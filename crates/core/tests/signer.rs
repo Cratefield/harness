@@ -6,7 +6,6 @@ use factory0_core::{HmacSigner, Kid, Payload, Signer, SignerError};
 
 // Obvious dummy secrets, never real.
 const SECRET_CUR: &str = "test-secret-current-0123456789abcdef";
-const SECRET_PREV: &str = "test-secret-previous-0123456789abcdef";
 const SECRET_NEW: &str = "test-secret-rotated---0123456789abcdef";
 
 fn signer() -> HmacSigner {
@@ -17,7 +16,11 @@ fn payload(purpose: &str) -> Payload {
     Payload {
         purpose: purpose.to_string(),
         subject: "nick@example.com".to_string(),
-        exp: Some((time::OffsetDateTime::now_utc().unix_timestamp() + 3600).max(0) as u64),
+        exp: Some(
+            (time::OffsetDateTime::now_utc().unix_timestamp() + 3600)
+                .max(0)
+                .cast_unsigned(),
+        ),
         kid: Kid::Cur,
     }
 }
@@ -44,7 +47,7 @@ fn tampered_payload_is_rejected() {
     // Flip a character in the subject.
     let mut json = String::from_utf8(bytes.clone()).expect("utf8");
     let subject_at = json.find("nick@").expect("subject present");
-    json.replace_range(subject_at..subject_at + 1, "r");
+    json.replace_range(subject_at..=subject_at, "r");
     bytes = json.into_bytes();
     let tampered = format!("{}.{}", URL_SAFE_NO_PAD.encode(bytes), mac);
     assert!(signer.verify(&tampered, "confirm").is_none());
@@ -65,7 +68,12 @@ fn tampered_mac_is_rejected() {
 fn expired_token_is_rejected() {
     let signer = signer();
     let mut p = payload("confirm");
-    p.exp = Some(time::OffsetDateTime::now_utc().unix_timestamp().max(0) as u64);
+    p.exp = Some(
+        time::OffsetDateTime::now_utc()
+            .unix_timestamp()
+            .max(0)
+            .cast_unsigned(),
+    );
     let token = signer.sign(&p);
     assert!(signer.verify(&token, "confirm").is_none());
 }

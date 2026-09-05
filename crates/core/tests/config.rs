@@ -2,7 +2,12 @@
 //! named together with the module; extra keys are ignored; `Ports::view_for`
 //! hides undeclared ports.
 
-use factory0_core::{Config, ConfigError, HarnessConfig, MapConfig, ModuleConfig, Port};
+use async_trait::async_trait;
+use factory0_core::{
+    Config, ConfigError, Database, DbError, HarnessConfig, MapConfig, Migrations, Module,
+    ModuleConfig, ModuleContext, Port, Statement,
+};
+use std::sync::Arc;
 
 // Obvious dummy secret, never real.
 const SECRET: &str = "test-secret-0123456789abcdef-0123";
@@ -81,8 +86,7 @@ fn module_missing_required_key_names_module_and_key() {
     let config = MapConfig::default();
     let module = ModuleConfig::new("email-signup", &config);
     let required = "CONFIRM_TTL_DAYS";
-    let value = module.get_opt(required);
-    assert!(value.is_none(), "key absent");
+    assert!(module.get_opt(required).is_none(), "key absent");
 
     // The pattern a module's validate_config uses:
     let mut errors = ConfigError::default();
@@ -110,7 +114,7 @@ fn module_extra_keys_are_ignored() {
     let module = ModuleConfig::new("email-signup", &config);
     assert_eq!(module.get_u32("CONFIRM_TTL_DAYS", 7), 3);
     assert_eq!(module.get_str("FROM_NAME", "Factory Zero"), "Factory Zero");
-    assert_eq!(module.get_bool("DOUBLE_OPT_IN", false), false);
+    assert!(!module.get_bool("DOUBLE_OPT_IN", false));
 }
 
 #[test]
@@ -125,79 +129,78 @@ fn module_key_prefixing_is_screaming_snake() {
     );
 }
 
+struct FakeDb;
+
+#[async_trait]
+impl Database for FakeDb {
+    async fn execute(&self, _stmt: &Statement) -> Result<u64, DbError> {
+        Ok(0)
+    }
+    async fn query(&self, _stmt: &Statement) -> Result<factory0_core::Rows, DbError> {
+        Ok(factory0_core::Rows::new(vec![]))
+    }
+    async fn batch(&self, _stmts: &[Statement]) -> Result<(), DbError> {
+        Ok(())
+    }
+}
+
+struct UndeclaringModule;
+
+impl Module for UndeclaringModule {
+    fn name(&self) -> &'static str {
+        "undeclaring"
+    }
+    fn version(&self) -> &'static str {
+        "0.0.0"
+    }
+    fn requires(&self) -> &'static [Port] {
+        &[]
+    }
+    fn migrations(&self) -> Migrations {
+        Migrations::default()
+    }
+    fn validate_config(&self, _cfg: &dyn Config) -> Result<(), ConfigError> {
+        Ok(())
+    }
+    fn router(&self, _ctx: ModuleContext) -> axum::Router {
+        axum::Router::new()
+    }
+}
+
+struct DeclaringModule;
+
+impl Module for DeclaringModule {
+    fn name(&self) -> &'static str {
+        "declaring"
+    }
+    fn version(&self) -> &'static str {
+        "0.0.0"
+    }
+    fn requires(&self) -> &'static [Port] {
+        &[Port::Db]
+    }
+    fn migrations(&self) -> Migrations {
+        Migrations::default()
+    }
+    fn validate_config(&self, _cfg: &dyn Config) -> Result<(), ConfigError> {
+        Ok(())
+    }
+    fn router(&self, _ctx: ModuleContext) -> axum::Router {
+        axum::Router::new()
+    }
+}
+
 /// `Ports::view_for`: a module reading an undeclared port gets `None`.
 #[test]
 fn view_for_hides_undeclared_ports() {
-    use async_trait::async_trait;
-    use factory0_core::{Database, DbError, Migrations, Module, ModuleContext, Statement};
-
-    struct UndeclaringModule;
-
-    impl Module for UndeclaringModule {
-        fn name(&self) -> &'static str {
-            "undeclaring"
-        }
-        fn version(&self) -> &'static str {
-            "0.0.0"
-        }
-        fn requires(&self) -> &'static [Port] {
-            &[]
-        }
-        fn migrations(&self) -> Migrations {
-            Migrations::default()
-        }
-        fn validate_config(&self, _cfg: &dyn Config) -> Result<(), ConfigError> {
-            Ok(())
-        }
-        fn router(&self, _ctx: ModuleContext) -> axum::Router {
-            axum::Router::new()
-        }
-    }
-
-    struct FakeDb;
-    #[async_trait]
-    impl Database for FakeDb {
-        async fn execute(&self, _stmt: &Statement) -> Result<u64, DbError> {
-            Ok(0)
-        }
-        async fn query(&self, _stmt: &Statement) -> Result<factory0_core::Rows, DbError> {
-            Ok(factory0_core::Rows::new(vec![]))
-        }
-        async fn batch(&self, _stmts: &[Statement]) -> Result<(), DbError> {
-            Ok(())
-        }
-    }
-
     let mut ports = factory0_core::Ports::empty();
-    ports.db = Some(std::sync::Arc::new(FakeDb));
+    ports.db = Some(Arc::new(FakeDb));
     assert!(ports.db.is_some(), "fixture: db is provided");
 
     let view = ports.view_for(&UndeclaringModule);
     assert!(view.db.is_none(), "undeclared Database port must be hidden");
 
-    // A module that declares the port sees it.
-    struct DeclaringModule(UndeclaringModule);
-    impl Module for DeclaringModule {
-        fn name(&self) -> &'static str {
-            "declaring"
-        }
-        fn version(&self) -> &'static str {
-            "0.0.0"
-        }
-        fn requires(&self) -> &'static [Port] {
-            &[Port::Db]
-        }
-        fn migrations(&self) -> Migrations {
-            Migrations::default()
-        }
-        fn validate_config(&self, _cfg: &dyn Config) -> Result<(), ConfigError> {
-            Ok(())
-        }
-        fn router(&self, _ctx: ModuleContext) -> axum::Router {
-            axum::Router::new()
-        }
-    }
-    let view = ports.view_for(&DeclaringModule(UndeclaringModule));
+    let view = ports.view_for(&DeclaringModule);
     assert!(view.db.is_some(), "declared Database port stays visible");
 }
 
