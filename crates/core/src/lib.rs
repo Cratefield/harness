@@ -20,10 +20,11 @@ mod ports;
 mod problem;
 mod problems;
 mod scope;
+mod signer;
 mod template;
 mod venture;
 
-pub use config::{Config, ConfigError, EmptyConfig, ModuleConfig};
+pub use config::{Config, ConfigError, EmptyConfig, HarnessConfig, MapConfig, ModuleConfig};
 pub use events::{AnyError, EventBus, EventHandler, EventName};
 pub use harness::{Harness, HarnessBuilder, Runtime};
 pub use http::{Json, MAX_BODY_BYTES, X_REQUEST_ID, request_id_is_valid};
@@ -37,5 +38,6 @@ pub use ports::{
 pub use problem::Problem;
 pub use problems::{ProblemDef, SLUGS, registry as problem_registry};
 pub use scope::Scope;
+pub use signer::{HmacSigner, MIN_SECRET_BYTES, SignerError};
 pub use template::{Rendered, Template, TemplateError, TemplateRegistry};
 pub use venture::{Venture, VentureEnv};

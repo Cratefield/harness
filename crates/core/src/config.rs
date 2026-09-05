@@ -7,6 +7,9 @@
 
 use std::fmt;
 
+use crate::signer::{HmacSigner, MIN_SECRET_BYTES};
+use crate::venture::VentureEnv;
+
 /// Read-only key/value configuration, resolved per runtime from environment
 /// variables and secrets (Workers `Env`) or the process environment.
 ///
@@ -147,5 +150,102 @@ impl<'a> ModuleConfig<'a> {
     /// An explicitly-set string key, `None` when absent.
     pub fn get_opt(&self, key_suffix: &str) -> Option<String> {
         self.config.get(&self.key(key_suffix))
+    }
+}
+
+/// The harness-level keys, parsed once from the environment `Config`
+/// (issue #3): `HARNESS_SECRET` (required, ≥ 32 bytes),
+/// `HARNESS_SECRET_PREVIOUS` (optional), `ADMIN_TOKEN` (optional),
+/// `ENV` (`development|staging|production`, default `development`).
+///
+/// Dummy secrets only, in tests:
+/// `HARNESS_SECRET = "test-secret-0123456789abcdef-0123"`.
+#[derive(Debug, Clone)]
+pub struct HarnessConfig {
+    pub harness_secret: String,
+    pub harness_secret_previous: Option<String>,
+    pub admin_token: Option<String>,
+    pub env: VentureEnv,
+}
+
+impl HarnessConfig {
+    /// # Errors
+    ///
+    /// One problem per invalid key, reported together: missing or short
+    /// `HARNESS_SECRET`, unknown `ENV` value.
+    pub fn from_config(config: &dyn Config) -> Result<Self, ConfigError> {
+        let mut errors = ConfigError::default();
+
+        let harness_secret = match config.get("HARNESS_SECRET") {
+            Some(secret) if secret.len() >= MIN_SECRET_BYTES => Some(secret),
+            Some(_) => {
+                errors.push(format!(
+                    "HARNESS_SECRET must be at least {MIN_SECRET_BYTES} bytes"
+                ));
+                None
+            }
+            None => {
+                errors.push(format!(
+                    "HARNESS_SECRET is required (min {MIN_SECRET_BYTES} bytes)"
+                ));
+                None
+            }
+        };
+        let env = match config.get("ENV").as_deref() {
+            None | Some("") => Some(VentureEnv::Development),
+            Some(raw) => {
+                let parsed = VentureEnv::parse(raw);
+                if parsed.is_none() {
+                    errors.push(format!(
+                        "ENV must be one of development|staging|production, got {raw:?}"
+                    ));
+                }
+                parsed
+            }
+        };
+
+        errors.into_result()?;
+        Ok(Self {
+            harness_secret: harness_secret.unwrap_or_default(),
+            harness_secret_previous: config.get("HARNESS_SECRET_PREVIOUS"),
+            admin_token: config.get("ADMIN_TOKEN"),
+            env: env.unwrap_or_default(),
+        })
+    }
+
+    /// The HMAC signer for this configuration (ADR 0006).
+    ///
+    /// # Panics
+    ///
+    /// Only when `from_config` was bypassed with an invalid secret.
+    pub fn signer(&self) -> HmacSigner {
+        HmacSigner::new(
+            self.harness_secret.clone(),
+            self.harness_secret_previous.clone(),
+        )
+        .expect("from_config validated the secret")
+    }
+}
+
+/// A `Config` backed by a map (tests, `fz doctor` with process env).
+#[derive(Debug, Clone, Default)]
+pub struct MapConfig(pub std::collections::HashMap<String, String>);
+
+impl MapConfig {
+    pub fn from_pairs(
+        pairs: impl IntoIterator<Item = (impl Into<String>, impl Into<String>)>,
+    ) -> Self {
+        Self(
+            pairs
+                .into_iter()
+                .map(|(k, v)| (k.into(), v.into()))
+                .collect(),
+        )
+    }
+}
+
+impl Config for MapConfig {
+    fn get(&self, key: &str) -> Option<String> {
+        self.0.get(key).cloned()
     }
 }

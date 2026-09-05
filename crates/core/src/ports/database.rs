@@ -31,6 +31,14 @@ impl Statement {
             values: sea_query::Values(values),
         }
     }
+
+    /// Renders a sea-query statement (select/insert/update/delete) with the
+    /// SQLite dialect. The portable subset renders identically for D1,
+    /// rusqlite and (later) Postgres (ADR 0004).
+    pub fn render(query: &impl sea_query::QueryStatementBuilder) -> Self {
+        let (sql, values) = query.build_any(&sea_query::SqliteQueryBuilder);
+        Self { sql, values }
+    }
 }
 
 /// A small owned row model. No engine types leak past this point.

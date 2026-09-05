@@ -14,7 +14,7 @@ mod idgen;
 mod kv;
 mod mailer;
 mod rate_limiter;
-mod signer;
+pub(crate) mod signer;
 
 pub use captcha::{Captcha, CaptchaError, Verdict};
 pub use clock::{Clock, SystemClock, timeout};
