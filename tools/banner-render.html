@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<!-- Source for assets/readme-banner.png. Regenerate with tools/render-banner.sh.
+     Query params: k=kicker t=title ("{o}" renders the Factory Zero ring) s=subtitle m=meta seed=n -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@300;400;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0;background:#0A0A0B;width:1280px;height:400px;overflow:hidden}
+  .b{position:relative;width:1280px;height:400px;color:#EDEBE6;font-family:'Archivo',system-ui,sans-serif;-webkit-font-smoothing:antialiased}
+  canvas{position:absolute;inset:0;display:block}
+  .veil{position:absolute;inset:0;background:radial-gradient(ellipse 46% 70% at 50% 50%, rgba(10,10,11,.94) 0%, rgba(10,10,11,.72) 45%, rgba(10,10,11,0) 100%)}
+  .c{position:absolute;inset:0;display:grid;align-content:center;justify-items:center;gap:18px}
+  .kick{font-family:'IBM Plex Mono',monospace;font-size:13px;letter-spacing:.24em;color:#8A8A8E;display:flex;align-items:center;gap:10px}
+  .kick .o{width:12px;height:12px;border:1.6px solid #EDEBE6;border-top-color:transparent;border-radius:50%;display:inline-block}
+  .mark{display:flex;align-items:center;gap:16px;font-weight:600;font-size:52px;letter-spacing:.22em;text-transform:uppercase}
+  .mark .o{width:44px;height:44px;border:3.5px solid currentColor;border-top-color:transparent;border-radius:50%;display:inline-block;position:relative;top:-2px}
+  .tag{font-weight:300;font-size:26px;letter-spacing:-.01em;color:#EDEBE6;text-align:center;max-width:980px}
+  .meta{font-family:'IBM Plex Mono',monospace;font-size:13px;letter-spacing:.24em;color:#8A8A8E}
+  .meta b{color:#FF5A36;font-weight:400}
+  .rule{position:absolute;left:0;right:0;bottom:0;height:5px;background:#FF5A36}
+</style>
+</head>
+<body>
+<div class="b">
+  <canvas id="c" width="1280" height="400"></canvas>
+  <div class="veil"></div>
+  <div class="c">
+    <div class="kick" id="k"></div>
+    <div class="mark" id="t"></div>
+    <div class="tag" id="s"></div>
+    <div class="meta" id="m"></div>
+  </div>
+  <div class="rule"></div>
+</div>
+<script>
+(function () {
+  var q = new URLSearchParams(location.search);
+  function esc(s){ return s.replace(/[&<>]/g, function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;'}[c]; }); }
+  function ring(s, cls){ return esc(s).split('{o}').map(function(p){return '<span>'+p+'</span>';}).join('<span class="'+cls+'"></span>'); }
+  document.getElementById('k').innerHTML = ring(q.get('k') || 'FACTORY ZER{o}', 'o');
+  document.getElementById('t').innerHTML = ring(q.get('t') || 'HARNESS', 'o');
+  document.getElementById('s').textContent = q.get('s') || '';
+  document.getElementById('m').innerHTML = esc(q.get('m') || '').replace(/ · /g, '<b> · </b>');
+  var seed = parseInt(q.get('seed') || '0', 10);
+  var c = document.getElementById('c'), ctx = c.getContext('2d');
+  var W = 1280, H = 400, N = 96, p = 0.72, now = 4200 + seed * 977;
+  function rnd(n){ var x = Math.sin((n + seed * 31) * 12.9898) * 43758.5453; return x - Math.floor(x); }
+  function ease(t){ return t < 0 ? 0 : t > 1 ? 1 : 1 - Math.pow(1 - t, 3); }
+  var nodes = [];
+  for (var i = 0; i < N; i++) nodes.push({ ang: i * 2.39996 + rnd(i) * 0.4 + seed * 0.37, r: 110 + (i % 6) * 52 + rnd(i + 9) * 40, acc: i % 9 === 0, sp: 0.17 + 0.38 * (i / N) });
+  window.renderBanner = function () {
+    ctx.clearRect(0, 0, W, H);
+    var cx = W * 0.5, cy = H * 0.5, scale = 1.35;
+    var pos = nodes.map(function (n, idx) {
+      var age = ease((p - n.sp) / 0.07); if (age <= 0) return null;
+      var drift = Math.sin(now / 1400 + idx) * 3;
+      return { x: cx + Math.cos(n.ang) * (n.r * scale * age + drift) * 1.75, y: cy + Math.sin(n.ang) * (n.r * scale * age + drift) * 0.62, a: age, acc: n.acc };
+    });
+    var reach = (150 * scale) * (150 * scale);
+    ctx.lineWidth = 1;
+    for (var a = 0; a < N; a++) { var A = pos[a]; if (!A) continue;
+      for (var b = a + 1; b < N; b++) { var B = pos[b]; if (!B) continue;
+        var dx = A.x - B.x, dy = A.y - B.y;
+        if (dx * dx + dy * dy < reach) { ctx.strokeStyle = 'rgba(237,235,230,' + Math.min(A.a, B.a) * 0.20 + ')'; ctx.beginPath(); ctx.moveTo(A.x, A.y); ctx.lineTo(B.x, B.y); ctx.stroke(); } } }
+    pos.forEach(function (n) { if (!n) return; ctx.fillStyle = n.acc ? 'rgba(255,90,54,' + n.a + ')' : 'rgba(237,235,230,' + n.a * 0.8 + ')'; ctx.beginPath(); ctx.arc(n.x, n.y, n.acc ? 2.6 : 1.8, 0, 7); ctx.fill(); });
+  };
+  if (document.fonts && document.fonts.ready) document.fonts.ready.then(window.renderBanner); else window.addEventListener('load', window.renderBanner);
+})();
+</script>
+</body>
+</html>

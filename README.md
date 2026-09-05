@@ -1,65 +1,181 @@
-# Factory Zero harness
+<p align="center">
+  <img src="assets/readme-banner.png" alt="Factory Zero Harness. One Rust harness. Every venture compiles its own backend." width="100%">
+</p>
 
-A modular, open-source backend harness in **Rust**. Every Factory Zero venture
-compiles its own backend from it: pick module crates, wire adapters, ship
-**one stateless Cloudflare Worker** (Rust on wasm via workers-rs). Cloudflare
-D1 today, a self-hosted native binary later, with no module rewrites in
-between.
+<p align="center">
+  <img src="https://img.shields.io/badge/STATUS-M0%20IN%20PROGRESS-FF5A36?style=flat-square&labelColor=0A0A0B" alt="Status: M0 in progress">
+  <img src="https://img.shields.io/badge/LANGUAGE-RUST-EDEBE6?style=flat-square&labelColor=0A0A0B" alt="Language: Rust">
+  <img src="https://img.shields.io/badge/TARGET-WASM32%20%C2%B7%20WORKERS-EDEBE6?style=flat-square&labelColor=0A0A0B" alt="Target: wasm32 on Cloudflare Workers">
+  <img src="https://img.shields.io/badge/ROUTER-AXUM-EDEBE6?style=flat-square&labelColor=0A0A0B" alt="Router: axum">
+  <img src="https://img.shields.io/badge/DATABASE-D1%20NOW%20%C2%B7%20POSTGRES%20LATER-EDEBE6?style=flat-square&labelColor=0A0A0B" alt="Database: D1 now, Postgres later">
+  <img src="https://img.shields.io/badge/LICENSE-MIT-FF5A36?style=flat-square&labelColor=0A0A0B" alt="License: MIT">
+</p>
 
-Read [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) first. Decisions live in
-[docs/adr](docs/adr); ADR 0000 explains why the TypeScript attempt was
-discarded.
+<p align="center">
+  <b>factory0.ventures</b> · HARNESS · <code>factory0-*</code> on crates.io
+</p>
 
-## Crates (`factory0-*`, crates.io, MIT)
+---
+
+# The harness
+
+Factory Zero builds companies that operate and grow themselves. Each of those
+companies needs a backend, and none of them should build one from scratch.
+
+This is that backend, once. A **Rust** harness that every venture compiles its
+own backend from: pick module crates, wire adapters, ship **one stateless
+Cloudflare Worker**. Cloudflare D1 today, a self-hosted native binary later,
+with no module rewrites in between.
+
+> **Modules only see ports.**
+> A module never touches a Cloudflare binding, an environment variable, or a
+> vendor client. It asks for a `Database`, a `Mailer`, a `Captcha`. Adapters
+> answer. That one rule is what makes the later move off Cloudflare a change of
+> a single runtime crate.
+
+Read [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full design.
+Decisions, including why the TypeScript attempt was thrown away, are in
+[docs/adr](docs/adr).
+
+## How a venture uses it
+
+```rust
+// src/harness.rs in a venture repo
+Harness::builder()
+    .venture(Venture::new("factory0", "factory0.ventures")
+        .public_url("https://factory0.ventures")
+        .cors_origins(["https://factory0.ventures"]))
+    .module(EmailSignup::new().double_opt_in(true))
+    .module(Waitlist::new().products(["kontinuum", "undercover-rockstars"]))
+    .runtime(Cloudflare::new()
+        .db("DB")
+        .mailer(Resend::from_env())
+        .captcha(Turnstile::from_env()))
+    .build()?
+```
+
+That is the whole composition. `build()` refuses a module that requires a port
+the runtime does not provide, two modules claiming the same table or route, or
+a module built against a different contract version. The venture template runs
+it under `cargo test`, so a misconfiguration fails before `wrangler deploy` can.
+
+## Shape
+
+```mermaid
+flowchart LR
+  subgraph venture["one venture · one Worker · one database"]
+    H["Harness<br/>axum router · /v1/&lt;module&gt;"]
+    M1["module<br/>email-signup"]
+    M2["module<br/>waitlist"]
+    P["ports<br/>Database · Mailer · Captcha<br/>RateLimiter · Signer · KeyValue"]
+    H --> M1 & M2 --> P
+  end
+  subgraph cf["runtime-cloudflare"]
+    D1[(D1)]
+    KV[(KV)]
+    RL[Rate Limiting]
+  end
+  subgraph vendors["adapters"]
+    RS[Resend]
+    TS[Turnstile]
+  end
+  P --> D1 & KV & RL & RS & TS
+  P -. "phase 3: runtime-native" .-> PG[(Postgres)]
+```
+
+## Crates
+
+All public crates are `factory0-*`, MIT, published to crates.io.
 
 | Crate | Role |
 |---|---|
-| `factory0-core` | `Module` trait, `Harness` builder, port traits, errors, request scope |
-| `factory0-runtime-cloudflare` | workers-rs entry points; maps bindings to ports |
-| `factory0-adapter-resend` | `Mailer` over Resend |
-| `factory0-adapter-turnstile` | `Captcha` over Turnstile |
-| `factory0-adapter-sqlite` | `Database` over rusqlite, for tests and single-node hosting |
-| `factory0-module-email-signup` | Email signup with double opt-in |
-| `factory0-module-waitlist` | Per-product waitlist with referral codes |
+| `factory0-core` | `Module` trait, `Harness` builder, port traits, problem+json errors, request scope, event bus, templates |
+| `factory0-runtime-cloudflare` | workers-rs entry points; D1, KV, Rate Limiting and `wait_until` mapped to ports |
+| `factory0-adapter-resend` | `Mailer` over the Resend REST API, with a `NotConfigured` mode until a sending domain is verified |
+| `factory0-adapter-turnstile` | `Captcha` over Cloudflare Turnstile, fail-closed |
+| `factory0-adapter-sqlite` | `Database` over rusqlite: every test, and single-node self-hosting |
+| `factory0-module-email-signup` | Email signup with double opt-in, unsubscribe, admin export |
+| `factory0-module-waitlist` | Per-product waitlist with confirm, position, referral codes |
 | `factory0-cli` | Binary `fz`: `migrations collect`, `doctor`, `modules` |
-| `factory0-testing` | Conformance kit every module runs against |
+| `factory0-testing` | Conformance kit every module, public or private, must pass |
+| `factory0-adapter-postgres` | Phase 3. `Database` over sqlx for the native runtime |
+| `factory0-runtime-native` | Phase 3. The same harness as a single binary on tokio |
 
-Private modules live in `Factory-Zero/harness-private` as `fz-*` git
-dependencies. New ventures start from `Factory-Zero/venture-backend-template`.
+Private modules are `fz-*` crates in
+[harness-private](https://github.com/Factory-Zero/harness-private), consumed as
+pinned git dependencies. New ventures start from
+[venture-backend-template](https://github.com/Factory-Zero/venture-backend-template).
+The first consumer is
+[factory0-backend](https://github.com/Factory-Zero/factory0-backend).
 
-## Status
+## What a module is
 
-Design v2 adopted 2026-09-05. Implementation tracked in the issues and
-milestones of this repo:
+A crate implementing one trait.
 
-- **M0 Foundation**: workspace tooling, `core`, `runtime-cloudflare`, adapters, CLI, testing kit
-- **M1 First modules**: `module-email-signup`, `module-waitlist`
-- **M2 First venture live**: publish to crates.io, template, `api.factory0.ventures`
-- **M3 Self-hosted portability**: `adapter-postgres`, `runtime-native`, parity suite
+```rust
+pub trait Module: Send + Sync + 'static {
+    fn name(&self) -> &'static str;              // mounted at /v1/<name>
+    fn requires(&self) -> &'static [Port];       // build fails if one is missing
+    fn migrations(&self) -> Migrations;          // include_str! SQL, portable subset
+    fn router(&self, ctx: ModuleContext) -> axum::Router;
+    // version, optional ports, tables, events, scheduled …
+}
+```
 
-## Layout (target)
+Migrations are plain SQL in a subset SQLite and Postgres both accept. Queries go
+through sea-query, which renders for either. Confirmation and unsubscribe
+links are HMAC-signed tokens with key rotation, so there is no session store.
+Request scope travels in axum extensions, never in shared state; the
+conformance kit includes the concurrent-request test that proves it.
+
+## Roadmap
+
+| Milestone | Contents | Issues |
+|---|---|---|
+| **M0 Foundation** | workspace tooling, `core`, Cloudflare runtime, Resend and Turnstile adapters, SQLite adapter, `fz`, testing kit | #1–#9 |
+| **M1 First modules** | `email-signup`, `waitlist`, templates, security baseline, observability | #10–#14 |
+| **M2 First venture live** | crates.io publishing, docs, contract versioning, `api.factory0.ventures` | #15–#17 |
+| **M3 Self-hosted portability** | Postgres adapter, native runtime, parity suite, data move | #18–#21 |
+
+Progress is visible in the [milestones](../../milestones).
+
+## Toolchain
+
+Stable Rust pinned in `rust-toolchain.toml`, target `wasm32-unknown-unknown`,
+[`worker-build`](https://crates.io/crates/worker-build), wrangler. CI runs
+`fmt`, `clippy -D warnings`, `test`, `cargo deny`, and builds the example
+venture to wasm so a native-only dependency cannot slip into a module.
+
+```
+cargo fmt --all --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
+(cd examples/venture && worker-build --release)
+```
+
+## Layout
 
 ```
 crates/
-  core/
-  runtime-cloudflare/
-  adapter-resend/
-  adapter-turnstile/
-  adapter-sqlite/
-  module-email-signup/
-  module-waitlist/
-  cli/
-  testing/
+  core/                    factory0-core
+  runtime-cloudflare/      factory0-runtime-cloudflare
+  adapter-resend/          factory0-adapter-resend
+  adapter-turnstile/       factory0-adapter-turnstile
+  adapter-sqlite/          factory0-adapter-sqlite
+  module-email-signup/     factory0-module-email-signup
+  module-waitlist/         factory0-module-waitlist
+  cli/                     factory0-cli  →  fz
+  testing/                 factory0-testing
 examples/
-  venture/            # smallest complete venture; CI builds it to wasm
+  venture/                 smallest complete venture; CI builds it to wasm
 docs/
   ARCHITECTURE.md
-  adr/
+  adr/                     0000 … 0007
+tools/
+  banner-render.html       source of the README banner
+  render-banner.sh         regenerates it with headless Chrome
 ```
-
-Toolchain: stable Rust (pinned in `rust-toolchain.toml`), target
-`wasm32-unknown-unknown`, `worker-build`, wrangler.
 
 ## License
 
-MIT.
+MIT. Built in the open by [Factory Zero](https://factory0.ventures).
