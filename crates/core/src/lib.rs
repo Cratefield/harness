@@ -15,3 +15,19 @@ mod tests {
     }
 }
 
+
+#[allow(dead_code)]
+fn clippy_probe() -> u64 {
+    // clippy::cast_possible_truncation (pedantic) — deliberately here to
+    // verify CI fails on clippy warnings. Throwaway branch, deleted after.
+    3.7_f64 as u64
+}
+
+#[cfg(test)]
+mod failing_probe {
+    #[test]
+    fn deliberately_failing() {
+        // Deliberately failing to verify CI fails on test failures.
+        assert_eq!(1, 2, "throwaway CI verification probe");
+    }
+}
