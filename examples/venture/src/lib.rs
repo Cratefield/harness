@@ -8,7 +8,7 @@
 #![forbid(unsafe_code)]
 
 use axum::routing::get;
-use worker::{event, Context, Env, HttpRequest, Result};
+use worker::{Context, Env, HttpRequest, Result, event};
 
 fn router() -> axum::Router {
     axum::Router::new()

@@ -20,3 +20,6 @@ worker = { workspace = true }
 axum = { workspace = true }
 http = { workspace = true }
 tower = { workspace = true }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+getrandom = { workspace = true }
