@@ -1,0 +1,74 @@
+[workspace]
+resolver = "3"
+members = ["crates/*", "examples/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.98"
+license = "MIT"
+repository = "https://github.com/Factory-Zero/harness"
+
+[workspace.dependencies]
+# Internal crates.
+factory0-core = { path = "crates/core", version = "0.1.0" }
+
+# HTTP stack. axum runs without tokio on Workers (ADR 0001): the `tokio`
+# feature stays off, `default-features = false`, and only the extractor
+# features modules need are enabled.
+axum = { version = "0.8.9", default-features = false, features = [
+    "json",
+    "query",
+    "matched-path",
+] }
+http = "1.5.0"
+tower = { version = "0.5.3", features = ["util"] }
+tower-http = { version = "0.7.1", default-features = false, features = ["cors"] }
+bytes = "1.12.1"
+futures-core = "0.3.34"
+
+# Serialization and diagnostics.
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+tracing = "0.1.44"
+
+# SQL. sea-query 1.0 exists but the brief pins the stable 0.32 line (ADR 0004).
+sea-query = { version = "0.32.7", default-features = false, features = [
+    "backend-sqlite",
+] }
+
+# Pure-Rust crypto (ADR 0006).
+hmac = "0.13.0"
+sha2 = "0.11.0"
+base64 = "0.23.1"
+subtle = "2.6.1"
+
+# Identifiers and time.
+ulid = "3.0.0"
+time = { version = "0.3.45", default-features = false, features = [
+    "std",
+    "formatting",
+    "parsing",
+] }
+
+# Traits and errors.
+async-trait = "0.1.92"
+thiserror = "2.0.20"
+
+# Runtime and adapters.
+worker = { version = "0.8.5", default-features = false, features = [
+    "http",
+    "d1",
+] }
+rusqlite = { version = "0.40.2", features = ["bundled"] }
+clap = { version = "4.6.6", features = ["derive"] }
+
+# Test-only.
+insta = "1.48.0"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+all = "warn"
+pedantic = "warn"

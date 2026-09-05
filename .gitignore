@@ -4,3 +4,4 @@ build/
 .dev.vars
 *.log
 .DS_Store
+PROGRESS.md

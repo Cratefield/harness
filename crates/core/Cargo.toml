@@ -1,0 +1,14 @@
+[package]
+name = "factory0-core"
+description = "Factory Zero harness kernel: Module trait, Harness builder, ports, errors"
+readme = "../../README.md"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]

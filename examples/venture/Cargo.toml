@@ -1,0 +1,22 @@
+[package]
+name = "venture"
+description = "Smallest complete Factory Zero venture: the wasm build canary"
+publish = false
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+crate-type = ["cdylib"]
+
+[lints]
+workspace = true
+
+[dependencies]
+factory0-core = { workspace = true }
+worker = { workspace = true }
+axum = { workspace = true }
+http = { workspace = true }
+tower = { workspace = true }

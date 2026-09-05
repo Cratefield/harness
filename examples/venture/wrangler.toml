@@ -1,0 +1,6 @@
+name = "venture-example"
+main = "build/worker/shim.mjs"
+compatibility_date = "2026-09-01"
+
+[build]
+command = "cargo install -q worker-build && worker-build --release"
