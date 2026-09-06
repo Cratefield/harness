@@ -676,6 +676,53 @@ pub async fn touch_session_seen(
     db.execute(&Statement::render(&update)).await
 }
 
+/// Slides a live session: refreshes `last_seen_at` and pushes
+/// `expires_at` out, in one guarded update that loses cleanly when the
+/// session was revoked or expired in the same instant. `0` rows means
+/// the slide did not land.
+///
+/// # Errors
+///
+/// [`DbError::Execute`] when the statement fails.
+pub async fn slide_session(
+    db: &dyn Database,
+    id: &str,
+    last_seen_at: &str,
+    expires_at: &str,
+    now: &str,
+) -> Result<u64, DbError> {
+    let mut update = Query::update();
+    update
+        .table(iden("sessions"))
+        .values([
+            (iden("last_seen_at"), last_seen_at.into()),
+            (iden("expires_at"), expires_at.into()),
+        ])
+        .and_where(Expr::col(iden("id")).eq(id))
+        .and_where(Expr::col(iden("revoked_at")).is_null())
+        .and_where(Expr::col(iden("expires_at")).gt(now));
+    db.execute(&Statement::render(&update)).await
+}
+
+/// Every session of a user (live and revoked), oldest first — the
+/// account-page listing; callers filter what they show.
+///
+/// # Errors
+///
+/// [`DbError::Query`] when the statement fails.
+pub async fn sessions_by_user(
+    db: &dyn Database,
+    user_id: &str,
+) -> Result<Vec<SessionRow>, DbError> {
+    let query = select_sessions()
+        .and_where(Expr::col(iden("user_id")).eq(user_id))
+        .order_by(iden("created_at"), sea_query::Order::Asc)
+        .order_by(iden("id"), sea_query::Order::Asc)
+        .to_owned();
+    let rows = db.query(&Statement::render(&query)).await?;
+    Ok(rows.rows.iter().map(session_from).collect())
+}
+
 /// Revokes a session; guarded, so a second revoke reports `0`.
 ///
 /// # Errors
@@ -687,6 +734,26 @@ pub async fn revoke_session(db: &dyn Database, id: &str, revoked_at: &str) -> Re
         .table(iden("sessions"))
         .values([(iden("revoked_at"), revoked_at.into())])
         .and_where(Expr::col(iden("id")).eq(id))
+        .and_where(Expr::col(iden("revoked_at")).is_null());
+    db.execute(&Statement::render(&update)).await
+}
+
+/// Revokes every live session of a user at once — the password-change
+/// and account-disable path. Returns how many rows flipped.
+///
+/// # Errors
+///
+/// [`DbError::Execute`] when the statement fails.
+pub async fn revoke_all_sessions(
+    db: &dyn Database,
+    user_id: &str,
+    revoked_at: &str,
+) -> Result<u64, DbError> {
+    let mut update = Query::update();
+    update
+        .table(iden("sessions"))
+        .values([(iden("revoked_at"), revoked_at.into())])
+        .and_where(Expr::col(iden("user_id")).eq(user_id))
         .and_where(Expr::col(iden("revoked_at")).is_null());
     db.execute(&Statement::render(&update)).await
 }

@@ -20,6 +20,7 @@
 
 mod clients;
 mod secrets;
+mod sessions;
 mod store;
 
 /// Exact-match redirect URI validation (issue #7): the one matching
@@ -29,6 +30,11 @@ pub mod redirect_uri;
 pub use secrets::{
     CLIENT_DISABLED, SECRET_BYTES, SecretError, ensure_client_usable, generate_secret, hash_secret,
     kind_allows_secret, verify_client_secret, verify_secret,
+};
+pub use sessions::{
+    ABSOLUTE_CAP_DAYS, COOKIE_NAME, IssuedSession, Login, SESSION_INVALID, SESSION_VALUE_BYTES,
+    SLIDE_AFTER_SECS, SLIDE_WINDOW_DAYS, Session, SessionError, ValidSession, clear_cookie,
+    cookie_value, issue, revoke_all, set_cookie, ua_family, validate,
 };
 pub use store::{
     Bytes, CLIENT_CONFIDENTIAL, CLIENT_PUBLIC, CREDENTIAL_PASSKEY, CREDENTIAL_PASSWORD,
@@ -40,10 +46,10 @@ pub use store::{
     insert_credential, insert_identity, insert_redirect_uri, insert_session,
     insert_single_use_token, insert_user, list_clients, passkey_by_credential_id,
     purge_expired_sessions, purge_expired_single_use_tokens, redirect_uris_for_client,
-    replace_redirect_uris, revoke_session, rotate_client_secret, session_by_token_hash,
-    single_use_token_by_hash, touch_credential_used, touch_identity_login, touch_session_seen,
-    update_client_name, update_client_status, update_passkey_sign_count, user_by_id,
-    user_by_primary_email,
+    replace_redirect_uris, revoke_all_sessions, revoke_session, rotate_client_secret,
+    session_by_token_hash, sessions_by_user, single_use_token_by_hash, slide_session,
+    touch_credential_used, touch_identity_login, touch_session_seen, update_client_name,
+    update_client_status, update_passkey_sign_count, user_by_id, user_by_primary_email,
 };
 
 use factory0_core::{
@@ -175,7 +181,7 @@ impl Module for AuthCore {
             secret_overlap_secs: self.resolved_overlap(&*ctx.config),
             ctx: Arc::new(ctx),
         });
-        clients::router(state)
+        clients::router(Arc::clone(&state)).merge(sessions::router().with_state(state))
     }
 
     fn scheduled<'a>(
