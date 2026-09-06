@@ -7,7 +7,7 @@ natively.
 
 ## Usage
 
-```rust
+```rust,ignore
 use std::sync::Arc;
 use factory0_adapter_resend::Resend;
 use factory0_runtime_cloudflare::FetchClient;
@@ -58,7 +58,7 @@ Until a domain is verified, the key is send-only. Probe it with a real
 send (expect 403 `DomainNotVerified`, which proves the key itself is
 valid):
 
-```
+```sh
 curl -s -X POST https://api.resend.com/emails \
   -H "authorization: Bearer $RESEND_API_KEY" \
   -H "content-type: application/json" \

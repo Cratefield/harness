@@ -14,6 +14,7 @@
 //! queries, `include_str!` migrations in the portable SQL subset, config
 //! keys prefixed `HELLO_*`, and the shared conformance suite.
 
+#![doc = include_str!("../README.md")]
 #![forbid(unsafe_code)]
 
 mod handlers;

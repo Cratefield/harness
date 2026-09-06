@@ -8,7 +8,7 @@ maps Workers bindings to the harness ports and serves a `Harness` on
 
 A venture's Worker is three lines:
 
-```rust
+```rust,ignore
 use factory0_core::Harness;
 use factory0_runtime_cloudflare::{serve, serve_scheduled, Cloudflare};
 use std::sync::OnceLock;

@@ -11,7 +11,7 @@ pub const PROBLEM_TYPE_BASE: &str = "https://factory0.ventures/problems/";
 
 /// An API error, serialized as `application/problem+json`.
 ///
-/// `type` is a stable URI under [`PROBLEM_TYPE_BASE`], `instance` is the
+/// `type` is a stable URI under `PROBLEM_TYPE_BASE`, `instance` is the
 /// request id, and the body never leaks internals: 500s carry no stack, no
 /// source error, nothing but the generic `internal` slug.
 #[derive(Debug, Clone)]

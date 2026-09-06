@@ -1,0 +1,59 @@
+# factory0-core
+
+The runtime-agnostic kernel of the Factory Zero harness: the [`Module`]
+contract, the [`Harness`] builder, the port traits, RFC 9457
+problem+json errors, the request [`Scope`], an in-process [`EventBus`],
+and the template registry (ADRs 0001, 0002, 0007).
+
+Core depends only on `http`, `axum` (default features off), `serde`,
+`tracing`, `sea-query` and pure-Rust crypto. It must never depend on
+`worker`, `wasm-bindgen`, `tokio`, `reqwest`, `sqlx` or `rusqlite` — a
+CI job fails the build if one appears. That is what lets the same
+modules run on Cloudflare Workers (wasm) and, in phase 3, as a native
+binary.
+
+## The shape
+
+```text
+Harness::builder()
+    .venture(Venture::new("factory0", "factory0.ventures").cors_origins([..]))
+    .module(EmailSignup::new().double_opt_in(true))     // any Module impl
+    .templates(EmailSignup::default_templates())        // + overrides
+    .runtime(Cloudflare::new().db("DB"))                // any Runtime impl
+    .build()?                                            // all problems at once
+```
+
+`build()` refuses a module that requires a port the runtime does not
+provide, two modules claiming the same table or route prefix, a module
+built against a different contract version (`HARNESS_API`), or a
+template override naming an unknown module — and it reports every
+problem in one error, not the first. `router(ports)` then mounts each
+module under `/v1/<name>`, adds `GET /__health` / `GET /__ready`, the
+request-scope middleware (request id + `Scope` in extensions, ADR 0007),
+CORS from `venture.cors_origins`, a 64 KiB body limit and `/v1/*`
+security headers.
+
+## What lives here
+
+| Piece | What it is |
+|---|---|
+| `Module` / `ModuleContext` | the module contract; see [docs/MODULE-AUTHORING.md](../../docs/MODULE-AUTHORING.md) |
+| `Harness` / `HarnessBuilder` | composition, validation, router assembly |
+| `ports::*` | `Database`, `Mailer`, `Captcha`, `RateLimiter`, `Signer`, `KeyValue`, `HttpClient`, `Clock`, `IdGen`, `Defer` — `Send + Sync` trait objects |
+| `Problem` / `problems!` | RFC 9457 errors with a stable slug taxonomy (generated into `docs/ERRORS.md`) |
+| `Scope` | per-request id + span + `wait_until`, an axum extractor, never shared state |
+| `EventBus` | in-process `"<module>.<event>"` handlers, run in the emitting request's scope |
+| `TemplateRegistry` | mail templates with per-venture overrides |
+| `HmacSigner` | signed tokens for confirm/unsubscribe links with key rotation (ADR 0006) |
+| admin / csv / email / rate-limit helpers | constant-time admin auth, formula-injection-safe CSV, email normalization |
+
+## Writing a module
+
+Start with [docs/MODULE-AUTHORING.md](../../docs/MODULE-AUTHORING.md) —
+it builds a complete module, `factory0-module-hello`, step by step.
+
+## Testing a module
+
+[`factory0-testing`](../testing/) is the conformance kit: fake ports, an
+in-memory SQLite `Database`, and request helpers over the real axum
+router, no network. Every module — public or private — passes it.

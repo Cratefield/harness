@@ -9,6 +9,7 @@
 //! scoped clippy allow follows the policy documented in the workspace
 //! `clippy.toml`.
 
+#![doc = include_str!("../README.md")]
 #![forbid(unsafe_code)]
 
 use async_trait::async_trait;

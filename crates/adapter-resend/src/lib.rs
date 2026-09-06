@@ -7,6 +7,7 @@
 //! the adapter reports [`SendOutcome::NotConfigured`] without any network
 //! call, so forms keep working.
 
+#![doc = include_str!("../README.md")]
 #![forbid(unsafe_code)]
 
 use async_trait::async_trait;

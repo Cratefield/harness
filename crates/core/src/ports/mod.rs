@@ -98,7 +98,8 @@ pub struct Ports {
 }
 
 impl Ports {
-    /// An empty bundle with no ports resolved and an [`EmptyConfig`].
+    /// An empty bundle with no ports resolved and an
+    /// [`EmptyConfig`](crate::config::EmptyConfig).
     pub fn empty() -> Self {
         Self::with_config(Arc::new(crate::config::EmptyConfig))
     }

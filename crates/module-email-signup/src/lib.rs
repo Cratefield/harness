@@ -21,6 +21,7 @@
 //! so ventures can override them; the module also falls back to built-in
 //! rendering when the registry has no entry.
 
+#![doc = include_str!("../README.md")]
 #![forbid(unsafe_code)]
 
 mod handlers;

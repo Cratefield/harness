@@ -6,7 +6,7 @@ request helpers over the axum router with **no network**.
 
 ## A 15-line module test
 
-```rust
+```rust,ignore
 use factory0_testing::{conformance, request, TestHarness};
 
 #[test]

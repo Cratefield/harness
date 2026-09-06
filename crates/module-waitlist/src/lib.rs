@@ -22,6 +22,7 @@
 //! `202 {"ok":true}` bytes whatever the row state; an unknown `ref` code
 //! is silently ignored.
 
+#![doc = include_str!("../README.md")]
 #![forbid(unsafe_code)]
 
 mod handlers;
