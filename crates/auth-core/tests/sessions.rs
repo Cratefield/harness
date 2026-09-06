@@ -66,6 +66,7 @@ async fn login(
             ip: Some("203.0.113.7"),
             user_agent: Some("Mozilla/5.0 Macintosh Safari/605.1.15"),
             presented_cookie: presented,
+            amr: &["passkey"],
         },
     )
     .await
@@ -377,6 +378,7 @@ async fn the_expired_shape_through_the_router_is_the_same_401() {
             ip: None,
             user_agent: None,
             presented_cookie: None,
+            amr: &[],
         },
     )
     .await
@@ -409,6 +411,7 @@ async fn listing_shows_ip_hash_ua_family_and_the_current_flag() {
             ip: Some("198.51.100.9"),
             user_agent: Some("Mozilla/5.0 Windows Chrome/120.0 Safari/537.36"),
             presented_cookie: None,
+            amr: &[],
         },
     )
     .await

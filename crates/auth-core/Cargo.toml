@@ -23,6 +23,7 @@ serde_json = { workspace = true }
 argon2 = { workspace = true }
 base64ct = { workspace = true }
 getrandom = { workspace = true }
+p256 = { workspace = true }
 sha2 = { workspace = true }
 thiserror = { workspace = true }
 

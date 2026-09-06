@@ -170,6 +170,12 @@ pub struct Login<'a> {
     /// The cookie the login request presented, if any: revoked before
     /// the new session exists (fixation).
     pub presented_cookie: Option<&'a str>,
+    /// Authentication-method references (RFC 8176) for this login —
+    /// `passkey` methods say `["user","passkey"]`-style values when the
+    /// login-method issues wire them (issues #13-#22). Stored as the
+    /// session's `amr` JSON array and copied into every access token
+    /// minted against the session (issue #9); empty stores `NULL`.
+    pub amr: &'a [&'a str],
 }
 
 /// A freshly issued session; the caller answers with
@@ -237,6 +243,8 @@ pub async fn issue(
             revoked_at: None,
             ip_hash: login.ip.map(|ip| Redacted(sha256_hex(ip.as_bytes()))),
             ua_family: ua_family(login.user_agent),
+            amr: (!login.amr.is_empty())
+                .then(|| serde_json::to_string(login.amr).unwrap_or_default()),
         },
     )
     .await?;
