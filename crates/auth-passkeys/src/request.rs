@@ -50,6 +50,32 @@ pub(crate) async fn require_session(
     }
 }
 
+/// The rate limit on the two endpoints anyone can call. Keyed on the client
+/// address **only**: keying on the email as well would let anyone lock a
+/// named account out of its own logins, which trades one denial of service
+/// for a worse one.
+///
+/// Fails open with a warning when the limiter itself is unreachable. An edge
+/// binding outage must not take logins down, and the ceremony still has to
+/// pass a single-use challenge and a signature.
+pub(crate) async fn limit_login(state: &ModuleState, headers: &HeaderMap) -> Option<Response> {
+    let limiter = state.ctx.ports.rate_limiter.as_deref()?;
+    let ip = factory0_core::client_ip(headers);
+    for key in factory0_core::rate_limit_keys(ip.as_deref(), None) {
+        match limiter.limit(&format!("auth-passkeys:{key}")).await {
+            Ok(decision) if !decision.ok => {
+                return Some(factory0_core::rate_limited(decision.retry_after).into_response());
+            }
+            Ok(_) => {}
+            Err(err) => {
+                tracing::warn!(error = %err, "the passkey rate limiter is unavailable");
+                return None;
+            }
+        }
+    }
+    None
+}
+
 /// The single answer every failed ceremony gets, whatever went wrong.
 pub(crate) fn ceremony_failed(scope: &Scope) -> Problem {
     Problem::new(&crate::CEREMONY_FAILED).instance(&scope.request_id)

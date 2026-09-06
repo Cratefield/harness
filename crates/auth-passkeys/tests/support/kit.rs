@@ -59,7 +59,30 @@ pub fn kit() -> Kit {
     kit_with(config_pairs())
 }
 
+/// A kit whose rate limiter refuses everything, for the endpoints anyone
+/// can call.
+pub fn kit_rate_limited() -> Kit {
+    kit_patched(config_pairs(), |ports| {
+        ports.rate_limiter = Some(std::sync::Arc::new(
+            factory0_testing::FakeRateLimiter::scripted(
+                Vec::new(),
+                factory0_core::Decision {
+                    ok: false,
+                    retry_after: Some(std::time::Duration::from_secs(30)),
+                },
+            ),
+        ));
+    })
+}
+
 pub fn kit_with(pairs: Vec<(String, String)>) -> Kit {
+    kit_patched(pairs, |_| {})
+}
+
+pub fn kit_patched(
+    pairs: Vec<(String, String)>,
+    patch: impl FnOnce(&mut factory0_core::Ports),
+) -> Kit {
     let clock = TestClock::new();
     let config: Arc<dyn Config> = Arc::new(MapConfig::from_pairs(pairs));
     let clock_for_ports = clock.clone();
@@ -71,6 +94,7 @@ pub fn kit_with(pairs: Vec<(String, String)>) -> Kit {
         move |ports| {
             ports.clock = Some(clock_for_ports);
             ports.config = config_for_ports;
+            patch(ports);
         },
     );
     let db = harness.db.clone();
@@ -102,6 +126,25 @@ impl Kit {
         .await
         .expect("user inserts");
         id
+    }
+
+    /// Flips the account to `disabled`, the schema's kill switch.
+    pub async fn disable(&self, user_id: &str) {
+        self.db
+            .execute(&factory0_core::Statement::with_values(
+                "UPDATE users SET status = ? WHERE id = ?".to_owned(),
+                vec!["disabled".into(), user_id.into()],
+            ))
+            .await
+            .expect("status updates");
+    }
+
+    /// Flags a credential as a possible clone, the way a counter regression
+    /// does.
+    pub async fn mark_suspect(&self, credential_id: &str) {
+        factory0_auth_core::mark_passkey_suspect(&*self.db, credential_id, "2026-09-07T10:00:00Z")
+            .await
+            .expect("mark applies");
     }
 
     /// A session cookie value for that account.
@@ -192,6 +235,16 @@ pub async fn send(
 
 pub async fn post(kit: &Kit, path: &str, body: &str, cookie: Option<&str>) -> Res {
     send(kit, http::Method::POST, path, Some(body), cookie).await
+}
+
+/// How many rows a table holds.
+pub fn count(kit: &Kit, table: &str) -> i64 {
+    let sql = format!("SELECT COUNT(*) AS n FROM {table}");
+    let rows =
+        pollster::block_on(kit.db.query(&factory0_core::Statement::new(sql))).expect("query");
+    rows.first()
+        .and_then(|row| row.get::<i64>("n"))
+        .unwrap_or_default()
 }
 
 /// The challenge bytes out of an options response.

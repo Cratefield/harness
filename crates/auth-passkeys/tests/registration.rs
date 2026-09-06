@@ -271,6 +271,33 @@ fn a_login_response_cannot_be_replayed_into_registration() {
 }
 
 #[test]
+fn an_authenticator_that_returns_extension_outputs_registers() {
+    pollster::block_on(async {
+        let kit = support::kit();
+        let user = kit.user("nick@example.com").await;
+        let cookie = kit.sign_in(&user).await;
+        // Chrome asks a security key for `credProtect` whenever a
+        // discoverable credential is created without `userVerification:
+        // required`, which is exactly what this module requests. The key
+        // echoes it in the authenticator data with the ED flag set, and
+        // treating those bytes as corruption would refuse every such
+        // registration on real hardware.
+        let authenticator = SoftAuthenticator::new(Algorithm::Es256).with_extension_output();
+
+        let options = post(&kit, OPTIONS, "{}", Some(&cookie)).await.json();
+        let challenge = challenge_of(&options);
+        let response = post(
+            &kit,
+            VERIFY,
+            &verify_body(&authenticator.register(RP_ID, ORIGIN, &challenge), "key"),
+            Some(&cookie),
+        )
+        .await;
+        assert_eq!(response.status, StatusCode::OK, "{}", response.text());
+    });
+}
+
+#[test]
 fn a_label_longer_than_the_limit_is_a_validation_error() {
     pollster::block_on(async {
         let kit = support::kit();
@@ -348,6 +375,56 @@ fn the_last_login_method_cannot_be_deleted() {
         assert_eq!(
             refused.json()["type"],
             "https://factory0.ventures/problems/auth/last-login-method"
+        );
+    });
+}
+
+#[test]
+fn a_suspect_credential_does_not_count_as_a_way_back_in() {
+    pollster::block_on(async {
+        let kit = support::kit();
+        let user = kit.user("nick@example.com").await;
+        let cookie = kit.sign_in(&user).await;
+
+        let mut ids = Vec::new();
+        for (index, credential_id) in [b"good-id".as_slice(), b"suspect-id".as_slice()]
+            .into_iter()
+            .enumerate()
+        {
+            let authenticator =
+                SoftAuthenticator::new(Algorithm::Es256).with_credential_id(credential_id);
+            let options = post(&kit, OPTIONS, "{}", Some(&cookie)).await.json();
+            let challenge = challenge_of(&options);
+            let stored = post(
+                &kit,
+                VERIFY,
+                &verify_body(
+                    &authenticator.register(RP_ID, ORIGIN, &challenge),
+                    &format!("key {index}"),
+                ),
+                Some(&cookie),
+            )
+            .await;
+            ids.push(stored.json()["id"].as_str().expect("id").to_owned());
+        }
+
+        // The second one is flagged as a possible clone, so it is refused at
+        // login and is not a way back into the account.
+        kit.mark_suspect(&ids[1]).await;
+
+        let refused = send(
+            &kit,
+            Method::DELETE,
+            &format!("{CREDENTIALS}/{}", ids[0]),
+            None,
+            Some(&cookie),
+        )
+        .await;
+        assert_eq!(
+            refused.status,
+            StatusCode::CONFLICT,
+            "deleting the only working passkey stranded the account: {}",
+            refused.text()
         );
     });
 }

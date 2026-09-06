@@ -43,9 +43,10 @@ in migration `0004`.
 dependency of `webauthn-rs-core` — so relying-party verification is
 implemented directly on the wire types (ADR 0100). ES256, RS256 and EdDSA
 are all accepted; anything else is refused at registration rather than
-stored and failed at every later login. Attestation statements other than
-`none` are stored and not verified, which is the ordinary consumer
-relying-party position.
+stored and failed at every later login. Registration requests
+`attestation: none` and accepts other formats without verifying them, which
+is the ordinary consumer relying-party position; the statement itself is
+logged and not retained, since nothing here would ever read it back.
 
 ## Two rules that run through the module
 
@@ -58,6 +59,27 @@ challenge, wrong origin and a bad signature return the same problem, because
 an attacker who can tell them apart learns which half of the ceremony to
 work on. The tests assert the responses are identical apart from the request
 id.
+
+**The signature is checked before the counter.** That order is the spec's
+(7.2 steps 21 then 22) and it matters here more than most places: a counter
+regression is the one failure this module acts on permanently, and every
+part of an assertion except the signature is attacker-chosen. Checking the
+counter first would let one unauthenticated request with a garbage signature
+mark a stranger's passkey as a clone.
+
+## What this module does not resist
+
+`POST /login/options` with an email returns that account's credential ids,
+which is inherent to the non-discoverable flow: the browser needs them to
+choose an authenticator. An account with no passkeys and an address with no
+account are indistinguishable, but an account *with* a passkey is not. Both
+public endpoints are rate limited by client address for that reason, and by
+address only: keying on the email too would let anyone lock a named account
+out of its own logins.
+
+Registration requires a live session but not a *recent* one, so a hijacked
+session can add a passkey. Requiring a fresh authentication before adding a
+credential is the usual hardening and is filed separately.
 
 ## Known gap
 

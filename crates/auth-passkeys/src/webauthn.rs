@@ -25,6 +25,11 @@ use webauthn_rs_proto::{
 const FLAG_USER_PRESENT: u8 = 0x01;
 const FLAG_USER_VERIFIED: u8 = 0x04;
 const FLAG_ATTESTED_CREDENTIAL_DATA: u8 = 0x40;
+/// Extension outputs follow the credential data as one more CBOR map.
+const FLAG_EXTENSION_DATA: u8 = 0x80;
+
+/// The spec's ceiling on a credential id.
+const MAX_CREDENTIAL_ID: usize = 1023;
 
 /// The smallest authenticator data that can exist: rpIdHash, flags, counter.
 const AUTH_DATA_MIN: usize = 37;
@@ -171,6 +176,11 @@ pub(crate) fn parse_auth_data(bytes: &[u8]) -> Result<AuthData, WebauthnError> {
         aaguid = Some(id);
 
         let id_len = usize::from(u16::from_be_bytes([rest[16], rest[17]]));
+        if id_len > MAX_CREDENTIAL_ID {
+            return Err(WebauthnError::AuthenticatorData(format!(
+                "credential id is {id_len} bytes; the spec allows at most {MAX_CREDENTIAL_ID}"
+            )));
+        }
         let key_start = ATTESTED_HEADER + id_len;
         if rest.len() < key_start {
             return Err(WebauthnError::AuthenticatorData(
@@ -180,17 +190,30 @@ pub(crate) fn parse_auth_data(bytes: &[u8]) -> Result<AuthData, WebauthnError> {
         credential_id = Some(rest[ATTESTED_HEADER..key_start].to_vec());
 
         // The COSE key is CBOR of unknown length, so it is measured by
-        // decoding it and asking the cursor how far it got. Anything after
-        // it is an extension block we do not read, but a *registration* has
-        // no extensions we accept, so trailing bytes are a malformed record.
+        // decoding it and asking the cursor how far it got.
         let mut cursor = Cursor::new(&rest[key_start..]);
         let value: ciborium::Value = ciborium::de::from_reader(&mut cursor)
             .map_err(|err| WebauthnError::CoseKey(err.to_string()))?;
-        let consumed = usize::try_from(cursor.position()).unwrap_or(usize::MAX);
+        let mut consumed = usize::try_from(cursor.position()).unwrap_or(usize::MAX);
+
+        // What follows the key is an extension-output map, when the ED flag
+        // says so. It is read only to find where the record ends: the
+        // outputs themselves are not acted on. Chrome asks for `credProtect`
+        // on a security key whenever a discoverable credential is created
+        // without `userVerification: required` — which is exactly what this
+        // module requests — so treating those bytes as corruption would
+        // refuse every such registration.
+        if flags & FLAG_EXTENSION_DATA != 0 {
+            let mut extensions = Cursor::new(&rest[key_start + consumed..]);
+            ciborium::de::from_reader::<ciborium::Value, _>(&mut extensions)
+                .map_err(|err| WebauthnError::AuthenticatorData(format!("extensions: {err}")))?;
+            consumed += usize::try_from(extensions.position()).unwrap_or(usize::MAX);
+        }
+
         let trailing = rest.len() - key_start - consumed;
         if trailing != 0 {
             return Err(WebauthnError::AuthenticatorData(format!(
-                "{trailing} bytes after the COSE key"
+                "{trailing} bytes after the authenticator data"
             )));
         }
         // Parsed once here so a key we could never verify against is
@@ -328,11 +351,20 @@ pub(crate) fn verify_registration(
     check_presence(&auth_data, policy)?;
 
     let attestation_unverified = attestation.fmt != "none";
-    if attestation_unverified && !matches!(attestation.att_stmt, ciborium::Value::Map(_)) {
-        return Err(WebauthnError::AttestationObject(format!(
-            "format {:?} with a non-map attStmt",
-            attestation.fmt
-        )));
+    match (&attestation.att_stmt, attestation_unverified) {
+        // `none` carries an empty map and nothing else (spec 7.1 step 20).
+        (ciborium::Value::Map(entries), false) if !entries.is_empty() => {
+            return Err(WebauthnError::AttestationObject(
+                "format \"none\" with a non-empty attStmt".to_owned(),
+            ));
+        }
+        (ciborium::Value::Map(_), _) => {}
+        (_, _) => {
+            return Err(WebauthnError::AttestationObject(format!(
+                "format {:?} with a non-map attStmt",
+                attestation.fmt
+            )));
+        }
     }
 
     let credential_id = auth_data
@@ -392,11 +424,23 @@ pub(crate) fn verify_assertion(
         return Err(WebauthnError::CredentialMismatch);
     }
 
-    // A counter that goes backwards is the one clone signal WebAuthn gives a
-    // relying party. Authenticators that do not keep a counter report zero
-    // forever, and comparing those would refuse every login.
-    if stored.sign_count != 0
-        && auth_data.sign_count != 0
+    // The signature comes before the counter, and the order is the whole
+    // point (spec 7.2: signature is step 21, counter is step 22). The
+    // counter is the only check whose failure the caller acts on
+    // permanently, and everything an assertion carries except the signature
+    // is attacker-chosen: the credential id is handed out by the options
+    // endpoint, the rpIdHash is a hash of a published domain, and the flags
+    // and the counter are just bytes. Comparing counters first would let one
+    // unauthenticated request with a garbage signature mark a stranger's
+    // passkey as a clone and lock them out for good.
+    verify_signature(stored.cose_key, &response.response)?;
+
+    // Now that the assertion is known to come from the registered key, a
+    // counter that has not advanced is the one clone signal WebAuthn gives a
+    // relying party. The rule is the spec's: when either value is non-zero
+    // the presented one must be greater. Authenticators that keep no counter
+    // report zero forever, and those are the only ones exempt.
+    if (stored.sign_count != 0 || auth_data.sign_count != 0)
         && auth_data.sign_count <= stored.sign_count
     {
         return Err(WebauthnError::CounterRegression {
@@ -404,8 +448,6 @@ pub(crate) fn verify_assertion(
             presented: auth_data.sign_count,
         });
     }
-
-    verify_signature(stored.cose_key, &response.response)?;
 
     Ok(VerifiedAssertion {
         sign_count: auth_data.sign_count,

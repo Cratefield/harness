@@ -96,14 +96,15 @@ const MIGRATION_ROTATION: SqlMigration = SqlMigration {
     sql: include_str!("../migrations/sqlite/0002_client_secret_rotation.sql"),
 };
 
-/// The token-issuing migration of issue #9: the sessions `amr` column
-/// and the `refresh_token` single-use-token kind.
+/// The passkey clone signal of issue #14: `credentials.passkey_suspect_at`.
 const MIGRATION_SUSPECT: SqlMigration = SqlMigration {
     id: "0004",
     name: "passkey_suspect",
     sql: include_str!("../migrations/sqlite/0004_passkey_suspect.sql"),
 };
 
+/// The token-issuing migration of issue #9: the sessions `amr` column
+/// and the `refresh_token` single-use-token kind.
 const MIGRATION_TOKENS: SqlMigration = SqlMigration {
     id: "0003",
     name: "token_issuing",

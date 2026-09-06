@@ -147,6 +147,118 @@ fn a_signature_counter_that_goes_backwards_is_refused_and_remembered() {
 }
 
 #[test]
+fn a_forged_assertion_cannot_disable_someone_elses_passkey() {
+    pollster::block_on(async {
+        let kit = support::kit();
+        let mut authenticator = SoftAuthenticator::new(Algorithm::Es256);
+        account_with(&kit, "victim@example.com", &authenticator).await;
+
+        // Everything here is public: `login/options` hands out the account's
+        // credential ids, the rpIdHash is a hash of a published domain, and
+        // the flags and counter are the attacker's to choose. The only thing
+        // they cannot produce is a signature.
+        let options = post(
+            &kit,
+            LOGIN_OPTIONS,
+            r#"{"email":"victim@example.com"}"#,
+            None,
+        )
+        .await
+        .json();
+        let mut forged =
+            SoftAuthenticator::new(Algorithm::Eddsa).with_credential_id(b"a-test-credential-id");
+        forged.counter = 1;
+        let mut credential = forged.assert(RP_ID, ORIGIN, &challenge_of(&options));
+        credential.response.signature = vec![0u8; 64].into();
+
+        let attack = post(&kit, LOGIN_VERIFY, &login_body(&credential), None).await;
+        assert_eq!(attack.status, StatusCode::UNAUTHORIZED);
+
+        // The victim must still be able to log in. If an unverified assertion
+        // can mark a credential suspect, one unauthenticated request locks
+        // every counter-keeping passkey out for good, with no way back.
+        let options = post(
+            &kit,
+            LOGIN_OPTIONS,
+            r#"{"email":"victim@example.com"}"#,
+            None,
+        )
+        .await
+        .json();
+        assert_eq!(
+            options["publicKey"]["allowCredentials"]
+                .as_array()
+                .expect("allow list")
+                .len(),
+            1,
+            "the forged assertion took the credential out of the allow list"
+        );
+        authenticator.counter = 2;
+        let legitimate = post(
+            &kit,
+            LOGIN_VERIFY,
+            &login_body(&authenticator.assert(RP_ID, ORIGIN, &challenge_of(&options))),
+            None,
+        )
+        .await;
+        assert_eq!(
+            legitimate.status,
+            StatusCode::OK,
+            "a forged assertion locked the victim out: {}",
+            legitimate.text()
+        );
+    });
+}
+
+#[test]
+fn a_disabled_account_cannot_log_in() {
+    pollster::block_on(async {
+        let kit = support::kit();
+        let mut authenticator = SoftAuthenticator::new(Algorithm::Es256);
+        let user = account_with(&kit, "nick@example.com", &authenticator).await;
+        kit.disable(&user).await;
+
+        let options = post(&kit, LOGIN_OPTIONS, "{}", None).await.json();
+        authenticator.counter = 2;
+        let response = post(
+            &kit,
+            LOGIN_VERIFY,
+            &login_body(&authenticator.assert(RP_ID, ORIGIN, &challenge_of(&options))),
+            None,
+        )
+        .await;
+        // The account status is the one administrative kill switch; a login
+        // method that ignores it makes it useless.
+        assert_eq!(response.status, StatusCode::UNAUTHORIZED);
+        assert!(response.set_cookie().is_none());
+    });
+}
+
+#[test]
+fn a_counter_that_drops_to_zero_is_still_a_regression() {
+    pollster::block_on(async {
+        let kit = support::kit();
+        let mut authenticator = SoftAuthenticator::new(Algorithm::Es256);
+        authenticator.counter = 5;
+        account_with(&kit, "nick@example.com", &authenticator).await;
+
+        // The spec's rule is "if either value is non-zero, the presented one
+        // must be greater". A stored 5 and a presented 0 is a regression, and
+        // storing that 0 would switch clone detection off for good.
+        let options = post(&kit, LOGIN_OPTIONS, "{}", None).await.json();
+        authenticator.counter = 0;
+        let response = post(
+            &kit,
+            LOGIN_VERIFY,
+            &login_body(&authenticator.assert(RP_ID, ORIGIN, &challenge_of(&options))),
+            None,
+        )
+        .await;
+        assert_eq!(response.status, StatusCode::UNAUTHORIZED);
+    });
+}
+
+#[test]
 fn an_authenticator_that_keeps_no_counter_still_logs_in() {
     pollster::block_on(async {
         let kit = support::kit();
@@ -340,7 +452,7 @@ fn a_challenge_bound_to_one_account_cannot_be_spent_by_another() {
 }
 
 #[test]
-fn options_never_say_whether_an_account_exists() {
+fn an_account_with_no_passkeys_looks_like_no_account_at_all() {
     pollster::block_on(async {
         let kit = support::kit();
         let authenticator = SoftAuthenticator::new(Algorithm::Es256);
@@ -360,8 +472,10 @@ fn options_never_say_whether_an_account_exists() {
 
         assert_eq!(unknown.status, StatusCode::OK);
         assert_eq!(no_passkeys.status, StatusCode::OK);
-        // Both get a real challenge and an empty list. An account with no
-        // passkeys and no account at all look the same.
+        // Both get a real challenge and an empty list, so these two are
+        // indistinguishable. This is **not** full enumeration resistance: an
+        // account that does have a passkey answers with its credential ids,
+        // which is inherent to the non-discoverable flow.
         for response in [&unknown, &no_passkeys] {
             let body = response.json();
             assert!(!challenge_of(&body).is_empty());
@@ -372,6 +486,29 @@ fn options_never_say_whether_an_account_exists() {
                     .is_empty()
             );
         }
+    });
+}
+
+#[test]
+fn the_endpoints_anyone_can_call_are_rate_limited() {
+    pollster::block_on(async {
+        let kit = support::kit_rate_limited();
+        // Both endpoints are unauthenticated, and every options call writes
+        // a challenge row, so an unlimited one is a free write amplifier as
+        // well as an enumeration surface.
+        for (path, body) in [
+            (LOGIN_OPTIONS, "{}"),
+            (LOGIN_VERIFY, r#"{"credential":{}}"#),
+        ] {
+            let response = post(&kit, path, body, None).await;
+            assert_eq!(
+                response.status,
+                StatusCode::TOO_MANY_REQUESTS,
+                "{path} was not limited"
+            );
+        }
+        // Nothing was written on the way to the refusal.
+        assert_eq!(support::count(&kit, "single_use_tokens"), 0);
     });
 }
 

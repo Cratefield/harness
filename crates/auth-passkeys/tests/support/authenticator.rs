@@ -21,6 +21,7 @@ use webauthn_rs_proto::{
 pub const FLAG_UP: u8 = 0x01;
 pub const FLAG_UV: u8 = 0x04;
 pub const FLAG_AT: u8 = 0x40;
+pub const FLAG_ED: u8 = 0x80;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Algorithm {
@@ -57,6 +58,9 @@ pub struct SoftAuthenticator {
     pub counter: u32,
     /// Whether the authenticator verified the user (a PIN or biometric).
     pub user_verified: bool,
+    /// Whether to append an extension-output map, as a security key does
+    /// when Chrome asks for `credProtect`.
+    pub extension_output: bool,
 }
 
 impl SoftAuthenticator {
@@ -81,7 +85,15 @@ impl SoftAuthenticator {
             aaguid: [0xAB; 16],
             counter: 1,
             user_verified: true,
+            extension_output: false,
         }
+    }
+
+    /// Emit extension outputs, which sets the ED flag and appends one more
+    /// CBOR map after the credential data.
+    pub fn with_extension_output(mut self) -> Self {
+        self.extension_output = true;
+        self
     }
 
     pub fn with_credential_id(mut self, id: &[u8]) -> Self {
@@ -155,6 +167,9 @@ impl SoftAuthenticator {
         if attested {
             flags |= FLAG_AT;
         }
+        if attested && self.extension_output {
+            flags |= FLAG_ED;
+        }
         flags
     }
 
@@ -169,6 +184,16 @@ impl SoftAuthenticator {
             data.extend_from_slice(&id_len.to_be_bytes());
             data.extend_from_slice(&self.credential_id);
             data.extend_from_slice(&self.cose_key());
+            if self.extension_output {
+                // What Chrome's credProtect request comes back as.
+                let outputs = Value::Map(vec![(
+                    Value::Text("credProtect".to_owned()),
+                    Value::Integer(2.into()),
+                )]);
+                let mut encoded = Vec::new();
+                ciborium::into_writer(&outputs, &mut encoded).expect("extensions encode");
+                data.extend_from_slice(&encoded);
+            }
         }
         data
     }

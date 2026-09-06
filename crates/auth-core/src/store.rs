@@ -557,22 +557,34 @@ pub async fn update_passkey_sign_count(
             (iden("last_used_at"), last_used_at.into()),
         ])
         .and_where(Expr::col(iden("id")).eq(id))
-        .and_where(Expr::col(iden("kind")).eq(CREDENTIAL_PASSKEY));
+        .and_where(Expr::col(iden("kind")).eq(CREDENTIAL_PASSKEY))
+        // Monotonic, and never on a credential already flagged as a possible
+        // clone. Two assertions in flight together can arrive out of order,
+        // and storing the lower counter would hand back the advance that the
+        // clone check depends on.
+        .and_where(Expr::col(iden("passkey_suspect_at")).is_null())
+        .cond_where(
+            sea_query::Cond::any()
+                .add(Expr::col(iden("passkey_sign_count")).is_null())
+                .add(Expr::col(iden("passkey_sign_count")).lte(sign_count)),
+        );
     db.execute(&Statement::render(&update)).await
 }
 
-/// Deletes one credential, returning the affected-row count. The caller
-/// decides whether removing it would leave the account with no way in;
-/// this only performs the deletion.
+/// Deletes one of a user's credentials, returning the affected-row count.
+/// The owner is part of the statement rather than checked beforehand, so a
+/// caller cannot delete somebody else's credential by passing the wrong id.
+/// Whether removing it strands the account is the caller's judgement.
 ///
 /// # Errors
 ///
 /// [`DbError::Execute`] when the statement fails.
-pub async fn delete_credential(db: &dyn Database, id: &str) -> Result<u64, DbError> {
+pub async fn delete_credential(db: &dyn Database, id: &str, user_id: &str) -> Result<u64, DbError> {
     let mut delete = Query::delete();
     delete
         .from_table(iden("credentials"))
-        .and_where(Expr::col(iden("id")).eq(id));
+        .and_where(Expr::col(iden("id")).eq(id))
+        .and_where(Expr::col(iden("user_id")).eq(user_id));
     db.execute(&Statement::render(&delete)).await
 }
 

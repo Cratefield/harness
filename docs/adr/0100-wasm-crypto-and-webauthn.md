@@ -80,6 +80,15 @@ fourth is recorded rather than quietly dropped:
   requires user *presence* always and user *verification* only when the
   configured policy is `required`, because refusing under `preferred`
   would shut out every security key without a PIN.
+- **Check order**: the signature is verified before the counter is
+  compared, which is the spec's order (7.2 steps 21 then 22). The spike had
+  it the other way round, which was harmless there because it persisted
+  nothing; a module that marks a credential on a counter regression must
+  not act on an assertion it has not verified.
+- **Extension outputs**: the authenticator data may carry a CBOR extension
+  map after the credential data, and Chrome asks for `credProtect` under
+  exactly the options this module sends. The spike treated those bytes as
+  corruption; production reads past them.
 - **Still missing: a hardware-authenticator fixture.** The tests mint
   ceremonies with a software authenticator, which exercises all three
   algorithms and every negative case but cannot prove a real device's

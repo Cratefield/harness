@@ -220,7 +220,7 @@ async fn verify(
         })?
         .is_some()
     {
-        return Err(Problem::new(&crate::CREDENTIAL_ALREADY_REGISTERED));
+        return Err(Problem::new(&crate::CREDENTIAL_ALREADY_REGISTERED).instance(&scope.request_id));
     }
 
     let now = crate::iso(clock.now());
@@ -355,7 +355,12 @@ async fn remove(
         .find(|row| row.id == id && row.kind == CREDENTIAL_PASSKEY)
         .ok_or_else(Problem::not_found)?;
 
-    let other_credentials = credentials.iter().filter(|row| row.id != target.id).count();
+    // A credential flagged as a possible clone is refused at login, so it is
+    // not a way back into the account and must not count as one.
+    let other_credentials = credentials
+        .iter()
+        .filter(|row| row.id != target.id && row.passkey_suspect_at.is_none())
+        .count();
     let identities = identities_by_user(db, &session.user_id)
         .await
         .map_err(|err| {
@@ -364,10 +369,10 @@ async fn remove(
         })?
         .len();
     if other_credentials == 0 && identities == 0 {
-        return Err(Problem::new(&crate::LAST_LOGIN_METHOD));
+        return Err(Problem::new(&crate::LAST_LOGIN_METHOD).instance(&scope.request_id));
     }
 
-    factory0_auth_core::delete_credential(db, &target.id)
+    factory0_auth_core::delete_credential(db, &target.id, &session.user_id)
         .await
         .map_err(|err| {
             tracing::error!(error = %err, "could not delete the passkey");

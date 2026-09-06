@@ -14,9 +14,9 @@ use axum::extract::State;
 use axum::response::{IntoResponse, Response};
 use axum::routing::post;
 use factory0_auth_core::{
-    CREDENTIAL_PASSKEY, Login, credentials_by_user, issue as issue_session, mark_passkey_suspect,
-    passkey_by_credential_id, set_cookie, touch_credential_used, update_passkey_sign_count,
-    user_by_primary_email,
+    CREDENTIAL_PASSKEY, Login, STATUS_ACTIVE, credentials_by_user, issue as issue_session,
+    mark_passkey_suspect, passkey_by_credential_id, set_cookie, touch_credential_used,
+    update_passkey_sign_count, user_by_id, user_by_primary_email,
 };
 use factory0_core::{Json, Problem, Scope};
 use http::HeaderMap;
@@ -31,7 +31,7 @@ use webauthn_rs_proto::{
 
 use crate::ModuleState;
 use crate::challenge::{self, PURPOSE_LOGIN};
-use crate::request::{ceremony_failed, client_hints, internal, ok, ports};
+use crate::request::{ceremony_failed, client_hints, internal, limit_login, ok, ports};
 use crate::webauthn::{StoredPasskey, UserVerification, WebauthnError, verify_assertion};
 
 pub(crate) const EVENT_LOGGED_IN: &str = "auth-passkeys.logged_in";
@@ -62,8 +62,12 @@ pub(crate) struct OptionsBody {
 async fn options(
     State(state): State<Arc<ModuleState>>,
     scope: Scope,
+    headers: HeaderMap,
     body: axum::body::Bytes,
 ) -> Result<Response, Problem> {
+    if let Some(limited) = limit_login(&state, &headers).await {
+        return Ok(limited);
+    }
     let rp = state.rp()?;
     let (db, clock, id_gen) = ports(&state)?;
     // Taken as raw bytes rather than through the JSON extractor because an
@@ -83,9 +87,11 @@ async fn options(
     let mut allow = Vec::new();
     let mut user_id = None;
     if let Some(email) = email.as_deref() {
-        // An unknown address gets an empty list and a real challenge, the
-        // same as an account with no passkeys. Nothing here says whether
-        // the account exists.
+        // An unknown address gets an empty list and a real challenge, which
+        // is exactly what an account with no passkeys gets. It is **not**
+        // full enumeration resistance: an account that does have a passkey
+        // answers with its credential ids, which is inherent to the
+        // non-discoverable flow and is why the endpoint is rate limited.
         if let Some(user) = user_by_primary_email(db, email).await.map_err(|err| {
             tracing::error!(error = %err, "could not look up the account");
             internal(&scope)
@@ -176,15 +182,33 @@ async fn lookup(
         return Err(ceremony_failed(scope));
     }
 
-    // When the options call named an account, the assertion has to be for
-    // that account. Without this, a challenge issued for one user could be
-    // spent with another user's passkey.
+    // Defence in depth rather than a barrier: when the options call named an
+    // account, the assertion has to be for that account. An attacker can
+    // always ask for an unbound challenge instead, so this only closes the
+    // narrower path where a bound one is reused.
     if let Some(expected) = consumed.user_id.as_deref()
         && expected != stored.user_id
     {
         tracing::warn!("a login challenge was spent by a different account");
         return Err(ceremony_failed(scope));
     }
+
+    // `users.status` is the service's one administrative kill switch. It is
+    // enforced at the token endpoint; a login method that skipped it would
+    // hand a disabled account a session cookie and make the switch useless.
+    // Same answer as every other refusal, so it is not an oracle either.
+    let user = user_by_id(db, &stored.user_id)
+        .await
+        .map_err(|err| {
+            tracing::error!(error = %err, "could not read the account");
+            internal(scope)
+        })?
+        .ok_or_else(|| ceremony_failed(scope))?;
+    if user.status != STATUS_ACTIVE {
+        tracing::warn!(user = %user.id, status = %user.status, "a disabled account tried to log in");
+        return Err(ceremony_failed(scope));
+    }
+
     Ok(stored)
 }
 
@@ -283,8 +307,16 @@ async fn verify(
     State(state): State<Arc<ModuleState>>,
     scope: Scope,
     headers: HeaderMap,
-    Json(body): Json<VerifyBody>,
+    // Raw bytes rather than the JSON extractor, because an extractor runs
+    // before the handler body: a typed one here would answer a parse error
+    // to a caller the rate limiter was about to refuse.
+    raw: axum::body::Bytes,
 ) -> Result<Response, Problem> {
+    if let Some(limited) = limit_login(&state, &headers).await {
+        return Ok(limited);
+    }
+    let body: VerifyBody = serde_json::from_slice(&raw)
+        .map_err(|err| Problem::validation_failed(format!("body is not a credential: {err}")))?;
     let rp = state.rp()?;
     let (db, clock, id_gen) = ports(&state)?;
 
@@ -323,11 +355,19 @@ async fn verify(
     }
 
     let now = crate::iso(clock.now());
-    if let Err(err) =
-        update_passkey_sign_count(db, &stored.id, i64::from(verified.sign_count), &now).await
-    {
-        tracing::error!(error = %err, "could not store the signature counter");
-        return Err(internal(&scope));
+    match update_passkey_sign_count(db, &stored.id, i64::from(verified.sign_count), &now).await {
+        // Zero rows means the guard held: another assertion stored a higher
+        // counter first, or the credential was flagged in between. The login
+        // still stands, since this assertion verified.
+        Ok(0) => tracing::info!(
+            credential = %stored.id,
+            "the signature counter was not advanced by this login"
+        ),
+        Ok(_) => {}
+        Err(err) => {
+            tracing::error!(error = %err, "could not store the signature counter");
+            return Err(internal(&scope));
+        }
     }
     if let Err(err) = touch_credential_used(db, &stored.id, &now).await {
         tracing::warn!(error = %err, "could not record the credential's last use");

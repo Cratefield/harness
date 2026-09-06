@@ -266,6 +266,12 @@ impl Module for Passkeys {
         &[Port::Db, Port::Clock, Port::IdGen]
     }
 
+    /// The two login endpoints are reachable by anyone and each one writes a
+    /// challenge row, so they are rate limited where a limiter exists.
+    fn optional(&self) -> &'static [Port] {
+        &[Port::RateLimiter]
+    }
+
     /// None. `auth-core` owns every table this module writes, so there is
     /// one schema and one migration history for `credentials` and
     /// `single_use_tokens` rather than two modules disagreeing about them.
