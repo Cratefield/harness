@@ -12,6 +12,7 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
+askama = { workspace = true }
 factory0-core = { workspace = true }
 axum = { workspace = true }
 http = { workspace = true }

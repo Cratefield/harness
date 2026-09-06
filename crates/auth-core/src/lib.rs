@@ -22,10 +22,12 @@
 
 #![forbid(unsafe_code)]
 
+mod authorize;
 mod clients;
 mod secrets;
 mod sessions;
 mod store;
+mod token_endpoint;
 
 /// Exact-match redirect URI validation (issue #7): the one matching
 /// rule, used at registration and — from issue #10 — at `/authorize`.
@@ -105,6 +107,9 @@ const MIGRATION_TOKENS: SqlMigration = SqlMigration {
 pub(crate) struct ModuleState {
     pub(crate) ctx: Arc<ModuleContext>,
     pub(crate) secret_overlap_secs: u64,
+    /// The same signing-key cell the `/.well-known` router reads, so
+    /// `/token` mints with the key JWKS publishes (issue #9).
+    pub(crate) tokens: tokens::SigningKeysCell,
 }
 
 /// The auth-core module: schema, clients, sessions, tokens, the
@@ -229,8 +234,12 @@ impl Module for AuthCore {
         let state = Arc::new(ModuleState {
             secret_overlap_secs: self.resolved_overlap(&*ctx.config),
             ctx: Arc::new(ctx),
+            tokens: Arc::clone(&self.signing),
         });
-        clients::router(Arc::clone(&state)).merge(sessions::router().with_state(state))
+        clients::router(Arc::clone(&state))
+            .merge(sessions::router().with_state(Arc::clone(&state)))
+            .merge(authorize::router().with_state(Arc::clone(&state)))
+            .merge(token_endpoint::router().with_state(state))
     }
 
     fn well_known(&self) -> Option<axum::Router> {

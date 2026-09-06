@@ -10,6 +10,7 @@ license = "MIT"
 repository = "https://github.com/Factory-Zero/auth"
 
 [workspace.dependencies]
+askama = "0.14.0"
 # Harness crates, pinned to a harness main commit (8853e07, 2026-09-06).
 # They are NOT on crates.io yet; when they publish, these git pins become
 # version pins (recorded in PROGRESS.md per BUILD-BRIEF.md).

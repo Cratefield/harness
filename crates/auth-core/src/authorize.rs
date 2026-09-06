@@ -23,15 +23,15 @@
 //! challenge and session id, expiring in 60 seconds.
 
 use askama::Template;
-use axum::extract::{Query, State};
 use axum::extract::rejection::QueryRejection;
+use axum::extract::{Query, State};
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use base64ct::{Base64UrlUnpadded, Encoding};
-use factory0_core::{Clock, Database, IdGen, Problem, Scope, subject_hash};
+use factory0_core::{Database, Problem, Scope, subject_hash};
 use serde::Deserialize;
-use serde_json::{Value, json};
+use serde_json::json;
 use sha2::{Digest, Sha256};
 use std::sync::Arc;
 use time::OffsetDateTime;
@@ -39,8 +39,8 @@ use time::format_description::well_known::Rfc3339;
 
 use crate::ModuleState;
 use crate::redirect_uri::matches_any;
-use crate::sessions;
 use crate::secrets;
+use crate::sessions;
 use crate::store::{self, TOKEN_AUTHORIZATION_CODE};
 
 /// Authorization-code lifetime: 60 seconds, single-use.
@@ -49,14 +49,36 @@ pub const CODE_LIFETIME_SECS: i64 = 60;
 /// The generic `/authorize` failure page's one message: same words
 /// for unknown client, unregistered URI and disabled client, because
 /// the page is the only channel that could leak the difference.
-const AUTHORIZE_REFUSED_MESSAGE: &str = "The sign-in request did not match a registered application.";
+const AUTHORIZE_REFUSED_MESSAGE: &str =
+    "The sign-in request did not match a registered application.";
 
 /// A button on the login chooser. Empty until the login-method issues
 /// land; the template carries the empty-state copy.
 pub struct LoginMethod {
+    /// The method's identifier, e.g. `passkey`. Unused until a login
+    /// method registers a button (#13-#21); kept so the chooser's shape
+    /// does not change when they land.
+    #[allow(dead_code)]
     pub slug: String,
     pub label: String,
     pub href: String,
+}
+
+/// Renders an askama template to an HTML response.
+///
+/// askama 0.14 does not implement axum's `IntoResponse` (the
+/// `askama_axum` bridge crate was discontinued), so templates are
+/// rendered explicitly. A render failure is a bug in our own template,
+/// never caller input, so it becomes a 500 problem rather than leaking
+/// the template error to the browser.
+fn html(template: &impl Template) -> Response {
+    match template.render() {
+        Ok(body) => axum::response::Html(body).into_response(),
+        Err(err) => {
+            tracing::error!(error = %err, "auth template failed to render");
+            Problem::internal().into_response()
+        }
+    }
 }
 
 #[derive(Template)]
@@ -96,11 +118,14 @@ pub fn enabled_login_methods() -> Vec<LoginMethod> {
 }
 
 fn error_page(scope: &Scope) -> Response {
-    AuthorizeErrorTemplate {
+    let page = html(&AuthorizeErrorTemplate {
         message: AUTHORIZE_REFUSED_MESSAGE,
         request_id: scope.request_id.clone(),
-    }
-    .into_response()
+    });
+    // A refused /authorize must not redirect: sending the browser to an
+    // unregistered URI is the vulnerability exact matching prevents
+    // (issue #7). 400 with a page, never 302.
+    (StatusCode::BAD_REQUEST, page).into_response()
 }
 
 /// Percent-encodes one query component: unreserved characters pass,
@@ -113,7 +138,10 @@ fn encode_query_component(value: &str) -> String {
             b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
                 out.push(char::from(byte));
             }
-            _ => out.push_str(&format!("%{byte:02X}")),
+            _ => {
+                use std::fmt::Write as _;
+                let _ = write!(out, "%{byte:02X}");
+            }
         }
     }
     out
@@ -188,6 +216,11 @@ async fn validate_client_and_uri(
     Ok(client)
 }
 
+// The /authorize handler is one linear ceremony — validate client and
+// URI, require a session, mint the code, redirect — and splitting it
+// into fragments that each take eight arguments would obscure the order
+// the security argument depends on. Kept whole, deliberately.
+#[allow(clippy::too_many_lines)]
 async fn authorize(
     scope: Scope,
     State(state): State<Arc<ModuleState>>,
@@ -224,10 +257,7 @@ async fn authorize(
             query.state.as_deref(),
         ));
     }
-    let challenge_ok = query
-        .code_challenge
-        .as_deref()
-        .is_some_and(is_base64url_43);
+    let challenge_ok = query.code_challenge.as_deref().is_some_and(is_base64url_43);
     let method_ok = query.code_challenge_method.as_deref() == Some("S256");
     if !challenge_ok || !method_ok {
         // Missing challenge, wrong length, or any method other than
@@ -251,19 +281,17 @@ async fn authorize(
     // A session is required to mint a code; without one, the login
     // chooser (its buttons arrive with the login-method issues).
     let Some(cookie) = sessions::cookie_value(&headers) else {
-        return Ok(LoginChooserTemplate {
+        return Ok(html(&LoginChooserTemplate {
             methods: enabled_login_methods(),
-        }
-        .into_response());
+        }));
     };
     let session = sessions::validate(&*db, &*clock, &cookie)
         .await
         .map_err(|_| Problem::internal())?;
     let Some(session) = session else {
-        return Ok(LoginChooserTemplate {
+        return Ok(html(&LoginChooserTemplate {
             methods: enabled_login_methods(),
-        }
-        .into_response());
+        }));
     };
 
     let mut bytes = [0u8; 32];
@@ -308,7 +336,10 @@ async fn authorize(
     }
     Ok((
         StatusCode::FOUND,
-        [(header::LOCATION, redirect_with_params(&query.redirect_uri, &params))],
+        [(
+            header::LOCATION,
+            redirect_with_params(&query.redirect_uri, &params),
+        )],
     )
         .into_response())
 }
@@ -345,8 +376,9 @@ async fn logout(
             }
         }
         (_, Some(_)) => return Ok(error_page(&scope)),
-        (None, None) => String::new(),
-        (Some(_), None) => String::new(),
+        // No post-logout redirect requested (or a client id without
+        // one): sign out and render the signed-out page.
+        (_, None) => String::new(),
     };
 
     if let Some(cookie) = sessions::cookie_value(&headers)
@@ -363,16 +395,15 @@ async fn logout(
 
     let clear = [(header::SET_COOKIE, sessions::clear_cookie())];
     if target.is_empty() {
-        return Ok((clear, SignedOutTemplate).into_response());
+        return Ok((clear, html(&SignedOutTemplate)).into_response());
     }
     Ok((StatusCode::FOUND, clear, [(header::LOCATION, target)]).into_response())
 }
 
 pub(crate) fn router() -> axum::Router<Arc<ModuleState>> {
-    axum::Router::new().route("/authorize", get(authorize)).route(
-        "/logout",
-        get(logout),
-    )
+    axum::Router::new()
+        .route("/authorize", get(authorize))
+        .route("/logout", get(logout))
 }
 
 #[cfg(test)]
@@ -408,6 +439,8 @@ mod tests {
         ));
         assert!(!is_base64url_43("short"));
         assert!(!is_base64url_43(&"x".repeat(44)));
-        assert!(!is_base64url_43("d+BjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjX"));
+        assert!(!is_base64url_43(
+            "d+BjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjX"
+        ));
     }
 }

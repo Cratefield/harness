@@ -19,8 +19,8 @@
 //! authorization code or refresh token **revokes the session** it was
 //! bound to before the request is refused.
 
-use axum::extract::{Form, State};
 use axum::extract::rejection::FormRejection;
+use axum::extract::{Form, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::post;
@@ -36,7 +36,9 @@ use time::format_description::well_known::Rfc3339;
 use crate::ModuleState;
 use crate::secrets;
 use crate::store::{self, TOKEN_AUTHORIZATION_CODE, UserRow};
-use crate::tokens::{self, SigningKeys, TOKENS_UNCONFIGURED, mint_access_token, mint_refresh_token};
+use crate::tokens::{
+    self, SigningKeys, TOKENS_UNCONFIGURED, mint_access_token, mint_refresh_token,
+};
 
 /// The one answer every refused token request sees. The description
 /// says what it does not distinguish, on purpose.
@@ -111,7 +113,7 @@ async fn live_session_and_user(
     };
     if session.revoked_at.is_some() || session.expires_at <= now {
         return Ok(None);
-    };
+    }
     let Some(user) = store::user_by_id(db, &session.user_id).await? else {
         return Ok(None);
     };
@@ -143,20 +145,17 @@ async fn mint_pair(
         .as_deref()
         .map(|email| (email, user.primary_email_verified));
     let amr = amr_of(session);
-    let access = mint_access_token(
-        keys,
-        clock,
-        &session.id,
-        &user.id,
-        email,
-        client_id,
-        &amr,
-    )
-    .map_err(|err| {
-        tracing::error!(error = %err, "access-token mint failed");
-        Problem::internal()
-    })?;
-    let refresh = mint_refresh_token(db, clock, id_gen, &session.id, &user.id, client_id).await?;
+    let access = mint_access_token(keys, clock, &session.id, &user.id, email, client_id, &amr)
+        .map_err(|err| {
+            tracing::error!(error = %err, "access-token mint failed");
+            Problem::internal()
+        })?;
+    let refresh = mint_refresh_token(db, clock, id_gen, &session.id, &user.id, client_id)
+        .await
+        .map_err(|err| {
+            tracing::error!(error = %err, "minting a refresh token failed");
+            Problem::internal()
+        })?;
     Ok(Json(json!({
         "access_token": access,
         "token_type": "Bearer",
@@ -184,7 +183,12 @@ async fn token(
     // Signing keys are a service precondition, not a per-request
     // outcome: refused with the stable unconfigured problem before
     // anything is consumed.
-    let Some(keys) = state.tokens.clone() else {
+    let keys = state
+        .tokens
+        .read()
+        .expect("signing cell uncontended")
+        .clone();
+    let Some(keys) = keys else {
         return Err(Problem::new(&TOKENS_UNCONFIGURED).instance(&scope.request_id));
     };
 
@@ -201,7 +205,8 @@ async fn token(
             return Err(refused(&scope));
         }
     }
-    secrets::ensure_client_usable(&client).map_err(|problem| problem.instance(&scope.request_id))?;
+    secrets::ensure_client_usable(&client)
+        .map_err(|problem| problem.instance(&scope.request_id))?;
 
     let grant = GrantContext {
         scope: &scope,
@@ -241,9 +246,11 @@ async fn code_grant(grant: &GrantContext<'_>, form: &TokenForm) -> Result<Respon
     if row.kind != TOKEN_AUTHORIZATION_CODE || row.client_id.as_deref() != Some(client_id) {
         return Err(refused(scope));
     }
-    let Some(payload) = row.payload.as_deref().and_then(|raw| {
-        serde_json::from_str::<Value>(raw).ok()
-    }) else {
+    let Some(payload) = row
+        .payload
+        .as_deref()
+        .and_then(|raw| serde_json::from_str::<Value>(raw).ok())
+    else {
         return Err(refused(scope));
     };
     let (Some(bound_redirect), Some(challenge), Some(session_id)) = (
@@ -312,8 +319,7 @@ async fn refresh_grant(grant: &GrantContext<'_>, form: &TokenForm) -> Result<Res
     else {
         return Err(refused(scope));
     };
-    let Some((session, user)) = live_session_and_user(db, clock, &granted.session_id).await?
-    else {
+    let Some((session, user)) = live_session_and_user(db, clock, &granted.session_id).await? else {
         return Err(refused(scope));
     };
 
@@ -349,14 +355,29 @@ mod tests {
         let verifier = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk";
         let challenge = Base64UrlUnpadded::encode_string(&Sha256::digest(verifier.as_bytes()));
         assert!(pkce_s256_matches(verifier, &challenge));
-        assert!(!pkce_s256_matches("a-different-verifier-for-sure-1234567890abc", &challenge));
+        assert!(!pkce_s256_matches(
+            "a-different-verifier-for-sure-1234567890abc",
+            &challenge
+        ));
 
         // Verifier bounds: 43 minimum, 128 maximum, unreserved only.
         assert!(!pkce_s256_matches(&"x".repeat(42), &challenge));
-        assert!(pkce_s256_matches(&"x".repeat(43), &Base64UrlUnpadded::encode_string(&Sha256::digest("x".repeat(43).as_bytes()))));
-        assert!(pkce_s256_matches(&"y".repeat(128), &Base64UrlUnpadded::encode_string(&Sha256::digest("y".repeat(128).as_bytes()))));
+        assert!(pkce_s256_matches(
+            &"x".repeat(43),
+            &Base64UrlUnpadded::encode_string(&Sha256::digest("x".repeat(43).as_bytes()))
+        ));
+        assert!(pkce_s256_matches(
+            &"y".repeat(128),
+            &Base64UrlUnpadded::encode_string(&Sha256::digest("y".repeat(128).as_bytes()))
+        ));
         assert!(!pkce_s256_matches(&"y".repeat(129), &challenge));
-        assert!(!pkce_s256_matches("contains space and & symbols pad-to-43-chars!!", &challenge));
-        assert!(!pkce_s256_matches("plus+slash/equals=not-unreserved-padding-43", &challenge));
+        assert!(!pkce_s256_matches(
+            "contains space and & symbols pad-to-43-chars!!",
+            &challenge
+        ));
+        assert!(!pkce_s256_matches(
+            "plus+slash/equals=not-unreserved-padding-43",
+            &challenge
+        ));
     }
 }
