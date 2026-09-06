@@ -5,7 +5,8 @@
 
 use factory0_adapter_sqlite::SqliteDatabase;
 use factory0_core::{
-    Database, Harness, HmacSigner, MapConfig, Module, Port, Ports, Runtime, UlidIdGen, Venture,
+    Database, Harness, HarnessBuilder, HmacSigner, MapConfig, Module, Port, Ports, Runtime,
+    UlidIdGen, Venture,
 };
 use std::sync::Arc;
 
@@ -174,13 +175,39 @@ impl TestHarness {
         dialect: Dialect,
         patch: impl FnOnce(&mut Ports),
     ) -> Self {
+        Self::from_arcs_with_builder(shared, dialect, |builder| builder, patch)
+    }
+
+    /// [`TestHarness::with_ports`] with a hook over the `HarnessBuilder`
+    /// before it builds: mount a UI renderer (`.ui(..)`), add a template
+    /// override, anything the venture would do in `harness.rs`.
+    ///
+    /// # Panics
+    ///
+    /// Panics when the harness cannot build or a migration fails.
+    #[must_use]
+    pub fn with_builder(
+        modules: Vec<Box<dyn Module>>,
+        configure: impl FnOnce(HarnessBuilder) -> HarnessBuilder,
+        patch: impl FnOnce(&mut Ports),
+    ) -> Self {
+        let shared: Vec<Arc<dyn Module>> = modules.into_iter().map(Arc::from).collect();
+        Self::from_arcs_with_builder(shared, Dialect::Sqlite, configure, patch)
+    }
+
+    fn from_arcs_with_builder(
+        shared: Vec<Arc<dyn Module>>,
+        dialect: Dialect,
+        configure: impl FnOnce(HarnessBuilder) -> HarnessBuilder,
+        patch: impl FnOnce(&mut Ports),
+    ) -> Self {
         let mut builder = Harness::builder().venture(
             Venture::new("test-venture", "test.example").cors_origins(["https://test.example"]),
         );
         for module in &shared {
             builder = builder.module_arc(Arc::clone(module));
         }
-        let harness = builder
+        let harness = configure(builder)
             .runtime(TestRuntime)
             .build()
             .expect("test harness builds");

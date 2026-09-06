@@ -3,7 +3,9 @@
 //! one venture has one budget per subject. Both modules call these on
 //! every public route, including confirm and status.
 
-use axum::http::{HeaderMap, HeaderName};
+use axum::http::HeaderMap;
+#[cfg(not(target_arch = "wasm32"))]
+use axum::http::HeaderName;
 
 use crate::email;
 

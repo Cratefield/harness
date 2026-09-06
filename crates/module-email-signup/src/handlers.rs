@@ -479,17 +479,32 @@ async fn confirm(
     };
 
     let cfg = ModuleConfig::new("email-signup", &*state.ctx.config);
+    // With the UI mounted (ADR 0010) the landings default to its pages;
+    // otherwise to pages the venture site provides. Config and builder
+    // settings still win.
+    let (confirmed_default, expired_default) = if state.ctx.ui_mounted {
+        let base = api_base(&cfg, &state.ctx);
+        (
+            format!("{base}/ui/email-signup/confirm/done"),
+            format!("{base}/ui/email-signup/confirm/expired"),
+        )
+    } else {
+        (
+            format!("{}/confirmed", state.ctx.venture.public_url),
+            format!("{}/confirm-expired", state.ctx.venture.public_url),
+        )
+    };
     let confirmed_target = configured_or_default(
         &cfg,
         "CONFIRMED_REDIRECT",
         state.settings.confirmed_redirect.as_ref(),
-        format!("{}/confirmed", state.ctx.venture.public_url),
+        confirmed_default,
     );
     let expired_target = configured_or_default(
         &cfg,
         "EXPIRED_REDIRECT",
         state.settings.expired_redirect.as_ref(),
-        format!("{}/confirm-expired", state.ctx.venture.public_url),
+        expired_default,
     );
 
     // A human clicked this link: every failure path stays a redirect,
@@ -598,11 +613,19 @@ async fn unsubscribe(
         return Err(internal(scope));
     };
     let cfg = ModuleConfig::new("email-signup", &*state.ctx.config);
+    let unsubscribed_default = if state.ctx.ui_mounted {
+        format!(
+            "{}/ui/email-signup/unsubscribe/done",
+            api_base(&cfg, &state.ctx)
+        )
+    } else {
+        format!("{}/unsubscribed", state.ctx.venture.public_url)
+    };
     let target = configured_or_default(
         &cfg,
         "UNSUBSCRIBED_REDIRECT",
         state.settings.unsubscribed_redirect.as_ref(),
-        format!("{}/unsubscribed", state.ctx.venture.public_url),
+        unsubscribed_default,
     );
 
     let Some(payload) = signer.verify(token, PURPOSE_UNSUBSCRIBE) else {

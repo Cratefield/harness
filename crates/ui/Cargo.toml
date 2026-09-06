@@ -1,0 +1,33 @@
+[package]
+name = "factory0-ui"
+description = "Factory Zero harness UI renderer: pages and fragments from the module surface, in-process dispatch, the cf-* markup contract"
+readme = "README.md"
+keywords = ["factory0", "harness", "ui", "forms", "maud"]
+categories = ["web-programming"]
+include = ["src/**/*", "assets/**/*", "tests/**/*", "README.md"]
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+factory0-core = { workspace = true }
+axum = { workspace = true }
+http = { workspace = true }
+tower = { workspace = true }
+maud = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+factory0-testing = { workspace = true }
+factory0-module-waitlist = { workspace = true }
+factory0-module-email-signup = { workspace = true }
+pollster = { workspace = true }
+insta = { workspace = true }
+schemars = { workspace = true }

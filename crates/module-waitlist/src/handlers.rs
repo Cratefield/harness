@@ -103,6 +103,24 @@ fn internal(scope: &Scope) -> Problem {
     Problem::internal().instance(&scope.request_id)
 }
 
+/// Where confirm lands by default: with the UI mounted (ADR 0010) on its
+/// pages, otherwise on pages the venture site provides. Config and
+/// builder settings still win over either.
+fn landing_defaults(cfg: &ModuleConfig<'_>, ctx: &ModuleContext) -> (String, String) {
+    if ctx.ui_mounted {
+        let base = api_base(cfg, ctx);
+        (
+            format!("{base}/ui/waitlist/status"),
+            format!("{base}/ui/waitlist/confirm/expired"),
+        )
+    } else {
+        (
+            format!("{}/waitlist/status", ctx.venture.public_url),
+            format!("{}/confirm-expired", ctx.venture.public_url),
+        )
+    }
+}
+
 fn api_base(cfg: &ModuleConfig<'_>, ctx: &ModuleContext) -> String {
     cfg.get_opt("API_BASE")
         .unwrap_or_else(|| format!("https://api.{}", ctx.venture.domain))
@@ -536,18 +554,14 @@ async fn confirm(
     };
 
     let cfg = ModuleConfig::new("waitlist", &*state.ctx.config);
+    let (status_default, expired_default) = landing_defaults(&cfg, &state.ctx);
     let status_base = configured_or_default(
         &cfg,
         "STATUS_REDIRECT",
         state.settings.status_redirect.as_ref(),
-        format!("{}/waitlist/status", state.ctx.venture.public_url),
+        status_default,
     );
-    let expired_target = configured_or_default(
-        &cfg,
-        "EXPIRED_REDIRECT",
-        None,
-        format!("{}/confirm-expired", state.ctx.venture.public_url),
-    );
+    let expired_target = configured_or_default(&cfg, "EXPIRED_REDIRECT", None, expired_default);
 
     let Some(payload) = signer.verify(&query.token, PURPOSE_CONFIRM) else {
         return see_other(expired_target);

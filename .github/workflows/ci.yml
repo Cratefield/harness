@@ -158,6 +158,17 @@ jobs:
           curl -sf -m 10 -D /tmp/surface.headers http://127.0.0.1:8787/__surface \
             | grep -q '"name":"insert"'
           grep -qi '^etag: "' /tmp/surface.headers
+          echo "-- ui page"
+          curl -sf -m 10 -D /tmp/ui.headers http://127.0.0.1:8787/ui/waitlist/join \
+            | grep -q '<form class="cf-form" data-cf-module="waitlist" data-cf-action="join"'
+          grep -qi '^content-security-policy:' /tmp/ui.headers
+          echo "-- ui submit (validation error re-renders the form)"
+          curl -s -m 10 -o /tmp/ui.body -w "%{http_code}" -X POST http://127.0.0.1:8787/ui/waitlist/join \
+            -H 'content-type: application/x-www-form-urlencoded' \
+            --data 'email=not-an-email&product=kontinuum' | grep -q '^422$'
+          grep -q 'cf-field--invalid' /tmp/ui.body
+          echo "-- ui css"
+          curl -sf -m 10 http://127.0.0.1:8787/ui/cf.css | grep -q '@layer cf'
           echo "-- insert"
           curl -sf -m 15 -X POST http://127.0.0.1:8787/v1/sample/rows \
             -H 'content-type: application/json' \
