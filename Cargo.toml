@@ -1,0 +1,7 @@
+[workspace]
+resolver = "2"
+members = ["spikes/wasm-auth"]
+
+# Spike workspace for auth issue #2. Everything here must build for
+# wasm32-unknown-unknown with no openssl, reqwest, tokio or mio in the tree
+# (BUILD-BRIEF.md, hard constraints).

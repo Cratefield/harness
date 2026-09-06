@@ -4,3 +4,6 @@ build/
 .dev.vars
 *.log
 .DS_Store
+
+# Spike progress notes (git-excluded per BUILD-BRIEF.md)
+PROGRESS.md
