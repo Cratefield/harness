@@ -65,7 +65,7 @@
 ## Reporting a vulnerability
 
 Report privately to `security@factory0.ventures` (or a GitHub security
-advisory on `Factory-Zero/harness`). Please include reproduction steps
+advisory on `Cratefield/harness`). Please include reproduction steps
 and affected commit; do not open a public issue for exploitable
 findings. We aim to respond within 72 hours and will credit reporters
 unless anonymity is requested.

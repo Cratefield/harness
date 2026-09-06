@@ -8,7 +8,7 @@ with plain `cargo add`. Private crates must not require running a registry.
 
 ## Decision
 - Open-source crates: prefix `factory0-`, published to crates.io from
-  `Factory-Zero/harness` with trusted publishing (GitHub OIDC).
+  `Cratefield/harness` with trusted publishing (GitHub OIDC).
 - Private crates: prefix `fz-`, never published; consumed as
   `fz-module-admin = { git = "ssh://git@github.com/Factory-Zero/harness-private", tag = "fz-module-admin-v0.3.0" }`.
 - Version tags in the private repo follow `<crate>-v<semver>` so one repo can carry many crates.

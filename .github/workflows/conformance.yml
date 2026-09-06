@@ -4,7 +4,7 @@
 # the CALLING repository. This repo's CI calls it via
 # `uses: ./.github/workflows/conformance.yml`; `harness-private` calls it
 # across repos with
-# `uses: Factory-Zero/harness/.github/workflows/conformance.yml@<ref>`,
+# `uses: Cratefield/harness/.github/workflows/conformance.yml@<ref>`,
 # so private modules pass the same suite as public ones (ADR 0005).
 #
 # Expected layout (same as this repo): module crates live in directories

@@ -1,7 +1,7 @@
 # factory0-adapter-postgres
 
 The [`Database`] port over `sqlx` Postgres 16 for the [Factory Zero
-harness](https://github.com/Factory-Zero/harness) native runtime (ADR 0004,
+harness](https://github.com/Cratefield/harness) native runtime (ADR 0004,
 issue #18). **Native only** — the crate fails compilation on any wasm
 target with a clear message, and the sqlx dependency is target-gated to
 non-wasm builds, so it can never slip into a Worker.

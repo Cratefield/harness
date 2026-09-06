@@ -56,7 +56,7 @@ crate exists**, so the very first release of each crate is manual:
    until those are published first — hence the order.)
 3. **Enable trusted publishing per crate.** For each published crate:
    crates.io → crate page → *Settings* → *Trusted publishing* → add
-   repository `Factory-Zero/harness`, workflow `release.yml`,
+   repository `Cratefield/harness`, workflow `release.yml`,
    environment *(leave empty)*. From then on the release workflow
    publishes that crate with OIDC and no token.
 4. **Revoke the token from step 1.**

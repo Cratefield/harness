@@ -1,74 +1,110 @@
 <!DOCTYPE html>
-<!-- Source for assets/readme-banner.png. Regenerate with tools/render-banner.sh.
-     Query params: k=kicker t=title ("{o}" renders the Factory Zero ring) s=subtitle m=meta seed=n -->
+<!-- Source for assets/readme-banner.png and assets/social-preview.png.
+     Regenerate with tools/render-banner.sh.
+     Query params: k=kicker t=title s=subtitle m=meta h=height (400 | 640)
+
+     Deliberately the same visual system as cratefield.com: the 56px mesh, the
+     field of modules and ports resolving into one binary, and the one accent. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@300;400;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
 <style>
-  *{box-sizing:border-box}
-  html,body{margin:0;padding:0;background:#0A0A0B;width:1280px;height:400px;overflow:hidden}
-  .b{position:relative;width:1280px;height:400px;color:#EDEBE6;font-family:'Archivo',system-ui,sans-serif;-webkit-font-smoothing:antialiased}
-  canvas{position:absolute;inset:0;display:block}
-  .veil{position:absolute;inset:0;background:radial-gradient(ellipse 46% 70% at 50% 50%, rgba(10,10,11,.94) 0%, rgba(10,10,11,.72) 45%, rgba(10,10,11,0) 100%)}
-  .c{position:absolute;inset:0;display:grid;align-content:center;justify-items:center;gap:18px}
-  .kick{font-family:'IBM Plex Mono',monospace;font-size:13px;letter-spacing:.24em;color:#8A8A8E;display:flex;align-items:center;gap:10px}
-  .kick .o{width:12px;height:12px;border:1.6px solid #EDEBE6;border-top-color:transparent;border-radius:50%;display:inline-block}
-  .mark{display:flex;align-items:center;gap:16px;font-weight:600;font-size:52px;letter-spacing:.22em;text-transform:uppercase}
-  .mark .o{width:44px;height:44px;border:3.5px solid currentColor;border-top-color:transparent;border-radius:50%;display:inline-block;position:relative;top:-2px}
-  .tag{font-weight:300;font-size:26px;letter-spacing:-.01em;color:#EDEBE6;text-align:center;max-width:980px}
-  .meta{font-family:'IBM Plex Mono',monospace;font-size:13px;letter-spacing:.24em;color:#8A8A8E}
-  .meta b{color:#FF5A36;font-weight:400}
-  .rule{position:absolute;left:0;right:0;bottom:0;height:5px;background:#FF5A36}
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; background: #0A0A0B; overflow: hidden; }
+  .b {
+    position: relative; width: 1280px; color: #EDEBE6;
+    font-family: Archivo, system-ui, sans-serif; -webkit-font-smoothing: antialiased;
+  }
+  .mesh {
+    position: absolute; inset: 0;
+    background-image: linear-gradient(#16161a 1px, transparent 1px), linear-gradient(90deg, #16161a 1px, transparent 1px);
+    background-size: 48px 48px;
+    -webkit-mask-image: radial-gradient(ellipse 58% 100% at 78% 45%, #000 25%, transparent 100%);
+  }
+  .c { position: relative; height: 100%; display: grid; grid-template-rows: auto 1fr auto; padding: 48px 60px; }
+  .top { display: flex; align-items: center; gap: 14px; font-family: 'IBM Plex Mono', monospace; font-size: 15px; letter-spacing: .22em; font-weight: 500; }
+  .top svg { display: block; }
+  .mid { align-self: center; }
+  h1 { margin: 0 0 14px; font-weight: 700; letter-spacing: -.035em; line-height: 1; max-width: 700px; }
+  .tag { font-size: 21px; line-height: 1.45; color: #A9A8A5; max-width: 640px; margin: 0; }
+  .bottom { display: flex; justify-content: space-between; align-items: flex-end; gap: 32px; font-family: 'IBM Plex Mono', monospace; font-size: 13px; letter-spacing: .12em; color: #8A8A8E; }
+  .rule { position: absolute; left: 0; right: 0; bottom: 0; height: 5px; background: #4C6FFF; }
+
+  /* The field: modules and ports compiling into one binary. */
+  .field { position: absolute; display: grid; grid-template-columns: repeat(4, 52px); gap: 6px; }
+  .field i { display: block; width: 52px; height: 52px; border: 1px solid #2A2A2E; background: #0E0E10; }
+  .field i.on { border-color: #4C6FFF; background: #141416; }
+  .out { position: absolute; width: 226px; border: 1px solid #EDEBE6; background: #0E0E10; padding: 9px 12px; font-family: 'IBM Plex Mono', monospace; font-size: 12px; color: #EDEBE6; text-align: center; }
+  .arrow { position: absolute; color: #4C6FFF; font-family: 'IBM Plex Mono', monospace; font-size: 16px; }
 </style>
 </head>
 <body>
-<div class="b">
-  <canvas id="c" width="1280" height="400"></canvas>
-  <div class="veil"></div>
+<div class="b" id="b">
+  <div class="mesh"></div>
+  <div class="field" id="field"></div>
+  <div class="arrow" id="arrow">&darr;</div>
+  <div class="out" id="out">acme_backend.wasm</div>
   <div class="c">
-    <div class="kick" id="k"></div>
-    <div class="mark" id="t"></div>
-    <div class="tag" id="s"></div>
-    <div class="meta" id="m"></div>
+    <div class="top">
+      <svg width="26" height="26" viewBox="0 0 24 24" aria-hidden="true"><rect x="1" y="1" width="6" height="6" fill="#EDEBE6"/><rect x="9" y="1" width="6" height="6" fill="#EDEBE6"/><rect x="17" y="1" width="6" height="6" fill="#3A3A3F"/><rect x="1" y="9" width="6" height="6" fill="#EDEBE6"/><rect x="9" y="9" width="6" height="6" fill="#4C6FFF"/><rect x="17" y="9" width="6" height="6" fill="#EDEBE6"/><rect x="1" y="17" width="6" height="6" fill="#3A3A3F"/><rect x="9" y="17" width="6" height="6" fill="#EDEBE6"/><rect x="17" y="17" width="6" height="6" fill="#EDEBE6"/></svg>
+      <span id="k">CRATEFIELD · HARNESS</span>
+    </div>
+    <div class="mid">
+      <h1 id="t">The open-source core.</h1>
+      <p class="tag" id="s"></p>
+    </div>
+    <div class="bottom">
+      <div id="m"></div>
+      <div>MIT</div>
+    </div>
   </div>
   <div class="rule"></div>
 </div>
 <script>
 (function () {
   var q = new URLSearchParams(location.search);
-  function esc(s){ return s.replace(/[&<>]/g, function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;'}[c]; }); }
-  function ring(s, cls){ return esc(s).split('{o}').map(function(p){return '<span>'+p+'</span>';}).join('<span class="'+cls+'"></span>'); }
-  document.getElementById('k').innerHTML = ring(q.get('k') || 'FACTORY ZER{o}', 'o');
-  document.getElementById('t').innerHTML = ring(q.get('t') || 'HARNESS', 'o');
+  var H = parseInt(q.get('h') || '400', 10);
+
+  document.documentElement.style.height = H + 'px';
+  document.body.style.width = '1280px';
+  document.body.style.height = H + 'px';
+  var b = document.getElementById('b');
+  b.style.height = H + 'px';
+
+  if (q.get('k')) document.getElementById('k').textContent = q.get('k');
+  if (q.get('t')) document.getElementById('t').textContent = q.get('t');
   document.getElementById('s').textContent = q.get('s') || '';
-  document.getElementById('m').innerHTML = esc(q.get('m') || '').replace(/ · /g, '<b> · </b>');
-  var seed = parseInt(q.get('seed') || '0', 10);
-  var c = document.getElementById('c'), ctx = c.getContext('2d');
-  var W = 1280, H = 400, N = 96, p = 0.72, now = 4200 + seed * 977;
-  function rnd(n){ var x = Math.sin((n + seed * 31) * 12.9898) * 43758.5453; return x - Math.floor(x); }
-  function ease(t){ return t < 0 ? 0 : t > 1 ? 1 : 1 - Math.pow(1 - t, 3); }
-  var nodes = [];
-  for (var i = 0; i < N; i++) nodes.push({ ang: i * 2.39996 + rnd(i) * 0.4 + seed * 0.37, r: 110 + (i % 6) * 52 + rnd(i + 9) * 40, acc: i % 9 === 0, sp: 0.17 + 0.38 * (i / N) });
-  window.renderBanner = function () {
-    ctx.clearRect(0, 0, W, H);
-    var cx = W * 0.5, cy = H * 0.5, scale = 1.35;
-    var pos = nodes.map(function (n, idx) {
-      var age = ease((p - n.sp) / 0.07); if (age <= 0) return null;
-      var drift = Math.sin(now / 1400 + idx) * 3;
-      return { x: cx + Math.cos(n.ang) * (n.r * scale * age + drift) * 1.75, y: cy + Math.sin(n.ang) * (n.r * scale * age + drift) * 0.62, a: age, acc: n.acc };
-    });
-    var reach = (150 * scale) * (150 * scale);
-    ctx.lineWidth = 1;
-    for (var a = 0; a < N; a++) { var A = pos[a]; if (!A) continue;
-      for (var b = a + 1; b < N; b++) { var B = pos[b]; if (!B) continue;
-        var dx = A.x - B.x, dy = A.y - B.y;
-        if (dx * dx + dy * dy < reach) { ctx.strokeStyle = 'rgba(237,235,230,' + Math.min(A.a, B.a) * 0.20 + ')'; ctx.beginPath(); ctx.moveTo(A.x, A.y); ctx.lineTo(B.x, B.y); ctx.stroke(); } } }
-    pos.forEach(function (n) { if (!n) return; ctx.fillStyle = n.acc ? 'rgba(255,90,54,' + n.a + ')' : 'rgba(237,235,230,' + n.a * 0.8 + ')'; ctx.beginPath(); ctx.arc(n.x, n.y, n.acc ? 2.6 : 1.8, 0, 7); ctx.fill(); });
-  };
-  if (document.fonts && document.fonts.ready) document.fonts.ready.then(window.renderBanner); else window.addEventListener('load', window.renderBanner);
+  document.getElementById('m').textContent = q.get('m') || '';
+
+  // Type and furniture scale with the canvas so both sizes stay balanced.
+  var tall = H >= 560;
+  document.getElementById('t').style.fontSize = (tall ? 66 : 54) + 'px';
+  document.getElementById('s').style.fontSize = (tall ? 24 : 21) + 'px';
+  document.querySelector('.c').style.padding = (tall ? 64 : 48) + 'px 60px';
+
+  var field = document.getElementById('field');
+  var lit = { 1: 1, 4: 1, 6: 1, 11: 1, 13: 1 };
+  for (var i = 0; i < 16; i++) {
+    var cell = document.createElement('i');
+    if (lit[i]) cell.className = 'on';
+    field.appendChild(cell);
+  }
+  // 4 rows of 52px + 3 gaps of 6 = 226px of field, then the arrow and the output.
+  var fieldH = 226, outH = 36, arrowH = 26, stackH = fieldH + arrowH + outH;
+  var top = Math.round((H - stackH) / 2);
+  field.style.right = '60px';
+  field.style.top = top + 'px';
+  var arrow = document.getElementById('arrow');
+  arrow.style.right = '168px';
+  arrow.style.top = (top + fieldH + 2) + 'px';
+  var out = document.getElementById('out');
+  out.style.right = '60px';
+  out.style.top = (top + fieldH + arrowH) + 'px';
+
+  document.documentElement.setAttribute('data-banner-ready', '1');
 })();
 </script>
 </body>

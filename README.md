@@ -1,37 +1,42 @@
 <p align="center">
-  <img src="assets/readme-banner.png" alt="Factory Zero Harness. One Rust harness. Every venture compiles its own backend." width="100%">
+  <img src="assets/readme-banner.png" alt="Cratefield Harness. The open-source core. Modules are crates, compiled into one stateless Worker with its own database." width="100%">
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/STATUS-M2%20IN%20PROGRESS-FF5A36?style=flat-square&labelColor=0A0A0B" alt="Status: M2 in progress">
+  <img src="https://img.shields.io/badge/STATUS-M2%20IN%20PROGRESS-4C6FFF?style=flat-square&labelColor=0A0A0B" alt="Status: M2 in progress">
   <img src="https://img.shields.io/badge/LANGUAGE-RUST-EDEBE6?style=flat-square&labelColor=0A0A0B" alt="Language: Rust">
   <img src="https://img.shields.io/badge/TARGET-WASM32%20%C2%B7%20WORKERS-EDEBE6?style=flat-square&labelColor=0A0A0B" alt="Target: wasm32 on Cloudflare Workers">
   <img src="https://img.shields.io/badge/ROUTER-AXUM-EDEBE6?style=flat-square&labelColor=0A0A0B" alt="Router: axum">
   <img src="https://img.shields.io/badge/DATABASE-D1%20NOW%20%C2%B7%20POSTGRES%20LATER-EDEBE6?style=flat-square&labelColor=0A0A0B" alt="Database: D1 now, Postgres later">
-  <img src="https://img.shields.io/badge/LICENSE-MIT-FF5A36?style=flat-square&labelColor=0A0A0B" alt="License: MIT">
+  <img src="https://img.shields.io/badge/LICENSE-MIT-4C6FFF?style=flat-square&labelColor=0A0A0B" alt="License: MIT">
 </p>
 
 <p align="center">
-  <a href="https://github.com/Factory-Zero/harness/actions/workflows/parity.yml">
-    <img src="https://github.com/Factory-Zero/harness/actions/workflows/parity.yml/badge.svg" alt="parity: module suites on SQLite and Postgres (matrix)">
+  <a href="https://github.com/Cratefield/harness/actions/workflows/parity.yml">
+    <img src="https://github.com/Cratefield/harness/actions/workflows/parity.yml/badge.svg" alt="parity: module suites on SQLite and Postgres (matrix)">
   </a>
 </p>
 
 <p align="center">
-  <b>factory0.ventures</b> · HARNESS · <code>factory0-*</code> on crates.io
+  <b>cratefield.com</b> · HARNESS · the open-source core
 </p>
 
 ---
 
 # The harness
 
-Factory Zero builds companies that operate and grow themselves. Each of those
-companies needs a backend, and none of them should build one from scratch.
+Every product needs a backend, and almost none of them should be built from
+scratch. This is that backend, once.
 
-This is that backend, once. A **Rust** harness that every venture compiles its
-own backend from: pick module crates, wire adapters, ship **one stateless
-Cloudflare Worker**. Cloudflare D1 today, a self-hosted native binary later,
-with no module rewrites in between.
+A **Rust** harness you compile your own backend from: pick module crates, wire
+adapters, ship **one stateless Worker with its own database**. Cloudflare D1
+today, a self-hosted native binary later, with no module rewrites in between.
+
+This repository is the open-source core, MIT, and it is complete enough to run
+yourself today. [Cratefield](https://cratefield.com) is the managed service
+being built on top of it: builds, migrations, secrets, domains and monitoring,
+so you do not have to operate any of it. That service is not built yet, and the
+site says so on every page.
 
 > **Modules only see ports.**
 > A module never touches a Cloudflare binding, an environment variable, or a
@@ -96,7 +101,13 @@ flowchart LR
 
 ## Crates
 
-All public crates are `factory0-*`, MIT, published to crates.io.
+All public crates are `factory0-*`, MIT. Nothing is published to crates.io yet;
+depend on this repository by git.
+
+> The `factory0-` prefix predates the move of this repository into the
+> Cratefield organisation. Renaming published crate names is a breaking change
+> for every consumer, so the prefix stays until there is a release worth
+> breaking. It is a package namespace, not a statement about who maintains this.
 
 | Crate | Role |
 |---|---|
@@ -219,4 +230,5 @@ tools/
 
 ## License
 
-MIT. Built in the open by [Factory Zero](https://factory0.ventures).
+MIT. Built in the open for [Cratefield](https://cratefield.com), a
+[Factory Zero](https://factory0.ventures) venture.

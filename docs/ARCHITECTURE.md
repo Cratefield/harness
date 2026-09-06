@@ -60,10 +60,10 @@ crates.io, so the prefix does the job.
 
 | Prefix | Distribution | Visibility | Lives in |
 |---|---|---|---|
-| `factory0-*` | crates.io | public, MIT | `Factory-Zero/harness` |
+| `factory0-*` | crates.io | public, MIT | `Cratefield/harness` |
 | `fz-*` | git dependency (`git = "ssh://git@github.com/Factory-Zero/harness-private"`, pinned `tag`) | private | `Factory-Zero/harness-private` |
 
-### `Factory-Zero/harness` (public Cargo workspace)
+### `Cratefield/harness` (public Cargo workspace)
 
 | Crate | Role |
 |---|---|

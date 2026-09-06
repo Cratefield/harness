@@ -8,7 +8,7 @@
 # breaking changes highlighted — the git-cliff defaults).
 
 [workspace]
-repo_url = "https://github.com/Factory-Zero/harness"
+repo_url = "https://github.com/Cratefield/harness"
 
 # Never published: the wasm example and the CLI acceptance suite exist
 # only inside this repository.

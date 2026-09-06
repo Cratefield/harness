@@ -8,7 +8,7 @@ version = "0.1.0"
 edition = "2024"
 rust-version = "1.98"
 license = "MIT"
-repository = "https://github.com/Factory-Zero/harness"
+repository = "https://github.com/Cratefield/harness"
 
 [workspace.dependencies]
 # Internal crates. factory0-core is pinned with a caret on the current
