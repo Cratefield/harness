@@ -1,0 +1,7 @@
+# Pinned to the public harness's toolchain (Cratefield/harness): the module
+# crates here compile against factory0-core and must not drift from it.
+[toolchain]
+channel = "1.98.1"
+components = ["rustfmt", "clippy"]
+targets = ["wasm32-unknown-unknown"]
+profile = "minimal"
