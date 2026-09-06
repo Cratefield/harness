@@ -1,4 +1,6 @@
+pub mod port;
 pub mod q2_webauthn;
+pub mod q3_oidc;
 
 use worker::{event, Context, Env, Request, Response, Result, Router};
 
@@ -19,6 +21,15 @@ async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
                         "reason": reason,
                     })),
                 }
+            })
+        })
+        .get_async("/q3/oidc", |_req, _ctx| {
+            Box::pin(async move {
+                let client = q3_oidc::WorkerHttpClient {
+                    intercept_fixtures: true,
+                };
+                let report = q3_oidc::run_oidc_flow(client, q3_oidc::worker_now).await;
+                Response::from_json(&report)
             })
         })
         .run(req, env)

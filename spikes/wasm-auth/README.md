@@ -70,3 +70,27 @@ The fixture is recorded by a software authenticator (no hardware key on the
 spike machine): real ES256 math over spec-shaped `authenticatorData` and
 Chrome-shaped `clientDataJSON`, wire-encoded with `webauthn-rs-proto` types.
 That limitation is recorded in the ADR.
+
+## Q3 — openidconnect through the harness HttpClient port
+
+```sh
+cargo run -p wasm-auth-spike --example mint_id_token  # records google-* fixtures
+cargo test -p wasm-auth-spike                          # 3 native tests incl. wrong aud/nonce
+cd spikes/wasm-auth && worker-build --release && bunx wrangler dev &
+curl -s localhost:8787/q3/oidc | python3 -m json.tool
+```
+
+Inside `wrangler dev` the report shows three ok steps: **discovery runs
+live** against the real Google document through the port (`src/port.rs`,
+copied verbatim from the harness) over `worker::Fetch`; the token exchange
+is served from `fixtures/google-token-response.json` by intercepting the
+real token endpoint URL inside the adapter; the Google-shaped RS256 ID token
+(`fixtures/google-token-response.json` + `fixtures/google-jwks.json`, minted
+by the host-only example) verifies — signature, issuer, audience, expiry,
+nonce. No Google client exists on the spike machine, so exchange/verify are
+fixture-driven and the ADR says so.
+
+Integration finding: the port's `#[async_trait]` future must be `Send`, but
+every `worker`/wasm-bindgen handle is `!Send`; the adapter bridges with
+`spawn_local` + a Send oneshot channel. The harness Workers adapter needs
+the same pattern (or the port needs `?Send` futures on wasm).
