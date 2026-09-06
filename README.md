@@ -170,7 +170,7 @@ examples/
   venture/                 smallest complete venture; CI builds it to wasm
 docs/
   ARCHITECTURE.md
-  adr/                     0000 … 0007
+  adr/                     0000 … 0008
 tools/
   banner-render.html       source of the README banner
   render-banner.sh         regenerates it with headless Chrome

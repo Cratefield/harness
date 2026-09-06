@@ -1,6 +1,6 @@
 # Factory Zero backend harness — architecture
 
-Status: v2 (Rust), adopted 2026-09-05. Owner: Factory Zero. Decisions are
+Status: v2 (Rust), adopted 2026-09-05, ADR 0008 added 2026-09-06. Owner: Factory Zero. Decisions are
 recorded in [docs/adr](adr). Supersedes the TypeScript v1 design entirely.
 
 ## 1. What this is
@@ -275,5 +275,5 @@ module's tests against SQLite and Postgres in CI from phase 3 onward.
 
 - Authentication and user accounts (later module).
 - Payments (later, and only through the ports pattern).
-- Multi-tenant single deployment. One venture = one Worker by design.
+- Multi-tenant single deployment **on the Worker path**. One venture = one Worker by design. The phase-3 native runtime does serve many tenants, one database each, with a separate control database; see ADR 0008 and issues #23 to #44.
 - Runtime plugin loading.
