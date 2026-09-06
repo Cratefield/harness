@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/STATUS-M0%20IN%20PROGRESS-FF5A36?style=flat-square&labelColor=0A0A0B" alt="Status: M0 in progress">
+  <img src="https://img.shields.io/badge/STATUS-M2%20IN%20PROGRESS-FF5A36?style=flat-square&labelColor=0A0A0B" alt="Status: M2 in progress">
   <img src="https://img.shields.io/badge/LANGUAGE-RUST-EDEBE6?style=flat-square&labelColor=0A0A0B" alt="Language: Rust">
   <img src="https://img.shields.io/badge/TARGET-WASM32%20%C2%B7%20WORKERS-EDEBE6?style=flat-square&labelColor=0A0A0B" alt="Target: wasm32 on Cloudflare Workers">
   <img src="https://img.shields.io/badge/ROUTER-AXUM-EDEBE6?style=flat-square&labelColor=0A0A0B" alt="Router: axum">
@@ -133,6 +133,14 @@ pub trait Module: Send + Sync + 'static {
 }
 ```
 
+A module is mounted one of two ways, and a caller cannot tell which. **Compiled
+in** is the default this README describes: the crate is linked into the Worker.
+**Sidecar** gives one module its own Worker, built and deployed separately and
+mounted at the same `/v1/<name>` over a Cloudflare service binding, binding the
+same database and secrets. It exists so a module whose source should not enter
+the shared artifact can still run as a real module with real ports. Designed,
+not built: [epic #56](../../issues/56).
+
 Migrations are plain SQL in a subset SQLite and Postgres both accept. Queries go
 through sea-query, which renders for either. Confirmation and unsubscribe
 links are HMAC-signed tokens with key rotation, so there is no session store.
@@ -147,6 +155,11 @@ conformance kit includes the concurrent-request test that proves it.
 | **M1 First modules** | `email-signup`, `waitlist`, templates, security baseline, observability | #10–#14 |
 | **M2 First venture live** | crates.io publishing, docs, contract versioning, `api.factory0.ventures` | #15–#17 |
 | **M3 Self-hosted portability** | Postgres adapter, native runtime, parity suite, data move | #18–#21 |
+
+Three epics sit outside the milestones because they are specified but not
+scheduled: [#23](../../issues/23) multi-tenant schema, [#24](../../issues/24)
+embedded secrets, and [#56](../../issues/56) custom modules without rebuilding
+the shared bundle.
 
 Progress is visible in the [milestones](../../milestones).
 
