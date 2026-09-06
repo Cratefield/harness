@@ -52,7 +52,10 @@ fn migration_sqls() -> Vec<&'static str> {
         .collect()
 }
 
-/// `(table, column)` pairs parsed out of the DDL, in file order.
+/// `(table, column)` pairs parsed out of the DDL, in file order. Covers
+/// `CREATE TABLE` bodies and `ALTER TABLE ... ADD COLUMN` lines (issue
+/// #6 lands columns by ALTER), so the forbidden-name grep sees every
+/// column regardless of how it was declared.
 fn columns(sql: &str) -> Vec<(String, String)> {
     const TYPES: [&str; 4] = ["TEXT", "INTEGER", "BLOB", "REAL"];
     let mut out = Vec::new();
@@ -60,6 +63,10 @@ fn columns(sql: &str) -> Vec<(String, String)> {
     for raw in sql.lines() {
         let line = raw.split_once("--").map_or(raw, |(code, _)| code).trim();
         let lowered = line.to_ascii_lowercase();
+        if let Some(rest) = lowered.strip_prefix("alter table") {
+            in_alter_branch(&mut table, rest, &mut out);
+            continue;
+        }
         if let Some(rest) = lowered.strip_prefix("create table") {
             let rest = rest
                 .trim_start()
@@ -84,6 +91,26 @@ fn columns(sql: &str) -> Vec<(String, String)> {
         }
     }
     out
+}
+
+/// Consumes one `ALTER TABLE <t> ADD [COLUMN] <name> <TYPE>` line.
+fn in_alter_branch(table: &mut Option<String>, rest: &str, out: &mut Vec<(String, String)>) {
+    const TYPES: [&str; 4] = ["TEXT", "INTEGER", "BLOB", "REAL"];
+    let mut words = rest.split_whitespace();
+    *table = words.next().map(str::to_owned);
+    let mut name = words.next();
+    if name.is_some_and(|w| w.eq_ignore_ascii_case("add")) {
+        name = words.next();
+    }
+    if name.is_some_and(|w| w.eq_ignore_ascii_case("column")) {
+        name = words.next();
+    }
+    if let (Some(name), Some(kind), Some(table)) = (name, words.next(), table.clone()) {
+        let kind = kind.trim_end_matches([';', ',']);
+        if TYPES.contains(&kind.to_ascii_uppercase().as_str()) {
+            out.push((table, name.to_owned()));
+        }
+    }
 }
 
 #[test]
@@ -159,5 +186,22 @@ fn schema_declares_the_issue_constraints() {
         "idx_single_use_tokens_expires_at",
     ] {
         assert!(joined.contains(index), "missing index {index}");
+    }
+}
+
+#[test]
+fn rotation_columns_are_visible_to_the_forbidden_name_grep() {
+    let all_columns = migration_sqls()
+        .iter()
+        .flat_map(|sql| columns(sql))
+        .collect::<Vec<_>>();
+    for (table, column) in [
+        ("clients", "previous_secret_hash"),
+        ("clients", "previous_hash_expires_at"),
+    ] {
+        assert!(
+            all_columns.iter().any(|(t, c)| t == table && c == column),
+            "{table}.{column} not parsed — the ALTER TABLE branch of `columns` regressed"
+        );
     }
 }

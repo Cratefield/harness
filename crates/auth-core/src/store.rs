@@ -676,6 +676,53 @@ pub async fn touch_session_seen(
     db.execute(&Statement::render(&update)).await
 }
 
+/// Slides a live session: refreshes `last_seen_at` and pushes
+/// `expires_at` out, in one guarded update that loses cleanly when the
+/// session was revoked or expired in the same instant. `0` rows means
+/// the slide did not land.
+///
+/// # Errors
+///
+/// [`DbError::Execute`] when the statement fails.
+pub async fn slide_session(
+    db: &dyn Database,
+    id: &str,
+    last_seen_at: &str,
+    expires_at: &str,
+    now: &str,
+) -> Result<u64, DbError> {
+    let mut update = Query::update();
+    update
+        .table(iden("sessions"))
+        .values([
+            (iden("last_seen_at"), last_seen_at.into()),
+            (iden("expires_at"), expires_at.into()),
+        ])
+        .and_where(Expr::col(iden("id")).eq(id))
+        .and_where(Expr::col(iden("revoked_at")).is_null())
+        .and_where(Expr::col(iden("expires_at")).gt(now));
+    db.execute(&Statement::render(&update)).await
+}
+
+/// Every session of a user (live and revoked), oldest first — the
+/// account-page listing; callers filter what they show.
+///
+/// # Errors
+///
+/// [`DbError::Query`] when the statement fails.
+pub async fn sessions_by_user(
+    db: &dyn Database,
+    user_id: &str,
+) -> Result<Vec<SessionRow>, DbError> {
+    let query = select_sessions()
+        .and_where(Expr::col(iden("user_id")).eq(user_id))
+        .order_by(iden("created_at"), sea_query::Order::Asc)
+        .order_by(iden("id"), sea_query::Order::Asc)
+        .to_owned();
+    let rows = db.query(&Statement::render(&query)).await?;
+    Ok(rows.rows.iter().map(session_from).collect())
+}
+
 /// Revokes a session; guarded, so a second revoke reports `0`.
 ///
 /// # Errors
@@ -687,6 +734,26 @@ pub async fn revoke_session(db: &dyn Database, id: &str, revoked_at: &str) -> Re
         .table(iden("sessions"))
         .values([(iden("revoked_at"), revoked_at.into())])
         .and_where(Expr::col(iden("id")).eq(id))
+        .and_where(Expr::col(iden("revoked_at")).is_null());
+    db.execute(&Statement::render(&update)).await
+}
+
+/// Revokes every live session of a user at once — the password-change
+/// and account-disable path. Returns how many rows flipped.
+///
+/// # Errors
+///
+/// [`DbError::Execute`] when the statement fails.
+pub async fn revoke_all_sessions(
+    db: &dyn Database,
+    user_id: &str,
+    revoked_at: &str,
+) -> Result<u64, DbError> {
+    let mut update = Query::update();
+    update
+        .table(iden("sessions"))
+        .values([(iden("revoked_at"), revoked_at.into())])
+        .and_where(Expr::col(iden("user_id")).eq(user_id))
         .and_where(Expr::col(iden("revoked_at")).is_null());
     db.execute(&Statement::render(&update)).await
 }
@@ -863,13 +930,17 @@ pub async fn purge_expired_single_use_tokens(db: &dyn Database, now: &str) -> Re
 // ---------------------------------------------------------------------------
 // clients
 
-/// One `clients` row: a registered consuming app. `secret_hash` is a hash
-/// of the client secret; the secret itself is never stored.
+/// One `clients` row: a registered consuming app. `secret_hash` is a
+/// hash of the client secret; the secret itself is never stored. After
+/// a rotation, `previous_secret_hash` keeps verifying until
+/// `previous_hash_expires_at` passes (issue #6).
 #[derive(Debug, Clone)]
 pub struct ClientRow {
     pub id: String,
     pub name: String,
     pub secret_hash: Redacted<String>,
+    pub previous_secret_hash: Option<Redacted<String>>,
+    pub previous_hash_expires_at: Option<String>,
     pub kind: String,
     pub status: String,
     pub created_at: String,
@@ -880,6 +951,8 @@ fn client_from(row: &Row) -> ClientRow {
         id: row.get::<String>("id").unwrap_or_default(),
         name: row.get::<String>("name").unwrap_or_default(),
         secret_hash: Redacted(required(row, "secret_hash")),
+        previous_secret_hash: optional::<String>(row, "previous_secret_hash").map(Redacted),
+        previous_hash_expires_at: optional::<String>(row, "previous_hash_expires_at"),
         kind: row.get::<String>("kind").unwrap_or_default(),
         status: row.get::<String>("status").unwrap_or_default(),
         created_at: row.get::<String>("created_at").unwrap_or_default(),
@@ -894,6 +967,23 @@ pub struct ClientRedirectUriRow {
     pub uri: String,
 }
 
+fn select_clients() -> sea_query::SelectStatement {
+    let mut select = Query::select();
+    select
+        .columns([
+            "id",
+            "name",
+            "secret_hash",
+            "previous_secret_hash",
+            "previous_hash_expires_at",
+            "kind",
+            "status",
+            "created_at",
+        ])
+        .from(iden("clients"));
+    select
+}
+
 /// Inserts a client.
 ///
 /// # Errors
@@ -903,11 +993,25 @@ pub async fn insert_client(db: &dyn Database, row: &ClientRow) -> Result<(), DbE
     let mut insert = Query::insert();
     insert
         .into_table(iden("clients"))
-        .columns(["id", "name", "secret_hash", "kind", "status", "created_at"])
+        .columns([
+            "id",
+            "name",
+            "secret_hash",
+            "previous_secret_hash",
+            "previous_hash_expires_at",
+            "kind",
+            "status",
+            "created_at",
+        ])
         .values_panic([
             row.id.clone().into(),
             row.name.clone().into(),
             row.secret_hash.0.clone().into(),
+            row.previous_secret_hash
+                .as_ref()
+                .map(|hash| hash.0.clone())
+                .into(),
+            row.previous_hash_expires_at.clone().into(),
             row.kind.as_str().into(),
             row.status.as_str().into(),
             row.created_at.clone().into(),
@@ -922,14 +1026,118 @@ pub async fn insert_client(db: &dyn Database, row: &ClientRow) -> Result<(), DbE
 ///
 /// [`DbError::Query`] when the statement fails.
 pub async fn client_by_id(db: &dyn Database, id: &str) -> Result<Option<ClientRow>, DbError> {
-    let mut select = Query::select();
-    select
-        .columns(["id", "name", "secret_hash", "kind", "status", "created_at"])
-        .from(iden("clients"))
+    let query = select_clients()
         .and_where(Expr::col(iden("id")).eq(id))
-        .limit(1);
-    let rows = db.query(&Statement::render(&select)).await?;
+        .limit(1)
+        .to_owned();
+    let rows = db.query(&Statement::render(&query)).await?;
     Ok(rows.first().map(client_from))
+}
+
+/// Every client, oldest first (display order for the admin list).
+///
+/// # Errors
+///
+/// [`DbError::Query`] when the statement fails.
+pub async fn list_clients(db: &dyn Database) -> Result<Vec<ClientRow>, DbError> {
+    let query = select_clients()
+        .order_by(iden("created_at"), sea_query::Order::Asc)
+        .to_owned();
+    let rows = db.query(&Statement::render(&query)).await?;
+    Ok(rows.rows.iter().map(client_from).collect())
+}
+
+/// Rotates a client secret in one guarded statement: the current hash
+/// becomes the previous hash, expiring at `previous_hash_expires_at`,
+/// and the new hash takes over. Returns `0` when the id is gone.
+///
+/// # Errors
+///
+/// [`DbError::Execute`] when the statement fails.
+pub async fn rotate_client_secret(
+    db: &dyn Database,
+    id: &str,
+    new_secret_hash: &str,
+    previous_hash_expires_at: &str,
+) -> Result<u64, DbError> {
+    let mut update = Query::update();
+    update
+        .table(iden("clients"))
+        .values([
+            (
+                iden("previous_secret_hash"),
+                Expr::col(iden("secret_hash")).into(),
+            ),
+            (
+                iden("previous_hash_expires_at"),
+                previous_hash_expires_at.into(),
+            ),
+            (iden("secret_hash"), new_secret_hash.into()),
+        ])
+        .and_where(Expr::col(iden("id")).eq(id));
+    db.execute(&Statement::render(&update)).await
+}
+
+/// Updates a client's display name; `0` when the id is gone.
+///
+/// # Errors
+///
+/// [`DbError::Execute`] when the statement fails.
+pub async fn update_client_name(db: &dyn Database, id: &str, name: &str) -> Result<u64, DbError> {
+    let mut update = Query::update();
+    update
+        .table(iden("clients"))
+        .values([(iden("name"), name.into())])
+        .and_where(Expr::col(iden("id")).eq(id));
+    db.execute(&Statement::render(&update)).await
+}
+
+/// Updates a client's status (`active`/`disabled`); `0` when the id is
+/// gone. A disabled client fails every flow.
+///
+/// # Errors
+///
+/// [`DbError::Execute`] when the statement fails.
+pub async fn update_client_status(
+    db: &dyn Database,
+    id: &str,
+    status: &str,
+) -> Result<u64, DbError> {
+    let mut update = Query::update();
+    update
+        .table(iden("clients"))
+        .values([(iden("status"), status.into())])
+        .and_where(Expr::col(iden("id")).eq(id));
+    db.execute(&Statement::render(&update)).await
+}
+
+/// Replaces a client's redirect URIs wholesale in one batch, so a
+/// reader never sees half the list. Issue #7's validator runs before
+/// this is called; the database itself keeps only the exact strings.
+///
+/// # Errors
+///
+/// [`DbError::Batch`] when the batch fails (e.g. a duplicate URI).
+pub async fn replace_redirect_uris(
+    db: &dyn Database,
+    client_id: &str,
+    uris: &[String],
+) -> Result<(), DbError> {
+    let mut stmts = Vec::with_capacity(uris.len() + 1);
+    let mut delete = Query::delete();
+    delete
+        .from_table(iden("client_redirect_uris"))
+        .and_where(Expr::col(iden("client_id")).eq(client_id));
+    stmts.push(Statement::render(&delete));
+    for uri in uris {
+        let mut insert = Query::insert();
+        insert
+            .into_table(iden("client_redirect_uris"))
+            .columns(["client_id", "uri"])
+            .values_panic([client_id.to_owned().into(), uri.clone().into()]);
+        stmts.push(Statement::render(&insert));
+    }
+    db.batch(&stmts).await
 }
 
 /// Inserts one exact redirect URI for a client.

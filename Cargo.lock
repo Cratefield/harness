@@ -667,14 +667,22 @@ dependencies = [
 name = "factory0-auth-core"
 version = "0.1.0"
 dependencies = [
+ "argon2",
  "axum",
+ "base64ct",
  "factory0-adapter-sqlite",
  "factory0-core",
  "factory0-testing",
  "getrandom 0.4.3",
+ "http",
  "pollster",
  "sea-query",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "thiserror 2.0.20",
  "time",
+ "tower",
  "tracing",
 ]
 

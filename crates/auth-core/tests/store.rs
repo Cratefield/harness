@@ -466,6 +466,8 @@ async fn client_and_redirect_uri_lookups() {
             id: "app1".to_owned(),
             name: "Undercover Rockstars".to_owned(),
             secret_hash: Redacted("hash-of-client-secret".to_owned()),
+            previous_secret_hash: None,
+            previous_hash_expires_at: None,
             kind: "confidential".to_owned(),
             status: "active".to_owned(),
             created_at: iso(NOW_SECS),
@@ -489,6 +491,7 @@ async fn client_and_redirect_uri_lookups() {
         .expect("client found");
     assert_eq!(client.name, "Undercover Rockstars");
     assert_eq!(client.kind, "confidential");
+    assert!(client.previous_secret_hash.is_none());
 
     let uris = factory0_auth_core::redirect_uris_for_client(&db, "app1")
         .await
@@ -507,6 +510,103 @@ async fn client_and_redirect_uri_lookups() {
     assert!(duplicate.is_err(), "exact URIs only, no duplicates");
 }
 
+#[pollster::test]
+async fn client_rotation_status_and_uri_replacement() {
+    let db = db();
+    factory0_auth_core::insert_client(
+        &db,
+        &ClientRow {
+            id: "app1".to_owned(),
+            name: "Kontinuum".to_owned(),
+            secret_hash: Redacted("old-hash".to_owned()),
+            previous_secret_hash: None,
+            previous_hash_expires_at: None,
+            kind: "confidential".to_owned(),
+            status: "active".to_owned(),
+            created_at: iso(NOW_SECS),
+        },
+    )
+    .await
+    .expect("insert client");
+
+    assert_eq!(
+        factory0_auth_core::rotate_client_secret(&db, "app1", "new-hash", &iso(NOW_SECS + 3600))
+            .await
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        factory0_auth_core::rotate_client_secret(&db, "ghost", "x", &iso(NOW_SECS)).await,
+        Ok(0),
+        "unknown ids affect nothing"
+    );
+
+    let rotated = factory0_auth_core::client_by_id(&db, "app1")
+        .await
+        .unwrap()
+        .expect("client");
+    assert_eq!(rotated.secret_hash.0, "new-hash");
+    assert_eq!(
+        rotated.previous_secret_hash.as_ref().map(|h| h.0.clone()),
+        Some("old-hash".to_owned()),
+        "the current hash slides into the previous slot"
+    );
+    assert_eq!(
+        rotated.previous_hash_expires_at.as_deref(),
+        Some(iso(NOW_SECS + 3600).as_str())
+    );
+
+    assert_eq!(
+        factory0_auth_core::update_client_status(&db, "app1", "disabled")
+            .await
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        factory0_auth_core::update_client_name(&db, "app1", "Kontinuum Audio")
+            .await
+            .unwrap(),
+        1
+    );
+    let listed = factory0_auth_core::list_clients(&db).await.unwrap();
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].status, "disabled");
+    assert_eq!(listed[0].name, "Kontinuum Audio");
+
+    factory0_auth_core::replace_redirect_uris(
+        &db,
+        "app1",
+        &[
+            "https://kontinuum.audio/cb".to_owned(),
+            "https://kontinuum.audio/cb2".to_owned(),
+        ],
+    )
+    .await
+    .expect("replace");
+    let uris = factory0_auth_core::redirect_uris_for_client(&db, "app1")
+        .await
+        .unwrap()
+        .iter()
+        .map(|row| row.uri.clone())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        uris,
+        vec![
+            "https://kontinuum.audio/cb".to_owned(),
+            "https://kontinuum.audio/cb2".to_owned()
+        ],
+        "replacement is wholesale"
+    );
+
+    factory0_auth_core::replace_redirect_uris(&db, "app1", &["https://kontinuum.audio/cb".into()])
+        .await
+        .expect("replace again");
+    let after = factory0_auth_core::redirect_uris_for_client(&db, "app1")
+        .await
+        .unwrap();
+    assert_eq!(after.len(), 1, "the stale URI is gone");
+}
+
 #[test]
 fn debug_never_prints_a_hash_column() {
     let secret_bytes: Vec<u8> = (0xB0..=0xBF).collect();
@@ -516,6 +616,8 @@ fn debug_never_prints_a_hash_column() {
         id: "app1".to_owned(),
         name: "App".to_owned(),
         secret_hash: Redacted("CLIENT-SECRET-HASH-DO-NOT-PRINT".to_owned()),
+        previous_secret_hash: Some(Redacted("PREVIOUS-SECRET-HASH-DO-NOT-PRINT".to_owned())),
+        previous_hash_expires_at: Some(iso(NOW_SECS + 3600)),
         kind: "confidential".to_owned(),
         status: "active".to_owned(),
         created_at: iso(NOW_SECS),
@@ -537,6 +639,10 @@ fn debug_never_prints_a_hash_column() {
         assert!(
             !debug.contains("CLIENT-SECRET"),
             "no client secret hash: {debug}"
+        );
+        assert!(
+            !debug.contains("PREVIOUS-SECRET"),
+            "no previous secret hash: {debug}"
         );
     }
 

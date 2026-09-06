@@ -58,6 +58,17 @@ time = { version = "0.3.45", default-features = false, features = [
 async-trait = "0.1.92"
 thiserror = "2.0.20"
 
+# Auth cryptography: argon2id for client secrets (ADR 0100 parameters,
+# default features off — no OpenSSL, wasm32-safe, same pin as the spike);
+# base64ct for cookie/secret encoding (PHC-compatible, constant-time).
+argon2 = { version = "0.6.0", default-features = false, features = [
+    "alloc",
+    "password-hash",
+] }
+base64ct = { version = "1.8.3", default-features = false, features = ["alloc"] }
+# sha2 matches the harness pin (factory0-core depends on 0.11).
+sha2 = { version = "0.11.0", default-features = false }
+
 # Enabled by wasm leaf crates (same as the harness venture example):
 # getrandom (via ulid/rand through factory0-core) needs the opt-in
 # wasm_js backend on wasm32-unknown-unknown.
