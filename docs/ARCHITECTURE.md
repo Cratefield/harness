@@ -1,6 +1,6 @@
 # Factory Zero backend harness — architecture
 
-Status: v2 (Rust), adopted 2026-09-05, ADR 0008 added 2026-09-06. Owner: Factory Zero. Decisions are
+Status: v2 (Rust), adopted 2026-09-05, ADR 0008 added 2026-09-06, ADR 0009 added 2026-09-06. Owner: Factory Zero. Decisions are
 recorded in [docs/adr](adr). Supersedes the TypeScript v1 design entirely.
 
 ## 1. What this is
@@ -29,8 +29,11 @@ a **waitlist** module, deployed for factory0.ventures.
    change of one runtime crate, not a rewrite.
 2. **Compile-time composition.** A venture backend lists module crates in
    `Cargo.toml` and composes them in `src/harness.rs`. The wasm binary contains
-   exactly those modules. No runtime plugin loading, no registry service.
-   Cargo features select adapters.
+   exactly those modules it serves in-process. No runtime plugin loading, no
+   registry service. Cargo features select adapters. One narrowing, ADR 0009: a
+   module whose source must stay with its owner may run as a **sidecar**, its
+   own Worker reached over a service binding and mounted at the same
+   `/v1/<name>`. It is still composed, just not into the same binary.
 3. **Stateless by construction.** No `static mut`, no `thread_local!` state
    that outlives a request, no per-isolate caches of request data. Anything
    that must persist goes through `Database` or `KeyValue`. Confirmation and
@@ -276,4 +279,7 @@ module's tests against SQLite and Postgres in CI from phase 3 onward.
 - Authentication and user accounts (later module).
 - Payments (later, and only through the ports pattern).
 - Multi-tenant single deployment **on the Worker path**. One venture = one Worker by design. The phase-3 native runtime does serve many tenants, one database each, with a separate control database; see ADR 0008 and issues #23 to #44.
-- Runtime plugin loading.
+- Runtime plugin loading. Unchanged by ADR 0009: Cloudflare's
+  `WebAssembly.instantiate()` accepts only pre-compiled modules, so nothing is
+  loaded at request time. A sidecar is a separately deployed Worker, not a
+  plugin.
