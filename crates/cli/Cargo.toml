@@ -23,10 +23,13 @@ postgres = ["dep:factory0-adapter-postgres", "dep:tokio"]
 
 [dependencies]
 factory0-core = { workspace = true }
+factory0-adapter-sqlite = { workspace = true }
 clap = { workspace = true }
 sha2 = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tracing = { workspace = true }
+pollster = { workspace = true }
+sea-query = { workspace = true }
 factory0-adapter-postgres = { workspace = true, optional = true }
 tokio = { workspace = true, optional = true }

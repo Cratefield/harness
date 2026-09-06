@@ -23,6 +23,7 @@
 
 pub mod apply;
 mod collect;
+pub mod data;
 mod doctor;
 pub mod lint;
 mod lock;
@@ -60,6 +61,47 @@ enum Command {
     },
     /// Prints modules, versions, route prefixes, emitted events, tables.
     Modules,
+    /// Moves venture data between engines (issue #21): export D1/SQLite
+    /// data to JSONL with a manifest, import into Postgres.
+    Data {
+        #[command(subcommand)]
+        command: DataCommand,
+    },
+}
+
+#[derive(Subcommand)]
+enum DataCommand {
+    /// Exports the venture's tables from a SQLite database (the D1
+    /// stand-in — `docs/DATA-MOVE.md`) to manifest + JSONL records.
+    Export {
+        /// The SQLite database file to read.
+        #[arg(long, value_name = "PATH")]
+        db: PathBuf,
+        /// The JSONL file to write (manifest line first).
+        #[arg(long, value_name = "FILE")]
+        out: PathBuf,
+        /// Prints the per-table summary without writing the file.
+        #[arg(long)]
+        plan: bool,
+    },
+    /// Loads an export file into a Postgres database in lock order,
+    /// verifying sha256 and row counts against the manifest. Requires
+    /// the `postgres` feature.
+    Import {
+        /// Connection string of the target Postgres database.
+        #[arg(long, value_name = "URL")]
+        url: String,
+        /// The export file written by `fz data export`.
+        #[arg(value_name = "FILE")]
+        file: PathBuf,
+        /// Adds to non-empty tables instead of refusing them.
+        #[arg(long)]
+        append: bool,
+        /// Prints what would be imported and the target state, writing
+        /// nothing.
+        #[arg(long)]
+        plan: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -113,6 +155,18 @@ pub fn run(build: impl Fn() -> Harness, args: impl IntoIterator<Item = String>) 
             print_modules(&harness);
             Ok(())
         }
+        Command::Data {
+            command: DataCommand::Export { db, out, plan },
+        } => data::export(&harness, &db, &out, plan),
+        Command::Data {
+            command:
+                DataCommand::Import {
+                    url,
+                    file,
+                    append,
+                    plan,
+                },
+        } => data::import(&harness, &file, &url, append, plan),
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
