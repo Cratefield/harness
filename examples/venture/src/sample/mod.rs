@@ -37,8 +37,9 @@ impl Module for SampleRowModule {
     }
 
     fn migrations(&self) -> Migrations {
+        const MIGRATIONS: [SqlMigration; 1] = [MIGRATION];
         Migrations {
-            sqlite: &[MIGRATION],
+            sqlite: &MIGRATIONS,
             postgres: &[],
         }
     }
@@ -113,13 +114,21 @@ async fn latest_row(
     State(ctx): State<Arc<ModuleContext>>,
 ) -> Result<Json<serde_json::Value>, Problem> {
     let Some(db) = ctx.ports.db.clone() else {
-        let problem = factory0_core::Problem::validation_failed("DB-NONE");
-        return Err(problem.instance(&scope.request_id));
+        return Err(internal(&scope));
     };
-    let raw = "SELECT id, email, created_at FROM sample_rows ORDER BY created_at DESC LIMIT 1";
-    let rows = db.query(&Statement::new(raw)).await.map_err(|err| {
-        let problem = factory0_core::Problem::validation_failed(format!("DEBUG {err}"));
-        problem.instance(&scope.request_id)
+    let query = sea_query::Query::select()
+        .columns([
+            sea_query::Alias::new("id"),
+            sea_query::Alias::new("email"),
+            sea_query::Alias::new("created_at"),
+        ])
+        .from(sea_query::Alias::new("sample_rows"))
+        .order_by(sea_query::Alias::new("created_at"), sea_query::Order::Desc)
+        .limit(1)
+        .to_owned();
+    let rows = db.query(&Statement::render(&query)).await.map_err(|err| {
+        tracing::error!(error = %err, "sample select failed");
+        internal(&scope)
     })?;
     match rows.first() {
         Some(row) => Ok(Json(json!({

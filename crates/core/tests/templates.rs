@@ -40,8 +40,12 @@ fn builder_override_wins_when_registered_last() {
             factory0_core::Venture::new("test-venture", "test.example")
                 .cors_origins(["https://test.example"]),
         )
-        .template("email-signup/confirm", fixed("module default"))
+        .templates(vec![(
+            "email-signup/confirm".to_string(),
+            fixed("module default"),
+        )])
         .template("email-signup/confirm", fixed("venture override"))
+        .module(StubSignupModule)
         .build()
         .expect("harness builds");
     let rendered = harness
@@ -95,4 +99,30 @@ fn contains_follows_locale_fallback() {
     registry.register("email-signup/confirm@de", fixed("de"));
     assert!(registry.contains("email-signup/confirm", "de"));
     assert!(!registry.contains("email-signup/confirm", "en"));
+}
+
+struct StubSignupModule;
+
+impl factory0_core::Module for StubSignupModule {
+    fn name(&self) -> &'static str {
+        "email-signup"
+    }
+    fn version(&self) -> &'static str {
+        "0.0.0"
+    }
+    fn requires(&self) -> &'static [factory0_core::Port] {
+        &[]
+    }
+    fn migrations(&self) -> factory0_core::Migrations {
+        factory0_core::Migrations::default()
+    }
+    fn validate_config(
+        &self,
+        _cfg: &dyn factory0_core::Config,
+    ) -> Result<(), factory0_core::ConfigError> {
+        Ok(())
+    }
+    fn router(&self, _ctx: factory0_core::ModuleContext) -> axum::Router {
+        axum::Router::new()
+    }
 }

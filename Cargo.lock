@@ -438,6 +438,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "factory0-testing"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "axum",
+ "bytes",
+ "factory0-adapter-sqlite",
+ "factory0-core",
+ "futures-core",
+ "http",
+ "pollster",
+ "sea-query",
+ "serde",
+ "serde_json",
+ "time",
+ "tower",
+ "tracing",
+]
+
+[[package]]
 name = "fallible-iterator"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

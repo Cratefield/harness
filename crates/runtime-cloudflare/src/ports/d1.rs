@@ -36,15 +36,20 @@ fn bind_statement(
 fn sea_to_json(value: &SeaValue) -> serde_json::Value {
     match value {
         SeaValue::Bool(Some(v)) => serde_json::Value::Bool(*v),
-        SeaValue::Bool(None) | SeaValue::String(None) => serde_json::Value::Null,
         SeaValue::TinyInt(Some(v)) => (*v).into(),
         SeaValue::SmallInt(Some(v)) => (*v).into(),
         SeaValue::Int(Some(v)) => (*v).into(),
         SeaValue::BigInt(Some(v)) => (*v).into(),
+        SeaValue::TinyUnsigned(Some(v)) => (*v).into(),
+        SeaValue::SmallUnsigned(Some(v)) => (*v).into(),
+        SeaValue::Unsigned(Some(v)) => (*v).into(),
+        // u64 > JSON safe range is not representable; the portable subset
+        // stores ids as TEXT, so this never triggers in practice.
+        SeaValue::BigUnsigned(Some(v)) => (*v).into(),
         SeaValue::Float(Some(v)) => f64::from(*v).into(),
         SeaValue::Double(Some(v)) => (*v).into(),
         SeaValue::String(Some(v)) => v.as_str().into(),
-        other => format!("{other:?}").into(),
+        _ => serde_json::Value::Null,
     }
 }
 

@@ -226,6 +226,14 @@ impl HarnessBuilder {
         self
     }
 
+    /// Adds an already-shared module (`factory0-testing` keeps handles to
+    /// apply migrations and run conformance).
+    #[must_use]
+    pub fn module_arc(mut self, module: Arc<dyn Module>) -> Self {
+        self.modules.push(module);
+        self
+    }
+
     /// Declares the runtime: its `provides()` set drives build-time
     /// checking of every module's `requires()`. The runtime is kept on the
     /// built harness for tooling (`fz doctor`, scheduled fan-out).
