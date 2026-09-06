@@ -1,0 +1,77 @@
+# Self-hosted example deployment for the example venture (issue #19):
+# the native binary + Postgres + Redis, `/__ready` as the app health
+# check. This file is an example — copy it, do not commit secrets.
+#
+#   export HARNESS_SECRET=$(openssl rand -hex 32)
+#   export POSTGRES_PASSWORD=$(openssl rand -hex 16)
+#   docker compose -f docker-compose.example.yml up --build
+#   curl -fsS http://127.0.0.1:8080/__health
+#   curl -fsS http://127.0.0.1:8080/__ready
+#
+# Secrets come from the environment (`:?` fails fast when missing) —
+# never from this file, never from the image.
+
+name: factory0-venture-example
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: examples/venture-native/Dockerfile
+    environment:
+      LISTEN_ADDR: "0.0.0.0:8080"
+      DATABASE_URL: "postgres://venture:${POSTGRES_PASSWORD:?export POSTGRES_PASSWORD first}@postgres:5432/venture"
+      REDIS_URL: "redis://redis:6379"
+      HARNESS_SECRET: "${HARNESS_SECRET:?export HARNESS_SECRET first}"
+      # staging: no Turnstile secret, so the Captcha port stays absent
+      # (production requires it for public-write modules — `fz doctor`).
+      ENV: staging
+      # One nightly purge fan-out to every module's scheduled handler.
+      CRONS: "0 3 * * *"
+      # Behind this compose's port mapping there is no proxy we control
+      # rewriting forwarding headers — so the trusted list stays empty
+      # and every client IP is the Docker network peer address.
+      TRUSTED_PROXY_HEADERS: ""
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      # Distroless ships no curl; the binary checks itself against the
+      # readiness endpoint (a SELECT 1 through the Database port).
+      test: ["CMD", "/app/venture-native", "--check-ready"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
+
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: venture
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:?export POSTGRES_PASSWORD first}"
+      POSTGRES_DB: venture
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U venture"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  redis:
+    image: redis:8-alpine
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+volumes:
+  pgdata:
+  redisdata:

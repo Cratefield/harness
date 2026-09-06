@@ -22,6 +22,10 @@ allow = [
     # webpki-roots (transitive via sqlx tls-rustls, issue #18) — Mozilla's
     # CDLA-Permissive-2.0 root store: permissive, attribution-only.
     "CDLA-Permissive-2.0",
+    # xxhash-rust (transitive via the redis crate's digest support, issue
+    # #19) — the Boost Software License 1.0: OSI-approved, permissive,
+    # attribution + license-copy only.
+    "BSL-1.0",
 ]
 
 [bans]
