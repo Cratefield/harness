@@ -1,10 +1,6 @@
 [workspace]
 resolver = "3"
-# `crates/*` joins with `crates/auth-core` in the next commit (issue #5):
-# cargo rejects a `members` glob that matches nothing, so it cannot be
-# listed before the directory exists. `spikes/*` stays a member so the
-# spike keeps building under the same commands as everything else.
-members = ["spikes/*"]
+members = ["crates/*", "spikes/*"]
 
 [workspace.package]
 version = "0.1.0"
@@ -61,6 +57,13 @@ time = { version = "0.3.45", default-features = false, features = [
 # Traits and errors.
 async-trait = "0.1.92"
 thiserror = "2.0.20"
+
+# Enabled by wasm leaf crates (same as the harness venture example):
+# getrandom (via ulid/rand through factory0-core) needs the opt-in
+# wasm_js backend on wasm32-unknown-unknown.
+getrandom = { version = "0.4.3", default-features = false, features = [
+    "wasm_js",
+] }
 
 # Test-only.
 pollster = { version = "0.4", features = ["macro"] }
