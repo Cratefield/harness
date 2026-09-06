@@ -53,6 +53,7 @@ independent versions.
 | Crate | Role | Status |
 |---|---|---|
 | `fz-module-admin` | Cross-module ops endpoints: stats, CSV exports, deletion requests, weekly digest | proposed, [#3](../../issues/3) |
+| `fz-module-linkedin` | Runs a LinkedIn Company Page: OAuth connect, posts, media, showcase pages | proposed, [#4](../../issues/4) |
 
 ## Rules
 
