@@ -116,4 +116,8 @@ impl Module for Hello {
     fn router(&self, ctx: ModuleContext) -> axum::Router {
         handlers::router(Arc::new(ctx), self.settings.clone())
     }
+
+    fn surface(&self) -> factory0_core::Surface {
+        handlers::surface()
+    }
 }

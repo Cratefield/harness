@@ -472,6 +472,23 @@ pub fn schema_for<T: JsonSchema>() -> Schema {
     SchemaGenerator::new(settings).into_root_schema_for::<T>()
 }
 
+/// Sets one `x-cf-*` (or any) keyword on a field of an object schema after
+/// derivation, for hints that only exist at runtime: a `select` whose
+/// options are the configured product list. Unknown fields are ignored so
+/// a rename in the body type cannot panic at build.
+pub fn hint_field(schema: &mut Schema, field: &str, key: &str, value: serde_json::Value) {
+    if let Some(properties) = schema
+        .as_object_mut()
+        .and_then(|root| root.get_mut("properties"))
+        .and_then(serde_json::Value::as_object_mut)
+        && let Some(property) = properties
+            .get_mut(field)
+            .and_then(serde_json::Value::as_object_mut)
+    {
+        property.insert(key.to_owned(), value);
+    }
+}
+
 fn is_object_schema(schema: &Schema) -> bool {
     let value = schema.as_value();
     match value.get("type") {
@@ -542,6 +559,24 @@ mod tests {
         assert_eq!(value["properties"]["email"]["x-cf-widget"], "email");
         assert_eq!(value["properties"]["captchaToken"]["x-cf-hidden"], true);
         assert!(value.get("$defs").is_none(), "subschemas must be inlined");
+    }
+
+    #[test]
+    fn hint_field_sets_a_keyword_and_ignores_unknown_fields() {
+        let mut schema = schema_for::<JoinBody>();
+        hint_field(
+            &mut schema,
+            "product",
+            "enum",
+            serde_json::json!(["a", "b"]),
+        );
+        hint_field(&mut schema, "missing", "x-cf-label", serde_json::json!("x"));
+        let value = schema.as_value();
+        assert_eq!(
+            value["properties"]["product"]["enum"],
+            serde_json::json!(["a", "b"])
+        );
+        assert!(value["properties"].get("missing").is_none());
     }
 
     #[test]

@@ -8,11 +8,12 @@ use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use factory0_core::{
-    Captcha, Clock, Decision, IdGen, Json, Kid, ModuleConfig, ModuleContext, Payload, Problem,
-    RateLimiter, SLUGS, Scope, SendOutcome, Signer, SystemClock, UlidIdGen, client_ip, csv_row,
-    invalid_email_problem, normalize_email, rate_limit_keys, rate_limited, require_admin,
-    validation_error,
+    Action, Audience, Captcha, Clock, Column, Decision, IdGen, Json, Kid, ModuleConfig,
+    ModuleContext, Outcome, Payload, Problem, RateLimiter, SLUGS, Scope, SendOutcome, Signer,
+    Surface, SystemClock, UlidIdGen, View, client_ip, csv_row, hint_field, invalid_email_problem,
+    normalize_email, rate_limit_keys, rate_limited, require_admin, validation_error,
 };
+use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::sync::Arc;
@@ -244,16 +245,81 @@ async fn confirm_with_code(
     Err(last_err.expect("at least one attempt"))
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, JsonSchema)]
 struct JoinBody {
+    #[schemars(extend(
+        "x-cf-label" = "Email",
+        "x-cf-widget" = "email",
+        "x-cf-placeholder" = "you@example.com"
+    ))]
     email: String,
+    // Configured slugs become a `select` in [`surface`]; with
+    // `.any_product()` it stays a text input.
+    #[schemars(extend("x-cf-label" = "Product"))]
     product: String,
+    // Referral code from the share link; the page supplies it.
+    #[schemars(extend("x-cf-hidden" = true))]
     #[serde(rename = "ref")]
     referral: Option<String>,
+    // Free-form answers; nested, so not form-renderable until a later
+    // issue adds question rendering.
+    #[schemars(extend("x-cf-hidden" = true))]
     answers: Option<Value>,
+    #[schemars(extend("x-cf-hidden" = true))]
     locale: Option<String>,
+    #[schemars(extend("x-cf-hidden" = true))]
     #[serde(rename = "captchaToken")]
     captcha_token: Option<String>,
+}
+
+/// The module's UI surface (ADR 0010, issue #71): the join form (product
+/// as a `select` over the configured list), the confirm link, the status
+/// page, and the admin export as a table.
+pub(crate) fn surface(settings: &Settings) -> Surface {
+    let mut join = factory0_core::schema_for::<JoinBody>();
+    if let Products::List(products) = &settings.products {
+        hint_field(&mut join, "product", "enum", json!(products));
+        hint_field(&mut join, "product", "x-cf-widget", json!("select"));
+    }
+    Surface::new()
+        .action(
+            Action::post("join", "/")
+                .input_schema(join)
+                .captcha()
+                .accepted("Check your inbox to confirm your spot."),
+        )
+        .action(Action::get("confirm", "/confirm").input::<TokenQuery>())
+        .action(
+            Action::get("status", "/status")
+                .input::<TokenQuery>()
+                .outcome(Outcome::Json),
+        )
+        .action(
+            Action::get("export", "/admin/export.csv")
+                .audience(Audience::Admin)
+                .input::<ExportQuery>()
+                .outcome(Outcome::Json),
+        )
+        .view(View::form("join"))
+        .view(View::status("status"))
+        .view(View::table(
+            "export",
+            [
+                ("id", "Id"),
+                ("email", "Email"),
+                ("product", "Product"),
+                ("status", "Status"),
+                ("position", "Position"),
+                ("referral_code", "Referral code"),
+                ("referred_by", "Referred by"),
+                ("referrals", "Referrals"),
+                ("created_at", "Created"),
+                ("confirmed_at", "Confirmed"),
+            ]
+            .into_iter()
+            .map(|(key, label)| Column::new(key, label))
+            .collect(),
+        ))
 }
 
 async fn join(
@@ -447,8 +513,9 @@ async fn send_join_confirmation(
     }
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, JsonSchema)]
 struct TokenQuery {
+    #[schemars(extend("x-cf-hidden" = true))]
     token: String,
 }
 
@@ -593,8 +660,9 @@ async fn status(
     .into_response())
 }
 
-#[derive(Deserialize, Default)]
+#[derive(Deserialize, Default, JsonSchema)]
 struct ExportQuery {
+    #[schemars(extend("x-cf-label" = "Product"))]
     product: Option<String>,
 }
 

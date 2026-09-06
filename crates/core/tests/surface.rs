@@ -229,3 +229,19 @@ fn bad_surface_fails_the_build_naming_the_module() {
         "{text}"
     );
 }
+
+/// Doc comments on a body type are developer notes; schemars would emit
+/// them as `description`, which a renderer shows to visitors. Modules use
+/// plain `//` comments on surfaced fields, and this guards the rule for
+/// the core fixture.
+#[test]
+fn fixture_schema_has_no_leaked_descriptions() {
+    let schema = factory0_core::schema_for::<JoinBody>();
+    let value = schema.as_value();
+    for (name, property) in value["properties"].as_object().unwrap() {
+        assert!(
+            property.get("description").is_none(),
+            "field `{name}` leaks a doc comment into the surface"
+        );
+    }
+}
