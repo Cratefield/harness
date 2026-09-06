@@ -210,6 +210,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "factory0-adapter-turnstile"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "factory0-core",
+ "futures-core",
+ "http",
+ "pollster",
+ "serde",
+ "serde_json",
+ "time",
+ "tracing",
+]
+
+[[package]]
 name = "factory0-core"
 version = "0.1.0"
 dependencies = [
