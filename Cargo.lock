@@ -723,6 +723,7 @@ dependencies = [
  "async-trait",
  "axum",
  "bytes",
+ "factory0-adapter-postgres",
  "factory0-adapter-sqlite",
  "factory0-core",
  "futures-core",
@@ -732,6 +733,7 @@ dependencies = [
  "serde",
  "serde_json",
  "time",
+ "tokio",
  "tower",
  "tracing",
 ]

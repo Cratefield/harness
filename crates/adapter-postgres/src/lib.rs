@@ -65,6 +65,7 @@ compile_error!(
 
 mod convert;
 mod migrate;
+pub mod testing;
 
 pub use migrate::select_set;
 
@@ -103,6 +104,19 @@ impl Postgres {
         let mut args = PgArguments::default();
         convert::bind_values(&mut args, &stmt.values.0)?;
         Ok((sql, args))
+    }
+
+    /// Closes the pool: waits for in-flight queries, then closes every
+    /// connection. Dropping the adapter eventually closes the pool too;
+    /// `close` makes shutdown deterministic for the parity kit and the
+    /// native runtime.
+    ///
+    /// # Errors
+    ///
+    /// [`DbError::Execute`] when the pool cannot be closed.
+    pub async fn close(&self) -> Result<(), DbError> {
+        self.pool.close().await;
+        Ok(())
     }
 }
 

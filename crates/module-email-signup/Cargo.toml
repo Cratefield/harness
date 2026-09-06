@@ -27,7 +27,10 @@ ulid = { workspace = true }
 askama = { workspace = true }
 
 [dev-dependencies]
-factory0-testing = { workspace = true }
+# The `postgres` feature unlocks the Postgres parity leg of the testing
+# kit (issue #20); the leg itself only runs when FZ_TEST_POSTGRES_URL
+# names a server. Dev-only, so it never reaches a venture's wasm graph.
+factory0-testing = { workspace = true, features = ["postgres"] }
 factory0-adapter-sqlite = { workspace = true }
 pollster = { workspace = true }
 tower = { workspace = true }

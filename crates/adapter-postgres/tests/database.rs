@@ -7,14 +7,15 @@
 
 mod common;
 
-use common::{TempDb, skip_reason};
+use common::{TempDb, base_url, skip_reason};
 use factory0_adapter_postgres::Postgres;
 use factory0_core::{Database, DbError, Row, Statement};
 use sea_query::Value as Sea;
 use std::sync::Arc;
 
 async fn fresh_db() -> Option<(Postgres, TempDb)> {
-    let temp = TempDb::create("db").await?;
+    let base = base_url()?;
+    let temp = TempDb::create(&base, "db").await?;
     temp.assert_postgres_16().await;
     let db = Postgres::connect(&temp.url).await.expect("connect");
     db.execute(&Statement::new(

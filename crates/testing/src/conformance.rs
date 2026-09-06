@@ -96,7 +96,9 @@ fn full_fake_ports() -> Ports {
     ports
 }
 
-/// Runs the shared conformance suite against one module:
+/// Runs the shared conformance suite against one module, once per
+/// dialect available in the environment (issue #20 — SQLite always,
+/// Postgres when `FZ_TEST_POSTGRES_URL` names a server):
 ///
 /// 1. mounts under `/v1/<name>` and `/__health` lists it with its version;
 /// 2. a request under the module prefix is answered (no harness-level
@@ -112,15 +114,28 @@ fn full_fake_ports() -> Ports {
 ///
 /// # Panics
 ///
-/// Panics with a message naming the failed check.
+/// Panics with a message naming the failed check and the dialect.
 pub fn conformance(module: Box<dyn Module>) {
     let name = module.name().to_owned();
     let version = module.version().to_owned();
     let has_well_known = module.well_known().is_some();
-
-    let kit = TestHarness::new(vec![Box::new(WellKnownProbe {
+    let module: Arc<dyn Module> = Arc::new(WellKnownProbe {
         inner: Arc::from(module),
-    })]);
+    });
+
+    for dialect in crate::dialect::Dialect::available() {
+        conformance_on_dialect(&dialect, module.clone(), &name, &version, has_well_known);
+    }
+}
+
+fn conformance_on_dialect(
+    dialect: &crate::dialect::Dialect,
+    module: Arc<dyn Module>,
+    name: &str,
+    version: &str,
+    has_well_known: bool,
+) {
+    let kit = TestHarness::from_arcs(vec![module], dialect.clone(), |_| {});
     let module = kit
         .modules
         .iter()
@@ -141,9 +156,14 @@ pub fn conformance(module: Box<dyn Module>) {
         .unwrap_or_else(|| panic!("health modules array missing: {body}"));
     let entry = listed
         .iter()
-        .find(|entry| entry["name"] == name.as_str())
+        .find(|entry| entry["name"] == *name)
         .unwrap_or_else(|| panic!("health does not list {name}: {body}"));
-    assert_eq!(entry["version"], version, "health lists the module version");
+    assert_eq!(
+        entry["version"],
+        version,
+        "[{}] health lists the module version",
+        dialect.name()
+    );
 
     // 2. a request under the prefix is answered without panicking.
     let probe = pollster::block_on(request(
@@ -156,18 +176,36 @@ pub fn conformance(module: Box<dyn Module>) {
     let _ = probe.status;
 
     // 3. migrations apply twice on fresh databases.
+    #[cfg(feature = "postgres")]
+    if let crate::dialect::Dialect::Postgres { .. } = &dialect {
+        crate::pg::migrations_apply_twice(&kit.modules)
+            .unwrap_or_else(|message| panic!("[postgres] {message}"));
+        check_visibility_and_scope(&kit, module.as_ref(), name, has_well_known);
+        return;
+    }
     for round in 1..=2 {
         let fresh = factory0_adapter_sqlite::SqliteDatabase::in_memory()
-            .unwrap_or_else(|err| panic!("fresh db {round}: {err}"));
+            .unwrap_or_else(|err| panic!("[sqlite] fresh db {round}: {err}"));
         for module in &kit.modules {
             fresh
                 .apply_migrations(module.name(), module.migrations().sqlite)
-                .unwrap_or_else(|err| panic!("round {round}, {}: {err}", module.name()));
+                .unwrap_or_else(|err| panic!("[sqlite] round {round}, {}: {err}", module.name()));
         }
     }
+    check_visibility_and_scope(&kit, module.as_ref(), name, has_well_known);
+}
 
+/// Conformance checks 4-6: undeclared ports stay hidden, concurrent
+/// requests keep their request ids, and a well-known router mounts at
+/// the root only.
+fn check_visibility_and_scope(
+    kit: &TestHarness,
+    module: &dyn Module,
+    name: &str,
+    has_well_known: bool,
+) {
     // 4. undeclared ports are hidden (declared ones stay visible).
-    let view = full_fake_ports().view_for(module.as_ref());
+    let view = full_fake_ports().view_for(module);
     for (port, provided) in [
         (Port::Db, view.db.is_some()),
         (Port::Mailer, view.mailer.is_some()),
@@ -216,7 +254,7 @@ pub fn conformance(module: Box<dyn Module>) {
     assert_eq!(handle_a.join().expect("a completes"), id_a);
     assert_eq!(handle_b.join().expect("b completes"), id_b);
 
-    check_well_known_mount(&kit, &name, has_well_known);
+    check_well_known_mount(kit, name, has_well_known);
 }
 
 /// Conformance check 6 (issue #46): the module's well-known router, when

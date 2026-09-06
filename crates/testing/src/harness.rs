@@ -1,13 +1,15 @@
-//! [`TestHarness`]: a built harness over fakes with an in-memory SQLite
-//! database whose migrations are applied per module at creation
-//! (issue #9).
+//! [`TestHarness`]: a built harness over fakes whose database runs
+//! in-memory SQLite by default, or a throwaway Postgres database for the
+//! parity suite (issues #9, #20) — migrations applied per module at
+//! creation.
 
 use factory0_adapter_sqlite::SqliteDatabase;
 use factory0_core::{
-    Harness, HmacSigner, MapConfig, Module, Port, Ports, Runtime, UlidIdGen, Venture,
+    Database, Harness, HmacSigner, MapConfig, Module, Port, Ports, Runtime, UlidIdGen, Venture,
 };
 use std::sync::Arc;
 
+use crate::dialect::Dialect;
 use crate::fakes::{
     FakeCaptcha, FakeDefer, FakeHttpClient, FakeMailer, FakeRateLimiter, FixedClock, MemoryKeyValue,
 };
@@ -20,9 +22,11 @@ impl Runtime for TestRuntime {
     }
 }
 
-/// A harness with every port faked and an in-memory SQLite database,
-/// migrations applied per module on creation. The same database handle is
-/// wired into the router and exposed for assertions.
+/// A harness with every port faked and a migrated database, migrations
+/// applied per module on creation. The same database handle is wired
+/// into the router and exposed for assertions — SQLite in memory by
+/// default ([`TestHarness::new`]), or a throwaway Postgres 16 database
+/// for the parity suite ([`TestHarness::with_database`], issue #20).
 pub struct TestHarness {
     /// The assembled router: hand it to [`crate::request`].
     pub router: axum::Router,
@@ -35,11 +39,32 @@ pub struct TestHarness {
     pub http: FakeHttpClient,
     pub defer: FakeDefer,
     pub signer: Arc<HmacSigner>,
-    /// The in-memory SQLite database backing the `Database` port (shared
-    /// with the router — assertions see module writes).
-    pub db: Arc<SqliteDatabase>,
+    /// The migrated database backing the `Database` port (shared with
+    /// the router — assertions see module writes). On Postgres every
+    /// call is marshalled onto the kit's own runtime, so any executor
+    /// can drive it.
+    pub db: Arc<dyn Database>,
     /// The modules passed in (for conformance access).
     pub modules: Vec<Arc<dyn Module>>,
+    /// The engine `db` runs against: `"sqlite"` or `"postgres"`.
+    pub dialect: &'static str,
+    #[cfg(feature = "postgres")]
+    pg: Option<crate::pg::PgFixture>,
+}
+
+impl Drop for TestHarness {
+    fn drop(&mut self) {
+        // Postgres kits close their pool and drop their throwaway
+        // database on the kit's runtime; this kit's router and port
+        // handles go first so the close waits only on handles a test
+        // leaked (a test's own threads are joined).
+        #[cfg(feature = "postgres")]
+        if let Some(pg) = self.pg.take() {
+            self.router = axum::Router::new();
+            self.db = Arc::new(crate::fakes::EmptyDatabase);
+            pg.shutdown();
+        }
+    }
 }
 
 impl TestHarness {
@@ -66,7 +91,89 @@ impl TestHarness {
     /// Panics when the harness cannot build or a migration fails.
     #[must_use]
     pub fn with_ports(modules: Vec<Box<dyn Module>>, patch: impl FnOnce(&mut Ports)) -> Self {
+        Self::with_database_and_ports(modules, Dialect::Sqlite, patch)
+    }
+
+    /// [`TestHarness::new`] over the chosen [`Dialect`] (issue #20):
+    /// `Dialect::Sqlite` is the in-memory default; `Dialect::Postgres
+    /// { url }` creates a throwaway Postgres 16 database on that server,
+    /// applies every module's migrations (the `postgres` set when
+    /// shipped, else the portable-linted `sqlite` set) and drops the
+    /// database when the harness drops. Requires building
+    /// `factory0-testing` with the `postgres` feature.
+    ///
+    /// # Panics
+    ///
+    /// Panics when the harness cannot build, a migration fails, the
+    /// Postgres server is unreachable, or the `postgres` feature is off
+    /// and the Postgres dialect was requested anyway.
+    #[must_use]
+    pub fn with_database(modules: Vec<Box<dyn Module>>, dialect: Dialect) -> Self {
+        Self::with_database_and_ports(modules, dialect, |_| {})
+    }
+
+    /// [`TestHarness::with_database`] with a patch over the default
+    /// ports (the parity counterpart of [`TestHarness::with_ports`]).
+    ///
+    /// # Panics
+    ///
+    /// Panics for the same reasons as [`TestHarness::with_database`].
+    #[must_use]
+    pub fn with_database_and_ports(
+        modules: Vec<Box<dyn Module>>,
+        dialect: Dialect,
+        patch: impl FnOnce(&mut Ports),
+    ) -> Self {
         let shared: Vec<Arc<dyn Module>> = modules.into_iter().map(Arc::from).collect();
+        Self::from_arcs(shared, dialect, patch)
+    }
+
+    /// One harness per dialect available in the environment — the parity
+    /// loop (issue #20): `for kit in TestHarness::all_dialects(make) {
+    /// … }` runs one test definition against SQLite and Postgres. The
+    /// factory runs once per dialect so every kit gets **fresh module
+    /// instances**: a module may carry per-build state (email-signup
+    /// parks its `ModuleContext` for the `waitlist.confirmed` handler),
+    /// and a shared instance would keep the first dialect's context
+    /// alive in the next dialect's router.
+    ///
+    /// # Panics
+    ///
+    /// Panics like [`TestHarness::with_database`] for any dialect built.
+    #[must_use]
+    pub fn all_dialects(make_modules: impl Fn() -> Vec<Box<dyn Module>>) -> Vec<Self> {
+        Dialect::available()
+            .into_iter()
+            .map(|dialect| Self::with_database(make_modules(), dialect))
+            .collect()
+    }
+
+    /// [`TestHarness::all_dialects`] with a port patch applied to every
+    /// kit. The patch runs once per dialect, so it must be a `Fn` over
+    /// cloneable captures (`Arc` handles), not a one-shot mover.
+    ///
+    /// # Panics
+    ///
+    /// Panics like [`TestHarness::with_database`] for any dialect built.
+    #[must_use]
+    pub fn all_dialects_with_ports(
+        make_modules: impl Fn() -> Vec<Box<dyn Module>>,
+        patch: impl Fn(&mut Ports) + Clone,
+    ) -> Vec<Self> {
+        Dialect::available()
+            .into_iter()
+            .map(|dialect| {
+                let patch = patch.clone();
+                Self::with_database_and_ports(make_modules(), dialect, move |ports| patch(ports))
+            })
+            .collect()
+    }
+
+    pub(crate) fn from_arcs(
+        shared: Vec<Arc<dyn Module>>,
+        dialect: Dialect,
+        patch: impl FnOnce(&mut Ports),
+    ) -> Self {
         let mut builder = Harness::builder().venture(
             Venture::new("test-venture", "test.example").cors_origins(["https://test.example"]),
         );
@@ -78,11 +185,11 @@ impl TestHarness {
             .build()
             .expect("test harness builds");
 
-        let db = Arc::new(SqliteDatabase::in_memory().expect("in-memory sqlite"));
-        for module in &shared {
-            db.apply_migrations(module.name(), module.migrations().sqlite)
-                .unwrap_or_else(|err| panic!("migration for {}: {err}", module.name()));
-        }
+        let dialect_name = dialect.name();
+        #[cfg(feature = "postgres")]
+        let (db, pg) = backing(dialect, &shared);
+        #[cfg(not(feature = "postgres"))]
+        let (db, _no_postgres_feature) = backing(dialect, &shared);
 
         let mailer = FakeMailer::new(crate::fakes::MailerMode::SendOk);
         let captcha = FakeCaptcha::allow_all();
@@ -124,6 +231,56 @@ impl TestHarness {
             signer,
             db,
             modules: shared,
+            dialect: dialect_name,
+            #[cfg(feature = "postgres")]
+            pg,
         }
+    }
+}
+
+/// A fresh in-memory SQLite database with every module's sqlite
+/// migrations applied. Panics on the first failure, naming the module.
+fn sqlite_backing(modules: &[Arc<dyn Module>]) -> Arc<dyn Database> {
+    let db = Arc::new(SqliteDatabase::in_memory().expect("in-memory sqlite"));
+    for module in modules {
+        db.apply_migrations(module.name(), module.migrations().sqlite)
+            .unwrap_or_else(|err| panic!("migration for {}: {err}", module.name()));
+    }
+    db
+}
+
+/// The migrated database (and, on Postgres, the fixture owning the
+/// throwaway database and its runtime) for the dialect.
+#[cfg(feature = "postgres")]
+fn backing(
+    dialect: Dialect,
+    modules: &[Arc<dyn Module>],
+) -> (Arc<dyn Database>, Option<crate::pg::PgFixture>) {
+    match dialect {
+        Dialect::Sqlite => (sqlite_backing(modules), None),
+        Dialect::Postgres { url } => {
+            let fixture = crate::pg::PgFixture::create(&url, modules)
+                .unwrap_or_else(|message| panic!("postgres parity kit: {message}"));
+            let db = fixture.database();
+            (db, Some(fixture))
+        }
+    }
+}
+
+/// Without the `postgres` feature there is no Postgres fixture type; the
+/// second element of the pair is always `None` and asking for the
+/// Postgres dialect fails loudly instead of silently passing.
+#[cfg(not(feature = "postgres"))]
+fn backing(
+    dialect: Dialect,
+    modules: &[Arc<dyn Module>],
+) -> (Arc<dyn Database>, Option<std::convert::Infallible>) {
+    match dialect {
+        Dialect::Sqlite => (sqlite_backing(modules), None),
+        Dialect::Postgres { .. } => panic!(
+            "factory0-testing was built without the `postgres` feature — the Postgres \
+             parity leg needs it (dev-depend on factory0-testing with \
+             features = [\"postgres\"])"
+        ),
     }
 }

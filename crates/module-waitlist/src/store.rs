@@ -1,8 +1,10 @@
 //! Sea-query data access for `waitlist_entries` (ADR 0004). Positions
 //! are assigned **inside** [`confirm_entry`]'s single
 //! [`factory0_core::Database::batch`] call — the `1 + MAX(position)`
-//! subquery runs inside the UPDATE, so concurrent confirms can never
-//! share a position (atomic on D1, a transaction on the sqlite adapter).
+//! subquery runs inside the UPDATE, under a per-product lock statement
+//! that serializes concurrent confirms of one product on every engine
+//! (atomic on D1, a locked transaction on the sqlite and Postgres
+//! adapters; issue #20).
 
 use factory0_core::{Database, DbError, Row, Statement};
 use sea_query::{Alias, Expr, Func, Query, SimpleExpr};
@@ -204,12 +206,26 @@ fn next_position_expr(product: &str) -> SimpleExpr {
 ///
 /// Positions are never recomputed: the `MAX` only looks forward, and
 /// deleting rows leaves gaps on purpose (issue #11).
+///
+/// The batch opens with a per-product lock statement — `UPDATE … SET
+/// referrals = referrals WHERE product = ?` — that changes no value but,
+/// on Postgres, takes the row locks of every entry in the product before
+/// the position `MAX` runs, so concurrent confirms of the same product
+/// serialize instead of each reading a pre-commit `MAX` and sharing a
+/// position (the parity suite, issue #20). SQLite and D1 serialize a
+/// whole batch on the single connection already; there the statement is
+/// a value-neutral no-op.
 pub(crate) async fn confirm_entry(
     db: &dyn Database,
     row: &WaitlistRow,
     now: &str,
     referral_code: &str,
 ) -> Result<bool, DbError> {
+    let mut lock = Query::update();
+    lock.table(iden("waitlist_entries"))
+        .value(iden("referrals"), Expr::col(iden("referrals")))
+        .and_where(Expr::col(iden("product")).eq(row.product.as_str()));
+
     let mut flip = Query::update();
     flip.table(iden("waitlist_entries"))
         .values([
@@ -226,7 +242,7 @@ pub(crate) async fn confirm_entry(
     // the one that confirms it. Ordered the other way the credit cannot tell
     // whether the flip was its own, and a replayed or interleaved confirm
     // credits the referrer again for one referral.
-    let mut stmts = Vec::with_capacity(2);
+    let mut stmts = vec![Statement::render(&lock)];
     if let Some(referrer) = row.referred_by.as_deref() {
         let mut still_pending = Query::select();
         still_pending
