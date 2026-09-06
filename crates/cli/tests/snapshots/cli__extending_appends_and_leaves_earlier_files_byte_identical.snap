@@ -1,0 +1,10 @@
+---
+source: crates/cli/tests/cli.rs
+assertion_line: 119
+expression: snapshot
+---
+.harness-lock.json
+0001_email-signup_0001_init.sql
+0002_waitlist_0001_init.sql
+0003_email-signup_0002_add_source_index.sql
+0004_audit-log_0001_init.sql

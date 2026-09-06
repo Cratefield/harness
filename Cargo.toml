@@ -1,6 +1,7 @@
 [workspace]
 resolver = "3"
 members = ["crates/*", "examples/*"]
+exclude = ["crates/cli/tests/fixture"]
 
 [workspace.package]
 version = "0.1.0"
@@ -13,6 +14,9 @@ repository = "https://github.com/Factory-Zero/harness"
 # Internal crates.
 factory0-core = { path = "crates/core", version = "0.1.0" }
 factory0-runtime-cloudflare = { path = "crates/runtime-cloudflare", version = "0.1.0" }
+factory0-adapter-resend = { path = "crates/adapter-resend", version = "0.1.0" }
+factory0-adapter-turnstile = { path = "crates/adapter-turnstile", version = "0.1.0" }
+factory0-adapter-sqlite = { path = "crates/adapter-sqlite", version = "0.1.0" }
 
 # HTTP stack. axum runs without tokio on Workers (ADR 0001): the `tokio`
 # feature stays off, `default-features = false`, and only the extractor

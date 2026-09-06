@@ -23,6 +23,9 @@ pub struct SqlMigration {
     /// Sortable id: `0001`, `0002`, ... — zero-padded so lexical order is
     /// apply order.
     pub id: &'static str,
+    /// Short slug from the file name (`0001_init.sql` -> `init`), used in
+    /// the wrangler-facing collected file names.
+    pub name: &'static str,
     pub sql: &'static str,
 }
 
