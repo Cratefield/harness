@@ -156,7 +156,7 @@ async fn page_get(
             .map(|s| fields_of(s.as_value()))
             .unwrap_or_default();
         let body = render_form(&state, spec, &module, &fields, &values, &[]);
-        return respond(&state, &module, spec, fragment, body);
+        return respond(&state, fragment, body);
     }
     let query_string = serde_urlencoded_encode(&values);
     let response = dispatch(&state, &scope, &headers, spec, &module, &query_string, None).await;
@@ -216,9 +216,9 @@ async fn landing(
     Path((module, action, landing)): Path<(String, String, String)>,
     Query(query): Query<Values>,
 ) -> Response {
-    let Some(spec) = find_action(&state, &module, &action) else {
+    if find_action(&state, &module, &action).is_none() {
         return not_found(&scope, &format!("{module}/{action}"));
-    };
+    }
     let (_, fragment) = split_fragment(query);
     let (tone, title, message) = match (action.as_str(), landing.as_str()) {
         ("confirm", "done") => (
@@ -240,7 +240,7 @@ async fn landing(
         _ => return not_found(&scope, &format!("{module}/{action}/{landing}")),
     };
     let body = render::notice(&module, &action, tone, &title, &message);
-    respond(&state, &module, spec, fragment, (title, body, false))
+    respond(&state, fragment, (title, body, false))
 }
 
 fn render_form(
@@ -348,7 +348,9 @@ async fn render_result(
         .await
         .unwrap_or_default();
     let json: Option<Value> = serde_json::from_slice(&bytes).ok();
-    tracing::debug!(status = %status, body = %String::from_utf8_lossy(&bytes), "ui dispatch answered");
+    // Status only: a body may carry an address, and the logging policy
+    // (`factory0_core::RedactingVisitor`) is not applied to free text.
+    tracing::debug!(status = %status, "ui dispatch answered");
 
     if status.is_success() {
         let title = humanize(&spec.name);
@@ -361,7 +363,7 @@ async fn render_result(
             }
             Outcome::Redirect => render::notice(module, &spec.name, "success", &title, "Done."),
         };
-        let mut out = respond(state, module, spec, fragment, (title, body, false));
+        let mut out = respond(state, fragment, (title, body, false));
         out.headers_mut()
             .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
         return out;
@@ -394,13 +396,7 @@ async fn render_result(
     };
     let Some((fields, mut values)) = form else {
         let body = render::notice(module, &spec.name, "error", &humanize(&spec.name), &message);
-        let mut out = respond(
-            state,
-            module,
-            spec,
-            fragment,
-            (humanize(&spec.name), body, false),
-        );
+        let mut out = respond(state, fragment, (humanize(&spec.name), body, false));
         *out.status_mut() = status;
         out.headers_mut()
             .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
@@ -426,14 +422,14 @@ async fn render_result(
     values.remove("captchaToken");
     let mut out = respond(
         state,
-        module,
-        spec,
         fragment,
         render_form(state, spec, module, &fields, &values, &errors),
     );
     // Keep the browser on the form: a validation error is the form's
-    // state, not a new page. `422` is what a validating handler answers.
-    *out.status_mut() = if status.is_client_error() {
+    // state, not a new page, so `400` becomes `422` like a validating
+    // handler would answer. Every other status (a `429` with its
+    // `Retry-After` semantics, a `5xx`) is kept.
+    *out.status_mut() = if status == StatusCode::BAD_REQUEST {
         StatusCode::UNPROCESSABLE_ENTITY
     } else {
         status
@@ -477,12 +473,9 @@ fn attribute_by_slug(slug: &str, fields: &[Field]) -> Option<String> {
 /// page shell with a CSP otherwise.
 fn respond(
     state: &UiState,
-    module: &str,
-    spec: &Action,
     fragment: bool,
     (title, body, turnstile): (String, maud::Markup, bool),
 ) -> Response {
-    let _ = (module, spec);
     if fragment {
         return Html(body.into_string()).into_response();
     }
