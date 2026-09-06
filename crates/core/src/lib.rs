@@ -42,7 +42,9 @@ pub use http::{Form, Json, MAX_BODY_BYTES, X_REQUEST_ID, rate_limited, request_i
 pub use logging::{
     RedactingVisitor, is_email_field, is_secret_field, redacted_value, subject_hash,
 };
-pub use module::{BoxFuture, HARNESS_API, Migrations, Module, ModuleContext, SqlMigration};
+pub use module::{
+    BoxFuture, HARNESS_API, Migrations, Module, ModuleContext, SqlMigration, harness_api_mismatch,
+};
 pub use ports::{
     Captcha, CaptchaError, Clock, Database, DbError, Decision, Defer, HttpClient, HttpError, IdGen,
     KeyValue, Kid, KvError, MailError, Mailer, Message, NoopDefer, Payload, Port, Ports,

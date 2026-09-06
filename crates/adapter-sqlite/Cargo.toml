@@ -2,6 +2,9 @@
 name = "factory0-adapter-sqlite"
 description = "Database port over rusqlite for the Factory Zero harness (tests and single-node self-hosting)"
 readme = "README.md"
+keywords = ["factory0", "sqlite", "database", "adapter", "sql"]
+categories = ["database"]
+include = ["src/**/*", "README.md"]
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

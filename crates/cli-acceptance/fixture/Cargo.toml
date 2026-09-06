@@ -5,12 +5,13 @@ publish = false
 version = "0.1.0"
 edition = "2024"
 
-# Standalone: not a workspace member (the CLI dev-depends on it by path).
+# Standalone: not a workspace member (factory0-cli-acceptance
+# dev-depends on it by path).
 [workspace]
 
 [dependencies]
-factory0-core = { path = "../../../core" }
-factory0-cli = { path = "../.." }
+factory0-core = { path = "../../core" }
+factory0-cli = { path = "../../cli" }
 axum = { version = "0.8", default-features = false }
 
 [[bin]]

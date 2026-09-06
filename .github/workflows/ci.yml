@@ -53,6 +53,14 @@ jobs:
       - run: cargo test --workspace
       - name: Error taxonomy drift check (issue #14)
         run: cargo run -q -p factory0-core --example errors-doc -- --check
+      - name: Compatibility matrix drift check (issue #17)
+        run: cargo run -q -p factory0-cli --example compatibility-doc -- --check
+
+  # The module conformance kit, run through the reusable workflow so
+  # `harness-private` consumes the identical job (issue #17).
+  conformance:
+    name: conformance (module kit)
+    uses: ./.github/workflows/conformance.yml
 
   deny:
     name: cargo deny

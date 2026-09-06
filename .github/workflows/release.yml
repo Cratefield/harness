@@ -1,0 +1,50 @@
+# crates.io release pipeline (issue #15, ADR 0005). Publishing uses
+# trusted publishing: GitHub OIDC (`id-token: write`) authenticates to
+# crates.io, so no CARGO_REGISTRY_TOKEN lives in this repo. Setup steps
+# the owner takes once per crate: docs/RELEASING.md.
+#
+# Both commands run on every push to `main`:
+# - `release-pr` opens/updates a PR with per-crate version bumps and
+#   changelogs for the conventional commits since the last release;
+# - `release` is a no-op until that release PR MERGES (the push that
+#   merges it is also a push to `main`): then it publishes every crate
+#   whose version is not on crates.io yet, in dependency order, and
+#   tags `<crate>-v<version>`.
+
+name: Release
+
+on:
+  push:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  release-plz:
+    name: release-plz (release-pr, then release)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # release PR commits, git tags, GitHub releases
+      pull-requests: write # open and update the release PR
+      id-token: write # crates.io trusted publishing (OIDC)
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.98.1"
+      - uses: Swatinem/rust-cache@v2
+      - name: Open or update the release PR
+        uses: MarcoIeni/release-plz-action@v0
+        with:
+          command: release-pr
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Publish crates and tag releases (no-op until the release PR merges)
+        uses: MarcoIeni/release-plz-action@v0
+        with:
+          command: release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -2,6 +2,9 @@
 name = "factory0-testing"
 description = "Conformance kit for Factory Zero modules: fake ports, in-memory Database, request helpers"
 readme = "README.md"
+keywords = ["factory0", "conformance", "testing", "fakes", "harness"]
+categories = ["development-tools::testing"]
+include = ["src/**/*", "README.md"]
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

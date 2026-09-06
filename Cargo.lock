@@ -426,17 +426,25 @@ dependencies = [
 name = "factory0-cli"
 version = "0.1.0"
 dependencies = [
- "axum",
  "clap",
- "factory0-adapter-sqlite",
  "factory0-core",
- "insta",
- "pollster",
- "sea-query",
  "serde",
  "serde_json",
  "sha2",
  "tracing",
+]
+
+[[package]]
+name = "factory0-cli-acceptance"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "factory0-adapter-sqlite",
+ "factory0-cli",
+ "factory0-core",
+ "insta",
+ "pollster",
+ "sea-query",
  "venture-fixture",
 ]
 
