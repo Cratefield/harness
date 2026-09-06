@@ -17,7 +17,9 @@ use std::path::Path;
 pub fn collect(harness: &Harness, dialect: &str, out: &Path) -> Result<(), String> {
     if dialect != "sqlite" {
         return Err(format!(
-            "dialect {dialect:?} is not available yet (postgres lands with adapter-postgres)"
+            "dialect {dialect:?} is not available for collect (collect writes the \
+             wrangler/D1 sqlite flow; postgres migrations apply directly with \
+             `fz migrations apply --dialect postgres --url ...`)"
         ));
     }
     std::fs::create_dir_all(out)

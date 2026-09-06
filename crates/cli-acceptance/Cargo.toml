@@ -15,6 +15,21 @@ repository.workspace = true
 [lints]
 workspace = true
 
+[features]
+# Runs `fz migrations apply` against a real Postgres (issue #18); needs
+# FZ_TEST_POSTGRES_URL at test time. Test-only crate (publish = false):
+# sqlx/tokio are regular optional deps because dev-dependencies cannot be
+# feature-gated.
+postgres = ["factory0-cli/postgres", "dep:sqlx", "dep:tokio"]
+
+[dependencies]
+sqlx = { version = "0.8.6", default-features = false, features = [
+    "postgres",
+    "runtime-tokio",
+    "tls-rustls",
+], optional = true }
+tokio = { workspace = true, optional = true }
+
 [dev-dependencies]
 factory0-core = { workspace = true }
 factory0-cli = { workspace = true }

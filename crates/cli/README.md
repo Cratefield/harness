@@ -1,6 +1,7 @@
 # factory0-cli (`fz`)
 
-The venture CLI: `fz migrations collect`, `fz doctor`, `fz modules`.
+The venture CLI: `fz migrations collect`, `fz migrations apply`, `fz
+doctor`, `fz modules`.
 
 `fz` links against your venture's compiled-in harness, so it runs as a bin
 target **inside the venture repo** — the pattern the venture template
@@ -42,7 +43,31 @@ global file name plus a sha256 of its content:
 - exits non-zero when a locked file is missing or was edited after being
   applied (restore the file or add a new migration instead).
 
-`--dialect postgres` arrives with `factory0-adapter-postgres` (phase 3).
+`--dialect postgres` for collect is not a thing: collect writes the
+wrangler/D1 (sqlite) flow. Postgres migrations apply directly — see
+`fz migrations apply` below.
+
+## `fz migrations apply [--dialect postgres] --url <URL>`
+
+Applies the harness's module migrations directly to a Postgres database
+(issue #18): per module the `postgres` migration set when shipped, else
+the `sqlite` set when it passes the portable-SQL lint, in lock order
+(the order `migrations collect` pins), tracked idempotently in
+`harness_migrations(id, applied_at)`. The native counterpart of
+`wrangler d1 migrations apply`.
+
+Requires building `fz` with the crate's `postgres` feature (so sqlx and
+tokio stay out of the default, wasm-safe dependency graph):
+
+```toml
+[dependencies]
+factory0-cli = { version = "0.1", features = ["postgres"] }
+```
+
+```sh
+cargo run --bin fz -- migrations apply --dialect postgres \
+  --url postgres://user:pass@host:5432/venture
+```
 
 ## `fz doctor [--out migrations]`
 

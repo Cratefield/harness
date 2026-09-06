@@ -1,0 +1,38 @@
+[package]
+name = "factory0-adapter-postgres"
+description = "Database port over sqlx Postgres for the Factory Zero harness native runtime (ADR 0004, issue #18)"
+readme = "README.md"
+keywords = ["factory0", "postgres", "database", "adapter", "sql"]
+categories = ["database"]
+include = ["src/**/*", "README.md"]
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+factory0-core = { workspace = true }
+async-trait = { workspace = true }
+sea-query = { workspace = true, features = ["backend-postgres"] }
+time = { workspace = true }
+
+# Native only (issue #18): the sqlx driver does not compile to wasm, so it
+# is gated to non-wasm targets and `src/lib.rs` fails the crate fast with a
+# clear message on any wasm target. `tls-rustls` pulls rustls with the
+# `ring` provider — no aws-lc, no cmake dependency.
+[target.'cfg(not(any(target_arch = "wasm32", target_arch = "wasm64")))'.dependencies]
+sqlx = { version = "0.8.6", default-features = false, features = [
+    "postgres",
+    "runtime-tokio",
+    "tls-rustls",
+] }
+
+[dev-dependencies]
+factory0-module-email-signup = { workspace = true }
+factory0-module-waitlist = { workspace = true }
+axum = { workspace = true }
+tokio = { workspace = true }

@@ -1,0 +1,184 @@
+//! Contract test (issue #18): every migration shipped in this repo also
+//! applies cleanly on Postgres 16, idempotently, through the same runner
+//! `fz migrations apply --dialect postgres` uses.
+//!
+//! Skipped with a printed reason when `FZ_TEST_POSTGRES_URL` is unset; CI
+//! provides a `postgres:16` service container.
+
+mod common;
+
+use axum::Router;
+use common::{TempDb, skip_reason};
+use factory0_adapter_postgres::Postgres;
+use factory0_core::{
+    Config, ConfigError, Database, DbError, Harness, Migrations, Module, ModuleContext, Port,
+    Runtime, SqlMigration, Statement, Venture,
+};
+use factory0_module_email_signup::EmailSignup;
+use factory0_module_waitlist::Waitlist;
+use std::sync::Arc;
+
+struct AllPorts;
+
+impl Runtime for AllPorts {
+    fn provides(&self) -> Vec<Port> {
+        Port::ALL.to_vec()
+    }
+}
+
+fn repo_harness() -> Harness {
+    Harness::builder()
+        .venture(
+            Venture::new("contract", "contract.example").cors_origins(["https://contract.example"]),
+        )
+        .module(EmailSignup::new())
+        .module(Waitlist::new())
+        .runtime(AllPorts)
+        .build()
+        .expect("contract harness builds")
+}
+
+#[tokio::test]
+async fn every_shipped_migration_applies_on_postgres_16() {
+    let Some(temp) = TempDb::create("contract").await else {
+        eprintln!("SKIPPED: {}", skip_reason());
+        return;
+    };
+    temp.assert_postgres_16().await;
+
+    let harness = repo_harness();
+    let db = Postgres::connect(&temp.url)
+        .await
+        .expect("connect to the throwaway database");
+
+    db.apply_harness_migrations(&harness)
+        .await
+        .expect("every shipped migration applies on Postgres 16");
+
+    // Re-running is a no-op (lock order + tracking table).
+    db.apply_harness_migrations(&harness)
+        .await
+        .expect("re-apply is idempotent");
+
+    // Both modules' first migrations are tracked under <module>/<id>.
+    let rows = db
+        .query(&Statement::new(
+            "SELECT id FROM harness_migrations ORDER BY id",
+        ))
+        .await
+        .expect("tracking rows are readable");
+    let ids: Vec<String> = rows
+        .rows
+        .iter()
+        .filter_map(|row| row.get::<String>("id"))
+        .collect();
+    assert_eq!(ids, ["email-signup/0001", "waitlist/0001"]);
+
+    // The tables exist with the columns the modules query: the portable
+    // DDL really landed (missing columns would error).
+    for table in ["subscribers", "waitlist_entries"] {
+        db.query(&Statement::new(format!(
+            "SELECT * FROM {table} WHERE 1 = 0"
+        )))
+        .await
+        .unwrap_or_else(|err| panic!("table {table} is queryable: {err}"));
+    }
+
+    temp.finish().await;
+}
+
+#[tokio::test]
+async fn runner_applies_a_module_directly_and_is_idempotent() {
+    let Some(temp) = TempDb::create("runner").await else {
+        eprintln!("SKIPPED: {}", skip_reason());
+        return;
+    };
+    temp.assert_postgres_16().await;
+
+    let db = Postgres::connect(&temp.url).await.expect("connect");
+    let waitlist = Waitlist::new();
+    let set = factory0_adapter_postgres::select_set(&waitlist.migrations())
+        .expect("the waitlist sqlite set passes the portable lint");
+
+    db.apply_migrations(waitlist.name(), set)
+        .await
+        .expect("applies per-module without a harness");
+    db.apply_migrations(waitlist.name(), set)
+        .await
+        .expect("second run is a no-op");
+
+    let rows = db
+        .query(&Statement::new("SELECT id FROM harness_migrations"))
+        .await
+        .expect("tracking readable");
+    assert_eq!(rows.len(), 1, "exactly one tracked migration");
+
+    // Through the port as a trait object, like a venture wires it.
+    let port: Arc<dyn Database> = Arc::new(db);
+    let rows = port
+        .query(&Statement::new(
+            "SELECT COUNT(*) AS n FROM waitlist_entries",
+        ))
+        .await
+        .expect("counts through Arc<dyn Database>");
+    assert_eq!(rows.first().and_then(|row| row.get::<i64>("n")), Some(0));
+
+    temp.finish().await;
+}
+
+#[tokio::test]
+async fn non_portable_sqlite_set_is_refused_not_applied() {
+    const SERIAL: SqlMigration = SqlMigration {
+        id: "0001",
+        name: "oops",
+        sql: "CREATE TABLE t (id SERIAL PRIMARY KEY);",
+    };
+    let Some(temp) = TempDb::create("lint").await else {
+        eprintln!("SKIPPED: {}", skip_reason());
+        return;
+    };
+    let db = Postgres::connect(&temp.url).await.expect("connect");
+
+    let err = db
+        .apply_harness_migrations(&harness_with(&[SERIAL]))
+        .await
+        .expect_err("SERIAL sqlite set must be refused for Postgres");
+    let DbError::Batch(message) = &err else {
+        panic!("expected DbError::Batch, got {err:?}");
+    };
+    assert!(message.contains("portable-SQL lint"), "message: {message}");
+    assert!(message.contains("0001/oops"), "message: {message}");
+
+    temp.finish().await;
+}
+
+/// A minimal harness around one migration set (for the refusal case).
+fn harness_with(migrations: &'static [SqlMigration]) -> Harness {
+    struct OneModule(&'static [SqlMigration]);
+    impl Module for OneModule {
+        fn name(&self) -> &'static str {
+            "one"
+        }
+        fn version(&self) -> &'static str {
+            "0.0.0"
+        }
+        fn requires(&self) -> &'static [Port] {
+            &[]
+        }
+        fn migrations(&self) -> Migrations {
+            Migrations::sqlite(self.0)
+        }
+        fn validate_config(&self, _cfg: &dyn Config) -> Result<(), ConfigError> {
+            Ok(())
+        }
+        fn router(&self, _ctx: ModuleContext) -> Router {
+            Router::new()
+        }
+    }
+    Harness::builder()
+        .venture(Venture::new("one", "one.example").cors_origins(["https://one.example"]))
+        .module(OneModule(migrations))
+        .runtime(AllPorts)
+        .build()
+        .expect("one-module harness builds")
+}

@@ -22,6 +22,10 @@ factory0-runtime-cloudflare = { path = "crates/runtime-cloudflare", version = "0
 factory0-adapter-resend = { path = "crates/adapter-resend", version = "0.1.0" }
 factory0-adapter-turnstile = { path = "crates/adapter-turnstile", version = "0.1.0" }
 factory0-adapter-sqlite = { path = "crates/adapter-sqlite", version = "0.1.0" }
+# Phase 3 (issue #18): native-only Postgres adapter. Never a dependency of
+# anything on the wasm path — CI asserts the venture wasm graph stays
+# sqlx-free.
+factory0-adapter-postgres = { path = "crates/adapter-postgres", version = "0.1.0" }
 factory0-module-email-signup = { path = "crates/module-email-signup", version = "0.1.0" }
 factory0-module-waitlist = { path = "crates/module-waitlist", version = "0.1.0" }
 factory0-testing = { path = "crates/testing", version = "0.1.0" }
@@ -97,6 +101,13 @@ thiserror = "2.0.20"
 worker = { version = "0.8.5", default-features = false, features = ["d1"] }
 rusqlite = { version = "0.40.2", features = ["bundled"] }
 clap = { version = "4.6.6", features = ["derive"] }
+# Native-only async runtime for sqlx (`runtime-tokio`) — used by
+# factory0-adapter-postgres tests and, behind the `postgres` feature, the
+# fz migration-apply path. Never enabled for a wasm target.
+tokio = { version = "1.53.1", default-features = false, features = [
+    "rt-multi-thread",
+    "macros",
+] }
 
 # Test-only.
 insta = "1.48.0"
