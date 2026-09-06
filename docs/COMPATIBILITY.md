@@ -31,6 +31,7 @@ compatibility-doc` and checked in CI for drift. Do not edit by hand.
 | `factory0-adapter-turnstile` | 0.1.0 | 1 | `^0.2` — `>=0.2.0, <0.3.0` |
 | `factory0-cli` | 0.1.0 | 1 | `^0.2` — `>=0.2.0, <0.3.0` |
 | `factory0-module-email-signup` | 0.1.0 | 1 | `^0.2` — `>=0.2.0, <0.3.0` |
+| `factory0-module-hello` | 0.1.0 | 1 | `^0.2` — `>=0.2.0, <0.3.0` |
 | `factory0-module-waitlist` | 0.1.0 | 1 | `^0.2` — `>=0.2.0, <0.3.0` |
 | `factory0-runtime-cloudflare` | 0.1.0 | 1 | `^0.2` — `>=0.2.0, <0.3.0` |
 | `factory0-testing` | 0.1.0 | 1 | `^0.2` — `>=0.2.0, <0.3.0` |

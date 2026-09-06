@@ -5,7 +5,7 @@ Zero harness. Native only — never compiled to wasm. Used by every module
 test and by `factory0-testing`, and viable for a single-node self-hosted
 deployment (ADR 0004).
 
-```rust
+```rust,ignore
 use factory0_adapter_sqlite::SqliteDatabase;
 
 let db = SqliteDatabase::in_memory()?;          // or ::open("venture.db")

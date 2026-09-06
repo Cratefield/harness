@@ -5,6 +5,7 @@
 //! CI boots this under `wrangler dev --local` and curls `/__health`,
 //! `/__ready` and the sample module's round-trip.
 
+#![doc = include_str!("../README.md")]
 #![forbid(unsafe_code)]
 
 mod sample;

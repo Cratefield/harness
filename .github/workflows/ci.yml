@@ -57,10 +57,14 @@ jobs:
         run: cargo run -q -p factory0-cli --example compatibility-doc -- --check
 
   # The module conformance kit, run through the reusable workflow so
-  # `harness-private` consumes the identical job (issue #17).
+  # `harness-private` consumes the identical job (issue #17). Includes
+  # the authoring guide's example module (issue #16); the workflow's bash
+  # loop word-splits and glob-expands the module-glob string.
   conformance:
     name: conformance (module kit)
     uses: ./.github/workflows/conformance.yml
+    with:
+      module-glob: "crates/module-* examples/module-hello"
 
   deny:
     name: cargo deny
@@ -68,6 +72,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: EmbarkStudios/cargo-deny-action@v2
+
+  docs:
+    name: cargo doc
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.98.1"
+      - uses: Swatinem/rust-cache@v2
+      - name: rustdoc -D warnings (crate docs include their READMEs)
+        run: RUSTDOCFLAGS="-D warnings" cargo doc --no-deps
 
   wasm:
     name: worker-build (examples/venture)

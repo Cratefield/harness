@@ -16,14 +16,14 @@ path = "src/fz_main.rs"
 factory0-cli = "0.1"
 ```
 
-```rust
+```rust,ignore
 // venture src/fz_main.rs
 fn main() { factory0_cli::main_for(my_venture::harness); }
 ```
 
 Then:
 
-```
+```sh
 cargo run --bin fz -- migrations collect
 cargo run --bin fz -- doctor
 cargo run --bin fz -- modules
@@ -67,7 +67,7 @@ Prints `name version /v1/<name> emits=[…] tables=[…]` per module.
 
 Staging and production run the same commands from the venture repo:
 
-```
+```sh
 # staging (first time / new migrations)
 wrangler d1 migrations apply <database-name> --remote --env staging
 

@@ -9,6 +9,7 @@
 //! never touches `std::fs` or `std::net` — CI enforces this with a
 //! `cargo tree` check and the wasm build of `examples/venture`.
 
+#![doc = include_str!("../README.md")]
 #![forbid(unsafe_code)]
 
 mod admin;

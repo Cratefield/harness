@@ -17,6 +17,7 @@
 //!
 //! Then `cargo run -p venture --bin fz -- migrations collect`.
 
+#![doc = include_str!("../README.md")]
 #![forbid(unsafe_code)]
 
 mod collect;

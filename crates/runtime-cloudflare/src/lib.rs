@@ -20,6 +20,7 @@
 //! Workers isolate is single-threaded — ADR 0002). This crate itself
 //! contains no `unsafe`.
 
+#![doc = include_str!("../README.md")]
 #![forbid(unsafe_code)]
 
 mod config;

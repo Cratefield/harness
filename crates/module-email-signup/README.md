@@ -5,16 +5,20 @@ an address, double opt-in via a signed confirmation link, one-click
 unsubscribe, admin CSV export and hard delete.
 
 ```rust
-EmailSignup::new()
+use factory0_module_email_signup::EmailSignup;
+
+let module = EmailSignup::new()
     .double_opt_in(true)
     .confirm_ttl_days(7)
-    .retention_days_pending(30)
+    .retention_days_pending(30);
 ```
 
 Composable with `factory0-module-waitlist`:
 
 ```rust
-EmailSignup::new().subscribe_on_waitlist_confirm(true)
+use factory0_module_email_signup::EmailSignup;
+
+let module = EmailSignup::new().subscribe_on_waitlist_confirm(true);
 ```
 
 adds confirmed waitlist addresses to the signup list through the
@@ -23,9 +27,11 @@ adds confirmed waitlist addresses to the signup list through the
 Register the default mail templates in `harness.rs`:
 
 ```rust
-Harness::builder()
-    .templates(EmailSignup::default_templates())
-    // overrides registered later win
+use factory0_core::Harness;
+use factory0_module_email_signup::default_templates;
+
+// module defaults; venture overrides registered later win
+let builder = Harness::builder().templates(default_templates());
 ```
 
 See `docs/ARCHITECTURE.md` section 6 (Email signup) and section 11

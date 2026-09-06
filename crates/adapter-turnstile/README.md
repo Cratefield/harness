@@ -6,7 +6,7 @@
 
 ## Usage
 
-```rust
+```rust,ignore
 use std::sync::Arc;
 use factory0_adapter_turnstile::Turnstile;
 use factory0_runtime_cloudflare::{FetchClient, WorkersClock};

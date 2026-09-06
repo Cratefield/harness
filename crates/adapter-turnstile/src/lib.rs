@@ -8,6 +8,7 @@
 //! `None` so the port is not provided at all — `fz doctor` then refuses a
 //! production build without captcha.
 
+#![doc = include_str!("../README.md")]
 #![forbid(unsafe_code)]
 
 use async_trait::async_trait;
