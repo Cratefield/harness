@@ -94,7 +94,8 @@ mechanism is deferred to #67** and is not decided here.
   migrations, the duplicate-table check and `fz data export` all need explicit
   work before a sidecar may own tables; #66.
 - A sidecar cannot serve `well_known()` routes, because the host nests it only
-  under `/v1/<name>`. The auth service in #46 therefore cannot be a sidecar.
+  under `/v1/<name>`. The auth service, which needs the root-level
+  `/.well-known` routes added in #46, therefore cannot be a sidecar.
 - A sidecar must not be publicly routable. The host's rate limiting, captcha and
   request-id trust key off the `cf-connecting-ip` it forwards; a directly
   reachable sidecar would accept a client-supplied one.
