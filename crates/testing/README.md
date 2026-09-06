@@ -43,7 +43,9 @@ async fn join_accepts_an_email() {
 - `conformance(module)` — the shared suite: mounts + health listing,
   request under the prefix, migrations apply twice on fresh databases,
   `view_for` hides undeclared ports, the two-concurrent-requests
-  request-id test (ADR 0007).
+  request-id test (ADR 0007), and — for modules with a `well_known`
+  router — that it serves at the root `/.well-known` and never under
+  `/v1` (#46).
 - `assert_wasm_safe_deps(env!("CARGO_PKG_NAME"))` — `cargo tree` check:
   no `worker`/`wasm-bindgen`/`tokio`/`reqwest` in the module's normal
   dependency tree.

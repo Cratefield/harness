@@ -44,6 +44,9 @@ pub struct Harness {
     templates: Arc<TemplateRegistry>,
     events: EventBus,
     runtime: Option<Arc<dyn Runtime>>,
+    /// The single module-provided `/.well-known` router, if any
+    /// (issue #46); nested at the root by `router()`.
+    well_known: Option<Router>,
 }
 
 impl std::fmt::Debug for Harness {
@@ -97,9 +100,11 @@ impl Harness {
     }
 
     /// Assembles the full router: each module nested under `/v1/<name>`,
+    /// the one `/.well-known` router (if any) nested at the root,
     /// `GET /__health`, `GET /__ready`, and the shared middleware
     /// (request-id/Scope, CORS allowlist, 64 KiB body limit, `/v1/*`
-    /// security headers).
+    /// security headers). Nothing but `/.well-known` is ever mounted at
+    /// the root.
     pub fn router(&self, ports: Ports) -> Router {
         let mut api = Router::new();
         for module in &self.modules {
@@ -143,13 +148,23 @@ impl Harness {
             clock: clock.unwrap_or_else(|| Arc::new(SystemClock)),
         };
 
-        Router::new()
+        let root = Router::new()
             .route("/__health", get(health_handler))
             .with_state(health_state)
             .route("/__ready", get(ready_handler))
             .with_state(ready_state)
-            .merge(api)
-            .layer(from_fn_with_state(scope_state, scope_layer))
+            .merge(api);
+        let root = match &self.well_known {
+            Some(well_known) => root.nest(
+                "/.well-known",
+                well_known
+                    .clone()
+                    .layer(DefaultBodyLimit::max(MAX_BODY_BYTES)),
+            ),
+            None => root,
+        };
+
+        root.layer(from_fn_with_state(scope_state, scope_layer))
             .layer(cors_layer(&self.venture.cors_origins))
     }
 }
@@ -285,9 +300,9 @@ impl HarnessBuilder {
     /// # Errors
     ///
     /// `Err` whose `Display` lists every problem: invalid venture, unknown
-    /// or duplicated port declarations, duplicate module names or tables,
-    /// `harness_api` mismatches, unprovided required ports, and template
-    /// ids naming unregistered modules.
+    /// or duplicated port declarations, duplicate module names, tables or
+    /// `/.well-known` routers, `harness_api` mismatches, unprovided
+    /// required ports, and template ids naming unregistered modules.
     pub fn build(self) -> Result<Harness, ConfigError> {
         let mut errors = ConfigError::default();
 
@@ -354,6 +369,8 @@ impl HarnessBuilder {
             }
         }
 
+        let well_known = collect_well_known(&self.modules, &mut errors);
+
         for module in &self.modules {
             for port in module.requires() {
                 if !self.provides.contains(port) {
@@ -397,6 +414,7 @@ impl HarnessBuilder {
             templates: Arc::new(registry),
             events,
             runtime: self.runtime,
+            well_known,
         })
     }
 }
@@ -408,4 +426,29 @@ fn is_module_name(name: &str) -> bool {
                 .chars()
                 .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
     })
+}
+
+/// Collects the modules' `/.well-known` routers (issue #46): at most one
+/// module may provide one — `/.well-known` is a singleton discovery
+/// namespace — and more is a build error naming every provider.
+fn collect_well_known(modules: &[Arc<dyn Module>], errors: &mut ConfigError) -> Option<Router> {
+    let mut providers: Vec<&'static str> = Vec::new();
+    let mut well_known = None;
+    for module in modules {
+        if let Some(router) = module.well_known() {
+            providers.push(module.name());
+            well_known = Some(router);
+        }
+    }
+    if providers.len() > 1 {
+        let listed = providers
+            .iter()
+            .map(|name| format!("`{name}`"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        errors.push(format!(
+            "modules {listed} all provide a well-known router; at most one module may occupy /.well-known"
+        ));
+    }
+    well_known
 }

@@ -2,7 +2,8 @@
 name = "factory0-core"
 description = "Factory Zero harness kernel: Module trait, Harness builder, ports, errors"
 readme = "../../README.md"
-version.workspace = true
+# 0.2.0 (not workspace): well-known routers and the Form extractor (issue #46).
+version = "0.2.0"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
