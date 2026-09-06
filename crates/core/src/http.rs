@@ -103,6 +103,14 @@ pub(crate) async fn scope_layer(
         .map(|matched| matched.as_str().to_owned())
         .unwrap_or_default();
 
+    // `std::time::Instant::now()` panics on wasm32-unknown-unknown with
+    // "time not implemented on this platform", which took down every
+    // request on Workers — `/__health` included. There is no monotonic
+    // clock in that target, and `Date.now()` is frozen between I/O in
+    // workerd, so a wall-clock delta would read 0 and look measured.
+    // Timing is therefore recorded only where a real clock exists;
+    // Cloudflare's own request logs carry it on Workers.
+    #[cfg(not(target_arch = "wasm32"))]
     let started = std::time::Instant::now();
     let future = next.run(request);
     let mut response = future.instrument(span.clone()).await;
@@ -119,8 +127,11 @@ pub(crate) async fn scope_layer(
             .unwrap_or_default(),
     );
     span.record("status", response.status().as_u16());
-    let duration_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
-    span.record("duration_ms", duration_ms);
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let duration_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+        span.record("duration_ms", duration_ms);
+    }
     response
 }
 

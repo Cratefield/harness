@@ -1599,6 +1599,7 @@ name = "venture"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "factory0-adapter-resend",
  "factory0-core",
  "factory0-module-email-signup",
  "factory0-module-waitlist",
