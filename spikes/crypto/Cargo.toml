@@ -1,0 +1,76 @@
+# Spike crate for issue #38 — deliberately NOT a member of the harness
+# workspace. The empty `[workspace]` table detaches it from the root
+# manifest, so it can never enter the workspace build (and therefore never
+# the wasm build path of examples/venture). Run everything from this
+# directory; the exact commands and their outputs are recorded in
+# docs/adr/0102-crypto-crate.md and PROGRESS.md.
+[workspace]
+
+[package]
+name = "spike-crypto"
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.98"
+publish = false
+
+[features]
+default = []
+# One feature per candidate so each can be built, tested, measured and
+# cross-compiled in isolation. `all` exists for convenience only; scoring
+# is always per candidate.
+aws-lc-backend = ["dep:aws-lc-rs"]
+ring-backend = ["dep:ring"]
+rustcrypto = ["dep:chacha20poly1305", "dep:aes-gcm"]
+age-backend = ["dep:age"]
+all = [
+    "aws-lc-backend",
+    "ring-backend",
+    "rustcrypto",
+    "age-backend",
+]
+
+[dependencies]
+# Shared: DEK type and cache zeroisation.
+zeroize = "1.8"
+
+# Candidate 1: aws-lc-rs (ring-compatible API over AWS's aws-lc, a
+# BoringSSL fork; optional FIPS build via the `fips` feature).
+aws-lc-rs = { version = "1.15", optional = true, default-features = false, features = [
+    "aws-lc-sys",
+] }
+
+# Candidate 2: ring 0.17.
+ring = { version = "0.17", optional = true }
+
+# Candidate 3: RustCrypto AEADs (current 0.11 line). `zeroize` makes the
+# key types zeroise on drop — a scored property.
+chacha20poly1305 = { version = "0.11", optional = true, features = [
+    "alloc",
+    "zeroize",
+] }
+aes-gcm = { version = "0.11", optional = true, features = [
+    "alloc",
+    "zeroize",
+] }
+
+# Candidate 4: age — expected to be eliminated (file-encryption format
+# on X25519 recipients, not a symmetric envelope primitive); scored once
+# so the question does not return.
+age = { version = "0.11", optional = true, default-features = false }
+
+# OS RNG for DEK and nonce generation. Only the native `store` module
+# calls it, so the dependency itself is native-only: wasm builds of the
+# AEAD layer pull no RNG at all (mirrors the workspace root's rule that
+# anything wasm-bound needs the getrandom wasm_js opt-in).
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+getrandom = "0.4"
+
+# On wasm the transitive getrandom copies need their JS backends enabled
+# (same opt-in the workspace root uses): RustCrypto's tree uses getrandom
+# 0.4 (`wasm_js`); ring and age pull getrandom 0.2 (`js`).
+[target.'cfg(target_family = "wasm")'.dependencies]
+getrandom = { version = "0.4", default-features = false, features = ["wasm_js"] }
+getrandom02 = { package = "getrandom", version = "0.2", features = ["js"] }
+
+[lints.rust]
+unsafe_code = "forbid"
