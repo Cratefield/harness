@@ -129,6 +129,17 @@ async fn serves_health_ready_and_spoofed_headers_go_nowhere() {
     let body: Value = serde_json::from_slice(ready.body()).expect("ready is JSON");
     assert_eq!(body["ok"], true);
 
+    // The UI surface is served on the native runtime too (ADR 0010); the
+    // module declares none, so the document lists no modules.
+    let surface = http_get(&client, &format!("http://{addr}/__surface"))
+        .await
+        .expect("surface succeeds");
+    assert_eq!(surface.status(), 200);
+    assert!(surface.headers().contains_key("etag"));
+    let body: Value = serde_json::from_slice(surface.body()).expect("surface is JSON");
+    assert_eq!(body["surface_api"], 1);
+    assert_eq!(body["modules"].as_array().map(Vec::len), Some(0));
+
     // The sanitization oracle: the client sends a forged x-forwarded-for
     // (and cf-connecting-ip), TRUSTED_PROXY_HEADERS is unset, so the
     // module must see the loopback peer and no trace of either header.

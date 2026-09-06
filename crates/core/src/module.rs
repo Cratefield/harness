@@ -5,6 +5,7 @@
 use crate::config::{Config, ConfigError};
 use crate::events::{AnyError, EventBus, EventHandler, EventName};
 use crate::ports::{Port, Ports};
+use crate::surface::Surface;
 use crate::template::TemplateRegistry;
 use crate::venture::Venture;
 use std::sync::Arc;
@@ -145,6 +146,15 @@ pub trait Module: Send + Sync + 'static {
     /// two modules return a router here. `None` by default.
     fn well_known(&self) -> Option<axum::Router> {
         None
+    }
+    /// The module's UI surface (ADR 0010): the actions a renderer may
+    /// offer and the views that compose them. Input schemas come from
+    /// the handler's own body types (`Action::input::<Body>()`), so the
+    /// declaration cannot drift from the route. `Harness::build`
+    /// validates it; `GET /__surface` serves the composition. Default:
+    /// nothing, and a module that declares nothing renders nothing.
+    fn surface(&self) -> Surface {
+        Surface::none()
     }
     /// Handlers for events other modules emit; registered at
     /// `Harness::build`.
