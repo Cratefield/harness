@@ -341,6 +341,20 @@ pub async fn identity_by_provider_subject(
     Ok(rows.first().map(identity_from))
 }
 
+/// Deletes one identity row by id. The caller checks first that it
+/// belongs to the user and is not their last way in (issue #22).
+///
+/// # Errors
+///
+/// [`DbError::Execute`] when the statement fails.
+pub async fn delete_identity(db: &dyn Database, id: &str) -> Result<u64, DbError> {
+    let mut delete = Query::delete();
+    delete
+        .from_table(iden("identities"))
+        .and_where(Expr::col(iden("id")).eq(id));
+    db.execute(&Statement::render(&delete)).await
+}
+
 /// Every identity linked to a user (the account-linking view).
 ///
 /// # Errors
