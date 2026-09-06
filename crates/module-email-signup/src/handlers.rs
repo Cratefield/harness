@@ -343,6 +343,7 @@ async fn send_confirmation(
         email: normalized.clone(),
         confirm_url: format!("{base}/v1/email-signup/confirm?token={confirm_token}"),
         unsubscribe_url: format!("{base}/v1/email-signup/unsubscribe?token={unsubscribe_token}"),
+        brand: state.ctx.venture.brand.clone(),
     });
     match mail::send(
         &state.ctx,
@@ -489,6 +490,7 @@ async fn confirm(
                     unsubscribe_url: format!(
                         "{base}/v1/email-signup/unsubscribe?token={unsubscribe_token}"
                     ),
+                    brand: state.ctx.venture.brand.clone(),
                 }),
                 locale: row.locale.clone().unwrap_or_else(|| "en".to_owned()),
                 idempotency_key: format!(

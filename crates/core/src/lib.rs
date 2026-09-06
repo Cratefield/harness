@@ -51,4 +51,4 @@ pub use rate_limit::{client_ip, rate_limit_keys};
 pub use scope::Scope;
 pub use signer::{HmacSigner, MIN_SECRET_BYTES, SignerError};
 pub use template::{Rendered, Template, TemplateError, TemplateRegistry};
-pub use venture::{Venture, VentureEnv};
+pub use venture::{Brand, Venture, VentureEnv};

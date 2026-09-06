@@ -1,0 +1,20 @@
+<!doctype html>
+<html>
+  <body style="margin:0;padding:24px;background:#f4f4f5;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;color:#18181b;">
+    <div style="max-width:520px;margin:0 auto;background:#ffffff;border-radius:12px;padding:32px;">
+      {% if let Some(logo) = data.brand.logo_url %}
+      <img src="{{ logo }}" alt="{{ data.venture }}" style="max-height:40px;display:block;margin:0 auto 16px;">
+      {% endif %}
+      <h1 style="font-size:20px;line-height:1.3;margin:0 0 12px;">You are on the list</h1>
+      <p style="font-size:15px;line-height:1.6;margin:0 0 8px;">
+        Welcome to <strong>{{ data.venture }}</strong> — your email address is confirmed.
+      </p>
+      <hr style="border:none;border-top:1px solid #e4e4e7;margin:24px 0;">
+      <p style="font-size:12px;line-height:1.6;margin:0;color:#71717a;">
+        This mail was sent to {{ data.email }}.<br>
+        Do not want these mails? <a href="{{ data.unsubscribe_url }}" style="color:#71717a;">Unsubscribe</a>
+        {% if let Some(footer) = data.brand.footer %}<br>{{ footer }}{% endif %}
+      </p>
+    </div>
+  </body>
+</html>

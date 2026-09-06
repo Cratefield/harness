@@ -1,0 +1,9 @@
+Your spot on the {{ data.venture }} {{ data.product }} waitlist is confirmed.
+This mail was sent to {{ data.email }}.
+You are number {{ data.position }} in line.
+
+Check your place any time:
+{{ data.status_url }}
+{% if let Some(footer) = data.brand.footer %}
+{{ footer }}
+{% endif %}

@@ -421,6 +421,7 @@ async fn send_join_confirmation(
         product: mail.product,
         email: mail.normalized.clone(),
         confirm_url: format!("{base}/v1/waitlist/confirm?token={confirm_token}"),
+        brand: state.ctx.venture.brand.clone(),
     });
     match mail::send(
         &state.ctx,
@@ -529,6 +530,7 @@ async fn confirm(
                     email: fresh.email.clone(),
                     position: fresh.position.unwrap_or(0),
                     status_url: format!("{base}/v1/waitlist/status?token={status_token}"),
+                    brand: state.ctx.venture.brand.clone(),
                 }),
                 locale: "en".to_owned(),
                 idempotency_key: format!(

@@ -1,0 +1,8 @@
+{{ data.venture }} is admitting {{ data.product }} members in join order.
+This mail was sent to {{ data.email }}.
+
+Confirm your address to hold your spot:
+{{ data.confirm_url }}
+{% if let Some(footer) = data.brand.footer %}
+{{ footer }}
+{% endif %}

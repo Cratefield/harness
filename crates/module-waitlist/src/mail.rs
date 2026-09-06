@@ -1,9 +1,12 @@
-//! Mail rendering and sending for `waitlist`. Built-in fallback
-//! templates with the same ids and data types issue #12's askama
-//! templates use.
+//! Mail rendering and sending for `waitlist`. The default templates are
+//! askama templates compiled into the crate (issue #12), exported via
+//! [`default_templates`] and used directly as the fallback when the
+//! venture registered no override. Locale: `en` shipped; ventures
+//! register `waitlist/confirm@<locale>` overrides.
 
+use askama::Template as _;
 use factory0_core::{
-    MailError, Message, ModuleConfig, ModuleContext, Rendered, SendOutcome, Template,
+    Brand, MailError, Message, ModuleConfig, ModuleContext, Rendered, SendOutcome, Template,
     TemplateError, TemplateRegistry,
 };
 use serde::{Deserialize, Serialize};
@@ -20,6 +23,8 @@ pub struct ConfirmMailData {
     pub product: String,
     pub email: String,
     pub confirm_url: String,
+    #[serde(default)]
+    pub brand: Brand,
 }
 
 /// Typed data for `waitlist/confirmed` (the "you're in" mail).
@@ -30,94 +35,93 @@ pub struct ConfirmedMailData {
     pub email: String,
     pub position: i64,
     pub status_url: String,
+    #[serde(default)]
+    pub brand: Brand,
 }
 
-fn mail_error(id: &str) -> impl Fn() -> TemplateError + '_ {
-    move || TemplateError::RenderFailed {
-        id: id.to_string(),
-        reason: "data does not fit the template".to_string(),
+fn parse_failed(id: &str) -> TemplateError {
+    TemplateError::RenderFailed {
+        id: id.to_owned(),
+        reason: "data does not fit the template".to_owned(),
     }
 }
 
-pub(crate) fn escape_html(input: &str) -> String {
-    let mut out = String::with_capacity(input.len());
-    for ch in input.chars() {
-        match ch {
-            '&' => out.push_str("&amp;"),
-            '<' => out.push_str("&lt;"),
-            '>' => out.push_str("&gt;"),
-            '"' => out.push_str("&quot;"),
-            '\'' => out.push_str("&#39;"),
-            other => out.push(other),
-        }
+fn askama_failed(id: &str, err: &askama::Error) -> TemplateError {
+    TemplateError::RenderFailed {
+        id: id.to_owned(),
+        reason: err.to_string(),
     }
-    out
 }
 
-struct BuiltInConfirm;
+#[derive(askama::Template)]
+#[template(path = "waitlist_confirm.html")]
+struct ConfirmHtml<'a> {
+    data: &'a ConfirmMailData,
+}
 
-impl Template for BuiltInConfirm {
+#[derive(askama::Template)]
+#[template(path = "waitlist_confirm.txt")]
+struct ConfirmText<'a> {
+    data: &'a ConfirmMailData,
+}
+
+#[derive(askama::Template)]
+#[template(path = "waitlist_confirmed.html")]
+struct ConfirmedHtml<'a> {
+    data: &'a ConfirmedMailData,
+}
+
+#[derive(askama::Template)]
+#[template(path = "waitlist_confirmed.txt")]
+struct ConfirmedText<'a> {
+    data: &'a ConfirmedMailData,
+}
+
+struct ConfirmTemplate;
+
+impl Template for ConfirmTemplate {
     fn render(&self, data: &Value, _locale: &str) -> Result<Rendered, TemplateError> {
         let data: ConfirmMailData =
-            serde_json::from_value(data.clone()).map_err(|_| mail_error(TEMPLATE_CONFIRM)())?;
+            serde_json::from_value(data.clone()).map_err(|_| parse_failed(TEMPLATE_CONFIRM))?;
         Ok(Rendered {
             subject: format!("Confirm your spot on the {} waitlist", data.product),
-            html: format!(
-                "<p>{venture} is admitting {product} members in order.</p>\n\
-                 <p>Confirm your address to hold your spot:</p>\n\
-                 <p><a href=\"{confirm}\">{confirm}</a></p>\n",
-                venture = escape_html(&data.venture),
-                product = escape_html(&data.product),
-                confirm = escape_html(&data.confirm_url),
-            ),
-            text: format!(
-                "{venture} is admitting {product} members in order.\n\n\
-                 Confirm your address to hold your spot:\n{confirm}\n",
-                venture = data.venture,
-                product = data.product,
-                confirm = data.confirm_url,
-            ),
+            html: ConfirmHtml { data: &data }
+                .render()
+                .map_err(|err| askama_failed(TEMPLATE_CONFIRM, &err))?,
+            text: ConfirmText { data: &data }
+                .render()
+                .map_err(|err| askama_failed(TEMPLATE_CONFIRM, &err))?,
         })
     }
 }
 
-struct BuiltInConfirmed;
+struct ConfirmedTemplate;
 
-impl Template for BuiltInConfirmed {
+impl Template for ConfirmedTemplate {
     fn render(&self, data: &Value, _locale: &str) -> Result<Rendered, TemplateError> {
         let data: ConfirmedMailData =
-            serde_json::from_value(data.clone()).map_err(|_| mail_error(TEMPLATE_CONFIRMED)())?;
+            serde_json::from_value(data.clone()).map_err(|_| parse_failed(TEMPLATE_CONFIRMED))?;
         Ok(Rendered {
             subject: format!(
-                "You are #{position} on the {product} waitlist",
-                position = data.position,
-                product = data.product
+                "You are #{} on the {} waitlist",
+                data.position, data.product
             ),
-            html: format!(
-                "<p>You are #{position} on the {venture} {product} waitlist.</p>\n\
-                 <p>Check your place any time: <a href=\"{status}\">{status}</a></p>\n",
-                position = data.position,
-                venture = escape_html(&data.venture),
-                product = escape_html(&data.product),
-                status = escape_html(&data.status_url),
-            ),
-            text: format!(
-                "You are #{position} on the {venture} {product} waitlist.\n\n\
-                 Check your place any time:\n{status}\n",
-                position = data.position,
-                venture = data.venture,
-                product = data.product,
-                status = data.status_url,
-            ),
+            html: ConfirmedHtml { data: &data }
+                .render()
+                .map_err(|err| askama_failed(TEMPLATE_CONFIRMED, &err))?,
+            text: ConfirmedText { data: &data }
+                .render()
+                .map_err(|err| askama_failed(TEMPLATE_CONFIRMED, &err))?,
         })
     }
 }
 
-/// The module's default templates, for `Harness::builder().templates(..)`.
+/// The module's default askama templates, for
+/// `Harness::builder().templates(..)`.
 pub fn default_templates() -> Vec<(String, Box<dyn Template>)> {
     vec![
-        (TEMPLATE_CONFIRM.to_string(), Box::new(BuiltInConfirm)),
-        (TEMPLATE_CONFIRMED.to_string(), Box::new(BuiltInConfirmed)),
+        (TEMPLATE_CONFIRM.to_owned(), Box::new(ConfirmTemplate)),
+        (TEMPLATE_CONFIRMED.to_owned(), Box::new(ConfirmedTemplate)),
     ]
 }
 
@@ -130,11 +134,11 @@ pub(crate) fn render(
     match registry.render(id, data, locale) {
         Ok(rendered) => Ok(rendered),
         Err(TemplateError::UnknownTemplate { .. }) => match id {
-            TEMPLATE_CONFIRM => BuiltInConfirm.render(data, locale),
-            TEMPLATE_CONFIRMED => BuiltInConfirmed.render(data, locale),
+            TEMPLATE_CONFIRM => ConfirmTemplate.render(data, locale),
+            TEMPLATE_CONFIRMED => ConfirmedTemplate.render(data, locale),
             other => Err(TemplateError::UnknownTemplate {
-                id: other.to_string(),
-                locale: locale.to_string(),
+                id: other.to_owned(),
+                locale: locale.to_owned(),
             }),
         },
         Err(other) => Err(other),
@@ -171,7 +175,7 @@ pub(crate) async fn send(
         html: rendered.html,
         text: rendered.text,
         idempotency_key: Some(mail.idempotency_key.clone()),
-        tags: vec!["waitlist".to_string()],
+        tags: vec!["waitlist".to_owned()],
     };
     let Some(mailer) = ctx.ports.mailer.clone() else {
         return Ok(SendOutcome::NotConfigured);
@@ -204,7 +208,11 @@ pub(crate) fn spawn_deferred(
 ) -> factory0_core::BoxFuture<'static, ()> {
     Box::pin(async move {
         if let Err(err) = send(&ctx, &mail).await {
-            tracing::error!(error = %err, template = mail.template_id, "deferred waitlist mail failed");
+            tracing::error!(
+                error = %err,
+                template = mail.template_id,
+                "deferred waitlist mail failed"
+            );
         }
     })
 }

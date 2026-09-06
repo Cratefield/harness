@@ -1,10 +1,15 @@
-//! Mail rendering and sending for `email-signup`. The built-in templates
-//! here are the module's fallback when the venture registered no
-//! override; issue #12 replaces them with askama templates with the same
-//! ids and data types.
+//! Mail rendering and sending for `email-signup`. The default templates
+//! are askama templates compiled into the crate (issue #12), exported via
+//! [`default_templates`] and used directly as the fallback when the
+//! venture registered no override.
+//!
+//! Locale: `en` is shipped; ventures register overrides under
+//! `email-signup/confirm@<locale>` (e.g. `@nl`, `@is`) and the registry
+//! resolves them per request locale.
 
+use askama::Template as _;
 use factory0_core::{
-    MailError, Message, ModuleConfig, ModuleContext, Rendered, SendOutcome, Template,
+    Brand, MailError, Message, ModuleConfig, ModuleContext, Rendered, SendOutcome, Template,
     TemplateError, TemplateRegistry,
 };
 use serde::{Deserialize, Serialize};
@@ -23,6 +28,8 @@ pub struct ConfirmMailData {
     pub email: String,
     pub confirm_url: String,
     pub unsubscribe_url: String,
+    #[serde(default)]
+    pub brand: Brand,
 }
 
 /// Typed data for `email-signup/welcome`.
@@ -31,91 +38,96 @@ pub struct WelcomeMailData {
     pub venture: String,
     pub email: String,
     pub unsubscribe_url: String,
+    #[serde(default)]
+    pub brand: Brand,
 }
 
-pub(crate) fn escape_html(input: &str) -> String {
-    let mut out = String::with_capacity(input.len());
-    for ch in input.chars() {
-        match ch {
-            '&' => out.push_str("&amp;"),
-            '<' => out.push_str("&lt;"),
-            '>' => out.push_str("&gt;"),
-            '"' => out.push_str("&quot;"),
-            '\'' => out.push_str("&#39;"),
-            other => out.push(other),
-        }
-    }
-    out
-}
-
-fn mail_error(template: &str, id: &str) -> TemplateError {
+fn parse_failed(id: &str) -> TemplateError {
     TemplateError::RenderFailed {
-        id: id.to_string(),
-        reason: format!("data does not fit the {template} template"),
+        id: id.to_owned(),
+        reason: "data does not fit the template".to_owned(),
     }
 }
 
-struct BuiltInConfirm;
+fn askama_failed(id: &str, err: &askama::Error) -> TemplateError {
+    TemplateError::RenderFailed {
+        id: id.to_owned(),
+        reason: err.to_string(),
+    }
+}
 
-impl Template for BuiltInConfirm {
+#[derive(askama::Template)]
+#[template(path = "email_confirm.html")]
+struct ConfirmHtml<'a> {
+    data: &'a ConfirmMailData,
+}
+
+#[derive(askama::Template)]
+#[template(path = "email_confirm.txt")]
+struct ConfirmText<'a> {
+    data: &'a ConfirmMailData,
+}
+
+#[derive(askama::Template)]
+#[template(path = "email_welcome.html")]
+struct WelcomeHtml<'a> {
+    data: &'a WelcomeMailData,
+}
+
+#[derive(askama::Template)]
+#[template(path = "email_welcome.txt")]
+struct WelcomeText<'a> {
+    data: &'a WelcomeMailData,
+}
+
+struct ConfirmTemplate;
+
+impl Template for ConfirmTemplate {
     fn render(&self, data: &Value, _locale: &str) -> Result<Rendered, TemplateError> {
-        let data: ConfirmMailData = serde_json::from_value(data.clone())
-            .map_err(|_| mail_error("confirm", TEMPLATE_CONFIRM))?;
+        let data: ConfirmMailData =
+            serde_json::from_value(data.clone()).map_err(|_| parse_failed(TEMPLATE_CONFIRM))?;
         Ok(Rendered {
             subject: format!("Confirm your email for {}", data.venture),
-            html: format!(
-                "<p>Welcome to {venture}.</p>\n<p>Confirm your email address:</p>\n\
-                 <p><a href=\"{confirm}\">{confirm}</a></p>\n\
-                 <p>Or unsubscribe: <a href=\"{unsub}\">{unsub}</a></p>\n",
-                venture = escape_html(&data.venture),
-                confirm = escape_html(&data.confirm_url),
-                unsub = escape_html(&data.unsubscribe_url),
-            ),
-            text: format!(
-                "Welcome to {venture}!\n\nConfirm your email address:\n{confirm}\n\n\
-                 Or unsubscribe:\n{unsub}\n",
-                venture = data.venture,
-                confirm = data.confirm_url,
-                unsub = data.unsubscribe_url,
-            ),
+            html: ConfirmHtml { data: &data }
+                .render()
+                .map_err(|err| askama_failed(TEMPLATE_CONFIRM, &err))?,
+            text: ConfirmText { data: &data }
+                .render()
+                .map_err(|err| askama_failed(TEMPLATE_CONFIRM, &err))?,
         })
     }
 }
 
-struct BuiltInWelcome;
+struct WelcomeTemplate;
 
-impl Template for BuiltInWelcome {
+impl Template for WelcomeTemplate {
     fn render(&self, data: &Value, _locale: &str) -> Result<Rendered, TemplateError> {
-        let data: WelcomeMailData = serde_json::from_value(data.clone())
-            .map_err(|_| mail_error("welcome", TEMPLATE_WELCOME))?;
+        let data: WelcomeMailData =
+            serde_json::from_value(data.clone()).map_err(|_| parse_failed(TEMPLATE_WELCOME))?;
         Ok(Rendered {
             subject: format!("Welcome to {}", data.venture),
-            html: format!(
-                "<p>You are on the {venture} list. Welcome!</p>\n\
-                 <p>Unsubscribe any time: <a href=\"{unsub}\">{unsub}</a></p>\n",
-                venture = escape_html(&data.venture),
-                unsub = escape_html(&data.unsubscribe_url),
-            ),
-            text: format!(
-                "You are on the {venture} list. Welcome!\n\nUnsubscribe any time:\n{unsub}\n",
-                venture = data.venture,
-                unsub = data.unsubscribe_url,
-            ),
+            html: WelcomeHtml { data: &data }
+                .render()
+                .map_err(|err| askama_failed(TEMPLATE_WELCOME, &err))?,
+            text: WelcomeText { data: &data }
+                .render()
+                .map_err(|err| askama_failed(TEMPLATE_WELCOME, &err))?,
         })
     }
 }
 
-/// The module's default templates, for `Harness::builder().templates(..)`.
-/// Ventures register them first and their overrides second.
+/// The module's default askama templates, for
+/// `Harness::builder().templates(..)`. Ventures register them first and
+/// their overrides second.
 pub fn default_templates() -> Vec<(String, Box<dyn Template>)> {
     vec![
-        (TEMPLATE_CONFIRM.to_string(), Box::new(BuiltInConfirm)),
-        (TEMPLATE_WELCOME.to_string(), Box::new(BuiltInWelcome)),
+        (TEMPLATE_CONFIRM.to_owned(), Box::new(ConfirmTemplate)),
+        (TEMPLATE_WELCOME.to_owned(), Box::new(WelcomeTemplate)),
     ]
 }
 
-/// Renders through the venture's registry, falling back to the built-in
-/// template when the registry misses (the conformance kit registers
+/// Renders through the venture's registry, falling back to the compiled
+/// defaults when the registry misses (the conformance kit registers
 /// nothing).
 pub(crate) fn render(
     registry: &TemplateRegistry,
@@ -126,11 +138,11 @@ pub(crate) fn render(
     match registry.render(id, data, locale) {
         Ok(rendered) => Ok(rendered),
         Err(TemplateError::UnknownTemplate { .. }) => match id {
-            TEMPLATE_CONFIRM => BuiltInConfirm.render(data, locale),
-            TEMPLATE_WELCOME => BuiltInWelcome.render(data, locale),
+            TEMPLATE_CONFIRM => ConfirmTemplate.render(data, locale),
+            TEMPLATE_WELCOME => WelcomeTemplate.render(data, locale),
             other => Err(TemplateError::UnknownTemplate {
-                id: other.to_string(),
-                locale: locale.to_string(),
+                id: other.to_owned(),
+                locale: locale.to_owned(),
             }),
         },
         Err(other) => Err(other),
@@ -167,7 +179,7 @@ pub(crate) async fn send(
         html: rendered.html,
         text: rendered.text,
         idempotency_key: Some(mail.idempotency_key.clone()),
-        tags: vec!["email-signup".to_string()],
+        tags: vec!["email-signup".to_owned()],
     };
     let Some(mailer) = ctx.ports.mailer.clone() else {
         return Ok(SendOutcome::NotConfigured);
@@ -193,15 +205,18 @@ pub(crate) async fn send(
     outcome
 }
 
-/// Convenience for deferred sends (welcome mail): render, send, log —
-/// errors never fail the deferred task.
+/// Deferred send (the welcome mail): errors are logged, never surfaced.
 pub(crate) fn spawn_deferred(
     ctx: Arc<ModuleContext>,
     mail: OutgoingMail,
 ) -> factory0_core::BoxFuture<'static, ()> {
     Box::pin(async move {
         if let Err(err) = send(&ctx, &mail).await {
-            tracing::error!(error = %err, template = mail.template_id, "deferred signup mail failed");
+            tracing::error!(
+                error = %err,
+                template = mail.template_id,
+                "deferred signup mail failed"
+            );
         }
     })
 }

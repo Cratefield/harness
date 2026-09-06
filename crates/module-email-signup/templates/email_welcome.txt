@@ -1,0 +1,8 @@
+Welcome to {{ data.venture }} — your email address is confirmed.
+This mail was sent to {{ data.email }}.
+
+Unsubscribe any time:
+{{ data.unsubscribe_url }}
+{% if let Some(footer) = data.brand.footer %}
+{{ footer }}
+{% endif %}

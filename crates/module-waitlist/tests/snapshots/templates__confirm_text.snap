@@ -1,0 +1,11 @@
+---
+source: crates/module-waitlist/tests/templates.rs
+expression: rendered.text
+---
+factory0 is admitting kontinuum members in join order.
+This mail was sent to nick@example.com.
+
+Confirm your address to hold your spot:
+https://api.factory0.ventures/v1/waitlist/confirm?token=abc
+
+Factory Zero · factory0.ventures

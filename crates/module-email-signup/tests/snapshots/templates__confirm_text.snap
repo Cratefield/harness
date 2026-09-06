@@ -1,0 +1,15 @@
+---
+source: crates/module-email-signup/tests/templates.rs
+expression: rendered.text
+---
+Welcome to factory0!
+
+This mail was sent to nick@example.com.
+
+Confirm your email address:
+https://api.factory0.ventures/v1/email-signup/confirm?token=abc
+
+Or unsubscribe:
+https://api.factory0.ventures/v1/email-signup/unsubscribe?token=def
+
+Factory Zero · factory0.ventures

@@ -1,0 +1,5 @@
+---
+source: crates/module-email-signup/tests/templates.rs
+expression: rendered.subject
+---
+Confirm your email for factory0

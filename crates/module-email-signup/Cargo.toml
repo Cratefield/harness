@@ -21,6 +21,7 @@ sea-query = { workspace = true }
 tracing = { workspace = true }
 time = { workspace = true }
 ulid = { workspace = true }
+askama = { workspace = true }
 
 [dev-dependencies]
 factory0-testing = { workspace = true }
@@ -28,4 +29,5 @@ factory0-adapter-sqlite = { workspace = true }
 pollster = { workspace = true }
 tower = { workspace = true }
 async-trait = { workspace = true }
+insta = { workspace = true }
 bytes = { workspace = true }
