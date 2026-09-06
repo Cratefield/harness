@@ -22,6 +22,10 @@ mod clients;
 mod secrets;
 mod store;
 
+/// Exact-match redirect URI validation (issue #7): the one matching
+/// rule, used at registration and — from issue #10 — at `/authorize`.
+pub mod redirect_uri;
+
 pub use secrets::{
     CLIENT_DISABLED, SECRET_BYTES, SecretError, ensure_client_usable, generate_secret, hash_secret,
     kind_allows_secret, verify_client_secret, verify_secret,

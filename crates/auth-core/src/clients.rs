@@ -98,7 +98,7 @@ fn validate_kind(kind: &str) -> Result<(), Problem> {
     }
 }
 
-fn validate_redirect_uris(uris: &[String]) -> Result<(), Problem> {
+fn validate_redirect_uris(uris: &[String], kind: &str) -> Result<(), Problem> {
     if uris.is_empty() {
         return Err(Problem::validation_failed(
             "redirect_uris must not be empty",
@@ -115,6 +115,9 @@ fn validate_redirect_uris(uris: &[String]) -> Result<(), Problem> {
                 "a redirect URI exceeds 2048 bytes",
             ));
         }
+        // The same rule /authorize will apply (issue #7): registration
+        // rejects any URI the matcher would never accept.
+        crate::redirect_uri::validate_registration(uri, kind)?;
     }
     Ok(())
 }
@@ -170,7 +173,8 @@ async fn create(
 ) -> Result<Response, Problem> {
     let name = sanitize_name(&body.name).map_err(|p| p.instance(&scope.request_id))?;
     validate_kind(&body.kind).map_err(|p| p.instance(&scope.request_id))?;
-    validate_redirect_uris(&body.redirect_uris).map_err(|p| p.instance(&scope.request_id))?;
+    validate_redirect_uris(&body.redirect_uris, &body.kind)
+        .map_err(|p| p.instance(&scope.request_id))?;
 
     let (Some(db), Some(clock), Some(id_gen)) = (
         state.ctx.ports.db.clone(),
@@ -252,15 +256,17 @@ async fn patch_client(
             format!("status must be `{STATUS_ACTIVE}` or `{STATUS_DISABLED}`"),
         ));
     }
-    if let Some(uris) = &body.redirect_uris {
-        validate_redirect_uris(uris).map_err(|p| p.instance(&scope.request_id))?;
-    }
-
     let Some(db) = state.ctx.ports.db.clone() else {
         return Err(internal(&scope));
     };
-    if store::client_by_id(&*db, &id).await?.is_none() {
-        return Err(Problem::not_found().instance(&scope.request_id));
+    let row = store::client_by_id(&*db, &id)
+        .await?
+        .ok_or_else(|| Problem::not_found().instance(&scope.request_id))?;
+    if let Some(uris) = &body.redirect_uris {
+        // URIs are validated against the kind the client already has;
+        // kind itself is immutable (a public client becoming
+        // confidential is a new client).
+        validate_redirect_uris(uris, &row.kind).map_err(|p| p.instance(&scope.request_id))?;
     }
 
     if let Some(name) = &body.name {

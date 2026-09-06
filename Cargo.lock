@@ -674,6 +674,7 @@ dependencies = [
  "factory0-core",
  "factory0-testing",
  "getrandom 0.4.3",
+ "http",
  "pollster",
  "sea-query",
  "serde",
