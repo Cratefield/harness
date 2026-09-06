@@ -250,3 +250,17 @@ pub(crate) async fn list_for_export(
     let rows = db.query(&Statement::render(&query)).await?;
     Ok(rows.rows.iter().map(row_from).collect())
 }
+
+/// Hard-deletes pending entries whose last join request (`created_at`)
+/// is older than the cutoff; confirmed entries keep their positions.
+pub(crate) async fn purge_pending_older_than(
+    db: &dyn Database,
+    cutoff_iso: &str,
+) -> Result<u64, DbError> {
+    let mut delete = Query::delete();
+    delete
+        .from_table(iden("waitlist_entries"))
+        .and_where(Expr::col(iden("status")).eq(STATUS_PENDING))
+        .and_where(Expr::col(iden("created_at")).lt(cutoff_iso));
+    db.execute(&Statement::render(&delete)).await
+}

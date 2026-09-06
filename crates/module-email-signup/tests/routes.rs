@@ -703,16 +703,18 @@ async fn redirect_params_are_ignored() {
     signup(&kit, "nick@example.com").await;
     let confirm_path = path_of(&links(&kit)[0]);
     let plain = request(&kit.router, Method::GET, &confirm_path, None).await;
-    let baited = request(
-        &kit.router,
-        Method::GET,
-        &format!("{confirm_path}&redirect=https://evil.example"),
-        None,
-    )
-    .await;
-    assert_eq!(
-        plain.headers.get(header::LOCATION).unwrap(),
-        baited.headers.get(header::LOCATION).unwrap(),
-        "no route reads a redirect query parameter"
-    );
+    for param in ["redirect", "return", "next"] {
+        let baited = request(
+            &kit.router,
+            Method::GET,
+            &format!("{confirm_path}&{param}=https://evil.example"),
+            None,
+        )
+        .await;
+        assert_eq!(
+            plain.headers.get(header::LOCATION).unwrap(),
+            baited.headers.get(header::LOCATION).unwrap(),
+            "no route reads a {param} query parameter"
+        );
+    }
 }

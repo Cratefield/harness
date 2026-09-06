@@ -35,7 +35,9 @@ with no module rewrites in between.
 
 Read [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full design.
 Decisions, including why the TypeScript attempt was thrown away, are in
-[docs/adr](docs/adr).
+[docs/adr](docs/adr). Security controls and reporting:
+[docs/SECURITY.md](docs/SECURITY.md). What we store and for how long:
+[docs/PRIVACY.md](docs/PRIVACY.md).
 
 ## How a venture uses it
 

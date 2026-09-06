@@ -477,3 +477,25 @@ async fn captcha_denial_is_400() {
         "https://factory0.ventures/problems/captcha-failed"
     );
 }
+
+#[pollster::test]
+async fn redirect_params_are_ignored() {
+    let kit = kit();
+    join(&kit, "nick@example.com", "kontinuum").await;
+    let confirm = request(&kit.router, Method::GET, &confirm_path(&kit, 0), None).await;
+    let path = confirm_path(&kit, 0);
+    for param in ["redirect", "return", "next"] {
+        let baited = request(
+            &kit.router,
+            Method::GET,
+            &format!("{path}&{param}=https://evil.example"),
+            None,
+        )
+        .await;
+        assert_eq!(
+            confirm.headers.get(header::LOCATION).unwrap(),
+            baited.headers.get(header::LOCATION).unwrap(),
+            "no route reads a {param} query parameter"
+        );
+    }
+}

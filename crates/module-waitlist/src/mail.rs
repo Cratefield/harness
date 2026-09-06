@@ -188,13 +188,13 @@ pub(crate) async fn send(
                 SendOutcome::Sent { .. } => "sent",
                 SendOutcome::NotConfigured => "not_configured",
             },
-            idempotency_key = %mail.idempotency_key,
+            idempotency = %mail.idempotency_key,
             "waitlist mail dispatch",
         ),
         Err(err) => tracing::error!(
             template = mail.template_id,
             error = %err,
-            idempotency_key = %mail.idempotency_key,
+            idempotency = %mail.idempotency_key,
             "waitlist mail failed",
         ),
     }

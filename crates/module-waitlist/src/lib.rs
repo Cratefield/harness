@@ -75,6 +75,7 @@ impl Waitlist {
             settings: Settings {
                 products: Products::List(Vec::new()),
                 confirm_ttl_days: 7,
+                retention_days_pending: 30,
                 status_redirect: None,
                 referrals: true,
                 answers_schema: accept_any_answers(),
@@ -101,6 +102,14 @@ impl Waitlist {
     #[must_use]
     pub fn confirm_ttl_days(mut self, days: u32) -> Self {
         self.settings.confirm_ttl_days = days;
+        self
+    }
+
+    /// Purge `pending` entries untouched for this many days from the
+    /// scheduled handler (default 30; issue #13 retention rule).
+    #[must_use]
+    pub fn retention_days_pending(mut self, days: u32) -> Self {
+        self.settings.retention_days_pending = days;
         self
     }
 
@@ -220,10 +229,27 @@ impl Module for Waitlist {
 
     fn scheduled<'a>(
         &'a self,
-        _ctx: &'a ModuleContext,
-        _cron: &'a str,
+        ctx: &'a ModuleContext,
+        cron: &'a str,
     ) -> BoxFuture<'a, Result<(), AnyError>> {
-        Box::pin(async { Ok(()) })
+        Box::pin(async move {
+            let Some(db) = ctx.ports.db.clone() else {
+                return Ok(());
+            };
+            let cfg = ModuleConfig::new("waitlist", &*ctx.config);
+            let days = i64::from(cfg.get_u32(
+                "RETENTION_DAYS_PENDING",
+                self.settings.retention_days_pending,
+            ));
+            let cutoff = handlers::iso_ago(days.saturating_mul(86_400));
+            let deleted = store::purge_pending_older_than(&*db, &cutoff)
+                .await
+                .map_err(|err| Box::new(err) as AnyError)?;
+            if deleted > 0 {
+                tracing::info!(deleted, cron, "purged stale pending waitlist entries");
+            }
+            Ok(())
+        })
     }
 }
 
@@ -242,6 +268,7 @@ mod tests {
     fn defaults_match_the_issue() {
         let module = Waitlist::new();
         assert_eq!(module.settings.confirm_ttl_days, 7);
+        assert_eq!(module.settings.retention_days_pending, 30);
         assert!(module.settings.referrals);
         assert_eq!(module.name(), "waitlist");
         assert_eq!(module.tables(), ["waitlist_entries"]);

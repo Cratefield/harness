@@ -39,64 +39,50 @@ pub fn install_tracing() {
 
 #[cfg(not(target_arch = "wasm32"))]
 mod native_subscriber {
-    use std::fmt;
     use std::sync::atomic::AtomicU64;
 
     use serde_json::{Map, Value, json};
-    use sha2::{Digest, Sha256};
-    use tracing::field::{Field, Visit};
+    use tracing::field::Visit;
     use tracing::span::{Attributes, Id, Record};
     use tracing::{Event, Level, Metadata, Subscriber};
 
-    fn redact_field(name: &str) -> bool {
-        let lowered = name.to_ascii_lowercase();
-        ["secret", "token", "key", "authorization", "password"]
-            .iter()
-            .any(|needle| lowered.contains(needle))
-    }
-
-    fn is_email_field(name: &str) -> bool {
-        let lowered = name.to_ascii_lowercase();
-        lowered.contains("email") || lowered == "subject"
-    }
-
-    fn subject_hash(value: &str) -> String {
-        let digest = Sha256::digest(value.as_bytes());
-        let hex: String = digest.iter().map(|b| format!("{b:02x}")).take(16).collect();
-        format!("sha256:{hex}")
-    }
-
+    /// Extends core's [`RedactingVisitor`] with the JSON representation
+    /// the console line needs; the redaction rules themselves live in
+    /// core so every runtime shares them.
     #[derive(Default)]
-    struct RedactingVisitor {
+    struct JsonRedactingVisitor {
         fields: Map<String, Value>,
     }
 
-    impl RedactingVisitor {
+    impl JsonRedactingVisitor {
         fn record_field(&mut self, name: &str, value: &str) {
-            if redact_field(name) {
-                self.fields.insert(name.to_string(), json!("[redacted]"));
-            } else if is_email_field(name) && value.contains('@') {
+            let redacted = factory0_core::redacted_value(name, value);
+            if redacted == "[redacted]" {
+                self.fields.insert(name.to_owned(), json!("[redacted]"));
+            } else if let Some(hash) = redacted.strip_prefix("subject_hash:").map(str::to_owned) {
                 self.fields
-                    .insert(format!("{name}_hash"), json!(subject_hash(value)));
+                    .insert(format!("{name}_hash"), json!(format!("sha256:{hash}")));
             } else {
-                self.fields.insert(name.to_string(), json!(value));
+                self.fields.insert(name.to_owned(), json!(value));
             }
         }
     }
 
-    impl Visit for RedactingVisitor {
-        fn record_str(&mut self, field: &Field, value: &str) {
+    impl Visit for JsonRedactingVisitor {
+        fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
             self.record_field(field.name(), value);
         }
 
-        fn record_debug(&mut self, field: &Field, value: &dyn fmt::Debug) {
-            let formatted = format!("{value:?}");
-            self.record_field(field.name(), &formatted);
+        fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+            self.record_field(field.name(), &format!("{value:?}"));
         }
 
-        fn record_error(&mut self, field: &Field, value: &(dyn std::error::Error + 'static)) {
-            let formatted = value.to_string();
-            self.record_field(field.name(), &formatted);
+        fn record_error(
+            &mut self,
+            field: &tracing::field::Field,
+            value: &(dyn std::error::Error + 'static),
+        ) {
+            self.record_field(field.name(), &value.to_string());
         }
     }
 
@@ -120,7 +106,7 @@ mod native_subscriber {
         fn record_follows_from(&self, _span: &Id, _follows: &Id) {}
 
         fn event(&self, event: &Event<'_>) {
-            let mut visitor = RedactingVisitor::default();
+            let mut visitor = JsonRedactingVisitor::default();
             event.record(&mut visitor);
 
             let metadata = event.metadata();

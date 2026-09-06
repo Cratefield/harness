@@ -46,6 +46,7 @@ pub(crate) enum Products {
 pub(crate) struct Settings {
     pub products: Products,
     pub confirm_ttl_days: u32,
+    pub retention_days_pending: u32,
     pub status_redirect: Option<String>,
     pub referrals: bool,
     pub answers_schema: crate::AnswersSchema,
