@@ -47,15 +47,23 @@ jobs:
  
   # The module conformance kit, run through the harness's reusable
   # workflow so this repo's modules pass the identical suite as the
-  # harness's own (its README: call it across repos with
-  # `Factory-Zero/harness/.github/workflows/conformance.yml@<ref>`).
-  # `crates/auth-core` does not match the default `crates/module-*` glob,
-  # so the glob is passed explicitly.
+  # harness's own.
+  #
+  # The harness moved to the Cratefield organisation. The GitHub API and
+  # git both follow that rename, but Actions does not resolve a reusable
+  # workflow through it: the old address fails the whole run at startup,
+  # with no jobs and a generic "workflow file issue". That is what broke CI
+  # here, not the module this PR adds.
+  #
+  # The input is expanded by bash, so several paths can be listed. Neither
+  # module crate matches the default `crates/module-*` glob, and
+  # `crates/auth-client` is a consumer library rather than a module, so
+  # they are named explicitly.
   conformance:
     name: conformance (module kit)
-    uses: Factory-Zero/harness/.github/workflows/conformance.yml@main
+    uses: Cratefield/harness/.github/workflows/conformance.yml@main
     with:
-      module-glob: crates/auth-core
+      module-glob: crates/auth-core crates/auth-passkeys
  
   deny:
     name: cargo deny
