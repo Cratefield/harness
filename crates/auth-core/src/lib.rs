@@ -19,7 +19,25 @@
 
 #![forbid(unsafe_code)]
 
-use factory0_core::{Config, ConfigError, Migrations, Module, ModuleContext, Port, SqlMigration};
+mod store;
+
+pub use store::{
+    Bytes, CLIENT_CONFIDENTIAL, CLIENT_PUBLIC, CREDENTIAL_PASSKEY, CREDENTIAL_PASSWORD,
+    ClientRedirectUriRow, ClientRow, CredentialRow, IdentityRow, PROVIDER_APPLE, PROVIDER_GOOGLE,
+    PROVIDER_MAGIC_LINK, PROVIDER_META, PROVIDER_PASSKEY, PROVIDER_PASSWORD, Redacted,
+    STATUS_ACTIVE, STATUS_DISABLED, SessionRow, SingleUseTokenRow, TOKEN_AUTHORIZATION_CODE,
+    TOKEN_MAGIC_LINK, TOKEN_WEBAUTHN_CHALLENGE, UserRow, client_by_id, consume_single_use_token,
+    credentials_by_user, identities_by_user, identity_by_provider_subject, insert_client,
+    insert_credential, insert_identity, insert_redirect_uri, insert_session,
+    insert_single_use_token, insert_user, passkey_by_credential_id, purge_expired_sessions,
+    purge_expired_single_use_tokens, redirect_uris_for_client, revoke_session,
+    session_by_token_hash, single_use_token_by_hash, touch_credential_used, touch_identity_login,
+    touch_session_seen, update_passkey_sign_count, user_by_id, user_by_primary_email,
+};
+
+use factory0_core::{
+    AnyError, BoxFuture, Config, ConfigError, Migrations, Module, ModuleContext, Port, SqlMigration,
+};
 
 /// The module's one migration: the seven-table schema of issue #5 in the
 /// harness's portable SQL subset, embedded per the module contract.
@@ -86,6 +104,14 @@ impl Module for AuthCore {
         // No routes in this issue (BUILD-BRIEF.md: no handlers, no routes
         // beyond what the `Module` impl requires).
         axum::Router::new()
+    }
+
+    fn scheduled<'a>(
+        &'a self,
+        ctx: &'a ModuleContext,
+        cron: &'a str,
+    ) -> BoxFuture<'a, Result<(), AnyError>> {
+        Box::pin(store::scheduled_purge(ctx, cron))
     }
 }
 
