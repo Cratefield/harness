@@ -414,6 +414,7 @@ async fn a_password_lets_the_last_provider_be_unlinked() {
             label: None,
             created_at: iso(),
             last_used_at: None,
+            passkey_suspect_at: None,
         },
     )
     .await

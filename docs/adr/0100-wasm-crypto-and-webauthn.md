@@ -56,6 +56,46 @@ checked. Production work must add: challenge storage in D1
 (delete-on-use per the architecture), origin allow-list per client, and
 a hardware-authenticator fixture in CI.
 
+## Production status of Q2 (issues #13, #14)
+
+`crates/auth-passkeys` carries the spike's verification into production.
+Three of the four things this ADR listed as missing are now done, and the
+fourth is recorded rather than quietly dropped:
+
+- **Challenge storage in D1**: done. Challenges are `single_use_tokens`
+  rows consumed by auth-core's conditional update, whose affected-row
+  count decides which of two concurrent attempts wins. Registration and
+  login challenges carry a purpose and are not interchangeable.
+- **Origin allow-list**: done, and checked at configuration time rather
+  than per request. An origin that is not the RP id or a subdomain of it
+  is a configuration error, because such a ceremony could never be valid.
+- **Counter semantics**: unchanged (strictly greater when both are
+  non-zero), and a regression now marks the credential suspect and keeps
+  refusing it, rather than only failing the one login.
+- **Algorithms**: the spike verified ES256 only. Production also accepts
+  RS256 (Windows Hello) and EdDSA, each with its own test; an unsupported
+  COSE key is refused at registration rather than stored and failed at
+  every later login.
+- **User verification**: the spike required the UV flag. Production
+  requires user *presence* always and user *verification* only when the
+  configured policy is `required`, because refusing under `preferred`
+  would shut out every security key without a PIN.
+- **Check order**: the signature is verified before the counter is
+  compared, which is the spec's order (7.2 steps 21 then 22). The spike had
+  it the other way round, which was harmless there because it persisted
+  nothing; a module that marks a credential on a counter regression must
+  not act on an assertion it has not verified.
+- **Extension outputs**: the authenticator data may carry a CBOR extension
+  map after the credential data, and Chrome asks for `credProtect` under
+  exactly the options this module sends. The spike treated those bytes as
+  corruption; production reads past them.
+- **Still missing: a hardware-authenticator fixture.** The tests mint
+  ceremonies with a software authenticator, which exercises all three
+  algorithms and every negative case but cannot prove a real device's
+  quirks. Issue #13's last acceptance box — a manual run in a browser
+  against `wrangler dev` — remains the only thing that can close that,
+  and it needs hardware CI does not have.
+
 ## Q3 — openidconnect through the harness HttpClient port. Works.
 
 `openidconnect 4.0.1` (default features off; no reqwest) +

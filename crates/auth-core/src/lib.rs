@@ -54,15 +54,15 @@ pub use store::{
     PROVIDER_MAGIC_LINK, PROVIDER_META, PROVIDER_PASSKEY, PROVIDER_PASSWORD, Redacted,
     STATUS_ACTIVE, STATUS_DISABLED, SessionRow, SingleUseTokenRow, TOKEN_AUTHORIZATION_CODE,
     TOKEN_MAGIC_LINK, TOKEN_REFRESH, TOKEN_WEBAUTHN_CHALLENGE, UserRow, client_by_id,
-    consume_single_use_token, credentials_by_user, identities_by_user,
+    consume_single_use_token, credentials_by_user, delete_credential, identities_by_user,
     identity_by_provider_subject, insert_client, insert_credential, insert_identity,
     insert_redirect_uri, insert_session, insert_single_use_token, insert_user, list_clients,
-    passkey_by_credential_id, purge_expired_sessions, purge_expired_single_use_tokens,
-    redirect_uris_for_client, replace_redirect_uris, revoke_all_sessions, revoke_session,
-    rotate_client_secret, session_by_id, session_by_token_hash, sessions_by_user,
-    single_use_token_by_hash, slide_session, touch_credential_used, touch_identity_login,
-    touch_session_seen, update_client_name, update_client_status, update_passkey_sign_count,
-    user_by_id, user_by_primary_email,
+    mark_passkey_suspect, passkey_by_credential_id, purge_expired_sessions,
+    purge_expired_single_use_tokens, redirect_uris_for_client, replace_redirect_uris,
+    revoke_all_sessions, revoke_session, rotate_client_secret, session_by_id,
+    session_by_token_hash, sessions_by_user, single_use_token_by_hash, slide_session,
+    touch_credential_used, touch_identity_login, touch_session_seen, update_client_name,
+    update_client_status, update_passkey_sign_count, user_by_id, user_by_primary_email,
 };
 pub use tokens::{
     ACCESS_TOKEN_SECS, JWKS_CACHE_CONTROL, OIDC_CACHE_CONTROL, REFRESH_TOKEN_DAYS, RefreshGrant,
@@ -94,6 +94,13 @@ const MIGRATION_ROTATION: SqlMigration = SqlMigration {
     id: "0002",
     name: "client_secret_rotation",
     sql: include_str!("../migrations/sqlite/0002_client_secret_rotation.sql"),
+};
+
+/// The passkey clone signal of issue #14: `credentials.passkey_suspect_at`.
+const MIGRATION_SUSPECT: SqlMigration = SqlMigration {
+    id: "0004",
+    name: "passkey_suspect",
+    sql: include_str!("../migrations/sqlite/0004_passkey_suspect.sql"),
 };
 
 /// The token-issuing migration of issue #9: the sessions `amr` column
@@ -190,8 +197,12 @@ impl Module for AuthCore {
     }
 
     fn migrations(&self) -> factory0_core::Migrations {
-        const MIGRATIONS: [SqlMigration; 3] =
-            [MIGRATION_INIT, MIGRATION_ROTATION, MIGRATION_TOKENS];
+        const MIGRATIONS: [SqlMigration; 4] = [
+            MIGRATION_INIT,
+            MIGRATION_ROTATION,
+            MIGRATION_TOKENS,
+            MIGRATION_SUSPECT,
+        ];
         factory0_core::Migrations {
             sqlite: &MIGRATIONS,
             postgres: &[],
@@ -285,15 +296,17 @@ mod tests {
     }
 
     #[test]
-    fn migrations_are_the_embedded_triple() {
+    fn migrations_are_the_embedded_set_in_order() {
         let migrations = AuthCore::new().migrations();
-        assert_eq!(migrations.sqlite.len(), 3);
+        assert_eq!(migrations.sqlite.len(), 4);
         assert_eq!(migrations.sqlite[0].id, "0001");
         assert_eq!(migrations.sqlite[0].name, "init");
         assert_eq!(migrations.sqlite[1].id, "0002");
         assert_eq!(migrations.sqlite[1].name, "client_secret_rotation");
         assert_eq!(migrations.sqlite[2].id, "0003");
         assert_eq!(migrations.sqlite[2].name, "token_issuing");
+        assert_eq!(migrations.sqlite[3].id, "0004");
+        assert_eq!(migrations.sqlite[3].name, "passkey_suspect");
         assert!(migrations.postgres.is_empty());
         assert_eq!(
             migrations.sqlite[0].sql,
