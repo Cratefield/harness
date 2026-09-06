@@ -34,8 +34,8 @@ that manifest from day one rather than an afterthought.
 
 ## Decision
 **A module declares a `Surface`. The harness serves it as data and renders it
-as HTML. One markup contract serves both the server renderer and a small
-client renderer, and styling is plain CSS against that contract.**
+as HTML from one renderer in the Worker. Static sites embed that HTML with a
+tiny script, and styling is plain CSS against a fixed markup contract.**
 
 ### 1. The surface is declared, typed, and served
 `Module` gains `fn surface(&self) -> Surface { Surface::none() }`. A `Surface`
@@ -58,8 +58,8 @@ tables: duplicate action names, views that reference unknown actions, and a
 non-object input schema are build errors. The composed surface is computed
 once at build and served at **`GET /__surface`**, public subset only; the
 admin subset is included when the request carries the admin bearer. The
-response carries an `ETag` that is the hash of the surface, so a client
-renderer caches it until the deploy changes. The surface has its own contract
+response carries an `ETag` that is the hash of the surface, so tooling caches
+it until the deploy changes. The surface has its own contract
 version, `surface_api`, alongside `harness_api`.
 
 ### 2. One renderer, HTML over the wire
