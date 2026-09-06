@@ -32,6 +32,28 @@ impl VentureEnv {
     }
 }
 
+/// Venture branding for mail templates (issue #12). Defaults are
+/// text-only: factory-zero orange accent, no logo, no footer line.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct Brand {
+    /// Accent colour as a `#rrggbb` string (links and rule lines).
+    pub accent: String,
+    /// Optional logo image URL; mails must read fine with images off.
+    pub logo_url: Option<String>,
+    /// Optional footer line (e.g. a company address).
+    pub footer: Option<String>,
+}
+
+impl Default for Brand {
+    fn default() -> Self {
+        Self {
+            accent: "#FF5A36".to_owned(),
+            logo_url: None,
+            footer: None,
+        }
+    }
+}
+
 /// Identity and CORS configuration for the venture this harness serves.
 ///
 /// ```
@@ -54,6 +76,8 @@ pub struct Venture {
     pub cors_origins: Vec<String>,
     /// Deployment environment.
     pub env: VentureEnv,
+    /// Mail branding (issue #12).
+    pub brand: Brand,
 }
 
 impl Venture {
@@ -65,6 +89,7 @@ impl Venture {
             domain,
             cors_origins: Vec::new(),
             env: VentureEnv::default(),
+            brand: Brand::default(),
         }
     }
 
@@ -83,6 +108,13 @@ impl Venture {
     #[must_use]
     pub fn env(mut self, env: VentureEnv) -> Self {
         self.env = env;
+        self
+    }
+
+    /// Mail branding for templates (accent, logo, footer).
+    #[must_use]
+    pub fn brand(mut self, brand: Brand) -> Self {
+        self.brand = brand;
         self
     }
 

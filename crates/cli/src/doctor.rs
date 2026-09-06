@@ -7,12 +7,18 @@ use crate::lock::{Lock, read_lock};
 use factory0_core::{Harness, VentureEnv};
 use std::path::Path;
 
-/// Runs every doctor check.
+/// Runs every doctor check. `allow_no_captcha` downgrades the
+/// production-captcha failure to a printed warning for the stated
+/// reason (issue #13).
 ///
 /// # Errors
 ///
 /// One message listing every failed check.
-pub fn doctor(harness: &Harness, migrations_dir: &Path) -> Result<(), String> {
+pub fn doctor(
+    harness: &Harness,
+    migrations_dir: &Path,
+    allow_no_captcha: Option<&str>,
+) -> Result<(), String> {
     let mut failures: Vec<String> = Vec::new();
 
     // Harness::build already succeeded by construction; the venture
@@ -25,11 +31,17 @@ pub fn doctor(harness: &Harness, migrations_dir: &Path) -> Result<(), String> {
             .map(|module| module.name())
             .collect();
         if !public_writers.is_empty() && !captcha_provided(harness) {
-            failures.push(format!(
+            let message = format!(
                 "production venture with public writes from [{}] but no Captcha port \
                  — configure Turnstile (architecture section 11)",
                 public_writers.join(", ")
-            ));
+            );
+            match allow_no_captcha {
+                Some(reason) => {
+                    eprintln!("fz: warning: captcha override accepted ({reason}): {message}");
+                }
+                None => failures.push(message),
+            }
         }
     }
 

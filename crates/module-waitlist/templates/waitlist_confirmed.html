@@ -1,0 +1,22 @@
+<!doctype html>
+<html>
+  <body style="margin:0;padding:24px;background:#f4f4f5;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;color:#18181b;">
+    <div style="max-width:520px;margin:0 auto;background:#ffffff;border-radius:12px;padding:32px;">
+      {% if let Some(logo) = data.brand.logo_url %}
+      <img src="{{ logo }}" alt="{{ data.venture }}" style="max-height:40px;display:block;margin:0 auto 16px;">
+      {% endif %}
+      <h1 style="font-size:20px;line-height:1.3;margin:0 0 12px;">You are #{{ data.position }}</h1>
+      <p style="font-size:15px;line-height:1.6;margin:0 0 20px;">
+        Your spot on the <strong>{{ data.venture }}</strong> {{ data.product }} waitlist is confirmed.
+        You are number <strong>{{ data.position }}</strong> in line.
+      </p>
+      <p style="margin:0 0 24px;">
+        <a href="{{ data.status_url }}" style="display:inline-block;background:{{ data.brand.accent }};color:#ffffff;text-decoration:none;padding:12px 24px;border-radius:8px;font-size:15px;font-weight:600;">Check my place</a>
+      </p>
+      <p style="font-size:13px;line-height:1.6;margin:0;">
+        This mail was sent to {{ data.email }}.<br>
+        <a href="{{ data.status_url }}" style="color:{{ data.brand.accent }};word-break:break-all;">{{ data.status_url }}</a>
+      </p>
+    </div>
+  </body>
+</html>

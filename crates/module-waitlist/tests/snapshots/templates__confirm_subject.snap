@@ -1,0 +1,5 @@
+---
+source: crates/module-waitlist/tests/templates.rs
+expression: rendered.subject
+---
+Confirm your spot on the kontinuum waitlist

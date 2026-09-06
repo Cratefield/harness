@@ -1,0 +1,27 @@
+<!doctype html>
+<html>
+  <body style="margin:0;padding:24px;background:#f4f4f5;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;color:#18181b;">
+    <div style="max-width:520px;margin:0 auto;background:#ffffff;border-radius:12px;padding:32px;">
+      {% if let Some(logo) = data.brand.logo_url %}
+      <img src="{{ logo }}" alt="{{ data.venture }}" style="max-height:40px;display:block;margin:0 auto 16px;">
+      {% endif %}
+      <h1 style="font-size:20px;line-height:1.3;margin:0 0 12px;">Confirm your email</h1>
+      <p style="font-size:15px;line-height:1.6;margin:0 0 20px;">
+        Welcome to <strong>{{ data.venture }}</strong>. Confirm your address to finish signing up.
+      </p>
+      <p style="margin:0 0 24px;">
+        <a href="{{ data.confirm_url }}" style="display:inline-block;background:{{ data.brand.accent }};color:#ffffff;text-decoration:none;padding:12px 24px;border-radius:8px;font-size:15px;font-weight:600;">Confirm email</a>
+      </p>
+      <p style="font-size:13px;line-height:1.6;margin:0 0 8px;">
+        If the button does not work, open this link:<br>
+        <a href="{{ data.confirm_url }}" style="color:{{ data.brand.accent }};word-break:break-all;">{{ data.confirm_url }}</a>
+      </p>
+      <hr style="border:none;border-top:1px solid #e4e4e7;margin:24px 0;">
+      <p style="font-size:12px;line-height:1.6;margin:0;color:#71717a;">
+        This mail was sent to {{ data.email }}.<br>
+        Do not want these mails? <a href="{{ data.unsubscribe_url }}" style="color:#71717a;">Unsubscribe</a>
+        {% if let Some(footer) = data.brand.footer %}<br>{{ footer }}{% endif %}
+      </p>
+    </div>
+  </body>
+</html>

@@ -1,0 +1,12 @@
+---
+source: crates/module-waitlist/tests/templates.rs
+expression: rendered.text
+---
+Your spot on the factory0 kontinuum waitlist is confirmed.
+This mail was sent to nick@example.com.
+You are number 42 in line.
+
+Check your place any time:
+https://api.factory0.ventures/v1/waitlist/status?token=def
+
+Factory Zero · factory0.ventures

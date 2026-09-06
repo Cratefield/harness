@@ -53,6 +53,9 @@ pub(crate) async fn scope_layer(
     mut request: Request,
     next: Next,
 ) -> AxumResponse {
+    use tracing::Instrument as _;
+    use tracing::field::Empty;
+
     let incoming = request
         .headers()
         .get(X_REQUEST_ID)
@@ -63,18 +66,78 @@ pub(crate) async fn scope_layer(
         None => state.id_gen.ulid(),
     };
 
+    // The one structured span per request (issue #14). `route`,
+    // `module`, `status` and `duration_ms` are recorded after the
+    // handler runs; no field ever carries an email (only `ip_hash`).
+    let method = request.method().as_str().to_owned();
+    let ip_hash = crate::logging::subject_hash(
+        &crate::rate_limit::client_ip(request.headers()).unwrap_or_default(),
+    );
+    let ua_family = request
+        .headers()
+        .get(header::USER_AGENT)
+        .and_then(|value| value.to_str().ok())
+        .map_or_else(|| "unknown".to_owned(), ua_family_of);
+    let span = info_span!(
+        "request",
+        request_id = %request_id,
+        method = %method,
+        route = Empty,
+        module = Empty,
+        status = Empty,
+        duration_ms = Empty,
+        ip_hash = %ip_hash,
+        ua_family = %ua_family,
+    );
+
     let scope = Scope {
         defer: Arc::clone(&state.defer),
-        span: info_span!("request", request_id = %request_id),
+        span: span.clone(),
         request_id: request_id.clone(),
     };
     request.extensions_mut().insert(scope);
 
-    let mut response = next.run(request).await;
+    let route = request
+        .extensions()
+        .get::<axum::extract::MatchedPath>()
+        .map(|matched| matched.as_str().to_owned())
+        .unwrap_or_default();
+
+    let started = std::time::Instant::now();
+    let future = next.run(request);
+    let mut response = future.instrument(span.clone()).await;
+
     if let Ok(value) = HeaderValue::from_str(&request_id) {
         response.headers_mut().insert(X_REQUEST_ID, value);
     }
+    span.record("route", route.as_str());
+    span.record(
+        "module",
+        route
+            .strip_prefix("/v1/")
+            .and_then(|rest| rest.split('/').next())
+            .unwrap_or_default(),
+    );
+    span.record("status", response.status().as_u16());
+    let duration_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+    span.record("duration_ms", duration_ms);
     response
+}
+
+/// Coarse user-agent family: the first product token, lowercased —
+/// enough to group browsers, bots and libraries without a UA parser.
+fn ua_family_of(user_agent: &str) -> String {
+    let token = user_agent
+        .split(['/', ' ', ';', '('])
+        .next()
+        .unwrap_or_default()
+        .to_lowercase();
+    let truncated: String = token.chars().take(24).collect();
+    if truncated.is_empty() {
+        "unknown".to_owned()
+    } else {
+        truncated
+    }
 }
 
 /// Middleware: `/v1/*` responses carry
@@ -139,6 +202,22 @@ impl<T: serde::Serialize> IntoResponse for Json<T> {
     fn into_response(self) -> AxumResponse {
         axum::Json(self.0).into_response()
     }
+}
+
+/// A `429 rate-limited` problem carrying `Retry-After: <seconds>` when the
+/// limiter reported a pause (architecture section 6).
+pub fn rate_limited(retry_after: Option<Duration>) -> AxumResponse {
+    let problem = Problem::new(&crate::problems::SLUGS.rate_limited);
+    let mut response = problem.into_response();
+    if let Some(pause) = retry_after {
+        let secs = pause.as_secs().max(1);
+        if let Ok(value) = HeaderValue::from_str(&secs.to_string()) {
+            response
+                .headers_mut()
+                .insert(header::HeaderName::from_static("retry-after"), value);
+        }
+    }
+    response
 }
 
 /// CORS allowlist from the venture's origins; never a wildcard

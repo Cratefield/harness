@@ -111,10 +111,10 @@ impl Harness {
             .layer(DefaultBodyLimit::max(MAX_BODY_BYTES));
 
         let Ports {
-            config: _,
+            config,
             db,
-            mailer: _,
-            captcha: _,
+            mailer,
+            captcha,
             rate_limiter: _,
             signer: _,
             kv: _,
@@ -127,6 +127,11 @@ impl Harness {
         let health_state = HealthState {
             venture: Arc::clone(&self.venture),
             modules: self.modules.clone(),
+            harness_build: config
+                .get("HARNESS_BUILD")
+                .filter(|build| !build.is_empty()),
+            mailer_configured: mailer.is_some(),
+            captcha_configured: captcha.is_some(),
         };
 
         let scope_state = ScopeState {
@@ -153,6 +158,10 @@ impl Harness {
 struct HealthState {
     venture: Arc<Venture>,
     modules: Vec<Arc<dyn Module>>,
+    /// Git sha injected as a var by the deploy workflow (issue #14).
+    harness_build: Option<String>,
+    mailer_configured: bool,
+    captcha_configured: bool,
 }
 
 async fn health_handler(State(state): State<HealthState>) -> impl IntoResponse {
@@ -170,6 +179,12 @@ async fn health_handler(State(state): State<HealthState>) -> impl IntoResponse {
     Json(json!({
         "venture": state.venture.name,
         "env": state.venture.env.as_str(),
+        "harness_api": HARNESS_API,
+        "harness_build": state.harness_build,
+        // Port presence: the Mailer/Captcha traits carry no probe, so a
+        // NotConfigured adapter still reports its port as configured.
+        "mailer": if state.mailer_configured { "configured" } else { "not_configured" },
+        "captcha": if state.captcha_configured { "configured" } else { "absent" },
         "modules": modules,
     }))
 }

@@ -53,6 +53,19 @@ impl TestHarness {
     /// migration fails — exactly what a module test should surface.
     #[must_use]
     pub fn new(modules: Vec<Box<dyn Module>>) -> Self {
+        Self::with_ports(modules, |_| {})
+    }
+
+    /// [`TestHarness::new`] with a patch over the default ports: swap in a
+    /// token-checking `FakeCaptcha`, a scripted `FakeRateLimiter`, or a
+    /// `MapConfig` carrying `ADMIN_TOKEN`, after the standard fakes (and
+    /// the migrated database) are in place.
+    ///
+    /// # Panics
+    ///
+    /// Panics when the harness cannot build or a migration fails.
+    #[must_use]
+    pub fn with_ports(modules: Vec<Box<dyn Module>>, patch: impl FnOnce(&mut Ports)) -> Self {
         let shared: Vec<Arc<dyn Module>> = modules.into_iter().map(Arc::from).collect();
         let mut builder = Harness::builder().venture(
             Venture::new("test-venture", "test.example").cors_origins(["https://test.example"]),
@@ -95,6 +108,7 @@ impl TestHarness {
         ports.clock = Some(Arc::new(clock.clone()));
         ports.id_gen = Some(Arc::new(UlidIdGen));
         ports.defer = Some(Arc::new(defer.clone()));
+        patch(&mut ports);
 
         let router = harness.router(ports);
         Self {

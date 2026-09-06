@@ -1,0 +1,27 @@
+---
+source: crates/module-waitlist/tests/templates.rs
+expression: rendered.html
+---
+<!doctype html>
+<html>
+  <body style="margin:0;padding:24px;background:#f4f4f5;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;color:#18181b;">
+    <div style="max-width:520px;margin:0 auto;background:#ffffff;border-radius:12px;padding:32px;">
+      
+      <img src="https://factory0.ventures/logo.png" alt="factory0" style="max-height:40px;display:block;margin:0 auto 16px;">
+      
+      <h1 style="font-size:20px;line-height:1.3;margin:0 0 12px;">Hold your spot</h1>
+      <p style="font-size:15px;line-height:1.6;margin:0 0 20px;">
+        <strong>factory0</strong> is admitting <strong>kontinuum</strong> members in join order.
+        Confirm your address to hold your place on the waitlist.
+      </p>
+      <p style="margin:0 0 24px;">
+        <a href="https://api.factory0.ventures/v1/waitlist/confirm?token=abc" style="display:inline-block;background:#FF5A36;color:#ffffff;text-decoration:none;padding:12px 24px;border-radius:8px;font-size:15px;font-weight:600;">Confirm my spot</a>
+      </p>
+      <p style="font-size:13px;line-height:1.6;margin:0;">
+        This mail was sent to nick@example.com.<br>
+        If the button does not work, open this link:<br>
+        <a href="https://api.factory0.ventures/v1/waitlist/confirm?token=abc" style="color:#FF5A36;word-break:break-all;">https://api.factory0.ventures/v1/waitlist/confirm?token=abc</a>
+      </p>
+    </div>
+  </body>
+</html>

@@ -1,9 +1,32 @@
 //! The shared conformance suite (issue #9): every module must pass it.
 
-use factory0_core::{Module, Port, Ports};
+use factory0_core::{HmacSigner, Module, Port, Ports, UlidIdGen};
 use std::sync::Arc;
 
 use crate::{TestHarness, request};
+
+/// A `Ports` with every port faked, for the visibility check: declared
+/// ports must survive `view_for`, undeclared ones must be hidden.
+fn full_fake_ports() -> Ports {
+    let mut ports = Ports::empty();
+    ports.db = Some(Arc::new(crate::fakes::EmptyDatabase));
+    ports.mailer = Some(Arc::new(crate::fakes::FakeMailer::new(
+        crate::fakes::MailerMode::SendOk,
+    )));
+    ports.captcha = Some(Arc::new(crate::fakes::FakeCaptcha::allow_all()));
+    ports.rate_limiter = Some(Arc::new(crate::fakes::FakeRateLimiter::always_allow()));
+    ports.signer = Some(Arc::new(
+        HmacSigner::new(crate::TEST_HARNESS_SECRET, None).expect("test secret is long enough"),
+    ));
+    ports.kv = Some(Arc::new(crate::fakes::MemoryKeyValue::new()));
+    ports.http = Some(Arc::new(crate::fakes::FakeHttpClient::ok_json("{}")));
+    ports.clock = Some(Arc::new(crate::fakes::FixedClock(
+        time::OffsetDateTime::from_unix_timestamp(1_800_000_000).expect("fixed epoch"),
+    )));
+    ports.id_gen = Some(Arc::new(UlidIdGen));
+    ports.defer = Some(Arc::new(crate::fakes::FakeDefer::new()));
+    ports
+}
 
 /// Runs the shared conformance suite against one module:
 ///
@@ -70,10 +93,8 @@ pub fn conformance(module: Box<dyn Module>) {
         }
     }
 
-    // 4. undeclared ports are hidden.
-    let mut ports = Ports::empty();
-    ports.db = Some(Arc::new(crate::fakes::EmptyDatabase));
-    let view = ports.view_for(module.as_ref());
+    // 4. undeclared ports are hidden (declared ones stay visible).
+    let view = full_fake_ports().view_for(module.as_ref());
     for (port, provided) in [
         (Port::Db, view.db.is_some()),
         (Port::Mailer, view.mailer.is_some()),

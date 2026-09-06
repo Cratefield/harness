@@ -50,6 +50,10 @@ enum Command {
         /// Migration directory (default `migrations`).
         #[arg(long, default_value = "migrations")]
         out: PathBuf,
+        /// Accept a production venture without a Captcha port for the
+        /// stated reason; prints a warning instead of failing.
+        #[arg(long, value_name = "REASON")]
+        allow_no_captcha: Option<String>,
     },
     /// Prints modules, versions, route prefixes, emitted events, tables.
     Modules,
@@ -84,7 +88,10 @@ pub fn run(build: impl Fn() -> Harness, args: impl IntoIterator<Item = String>) 
         Command::Migrations {
             command: MigrationsCommand::Collect { dialect, out },
         } => collect::collect(&harness, &dialect, &out),
-        Command::Doctor { out } => doctor::doctor(&harness, &out),
+        Command::Doctor {
+            out,
+            allow_no_captcha,
+        } => doctor::doctor(&harness, &out, allow_no_captcha.as_deref()),
         Command::Modules => {
             print_modules(&harness);
             Ok(())

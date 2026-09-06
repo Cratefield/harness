@@ -39,15 +39,23 @@ fn sea_to_sqlite(value: &SeaValue) -> SqliteValue {
         SeaValue::SmallInt(v) => v.map_or(null, |v| SqliteValue::Integer(i64::from(v))),
         SeaValue::Int(v) => v.map_or(null, |v| SqliteValue::Integer(i64::from(v))),
         SeaValue::BigInt(v) => v.map_or(null, SqliteValue::Integer),
+        // sea-query renders `LIMIT n` and unsigned literals as unsigned
+        // variants; SQLite has only INTEGER, so widen here.
+        SeaValue::TinyUnsigned(v) => v.map_or(null, |v| SqliteValue::Integer(i64::from(v))),
+        SeaValue::SmallUnsigned(v) => v.map_or(null, |v| SqliteValue::Integer(i64::from(v))),
+        SeaValue::Unsigned(v) => v.map_or(null, |v| SqliteValue::Integer(i64::from(v))),
+        SeaValue::BigUnsigned(v) => v.map_or(null, |v| {
+            SqliteValue::Integer(i64::try_from(v).unwrap_or(i64::MAX))
+        }),
         SeaValue::Float(v) => v.map_or(null, |v| SqliteValue::Real(f64::from(v))),
         SeaValue::Double(v) => v.map_or(null, SqliteValue::Real),
         SeaValue::String(v) => v
             .as_ref()
             .map_or(null, |v| SqliteValue::Text(v.to_string())),
+        SeaValue::Char(v) => v.map_or(null, |v| SqliteValue::Text(v.to_string())),
         SeaValue::Bytes(v) => v
             .as_ref()
             .map_or(null, |v| SqliteValue::Blob((**v).clone())),
-        other => SqliteValue::Text(format!("{other:?}")),
     }
 }
 

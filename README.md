@@ -35,7 +35,9 @@ with no module rewrites in between.
 
 Read [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full design.
 Decisions, including why the TypeScript attempt was thrown away, are in
-[docs/adr](docs/adr).
+[docs/adr](docs/adr). Security controls and reporting:
+[docs/SECURITY.md](docs/SECURITY.md). What we store and for how long:
+[docs/PRIVACY.md](docs/PRIVACY.md).
 
 ## How a venture uses it
 
@@ -138,6 +140,23 @@ conformance kit includes the concurrent-request test that proves it.
 | **M3 Self-hosted portability** | Postgres adapter, native runtime, parity suite, data move | #18–#21 |
 
 Progress is visible in the [milestones](../../milestones).
+
+## Observability
+
+One structured span per request carries `request_id`, `method`, `route`
+(the matched path), `module`, `status`, `duration_ms`, `ip_hash` and
+`ua_family` — never an email address. Workers Logs is enabled in the
+template `wrangler.toml` (`[observability] enabled = true`); every
+response also echoes `x-request-id`. To pull one request's trail out of
+the logs, filter on the id the API returned:
+
+```sh
+wrangler tail --format pretty --search <request-id>
+```
+
+The error taxonomy (every problem slug, status and meaning) is
+`docs/ERRORS.md`, generated from `factory0-core`'s registry and checked
+in CI for drift.
 
 ## Toolchain
 

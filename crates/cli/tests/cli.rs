@@ -371,3 +371,85 @@ fn sorted_listing(dir: &std::path::Path) -> Vec<String> {
     names.sort();
     names
 }
+
+#[test]
+fn doctor_production_captcha_rule_and_override() {
+    use factory0_core::{
+        Config, ConfigError, Harness, Migrations, Module, ModuleContext, Port, Runtime, Venture,
+        VentureEnv,
+    };
+
+    struct WritingModule;
+    impl Module for WritingModule {
+        fn name(&self) -> &'static str {
+            "writer"
+        }
+        fn version(&self) -> &'static str {
+            "0.0.0"
+        }
+        fn requires(&self) -> &'static [Port] {
+            &[]
+        }
+        fn public_writes(&self) -> bool {
+            true
+        }
+        fn migrations(&self) -> Migrations {
+            Migrations::default()
+        }
+        fn validate_config(&self, _cfg: &dyn Config) -> Result<(), ConfigError> {
+            Ok(())
+        }
+        fn router(&self, _ctx: ModuleContext) -> axum::Router {
+            axum::Router::new()
+        }
+    }
+    struct NoCaptcha;
+    impl Runtime for NoCaptcha {
+        fn provides(&self) -> Vec<Port> {
+            Port::ALL
+                .iter()
+                .copied()
+                .filter(|port| *port != Port::Captcha)
+                .collect()
+        }
+    }
+    let build = move || {
+        Harness::builder()
+            .venture(
+                Venture::new("prod-venture", "prod.example")
+                    .cors_origins(["https://prod.example"])
+                    .env(VentureEnv::Production),
+            )
+            .module(WritingModule)
+            .runtime(NoCaptcha)
+            .build()
+            .expect("fixture builds")
+    };
+
+    // Without the override the rule fails the build check.
+    assert_eq!(
+        run(
+            build,
+            args(&["doctor", "--out", "/tmp/fz-doctor-test-migrations"])
+        ),
+        ExitCode::FAILURE
+    );
+
+    // The override downgrades the failure to a warning and passes
+    // (no migrations to check, so an empty dir is fine).
+    let tmp = TempDir::new("doctor-captcha");
+    std::fs::create_dir_all(tmp.migrations()).expect("dir");
+    assert_eq!(
+        run(
+            build,
+            args(&[
+                "doctor",
+                "--out",
+                tmp.migrations().to_str().unwrap(),
+                "--allow-no-captcha",
+                "internal staging form"
+            ]),
+        ),
+        ExitCode::SUCCESS
+    );
+}

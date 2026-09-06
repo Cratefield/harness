@@ -17,6 +17,9 @@ factory0-runtime-cloudflare = { path = "crates/runtime-cloudflare", version = "0
 factory0-adapter-resend = { path = "crates/adapter-resend", version = "0.1.0" }
 factory0-adapter-turnstile = { path = "crates/adapter-turnstile", version = "0.1.0" }
 factory0-adapter-sqlite = { path = "crates/adapter-sqlite", version = "0.1.0" }
+factory0-module-email-signup = { path = "crates/module-email-signup", version = "0.1.0" }
+factory0-module-waitlist = { path = "crates/module-waitlist", version = "0.1.0" }
+factory0-testing = { path = "crates/testing", version = "0.1.0" }
 
 # HTTP stack. axum runs without tokio on Workers (ADR 0001): the `tokio`
 # feature stays off, `default-features = false`, and only the extractor
@@ -54,9 +57,14 @@ hmac = "0.13.0"
 sha2 = "0.11.0"
 base64 = "0.23.1"
 subtle = "2.6.1"
+# Email NFC normalisation (core `email` module) — pure Rust, wasm-safe.
+unicode-normalization = "0.1.24"
 
 # Identifiers and time.
 ulid = "3.0.0"
+# Compiled mail templates for the modules (issue #12); pure build-time
+# rendering, wasm-safe.
+askama = "0.14.0"
 # `wasm-bindgen` makes OffsetDateTime::now_utc() use JS Date on wasm;
 # without it, now() panics ("time not implemented on this platform").
 time = { version = "0.3.45", default-features = false, features = [

@@ -90,3 +90,26 @@ async fn batch_is_atomic() {
         .expect("select");
     assert_eq!(count.len(), 2, "only a and b survive");
 }
+
+/// sea-query renders `LIMIT n` as `Value::BigUnsigned`; the adapter must
+/// widen it to INTEGER instead of falling through to a TEXT debug string
+/// (SQLite then fails the statement with a datatype mismatch).
+#[pollster::test]
+async fn sea_query_limit_binds_as_integer() {
+    let db = SqliteDatabase::in_memory().expect("db");
+    db.apply_migrations("m", &[SUBSCRIBERS_INIT])
+        .expect("apply");
+    db.execute(&Statement::new(
+        "INSERT INTO subscribers (id, email, status) VALUES ('a', 'nick@example.com', 'pending')",
+    ))
+    .await
+    .expect("insert");
+    let mut select = sea_query::Query::select();
+    select.column("id").from("subscribers");
+    let query = select
+        .and_where(sea_query::Expr::col("email").eq("nick@example.com"))
+        .limit(1)
+        .to_owned();
+    let rows: Rows = db.query(&Statement::render(&query)).await.expect("select");
+    assert_eq!(rows.len(), 1);
+}
