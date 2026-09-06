@@ -221,15 +221,29 @@ pub(crate) async fn confirm_entry(
         .and_where(Expr::col(iden("id")).eq(row.id.as_str()))
         .and_where(Expr::col(iden("status")).eq(STATUS_PENDING));
 
-    let mut stmts = vec![Statement::render(&flip)];
+    // The credit runs BEFORE the flip and carries the same guard: it applies
+    // only while this entry is still pending, i.e. only when this batch is
+    // the one that confirms it. Ordered the other way the credit cannot tell
+    // whether the flip was its own, and a replayed or interleaved confirm
+    // credits the referrer again for one referral.
+    let mut stmts = Vec::with_capacity(2);
     if let Some(referrer) = row.referred_by.as_deref() {
+        let mut still_pending = Query::select();
+        still_pending
+            .expr(Expr::val(1))
+            .from(iden("waitlist_entries"))
+            .and_where(Expr::col(iden("id")).eq(row.id.as_str()))
+            .and_where(Expr::col(iden("status")).eq(STATUS_PENDING));
+
         let mut credit = Query::update();
         credit
             .table(iden("waitlist_entries"))
             .value(iden("referrals"), Expr::col(iden("referrals")).add(1))
-            .and_where(Expr::col(iden("id")).eq(referrer));
+            .and_where(Expr::col(iden("id")).eq(referrer))
+            .and_where(Expr::exists(still_pending));
         stmts.push(Statement::render(&credit));
     }
+    stmts.push(Statement::render(&flip));
     db.batch(&stmts).await?;
     // The batch reports no per-statement counts; the row's state is the
     // truth for whether this call flipped anything.
@@ -263,4 +277,65 @@ pub(crate) async fn purge_pending_older_than(
         .and_where(Expr::col(iden("status")).eq(STATUS_PENDING))
         .and_where(Expr::col(iden("created_at")).lt(cutoff_iso));
     db.execute(&Statement::render(&delete)).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use factory0_core::{Module, Statement};
+
+    /// A true interleave hands both callers a snapshot that still says
+    /// "pending": each read the row before either wrote. The flip is
+    /// guarded, so only one applies; the credit must carry the same guard,
+    /// or the referrer is paid twice for one referral.
+    #[test]
+    fn replayed_confirm_credits_the_referrer_once() {
+        let module = crate::Waitlist::new().products(["kontinuum"]);
+        let db = factory0_adapter_sqlite::SqliteDatabase::in_memory().expect("db");
+        db.apply_migrations(module.name(), module.migrations().sqlite)
+            .expect("migrate");
+
+        let insert = |id: &str, email: &str, status: &str, referred_by: Option<&str>| {
+            let stmt = Statement::with_values(
+                "INSERT INTO waitlist_entries \
+                 (id, email, email_normalized, product, status, referrals, created_at, referred_by) \
+                 VALUES (?, ?, ?, 'kontinuum', ?, 0, '2026-01-01T00:00:00Z', ?)",
+                vec![
+                    id.into(),
+                    email.into(),
+                    email.into(),
+                    status.into(),
+                    referred_by.into(),
+                ],
+            );
+            pollster::block_on(db.execute(&stmt)).expect("insert");
+        };
+        insert("referrer", "ref@example.com", "confirmed", None);
+        insert("friend", "friend@example.com", "pending", Some("referrer"));
+
+        let snapshot = pollster::block_on(find_by_id(&db, "friend"))
+            .expect("query")
+            .expect("row");
+
+        for _ in 0..2 {
+            pollster::block_on(confirm_entry(
+                &db,
+                &snapshot,
+                "2026-01-01T00:00:01Z",
+                "CODE1234",
+            ))
+            .expect("confirm");
+        }
+
+        let rows = pollster::block_on(db.query(&Statement::with_values(
+            "SELECT referrals FROM waitlist_entries WHERE id = ?",
+            vec!["referrer".into()],
+        )))
+        .expect("select");
+        let referrals = rows
+            .first()
+            .and_then(|row| row.get::<i64>("referrals"))
+            .expect("referrals");
+        assert_eq!(referrals, 1, "one referral, one credit");
+    }
 }

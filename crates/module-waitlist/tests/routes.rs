@@ -499,3 +499,63 @@ async fn redirect_params_are_ignored() {
         );
     }
 }
+
+/// Two concurrent hits on ONE confirm link (a mail scanner prefetching while
+/// the human clicks). The entry flips once and the referrer is credited once.
+#[test]
+fn double_submit_of_one_confirm_link_credits_the_referrer_once() {
+    let kit = kit();
+    pollster::block_on(join(&kit, "ref@example.com", "kontinuum"));
+    pollster::block_on(request(
+        &kit.router,
+        Method::GET,
+        &confirm_path(&kit, 0),
+        None,
+    ));
+    let code = column_text(&kit, "ref@example.com", "referral_code").expect("code");
+    let referrer_id = column_text(&kit, "ref@example.com", "id").expect("id");
+
+    // Someone joins with that referral code.
+    pollster::block_on(request(
+        &kit.router,
+        Method::POST,
+        "/v1/waitlist",
+        Some(&format!(
+            r#"{{"email":"friend@example.com","product":"kontinuum","ref":"{code}","captchaToken":"x"}}"#
+        )),
+    ));
+    let path = confirm_path(&kit, 1);
+
+    // The mail scanner prefetches the link while the human clicks it.
+    let mut handles = Vec::new();
+    for _ in 0..2 {
+        let router = kit.router.clone();
+        let path = path.clone();
+        handles.push(std::thread::spawn(move || {
+            let req = Request::builder()
+                .method(Method::GET)
+                .uri(path)
+                .body(Body::empty())
+                .expect("request");
+            pollster::block_on(router.oneshot(req)).expect("answers");
+        }));
+    }
+    for h in handles {
+        h.join().expect("thread");
+    }
+
+    let stmt = Statement::with_values(
+        "SELECT referrals FROM waitlist_entries WHERE id = ?".to_string(),
+        vec![referrer_id.clone().into()],
+    );
+    let rows = pollster::block_on(kit.db.query(&stmt)).expect("select");
+    let referrals = rows
+        .first()
+        .and_then(|r| r.get::<i64>("referrals"))
+        .expect("referrals");
+    eprintln!("OBSERVED referrals after a double-submit = {referrals}");
+    assert_eq!(
+        referrals, 1,
+        "referrer credited once per confirmed referral"
+    );
+}
