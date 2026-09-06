@@ -217,8 +217,13 @@ pub fn export(
 }
 
 fn record_line(table: &str, row: &Row) -> Result<String, String> {
+    // Keys sorted explicitly: the file format is "byte-identical across
+    // exports", and that must not depend on whether serde_json was built
+    // with `preserve_order` (it is, for the UI surface, since ADR 0010).
+    let mut names: Vec<&str> = row.column_names().collect();
+    names.sort_unstable();
     let mut object = Map::new();
-    for name in row.column_names() {
+    for name in names {
         let value = row
             .get::<sea_query::Value>(name)
             .unwrap_or(sea_query::Value::String(None));
