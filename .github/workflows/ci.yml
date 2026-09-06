@@ -1,0 +1,119 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  fmt:
+    name: rustfmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.98.1"
+          components: rustfmt
+      - run: cargo fmt --all --check
+
+  clippy:
+    name: clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.98.1"
+          components: clippy
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: core dependency boundary (ADR 0001)
+        run: |
+          if cargo tree -p factory0-core --edges normal | grep -qE '(worker|wasm-bindgen|tokio|reqwest|sqlx|rusqlite) v'; then
+            echo "factory0-core pulled a forbidden dependency:"
+            cargo tree -p factory0-core --edges normal | grep -E '(worker|wasm-bindgen|tokio|reqwest|sqlx|rusqlite) v'
+            exit 1
+          fi
+
+  test:
+    name: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.98.1"
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --workspace
+
+  deny:
+    name: cargo deny
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EmbarkStudios/cargo-deny-action@v2
+
+  wasm:
+    name: worker-build (examples/venture)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.98.1"
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - name: Install worker-build
+        run: cargo install -q --locked worker-build
+      - name: Build example venture to wasm
+        working-directory: examples/venture
+        run: worker-build --release
+      - name: Assert shim exists
+        run: test -f examples/venture/build/worker/shim.mjs
+
+  wrangler-dev:
+    name: wrangler dev (examples/venture, local D1)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.98.1"
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - uses: oven-sh/setup-bun@v2
+      - name: Install worker-build
+        run: cargo install -q --locked worker-build
+      - name: Apply local D1 migrations
+        working-directory: examples/venture
+        run: bunx wrangler d1 migrations apply venture-example --local
+      - name: Start wrangler dev
+        working-directory: examples/venture
+        run: |
+          nohup bunx wrangler dev --local > /tmp/wrangler.log 2>&1 &
+          for i in $(seq 1 60); do
+            code=$(curl -s -o /dev/null -w "%{http_code}" -m 3 http://127.0.0.1:8787/__health || true)
+            if [ "$code" = "200" ]; then echo "worker ready"; exit 0; fi
+            sleep 5
+          done
+          echo "worker never became ready"; cat /tmp/wrangler.log; exit 1
+      - name: Curl assertions
+        run: |
+          set -e
+          echo "-- health"
+          curl -sf -m 10 http://127.0.0.1:8787/__health | grep -q '"name":"sample"'
+          echo "-- ready"
+          curl -sf -m 10 http://127.0.0.1:8787/__ready | grep -q '"ok":true'
+          echo "-- insert"
+          curl -sf -m 15 -X POST http://127.0.0.1:8787/v1/sample/rows \
+            -H 'content-type: application/json' \
+            -d '{"email":"ci@example.com"}' | grep -q '"id"'
+          echo "-- latest"
+          curl -sf -m 10 http://127.0.0.1:8787/v1/sample/rows/latest | grep -q 'ci@example.com'
+          echo "all assertions passed"

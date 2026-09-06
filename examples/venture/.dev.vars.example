@@ -1,0 +1,6 @@
+# Copy to .dev.vars and fill with DUMMY values for local dev.
+# Never put a real secret here.
+HARNESS_SECRET=dummy-harness-secret-0123456789abcdef
+# HARNESS_SECRET_PREVIOUS=dummy-previous-secret-0123456789
+# ADMIN_TOKEN=dummy-admin-token
+ENV=development

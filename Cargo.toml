@@ -1,0 +1,98 @@
+[workspace]
+resolver = "3"
+members = ["crates/*", "examples/*"]
+exclude = ["crates/cli/tests/fixture"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.98"
+license = "MIT"
+repository = "https://github.com/Factory-Zero/harness"
+
+[workspace.dependencies]
+# Internal crates.
+factory0-core = { path = "crates/core", version = "0.1.0" }
+factory0-runtime-cloudflare = { path = "crates/runtime-cloudflare", version = "0.1.0" }
+factory0-adapter-resend = { path = "crates/adapter-resend", version = "0.1.0" }
+factory0-adapter-turnstile = { path = "crates/adapter-turnstile", version = "0.1.0" }
+factory0-adapter-sqlite = { path = "crates/adapter-sqlite", version = "0.1.0" }
+
+# HTTP stack. axum runs without tokio on Workers (ADR 0001): the `tokio`
+# feature stays off, `default-features = false`, and only the extractor
+# features modules need are enabled.
+axum = { version = "0.8.9", default-features = false, features = [
+    "json",
+    "query",
+    "matched-path",
+] }
+http = "1.5.0"
+tower = { version = "0.5.3", features = ["util"] }
+tower-http = { version = "0.7.1", default-features = false, features = ["cors"] }
+bytes = "1.12.1"
+futures-core = "0.3.34"
+futures-util = { version = "0.3.34", default-features = false, features = [
+    "async-await",
+    "std",
+] }
+
+# Serialization and diagnostics.
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+tracing = "0.1.44"
+
+# SQL. sea-query 1.0 exists but the brief pins the stable 0.32 line (ADR 0004).
+# `thread-safe` swaps SeaRc = Rc for Arc; without it query builders are !Send
+# and cannot live in async handlers.
+sea-query = { version = "0.32.7", default-features = false, features = [
+    "backend-sqlite",
+    "thread-safe",
+] }
+
+# Pure-Rust crypto (ADR 0006).
+hmac = "0.13.0"
+sha2 = "0.11.0"
+base64 = "0.23.1"
+subtle = "2.6.1"
+
+# Identifiers and time.
+ulid = "3.0.0"
+# `wasm-bindgen` makes OffsetDateTime::now_utc() use JS Date on wasm;
+# without it, now() panics ("time not implemented on this platform").
+time = { version = "0.3.45", default-features = false, features = [
+    "std",
+    "formatting",
+    "parsing",
+    "wasm-bindgen",
+] }
+# Enabled by wasm leaf crates: getrandom (via ulid/rand) needs the opt-in
+# wasm_js backend on wasm32-unknown-unknown.
+getrandom = { version = "0.4.3", default-features = false, features = [
+    "wasm_js",
+] }
+
+# Traits and errors.
+async-trait = "0.1.92"
+thiserror = "2.0.20"
+
+# Runtime and adapters.
+# NOTE: the `http` feature stays OFF deliberately — with it enabled, D1
+# writes hang under workerd/miniflare (worker 0.8.5, verified empirically).
+worker = { version = "0.8.5", default-features = false, features = ["d1"] }
+rusqlite = { version = "0.40.2", features = ["bundled"] }
+clap = { version = "4.6.6", features = ["derive"] }
+
+# Test-only.
+insta = "1.48.0"
+pollster = { version = "0.4", features = ["macro"] }
+futures-channel = "0.3.34"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+all = "warn"
+pedantic = "warn"
+# Builder-heavy API: nearly every `fn(self) -> Self` and getter trips this
+# lint; the attribute noise outweighs the value.
+must_use_candidate = { level = "allow", priority = 1 }

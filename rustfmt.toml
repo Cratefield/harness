@@ -1,0 +1,2 @@
+# Rustfmt defaults; the edition comes from Cargo.toml. This file exists so
+# formatting configuration is an explicit, reviewable decision.

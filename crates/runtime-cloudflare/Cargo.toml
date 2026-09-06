@@ -1,0 +1,33 @@
+[package]
+name = "factory0-runtime-cloudflare"
+description = "Cloudflare Workers runtime for the Factory Zero harness (workers-rs)"
+readme = "README.md"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+factory0-core = { workspace = true }
+worker = { workspace = true }
+axum = { workspace = true }
+http = { workspace = true }
+tower = { workspace = true }
+bytes = { workspace = true }
+futures-core = { workspace = true }
+futures-util = { workspace = true }
+async-trait = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+time = { workspace = true }
+sha2 = { workspace = true }
+sea-query = { workspace = true }
+
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+getrandom = { workspace = true }

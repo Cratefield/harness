@@ -1,0 +1,237 @@
+//! The kit's own tests plus a demo module passing conformance (issue #9).
+
+use factory0_core::{
+    Config, ConfigError, Database, Migrations, Module, ModuleContext, Port, SqlMigration,
+};
+use factory0_testing::{
+    FakeCaptcha, FakeDefer, FakeHttpClient, FakeMailer, FakeRateLimiter, MailerMode,
+    MemoryKeyValue, TestHarness, assert_wasm_safe_deps, conformance, request,
+};
+use std::sync::Arc;
+use std::time::Duration;
+
+const DEMO_INIT: SqlMigration = SqlMigration {
+    id: "0001",
+    name: "init",
+    sql: "CREATE TABLE IF NOT EXISTS demo_notes (
+        id TEXT PRIMARY KEY,
+        body TEXT NOT NULL
+    );",
+};
+
+pub struct DemoModule;
+
+impl Module for DemoModule {
+    fn name(&self) -> &'static str {
+        "demo"
+    }
+    fn version(&self) -> &'static str {
+        env!("CARGO_PKG_VERSION")
+    }
+    fn requires(&self) -> &'static [Port] {
+        &[Port::Db]
+    }
+    fn tables(&self) -> &'static [&'static str] {
+        &["demo_notes"]
+    }
+    fn migrations(&self) -> Migrations {
+        const MIGRATIONS: [SqlMigration; 1] = [DEMO_INIT];
+        Migrations {
+            sqlite: &MIGRATIONS,
+            postgres: &[],
+        }
+    }
+    fn validate_config(&self, _cfg: &dyn Config) -> Result<(), ConfigError> {
+        Ok(())
+    }
+    fn router(&self, ctx: ModuleContext) -> axum::Router {
+        let db = ctx.ports.db.expect("demo requires Db");
+        axum::Router::new().route(
+            "/notes",
+            axum::routing::get(move || async move {
+                let rows = db
+                    .query(&factory0_core::Statement::new("SELECT id FROM demo_notes"))
+                    .await
+                    .expect("select");
+                factory0_core::Json(serde_json::json!({ "count": rows.len() }))
+            }),
+        )
+    }
+}
+
+#[test]
+fn demo_module_passes_conformance() {
+    conformance(Box::new(DemoModule));
+}
+
+#[test]
+fn testing_crate_deps_are_wasm_safe() {
+    assert_wasm_safe_deps("factory0-testing");
+}
+
+#[pollster::test]
+async fn test_harness_applies_migrations_and_serves_module_routes() {
+    let kit = TestHarness::new(vec![Box::new(DemoModule)]);
+    let response = request(&kit.router, axum::http::Method::GET, "/v1/demo/notes", None).await;
+    assert_eq!(response.status, axum::http::StatusCode::OK);
+    assert_eq!(response.json()["count"], 0);
+
+    // Module writes land in the shared db handle.
+    kit.db
+        .execute(&factory0_core::Statement::new(
+            "INSERT INTO demo_notes (id, body) VALUES ('n1', 'hello')",
+        ))
+        .await
+        .expect("insert");
+    let response = request(&kit.router, axum::http::Method::GET, "/v1/demo/notes", None).await;
+    assert_eq!(response.json()["count"], 1);
+}
+
+#[pollster::test]
+async fn fake_mailer_records_and_switches_modes() {
+    use factory0_core::{Mailer, Message, SendOutcome};
+    let mailer = FakeMailer::new(MailerMode::SendOk);
+    let message = Message {
+        to: "nick@example.com".into(),
+        from: "no-reply@test.example".into(),
+        reply_to: None,
+        subject: "hi".into(),
+        html: "<p>hi</p>".into(),
+        text: "hi".into(),
+        idempotency_key: None,
+        tags: vec![],
+    };
+    let outcome = mailer.send(message.clone()).await.expect("send");
+    assert!(matches!(outcome, SendOutcome::Sent { .. }));
+    assert_eq!(mailer.sent().len(), 1);
+    assert_eq!(mailer.last_message().expect("recorded").to, message.to);
+
+    mailer.set_mode(MailerMode::NotConfigured);
+    assert_eq!(
+        mailer.send(message).await.expect("send"),
+        SendOutcome::NotConfigured
+    );
+    assert_eq!(mailer.sent().len(), 1, "NotConfigured records nothing");
+
+    mailer.set_mode(MailerMode::Fail);
+    assert!(
+        mailer
+            .send(Message {
+                to: "x@y.dev".into(),
+                from: String::new(),
+                reply_to: None,
+                subject: String::new(),
+                html: String::new(),
+                text: String::new(),
+                idempotency_key: None,
+                tags: vec![],
+            })
+            .await
+            .is_err()
+    );
+}
+
+#[pollster::test]
+async fn fake_captcha_allow_all_and_token_lists() {
+    use factory0_core::Captcha;
+    let allow_all = FakeCaptcha::allow_all();
+    assert!(allow_all.verify("anything", None).await.expect("v").ok);
+
+    let listed = FakeCaptcha::with_tokens(["good-token"]);
+    assert!(listed.verify("good-token", None).await.expect("v").ok);
+    let bad = listed.verify("bad-token", None).await.expect("v");
+    assert!(!bad.ok);
+    assert_eq!(bad.reason.as_deref(), Some("token not allowed"));
+}
+
+#[pollster::test]
+async fn fake_rate_limiter_is_scripted() {
+    use factory0_core::{Decision, RateLimiter};
+    let limiter = FakeRateLimiter::scripted(
+        vec![Decision {
+            ok: false,
+            retry_after: Some(Duration::from_secs(3)),
+        }],
+        Decision {
+            ok: true,
+            retry_after: None,
+        },
+    );
+    let first = limiter.limit("k").await.expect("l");
+    assert!(!first.ok);
+    assert_eq!(first.retry_after, Some(Duration::from_secs(3)));
+    assert!(limiter.limit("k").await.expect("l").ok);
+    assert!(limiter.limit("k").await.expect("l").ok);
+    assert_eq!(limiter.calls(), 3);
+}
+
+#[pollster::test]
+async fn memory_key_value_round_trips() {
+    use factory0_core::KeyValue;
+    let kv = MemoryKeyValue::new();
+    assert_eq!(kv.get("k").await.expect("g"), None);
+    kv.put("k", "v", None).await.expect("p");
+    assert_eq!(kv.get("k").await.expect("g"), Some("v".into()));
+    kv.delete("k").await.expect("d");
+    assert_eq!(kv.get("k").await.expect("g"), None);
+}
+
+#[pollster::test]
+async fn fake_http_client_is_scripted_and_captures() {
+    use factory0_core::HttpClient;
+    let http = FakeHttpClient::ok_json(r#"{"ok":true}"#);
+    let request = http::Request::builder()
+        .method("POST")
+        .uri("https://example.test/x")
+        .body(bytes::Bytes::from("payload"))
+        .expect("request");
+    let response = http.send(request).await.expect("send");
+    assert_eq!(response.status(), 200);
+    let captured = http.captured();
+    assert_eq!(captured.len(), 1);
+    assert_eq!(captured[0].0, "POST");
+    assert_eq!(captured[0].1, "https://example.test/x");
+    assert_eq!(captured[0].2, "payload");
+}
+
+#[pollster::test]
+async fn fake_defer_collects_and_drains() {
+    use factory0_core::Defer;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let defer = FakeDefer::new();
+    let ran = Arc::new(AtomicUsize::new(0));
+    for _ in 0..3 {
+        let ran = Arc::clone(&ran);
+        defer.wait_until(Box::pin(async move {
+            ran.fetch_add(1, Ordering::SeqCst);
+        }));
+    }
+    assert_eq!(defer.deferred_count(), 3);
+    assert_eq!(ran.load(Ordering::SeqCst), 0, "nothing runs before drain");
+    defer.drain().await;
+    assert_eq!(ran.load(Ordering::SeqCst), 3);
+}
+
+#[pollster::test]
+async fn signer_round_trips_with_test_secret() {
+    use factory0_core::{Kid, Payload, Signer};
+    let kit = TestHarness::new(vec![Box::new(DemoModule)]);
+    let payload = Payload {
+        purpose: "confirm".into(),
+        subject: "nick@example.com".into(),
+        exp: None,
+        kid: Kid::Cur,
+    };
+    let token = kit.signer.sign(&payload);
+    let verified = kit.signer.verify(&token, "confirm").expect("verifies");
+    assert_eq!(verified.subject, "nick@example.com");
+}
+
+#[test]
+fn empty_database_answers_readiness_probe() {
+    let db = factory0_testing::EmptyDatabase;
+    let rows =
+        pollster::block_on(db.query(&factory0_core::Statement::new("SELECT 1"))).expect("select 1");
+    assert_eq!(rows.len(), 1);
+}

@@ -1,0 +1,18 @@
+[package]
+name = "venture-fixture"
+description = "Fixture venture for factory0-cli tests (two modules, extensible)"
+publish = false
+version = "0.1.0"
+edition = "2024"
+
+# Standalone: not a workspace member (the CLI dev-depends on it by path).
+[workspace]
+
+[dependencies]
+factory0-core = { path = "../../../core" }
+factory0-cli = { path = "../.." }
+axum = { version = "0.8", default-features = false }
+
+[[bin]]
+name = "fz"
+path = "src/fz_main.rs"
