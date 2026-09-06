@@ -1,0 +1,27 @@
+[package]
+name = "factory0-auth-core"
+description = "Factory Zero auth module: users, identities, credentials, sessions, single-use tokens, clients (issue #5)"
+publish = false
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+factory0-core = { workspace = true }
+axum = { workspace = true }
+sea-query = { workspace = true }
+time = { workspace = true }
+tracing = { workspace = true }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+getrandom = { workspace = true }
+
+[dev-dependencies]
+factory0-testing = { workspace = true }
+factory0-adapter-sqlite = { workspace = true }
+pollster = { workspace = true }

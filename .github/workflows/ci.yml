@@ -1,0 +1,86 @@
+name: CI
+ 
+on:
+  push:
+    branches: [main]
+  pull_request:
+ 
+env:
+  CARGO_TERM_COLOR: always
+ 
+jobs:
+  fmt:
+    name: rustfmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.98.1"
+          components: rustfmt
+      - run: cargo fmt --all --check
+ 
+  clippy:
+    name: clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.98.1"
+          components: clippy
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+ 
+  test:
+    name: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.98.1"
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --workspace
+ 
+  # The module conformance kit, run through the harness's reusable
+  # workflow so this repo's modules pass the identical suite as the
+  # harness's own (its README: call it across repos with
+  # `Factory-Zero/harness/.github/workflows/conformance.yml@<ref>`).
+  # `crates/auth-core` does not match the default `crates/module-*` glob,
+  # so the glob is passed explicitly.
+  conformance:
+    name: conformance (module kit)
+    uses: Factory-Zero/harness/.github/workflows/conformance.yml@main
+    with:
+      module-glob: crates/auth-core
+ 
+  deny:
+    name: cargo deny
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EmbarkStudios/cargo-deny-action@v2
+ 
+  wasm:
+    name: wasm build (workspace)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.98.1"
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - name: Build the workspace for wasm32
+        run: cargo build --target wasm32-unknown-unknown
+      - name: No openssl/reqwest/mio in the wasm tree (BUILD-BRIEF.md)
+        run: |
+          count=$(cargo tree --target wasm32-unknown-unknown | grep -cE '^\S*(openssl|reqwest|mio) ' || true)
+          if [ "$count" != "0" ]; then
+            echo "forbidden dependencies in the wasm tree:"
+            cargo tree --target wasm32-unknown-unknown | grep -E '(openssl|reqwest|mio) v'
+            exit 1
+          fi
