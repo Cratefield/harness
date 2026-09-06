@@ -43,6 +43,22 @@ jobs:
   test:
     name: test
     runs-on: ubuntu-latest
+    services:
+      # Postgres 16 for the factory0-adapter-postgres contract tests
+      # (issue #18); tests skip cleanly when the URL is unset.
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      FZ_TEST_POSTGRES_URL: postgres://postgres:postgres@localhost:5432/postgres
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@master
@@ -51,6 +67,8 @@ jobs:
           targets: wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@v2
       - run: cargo test --workspace
+      - name: fz migrations apply against the service container (issue #18)
+        run: cargo test -p factory0-cli-acceptance --features postgres
       - name: Error taxonomy drift check (issue #14)
         run: cargo run -q -p factory0-core --example errors-doc -- --check
       - name: Compatibility matrix drift check (issue #17)

@@ -1,6 +1,6 @@
 [package]
 name = "factory0-cli"
-description = "The fz CLI for Factory Zero ventures: migrations collect, doctor, modules"
+description = "The fz CLI for Factory Zero ventures: migrations collect/apply, doctor, modules"
 readme = "README.md"
 keywords = ["factory0", "cli", "migrations", "wrangler", "d1"]
 categories = ["command-line-utilities", "development-tools"]
@@ -14,6 +14,13 @@ repository.workspace = true
 [lints]
 workspace = true
 
+[features]
+# `fz migrations apply --dialect postgres` (issue #18): pulls the
+# native-only Postgres adapter and a tokio runtime to drive it. Opt-in so
+# the default fz dependency graph stays free of sqlx and tokio — a
+# venture's wasm build must never see them.
+postgres = ["dep:factory0-adapter-postgres", "dep:tokio"]
+
 [dependencies]
 factory0-core = { workspace = true }
 clap = { workspace = true }
@@ -21,3 +28,5 @@ sha2 = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tracing = { workspace = true }
+factory0-adapter-postgres = { workspace = true, optional = true }
+tokio = { workspace = true, optional = true }

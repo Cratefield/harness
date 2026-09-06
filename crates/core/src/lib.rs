@@ -18,6 +18,7 @@ mod email;
 mod events;
 mod harness;
 mod http;
+mod lint;
 mod logging;
 mod module;
 mod ports;
@@ -39,6 +40,7 @@ pub use email::{
 pub use events::{AnyError, EventBus, EventHandler, EventName};
 pub use harness::{Harness, HarnessBuilder, Runtime};
 pub use http::{Form, Json, MAX_BODY_BYTES, X_REQUEST_ID, rate_limited, request_id_is_valid};
+pub use lint::lint_portable_sql;
 pub use logging::{
     RedactingVisitor, is_email_field, is_secret_field, redacted_value, subject_hash,
 };

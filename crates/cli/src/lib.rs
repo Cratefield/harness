@@ -1,5 +1,6 @@
-//! `fz` — the Factory Zero venture CLI (issue #8): `fz migrations collect`,
-//! `fz doctor`, `fz modules`.
+//! `fz` — the Factory Zero venture CLI (issue #8): `fz migrations
+//! collect`, `fz migrations apply` (issue #18), `fz doctor`, `fz
+//! modules`.
 //!
 //! `fz` is linked into the venture as a bin target so it can see the
 //! compiled-in harness. The documented pattern (venture template):
@@ -19,6 +20,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod apply;
 mod collect;
 mod doctor;
 pub mod lint;
@@ -63,12 +65,23 @@ enum Command {
 enum MigrationsCommand {
     /// Collects module migrations into wrangler-ordered files.
     Collect {
-        /// SQL dialect (postgres lands with adapter-postgres, phase 3).
+        /// SQL dialect of the collected files (sqlite for wrangler/D1).
         #[arg(long, default_value = "sqlite")]
         dialect: String,
         /// Output directory for wrangler `migrations_dir`.
         #[arg(long, default_value = "migrations")]
         out: PathBuf,
+    },
+    /// Applies the harness's migrations directly to a database — the
+    /// native counterpart of `wrangler d1 migrations apply` (issue #18).
+    Apply {
+        /// Target SQL dialect: postgres.
+        #[arg(long, default_value = "postgres")]
+        dialect: String,
+        /// Connection string of the target database, e.g.
+        /// `postgres://user:pass@host:5432/venture`.
+        #[arg(long, value_name = "URL")]
+        url: String,
     },
 }
 
@@ -88,6 +101,9 @@ pub fn run(build: impl Fn() -> Harness, args: impl IntoIterator<Item = String>) 
         Command::Migrations {
             command: MigrationsCommand::Collect { dialect, out },
         } => collect::collect(&harness, &dialect, &out),
+        Command::Migrations {
+            command: MigrationsCommand::Apply { dialect, url },
+        } => apply::apply(&harness, &dialect, &url),
         Command::Doctor {
             out,
             allow_no_captcha,
