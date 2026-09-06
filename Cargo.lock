@@ -500,6 +500,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "factory0-module-hello"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "factory0-core",
+ "factory0-testing",
+ "http",
+ "pollster",
+ "sea-query",
+ "serde",
+ "serde_json",
+ "tower",
+ "tracing",
+]
+
+[[package]]
 name = "factory0-module-waitlist"
 version = "0.1.0"
 dependencies = [
