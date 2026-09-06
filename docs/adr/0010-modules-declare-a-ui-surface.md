@@ -18,9 +18,10 @@ Three constraints shape the answer.
    discovered from the routes; a module has to say what it offers.
 2. **Fast and light.** The sites are static HTML on Cloudflare Pages and the
    API is a Worker at the edge. A framework runtime in the browser (React, or a
-   Rust-to-wasm UI crate at 300 KB and up, plus a build step) is the wrong
+   Rust-to-wasm UI crate at hundreds of KB plus a build step) is the wrong
    weight class for a signup form. Server-rendered HTML from the Worker costs
-   microseconds and ships no JavaScript at all.
+   microseconds and ships no JavaScript of ours; the only script on a public
+   form is Turnstile's, and only when the captcha port is configured.
 3. **Styleable.** A venture must be able to make it look like theirs with a
    stylesheet and nothing else, without fighting specificity or reaching into a
    shadow root.
@@ -61,28 +62,36 @@ response carries an `ETag` that is the hash of the surface, so a client
 renderer caches it until the deploy changes. The surface has its own contract
 version, `surface_api`, alongside `harness_api`.
 
-### 2. Two renderers, one markup contract
-The **server renderer** is a new `factory0-ui` crate built on `maud`, which is
-string building and runs on wasm. Mounting `.ui(Ui::default())` in the builder
-adds `/ui/<module>/<action>` (a full page) and the same path with
-`?fragment=1` (the form markup alone, for inclusion in an existing page),
-`/ui/cf.css`, and `/ui/cf.js`. Forms post `application/x-www-form-urlencoded`
-to the module's own route; core gains a `JsonOrForm<T>` extractor so a handler
-accepts both with a one-line change, and the existing `202` and `303`
-behaviours already fit a browser submit.
+### 2. One renderer, HTML over the wire
+The renderer is a new `factory0-ui` crate built on `maud`, which is string
+building and runs on wasm. Mounting `.ui(Ui::default())` in the builder adds
+`/ui/<module>/<action>` (a full page), the same path with `?fragment=1` (the
+form markup alone, no `<html>` wrapper), `/ui/cf.css` and `/ui/cf.js`.
 
-The **client renderer**, `cf.js`, is one dependency-free ES2020 file of at most
-8 KB minified and gzipped, checked in and size-gated in CI. It defines custom
-elements such as `<cf-form module="waitlist" action="join" product="kontinuum">`
-that fetch `/__surface` once, render the same markup into the **light DOM**,
-attach Turnstile when the surface says the action needs a captcha, submit as
-JSON, and map `problem+json` errors back onto fields. It exists for the static
-sites and for the admin pages' progressive enhancement; nothing requires it.
+**Modules stay JSON-only.** A page's form posts to its own `/ui` route, not to
+`/v1`. The UI handler turns the form body into the JSON request the module
+already accepts, dispatches it **in-process** to the module router (the API
+router is a `tower::Service`; the UI holds a clone and calls it, so nothing
+leaves the isolate and every module middleware still runs), and renders the
+result: a `202` becomes the success notice, a `problem+json` becomes the form
+re-rendered with the errors on their fields and the values preserved, a `303`
+is passed to the browser. The client's `cf-connecting-ip`, `x-forwarded-for`
+and `Authorization` headers are forwarded on the internal request so rate
+limiting, captcha verification and admin checks see the real caller. No
+module handler changes, no content negotiation, no second body encoding.
 
-The two renderers must produce identical DOM for the same surface. A fixture
-surface rendered by both is compared in the conformance suite, and the wasm
-build renders a page under `wrangler dev` in CI, because a green build proves
-nothing about a Workers request.
+**`cf.js` is an embed, not a renderer.** It is one dependency-free ES2020
+file of at most 4 KB minified and gzipped, checked in and size-gated in CI. A
+custom element such as `<cf-form module="waitlist" action="join"
+product="kontinuum">` fetches the fragment from the API origin, inserts it
+into the **light DOM**, and turns the submit into a `fetch` of the same `/ui`
+route that swaps the returned fragment back in. Attributes that name a field
+pre-fill and hide it. Every byte of markup comes from the one Rust renderer,
+so there is nothing to keep in parity and nothing to restyle twice; a
+`<noscript>` link to the full `/ui` page is the fallback.
+
+The wasm build renders a page and submits it under `wrangler dev` in CI,
+because a green build proves nothing about a Workers request.
 
 ### 3. Styling is a CSS contract, not a theme API
 The markup uses a fixed class vocabulary (`cf-form`, `cf-field`,
@@ -100,8 +109,9 @@ a class name is a breaking change of the UI surface.
 Everything that is not code or CSS is a **`UiSpec`**: per-action labels and
 copy, field order, hidden fields, the success message, the page title. It is
 JSON validated against a published `ui-spec-v1.schema.json`, given to the
-builder as `.ui(Ui::from_spec(...))` or by configuration, and applied by both
-renderers. `/__surface`, the schema, and a `docs/ui-llms.txt` that states the
+builder as `.ui(Ui::from_spec(...))` or by runtime configuration, and applied
+by the renderer. Where per-venture runtime configuration lives is the same
+open question as ADR 0009's sidecar mount table and is decided once, there. `/__surface`, the schema, and a `docs/ui-llms.txt` that states the
 class vocabulary, the custom properties and worked examples are the complete
 input an LLM needs to turn "make it look like a record label site" into a
 `UiSpec` plus a stylesheet. That generation step lives in the Cratefield
@@ -119,10 +129,16 @@ storefront-react manifest.
 - Admin pages need a session. The first version takes the admin token in a
   login form and sets a cookie signed by the `Signer`; the accounts module,
   when it exists, replaces that.
+- `/ui` and `/__surface` join `/.well-known` as the only root-mounted paths;
+  ARCHITECTURE §6 and the comment on `Harness::router` change accordingly.
 - Rejected: a Rust-to-wasm browser UI (size and a build step), React or any
   framework (a dependency on a stack the sites do not have), shadow DOM (the
-  styling promise), runtime template files (ADR 0003's compile-time
-  composition applies), and a page builder in the harness (that is a control
-  plane product; the harness only renders what a `UiSpec` says).
+  styling promise), a second client-side renderer with a parity test (the
+  first draft of this ADR had one; HTML over the wire makes it unnecessary),
+  form-encoded bodies on module routes (a `JsonOrForm` extractor would have
+  put a second encoding and its edge cases into every handler), runtime
+  template files (ADR 0003's compile-time composition applies), and a page
+  builder in the harness (that is a control plane product; the harness only
+  renders what a `UiSpec` says).
 - The sidecar mount (ADR 0009) must forward `/__surface` from the sidecar and
   merge it, or a sidecar module renders nothing. Tracked with the epic.
