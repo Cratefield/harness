@@ -70,7 +70,7 @@ pub struct ValidSession {
     pub user_id: String,
 }
 
-fn iso(t: OffsetDateTime) -> String {
+pub(crate) fn iso(t: OffsetDateTime) -> String {
     t.replace_nanosecond(0)
         .expect("truncation stays in range")
         .format(&Rfc3339)
