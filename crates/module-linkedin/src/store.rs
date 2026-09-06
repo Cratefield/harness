@@ -1068,3 +1068,53 @@ pub(crate) async fn budget_spent(db: &dyn Database, day: &str) -> Result<i64, Db
         .and_then(|row| row.get::<i64>("spent"))
         .unwrap_or_default())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `claim_post` and `due_post_ids` mix `and_where` with `cond_where`.
+    /// If sea-query treated `cond_where` as a replacement rather than
+    /// another AND, `claim_post` would update every claimable row instead of
+    /// one, and with a single row in the table the two behaviours look
+    /// identical. So the rendered SQL is asserted directly.
+    #[test]
+    fn timestamps_are_fixed_width_so_string_order_is_time_order() {
+        let early =
+            iso(time::OffsetDateTime::from_unix_timestamp(1_788_775_200).expect("in range"));
+        let late = iso(time::OffsetDateTime::from_unix_timestamp(1_788_775_260).expect("in range"));
+        assert_eq!(early.len(), late.len(), "{early} vs {late}");
+        assert!(early < late, "{early} is not before {late}");
+        assert_eq!(parse_iso(&early).map(iso).as_deref(), Some(early.as_str()));
+        // Whatever the offset suffix is, the module writes and parses one
+        // shape, and that is what the due-work queries compare.
+        assert!(early.starts_with("2026-09-07T"), "{early}");
+    }
+
+    #[test]
+    fn claiming_a_post_is_scoped_to_that_post() {
+        let mut update = Query::update();
+        update
+            .table(iden(POSTS))
+            .values([(iden("state"), POST_PUBLISHING.into())])
+            .and_where(Expr::col(iden("id")).eq("post_1"))
+            .cond_where(
+                sea_query::Cond::any()
+                    .add(Expr::col(iden("state")).eq(POST_SCHEDULED))
+                    .add(
+                        sea_query::Cond::all()
+                            .add(Expr::col(iden("state")).eq(POST_PUBLISHING))
+                            .add(Expr::col(iden("publishing_since")).lt("cutoff")),
+                    ),
+            );
+        let statement = Statement::render(&update);
+        // Values are placeholders, so the shape is what to assert on: the id
+        // filter, then AND, then the parenthesised state condition.
+        assert_eq!(
+            statement.sql,
+            r#"UPDATE "linkedin_posts" SET "state" = ? WHERE "id" = ? AND ("state" = ? OR ("state" = ? AND "publishing_since" < ?))"#,
+            "the claim is no longer scoped to one row"
+        );
+        assert_eq!(statement.values.0.len(), 5);
+    }
+}

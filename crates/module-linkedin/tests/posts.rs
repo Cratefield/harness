@@ -168,6 +168,35 @@ fn a_live_publish_lease_keeps_a_second_pass_out() {
 }
 
 #[test]
+fn one_pass_publishes_each_due_post_exactly_once() {
+    pollster::block_on(async {
+        let kit = ready_kit().await;
+        let path = format!("/v1/linkedin/admin/pages/{ORG}/posts");
+        // Two rows, so a claim that was not scoped to one post would show up
+        // as a row that never publishes or as a duplicate.
+        for index in 0..2 {
+            post_json(
+                &kit,
+                &path,
+                &create_body(&format!("Post {index}"), &format!("key-{index}")),
+            )
+            .await;
+        }
+
+        kit.cron(PUBLISHER).await;
+
+        assert_eq!(kit.fake.created_posts(), 2);
+        let mut published = kit.fake.post_commentaries();
+        published.sort();
+        assert_eq!(published, ["Post 0", "Post 1"]);
+        let listed = get(&kit, "/v1/linkedin/admin/posts").await.json();
+        for post in listed["posts"].as_array().expect("posts") {
+            assert_eq!(post["state"], "published", "{post}");
+        }
+    });
+}
+
+#[test]
 fn a_201_is_not_treated_as_published() {
     pollster::block_on(async {
         let kit = ready_kit().await;

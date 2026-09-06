@@ -30,22 +30,38 @@ fn connect_returns_an_authorize_url_with_the_compiled_in_scopes() {
 }
 
 #[test]
-fn admin_routes_are_closed_without_the_bearer() {
+fn every_route_but_the_callback_is_closed_without_the_bearer() {
     pollster::block_on(async {
         let kit = support::kit();
+        // The whole admin surface, so a route added later cannot quietly
+        // skip the check. `ADMIN_TOKEN` unset answers 401 as well, so a
+        // deployment that forgot the secret is closed rather than open.
         for (method, path) in [
             (Method::POST, "/v1/linkedin/admin/connect"),
             (Method::GET, "/v1/linkedin/admin/status"),
-            (Method::GET, "/v1/linkedin/admin/pages"),
             (Method::DELETE, "/v1/linkedin/admin/account"),
+            (Method::GET, "/v1/linkedin/admin/pages"),
+            (Method::POST, "/v1/linkedin/admin/pages/sync"),
+            (Method::POST, "/v1/linkedin/admin/pages/2414183/images"),
+            (Method::GET, "/v1/linkedin/admin/assets/whatever"),
+            (Method::POST, "/v1/linkedin/admin/pages/2414183/posts"),
+            (Method::GET, "/v1/linkedin/admin/posts"),
+            (Method::PATCH, "/v1/linkedin/admin/posts/whatever"),
+            (Method::DELETE, "/v1/linkedin/admin/posts/whatever"),
         ] {
-            let response = send(&kit, method.clone(), path, None, false).await;
+            let body = matches!(method, Method::POST | Method::PATCH)
+                .then(|| ("application/json", b"{}".to_vec()));
+            let response = send(&kit, method.clone(), path, body, false).await;
             assert_eq!(
                 response.status,
                 StatusCode::UNAUTHORIZED,
                 "{method} {path} was open"
             );
         }
+        assert!(
+            kit.fake.calls().is_empty(),
+            "an unauthenticated call reached LinkedIn"
+        );
     });
 }
 

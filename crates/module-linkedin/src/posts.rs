@@ -157,14 +157,49 @@ fn prepare(body: &CreateBody, settings: &Settings) -> Result<Prepared, Problem> 
     })
 }
 
+/// The image a create points at has to exist, belong to this page, and not
+/// have failed processing. Checked before the row is written so a caller
+/// learns immediately rather than from a post that never publishes.
+async fn check_asset(
+    db: &dyn Database,
+    asset_id: &str,
+    org_id: &str,
+    scope: &Scope,
+) -> Result<(), Problem> {
+    let asset = store::find_asset(db, asset_id)
+        .await
+        .map_err(|error| {
+            tracing::error!(error = %error, "could not read the asset");
+            handlers::internal(scope)
+        })?
+        .ok_or_else(|| Problem::validation_failed("asset_id does not exist"))?;
+    if asset.org_id != org_id {
+        return Err(Problem::validation_failed(
+            "that asset belongs to a different page",
+        ));
+    }
+    if asset.status == store::ASSET_FAILED {
+        return Err(Problem::validation_failed(
+            "that asset failed processing at LinkedIn; upload it again",
+        ));
+    }
+    Ok(())
+}
+
 pub(crate) async fn create(
     State(state): State<Arc<ModuleState>>,
     scope: Scope,
     headers: HeaderMap,
     Path(org): Path<String>,
-    factory0_core::Json(body): factory0_core::Json<CreateBody>,
+    // Deliberately `Value` and not `CreateBody`: an extractor runs before the
+    // handler body, so a typed one would answer a schema error to a caller
+    // who has not authenticated yet. Authentication comes first, then shape.
+    factory0_core::Json(raw): factory0_core::Json<Value>,
 ) -> Result<Response, Problem> {
     handlers::admin(&state, &headers)?;
+    let body: CreateBody = serde_json::from_value(raw).map_err(|error| {
+        Problem::validation_failed(format!("the request body is not a valid post: {error}"))
+    })?;
     let ctx = state.ctx.as_ref();
     let settings = state.settings();
     let db = handlers::db(ctx)?;
@@ -182,23 +217,7 @@ pub(crate) async fn create(
     let prepared = prepare(&body, &settings)?;
 
     if let Some(asset_id) = body.asset_id.as_deref() {
-        let asset = store::find_asset(db, asset_id)
-            .await
-            .map_err(|error| {
-                tracing::error!(error = %error, "could not read the asset");
-                handlers::internal(&scope)
-            })?
-            .ok_or_else(|| Problem::validation_failed("asset_id does not exist"))?;
-        if asset.org_id != page.org_id {
-            return Err(Problem::validation_failed(
-                "that asset belongs to a different page",
-            ));
-        }
-        if asset.status == store::ASSET_FAILED {
-            return Err(Problem::validation_failed(
-                "that asset failed processing at LinkedIn; upload it again",
-            ));
-        }
+        check_asset(db, asset_id, &page.org_id, &scope).await?;
     }
 
     // A repeat of an idempotency key returns the first result and makes no
