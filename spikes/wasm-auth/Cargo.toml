@@ -33,5 +33,8 @@ sha2 = "0.10"
 openidconnect = { version = "4.0", default-features = false }
 futures-channel = "0.3"
 
+# Q4: argon2 cost measurement.
+argon2 = { version = "0.6", default-features = false, features = ["alloc", "password-hash"] }
+
 # Host-only fixture minting (examples are never built for the wasm target).
 [dev-dependencies]

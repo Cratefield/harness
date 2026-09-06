@@ -94,3 +94,47 @@ Integration finding: the port's `#[async_trait]` future must be `Send`, but
 every `worker`/wasm-bindgen handle is `!Send`; the adapter bridges with
 `spawn_local` + a Send oneshot channel. The harness Workers adapter needs
 the same pattern (or the port needs `?Send` futures on wasm).
+
+## Q4 — argon2 cost in wrangler dev
+
+```sh
+cd spikes/wasm-auth && worker-build --release && bunx wrangler dev &
+curl -s -X POST 'localhost:8787/q4/argon2?m=19456&t=2&p=1&n=3' -w ' %{time_total}\n'
+curl -s localhost:8787/q4/argon2/matrix    # the whole matrix in one request
+```
+
+Measured 2026-09-06, `wrangler dev` (local workerd, Apple Silicon host),
+each cell = 3 x (hash + verify), `Date.now()` inside the Worker:
+
+| Argon2id params | internal ms (3x hash+verify) | external wall s |
+|---|---|---|
+| m=19456 KiB (19 MiB), t=2, p=1 — OWASP minimal | 118 | 0.12 |
+| m=19456, t=3, p=1 | 173 | 0.18 |
+| m=32768, t=2, p=1 | 204 | 0.21 |
+| m=47104 (46 MiB), t=1, p=1 — OWASP tolerable | 144 | 0.15 |
+| m=65536, t=2, p=1 | 413 | 0.42 |
+| m=65536, t=3, p=1 | 626 | 0.63 |
+| m=131072, t=2, p=1 | 931 | 0.93 |
+| m=19456, t=2, p=2 | 117 | 0.12 |
+
+Per hash+verify that is ~39 ms at the recommended set. CPU time on a
+Worker is ~= wall time for this pure compute; the paid-plan CPU limit
+(default 30 s) fits every tested set with orders of magnitude of margin,
+while the **free tier's 10 ms CPU cannot fit even one verify** at any
+sane parameters. Deployed-staging numbers were not taken (no Cloudflare
+credentials on this machine) — see the ADR.
+
+## Dependency proof (hard constraint)
+
+```sh
+cargo tree --target wasm32-unknown-unknown -i openssl   # error: package not found
+cargo tree --target wasm32-unknown-unknown -i reqwest   # error: package not found
+cargo tree --target wasm32-unknown-unknown -i mio       # error: package not found
+cargo tree --target wasm32-unknown-unknown -i tokio     # tokio v1.53.1 -> worker v0.8.5 only
+```
+
+`openssl`, `openssl-sys`, `reqwest` and `mio` are absent from the wasm
+tree entirely. `tokio` v1.53.1 is present solely through the `worker`
+SDK (which compiles to wasm32 cleanly); no auth dependency pulls it —
+verified per subtree for `openidconnect`, `argon2`, `webauthn-rs-proto`,
+`p256` and `coset` (0 matches each).

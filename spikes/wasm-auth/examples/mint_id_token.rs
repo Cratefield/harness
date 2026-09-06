@@ -12,8 +12,8 @@ use openidconnect::core::{
     CoreIdToken, CoreIdTokenClaims, CoreJwsSigningAlgorithm, CoreRsaPrivateSigningKey,
 };
 use openidconnect::{
-    AccessToken, Audience, AuthorizationCode, EmptyAdditionalClaims, IssuerUrl,
-    JsonWebKeyId, PrivateSigningKey, StandardClaims,
+    AccessToken, Audience, AuthorizationCode, EmptyAdditionalClaims, IssuerUrl, JsonWebKeyId,
+    PrivateSigningKey, StandardClaims,
 };
 use serde_json::json;
 
