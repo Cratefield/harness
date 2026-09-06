@@ -115,6 +115,18 @@ pub trait Module: Send + Sync + 'static {
     fn validate_config(&self, cfg: &dyn Config) -> Result<(), ConfigError>;
     /// The module's router, nested under `/v1/<name>`.
     fn router(&self, ctx: ModuleContext) -> axum::Router;
+    /// Routes this module serves at the root under `/.well-known`, for
+    /// spec-mandated discovery documents (OIDC `openid-configuration`,
+    /// `jwks.json`) that must live outside `/v1` (issue #46). Paths are
+    /// relative to the prefix: register `/jwks.json`, not
+    /// `/.well-known/jwks.json`.
+    ///
+    /// At most one module may provide one: discovery URLs are a singleton
+    /// namespace, so `Harness::build` fails (naming every provider) when
+    /// two modules return a router here. `None` by default.
+    fn well_known(&self) -> Option<axum::Router> {
+        None
+    }
     /// Handlers for events other modules emit; registered at
     /// `Harness::build`.
     fn events(&self) -> Vec<(EventName, EventHandler)> {

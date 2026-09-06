@@ -64,6 +64,56 @@ fn demo_module_passes_conformance() {
     conformance(Box::new(DemoModule));
 }
 
+/// The issue #46 fixture: a module whose `well_known` router serves one
+/// discovery document, checked by the kit's sixth conformance rule.
+pub struct DiscoveryModule;
+
+impl Module for DiscoveryModule {
+    fn name(&self) -> &'static str {
+        "discovery"
+    }
+    fn version(&self) -> &'static str {
+        env!("CARGO_PKG_VERSION")
+    }
+    fn requires(&self) -> &'static [Port] {
+        &[]
+    }
+    fn migrations(&self) -> Migrations {
+        Migrations::default()
+    }
+    fn validate_config(&self, _cfg: &dyn Config) -> Result<(), ConfigError> {
+        Ok(())
+    }
+    fn router(&self, _ctx: ModuleContext) -> axum::Router {
+        axum::Router::new()
+    }
+    fn well_known(&self) -> Option<axum::Router> {
+        Some(axum::Router::new().route(
+            "/jwks.json",
+            axum::routing::get(|| async { factory0_core::Json(serde_json::json!({ "keys": [] })) }),
+        ))
+    }
+}
+
+#[test]
+fn discovery_module_passes_conformance() {
+    conformance(Box::new(DiscoveryModule));
+}
+
+#[pollster::test]
+async fn discovery_document_serves_at_root() {
+    let kit = TestHarness::new(vec![Box::new(DiscoveryModule)]);
+    let response = request(
+        &kit.router,
+        axum::http::Method::GET,
+        "/.well-known/jwks.json",
+        None,
+    )
+    .await;
+    assert_eq!(response.status, axum::http::StatusCode::OK);
+    assert_eq!(response.json()["keys"], serde_json::json!([]));
+}
+
 #[test]
 fn testing_crate_deps_are_wasm_safe() {
     assert_wasm_safe_deps("factory0-testing");
