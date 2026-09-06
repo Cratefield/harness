@@ -438,6 +438,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "factory0-module-waitlist"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "axum",
+ "factory0-adapter-sqlite",
+ "factory0-core",
+ "factory0-testing",
+ "http",
+ "pollster",
+ "sea-query",
+ "serde",
+ "serde_json",
+ "time",
+ "tower",
+ "tracing",
+ "ulid",
+]
+
+[[package]]
 name = "factory0-runtime-cloudflare"
 version = "0.1.0"
 dependencies = [
@@ -1519,6 +1539,7 @@ dependencies = [
  "axum",
  "factory0-core",
  "factory0-module-email-signup",
+ "factory0-module-waitlist",
  "factory0-runtime-cloudflare",
  "getrandom",
  "http",

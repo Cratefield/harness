@@ -18,6 +18,7 @@ factory0-adapter-resend = { path = "crates/adapter-resend", version = "0.1.0" }
 factory0-adapter-turnstile = { path = "crates/adapter-turnstile", version = "0.1.0" }
 factory0-adapter-sqlite = { path = "crates/adapter-sqlite", version = "0.1.0" }
 factory0-module-email-signup = { path = "crates/module-email-signup", version = "0.1.0" }
+factory0-module-waitlist = { path = "crates/module-waitlist", version = "0.1.0" }
 factory0-testing = { path = "crates/testing", version = "0.1.0" }
 
 # HTTP stack. axum runs without tokio on Workers (ADR 0001): the `tokio`

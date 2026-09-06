@@ -1,0 +1,30 @@
+[package]
+name = "factory0-module-waitlist"
+description = "Factory Zero module: per-product waitlist with confirm, position, referral codes"
+readme = "README.md"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+factory0-core = { workspace = true }
+axum = { workspace = true }
+http = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sea-query = { workspace = true }
+tracing = { workspace = true }
+time = { workspace = true }
+ulid = { workspace = true }
+
+[dev-dependencies]
+factory0-testing = { workspace = true }
+factory0-adapter-sqlite = { workspace = true }
+pollster = { workspace = true }
+tower = { workspace = true }
+async-trait = { workspace = true }

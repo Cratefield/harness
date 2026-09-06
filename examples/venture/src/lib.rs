@@ -11,6 +11,7 @@ mod sample;
 
 use factory0_core::Harness;
 use factory0_module_email_signup::EmailSignup;
+use factory0_module_waitlist::Waitlist;
 use factory0_runtime_cloudflare::{Cloudflare, serve, serve_scheduled};
 use std::sync::OnceLock;
 use worker::{Context, Env, Request, Response, event};
@@ -20,6 +21,8 @@ static INSTANCE: OnceLock<(Harness, Cloudflare)> = OnceLock::new();
 fn instance() -> &'static (Harness, Cloudflare) {
     INSTANCE.get_or_init(|| {
         let runtime = Cloudflare::new().db("DB");
+        let mut templates = factory0_module_email_signup::default_templates();
+        templates.extend(factory0_module_waitlist::default_templates());
         let harness = Harness::builder()
             .venture(
                 factory0_core::Venture::new("venture-example", "example.factory0.dev")
@@ -28,7 +31,12 @@ fn instance() -> &'static (Harness, Cloudflare) {
             )
             .module(sample::SampleRowModule)
             .module(EmailSignup::new())
-            .templates(factory0_module_email_signup::default_templates())
+            .module(
+                Waitlist::new()
+                    .products(["kontinuum", "undercover-rockstars"])
+                    .confirm_ttl_days(7),
+            )
+            .templates(templates)
             .runtime(Cloudflare::new().db("DB"))
             .build()
             .expect("example venture harness is valid");
