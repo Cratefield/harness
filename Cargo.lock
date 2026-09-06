@@ -222,6 +222,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "factory0-runtime-cloudflare"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "axum",
+ "bytes",
+ "factory0-core",
+ "futures-core",
+ "futures-util",
+ "getrandom",
+ "http",
+ "sea-query",
+ "serde",
+ "serde_json",
+ "sha2",
+ "time",
+ "tower",
+ "tracing",
+ "worker",
+]
+
+[[package]]
 name = "form_urlencoded"
 version = "1.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -878,6 +900,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cdb87b95ec50ddfa440816d227a17b2ccbdda963a316a727fda0fc4334f7d134"
 dependencies = [
  "deranged",
+ "js-sys",
  "num-conv",
  "powerfmt",
  "serde_core",
@@ -1038,9 +1061,15 @@ version = "0.1.0"
 dependencies = [
  "axum",
  "factory0-core",
+ "factory0-runtime-cloudflare",
  "getrandom",
  "http",
+ "sea-query",
+ "serde",
+ "serde_json",
+ "time",
  "tower",
+ "tracing",
  "worker",
 ]
 

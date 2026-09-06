@@ -1,0 +1,135 @@
+//! `factory0-runtime-cloudflare` runs a Factory Zero [`Harness`] on
+//! Cloudflare Workers (ADR 0001, 0002). It maps bindings to ports:
+//! D1 -> `Database`, KV -> `KeyValue`, the Rate Limiting binding ->
+//! `RateLimiter`, `HARNESS_SECRET` -> `Signer`, `Context::wait_until` ->
+//! `Defer`, `worker::Fetch` -> `HttpClient`.
+//!
+//! A venture's Worker is three lines:
+//!
+//! ```ignore
+//! #[event(fetch)]
+//! pub async fn fetch(req: HttpRequest, env: Env, ctx: Context)
+//!     -> Result<http::Response<axum::body::Body>> {
+//!     let (harness, runtime) = INSTANCE.get_or_init(build);
+//!     serve(harness, runtime, req, env, ctx).await
+//! }
+//! ```
+//!
+//! Every port adapter here holds JS handles that workers-rs already marks
+//! `Send + Sync` (`unsafe impl` inside the `worker` crate, sound because a
+//! Workers isolate is single-threaded — ADR 0002). This crate itself
+//! contains no `unsafe`.
+
+#![forbid(unsafe_code)]
+
+mod config;
+mod ports;
+mod runtime;
+mod tracing_setup;
+
+pub use config::EnvConfig;
+pub use ports::{
+    ContextDefer, D1Database, FetchClient, KvStorePort, RateLimitPort, ScheduleDefer, WorkersClock,
+    client_ip,
+};
+pub use runtime::Cloudflare;
+pub use tracing_setup::install_tracing;
+
+use factory0_core::Harness;
+use std::sync::Arc;
+use tower::ServiceExt;
+use worker::{Context, Env, Request as WorkerRequest, Response as WorkerResponse};
+
+/// Serves one fetch event: resolves ports from the bindings, builds the
+/// router, hands a fully-buffered request over, and converts the response.
+///
+/// Takes the native `worker::Request` (the fetch macro's `FromRequest`
+/// accepts it): `Request::bytes()` is the only body read that reliably
+/// resolves under workerd/miniflare — streaming a `worker::Body` through
+/// the axum bridge or re-wrapping it into `web_sys::Request` hangs the
+/// isolate (verified empirically). Bodies are bounded by the harness's
+/// 64 KiB `/v1/*` limit either way.
+///
+/// # Errors
+///
+/// `worker::Error` on conversion/transport failures; problem+json
+/// responses are ordinary 4xx/5xx Worker responses.
+pub async fn serve(
+    harness: &Harness,
+    runtime: &Cloudflare,
+    mut req: WorkerRequest,
+    env: Env,
+    ctx: Context,
+) -> worker::Result<WorkerResponse> {
+    install_tracing();
+    let ports = runtime.ports(&env, Arc::new(ContextDefer(ctx)));
+    let router = harness.router(ports);
+
+    let bytes = req.bytes().await?;
+    let method = http::Method::from_bytes(req.method().to_string().as_bytes())
+        .map_err(|err| worker::Error::RustError(err.to_string()))?;
+    let mut builder = http::Request::builder()
+        .method(method)
+        .uri(req.url()?.to_string());
+    {
+        let headers = req.headers();
+        for (name, value) in headers {
+            builder = builder.header(name.as_str(), value.as_str());
+        }
+    }
+    let buffered = builder
+        .body(axum::body::Body::from(bytes))
+        .map_err(|err| worker::Error::RustError(err.to_string()))?;
+
+    let response = router
+        .oneshot(buffered)
+        .await
+        .map_err(|err| worker::Error::RustError(err.to_string()))?;
+    response_to_worker(response).await
+}
+
+async fn response_to_worker(
+    response: http::Response<axum::body::Body>,
+) -> worker::Result<WorkerResponse> {
+    let (parts, body) = response.into_parts();
+    let bytes = axum::body::to_bytes(body, MAX_RESPONSE_BUFFER)
+        .await
+        .map_err(|err| worker::Error::RustError(err.to_string()))?;
+    let mut out =
+        WorkerResponse::from_bytes(bytes.as_ref().to_vec())?.with_status(parts.status.as_u16());
+    {
+        let worker_headers = out.headers_mut();
+        for (name, value) in &parts.headers {
+            let _ = worker_headers.set(name.as_str(), value.to_str().unwrap_or_default());
+        }
+    }
+    Ok(out)
+}
+
+/// Responses are JSON (small); 1 MiB is a generous ceiling.
+const MAX_RESPONSE_BUFFER: usize = 1024 * 1024;
+
+/// Fans a scheduled event out to every module's `scheduled(ctx, cron)`.
+/// Handler errors are logged and never fail the cron.
+pub async fn serve_scheduled(
+    harness: &Harness,
+    runtime: &Cloudflare,
+    event: worker::ScheduledEvent,
+    env: Env,
+    ctx: worker::ScheduleContext,
+) {
+    install_tracing();
+    let cron = event.cron();
+    let ports = runtime.ports(&env, Arc::new(ScheduleDefer(ctx)));
+    for module in harness.modules() {
+        let module_ctx = harness.module_context(module.as_ref(), &ports);
+        if let Err(err) = module.scheduled(&module_ctx, &cron).await {
+            tracing::error!(
+                module = module.name(),
+                cron = %cron,
+                error = %err,
+                "scheduled module work failed",
+            );
+        }
+    }
+}

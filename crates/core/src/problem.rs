@@ -101,3 +101,13 @@ impl std::fmt::Display for Problem {
 }
 
 impl std::error::Error for Problem {}
+
+// Handler ergonomics: `?` on a port error inside a `Result<_, Problem>`
+// handler maps to a generic 500 — the underlying error is logged by the
+// caller, never exposed in the body (architecture section 6).
+impl From<crate::ports::DbError> for Problem {
+    fn from(error: crate::ports::DbError) -> Self {
+        tracing::error!(error = %error, "database error mapped to internal problem");
+        Self::internal()
+    }
+}

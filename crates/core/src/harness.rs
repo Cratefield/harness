@@ -77,6 +77,20 @@ impl Harness {
         &self.events
     }
 
+    /// Builds the context a module sees: its declared ports (view), the
+    /// config, the shared bus, templates and venture. `router()` uses this
+    /// per module; `factory0-runtime-cloudflare` uses it for scheduled
+    /// fan-out.
+    pub fn module_context(&self, module: &dyn Module, ports: &Ports) -> ModuleContext {
+        ModuleContext {
+            config: Arc::clone(&ports.config),
+            ports: ports.view_for(module),
+            events: self.events.clone(),
+            templates: Arc::clone(&self.templates),
+            venture: Arc::clone(&self.venture),
+        }
+    }
+
     /// The runtime this harness was validated against, if one was supplied.
     pub fn runtime(&self) -> Option<&Arc<dyn Runtime>> {
         self.runtime.as_ref()
@@ -89,13 +103,7 @@ impl Harness {
     pub fn router(&self, ports: Ports) -> Router {
         let mut api = Router::new();
         for module in &self.modules {
-            let ctx = ModuleContext {
-                ports: ports.view_for(module.as_ref()),
-                config: Arc::clone(&ports.config),
-                events: self.events.clone(),
-                templates: Arc::clone(&self.templates),
-                venture: Arc::clone(&self.venture),
-            };
+            let ctx = self.module_context(module.as_ref(), &ports);
             api = api.nest(&format!("/v1/{}", module.name()), module.router(ctx));
         }
         let api = api

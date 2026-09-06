@@ -10,11 +10,11 @@ use axum::response::{IntoResponse, Response as AxumResponse};
 use serde::de::DeserializeOwned;
 use std::sync::Arc;
 use std::time::Duration;
-use tracing::info_span;
 
 use crate::ports::{Defer, IdGen};
 use crate::problem::Problem;
 use crate::scope::Scope;
+use tracing::info_span;
 
 /// `x-request-id`: accepted from the client when it matches
 /// `^[A-Za-z0-9_-]{8,128}$`, otherwise generated as a ULID. Always set on

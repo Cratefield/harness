@@ -3,4 +3,13 @@ main = "build/worker/shim.mjs"
 compatibility_date = "2026-09-01"
 
 [build]
-command = "cargo install -q worker-build && worker-build --release"
+command = "cargo install -q worker-build && worker-build"
+
+[observability]
+enabled = true
+
+[[d1_databases]]
+binding = "DB"
+database_name = "venture-example"
+database_id = "local-venture-example"
+migrations_dir = "migrations"
