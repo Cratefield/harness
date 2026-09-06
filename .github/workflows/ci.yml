@@ -154,6 +154,10 @@ jobs:
           curl -sf -m 10 http://127.0.0.1:8787/__health | grep -q '"name":"sample"'
           echo "-- ready"
           curl -sf -m 10 http://127.0.0.1:8787/__ready | grep -q '"ok":true'
+          echo "-- surface"
+          curl -sf -m 10 -D /tmp/surface.headers http://127.0.0.1:8787/__surface \
+            | grep -q '"name":"insert"'
+          grep -qi '^etag: "' /tmp/surface.headers
           echo "-- insert"
           curl -sf -m 15 -X POST http://127.0.0.1:8787/v1/sample/rows \
             -H 'content-type: application/json' \

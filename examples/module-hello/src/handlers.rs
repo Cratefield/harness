@@ -7,8 +7,10 @@ use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::routing::{get, post};
 use factory0_core::{
-    IdGen, Json, ModuleConfig, ModuleContext, Problem, Scope, Statement, UlidIdGen,
+    Action, Audience, IdGen, Json, ModuleConfig, ModuleContext, Outcome, Problem, Scope, Statement,
+    Surface, UlidIdGen, View,
 };
+use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::sync::Arc;
@@ -35,9 +37,28 @@ pub(crate) fn router(ctx: Arc<ModuleContext>, settings: Settings) -> axum::Route
         .with_state(state)
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, JsonSchema)]
 struct RecordBody {
+    #[schemars(extend("x-cf-label" = "Your name", "x-cf-placeholder" = "Ada"))]
     name: String,
+}
+
+/// The module's UI surface (ADR 0010): the record form and the count as
+/// a status view. Derived from `RecordBody`, the type `record` deserializes.
+pub(crate) fn surface() -> Surface {
+    Surface::new()
+        .action(
+            Action::post("record", "/")
+                .input::<RecordBody>()
+                .accepted("Recorded. Hello!"),
+        )
+        .action(
+            Action::get("count", "/count")
+                .audience(Audience::Public)
+                .outcome(Outcome::Json),
+        )
+        .view(View::form("record"))
+        .view(View::status("count"))
 }
 
 /// `POST /v1/hello` `{ "name": str }` -> `202 {"ok":true,"name":..}`;

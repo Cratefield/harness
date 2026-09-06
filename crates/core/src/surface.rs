@@ -1,0 +1,702 @@
+//! The UI surface (ADR 0010, issue #70). A module declares the actions it
+//! serves and the views that compose them; `Harness::build` validates the
+//! declaration and `GET /__surface` serves the composed document.
+//!
+//! An axum `Router` is opaque, so nothing here is discovered: a module says
+//! what it offers, and the input schema of each action is derived with
+//! `schemars` from the same serde type the handler deserializes, which is
+//! what keeps the declaration from drifting.
+//!
+//! UI hints ride on the schema as `x-cf-*` extension keywords set with
+//! `#[schemars(extend("x-cf-label" = "Email"))]` on a field. The keywords
+//! the renderer understands are listed in [`HINT_KEYWORDS`].
+
+use std::collections::{BTreeSet, HashSet};
+
+use http::Method;
+use schemars::{JsonSchema, Schema, SchemaGenerator};
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+
+use crate::config::ConfigError;
+use crate::module::{HARNESS_API, Module};
+use crate::venture::Venture;
+
+/// Contract version of the surface document, independent of
+/// [`HARNESS_API`]: a renderer or the control plane checks it before
+/// reading the document.
+pub const SURFACE_API: u32 = 1;
+
+/// The `x-cf-*` extension keywords the renderer understands on a field
+/// schema. Anything else under `x-cf-` is ignored, never an error, so a
+/// module can target a newer renderer than the one that serves it.
+///
+/// | Keyword | Value | Meaning |
+/// |---|---|---|
+/// | `x-cf-label` | string | Field label; defaults to the field name |
+/// | `x-cf-placeholder` | string | Input placeholder |
+/// | `x-cf-help` | string | Help text under the input |
+/// | `x-cf-widget` | `"text"`, `"email"`, `"select"`, `"textarea"`, `"checkbox"`, `"hidden"` | Input widget; inferred from the schema when absent |
+/// | `x-cf-hidden` | bool | Never rendered; the renderer supplies it (`captchaToken`) or omits it |
+/// | `x-cf-options` | array of `{value, label}` | Choices for a `select`, when `enum` on the schema is not enough |
+pub const HINT_KEYWORDS: &[&str] = &[
+    "x-cf-label",
+    "x-cf-placeholder",
+    "x-cf-help",
+    "x-cf-widget",
+    "x-cf-hidden",
+    "x-cf-options",
+];
+
+/// Who an action is for. Drives the public/admin split of `/__surface`
+/// and, in the renderer, which pages need the admin session.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Audience {
+    /// Anyone; the action is the venture's public face (`join`,
+    /// `subscribe`).
+    Public,
+    /// Needs `Authorization: Bearer <ADMIN_TOKEN>`; path must be under
+    /// `/admin/`.
+    Admin,
+    /// Reached only through a signed link the module minted (`confirm`,
+    /// `unsubscribe`, `status`); rendered as a landing page, never as a
+    /// form.
+    Link,
+}
+
+/// What the browser should do with a successful response.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "kebab-case")]
+pub enum Outcome {
+    /// The module answers `202` (or `200`) with nothing the user needs to
+    /// see; show `message`.
+    Accepted { message: String },
+    /// The module answers with a redirect the browser follows.
+    Redirect,
+    /// The module answers with a JSON body the view renders (`status`).
+    Json,
+}
+
+/// One route the module serves, described for a renderer.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Action {
+    /// Kebab-case, unique within the module (`join`, `confirm`,
+    /// `export-csv`).
+    pub name: String,
+    /// HTTP method, serialized as its upper-case name.
+    #[serde(with = "method_serde")]
+    pub method: Method,
+    /// Path relative to `/v1/<module>`, always starting with `/`.
+    pub path: String,
+    pub audience: Audience,
+    /// JSON Schema of the request body (or of the query for a `GET`).
+    /// `None` for an action that takes nothing.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub input: Option<Schema>,
+    pub outcome: Outcome,
+    /// Whether the module verifies a captcha token on this action when the
+    /// `Captcha` port is configured; the renderer then includes the widget.
+    pub captcha: bool,
+}
+
+impl Action {
+    /// A public `POST` that answers `202`, the common case for a signup
+    /// form. Add `.input::<Body>()`, `.captcha()` and friends.
+    #[must_use]
+    pub fn post(name: impl Into<String>, path: impl Into<String>) -> Self {
+        Self::new(name, Method::POST, path)
+    }
+
+    /// A `GET`. Audience defaults to `Link` because a module's `GET`s are
+    /// the signed-link landings; call `.audience(..)` otherwise.
+    #[must_use]
+    pub fn get(name: impl Into<String>, path: impl Into<String>) -> Self {
+        Self::new(name, Method::GET, path)
+            .audience(Audience::Link)
+            .outcome(Outcome::Redirect)
+    }
+
+    /// A `DELETE`, admin by default.
+    #[must_use]
+    pub fn delete(name: impl Into<String>, path: impl Into<String>) -> Self {
+        Self::new(name, Method::DELETE, path)
+            .audience(Audience::Admin)
+            .outcome(Outcome::Json)
+    }
+
+    #[must_use]
+    pub fn new(name: impl Into<String>, method: Method, path: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            method,
+            path: path.into(),
+            audience: Audience::Public,
+            input: None,
+            outcome: Outcome::Accepted {
+                message: "Thanks, you're in.".to_owned(),
+            },
+            captcha: false,
+        }
+    }
+
+    #[must_use]
+    pub fn audience(mut self, audience: Audience) -> Self {
+        self.audience = audience;
+        self
+    }
+
+    /// Derives the input schema from the handler's own body type.
+    #[must_use]
+    pub fn input<T: JsonSchema>(mut self) -> Self {
+        self.input = Some(schema_for::<T>());
+        self
+    }
+
+    /// Supplies a schema built by hand or adjusted after derivation (a
+    /// `select` whose options come from runtime settings).
+    #[must_use]
+    pub fn input_schema(mut self, schema: Schema) -> Self {
+        self.input = Some(schema);
+        self
+    }
+
+    #[must_use]
+    pub fn outcome(mut self, outcome: Outcome) -> Self {
+        self.outcome = outcome;
+        self
+    }
+
+    /// Shorthand for `.outcome(Outcome::Accepted { message })`.
+    #[must_use]
+    pub fn accepted(self, message: impl Into<String>) -> Self {
+        self.outcome(Outcome::Accepted {
+            message: message.into(),
+        })
+    }
+
+    #[must_use]
+    pub fn captcha(mut self) -> Self {
+        self.captcha = true;
+        self
+    }
+}
+
+/// A column of a [`View::Table`].
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Column {
+    /// Field name in each row (the CSV header or JSON key).
+    pub key: String,
+    pub label: String,
+}
+
+impl Column {
+    #[must_use]
+    pub fn new(key: impl Into<String>, label: impl Into<String>) -> Self {
+        Self {
+            key: key.into(),
+            label: label.into(),
+        }
+    }
+}
+
+/// How actions compose into something to render.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "kebab-case")]
+pub enum View {
+    /// A form for one action.
+    Form { action: String },
+    /// A page that reads a `Json` action (the waitlist status).
+    Status { action: String },
+    /// A table over an action that returns rows (an admin export).
+    Table {
+        source: String,
+        columns: Vec<Column>,
+    },
+}
+
+impl View {
+    #[must_use]
+    pub fn form(action: impl Into<String>) -> Self {
+        View::Form {
+            action: action.into(),
+        }
+    }
+
+    #[must_use]
+    pub fn status(action: impl Into<String>) -> Self {
+        View::Status {
+            action: action.into(),
+        }
+    }
+
+    #[must_use]
+    pub fn table(source: impl Into<String>, columns: Vec<Column>) -> Self {
+        View::Table {
+            source: source.into(),
+            columns,
+        }
+    }
+
+    fn action_names(&self) -> Vec<&str> {
+        match self {
+            View::Form { action } | View::Status { action } => vec![action],
+            View::Table { source, .. } => vec![source],
+        }
+    }
+}
+
+/// What a module declares from [`Module::surface`].
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct Surface {
+    pub actions: Vec<Action>,
+    pub views: Vec<View>,
+}
+
+impl Surface {
+    /// A module with no UI. The default of [`Module::surface`].
+    #[must_use]
+    pub fn none() -> Self {
+        Self::default()
+    }
+
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    #[must_use]
+    pub fn action(mut self, action: Action) -> Self {
+        self.actions.push(action);
+        self
+    }
+
+    #[must_use]
+    pub fn view(mut self, view: View) -> Self {
+        self.views.push(view);
+        self
+    }
+
+    /// `true` when nothing is declared.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.actions.is_empty() && self.views.is_empty()
+    }
+
+    /// Validates the declaration for `module` into `errors`, collecting
+    /// every problem (the `Harness::build` convention): duplicate or
+    /// malformed action names, paths not starting with `/`, an `Admin`
+    /// action outside `/admin/` (or a non-admin one inside it), an input
+    /// schema that is not an object, and views naming unknown actions.
+    pub fn validate(&self, module: &str, errors: &mut ConfigError) {
+        let mut seen: HashSet<&str> = HashSet::new();
+        for action in &self.actions {
+            let name = action.name.as_str();
+            if !is_kebab(name) {
+                errors.push(format!(
+                    "module `{module}` surface action `{name}` must be kebab-case"
+                ));
+            }
+            if !seen.insert(name) {
+                errors.push(format!(
+                    "module `{module}` surface declares action `{name}` twice"
+                ));
+            }
+            if !action.path.starts_with('/') {
+                errors.push(format!(
+                    "module `{module}` surface action `{name}` path `{}` must start with '/' \
+                     (relative to /v1/{module})",
+                    action.path
+                ));
+            }
+            let under_admin = action.path == "/admin" || action.path.starts_with("/admin/");
+            match action.audience {
+                Audience::Admin if !under_admin => errors.push(format!(
+                    "module `{module}` surface action `{name}` is admin but its path `{}` \
+                     is not under /admin/",
+                    action.path
+                )),
+                Audience::Public | Audience::Link if under_admin => errors.push(format!(
+                    "module `{module}` surface action `{name}` is under /admin/ but its \
+                     audience is not admin",
+                )),
+                _ => {}
+            }
+            if let Some(schema) = &action.input
+                && !is_object_schema(schema)
+            {
+                errors.push(format!(
+                    "module `{module}` surface action `{name}` input schema must describe an \
+                     object (a struct with named fields), so a renderer can lay out fields"
+                ));
+            }
+        }
+        for view in &self.views {
+            for referenced in view.action_names() {
+                if !seen.contains(referenced) {
+                    errors.push(format!(
+                        "module `{module}` surface view references action `{referenced}` \
+                         which the module does not declare"
+                    ));
+                }
+            }
+        }
+    }
+
+    /// The subset a renderer may show without the admin session: every
+    /// non-admin action and every view that references only those.
+    #[must_use]
+    pub fn public(&self) -> Surface {
+        let actions: Vec<Action> = self
+            .actions
+            .iter()
+            .filter(|action| action.audience != Audience::Admin)
+            .cloned()
+            .collect();
+        let names: BTreeSet<&str> = actions.iter().map(|a| a.name.as_str()).collect();
+        let views = self
+            .views
+            .iter()
+            .filter(|view| view.action_names().iter().all(|n| names.contains(n)))
+            .cloned()
+            .collect();
+        Surface { actions, views }
+    }
+}
+
+/// One module's entry in the composed document.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ModuleSurface {
+    pub name: String,
+    pub version: String,
+    #[serde(flatten)]
+    pub surface: Surface,
+}
+
+/// The venture identity a renderer needs.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VentureSurface {
+    pub name: String,
+    pub public_url: String,
+}
+
+/// The document `GET /__surface` serves: composed at `Harness::build`, one
+/// entry per module in mount order, modules with an empty surface omitted.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SurfaceDocument {
+    pub surface_api: u32,
+    pub harness_api: u32,
+    pub venture: VentureSurface,
+    pub modules: Vec<ModuleSurface>,
+}
+
+impl SurfaceDocument {
+    /// Composes the full document (admin actions included).
+    #[must_use]
+    pub fn compose(venture: &Venture, modules: &[std::sync::Arc<dyn Module>]) -> Self {
+        let modules = modules
+            .iter()
+            .map(|module| ModuleSurface {
+                name: module.name().to_owned(),
+                version: module.version().to_owned(),
+                surface: module.surface(),
+            })
+            .filter(|entry| !entry.surface.is_empty())
+            .collect();
+        Self {
+            surface_api: SURFACE_API,
+            harness_api: HARNESS_API,
+            venture: VentureSurface {
+                name: venture.name.clone(),
+                public_url: venture.public_url.clone(),
+            },
+            modules,
+        }
+    }
+
+    /// The public subset: admin actions and the views over them removed,
+    /// modules left with nothing omitted.
+    #[must_use]
+    pub fn public(&self) -> Self {
+        Self {
+            surface_api: self.surface_api,
+            harness_api: self.harness_api,
+            venture: self.venture.clone(),
+            modules: self
+                .modules
+                .iter()
+                .map(|entry| ModuleSurface {
+                    name: entry.name.clone(),
+                    version: entry.version.clone(),
+                    surface: entry.surface.public(),
+                })
+                .filter(|entry| !entry.surface.is_empty())
+                .collect(),
+        }
+    }
+}
+
+/// A document serialized once, with the strong `ETag` clients revalidate
+/// against. Built at `Harness::build` for both the public and the admin
+/// variant.
+#[derive(Debug, Clone)]
+pub struct RenderedSurface {
+    pub json: String,
+    /// Quoted strong validator: `"<first 32 hex of sha256(json)>"`.
+    pub etag: String,
+}
+
+impl RenderedSurface {
+    #[must_use]
+    pub fn render(document: &SurfaceDocument) -> Self {
+        let json = serde_json::to_string(document).unwrap_or_else(|_| "{}".to_owned());
+        let digest = Sha256::digest(json.as_bytes());
+        let mut hex = String::with_capacity(32);
+        for byte in &digest[..16] {
+            use std::fmt::Write as _;
+            let _ = write!(hex, "{byte:02x}");
+        }
+        Self {
+            json,
+            etag: format!("\"{hex}\""),
+        }
+    }
+}
+
+/// Generates the schema for `T` the way every action does: draft 2020-12,
+/// definitions inlined so a renderer never has to resolve `$ref`.
+#[must_use]
+pub fn schema_for<T: JsonSchema>() -> Schema {
+    let mut settings = schemars::generate::SchemaSettings::draft2020_12();
+    settings.inline_subschemas = true;
+    SchemaGenerator::new(settings).into_root_schema_for::<T>()
+}
+
+/// Sets one `x-cf-*` (or any) keyword on a field of an object schema after
+/// derivation, for hints that only exist at runtime: a `select` whose
+/// options are the configured product list. Unknown fields are ignored so
+/// a rename in the body type cannot panic at build.
+pub fn hint_field(schema: &mut Schema, field: &str, key: &str, value: serde_json::Value) {
+    if let Some(properties) = schema
+        .as_object_mut()
+        .and_then(|root| root.get_mut("properties"))
+        .and_then(serde_json::Value::as_object_mut)
+        && let Some(property) = properties
+            .get_mut(field)
+            .and_then(serde_json::Value::as_object_mut)
+    {
+        property.insert(key.to_owned(), value);
+    }
+}
+
+fn is_object_schema(schema: &Schema) -> bool {
+    let value = schema.as_value();
+    match value.get("type") {
+        Some(serde_json::Value::String(t)) => t == "object",
+        Some(serde_json::Value::Array(types)) => types.iter().any(|t| t == "object"),
+        _ => value.get("properties").is_some(),
+    }
+}
+
+fn is_kebab(name: &str) -> bool {
+    !name.is_empty()
+        && name.split('-').all(|part| {
+            !part.is_empty()
+                && part
+                    .chars()
+                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
+        })
+}
+
+mod method_serde {
+    use http::Method;
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    pub fn serialize<S: Serializer>(method: &Method, serializer: S) -> Result<S::Ok, S::Error> {
+        method.as_str().serialize(serializer)
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Method, D::Error> {
+        let text = String::deserialize(deserializer)?;
+        Method::from_bytes(text.as_bytes()).map_err(serde::de::Error::custom)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[derive(JsonSchema)]
+    #[allow(dead_code)]
+    struct JoinBody {
+        #[schemars(extend("x-cf-label" = "Email", "x-cf-widget" = "email"))]
+        email: String,
+        product: String,
+        #[schemars(extend("x-cf-hidden" = true))]
+        #[serde(rename = "captchaToken")]
+        captcha_token: Option<String>,
+    }
+
+    fn join() -> Action {
+        Action::post("join", "/").input::<JoinBody>().captcha()
+    }
+
+    fn errors_of(surface: &Surface) -> Vec<String> {
+        let mut errors = ConfigError::default();
+        surface.validate("waitlist", &mut errors);
+        match errors.into_result() {
+            Ok(()) => Vec::new(),
+            Err(err) => err.to_string().lines().skip(1).map(str::to_owned).collect(),
+        }
+    }
+
+    #[test]
+    fn schema_carries_hints_and_is_inlined() {
+        let schema = schema_for::<JoinBody>();
+        let value = schema.as_value();
+        assert_eq!(value["type"], "object");
+        assert_eq!(value["properties"]["email"]["x-cf-label"], "Email");
+        assert_eq!(value["properties"]["email"]["x-cf-widget"], "email");
+        assert_eq!(value["properties"]["captchaToken"]["x-cf-hidden"], true);
+        assert!(value.get("$defs").is_none(), "subschemas must be inlined");
+    }
+
+    #[test]
+    fn hint_field_sets_a_keyword_and_ignores_unknown_fields() {
+        let mut schema = schema_for::<JoinBody>();
+        hint_field(
+            &mut schema,
+            "product",
+            "enum",
+            serde_json::json!(["a", "b"]),
+        );
+        hint_field(&mut schema, "missing", "x-cf-label", serde_json::json!("x"));
+        let value = schema.as_value();
+        assert_eq!(
+            value["properties"]["product"]["enum"],
+            serde_json::json!(["a", "b"])
+        );
+        assert!(value["properties"].get("missing").is_none());
+    }
+
+    #[test]
+    fn valid_surface_has_no_errors() {
+        let surface = Surface::new()
+            .action(join())
+            .action(Action::get("confirm", "/confirm"))
+            .action(
+                Action::get("export", "/admin/export.csv")
+                    .audience(Audience::Admin)
+                    .outcome(Outcome::Json),
+            )
+            .view(View::form("join"))
+            .view(View::table("export", vec![Column::new("email", "Email")]));
+        assert!(errors_of(&surface).is_empty());
+    }
+
+    #[test]
+    fn every_validation_rule_names_the_module_and_action() {
+        #[derive(JsonSchema)]
+        #[allow(dead_code)]
+        struct NotAnObject(Vec<String>);
+
+        let surface = Surface::new()
+            .action(join())
+            .action(join())
+            .action(Action::post("Bad Name", "no-slash"))
+            .action(Action::post("hidden", "/admin/thing"))
+            .action(Action::delete("wipe", "/wipe"))
+            .action(Action::post("list", "/list").input::<NotAnObject>())
+            .view(View::form("missing"));
+        let errors = errors_of(&surface);
+        let joined = errors.join("\n");
+        for needle in [
+            "declares action `join` twice",
+            "action `Bad Name` must be kebab-case",
+            "path `no-slash` must start with '/'",
+            "action `hidden` is under /admin/ but its audience is not admin",
+            "action `wipe` is admin but its path `/wipe` is not under /admin/",
+            "action `list` input schema must describe an object",
+            "view references action `missing`",
+        ] {
+            assert!(joined.contains(needle), "missing `{needle}` in:\n{joined}");
+        }
+        assert!(joined.lines().all(|l| l.contains("`waitlist`")), "{joined}");
+    }
+
+    #[test]
+    fn public_subset_drops_admin_actions_and_their_views() {
+        let surface = Surface::new()
+            .action(join())
+            .action(
+                Action::get("export", "/admin/export.csv")
+                    .audience(Audience::Admin)
+                    .outcome(Outcome::Json),
+            )
+            .view(View::form("join"))
+            .view(View::table("export", vec![]));
+        let public = surface.public();
+        assert_eq!(public.actions.len(), 1);
+        assert_eq!(public.views.len(), 1);
+        assert!(matches!(public.views[0], View::Form { .. }));
+    }
+
+    #[test]
+    fn rendered_surface_etag_is_stable_and_differs_per_variant() {
+        let doc = SurfaceDocument {
+            surface_api: SURFACE_API,
+            harness_api: HARNESS_API,
+            venture: VentureSurface {
+                name: "v".into(),
+                public_url: "https://v.test".into(),
+            },
+            modules: vec![ModuleSurface {
+                name: "waitlist".into(),
+                version: "0.1.0".into(),
+                surface: Surface::new()
+                    .action(join())
+                    .action(Action::delete("wipe", "/admin/wipe")),
+            }],
+        };
+        let full = RenderedSurface::render(&doc);
+        let again = RenderedSurface::render(&doc);
+        let public = RenderedSurface::render(&doc.public());
+        assert_eq!(full.etag, again.etag);
+        assert_ne!(full.etag, public.etag);
+        assert!(full.etag.starts_with('"') && full.etag.ends_with('"'));
+        assert_eq!(full.etag.len(), 34);
+        let parsed: serde_json::Value = serde_json::from_str(&full.json).unwrap();
+        assert_eq!(parsed["modules"][0]["actions"][0]["method"], "POST");
+        assert_eq!(parsed["modules"][0]["actions"][1]["audience"], "admin");
+        assert_eq!(parsed["surface_api"], SURFACE_API);
+    }
+
+    #[test]
+    fn document_omits_modules_without_a_surface() {
+        struct Silent;
+        impl Module for Silent {
+            fn name(&self) -> &'static str {
+                "silent"
+            }
+            fn version(&self) -> &'static str {
+                "0.0.0"
+            }
+            fn requires(&self) -> &'static [crate::ports::Port] {
+                &[]
+            }
+            fn migrations(&self) -> crate::module::Migrations {
+                crate::module::Migrations::EMPTY
+            }
+            fn validate_config(&self, _: &dyn crate::config::Config) -> Result<(), ConfigError> {
+                Ok(())
+            }
+            fn router(&self, _: crate::module::ModuleContext) -> axum::Router {
+                axum::Router::new()
+            }
+        }
+        let venture = Venture::new("v", "v.test");
+        let modules: Vec<std::sync::Arc<dyn Module>> = vec![std::sync::Arc::new(Silent)];
+        let doc = SurfaceDocument::compose(&venture, &modules);
+        assert!(doc.modules.is_empty());
+    }
+}

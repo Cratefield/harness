@@ -12,12 +12,15 @@ use std::time::Duration;
 
 use axum::Router;
 use axum::extract::{DefaultBodyLimit, State};
+use axum::http::{HeaderMap, StatusCode, header};
 use axum::middleware::from_fn_with_state;
 use axum::response::IntoResponse;
 use axum::routing::get;
 use serde_json::json;
 use tracing::error;
 
+use crate::admin::require_admin;
+use crate::config::Config;
 use crate::config::ConfigError;
 use crate::events::EventBus;
 use crate::http::{
@@ -26,6 +29,7 @@ use crate::http::{
 use crate::module::{HARNESS_API, Module, ModuleContext, harness_api_mismatch};
 use crate::ports::{Clock, Database, Port, Ports, Statement, SystemClock, warn_undeclared_ports};
 use crate::problem::Problem;
+use crate::surface::{RenderedSurface, SurfaceDocument};
 use crate::template::{Template, TemplateRegistry};
 use crate::venture::Venture;
 
@@ -47,6 +51,26 @@ pub struct Harness {
     /// The single module-provided `/.well-known` router, if any
     /// (issue #46); nested at the root by `router()`.
     well_known: Option<Router>,
+    /// The composed UI surface (ADR 0010), rendered once for
+    /// `GET /__surface`: the admin variant and the public subset.
+    surface: Arc<SurfaceVariants>,
+}
+
+struct SurfaceVariants {
+    document: SurfaceDocument,
+    full: RenderedSurface,
+    public: RenderedSurface,
+}
+
+impl SurfaceVariants {
+    fn compose(venture: &Venture, modules: &[Arc<dyn Module>]) -> Self {
+        let document = SurfaceDocument::compose(venture, modules);
+        Self {
+            full: RenderedSurface::render(&document),
+            public: RenderedSurface::render(&document.public()),
+            document,
+        }
+    }
 }
 
 impl std::fmt::Debug for Harness {
@@ -99,12 +123,20 @@ impl Harness {
         self.runtime.as_ref()
     }
 
+    /// The composed UI surface, admin actions included, for tooling
+    /// (`fz`, the control plane). `GET /__surface` serves the same
+    /// document, public subset unless the admin bearer is presented.
+    #[must_use]
+    pub fn surface(&self) -> &SurfaceDocument {
+        &self.surface.document
+    }
+
     /// Assembles the full router: each module nested under `/v1/<name>`,
     /// the one `/.well-known` router (if any) nested at the root,
-    /// `GET /__health`, `GET /__ready`, and the shared middleware
-    /// (request-id/Scope, CORS allowlist, 64 KiB body limit, `/v1/*`
-    /// security headers). Nothing but `/.well-known` is ever mounted at
-    /// the root.
+    /// `GET /__health`, `GET /__ready`, `GET /__surface`, and the shared
+    /// middleware (request-id/Scope, CORS allowlist, 64 KiB body limit,
+    /// `/v1/*` security headers). Nothing but `/.well-known` and the
+    /// `/__*` probes is ever mounted at the root.
     pub fn router(&self, ports: Ports) -> Router {
         let mut api = Router::new();
         for module in &self.modules {
@@ -148,11 +180,18 @@ impl Harness {
             clock: clock.unwrap_or_else(|| Arc::new(SystemClock)),
         };
 
+        let surface_state = SurfaceState {
+            config,
+            variants: Arc::clone(&self.surface),
+        };
+
         let root = Router::new()
             .route("/__health", get(health_handler))
             .with_state(health_state)
             .route("/__ready", get(ready_handler))
             .with_state(ready_state)
+            .route("/__surface", get(surface_handler))
+            .with_state(surface_state)
             .merge(api);
         let root = match &self.well_known {
             Some(well_known) => root.nest(
@@ -229,6 +268,62 @@ async fn ready_handler(State(state): State<ReadyState>) -> impl IntoResponse {
     }
 }
 
+#[derive(Clone)]
+struct SurfaceState {
+    config: Arc<dyn Config>,
+    variants: Arc<SurfaceVariants>,
+}
+
+/// `GET /__surface` (ADR 0010): the composed surface, public subset by
+/// default, admin actions included when `Authorization: Bearer
+/// <ADMIN_TOKEN>` is valid. A wrong or stale bearer is not an error here,
+/// it just gets the public document: this route exists to be read by
+/// renderers and tooling, and a `403` would leak whether admin is on.
+/// Strong `ETag` per variant; `If-None-Match` answers `304`.
+async fn surface_handler(
+    State(state): State<SurfaceState>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    let admin = require_admin(&*state.config, &headers).is_ok();
+    let rendered = if admin {
+        &state.variants.full
+    } else {
+        &state.variants.public
+    };
+    let matches = headers
+        .get(header::IF_NONE_MATCH)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| {
+            value
+                .split(',')
+                .map(str::trim)
+                .any(|tag| tag == "*" || tag == rendered.etag)
+        });
+    let mut response = if matches {
+        StatusCode::NOT_MODIFIED.into_response()
+    } else {
+        (
+            [(header::CONTENT_TYPE, "application/json")],
+            rendered.json.clone(),
+        )
+            .into_response()
+    };
+    let response_headers = response.headers_mut();
+    response_headers.insert(
+        header::ETAG,
+        header::HeaderValue::from_str(&rendered.etag).expect("hex etag is a valid header"),
+    );
+    response_headers.insert(
+        header::CACHE_CONTROL,
+        header::HeaderValue::from_static("no-cache"),
+    );
+    response_headers.insert(
+        header::VARY,
+        header::HeaderValue::from_static("Authorization"),
+    );
+    response
+}
+
 /// Builder: `.venture(..)`, `.module(..)`, `.runtime(..)`, `.template(..)`,
 /// then `.build()`.
 #[derive(Default)]
@@ -301,8 +396,9 @@ impl HarnessBuilder {
     ///
     /// `Err` whose `Display` lists every problem: invalid venture, unknown
     /// or duplicated port declarations, duplicate module names, tables or
-    /// `/.well-known` routers, `harness_api` mismatches, unprovided
-    /// required ports, and template ids naming unregistered modules.
+    /// `/.well-known` routers, `harness_api` mismatches, invalid UI
+    /// surfaces, unprovided required ports, and template ids naming
+    /// unregistered modules.
     pub fn build(self) -> Result<Harness, ConfigError> {
         let mut errors = ConfigError::default();
 
@@ -351,6 +447,8 @@ impl HarnessBuilder {
                     ));
                 }
             }
+
+            module.surface().validate(name, &mut errors);
 
             for table in module.tables() {
                 match tables.get(table) {
@@ -403,6 +501,8 @@ impl HarnessBuilder {
             }
         }
 
+        let surface = Arc::new(SurfaceVariants::compose(&venture, &self.modules));
+
         Ok(Harness {
             venture: Arc::new(venture),
             modules: self.modules,
@@ -410,6 +510,7 @@ impl HarnessBuilder {
             events,
             runtime: self.runtime,
             well_known,
+            surface,
         })
     }
 }

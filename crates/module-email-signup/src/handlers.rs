@@ -9,11 +9,12 @@ use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, post};
 use factory0_core::{
-    Captcha, Clock, Decision, IdGen, Json, Kid, ModuleConfig, ModuleContext, Payload, Problem,
-    RateLimiter, SLUGS, Scope, SendOutcome, Signer, SystemClock, UlidIdGen, client_ip, csv_row,
-    invalid_email_problem, normalize_email, rate_limit_keys, rate_limited, require_admin,
-    validation_error,
+    Action, Audience, Captcha, Clock, Column, Decision, IdGen, Json, Kid, ModuleConfig,
+    ModuleContext, Outcome, Payload, Problem, RateLimiter, SLUGS, Scope, SendOutcome, Signer,
+    Surface, SystemClock, UlidIdGen, View, client_ip, csv_row, invalid_email_problem,
+    normalize_email, rate_limit_keys, rate_limited, require_admin, validation_error,
 };
+use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::json;
 use std::sync::Arc;
@@ -189,18 +190,72 @@ fn sanitize_locale(raw: Option<String>) -> String {
     }
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, JsonSchema)]
 struct SignupBody {
+    #[schemars(extend(
+        "x-cf-label" = "Email",
+        "x-cf-widget" = "email",
+        "x-cf-placeholder" = "you@example.com"
+    ))]
     email: String,
+    // Where the signup came from (a page or campaign slug); set by the
+    // embedding page, not typed by the visitor.
+    #[schemars(extend("x-cf-hidden" = true))]
     source: Option<String>,
+    #[schemars(extend("x-cf-hidden" = true))]
     locale: Option<String>,
+    #[schemars(extend("x-cf-hidden" = true))]
     #[serde(rename = "captchaToken")]
     captcha_token: Option<String>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, JsonSchema)]
 struct TokenQuery {
+    #[schemars(extend("x-cf-hidden" = true))]
     token: String,
+}
+
+/// The module's UI surface (ADR 0010, issue #71): the signup form, the two
+/// signed links, and the admin export as a table. Body types are the ones
+/// the handlers deserialize, so the schema cannot drift from the route.
+pub(crate) fn surface(settings: &Settings) -> Surface {
+    let message = if settings.double_opt_in {
+        "Check your inbox to confirm your subscription."
+    } else {
+        "You're subscribed."
+    };
+    Surface::new()
+        .action(
+            Action::post("subscribe", "/")
+                .input::<SignupBody>()
+                .captcha()
+                .accepted(message),
+        )
+        .action(Action::get("confirm", "/confirm").input::<TokenQuery>())
+        .action(Action::get("unsubscribe", "/unsubscribe").input::<TokenQuery>())
+        .action(
+            Action::get("export", "/admin/export.csv")
+                .audience(Audience::Admin)
+                .outcome(Outcome::Json),
+        )
+        .action(Action::delete("delete", "/admin/subscribers/{email}"))
+        .view(View::form("subscribe"))
+        .view(View::table(
+            "export",
+            [
+                ("id", "Id"),
+                ("email", "Email"),
+                ("status", "Status"),
+                ("source", "Source"),
+                ("locale", "Locale"),
+                ("created_at", "Created"),
+                ("confirmed_at", "Confirmed"),
+                ("unsubscribed_at", "Unsubscribed"),
+            ]
+            .into_iter()
+            .map(|(key, label)| Column::new(key, label))
+            .collect(),
+        ))
 }
 
 async fn signup(

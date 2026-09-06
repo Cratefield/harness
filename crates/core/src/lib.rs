@@ -28,6 +28,7 @@ mod problems;
 mod rate_limit;
 mod scope;
 mod signer;
+mod surface;
 mod template;
 mod venture;
 
@@ -59,5 +60,9 @@ pub use problems::{ProblemDef, SLUGS, registry as problem_registry};
 pub use rate_limit::{client_ip, rate_limit_keys};
 pub use scope::Scope;
 pub use signer::{HmacSigner, MIN_SECRET_BYTES, SignerError};
+pub use surface::{
+    Action, Audience, Column, HINT_KEYWORDS, ModuleSurface, Outcome, RenderedSurface, SURFACE_API,
+    Surface, SurfaceDocument, VentureSurface, View, hint_field, schema_for,
+};
 pub use template::{Rendered, Template, TemplateError, TemplateRegistry};
 pub use venture::{Brand, Venture, VentureEnv};

@@ -252,6 +252,10 @@ impl Module for EmailSignup {
         handlers::router(shared, self.settings.clone())
     }
 
+    fn surface(&self) -> factory0_core::Surface {
+        handlers::surface(&self.settings)
+    }
+
     fn events(&self) -> Vec<(factory0_core::EventName, factory0_core::EventHandler)> {
         if !self.settings.subscribe_on_waitlist_confirm {
             return Vec::new();

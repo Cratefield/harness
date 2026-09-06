@@ -228,6 +228,10 @@ impl Module for Waitlist {
         handlers::router(Arc::new(ctx), self.settings.clone())
     }
 
+    fn surface(&self) -> factory0_core::Surface {
+        handlers::surface(&self.settings)
+    }
+
     fn scheduled<'a>(
         &'a self,
         ctx: &'a ModuleContext,

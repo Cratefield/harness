@@ -5,8 +5,9 @@ readme = "../../README.md"
 keywords = ["factory0", "harness", "backend", "axum", "modules"]
 categories = ["web-programming", "asynchronous"]
 include = ["src/**/*", "examples/**/*"]
-# 0.2.0 (not workspace): well-known routers and the Form extractor (issue #46).
-version = "0.2.0"
+# 0.3.0 (not workspace): the UI surface (`Module::surface`, `GET /__surface`,
+# ADR 0010) adds a defaulted trait method and a root route.
+version = "0.3.0"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -24,6 +25,7 @@ bytes = { workspace = true }
 futures-core = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+schemars = { workspace = true }
 tracing = { workspace = true }
 sea-query = { workspace = true }
 async-trait = { workspace = true }
@@ -37,6 +39,7 @@ subtle = { workspace = true }
 unicode-normalization = { workspace = true }
 
 [dev-dependencies]
+schemars = { workspace = true }
 pollster = { workspace = true }
 futures-channel = { workspace = true }
 insta = { workspace = true }

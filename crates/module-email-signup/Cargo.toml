@@ -19,6 +19,7 @@ factory0-core = { workspace = true }
 axum = { workspace = true }
 http = { workspace = true }
 serde = { workspace = true }
+schemars = { workspace = true }
 serde_json = { workspace = true }
 sea-query = { workspace = true }
 tracing = { workspace = true }
@@ -27,6 +28,8 @@ ulid = { workspace = true }
 askama = { workspace = true }
 
 [dev-dependencies]
+http = { workspace = true }
+serde_json = { workspace = true }
 # The `postgres` feature unlocks the Postgres parity leg of the testing
 # kit (issue #20); the leg itself only runs when FZ_TEST_POSTGRES_URL
 # names a server. Dev-only, so it never reaches a venture's wasm graph.

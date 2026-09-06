@@ -100,8 +100,12 @@ async fn response_to_worker(
         WorkerResponse::from_bytes(bytes.as_ref().to_vec())?.with_status(parts.status.as_u16());
     {
         let worker_headers = out.headers_mut();
+        // `append`, not `set`: a header may carry several values (`Vary`
+        // from the CORS layer plus the handler's own, later `Set-Cookie`),
+        // and `set` kept only the last one (found by `GET /__surface`
+        // losing `Vary: Authorization`, issue #70).
         for (name, value) in &parts.headers {
-            let _ = worker_headers.set(name.as_str(), value.to_str().unwrap_or_default());
+            let _ = worker_headers.append(name.as_str(), value.to_str().unwrap_or_default());
         }
     }
     Ok(out)

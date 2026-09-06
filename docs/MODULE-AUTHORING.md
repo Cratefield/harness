@@ -648,7 +648,47 @@ async fn config_overrides_the_builder_limit() {
 you assert on what the module actually did — see the
 [`factory0-testing` README](../crates/testing/README.md).
 
-## Step 9 — Run everything
+## Step 9 — Declare a surface
+
+A module gets a UI for free once it says what it offers (ADR
+[0010](adr/0010-modules-declare-a-ui-surface.md)). An axum router is opaque,
+so `Module::surface` lists the **actions** (routes, relative to
+`/v1/<name>`) and the **views** that compose them. The input schema of an
+action is derived from the handler's own body type, so it cannot drift from
+the route: derive `JsonSchema` next to `Deserialize` and put the UI hints on
+the fields as `x-cf-*` keywords (the full list is on
+`factory0_core::HINT_KEYWORDS`).
+
+```rust
+#[derive(Deserialize, JsonSchema)]
+struct RecordBody {
+    #[schemars(extend("x-cf-label" = "Your name", "x-cf-placeholder" = "Ada"))]
+    name: String,
+}
+
+pub(crate) fn surface() -> Surface {
+    Surface::new()
+        .action(Action::post("record", "/").input::<RecordBody>().accepted("Recorded. Hello!"))
+        .action(Action::get("count", "/count").audience(Audience::Public).outcome(Outcome::Json))
+        .view(View::form("record"))
+        .view(View::status("count"))
+}
+```
+
+and in the trait impl, `fn surface(&self) -> Surface { handlers::surface() }`.
+
+Rules `Harness::build` enforces: action names are kebab-case and unique,
+paths start with `/`, an `Admin` action lives under `/admin/` (and nothing
+else does), an input schema describes an object, and a view names an action
+the module declares. Mark fields the visitor must never type
+(`captchaToken`, a referral code, a locale) with `x-cf-hidden`; a hint that
+only exists at runtime (a `select` over configured products) is set after
+derivation with `factory0_core::hint_field`, as the waitlist does.
+
+`GET /__surface` on the venture then lists the module. Admin actions and the
+views over them appear only when the request carries the admin bearer.
+
+## Step 10 — Run everything
 
 From the repository root:
 
@@ -724,6 +764,8 @@ Before opening a PR that adds or changes a module:
 - [ ] `cargo tree -p <crate> --edges normal` shows no `worker` /
       `wasm-bindgen` / `tokio` / `reqwest`
 - [ ] migrations portable (subset above), idempotent, `include_str!`'d
+- [ ] `surface()` declares every route a visitor or admin should see, and
+      `JsonSchema` is derived on the same types the handlers deserialize
 - [ ] `name()`, `tables()`, `emits()` complete and honest;
       `public_writes()` reflects reality
 - [ ] config keys prefixed, `validate_config` collects all problems

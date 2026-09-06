@@ -119,6 +119,7 @@ pub trait Module: Send + Sync + 'static {
     fn migrations(&self) -> Migrations;          // include_str! SQL per dialect
     fn validate_config(&self, cfg: &dyn Config) -> Result<(), ConfigError>;
     fn router(&self, ctx: ModuleContext) -> axum::Router;
+    fn surface(&self) -> Surface { Surface::none() } // UI actions + views, ADR 0010
     fn events(&self) -> Vec<(EventName, EventHandler)> { Vec::new() }
     fn scheduled<'a>(&'a self, ctx: &'a ModuleContext, cron: &'a str) -> BoxFuture<'a, Result<()>> {
         Box::pin(async { Ok(()) })
@@ -194,7 +195,7 @@ ergonomic for trait objects.
 
 ## 6. HTTP conventions
 
-- Prefix `/v1/<module>`; `GET /__health` lists modules and versions; `GET /__ready` runs `SELECT 1` through `Database`.
+- Prefix `/v1/<module>`; `GET /__health` lists modules and versions; `GET /__ready` runs `SELECT 1` through `Database`; `GET /__surface` serves the composed UI surface (ADR 0010): public actions and views, plus admin ones when the admin bearer is presented, with a strong `ETag` per variant.
 - JSON in, JSON out. Bodies deserialize with serde into types whose constructors validate. Errors are RFC 9457 `application/problem+json` with a stable `type` URI per error (`https://factory0.ventures/problems/<slug>`), `instance` = request id.
 - CORS allowlist from `venture.cors_origins` via `tower-http`. No wildcard in production.
 - Every response carries `x-request-id` (accepted from the client if it matches `^[A-Za-z0-9_-]{8,128}$`, else a fresh ULID). Tracing spans carry it; logs are JSON keyed by it.

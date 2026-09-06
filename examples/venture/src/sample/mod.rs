@@ -4,9 +4,10 @@
 use axum::extract::State;
 use axum::routing::{get, post};
 use factory0_core::{
-    Clock, Config, ConfigError, IdGen, Json, Migrations, Module, ModuleContext, Port, Problem,
-    Scope, SqlMigration, Statement, SystemClock, UlidIdGen,
+    Action, Audience, Clock, Config, ConfigError, IdGen, Json, Migrations, Module, ModuleContext,
+    Outcome, Port, Problem, Scope, SqlMigration, Statement, Surface, SystemClock, UlidIdGen, View,
 };
+use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::json;
 use std::sync::Arc;
@@ -57,10 +58,30 @@ impl Module for SampleRowModule {
                 get(latest_row).with_state(Arc::clone(&state)),
             )
     }
+
+    /// The UI surface (ADR 0010): the insert as a public form, the read as
+    /// a JSON action. `GET /__surface` lists both; the CI wrangler smoke
+    /// asserts the document on a real Workers request.
+    fn surface(&self) -> Surface {
+        Surface::new()
+            .action(
+                Action::post("insert", "/rows")
+                    .input::<InsertBody>()
+                    .accepted("Row stored."),
+            )
+            .action(
+                Action::get("latest", "/rows/latest")
+                    .audience(Audience::Public)
+                    .outcome(Outcome::Json),
+            )
+            .view(View::form("insert"))
+            .view(View::status("latest"))
+    }
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, JsonSchema)]
 struct InsertBody {
+    #[schemars(extend("x-cf-label" = "Email", "x-cf-widget" = "email"))]
     email: String,
 }
 
