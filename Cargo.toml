@@ -10,6 +10,7 @@ license = "MIT"
 repository = "https://github.com/Factory-Zero/auth"
 
 [workspace.dependencies]
+askama = "0.14.0"
 # Harness crates, pinned to a harness main commit (8853e07, 2026-09-06).
 # They are NOT on crates.io yet; when they publish, these git pins become
 # version pins (recorded in PROGRESS.md per BUILD-BRIEF.md).
@@ -60,12 +61,16 @@ thiserror = "2.0.20"
 
 # Auth cryptography: argon2id for client secrets (ADR 0100 parameters,
 # default features off — no OpenSSL, wasm32-safe, same pin as the spike);
-# base64ct for cookie/secret encoding (PHC-compatible, constant-time).
+# base64ct for cookie/secret encoding (PHC-compatible, constant-time);
+# p256 for ES256 signing and JWK parsing (ADR 0100/0101 stack: `ecdsa`
+# gives deterministic RFC 6979 signing, no RNG, no OpenSSL — the pin the
+# wasm-auth spike validated on wasm32).
 argon2 = { version = "0.6.0", default-features = false, features = [
     "alloc",
     "password-hash",
 ] }
 base64ct = { version = "1.8.3", default-features = false, features = ["alloc"] }
+p256 = { version = "0.14.0", default-features = false, features = ["ecdsa"] }
 # sha2 matches the harness pin (factory0-core depends on 0.11).
 sha2 = { version = "0.11.0", default-features = false }
 

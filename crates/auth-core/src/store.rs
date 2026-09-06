@@ -27,6 +27,10 @@ pub const CREDENTIAL_PASSWORD: &str = "password";
 pub const TOKEN_MAGIC_LINK: &str = "magic_link";
 pub const TOKEN_WEBAUTHN_CHALLENGE: &str = "webauthn_challenge";
 pub const TOKEN_AUTHORIZATION_CODE: &str = "authorization_code";
+/// Opaque single-use refresh tokens (issue #9): rows of
+/// `single_use_tokens` bound to a session; reuse of a consumed one
+/// revokes the session.
+pub const TOKEN_REFRESH: &str = "refresh_token";
 
 pub const CLIENT_CONFIDENTIAL: &str = "confidential";
 pub const CLIENT_PUBLIC: &str = "public";
@@ -559,7 +563,9 @@ pub async fn touch_credential_used(
 // sessions
 
 /// One `sessions` row. `token_hash` is the sha256 of the cookie value;
-/// the value itself is never stored.
+/// the value itself is never stored. `amr` is the JSON array of
+/// authentication-method references recorded at login (issue #9),
+/// `None` until a login method exists.
 #[derive(Debug, Clone)]
 pub struct SessionRow {
     pub id: String,
@@ -571,6 +577,7 @@ pub struct SessionRow {
     pub revoked_at: Option<String>,
     pub ip_hash: Option<Redacted<String>>,
     pub ua_family: Option<String>,
+    pub amr: Option<String>,
 }
 
 fn session_from(row: &Row) -> SessionRow {
@@ -584,6 +591,7 @@ fn session_from(row: &Row) -> SessionRow {
         revoked_at: row.get::<Option<String>>("revoked_at").flatten(),
         ip_hash: optional::<String>(row, "ip_hash").map(Redacted),
         ua_family: row.get::<Option<String>>("ua_family").flatten(),
+        amr: row.get::<Option<String>>("amr").flatten(),
     }
 }
 
@@ -600,6 +608,7 @@ fn select_sessions() -> sea_query::SelectStatement {
             "revoked_at",
             "ip_hash",
             "ua_family",
+            "amr",
         ])
         .from(iden("sessions"));
     select
@@ -625,6 +634,7 @@ pub async fn insert_session(db: &dyn Database, row: &SessionRow) -> Result<(), D
             "revoked_at",
             "ip_hash",
             "ua_family",
+            "amr",
         ])
         .values_panic([
             row.id.clone().into(),
@@ -636,6 +646,7 @@ pub async fn insert_session(db: &dyn Database, row: &SessionRow) -> Result<(), D
             row.revoked_at.clone().into(),
             row.ip_hash.as_ref().map(|hash| hash.0.clone()).into(),
             row.ua_family.clone().into(),
+            row.amr.clone().into(),
         ]);
     db.execute(&Statement::render(&insert)).await?;
     Ok(())
@@ -652,6 +663,22 @@ pub async fn session_by_token_hash(
 ) -> Result<Option<SessionRow>, DbError> {
     let query = select_sessions()
         .and_where(Expr::col(iden("token_hash")).eq(token_hash.to_vec()))
+        .limit(1)
+        .to_owned();
+    let rows = db.query(&Statement::render(&query)).await?;
+    Ok(rows.first().map(session_from))
+}
+
+/// The id lookup: the session row for a session id (issue #9 — the
+/// token endpoints read liveness, user and `amr` from the session a
+/// grant is bound to).
+///
+/// # Errors
+///
+/// [`DbError::Query`] when the statement fails.
+pub async fn session_by_id(db: &dyn Database, id: &str) -> Result<Option<SessionRow>, DbError> {
+    let query = select_sessions()
+        .and_where(Expr::col(iden("id")).eq(id))
         .limit(1)
         .to_owned();
     let rows = db.query(&Statement::render(&query)).await?;
