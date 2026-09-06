@@ -436,6 +436,33 @@ impl SurfaceDocument {
     }
 }
 
+/// What a UI renderer gets from the harness (ADR 0010). Built by
+/// `Harness::router` for every router it assembles.
+pub struct UiContext {
+    /// The composed surface, admin actions included; the renderer applies
+    /// its own audience rules per page.
+    pub surface: std::sync::Arc<SurfaceDocument>,
+    /// The `/v1` API router, for in-process dispatch: a form post becomes
+    /// the JSON request the module accepts and is sent through this
+    /// service, so every module layer runs and nothing leaves the process.
+    /// The request must carry the caller's [`crate::Scope`] in its
+    /// extensions, because the scope layer sits above `/v1`.
+    pub api: axum::Router,
+    pub config: std::sync::Arc<dyn crate::config::Config>,
+    pub venture: std::sync::Arc<Venture>,
+    /// Whether the `Captcha` port is configured, so the renderer knows to
+    /// include the widget on actions that declare `captcha`.
+    pub captcha_configured: bool,
+}
+
+/// A renderer the venture mounts at `/ui` with `HarnessBuilder::ui`
+/// (ADR 0010). Core defines the seam; `factory0-ui` is the implementation,
+/// kept out of core so a venture without a UI carries no `maud`.
+pub trait UiMount: Send + Sync + 'static {
+    /// The router nested at `/ui`, built per `Harness::router` call.
+    fn router(&self, ctx: UiContext) -> axum::Router;
+}
+
 /// A document serialized once, with the strong `ETag` clients revalidate
 /// against. Built at `Harness::build` for both the public and the admin
 /// variant.

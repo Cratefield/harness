@@ -41,6 +41,8 @@ fn instance() -> &'static (Harness, Cloudflare) {
                     .confirm_ttl_days(7),
             )
             .templates(templates)
+            // The UI renderer (ADR 0010): pages at /ui/<module>/<action>.
+            .ui(factory0_ui::Ui::new())
             .runtime(
                 Cloudflare::new()
                     .db("DB")

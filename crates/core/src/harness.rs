@@ -29,7 +29,7 @@ use crate::http::{
 use crate::module::{HARNESS_API, Module, ModuleContext, harness_api_mismatch};
 use crate::ports::{Clock, Database, Port, Ports, Statement, SystemClock, warn_undeclared_ports};
 use crate::problem::Problem;
-use crate::surface::{RenderedSurface, SurfaceDocument};
+use crate::surface::{RenderedSurface, SurfaceDocument, UiContext, UiMount};
 use crate::template::{Template, TemplateRegistry};
 use crate::venture::Venture;
 
@@ -54,10 +54,12 @@ pub struct Harness {
     /// The composed UI surface (ADR 0010), rendered once for
     /// `GET /__surface`: the admin variant and the public subset.
     surface: Arc<SurfaceVariants>,
+    /// The renderer mounted at `/ui`, if the venture chose one.
+    ui: Option<Arc<dyn UiMount>>,
 }
 
 struct SurfaceVariants {
-    document: SurfaceDocument,
+    document: Arc<SurfaceDocument>,
     full: RenderedSurface,
     public: RenderedSurface,
 }
@@ -68,7 +70,7 @@ impl SurfaceVariants {
         Self {
             full: RenderedSurface::render(&document),
             public: RenderedSurface::render(&document.public()),
-            document,
+            document: Arc::new(document),
         }
     }
 }
@@ -115,6 +117,7 @@ impl Harness {
             events: self.events.clone(),
             templates: Arc::clone(&self.templates),
             venture: Arc::clone(&self.venture),
+            ui_mounted: self.ui.is_some(),
         }
     }
 
@@ -133,9 +136,10 @@ impl Harness {
 
     /// Assembles the full router: each module nested under `/v1/<name>`,
     /// the one `/.well-known` router (if any) nested at the root,
-    /// `GET /__health`, `GET /__ready`, `GET /__surface`, and the shared
-    /// middleware (request-id/Scope, CORS allowlist, 64 KiB body limit,
-    /// `/v1/*` security headers). Nothing but `/.well-known` and the
+    /// `GET /__health`, `GET /__ready`, `GET /__surface`, the UI renderer
+    /// at `/ui` when one is mounted, and the shared middleware
+    /// (request-id/Scope, CORS allowlist, 64 KiB body limit, `/v1/*`
+    /// security headers). Nothing but `/.well-known`, `/ui` and the
     /// `/__*` probes is ever mounted at the root.
     pub fn router(&self, ports: Ports) -> Router {
         let mut api = Router::new();
@@ -146,6 +150,17 @@ impl Harness {
         let api = api
             .layer(axum::middleware::from_fn(security_headers_layer))
             .layer(DefaultBodyLimit::max(MAX_BODY_BYTES));
+
+        let ui = self.ui.as_ref().map(|ui| {
+            ui.router(UiContext {
+                surface: Arc::clone(&self.surface.document),
+                api: api.clone(),
+                config: Arc::clone(&ports.config),
+                venture: Arc::clone(&self.venture),
+                captcha_configured: ports.captcha.is_some(),
+            })
+            .layer(DefaultBodyLimit::max(MAX_BODY_BYTES))
+        });
 
         let Ports {
             config,
@@ -200,6 +215,10 @@ impl Harness {
                     .clone()
                     .layer(DefaultBodyLimit::max(MAX_BODY_BYTES)),
             ),
+            None => root,
+        };
+        let root = match ui {
+            Some(ui) => root.nest("/ui", ui),
             None => root,
         };
 
@@ -334,6 +353,7 @@ pub struct HarnessBuilder {
     runtime: Option<Arc<dyn Runtime>>,
     module_templates: Vec<(String, Box<dyn Template>)>,
     overrides: Vec<(String, Box<dyn Template>)>,
+    ui: Option<Arc<dyn UiMount>>,
 }
 
 impl HarnessBuilder {
@@ -378,6 +398,14 @@ impl HarnessBuilder {
         templates: impl IntoIterator<Item = (String, Box<dyn Template>)>,
     ) -> Self {
         self.module_templates.extend(templates);
+        self
+    }
+
+    /// Mounts a UI renderer at `/ui` (ADR 0010): `factory0_ui::Ui`. Off
+    /// unless called, so a venture without a UI serves nothing there.
+    #[must_use]
+    pub fn ui(mut self, ui: impl UiMount) -> Self {
+        self.ui = Some(Arc::new(ui));
         self
     }
 
@@ -511,6 +539,7 @@ impl HarnessBuilder {
             runtime: self.runtime,
             well_known,
             surface,
+            ui: self.ui,
         })
     }
 }

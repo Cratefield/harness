@@ -138,6 +138,7 @@ depend on this repository by git.
 | `factory0-adapter-sqlite` | `Database` over rusqlite: every test, and single-node self-hosting |
 | `factory0-module-email-signup` | Email signup with double opt-in, unsubscribe, admin export |
 | `factory0-module-waitlist` | Per-product waitlist with confirm, position, referral codes |
+| `factory0-ui` | Renders the module surface as HTML at `/ui`: pages, fragments, in-process form dispatch, the `cf-*` styling contract (ADR 0010) |
 | `factory0-cli` | Binary `fz`: `migrations collect`, `doctor`, `modules` |
 | `factory0-testing` | Conformance kit every module, public or private, must pass |
 | `factory0-adapter-postgres` | Phase 3. `Database` over sqlx for the native runtime |
@@ -236,12 +237,14 @@ crates/
   adapter-sqlite/          factory0-adapter-sqlite
   module-email-signup/     factory0-module-email-signup
   module-waitlist/         factory0-module-waitlist
+  ui/                      factory0-ui
   cli/                     factory0-cli  →  fz
   testing/                 factory0-testing
 examples/
   venture/                 smallest complete venture; CI builds it to wasm
 docs/
   ARCHITECTURE.md
+  UI.md                    the UI surface and its markup contract
   adr/                     0000 … 0010
 tools/
   banner-render.html       source of the README banner

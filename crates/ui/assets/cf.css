@@ -1,0 +1,169 @@
+/* factory0-ui base stylesheet (ADR 0010). Everything sits in @layer cf, so
+   any unlayered rule a venture writes wins on its own. Colours,
+   radii and spacing are the --cf-* custom properties below; override them
+   on :root to restyle without touching a selector. */
+@layer cf {
+  :root {
+    --cf-font: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    --cf-fg: #1a1a1a;
+    --cf-bg: #ffffff;
+    --cf-muted: #666666;
+    --cf-border: #cfcfcf;
+    --cf-accent: #1a56db;
+    --cf-accent-fg: #ffffff;
+    --cf-error: #b91c1c;
+    --cf-success: #15803d;
+    --cf-warning: #b45309;
+    --cf-radius: 6px;
+    --cf-gap: 1rem;
+    --cf-max-width: 32rem;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --cf-fg: #f2f2f2;
+      --cf-bg: #111111;
+      --cf-muted: #a3a3a3;
+      --cf-border: #3a3a3a;
+      --cf-accent: #60a5fa;
+      --cf-accent-fg: #0b1220;
+    }
+  }
+  .cf-page {
+    margin: 0;
+    font-family: var(--cf-font);
+    color: var(--cf-fg);
+    background: var(--cf-bg);
+    line-height: 1.5;
+  }
+  .cf-main {
+    max-width: var(--cf-max-width);
+    margin: 0 auto;
+    padding: calc(var(--cf-gap) * 2) var(--cf-gap);
+  }
+  .cf-venture {
+    margin: 0;
+    color: var(--cf-muted);
+    font-size: 0.875rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+  .cf-title {
+    margin: 0 0 var(--cf-gap);
+    font-size: 1.75rem;
+  }
+  .cf-form {
+    display: grid;
+    gap: var(--cf-gap);
+  }
+  .cf-field {
+    display: grid;
+    gap: 0.375rem;
+  }
+  .cf-label {
+    font-weight: 600;
+  }
+  .cf-label--checkbox {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-weight: 400;
+  }
+  .cf-required {
+    color: var(--cf-error);
+    margin-left: 0.2em;
+  }
+  .cf-input {
+    font: inherit;
+    color: inherit;
+    background: var(--cf-bg);
+    border: 1px solid var(--cf-border);
+    border-radius: var(--cf-radius);
+    padding: 0.625rem 0.75rem;
+    width: 100%;
+    box-sizing: border-box;
+  }
+  .cf-input:focus-visible {
+    outline: 2px solid var(--cf-accent);
+    outline-offset: 1px;
+  }
+  .cf-input--checkbox {
+    width: auto;
+    padding: 0;
+  }
+  .cf-input--textarea {
+    min-height: 6rem;
+    resize: vertical;
+  }
+  .cf-field--invalid .cf-input {
+    border-color: var(--cf-error);
+  }
+  .cf-help {
+    margin: 0;
+    color: var(--cf-muted);
+    font-size: 0.875rem;
+  }
+  .cf-error {
+    margin: 0;
+    color: var(--cf-error);
+    font-size: 0.875rem;
+  }
+  .cf-error--form {
+    font-size: 1rem;
+  }
+  .cf-actions {
+    display: flex;
+    gap: var(--cf-gap);
+  }
+  .cf-submit {
+    font: inherit;
+    font-weight: 600;
+    color: var(--cf-accent-fg);
+    background: var(--cf-accent);
+    border: 0;
+    border-radius: var(--cf-radius);
+    padding: 0.75rem 1.25rem;
+    cursor: pointer;
+  }
+  .cf-submit:focus-visible {
+    outline: 2px solid var(--cf-fg);
+    outline-offset: 2px;
+  }
+  .cf-notice {
+    border: 1px solid var(--cf-border);
+    border-left: 4px solid var(--cf-accent);
+    border-radius: var(--cf-radius);
+    padding: var(--cf-gap);
+  }
+  .cf-notice--success {
+    border-left-color: var(--cf-success);
+  }
+  .cf-notice--warning {
+    border-left-color: var(--cf-warning);
+  }
+  .cf-notice--error {
+    border-left-color: var(--cf-error);
+  }
+  .cf-notice-title {
+    margin: 0 0 0.25rem;
+    font-size: 1.125rem;
+  }
+  .cf-notice-text {
+    margin: 0;
+  }
+  .cf-status {
+    display: grid;
+    grid-template-columns: max-content 1fr;
+    gap: 0.5rem var(--cf-gap);
+    margin: 0;
+  }
+  .cf-status-row {
+    display: contents;
+  }
+  .cf-status-key {
+    color: var(--cf-muted);
+  }
+  .cf-status-value {
+    margin: 0;
+    overflow-wrap: anywhere;
+  }
+}

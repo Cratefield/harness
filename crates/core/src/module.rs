@@ -87,6 +87,11 @@ pub struct ModuleContext {
     pub events: EventBus,
     pub templates: Arc<TemplateRegistry>,
     pub venture: Arc<Venture>,
+    /// `true` when the venture mounted a UI renderer (ADR 0010). A module
+    /// then defaults its landing redirects (confirmed, expired,
+    /// unsubscribed, status) to `<api base>/ui/<module>/<action>/<page>`
+    /// instead of pages the venture site has to provide.
+    pub ui_mounted: bool,
 }
 
 /// A Factory Zero module. Object-safe; composed as `Arc<dyn Module>`.
