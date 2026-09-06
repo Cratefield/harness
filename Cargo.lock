@@ -196,6 +196,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "factory0-adapter-resend"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "factory0-core",
+ "http",
+ "pollster",
+ "serde",
+ "serde_json",
+ "tracing",
+]
+
+[[package]]
 name = "factory0-core"
 version = "0.1.0"
 dependencies = [
