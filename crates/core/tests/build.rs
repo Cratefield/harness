@@ -105,21 +105,26 @@ fn duplicate_tables_are_reported_with_both_owners() {
 
 #[test]
 fn harness_api_mismatch_is_reported() {
+    // Issue #17 acceptance: a module targeting harness API 2 fails at
+    // build with the full message — module, both versions, both APIs and
+    // the core crate. (HARNESS_API is 1 today.)
     let problems = failure_lines(
         Harness::builder()
             .venture(base_venture())
             .module(SampleModule {
-                harness_api: factory0_core::HARNESS_API + 1,
+                harness_api: 2,
                 ..SampleModule::default()
             })
             .runtime(FakeRuntime(all_ports())),
     );
-    assert!(
-        problems
-            .iter()
-            .any(|p| p.contains("targets harness API") && p.contains("sample")),
-        "problems: {problems:?}"
+    // The fixture's version is core's own package version.
+    let expected = format!(
+        "module `sample` v{v} targets harness API 2, but factory0-core v{v} provides harness \
+         API 1: rebuild `sample` against this core — the supported ranges are in \
+         docs/COMPATIBILITY.md",
+        v = env!("CARGO_PKG_VERSION")
     );
+    assert_eq!(problems, vec![expected], "exact message required");
 }
 
 #[test]

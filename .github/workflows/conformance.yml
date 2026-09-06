@@ -1,0 +1,54 @@
+# Reusable module conformance (issue #17).
+#
+# Runs the `factory0-testing` conformance kit for every module crate in
+# the CALLING repository. This repo's CI calls it via
+# `uses: ./.github/workflows/conformance.yml`; `harness-private` calls it
+# across repos with
+# `uses: Factory-Zero/harness/.github/workflows/conformance.yml@<ref>`,
+# so private modules pass the same suite as public ones (ADR 0005).
+#
+# Expected layout (same as this repo): module crates live in directories
+# matching `module-glob` (default `crates/module-*`), each with a
+# `tests/conformance.rs` calling `factory0_testing::conformance`.
+
+name: Conformance
+
+on:
+  workflow_call:
+    inputs:
+      module-glob:
+        description: Glob of module crate directories, relative to the repo root
+        type: string
+        default: crates/module-*
+  workflow_dispatch:
+
+jobs:
+  conformance:
+    name: conformance kit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.98.1"
+      - uses: Swatinem/rust-cache@v2
+      - name: Run the conformance kit for every module crate
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          dirs=(${{ inputs.module-glob }})
+          if [ ${#dirs[@]} -eq 0 ]; then
+            echo "::error::no module crates match '${{ inputs.module-glob }}'"
+            exit 1
+          fi
+          for dir in "${dirs[@]}"; do
+            pkg=$(sed -n 's/^name = "\(.*\)"$/\1/p' "$dir/Cargo.toml" | head -1)
+            if [ -z "$pkg" ]; then
+              echo "::error::$dir/Cargo.toml has no package name"
+              exit 1
+            fi
+            echo "::group::cargo test -p $pkg --test conformance"
+            cargo test -p "$pkg" --test conformance
+            echo "::endgroup::"
+          done

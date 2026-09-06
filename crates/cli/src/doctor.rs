@@ -1,10 +1,11 @@
 //! `fz doctor` (issue #8): harness validity, the production-captcha rule,
-//! lockfile consistency and the portable-SQL lint.
+//! lockfile consistency and the portable-SQL lint. Since issue #17 it
+//! also re-asserts the contract-version rule.
 
 use crate::collect::verify_locked;
 use crate::lint::banned_tokens;
 use crate::lock::{Lock, read_lock};
-use factory0_core::{Harness, VentureEnv};
+use factory0_core::{HARNESS_API, Harness, VentureEnv, harness_api_mismatch};
 use std::path::Path;
 
 /// Runs every doctor check. `allow_no_captcha` downgrades the
@@ -20,6 +21,16 @@ pub fn doctor(
     allow_no_captcha: Option<&str>,
 ) -> Result<(), String> {
     let mut failures: Vec<String> = Vec::new();
+
+    // Contract versions (issue #17). `Harness::build` already refuses a
+    // mismatched module, so a harness that reaches the doctor is coherent;
+    // the re-check keeps the rule visible here as well, and reports the
+    // module, its version and the core crate if it ever fires.
+    for module in harness.modules() {
+        if module.harness_api() != HARNESS_API {
+            failures.push(harness_api_mismatch(module.as_ref()));
+        }
+    }
 
     // Harness::build already succeeded by construction; the venture
     // captcha rule is checked against the runtime's provided ports.

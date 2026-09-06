@@ -48,6 +48,10 @@ global file name plus a sha256 of its content:
 
 Fails when:
 
+- a module's `harness_api` differs from the `factory0-core` it linked
+  against (the message names the module, its version and the core crate;
+  `Harness::build` already refuses this, the doctor re-asserts it —
+  issue #17);
 - a module with `public_writes()` runs in a `production` venture without
   the Captcha port (section 11);
 - any module migration is not collected yet, a locked file is missing or

@@ -23,7 +23,7 @@ use crate::events::EventBus;
 use crate::http::{
     Json, MAX_BODY_BYTES, ScopeState, cors_layer, scope_layer, security_headers_layer,
 };
-use crate::module::{HARNESS_API, Module, ModuleContext};
+use crate::module::{HARNESS_API, Module, ModuleContext, harness_api_mismatch};
 use crate::ports::{Clock, Database, Port, Ports, Statement, SystemClock, warn_undeclared_ports};
 use crate::problem::Problem;
 use crate::template::{Template, TemplateRegistry};
@@ -304,12 +304,7 @@ impl HarnessBuilder {
 
         for module in &self.modules {
             if module.harness_api() != HARNESS_API {
-                errors.push(format!(
-                    "module `{}` targets harness API {} but this core provides {}",
-                    module.name(),
-                    module.harness_api(),
-                    HARNESS_API
-                ));
+                errors.push(harness_api_mismatch(module.as_ref()));
             }
 
             let name = module.name();

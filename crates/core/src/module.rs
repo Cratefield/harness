@@ -16,6 +16,25 @@ pub use futures_core::future::BoxFuture;
 /// contract changes; `factory0-core`'s major follows it.
 pub const HARNESS_API: u32 = 1;
 
+/// The message `Harness::build` and `fz doctor` report for a module whose
+/// [`Module::harness_api`] differs from core's: it names the module, the
+/// module crate's version, the API it targets, and the `factory0-core`
+/// crate with its version and API (issue #17).
+#[must_use]
+pub fn harness_api_mismatch(module: &dyn Module) -> String {
+    format!(
+        "module `{name}` v{version} targets harness API {api}, but {core} v{core_version} \
+         provides harness API {harness_api}: rebuild `{name}` against this core — the supported \
+         ranges are in docs/COMPATIBILITY.md",
+        name = module.name(),
+        version = module.version(),
+        api = module.harness_api(),
+        core = env!("CARGO_PKG_NAME"),
+        core_version = env!("CARGO_PKG_VERSION"),
+        harness_api = HARNESS_API,
+    )
+}
+
 /// One migration step, embedded with `include_str!` from
 /// `crates/<module>/migrations/<dialect>/NNNN_name.sql` (issue #8).
 #[derive(Debug, Clone)]
