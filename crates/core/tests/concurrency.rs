@@ -157,6 +157,16 @@ fn concurrent_requests_through_one_router_keep_their_own_scope() {
         response_b.headers().get("x-request-id").unwrap(),
         "request-BBBBBBBB"
     );
+
+    // The header alone is not the proof: the discarded TypeScript harness
+    // set the header correctly and still handed request A request B's scope
+    // inside the handler. Assert what each handler actually observed.
+    let body_a = pollster::block_on(body_json(response_a));
+    let body_b = pollster::block_on(body_json(response_b));
+    assert_eq!(body_a["request_id"], "request-AAAAAAAA");
+    assert_eq!(body_b["request_id"], "request-BBBBBBBB");
+    assert_eq!(body_a["gate"], "a-second");
+    assert_eq!(body_b["gate"], "b-first");
 }
 
 struct EitherParkModule {
