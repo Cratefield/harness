@@ -37,7 +37,19 @@ fn instance() -> &'static (Harness, Cloudflare) {
                     .confirm_ttl_days(7),
             )
             .templates(templates)
-            .runtime(Cloudflare::new().db("DB"))
+            .runtime(
+                Cloudflare::new()
+                    .db("DB")
+                    // Both modules require the Mailer port. With no API key
+                    // the adapter is NotConfigured: the port is provided and
+                    // no mail is ever sent, which is what an example wants.
+                    .mailer(factory0_adapter_resend::Resend::new(
+                        std::sync::Arc::new(factory0_runtime_cloudflare::FetchClient),
+                        None,
+                        "example@factory0.dev",
+                        None,
+                    )),
+            )
             .build()
             .expect("example venture harness is valid");
         (harness, runtime)

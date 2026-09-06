@@ -9,8 +9,8 @@ use axum::extract::State;
 use axum::http::{HeaderValue, Method, Request, header};
 use axum::response::Response;
 use factory0_core::{
-    Config, ConfigError, Database, DbError, Harness, HarnessBuilder, Json, Migrations, Module,
-    ModuleContext, Port, Ports, Row, Rows, Runtime, Statement, SystemClock,
+    Config, ConfigError, Database, DbError, Form, Harness, HarnessBuilder, Json, Migrations,
+    Module, ModuleContext, Port, Ports, Row, Rows, Runtime, Statement, SystemClock,
 };
 use futures_channel::oneshot::Receiver;
 use serde::Deserialize;
@@ -26,23 +26,28 @@ pub type SharedParkGate = Arc<std::sync::Mutex<Option<ParkGate>>>;
 
 /// The sample module from issue #2's acceptance: mounts one route reachable
 /// at `/v1/sample`. Optionally parks one request on a channel for the
-/// concurrency test.
+/// concurrency test, serves `/.well-known/test` at the root (issue #46),
+/// or both under a custom name (the duplicate-well-known build error).
 pub struct SampleModule {
+    pub name: &'static str,
     pub harness_api: u32,
     pub requires: &'static [Port],
     pub optional: &'static [Port],
     pub tables: &'static [&'static str],
     pub park: Option<SharedParkGate>,
+    pub well_known: bool,
 }
 
 impl Default for SampleModule {
     fn default() -> Self {
         Self {
+            name: "sample",
             harness_api: factory0_core::HARNESS_API,
             requires: &[],
             optional: &[],
             tables: &[],
             park: None,
+            well_known: false,
         }
     }
 }
@@ -54,6 +59,20 @@ impl SampleModule {
             ..Self::default()
         }
     }
+
+    pub fn named(name: &'static str) -> Self {
+        Self {
+            name,
+            ..Self::default()
+        }
+    }
+
+    pub fn with_well_known(self) -> Self {
+        Self {
+            well_known: true,
+            ..self
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -61,9 +80,16 @@ pub struct EchoBody {
     pub email: String,
 }
 
+/// Shaped like a Sign in with Apple `form_post` callback body.
+#[derive(Deserialize)]
+pub struct CallbackBody {
+    pub code: String,
+    pub state: String,
+}
+
 impl Module for SampleModule {
     fn name(&self) -> &'static str {
-        "sample"
+        self.name
     }
 
     fn version(&self) -> &'static str {
@@ -104,6 +130,10 @@ impl Module for SampleModule {
             .route(
                 "/echo",
                 axum::routing::post(echo).with_state(Arc::clone(&state)),
+            )
+            .route(
+                "/callback",
+                axum::routing::post(callback).with_state(Arc::clone(&state)),
             );
         if let Some(park) = &self.park {
             let park = Arc::clone(park);
@@ -125,6 +155,17 @@ impl Module for SampleModule {
         }
         router
     }
+
+    fn well_known(&self) -> Option<axum::Router> {
+        if self.well_known {
+            Some(axum::Router::new().route(
+                "/test",
+                axum::routing::get(|| async { Json(json!({ "served": "well-known" })) }),
+            ))
+        } else {
+            None
+        }
+    }
 }
 
 async fn hello(
@@ -139,6 +180,10 @@ async fn hello(
 
 async fn echo(Json(body): Json<EchoBody>) -> Json<serde_json::Value> {
     Json(json!({ "email": body.email }))
+}
+
+async fn callback(Form(body): Form<CallbackBody>) -> Json<serde_json::Value> {
+    Json(json!({ "code": body.code, "state": body.state }))
 }
 
 /// A runtime that claims a fixed `provides` set.
@@ -265,6 +310,30 @@ pub async fn request(
             .expect("request builds"),
         None => builder.body(Body::empty()).expect("request builds"),
     };
+    router
+        .clone()
+        .oneshot(request)
+        .await
+        .expect("router answers")
+}
+
+/// Sends a urlencoded form body without a network (issue #46).
+pub async fn form_request(
+    router: &axum::Router,
+    method: Method,
+    uri: &str,
+    body: String,
+) -> Response {
+    use tower::ServiceExt;
+    let request = Request::builder()
+        .method(method)
+        .uri(uri)
+        .header(
+            header::CONTENT_TYPE,
+            HeaderValue::from_static("application/x-www-form-urlencoded"),
+        )
+        .body(Body::from(body))
+        .expect("request builds");
     router
         .clone()
         .oneshot(request)

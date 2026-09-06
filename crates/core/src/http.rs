@@ -1,6 +1,6 @@
 //! HTTP plumbing every venture router shares (issue #2): the problem+json
-//! `Json` extractor, the request-id middleware that creates the [`Scope`],
-//! and the `/v1/*` security headers.
+//! `Json` and `Form` extractors, the request-id middleware that creates
+//! the [`Scope`], and the `/v1/*` security headers.
 
 use axum::body::Body;
 use axum::extract::{FromRequest, Request};
@@ -103,6 +103,14 @@ pub(crate) async fn scope_layer(
         .map(|matched| matched.as_str().to_owned())
         .unwrap_or_default();
 
+    // `std::time::Instant::now()` panics on wasm32-unknown-unknown with
+    // "time not implemented on this platform", which took down every
+    // request on Workers — `/__health` included. There is no monotonic
+    // clock in that target, and `Date.now()` is frozen between I/O in
+    // workerd, so a wall-clock delta would read 0 and look measured.
+    // Timing is therefore recorded only where a real clock exists;
+    // Cloudflare's own request logs carry it on Workers.
+    #[cfg(not(target_arch = "wasm32"))]
     let started = std::time::Instant::now();
     let future = next.run(request);
     let mut response = future.instrument(span.clone()).await;
@@ -119,8 +127,11 @@ pub(crate) async fn scope_layer(
             .unwrap_or_default(),
     );
     span.record("status", response.status().as_u16());
-    let duration_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
-    span.record("duration_ms", duration_ms);
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let duration_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+        span.record("duration_ms", duration_ms);
+    }
     response
 }
 
@@ -201,6 +212,43 @@ where
 impl<T: serde::Serialize> IntoResponse for Json<T> {
     fn into_response(self) -> AxumResponse {
         axum::Json(self.0).into_response()
+    }
+}
+
+/// A form (`application/x-www-form-urlencoded`) extractor whose
+/// rejections are problem+json with the same shape as [`Json`]'s: body
+/// reads fail through the shared 413 slug (the size limit), everything
+/// else is a 400 validation problem. Needed for cross-site `form_post`
+/// callbacks (issue #46).
+pub struct Form<T>(pub T);
+
+impl<T, S> FromRequest<S> for Form<T>
+where
+    T: DeserializeOwned,
+    S: Send + Sync,
+{
+    type Rejection = Problem;
+
+    async fn from_request(request: HttpRequest<Body>, state: &S) -> Result<Self, Self::Rejection> {
+        let instance = request
+            .extensions()
+            .get::<Scope>()
+            .map(|scope| scope.request_id.clone());
+        match axum::Form::<T>::from_request(request, state).await {
+            Ok(axum::Form(value)) => Ok(Form(value)),
+            Err(rejection) => {
+                let mut problem = match &rejection {
+                    axum::extract::rejection::FormRejection::BytesRejection(_) => {
+                        Problem::request_too_large()
+                    }
+                    _ => Problem::validation_failed(rejection.body_text()),
+                };
+                if let Some(instance) = instance {
+                    problem = problem.instance(&instance);
+                }
+                Err(problem)
+            }
+        }
     }
 }
 

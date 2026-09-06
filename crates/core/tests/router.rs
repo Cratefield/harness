@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use axum::http::{Method, StatusCode, header};
 use common::*;
-use factory0_core::Ports;
+use factory0_core::{Harness, Ports};
 
 /// `GET /__health` lists modules and versions without touching the db.
 #[pollster::test]
@@ -306,6 +306,142 @@ fn problem_slugs_are_unique() {
         );
         assert_eq!(problem.status, def.status);
     }
+}
+
+/// Issue #46: a module's well-known router is served at the root under
+/// `/.well-known` (never under `/v1`), while the module keeps its `/v1`
+/// mount and its `/__health` entry.
+#[pollster::test]
+async fn well_known_served_at_root_and_not_under_v1() {
+    let harness = Harness::builder()
+        .venture(base_venture())
+        .module(SampleModule::default().with_well_known())
+        .runtime(FakeRuntime(all_ports()))
+        .build()
+        .expect("single well-known provider builds");
+    let router = harness.router(Ports::empty());
+
+    let root = request(&router, Method::GET, "/.well-known/test", &[], None).await;
+    assert_eq!(root.status(), StatusCode::OK);
+    assert_eq!(body_json(root).await["served"], "well-known");
+
+    let under_v1 = request(
+        &router,
+        Method::GET,
+        "/v1/sample/.well-known/test",
+        &[],
+        None,
+    )
+    .await;
+    assert_eq!(under_v1.status(), StatusCode::NOT_FOUND);
+
+    let module_route = request(&router, Method::GET, "/v1/sample/hello", &[], None).await;
+    assert_eq!(module_route.status(), StatusCode::OK);
+
+    let health = request(&router, Method::GET, "/__health", &[], None).await;
+    let body = body_json(health).await;
+    assert_eq!(body["modules"][0]["name"], "sample");
+}
+
+/// Issue #46: two modules providing a well-known router fail the build
+/// with an error naming both.
+#[test]
+fn two_well_known_routers_fail_build_naming_both() {
+    let error = Harness::builder()
+        .venture(base_venture())
+        .module(SampleModule::default().with_well_known())
+        .module(SampleModule::named("other").with_well_known())
+        .runtime(FakeRuntime(all_ports()))
+        .build()
+        .expect_err("two well-known providers must not build");
+    let message = error.to_string();
+    assert!(message.contains("`sample`"), "names sample: {message}");
+    assert!(message.contains("`other`"), "names other: {message}");
+    assert!(
+        message.contains(".well-known"),
+        "names the mount: {message}"
+    );
+}
+
+/// Issue #46: a form_post-shaped body (Sign in with Apple) parses through
+/// the `Form` extractor.
+#[pollster::test]
+async fn form_post_body_parses() {
+    let harness = harness_with_sample();
+    let router = harness.router(Ports::empty());
+    let response = form_request(
+        &router,
+        Method::POST,
+        "/v1/sample/callback",
+        "code=abc.def&state=xyz0123456".to_owned(),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = body_json(response).await;
+    assert_eq!(body["code"], "abc.def");
+    assert_eq!(body["state"], "xyz0123456");
+}
+
+/// Malformed forms (missing field, wrong content type) become 400
+/// `validation-failed` problems with `instance` set, like invalid JSON.
+#[pollster::test]
+async fn malformed_form_is_a_validation_problem() {
+    let harness = harness_with_sample();
+    let router = harness.router(Ports::empty());
+
+    let missing_field = form_request(
+        &router,
+        Method::POST,
+        "/v1/sample/callback",
+        "code=abc.def".to_owned(),
+    )
+    .await;
+    assert_eq!(missing_field.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        missing_field.headers().get(header::CONTENT_TYPE).unwrap(),
+        "application/problem+json"
+    );
+    let body = body_json(missing_field).await;
+    assert_eq!(
+        body["type"],
+        "https://factory0.ventures/problems/validation-failed"
+    );
+    let detail = body["detail"].as_str().unwrap();
+    assert!(detail.contains("state"), "detail names the field: {detail}");
+    assert_eq!(
+        body["instance"].as_str().unwrap().len(),
+        26,
+        "instance is the generated request id"
+    );
+
+    let wrong_type = request(
+        &router,
+        Method::POST,
+        "/v1/sample/callback",
+        &[],
+        Some(br#"{"code": "c", "state": "s"}"#.to_vec()),
+    )
+    .await;
+    assert_eq!(wrong_type.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        body_json(wrong_type).await["type"],
+        "https://factory0.ventures/problems/validation-failed"
+    );
+}
+
+/// The 64 KiB body limit applies to form bodies exactly as to JSON.
+#[pollster::test]
+async fn oversized_form_body_rejected() {
+    let harness = harness_with_sample();
+    let router = harness.router(Ports::empty());
+    let big = format!("code={}&state=x", "a".repeat(70_000));
+    let response = form_request(&router, Method::POST, "/v1/sample/callback", big).await;
+    assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+    let body = body_json(response).await;
+    assert_eq!(
+        body["type"],
+        "https://factory0.ventures/problems/request-too-large"
+    );
 }
 
 /// `/__health` carries the observability detail from issue #14:

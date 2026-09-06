@@ -38,7 +38,7 @@ pub use email::{
 };
 pub use events::{AnyError, EventBus, EventHandler, EventName};
 pub use harness::{Harness, HarnessBuilder, Runtime};
-pub use http::{Json, MAX_BODY_BYTES, X_REQUEST_ID, rate_limited, request_id_is_valid};
+pub use http::{Form, Json, MAX_BODY_BYTES, X_REQUEST_ID, rate_limited, request_id_is_valid};
 pub use logging::{
     RedactingVisitor, is_email_field, is_secret_field, redacted_value, subject_hash,
 };

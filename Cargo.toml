@@ -12,11 +12,12 @@ repository = "https://github.com/Factory-Zero/harness"
 
 [workspace.dependencies]
 # Internal crates. factory0-core is pinned with a caret on the current
-# minor while pre-1.0 (issue #17): "^0.1" accepts 0.1.x only, so a core
+# minor while pre-1.0 (issue #17): "0.2" accepts 0.2.x only, so a core
 # minor bump can never silently mix with older modules and adapters.
 # At 1.0 the range becomes "^1" (compatible within the major). The
 # supported ranges per release are listed in docs/COMPATIBILITY.md.
-factory0-core = { path = "crates/core", version = "0.1" }
+# core is ahead of the other crates at 0.2.x: `well_known` + `Form` (#46).
+factory0-core = { path = "crates/core", version = "0.2" }
 factory0-runtime-cloudflare = { path = "crates/runtime-cloudflare", version = "0.1.0" }
 factory0-adapter-resend = { path = "crates/adapter-resend", version = "0.1.0" }
 factory0-adapter-turnstile = { path = "crates/adapter-turnstile", version = "0.1.0" }
@@ -28,10 +29,12 @@ factory0-cli = { path = "crates/cli", version = "0.1.0" }
 
 # HTTP stack. axum runs without tokio on Workers (ADR 0001): the `tokio`
 # feature stays off, `default-features = false`, and only the extractor
-# features modules need are enabled.
+# features modules need are enabled (`form` = form-encoded bodies for
+# cross-site form_post callbacks, issue #46).
 axum = { version = "0.8.9", default-features = false, features = [
     "json",
     "query",
+    "form",
     "matched-path",
 ] }
 http = "1.5.0"
