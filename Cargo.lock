@@ -452,6 +452,7 @@ dependencies = [
  "futures-core",
  "hmac",
  "http",
+ "insta",
  "pollster",
  "sea-query",
  "serde",

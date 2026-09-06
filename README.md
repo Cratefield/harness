@@ -141,6 +141,23 @@ conformance kit includes the concurrent-request test that proves it.
 
 Progress is visible in the [milestones](../../milestones).
 
+## Observability
+
+One structured span per request carries `request_id`, `method`, `route`
+(the matched path), `module`, `status`, `duration_ms`, `ip_hash` and
+`ua_family` — never an email address. Workers Logs is enabled in the
+template `wrangler.toml` (`[observability] enabled = true`); every
+response also echoes `x-request-id`. To pull one request's trail out of
+the logs, filter on the id the API returned:
+
+```sh
+wrangler tail --format pretty --search <request-id>
+```
+
+The error taxonomy (every problem slug, status and meaning) is
+`docs/ERRORS.md`, generated from `factory0-core`'s registry and checked
+in CI for drift.
+
 ## Toolchain
 
 Stable Rust pinned in `rust-toolchain.toml`, target `wasm32-unknown-unknown`,

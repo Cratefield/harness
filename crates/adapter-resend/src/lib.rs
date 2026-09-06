@@ -126,7 +126,15 @@ impl Resend {
 #[async_trait]
 impl Mailer for Resend {
     async fn send(&self, message: Message) -> Result<SendOutcome, MailError> {
+        // Outcome logging per issue #14: provider, code, idempotency key;
+        // the recipient is never logged.
         let Some(api_key) = &self.api_key else {
+            tracing::info!(
+                provider = "resend",
+                outcome = "not_configured",
+                idempotency = message.idempotency_key.as_deref().unwrap_or(""),
+                "mailer outcome"
+            );
             return Ok(SendOutcome::NotConfigured);
         };
 
@@ -178,8 +186,24 @@ impl Mailer for Resend {
         if status.is_success() {
             let parsed: SendResponse =
                 serde_json::from_str(&text).map_err(|err| MailError::Transport(err.to_string()))?;
+            tracing::info!(
+                provider = "resend",
+                code = status.as_u16(),
+                outcome = "sent",
+                idempotency = message.idempotency_key.as_deref().unwrap_or(""),
+                "mailer outcome"
+            );
             return Ok(SendOutcome::Sent { id: parsed.id });
         }
-        Err(Self::map_status(status, &text, retry_after))
+        let error = Self::map_status(status, &text, retry_after);
+        tracing::warn!(
+            provider = "resend",
+            code = status.as_u16(),
+            outcome = "failed",
+            idempotency = message.idempotency_key.as_deref().unwrap_or(""),
+            error = %error,
+            "mailer outcome"
+        );
+        Err(error)
     }
 }

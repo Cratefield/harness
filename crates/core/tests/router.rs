@@ -307,3 +307,41 @@ fn problem_slugs_are_unique() {
         assert_eq!(problem.status, def.status);
     }
 }
+
+/// `/__health` carries the observability detail from issue #14:
+/// `harness_api`, `HARNESS_BUILD` from config, mailer/captcha presence.
+struct NeverMailer;
+#[async_trait::async_trait]
+impl factory0_core::Mailer for NeverMailer {
+    async fn send(
+        &self,
+        _message: factory0_core::Message,
+    ) -> Result<factory0_core::SendOutcome, factory0_core::MailError> {
+        Ok(factory0_core::SendOutcome::NotConfigured)
+    }
+}
+
+#[pollster::test]
+async fn health_lists_contract_and_port_detail() {
+    let harness = harness_with_sample();
+    let mut ports = Ports::with_config(Arc::new(factory0_core::MapConfig::from_pairs([(
+        "HARNESS_BUILD",
+        "c8ecd06",
+    )])));
+    ports.mailer = Some(Arc::new(NeverMailer));
+    let router = harness.router(ports);
+    let response = request(&router, Method::GET, "/__health", &[], None).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = body_json(response).await;
+    assert_eq!(body["harness_api"], factory0_core::HARNESS_API);
+    assert_eq!(body["harness_build"], "c8ecd06");
+    assert_eq!(body["mailer"], "configured");
+    assert_eq!(body["captcha"], "absent");
+
+    // Without config or ports: null build, mailer not configured.
+    let bare = harness.router(Ports::empty());
+    let response = request(&bare, Method::GET, "/__health", &[], None).await;
+    let body = body_json(response).await;
+    assert_eq!(body["harness_build"], serde_json::Value::Null);
+    assert_eq!(body["mailer"], "not_configured");
+}

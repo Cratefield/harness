@@ -11,8 +11,10 @@
 //! subscriber writes one JSON line per event with field redaction per
 //! architecture section 11 — names matching
 //! `(?i)secret|token|key|authorization|password` become `[redacted]`, and
-//! email-ish fields are logged only as a truncated SHA-256 hash. Span
-//! fields are not emitted; harness spans carry only the request id.
+//! email-ish fields are logged only as a truncated SHA-256 hash (rules
+//! in `factory0_core::logging`, so runtimes cannot drift). Span fields
+//! are not emitted as events; the per-request span (issue #14) is
+//! carried on the `Scope` and its shape is asserted by core's tests.
 
 use std::sync::OnceLock;
 

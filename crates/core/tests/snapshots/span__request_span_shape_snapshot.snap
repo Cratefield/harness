@@ -1,0 +1,12 @@
+---
+source: crates/core/tests/span.rs
+expression: "shape.join(\"\\n\")"
+---
+duration_ms=<value>
+ip_hash=<12-hex>
+method=GET
+module=sample
+request_id=<value>
+route=/v1/sample/hello
+status=200
+ua_family=mozilla

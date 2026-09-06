@@ -35,3 +35,4 @@ unicode-normalization = { workspace = true }
 [dev-dependencies]
 pollster = { workspace = true }
 futures-channel = { workspace = true }
+insta = { workspace = true }
