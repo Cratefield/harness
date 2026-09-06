@@ -1,0 +1,32 @@
+[package]
+name = "venture-native"
+description = "The example venture as a native binary: same modules, runtime-native on tokio"
+publish = false
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+# Native-only deps are target-gated (the pattern `factory0-adapter-postgres`
+# uses) so `cargo tree --target wasm32-unknown-unknown --workspace` stays
+# free of tokio/reqwest/redis/sqlx/rusqlite even with this crate as a
+# member — the proof the brief demands.
+[target.'cfg(not(any(target_arch = "wasm32", target_arch = "wasm64")))'.dependencies]
+venture = { path = "../venture" }
+factory0-core = { workspace = true }
+factory0-runtime-native = { path = "../../crates/runtime-native" }
+factory0-adapter-postgres = { workspace = true }
+factory0-adapter-sqlite = { workspace = true }
+factory0-adapter-resend = { workspace = true }
+factory0-adapter-turnstile = { workspace = true }
+factory0-module-email-signup = { workspace = true }
+factory0-module-waitlist = { workspace = true }
+tokio = { workspace = true, features = ["time", "net", "signal"] }
+http = { workspace = true }
+bytes = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }

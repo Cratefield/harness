@@ -8,7 +8,10 @@
 #![doc = include_str!("../README.md")]
 #![forbid(unsafe_code)]
 
-mod sample;
+// `pub` + the `rlib` crate type in `Cargo.toml` so the native example
+// (`examples/venture-native`) reuses this exact module — one source of
+// truth for the wasm and native canaries.
+pub mod sample;
 
 use factory0_core::Harness;
 use factory0_module_email_signup::EmailSignup;

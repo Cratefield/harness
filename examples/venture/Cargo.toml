@@ -8,8 +8,10 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 
+# `cdylib` for worker-build's wasm output; `rlib` so the native example
+# crate can link the sample module verbatim (issue #19).
 [lib]
-crate-type = ["cdylib"]
+crate-type = ["cdylib", "rlib"]
 
 [lints]
 workspace = true
