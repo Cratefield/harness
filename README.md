@@ -78,25 +78,45 @@ it under `cargo test`, so a misconfiguration fails before `wrangler deploy` can.
 ## Shape
 
 ```mermaid
+%%{init: {"theme":"base","themeVariables":{
+  "background":"transparent",
+  "fontFamily":"ui-monospace, SFMono-Regular, Menlo, monospace",
+  "fontSize":"13px",
+  "primaryColor":"#141416","primaryTextColor":"#EDEBE6","primaryBorderColor":"#3A3A3F",
+  "lineColor":"#6E6E76","textColor":"#8A8A8E",
+  "clusterBkg":"transparent","clusterBorder":"#3A3A3F",
+  "edgeLabelBackground":"#0E0E10"
+}} }%%
 flowchart LR
-  subgraph venture["one venture · one Worker · one database"]
-    H["Harness<br/>axum router · /v1/&lt;module&gt;"]
-    M1["module<br/>email-signup"]
-    M2["module<br/>waitlist"]
-    P["ports<br/>Database · Mailer · Captcha<br/>RateLimiter · Signer · KeyValue"]
-    H --> M1 & M2 --> P
+  REQ(["HTTPS<br/>request"]):::req --> H
+
+  subgraph V["ONE VENTURE · ONE BINARY · ONE DATABASE"]
+    H["<b>Harness</b><br/>axum router<br/>/v1/&lt;module&gt;"]:::core
+    M1["email-signup"]:::mod
+    M2["waitlist"]:::mod
+    MX["your module"]:::ghost
+    P{{"<b>ports</b><br/>Database · Mailer<br/>Captcha · RateLimiter<br/>Signer · KeyValue"}}:::port
+    H --> M1 & M2 & MX --> P
   end
-  subgraph cf["runtime-cloudflare"]
-    D1[(D1)]
-    KV[(KV)]
-    RL[Rate Limiting]
+
+  subgraph A["ADAPTERS · THE ONLY VENDOR-AWARE CODE"]
+    DB[("D1")]:::vendor
+    KV[("KV")]:::vendor
+    RS["Resend"]:::vendor
+    TS["Turnstile"]:::vendor
+    PG[("Postgres<br/>phase 3")]:::future
   end
-  subgraph vendors["adapters"]
-    RS[Resend]
-    TS[Turnstile]
-  end
-  P --> D1 & KV & RL & RS & TS
-  P -. "phase 3: runtime-native" .-> PG[(Postgres)]
+
+  P --> DB & KV & RS & TS
+  P -. "runtime-native" .-> PG
+
+  classDef req fill:#0E0E10,stroke:#4C6FFF,stroke-width:1.5px,color:#EDEBE6
+  classDef core fill:#141416,stroke:#4C6FFF,stroke-width:1.5px,color:#EDEBE6
+  classDef mod fill:#0E0E10,stroke:#3A3A3F,color:#EDEBE6
+  classDef ghost fill:transparent,stroke:#55555A,stroke-dasharray:4 3,color:#8A8A8E
+  classDef port fill:#141416,stroke:#EDEBE6,stroke-width:1.5px,color:#EDEBE6
+  classDef vendor fill:#0E0E10,stroke:#3A3A3F,color:#A9A8A5
+  classDef future fill:transparent,stroke:#55555A,stroke-dasharray:4 3,color:#8A8A8E
 ```
 
 ## Crates

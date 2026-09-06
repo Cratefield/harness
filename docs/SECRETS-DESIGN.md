@@ -27,6 +27,15 @@ bindings exactly as today (section 9).
 ## 2. Key hierarchy
 
 ```mermaid
+%%{init: {"theme":"base","themeVariables":{
+  "background":"transparent",
+  "fontFamily":"ui-monospace, SFMono-Regular, Menlo, monospace",
+  "fontSize":"13px",
+  "primaryColor":"#141416","primaryTextColor":"#EDEBE6","primaryBorderColor":"#3A3A3F",
+  "lineColor":"#6E6E76","textColor":"#8A8A8E",
+  "clusterBkg":"transparent","clusterBorder":"#3A3A3F",
+  "edgeLabelBackground":"#0E0E10"
+}} }%%
 flowchart TB
   KMS["KMS — one master key (KEK) per environment<br/>alias: fz/&lt;env&gt;"]
   subgraph control["control database — no venture role has credentials"]
@@ -50,6 +59,17 @@ flowchart TB
   GW -. "unwraps (cache miss)" .-> GS
   AW -. "unwraps (cache miss)" .-> AS
   BW -. "unwraps (cache miss)" .-> BS
+  KMS:::kms
+  GW:::key
+  AW:::key
+  BW:::key
+  GS:::store
+  AS:::store
+  BS:::store
+
+  classDef kms fill:#141416,stroke:#4C6FFF,stroke-width:1.5px,color:#EDEBE6
+  classDef key fill:#141416,stroke:#EDEBE6,stroke-width:1.5px,color:#EDEBE6
+  classDef store fill:#0E0E10,stroke:#3A3A3F,color:#A9A8A5
 ```
 
 - **KEK: one master key per environment** (`dev`, `staging`, `prod`), held
