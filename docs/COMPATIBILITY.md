@@ -26,15 +26,15 @@ compatibility-doc` and checked in CI for drift. Do not edit by hand.
 
 | Crate | Version | HARNESS_API | `factory0-core` range |
 |---|---|---|---|
-| `factory0-adapter-resend` | 0.1.0 | 1 | `^0.1` — `>=0.1.0, <0.2.0` |
-| `factory0-adapter-sqlite` | 0.1.0 | 1 | `^0.1` — `>=0.1.0, <0.2.0` |
-| `factory0-adapter-turnstile` | 0.1.0 | 1 | `^0.1` — `>=0.1.0, <0.2.0` |
-| `factory0-cli` | 0.1.0 | 1 | `^0.1` — `>=0.1.0, <0.2.0` |
-| `factory0-module-email-signup` | 0.1.0 | 1 | `^0.1` — `>=0.1.0, <0.2.0` |
-| `factory0-module-waitlist` | 0.1.0 | 1 | `^0.1` — `>=0.1.0, <0.2.0` |
-| `factory0-runtime-cloudflare` | 0.1.0 | 1 | `^0.1` — `>=0.1.0, <0.2.0` |
-| `factory0-testing` | 0.1.0 | 1 | `^0.1` — `>=0.1.0, <0.2.0` |
-| `venture` | 0.1.0 | 1 | `^0.1` — `>=0.1.0, <0.2.0` |
+| `factory0-adapter-resend` | 0.1.0 | 1 | `^0.2` — `>=0.2.0, <0.3.0` |
+| `factory0-adapter-sqlite` | 0.1.0 | 1 | `^0.2` — `>=0.2.0, <0.3.0` |
+| `factory0-adapter-turnstile` | 0.1.0 | 1 | `^0.2` — `>=0.2.0, <0.3.0` |
+| `factory0-cli` | 0.1.0 | 1 | `^0.2` — `>=0.2.0, <0.3.0` |
+| `factory0-module-email-signup` | 0.1.0 | 1 | `^0.2` — `>=0.2.0, <0.3.0` |
+| `factory0-module-waitlist` | 0.1.0 | 1 | `^0.2` — `>=0.2.0, <0.3.0` |
+| `factory0-runtime-cloudflare` | 0.1.0 | 1 | `^0.2` — `>=0.2.0, <0.3.0` |
+| `factory0-testing` | 0.1.0 | 1 | `^0.2` — `>=0.2.0, <0.3.0` |
+| `venture` | 0.1.0 | 1 | `^0.2` — `>=0.2.0, <0.3.0` |
 
 A module row means: that module version was built and conformance-tested
 against every `factory0-core` its range accepts at the time of release
