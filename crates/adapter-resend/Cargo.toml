@@ -2,6 +2,9 @@
 name = "factory0-adapter-resend"
 description = "Mailer port over the Resend REST API for the Factory Zero harness"
 readme = "README.md"
+keywords = ["factory0", "resend", "email", "mailer", "adapter"]
+categories = ["email"]
+include = ["src/**/*", "README.md"]
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

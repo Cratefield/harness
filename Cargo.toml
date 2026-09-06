@@ -1,7 +1,7 @@
 [workspace]
 resolver = "3"
 members = ["crates/*", "examples/*"]
-exclude = ["crates/cli/tests/fixture"]
+exclude = ["crates/cli-acceptance/fixture"]
 
 [workspace.package]
 version = "0.1.0"
@@ -24,6 +24,7 @@ factory0-adapter-sqlite = { path = "crates/adapter-sqlite", version = "0.1.0" }
 factory0-module-email-signup = { path = "crates/module-email-signup", version = "0.1.0" }
 factory0-module-waitlist = { path = "crates/module-waitlist", version = "0.1.0" }
 factory0-testing = { path = "crates/testing", version = "0.1.0" }
+factory0-cli = { path = "crates/cli", version = "0.1.0" }
 
 # HTTP stack. axum runs without tokio on Workers (ADR 0001): the `tokio`
 # feature stays off, `default-features = false`, and only the extractor

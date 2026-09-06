@@ -2,6 +2,9 @@
 name = "factory0-cli"
 description = "The fz CLI for Factory Zero ventures: migrations collect, doctor, modules"
 readme = "README.md"
+keywords = ["factory0", "cli", "migrations", "wrangler", "d1"]
+categories = ["command-line-utilities", "development-tools"]
+include = ["src/**/*", "examples/**/*", "README.md"]
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -18,11 +21,3 @@ sha2 = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tracing = { workspace = true }
-
-[dev-dependencies]
-pollster = { workspace = true }
-insta = { workspace = true }
-factory0-adapter-sqlite = { workspace = true }
-venture-fixture = { path = "tests/fixture" }
-sea-query = { workspace = true }
-axum = { workspace = true }

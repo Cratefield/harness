@@ -2,6 +2,9 @@
 name = "factory0-core"
 description = "Factory Zero harness kernel: Module trait, Harness builder, ports, errors"
 readme = "../../README.md"
+keywords = ["factory0", "harness", "backend", "axum", "modules"]
+categories = ["web-programming", "asynchronous"]
+include = ["src/**/*", "examples/**/*"]
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

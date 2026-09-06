@@ -2,6 +2,9 @@
 name = "factory0-module-email-signup"
 description = "Factory Zero module: email signup with double opt-in, unsubscribe, admin export"
 readme = "README.md"
+keywords = ["factory0", "signup", "email", "newsletter", "opt-in"]
+categories = ["email"]
+include = ["src/**/*", "migrations/**/*", "templates/**/*", "examples/**/*", "tests/**/*", "README.md"]
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

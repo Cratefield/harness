@@ -39,7 +39,8 @@ Decisions, including why the TypeScript attempt was thrown away, are in
 [docs/SECURITY.md](docs/SECURITY.md). What we store and for how long:
 [docs/PRIVACY.md](docs/PRIVACY.md). Which module version runs on which
 core: [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md), generated and
-drift-checked in CI.
+drift-checked in CI. How crates reach crates.io:
+[docs/RELEASING.md](docs/RELEASING.md).
 
 ## How a venture uses it
 

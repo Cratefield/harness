@@ -2,6 +2,9 @@
 name = "factory0-adapter-turnstile"
 description = "Captcha port over Cloudflare Turnstile siteverify for the Factory Zero harness"
 readme = "README.md"
+keywords = ["factory0", "turnstile", "captcha", "cloudflare", "adapter"]
+categories = ["web-programming"]
+include = ["src/**/*", "README.md"]
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

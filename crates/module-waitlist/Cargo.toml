@@ -2,6 +2,9 @@
 name = "factory0-module-waitlist"
 description = "Factory Zero module: per-product waitlist with confirm, position, referral codes"
 readme = "README.md"
+keywords = ["factory0", "waitlist", "referral", "email", "module"]
+categories = ["email", "web-programming"]
+include = ["src/**/*", "migrations/**/*", "templates/**/*", "examples/**/*", "tests/**/*", "README.md"]
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

@@ -1,0 +1,26 @@
+# Acceptance tests for `fz` (issue #8): a separate workspace crate, not
+# dev-dependencies of `factory0-cli`, because `cargo publish` resolves
+# dev-dependencies against crates.io — a published `factory0-cli` could
+# never verify with a fixture that is not itself published (issue #15).
+[package]
+name = "factory0-cli-acceptance"
+description = "Acceptance tests for the fz CLI: fixture venture, collect/lockfile, doctor, modules"
+publish = false
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+factory0-core = { workspace = true }
+factory0-cli = { workspace = true }
+venture-fixture = { path = "fixture" }
+factory0-adapter-sqlite = { workspace = true }
+insta = { workspace = true }
+sea-query = { workspace = true }
+axum = { workspace = true }
+pollster = { workspace = true }

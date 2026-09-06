@@ -1,0 +1,21 @@
+# release-plz configuration (issue #15, ADR 0005). Docs:
+# https://release-plz.dev
+#
+# Per-crate versioning: every crate versions independently; release-plz
+# bumps only the crates changed since their last release and rewrites
+# the workspace dependency requirements it manages. Changelogs are
+# generated per crate from conventional commits (feat/fix grouped,
+# breaking changes highlighted — the git-cliff defaults).
+
+[workspace]
+repo_url = "https://github.com/Factory-Zero/harness"
+
+# Never published: the wasm example and the CLI acceptance suite exist
+# only inside this repository.
+[[package]]
+name = "venture"
+publish = false
+
+[[package]]
+name = "factory0-cli-acceptance"
+publish = false

@@ -2,6 +2,9 @@
 name = "factory0-runtime-cloudflare"
 description = "Cloudflare Workers runtime for the Factory Zero harness (workers-rs)"
 readme = "README.md"
+keywords = ["factory0", "cloudflare", "workers", "wasm", "serverless"]
+categories = ["web-programming"]
+include = ["src/**/*", "README.md"]
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
