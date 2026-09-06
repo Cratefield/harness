@@ -14,9 +14,20 @@ repository.workspace = true
 [lints]
 workspace = true
 
+[features]
+# The Postgres parity leg (issue #20): pulls the native-only Postgres
+# adapter and a private tokio runtime that drives its sqlx pool. Opt-in
+# so the default factory0-testing dependency graph stays free of sqlx
+# and tokio — a module's wasm build must never see them. Modules enable
+# it on their factory0-testing dev-dependency; the Postgres leg itself
+# only runs when FZ_TEST_POSTGRES_URL names a server.
+postgres = ["dep:factory0-adapter-postgres", "dep:tokio"]
+
 [dependencies]
 factory0-core = { workspace = true }
 factory0-adapter-sqlite = { workspace = true }
+factory0-adapter-postgres = { workspace = true, optional = true }
+tokio = { workspace = true, optional = true }
 axum = { workspace = true }
 http = { workspace = true }
 tower = { workspace = true }

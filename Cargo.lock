@@ -741,7 +741,10 @@ version = "0.1.0"
 dependencies = [
  "clap",
  "factory0-adapter-postgres",
+ "factory0-adapter-sqlite",
  "factory0-core",
+ "pollster",
+ "sea-query",
  "serde",
  "serde_json",
  "sha2 0.11.0",
@@ -754,12 +757,15 @@ name = "factory0-cli-acceptance"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "factory0-adapter-postgres",
  "factory0-adapter-sqlite",
  "factory0-cli",
  "factory0-core",
  "insta",
  "pollster",
  "sea-query",
+ "serde_json",
+ "sha2 0.11.0",
  "sqlx",
  "tokio",
  "venture-fixture",
@@ -907,6 +913,7 @@ dependencies = [
  "async-trait",
  "axum",
  "bytes",
+ "factory0-adapter-postgres",
  "factory0-adapter-sqlite",
  "factory0-core",
  "futures-core",
@@ -916,6 +923,7 @@ dependencies = [
  "serde",
  "serde_json",
  "time",
+ "tokio",
  "tower",
  "tracing",
 ]

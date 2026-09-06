@@ -12,6 +12,12 @@
 </p>
 
 <p align="center">
+  <a href="https://github.com/Factory-Zero/harness/actions/workflows/parity.yml">
+    <img src="https://github.com/Factory-Zero/harness/actions/workflows/parity.yml/badge.svg" alt="parity: module suites on SQLite and Postgres (matrix)">
+  </a>
+</p>
+
+<p align="center">
   <b>factory0.ventures</b> · HARNESS · <code>factory0-*</code> on crates.io
 </p>
 

@@ -8,7 +8,7 @@
 mod common;
 
 use axum::Router;
-use common::{TempDb, skip_reason};
+use common::{TempDb, base_url, skip_reason};
 use factory0_adapter_postgres::Postgres;
 use factory0_core::{
     Config, ConfigError, Database, DbError, Harness, Migrations, Module, ModuleContext, Port,
@@ -40,9 +40,12 @@ fn repo_harness() -> Harness {
 
 #[tokio::test]
 async fn every_shipped_migration_applies_on_postgres_16() {
-    let Some(temp) = TempDb::create("contract").await else {
+    let Some(base) = base_url() else {
         eprintln!("SKIPPED: {}", skip_reason());
         return;
+    };
+    let Some(temp) = TempDb::create(&base, "contract").await else {
+        panic!("throwaway database creation failed");
     };
     temp.assert_postgres_16().await;
 
@@ -89,9 +92,12 @@ async fn every_shipped_migration_applies_on_postgres_16() {
 
 #[tokio::test]
 async fn runner_applies_a_module_directly_and_is_idempotent() {
-    let Some(temp) = TempDb::create("runner").await else {
+    let Some(base) = base_url() else {
         eprintln!("SKIPPED: {}", skip_reason());
         return;
+    };
+    let Some(temp) = TempDb::create(&base, "runner").await else {
+        panic!("throwaway database creation failed");
     };
     temp.assert_postgres_16().await;
 
@@ -133,9 +139,12 @@ async fn non_portable_sqlite_set_is_refused_not_applied() {
         name: "oops",
         sql: "CREATE TABLE t (id SERIAL PRIMARY KEY);",
     };
-    let Some(temp) = TempDb::create("lint").await else {
+    let Some(base) = base_url() else {
         eprintln!("SKIPPED: {}", skip_reason());
         return;
+    };
+    let Some(temp) = TempDb::create(&base, "lint").await else {
+        panic!("throwaway database creation failed");
     };
     let db = Postgres::connect(&temp.url).await.expect("connect");
 

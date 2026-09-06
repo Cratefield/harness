@@ -1,7 +1,7 @@
 # factory0-cli (`fz`)
 
 The venture CLI: `fz migrations collect`, `fz migrations apply`, `fz
-doctor`, `fz modules`.
+data export` / `fz data import`, `fz doctor`, `fz modules`.
 
 `fz` links against your venture's compiled-in harness, so it runs as a bin
 target **inside the venture repo** — the pattern the venture template
@@ -68,6 +68,36 @@ factory0-cli = { version = "0.1", features = ["postgres"] }
 cargo run --bin fz -- migrations apply --dialect postgres \
   --url postgres://user:pass@host:5432/venture
 ```
+
+## `fz data export [--plan] --db <PATH> --out <FILE.jsonl>` / `fz data import [--append] [--plan] --url <URL> <FILE.jsonl>`
+
+Moves a venture's D1 data to Postgres (issue #21). Export reads a
+venture SQLite database — D1 is SQLite; the Cloudflare-side step is
+`wrangler d1 export` loaded into a local file (`docs/DATA-MOVE.md` is
+the whole runbook) — and writes one JSON Lines file: a manifest line
+(per-table row counts and sha256, tables in lock order), then one
+`{"table","row"}` record per row. `--plan` prints the per-table summary
+without writing.
+
+Import (built with the crate's `postgres` feature, like `migrations
+apply`) loads that file into Postgres in lock order:
+
+- every table's sha256 is verified against the manifest **before
+  anything is written** — a tampered or truncated file leaves the
+  target untouched;
+- a non-empty table is refused without `--append` (naming the table and
+  the flag) before any write; `--append` adds to it, and overlapping
+  primary keys fail loudly rather than duplicating;
+- inserts are batched multi-row statements inside one transaction per
+  table; values bind by the target column's Postgres type (typed NULLs
+  included), and the portable subset is TEXT/INTEGER/REAL/BOOLEAN —
+  anything else fails by name;
+- after the writes, row counts are verified against the manifest;
+- `--plan` prints the target's state (tables, incoming rows, existing
+  rows, refusal warnings) and writes nothing.
+
+The manifest must be exactly this venture's tables — another venture's
+export file is refused before anything touches the network.
 
 ## `fz doctor [--out migrations]`
 

@@ -23,11 +23,15 @@
 #![forbid(unsafe_code)]
 
 mod conformance;
+mod dialect;
 mod fakes;
 mod harness;
+#[cfg(feature = "postgres")]
+mod pg;
 mod request;
 
 pub use conformance::{assert_wasm_safe_deps, conformance};
+pub use dialect::Dialect;
 pub use fakes::{
     EmptyDatabase, FakeCaptcha, FakeDefer, FakeHttpClient, FakeMailer, FakeRateLimiter, FixedClock,
     MailerMode, MemoryKeyValue,
@@ -37,3 +41,8 @@ pub use request::{TestResponse, request};
 
 // The fixed test secret for the kit's Signer — an obvious dummy, never real.
 pub const TEST_HARNESS_SECRET: &str = "factory0-testing-dummy-secret-0123456789";
+
+// Mirrors factory0-adapter-postgres's integration-test skip reason.
+const POSTGRES_SKIP_REASON: &str = "start a local postgres:16 \
+     (docker run --rm -e POSTGRES_PASSWORD=postgres -p 5433:5432 postgres:16) \
+     and set FZ_TEST_POSTGRES_URL=postgres://postgres:postgres@127.0.0.1:5433/postgres";

@@ -1,0 +1,60 @@
+# Parity matrix (issue #20): both modules' suites run against SQLite
+# and Postgres — one test definition, every engine. The `sqlite` leg
+# proves the suites pass without a Postgres; the `postgres` leg runs
+# against a postgres:16 service container (the same image CI uses for
+# the factory0-adapter-postgres contract tests) with
+# FZ_TEST_POSTGRES_URL set, which also exercises the sqlite leg first —
+# `factory0-testing::Dialect::available()` picks up every dialect the
+# environment provides.
+#
+# Both legs are required checks; the README badge reflects the matrix.
+
+name: Parity
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  parity:
+    name: module suites (${{ matrix.dialect }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        dialect: [sqlite, postgres]
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      # Only the postgres leg points the kit at the service container;
+      # the sqlite leg leaves it unset so it runs the sqlite dialect only.
+      FZ_TEST_POSTGRES_URL: ${{ matrix.dialect == 'postgres' && 'postgres://postgres:postgres@localhost:5432/postgres' || '' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.98.1"
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - name: Module suites on the matrix dialect
+        run: |
+          cargo test -p factory0-module-email-signup
+          cargo test -p factory0-module-waitlist
+      - name: Conformance kit on the matrix dialect
+        run: |
+          cargo test -p factory0-module-email-signup --test conformance
+          cargo test -p factory0-module-waitlist --test conformance

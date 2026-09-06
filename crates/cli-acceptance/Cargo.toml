@@ -16,11 +16,16 @@ repository.workspace = true
 workspace = true
 
 [features]
-# Runs `fz migrations apply` against a real Postgres (issue #18); needs
-# FZ_TEST_POSTGRES_URL at test time. Test-only crate (publish = false):
-# sqlx/tokio are regular optional deps because dev-dependencies cannot be
-# feature-gated.
-postgres = ["factory0-cli/postgres", "dep:sqlx", "dep:tokio"]
+# Runs `fz migrations apply` and `fz data import` against a real Postgres
+# (issues #18, #21); needs FZ_TEST_POSTGRES_URL at test time. Test-only
+# crate (publish = false): sqlx/tokio are regular optional deps because
+# dev-dependencies cannot be feature-gated.
+postgres = [
+    "factory0-cli/postgres",
+    "dep:sqlx",
+    "dep:tokio",
+    "dep:factory0-adapter-postgres",
+]
 
 [dependencies]
 sqlx = { version = "0.8.6", default-features = false, features = [
@@ -29,12 +34,15 @@ sqlx = { version = "0.8.6", default-features = false, features = [
     "tls-rustls",
 ], optional = true }
 tokio = { workspace = true, optional = true }
+factory0-adapter-postgres = { workspace = true, optional = true }
 
 [dev-dependencies]
 factory0-core = { workspace = true }
 factory0-cli = { workspace = true }
+sha2 = { workspace = true }
 venture-fixture = { path = "fixture" }
 factory0-adapter-sqlite = { workspace = true }
+serde_json = { workspace = true }
 insta = { workspace = true }
 sea-query = { workspace = true }
 axum = { workspace = true }
