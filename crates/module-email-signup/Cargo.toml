@@ -1,32 +1,31 @@
 [package]
-name = "venture"
-description = "Smallest complete Factory Zero venture: the wasm + D1 canary"
-publish = false
+name = "factory0-module-email-signup"
+description = "Factory Zero module: email signup with double opt-in, unsubscribe, admin export"
+readme = "README.md"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 
-[lib]
-crate-type = ["cdylib"]
-
 [lints]
 workspace = true
 
 [dependencies]
 factory0-core = { workspace = true }
-factory0-runtime-cloudflare = { workspace = true }
-factory0-module-email-signup = { workspace = true }
 axum = { workspace = true }
 http = { workspace = true }
-tower = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 sea-query = { workspace = true }
-worker = { workspace = true }
 tracing = { workspace = true }
 time = { workspace = true }
+ulid = { workspace = true }
 
-[target.'cfg(target_arch = "wasm32")'.dependencies]
-getrandom = { workspace = true }
+[dev-dependencies]
+factory0-testing = { workspace = true }
+factory0-adapter-sqlite = { workspace = true }
+pollster = { workspace = true }
+tower = { workspace = true }
+async-trait = { workspace = true }
+bytes = { workspace = true }

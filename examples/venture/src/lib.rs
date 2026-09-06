@@ -10,6 +10,7 @@
 mod sample;
 
 use factory0_core::Harness;
+use factory0_module_email_signup::EmailSignup;
 use factory0_runtime_cloudflare::{Cloudflare, serve, serve_scheduled};
 use std::sync::OnceLock;
 use worker::{Context, Env, Request, Response, event};
@@ -26,6 +27,8 @@ fn instance() -> &'static (Harness, Cloudflare) {
                     .cors_origins(["https://example.factory0.dev"]),
             )
             .module(sample::SampleRowModule)
+            .module(EmailSignup::new())
+            .templates(factory0_module_email_signup::default_templates())
             .runtime(Cloudflare::new().db("DB"))
             .build()
             .expect("example venture harness is valid");

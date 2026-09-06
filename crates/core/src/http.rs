@@ -141,6 +141,22 @@ impl<T: serde::Serialize> IntoResponse for Json<T> {
     }
 }
 
+/// A `429 rate-limited` problem carrying `Retry-After: <seconds>` when the
+/// limiter reported a pause (architecture section 6).
+pub fn rate_limited(retry_after: Option<Duration>) -> AxumResponse {
+    let problem = Problem::new(&crate::problems::SLUGS.rate_limited);
+    let mut response = problem.into_response();
+    if let Some(pause) = retry_after {
+        let secs = pause.as_secs().max(1);
+        if let Ok(value) = HeaderValue::from_str(&secs.to_string()) {
+            response
+                .headers_mut()
+                .insert(header::HeaderName::from_static("retry-after"), value);
+        }
+    }
+    response
+}
+
 /// CORS allowlist from the venture's origins; never a wildcard
 /// (architecture section 6). Tower-http echoes the matched origin rather
 /// than emitting `*`, and requests from other origins get no CORS headers.

@@ -11,7 +11,10 @@
 
 #![forbid(unsafe_code)]
 
+mod admin;
 mod config;
+mod csv;
+mod email;
 mod events;
 mod harness;
 mod http;
@@ -19,15 +22,22 @@ mod module;
 mod ports;
 mod problem;
 mod problems;
+mod rate_limit;
 mod scope;
 mod signer;
 mod template;
 mod venture;
 
+pub use admin::{bearer_token, constant_time_eq, require_admin};
 pub use config::{Config, ConfigError, EmptyConfig, HarnessConfig, MapConfig, ModuleConfig};
+pub use csv::{FORMULA_PREFIXES, escape as csv_escape, row as csv_row};
+pub use email::{
+    MAX_EMAIL_BYTES, MAX_LOCAL_BYTES, invalid_email_problem, is_valid,
+    normalize as normalize_email, validation_error,
+};
 pub use events::{AnyError, EventBus, EventHandler, EventName};
 pub use harness::{Harness, HarnessBuilder, Runtime};
-pub use http::{Json, MAX_BODY_BYTES, X_REQUEST_ID, request_id_is_valid};
+pub use http::{Json, MAX_BODY_BYTES, X_REQUEST_ID, rate_limited, request_id_is_valid};
 pub use module::{BoxFuture, HARNESS_API, Migrations, Module, ModuleContext, SqlMigration};
 pub use ports::{
     Captcha, CaptchaError, Clock, Database, DbError, Decision, Defer, HttpClient, HttpError, IdGen,
@@ -37,6 +47,7 @@ pub use ports::{
 };
 pub use problem::Problem;
 pub use problems::{ProblemDef, SLUGS, registry as problem_registry};
+pub use rate_limit::{client_ip, rate_limit_keys};
 pub use scope::Scope;
 pub use signer::{HmacSigner, MIN_SECRET_BYTES, SignerError};
 pub use template::{Rendered, Template, TemplateError, TemplateRegistry};
