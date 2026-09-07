@@ -29,6 +29,9 @@ tracing = { workspace = true }
 factory0-testing = { workspace = true }
 factory0-module-waitlist = { workspace = true }
 factory0-module-email-signup = { workspace = true }
+factory0-module-hello = { workspace = true }
+async-trait = { workspace = true }
+bytes = { workspace = true }
 pollster = { workspace = true }
 insta = { workspace = true }
 schemars = { workspace = true }

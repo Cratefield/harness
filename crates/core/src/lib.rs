@@ -64,7 +64,8 @@ pub use sidecar::{HARNESS_SIDECARS, SidecarMount, SidecarMounts, X_HARNESS_API, 
 pub use signer::{HmacSigner, MIN_SECRET_BYTES, SignerError};
 pub use surface::{
     Action, Audience, Column, HINT_KEYWORDS, ModuleSurface, Outcome, RenderedSurface, SURFACE_API,
-    Surface, SurfaceDocument, UiContext, UiMount, VentureSurface, View, hint_field, schema_for,
+    Surface, SurfaceDocument, SurfaceSource, UiContext, UiMount, VentureSurface, View, hint_field,
+    schema_for,
 };
 pub use template::{Rendered, Template, TemplateError, TemplateRegistry};
 pub use venture::{Brand, Venture, VentureEnv};

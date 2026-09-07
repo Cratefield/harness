@@ -30,6 +30,7 @@ factory0-adapter-sqlite = { path = "crates/adapter-sqlite", version = "0.1.0" }
 factory0-adapter-postgres = { path = "crates/adapter-postgres", version = "0.1.0" }
 factory0-module-email-signup = { path = "crates/module-email-signup", version = "0.1.0" }
 factory0-module-waitlist = { path = "crates/module-waitlist", version = "0.1.0" }
+factory0-module-hello = { path = "examples/module-hello", version = "0.1.0" }
 factory0-testing = { path = "crates/testing", version = "0.1.0" }
 factory0-cli = { path = "crates/cli", version = "0.1.0" }
 

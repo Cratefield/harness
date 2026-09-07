@@ -441,12 +441,34 @@ impl SurfaceDocument {
     }
 }
 
+/// Where the current surface comes from (issue #76). With no sidecar
+/// mounted this is the document composed at build; with sidecars, each
+/// call fetches every mounted sidecar's `/__surface` (public part) and
+/// merges it in, so a sidecar redeploy is seen on the next request
+/// (ADR 0009). An unreachable sidecar contributes nothing and is logged.
+#[async_trait::async_trait]
+pub trait SurfaceSource: Send + Sync {
+    /// The full document: admin actions of in-process modules included,
+    /// sidecar modules appended.
+    async fn current(&self) -> std::sync::Arc<SurfaceDocument>;
+    /// The build-time document alone, for checks that must not wait on a
+    /// network (a `UiSpec` validated against what the artifact ships).
+    fn built(&self) -> std::sync::Arc<SurfaceDocument>;
+    /// A prerendered build-time document (admin variant when `admin`),
+    /// if the source keeps one; `None` means render the current document.
+    fn rendered(&self, admin: bool) -> Option<&RenderedSurface> {
+        let _ = admin;
+        None
+    }
+}
+
 /// What a UI renderer gets from the harness (ADR 0010). Built by
 /// `Harness::router` for every router it assembles.
 pub struct UiContext {
     /// The composed surface, admin actions included; the renderer applies
-    /// its own audience rules per page.
-    pub surface: std::sync::Arc<SurfaceDocument>,
+    /// its own audience rules per page. Sidecar modules arrive through
+    /// [`SurfaceSource::current`].
+    pub surface: std::sync::Arc<dyn SurfaceSource>,
     /// The `/v1` API router, for in-process dispatch: a form post becomes
     /// the JSON request the module accepts and is sent through this
     /// service, so every module layer runs and nothing leaves the process.

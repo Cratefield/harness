@@ -33,6 +33,20 @@ win.
 Admin actions are not served on the public routes; they answer `404` like
 an unknown action there and live under `/ui/admin`, below.
 
+## Sidecar modules
+
+A module mounted as a sidecar (ADR 0009, `HARNESS_SIDECARS`) is not in the
+build-time surface. `GET /__surface` and every `/ui` page read the surface
+through a source that, when sidecars are mounted, fetches each sidecar's
+own `/__surface` over its service binding on every call and merges the
+**public** part in under the mount's name (a sidecar's admin routes take
+its own token, which the host does not hold). No cache: a sidecar
+redeploy is seen on the next request, and the binding runs on the same
+thread. An unreachable sidecar contributes nothing and is logged; the
+document still serves. With no sidecar mounted nothing is fetched and the
+prerendered document answers, `ETag` and all. A sidecar module's form
+posts through the same mount its API uses.
+
 ## Field rendering
 
 Fields come from the action's input schema in **struct order**. Per field:
