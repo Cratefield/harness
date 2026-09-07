@@ -556,3 +556,96 @@ impl cratefield_core::Blob for MemoryBlob {
         ))
     }
 }
+
+// ---------------------------------------------------------------------------
+// FakePush
+
+/// How a [`FakePush`] responds, mirroring [`MailerMode`] for the push port.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PushMode {
+    /// Accept and record the notification.
+    DeliverOk,
+    /// Report the adapter is not configured (no key).
+    NotConfigured,
+    /// Report the device token is dead (APNs `410`): the caller prunes it.
+    Unregistered,
+    /// A retryable failure.
+    Transient,
+}
+
+/// An in-memory [`cratefield_core::Push`] for module tests: records every
+/// `(token, notification)` and answers according to its [`PushMode`].
+#[derive(Clone)]
+pub struct FakePush {
+    inner: Arc<FakePushInner>,
+}
+
+struct FakePushInner {
+    mode: Mutex<PushMode>,
+    sent: Mutex<Vec<(String, cratefield_core::Notification)>>,
+}
+
+impl FakePush {
+    #[must_use]
+    pub fn new(mode: PushMode) -> Self {
+        Self {
+            inner: Arc::new(FakePushInner {
+                mode: Mutex::new(mode),
+                sent: Mutex::new(Vec::new()),
+            }),
+        }
+    }
+
+    /// Every `(token, notification)` recorded so far.
+    #[must_use]
+    pub fn sent(&self) -> Vec<(String, cratefield_core::Notification)> {
+        self.inner.sent.lock().expect("push lock").clone()
+    }
+
+    /// The most recent `(token, notification)`.
+    #[must_use]
+    pub fn last(&self) -> Option<(String, cratefield_core::Notification)> {
+        self.inner.sent.lock().expect("push lock").last().cloned()
+    }
+
+    /// Switches the mode (e.g. flip to `Unregistered` mid-test).
+    pub fn set_mode(&self, mode: PushMode) {
+        *self.inner.mode.lock().expect("push lock") = mode;
+    }
+}
+
+impl Default for FakePush {
+    fn default() -> Self {
+        Self::new(PushMode::DeliverOk)
+    }
+}
+
+#[async_trait]
+impl cratefield_core::Push for FakePush {
+    async fn send(
+        &self,
+        device_token: &str,
+        notification: &cratefield_core::Notification,
+    ) -> Result<cratefield_core::PushOutcome, cratefield_core::PushError> {
+        let mode = *self.inner.mode.lock().expect("push lock");
+        match mode {
+            PushMode::DeliverOk => {
+                let id = format!(
+                    "fake-apns-{}",
+                    self.inner.sent.lock().expect("push lock").len()
+                );
+                self.inner
+                    .sent
+                    .lock()
+                    .expect("push lock")
+                    .push((device_token.to_owned(), notification.clone()));
+                Ok(cratefield_core::PushOutcome::Delivered { id: Some(id) })
+            }
+            PushMode::NotConfigured => Ok(cratefield_core::PushOutcome::NotConfigured),
+            PushMode::Unregistered => Err(cratefield_core::PushError::Unregistered),
+            PushMode::Transient => Err(cratefield_core::PushError::Transient(
+                "fake push failure".to_owned(),
+            )),
+        }
+    }
+}

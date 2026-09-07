@@ -71,6 +71,7 @@ crates.io, so the prefix does the job.
 | `cratefield-runtime-cloudflare` | `#[event(fetch)]` and `#[event(scheduled)]` entry points on `workers-rs`. Maps bindings to ports: D1 -> `Database` (sea-query -> `D1PreparedStatement`), KV -> `KeyValue`, Rate Limiting binding -> `RateLimiter`, `HARNESS_SECRET` -> `Signer`, `Context::wait_until` -> `Defer`. |
 | `cratefield-adapter-resend` | `Mailer` over the Resend REST API using the runtime's `HttpClient` port (no vendor SDK). Idempotency keys, error mapping, `NotConfigured` mode when the key is absent. |
 | `cratefield-adapter-turnstile` | `Captcha` over Cloudflare Turnstile siteverify. |
+| `cratefield-adapter-apns` | `Push` over Apple Push Notification service using the runtime's `HttpClient` port (no vendor SDK). Pure-Rust ES256 provider JWT cached 50 min, `Unregistered` (410) vs retryable error mapping, `NotConfigured` mode when the `.p8` is absent. |
 | `cratefield-adapter-sqlite` | `Database` over `rusqlite` (bundled). Used by every test, and viable for a single-node self-hosted deployment. |
 | `cratefield-module-email-signup` | Collect an email, double opt-in, unsubscribe, admin export. |
 | `cratefield-module-waitlist` | Join a per-product waitlist, confirm, position, referral codes, admin export. |
@@ -184,6 +185,7 @@ module. The template ships `tests/harness_builds.rs` asserting `build()` is
 | `Signer` | `sign(Payload) -> String`, `verify(token, purpose) -> Option<Payload>` | HMAC-SHA256 (`hmac` + `sha2`) with `HARNESS_SECRET`; in core | same |
 | `KeyValue` | `get/put/delete` with TTL | KV | Redis |
 | `Blob` | `put(key, bytes, content_type)`, `get -> Option<BlobObject>`, `delete` (idempotent), `signed_url(key, ttl)`; keys are module-prefixed and the harness hands each module a `ScopedBlob` so it cannot name another's objects | R2 via `worker::Bucket` (verify in `wrangler dev`) | directory (`DirBlob`); S3-compatible later |
+| `Push` | `send(device_token, Notification) -> Result<PushOutcome>` where `PushOutcome::{Delivered{id}, NotConfigured}` and `PushError::Unregistered` tells the caller to delete a dead token | APNs over `HttpClient` (`cratefield-adapter-apns`, ES256 provider JWT; verify against Apple sandbox) | APNs (unchanged); FCM later |
 | `HttpClient` | `send(http::Request<Bytes>) -> http::Response<Bytes>` | `worker::Fetch` | `reqwest` |
 | `Clock`, `IdGen` | `now() -> OffsetDateTime`, `ulid() -> String` | in core | in core |
 | `Defer` | `wait_until(BoxFuture)` | `worker::Context::wait_until` | `tokio::spawn` |

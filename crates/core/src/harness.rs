@@ -219,6 +219,7 @@ impl Harness {
             signer: _,
             kv: _,
             blob: _,
+            push: _,
             http: _,
             clock,
             id_gen,

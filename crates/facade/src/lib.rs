@@ -29,6 +29,9 @@ pub use cratefield_adapter_resend as resend;
 #[cfg(feature = "turnstile")]
 pub use cratefield_adapter_turnstile as turnstile;
 
+#[cfg(feature = "apns")]
+pub use cratefield_adapter_apns as apns;
+
 #[cfg(feature = "ui")]
 pub use cratefield_ui as ui;
 

@@ -21,8 +21,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use cratefield_core::{
-    Blob, Captcha, Database, HarnessConfig, KeyValue, Mailer, Port, Ports, RateLimiter, Runtime,
-    UlidIdGen,
+    Blob, Captcha, Database, HarnessConfig, KeyValue, Mailer, Port, Ports, Push, RateLimiter,
+    Runtime, UlidIdGen,
 };
 
 use crate::config::EnvConfig;
@@ -53,6 +53,7 @@ pub struct Native {
     rate_limiter: Option<Arc<dyn RateLimiter>>,
     kv: Option<Arc<dyn KeyValue>>,
     blob: Option<Arc<dyn Blob>>,
+    push: Option<Arc<dyn Push>>,
     mailer: Option<Arc<dyn Mailer>>,
     captcha: Option<Arc<dyn Captcha>>,
 }
@@ -115,6 +116,14 @@ impl Native {
         self
     }
 
+    /// The `Push` port: an APNs adapter (`cratefield-adapter-apns`) or a test
+    /// fake. Notifications reach a device over the runtime's `HttpClient`.
+    #[must_use]
+    pub fn push_arc(mut self, push: Arc<dyn Push>) -> Self {
+        self.push = Some(push);
+        self
+    }
+
     #[must_use]
     pub fn mailer(mut self, mailer: impl Mailer + 'static) -> Self {
         self.mailer = Some(Arc::new(mailer));
@@ -157,6 +166,7 @@ impl Native {
         ports.rate_limiter.clone_from(&self.rate_limiter);
         ports.kv.clone_from(&self.kv);
         ports.blob.clone_from(&self.blob);
+        ports.push.clone_from(&self.push);
         ports.mailer.clone_from(&self.mailer);
         ports.captcha.clone_from(&self.captcha);
 
@@ -200,6 +210,9 @@ impl Runtime for Native {
         if self.blob.is_some() {
             provided.push(Port::Blob);
         }
+        if self.push.is_some() {
+            provided.push(Port::Push);
+        }
         if self.mailer.is_some() {
             provided.push(Port::Mailer);
         }
@@ -223,6 +236,7 @@ pub(crate) fn clone_ports(ports: &Ports) -> Ports {
     snapshot.signer.clone_from(&ports.signer);
     snapshot.kv.clone_from(&ports.kv);
     snapshot.blob.clone_from(&ports.blob);
+    snapshot.push.clone_from(&ports.push);
     snapshot.http.clone_from(&ports.http);
     snapshot.clock.clone_from(&ports.clock);
     snapshot.id_gen.clone_from(&ports.id_gen);
