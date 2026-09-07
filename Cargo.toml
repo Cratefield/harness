@@ -11,12 +11,16 @@ repository = "https://github.com/Factory-Zero/auth"
 
 [workspace.dependencies]
 askama = "0.14.0"
-# Harness crates, pinned to a harness main commit (8853e07, 2026-09-06).
+# Harness crates, pinned to a harness main commit (45c34a4, 2026-09-07).
 # They are NOT on crates.io yet; when they publish, these git pins become
-# version pins (recorded in PROGRESS.md per BUILD-BRIEF.md).
-factory0-core = { git = "https://github.com/Factory-Zero/harness", rev = "8853e071659a967fecdfa95596275188c7bb6725" }
-factory0-testing = { git = "https://github.com/Factory-Zero/harness", rev = "8853e071659a967fecdfa95596275188c7bb6725" }
-factory0-adapter-sqlite = { git = "https://github.com/Factory-Zero/harness", rev = "8853e071659a967fecdfa95596275188c7bb6725" }
+# version pins (issue #25).
+#
+# The repository moved to the Cratefield organisation. git follows the
+# rename, but the address is written out here so a reader is not misled
+# about where the code lives.
+factory0-core = { git = "https://github.com/Cratefield/harness", rev = "45c34a4cc1ad8e2ed0c0077093590a424623f0bd" }
+factory0-testing = { git = "https://github.com/Cratefield/harness", rev = "45c34a4cc1ad8e2ed0c0077093590a424623f0bd" }
+factory0-adapter-sqlite = { git = "https://github.com/Cratefield/harness", rev = "45c34a4cc1ad8e2ed0c0077093590a424623f0bd" }
 
 # Versions mirror the harness workspace so the git harness crates and our
 # direct dependencies unify into one dependency tree.
