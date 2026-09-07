@@ -16,6 +16,14 @@ fn keyed_pseudonym_differs_from_the_bare_hash_and_is_stable() {
     assert_eq!(keyed.len(), 12);
     assert!(keyed.chars().all(|c| c.is_ascii_hexdigit()));
     assert_ne!(keyed, bare, "keying changes the pseudonym");
-    assert_eq!(keyed, subject_hash("alice@example.com"), "stable under one key");
-    assert_ne!(keyed, subject_hash("bob@example.com"), "distinct inputs differ");
+    assert_eq!(
+        keyed,
+        subject_hash("alice@example.com"),
+        "stable under one key"
+    );
+    assert_ne!(
+        keyed,
+        subject_hash("bob@example.com"),
+        "distinct inputs differ"
+    );
 }
