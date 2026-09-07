@@ -10,12 +10,28 @@
 #   merges it is also a push to `main`): then it publishes every crate
 #   whose version is not on crates.io yet, in dependency order, and
 #   tags `<crate>-v<version>`.
+#
+# `release` is gated on the repository variable `CRATES_IO_READY`: a
+# crate's trusted publisher can only be configured after the crate
+# exists, so until the owner has first-published each crate by hand and
+# enabled trusted publishing (docs/RELEASING.md, "Owner setup"), every
+# `release` run would fail on authentication and leave `main` red.
+# `release-pr` is not gated: version bumps and changelogs need no
+# registry credentials.
 
 name: Release
 
 on:
   push:
     branches: [main]
+  # Exercises the pipeline without waiting for a merge and without
+  # publishing: `dry_run` adds `--dry-run` to the release command.
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Add --dry-run to the release command"
+        type: boolean
+        default: true
 
 env:
   CARGO_TERM_COLOR: always
@@ -36,15 +52,27 @@ jobs:
         with:
           toolchain: "1.98.1"
       - uses: Swatinem/rust-cache@v2
+      # Pinned exactly: the action moved from `MarcoIeni/release-plz-action`
+      # to `release-plz/action`, which publishes no floating major tag, so
+      # `@v0` cannot resolve and the job never starts. Bump deliberately.
       - name: Open or update the release PR
-        uses: MarcoIeni/release-plz-action@v0
+        uses: release-plz/action@v0.5.133
         with:
           command: release-pr
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: Publish crates and tag releases (no-op until the release PR merges)
-        uses: MarcoIeni/release-plz-action@v0
+        if: vars.CRATES_IO_READY == 'true'
+        uses: release-plz/action@v0.5.133
         with:
           command: release
+          # Empty means "no dry run": the action tests this input with
+          # `[[ -n ... ]]`, so the string `false` would enable --dry-run
+          # and publishing would silently never happen.
+          dry_run: ${{ inputs.dry_run && 'true' || '' }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Say why publishing was skipped
+        if: vars.CRATES_IO_READY != 'true'
+        run: |
+          echo "::notice title=Publishing is off::The repository variable CRATES_IO_READY is not 'true', so the release command did not run. The crates have not been first-published by hand yet: see docs/RELEASING.md, Owner setup."
