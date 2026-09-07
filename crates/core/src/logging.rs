@@ -6,9 +6,31 @@
 //! The tracing **formatter** lives in each runtime; the redaction rules
 //! live here so Workers and native logs cannot drift apart.
 
+use hmac::{Hmac, KeyInit, Mac};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
+use std::sync::OnceLock;
 use tracing::field::{Field, Visit};
+
+/// A process-wide key that turns a logged email pseudonym into a keyed HMAC
+/// rather than a bare hash. See [`set_log_pseudonym_key`].
+static LOG_PSEUDONYM_KEY: OnceLock<Vec<u8>> = OnceLock::new();
+
+/// Domain-separates the pseudonym HMAC from the signer's use of the same
+/// secret, and versions it so the scheme can change without silently
+/// colliding.
+const PSEUDONYM_DOMAIN: &[u8] = b"cratefield/log-pseudonym/v1\x00";
+
+/// Installs the key that [`subject_hash`] uses to pseudonymise email values in
+/// logs (issue #135). A bare SHA-256 of a low-entropy email is
+/// dictionary-reversible, so a runtime derives this from `HARNESS_SECRET` and
+/// installs it once at startup; `subject_hash` then emits `HMAC(key, email)`
+/// instead. Unset (tests, or a runtime that hasn't wired it) falls back to the
+/// bare hash. Boot-time infrastructure, not request state (ADR 0007);
+/// first-install-wins.
+pub fn set_log_pseudonym_key(key: &[u8]) {
+    let _ = LOG_PSEUDONYM_KEY.set(key.to_vec());
+}
 
 /// Whether a field name marks a secret: matches
 /// `(?i)secret|token|key|authorization|password`.
@@ -27,12 +49,28 @@ pub fn is_email_field(name: &str) -> bool {
     lowered.contains("email") || lowered == "subject"
 }
 
-/// The redacted form of an email-ish value: its SHA-256 digest, 12 hex
-/// characters, no `@` ever reaches the logs.
+/// The redacted form of an email-ish value: a 12-hex pseudonym, no `@` ever
+/// reaching the logs. When a [pseudonym key](set_log_pseudonym_key) is
+/// installed it is `HMAC-SHA256(key, domain ‖ value)` (a keyed pseudonym,
+/// resistant to dictionary reversal); otherwise it degrades to a bare
+/// SHA-256 digest.
 #[must_use]
 pub fn subject_hash(value: &str) -> String {
     use std::fmt::Write as _;
-    let digest = Sha256::digest(value.as_bytes());
+    // Keyed HMAC pseudonym when a key is installed, else a bare digest. The
+    // redaction path never panics: HMAC accepts any key length, and the
+    // `.ok()` fallback covers the impossible error rather than unwrapping it.
+    let digest: [u8; 32] = LOG_PSEUDONYM_KEY
+        .get()
+        .and_then(|key| Hmac::<Sha256>::new_from_slice(key).ok())
+        .map_or_else(
+            || Sha256::digest(value.as_bytes()).into(),
+            |mut mac| {
+                mac.update(PSEUDONYM_DOMAIN);
+                mac.update(value.as_bytes());
+                mac.finalize().into_bytes().into()
+            },
+        );
     let mut hex = String::with_capacity(12);
     for byte in digest.iter().take(6) {
         let _ = write!(hex, "{byte:02x}");
@@ -148,8 +186,6 @@ mod tests {
 
 // ---------------------------------------------------------------------------
 // Internal-error forwarder (issue #107)
-
-use std::sync::OnceLock;
 
 /// A process-wide sink for internal-error diagnostics, installed by the
 /// runtime. See [`set_error_forwarder`].

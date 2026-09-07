@@ -35,8 +35,12 @@
 - **PII minimalism and retention.** See [PRIVACY.md](PRIVACY.md).
 - **Redaction.** Field names matching `(?i)secret|token|key|
   authorization|password` are replaced with `[redacted]`; email values
-  appear only as a 12-hex `subject_hash` (rules in `cratefield_core::logging`,
-  shared by every runtime formatter; verified by tests).
+  appear only as a 12-hex `subject_hash` — a **keyed** HMAC pseudonym
+  (`HMAC-SHA256` under a key the runtime derives from `HARNESS_SECRET`,
+  domain-separated) so a low-entropy address is not dictionary-reversible
+  (issue #135); it degrades to a bare hash only when no key is installed.
+  Rules in `cratefield_core::logging`, shared by every runtime formatter;
+  verified by tests.
 - **No `unsafe`** in core or any module (`#![forbid(unsafe_code)]`); the
   only `unsafe`-adjacent code is `worker::send::SendWrapper` inside the
   `worker` crate (ADR 0002).

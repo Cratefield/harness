@@ -208,6 +208,8 @@ impl Cloudflare {
 
         match HarnessConfig::from_config(&EnvConfig(env.clone())) {
             Ok(config) => {
+                // Key logged email pseudonyms from the harness secret (#135).
+                cratefield_core::set_log_pseudonym_key(config.harness_secret.as_bytes());
                 ports.signer = Some(Arc::new(config.signer()));
             }
             Err(_) => warn_once(

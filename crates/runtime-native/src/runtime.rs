@@ -191,7 +191,12 @@ impl Native {
         ports.captcha.clone_from(&self.captcha);
 
         match HarnessConfig::from_config(&*config) {
-            Ok(parsed) => ports.signer = Some(Arc::new(parsed.signer())),
+            Ok(parsed) => {
+                // Pseudonymise logged emails with a key derived from the
+                // harness secret, not a bare (reversible) hash — issue #135.
+                cratefield_core::set_log_pseudonym_key(parsed.harness_secret.as_bytes());
+                ports.signer = Some(Arc::new(parsed.signer()));
+            }
             Err(_) => warn_once(
                 &WARNED_SIGNER,
                 "HARNESS_SECRET missing or invalid: Signer port not provided",
