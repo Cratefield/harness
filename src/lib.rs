@@ -5,28 +5,32 @@
 //! and the entry lands in this worker's own D1 database. Retrieve the list
 //! with `GET /v1/waitlist/admin/export.csv` under the admin token.
 //!
-//! **The mailer is a no-op until a sending domain is verified.** The
-//! `waitlist` module records a join only after the mailer reports success, so
-//! [`NoopMailer`] reports success without sending: the address is captured as
-//! a pending entry, and the site shows an honest "you're on the list" message
-//! that promises no confirmation email. Swap [`NoopMailer`] for the Resend
-//! adapter once `cratefield.com` has a verified sending domain, and the
-//! double opt-in comes to life with no other change.
+//! **Mail.** The `waitlist` module records a join only after the mailer
+//! reports success, and it sends its confirmation `from` `no-reply@send.
+//! cratefield.com`. When the `RESEND_API_KEY` secret is set, this worker uses
+//! the Resend adapter and double opt-in comes to life; until then it falls
+//! back to [`NoopMailer`], which reports success without sending so the
+//! address is still captured as a pending entry. The key is read from the
+//! Worker `Env` at init — not `std::env`, which is empty on Workers.
 
 #![forbid(unsafe_code)]
 
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 
 use async_trait::async_trait;
+use factory0_adapter_resend::Resend;
 use factory0_core::{Harness, MailError, Mailer, Message, SendOutcome, Venture};
 use factory0_module_waitlist::Waitlist;
-use factory0_runtime_cloudflare::{Cloudflare, serve, serve_scheduled};
+use factory0_runtime_cloudflare::{Cloudflare, FetchClient, serve, serve_scheduled};
 use worker::{Context, Env, Request, Response, event};
 
-/// Reports a send as done without sending. See the crate docs for why: the
-/// module records the join only on a successful send, and Cratefield has no
-/// verified sending domain yet, so this captures the address as a pending
-/// entry rather than failing the join.
+/// The address the confirmation mail is sent from; the sending subdomain
+/// verified in Resend. The module also defaults to this, so it is belt and
+/// braces.
+const MAIL_FROM: &str = "no-reply@send.cratefield.com";
+
+/// Reports a send as done without sending: used until a Resend key is set, so
+/// a join is still captured (as a pending entry) rather than failing.
 struct NoopMailer;
 
 #[async_trait]
@@ -38,10 +42,31 @@ impl Mailer for NoopMailer {
     }
 }
 
+/// Resend when `RESEND_API_KEY` is present on the Worker `Env`, else the
+/// capture-only no-op. Read from the binding, since `std::env` is empty on
+/// Workers.
+fn build_mailer(env: &Env) -> Arc<dyn Mailer> {
+    let key = env
+        .secret("RESEND_API_KEY")
+        .ok()
+        .map(|secret| secret.to_string())
+        .filter(|key| !key.is_empty());
+    match key {
+        Some(key) => Arc::new(Resend::new(
+            Arc::new(FetchClient),
+            Some(key),
+            MAIL_FROM,
+            None,
+        )),
+        None => Arc::new(NoopMailer),
+    }
+}
+
 static INSTANCE: OnceLock<(Harness, Cloudflare)> = OnceLock::new();
 
-fn instance() -> &'static (Harness, Cloudflare) {
+fn instance(env: &Env) -> &'static (Harness, Cloudflare) {
     INSTANCE.get_or_init(|| {
+        let mailer = build_mailer(env);
         let harness = Harness::builder()
             .venture(
                 Venture::new("cratefield-waitlist", "cratefield.com")
@@ -50,13 +75,11 @@ fn instance() -> &'static (Harness, Cloudflare) {
             )
             .templates(factory0_module_waitlist::default_templates())
             .module(Waitlist::new().products(["cratefield"]).referrals(false))
-            .runtime(Cloudflare::new().db("DB").mailer(NoopMailer))
+            .runtime(Cloudflare::new().db("DB").mailer_arc(Arc::clone(&mailer)))
             .build()
             .expect("cratefield waitlist harness is valid");
-        // The mailer must live on the runtime `serve` resolves ports from, so
-        // it is set here too (a no-op both times); the builder copy above is
-        // what satisfies the Waitlist module's required Mailer port at build.
-        let runtime = Cloudflare::new().db("DB").mailer(NoopMailer);
+        // The runtime `serve` resolves ports from must carry the mailer too.
+        let runtime = Cloudflare::new().db("DB").mailer_arc(mailer);
         (harness, runtime)
     })
 }
@@ -68,12 +91,12 @@ fn instance() -> &'static (Harness, Cloudflare) {
 ///
 /// Propagates `worker::Error` from the harness router.
 pub async fn fetch(req: Request, env: Env, ctx: Context) -> worker::Result<Response> {
-    let (harness, runtime) = instance();
+    let (harness, runtime) = instance(&env);
     serve(harness, runtime, req, env, ctx).await
 }
 
 #[event(scheduled)]
 pub async fn scheduled(event: worker::ScheduledEvent, env: Env, ctx: worker::ScheduleContext) {
-    let (harness, runtime) = instance();
+    let (harness, runtime) = instance(&env);
     serve_scheduled(harness, runtime, event, env, ctx).await;
 }
