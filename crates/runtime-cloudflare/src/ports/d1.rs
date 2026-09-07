@@ -22,12 +22,23 @@ fn bind_statement(
     // with `D1Type`: the `D1Type` conversion path fails (integer binds
     // error, text binds hang) under workerd/miniflare, while the
     // JSON->JsValue path is the one workers-rs itself uses for D1 results.
+    //
+    // A JSON `null` must bind as JS `null`, not the `undefined` that
+    // `serde_wasm_bindgen` produces for it: D1 rejects `undefined` with
+    // `D1_TYPE_ERROR: Type 'undefined' not supported`, so any write with a
+    // NULL column (a nullable field left unset) would fail. Map null first.
     let js_values: Vec<worker::wasm_bindgen::JsValue> = stmt
         .values
         .0
         .iter()
         .map(sea_to_json)
-        .map(|json| worker::d1::serde_wasm_bindgen::to_value(&json))
+        .map(|json| {
+            if json.is_null() {
+                Ok(worker::wasm_bindgen::JsValue::NULL)
+            } else {
+                worker::d1::serde_wasm_bindgen::to_value(&json)
+            }
+        })
         .collect::<Result<Vec<_>, _>>()
         .map_err(worker::Error::SerdeWasmBindgenError)?;
     prepared.bind(&js_values)
