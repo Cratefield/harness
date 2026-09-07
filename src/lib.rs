@@ -74,7 +74,15 @@ fn instance(env: &Env) -> &'static (Harness, Cloudflare) {
                     .cors_origins(["https://cratefield.com", "https://www.cratefield.com"]),
             )
             .templates(factory0_module_waitlist::default_templates())
-            .module(Waitlist::new().products(["cratefield"]).referrals(false))
+            .module(
+                Waitlist::new()
+                    .products(["cratefield"])
+                    .referrals(false)
+                    // No /ui is mounted, so send the post-confirm landing to
+                    // the site rather than the module's default status page,
+                    // which this venture does not serve.
+                    .status_redirect("https://cratefield.com/"),
+            )
             .runtime(Cloudflare::new().db("DB").mailer_arc(Arc::clone(&mailer)))
             .build()
             .expect("cratefield waitlist harness is valid");

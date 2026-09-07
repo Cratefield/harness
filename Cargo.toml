@@ -15,10 +15,10 @@ all = "deny"
 pedantic = "warn"
 
 [dependencies]
-factory0-core = { git = "https://github.com/Cratefield/harness", rev = "2b02b77184adde378c0154c273e4313307e1c92e" }
-factory0-runtime-cloudflare = { git = "https://github.com/Cratefield/harness", rev = "2b02b77184adde378c0154c273e4313307e1c92e" }
-factory0-module-waitlist = { git = "https://github.com/Cratefield/harness", rev = "2b02b77184adde378c0154c273e4313307e1c92e" }
-factory0-adapter-resend = { git = "https://github.com/Cratefield/harness", rev = "2b02b77184adde378c0154c273e4313307e1c92e" }
+factory0-core = { git = "https://github.com/Cratefield/harness", rev = "c8a87233af66d368d032349460e8e5ad8148c670" }
+factory0-runtime-cloudflare = { git = "https://github.com/Cratefield/harness", rev = "c8a87233af66d368d032349460e8e5ad8148c670" }
+factory0-module-waitlist = { git = "https://github.com/Cratefield/harness", rev = "c8a87233af66d368d032349460e8e5ad8148c670" }
+factory0-adapter-resend = { git = "https://github.com/Cratefield/harness", rev = "c8a87233af66d368d032349460e8e5ad8148c670" }
 worker = { version = "0.8.5", default-features = false, features = ["d1"] }
 async-trait = "0.1.92"
 
@@ -28,4 +28,5 @@ getrandom = { version = "0.4.3", default-features = false, features = ["wasm_js"
 [profile.release]
 opt-level = "s"
 lto = true
+
 
