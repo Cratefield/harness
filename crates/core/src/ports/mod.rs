@@ -15,6 +15,7 @@ mod http;
 mod idgen;
 mod kv;
 mod mailer;
+mod push;
 mod rate_limiter;
 pub(crate) mod signer;
 
@@ -28,6 +29,7 @@ pub use http::{HttpClient, HttpError};
 pub use idgen::{IdGen, UlidIdGen};
 pub use kv::{KeyValue, KvError};
 pub use mailer::{MailError, Mailer, Message, SendOutcome};
+pub use push::{Notification, Priority, Push, PushError, PushOutcome};
 pub use rate_limiter::{Decision, RateLimitError, RateLimiter};
 pub use signer::{Kid, Payload, SignatureError, Signer};
 
@@ -47,6 +49,7 @@ pub enum Port {
     Signer,
     KeyValue,
     Blob,
+    Push,
     HttpClient,
     Clock,
     IdGen,
@@ -62,6 +65,7 @@ impl Port {
         Port::Signer,
         Port::KeyValue,
         Port::Blob,
+        Port::Push,
         Port::HttpClient,
         Port::Clock,
         Port::IdGen,
@@ -77,6 +81,7 @@ impl Port {
             Port::Signer => "Signer",
             Port::KeyValue => "KeyValue",
             Port::Blob => "Blob",
+            Port::Push => "Push",
             Port::HttpClient => "HttpClient",
             Port::Clock => "Clock",
             Port::IdGen => "IdGen",
@@ -99,6 +104,7 @@ pub struct Ports {
     pub signer: Option<Arc<dyn Signer>>,
     pub kv: Option<Arc<dyn KeyValue>>,
     pub blob: Option<Arc<dyn Blob>>,
+    pub push: Option<Arc<dyn Push>>,
     pub http: Option<Arc<dyn HttpClient>>,
     pub clock: Option<Arc<dyn Clock>>,
     pub id_gen: Option<Arc<dyn IdGen>>,
@@ -125,6 +131,7 @@ impl Ports {
             signer: None,
             kv: None,
             blob: None,
+            push: None,
             http: None,
             clock: None,
             id_gen: None,
@@ -153,6 +160,12 @@ impl Ports {
         }
         if self.kv.is_some() {
             provided.push(Port::KeyValue);
+        }
+        if self.blob.is_some() {
+            provided.push(Port::Blob);
+        }
+        if self.push.is_some() {
+            provided.push(Port::Push);
         }
         if self.http.is_some() {
             provided.push(Port::HttpClient);
@@ -207,6 +220,9 @@ impl Ports {
             view.blob = self.blob.as_ref().map(|blob| {
                 Arc::new(ScopedBlob::new(Arc::clone(blob), module.name())) as Arc<dyn Blob>
             });
+        }
+        if allows(&declared, Port::Push) {
+            view.push.clone_from(&self.push);
         }
         if allows(&declared, Port::HttpClient) {
             view.http.clone_from(&self.http);

@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use cratefield_core::{
-    Captcha, Defer, HarnessConfig, Mailer, Port, Ports, Runtime, SidecarMounts, UlidIdGen,
+    Captcha, Defer, HarnessConfig, Mailer, Port, Ports, Push, Runtime, SidecarMounts, UlidIdGen,
 };
 use worker::Env;
 
@@ -57,6 +57,7 @@ pub struct Cloudflare {
     blob_binding: Option<&'static str>,
     rate_limiter_binding: Option<&'static str>,
     mailer: Option<Arc<dyn Mailer>>,
+    push: Option<Arc<dyn Push>>,
     captcha: Option<Arc<dyn Captcha>>,
 }
 
@@ -74,6 +75,7 @@ impl Cloudflare {
             blob_binding: None,
             rate_limiter_binding: None,
             mailer: None,
+            push: None,
             captcha: None,
         }
     }
@@ -112,6 +114,21 @@ impl Cloudflare {
     #[must_use]
     pub fn mailer_arc(mut self, mailer: Arc<dyn Mailer>) -> Self {
         self.mailer = Some(mailer);
+        self
+    }
+
+    /// The `Push` port. Like `mailer`, the adapter is built from the
+    /// venture's secrets (`cratefield-adapter-apns` from an APNs `.p8`) and
+    /// passed in, not resolved from a Worker binding.
+    #[must_use]
+    pub fn push(mut self, push: impl Push + 'static) -> Self {
+        self.push = Some(Arc::new(push));
+        self
+    }
+
+    #[must_use]
+    pub fn push_arc(mut self, push: Arc<dyn Push>) -> Self {
+        self.push = Some(push);
         self
     }
 
@@ -218,6 +235,7 @@ impl Cloudflare {
         ports.id_gen = Some(Arc::new(UlidIdGen));
         ports.defer = Some(defer);
         ports.mailer.clone_from(&self.mailer);
+        ports.push.clone_from(&self.push);
         ports.captcha.clone_from(&self.captcha);
         ports
     }
@@ -248,6 +266,9 @@ impl Runtime for Cloudflare {
         }
         if self.mailer.is_some() {
             provided.push(Port::Mailer);
+        }
+        if self.push.is_some() {
+            provided.push(Port::Push);
         }
         if self.captcha.is_some() {
             provided.push(Port::Captcha);
