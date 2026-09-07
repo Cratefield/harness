@@ -1,0 +1,28 @@
+{
+  "version": 1,
+  "theme": {
+    "tokens": { "--cf-accent": "#1d4ed8", "--cf-radius": "10px" }
+  },
+  "modules": {
+    "waitlist": {
+      "title": "Early access",
+      "actions": {
+        "join": {
+          "title": "Get early access",
+          "intro": "We open the doors in small batches and email you when it is your turn.",
+          "submit": "Put me on the list",
+          "success": "You're on the list. Check your inbox to confirm.",
+          "fields": {
+            "email": { "label": "Your email", "placeholder": "you@example.com" },
+            "product": { "label": "Which product?" }
+          }
+        },
+        "confirm": {
+          "pages": {
+            "done": { "title": "You're in", "message": "Your place is confirmed. We'll be in touch." }
+          }
+        }
+      }
+    }
+  }
+}

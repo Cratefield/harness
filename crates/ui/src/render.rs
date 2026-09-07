@@ -19,6 +19,8 @@ pub struct FormSpec<'a> {
     pub action: &'a str,
     /// `POST` target; the `/ui` route, never `/v1`.
     pub post_to: &'a str,
+    /// A paragraph above the fields (from the `UiSpec`).
+    pub intro: Option<&'a str>,
     pub fields: &'a [Field],
     pub values: &'a Values,
     /// Field name to message; a key of `""` is the form-level error.
@@ -36,6 +38,9 @@ pub fn form(spec: &FormSpec<'_>) -> Markup {
     html! {
         form class="cf-form" data-cf-module=(spec.module) data-cf-action=(spec.action)
             method="post" action=(spec.post_to) novalidate {
+            @if let Some(intro) = spec.intro {
+                p class="cf-intro" { (intro) }
+            }
             @if let Some((_, message)) = form_error {
                 p class="cf-error cf-error--form" role="alert" { (message) }
             }
@@ -198,6 +203,8 @@ pub struct PageSpec<'a> {
     pub title: &'a str,
     /// `/ui/cf.css` and `/ui/cf.js` relative to the API origin; the
     /// venture's own theme stylesheet, if configured, is linked after.
+    /// Link `/ui/theme.css` (the spec's `--cf-*` tokens) after `cf.css`.
+    pub theme_tokens: bool,
     pub theme_css: Option<&'a str>,
     pub turnstile: bool,
     /// Render the admin navigation (home link, log-out form).
@@ -217,6 +224,9 @@ pub fn page(spec: &PageSpec<'_>, body: &Markup) -> Markup {
                 meta name="robots" content="noindex";
                 title { (spec.title) " · " (spec.venture) }
                 link rel="stylesheet" href="/ui/cf.css";
+                @if spec.theme_tokens {
+                    link rel="stylesheet" href="/ui/theme.css";
+                }
                 @if let Some(theme) = spec.theme_css {
                     link rel="stylesheet" href=(theme);
                 }

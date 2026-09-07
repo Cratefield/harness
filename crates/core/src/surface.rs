@@ -388,6 +388,9 @@ pub struct SurfaceDocument {
     pub harness_api: u32,
     pub venture: VentureSurface,
     pub modules: Vec<ModuleSurface>,
+    /// The mounted renderer's build-time configuration (`UiMount::describe`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ui: Option<serde_json::Value>,
 }
 
 impl SurfaceDocument {
@@ -411,6 +414,7 @@ impl SurfaceDocument {
                 public_url: venture.public_url.clone(),
             },
             modules,
+            ui: None,
         }
     }
 
@@ -432,6 +436,7 @@ impl SurfaceDocument {
                 })
                 .filter(|entry| !entry.surface.is_empty())
                 .collect(),
+            ui: self.ui.clone(),
         }
     }
 }
@@ -466,6 +471,18 @@ pub struct UiContext {
 pub trait UiMount: Send + Sync + 'static {
     /// The router nested at `/ui`, built per `Harness::router` call.
     fn router(&self, ctx: UiContext) -> axum::Router;
+    /// Build-time check of whatever the renderer was configured with (a
+    /// `UiSpec`) against the composed surface; problems go into the same
+    /// list as every other build error.
+    fn validate(&self, surface: &SurfaceDocument, errors: &mut ConfigError) {
+        let _ = (surface, errors);
+    }
+    /// The renderer's build-time configuration as JSON, published in the
+    /// surface document as `ui` so tooling can read the copy and theme a
+    /// venture ships with.
+    fn describe(&self) -> Option<serde_json::Value> {
+        None
+    }
 }
 
 /// A document serialized once, with the strong `ETag` clients revalidate
@@ -689,6 +706,7 @@ mod tests {
                     .action(join())
                     .action(Action::delete("wipe", "/admin/wipe")),
             }],
+            ui: None,
         };
         let full = RenderedSurface::render(&doc);
         let again = RenderedSurface::render(&doc);

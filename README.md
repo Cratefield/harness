@@ -244,7 +244,8 @@ examples/
   venture/                 smallest complete venture; CI builds it to wasm
 docs/
   ARCHITECTURE.md
-  UI.md                    the UI surface and its markup contract
+  UI.md                    the UI surface, its markup contract, UiSpec, admin
+  ui-llms.txt              the same contract written for a generator
   adr/                     0000 … 0010
 tools/
   banner-render.html       source of the README banner

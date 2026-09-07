@@ -4,7 +4,7 @@ description = "Factory Zero harness UI renderer: pages and fragments from the mo
 readme = "README.md"
 keywords = ["factory0", "harness", "ui", "forms", "maud"]
 categories = ["web-programming"]
-include = ["src/**/*", "assets/**/*", "tests/**/*", "README.md"]
+include = ["src/**/*", "assets/**/*", "schemas/**/*", "tests/**/*", "README.md"]
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -22,6 +22,7 @@ tower = { workspace = true }
 maud = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+schemars = { workspace = true }
 tracing = { workspace = true }
 
 [dev-dependencies]

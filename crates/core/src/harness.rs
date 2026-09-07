@@ -65,8 +65,13 @@ struct SurfaceVariants {
 }
 
 impl SurfaceVariants {
-    fn compose(venture: &Venture, modules: &[Arc<dyn Module>]) -> Self {
-        let document = SurfaceDocument::compose(venture, modules);
+    fn compose(
+        venture: &Venture,
+        modules: &[Arc<dyn Module>],
+        ui: Option<&Arc<dyn UiMount>>,
+    ) -> Self {
+        let mut document = SurfaceDocument::compose(venture, modules);
+        document.ui = ui.and_then(|ui| ui.describe());
         Self {
             full: RenderedSurface::render(&document),
             public: RenderedSurface::render(&document.public()),
@@ -534,15 +539,19 @@ impl HarnessBuilder {
             warn_undeclared_ports(module.as_ref(), &self.provides);
         }
 
-        for (id, _) in self.overrides.iter().chain(self.module_templates.iter()) {
-            let Some(module_name) = id.split('/').next() else {
-                continue;
-            };
-            if !names.contains_key(module_name) {
-                errors.push(format!(
-                    "template `{id}` names module `{module_name}` which is not registered"
-                ));
-            }
+        check_template_ids(
+            self.overrides.iter().chain(self.module_templates.iter()),
+            &names,
+            &mut errors,
+        );
+
+        let surface = Arc::new(SurfaceVariants::compose(
+            &venture,
+            &self.modules,
+            self.ui.as_ref(),
+        ));
+        if let Some(ui) = &self.ui {
+            ui.validate(&surface.document, &mut errors);
         }
 
         errors.into_result()?;
@@ -558,8 +567,6 @@ impl HarnessBuilder {
             }
         }
 
-        let surface = Arc::new(SurfaceVariants::compose(&venture, &self.modules));
-
         Ok(Harness {
             venture: Arc::new(venture),
             modules: self.modules,
@@ -570,6 +577,24 @@ impl HarnessBuilder {
             surface,
             ui: self.ui,
         })
+    }
+}
+
+/// A template id's module part must name a registered module.
+fn check_template_ids<'a>(
+    ids: impl Iterator<Item = &'a (String, Box<dyn Template>)>,
+    names: &HashMap<&'static str, usize>,
+    errors: &mut ConfigError,
+) {
+    for (id, _) in ids {
+        let Some(module_name) = id.split('/').next() else {
+            continue;
+        };
+        if !names.contains_key(module_name) {
+            errors.push(format!(
+                "template `{id}` names module `{module_name}` which is not registered"
+            ));
+        }
     }
 }
 
