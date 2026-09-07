@@ -81,9 +81,10 @@ fn json_to_sea(value: &Json) -> SeaValue {
 }
 
 fn d1_rows_to_rows(result: &worker::d1::D1Result) -> Result<Rows, DbError> {
-    let values: Vec<Json> = result
-        .results()
-        .map_err(|err| DbError::Query(err.to_string()))?;
+    let values: Vec<Json> = result.results().map_err(|err| {
+        log_d1(&err);
+        DbError::Query(err.to_string())
+    })?;
     let rows = values
         .into_iter()
         .map(|value| {
@@ -100,11 +101,24 @@ fn d1_rows_to_rows(result: &worker::d1::D1Result) -> Result<Rows, DbError> {
     Ok(Rows::new(rows))
 }
 
+/// Logs a D1 error straight to `console_error!` before it becomes a
+/// [`DbError`]. `install_tracing` is a no-op on wasm (installing a dispatcher
+/// hangs the isolate), so the `tracing::error!` the harness emits when it maps
+/// a `DbError` to a 500 is dropped on Workers; without this, a failed query or
+/// write is an opaque `500` in `wrangler tail`. Errors are the exceptional
+/// path, and D1's messages are structural (no row data), so logging them here
+/// is safe.
+fn log_d1(err: &worker::Error) {
+    worker::console_error!("[d1] {err}");
+}
+
 #[async_trait]
 impl Database for D1Database {
     async fn execute(&self, stmt: &Statement) -> Result<u64, DbError> {
-        let prepared =
-            bind_statement(&self.0, stmt).map_err(|err| DbError::Execute(err.to_string()))?;
+        let prepared = bind_statement(&self.0, stmt).map_err(|err| {
+            log_d1(&err);
+            DbError::Execute(err.to_string())
+        })?;
         // Writes go through `batch` (single-statement): plain `.run()` /
         // `.all()` promises never resolve for writes under local
         // workerd/miniflare (verified empirically); batch resolves.
@@ -113,7 +127,10 @@ impl Database for D1Database {
             .batch(vec![prepared])
             .into_send()
             .await
-            .map_err(|err| DbError::Execute(err.to_string()))?;
+            .map_err(|err| {
+                log_d1(&err);
+                DbError::Execute(err.to_string())
+            })?;
         let changed = results
             .first()
             .and_then(|result| result.meta().ok().flatten())
@@ -123,13 +140,14 @@ impl Database for D1Database {
     }
 
     async fn query(&self, stmt: &Statement) -> Result<Rows, DbError> {
-        let prepared =
-            bind_statement(&self.0, stmt).map_err(|err| DbError::Query(err.to_string()))?;
-        let result = prepared
-            .all()
-            .into_send()
-            .await
-            .map_err(|err| DbError::Query(err.to_string()))?;
+        let prepared = bind_statement(&self.0, stmt).map_err(|err| {
+            log_d1(&err);
+            DbError::Query(err.to_string())
+        })?;
+        let result = prepared.all().into_send().await.map_err(|err| {
+            log_d1(&err);
+            DbError::Query(err.to_string())
+        })?;
         d1_rows_to_rows(&result)
     }
 
@@ -137,15 +155,15 @@ impl Database for D1Database {
     async fn batch(&self, stmts: &[Statement]) -> Result<(), DbError> {
         let mut prepared = Vec::with_capacity(stmts.len());
         for stmt in stmts {
-            prepared.push(
-                bind_statement(&self.0, stmt).map_err(|err| DbError::Batch(err.to_string()))?,
-            );
+            prepared.push(bind_statement(&self.0, stmt).map_err(|err| {
+                log_d1(&err);
+                DbError::Batch(err.to_string())
+            })?);
         }
-        self.0
-            .batch(prepared)
-            .into_send()
-            .await
-            .map_err(|err| DbError::Batch(err.to_string()))?;
+        self.0.batch(prepared).into_send().await.map_err(|err| {
+            log_d1(&err);
+            DbError::Batch(err.to_string())
+        })?;
         Ok(())
     }
 }
