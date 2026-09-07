@@ -423,3 +423,26 @@ async fn names_and_actors_are_validated() {
     );
     assert!(Actor::new("").is_err(), "there is no anonymous access");
 }
+
+#[pollster::test]
+async fn a_card_data_shaped_name_is_refused() {
+    let secrets = Secrets::new(kms());
+    let (store, _db) = store_on(&secrets, "tenant-a");
+    // We never store card data, so a name that looks like it is refused
+    // (PCI DSS SAQ A, #44). Stripe's own secrets go under plain names.
+    for name in ["cvv", "card_number", "customer/card_cvv", "exp_month"] {
+        let err = store
+            .put(name, &"x".into(), &actor())
+            .await
+            .expect_err("card-data name refused");
+        assert!(
+            matches!(err, SecretsError::Invalid(_)),
+            "name `{name}` should be Invalid, got {err:?}"
+        );
+    }
+    // A legitimate Stripe secret name is fine.
+    store
+        .put("stripe/webhook_signing_secret", &"whsec_x".into(), &actor())
+        .await
+        .expect("a plain Stripe secret name is allowed");
+}

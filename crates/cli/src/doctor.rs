@@ -5,6 +5,7 @@
 use crate::collect::verify_locked;
 use crate::lint::banned_tokens;
 use crate::lock::{Lock, read_lock};
+use cratefield_core::lint_card_data;
 use cratefield_core::{HARNESS_API, HARNESS_SIDECARS, Harness, VentureEnv, harness_api_mismatch};
 use std::path::Path;
 
@@ -121,6 +122,22 @@ pub fn doctor(
             for (token, why) in banned_tokens(migration.sql) {
                 failures.push(format!(
                     "module `{}` migration {}: banned token `{token}` — {why}",
+                    module.name(),
+                    migration.id
+                ));
+            }
+        }
+    }
+
+    // Card-data lint (#44): never a PAN, verification code or full expiry in a
+    // migration, on either dialect — so, unlike the portable lint above, this
+    // does not skip a module that ships a postgres override.
+    for module in harness.modules() {
+        let migrations = module.migrations();
+        for migration in migrations.sqlite.iter().chain(migrations.postgres.iter()) {
+            for (fragment, why) in lint_card_data(migration.sql) {
+                failures.push(format!(
+                    "module `{}` migration {}: `{fragment}` {why}",
                     module.name(),
                     migration.id
                 ));
