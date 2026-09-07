@@ -195,6 +195,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "cratefield-access"
+version = "0.1.0"
+dependencies = [
+ "factory0-adapter-sqlite",
+ "factory0-core",
+ "pollster",
+ "sea-query",
+ "serde",
+]
+
+[[package]]
 name = "cratefield-accounts"
 version = "0.1.0"
 dependencies = [
