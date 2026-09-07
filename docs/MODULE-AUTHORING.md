@@ -570,7 +570,23 @@ fn hello_deps_are_wasm_safe() {
 5. two concurrent requests keep their own request ids (the ADR 0007
    regression test);
 6. a `well_known()` router, when provided, serves at the root
-   `/.well-known` and never under `/v1`.
+   `/.well-known` and never under `/v1`;
+7. **sidecar parity** (issue #64): the module answers identically
+   whether it is linked in or reached over a service binding (ADR 0009).
+
+The parity axis builds the module twice — once in-process, once behind a
+fake dispatcher whose "Worker" is a second harness — and sends both the
+same probes with the same client-supplied request id, so a problem
+body's `instance` and the `x-request-id` header compare byte for byte.
+The probes are ones the kit can build without knowing your routes: an
+unknown path, the module root, a malformed body. It also asserts that a
+body over the 64 KiB cap is refused by the host and never forwarded, and
+that every probe actually crossed the hop, so the comparison can never
+pass because the mount quietly stopped working.
+
+If a module genuinely cannot be sidecar-mounted, use
+`conformance_in_process_only(module, "why")`. The reason is required and
+printed by the run: it is the only record of the exception.
 
 `assert_wasm_safe_deps` runs `cargo tree -p <crate> --edges normal` and
 fails on `worker`, `wasm-bindgen`, `tokio` or `reqwest` — the

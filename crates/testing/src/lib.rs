@@ -29,8 +29,11 @@ mod harness;
 #[cfg(feature = "postgres")]
 mod pg;
 mod request;
+mod sidecar;
 
-pub use conformance::{assert_wasm_safe_deps, conformance};
+pub use conformance::{
+    assert_wasm_safe_deps, conformance, conformance_in_process_only, sidecar_parity,
+};
 pub use dialect::Dialect;
 pub use fakes::{
     EmptyDatabase, FakeCaptcha, FakeDefer, FakeDispatcher, FakeHttpClient, FakeMailer,
@@ -38,6 +41,7 @@ pub use fakes::{
 };
 pub use harness::TestHarness;
 pub use request::{TestResponse, request};
+pub use sidecar::{FakeSidecar, Fault, shared as shared_sidecar};
 
 // The fixed test secret for the kit's Signer — an obvious dummy, never real.
 pub const TEST_HARNESS_SECRET: &str = "factory0-testing-dummy-secret-0123456789";
