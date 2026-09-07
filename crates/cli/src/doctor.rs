@@ -129,9 +129,10 @@ pub fn doctor(
         }
     }
 
-    // Card-data lint (#44): never a PAN, verification code or full expiry in a
-    // migration, on either dialect — so, unlike the portable lint above, this
-    // does not skip a module that ships a postgres override.
+    // Card-data lint (#44): never a card number, verification code or full
+    // expiry in a migration, on either dialect (a normal Stripe integration
+    // stores none of them) — so, unlike the portable lint above, this does not
+    // skip a module that ships a postgres override.
     for module in harness.modules() {
         let migrations = module.migrations();
         for migration in migrations.sqlite.iter().chain(migrations.postgres.iter()) {
