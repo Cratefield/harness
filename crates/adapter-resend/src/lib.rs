@@ -66,8 +66,47 @@ struct OutboundEmail<'a> {
     subject: &'a str,
     html: &'a str,
     text: &'a str,
-    #[serde(skip_serializing_if = "<[_]>::is_empty")]
-    tags: &'a [String],
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    tags: Vec<ResendTag>,
+}
+
+/// Resend requires each tag to be a `{ name, value }` object whose fields
+/// contain only ASCII letters, digits, `_` or `-`; a bare string array is
+/// rejected with `422 Invalid input`. A harness tag is a single label, so it
+/// becomes the `name` (sanitised) with a constant `value`.
+#[derive(serde::Serialize)]
+struct ResendTag {
+    name: String,
+    value: &'static str,
+}
+
+fn resend_tags(tags: &[String]) -> Vec<ResendTag> {
+    tags.iter()
+        .map(|tag| ResendTag {
+            name: sanitize_tag(tag),
+            value: "1",
+        })
+        .collect()
+}
+
+/// Keeps only Resend's allowed tag characters (ASCII letters, digits, `_`,
+/// `-`), mapping anything else to `_`, and never emits an empty name.
+fn sanitize_tag(tag: &str) -> String {
+    let cleaned: String = tag
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    if cleaned.is_empty() {
+        "tag".to_owned()
+    } else {
+        cleaned
+    }
 }
 
 #[derive(serde::Deserialize)]
@@ -153,7 +192,7 @@ impl Mailer for Resend {
             subject: &message.subject,
             html: &message.html,
             text: &message.text,
-            tags: &message.tags,
+            tags: resend_tags(&message.tags),
         };
         let body =
             serde_json::to_vec(&payload).map_err(|err| MailError::Transport(err.to_string()))?;
