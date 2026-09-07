@@ -191,3 +191,58 @@ fn harness_with(migrations: &'static [SqlMigration]) -> Harness {
         .build()
         .expect("one-module harness builds")
 }
+
+/// Forward-only enforced by the database, not by one repository's
+/// lockfile: an applied migration whose SQL changed is refused, and a
+/// database written before checksums were recorded keeps working
+/// (issues #28, #34). The SQLite adapter asserts the same, and the two
+/// must not drift.
+#[tokio::test]
+async fn an_edited_migration_is_refused_and_pre_checksum_rows_are_tolerated() {
+    let Some(base) = base_url() else {
+        eprintln!("SKIPPED: {}", skip_reason());
+        return;
+    };
+    let Some(temp) = TempDb::create(&base, "checksum").await else {
+        panic!("throwaway database creation failed");
+    };
+    let db = Postgres::connect(&temp.url).await.expect("connect");
+
+    let first = [SqlMigration {
+        id: "0001",
+        name: "init",
+        sql: "CREATE TABLE IF NOT EXISTS widgets (id text PRIMARY KEY)",
+    }];
+    db.apply_migrations("widgets", &first)
+        .await
+        .expect("applies");
+    db.apply_migrations("widgets", &first)
+        .await
+        .expect("second run is a no-op");
+
+    let edited = [SqlMigration {
+        id: "0001",
+        name: "init",
+        sql: "CREATE TABLE IF NOT EXISTS widgets (id text PRIMARY KEY, colour text)",
+    }];
+    let err = db
+        .apply_migrations("widgets", &edited)
+        .await
+        .expect_err("an edited migration must be refused");
+    let message = err.to_string();
+    assert!(message.contains("widgets/0001"), "{message}");
+    assert!(message.contains("write a new migration"), "{message}");
+
+    // A row recorded before checksums existed reads as applied and
+    // unverifiable, never as a mismatch.
+    db.execute(&Statement::new(
+        "UPDATE harness_migrations SET checksum = NULL WHERE id = 'widgets/0001'",
+    ))
+    .await
+    .expect("simulate a pre-checksum row");
+    db.apply_migrations("widgets", &edited)
+        .await
+        .expect("an old row is tolerated, not a mismatch");
+
+    temp.finish().await;
+}

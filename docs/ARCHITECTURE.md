@@ -235,6 +235,15 @@ Emits `waitlist.confirmed`; a venture can subscribe that event to also add the a
 - Portable subset: `TEXT` ids (ULID), ISO-8601 `TEXT` timestamps, `INTEGER` counters, no `AUTOINCREMENT`, no dialect-specific functions in DDL. `fz doctor` lints it.
 - Postgres later: same files run through the `factory0-adapter-postgres` migrator.
 
+Every applied migration is recorded in `harness_migrations` as
+`<module>/<id>` with the **sha256 of its SQL**. A later run compares
+that hash: unchanged is a skip, changed is a hard error naming the
+migration. Forward-only is therefore enforced by each database rather
+than by one repository's lockfile, which cannot see a deployment that
+already ran the old SQL. Rows written before checksums were recorded
+carry `NULL` and read as "applied, unverifiable" rather than as a
+mismatch.
+
 ## 8. Tooling and release
 
 - Cargo workspace, `rust-toolchain.toml` pinning stable, `rustfmt` + `clippy -D warnings`, `cargo test` for core and modules against `factory0-adapter-sqlite`, `cargo deny` for licenses and advisories.

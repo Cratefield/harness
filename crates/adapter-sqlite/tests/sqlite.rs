@@ -113,3 +113,79 @@ async fn sea_query_limit_binds_as_integer() {
     let rows: Rows = db.query(&Statement::render(&query)).await.expect("select");
     assert_eq!(rows.len(), 1);
 }
+
+/// Forward-only means an applied migration is never edited. The lockfile
+/// enforces that inside one repository; the database has to enforce it
+/// across every deployment that already ran the old SQL (issues #28,
+/// #34). A changed migration is an error, not a silent skip.
+#[pollster::test]
+async fn an_edited_migration_is_refused_by_the_database() {
+    let db = SqliteDatabase::in_memory().expect("in-memory db");
+    let first = [SqlMigration {
+        id: "0001",
+        name: "init",
+        sql: "CREATE TABLE IF NOT EXISTS widgets (id TEXT PRIMARY KEY);",
+    }];
+    db.apply_migrations("widgets", &first).expect("first apply");
+    // Re-applying the same SQL is a no-op, not an error.
+    db.apply_migrations("widgets", &first).expect("idempotent");
+
+    let edited = [SqlMigration {
+        id: "0001",
+        name: "init",
+        sql: "CREATE TABLE IF NOT EXISTS widgets (id TEXT PRIMARY KEY, colour TEXT);",
+    }];
+    let err = db
+        .apply_migrations("widgets", &edited)
+        .expect_err("an edited migration must be refused");
+    let message = err.to_string();
+    assert!(message.contains("widgets/0001"), "{message}");
+    assert!(message.contains("already applied"), "{message}");
+    assert!(message.contains("write a new migration"), "{message}");
+}
+
+/// A database migrated before checksums were recorded has the old
+/// two-column table and rows with no hash. It keeps working, and its
+/// unverifiable rows are treated as applied rather than as mismatches.
+#[pollster::test]
+async fn a_pre_checksum_database_still_applies_and_does_not_cry_mismatch() {
+    let db = SqliteDatabase::in_memory().expect("in-memory db");
+    for sql in [
+        "CREATE TABLE harness_migrations (id TEXT PRIMARY KEY, applied_at TEXT NOT NULL)",
+        "INSERT INTO harness_migrations (id, applied_at) \
+         VALUES ('widgets/0001', '2026-01-01T00:00:00Z')",
+        "CREATE TABLE widgets (id TEXT PRIMARY KEY)",
+    ] {
+        db.execute(&Statement::new(sql))
+            .await
+            .expect("old-style tracking table");
+    }
+
+    // 0001 is recorded with no checksum: applied, unverifiable, skipped
+    // even though the SQL here differs. 0002 is new and applies.
+    let migrations = [
+        SqlMigration {
+            id: "0001",
+            name: "init",
+            sql: "CREATE TABLE IF NOT EXISTS widgets (id TEXT PRIMARY KEY, colour TEXT);",
+        },
+        SqlMigration {
+            id: "0002",
+            name: "add_gadgets",
+            sql: "CREATE TABLE IF NOT EXISTS gadgets (id TEXT PRIMARY KEY);",
+        },
+    ];
+    db.apply_migrations("widgets", &migrations)
+        .expect("an old database keeps working");
+
+    // And the new row carries a checksum, so the next edit is caught.
+    let edited = [SqlMigration {
+        id: "0002",
+        name: "add_gadgets",
+        sql: "CREATE TABLE IF NOT EXISTS gadgets (id TEXT PRIMARY KEY, size INTEGER);",
+    }];
+    assert!(
+        db.apply_migrations("widgets", &edited).is_err(),
+        "rows written from now on are verifiable"
+    );
+}

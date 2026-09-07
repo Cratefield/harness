@@ -14,8 +14,8 @@
 
 use async_trait::async_trait;
 use factory0_core::{Database, DbError, Row, Rows, SqlMigration, Statement};
-use rusqlite::Connection;
 use rusqlite::types::Value as SqliteValue;
+use rusqlite::{Connection, OptionalExtension};
 use sea_query::Value as SeaValue;
 // Connection guarding (see module docs) — not request state.
 #[allow(clippy::disallowed_types)]
@@ -116,22 +116,46 @@ impl SqliteDatabase {
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS harness_migrations (
                  id TEXT PRIMARY KEY,
-                 applied_at TEXT NOT NULL
+                 applied_at TEXT NOT NULL,
+                 checksum TEXT
              );",
         )
         .map_err(|err| DbError::Batch(err.to_string()))?;
+        // Databases migrated before checksums were recorded have the
+        // two-column table. Add the column; their existing rows stay
+        // NULL, which reads as "applied, cannot verify" rather than as a
+        // mismatch — the honest answer for SQL nobody hashed.
+        let has_checksum = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('harness_migrations') \
+                 WHERE name = 'checksum'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .map(|count| count > 0)
+            .map_err(|err| db_err(&err))?;
+        if !has_checksum {
+            conn.execute_batch("ALTER TABLE harness_migrations ADD COLUMN checksum TEXT;")
+                .map_err(|err| DbError::Batch(err.to_string()))?;
+        }
 
         for migration in migrations {
             let key = format!("{module}/{}", migration.id);
-            let already: bool = conn
+            let checksum = factory0_core::migration_checksum(migration.sql);
+            let recorded: Option<Option<String>> = conn
                 .query_row(
-                    "SELECT COUNT(*) FROM harness_migrations WHERE id = ?1",
+                    "SELECT checksum FROM harness_migrations WHERE id = ?1",
                     [&key],
-                    |row| row.get::<_, i64>(0),
+                    |row| row.get::<_, Option<String>>(0),
                 )
-                .map(|count| count > 0)
+                .optional()
                 .map_err(|err| db_err(&err))?;
-            if already {
+            if let Some(recorded) = recorded {
+                if let Some(recorded) = recorded.filter(|hash| hash != &checksum) {
+                    return Err(DbError::Batch(factory0_core::migration_edited(
+                        &key, &recorded, &checksum,
+                    )));
+                }
                 continue;
             }
             let tx = conn
@@ -140,8 +164,8 @@ impl SqliteDatabase {
             tx.execute_batch(migration.sql)
                 .map_err(|err| DbError::Batch(err.to_string()))?;
             tx.execute(
-                "INSERT INTO harness_migrations (id, applied_at) VALUES (?1, ?2)",
-                rusqlite::params![key, iso_now()],
+                "INSERT INTO harness_migrations (id, applied_at, checksum) VALUES (?1, ?2, ?3)",
+                rusqlite::params![key, iso_now(), checksum],
             )
             .map_err(|err| DbError::Batch(err.to_string()))?;
             tx.commit().map_err(|err| DbError::Batch(err.to_string()))?;
