@@ -471,6 +471,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "cratefield"
+version = "0.1.0"
+dependencies = [
+ "cratefield-adapter-postgres",
+ "cratefield-adapter-resend",
+ "cratefield-adapter-sqlite",
+ "cratefield-adapter-turnstile",
+ "cratefield-core",
+ "cratefield-kms",
+ "cratefield-module-cms",
+ "cratefield-module-email-signup",
+ "cratefield-module-waitlist",
+ "cratefield-runtime-cloudflare",
+ "cratefield-runtime-native",
+ "cratefield-secrets",
+ "cratefield-testing",
+ "cratefield-ui",
+]
+
+[[package]]
 name = "cratefield-adapter-postgres"
 version = "0.1.0"
 dependencies = [
@@ -3074,12 +3094,7 @@ name = "venture"
 version = "0.1.0"
 dependencies = [
  "axum",
- "cratefield-adapter-resend",
- "cratefield-core",
- "cratefield-module-email-signup",
- "cratefield-module-waitlist",
- "cratefield-runtime-cloudflare",
- "cratefield-ui",
+ "cratefield",
  "getrandom 0.4.3",
  "http",
  "schemars",

@@ -26,6 +26,7 @@ compatibility-doc` and checked in CI for drift. Do not edit by hand.
 
 | Crate | Version | HARNESS_API | `cratefield-core` range |
 |---|---|---|---|
+| `cratefield` | 0.1.0 | 1 | `^0.3` — `>=0.3.0, <0.4.0` |
 | `cratefield-adapter-postgres` | 0.1.0 | 1 | `^0.3` — `>=0.3.0, <0.4.0` |
 | `cratefield-adapter-resend` | 0.1.0 | 1 | `^0.3` — `>=0.3.0, <0.4.0` |
 | `cratefield-adapter-sqlite` | 0.1.0 | 1 | `^0.3` — `>=0.3.0, <0.4.0` |
@@ -40,7 +41,6 @@ compatibility-doc` and checked in CI for drift. Do not edit by hand.
 | `cratefield-secrets` | 0.1.0 | 1 | `^0.3` — `>=0.3.0, <0.4.0` |
 | `cratefield-testing` | 0.1.0 | 1 | `^0.3` — `>=0.3.0, <0.4.0` |
 | `cratefield-ui` | 0.1.0 | 1 | `^0.3` — `>=0.3.0, <0.4.0` |
-| `venture` | 0.1.0 | 1 | `^0.3` — `>=0.3.0, <0.4.0` |
 | `venture-native` | 0.1.0 | 1 | `^0.3` — `>=0.3.0, <0.4.0` |
 
 A module row means: that module version was built and conformance-tested

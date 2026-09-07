@@ -3,7 +3,7 @@
 
 use axum::extract::State;
 use axum::routing::{get, post};
-use cratefield_core::{
+use cratefield::{
     Action, Audience, Clock, Config, ConfigError, IdGen, Json, Migrations, Module, ModuleContext,
     Outcome, Port, Problem, Scope, SqlMigration, Statement, Surface, SystemClock, UlidIdGen, View,
 };
