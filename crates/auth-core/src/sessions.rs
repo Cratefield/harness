@@ -59,6 +59,13 @@ pub const SESSION_INVALID: factory0_core::ProblemDef = factory0_core::ProblemDef
 pub enum SessionError {
     #[error("entropy source failed: {0}")]
     Entropy(String),
+    /// The account is not `active`, or is gone. Checked here rather than in
+    /// each login method: `users.status` is the service's one
+    /// administrative kill switch, and a method that forgot to look at it
+    /// would quietly make the switch useless. Every way in goes through
+    /// this function, so this is the one place it cannot be forgotten.
+    #[error("the account is not active")]
+    NotActive,
     #[error(transparent)]
     Db(#[from] DbError),
 }
@@ -217,6 +224,16 @@ pub async fn issue(
     id_gen: &dyn IdGen,
     login: Login<'_>,
 ) -> Result<IssuedSession, SessionError> {
+    // Before anything else: a disabled account gets no session, whichever
+    // login method asked. One read, and the kill switch means something.
+    match store::user_by_id(db, login.user_id).await? {
+        Some(user) if user.status == store::STATUS_ACTIVE => {}
+        _ => {
+            tracing::warn!("a session was requested for an account that is not active");
+            return Err(SessionError::NotActive);
+        }
+    }
+
     if let Some(presented) = login.presented_cookie
         && let Some(old) =
             store::session_by_token_hash(db, &sha256_raw(presented.as_bytes())).await?

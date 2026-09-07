@@ -45,26 +45,51 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo test --workspace
  
-  # The module conformance kit, run through the harness's reusable
-  # workflow so this repo's modules pass the identical suite as the
-  # harness's own.
+  # Which crates are modules, worked out rather than listed. A hand-kept
+  # list is a trap: forgetting to add a new module means its conformance
+  # test silently never runs, which is the one failure this job exists to
+  # prevent. `crates/auth-client` is a consumer library, not a module, and
+  # is correctly absent because it implements no `Module`.
+  detect-modules:
+    name: detect module crates
+    runs-on: ubuntu-latest
+    outputs:
+      modules: ${{ steps.find.outputs.modules }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: find
+        shell: bash
+        run: |
+          set -euo pipefail
+          modules=""
+          for dir in crates/*/; do
+            dir="${dir%/}"
+            if grep -rqs "^impl Module for" "$dir/src"; then
+              modules="$modules $dir"
+            fi
+          done
+          modules="${modules# }"
+          if [ -z "$modules" ]; then
+            echo "::error::no crate implements Module; the conformance kit would test nothing"
+            exit 1
+          fi
+          echo "found: $modules"
+          echo "modules=$modules" >> "$GITHUB_OUTPUT"
+
+  # The module conformance kit, run through the harness's reusable workflow
+  # so this repo's modules pass the identical suite as the harness's own.
   #
-  # The harness moved to the Cratefield organisation. The GitHub API and
-  # git both follow that rename, but Actions does not resolve a reusable
+  # The harness moved to the Cratefield organisation. The GitHub API and git
+  # both follow that rename, but Actions does not resolve a reusable
   # workflow through it: the old address fails the whole run at startup,
-  # with no jobs and a generic "workflow file issue". That is what broke CI
-  # here, not the module this PR adds.
-  #
-  # The input is expanded by bash, so several paths can be listed. Neither
-  # module crate matches the default `crates/module-*` glob, and
-  # `crates/auth-client` is a consumer library rather than a module, so
-  # they are named explicitly.
+  # with no jobs and a generic "workflow file issue".
   conformance:
     name: conformance (module kit)
+    needs: detect-modules
     uses: Cratefield/harness/.github/workflows/conformance.yml@main
     with:
-      module-glob: crates/auth-core crates/auth-passkeys
- 
+      module-glob: ${{ needs.detect-modules.outputs.modules }}
+
   deny:
     name: cargo deny
     runs-on: ubuntu-latest

@@ -71,6 +71,14 @@ ed25519-dalek = { version = "2", default-features = false, features = [
 ] }
 rand_core = { version = "0.6", default-features = false }
 
+# OIDC (ADR 0100 Q3): openidconnect and oauth2 build to wasm32 with default
+# features off — no reqwest, no OpenSSL. These are the pins the wasm-auth
+# spike validated. `chrono` comes with them as an API type; its `clock`
+# feature is deliberately OFF, because `Utc::now()` panics on wasm32 and
+# modules read the wall clock through the `Clock` port anyway.
+openidconnect = { version = "4.0.1", default-features = false }
+chrono = { version = "0.4", default-features = false, features = ["alloc"] }
+
 # Traits and errors.
 async-trait = "0.1.92"
 thiserror = "2.0.20"

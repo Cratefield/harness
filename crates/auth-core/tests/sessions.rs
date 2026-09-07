@@ -52,6 +52,65 @@ async fn user(kit: &TestHarness, id: &str) {
     .expect("user");
 }
 
+/// A disabled account, or one that does not exist at all, gets no session
+/// from any login method: the check lives in `issue`, which is the one
+/// funnel every method goes through.
+#[test]
+fn a_session_is_never_issued_to_an_account_that_is_not_active() {
+    pollster::block_on(async {
+        let kit = TestHarness::new(vec![Box::new(AuthCore::new())]);
+        user(&kit, "u1").await;
+        factory0_core::Database::execute(
+            &*kit.db,
+            &factory0_core::Statement::new("UPDATE users SET status = 'disabled' WHERE id = 'u1'"),
+        )
+        .await
+        .expect("status updates");
+
+        let refused = issue(
+            &*kit.db,
+            &at(EPOCH),
+            &factory0_core::UlidIdGen,
+            Login {
+                user_id: "u1",
+                ip: None,
+                user_agent: None,
+                presented_cookie: None,
+                amr: &["passkey"],
+            },
+        )
+        .await;
+        assert!(
+            matches!(refused, Err(factory0_auth_core::SessionError::NotActive)),
+            "a disabled account was issued a session"
+        );
+
+        // An account that was never there is refused the same way, so the
+        // answer says nothing about whether it exists.
+        let missing = issue(
+            &*kit.db,
+            &at(EPOCH),
+            &factory0_core::UlidIdGen,
+            Login {
+                user_id: "nobody",
+                ip: None,
+                user_agent: None,
+                presented_cookie: None,
+                amr: &["passkey"],
+            },
+        )
+        .await;
+        assert!(matches!(
+            missing,
+            Err(factory0_auth_core::SessionError::NotActive)
+        ));
+        assert_eq!(
+            sessions_by_user(&*kit.db, "u1").await.expect("query").len(),
+            0
+        );
+    });
+}
+
 async fn login(
     kit: &TestHarness,
     user_id: &str,
