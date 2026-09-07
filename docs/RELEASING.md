@@ -26,8 +26,29 @@ Authentication is **trusted publishing**: the workflow exchanges the
 GitHub Actions OIDC token (`id-token: write`) for a short-lived
 crates.io token. No `CARGO_REGISTRY_TOKEN` is stored anywhere.
 
-Step 2 is **switched off** until the owner setup below is done: the
-`release` step runs only when the repository variable
+Both steps are **switched off** until the owner setup below is done, so
+an unfinished setup leaves `main` green with an annotation instead of a
+red X on every merge.
+
+Step 1 runs only with a token GitHub lets create pull requests. The
+built-in `GITHUB_TOKEN` usually may not: the API answers *"GitHub
+Actions is not permitted to create or approve pull requests"* (403)
+unless the repository setting allows it. Two ways to fix it, and the
+first is better:
+
+- **A `RELEASE_PLZ_TOKEN` secret** — a fine-grained PAT or GitHub App
+  token with *contents: write* and *pull requests: write* on this
+  repository. It sidesteps the setting, and the release PR it opens
+  **runs CI**, which a `GITHUB_TOKEN`-authored PR never does (GitHub
+  suppresses workflow triggers on those, so version bumps would merge
+  unverified).
+- **The repository setting** — *Settings* → *Actions* → *General* →
+  *Workflow permissions* → tick *Allow GitHub Actions to create and
+  approve pull requests*, then set the repository variable
+  `ACTIONS_MAY_OPEN_PRS` to `true` so the workflow knows. Note the
+  setting also lets any workflow in this repository *approve* PRs.
+
+Step 2 runs only when the repository variable
 `CRATES_IO_READY` is `true`. A crate's trusted publisher cannot be
 configured before the crate exists, so until the first manual publish
 every `release` run would fail on authentication and leave `main` red.
@@ -39,8 +60,15 @@ can be exercised without publishing.
 
 ## Owner setup (once)
 
-These steps need the crates.io account that will own the `factory0-*`
-names. A crate's trusted publisher can only be configured **after the
+Step 0 is about GitHub; the rest need the crates.io account that will
+own the `factory0-*` names.
+
+0. **Let the release PR be opened.** Either add a `RELEASE_PLZ_TOKEN`
+   secret (preferred, and the release PR then runs CI) or tick the
+   repository setting and add the variable `ACTIONS_MAY_OPEN_PRS=true`,
+   as described above. Verify with Actions → *Release* → *Run workflow*
+   (leave `dry_run` checked): the release PR appears.
+ A crate's trusted publisher can only be configured **after the
 crate exists**, so the very first release of each crate is manual:
 
 1. **Create a scoped token.** Sign in to crates.io → *Account settings*
