@@ -23,6 +23,7 @@ mod idempotency;
 mod lint;
 mod logging;
 mod module;
+mod outbox;
 mod ports;
 mod problem;
 mod problems;
@@ -54,6 +55,7 @@ pub use module::{
     BoxFuture, HARNESS_API, Migrations, Module, ModuleContext, SqlMigration, harness_api_mismatch,
     migration_checksum, migration_edited,
 };
+pub use outbox::{Outbox, OutboxRecord};
 pub use ports::{
     Blob, BlobError, BlobObject, Captcha, CaptchaError, Charge, CheckoutRequest, CheckoutSession,
     Clock, ConnectAccountLink, ConnectAccountLinkRequest, Database, DbError, Decision, Defer,
