@@ -48,6 +48,12 @@ pub struct TestResponse {
 }
 
 impl TestResponse {
+    /// Reads a response the caller drove itself (the conformance kit's
+    /// parity probes build their own requests).
+    pub(crate) async fn of(response: Response) -> Self {
+        Self::from(response).await
+    }
+
     async fn from(response: Response) -> Self {
         let (parts, body) = response.into_parts();
         let body = axum::body::to_bytes(body, 1024 * 1024)

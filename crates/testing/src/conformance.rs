@@ -116,15 +116,46 @@ fn full_fake_ports() -> Ports {
 ///
 /// Panics with a message naming the failed check and the dialect.
 pub fn conformance(module: Box<dyn Module>) {
-    let name = module.name().to_owned();
-    let version = module.version().to_owned();
-    let has_well_known = module.well_known().is_some();
+    let inner: Arc<dyn Module> = Arc::from(module);
+    conformance_inner(&inner, true);
+}
+
+/// [`conformance`] without the sidecar parity axis (issue #64). `reason`
+/// is recorded in code and printed by the run, so a module that opts out
+/// says why in the same place it opts out. Use it only for a module that
+/// genuinely cannot be sidecar-mounted; "it fails" is not a reason.
+///
+/// # Panics
+///
+/// Panics when `reason` is empty, and on any conformance failure.
+pub fn conformance_in_process_only(module: Box<dyn Module>, reason: &str) {
+    assert!(
+        !reason.trim().is_empty(),
+        "conformance_in_process_only needs a reason: it is the only record of why \
+         `{}` is not checked for sidecar parity",
+        module.name()
+    );
+    eprintln!("[{}] sidecar parity axis skipped: {reason}", module.name());
+    let inner: Arc<dyn Module> = Arc::from(module);
+    conformance_inner(&inner, false);
+}
+
+fn conformance_inner(inner: &Arc<dyn Module>, parity: bool) {
+    let name = inner.name().to_owned();
+    let version = inner.version().to_owned();
+    let has_well_known = inner.well_known().is_some();
     let module: Arc<dyn Module> = Arc::new(WellKnownProbe {
-        inner: Arc::from(module),
+        inner: inner.clone(),
     });
 
     for dialect in crate::dialect::Dialect::available() {
         conformance_on_dialect(&dialect, module.clone(), &name, &version, has_well_known);
+    }
+
+    if parity {
+        // One instance across both mounts, as the dialect axis above
+        // already does: the probes never reach a module's parked context.
+        parity_on(inner, &name);
     }
 }
 
@@ -317,6 +348,234 @@ pub fn assert_wasm_safe_deps(module_crate: &str) {
             !tree.contains(forbidden),
             "{module_crate} pulls forbidden dependency `{}`:\n{tree}",
             forbidden.trim_end_matches(" v")
+        );
+    }
+}
+
+/// One probe of the [`sidecar_parity`] battery: a request whose answer
+/// must be identical whether the module is linked in or reached over a
+/// service binding.
+struct Probe {
+    what: &'static str,
+    method: axum::http::Method,
+    /// Appended to `/v1/<module>`.
+    path: &'static str,
+    body: Option<&'static str>,
+}
+
+/// The request id both mounts are given, so `instance` in a problem body
+/// and the `x-request-id` header can be compared byte for byte. The
+/// harness accepts a client-supplied id that matches its pattern.
+const PARITY_REQUEST_ID: &str = "parity-0123456789abcdef";
+
+/// Sends one probe through `router`, with the fixed request id.
+async fn probe_once(router: &axum::Router, name: &str, probe: &Probe) -> crate::TestResponse {
+    use axum::http::{HeaderValue, Request, header};
+    use tower::ServiceExt;
+
+    let uri = format!("/v1/{name}{}", probe.path);
+    let mut builder = Request::builder()
+        .method(probe.method.clone())
+        .uri(uri)
+        .header(
+            factory0_core::X_REQUEST_ID,
+            HeaderValue::from_static(PARITY_REQUEST_ID),
+        )
+        .header("cf-connecting-ip", HeaderValue::from_static("203.0.113.9"));
+    let body = match probe.body {
+        Some(json) => {
+            builder = builder.header(header::CONTENT_TYPE, "application/json");
+            axum::body::Body::from(json)
+        }
+        None => axum::body::Body::empty(),
+    };
+    let response = router
+        .clone()
+        .oneshot(builder.body(body).expect("probe request builds"))
+        .await
+        .expect("router is infallible");
+    crate::TestResponse::of(response).await
+}
+
+/// Asserts that a module answers identically in-process and behind a
+/// sidecar mount (issue #64, ADR 0009: a caller cannot tell which).
+///
+/// Both mounts are given the same client-supplied request id, so the
+/// `instance` of a problem body and the `x-request-id` header are
+/// comparable byte for byte. Probes are deliberately module-agnostic —
+/// unknown paths, a malformed body, a wrong method — because the kit
+/// does not know the module's routes and because those are exactly the
+/// paths where the hop could quietly rewrite something.
+///
+/// Also asserted: a body over the harness's 64 KiB cap is refused by the
+/// **host** and never forwarded.
+///
+/// # Panics
+///
+/// Panics naming the probe and the field that diverged.
+pub fn sidecar_parity(module: Box<dyn Module>) {
+    let name = module.name().to_owned();
+    parity_on(&Arc::from(module), &name);
+}
+
+fn parity_on(shared: &Arc<dyn Module>, name: &str) {
+    // In-process: the module is linked into the harness under test.
+    let in_process = TestHarness::from_arcs(
+        vec![shared.clone()],
+        crate::dialect::Dialect::Sqlite,
+        |_| {},
+    );
+
+    // Sidecar: a second harness holds the module, and the host holds a
+    // mount table pointing at it over a fake service binding.
+    let remote = TestHarness::from_arcs(
+        vec![shared.clone()],
+        crate::dialect::Dialect::Sqlite,
+        |_| {},
+    );
+    let (sidecar, dispatcher) = crate::sidecar::shared(crate::sidecar::FakeSidecar::new(
+        "PARITY",
+        remote.router.clone(),
+    ));
+    let table = format!("{{\"{name}\":\"PARITY\"}}");
+    let host = TestHarness::with_builder(
+        Vec::new(),
+        |builder| builder,
+        |ports| {
+            ports.config = Arc::new(factory0_core::MapConfig::from_pairs([
+                ("HARNESS_SECRET", crate::TEST_HARNESS_SECRET),
+                (factory0_core::HARNESS_SIDECARS, table.as_str()),
+            ]));
+            ports.dispatcher = Some(dispatcher);
+        },
+    );
+
+    let probes = [
+        Probe {
+            what: "an unknown path under the module prefix",
+            method: axum::http::Method::GET,
+            path: "/__parity_no_such_route",
+            body: None,
+        },
+        Probe {
+            what: "a POST to an unknown path",
+            method: axum::http::Method::POST,
+            path: "/__parity_no_such_route",
+            body: Some(r#"{"parity":true}"#),
+        },
+        Probe {
+            what: "the module root",
+            method: axum::http::Method::GET,
+            path: "",
+            body: None,
+        },
+        Probe {
+            what: "a malformed JSON body at the module root",
+            method: axum::http::Method::POST,
+            path: "",
+            body: Some("{not json"),
+        },
+    ];
+
+    for (sent, probe) in probes.iter().enumerate() {
+        let direct = pollster::block_on(probe_once(&in_process.router, name, probe));
+        let hopped = pollster::block_on(probe_once(&host.router, name, probe));
+        // Without this the axis could pass vacuously: if the mount stopped
+        // forwarding, the host would answer its own 404 and a module that
+        // also answers 404 would compare equal. Every probe must have
+        // crossed the hop.
+        assert_eq!(
+            sidecar.calls(),
+            sent + 1,
+            "[{name}] {} never reached the sidecar: the mount is not forwarding, \
+             so this comparison proves nothing",
+            probe.what
+        );
+        compare(name, probe.what, &direct, &hopped);
+    }
+
+    check_oversized_body_stops_at_the_host(&host, &sidecar, name);
+}
+
+/// A body over the harness cap is refused by the **host** and never
+/// forwarded: the forwarder buffers, so a body it accepted would be held
+/// in the isolate twice (issue #64, amended).
+fn check_oversized_body_stops_at_the_host(
+    host: &TestHarness,
+    sidecar: &Arc<crate::sidecar::FakeSidecar>,
+    name: &str,
+) {
+    use axum::http::{Request, StatusCode, header};
+    use tower::ServiceExt;
+
+    let before = sidecar.calls();
+    let big = "x".repeat(factory0_core::MAX_BODY_BYTES + 1);
+    let response = pollster::block_on(async {
+        let request = Request::builder()
+            .method(axum::http::Method::POST)
+            .uri(format!("/v1/{name}"))
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(axum::body::Body::from(big))
+            .expect("oversized request builds");
+        let response = host
+            .router
+            .clone()
+            .oneshot(request)
+            .await
+            .expect("router is infallible");
+        crate::TestResponse::of(response).await
+    });
+    assert_eq!(
+        response.status,
+        StatusCode::PAYLOAD_TOO_LARGE,
+        "[{name}] a body over {} bytes must be refused by the host",
+        factory0_core::MAX_BODY_BYTES
+    );
+    assert_eq!(
+        sidecar.calls(),
+        before,
+        "[{name}] an oversized body must never be forwarded to the sidecar"
+    );
+}
+
+/// Compares one probe's two answers: status, the problem body byte for
+/// byte, and the request id (present exactly once, and the one the
+/// caller sent).
+fn compare(name: &str, what: &str, direct: &crate::TestResponse, hopped: &crate::TestResponse) {
+    assert_eq!(
+        direct.status, hopped.status,
+        "[{name}] status differs over the sidecar hop for {what}"
+    );
+    assert_eq!(
+        direct.body(),
+        hopped.body(),
+        "[{name}] body differs over the sidecar hop for {what}"
+    );
+    for header in [
+        axum::http::header::CONTENT_TYPE.as_str(),
+        axum::http::header::LOCATION.as_str(),
+    ] {
+        assert_eq!(
+            direct.headers.get(header),
+            hopped.headers.get(header),
+            "[{name}] `{header}` differs over the sidecar hop for {what}"
+        );
+    }
+    for (label, response) in [("in-process", direct), ("sidecar", hopped)] {
+        let ids: Vec<_> = response
+            .headers
+            .get_all(factory0_core::X_REQUEST_ID)
+            .iter()
+            .collect();
+        assert_eq!(
+            ids.len(),
+            1,
+            "[{name}] {label} answered {} request ids for {what}; exactly one is the contract",
+            ids.len()
+        );
+        assert_eq!(
+            ids[0], PARITY_REQUEST_ID,
+            "[{name}] {label} did not echo the caller's request id for {what}"
         );
     }
 }
