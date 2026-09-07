@@ -1,8 +1,8 @@
 [package]
-name = "factory0-ui"
+name = "cratefield-ui"
 description = "Factory Zero harness UI renderer: pages and fragments from the module surface, in-process dispatch, the cf-* markup contract"
 readme = "README.md"
-keywords = ["factory0", "harness", "ui", "forms", "maud"]
+keywords = ["cratefield", "harness", "ui", "forms", "maud"]
 categories = ["web-programming"]
 include = ["src/**/*", "assets/**/*", "schemas/**/*", "tests/**/*", "README.md"]
 version.workspace = true
@@ -15,7 +15,7 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
-factory0-core = { workspace = true }
+cratefield-core = { workspace = true }
 axum = { workspace = true }
 http = { workspace = true }
 tower = { workspace = true }
@@ -26,10 +26,10 @@ schemars = { workspace = true }
 tracing = { workspace = true }
 
 [dev-dependencies]
-factory0-testing = { workspace = true }
-factory0-module-waitlist = { workspace = true }
-factory0-module-email-signup = { workspace = true }
-factory0-module-hello = { workspace = true }
+cratefield-testing = { path = "../testing" }
+cratefield-module-waitlist = { path = "../module-waitlist" }
+cratefield-module-email-signup = { path = "../module-email-signup" }
+cratefield-module-hello = { path = "../../examples/module-hello" }
 async-trait = { workspace = true }
 bytes = { workspace = true }
 pollster = { workspace = true }

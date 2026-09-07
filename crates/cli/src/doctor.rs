@@ -5,7 +5,7 @@
 use crate::collect::verify_locked;
 use crate::lint::banned_tokens;
 use crate::lock::{Lock, read_lock};
-use factory0_core::{HARNESS_API, HARNESS_SIDECARS, Harness, VentureEnv, harness_api_mismatch};
+use cratefield_core::{HARNESS_API, HARNESS_SIDECARS, Harness, VentureEnv, harness_api_mismatch};
 use std::path::Path;
 
 /// Runs every doctor check. `allow_no_captcha` downgrades the
@@ -111,7 +111,7 @@ pub fn doctor(
     // Portable-SQL lint over every migration. A module that ships a
     // `postgres` set has declared where its SQL differs, so its sqlite
     // set is allowed to be sqlite-specific — the same rule
-    // `factory0_adapter_postgres::select_set` applies when it chooses a
+    // `cratefield_adapter_postgres::select_set` applies when it chooses a
     // set, and the doctor should not disagree with the runner.
     for module in harness.modules() {
         if !module.migrations().postgres.is_empty() {
@@ -138,5 +138,5 @@ pub fn doctor(
 fn captcha_provided(harness: &Harness) -> bool {
     harness
         .runtime()
-        .is_some_and(|runtime| runtime.provides().contains(&factory0_core::Port::Captcha))
+        .is_some_and(|runtime| runtime.provides().contains(&cratefield_core::Port::Captcha))
 }

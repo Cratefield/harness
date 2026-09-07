@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use axum::http::{Method, StatusCode, header};
 use common::*;
-use factory0_core::{
+use cratefield_core::{
     Action, Audience, Column, Config, ConfigError, Harness, MapConfig, Migrations, Module,
     ModuleContext, Outcome, Port, Ports, SURFACE_API, Surface, View,
 };
@@ -236,7 +236,7 @@ fn bad_surface_fails_the_build_naming_the_module() {
 /// the core fixture.
 #[test]
 fn fixture_schema_has_no_leaked_descriptions() {
-    let schema = factory0_core::schema_for::<JoinBody>();
+    let schema = cratefield_core::schema_for::<JoinBody>();
     let value = schema.as_value();
     for (name, property) in value["properties"].as_object().unwrap() {
         assert!(

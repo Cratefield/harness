@@ -1,8 +1,8 @@
 [package]
-name = "factory0-module-waitlist"
+name = "cratefield-module-waitlist"
 description = "Factory Zero module: per-product waitlist with confirm, position, referral codes"
 readme = "README.md"
-keywords = ["factory0", "waitlist", "referral", "email", "module"]
+keywords = ["cratefield", "waitlist", "referral", "email", "module"]
 categories = ["email", "web-programming"]
 include = ["src/**/*", "migrations/**/*", "templates/**/*", "examples/**/*", "tests/**/*", "README.md"]
 version.workspace = true
@@ -15,7 +15,7 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
-factory0-core = { workspace = true }
+cratefield-core = { workspace = true }
 axum = { workspace = true }
 http = { workspace = true }
 serde = { workspace = true }
@@ -33,8 +33,8 @@ serde_json = { workspace = true }
 # The `postgres` feature unlocks the Postgres parity leg of the testing
 # kit (issue #20); the leg itself only runs when FZ_TEST_POSTGRES_URL
 # names a server. Dev-only, so it never reaches a venture's wasm graph.
-factory0-testing = { workspace = true, features = ["postgres"] }
-factory0-adapter-sqlite = { workspace = true }
+cratefield-testing = { path = "../testing", features = ["postgres"] }
+cratefield-adapter-sqlite = { path = "../adapter-sqlite" }
 pollster = { workspace = true }
 tower = { workspace = true }
 async-trait = { workspace = true }

@@ -1,8 +1,8 @@
 //! The shared conformance suite (issue #9) plus the wasm dependency
-//! boundary (ADR 0001) for `factory0-module-cms`.
+//! boundary (ADR 0001) for `cratefield-module-cms`.
 
-use factory0_module_cms::Cms;
-use factory0_testing::{assert_wasm_safe_deps, conformance};
+use cratefield_module_cms::Cms;
+use cratefield_testing::{assert_wasm_safe_deps, conformance};
 
 fn module() -> Cms {
     Cms::new().collections(["pages"])

@@ -7,7 +7,7 @@ use axum::extract::{Query, State};
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
-use factory0_core::{
+use cratefield_core::{
     Action, Audience, Captcha, Clock, Column, Decision, IdGen, Json, Kid, ModuleConfig,
     ModuleContext, Outcome, Payload, Problem, RateLimiter, SLUGS, Scope, SendOutcome, Signer,
     Surface, SystemClock, UlidIdGen, View, client_ip, csv_row, hint_field, invalid_email_problem,
@@ -232,10 +232,12 @@ pub(crate) fn referral_code() -> String {
         .to_lowercase()
 }
 
-fn unique_code_violation(err: &factory0_core::DbError) -> bool {
+fn unique_code_violation(err: &cratefield_core::DbError) -> bool {
     let detail = match err {
-        factory0_core::DbError::Batch(detail) | factory0_core::DbError::Execute(detail) => detail,
-        factory0_core::DbError::Query(_) => return false,
+        cratefield_core::DbError::Batch(detail) | cratefield_core::DbError::Execute(detail) => {
+            detail
+        }
+        cratefield_core::DbError::Query(_) => return false,
     };
     detail.contains("UNIQUE constraint failed") && detail.contains("referral_code")
 }
@@ -244,10 +246,10 @@ fn unique_code_violation(err: &factory0_core::DbError) -> bool {
 /// whole batch (position included) rolls back on a code collision, so a
 /// retry assigns cleanly.
 async fn confirm_with_code(
-    db: &dyn factory0_core::Database,
+    db: &dyn cratefield_core::Database,
     row: &store::WaitlistRow,
     now: &str,
-) -> Result<bool, factory0_core::DbError> {
+) -> Result<bool, cratefield_core::DbError> {
     let mut last_err = None;
     for _ in 0..3 {
         let code = referral_code();
@@ -294,7 +296,7 @@ struct JoinBody {
 /// as a `select` over the configured list), the confirm link, the status
 /// page, and the admin export as a table.
 pub(crate) fn surface(settings: &Settings) -> Surface {
-    let mut join = factory0_core::schema_for::<JoinBody>();
+    let mut join = cratefield_core::schema_for::<JoinBody>();
     if let Products::List(products) = &settings.products {
         hint_field(&mut join, "product", "enum", json!(products));
         hint_field(&mut join, "product", "x-cf-widget", json!("select"));

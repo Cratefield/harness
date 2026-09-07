@@ -10,7 +10,7 @@ use std::time::Duration;
 pub struct WorkersClock;
 
 #[async_trait]
-impl factory0_core::Clock for WorkersClock {
+impl cratefield_core::Clock for WorkersClock {
     fn now(&self) -> time::OffsetDateTime {
         time::OffsetDateTime::now_utc()
     }

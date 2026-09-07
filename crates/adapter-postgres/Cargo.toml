@@ -1,8 +1,8 @@
 [package]
-name = "factory0-adapter-postgres"
+name = "cratefield-adapter-postgres"
 description = "Database port over sqlx Postgres for the Factory Zero harness native runtime (ADR 0004, issue #18)"
 readme = "README.md"
-keywords = ["factory0", "postgres", "database", "adapter", "sql"]
+keywords = ["cratefield", "postgres", "database", "adapter", "sql"]
 categories = ["database"]
 include = ["src/**/*", "README.md"]
 version.workspace = true
@@ -15,7 +15,7 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
-factory0-core = { workspace = true }
+cratefield-core = { workspace = true }
 async-trait = { workspace = true }
 sea-query = { workspace = true, features = ["backend-postgres"] }
 time = { workspace = true }
@@ -32,7 +32,7 @@ sqlx = { version = "0.8.6", default-features = false, features = [
 ] }
 
 [dev-dependencies]
-factory0-module-email-signup = { workspace = true }
-factory0-module-waitlist = { workspace = true }
+cratefield-module-email-signup = { path = "../module-email-signup" }
+cratefield-module-waitlist = { path = "../module-waitlist" }
 axum = { workspace = true }
 tokio = { workspace = true }

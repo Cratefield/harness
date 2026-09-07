@@ -3,7 +3,7 @@
 //! `postgres`-feature build applies the fixture's migrations to a real
 //! Postgres 16 (gated on `FZ_TEST_POSTGRES_URL`).
 
-use factory0_cli::apply::apply;
+use cratefield_cli::apply::apply;
 use venture_fixture::harness_v1;
 
 #[test]
@@ -23,8 +23,8 @@ fn apply_without_the_feature_fails_with_build_instructions() {
 
 #[cfg(feature = "postgres")]
 mod on_postgres {
-    use factory0_cli::apply::apply;
-    use factory0_cli::run;
+    use cratefield_cli::apply::apply;
+    use cratefield_cli::run;
     use sqlx::Executor as _;
     use std::process::ExitCode;
     use venture_fixture::{harness_v1, harness_v2};

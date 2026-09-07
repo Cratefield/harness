@@ -1,4 +1,4 @@
-/* factory0-ui embed (ADR 0010, issue #73). Served at /ui/cf.js.
+/* cratefield-ui embed (ADR 0010, issue #73). Served at /ui/cf.js.
  *
  *   <script type="module" src="https://api.example.com/ui/cf.js"></script>
  *   <cf-form module="waitlist" action="join" product="kontinuum"></cf-form>

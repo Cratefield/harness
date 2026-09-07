@@ -7,7 +7,7 @@ The database (D1 now, Postgres later), mailer, captcha and rate limiter are all
 vendor services that will change. Modules must not.
 
 ## Decision
-`factory0-core` defines the port traits: `Database`, `Mailer`, `Captcha`,
+`cratefield-core` defines the port traits: `Database`, `Mailer`, `Captcha`,
 `RateLimiter`, `Signer`, `KeyValue`, `HttpClient`, `Clock`, `IdGen`, `Defer`.
 All are `Send + Sync` and object-safe (`Arc<dyn Trait>`). Modules declare which
 ports they `requires()` and which are `optional()`; `Harness::build()` fails
@@ -20,5 +20,5 @@ on a single thread; it is the one place `unsafe`-adjacent code is allowed.
 
 ## Consequences
 - A venture compiles only the adapters it lists (Cargo features on the runtime crate).
-- Tests run modules against fakes from `factory0-testing` and the `rusqlite` adapter; no Cloudflare needed.
+- Tests run modules against fakes from `cratefield-testing` and the `rusqlite` adapter; no Cloudflare needed.
 - Every new vendor integration is an adapter crate, never an `if let Some(binding)` inside a module.

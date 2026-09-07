@@ -1,8 +1,8 @@
 [package]
-name = "factory0-adapter-sqlite"
+name = "cratefield-adapter-sqlite"
 description = "Database port over rusqlite for the Factory Zero harness (tests and single-node self-hosting)"
 readme = "README.md"
-keywords = ["factory0", "sqlite", "database", "adapter", "sql"]
+keywords = ["cratefield", "sqlite", "database", "adapter", "sql"]
 categories = ["database"]
 include = ["src/**/*", "README.md"]
 version.workspace = true
@@ -15,7 +15,7 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
-factory0-core = { workspace = true }
+cratefield-core = { workspace = true }
 async-trait = { workspace = true }
 rusqlite = { workspace = true }
 sea-query = { workspace = true }

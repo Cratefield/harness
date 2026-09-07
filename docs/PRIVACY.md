@@ -1,8 +1,8 @@
 # Privacy: what the harness stores, where, and for how long
 
 This document is the data map required by architecture section 11 and
-issue #13. It covers the two M1 modules: `factory0-module-email-signup`
-and `factory0-module-waitlist`.
+issue #13. It covers the two M1 modules: `cratefield-module-email-signup`
+and `cratefield-module-waitlist`.
 
 ## Principles
 
@@ -13,7 +13,7 @@ and `factory0-module-waitlist`.
   used in memory for rate-limit keys (`ip:<address>`) and never written
   to a table. Logs hash IPs; they never store the raw address.
 - **Logs never contain addresses.** The tracing redaction layer
-  (`factory0_core::logging`) replaces email-ish fields with a 12-hex
+  (`cratefield_core::logging`) replaces email-ish fields with a 12-hex
   truncated SHA-256 `subject_hash` and drops secret-named fields
   entirely; a CI test asserts no emitted log line contains an `@`.
 - **Admin delete is a hard delete.** There is no soft-delete flag and no

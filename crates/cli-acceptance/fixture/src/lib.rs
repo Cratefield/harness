@@ -1,11 +1,11 @@
-//! Fixture venture for the factory0-cli tests (issue #8): an
+//! Fixture venture for the cratefield-cli tests (issue #8): an
 //! `email-signup` and a `waitlist` module with real embedded migrations,
 //! plus an extensible `harness_v2` that adds a third module and a second
 //! migration to the first — exactly the acceptance scenario.
 
 #![forbid(unsafe_code)]
 
-use factory0_core::{
+use cratefield_core::{
     Config, ConfigError, Harness, Migrations, Module, ModuleContext, Port, Runtime, SqlMigration,
     Venture,
 };

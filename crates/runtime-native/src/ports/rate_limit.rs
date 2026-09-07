@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use async_trait::async_trait;
-use factory0_core::{Config, Decision, RateLimitError, RateLimiter};
+use cratefield_core::{Config, Decision, RateLimitError, RateLimiter};
 use redis::aio::ConnectionManager;
 
 /// Default `RATE_LIMIT_MAX`: requests allowed per key per window.

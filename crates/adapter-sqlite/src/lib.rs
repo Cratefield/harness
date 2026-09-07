@@ -1,4 +1,4 @@
-//! `factory0-adapter-sqlite`: the [`Database`] port over `rusqlite`
+//! `cratefield-adapter-sqlite`: the [`Database`] port over `rusqlite`
 //! (bundled SQLite). Native only — never compiled to wasm. Used by every
 //! module test and viable for a single-node self-hosted deployment
 //! (ADR 0004).
@@ -13,7 +13,7 @@
 #![forbid(unsafe_code)]
 
 use async_trait::async_trait;
-use factory0_core::{Database, DbError, Row, Rows, SqlMigration, Statement};
+use cratefield_core::{Database, DbError, Row, Rows, SqlMigration, Statement};
 use rusqlite::types::Value as SqliteValue;
 use rusqlite::{Connection, OptionalExtension};
 use sea_query::Value as SeaValue;
@@ -141,7 +141,7 @@ impl SqliteDatabase {
 
         for migration in migrations {
             let key = format!("{module}/{}", migration.id);
-            let checksum = factory0_core::migration_checksum(migration.sql);
+            let checksum = cratefield_core::migration_checksum(migration.sql);
             let recorded: Option<Option<String>> = conn
                 .query_row(
                     "SELECT checksum FROM harness_migrations WHERE id = ?1",
@@ -152,7 +152,7 @@ impl SqliteDatabase {
                 .map_err(|err| db_err(&err))?;
             if let Some(recorded) = recorded {
                 if let Some(recorded) = recorded.filter(|hash| hash != &checksum) {
-                    return Err(DbError::Batch(factory0_core::migration_edited(
+                    return Err(DbError::Batch(cratefield_core::migration_edited(
                         &key, &recorded, &checksum,
                     )));
                 }

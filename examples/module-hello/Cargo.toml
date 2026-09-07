@@ -1,5 +1,5 @@
 [package]
-name = "factory0-module-hello"
+name = "cratefield-module-hello"
 description = "Example Factory Zero module: one table, one write, one read, one event (built by docs/MODULE-AUTHORING.md)"
 readme = "README.md"
 publish = false
@@ -13,7 +13,7 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
-factory0-core = { workspace = true }
+cratefield-core = { workspace = true }
 axum = { workspace = true }
 serde = { workspace = true }
 schemars = { workspace = true }
@@ -22,7 +22,7 @@ sea-query = { workspace = true }
 tracing = { workspace = true }
 
 [dev-dependencies]
-factory0-testing = { workspace = true }
+cratefield-testing = { workspace = true }
 pollster = { workspace = true }
 tower = { workspace = true }
 http = { workspace = true }

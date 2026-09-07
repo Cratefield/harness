@@ -48,9 +48,9 @@ jobs:
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - name: core dependency boundary (ADR 0001)
         run: |
-          if cargo tree -p factory0-core --edges normal | grep -qE '(worker|wasm-bindgen|tokio|reqwest|sqlx|rusqlite) v'; then
-            echo "factory0-core pulled a forbidden dependency:"
-            cargo tree -p factory0-core --edges normal | grep -E '(worker|wasm-bindgen|tokio|reqwest|sqlx|rusqlite) v'
+          if cargo tree -p cratefield-core --edges normal | grep -qE '(worker|wasm-bindgen|tokio|reqwest|sqlx|rusqlite) v'; then
+            echo "cratefield-core pulled a forbidden dependency:"
+            cargo tree -p cratefield-core --edges normal | grep -E '(worker|wasm-bindgen|tokio|reqwest|sqlx|rusqlite) v'
             exit 1
           fi
 
@@ -58,7 +58,7 @@ jobs:
     name: test
     runs-on: ubuntu-latest
     services:
-      # Postgres 16 for the factory0-adapter-postgres contract tests
+      # Postgres 16 for the cratefield-adapter-postgres contract tests
       # (issue #18); tests skip cleanly when the URL is unset.
       postgres:
         image: postgres:16
@@ -82,11 +82,11 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo test --workspace
       - name: fz migrations apply against the service container (issue #18)
-        run: cargo test -p factory0-cli-acceptance --features postgres
+        run: cargo test -p cratefield-cli-acceptance --features postgres
       - name: Error taxonomy drift check (issue #14)
-        run: cargo run -q -p factory0-core --example errors-doc -- --check
+        run: cargo run -q -p cratefield-core --example errors-doc -- --check
       - name: Compatibility matrix drift check (issue #17)
-        run: cargo run -q -p factory0-cli --example compatibility-doc -- --check
+        run: cargo run -q -p cratefield-cli --example compatibility-doc -- --check
 
   # The module conformance kit, run through the reusable workflow so
   # `harness-private` consumes the identical job (issue #17). Includes

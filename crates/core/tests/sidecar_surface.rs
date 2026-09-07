@@ -11,7 +11,7 @@ use async_trait::async_trait;
 use axum::http::{Method, StatusCode, header};
 use bytes::Bytes;
 use common::*;
-use factory0_core::{
+use cratefield_core::{
     Action, Audience, Config, ConfigError, DispatchError, Dispatcher, HARNESS_SIDECARS, Harness,
     MapConfig, Migrations, Module, ModuleContext, Outcome, Port, Ports, Surface, View,
 };
@@ -85,7 +85,7 @@ impl Dispatcher for HarnessDispatcher {
 fn sidecar_router() -> axum::Router {
     Harness::builder()
         .venture(
-            factory0_core::Venture::new("sidecar", "sidecar.test")
+            cratefield_core::Venture::new("sidecar", "sidecar.test")
                 .cors_origins(["https://sidecar.test"]),
         )
         .module(Remote)

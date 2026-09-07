@@ -2,7 +2,7 @@
 //! `[triggers] crons`. Each expression in `CRONS` gets one tokio task
 //! that sleeps to the next occurrence (UTC) and fans out to every
 //! module's `scheduled(ctx, cron)` — exactly what
-//! `factory0_runtime_cloudflare::serve_scheduled` does per trigger.
+//! `cratefield_runtime_cloudflare::serve_scheduled` does per trigger.
 //!
 //! Expressions are strictly **five-field** (minute hour day month
 //! weekday), the form wrangler accepts; a six-field expression with
@@ -15,7 +15,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use factory0_core::{Clock, Harness, Ports};
+use cratefield_core::{Clock, Harness, Ports};
 use tokio::task::JoinHandle;
 
 /// A `CRONS` entry that could not be parsed.

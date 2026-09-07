@@ -2,8 +2,8 @@
 //! visit is counted, an over-long name is a `400 validation-failed`
 //! problem, and the config key `HELLO_MAX_NAME_LEN` overrides the builder.
 
-use factory0_module_hello::Hello;
-use factory0_testing::{TestHarness, request};
+use cratefield_module_hello::Hello;
+use cratefield_testing::{TestHarness, request};
 use http::{Method, StatusCode};
 
 fn kit() -> TestHarness {

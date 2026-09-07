@@ -1,5 +1,5 @@
-//! The smallest complete Factory Zero venture: `factory0-core` +
-//! `factory0-runtime-cloudflare` with one sample module that writes and
+//! The smallest complete Factory Zero venture: `cratefield-core` +
+//! `cratefield-runtime-cloudflare` with one sample module that writes and
 //! reads a row through sea-query and D1 (issue #5 acceptance).
 //!
 //! CI boots this under `wrangler dev --local` and curls `/__health`,
@@ -13,10 +13,10 @@
 // truth for the wasm and native canaries.
 pub mod sample;
 
-use factory0_core::Harness;
-use factory0_module_email_signup::EmailSignup;
-use factory0_module_waitlist::Waitlist;
-use factory0_runtime_cloudflare::{Cloudflare, serve, serve_scheduled};
+use cratefield_core::Harness;
+use cratefield_module_email_signup::EmailSignup;
+use cratefield_module_waitlist::Waitlist;
+use cratefield_runtime_cloudflare::{Cloudflare, serve, serve_scheduled};
 use std::sync::OnceLock;
 use worker::{Context, Env, Request, Response, event};
 
@@ -25,11 +25,11 @@ static INSTANCE: OnceLock<(Harness, Cloudflare)> = OnceLock::new();
 fn instance() -> &'static (Harness, Cloudflare) {
     INSTANCE.get_or_init(|| {
         let runtime = Cloudflare::new().db("DB");
-        let mut templates = factory0_module_email_signup::default_templates();
-        templates.extend(factory0_module_waitlist::default_templates());
+        let mut templates = cratefield_module_email_signup::default_templates();
+        templates.extend(cratefield_module_waitlist::default_templates());
         let harness = Harness::builder()
             .venture(
-                factory0_core::Venture::new("venture-example", "example.factory0.dev")
+                cratefield_core::Venture::new("venture-example", "example.factory0.dev")
                     .public_url("https://example.factory0.dev")
                     // The second origin is the example static site served
                     // next to the API in the CI smoke (`site/`); a real
@@ -46,15 +46,15 @@ fn instance() -> &'static (Harness, Cloudflare) {
             .templates(templates)
             // The UI renderer (ADR 0010): pages at /ui/<module>/<action>,
             // copy and theme from ui.json (validated by build()).
-            .ui(factory0_ui::Ui::from_spec(include_str!("../ui.json")).expect("ui.json parses"))
+            .ui(cratefield_ui::Ui::from_spec(include_str!("../ui.json")).expect("ui.json parses"))
             .runtime(
                 Cloudflare::new()
                     .db("DB")
                     // Both modules require the Mailer port. With no API key
                     // the adapter is NotConfigured: the port is provided and
                     // no mail is ever sent, which is what an example wants.
-                    .mailer(factory0_adapter_resend::Resend::new(
-                        std::sync::Arc::new(factory0_runtime_cloudflare::FetchClient),
+                    .mailer(cratefield_adapter_resend::Resend::new(
+                        std::sync::Arc::new(cratefield_runtime_cloudflare::FetchClient),
                         None,
                         "example@factory0.dev",
                         None,

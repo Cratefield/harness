@@ -9,13 +9,13 @@ mod common;
 
 use axum::Router;
 use common::{TempDb, base_url, skip_reason};
-use factory0_adapter_postgres::Postgres;
-use factory0_core::{
+use cratefield_adapter_postgres::Postgres;
+use cratefield_core::{
     Config, ConfigError, Database, DbError, Harness, Migrations, Module, ModuleContext, Port,
     Runtime, SqlMigration, Statement, Venture,
 };
-use factory0_module_email_signup::EmailSignup;
-use factory0_module_waitlist::Waitlist;
+use cratefield_module_email_signup::EmailSignup;
+use cratefield_module_waitlist::Waitlist;
 use std::sync::Arc;
 
 struct AllPorts;
@@ -103,7 +103,7 @@ async fn runner_applies_a_module_directly_and_is_idempotent() {
 
     let db = Postgres::connect(&temp.url).await.expect("connect");
     let waitlist = Waitlist::new();
-    let set = factory0_adapter_postgres::select_set(&waitlist.migrations())
+    let set = cratefield_adapter_postgres::select_set(&waitlist.migrations())
         .expect("the waitlist sqlite set passes the portable lint");
 
     db.apply_migrations(waitlist.name(), set)

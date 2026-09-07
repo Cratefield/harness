@@ -2,7 +2,7 @@
 //! writes go through [`Statement::with_values`] with `?` placeholders, so the
 //! same statements run on the sqlite adapter, D1 and Postgres.
 
-use factory0_core::{Database, DbError, Row, Statement};
+use cratefield_core::{Database, DbError, Row, Statement};
 use sea_query::Value as SeaValue;
 
 pub(crate) const STATUS_DRAFT: &str = "draft";

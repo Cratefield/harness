@@ -1,5 +1,5 @@
-//! The documented venture-side `fz` bin (see factory0-cli crate docs).
+//! The documented venture-side `fz` bin (see cratefield-cli crate docs).
 
 fn main() {
-    factory0_cli::main_for(venture_fixture::harness_v1);
+    cratefield_cli::main_for(venture_fixture::harness_v1);
 }

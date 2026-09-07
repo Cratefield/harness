@@ -7,7 +7,7 @@ scores them. The result is `docs/adr/0102-crypto-crate.md`.
 **Scratch crate — not part of the harness workspace.** The empty
 `[workspace]` table in `Cargo.toml` detaches it from the root manifest, so
 it can never enter the workspace build or the wasm build path of
-`examples/venture`. It depends on no `factory0-*` crate and nothing depends
+`examples/venture`. It depends on no `cratefield-*` crate and nothing depends
 on it.
 
 ## Layout

@@ -1,4 +1,4 @@
-/* factory0-ui base stylesheet (ADR 0010). Everything sits in @layer cf, so
+/* cratefield-ui base stylesheet (ADR 0010). Everything sits in @layer cf, so
    any unlayered rule a venture writes wins on its own. Colours,
    radii and spacing are the --cf-* custom properties below; override them
    on :root to restyle without touching a selector. */

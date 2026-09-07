@@ -78,7 +78,7 @@ Import verifies every table's sha256 against the manifest **before
 writing** (a tampered file leaves the target untouched), refuses a
 non-empty table without `--append`, inserts in one transaction per
 table, and verifies row counts afterwards. Build the `fz` bin with
-factory0-cli's `postgres` feature (`--features factory0-cli/postgres`).
+cratefield-cli's `postgres` feature (`--features cratefield-cli/postgres`).
 
 ## 5. Smoke test on Postgres
 

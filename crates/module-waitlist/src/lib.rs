@@ -1,9 +1,9 @@
-//! `factory0-module-waitlist`: per-product waitlist with confirm,
+//! `cratefield-module-waitlist`: per-product waitlist with confirm,
 //! position, referral codes and status (issue #11, architecture section
 //! 6).
 //!
 //! ```no_run
-//! use factory0_module_waitlist::Waitlist;
+//! use cratefield_module_waitlist::Waitlist;
 //!
 //! let module = Waitlist::new()
 //!     .products(["kontinuum", "undercover-rockstars"])
@@ -13,7 +13,7 @@
 //!
 //! **Positions are atomic.** Confirmation runs `1 + MAX(position)` for
 //! the product *inside* the position UPDATE, and that UPDATE plus the
-//! referrer credit run in one [`factory0_core::Database::batch`] —
+//! referrer credit run in one [`cratefield_core::Database::batch`] —
 //! atomic on D1, a transaction on the sqlite adapter — so concurrent
 //! confirmations never share a position. Positions are dense at assign
 //! time per product and never recomputed on delete.
@@ -31,7 +31,7 @@ mod store;
 
 pub use mail::{ConfirmMailData, ConfirmedMailData, default_templates};
 
-use factory0_core::{
+use cratefield_core::{
     AnyError, BoxFuture, Config, ConfigError, Migrations, Module, ModuleConfig, ModuleContext,
     Port, SqlMigration,
 };
@@ -228,7 +228,7 @@ impl Module for Waitlist {
         handlers::router(Arc::new(ctx), self.settings.clone())
     }
 
-    fn surface(&self) -> factory0_core::Surface {
+    fn surface(&self) -> cratefield_core::Surface {
         handlers::surface(&self.settings)
     }
 

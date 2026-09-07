@@ -11,7 +11,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use factory0_core::{DispatchError, Dispatcher};
+use cratefield_core::{DispatchError, Dispatcher};
 use tower::ServiceExt;
 
 /// A way the hop can be wrong. Used by the kit's own tests to prove the
@@ -113,7 +113,7 @@ impl Dispatcher for FakeSidecar {
             .unwrap_or_default();
         let bytes = match self.fault {
             Some(Fault::DropRequestId) => {
-                parts.headers.remove(factory0_core::X_REQUEST_ID);
+                parts.headers.remove(cratefield_core::X_REQUEST_ID);
                 bytes
             }
             Some(Fault::RemapStatus) => {
@@ -122,7 +122,7 @@ impl Dispatcher for FakeSidecar {
             }
             Some(Fault::DuplicateRequestId) => {
                 parts.headers.append(
-                    factory0_core::X_REQUEST_ID,
+                    cratefield_core::X_REQUEST_ID,
                     http::HeaderValue::from_static("a-second-id-from-the-sidecar"),
                 );
                 bytes

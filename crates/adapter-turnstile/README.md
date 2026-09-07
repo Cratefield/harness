@@ -1,4 +1,4 @@
-# factory0-adapter-turnstile
+# cratefield-adapter-turnstile
 
 [`Captcha`] port over Cloudflare [Turnstile](https://developers.cloudflare.com/turnstile/)
 `siteverify` for the Factory Zero harness. Runs on the runtime's
@@ -8,8 +8,8 @@
 
 ```rust,ignore
 use std::sync::Arc;
-use factory0_adapter_turnstile::Turnstile;
-use factory0_runtime_cloudflare::{FetchClient, WorkersClock};
+use cratefield_adapter_turnstile::Turnstile;
+use cratefield_runtime_cloudflare::{FetchClient, WorkersClock};
 
 // Turnstile::from_env returns None when TURNSTILE_SECRET is absent — the
 // port is then simply not provided, and fz doctor refuses a production

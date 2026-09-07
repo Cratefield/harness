@@ -2,7 +2,7 @@
 
 use base64::Engine;
 use base64::engine::general_purpose::{URL_SAFE, URL_SAFE_NO_PAD};
-use factory0_core::{HmacSigner, Kid, Payload, Signer, SignerError};
+use cratefield_core::{HmacSigner, Kid, Payload, Signer, SignerError};
 
 // Obvious dummy secrets, never real.
 const SECRET_CUR: &str = "test-secret-current-0123456789abcdef";

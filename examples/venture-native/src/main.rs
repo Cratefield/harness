@@ -1,6 +1,6 @@
 //! The example venture as a **native** binary (issue #19): the same
 //! modules as the Worker example — `sample`, `email-signup`,
-//! `waitlist` — served by `factory0-runtime-native` on tokio, with
+//! `waitlist` — served by `cratefield-runtime-native` on tokio, with
 //! Postgres or SQLite behind the `Database` port and, when `REDIS_URL`
 //! is set, Redis behind `RateLimiter` and `KeyValue`.
 //!
@@ -19,12 +19,14 @@
 
 use std::sync::Arc;
 
-use factory0_adapter_postgres::Postgres;
-use factory0_adapter_sqlite::SqliteDatabase;
-use factory0_core::{Clock, Config, Database, Harness, HttpClient, KeyValue, RateLimiter, Venture};
-use factory0_module_email_signup::EmailSignup;
-use factory0_module_waitlist::Waitlist;
-use factory0_runtime_native::{
+use cratefield_adapter_postgres::Postgres;
+use cratefield_adapter_sqlite::SqliteDatabase;
+use cratefield_core::{
+    Clock, Config, Database, Harness, HttpClient, KeyValue, RateLimiter, Venture,
+};
+use cratefield_module_email_signup::EmailSignup;
+use cratefield_module_waitlist::Waitlist;
+use cratefield_runtime_native::{
     EnvConfig, Native, ReqwestClient, TokioClock, install_tracing, serve,
 };
 use venture::sample::SampleRowModule;
@@ -69,7 +71,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     let mut runtime = Native::new().db_arc(db.port());
-    if let Some(redis) = factory0_runtime_native::redis_from_env(&config).await? {
+    if let Some(redis) = cratefield_runtime_native::redis_from_env(&config).await? {
         let rate_limiter: Arc<dyn RateLimiter> = redis.rate_limiter;
         let kv: Arc<dyn KeyValue> = redis.kv;
         runtime = runtime.rate_limiter_arc(rate_limiter).kv_arc(kv);
@@ -80,20 +82,20 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     let http: Arc<dyn HttpClient> = Arc::new(ReqwestClient::new());
     let clock: Arc<dyn Clock> = Arc::new(TokioClock);
-    runtime = runtime.mailer(factory0_adapter_resend::Resend::new(
+    runtime = runtime.mailer(cratefield_adapter_resend::Resend::new(
         Arc::clone(&http),
         None,
         "example@factory0.dev",
         None,
     ));
     if let Some(turnstile) =
-        factory0_adapter_turnstile::Turnstile::from_env(Arc::clone(&http), Arc::clone(&clock))
+        cratefield_adapter_turnstile::Turnstile::from_env(Arc::clone(&http), Arc::clone(&clock))
     {
         runtime = runtime.captcha(turnstile);
     }
 
-    let mut templates = factory0_module_email_signup::default_templates();
-    templates.extend(factory0_module_waitlist::default_templates());
+    let mut templates = cratefield_module_email_signup::default_templates();
+    templates.extend(cratefield_module_waitlist::default_templates());
     let harness = Arc::new(
         Harness::builder()
             .venture(

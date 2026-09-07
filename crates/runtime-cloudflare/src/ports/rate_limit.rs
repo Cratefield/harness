@@ -2,7 +2,7 @@
 //! not expose a retry-after, so `Decision::retry_after` is `None`.
 
 use async_trait::async_trait;
-use factory0_core::{Decision, RateLimitError, RateLimiter};
+use cratefield_core::{Decision, RateLimitError, RateLimiter};
 use worker::RateLimiter as WorkerRateLimiter;
 
 pub struct RateLimitPort(pub WorkerRateLimiter);

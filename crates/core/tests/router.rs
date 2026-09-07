@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use axum::http::{Method, StatusCode, header};
 use common::*;
-use factory0_core::{Harness, Ports};
+use cratefield_core::{Harness, Ports};
 
 /// `GET /__health` lists modules and versions without touching the db.
 #[pollster::test]
@@ -294,11 +294,11 @@ async fn valid_json_echoes() {
 /// Every core slug definition has a unique slug and a stable type URI.
 #[test]
 fn problem_slugs_are_unique() {
-    let registry = factory0_core::problem_registry();
+    let registry = cratefield_core::problem_registry();
     let mut seen = std::collections::HashSet::new();
     for def in registry {
         assert!(seen.insert(def.slug), "duplicate slug {}", def.slug);
-        let problem = factory0_core::Problem::new(def);
+        let problem = cratefield_core::Problem::new(def);
         assert!(
             problem
                 .type_uri()
@@ -448,19 +448,19 @@ async fn oversized_form_body_rejected() {
 /// `harness_api`, `HARNESS_BUILD` from config, mailer/captcha presence.
 struct NeverMailer;
 #[async_trait::async_trait]
-impl factory0_core::Mailer for NeverMailer {
+impl cratefield_core::Mailer for NeverMailer {
     async fn send(
         &self,
-        _message: factory0_core::Message,
-    ) -> Result<factory0_core::SendOutcome, factory0_core::MailError> {
-        Ok(factory0_core::SendOutcome::NotConfigured)
+        _message: cratefield_core::Message,
+    ) -> Result<cratefield_core::SendOutcome, cratefield_core::MailError> {
+        Ok(cratefield_core::SendOutcome::NotConfigured)
     }
 }
 
 #[pollster::test]
 async fn health_lists_contract_and_port_detail() {
     let harness = harness_with_sample();
-    let mut ports = Ports::with_config(Arc::new(factory0_core::MapConfig::from_pairs([(
+    let mut ports = Ports::with_config(Arc::new(cratefield_core::MapConfig::from_pairs([(
         "HARNESS_BUILD",
         "c8ecd06",
     )])));
@@ -469,7 +469,7 @@ async fn health_lists_contract_and_port_detail() {
     let response = request(&router, Method::GET, "/__health", &[], None).await;
     assert_eq!(response.status(), StatusCode::OK);
     let body = body_json(response).await;
-    assert_eq!(body["harness_api"], factory0_core::HARNESS_API);
+    assert_eq!(body["harness_api"], cratefield_core::HARNESS_API);
     assert_eq!(body["harness_build"], "c8ecd06");
     assert_eq!(body["mailer"], "configured");
     assert_eq!(body["captcha"], "absent");

@@ -1,4 +1,4 @@
-# factory0-runtime-native
+# cratefield-runtime-native
 
 The native runtime for the [Cratefield harness](https://github.com/Cratefield/harness):
 the same `Harness` served by axum on tokio as a single binary, for the
@@ -9,19 +9,19 @@ modules, same adapters, no module rewrites.
 **Native only.** tokio, reqwest and redis do not compile to wasm, so this
 crate fails compilation on any wasm target with a clear message and its
 native dependencies are target-gated in `Cargo.toml`. A Worker depends on
-`factory0-runtime-cloudflare`, never on this crate; `cargo tree --target
+`cratefield-runtime-cloudflare`, never on this crate; `cargo tree --target
 wasm32-unknown-unknown` of the venture must stay free of it.
 
 ## Usage
 
 ```rust,ignore
 use std::sync::Arc;
-use factory0_core::Harness;
-use factory0_runtime_native::{Native, serve};
+use cratefield_core::Harness;
+use cratefield_runtime_native::{Native, serve};
 
 #[tokio::main]
 async fn main() {
-    let db = factory0_adapter_postgres::Postgres::connect(&std::env::var("DATABASE_URL").unwrap())
+    let db = cratefield_adapter_postgres::Postgres::connect(&std::env::var("DATABASE_URL").unwrap())
         .await
         .expect("database reachable");
     let runtime = Native::new().db_arc(Arc::new(db));
@@ -31,8 +31,8 @@ async fn main() {
 ```
 
 The builder mirrors the Cloudflare one: `.db(..)` takes any `Database`
-(`Postgres` from `factory0-adapter-postgres`, `SqliteDatabase` from
-`factory0-adapter-sqlite`), `.rate_limiter(..)`/`.kv(..)` take the Redis
+(`Postgres` from `cratefield-adapter-postgres`, `SqliteDatabase` from
+`cratefield-adapter-sqlite`), `.rate_limiter(..)`/`.kv(..)` take the Redis
 adapters below, `.mailer(..)`/`.captcha(..)` take the adapter instances —
 `Resend::from_env(..)` and `Turnstile::from_env(..)` unchanged from the
 Workers path. `serve(harness, runtime)` binds, sanitizes client IPs,
@@ -73,7 +73,7 @@ this runtime owns IP resolution:
   proxy you control overwrites), the first configured header whose first
   comma-separated entry parses as an IP wins, else the peer address.
 - The resolved address is written into `cf-connecting-ip` — the header
-  `factory0_core::client_ip` reads first — after stripping, so modules
+  `cratefield_core::client_ip` reads first — after stripping, so modules
   (which only ever call core) see exactly the runtime's verdict.
 
 ## Redis is not the Workers bindings
@@ -91,7 +91,7 @@ per-colo. See the rustdoc of each adapter for the full list.
 `install_tracing()` (called by `serve`) installs a `tracing-subscriber`
 JSON formatter writing one line per event to stdout, with the same
 field-redaction rules as the Workers runtime (rules live in
-`factory0-core`; secret-ish field names become `[redacted]`, email-ish
+`cratefield-core`; secret-ish field names become `[redacted]`, email-ish
 values become truncated SHA-256 hashes). `RUST_LOG` sets the filter
 (default `info`). On wasm the Cloudflare runtime's `install_tracing` is a
 no-op; here the real subscriber runs.

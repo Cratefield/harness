@@ -4,8 +4,8 @@
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use factory0_adapter_resend::Resend;
-use factory0_core::{HttpClient, HttpError, MailError, Mailer, Message, SendOutcome};
+use cratefield_adapter_resend::Resend;
+use cratefield_core::{HttpClient, HttpError, MailError, Mailer, Message, SendOutcome};
 use http::{HeaderMap, Request, Response, StatusCode};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};

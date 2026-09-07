@@ -1,4 +1,4 @@
-//! `factory0-core` is the runtime-agnostic kernel of the Factory Zero harness:
+//! `cratefield-core` is the runtime-agnostic kernel of the Factory Zero harness:
 //! the [`Module`] contract, the [`Harness`] builder, port traits, RFC 9457
 //! problem+json errors, the request [`Scope`], an in-process [`EventBus`] and
 //! a [`TemplateRegistry`] (ADR 0001, 0002, 0007).

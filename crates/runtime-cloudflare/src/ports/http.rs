@@ -2,7 +2,7 @@
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use factory0_core::{HttpClient, HttpError};
+use cratefield_core::{HttpClient, HttpError};
 use worker::send::IntoSendFuture;
 use worker::{Fetch, Headers, Method, Request as WorkerRequest, RequestInit};
 

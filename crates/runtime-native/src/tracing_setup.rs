@@ -1,12 +1,12 @@
 //! `tracing-subscriber` JSON to stdout (issue #19) with the crate-wide
 //! redaction rules applied in the formatter — the native counterpart of
-//! `factory0-runtime-cloudflare`'s hand-rolled console subscriber (which
+//! `cratefield-runtime-cloudflare`'s hand-rolled console subscriber (which
 //! exists because a dispatcher hangs the workerd isolate; none of that
 //! applies on tokio, so here the real subscriber runs).
 //!
 //! One JSON line per event: `timestamp`, `level`, `target`, the event's
 //! fields (secret-ish names `[redacted]`, email-ish values as truncated
-//! SHA-256 hashes — the rules live in `factory0-core` so Workers and
+//! SHA-256 hashes — the rules live in `cratefield-core` so Workers and
 //! native logs cannot drift). Span fields are not emitted as events; the
 //! per-request span is carried on the `Scope`, its shape asserted by
 //! core's tests. `RUST_LOG` sets the filter (default `info`).
@@ -76,7 +76,7 @@ where
 }
 
 /// The field half of runtime-cloudflare's `JsonRedactingVisitor`: the
-/// redaction rules themselves are `factory0_core::redacted_value`.
+/// redaction rules themselves are `cratefield_core::redacted_value`.
 #[derive(Default)]
 struct RedactingVisitor {
     fields: Map<String, Value>,
@@ -84,7 +84,7 @@ struct RedactingVisitor {
 
 impl RedactingVisitor {
     fn record_field(&mut self, name: &str, value: &str) {
-        let redacted = factory0_core::redacted_value(name, value);
+        let redacted = cratefield_core::redacted_value(name, value);
         if redacted == "[redacted]" {
             self.fields.insert(name.to_owned(), json!("[redacted]"));
         } else if let Some(hash) = redacted.strip_prefix("subject_hash:") {

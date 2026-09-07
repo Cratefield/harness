@@ -4,9 +4,9 @@
 mod common;
 
 use common::*;
-use factory0_core::{Harness, Venture};
+use cratefield_core::{Harness, Venture};
 
-fn failure_lines(builder: factory0_core::HarnessBuilder) -> Vec<String> {
+fn failure_lines(builder: cratefield_core::HarnessBuilder) -> Vec<String> {
     builder.build().expect_err("build must fail").problems
 }
 
@@ -119,7 +119,7 @@ fn harness_api_mismatch_is_reported() {
     );
     // The fixture's version is core's own package version.
     let expected = format!(
-        "module `sample` v{v} targets harness API 2, but factory0-core v{v} provides harness \
+        "module `sample` v{v} targets harness API 2, but cratefield-core v{v} provides harness \
          API 1: rebuild `sample` against this core — the supported ranges are in \
          docs/COMPATIBILITY.md",
         v = env!("CARGO_PKG_VERSION")
@@ -133,8 +133,8 @@ fn port_in_both_requires_and_optional_is_reported() {
         Harness::builder()
             .venture(base_venture())
             .module(SampleModule {
-                requires: &[factory0_core::Port::Db],
-                optional: &[factory0_core::Port::Db],
+                requires: &[cratefield_core::Port::Db],
+                optional: &[cratefield_core::Port::Db],
                 ..SampleModule::default()
             })
             .runtime(FakeRuntime(all_ports())),
@@ -153,10 +153,10 @@ fn required_port_not_provided_is_reported() {
         Harness::builder()
             .venture(base_venture())
             .module(SampleModule {
-                requires: &[factory0_core::Port::Db],
+                requires: &[cratefield_core::Port::Db],
                 ..SampleModule::default()
             })
-            .runtime(FakeRuntime(vec![factory0_core::Port::Mailer])),
+            .runtime(FakeRuntime(vec![cratefield_core::Port::Mailer])),
     );
     assert!(
         problems.iter().any(|p| p
@@ -185,12 +185,12 @@ fn template_override_naming_unknown_module_is_reported() {
 
 #[test]
 fn all_problems_reported_together() {
-    static REQUIRES_DB: [factory0_core::Port; 1] = [factory0_core::Port::Db];
+    static REQUIRES_DB: [cratefield_core::Port; 1] = [cratefield_core::Port::Db];
     let problems = failure_lines(
         Harness::builder()
             .venture(Venture::new("Bad Name", ""))
             .module(SampleModule {
-                harness_api: factory0_core::HARNESS_API + 1,
+                harness_api: cratefield_core::HARNESS_API + 1,
                 tables: &["t"],
                 ..SampleModule::default()
             })
@@ -213,13 +213,13 @@ fn all_problems_reported_together() {
 
 struct StaticTemplate;
 
-impl factory0_core::Template for StaticTemplate {
+impl cratefield_core::Template for StaticTemplate {
     fn render(
         &self,
         _data: &serde_json::Value,
         _locale: &str,
-    ) -> Result<factory0_core::Rendered, factory0_core::TemplateError> {
-        Ok(factory0_core::Rendered {
+    ) -> Result<cratefield_core::Rendered, cratefield_core::TemplateError> {
+        Ok(cratefield_core::Rendered {
             subject: "s".to_string(),
             html: "h".to_string(),
             text: "t".to_string(),

@@ -12,7 +12,7 @@
 /// Returns `(token, explanation)` pairs found in `sql`.
 ///
 /// This is the predicate behind both `fz doctor`'s migration lint and the
-/// `factory0-adapter-postgres` runner's rule that a module's `sqlite`
+/// `cratefield-adapter-postgres` runner's rule that a module's `sqlite`
 /// migration set may be applied to Postgres only when it passes.
 ///
 /// SQL comments (`-- ...`, `/* ... */`) and single-quoted string literals

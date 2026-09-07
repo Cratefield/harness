@@ -10,9 +10,9 @@
 //! calling thread on a channel until it completes, which is correct
 //! from any thread that is not a worker of that runtime.
 
-use factory0_adapter_postgres::testing::TempDb;
-use factory0_adapter_postgres::{Postgres, select_set};
-use factory0_core::{Database, DbError, Module, Statement};
+use cratefield_adapter_postgres::testing::TempDb;
+use cratefield_adapter_postgres::{Postgres, select_set};
+use cratefield_core::{Database, DbError, Module, Statement};
 use std::sync::Arc;
 
 /// The throwaway database, its pool and the private runtime driving it.
@@ -144,7 +144,7 @@ impl Database for MarshalledDatabase {
         self.marshal(async move { inner.execute(&stmt).await })
     }
 
-    async fn query(&self, stmt: &Statement) -> Result<factory0_core::Rows, DbError> {
+    async fn query(&self, stmt: &Statement) -> Result<cratefield_core::Rows, DbError> {
         let inner = self.inner.clone();
         let stmt = stmt.clone();
         self.marshal(async move { inner.query(&stmt).await })
@@ -172,7 +172,7 @@ pub(crate) fn migrations_apply_twice(modules: &[Arc<dyn Module>]) -> Result<(), 
     runtime.block_on(async {
         for round in 1..=2 {
             let Some(temp) = TempDb::create(
-                &factory0_adapter_postgres::testing::base_url()
+                &cratefield_adapter_postgres::testing::base_url()
                     .expect("the caller checked FZ_TEST_POSTGRES_URL"),
                 "conformance",
             )

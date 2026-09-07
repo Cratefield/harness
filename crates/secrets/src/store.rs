@@ -8,8 +8,8 @@
 use std::sync::Arc;
 
 use chacha20poly1305::aead::{Aead, KeyInit, Payload};
-use factory0_core::{Database, Row, Statement};
-use factory0_kms::{Dek, Kms};
+use cratefield_core::{Database, Row, Statement};
+use cratefield_kms::{Dek, Kms};
 use sea_query::Value as SeaValue;
 
 use crate::{

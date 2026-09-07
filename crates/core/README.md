@@ -1,4 +1,4 @@
-# factory0-core
+# cratefield-core
 
 The runtime-agnostic kernel of the Factory Zero harness: the [`Module`]
 contract, the [`Harness`] builder, the port traits, RFC 9457
@@ -50,10 +50,10 @@ security headers.
 ## Writing a module
 
 Start with [docs/MODULE-AUTHORING.md](../../docs/MODULE-AUTHORING.md) —
-it builds a complete module, `factory0-module-hello`, step by step.
+it builds a complete module, `cratefield-module-hello`, step by step.
 
 ## Testing a module
 
-[`factory0-testing`](../testing/) is the conformance kit: fake ports, an
+[`cratefield-testing`](../testing/) is the conformance kit: fake ports, an
 in-memory SQLite `Database`, and request helpers over the real axum
 router, no network. Every module — public or private — passes it.

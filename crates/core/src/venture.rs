@@ -57,7 +57,7 @@ impl Default for Brand {
 /// Identity and CORS configuration for the venture this harness serves.
 ///
 /// ```
-/// use factory0_core::Venture;
+/// use cratefield_core::Venture;
 ///
 /// let v = Venture::new("factory0", "factory0.ventures")
 ///     .public_url("https://factory0.ventures")

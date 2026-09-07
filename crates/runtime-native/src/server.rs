@@ -9,7 +9,7 @@ use std::sync::Arc;
 use axum::extract::{ConnectInfo, Request, State};
 use axum::middleware::{Next, from_fn_with_state};
 use axum::response::Response;
-use factory0_core::{Config, Harness};
+use cratefield_core::{Config, Harness};
 use thiserror::Error;
 use tokio::net::TcpListener;
 
@@ -118,7 +118,7 @@ pub async fn serve_on(
         .local_addr()
         .map(|addr| addr.to_string())
         .unwrap_or_default();
-    tracing::info!(%addr, "factory0 native runtime listening");
+    tracing::info!(%addr, "cratefield native runtime listening");
 
     axum::serve(
         listener,
@@ -210,7 +210,7 @@ pub async fn shutdown_signal() {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use factory0_core::MapConfig;
+    use cratefield_core::MapConfig;
 
     #[test]
     fn crons_default_to_empty_and_split_on_commas() {

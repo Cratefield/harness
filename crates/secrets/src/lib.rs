@@ -1,4 +1,4 @@
-//! `factory0-secrets` — the secrets store (issue #39,
+//! `cratefield-secrets` — the secrets store (issue #39,
 //! `docs/SECRETS-DESIGN.md`, ADR 0102).
 //!
 //! Envelope encryption over the `Database` port, in two tiers. **Global**
@@ -37,32 +37,32 @@ pub use store::{HarnessOnly, SecretStore, Secrets};
 /// The tables are portable; only the append-only trigger differs, which
 /// is what `Migrations`' two sets are for (ADR 0004).
 #[must_use]
-pub fn migrations() -> factory0_core::Migrations {
-    const SQLITE: [factory0_core::SqlMigration; 2] = [
-        factory0_core::SqlMigration {
+pub fn migrations() -> cratefield_core::Migrations {
+    const SQLITE: [cratefield_core::SqlMigration; 2] = [
+        cratefield_core::SqlMigration {
             id: "0001",
             name: "init",
             sql: include_str!("../migrations/sqlite/0001_init.sql"),
         },
-        factory0_core::SqlMigration {
+        cratefield_core::SqlMigration {
             id: "0002",
             name: "audit",
             sql: include_str!("../migrations/sqlite/0002_audit.sql"),
         },
     ];
-    const POSTGRES: [factory0_core::SqlMigration; 2] = [
-        factory0_core::SqlMigration {
+    const POSTGRES: [cratefield_core::SqlMigration; 2] = [
+        cratefield_core::SqlMigration {
             id: "0001",
             name: "init",
             sql: include_str!("../migrations/postgres/0001_init.sql"),
         },
-        factory0_core::SqlMigration {
+        cratefield_core::SqlMigration {
             id: "0002",
             name: "audit",
             sql: include_str!("../migrations/postgres/0002_audit.sql"),
         },
     ];
-    factory0_core::Migrations {
+    cratefield_core::Migrations {
         sqlite: &SQLITE,
         postgres: &POSTGRES,
     }
@@ -188,10 +188,10 @@ pub enum SecretsError {
     /// The KMS could not wrap or unwrap. Carries the port's error so the
     /// caller can still tell retryable from not.
     #[error("the key could not be unwrapped: {0}")]
-    Kms(#[from] factory0_kms::KmsError),
+    Kms(#[from] cratefield_kms::KmsError),
     /// The database refused or was unreachable.
     #[error("the secrets database: {0}")]
-    Database(#[from] factory0_core::DbError),
+    Database(#[from] cratefield_core::DbError),
     /// A ciphertext did not authenticate under its context. Either the
     /// row was altered, or it was moved between stores, renamed, rolled
     /// back, or repointed at another key.
@@ -301,7 +301,7 @@ pub struct AuditEvent<'a> {
     /// attempt either way.
     pub allowed: bool,
     /// The request this access belongs to, when there is one, so an
-    /// audit row can be tied to a log line (`factory0_core::Scope`).
+    /// audit row can be tied to a log line (`cratefield_core::Scope`).
     pub request_id: Option<&'a str>,
 }
 

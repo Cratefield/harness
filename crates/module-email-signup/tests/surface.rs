@@ -1,13 +1,13 @@
 //! The email-signup UI surface (ADR 0010, issue #71).
 
-use factory0_core::{Audience, Module, Outcome, View};
-use factory0_module_email_signup::EmailSignup;
+use cratefield_core::{Audience, Module, Outcome, View};
+use cratefield_module_email_signup::EmailSignup;
 
 #[test]
 fn subscribe_form_message_follows_double_opt_in() {
     let single = EmailSignup::new().double_opt_in(false).surface();
     let double = EmailSignup::new().double_opt_in(true).surface();
-    let message = |s: &factory0_core::Surface| match &s.actions[0].outcome {
+    let message = |s: &cratefield_core::Surface| match &s.actions[0].outcome {
         Outcome::Accepted { message } => message.clone(),
         other => panic!("unexpected outcome {other:?}"),
     };

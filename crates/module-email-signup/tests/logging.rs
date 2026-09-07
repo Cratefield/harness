@@ -5,13 +5,13 @@
 //! contains an `@`.
 
 // Test-side recording fixture, not request state — the same category
-// and allowance as the fakes in `factory0-testing` (ADR 0007 policy).
+// and allowance as the fakes in `cratefield-testing` (ADR 0007 policy).
 #![allow(clippy::disallowed_types)]
 
 use axum::body::Body;
 use axum::http::{Method, Request, StatusCode, header};
-use factory0_module_email_signup::EmailSignup;
-use factory0_testing::TestHarness;
+use cratefield_module_email_signup::EmailSignup;
+use cratefield_testing::TestHarness;
 use std::sync::{Arc, Mutex};
 use tracing::span::{Attributes, Id, Record};
 use tracing::{Event, Level, Metadata, Subscriber};
@@ -35,7 +35,7 @@ impl Subscriber for CapturingSubscriber {
 
     fn event(&self, event: &Event<'_>) {
         // The same redaction every runtime formatter applies.
-        let mut visitor = factory0_core::RedactingVisitor::new();
+        let mut visitor = cratefield_core::RedactingVisitor::new();
         event.record(&mut visitor);
         let line = visitor
             .fields

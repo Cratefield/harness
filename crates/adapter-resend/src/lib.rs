@@ -1,4 +1,4 @@
-//! `factory0-adapter-resend`: the [`Mailer`] port over the Resend REST API
+//! `cratefield-adapter-resend`: the [`Mailer`] port over the Resend REST API
 //! (issue #6). Uses the runtime's [`HttpClient`] port — no `reqwest`, no
 //! vendor SDK — so the same adapter runs on Workers and natively.
 //!
@@ -12,7 +12,7 @@
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use factory0_core::{HttpClient, HttpError, MailError, Mailer, Message, SendOutcome};
+use cratefield_core::{HttpClient, HttpError, MailError, Mailer, Message, SendOutcome};
 use http::header::{AUTHORIZATION, CONTENT_TYPE, RETRY_AFTER};
 use http::{Request, StatusCode};
 use std::sync::Arc;

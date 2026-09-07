@@ -2,7 +2,7 @@
 //! submitted form back to the JSON the module accepts.
 //!
 //! The schema is whatever `schemars` derived from the handler's body type
-//! (`factory0_core::schema_for`), with `x-cf-*` hints on the properties.
+//! (`cratefield_core::schema_for`), with `x-cf-*` hints on the properties.
 //! Property order is struct order (`preserve_order`), so fields render in
 //! the order the module author wrote them.
 
@@ -259,8 +259,8 @@ mod tests {
     }
 
     fn schema() -> Value {
-        let mut schema = factory0_core::schema_for::<Body>();
-        factory0_core::hint_field(
+        let mut schema = cratefield_core::schema_for::<Body>();
+        cratefield_core::hint_field(
             &mut schema,
             "product",
             "enum",

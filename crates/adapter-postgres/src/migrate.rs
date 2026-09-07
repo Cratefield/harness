@@ -7,7 +7,7 @@
 //! protocol (they may hold several statements).
 
 use crate::convert::{bind_values, rebind_placeholders};
-use factory0_core::{Database, DbError, Harness, Migrations, SqlMigration, Statement};
+use cratefield_core::{Database, DbError, Harness, Migrations, SqlMigration, Statement};
 use sea_query::{Alias, ColumnDef, PostgresQueryBuilder, Query, Table};
 use sqlx::postgres::{PgArguments, PgConnection};
 use std::collections::HashMap;
@@ -15,7 +15,7 @@ use std::collections::HashMap;
 /// Selects the migration set a module contributes to a Postgres
 /// deployment: its `postgres` set when it ships one, else its `sqlite`
 /// set — but only when every file passes the portable-SQL lint
-/// ([`factory0_core::lint_portable_sql`], the same predicate `fz doctor`
+/// ([`cratefield_core::lint_portable_sql`], the same predicate `fz doctor`
 /// enforces, so the two can never drift).
 ///
 /// # Errors
@@ -27,7 +27,7 @@ pub fn select_set(migrations: &Migrations) -> Result<&'static [SqlMigration], St
         return Ok(migrations.postgres);
     }
     for migration in migrations.sqlite {
-        let hits = factory0_core::lint_portable_sql(migration.sql);
+        let hits = cratefield_core::lint_portable_sql(migration.sql);
         if let Some((token, explanation)) = hits.first() {
             return Err(format!(
                 "sqlite migration {}/{} fails the portable-SQL lint (found {token:?}: \
@@ -150,10 +150,10 @@ impl crate::Postgres {
 
         for migration in ordered {
             let key = format!("{module}/{}", migration.id);
-            let checksum = factory0_core::migration_checksum(migration.sql);
+            let checksum = cratefield_core::migration_checksum(migration.sql);
             if let Some(recorded) = applied.get(&key) {
                 if let Some(recorded) = recorded.as_ref().filter(|hash| *hash != &checksum) {
-                    return Err(DbError::Batch(factory0_core::migration_edited(
+                    return Err(DbError::Batch(cratefield_core::migration_edited(
                         &key, recorded, &checksum,
                     )));
                 }
@@ -208,7 +208,7 @@ impl crate::Postgres {
 #[cfg(test)]
 mod tests {
     use super::select_set;
-    use factory0_core::{Migrations, SqlMigration};
+    use cratefield_core::{Migrations, SqlMigration};
 
     const PORTABLE: SqlMigration = SqlMigration {
         id: "0001",

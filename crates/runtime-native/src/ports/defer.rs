@@ -2,11 +2,11 @@
 //! outlives the response, the native counterpart of
 //! `worker::Context::wait_until`.
 
-use factory0_core::Defer;
+use cratefield_core::Defer;
 use futures_core::future::BoxFuture;
 
 /// Spawns deferred work on the tokio runtime. Request-scoped through the
-/// [`Scope`](factory0_core::Scope) like every defer — the runtime holds
+/// [`Scope`](cratefield_core::Scope) like every defer — the runtime holds
 /// no state of its own.
 ///
 /// The spawned task is detached: a panic inside it is tokio's default

@@ -2,7 +2,7 @@
 //! the server named by `FZ_TEST_POSTGRES_URL`, so tests never see each
 //! other's tables (issue #18).
 //!
-//! Exported so `factory0-testing`'s parity kit (issue #20) reuses the
+//! Exported so `cratefield-testing`'s parity kit (issue #20) reuses the
 //! exact helper this crate's own contract tests use — one
 //! implementation, not two. Tests skip with a printed reason when the
 //! variable is unset (CI provides a `postgres:16` service container).

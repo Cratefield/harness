@@ -77,7 +77,7 @@ impl std::error::Error for ConfigError {}
 /// (issue #3).
 ///
 /// ```
-/// use factory0_core::{Config, ModuleConfig};
+/// use cratefield_core::{Config, ModuleConfig};
 /// # struct MapConfig(std::collections::HashMap<String, String>);
 /// # impl Config for MapConfig {
 /// #     fn get(&self, key: &str) -> Option<String> {

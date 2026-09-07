@@ -8,7 +8,7 @@
 //! resolves them per request locale.
 
 use askama::Template as _;
-use factory0_core::{
+use cratefield_core::{
     Brand, MailError, Message, ModuleConfig, ModuleContext, Rendered, SendOutcome, Template,
     TemplateError, TemplateRegistry,
 };
@@ -209,7 +209,7 @@ pub(crate) async fn send(
 pub(crate) fn spawn_deferred(
     ctx: Arc<ModuleContext>,
     mail: OutgoingMail,
-) -> factory0_core::BoxFuture<'static, ()> {
+) -> cratefield_core::BoxFuture<'static, ()> {
     Box::pin(async move {
         if let Err(err) = send(&ctx, &mail).await {
             tracing::error!(

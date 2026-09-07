@@ -7,7 +7,7 @@ mod common;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use factory0_core::{
+use cratefield_core::{
     AnyError, BoxFuture, Config, ConfigError, EventBus, Harness, Migrations, Module, ModuleContext,
     Port, Runtime, Scope,
 };
@@ -18,7 +18,7 @@ use std::sync::mpsc;
 // observe both the deferral and the handler's effect.
 struct InlineDefer(AtomicUsize);
 
-impl factory0_core::Defer for InlineDefer {
+impl cratefield_core::Defer for InlineDefer {
     fn wait_until(&self, fut: CoreBoxFuture<'static, ()>) {
         self.0.fetch_add(1, Ordering::SeqCst);
         pollster::block_on(fut);
@@ -28,7 +28,7 @@ impl factory0_core::Defer for InlineDefer {
 fn scope_with(defer: &Arc<InlineDefer>) -> Scope {
     Scope {
         request_id: "test-request-0001".to_string(),
-        defer: Arc::clone(defer) as Arc<dyn factory0_core::Defer>,
+        defer: Arc::clone(defer) as Arc<dyn cratefield_core::Defer>,
         span: tracing::info_span!("test"),
     }
 }
@@ -82,7 +82,7 @@ impl Module for RecordingModule {
     fn router(&self, _ctx: ModuleContext) -> axum::Router {
         axum::Router::new()
     }
-    fn events(&self) -> Vec<(factory0_core::EventName, factory0_core::EventHandler)> {
+    fn events(&self) -> Vec<(cratefield_core::EventName, cratefield_core::EventHandler)> {
         let sink = self.sink.clone();
         let seen = Arc::clone(&self.seen);
         let fail = self.fail;
@@ -119,7 +119,7 @@ impl Runtime for AllPorts {
 fn two_module_harness(recorder: RecordingModule) -> Harness {
     Harness::builder()
         .venture(
-            factory0_core::Venture::new("test-venture", "test.example")
+            cratefield_core::Venture::new("test-venture", "test.example")
                 .cors_origins(["https://test.example"]),
         )
         .module(EmittingModule)

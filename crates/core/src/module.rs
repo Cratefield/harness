@@ -14,12 +14,12 @@ pub use futures_core::future::BoxFuture;
 
 /// Contract version shared by core and every module. `Harness::build`
 /// rejects modules whose `harness_api` differs. Bumped only on breaking
-/// contract changes; `factory0-core`'s major follows it.
+/// contract changes; `cratefield-core`'s major follows it.
 pub const HARNESS_API: u32 = 1;
 
 /// The message `Harness::build` and `fz doctor` report for a module whose
 /// [`Module::harness_api`] differs from core's: it names the module, the
-/// module crate's version, the API it targets, and the `factory0-core`
+/// module crate's version, the API it targets, and the `cratefield-core`
 /// crate with its version and API (issue #17).
 #[must_use]
 pub fn harness_api_mismatch(module: &dyn Module) -> String {

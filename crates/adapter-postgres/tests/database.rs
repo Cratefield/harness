@@ -8,8 +8,8 @@
 mod common;
 
 use common::{TempDb, base_url, skip_reason};
-use factory0_adapter_postgres::Postgres;
-use factory0_core::{Database, DbError, Row, Statement};
+use cratefield_adapter_postgres::Postgres;
+use cratefield_core::{Database, DbError, Row, Statement};
 use sea_query::Value as Sea;
 use std::sync::Arc;
 

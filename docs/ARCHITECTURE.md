@@ -40,11 +40,11 @@ a **waitlist** module, deployed for factory0.ventures.
    unsubscribe links are HMAC-signed tokens, so they need no server-side
    session. Request scope (request id, tracing span, `wait_until`) travels in
    axum request extensions, never in shared mutable state.
-4. **Runtime-agnostic kernel.** `factory0-core` depends on `http`, `axum`
+4. **Runtime-agnostic kernel.** `cratefield-core` depends on `http`, `axum`
    (default features off), `serde`, `tracing`, and pure-Rust crypto. It has no
    `wasm-bindgen`, `worker`, `tokio` or `std::fs` dependency. Runtime-specific
-   code lives in `factory0-runtime-cloudflare` (wasm) and, later,
-   `factory0-runtime-native` (tokio).
+   code lives in `cratefield-runtime-cloudflare` (wasm) and, later,
+   `cratefield-runtime-native` (tokio).
 5. **Portable SQL.** Migrations are hand-written SQL in a subset that both
    SQLite (D1) and Postgres accept, with per-dialect overrides only when
    unavoidable. Queries are built with `sea-query`, which renders the same
@@ -60,30 +60,30 @@ crates.io, so the prefix does the job.
 
 | Prefix | Distribution | Visibility | Lives in |
 |---|---|---|---|
-| `factory0-*` | crates.io | public, MIT | `Cratefield/harness` |
+| `cratefield-*` | crates.io | public, MIT | `Cratefield/harness` |
 | `fz-*` | git dependency (`git = "ssh://git@github.com/Factory-Zero/harness-private"`, pinned `tag`) | private | `Factory-Zero/harness-private` |
 
 ### `Cratefield/harness` (public Cargo workspace)
 
 | Crate | Role |
 |---|---|
-| `factory0-core` | `Module` trait, `Harness` builder, axum router assembly, port traits, typed config, problem+json errors, request scope, tracing setup, in-process event bus, template registry. |
-| `factory0-runtime-cloudflare` | `#[event(fetch)]` and `#[event(scheduled)]` entry points on `workers-rs`. Maps bindings to ports: D1 -> `Database` (sea-query -> `D1PreparedStatement`), KV -> `KeyValue`, Rate Limiting binding -> `RateLimiter`, `HARNESS_SECRET` -> `Signer`, `Context::wait_until` -> `Defer`. |
-| `factory0-adapter-resend` | `Mailer` over the Resend REST API using the runtime's `HttpClient` port (no vendor SDK). Idempotency keys, error mapping, `NotConfigured` mode when the key is absent. |
-| `factory0-adapter-turnstile` | `Captcha` over Cloudflare Turnstile siteverify. |
-| `factory0-adapter-sqlite` | `Database` over `rusqlite` (bundled). Used by every test, and viable for a single-node self-hosted deployment. |
-| `factory0-module-email-signup` | Collect an email, double opt-in, unsubscribe, admin export. |
-| `factory0-module-waitlist` | Join a per-product waitlist, confirm, position, referral codes, admin export. |
-| `factory0-cli` | Binary `fz`: `fz migrations collect`, `fz doctor`, `fz modules`. Run from the venture repo with `cargo run -p` or installed. |
-| `factory0-testing` | Conformance kit for modules: fake mailer, fake captcha, fake rate limiter, fixed clock, in-memory `Database`, request helpers over the axum router (no network). Used by public and private modules alike. |
-| `factory0-adapter-postgres` | (phase 3) `Database` over `sqlx` Postgres, for the native runtime. |
-| `factory0-runtime-native` | (phase 3) The same harness served by axum on tokio as a single binary, for the self-hosted move. |
+| `cratefield-core` | `Module` trait, `Harness` builder, axum router assembly, port traits, typed config, problem+json errors, request scope, tracing setup, in-process event bus, template registry. |
+| `cratefield-runtime-cloudflare` | `#[event(fetch)]` and `#[event(scheduled)]` entry points on `workers-rs`. Maps bindings to ports: D1 -> `Database` (sea-query -> `D1PreparedStatement`), KV -> `KeyValue`, Rate Limiting binding -> `RateLimiter`, `HARNESS_SECRET` -> `Signer`, `Context::wait_until` -> `Defer`. |
+| `cratefield-adapter-resend` | `Mailer` over the Resend REST API using the runtime's `HttpClient` port (no vendor SDK). Idempotency keys, error mapping, `NotConfigured` mode when the key is absent. |
+| `cratefield-adapter-turnstile` | `Captcha` over Cloudflare Turnstile siteverify. |
+| `cratefield-adapter-sqlite` | `Database` over `rusqlite` (bundled). Used by every test, and viable for a single-node self-hosted deployment. |
+| `cratefield-module-email-signup` | Collect an email, double opt-in, unsubscribe, admin export. |
+| `cratefield-module-waitlist` | Join a per-product waitlist, confirm, position, referral codes, admin export. |
+| `cratefield-cli` | Binary `fz`: `fz migrations collect`, `fz doctor`, `fz modules`. Run from the venture repo with `cargo run -p` or installed. |
+| `cratefield-testing` | Conformance kit for modules: fake mailer, fake captcha, fake rate limiter, fixed clock, in-memory `Database`, request helpers over the axum router (no network). Used by public and private modules alike. |
+| `cratefield-adapter-postgres` | (phase 3) `Database` over `sqlx` Postgres, for the native runtime. |
+| `cratefield-runtime-native` | (phase 3) The same harness served by axum on tokio as a single binary, for the self-hosted move. |
 
 ### `Factory-Zero/harness-private` (private Cargo workspace)
 
 Same layout and tooling as `harness`. Crates are `fz-*` and are consumed as
 pinned git dependencies; they are never published. Modules here pass the same
-`factory0-testing` conformance kit. Candidate first module: `fz-module-admin`
+`cratefield-testing` conformance kit. Candidate first module: `fz-module-admin`
 (cross-module ops endpoints: stats, exports, deletion requests) because it
 encodes internal process and needs no public API stability.
 
@@ -106,7 +106,7 @@ forms post here.
 ## 4. The module contract
 
 ```rust
-// factory0-core
+// cratefield-core
 pub trait Module: Send + Sync + 'static {
     fn name(&self) -> &'static str;              // "email-signup" -> mounted at /v1/email-signup
     fn version(&self) -> &'static str;           // env!("CARGO_PKG_VERSION"), for /__health
@@ -147,12 +147,12 @@ A venture composes:
 
 ```rust
 // src/harness.rs in a venture repo
-use factory0_core::{Harness, Venture};
-use factory0_runtime_cloudflare::Cloudflare;
-use factory0_adapter_resend::Resend;
-use factory0_adapter_turnstile::Turnstile;
-use factory0_module_email_signup::EmailSignup;
-use factory0_module_waitlist::Waitlist;
+use cratefield_core::{Harness, Venture};
+use cratefield_runtime_cloudflare::Cloudflare;
+use cratefield_adapter_resend::Resend;
+use cratefield_adapter_turnstile::Turnstile;
+use cratefield_module_email_signup::EmailSignup;
+use cratefield_module_waitlist::Waitlist;
 
 pub fn harness() -> Harness {
     Harness::builder()
@@ -195,7 +195,7 @@ ergonomic for trait objects.
 
 ## 6. HTTP conventions
 
-- Prefix `/v1/<module>`; `GET /__health` lists modules and versions; `GET /__ready` runs `SELECT 1` through `Database`; `GET /__surface` serves the composed UI surface (ADR 0010): public actions and views, plus admin ones when the admin bearer is presented, with a strong `ETag` per variant. With `factory0-ui` mounted, `/ui/<module>/<action>` renders that surface as HTML and a form post there is dispatched in-process to the module route (`docs/UI.md`). Sidecar modules' public surfaces are fetched over their bindings and merged in per request.
+- Prefix `/v1/<module>`; `GET /__health` lists modules and versions; `GET /__ready` runs `SELECT 1` through `Database`; `GET /__surface` serves the composed UI surface (ADR 0010): public actions and views, plus admin ones when the admin bearer is presented, with a strong `ETag` per variant. With `cratefield-ui` mounted, `/ui/<module>/<action>` renders that surface as HTML and a form post there is dispatched in-process to the module route (`docs/UI.md`). Sidecar modules' public surfaces are fetched over their bindings and merged in per request.
 - JSON in, JSON out. Bodies deserialize with serde into types whose constructors validate. Errors are RFC 9457 `application/problem+json` with a stable `type` URI per error (`https://factory0.ventures/problems/<slug>`), `instance` = request id.
 - CORS allowlist from `venture.cors_origins` via `tower-http`. No wildcard in production.
 - Every response carries `x-request-id` (accepted from the client if it matches `^[A-Za-z0-9_-]{8,128}$`, else a fresh ULID). Tracing spans carry it; logs are JSON keyed by it.
@@ -233,7 +233,7 @@ Emits `waitlist.confirmed`; a venture can subscribe that event to also add the a
 - Each module ships `migrations/sqlite/NNNN_<name>.sql` (and `migrations/postgres/` when the SQL differs), embedded with `include_str!` so the crate carries its own SQL.
 - `fz migrations collect` in the venture repo writes `migrations/<GGGG>_<module>_<NNNN>_<name>.sql` for `wrangler d1 migrations apply`. A lockfile `migrations/.harness-lock.json` pins module migration -> global file so adding a module later appends and never renumbers, and detects edits to already-applied SQL by content hash.
 - Portable subset: `TEXT` ids (ULID), ISO-8601 `TEXT` timestamps, `INTEGER` counters, no `AUTOINCREMENT`, no dialect-specific functions in DDL. `fz doctor` lints it.
-- Postgres later: same files run through the `factory0-adapter-postgres` migrator.
+- Postgres later: same files run through the `cratefield-adapter-postgres` migrator.
 
 Every applied migration is recorded in `harness_migrations` as
 `<module>/<id>` with the **sha256 of its SQL**. A later run compares
@@ -246,11 +246,11 @@ mismatch.
 
 ## 8. Tooling and release
 
-- Cargo workspace, `rust-toolchain.toml` pinning stable, `rustfmt` + `clippy -D warnings`, `cargo test` for core and modules against `factory0-adapter-sqlite`, `cargo deny` for licenses and advisories.
+- Cargo workspace, `rust-toolchain.toml` pinning stable, `rustfmt` + `clippy -D warnings`, `cargo test` for core and modules against `cratefield-adapter-sqlite`, `cargo deny` for licenses and advisories.
 - Target `wasm32-unknown-unknown` built with `worker-build`; CI runs `worker-build --release` on the example venture to catch wasm-incompatible dependencies (anything pulling `tokio`, `mio`, `std::fs` at runtime).
-- Release with `release-plz`: it opens a release PR with per-crate version bumps and changelogs from conventional commits; merging publishes `factory0-*` to crates.io using **trusted publishing** (OIDC from GitHub Actions, no long-lived token). Private crates are tagged, never published.
+- Release with `release-plz`: it opens a release PR with per-crate version bumps and changelogs from conventional commits; merging publishes `cratefield-*` to crates.io using **trusted publishing** (OIDC from GitHub Actions, no long-lived token). Private crates are tagged, never published.
 - Ventures pin exact crate versions; Renovate (cargo manager) opens bumps.
-- `HARNESS_API` is bumped only on breaking contract changes; `factory0-core`'s major follows it.
+- `HARNESS_API` is bumped only on breaking contract changes; `cratefield-core`'s major follows it.
 
 ## 9. Deployment
 
@@ -261,7 +261,7 @@ mismatch.
 
 ## 10. Migration path to self-hosted
 
-Phase 3 introduces `factory0-adapter-postgres` and `factory0-runtime-native`.
+Phase 3 introduces `cratefield-adapter-postgres` and `cratefield-runtime-native`.
 The move for a venture is:
 
 1. Stand up Postgres, run the same module migrations (postgres set).
@@ -269,7 +269,7 @@ The move for a venture is:
 3. Switch `src/harness.rs` to `.runtime(Native::new().db(Postgres::from_env()).rate_limiter(Redis::from_env()))`, keep `Resend` and `Turnstile`. Build a native binary; ship the Dockerfile from the template.
 4. Point `api.<domain>` at the new host.
 
-No module code changes. The parity suite in `factory0-testing` runs every
+No module code changes. The parity suite in `cratefield-testing` runs every
 module's tests against SQLite and Postgres in CI from phase 3 onward.
 
 ## 11. Security and privacy rules

@@ -6,8 +6,8 @@
 # `static_mut_refs` is warn-by-default in edition 2024.
 #
 # Crates that have a legitimate, non-request-scoped need for interior
-# mutability (e.g. `factory0-adapter-sqlite` guarding a `rusqlite` connection,
-# or `factory0-testing` recording fakes) must annotate the specific item with
+# mutability (e.g. `cratefield-adapter-sqlite` guarding a `rusqlite` connection,
+# or `cratefield-testing` recording fakes) must annotate the specific item with
 # `#[allow(clippy::disallowed_types)]` and a justification comment.
 
 disallowed-macros = [

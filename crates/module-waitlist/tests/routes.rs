@@ -5,9 +5,9 @@
 
 use axum::body::Body;
 use axum::http::{Method, Request, StatusCode, header};
-use factory0_core::{Clock, Decision, MapConfig, Statement, SystemClock};
-use factory0_module_waitlist::Waitlist;
-use factory0_testing::{MailerMode, TestHarness, request};
+use cratefield_core::{Clock, Decision, MapConfig, Statement, SystemClock};
+use cratefield_module_waitlist::Waitlist;
+use cratefield_testing::{MailerMode, TestHarness, request};
 use std::sync::Arc;
 use std::time::Duration;
 use time::format_description::well_known::Rfc3339;
@@ -28,7 +28,7 @@ fn join_json(email: &str, product: &str) -> String {
     format!(r#"{{"email":"{email}","product":"{product}","captchaToken":"x"}}"#)
 }
 
-async fn join(kit: &TestHarness, email: &str, product: &str) -> factory0_testing::TestResponse {
+async fn join(kit: &TestHarness, email: &str, product: &str) -> cratefield_testing::TestResponse {
     request(
         &kit.router,
         Method::POST,
@@ -460,7 +460,7 @@ async fn rate_limit_denial_is_429_with_retry_after() {
     for kit in TestHarness::all_dialects_with_ports(
         || vec![Box::new(Waitlist::new().products(["kontinuum"]))],
         move |ports| {
-            ports.rate_limiter = Some(Arc::new(factory0_testing::FakeRateLimiter::scripted(
+            ports.rate_limiter = Some(Arc::new(cratefield_testing::FakeRateLimiter::scripted(
                 vec![deny.clone()],
                 deny.clone(),
             )));
@@ -477,7 +477,7 @@ async fn captcha_denial_is_400() {
     for kit in TestHarness::all_dialects_with_ports(
         || vec![Box::new(Waitlist::new().products(["kontinuum"]))],
         |ports| {
-            ports.captcha = Some(Arc::new(factory0_testing::FakeCaptcha::with_tokens([
+            ports.captcha = Some(Arc::new(cratefield_testing::FakeCaptcha::with_tokens([
                 "good",
             ])));
         },

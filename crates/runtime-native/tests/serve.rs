@@ -10,16 +10,16 @@ use std::sync::Arc;
 
 use axum::extract::State;
 use axum::routing::get;
-use factory0_adapter_sqlite::SqliteDatabase;
-use factory0_core::{
+use cratefield_adapter_sqlite::SqliteDatabase;
+use cratefield_core::{
     Config, ConfigError, Harness, HttpClient, Json, Migrations, Module, ModuleContext, Port,
     Venture,
 };
-use factory0_runtime_native::{Native, ReqwestClient, serve_on};
+use cratefield_runtime_native::{Native, ReqwestClient, serve_on};
 use serde_json::Value;
 
 /// A module whose one route answers with exactly what
-/// `factory0_core::client_ip` sees — the sanitization oracle. Requires
+/// `cratefield_core::client_ip` sees — the sanitization oracle. Requires
 /// the `Database` port so `/__ready` has something to probe.
 struct IpEchoModule;
 
@@ -55,7 +55,7 @@ async fn echo_ip(
     State(_ctx): State<Arc<ModuleContext>>,
 ) -> Json<Value> {
     Json(serde_json::json!({
-        "client_ip": factory0_core::client_ip(&headers),
+        "client_ip": cratefield_core::client_ip(&headers),
         "raw_xff": headers
             .get("x-forwarded-for")
             .and_then(|value| value.to_str().ok()),

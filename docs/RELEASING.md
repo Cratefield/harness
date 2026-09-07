@@ -1,4 +1,4 @@
-# Releasing `factory0-*` to crates.io
+# Releasing `cratefield-*` to crates.io
 
 The pipeline is wired; the only things left are one-time crates.io
 setup steps that need a human with the owner account. This page is the
@@ -15,7 +15,7 @@ below runs from this repository's CI until it is configured.
    requirements.
 2. Merging that release PR triggers `release-plz release` on the
    resulting push to `main`: it publishes every crate whose version is
-   not yet on crates.io — in dependency order (`factory0-core` first) —
+   not yet on crates.io — in dependency order (`cratefield-core` first) —
    and tags `<crate>-v<version>` with a GitHub release per crate.
 
 Configuration lives in `release-plz.toml` (per-crate versioning,
@@ -61,7 +61,7 @@ can be exercised without publishing.
 ## Owner setup (once)
 
 Step 0 is about GitHub; the rest need the crates.io account that will
-own the `factory0-*` names.
+own the `cratefield-*` names.
 
 0. **Let the release PR be opened.** Either add a `RELEASE_PLZ_TOKEN`
    secret (preferred, and the release PR then runs CI) or tick the
@@ -79,20 +79,38 @@ crate exists**, so the very first release of each crate is manual:
 
    ```sh
    export CARGO_REGISTRY_TOKEN=...   # the scoped token from step 1
-   cargo publish --dry-run -p factory0-core   # then without --dry-run
-   cargo publish -p factory0-testing
-   cargo publish -p factory0-adapter-sqlite
-   cargo publish -p factory0-adapter-resend
-   cargo publish -p factory0-adapter-turnstile
-   cargo publish -p factory0-runtime-cloudflare
-   cargo publish -p factory0-module-email-signup
-   cargo publish -p factory0-module-waitlist
-   cargo publish -p factory0-cli
+   cargo publish --dry-run -p cratefield-core   # then without --dry-run
+   cargo publish -p cratefield-kms
+   cargo publish -p cratefield-adapter-sqlite
+   cargo publish -p cratefield-adapter-postgres
+   cargo publish -p cratefield-adapter-resend
+   cargo publish -p cratefield-adapter-turnstile
+   cargo publish -p cratefield-secrets
+   cargo publish -p cratefield-runtime-cloudflare
+   cargo publish -p cratefield-runtime-native
+   cargo publish -p cratefield-testing
+   cargo publish -p cratefield-module-email-signup
+   cargo publish -p cratefield-module-waitlist
+   cargo publish -p cratefield-module-cms
+   cargo publish -p cratefield-ui
+   cargo publish -p cratefield-cli
    ```
 
-   (`--dry-run` for a crate whose upstream `factory0-*` dependencies
-   are not on crates.io yet resolves against the registry and fails
-   until those are published first — hence the order.)
+   Fifteen crates, and the order is the dependency order: `--dry-run` for
+   a crate whose upstream `cratefield-*` dependencies are not on crates.io
+   yet resolves against the registry and fails until those are published.
+   Regenerate the list with the topological sort in
+   [COMPATIBILITY.md](COMPATIBILITY.md) if a crate is added.
+
+   `cargo publish` resolves **dev**-dependencies against crates.io too,
+   which is why every internal dev-dependency in this workspace is
+   declared path-only rather than `workspace = true` (see the note in the
+   root `Cargo.toml`). Cargo strips a path-only dev-dependency from the
+   packaged manifest, so `cratefield-ui` can dev-depend on the unpublished
+   `module-hello` example, and the
+   `adapter-postgres -> module-* -> testing -> adapter-postgres` dev cycle
+   never has to be broken with `--no-verify`. If you ever find yourself
+   reaching for `--no-verify`, a dev-dependency has grown a version.
 3. **Enable trusted publishing per crate.** For each published crate:
    crates.io → crate page → *Settings* → *Trusted publishing* → add
    repository `Cratefield/harness`, workflow `release.yml`,
@@ -106,9 +124,9 @@ crate exists**, so the very first release of each crate is manual:
    `dry_run` checked; the release step should now execute and report
    what it *would* publish.
 5. **Revoke the token from step 1.**
-6. **Add the team owner.** On each crate page → *Owners* → add the
-   Factory Zero GitHub org team, so a second human can recover the
-   crates.
+6. **Add the team owner.** On each crate page → *Owners* → add a
+   GitHub team from the `Cratefield` org (the org that owns this
+   repository), so a second human can recover the crates.
 
 If trusted publishing ever needs to be bypassed temporarily: create a
 token with the *Update crates* scope and add it as the GitHub Actions
@@ -132,27 +150,27 @@ While pre-1.0 a minor bump may break (that is what the caret ranges in
 `0.2.0-rc.1`:
 
 1. On a branch, set the candidate versions
-   (`cargo set-version -p factory0-core 0.2.0-rc.1` from `cargo-edit`,
+   (`cargo set-version -p cratefield-core 0.2.0-rc.1` from `cargo-edit`,
    or by hand) and land the change on `main` with a message like
-   `chore(release): prepare factory0-core 0.2.0-rc.1`.
+   `chore(release): prepare cratefield-core 0.2.0-rc.1`.
 2. The next `release-plz release` run publishes any version that is not
    on crates.io yet — including the `rc`. (Verify the release run's
    logs; if release-plz skipped it, publish the `rc` manually as in
    step 2 above — same trusted publishing / token rules.)
 3. Consumers opt in explicitly: prerelease versions never match a caret
    range, so a venture must pin
-   `factory0-core = "=0.2.0-rc.1"` while testing.
+   `cratefield-core = "=0.2.0-rc.1"` while testing.
 4. The final `0.2.0` follows the normal release-PR flow; the `rc`
    commits appear in its changelog.
 
 ## What CI checks without credentials
 
-- `cargo publish --dry-run -p factory0-core` (definition of done in
+- `cargo publish --dry-run -p cratefield-core` (definition of done in
   CI's absence: it packages and verification-builds the crate with only
   registry dependencies).
 - `cargo package --list` for every crate: the packaged file list is
   exact (`include` lists), so the migration SQL and mail templates ship
   and no repo-root file (`BUILD-BRIEF.md`, `PROGRESS.md`, `target/`)
   can leak into a package.
-- After the first real release, `cargo add factory0-core` from an empty
+- After the first real release, `cargo add cratefield-core` from an empty
   project (issue #15 acceptance) should be re-run by hand once.

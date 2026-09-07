@@ -1,6 +1,6 @@
 # Reusable module conformance (issue #17).
 #
-# Runs the `factory0-testing` conformance kit for every module crate in
+# Runs the `cratefield-testing` conformance kit for every module crate in
 # the CALLING repository. This repo's CI calls it via
 # `uses: ./.github/workflows/conformance.yml`; `harness-private` calls it
 # across repos with
@@ -9,7 +9,7 @@
 #
 # Expected layout (same as this repo): module crates live in directories
 # matching `module-glob` (default `crates/module-*`), each with a
-# `tests/conformance.rs` calling `factory0_testing::conformance`.
+# `tests/conformance.rs` calling `cratefield_testing::conformance`.
 
 name: Conformance
 

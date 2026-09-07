@@ -17,15 +17,15 @@ crate-type = ["cdylib", "rlib"]
 workspace = true
 
 [dependencies]
-factory0-core = { workspace = true }
-factory0-runtime-cloudflare = { workspace = true }
-factory0-module-email-signup = { workspace = true }
-factory0-module-waitlist = { workspace = true }
-factory0-ui = { workspace = true }
+cratefield-core = { workspace = true }
+cratefield-runtime-cloudflare = { workspace = true }
+cratefield-module-email-signup = { workspace = true }
+cratefield-module-waitlist = { workspace = true }
+cratefield-ui = { workspace = true }
 # The example mounts modules that require a Mailer; the Resend adapter with
 # no key is NotConfigured, which is what the example wants: the port exists,
 # nothing is ever sent.
-factory0-adapter-resend = { workspace = true }
+cratefield-adapter-resend = { workspace = true }
 axum = { workspace = true }
 http = { workspace = true }
 tower = { workspace = true }

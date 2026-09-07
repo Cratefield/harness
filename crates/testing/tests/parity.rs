@@ -1,7 +1,7 @@
 //! What the sidecar hop must preserve, and proof the parity axis fails
 //! when it does not (issue #64, ADR 0009).
 //!
-//! The generic axis in [`factory0_testing::conformance`] probes a real
+//! The generic axis in [`cratefield_testing::conformance`] probes a real
 //! module with requests the kit can build without knowing its routes.
 //! These cases need shapes a real module will not produce on demand — a
 //! `303`, a chosen problem body, an echo of what the far end received —
@@ -13,11 +13,11 @@ use axum::extract::State;
 use axum::http::{HeaderMap, Method, Request, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
-use factory0_core::{
+use cratefield_core::{
     Config, ConfigError, HARNESS_SIDECARS, MapConfig, Migrations, Module, ModuleContext, Port,
     Problem, Scope, X_REQUEST_ID,
 };
-use factory0_testing::{FakeSidecar, Fault, TestHarness, shared_sidecar};
+use cratefield_testing::{FakeSidecar, Fault, TestHarness, shared_sidecar};
 use tower::ServiceExt;
 
 /// Answers one of every shape the hop could mangle.
@@ -113,7 +113,7 @@ fn mounts_with(fault: Option<Fault>) -> Mounts {
         |builder| builder,
         move |ports| {
             ports.config = Arc::new(MapConfig::from_pairs([
-                ("HARNESS_SECRET", factory0_testing::TEST_HARNESS_SECRET),
+                ("HARNESS_SECRET", cratefield_testing::TEST_HARNESS_SECRET),
                 (HARNESS_SIDECARS, r#"{"shapes":"SHAPES"}"#),
             ]));
             ports.dispatcher = Some(dispatcher);

@@ -1,7 +1,7 @@
-# factory0-ui
+# cratefield-ui
 
 Renders the harness's UI surface (ADR 0010) as HTML from inside the Worker.
-Mount it with `Harness::builder().ui(factory0_ui::Ui::default())` and every
+Mount it with `Harness::builder().ui(cratefield_ui::Ui::default())` and every
 module that declares a surface gets pages at `/ui/<module>/<action>`, the
 same markup as a fragment with `?fragment=1`, landing pages at
 `/ui/<module>/<action>/{done,expired}`, and the base stylesheet at

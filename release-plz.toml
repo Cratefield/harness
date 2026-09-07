@@ -17,5 +17,5 @@ name = "venture"
 publish = false
 
 [[package]]
-name = "factory0-cli-acceptance"
+name = "cratefield-cli-acceptance"
 publish = false

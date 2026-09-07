@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use factory0_core::{Config, KeyValue, KvError};
+use cratefield_core::{Config, KeyValue, KvError};
 use redis::aio::ConnectionManager;
 
 use crate::ports::rate_limit::RedisRateLimiter;

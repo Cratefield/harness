@@ -1,4 +1,4 @@
-//! `factory0-runtime-cloudflare` runs a Factory Zero [`Harness`] on
+//! `cratefield-runtime-cloudflare` runs a Factory Zero [`Harness`] on
 //! Cloudflare Workers (ADR 0001, 0002). It maps bindings to ports:
 //! D1 -> `Database`, KV -> `KeyValue`, the Rate Limiting binding ->
 //! `RateLimiter`, `HARNESS_SECRET` -> `Signer`, `Context::wait_until` ->
@@ -36,7 +36,7 @@ pub use ports::{
 pub use runtime::Cloudflare;
 pub use tracing_setup::install_tracing;
 
-use factory0_core::Harness;
+use cratefield_core::Harness;
 use std::sync::Arc;
 use tower::ServiceExt;
 use worker::{Context, Env, Request as WorkerRequest, Response as WorkerResponse};

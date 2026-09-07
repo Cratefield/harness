@@ -1,4 +1,4 @@
-# factory0-cli (`fz`)
+# cratefield-cli (`fz`)
 
 The venture CLI: `fz migrations collect`, `fz migrations apply`, `fz
 data export` / `fz data import`, `fz doctor`, `fz modules`.
@@ -14,12 +14,12 @@ name = "fz"
 path = "src/fz_main.rs"
 
 [dependencies]
-factory0-cli = "0.1"
+cratefield-cli = "0.1"
 ```
 
 ```rust,ignore
 // venture src/fz_main.rs
-fn main() { factory0_cli::main_for(my_venture::harness); }
+fn main() { cratefield_cli::main_for(my_venture::harness); }
 ```
 
 Then:
@@ -61,7 +61,7 @@ tokio stay out of the default, wasm-safe dependency graph):
 
 ```toml
 [dependencies]
-factory0-cli = { version = "0.1", features = ["postgres"] }
+cratefield-cli = { version = "0.1", features = ["postgres"] }
 ```
 
 ```sh
@@ -103,7 +103,7 @@ export file is refused before anything touches the network.
 
 Fails when:
 
-- a module's `harness_api` differs from the `factory0-core` it linked
+- a module's `harness_api` differs from the `cratefield-core` it linked
   against (the message names the module, its version and the core crate;
   `Harness::build` already refuses this, the doctor re-asserts it —
   issue #17);

@@ -2,7 +2,7 @@
 //! statement, values bind positionally, `batch` uses D1's atomic batch.
 
 use async_trait::async_trait;
-use factory0_core::{Database, DbError, Row, Rows, Statement};
+use cratefield_core::{Database, DbError, Row, Rows, Statement};
 use sea_query::Value as SeaValue;
 use serde_json::Value as Json;
 use worker::D1Database as WorkerD1;

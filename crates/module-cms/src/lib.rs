@@ -1,8 +1,8 @@
-//! `factory0-module-cms`: a small content store with an editor (Cratefield
+//! `cratefield-module-cms`: a small content store with an editor (Cratefield
 //! control-plane issue #10).
 //!
 //! ```no_run
-//! use factory0_module_cms::Cms;
+//! use cratefield_module_cms::Cms;
 //!
 //! let module = Cms::new().collections(["pages", "posts"]);
 //! ```
@@ -32,7 +32,7 @@
 mod handlers;
 mod store;
 
-use factory0_core::{
+use cratefield_core::{
     Config, ConfigError, Migrations, Module, ModuleConfig, ModuleContext, Port, SqlMigration,
 };
 use std::sync::Arc;
@@ -156,7 +156,7 @@ impl Module for Cms {
         handlers::router(Arc::new(ctx), self.settings.clone())
     }
 
-    fn surface(&self) -> factory0_core::Surface {
+    fn surface(&self) -> cratefield_core::Surface {
         handlers::surface(&self.settings)
     }
 }

@@ -1,9 +1,9 @@
-//! `factory0-testing`: the conformance kit every Factory Zero module runs
+//! `cratefield-testing`: the conformance kit every Factory Zero module runs
 //! against (issue #9) — fake ports, an in-memory SQLite `Database`, and
 //! request helpers over the axum router with **no network**.
 //!
 //! ```no_run
-//! use factory0_testing::{conformance, TestHarness, request};
+//! use cratefield_testing::{conformance, TestHarness, request};
 //!
 //! #[test]
 //! fn my_module_conforms() {
@@ -44,9 +44,9 @@ pub use request::{TestResponse, request};
 pub use sidecar::{FakeSidecar, Fault, shared as shared_sidecar};
 
 // The fixed test secret for the kit's Signer — an obvious dummy, never real.
-pub const TEST_HARNESS_SECRET: &str = "factory0-testing-dummy-secret-0123456789";
+pub const TEST_HARNESS_SECRET: &str = "cratefield-testing-dummy-secret-0123456789";
 
-// Mirrors factory0-adapter-postgres's integration-test skip reason.
+// Mirrors cratefield-adapter-postgres's integration-test skip reason.
 const POSTGRES_SKIP_REASON: &str = "start a local postgres:16 \
      (docker run --rm -e POSTGRES_PASSWORD=postgres -p 5433:5432 postgres:16) \
      and set FZ_TEST_POSTGRES_URL=postgres://postgres:postgres@127.0.0.1:5433/postgres";

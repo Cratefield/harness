@@ -2,8 +2,8 @@
 //! handlers' own body types, product as a `select` over the configured
 //! list, admin export hidden from the public subset.
 
-use factory0_core::{Audience, Module, View};
-use factory0_module_waitlist::Waitlist;
+use cratefield_core::{Audience, Module, View};
+use cratefield_module_waitlist::Waitlist;
 
 #[test]
 fn join_form_offers_the_configured_products_as_a_select() {

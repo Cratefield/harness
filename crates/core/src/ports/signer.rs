@@ -1,5 +1,5 @@
 //! The `Signer` port and the signed-token payload (ADR 0006). The HMAC
-//! reference implementation lives in `factory0-core::signer` (issue #3).
+//! reference implementation lives in `cratefield-core::signer` (issue #3).
 
 use thiserror::Error;
 

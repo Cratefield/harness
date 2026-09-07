@@ -1,4 +1,4 @@
-//! `factory0-runtime-native` runs a Factory Zero `Harness` as a single
+//! `cratefield-runtime-native` runs a Factory Zero `Harness` as a single
 //! binary on tokio (ADR 0001, issue #19): axum on a `TcpListener`,
 //! `reqwest` (rustls) behind the `HttpClient` port, Redis behind
 //! `RateLimiter` and `KeyValue`, `tokio::spawn` behind `Defer`, the
@@ -15,7 +15,7 @@
 //! tokio, reqwest, redis and the JSON log subscriber do not compile to
 //! wasm, so this crate is impossible to build for a wasm target:
 //! `src/lib.rs` fails compilation with a clear message on `wasm32`/
-//! `wasm64` (the same gate `factory0-adapter-postgres` uses), and the
+//! `wasm64` (the same gate `cratefield-adapter-postgres` uses), and the
 //! native dependencies are target-gated in `Cargo.toml`. The wasm graph
 //! of `examples/venture` must stay free of this crate; CI asserts it
 //! with `cargo tree --target wasm32-unknown-unknown`.
@@ -45,10 +45,10 @@
 //! ```ignore
 //! # async fn demo() -> Result<(), Box<dyn std::error::Error>> {
 //! use std::sync::Arc;
-//! use factory0_core::Harness;
-//! use factory0_runtime_native::{Native, serve};
+//! use cratefield_core::Harness;
+//! use cratefield_runtime_native::{Native, serve};
 //!
-//! let db = factory0_adapter_postgres::Postgres::connect("postgres://user:pass@host:5432/venture").await?;
+//! let db = cratefield_adapter_postgres::Postgres::connect("postgres://user:pass@host:5432/venture").await?;
 //! let harness = Arc::new(harness()); // your composition, as on Workers
 //! let runtime = Native::new().db_arc(Arc::new(db));
 //! serve(harness, runtime).await?;
@@ -67,9 +67,9 @@
 // that wires the wrong runtime into a Worker.
 #[cfg(any(target_arch = "wasm32", target_arch = "wasm64"))]
 compile_error!(
-    "factory0-runtime-native is native-only: tokio, reqwest and redis do not \
+    "cratefield-runtime-native is native-only: tokio, reqwest and redis do not \
      compile to wasm (issue #19, ADR 0001). A wasm target must not depend on \
-     this crate — use factory0-runtime-cloudflare on Workers, and check the \
+     this crate — use cratefield-runtime-cloudflare on Workers, and check the \
      wasm dependency graph of the venture."
 );
 

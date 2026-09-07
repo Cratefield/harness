@@ -6,15 +6,15 @@
 //! per-table content checksum. The refusal, `--append`, tamper and
 //! `--plan` paths are exercised on the same fixture.
 
-use factory0_cli::run;
-use factory0_core::{Database, Statement};
+use cratefield_cli::run;
+use cratefield_core::{Database, Statement};
 #[cfg(feature = "postgres")]
 use sea_query::Value as Sea;
 use std::path::PathBuf;
 use std::process::ExitCode;
 use venture_fixture::harness_v1;
 
-use factory0_adapter_sqlite::SqliteDatabase;
+use cratefield_adapter_sqlite::SqliteDatabase;
 
 /// A unique scratch directory per test; removed on drop (best effort —
 /// a failure leaves it behind, which is fine under the system temp).
@@ -303,7 +303,7 @@ fn import_without_the_feature_fails_with_build_instructions() {
 }
 
 #[cfg(feature = "postgres")]
-fn sqlite_rows(db: &dyn Database, table: &str) -> factory0_core::Rows {
+fn sqlite_rows(db: &dyn Database, table: &str) -> cratefield_core::Rows {
     pollster::block_on(db.query(&Statement::new(format!(
         "SELECT * FROM \"{table}\" ORDER BY id"
     ))))
@@ -329,7 +329,7 @@ fn canonical_value(value: &Sea) -> String {
 }
 
 #[cfg(feature = "postgres")]
-fn table_checksum(rows: &factory0_core::Rows) -> String {
+fn table_checksum(rows: &cratefield_core::Rows) -> String {
     use sha2::{Digest, Sha256};
     let mut hasher = Sha256::new();
     for row in &rows.rows {
@@ -354,10 +354,10 @@ fn table_checksum(rows: &factory0_core::Rows) -> String {
 #[cfg(feature = "postgres")]
 mod on_postgres {
     use super::{Scratch, args, export, seeded_sqlite, sqlite_rows, table_checksum};
-    use factory0_adapter_postgres::Postgres;
-    use factory0_adapter_postgres::testing::TempDb;
-    use factory0_cli::run;
-    use factory0_core::{Database, Statement};
+    use cratefield_adapter_postgres::Postgres;
+    use cratefield_adapter_postgres::testing::TempDb;
+    use cratefield_cli::run;
+    use cratefield_core::{Database, Statement};
     use std::process::ExitCode;
     use venture_fixture::harness_v1;
 
@@ -418,7 +418,7 @@ mod on_postgres {
 
     fn count(rt: &Rt, db: &Postgres, table: &str) -> i64 {
         let rows = rt.block_on(async {
-            db.query(&factory0_core::Statement::new(format!(
+            db.query(&cratefield_core::Statement::new(format!(
                 "SELECT COUNT(*) AS n FROM \"{table}\""
             )))
             .await
@@ -451,7 +451,7 @@ mod on_postgres {
 
         let pg = rt.block_on(async { Postgres::connect(&temp.url).await.expect("connect") });
         let sqlite =
-            factory0_adapter_sqlite::SqliteDatabase::open(db_path.to_string_lossy().as_ref())
+            cratefield_adapter_sqlite::SqliteDatabase::open(db_path.to_string_lossy().as_ref())
                 .expect("reopen sqlite");
         for table in ["subscribers", "waitlist_entries"] {
             assert_eq!(count(&rt, &pg, table), expected_rows(table), "{table}");
@@ -476,8 +476,9 @@ mod on_postgres {
     }
 
     async fn delta_source(db_path: &std::path::Path) {
-        let db = factory0_adapter_sqlite::SqliteDatabase::open(db_path.to_string_lossy().as_ref())
-            .expect("reopen sqlite");
+        let db =
+            cratefield_adapter_sqlite::SqliteDatabase::open(db_path.to_string_lossy().as_ref())
+                .expect("reopen sqlite");
         for id in [
             "01SUBSCRIBER0000000000000004",
             "01SUBSCRIBER0000000000000005",

@@ -1,8 +1,8 @@
 [package]
-name = "factory0-adapter-resend"
+name = "cratefield-adapter-resend"
 description = "Mailer port over the Resend REST API for the Factory Zero harness"
 readme = "README.md"
-keywords = ["factory0", "resend", "email", "mailer", "adapter"]
+keywords = ["cratefield", "resend", "email", "mailer", "adapter"]
 categories = ["email"]
 include = ["src/**/*", "README.md"]
 version.workspace = true
@@ -15,7 +15,7 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
-factory0-core = { workspace = true }
+cratefield-core = { workspace = true }
 async-trait = { workspace = true }
 http = { workspace = true }
 bytes = { workspace = true }

@@ -21,10 +21,10 @@
 - **Fixed redirects.** Confirm/unsubscribe/status redirect only to URLs
   from `Venture` config or module builders; a test asserts no route
   reads `redirect`/`return`/`next` query parameters.
-- **Admin auth.** `factory0_core::admin::require_admin`: disabled (401)
+- **Admin auth.** `cratefield_core::admin::require_admin`: disabled (401)
   when `ADMIN_TOKEN` is unset, SHA-256-digest constant-time compare,
   403 on a wrong token; the token never appears in tracing fields.
-- **CSV formula-injection guard.** `factory0_core::csv::escape` prefixes
+- **CSV formula-injection guard.** `cratefield_core::csv::escape` prefixes
   `= + - @ \t \r` leading cells with `'` before RFC 4180 quoting.
 - **Rate limits on every public route** — including confirm and status —
   keyed `ip:<cf-connecting-ip>` (never `x-forwarded-for` on Workers) and
@@ -35,7 +35,7 @@
 - **PII minimalism and retention.** See [PRIVACY.md](PRIVACY.md).
 - **Redaction.** Field names matching `(?i)secret|token|key|
   authorization|password` are replaced with `[redacted]`; email values
-  appear only as a 12-hex `subject_hash` (rules in `factory0_core::logging`,
+  appear only as a 12-hex `subject_hash` (rules in `cratefield_core::logging`,
   shared by every runtime formatter; verified by tests).
 - **No `unsafe`** in core or any module (`#![forbid(unsafe_code)]`); the
   only `unsafe`-adjacent code is `worker::send::SendWrapper` inside the
@@ -46,8 +46,8 @@
 - `cargo deny check` runs in CI on every PR: advisories (vulnerabilities
   and yanked crates) are **deny**, licenses restricted to the allowlist
   in `deny.toml`, unknown registries and git sources denied.
-- Runtime dependency boundaries are enforced in CI: `factory0-core` and
-  every `factory0-module-*` must build to `wasm32-unknown-unknown` and
+- Runtime dependency boundaries are enforced in CI: `cratefield-core` and
+  every `cratefield-module-*` must build to `wasm32-unknown-unknown` and
   must not pull `worker`, `wasm-bindgen`, `tokio`, `reqwest`, `sqlx` or
   `rusqlite` (the example venture's `worker-build` job catches it).
 - Ventures pin exact crate versions; Renovate opens bumps, CI re-runs

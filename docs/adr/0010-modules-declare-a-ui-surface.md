@@ -63,7 +63,7 @@ it until the deploy changes. The surface has its own contract
 version, `surface_api`, alongside `harness_api`.
 
 ### 2. One renderer, HTML over the wire
-The renderer is a new `factory0-ui` crate built on `maud`, which is string
+The renderer is a new `cratefield-ui` crate built on `maud`, which is string
 building and runs on wasm. Mounting `.ui(Ui::default())` in the builder adds
 `/ui/<module>/<action>` (a full page), the same path with `?fragment=1` (the
 form markup alone, no `<html>` wrapper), `/ui/cf.css` and `/ui/cf.js`.

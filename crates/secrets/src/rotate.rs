@@ -18,7 +18,7 @@
 //!   nothing needs to be: the secrets are sealed under the DEKs, not
 //!   under the KEK.
 
-use factory0_core::Statement;
+use cratefield_core::Statement;
 use sea_query::Value as SeaValue;
 
 use crate::{Access, Actor, SecretStore, SecretsError};

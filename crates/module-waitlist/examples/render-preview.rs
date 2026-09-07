@@ -3,11 +3,11 @@
 //! module library itself never touches `std::fs`.
 //!
 //! ```text
-//! cargo run -p factory0-module-waitlist --example render-preview
+//! cargo run -p cratefield-module-waitlist --example render-preview
 //! ```
 
-use factory0_core::Brand;
-use factory0_module_waitlist::{ConfirmMailData, ConfirmedMailData, default_templates};
+use cratefield_core::Brand;
+use cratefield_module_waitlist::{ConfirmMailData, ConfirmedMailData, default_templates};
 use serde_json::json;
 
 fn main() {

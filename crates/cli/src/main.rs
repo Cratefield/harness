@@ -7,8 +7,8 @@
 fn main() {
     eprintln!(
         "fz must run inside a venture: add the [[bin]] target that calls \
-         factory0_cli::main_for(your::harness) — see \
-         https://github.com/Cratefield/harness (factory0-cli README)."
+         cratefield_cli::main_for(your::harness) — see \
+         https://github.com/Cratefield/harness (cratefield-cli README)."
     );
     std::process::exit(2);
 }

@@ -12,7 +12,7 @@
 //! architecture section 11 — names matching
 //! `(?i)secret|token|key|authorization|password` become `[redacted]`, and
 //! email-ish fields are logged only as a truncated SHA-256 hash (rules
-//! in `factory0_core::logging`, so runtimes cannot drift). Span fields
+//! in `cratefield_core::logging`, so runtimes cannot drift). Span fields
 //! are not emitted as events; the per-request span (issue #14) is
 //! carried on the `Scope` and its shape is asserted by core's tests.
 
@@ -58,7 +58,7 @@ mod native_subscriber {
 
     impl JsonRedactingVisitor {
         fn record_field(&mut self, name: &str, value: &str) {
-            let redacted = factory0_core::redacted_value(name, value);
+            let redacted = cratefield_core::redacted_value(name, value);
             if redacted == "[redacted]" {
                 self.fields.insert(name.to_owned(), json!("[redacted]"));
             } else if let Some(hash) = redacted.strip_prefix("subject_hash:").map(str::to_owned) {

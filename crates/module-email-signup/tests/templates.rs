@@ -1,8 +1,8 @@
 //! Issue #12 acceptance for `email-signup`: askama snapshot tests per
 //! template, links equal between text and html, and `<script>` escaping.
 
-use factory0_core::{Brand, Rendered};
-use factory0_module_email_signup::{ConfirmMailData, WelcomeMailData, default_templates};
+use cratefield_core::{Brand, Rendered};
+use cratefield_module_email_signup::{ConfirmMailData, WelcomeMailData, default_templates};
 use serde_json::json;
 
 fn render(id: &str, data: &serde_json::Value) -> Rendered {
@@ -121,13 +121,13 @@ fn script_in_email_is_escaped() {
 fn defaults_render_without_a_registry() {
     // The fallback path: registry misses, module renders its compiled
     // default directly (conformance kit registers nothing).
-    let registry = factory0_core::TemplateRegistry::new();
+    let registry = cratefield_core::TemplateRegistry::new();
     let err = registry
         .render("email-signup/confirm", &confirm_data(), "en")
         .expect_err("registry is empty");
     assert!(matches!(
         err,
-        factory0_core::TemplateError::UnknownTemplate { .. }
+        cratefield_core::TemplateError::UnknownTemplate { .. }
     ));
     let rendered = render("email-signup/confirm", &confirm_data());
     assert!(rendered.subject.contains("factory0"));

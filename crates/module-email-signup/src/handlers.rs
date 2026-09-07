@@ -8,7 +8,7 @@ use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, post};
-use factory0_core::{
+use cratefield_core::{
     Action, Audience, Captcha, Clock, Column, Decision, IdGen, Json, Kid, ModuleConfig,
     ModuleContext, Outcome, Payload, Problem, RateLimiter, SLUGS, Scope, SendOutcome, Signer,
     Surface, SystemClock, UlidIdGen, View, client_ip, csv_row, invalid_email_problem,

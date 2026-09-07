@@ -4,12 +4,12 @@
 //! the scheduled retention purge.
 
 use axum::http::{Method, StatusCode, header};
-use factory0_core::{
+use cratefield_core::{
     Clock, Decision, Kid, MapConfig, Payload, Ports, Scope, Signer, Statement, SystemClock,
     UlidIdGen,
 };
-use factory0_module_email_signup::EmailSignup;
-use factory0_testing::{MailerMode, TestHarness, request};
+use cratefield_module_email_signup::EmailSignup;
+use cratefield_testing::{MailerMode, TestHarness, request};
 use std::sync::Arc;
 use std::time::Duration;
 use time::format_description::well_known::Rfc3339;
@@ -29,7 +29,7 @@ fn signup_json(email: &str) -> String {
     format!(r#"{{"email":"{email}","captchaToken":"x"}}"#)
 }
 
-async fn signup(kit: &TestHarness, email: &str) -> factory0_testing::TestResponse {
+async fn signup(kit: &TestHarness, email: &str) -> cratefield_testing::TestResponse {
     request(
         &kit.router,
         Method::POST,
@@ -506,7 +506,7 @@ async fn captcha_denial_is_400_captcha_failed() {
     for kit in TestHarness::all_dialects_with_ports(
         || vec![Box::new(EmailSignup::new())],
         |ports| {
-            ports.captcha = Some(Arc::new(factory0_testing::FakeCaptcha::with_tokens([
+            ports.captcha = Some(Arc::new(cratefield_testing::FakeCaptcha::with_tokens([
                 "good",
             ])));
         },
@@ -557,7 +557,7 @@ async fn rate_limit_denial_is_429_with_retry_after() {
     for kit in TestHarness::all_dialects_with_ports(
         || vec![Box::new(EmailSignup::new())],
         move |ports| {
-            ports.rate_limiter = Some(Arc::new(factory0_testing::FakeRateLimiter::scripted(
+            ports.rate_limiter = Some(Arc::new(cratefield_testing::FakeRateLimiter::scripted(
                 vec![deny.clone()],
                 deny.clone(),
             )));

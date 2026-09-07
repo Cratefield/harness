@@ -19,18 +19,18 @@ use axum::http::{HeaderMap, HeaderName};
 use std::net::IpAddr;
 use std::str::FromStr as _;
 
-use factory0_core::Config;
+use cratefield_core::Config;
 
 /// The header the runtime normalizes the resolved client IP into. Core's
 /// `client_ip` reads it first on every target, so modules (which only
-/// ever call `factory0_core::client_ip`) see the same header contract on
+/// ever call `cratefield_core::client_ip`) see the same header contract on
 /// Workers and native. The server middleware sets it **after** stripping
 /// every inbound forwarding header, so its value is always the one this
 /// runtime resolved — never what a client sent.
 pub const CLIENT_IP_HEADER: &str = "cf-connecting-ip";
 
 /// Forwarding headers stripped from every inbound request before the
-/// router sees it. `factory0_core::client_ip` trusts
+/// router sees it. `cratefield_core::client_ip` trusts
 /// `x-forwarded-for`'s first hop on native builds, so an unsanitized
 /// header would let any client pick its own rate-limit key; stripping
 /// here is what makes [`trusted_proxy_headers`] the single trust point.
@@ -80,7 +80,7 @@ pub fn trusted_proxy_headers(config: &dyn Config) -> Vec<String> {
 /// This function decides; the server middleware enforces. It resolves
 /// the address here, strips every forwarding header, and writes the
 /// result into [`CLIENT_IP_HEADER`](crate::CLIENT_IP_HEADER) — so by the time a module calls
-/// `factory0_core::client_ip(headers)`, the only forwarding header left
+/// `cratefield_core::client_ip(headers)`, the only forwarding header left
 /// carries exactly this runtime's verdict.
 #[must_use]
 pub fn client_ip(headers: &HeaderMap, trusted: &[String], peer: Option<IpAddr>) -> Option<IpAddr> {
@@ -117,7 +117,7 @@ pub(crate) fn normalize_headers(headers: &mut HeaderMap, resolved: Option<IpAddr
 mod tests {
     use super::*;
     use axum::http::HeaderValue;
-    use factory0_core::MapConfig;
+    use cratefield_core::MapConfig;
 
     fn headers(pairs: &[(&str, &str)]) -> HeaderMap {
         use std::str::FromStr as _;
@@ -206,7 +206,7 @@ mod tests {
         );
         // And core — what the modules call — reads exactly that verdict.
         assert_eq!(
-            factory0_core::client_ip(&headers).as_deref(),
+            cratefield_core::client_ip(&headers).as_deref(),
             Some("203.0.113.7")
         );
     }
