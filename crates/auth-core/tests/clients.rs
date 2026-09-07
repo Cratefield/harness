@@ -7,7 +7,7 @@
 use axum::http::{Method, StatusCode, header};
 use axum::response::Response;
 use factory0_auth_core::AuthCore;
-use factory0_core::{Database, Statement};
+use factory0_core::Statement;
 use factory0_testing::TestHarness;
 use serde_json::Value;
 use std::sync::Arc;
