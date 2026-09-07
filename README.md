@@ -245,6 +245,7 @@ examples/
 docs/
   ARCHITECTURE.md
   MIGRATION-STREAMS.md     two repositories applying migrations to one database
+  RECONCILIATION.md        boot-time reconciliation across tenant databases
   MOUNTING.md              compile a module in, or run it as a sidecar
   UI.md                    the UI surface, its markup contract, UiSpec, admin
   ui-llms.txt              the same contract written for a generator

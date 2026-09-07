@@ -289,7 +289,7 @@ module's tests against SQLite and Postgres in CI from phase 3 onward.
 
 - Authentication and user accounts (later module).
 - Payments (later, and only through the ports pattern).
-- Multi-tenant single deployment **on the Worker path**. One venture = one Worker by design. The phase-3 native runtime does serve many tenants, one database each, with a separate control database; see ADR 0008 and issues #23 to #44.
+- Multi-tenant single deployment **on the Worker path**. One venture = one Worker by design. The phase-3 native runtime does serve many tenants, one database each, with a separate control database; see ADR 0008, [RECONCILIATION.md](RECONCILIATION.md) for how a boot reconciles them, and issues #23 to #44.
 - Runtime plugin loading. Unchanged by ADR 0009 (when to use the sidecar mount at all: [MOUNTING.md](MOUNTING.md)): Cloudflare's
   `WebAssembly.instantiate()` accepts only pre-compiled modules, so nothing is
   loaded at request time. A sidecar is a separately deployed Worker, not a
