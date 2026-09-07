@@ -10,7 +10,7 @@ use std::collections::BTreeMap;
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use factory0_core::{DispatchError, Dispatcher};
+use cratefield_core::{DispatchError, Dispatcher};
 use worker::js_sys::Uint8Array;
 use worker::send::IntoSendFuture;
 use worker::{Fetcher, Headers, Method, Request as WorkerRequest, RequestInit};

@@ -8,11 +8,11 @@ use async_trait::async_trait;
 use axum::body::Body;
 use axum::http::{Method, Request, StatusCode, header};
 use bytes::Bytes;
-use factory0_core::{DispatchError, Dispatcher, HARNESS_SIDECARS, MapConfig};
-use factory0_module_hello::Hello;
-use factory0_module_waitlist::Waitlist;
-use factory0_testing::TestHarness;
-use factory0_ui::Ui;
+use cratefield_core::{DispatchError, Dispatcher, HARNESS_SIDECARS, MapConfig};
+use cratefield_module_hello::Hello;
+use cratefield_module_waitlist::Waitlist;
+use cratefield_testing::TestHarness;
+use cratefield_ui::Ui;
 use tower::ServiceExt;
 
 struct HarnessDispatcher(axum::Router);
@@ -80,7 +80,7 @@ async fn sidecar_module_renders_and_submits_through_the_host_ui() {
         |builder| builder.ui(Ui::new()),
         move |ports| {
             ports.config = Arc::new(MapConfig::from_pairs([
-                ("HARNESS_SECRET", factory0_testing::TEST_HARNESS_SECRET),
+                ("HARNESS_SECRET", cratefield_testing::TEST_HARNESS_SECRET),
                 (HARNESS_SIDECARS, r#"{"hello":"HELLO"}"#),
             ]));
             ports.dispatcher = Some(dispatcher);

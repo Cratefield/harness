@@ -13,7 +13,7 @@ use axum::{
     response::{IntoResponse, Response},
     routing::{get, post},
 };
-use factory0_core::{
+use cratefield_core::{
     Action, Audience, Clock, Column, IdGen, ModuleContext, Outcome, Problem, Scope, Surface,
     SystemClock, UlidIdGen, View, require_admin,
 };
@@ -49,7 +49,7 @@ fn internal(scope: &Scope) -> Problem {
     Problem::internal().instance(&scope.request_id)
 }
 
-fn db_of(state: &ModuleState) -> Option<Arc<dyn factory0_core::Database>> {
+fn db_of(state: &ModuleState) -> Option<Arc<dyn cratefield_core::Database>> {
     state.ctx.ports.db.clone()
 }
 

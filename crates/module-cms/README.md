@@ -1,4 +1,4 @@
-# factory0-module-cms
+# cratefield-module-cms
 
 A small content store with an editor, as a Factory Zero module. Content is a
 titled body plus a JSON `data` object addressed by `(collection, slug)`, kept
@@ -12,7 +12,7 @@ The look comes from the venture's `UI_SPEC`, not from here — this is a content
 store, not a page builder.
 
 ```rust
-use factory0_module_cms::Cms;
+use cratefield_module_cms::Cms;
 
 let module = Cms::new().collections(["pages", "posts"]);
 ```

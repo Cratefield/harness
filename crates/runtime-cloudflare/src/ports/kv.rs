@@ -1,7 +1,7 @@
 //! `KeyValue` over a Workers KV namespace.
 
 use async_trait::async_trait;
-use factory0_core::{KeyValue, KvError};
+use cratefield_core::{KeyValue, KvError};
 use std::time::Duration;
 use worker::KvStore;
 use worker::send::IntoSendFuture;

@@ -16,7 +16,7 @@ use std::time::Duration;
 use axum::extract::{Path, State};
 use axum::http::{HeaderMap, HeaderValue, Method, StatusCode, header};
 use axum::response::{IntoResponse, Redirect, Response};
-use factory0_core::{
+use cratefield_core::{
     Action, Audience, Clock, Kid, Payload, Problem, Scope, View, client_ip, constant_time_eq,
 };
 use maud::Markup;
@@ -103,7 +103,7 @@ fn same_origin(headers: &HeaderMap) -> bool {
 }
 
 fn forbidden(scope: &Scope, detail: &str) -> Response {
-    Problem::new(&factory0_core::SLUGS.admin_forbidden)
+    Problem::new(&cratefield_core::SLUGS.admin_forbidden)
         .with_detail(detail)
         .instance(&scope.request_id)
         .into_response()
@@ -212,8 +212,8 @@ pub(crate) async fn login_post(
         .expect("enabled() checked the signer");
     // The Clock port, not `SystemTime`: the latter panics on
     // `wasm32-unknown-unknown`.
-    let now =
-        u64::try_from(factory0_core::SystemClock.now().unix_timestamp().max(0)).unwrap_or_default();
+    let now = u64::try_from(cratefield_core::SystemClock.now().unix_timestamp().max(0))
+        .unwrap_or_default();
     let session = signer.sign(&Payload {
         purpose: PURPOSE.to_owned(),
         subject: "admin".to_owned(),
@@ -273,7 +273,7 @@ pub(crate) async fn index(State(state): State<Arc<UiState>>, headers: HeaderMap)
     respond_admin(&state, "Admin", &render::admin_index(&entries), true)
 }
 
-type Doc = factory0_core::SurfaceDocument;
+type Doc = cratefield_core::SurfaceDocument;
 
 fn admin_action<'a>(surface: &'a Doc, module: &str, action: &str) -> Option<&'a Action> {
     surface
@@ -473,7 +473,7 @@ pub(crate) async fn page_post(
             let status = response.status();
             let body = if status.is_success() {
                 match &spec.outcome {
-                    factory0_core::Outcome::Accepted { message } => {
+                    cratefield_core::Outcome::Accepted { message } => {
                         render::notice(&module, &action, "success", &humanize(&action), message)
                     }
                     _ => render::notice(&module, &action, "success", &humanize(&action), "Done."),
@@ -559,7 +559,7 @@ fn back_to_table(surface: &Doc, module: &str) -> String {
 
 /// RFC 4180: quoted fields, doubled quotes, `\r\n` or `\n`. Returns the
 /// header and one map per record. The writer side is
-/// `factory0_core::csv_row`; this is its inverse.
+/// `cratefield_core::csv_row`; this is its inverse.
 pub(crate) fn parse_csv(text: &str) -> (Vec<String>, Vec<BTreeMap<String, String>>) {
     let mut rows: Vec<Vec<String>> = Vec::new();
     let mut row: Vec<String> = Vec::new();
@@ -612,7 +612,7 @@ pub(crate) fn parse_csv(text: &str) -> (Vec<String>, Vec<BTreeMap<String, String
 mod tests {
     use super::*;
     use crate::fields::Widget;
-    use factory0_core::csv_row;
+    use cratefield_core::csv_row;
 
     #[test]
     fn csv_round_trips_the_writer() {

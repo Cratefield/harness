@@ -13,7 +13,7 @@
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use factory0_core::{
+use cratefield_core::{
     Captcha, CaptchaError, Clock, Database, DbError, Decision, Defer, HttpClient, HttpError,
     KeyValue, KvError, MailError, Mailer, Message, RateLimitError, RateLimiter, Row, Rows,
     SendOutcome, Statement, Verdict,
@@ -385,7 +385,7 @@ impl Database for EmptyDatabase {
     }
 }
 
-/// An in-process [`Dispatcher`](factory0_core::Dispatcher) that answers from an
+/// An in-process [`Dispatcher`](cratefield_core::Dispatcher) that answers from an
 /// axum [`Router`](axum::Router), so a
 /// module can be exercised through a sidecar mount without a network or a
 /// second Worker (ADR 0009). The conformance kit uses it to run the same
@@ -449,7 +449,7 @@ impl FakeDispatcher {
 }
 
 #[async_trait]
-impl factory0_core::Dispatcher for FakeDispatcher {
+impl cratefield_core::Dispatcher for FakeDispatcher {
     fn has(&self, binding: &str) -> bool {
         !matches!(self.behaviour, FakeDispatch::Unbound) && binding == self.binding
     }
@@ -458,13 +458,13 @@ impl factory0_core::Dispatcher for FakeDispatcher {
         &self,
         binding: &str,
         request: Request<Bytes>,
-    ) -> Result<Response<Bytes>, factory0_core::DispatchError> {
+    ) -> Result<Response<Bytes>, cratefield_core::DispatchError> {
         self.calls.fetch_add(1, Ordering::SeqCst);
         match &self.behaviour {
             FakeDispatch::Unbound => {
-                Err(factory0_core::DispatchError::NotBound(binding.to_owned()))
+                Err(cratefield_core::DispatchError::NotBound(binding.to_owned()))
             }
-            FakeDispatch::Failing(reason) => Err(factory0_core::DispatchError::Unavailable {
+            FakeDispatch::Failing(reason) => Err(cratefield_core::DispatchError::Unavailable {
                 binding: binding.to_owned(),
                 reason: reason.clone(),
             }),
@@ -475,14 +475,14 @@ impl factory0_core::Dispatcher for FakeDispatcher {
                 let response =
                     tower::ServiceExt::oneshot(router, request)
                         .await
-                        .map_err(|err| factory0_core::DispatchError::Unavailable {
+                        .map_err(|err| cratefield_core::DispatchError::Unavailable {
                             binding: binding.to_owned(),
                             reason: err.to_string(),
                         })?;
                 let (parts, body) = response.into_parts();
                 let bytes = axum::body::to_bytes(body, usize::MAX)
                     .await
-                    .map_err(|err| factory0_core::DispatchError::Unavailable {
+                    .map_err(|err| cratefield_core::DispatchError::Unavailable {
                         binding: binding.to_owned(),
                         reason: err.to_string(),
                     })?;

@@ -1,7 +1,7 @@
 //! `Defer` over the Workers `wait_until` entry points: fetch contexts and
 //! scheduled contexts each have one.
 
-use factory0_core::Defer;
+use cratefield_core::Defer;
 use futures_core::future::BoxFuture;
 use worker::{Context, ScheduleContext};
 

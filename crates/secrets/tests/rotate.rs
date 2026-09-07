@@ -3,10 +3,10 @@
 
 use std::sync::Arc;
 
-use factory0_adapter_sqlite::SqliteDatabase;
-use factory0_core::{Database, Statement};
-use factory0_kms::{Dek, Kms, LocalFileKms};
-use factory0_secrets::{Actor, ChainAudit, SecretStore, Secrets, StoreId, migrations, verify};
+use cratefield_adapter_sqlite::SqliteDatabase;
+use cratefield_core::{Database, Statement};
+use cratefield_kms::{Dek, Kms, LocalFileKms};
+use cratefield_secrets::{Actor, ChainAudit, SecretStore, Secrets, StoreId, migrations, verify};
 
 fn kms() -> Arc<dyn Kms> {
     let kek = Dek::generate().expect("rng");

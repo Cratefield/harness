@@ -88,7 +88,7 @@ review checklist.
 - `crates/core` and module crates must stay wasm-safe: no `worker`,
   `wasm-bindgen`, `tokio`, `reqwest`, `sqlx`, `rusqlite`, no `std::fs` /
   `std::net` at runtime.
-- `#![forbid(unsafe_code)]` everywhere except `factory0-runtime-cloudflare`
+- `#![forbid(unsafe_code)]` everywhere except `cratefield-runtime-cloudflare`
   (ADR 0002).
 - No `thread_local!`, no `static mut`, no ambient request state (ADR 0007).
 - Never commit real secrets; test fixtures use obvious dummies.

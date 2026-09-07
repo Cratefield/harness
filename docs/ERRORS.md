@@ -1,7 +1,7 @@
 # Error taxonomy
 
 Every problem slug the harness can emit, generated from
-`factory0-core`'s registry by `cargo run -p factory0-core --example
+`cratefield-core`'s registry by `cargo run -p cratefield-core --example
 errors-doc` and checked in CI for drift. Responses are RFC 9457
 `application/problem+json` with `type` =
 `https://factory0.ventures/problems/<slug>` and `instance` = the

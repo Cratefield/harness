@@ -98,6 +98,6 @@ separate, deliberate act (#36).
 - The `harness secrets` and `harness audit` commands above. The
   operations themselves are implemented and tested
   (`SecretStore::rotate_dek`, `SecretStore::rewrap`,
-  `factory0_secrets::verify`); wiring commands that address a tenant by
+  `cratefield_secrets::verify`); wiring commands that address a tenant by
   id needs the tenant registry and the control database (#32).
 - The quarterly rehearsal as a scheduled task with an owner.

@@ -13,7 +13,7 @@
 //! name = "fz"
 //! path = "src/fz_main.rs"
 //! // src/fz_main.rs
-//! fn main() { factory0_cli::main_for(venture::harness); }
+//! fn main() { cratefield_cli::main_for(venture::harness); }
 //! ```
 //!
 //! Then `cargo run -p venture --bin fz -- migrations collect`.
@@ -30,7 +30,7 @@ mod lock;
 pub mod sidecars;
 
 use clap::{Parser, Subcommand};
-use factory0_core::Harness;
+use cratefield_core::Harness;
 use std::path::PathBuf;
 use std::process::ExitCode;
 

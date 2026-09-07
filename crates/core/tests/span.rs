@@ -4,7 +4,7 @@
 //! appear in any of them.
 
 // Test-side recording fixture, not request state — the same category
-// and allowance as the fakes in `factory0-testing` (ADR 0007 policy).
+// and allowance as the fakes in `cratefield-testing` (ADR 0007 policy).
 #![allow(clippy::disallowed_types)]
 
 mod common;

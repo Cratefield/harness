@@ -1,16 +1,16 @@
 //! Generates `docs/ERRORS.md` from the problem registry in
-//! `factory0-core::problems` (issue #14). Run without arguments to
+//! `cratefield-core::problems` (issue #14). Run without arguments to
 //! write the file, or with `--check` to verify the checked-in copy has
 //! no drift (CI fails the run on drift).
 //!
 //! ```text
-//! cargo run -p factory0-core --example errors-doc          # write
-//! cargo run -p factory0-core --example errors-doc -- --check
+//! cargo run -p cratefield-core --example errors-doc          # write
+//! cargo run -p cratefield-core --example errors-doc -- --check
 //! ```
 //!
 //! Host-only tooling: the core library itself never touches `std::fs`.
 
-use factory0_core::problem_registry;
+use cratefield_core::problem_registry;
 
 fn markdown() -> String {
     let mut defs = problem_registry();
@@ -20,7 +20,7 @@ fn markdown() -> String {
     out.push_str("# Error taxonomy\n\n");
     out.push_str(
         "Every problem slug the harness can emit, generated from\n\
-         `factory0-core`'s registry by `cargo run -p factory0-core --example\n\
+         `cratefield-core`'s registry by `cargo run -p cratefield-core --example\n\
          errors-doc` and checked in CI for drift. Responses are RFC 9457\n\
          `application/problem+json` with `type` =\n\
          `https://factory0.ventures/problems/<slug>` and `instance` = the\n\
@@ -51,7 +51,7 @@ fn main() {
         let current = std::fs::read_to_string(&path).unwrap_or_default();
         if current != generated {
             eprintln!(
-                "docs/ERRORS.md is stale; regenerate with `cargo run -p factory0-core \
+                "docs/ERRORS.md is stale; regenerate with `cargo run -p cratefield-core \
                  --example errors-doc` and commit it"
             );
             std::process::exit(1);

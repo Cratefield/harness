@@ -204,7 +204,7 @@ sequenceDiagram
   the fleet is visible before it becomes a deploy problem.
 
 No DSN, no secret, and no migration SQL appears in any of it. The
-redaction rules in `factory0_core::logging` already apply.
+redaction rules in `cratefield_core::logging` already apply.
 
 ## 8. Dry run
 

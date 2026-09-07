@@ -1,7 +1,7 @@
 //! `TemplateRegistry` tests (issue #4): override precedence, locale
 //! fallback, unknown ids.
 
-use factory0_core::{Harness, Rendered, Template, TemplateError};
+use cratefield_core::{Harness, Rendered, Template, TemplateError};
 
 fn fixed(subject: &'static str) -> Box<dyn Template> {
     struct Fixed(&'static str);
@@ -23,7 +23,7 @@ fn fixed(subject: &'static str) -> Box<dyn Template> {
 
 #[test]
 fn override_wins_over_module_default() {
-    let mut registry = factory0_core::TemplateRegistry::new();
+    let mut registry = cratefield_core::TemplateRegistry::new();
     registry.register("email-signup/confirm", fixed("default subject"));
     registry.register("email-signup/confirm", fixed("venture override"));
 
@@ -37,7 +37,7 @@ fn override_wins_over_module_default() {
 fn builder_override_wins_when_registered_last() {
     let harness = Harness::builder()
         .venture(
-            factory0_core::Venture::new("test-venture", "test.example")
+            cratefield_core::Venture::new("test-venture", "test.example")
                 .cors_origins(["https://test.example"]),
         )
         .templates(vec![(
@@ -57,7 +57,7 @@ fn builder_override_wins_when_registered_last() {
 
 #[test]
 fn locale_variant_tried_first_then_base() {
-    let mut registry = factory0_core::TemplateRegistry::new();
+    let mut registry = cratefield_core::TemplateRegistry::new();
     registry.register("email-signup/confirm", fixed("english subject"));
     registry.register("email-signup/confirm@de", fixed("deutscher betreff"));
 
@@ -80,7 +80,7 @@ fn locale_variant_tried_first_then_base() {
 
 #[test]
 fn unknown_template_is_an_error_naming_id_and_locale() {
-    let registry = factory0_core::TemplateRegistry::new();
+    let registry = cratefield_core::TemplateRegistry::new();
     let err = registry
         .render("email-signup/missing", &serde_json::json!({}), "de")
         .expect_err("must fail");
@@ -95,7 +95,7 @@ fn unknown_template_is_an_error_naming_id_and_locale() {
 
 #[test]
 fn contains_follows_locale_fallback() {
-    let mut registry = factory0_core::TemplateRegistry::new();
+    let mut registry = cratefield_core::TemplateRegistry::new();
     registry.register("email-signup/confirm@de", fixed("de"));
     assert!(registry.contains("email-signup/confirm", "de"));
     assert!(!registry.contains("email-signup/confirm", "en"));
@@ -103,26 +103,26 @@ fn contains_follows_locale_fallback() {
 
 struct StubSignupModule;
 
-impl factory0_core::Module for StubSignupModule {
+impl cratefield_core::Module for StubSignupModule {
     fn name(&self) -> &'static str {
         "email-signup"
     }
     fn version(&self) -> &'static str {
         "0.0.0"
     }
-    fn requires(&self) -> &'static [factory0_core::Port] {
+    fn requires(&self) -> &'static [cratefield_core::Port] {
         &[]
     }
-    fn migrations(&self) -> factory0_core::Migrations {
-        factory0_core::Migrations::default()
+    fn migrations(&self) -> cratefield_core::Migrations {
+        cratefield_core::Migrations::default()
     }
     fn validate_config(
         &self,
-        _cfg: &dyn factory0_core::Config,
-    ) -> Result<(), factory0_core::ConfigError> {
+        _cfg: &dyn cratefield_core::Config,
+    ) -> Result<(), cratefield_core::ConfigError> {
         Ok(())
     }
-    fn router(&self, _ctx: factory0_core::ModuleContext) -> axum::Router {
+    fn router(&self, _ctx: cratefield_core::ModuleContext) -> axum::Router {
         axum::Router::new()
     }
 }

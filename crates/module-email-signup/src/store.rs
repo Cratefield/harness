@@ -3,7 +3,7 @@
 //! `YYYY-MM-DDTHH:MM:SSZ` strings, so lexicographic order is
 //! chronological order.
 
-use factory0_core::{Database, DbError, Row, Statement};
+use cratefield_core::{Database, DbError, Row, Statement};
 use sea_query::{Alias, Expr, Query};
 
 pub(crate) const STATUS_PENDING: &str = "pending";

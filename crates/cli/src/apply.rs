@@ -1,10 +1,10 @@
 //! `fz migrations apply` (issue #18): applies the harness's module
 //! migrations directly to a Postgres database — the native counterpart of
 //! `wrangler d1 migrations apply`. Requires building `fz` with
-//! factory0-cli's `postgres` feature so sqlx and tokio stay out of the
+//! cratefield-cli's `postgres` feature so sqlx and tokio stay out of the
 //! default (wasm-safe) dependency graph.
 
-use factory0_core::Harness;
+use cratefield_core::Harness;
 
 /// Applies the harness's migrations to the database at `url`.
 ///
@@ -23,8 +23,8 @@ pub fn apply(harness: &Harness, dialect: &str, url: &str) -> Result<(), String> 
     {
         let _ = (harness, url);
         Err(
-            "this fz binary was built without factory0-cli's `postgres` feature — \
-             rebuild the fz bin with `--features factory0-cli/postgres` to apply \
+            "this fz binary was built without cratefield-cli's `postgres` feature — \
+             rebuild the fz bin with `--features cratefield-cli/postgres` to apply \
              migrations to Postgres (sqlite/D1 migrations run through \
              `wrangler d1 migrations apply`)"
                 .to_owned(),
@@ -42,7 +42,7 @@ fn apply_postgres(harness: &Harness, url: &str) -> Result<(), String> {
         .map_err(|err| format!("cannot start the async runtime: {err}"))?;
     // The URL is never echoed: connection strings carry credentials.
     runtime.block_on(async {
-        let db = factory0_adapter_postgres::Postgres::connect(url)
+        let db = cratefield_adapter_postgres::Postgres::connect(url)
             .await
             .map_err(|err| format!("cannot connect (check --url): {err}"))?;
         db.apply_harness_migrations(harness)

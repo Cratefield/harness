@@ -5,10 +5,10 @@
 
 use std::sync::Arc;
 
-use factory0_adapter_sqlite::SqliteDatabase;
-use factory0_core::{Database, Statement};
-use factory0_kms::{Dek, Kms, LocalFileKms};
-use factory0_secrets::{Access, Actor, Audit, AuditEvent, SecretStore, Secrets, SecretsError};
+use cratefield_adapter_sqlite::SqliteDatabase;
+use cratefield_core::{Database, Statement};
+use cratefield_kms::{Dek, Kms, LocalFileKms};
+use cratefield_secrets::{Access, Actor, Audit, AuditEvent, SecretStore, Secrets, SecretsError};
 
 fn kms() -> Arc<dyn Kms> {
     let kek = Dek::generate().expect("rng");
@@ -18,7 +18,7 @@ fn kms() -> Arc<dyn Kms> {
 /// A store on a fresh in-memory database, migrated.
 fn store_on(secrets: &Secrets, id: &str) -> (SecretStore, Arc<dyn Database>) {
     let db = SqliteDatabase::in_memory().expect("in-memory db");
-    db.apply_migrations("secrets", factory0_secrets::migrations().sqlite)
+    db.apply_migrations("secrets", cratefield_secrets::migrations().sqlite)
         .expect("schema applies");
     let db: Arc<dyn Database> = Arc::new(db);
     (secrets.tenant(id, Arc::clone(&db)), db)

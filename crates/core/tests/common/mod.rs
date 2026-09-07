@@ -8,7 +8,7 @@ use axum::body::Body;
 use axum::extract::State;
 use axum::http::{HeaderValue, Method, Request, header};
 use axum::response::Response;
-use factory0_core::{
+use cratefield_core::{
     Config, ConfigError, Database, DbError, Form, Harness, HarnessBuilder, Json, Migrations,
     Module, ModuleContext, Port, Ports, Row, Rows, Runtime, Statement, SystemClock,
 };
@@ -42,7 +42,7 @@ impl Default for SampleModule {
     fn default() -> Self {
         Self {
             name: "sample",
-            harness_api: factory0_core::HARNESS_API,
+            harness_api: cratefield_core::HARNESS_API,
             requires: &[],
             optional: &[],
             tables: &[],
@@ -139,7 +139,7 @@ impl Module for SampleModule {
             let park = Arc::clone(park);
             router = router.route(
                 "/park",
-                axum::routing::get(move |scope: factory0_core::Scope| async move {
+                axum::routing::get(move |scope: cratefield_core::Scope| async move {
                     let receiver = park
                         .lock()
                         .expect("park lock uncontended")
@@ -169,7 +169,7 @@ impl Module for SampleModule {
 }
 
 async fn hello(
-    scope: factory0_core::Scope,
+    scope: cratefield_core::Scope,
     State(ctx): State<Arc<ModuleContext>>,
 ) -> Json<serde_json::Value> {
     Json(json!({
@@ -199,15 +199,15 @@ pub fn all_ports() -> Vec<Port> {
     Port::ALL.to_vec()
 }
 
-pub fn base_venture() -> factory0_core::Venture {
-    factory0_core::Venture::new("test-venture", "test.example")
+pub fn base_venture() -> cratefield_core::Venture {
+    cratefield_core::Venture::new("test-venture", "test.example")
         .cors_origins(["https://test.example"])
 }
 
 pub fn builder_with_sample() -> HarnessBuilder {
     Harness::builder()
         .venture(
-            factory0_core::Venture::new("test-venture", "test.example")
+            cratefield_core::Venture::new("test-venture", "test.example")
                 .cors_origins(["https://test.example"]),
         )
         .module(SampleModule::default())
@@ -267,7 +267,7 @@ impl Database for FailingDb {
 pub struct InstantTimeoutClock;
 
 #[async_trait]
-impl factory0_core::Clock for InstantTimeoutClock {
+impl cratefield_core::Clock for InstantTimeoutClock {
     fn now(&self) -> time::OffsetDateTime {
         SystemClock.now()
     }

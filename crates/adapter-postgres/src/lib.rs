@@ -1,4 +1,4 @@
-//! `factory0-adapter-postgres`: the [`Database`] port over `sqlx`
+//! `cratefield-adapter-postgres`: the [`Database`] port over `sqlx`
 //! Postgres for the native runtime (ADR 0004, issue #18). Native only —
 //! it must never enter a wasm build.
 //!
@@ -41,8 +41,8 @@
 //! `batch` runs all statements in one transaction (atomic, ADR 0004).
 //!
 //! ```no_run
-//! # async fn demo() -> Result<(), factory0_core::DbError> {
-//! use factory0_adapter_postgres::Postgres;
+//! # async fn demo() -> Result<(), cratefield_core::DbError> {
+//! use cratefield_adapter_postgres::Postgres;
 //!
 //! let db = Postgres::connect("postgres://user:pass@host:5432/venture").await?;
 //! // db.apply_harness_migrations(&harness).await?;   // library entry point
@@ -57,7 +57,7 @@
 // crate fast, with a clear message, before sqlx is even attempted.
 #[cfg(any(target_arch = "wasm32", target_arch = "wasm64"))]
 compile_error!(
-    "factory0-adapter-postgres is native-only: the sqlx Postgres driver does not \
+    "cratefield-adapter-postgres is native-only: the sqlx Postgres driver does not \
      compile to wasm (issue #18, ADR 0004). A wasm target must not depend on this \
      crate — check the wasm dependency graph of the venture (modules see ports, \
      never adapters, and runtime-native is the only consumer)."
@@ -70,7 +70,7 @@ pub mod testing;
 pub use migrate::select_set;
 
 use async_trait::async_trait;
-use factory0_core::{Database, DbError, Rows, Statement};
+use cratefield_core::{Database, DbError, Rows, Statement};
 use sqlx::postgres::PgArguments;
 
 /// An open Postgres connection pool (`sqlx` 0.8, `runtime-tokio`,

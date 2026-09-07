@@ -264,11 +264,11 @@ dependencies = [
 ]
 
 [[package]]
-name = "factory0-cli"
+name = "cratefield-cli"
 version = "0.1.0"
 dependencies = [
  "clap",
- "factory0-core",
+ "cratefield-core",
  "serde",
  "serde_json",
  "sha2",
@@ -276,7 +276,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "factory0-core"
+name = "cratefield-core"
 version = "0.2.0"
 dependencies = [
  "async-trait",
@@ -861,8 +861,8 @@ name = "venture-fixture"
 version = "0.1.0"
 dependencies = [
  "axum",
- "factory0-cli",
- "factory0-core",
+ "cratefield-cli",
+ "cratefield-core",
 ]
 
 [[package]]

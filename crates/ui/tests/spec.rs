@@ -6,10 +6,10 @@ use std::sync::Arc;
 
 use axum::body::Body;
 use axum::http::{Method, Request, StatusCode, header};
-use factory0_core::MapConfig;
-use factory0_module_waitlist::Waitlist;
-use factory0_testing::TestHarness;
-use factory0_ui::{Ui, UiSpec};
+use cratefield_core::MapConfig;
+use cratefield_module_waitlist::Waitlist;
+use cratefield_testing::TestHarness;
+use cratefield_ui::{Ui, UiSpec};
 use tower::ServiceExt;
 
 const SPEC: &str = r##"{
@@ -45,7 +45,7 @@ fn kit(ui: Ui, runtime_spec: Option<&'static str>) -> TestHarness {
         )],
         move |builder| builder.ui(ui),
         move |ports| {
-            let mut pairs = vec![("HARNESS_SECRET", factory0_testing::TEST_HARNESS_SECRET)];
+            let mut pairs = vec![("HARNESS_SECRET", cratefield_testing::TEST_HARNESS_SECRET)];
             if let Some(spec) = runtime_spec {
                 pairs.push(("UI_SPEC", spec));
             }
@@ -200,8 +200,8 @@ async fn no_spec_means_no_theme_and_no_ui_entry() {
 fn unknown_references_fail_the_build_with_their_path() {
     let bad = r##"{"modules":{"waitlist":{"actions":{"join":{"fields":{"emial":{"label":"x"}},"order":["nope"],"pages":{"later":{}}},"leave":{}}},"ghost":{}},"theme":{"tokens":{"accent":"#000"},"css_url":"http://plain.example/x.css"}}"##;
     let ui = Ui::from_spec(bad).unwrap();
-    let err = factory0_core::Harness::builder()
-        .venture(factory0_core::Venture::new("v", "v.test"))
+    let err = cratefield_core::Harness::builder()
+        .venture(cratefield_core::Venture::new("v", "v.test"))
         .module(Waitlist::new().products(["kontinuum"]))
         .ui(ui)
         .runtime(NoRuntime)
@@ -223,9 +223,9 @@ fn unknown_references_fail_the_build_with_their_path() {
 }
 
 struct NoRuntime;
-impl factory0_core::Runtime for NoRuntime {
-    fn provides(&self) -> Vec<factory0_core::Port> {
-        factory0_core::Port::ALL.to_vec()
+impl cratefield_core::Runtime for NoRuntime {
+    fn provides(&self) -> Vec<cratefield_core::Port> {
+        cratefield_core::Port::ALL.to_vec()
     }
 }
 

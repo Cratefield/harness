@@ -1,8 +1,8 @@
 [package]
-name = "factory0-runtime-cloudflare"
+name = "cratefield-runtime-cloudflare"
 description = "Cloudflare Workers runtime for the Factory Zero harness (workers-rs)"
 readme = "README.md"
-keywords = ["factory0", "cloudflare", "workers", "wasm", "serverless"]
+keywords = ["cratefield", "cloudflare", "workers", "wasm", "serverless"]
 categories = ["web-programming"]
 include = ["src/**/*", "README.md"]
 version.workspace = true
@@ -15,7 +15,7 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
-factory0-core = { workspace = true }
+cratefield-core = { workspace = true }
 worker = { workspace = true }
 axum = { workspace = true }
 http = { workspace = true }

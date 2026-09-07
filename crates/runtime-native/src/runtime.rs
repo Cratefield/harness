@@ -1,13 +1,13 @@
 //! The `Native` runtime builder (issue #19): the counterpart of
-//! `factory0_runtime_cloudflare::Cloudflare` for a self-hosted binary.
+//! `cratefield_runtime_cloudflare::Cloudflare` for a self-hosted binary.
 //!
 //! ```ignore
 //! # use std::sync::Arc;
-//! # fn db() -> Arc<dyn factory0_core::Database> { unimplemented!() }
-//! # fn rate_limiter() -> Arc<dyn factory0_core::RateLimiter> { unimplemented!() }
-//! # fn kv() -> Arc<dyn factory0_core::KeyValue> { unimplemented!() }
-//! # fn mailer() -> Arc<dyn factory0_core::Mailer> { unimplemented!() }
-//! use factory0_runtime_native::Native;
+//! # fn db() -> Arc<dyn cratefield_core::Database> { unimplemented!() }
+//! # fn rate_limiter() -> Arc<dyn cratefield_core::RateLimiter> { unimplemented!() }
+//! # fn kv() -> Arc<dyn cratefield_core::KeyValue> { unimplemented!() }
+//! # fn mailer() -> Arc<dyn cratefield_core::Mailer> { unimplemented!() }
+//! use cratefield_runtime_native::Native;
 //!
 //! let runtime = Native::new()
 //!     .db_arc(db())                       // Postgres (adapter-postgres) or Sqlite
@@ -20,7 +20,7 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use factory0_core::{
+use cratefield_core::{
     Captcha, Database, HarnessConfig, KeyValue, Mailer, Port, Ports, RateLimiter, Runtime,
     UlidIdGen,
 };
@@ -39,13 +39,13 @@ fn warn_once(flag: &AtomicBool, message: &str) {
 
 /// The native runtime. Adapters are passed in as instances (the same
 /// pattern as the Cloudflare runtime's `.mailer(..)`/`.captcha(..)`):
-/// a Postgres or SQLite [`Database`](factory0_core::Database) from the
+/// a Postgres or SQLite [`Database`](cratefield_core::Database) from the
 /// matching adapter crate, a [`RedisRateLimiter`](crate::RedisRateLimiter)
 /// and [`RedisKv`](crate::RedisKv) over a shared Redis connection
 /// manager, `Resend`/`Turnstile` unchanged from the Workers path.
 ///
 /// Config — including `HARNESS_SECRET` for the `Signer` port — is read
-/// from `std::env` through the same [`factory0_core::Config`] trait
+/// from `std::env` through the same [`cratefield_core::Config`] trait
 /// ([`EnvConfig`]), so module keys behave identically on both runtimes.
 #[derive(Clone, Default)]
 pub struct Native {
@@ -61,8 +61,8 @@ impl Native {
         Self::default()
     }
 
-    /// The `Database` port: `Postgres` (`factory0-adapter-postgres`) or
-    /// `SqliteDatabase` (`factory0-adapter-sqlite`) — any `Database`
+    /// The `Database` port: `Postgres` (`cratefield-adapter-postgres`) or
+    /// `SqliteDatabase` (`cratefield-adapter-sqlite`) — any `Database`
     /// implementation.
     #[must_use]
     pub fn db(mut self, db: impl Database + 'static) -> Self {
@@ -141,7 +141,7 @@ impl Native {
     /// here is an `Arc`, so `clone_ports` snapshots cheaply.
     #[must_use]
     pub fn ports(&self) -> Ports {
-        let config: Arc<dyn factory0_core::Config> = Arc::new(EnvConfig);
+        let config: Arc<dyn cratefield_core::Config> = Arc::new(EnvConfig);
         let mut ports = Ports::with_config(Arc::clone(&config));
 
         ports.db.clone_from(&self.db);

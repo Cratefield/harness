@@ -1,12 +1,12 @@
 //! Sea-query data access for `waitlist_entries` (ADR 0004). Positions
 //! are assigned **inside** [`confirm_entry`]'s single
-//! [`factory0_core::Database::batch`] call — the `1 + MAX(position)`
+//! [`cratefield_core::Database::batch`] call — the `1 + MAX(position)`
 //! subquery runs inside the UPDATE, under a per-product lock statement
 //! that serializes concurrent confirms of one product on every engine
 //! (atomic on D1, a locked transaction on the sqlite and Postgres
 //! adapters; issue #20).
 
-use factory0_core::{Database, DbError, Row, Statement};
+use cratefield_core::{Database, DbError, Row, Statement};
 use sea_query::{Alias, Expr, Func, Query, SimpleExpr};
 
 pub(crate) const STATUS_PENDING: &str = "pending";
@@ -298,7 +298,7 @@ pub(crate) async fn purge_pending_older_than(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use factory0_core::{Module, Statement};
+    use cratefield_core::{Module, Statement};
 
     /// A true interleave hands both callers a snapshot that still says
     /// "pending": each read the row before either wrote. The flip is
@@ -307,7 +307,7 @@ mod tests {
     #[test]
     fn replayed_confirm_credits_the_referrer_once() {
         let module = crate::Waitlist::new().products(["kontinuum"]);
-        let db = factory0_adapter_sqlite::SqliteDatabase::in_memory().expect("db");
+        let db = cratefield_adapter_sqlite::SqliteDatabase::in_memory().expect("db");
         db.apply_migrations(module.name(), module.migrations().sqlite)
             .expect("migrate");
 

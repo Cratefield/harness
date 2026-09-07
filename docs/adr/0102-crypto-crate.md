@@ -17,7 +17,7 @@ Rust choice): **the AEAD layer must build for `wasm32-unknown-unknown`**.
 Not because the native-only stores ship to wasm (ADR 0008) — because the
 primitive is shared code that must stay out of the native-only ghetto, or
 every future consumer either drags a C toolchain into the wasm graph or
-forks the primitive. `factory0-core`'s dependency boundary forbids C
+forks the primitive. `cratefield-core`'s dependency boundary forbids C
 toolchains outright.
 
 ## Decision

@@ -1,4 +1,4 @@
-# factory0-module-hello
+# cratefield-module-hello
 
 The example Factory Zero module, built step by step by
 [docs/MODULE-AUTHORING.md](../../docs/MODULE-AUTHORING.md): one table
@@ -7,7 +7,7 @@ The example Factory Zero module, built step by step by
 that still exercises every rule a real module must obey.
 
 ```rust
-use factory0_module_hello::Hello;
+use cratefield_module_hello::Hello;
 
 let module = Hello::new().max_name_len(64);
 ```
@@ -18,7 +18,7 @@ let module = Hello::new().max_name_len(64);
   configure the `Captcha` port or `fz doctor` fails the build.
 - Migrations in the portable SQL subset, queries via sea-query,
   `#![forbid(unsafe_code)]`, no `worker`/`tokio`/`std::fs`/`std::net`.
-- Passes the `factory0-testing` conformance suite.
+- Passes the `cratefield-testing` conformance suite.
 
 This crate is an example (`publish = false`); real modules live in
 `crates/module-*` here or as `fz-*` crates in `harness-private`.

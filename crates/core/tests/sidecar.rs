@@ -3,7 +3,7 @@
 
 // The recorder below stores what it was asked to forward. That is a test
 // fixture, not request state (ADR 0007); the scoped allow follows the policy
-// in the workspace clippy.toml, as `factory0-testing`'s fakes do.
+// in the workspace clippy.toml, as `cratefield-testing`'s fakes do.
 #![allow(clippy::disallowed_types)]
 
 mod common;
@@ -15,13 +15,13 @@ use async_trait::async_trait;
 use axum::http::{Method, StatusCode, header};
 use bytes::Bytes;
 use common::*;
-use factory0_core::{
+use cratefield_core::{
     DispatchError, Dispatcher, HARNESS_SIDECARS, MapConfig, Ports, SidecarMounts, X_HARNESS_API,
     X_REQUEST_ID,
 };
 
 /// Records what it was asked to forward, and answers with whatever it was
-/// configured to answer. Core's tests cannot use `factory0-testing`, which
+/// configured to answer. Core's tests cannot use `cratefield-testing`, which
 /// depends on core.
 struct RecordingDispatcher {
     binding: &'static str,
@@ -276,7 +276,7 @@ async fn no_dispatcher_at_all_degrades_only_that_prefix() {
 #[pollster::test]
 async fn a_contract_mismatch_is_refused() {
     let dispatcher = Arc::new(
-        RecordingDispatcher::new("ACME").answering_contract(factory0_core::HARNESS_API + 1),
+        RecordingDispatcher::new("ACME").answering_contract(cratefield_core::HARNESS_API + 1),
     );
     let harness = harness_with_sample();
     let router = harness.router(ports_with_sidecars(
@@ -300,7 +300,7 @@ async fn a_contract_mismatch_is_refused() {
 #[pollster::test]
 async fn a_matching_contract_passes_through() {
     let dispatcher =
-        Arc::new(RecordingDispatcher::new("ACME").answering_contract(factory0_core::HARNESS_API));
+        Arc::new(RecordingDispatcher::new("ACME").answering_contract(cratefield_core::HARNESS_API));
     let harness = harness_with_sample();
     let router = harness.router(ports_with_sidecars(
         r#"{"acme-pricing":"ACME"}"#,

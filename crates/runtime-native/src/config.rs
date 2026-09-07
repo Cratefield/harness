@@ -1,9 +1,9 @@
 //! `Config` over the process environment (`std::env`), the native
 //! counterpart of the Workers `Env` adapter in
-//! `factory0-runtime-cloudflare`. Modules still never touch `std::env`:
+//! `cratefield-runtime-cloudflare`. Modules still never touch `std::env`:
 //! they receive the same [`Config`] trait object, filled here.
 
-use factory0_core::Config;
+use cratefield_core::Config;
 
 /// Reads `SCREAMING_SNAKE` keys from the process environment. Secrets and
 /// plain variables are the same thing natively — there is no separate

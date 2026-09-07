@@ -1,9 +1,9 @@
-//! factory0-cli acceptance tests (issue #8): collect + lockfile
+//! cratefield-cli acceptance tests (issue #8): collect + lockfile
 //! append-only behavior, tamper detection, doctor (captcha rule,
 //! consistency, lint), modules listing, and adapter-sqlite applying the
 //! fixture's migrations.
 
-use factory0_cli::run;
+use cratefield_cli::run;
 use std::fs;
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -210,7 +210,7 @@ fn doctor_fails_when_not_collected() {
 
 #[test]
 fn doctor_fails_on_banned_sql_tokens() {
-    use factory0_core::{
+    use cratefield_core::{
         Config, ConfigError, Harness, Migrations, Module, ModuleContext, Port, Runtime,
         SqlMigration, Venture,
     };
@@ -283,13 +283,13 @@ fn lint_catches_each_banned_token() {
         ("CREATE TABLE `t` (id TEXT)", "`"),
     ];
     for (sql, token) in cases {
-        let hits = factory0_cli::lint::banned_tokens(sql);
+        let hits = cratefield_cli::lint::banned_tokens(sql);
         assert!(
             hits.iter().any(|(found, _)| *found == token),
             "{sql:?} must flag {token}"
         );
     }
-    assert!(factory0_cli::lint::banned_tokens("CREATE TABLE t (id TEXT PRIMARY KEY)").is_empty());
+    assert!(cratefield_cli::lint::banned_tokens("CREATE TABLE t (id TEXT PRIMARY KEY)").is_empty());
 }
 
 #[test]
@@ -307,16 +307,16 @@ fn modules_lists_names_versions_prefixes_events_tables() {
 
 #[test]
 fn adapter_sqlite_applies_fixture_migrations_and_round_trips() {
-    use factory0_core::Database;
+    use cratefield_core::Database;
 
-    let db = factory0_adapter_sqlite::SqliteDatabase::in_memory().expect("db");
+    let db = cratefield_adapter_sqlite::SqliteDatabase::in_memory().expect("db");
     let harness = harness_v2();
     for module in harness.modules() {
         db.apply_migrations(module.name(), module.migrations().sqlite)
             .unwrap_or_else(|err| panic!("{}: {err}", module.name()));
     }
 
-    let insert = factory0_core::Statement::with_values(
+    let insert = cratefield_core::Statement::with_values(
         "INSERT INTO subscribers (id, email, email_normalized, status, created_at, updated_at) \
          VALUES (?, ?, ?, ?, ?, ?)",
         vec![
@@ -331,7 +331,7 @@ fn adapter_sqlite_applies_fixture_migrations_and_round_trips() {
     let changed = pollster::block_on(db.execute(&insert)).expect("insert");
     assert_eq!(changed, 1);
 
-    let select = factory0_core::Statement::new(
+    let select = cratefield_core::Statement::new(
         "SELECT email FROM subscribers WHERE email_normalized = 'nick@example.com'",
     );
     let rows = pollster::block_on(db.query(&select)).expect("select");
@@ -374,7 +374,7 @@ fn sorted_listing(dir: &std::path::Path) -> Vec<String> {
 
 #[test]
 fn doctor_production_captcha_rule_and_override() {
-    use factory0_core::{
+    use cratefield_core::{
         Config, ConfigError, Harness, Migrations, Module, ModuleContext, Port, Runtime, Venture,
         VentureEnv,
     };

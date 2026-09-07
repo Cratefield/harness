@@ -1,4 +1,4 @@
-# factory0-adapter-postgres
+# cratefield-adapter-postgres
 
 The [`Database`] port over `sqlx` Postgres 16 for the [Factory Zero
 harness](https://github.com/Cratefield/harness) native runtime (ADR 0004,
@@ -7,7 +7,7 @@ target with a clear message, and the sqlx dependency is target-gated to
 non-wasm builds, so it can never slip into a Worker.
 
 ```rust
-use factory0_adapter_postgres::Postgres;
+use cratefield_adapter_postgres::Postgres;
 
 let db = Postgres::connect("postgres://user:pass@host:5432/venture").await?;
 db.apply_harness_migrations(&harness).await?;   // see below
@@ -25,13 +25,13 @@ db.apply_harness_migrations(&harness).await?;   // see below
   in lock order (module config order, then zero-padded migration id —
   the order `fz migrations collect` pins). Per module it applies the
   `postgres` migration set when the module ships one, else the `sqlite`
-  set when it passes the portable-SQL lint (`factory0-core`'s
+  set when it passes the portable-SQL lint (`cratefield-core`'s
   `lint_portable_sql`, the same predicate `fz doctor` enforces).
 - `apply_migrations(module, &[SqlMigration])` is the per-module entry
   point: idempotent, each migration applied in its own transaction and
   tracked under `<module>/<id>` in `harness_migrations(id, applied_at)`.
 - CLI: `fz migrations apply --dialect postgres --url …` (the `fz` binary
-  must be built with factory0-cli's `postgres` feature).
+  must be built with cratefield-cli's `postgres` feature).
 
 ## The SQLite → Postgres mapping actually used
 
@@ -56,5 +56,5 @@ service container). Locally:
 ```sh
 docker run --rm -e POSTGRES_PASSWORD=postgres -p 5433:5432 postgres:16
 export FZ_TEST_POSTGRES_URL=postgres://postgres:postgres@127.0.0.1:5433/postgres
-cargo test -p factory0-adapter-postgres
+cargo test -p cratefield-adapter-postgres
 ```

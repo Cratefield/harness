@@ -1,8 +1,8 @@
 [package]
-name = "factory0-adapter-turnstile"
+name = "cratefield-adapter-turnstile"
 description = "Captcha port over Cloudflare Turnstile siteverify for the Factory Zero harness"
 readme = "README.md"
-keywords = ["factory0", "turnstile", "captcha", "cloudflare", "adapter"]
+keywords = ["cratefield", "turnstile", "captcha", "cloudflare", "adapter"]
 categories = ["web-programming"]
 include = ["src/**/*", "README.md"]
 version.workspace = true
@@ -15,7 +15,7 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
-factory0-core = { workspace = true }
+cratefield-core = { workspace = true }
 async-trait = { workspace = true }
 http = { workspace = true }
 bytes = { workspace = true }

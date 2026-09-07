@@ -2,7 +2,7 @@
 
 ADR [0010](adr/0010-modules-declare-a-ui-surface.md) in practice. A module
 declares a **surface** (actions and views, `Module::surface`); the harness
-serves it as data at `GET /__surface` and, with `factory0-ui` mounted,
+serves it as data at `GET /__surface` and, with `cratefield-ui` mounted,
 renders it as HTML at `/ui`. This page is the contract a venture styles
 against and a tool (or a prompt) generates for. Changing anything in the
 tables below is a breaking change of the UI surface: bump `SURFACE_API`.
@@ -12,7 +12,7 @@ tables below is a breaking change of the UI surface: bump `SURFACE_API`.
 ```rust
 Harness::builder()
     // ...modules...
-    .ui(factory0_ui::Ui::new().theme_css("https://example.com/theme.css"))
+    .ui(cratefield_ui::Ui::new().theme_css("https://example.com/theme.css"))
 ```
 
 Off unless called. Once mounted, modules default their landing redirects
@@ -133,7 +133,7 @@ Turnstile's when a widget is on the page, and `form-action 'self'`.
 Everything about the UI that is copy, layout or theme rather than code
 lives in a `UiSpec`: JSON, schema at `crates/ui/schemas/ui-spec-v1.schema.json`
 (generated from the Rust types; a test fails on drift, regenerate with
-`UPDATE_SCHEMAS=1 cargo test -p factory0-ui`). Per module a `title`; per
+`UPDATE_SCHEMAS=1 cargo test -p cratefield-ui`). Per module a `title`; per
 action `title`, `intro`, `submit`, `success`, per-field `label`,
 `placeholder`, `help`, `hidden`, an `order`, and copy for the `done` and
 `expired` landing pages; a `theme` of `--cf-*` token values and an
@@ -222,7 +222,7 @@ fetched cross-origin, and that is the same allowlist the API already needs.
 ## Cost
 
 Measured on the native router in release mode
-(`cargo test -p factory0-ui --release --test pages render_timing --
+(`cargo test -p cratefield-ui --release --test pages render_timing --
 --ignored --nocapture`, 2026-09-07, M-series laptop): a full page
 **6.7 µs**, a fragment **5.8 µs**, through the whole router including the
 request-id and CORS layers. Under `wrangler dev` the round trip is about

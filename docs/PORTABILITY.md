@@ -27,12 +27,12 @@ Three decisions made on day one exist so that this page stays short:
    queries are sea-query trees that render per dialect. `fz doctor`
    already lints the subset today.
 
-What exists today toward this: the `factory0-adapter-sqlite` `Database`
+What exists today toward this: the `cratefield-adapter-sqlite` `Database`
 (native rusqlite), sea-query's dual-builder rendering behind
 `Statement::render`, the portable-SQL lint, and the conformance suite
 that applies every module's migrations to a fresh SQLite database twice.
-What does not exist yet: `factory0-adapter-postgres` (sqlx),
-`factory0-runtime-native` (axum on tokio), `fz data export` /
+What does not exist yet: `cratefield-adapter-postgres` (sqlx),
+`cratefield-runtime-native` (axum on tokio), `fz data export` /
 `fz data import`, a Redis `RateLimiter`, and the control database.
 
 ## The move, in order
@@ -43,7 +43,7 @@ Architecture section 10, expanded. Per venture:
    migrations — the postgres set. Modules that needed dialect-specific
    SQL ship `migrations/postgres/NNNN_<name>.sql` overrides; everything
    else reuses the sqlite-authored file content through the Postgres
-   migrator in `factory0-adapter-postgres`. Migration history is
+   migrator in `cratefield-adapter-postgres`. Migration history is
    per-tenant (see below).
 
 2. **Copy the data**: `fz data export` reads the venture's D1 and
@@ -70,7 +70,7 @@ Architecture section 10, expanded. Per venture:
    cutover is a DNS revert, not a restore.
 
 No module code changes. That claim is what the parity suite protects:
-from phase 3 on, `factory0-testing` runs every module's tests against
+from phase 3 on, `cratefield-testing` runs every module's tests against
 SQLite **and** Postgres in CI, so "works on D1" and "works on Postgres"
 cannot drift apart between releases.
 
@@ -110,7 +110,7 @@ Nothing extra — the guardrails are already the rules:
 
 - keep module queries on sea-query and migrations in the portable subset
   (`fz doctor` fails anything else);
-- keep ventures on published, pinned `factory0-*` versions so the
+- keep ventures on published, pinned `cratefield-*` versions so the
   phase-3 crates arrive as ordinary dependency bumps;
 - treat `HARNESS_API` / core major bumps as the compatibility contract
   (see [COMPATIBILITY.md](COMPATIBILITY.md)) — a module that compiles

@@ -18,8 +18,8 @@
 //! row counts afterwards. `--plan` prints what either command would do
 //! and writes nothing.
 
-use factory0_adapter_sqlite::SqliteDatabase;
-use factory0_core::{Database, Harness, Row, Statement};
+use cratefield_adapter_sqlite::SqliteDatabase;
+use cratefield_core::{Database, Harness, Row, Statement};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value as Json};
 use std::path::Path;
@@ -338,8 +338,8 @@ pub fn import(
     {
         let _ = (url, append, plan);
         Err(
-            "this fz binary was built without factory0-cli's `postgres` feature — \
-             rebuild the fz bin with `--features factory0-cli/postgres` to import \
+            "this fz binary was built without cratefield-cli's `postgres` feature — \
+             rebuild the fz bin with `--features cratefield-cli/postgres` to import \
              into Postgres"
                 .to_owned(),
         )
@@ -391,7 +391,7 @@ fn import_postgres(
         .build()
         .map_err(|err| format!("cannot start the async runtime: {err}"))?;
     runtime.block_on(async {
-        let db = factory0_adapter_postgres::Postgres::connect(url)
+        let db = cratefield_adapter_postgres::Postgres::connect(url)
             .await
             .map_err(|err| format!("cannot connect (check --url): {err}"))?;
 
@@ -436,7 +436,7 @@ fn import_postgres(
 /// will not insert into an integer column).
 #[cfg(feature = "postgres")]
 async fn load_target_schemas(
-    db: &factory0_adapter_postgres::Postgres,
+    db: &cratefield_adapter_postgres::Postgres,
     manifest: &Manifest,
 ) -> Result<Vec<Vec<(String, String)>>, String> {
     let mut schemas = Vec::with_capacity(manifest.tables.len());
@@ -503,7 +503,7 @@ fn check_column_drift(
 /// refused up front, so a partial import never starts.
 #[cfg(feature = "postgres")]
 async fn preflight_counts(
-    db: &factory0_adapter_postgres::Postgres,
+    db: &cratefield_adapter_postgres::Postgres,
     manifest: &Manifest,
     append: bool,
     plan: bool,
@@ -591,7 +591,7 @@ fn verify_hashes(manifest: &Manifest, slices: &[&RecordGroup]) -> Result<(), Str
 /// resume at the tables that are still empty).
 #[cfg(feature = "postgres")]
 async fn import_tables(
-    db: &factory0_adapter_postgres::Postgres,
+    db: &cratefield_adapter_postgres::Postgres,
     manifest: &Manifest,
     schemas: &[Vec<(String, String)>],
     slices: &[&RecordGroup],
@@ -608,7 +608,7 @@ async fn import_tables(
 /// promised on top of what it had.
 #[cfg(feature = "postgres")]
 async fn verify_counts(
-    db: &factory0_adapter_postgres::Postgres,
+    db: &cratefield_adapter_postgres::Postgres,
     manifest: &Manifest,
     existing: &[u64],
 ) -> Result<(), String> {
@@ -630,7 +630,7 @@ async fn verify_counts(
 }
 
 #[cfg(feature = "postgres")]
-async fn row_count(db: &factory0_adapter_postgres::Postgres, table: &str) -> Result<u64, String> {
+async fn row_count(db: &cratefield_adapter_postgres::Postgres, table: &str) -> Result<u64, String> {
     let rows = db
         .query(&Statement::new(format!(
             "SELECT COUNT(*) AS n FROM \"{table}\""
@@ -646,7 +646,7 @@ async fn row_count(db: &factory0_adapter_postgres::Postgres, table: &str) -> Res
 
 #[cfg(feature = "postgres")]
 async fn insert_table(
-    db: &factory0_adapter_postgres::Postgres,
+    db: &cratefield_adapter_postgres::Postgres,
     entry: &TableManifest,
     columns: &[(String, String)],
     records: &RecordGroup,

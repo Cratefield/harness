@@ -1,4 +1,4 @@
-# factory0-kms
+# cratefield-kms
 
 The KMS port (issue #40, ADR 0102, `docs/SECRETS-DESIGN.md`). Wrapping and
 unwrapping a data key is the only thing the KMS does for the harness, so it

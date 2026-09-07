@@ -4,14 +4,14 @@
 
 #![allow(clippy::module_name_repetitions)] // ..._to_row mirrors the other adapters
 
-use factory0_core::{DbError, Row};
+use cratefield_core::{DbError, Row};
 use sea_query::Value as SeaValue;
 use sqlx::postgres::{PgArguments, PgRow};
 use sqlx::{Arguments as _, Column as _, Row as _, TypeInfo as _};
 
 /// Rewrites positional `?` placeholders to Postgres `$n` placeholders.
 ///
-/// The port's [`factory0_core::Statement`] carries SQL rendered by
+/// The port's [`cratefield_core::Statement`] carries SQL rendered by
 /// sea-query's `SqliteQueryBuilder` (the portable wire form the D1 and
 /// rusqlite adapters execute directly); Postgres binds `$1, $2, …`. The
 /// rewrite walks the statement skipping string literals (`'…'`, `''`

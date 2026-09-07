@@ -5,7 +5,7 @@
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use factory0_core::{HttpClient, HttpError};
+use cratefield_core::{HttpClient, HttpError};
 
 /// A shared reqwest client. Built once per process (the connection pool
 /// is the `Client`); the port is cheap to `Arc` and clone-free on the

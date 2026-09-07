@@ -1,4 +1,4 @@
-//! `factory0-kms` — the KMS port (issue #40, ADR 0102,
+//! `cratefield-kms` — the KMS port (issue #40, ADR 0102,
 //! `docs/SECRETS-DESIGN.md`).
 //!
 //! Wrapping and unwrapping a data key is the **only** thing the KMS does
@@ -11,7 +11,7 @@
 //! changing vendor is a re-wrap job rather than a schema change.
 //!
 //! ```no_run
-//! # use factory0_kms::{Kms, LocalFileKms, Dek};
+//! # use cratefield_kms::{Kms, LocalFileKms, Dek};
 //! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 //! let kms = LocalFileKms::open("/run/secrets/fz-kek", "development")?;
 //! let dek = Dek::generate()?;

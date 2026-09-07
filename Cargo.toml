@@ -11,30 +11,39 @@ license = "MIT"
 repository = "https://github.com/Cratefield/harness"
 
 [workspace.dependencies]
-# Internal crates. factory0-core is pinned with a caret on the current
+# Internal crates. cratefield-core is pinned with a caret on the current
 # minor while pre-1.0 (issue #17): "0.3" accepts 0.3.x only, so a core
 # minor bump can never silently mix with older modules and adapters.
 # At 1.0 the range becomes "^1" (compatible within the major). The
 # supported ranges per release are listed in docs/COMPATIBILITY.md.
 # core is ahead of the other crates at 0.3.x: `well_known` + `Form` (#46),
 # then the UI surface (`Module::surface`, `/__surface`, ADR 0010).
-factory0-core = { path = "crates/core", version = "0.3" }
-factory0-ui = { path = "crates/ui", version = "0.1.0" }
-factory0-kms = { path = "crates/kms", version = "0.1.0" }
-factory0-secrets = { path = "crates/secrets", version = "0.1.0" }
-factory0-runtime-cloudflare = { path = "crates/runtime-cloudflare", version = "0.1.0" }
-factory0-adapter-resend = { path = "crates/adapter-resend", version = "0.1.0" }
-factory0-adapter-turnstile = { path = "crates/adapter-turnstile", version = "0.1.0" }
-factory0-adapter-sqlite = { path = "crates/adapter-sqlite", version = "0.1.0" }
+cratefield-core = { path = "crates/core", version = "0.3" }
+cratefield-ui = { path = "crates/ui", version = "0.1.0" }
+cratefield-kms = { path = "crates/kms", version = "0.1.0" }
+cratefield-secrets = { path = "crates/secrets", version = "0.1.0" }
+cratefield-runtime-cloudflare = { path = "crates/runtime-cloudflare", version = "0.1.0" }
+cratefield-adapter-resend = { path = "crates/adapter-resend", version = "0.1.0" }
+cratefield-adapter-turnstile = { path = "crates/adapter-turnstile", version = "0.1.0" }
+cratefield-adapter-sqlite = { path = "crates/adapter-sqlite", version = "0.1.0" }
 # Phase 3 (issue #18): native-only Postgres adapter. Never a dependency of
 # anything on the wasm path — CI asserts the venture wasm graph stays
 # sqlx-free.
-factory0-adapter-postgres = { path = "crates/adapter-postgres", version = "0.1.0" }
-factory0-module-email-signup = { path = "crates/module-email-signup", version = "0.1.0" }
-factory0-module-waitlist = { path = "crates/module-waitlist", version = "0.1.0" }
-factory0-module-hello = { path = "examples/module-hello", version = "0.1.0" }
-factory0-testing = { path = "crates/testing", version = "0.1.0" }
-factory0-cli = { path = "crates/cli", version = "0.1.0" }
+cratefield-adapter-postgres = { path = "crates/adapter-postgres", version = "0.1.0" }
+cratefield-module-email-signup = { path = "crates/module-email-signup", version = "0.1.0" }
+cratefield-module-waitlist = { path = "crates/module-waitlist", version = "0.1.0" }
+cratefield-testing = { path = "crates/testing", version = "0.1.0" }
+cratefield-cli = { path = "crates/cli", version = "0.1.0" }
+
+# These entries carry a `version`, which is what makes them publishable as
+# real dependencies. Internal **dev**-dependencies deliberately do NOT use
+# `workspace = true`: they are declared path-only in the crate that needs
+# them, because `cargo publish` resolves dev-dependencies against crates.io
+# (the same trap `crates/cli-acceptance` was carved out to avoid). A
+# path-only dev-dependency is stripped from the packaged manifest, which is
+# what lets `cratefield-ui` dev-depend on the unpublished `module-hello`
+# example and breaks the adapter-postgres -> module-* -> testing ->
+# adapter-postgres cycle that would otherwise stall every release.
 
 # HTTP stack. axum runs without tokio on Workers (ADR 0001): the `tokio`
 # feature stays off, `default-features = false`, and only the extractor
@@ -127,7 +136,7 @@ worker = { version = "0.8.5", default-features = false, features = ["d1"] }
 rusqlite = { version = "0.40.2", features = ["bundled"] }
 clap = { version = "4.6.6", features = ["derive"] }
 # Native-only async runtime for sqlx (`runtime-tokio`) — used by
-# factory0-adapter-postgres tests and, behind the `postgres` feature, the
+# cratefield-adapter-postgres tests and, behind the `postgres` feature, the
 # fz migration-apply path. Never enabled for a wasm target.
 tokio = { version = "1.53.1", default-features = false, features = [
     "rt-multi-thread",

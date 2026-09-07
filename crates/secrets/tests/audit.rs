@@ -4,10 +4,10 @@
 
 use std::sync::Arc;
 
-use factory0_adapter_sqlite::SqliteDatabase;
-use factory0_core::{Database, Statement};
-use factory0_kms::{Dek, Kms, LocalFileKms};
-use factory0_secrets::{
+use cratefield_adapter_sqlite::SqliteDatabase;
+use cratefield_core::{Database, Statement};
+use cratefield_kms::{Dek, Kms, LocalFileKms};
+use cratefield_secrets::{
     Actor, ChainAudit, SecretStore, Secrets, SecretsError, StoreId, migrations, verify,
 };
 
@@ -257,10 +257,10 @@ async fn a_secret_is_refused_when_it_cannot_be_audited() {
     struct Broken;
 
     #[async_trait::async_trait]
-    impl factory0_secrets::Audit for Broken {
+    impl cratefield_secrets::Audit for Broken {
         async fn record(
             &self,
-            _event: &factory0_secrets::AuditEvent<'_>,
+            _event: &cratefield_secrets::AuditEvent<'_>,
         ) -> Result<(), SecretsError> {
             Err(SecretsError::NotAudited(
                 "the log is unreachable".to_owned(),

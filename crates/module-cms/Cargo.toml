@@ -1,8 +1,8 @@
 [package]
-name = "factory0-module-cms"
+name = "cratefield-module-cms"
 description = "Factory Zero module: a small content store with an editor — typed collections, versioned, in the venture's own database"
 readme = "README.md"
-keywords = ["factory0", "cms", "content", "module"]
+keywords = ["cratefield", "cms", "content", "module"]
 categories = ["web-programming"]
 include = ["src/**/*", "migrations/**/*", "README.md"]
 version.workspace = true
@@ -15,7 +15,7 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
-factory0-core = { workspace = true }
+cratefield-core = { workspace = true }
 axum = { workspace = true }
 http = { workspace = true }
 serde = { workspace = true }
@@ -27,8 +27,8 @@ time = { workspace = true }
 ulid = { workspace = true }
 
 [dev-dependencies]
-factory0-testing = { workspace = true, features = ["postgres"] }
-factory0-adapter-sqlite = { workspace = true }
+cratefield-testing = { path = "../testing", features = ["postgres"] }
+cratefield-adapter-sqlite = { path = "../adapter-sqlite" }
 pollster = { workspace = true }
 tower = { workspace = true }
 http = { workspace = true }

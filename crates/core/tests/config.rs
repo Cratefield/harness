@@ -3,7 +3,7 @@
 //! hides undeclared ports.
 
 use async_trait::async_trait;
-use factory0_core::{
+use cratefield_core::{
     Config, ConfigError, Database, DbError, HarnessConfig, MapConfig, Migrations, Module,
     ModuleConfig, ModuleContext, Port, Statement,
 };
@@ -27,7 +27,7 @@ fn harness_config_parses_all_keys() {
     assert_eq!(parsed.harness_secret, SECRET);
     assert!(parsed.harness_secret_previous.is_some());
     assert_eq!(parsed.admin_token.as_deref(), Some("test-admin-token"));
-    assert_eq!(parsed.env, factory0_core::VentureEnv::Staging);
+    assert_eq!(parsed.env, cratefield_core::VentureEnv::Staging);
     parsed.signer();
 }
 
@@ -76,7 +76,7 @@ fn invalid_env_names_the_key_and_value() {
 fn env_defaults_to_development() {
     let config = MapConfig::from_pairs([("HARNESS_SECRET", SECRET)]);
     let parsed = HarnessConfig::from_config(&config).expect("parses");
-    assert_eq!(parsed.env, factory0_core::VentureEnv::Development);
+    assert_eq!(parsed.env, cratefield_core::VentureEnv::Development);
 }
 
 /// Module-key reporting: a module missing a required key reports the module
@@ -136,8 +136,8 @@ impl Database for FakeDb {
     async fn execute(&self, _stmt: &Statement) -> Result<u64, DbError> {
         Ok(0)
     }
-    async fn query(&self, _stmt: &Statement) -> Result<factory0_core::Rows, DbError> {
-        Ok(factory0_core::Rows::new(vec![]))
+    async fn query(&self, _stmt: &Statement) -> Result<cratefield_core::Rows, DbError> {
+        Ok(cratefield_core::Rows::new(vec![]))
     }
     async fn batch(&self, _stmts: &[Statement]) -> Result<(), DbError> {
         Ok(())
@@ -193,7 +193,7 @@ impl Module for DeclaringModule {
 /// `Ports::view_for`: a module reading an undeclared port gets `None`.
 #[test]
 fn view_for_hides_undeclared_ports() {
-    let mut ports = factory0_core::Ports::empty();
+    let mut ports = cratefield_core::Ports::empty();
     ports.db = Some(Arc::new(FakeDb));
     assert!(ports.db.is_some(), "fixture: db is provided");
 
@@ -214,7 +214,7 @@ fn statement_renders_sea_query_for_sqlite() {
         .and_where(Expr::col(sea_query::Alias::new("status")).eq("pending"))
         .limit(1)
         .take();
-    let stmt = factory0_core::Statement::render(&query);
+    let stmt = cratefield_core::Statement::render(&query);
     assert!(stmt.sql.contains("SELECT"));
     assert!(stmt.sql.contains("FROM"));
     assert!(

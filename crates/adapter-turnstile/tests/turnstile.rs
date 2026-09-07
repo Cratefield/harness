@@ -4,8 +4,8 @@
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use factory0_adapter_turnstile::Turnstile;
-use factory0_core::{Captcha, Clock, HttpClient, HttpError, Verdict};
+use cratefield_adapter_turnstile::Turnstile;
+use cratefield_core::{Captcha, Clock, HttpClient, HttpError, Verdict};
 use http::{Request, Response, StatusCode};
 use std::sync::Arc;
 use std::sync::mpsc;

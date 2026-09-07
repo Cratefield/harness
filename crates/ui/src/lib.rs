@@ -1,4 +1,4 @@
-//! `factory0-ui` renders the harness's UI surface (ADR 0010) as HTML from
+//! `cratefield-ui` renders the harness's UI surface (ADR 0010) as HTML from
 //! inside the Worker: full pages at `/ui/<module>/<action>`, the same as a
 //! fragment with `?fragment=1`, landing pages at
 //! `/ui/<module>/<action>/<page>`, and the base stylesheet at
@@ -7,7 +7,7 @@
 //! **in-process** to the `/v1` router, then renders the `202`, the
 //! `problem+json` or the `303`. Modules stay JSON-only.
 //!
-//! Mount with `Harness::builder().ui(factory0_ui::Ui::default())`.
+//! Mount with `Harness::builder().ui(cratefield_ui::Ui::default())`.
 //!
 //! Web-agnostic like every other crate: no `worker`, `tokio` or
 //! `std::fs`; `maud` builds strings, and the wasm build of
@@ -29,7 +29,7 @@ use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, HeaderValue, Method, Request, StatusCode, header};
 use axum::response::{Html, IntoResponse, Response};
 use axum::routing::get;
-use factory0_core::{Action, Audience, Outcome, Problem, Scope, UiContext, UiMount};
+use cratefield_core::{Action, Audience, Outcome, Problem, Scope, UiContext, UiMount};
 use serde_json::Value;
 use tower::ServiceExt;
 
@@ -92,8 +92,8 @@ impl Ui {
 impl UiMount for Ui {
     fn validate(
         &self,
-        surface: &factory0_core::SurfaceDocument,
-        errors: &mut factory0_core::ConfigError,
+        surface: &cratefield_core::SurfaceDocument,
+        errors: &mut cratefield_core::ConfigError,
     ) {
         if let Err(problems) = self.spec.validate(surface) {
             for problem in problems {
@@ -217,7 +217,7 @@ async fn js() -> impl IntoResponse {
 /// Looks an action up; admin actions are not served here until the admin
 /// UI (issue #74) exists, so they are `404` like an unknown one.
 fn find_action<'a>(
-    surface: &'a factory0_core::SurfaceDocument,
+    surface: &'a cratefield_core::SurfaceDocument,
     module: &str,
     action: &str,
 ) -> Option<&'a Action> {
@@ -554,7 +554,7 @@ async fn render_result(
         .unwrap_or_default();
     let json: Option<Value> = serde_json::from_slice(&bytes).ok();
     // Status only: a body may carry an address, and the logging policy
-    // (`factory0_core::RedactingVisitor`) is not applied to free text.
+    // (`cratefield_core::RedactingVisitor`) is not applied to free text.
     tracing::debug!(status = %status, "ui dispatch answered");
 
     if status.is_success() {

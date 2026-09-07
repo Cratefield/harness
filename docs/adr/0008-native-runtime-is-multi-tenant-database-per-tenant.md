@@ -29,7 +29,7 @@ decisions were taken while writing them.
    unreachable from module code, enforced by both the API and by credentials.
 
 ## Scope
-This applies to `factory0-runtime-native` and the Postgres adapter. The
+This applies to `cratefield-runtime-native` and the Postgres adapter. The
 Cloudflare path is unchanged: one Worker, one D1, one venture, as ADR 0003
 says. sqlx and SeaORM still do not enter the core (ADR 0004). Section 12's
 non-goal is narrowed to "a multi-tenant deployment on the Worker path".

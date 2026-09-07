@@ -1,12 +1,12 @@
-# factory0-adapter-sqlite
+# cratefield-adapter-sqlite
 
 The [`Database`] port over `rusqlite` (bundled SQLite) for the Factory
 Zero harness. Native only — never compiled to wasm. Used by every module
-test and by `factory0-testing`, and viable for a single-node self-hosted
+test and by `cratefield-testing`, and viable for a single-node self-hosted
 deployment (ADR 0004).
 
 ```rust,ignore
-use factory0_adapter_sqlite::SqliteDatabase;
+use cratefield_adapter_sqlite::SqliteDatabase;
 
 let db = SqliteDatabase::in_memory()?;          // or ::open("venture.db")
 db.apply_migrations("email-signup", &migrations)?; // tracked in harness_migrations

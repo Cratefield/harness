@@ -7,9 +7,9 @@ use std::sync::Arc;
 
 use axum::body::Body;
 use axum::http::{Method, Request, StatusCode, header};
-use factory0_module_waitlist::Waitlist;
-use factory0_testing::TestHarness;
-use factory0_ui::Ui;
+use cratefield_module_waitlist::Waitlist;
+use cratefield_testing::TestHarness;
+use cratefield_ui::Ui;
 use tower::ServiceExt;
 
 fn kit() -> TestHarness {
@@ -19,8 +19,8 @@ fn kit() -> TestHarness {
         )],
         |builder| builder.ui(Ui::new().theme_css("https://cdn.test.example/theme.css")),
         |ports| {
-            ports.config = Arc::new(factory0_core::MapConfig::from_pairs([
-                ("HARNESS_SECRET", factory0_testing::TEST_HARNESS_SECRET),
+            ports.config = Arc::new(cratefield_core::MapConfig::from_pairs([
+                ("HARNESS_SECRET", cratefield_testing::TEST_HARNESS_SECRET),
                 ("TURNSTILE_SITE_KEY", "0x4AAAAAAA-site"),
             ]));
         },
@@ -393,12 +393,12 @@ async fn form_fragment_matches_the_contract_snapshot() {
 #[pollster::test]
 async fn email_signup_confirm_lands_on_the_ui_done_page() {
     let kit = TestHarness::with_builder(
-        vec![Box::new(factory0_module_email_signup::EmailSignup::new())],
+        vec![Box::new(cratefield_module_email_signup::EmailSignup::new())],
         |builder| builder.ui(Ui::new()),
         |ports| {
-            ports.config = Arc::new(factory0_core::MapConfig::from_pairs([(
+            ports.config = Arc::new(cratefield_core::MapConfig::from_pairs([(
                 "HARNESS_SECRET",
-                factory0_testing::TEST_HARNESS_SECRET,
+                cratefield_testing::TEST_HARNESS_SECRET,
             )]));
         },
     );
@@ -472,13 +472,13 @@ fn ui_spec_schema_is_committed_and_current() {
         env!("CARGO_MANIFEST_DIR"),
         "/schemas/ui-spec-v1.schema.json"
     );
-    let generated = serde_json::to_string_pretty(&factory0_ui::UiSpec::schema()).unwrap() + "\n";
+    let generated = serde_json::to_string_pretty(&cratefield_ui::UiSpec::schema()).unwrap() + "\n";
     if std::env::var("UPDATE_SCHEMAS").is_ok() {
         std::fs::write(path, &generated).unwrap();
     }
     let committed = std::fs::read_to_string(path).unwrap_or_default();
     assert_eq!(
         committed, generated,
-        "schemas/ui-spec-v1.schema.json is stale: run UPDATE_SCHEMAS=1 cargo test -p factory0-ui"
+        "schemas/ui-spec-v1.schema.json is stale: run UPDATE_SCHEMAS=1 cargo test -p cratefield-ui"
     );
 }

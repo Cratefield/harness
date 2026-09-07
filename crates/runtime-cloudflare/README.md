@@ -1,4 +1,4 @@
-# factory0-runtime-cloudflare
+# cratefield-runtime-cloudflare
 
 Cloudflare Workers runtime for the [Cratefield harness](https://github.com/Cratefield/harness):
 maps Workers bindings to the harness ports and serves a `Harness` on
@@ -9,8 +9,8 @@ maps Workers bindings to the harness ports and serves a `Harness` on
 A venture's Worker is three lines:
 
 ```rust,ignore
-use factory0_core::Harness;
-use factory0_runtime_cloudflare::{serve, serve_scheduled, Cloudflare};
+use cratefield_core::Harness;
+use cratefield_runtime_cloudflare::{serve, serve_scheduled, Cloudflare};
 use std::sync::OnceLock;
 use worker::{event, Context, Env, Request, Response};
 

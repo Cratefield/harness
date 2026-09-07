@@ -1,6 +1,6 @@
 //! `Config` over the Workers `Env`: secrets first, then vars.
 
-use factory0_core::Config;
+use cratefield_core::Config;
 use worker::Env;
 
 pub struct EnvConfig(pub Env);

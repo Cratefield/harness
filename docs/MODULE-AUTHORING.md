@@ -2,7 +2,7 @@
 
 How to write a Factory Zero module: a crate that implements one trait,
 sees nothing but ports, and passes the shared conformance suite. This
-guide builds a complete module — `factory0-module-hello` — from an empty
+guide builds a complete module — `cratefield-module-hello` — from an empty
 directory to green CI, step by step. The finished crate lives at
 [`examples/module-hello/`](../examples/module-hello/) in this repository,
 and its conformance run is part of CI.
@@ -21,7 +21,7 @@ atomic positions, scheduled work).
 
 ## What a module is
 
-A module is one crate implementing `factory0_core::Module`. `Harness::build()`
+A module is one crate implementing `cratefield_core::Module`. `Harness::build()`
 nests its router under `/v1/<name>`, checks its declared ports against the
 runtime, rejects table and route collisions with other modules, and mounts
 its migrations, events and scheduled work. The trait:
@@ -71,7 +71,7 @@ not by convention alone:
 | Queries through sea-query, never raw SQL strings | review; rendered by `Statement::render` |
 | Migrations in the portable SQL subset (below) | `fz doctor` lints |
 | Config keys `SCREAMING_SNAKE`, prefixed with the module name | `validate_config` + review |
-| Passes `factory0_testing::conformance` | the conformance CI job |
+| Passes `cratefield_testing::conformance` | the conformance CI job |
 | Kebab-case `name()`, unique tables, unique route prefix | `Harness::build()` fails otherwise |
 
 A module never touches a Cloudflare binding, `std::env`, or a vendor
@@ -104,7 +104,7 @@ scaffold is identical. `examples/module-hello/Cargo.toml`:
 
 ```toml
 [package]
-name = "factory0-module-hello"
+name = "cratefield-module-hello"
 description = "Example Factory Zero module: one table, one write, one read, one event (built by docs/MODULE-AUTHORING.md)"
 readme = "README.md"
 publish = false
@@ -118,7 +118,7 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
-factory0-core = { workspace = true }
+cratefield-core = { workspace = true }
 axum = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -126,7 +126,7 @@ sea-query = { workspace = true }
 tracing = { workspace = true }
 
 [dev-dependencies]
-factory0-testing = { workspace = true }
+cratefield-testing = { workspace = true }
 pollster = { workspace = true }
 tower = { workspace = true }
 http = { workspace = true }
@@ -134,7 +134,7 @@ http = { workspace = true }
 
 Notes:
 
-- `factory0-core` is the only harness dependency a module needs. It is
+- `cratefield-core` is the only harness dependency a module needs. It is
   wasm-safe by construction (ADR 0001) and the CI job on this repository
   fails if it ever pulls `worker`, `wasm-bindgen`, `tokio`, `reqwest`,
   `sqlx` or `rusqlite`.
@@ -161,7 +161,7 @@ The whole `Module` impl for `hello` (this is
 `examples/module-hello/src/lib.rs`, minus the doc comment):
 
 ```rust
-use factory0_core::{
+use cratefield_core::{
     Config, ConfigError, Migrations, Module, ModuleConfig, ModuleContext, Port, SqlMigration,
 };
 use std::sync::Arc;
@@ -363,7 +363,7 @@ use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::routing::{get, post};
-use factory0_core::{IdGen, Json, ModuleConfig, ModuleContext, Problem, Scope, Statement, UlidIdGen};
+use cratefield_core::{IdGen, Json, ModuleConfig, ModuleContext, Problem, Scope, Statement, UlidIdGen};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::sync::Arc;
@@ -492,7 +492,7 @@ The patterns that matter:
   act. Public write endpoints answer `202` with an identical body shape
   whatever the row state — that is the no-enumeration rule (section 11);
   `hello` has no state to hide, the real modules show the full pattern.
-- **JSON in, JSON out**; `factory0_core::Json` re-exports the axum
+- **JSON in, JSON out**; `cratefield_core::Json` re-exports the axum
   `Json` extractor/responder.
 
 Captcha, rate limiting, and admin auth: public writes take an optional
@@ -500,7 +500,7 @@ Captcha, rate limiting, and admin auth: public writes take an optional
 (fail-closed); rate limiting goes through the `RateLimiter` port keyed by
 IP and, for writes, by normalized email; admin endpoints under
 `/v1/<module>/admin/*` require `Authorization: Bearer <ADMIN_TOKEN>` via
-`factory0_core::require_admin` and are disabled when the token is unset.
+`cratefield_core::require_admin` and are disabled when the token is unset.
 Copy the exact patterns from `crates/module-waitlist/src/handlers.rs` —
 `check_captcha`, `rate_limited`, `require_admin` are the reusable pieces.
 
@@ -552,8 +552,8 @@ between the two modules. Read `crates/module-email-signup/src/lib.rs`
 `examples/module-hello/tests/conformance.rs` — the whole file:
 
 ```rust
-use factory0_module_hello::Hello;
-use factory0_testing::{assert_wasm_safe_deps, conformance};
+use cratefield_module_hello::Hello;
+use cratefield_testing::{assert_wasm_safe_deps, conformance};
 
 #[test]
 fn hello_conforms() {
@@ -614,8 +614,8 @@ router; `request(&kit.router, method, path, body)` drives it with no
 network. `examples/module-hello/tests/routes.rs`:
 
 ```rust
-use factory0_module_hello::Hello;
-use factory0_testing::{TestHarness, request};
+use cratefield_module_hello::Hello;
+use cratefield_testing::{TestHarness, request};
 use http::{Method, StatusCode};
 
 fn kit() -> TestHarness {
@@ -671,7 +671,7 @@ async fn config_overrides_the_builder_limit() {
 
 `kit.mailer.sent()`, `kit.db`, `kit.clock`, `kit.defer` and friends let
 you assert on what the module actually did — see the
-[`factory0-testing` README](../crates/testing/README.md).
+[`cratefield-testing` README](../crates/testing/README.md).
 
 ## Step 9 — Declare a surface
 
@@ -682,7 +682,7 @@ so `Module::surface` lists the **actions** (routes, relative to
 action is derived from the handler's own body type, so it cannot drift from
 the route: derive `JsonSchema` next to `Deserialize` and put the UI hints on
 the fields as `x-cf-*` keywords (the full list is on
-`factory0_core::HINT_KEYWORDS`).
+`cratefield_core::HINT_KEYWORDS`).
 
 ```rust
 #[derive(Deserialize, JsonSchema)]
@@ -708,7 +708,7 @@ else does), an input schema describes an object, and a view names an action
 the module declares. Mark fields the visitor must never type
 (`captchaToken`, a referral code, a locale) with `x-cf-hidden`; a hint that
 only exists at runtime (a `select` over configured products) is set after
-derivation with `factory0_core::hint_field`, as the waitlist does.
+derivation with `cratefield_core::hint_field`, as the waitlist does.
 
 `GET /__surface` on the venture then lists the module. Admin actions and the
 views over them appear only when the request carries the admin bearer.
@@ -718,9 +718,9 @@ views over them appear only when the request carries the admin bearer.
 From the repository root:
 
 ```
-$ cargo test -p factory0-module-hello
+$ cargo test -p cratefield-module-hello
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.11s
-     Running unittests src/lib.rs (target/debug/deps/factory0_module_hello-…)
+     Running unittests src/lib.rs (target/debug/deps/cratefield_module_hello-…)
 running 0 tests
 test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
 
@@ -737,7 +737,7 @@ test config_overrides_the_builder_limit ... ok
 test a_recorded_visit_is_counted ... ok
 test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
 
-   Doc-tests factory0_module_hello
+   Doc-tests cratefield_module_hello
 running 1 test
 test examples/module-hello/src/lib.rs - (line 6) - compile ... ok
 test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
@@ -775,7 +775,7 @@ Everything else a module can do, with the module that does it:
   purge in `crates/module-waitlist/src/lib.rs`.
 - **`/.well-known` discovery routes**: `Module::well_known` (root-level
   only; at most one module per venture may provide one).
-- **CSV admin export with formula-injection escaping**: `factory0_core::csv_row`.
+- **CSV admin export with formula-injection escaping**: `cratefield_core::csv_row`.
 - **Private modules**: same guide, different repo — `fz-*` crates in
   `harness-private`, consumed by ventures as pinned git dependencies
   (ADR [0005](adr/0005-crate-naming-and-distribution.md)), passing the

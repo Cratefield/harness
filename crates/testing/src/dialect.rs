@@ -16,7 +16,7 @@ pub enum Dialect {
     Sqlite,
     /// A throwaway database on the Postgres server at `url`, created
     /// when the harness builds and dropped when it drops. Requires
-    /// building `factory0-testing` with the `postgres` feature.
+    /// building `cratefield-testing` with the `postgres` feature.
     Postgres { url: String },
 }
 

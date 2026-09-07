@@ -1,8 +1,8 @@
 //! Issue #12 acceptance for `waitlist`: askama snapshot tests per
 //! template, links equal between text and html, and `<script>` escaping.
 
-use factory0_core::{Brand, Rendered};
-use factory0_module_waitlist::{ConfirmMailData, ConfirmedMailData, default_templates};
+use cratefield_core::{Brand, Rendered};
+use cratefield_module_waitlist::{ConfirmMailData, ConfirmedMailData, default_templates};
 use serde_json::json;
 
 fn render(id: &str, data: &serde_json::Value) -> Rendered {

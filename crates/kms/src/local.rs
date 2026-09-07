@@ -45,7 +45,7 @@ impl LocalFileKms {
     /// Reads the master key from `path`.
     ///
     /// `env` is the deployment environment, as
-    /// `factory0_core::VentureEnv` spells it: anything equal to
+    /// `cratefield_core::VentureEnv` spells it: anything equal to
     /// `"production"` (case-insensitively) is refused. The environment
     /// is a parameter rather than read from the process here, so the
     /// refusal cannot be sidestepped by unsetting a variable, and so the

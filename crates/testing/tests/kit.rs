@@ -1,9 +1,9 @@
 //! The kit's own tests plus a demo module passing conformance (issue #9).
 
-use factory0_core::{
+use cratefield_core::{
     Config, ConfigError, Database, Migrations, Module, ModuleContext, Port, SqlMigration,
 };
-use factory0_testing::{
+use cratefield_testing::{
     FakeCaptcha, FakeDefer, FakeHttpClient, FakeMailer, FakeRateLimiter, MailerMode,
     MemoryKeyValue, TestHarness, assert_wasm_safe_deps, conformance, request,
 };
@@ -50,10 +50,12 @@ impl Module for DemoModule {
             "/notes",
             axum::routing::get(move || async move {
                 let rows = db
-                    .query(&factory0_core::Statement::new("SELECT id FROM demo_notes"))
+                    .query(&cratefield_core::Statement::new(
+                        "SELECT id FROM demo_notes",
+                    ))
                     .await
                     .expect("select");
-                factory0_core::Json(serde_json::json!({ "count": rows.len() }))
+                cratefield_core::Json(serde_json::json!({ "count": rows.len() }))
             }),
         )
     }
@@ -90,7 +92,9 @@ impl Module for DiscoveryModule {
     fn well_known(&self) -> Option<axum::Router> {
         Some(axum::Router::new().route(
             "/jwks.json",
-            axum::routing::get(|| async { factory0_core::Json(serde_json::json!({ "keys": [] })) }),
+            axum::routing::get(|| async {
+                cratefield_core::Json(serde_json::json!({ "keys": [] }))
+            }),
         ))
     }
 }
@@ -116,7 +120,7 @@ async fn discovery_document_serves_at_root() {
 
 #[test]
 fn testing_crate_deps_are_wasm_safe() {
-    assert_wasm_safe_deps("factory0-testing");
+    assert_wasm_safe_deps("cratefield-testing");
 }
 
 #[pollster::test]
@@ -128,7 +132,7 @@ async fn test_harness_applies_migrations_and_serves_module_routes() {
 
     // Module writes land in the shared db handle.
     kit.db
-        .execute(&factory0_core::Statement::new(
+        .execute(&cratefield_core::Statement::new(
             "INSERT INTO demo_notes (id, body) VALUES ('n1', 'hello')",
         ))
         .await
@@ -139,7 +143,7 @@ async fn test_harness_applies_migrations_and_serves_module_routes() {
 
 #[pollster::test]
 async fn fake_mailer_records_and_switches_modes() {
-    use factory0_core::{Mailer, Message, SendOutcome};
+    use cratefield_core::{Mailer, Message, SendOutcome};
     let mailer = FakeMailer::new(MailerMode::SendOk);
     let message = Message {
         to: "nick@example.com".into(),
@@ -183,7 +187,7 @@ async fn fake_mailer_records_and_switches_modes() {
 
 #[pollster::test]
 async fn fake_captcha_allow_all_and_token_lists() {
-    use factory0_core::Captcha;
+    use cratefield_core::Captcha;
     let allow_all = FakeCaptcha::allow_all();
     assert!(allow_all.verify("anything", None).await.expect("v").ok);
 
@@ -196,7 +200,7 @@ async fn fake_captcha_allow_all_and_token_lists() {
 
 #[pollster::test]
 async fn fake_rate_limiter_is_scripted() {
-    use factory0_core::{Decision, RateLimiter};
+    use cratefield_core::{Decision, RateLimiter};
     let limiter = FakeRateLimiter::scripted(
         vec![Decision {
             ok: false,
@@ -217,7 +221,7 @@ async fn fake_rate_limiter_is_scripted() {
 
 #[pollster::test]
 async fn memory_key_value_round_trips() {
-    use factory0_core::KeyValue;
+    use cratefield_core::KeyValue;
     let kv = MemoryKeyValue::new();
     assert_eq!(kv.get("k").await.expect("g"), None);
     kv.put("k", "v", None).await.expect("p");
@@ -228,7 +232,7 @@ async fn memory_key_value_round_trips() {
 
 #[pollster::test]
 async fn fake_http_client_is_scripted_and_captures() {
-    use factory0_core::HttpClient;
+    use cratefield_core::HttpClient;
     let http = FakeHttpClient::ok_json(r#"{"ok":true}"#);
     let request = http::Request::builder()
         .method("POST")
@@ -246,7 +250,7 @@ async fn fake_http_client_is_scripted_and_captures() {
 
 #[pollster::test]
 async fn fake_defer_collects_and_drains() {
-    use factory0_core::Defer;
+    use cratefield_core::Defer;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     let defer = FakeDefer::new();
@@ -265,7 +269,7 @@ async fn fake_defer_collects_and_drains() {
 
 #[pollster::test]
 async fn signer_round_trips_with_test_secret() {
-    use factory0_core::{Kid, Payload, Signer};
+    use cratefield_core::{Kid, Payload, Signer};
     let kit = TestHarness::new(vec![Box::new(DemoModule)]);
     let payload = Payload {
         purpose: "confirm".into(),
@@ -280,8 +284,8 @@ async fn signer_round_trips_with_test_secret() {
 
 #[test]
 fn empty_database_answers_readiness_probe() {
-    let db = factory0_testing::EmptyDatabase;
-    let rows =
-        pollster::block_on(db.query(&factory0_core::Statement::new("SELECT 1"))).expect("select 1");
+    let db = cratefield_testing::EmptyDatabase;
+    let rows = pollster::block_on(db.query(&cratefield_core::Statement::new("SELECT 1")))
+        .expect("select 1");
     assert_eq!(rows.len(), 1);
 }

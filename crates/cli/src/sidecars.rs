@@ -12,7 +12,7 @@
 //! reads from config. It is passed down from `run` rather than read
 //! here, so nothing below the command line depends on process state.
 
-use factory0_core::{HARNESS_SIDECARS, Harness, MapConfig, SidecarMount, SidecarMounts};
+use cratefield_core::{HARNESS_SIDECARS, Harness, MapConfig, SidecarMount, SidecarMounts};
 
 /// The mount table the command line gave, else the environment's.
 #[must_use]

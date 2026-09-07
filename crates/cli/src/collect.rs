@@ -5,7 +5,7 @@
 //! non-zero when a locked file is missing or its content hash changed.
 
 use crate::lock::{Lock, read_lock, sha256_hex, write_lock};
-use factory0_core::Harness;
+use cratefield_core::Harness;
 use std::path::Path;
 
 /// Collects the harness's module migrations into `out`.

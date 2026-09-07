@@ -18,14 +18,14 @@ use std::sync::Arc;
 
 use axum::http::{Method, StatusCode, header};
 use common::*;
-use factory0_core::Harness;
+use cratefield_core::Harness;
 use futures_channel::oneshot;
 use tower::ServiceExt;
 
-fn parked_harness(park: SharedParkGate) -> factory0_core::Harness {
+fn parked_harness(park: SharedParkGate) -> cratefield_core::Harness {
     Harness::builder()
         .venture(
-            factory0_core::Venture::new("test-venture", "test.example")
+            cratefield_core::Venture::new("test-venture", "test.example")
                 .cors_origins(["https://test.example"]),
         )
         .module(SampleModule::parking(park))
@@ -45,8 +45,8 @@ fn concurrent_requests_keep_their_own_scope() {
     let harness_a = parked_harness(park_a);
     let harness_b = parked_harness(park_b);
 
-    let router_a = harness_a.router(factory0_core::Ports::empty());
-    let router_b = harness_b.router(factory0_core::Ports::empty());
+    let router_a = harness_a.router(cratefield_core::Ports::empty());
+    let router_b = harness_b.router(cratefield_core::Ports::empty());
 
     let id_a = "request-AAAAAAAA";
     let id_b = "request-BBBBBBBB";
@@ -110,7 +110,7 @@ fn concurrent_requests_through_one_router_keep_their_own_scope() {
     };
     let harness = Harness::builder()
         .venture(
-            factory0_core::Venture::new("test-venture", "test.example")
+            cratefield_core::Venture::new("test-venture", "test.example")
                 .cors_origins(["https://test.example"]),
         )
         .module(module)
@@ -118,7 +118,7 @@ fn concurrent_requests_through_one_router_keep_their_own_scope() {
         .build()
         .expect("harness builds");
 
-    let router = harness.router(factory0_core::Ports::empty());
+    let router = harness.router(cratefield_core::Ports::empty());
     let router_a = router.clone();
     let router_b = router;
 
@@ -174,7 +174,7 @@ struct EitherParkModule {
     b: SharedParkGate,
 }
 
-impl factory0_core::Module for EitherParkModule {
+impl cratefield_core::Module for EitherParkModule {
     fn name(&self) -> &'static str {
         "sample"
     }
@@ -183,28 +183,28 @@ impl factory0_core::Module for EitherParkModule {
         env!("CARGO_PKG_VERSION")
     }
 
-    fn requires(&self) -> &'static [factory0_core::Port] {
+    fn requires(&self) -> &'static [cratefield_core::Port] {
         &[]
     }
 
-    fn migrations(&self) -> factory0_core::Migrations {
-        factory0_core::Migrations::default()
+    fn migrations(&self) -> cratefield_core::Migrations {
+        cratefield_core::Migrations::default()
     }
 
     fn validate_config(
         &self,
-        _cfg: &dyn factory0_core::Config,
-    ) -> Result<(), factory0_core::ConfigError> {
+        _cfg: &dyn cratefield_core::Config,
+    ) -> Result<(), cratefield_core::ConfigError> {
         Ok(())
     }
 
-    fn router(&self, _ctx: factory0_core::ModuleContext) -> axum::Router {
+    fn router(&self, _ctx: cratefield_core::ModuleContext) -> axum::Router {
         let a = Arc::clone(&self.a);
         let b = Arc::clone(&self.b);
         axum::Router::new().route(
             "/park",
             axum::routing::get(
-                move |scope: factory0_core::Scope,
+                move |scope: cratefield_core::Scope,
                       axum::extract::RawQuery(query): axum::extract::RawQuery| async move {
                     let park = match query.as_deref() {
                         Some("ch=a") => &a,
@@ -217,7 +217,7 @@ impl factory0_core::Module for EitherParkModule {
                         .take()
                         .expect("park gate used once");
                     let gate: &'static str = receiver.await.expect("gate open");
-                    factory0_core::Json(serde_json::json!({
+                    cratefield_core::Json(serde_json::json!({
                         "gate": gate,
                         "request_id": scope.request_id,
                     }))

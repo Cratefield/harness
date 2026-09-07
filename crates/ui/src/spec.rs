@@ -8,7 +8,7 @@
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
-use factory0_core::SurfaceDocument;
+use cratefield_core::SurfaceDocument;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 

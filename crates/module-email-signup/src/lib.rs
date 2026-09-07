@@ -1,9 +1,9 @@
-//! `factory0-module-email-signup`: collect an address, double opt-in via
+//! `cratefield-module-email-signup`: collect an address, double opt-in via
 //! a signed link, one-click unsubscribe, admin CSV export and hard delete
 //! (issue #10, architecture section 6).
 //!
 //! ```no_run
-//! use factory0_module_email_signup::EmailSignup;
+//! use cratefield_module_email_signup::EmailSignup;
 //!
 //! let module = EmailSignup::new()
 //!     .double_opt_in(true)
@@ -30,7 +30,7 @@ mod store;
 
 pub use mail::{ConfirmMailData, WelcomeMailData, default_templates};
 
-use factory0_core::{
+use cratefield_core::{
     AnyError, BoxFuture, Config, ConfigError, IdGen, Migrations, Module, ModuleConfig,
     ModuleContext, Port, SqlMigration, UlidIdGen, normalize_email, validation_error,
 };
@@ -252,16 +252,16 @@ impl Module for EmailSignup {
         handlers::router(shared, self.settings.clone())
     }
 
-    fn surface(&self) -> factory0_core::Surface {
+    fn surface(&self) -> cratefield_core::Surface {
         handlers::surface(&self.settings)
     }
 
-    fn events(&self) -> Vec<(factory0_core::EventName, factory0_core::EventHandler)> {
+    fn events(&self) -> Vec<(cratefield_core::EventName, cratefield_core::EventHandler)> {
         if !self.settings.subscribe_on_waitlist_confirm {
             return Vec::new();
         }
         let cell = Arc::clone(&self.ctx_cell);
-        let handler: factory0_core::EventHandler = Arc::new(move |_scope, payload| {
+        let handler: cratefield_core::EventHandler = Arc::new(move |_scope, payload| {
             let cell = Arc::clone(&cell);
             Box::pin(async move { subscribe_waitlist_confirmed(&cell, payload).await })
         });

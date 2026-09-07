@@ -121,30 +121,31 @@ flowchart LR
 
 ## Crates
 
-All public crates are `factory0-*`, MIT. Nothing is published to crates.io yet;
+All public crates are `cratefield-*`, MIT. Nothing is published to crates.io yet;
 depend on this repository by git.
 
-> The `factory0-` prefix predates the move of this repository into the
-> Cratefield organisation. Renaming published crate names is a breaking change
-> for every consumer, so the prefix stays until there is a release worth
-> breaking. It is a package namespace, not a statement about who maintains this.
+> These crates were `factory0-*` until the first release. Renaming a
+> published crate breaks every consumer, so the rename had exactly one
+> free moment: before anything reached crates.io. It was taken then
+> (ADR [0011](docs/adr/0011-crates-are-published-as-cratefield.md)).
+> Private modules stay `fz-*` and stay unpublished.
 
 | Crate | Role |
 |---|---|
-| `factory0-core` | `Module` trait, `Harness` builder, port traits, problem+json errors, request scope, event bus, templates |
-| `factory0-runtime-cloudflare` | workers-rs entry points; D1, KV, Rate Limiting and `wait_until` mapped to ports |
-| `factory0-adapter-resend` | `Mailer` over the Resend REST API, with a `NotConfigured` mode until a sending domain is verified |
-| `factory0-adapter-turnstile` | `Captcha` over Cloudflare Turnstile, fail-closed |
-| `factory0-adapter-sqlite` | `Database` over rusqlite: every test, and single-node self-hosting |
-| `factory0-module-email-signup` | Email signup with double opt-in, unsubscribe, admin export |
-| `factory0-module-waitlist` | Per-product waitlist with confirm, position, referral codes |
-| `factory0-secrets` | Envelope-encrypted secrets over the `Database` port, two tiers, ciphertexts bound to their row (#39) |
-| `factory0-kms` | The KMS port: wrap and unwrap data keys, with a local-file provider that refuses production (ADR 0102) |
-| `factory0-ui` | Renders the module surface as HTML at `/ui`: pages, fragments, in-process form dispatch, the `cf-*` styling contract (ADR 0010) |
-| `factory0-cli` | Binary `fz`: `migrations collect`, `doctor`, `modules` |
-| `factory0-testing` | Conformance kit every module, public or private, must pass |
-| `factory0-adapter-postgres` | Phase 3. `Database` over sqlx for the native runtime |
-| `factory0-runtime-native` | Phase 3. The same harness as a single binary on tokio |
+| `cratefield-core` | `Module` trait, `Harness` builder, port traits, problem+json errors, request scope, event bus, templates |
+| `cratefield-runtime-cloudflare` | workers-rs entry points; D1, KV, Rate Limiting and `wait_until` mapped to ports |
+| `cratefield-adapter-resend` | `Mailer` over the Resend REST API, with a `NotConfigured` mode until a sending domain is verified |
+| `cratefield-adapter-turnstile` | `Captcha` over Cloudflare Turnstile, fail-closed |
+| `cratefield-adapter-sqlite` | `Database` over rusqlite: every test, and single-node self-hosting |
+| `cratefield-module-email-signup` | Email signup with double opt-in, unsubscribe, admin export |
+| `cratefield-module-waitlist` | Per-product waitlist with confirm, position, referral codes |
+| `cratefield-secrets` | Envelope-encrypted secrets over the `Database` port, two tiers, ciphertexts bound to their row (#39) |
+| `cratefield-kms` | The KMS port: wrap and unwrap data keys, with a local-file provider that refuses production (ADR 0102) |
+| `cratefield-ui` | Renders the module surface as HTML at `/ui`: pages, fragments, in-process form dispatch, the `cf-*` styling contract (ADR 0010) |
+| `cratefield-cli` | Binary `fz`: `migrations collect`, `doctor`, `modules` |
+| `cratefield-testing` | Conformance kit every module, public or private, must pass |
+| `cratefield-adapter-postgres` | Phase 3. `Database` over sqlx for the native runtime |
+| `cratefield-runtime-native` | Phase 3. The same harness as a single binary on tokio |
 
 Private modules are `fz-*` crates in
 [harness-private](https://github.com/Factory-Zero/harness-private), consumed as
@@ -211,7 +212,7 @@ wrangler tail --format pretty --search <request-id>
 ```
 
 The error taxonomy (every problem slug, status and meaning) is
-`docs/ERRORS.md`, generated from `factory0-core`'s registry and checked
+`docs/ERRORS.md`, generated from `cratefield-core`'s registry and checked
 in CI for drift.
 
 ## Toolchain
@@ -232,18 +233,18 @@ cargo test --workspace
 
 ```
 crates/
-  core/                    factory0-core
-  runtime-cloudflare/      factory0-runtime-cloudflare
-  adapter-resend/          factory0-adapter-resend
-  adapter-turnstile/       factory0-adapter-turnstile
-  adapter-sqlite/          factory0-adapter-sqlite
-  module-email-signup/     factory0-module-email-signup
-  module-waitlist/         factory0-module-waitlist
-  kms/                     factory0-kms
-  secrets/                 factory0-secrets
-  ui/                      factory0-ui
-  cli/                     factory0-cli  →  fz
-  testing/                 factory0-testing
+  core/                    cratefield-core
+  runtime-cloudflare/      cratefield-runtime-cloudflare
+  adapter-resend/          cratefield-adapter-resend
+  adapter-turnstile/       cratefield-adapter-turnstile
+  adapter-sqlite/          cratefield-adapter-sqlite
+  module-email-signup/     cratefield-module-email-signup
+  module-waitlist/         cratefield-module-waitlist
+  kms/                     cratefield-kms
+  secrets/                 cratefield-secrets
+  ui/                      cratefield-ui
+  cli/                     cratefield-cli  →  fz
+  testing/                 cratefield-testing
 examples/
   venture/                 smallest complete venture; CI builds it to wasm
 docs/

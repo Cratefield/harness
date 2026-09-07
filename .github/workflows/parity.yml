@@ -2,9 +2,9 @@
 # and Postgres — one test definition, every engine. The `sqlite` leg
 # proves the suites pass without a Postgres; the `postgres` leg runs
 # against a postgres:16 service container (the same image CI uses for
-# the factory0-adapter-postgres contract tests) with
+# the cratefield-adapter-postgres contract tests) with
 # FZ_TEST_POSTGRES_URL set, which also exercises the sqlite leg first —
-# `factory0-testing::Dialect::available()` picks up every dialect the
+# `cratefield-testing::Dialect::available()` picks up every dialect the
 # environment provides.
 #
 # Both legs are required checks; the README badge reflects the matrix.
@@ -52,9 +52,9 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Module suites on the matrix dialect
         run: |
-          cargo test -p factory0-module-email-signup
-          cargo test -p factory0-module-waitlist
+          cargo test -p cratefield-module-email-signup
+          cargo test -p cratefield-module-waitlist
       - name: Conformance kit on the matrix dialect
         run: |
-          cargo test -p factory0-module-email-signup --test conformance
-          cargo test -p factory0-module-waitlist --test conformance
+          cargo test -p cratefield-module-email-signup --test conformance
+          cargo test -p cratefield-module-waitlist --test conformance

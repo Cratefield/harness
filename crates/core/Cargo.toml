@@ -1,8 +1,8 @@
 [package]
-name = "factory0-core"
+name = "cratefield-core"
 description = "Factory Zero harness kernel: Module trait, Harness builder, ports, errors"
 readme = "../../README.md"
-keywords = ["factory0", "harness", "backend", "axum", "modules"]
+keywords = ["cratefield", "harness", "backend", "axum", "modules"]
 categories = ["web-programming", "asynchronous"]
 include = ["src/**/*", "examples/**/*"]
 # 0.3.0 (not workspace): the UI surface (`Module::surface`, `GET /__surface`,

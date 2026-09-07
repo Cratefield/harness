@@ -15,7 +15,7 @@ use std::time::Duration;
 pub struct TokioClock;
 
 #[async_trait]
-impl factory0_core::Clock for TokioClock {
+impl cratefield_core::Clock for TokioClock {
     fn now(&self) -> time::OffsetDateTime {
         time::OffsetDateTime::now_utc()
     }
@@ -32,7 +32,7 @@ impl factory0_core::Clock for TokioClock {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use factory0_core::Clock as _;
+    use cratefield_core::Clock as _;
 
     #[tokio::test]
     async fn timeout_abandons_a_slow_future() {

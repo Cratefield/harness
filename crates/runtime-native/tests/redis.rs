@@ -6,7 +6,7 @@
 //! ```sh
 //! docker run --rm -p 6380:6379 redis:8-alpine
 //! export FZ_TEST_REDIS_URL=redis://127.0.0.1:6380
-//! cargo test -p factory0-runtime-native --test redis
+//! cargo test -p cratefield-runtime-native --test redis
 //! ```
 //!
 //! Sliding-window assertions use unique keys per run (ULID-prefixed) so
@@ -15,8 +15,8 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use factory0_core::{IdGen as _, KeyValue as _, RateLimiter as _, UlidIdGen};
-use factory0_runtime_native::{RedisKv, RedisRateLimiter};
+use cratefield_core::{IdGen as _, KeyValue as _, RateLimiter as _, UlidIdGen};
+use cratefield_runtime_native::{RedisKv, RedisRateLimiter};
 use redis::aio::ConnectionManager;
 
 fn redis_url() -> Option<String> {

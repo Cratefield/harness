@@ -41,7 +41,7 @@ and name the new repo `<venture>-backend`.
 You get this shape (template README):
 
 ```
-Cargo.toml               depends on factory0-core, the runtime, and the modules you want
+Cargo.toml               depends on cratefield-core, the runtime, and the modules you want
 src/harness.rs           Harness::builder() composition for this venture   ← edit this
 src/lib.rs               #[event(fetch)] / #[event(scheduled)] delegating to the harness
 tests/harness_builds.rs  asserts Harness::build() is Ok; a bad config fails `cargo test`
@@ -180,7 +180,7 @@ migrations_dir = "migrations"
 ## 4. Collect and apply migrations
 
 From the venture repo (the template wires `fz` as a bin target; see the
-[factory0-cli README](../crates/cli/README.md)):
+[cratefield-cli README](../crates/cli/README.md)):
 
 ```
 cargo run --bin fz -- migrations collect     # writes migrations/ + .harness-lock.json, commit them
@@ -245,7 +245,7 @@ wildcards in production.
 
 ## 8b. Add the forms to your site
 
-With `factory0-ui` mounted (`.ui(Ui::from_spec(include_str!("../ui.json")))`
+With `cratefield-ui` mounted (`.ui(Ui::from_spec(include_str!("../ui.json")))`
 in `harness.rs`), every module's forms are served by the API and your site
 writes no form code. Two ways in:
 

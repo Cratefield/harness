@@ -22,7 +22,7 @@
 
 use std::sync::Arc;
 
-use factory0_core::{Database, Statement};
+use cratefield_core::{Database, Statement};
 use sea_query::Value as SeaValue;
 use sha2::{Digest, Sha256};
 

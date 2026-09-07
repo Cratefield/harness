@@ -1,4 +1,4 @@
-# factory0-secrets
+# cratefield-secrets
 
 The secrets store (issue #39, `docs/SECRETS-DESIGN.md`, ADR 0102).
 Envelope encryption over the `Database` port in two tiers: global secrets

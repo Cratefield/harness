@@ -1,4 +1,4 @@
-# factory0-adapter-resend
+# cratefield-adapter-resend
 
 [`Mailer`] port over the [Resend](https://resend.com) REST API for the
 Factory Zero harness. Uses the runtime's `HttpClient` port — no `reqwest`,
@@ -9,8 +9,8 @@ natively.
 
 ```rust,ignore
 use std::sync::Arc;
-use factory0_adapter_resend::Resend;
-use factory0_runtime_cloudflare::FetchClient;
+use cratefield_adapter_resend::Resend;
+use cratefield_runtime_cloudflare::FetchClient;
 
 // With a key:
 let mailer = Resend::new(Arc::new(FetchClient), Some(key), "Factory Zero <no-reply@send.example.com>", None);
@@ -23,7 +23,7 @@ let runtime = Cloudflare::new().db("DB").mailer(mailer);
 `MAIL_REPLY_TO` from the process environment (native/self-hosted). On
 Workers, read the secrets from the venture's `Env` and call `Resend::new`.
 
-Error mapping (to `factory0_core::MailError`): 401/403 →
+Error mapping (to `cratefield_core::MailError`): 401/403 →
 `Unauthorized`/`DomainNotVerified { domain }` (domain parsed from Resend's
 message), 422 → `Invalid { detail }`, 429 → `RateLimited { retry_after }`
 (from the `Retry-After` header), 5xx → `Upstream`. No error `Display` ever

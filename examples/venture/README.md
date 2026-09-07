@@ -1,7 +1,7 @@
 # venture (example)
 
-The smallest complete Factory Zero venture: `factory0-core` +
-`factory0-runtime-cloudflare`, three modules (`sample` row round-trip,
+The smallest complete Factory Zero venture: `cratefield-core` +
+`cratefield-runtime-cloudflare`, three modules (`sample` row round-trip,
 `email-signup`, `waitlist`), one Worker, one local D1.
 
 CI builds it to wasm with `worker-build --release` so a native-only
@@ -20,12 +20,12 @@ curl -fsS http://127.0.0.1:8792/__ready
 See [CONTRIBUTING.md](../../CONTRIBUTING.md) for the full walkthrough and
 [docs/VENTURE-GUIDE.md](../../docs/VENTURE-GUIDE.md) for the template-to-
 production path this example mirrors. The guide-built module
-[`factory0-module-hello`](../module-hello/) is its documentation-focused
+[`cratefield-module-hello`](../module-hello/) is its documentation-focused
 sibling.
 
 ## The UI
 
-The example mounts `factory0_ui::Ui`, so every module's forms are served
+The example mounts `cratefield_ui::Ui`, so every module's forms are served
 from the Worker (`docs/UI.md`):
 
 ```text

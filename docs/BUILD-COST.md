@@ -75,7 +75,7 @@ Same host and method, `examples/venture` as it stands after the UI epic
 | Today, without the UI renderer mounted | 2.98 MB |
 | **Today, as shipped** | **3.50 MB** |
 
-`factory0-ui` and its `ui.json` account for **0.52 MB** of that, measured
+`cratefield-ui` and its `ui.json` account for **0.52 MB** of that, measured
 by dropping the `.ui(..)` call and the dependency and rebuilding. The
 0.32 MB between the two older figures is everything else landed since:
 `schemars` for the module surface, the sidecar dispatcher and mount, the

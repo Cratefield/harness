@@ -2,8 +2,8 @@
 //! through sea-query-rendered statements (issue #8 acceptance; the
 //! fixture modules live in the CLI crate's tests).
 
-use factory0_adapter_sqlite::SqliteDatabase;
-use factory0_core::{Database, Row, Rows, SqlMigration, Statement};
+use cratefield_adapter_sqlite::SqliteDatabase;
+use cratefield_core::{Database, Row, Rows, SqlMigration, Statement};
 
 const SUBSCRIBERS_INIT: SqlMigration = SqlMigration {
     id: "0001",
@@ -38,7 +38,7 @@ async fn applies_fixture_migrations_and_round_trips_a_row() {
     db.apply_migrations("email-signup", &[SUBSCRIBERS_INIT])
         .expect("re-apply is a no-op");
 
-    let insert = factory0_core::Statement::with_values(
+    let insert = cratefield_core::Statement::with_values(
         "INSERT INTO subscribers (id, email, status) VALUES (?, ?, ?)",
         vec![
             sea_query::Value::String(Some(Box::new("01TEST".to_string()))),

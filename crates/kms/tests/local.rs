@@ -4,7 +4,7 @@
 
 use std::fmt::Write as _;
 
-use factory0_kms::{Dek, Kms, KmsError, LocalFileKms, conformance};
+use cratefield_kms::{Dek, Kms, KmsError, LocalFileKms, conformance};
 
 /// The hex encoding a key file may carry.
 fn to_hex(bytes: &[u8]) -> String {

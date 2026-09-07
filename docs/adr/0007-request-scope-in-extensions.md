@@ -13,7 +13,7 @@ one lost its `waitUntil`. Rust makes the same mistake possible with a
 Core middleware creates a `Scope { request_id, defer, span }` per request and
 stores it in the request's extensions. Handlers receive it through the `Scope`
 extractor. `EventBus::emit_in(&scope, ..)` and `Defer` take the scope
-explicitly. `factory0-core` and every module carry `#![forbid(unsafe_code)]`
+explicitly. `cratefield-core` and every module carry `#![forbid(unsafe_code)]`
 and a clippy lint deny on `thread_local!` and `static mut`.
 
 ## Consequences

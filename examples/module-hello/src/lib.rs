@@ -1,10 +1,10 @@
-//! `factory0-module-hello`: the example module built step by step by
+//! `cratefield-module-hello`: the example module built step by step by
 //! [docs/MODULE-AUTHORING.md](../../docs/MODULE-AUTHORING.md). One table,
 //! one public write, one public read, one event — the smallest module that
 //! still exercises every rule a real module must obey.
 //!
 //! ```no_run
-//! use factory0_module_hello::Hello;
+//! use cratefield_module_hello::Hello;
 //!
 //! let module = Hello::new().max_name_len(64);
 //! ```
@@ -19,7 +19,7 @@
 
 mod handlers;
 
-use factory0_core::{
+use cratefield_core::{
     Config, ConfigError, Migrations, Module, ModuleConfig, ModuleContext, Port, SqlMigration,
 };
 use std::sync::Arc;
@@ -117,7 +117,7 @@ impl Module for Hello {
         handlers::router(Arc::new(ctx), self.settings.clone())
     }
 
-    fn surface(&self) -> factory0_core::Surface {
+    fn surface(&self) -> cratefield_core::Surface {
         handlers::surface()
     }
 }

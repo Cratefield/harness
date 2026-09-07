@@ -1,4 +1,4 @@
-//! `factory0-adapter-turnstile`: the [`Captcha`] port over Cloudflare
+//! `cratefield-adapter-turnstile`: the [`Captcha`] port over Cloudflare
 //! Turnstile `siteverify` (issue #7). Runs on the runtime's `HttpClient`
 //! port; the 5 s timeout is supplied by the runtime's [`Clock`].
 //!
@@ -13,7 +13,7 @@
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use factory0_core::{Captcha, CaptchaError, Clock, HttpClient, Verdict, timeout};
+use cratefield_core::{Captcha, CaptchaError, Clock, HttpClient, Verdict, timeout};
 use http::Request;
 use std::sync::Arc;
 use std::time::Duration;

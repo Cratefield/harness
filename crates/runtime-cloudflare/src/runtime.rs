@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use factory0_core::{
+use cratefield_core::{
     Captcha, Defer, HarnessConfig, Mailer, Port, Ports, Runtime, SidecarMounts, UlidIdGen,
 };
 use worker::Env;
@@ -48,8 +48,8 @@ static WARNED_SIGNER: AtomicBool = AtomicBool::new(false);
 static WARNED_SIDECAR: AtomicBool = AtomicBool::new(false);
 
 /// The Workers runtime. Binding names are static; `.mailer()`/`.captcha()`
-/// take adapter instances (`factory0-adapter-resend`,
-/// `factory0-adapter-turnstile`).
+/// take adapter instances (`cratefield-adapter-resend`,
+/// `cratefield-adapter-turnstile`).
 pub struct Cloudflare {
     db_binding: Option<&'static str>,
     kv_binding: Option<&'static str>,

@@ -1,4 +1,4 @@
-# factory0-testing
+# cratefield-testing
 
 The conformance kit every Factory Zero module runs against — public and
 private modules alike. Fake ports, an in-memory SQLite `Database`, and
@@ -7,7 +7,7 @@ request helpers over the axum router with **no network**.
 ## A 15-line module test
 
 ```rust,ignore
-use factory0_testing::{conformance, request, TestHarness};
+use cratefield_testing::{conformance, request, TestHarness};
 
 #[test]
 fn my_module_conforms() {
@@ -60,7 +60,7 @@ async fn join_accepts_an_email() {
   no `worker`/`wasm-bindgen`/`tokio`/`reqwest` in the module's normal
   dependency tree.
 
-The in-memory `Database` is `factory0-adapter-sqlite`; assertions on
+The in-memory `Database` is `cratefield-adapter-sqlite`; assertions on
 `kit.db` see exactly what the module wrote. On the Postgres leg `kit.db`
 is a pool on the kit's own tokio runtime marshalled per call, so
 pollster-driven tests, spawned threads and deferred handlers all reach

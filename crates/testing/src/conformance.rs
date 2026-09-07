@@ -1,6 +1,6 @@
 //! The shared conformance suite (issue #9): every module must pass it.
 
-use factory0_core::{
+use cratefield_core::{
     AnyError, BoxFuture, Config, ConfigError, EventHandler, EventName, HmacSigner, Migrations,
     Module, ModuleContext, Port, Ports, UlidIdGen,
 };
@@ -215,7 +215,7 @@ fn conformance_on_dialect(
         return;
     }
     for round in 1..=2 {
-        let fresh = factory0_adapter_sqlite::SqliteDatabase::in_memory()
+        let fresh = cratefield_adapter_sqlite::SqliteDatabase::in_memory()
             .unwrap_or_else(|err| panic!("[sqlite] fresh db {round}: {err}"));
         for module in &kit.modules {
             fresh
@@ -378,7 +378,7 @@ async fn probe_once(router: &axum::Router, name: &str, probe: &Probe) -> crate::
         .method(probe.method.clone())
         .uri(uri)
         .header(
-            factory0_core::X_REQUEST_ID,
+            cratefield_core::X_REQUEST_ID,
             HeaderValue::from_static(PARITY_REQUEST_ID),
         )
         .header("cf-connecting-ip", HeaderValue::from_static("203.0.113.9"));
@@ -442,9 +442,9 @@ fn parity_on(shared: &Arc<dyn Module>, name: &str) {
         Vec::new(),
         |builder| builder,
         |ports| {
-            ports.config = Arc::new(factory0_core::MapConfig::from_pairs([
+            ports.config = Arc::new(cratefield_core::MapConfig::from_pairs([
                 ("HARNESS_SECRET", crate::TEST_HARNESS_SECRET),
-                (factory0_core::HARNESS_SIDECARS, table.as_str()),
+                (cratefield_core::HARNESS_SIDECARS, table.as_str()),
             ]));
             ports.dispatcher = Some(dispatcher);
         },
@@ -509,7 +509,7 @@ fn check_oversized_body_stops_at_the_host(
     use tower::ServiceExt;
 
     let before = sidecar.calls();
-    let big = "x".repeat(factory0_core::MAX_BODY_BYTES + 1);
+    let big = "x".repeat(cratefield_core::MAX_BODY_BYTES + 1);
     let response = pollster::block_on(async {
         let request = Request::builder()
             .method(axum::http::Method::POST)
@@ -529,7 +529,7 @@ fn check_oversized_body_stops_at_the_host(
         response.status,
         StatusCode::PAYLOAD_TOO_LARGE,
         "[{name}] a body over {} bytes must be refused by the host",
-        factory0_core::MAX_BODY_BYTES
+        cratefield_core::MAX_BODY_BYTES
     );
     assert_eq!(
         sidecar.calls(),
@@ -564,7 +564,7 @@ fn compare(name: &str, what: &str, direct: &crate::TestResponse, hopped: &crate:
     for (label, response) in [("in-process", direct), ("sidecar", hopped)] {
         let ids: Vec<_> = response
             .headers
-            .get_all(factory0_core::X_REQUEST_ID)
+            .get_all(cratefield_core::X_REQUEST_ID)
             .iter()
             .collect();
         assert_eq!(

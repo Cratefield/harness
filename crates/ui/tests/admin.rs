@@ -6,10 +6,10 @@ use std::sync::Arc;
 
 use axum::body::Body;
 use axum::http::{Method, Request, StatusCode, header};
-use factory0_module_email_signup::EmailSignup;
-use factory0_module_waitlist::Waitlist;
-use factory0_testing::TestHarness;
-use factory0_ui::Ui;
+use cratefield_module_email_signup::EmailSignup;
+use cratefield_module_waitlist::Waitlist;
+use cratefield_testing::TestHarness;
+use cratefield_ui::Ui;
 use tower::ServiceExt;
 
 const TOKEN: &str = "test-admin-token-with-enough-entropy";
@@ -22,11 +22,11 @@ fn kit(with_token: bool) -> TestHarness {
         ],
         |builder| builder.ui(Ui::new()),
         move |ports| {
-            let mut pairs = vec![("HARNESS_SECRET", factory0_testing::TEST_HARNESS_SECRET)];
+            let mut pairs = vec![("HARNESS_SECRET", cratefield_testing::TEST_HARNESS_SECRET)];
             if with_token {
                 pairs.push(("ADMIN_TOKEN", TOKEN));
             }
-            ports.config = Arc::new(factory0_core::MapConfig::from_pairs(pairs));
+            ports.config = Arc::new(cratefield_core::MapConfig::from_pairs(pairs));
         },
     )
 }
@@ -223,7 +223,7 @@ async fn table_shows_rows_and_delete_takes_two_posts() {
     let kit = kit(true);
     let cookie = login(&kit).await;
     // A subscriber through the public API (single opt-in: confirmed at once).
-    let reply = factory0_testing::request(
+    let reply = cratefield_testing::request(
         &kit.router,
         Method::POST,
         "/v1/email-signup",

@@ -164,7 +164,7 @@ the new name, not editing the row.
 
 ### The port
 
-The trait is `factory0_kms::Kms` (issue #40): `provider()`, `key_ref()`,
+The trait is `cratefield_kms::Kms` (issue #40): `provider()`, `key_ref()`,
 `wrap()`, `unwrap()`, and nothing else, because wrapping is the only
 thing the KMS does for us. Errors split **unavailable** (retry) from
 **denied** (a human has to change something) from **tampered** (never
@@ -173,7 +173,7 @@ mistake look like an outage.
 
 `LocalFileKms` is the development provider and **refuses to construct
 when the environment is production**: its master key sits on a local
-disk, which is the property a KMS exists to remove. `factory0_kms::
+disk, which is the property a KMS exists to remove. `cratefield_kms::
 conformance` is the suite every future provider passes — round trip,
 a fresh nonce per wrap, every single-bit change to the wrapped blob
 refused, and a truncated or empty blob refused rather than panicking.
@@ -184,7 +184,7 @@ integration here would be worse than an absent one.
 
 ### The store
 
-`factory0-secrets` (issue #39) holds the two tables in every store —
+`cratefield-secrets` (issue #39) holds the two tables in every store —
 `harness_secret_keys` and `harness_secrets` — and the API modules call.
 `Secrets::tenant()` is what a module gets; `Secrets::global()` takes a
 token type only the harness can construct, so the control database's
@@ -290,8 +290,8 @@ lives once the stores ship (#39) on the native runtime.
 |---|---|---|---|
 | `HARNESS_SECRET` / `HARNESS_SECRET_PREVIOUS` | core `Signer` (ADR 0006) | **tenant** | Each venture's own token-signing keys |
 | `ADMIN_TOKEN` | core admin auth | **tenant** | Per venture |
-| `RESEND_API_KEY` | `factory0-adapter-resend` | **tenant** | The venture's sending account |
-| `TURNSTILE_SECRET` | `factory0-adapter-turnstile` | **tenant** | The venture's site secret |
+| `RESEND_API_KEY` | `cratefield-adapter-resend` | **tenant** | The venture's sending account |
+| `TURNSTILE_SECRET` | `cratefield-adapter-turnstile` | **tenant** | The venture's site secret |
 | `MAIL_FROM`, `MAIL_REPLY_TO` | resend adapter | — (not secrets) | Listed to close the audit of `from_env` inputs |
 | Control database URL | native runtime bootstrap | **environment** | The one value from the environment (ADR 0008); it names the store that holds everything else, so it can never live inside one |
 | KMS credentials / IAM role | native runtime + `fz` | **environment** | Same bootstrap argument: needed to unwrap, so not storable |

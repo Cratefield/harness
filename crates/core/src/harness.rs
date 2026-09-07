@@ -38,7 +38,7 @@ use crate::venture::Venture;
 /// A runtime resolves environment bindings into [`Ports`] and declares
 /// statically which ports it can provide, so `Harness::build` can reject a
 /// module that requires something the runtime will never hand it
-/// (ADR 0002). Reference implementation: `factory0-runtime-cloudflare`.
+/// (ADR 0002). Reference implementation: `cratefield-runtime-cloudflare`.
 pub trait Runtime: Send + Sync + 'static {
     fn provides(&self) -> Vec<Port>;
 }
@@ -115,7 +115,7 @@ impl Harness {
 
     /// Builds the context a module sees: its declared ports (view), the
     /// config, the shared bus, templates and venture. `router()` uses this
-    /// per module; `factory0-runtime-cloudflare` uses it for scheduled
+    /// per module; `cratefield-runtime-cloudflare` uses it for scheduled
     /// fan-out.
     pub fn module_context(&self, module: &dyn Module, ports: &Ports) -> ModuleContext {
         ModuleContext {
@@ -517,7 +517,7 @@ impl HarnessBuilder {
         self
     }
 
-    /// Adds an already-shared module (`factory0-testing` keeps handles to
+    /// Adds an already-shared module (`cratefield-testing` keeps handles to
     /// apply migrations and run conformance).
     #[must_use]
     pub fn module_arc(mut self, module: Arc<dyn Module>) -> Self {
@@ -547,7 +547,7 @@ impl HarnessBuilder {
         self
     }
 
-    /// Mounts a UI renderer at `/ui` (ADR 0010): `factory0_ui::Ui`. Off
+    /// Mounts a UI renderer at `/ui` (ADR 0010): `cratefield_ui::Ui`. Off
     /// unless called, so a venture without a UI serves nothing there.
     #[must_use]
     pub fn ui(mut self, ui: impl UiMount) -> Self {

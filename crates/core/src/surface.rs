@@ -488,7 +488,7 @@ pub struct UiContext {
 }
 
 /// A renderer the venture mounts at `/ui` with `HarnessBuilder::ui`
-/// (ADR 0010). Core defines the seam; `factory0-ui` is the implementation,
+/// (ADR 0010). Core defines the seam; `cratefield-ui` is the implementation,
 /// kept out of core so a venture without a UI carries no `maud`.
 pub trait UiMount: Send + Sync + 'static {
     /// The router nested at `/ui`, built per `Harness::router` call.

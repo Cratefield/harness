@@ -3,8 +3,8 @@
 //! parity suite (issues #9, #20) — migrations applied per module at
 //! creation.
 
-use factory0_adapter_sqlite::SqliteDatabase;
-use factory0_core::{
+use cratefield_adapter_sqlite::SqliteDatabase;
+use cratefield_core::{
     Database, Harness, HarnessBuilder, HmacSigner, MapConfig, Module, Port, Ports, Runtime,
     UlidIdGen, Venture,
 };
@@ -101,7 +101,7 @@ impl TestHarness {
     /// applies every module's migrations (the `postgres` set when
     /// shipped, else the portable-linted `sqlite` set) and drops the
     /// database when the harness drops. Requires building
-    /// `factory0-testing` with the `postgres` feature.
+    /// `cratefield-testing` with the `postgres` feature.
     ///
     /// # Panics
     ///
@@ -305,8 +305,8 @@ fn backing(
     match dialect {
         Dialect::Sqlite => (sqlite_backing(modules), None),
         Dialect::Postgres { .. } => panic!(
-            "factory0-testing was built without the `postgres` feature — the Postgres \
-             parity leg needs it (dev-depend on factory0-testing with \
+            "cratefield-testing was built without the `postgres` feature — the Postgres \
+             parity leg needs it (dev-depend on cratefield-testing with \
              features = [\"postgres\"])"
         ),
     }
