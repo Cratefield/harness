@@ -24,10 +24,11 @@ win.
 |---|---|
 | `GET /ui/<module>/<action>` | Full page. For a `POST` action: the form; query parameters pre-fill and hide fields (`?product=kontinuum&ref=R1`). For a `GET` action: the action is dispatched with the same query and its answer rendered (a status page), or its redirect passed to the browser (a signed link). |
 | `GET …?fragment=1` | The same markup without the page shell, for a static site to embed. No CSP header on a fragment. |
+| `…&hide=<field,field>` | Renders the named pre-filled fields as hidden inputs instead of controls, on `GET` and on the re-render after a failed `POST`. |
 | `POST /ui/<module>/<action>` | The form, as `application/x-www-form-urlencoded`. Becomes the JSON the module accepts and is dispatched **in-process** to `/v1/<module><path>` with the caller's request scope and `cf-connecting-ip`, `x-forwarded-for`, `authorization` forwarded. `2xx` renders the declared outcome; `3xx` is passed through; a `problem+json` re-renders the form with the error on its field (`422`); `429` and `5xx` become a form-level notice. `?fragment=1` applies. |
 | `GET /ui/<module>/<action>/done`, `…/expired` | Landing pages for signed links. |
 | `GET /ui/cf.css` | The base stylesheet. |
-| `GET /ui/cf.js` | The embed (issue #73). |
+| `GET /ui/cf.js` | The embed, below. |
 
 Admin actions are not served by `/ui` until the admin UI (issue #74); they
 answer `404` like an unknown action.
@@ -112,6 +113,38 @@ Full pages link `/ui/cf.css`, then the theme stylesheet from
 `Ui::theme_css` if set, and carry a `Content-Security-Policy` that allows
 only the API origin for styles (plus the theme's origin), no scripts except
 Turnstile's when a widget is on the page, and `form-action 'self'`.
+
+## The embed: `cf.js`
+
+One dependency-free ES module, under 4 KB minified and gzipped (CI gate in
+`tools/cfjs/size.mjs`), served at `/ui/cf.js`. It is an embed, not a
+renderer: every byte of markup comes from the harness.
+
+```html
+<script type="module" src="https://api.example.com/ui/cf.js"></script>
+
+<cf-form module="waitlist" action="join" product="kontinuum"></cf-form>
+<cf-form module="email-signup" action="subscribe" source="footer"></cf-form>
+<cf-status module="waitlist"></cf-status>
+```
+
+`<cf-form>` fetches `/ui/<module>/<action>?fragment=1` from the script's
+own origin (or `base="…"`), inserts it into the light DOM, and turns the
+submit into a `fetch` of the same `/ui` route, swapping the returned
+fragment back in: the notice, or the form with its errors. Any other
+attribute names a field: it is sent as `?field=value&hide=field`, so the
+visitor sees it neither as a control nor as a choice. A Turnstile widget in
+the fragment loads Turnstile's script once and renders. `<cf-status>` is a
+`<cf-form>` whose action defaults to `status` and whose `token` comes from
+the page URL. While loading, and if the fetch fails, the element holds a
+plain link to the full `/ui` page.
+
+Events on the element: `cf:loaded`, `cf:submitted` (`detail.status`),
+`cf:error`. A redirect answer (a signed link) navigates the page.
+
+The site's origin must be in the venture's `cors_origins`: fragments are
+fetched cross-origin, and that is the same allowlist the API already needs.
+`tools/cfjs/test.mjs` runs the embed in jsdom against `wrangler dev` in CI.
 
 ## Cost
 

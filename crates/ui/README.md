@@ -16,3 +16,10 @@ Styling is a CSS contract, not an API: `cf-*` classes and `data-cf-*`
 attributes, no shadow DOM, and `cf.css` inside `@layer cf` written against
 `--cf-*` custom properties, so any venture stylesheet wins without
 `!important`. The contract is documented in `docs/UI.md`.
+
+On a static site, `cf.js` (under 4 KB) embeds those fragments:
+
+```html
+<script type="module" src="https://api.example.com/ui/cf.js"></script>
+<cf-form module="waitlist" action="join" product="kontinuum"></cf-form>
+```

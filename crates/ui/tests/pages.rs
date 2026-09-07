@@ -129,6 +129,37 @@ async fn fragment_prefills_and_hides_from_the_query() {
     assert!(html.starts_with(r#"<form class="cf-form""#));
     assert!(html.contains(r#"<option value="kontinuum" selected>Kontinuum</option>"#));
     assert!(html.contains(r#"<input type="hidden" name="ref" value="ABCD1234">"#));
+
+    // `hide=` (what the embed sends for attribute-supplied fields) turns
+    // the pre-filled control into a hidden input, on GET and on the
+    // re-render after a failed POST.
+    let hidden = send(
+        &kit,
+        Method::GET,
+        "/ui/waitlist/join?fragment=1&product=kontinuum&hide=product",
+        None,
+    )
+    .await;
+    assert!(!hidden.body.contains("<select"), "{}", hidden.body);
+    assert!(
+        hidden
+            .body
+            .contains(r#"<input type="hidden" name="product" value="kontinuum">"#)
+    );
+    let failed = send(
+        &kit,
+        Method::POST,
+        "/ui/waitlist/join?fragment=1&hide=product",
+        Some("email=bad&product=kontinuum&cf-turnstile-response=tok"),
+    )
+    .await;
+    assert_eq!(failed.status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(!failed.body.contains("<select"));
+    assert!(
+        failed
+            .body
+            .contains(r#"<input type="hidden" name="product" value="kontinuum">"#)
+    );
 }
 
 #[pollster::test]

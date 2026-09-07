@@ -22,3 +22,20 @@ See [CONTRIBUTING.md](../../CONTRIBUTING.md) for the full walkthrough and
 production path this example mirrors. The guide-built module
 [`factory0-module-hello`](../module-hello/) is its documentation-focused
 sibling.
+
+## The UI
+
+The example mounts `factory0_ui::Ui`, so every module's forms are served
+from the Worker (`docs/UI.md`):
+
+```
+http://127.0.0.1:8787/ui/waitlist/join
+http://127.0.0.1:8787/ui/email-signup/subscribe
+```
+
+and a static site on an allowed origin embeds them with one script:
+
+```html
+<script type="module" src="http://127.0.0.1:8787/ui/cf.js"></script>
+<cf-form module="waitlist" action="join" product="kontinuum"></cf-form>
+```

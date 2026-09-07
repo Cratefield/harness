@@ -127,11 +127,45 @@ fn not_found(scope: &Scope, what: &str) -> Response {
         .into_response()
 }
 
-fn split_fragment(mut query: Values) -> (Values, bool) {
+/// Query switches the renderer consumes rather than pre-fills:
+/// `fragment=1` and `hide=<field,field>` (a page that supplies a value
+/// and does not want the visitor to change it, which is what the embed
+/// sends for every attribute-supplied field).
+struct Switches {
+    fragment: bool,
+    hide: Vec<String>,
+}
+
+fn split_switches(mut query: Values) -> (Values, Switches) {
     let fragment = query
         .remove("fragment")
         .is_some_and(|v| matches!(v.as_str(), "1" | "true" | "yes"));
-    (query, fragment)
+    let hide = query
+        .remove("hide")
+        .map(|list| {
+            list.split(',')
+                .map(str::trim)
+                .filter(|f| !f.is_empty())
+                .map(str::to_owned)
+                .collect()
+        })
+        .unwrap_or_default();
+    (query, Switches { fragment, hide })
+}
+
+fn split_fragment(query: Values) -> (Values, bool) {
+    let (values, switches) = split_switches(query);
+    (values, switches.fragment)
+}
+
+/// Fields the page asked to hide render as hidden inputs (with the
+/// supplied value) instead of controls.
+fn apply_hide(fields: &mut [Field], hide: &[String]) {
+    for field in fields.iter_mut() {
+        if hide.iter().any(|h| h == &field.name) {
+            field.widget = Widget::Hidden;
+        }
+    }
 }
 
 /// `GET /ui/<module>/<action>`: the form for a `POST` action (query
@@ -148,13 +182,15 @@ async fn page_get(
     let Some(spec) = find_action(&state, &module, &action) else {
         return not_found(&scope, &format!("{module}/{action}"));
     };
-    let (values, fragment) = split_fragment(query);
+    let (values, switches) = split_switches(query);
+    let fragment = switches.fragment;
     if spec.method == Method::POST {
-        let fields = spec
+        let mut fields = spec
             .input
             .as_ref()
             .map(|s| fields_of(s.as_value()))
             .unwrap_or_default();
+        apply_hide(&mut fields, &switches.hide);
         let body = render_form(&state, spec, &module, &fields, &values, &[]);
         return respond(&state, fragment, body);
     }
@@ -182,12 +218,14 @@ async fn page_post(
             .instance(&scope.request_id)
             .into_response();
     }
-    let (_, fragment) = split_fragment(query);
-    let fields = spec
+    let (_, switches) = split_switches(query);
+    let fragment = switches.fragment;
+    let mut fields = spec
         .input
         .as_ref()
         .map(|s| fields_of(s.as_value()))
         .unwrap_or_default();
+    apply_hide(&mut fields, &switches.hide);
     let mut values: Values = form.into_iter().collect();
     // Turnstile posts its token under its own name; the module wants it
     // as `captchaToken`.
