@@ -28,7 +28,7 @@ sibling.
 The example mounts `factory0_ui::Ui`, so every module's forms are served
 from the Worker (`docs/UI.md`):
 
-```
+```text
 http://127.0.0.1:8787/ui/waitlist/join
 http://127.0.0.1:8787/ui/email-signup/subscribe
 ```
