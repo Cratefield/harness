@@ -1,0 +1,41 @@
+# Cratefield control plane — a harness venture that provisions harness
+# ventures (ADR: docs/ARCHITECTURE.md). It consumes the public
+# `Cratefield/harness` crates as git dependencies pinned to a revision;
+# nothing is on crates.io yet.
+[workspace]
+resolver = "2"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.98"
+license = "MIT"
+repository = "https://github.com/Cratefield/control-plane"
+
+[workspace.dependencies]
+# The harness, pinned. Bump the rev deliberately; the control plane ships
+# on the same runtime it provisions, so a harness change is a real change.
+factory0-core = { git = "https://github.com/Cratefield/harness", rev = "c2fd9ccc57909c4d82bc80a259148380fb520726" }
+factory0-runtime-cloudflare = { git = "https://github.com/Cratefield/harness", rev = "c2fd9ccc57909c4d82bc80a259148380fb520726" }
+factory0-ui = { git = "https://github.com/Cratefield/harness", rev = "c2fd9ccc57909c4d82bc80a259148380fb520726" }
+factory0-secrets = { git = "https://github.com/Cratefield/harness", rev = "c2fd9ccc57909c4d82bc80a259148380fb520726" }
+factory0-kms = { git = "https://github.com/Cratefield/harness", rev = "c2fd9ccc57909c4d82bc80a259148380fb520726" }
+
+axum = { version = "0.8.9", default-features = false, features = ["json", "query"] }
+http = "1.5.0"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+sea-query = { version = "0.32.7", default-features = false, features = ["backend-sqlite", "thread-safe"] }
+worker = { version = "0.8.5", default-features = false, features = ["d1"] }
+tracing = "0.1.44"
+time = { version = "0.3.45", default-features = false, features = ["formatting", "parsing"] }
+getrandom = { version = "0.4.3", default-features = false, features = ["wasm_js"] }
+
+[workspace.lints.clippy]
+all = { level = "deny", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+
+[profile.release]
+opt-level = "s"
+lto = true
