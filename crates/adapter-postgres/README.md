@@ -1,3 +1,15 @@
+<p align="center">
+  <a href="https://github.com/Cratefield/harness">
+    <img src="https://raw.githubusercontent.com/Cratefield/harness/main/assets/readme-banner.png" alt="Cratefield Harness. The open-source core. Modules are crates, compiled into one stateless Worker with its own database." width="100%">
+  </a>
+</p>
+
+<p align="center">
+  <a href="https://crates.io/crates/cratefield-adapter-postgres"><img src="https://img.shields.io/crates/v/cratefield-adapter-postgres.svg?style=flat-square&labelColor=0A0A0B&color=4C6FFF" alt="cratefield-adapter-postgres on crates.io"></a>
+  <a href="https://docs.rs/cratefield-adapter-postgres"><img src="https://img.shields.io/docsrs/cratefield-adapter-postgres?style=flat-square&labelColor=0A0A0B&color=EDEBE6" alt="cratefield-adapter-postgres documentation"></a>
+  <a href="https://github.com/Cratefield/harness/blob/main/LICENSE"><img src="https://img.shields.io/badge/LICENSE-MIT-4C6FFF?style=flat-square&labelColor=0A0A0B" alt="MIT"></a>
+</p>
+
 # cratefield-adapter-postgres
 
 The [`Database`] port over `sqlx` Postgres 16 for the [Factory Zero
