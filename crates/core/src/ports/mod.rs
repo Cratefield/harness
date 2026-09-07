@@ -18,6 +18,7 @@ mod mailer;
 mod payments;
 mod push;
 mod rate_limiter;
+mod realtime;
 pub(crate) mod signer;
 
 pub use blob::{Blob, BlobError, BlobObject, ScopedBlob};
@@ -37,6 +38,7 @@ pub use payments::{
 };
 pub use push::{Notification, Priority, Push, PushError, PushOutcome};
 pub use rate_limiter::{Decision, RateLimitError, RateLimiter};
+pub use realtime::{Member, Realtime, RealtimeError, RoomContext, RoomHandler};
 pub use signer::{Kid, Payload, SignatureError, Signer};
 
 use crate::config::Config;
@@ -57,6 +59,7 @@ pub enum Port {
     Blob,
     Push,
     Payments,
+    Realtime,
     HttpClient,
     Clock,
     IdGen,
@@ -74,6 +77,7 @@ impl Port {
         Port::Blob,
         Port::Push,
         Port::Payments,
+        Port::Realtime,
         Port::HttpClient,
         Port::Clock,
         Port::IdGen,
@@ -91,6 +95,7 @@ impl Port {
             Port::Blob => "Blob",
             Port::Push => "Push",
             Port::Payments => "Payments",
+            Port::Realtime => "Realtime",
             Port::HttpClient => "HttpClient",
             Port::Clock => "Clock",
             Port::IdGen => "IdGen",
@@ -115,6 +120,7 @@ pub struct Ports {
     pub blob: Option<Arc<dyn Blob>>,
     pub push: Option<Arc<dyn Push>>,
     pub payments: Option<Arc<dyn Payments>>,
+    pub realtime: Option<Arc<dyn Realtime>>,
     pub http: Option<Arc<dyn HttpClient>>,
     pub clock: Option<Arc<dyn Clock>>,
     pub id_gen: Option<Arc<dyn IdGen>>,
@@ -143,6 +149,7 @@ impl Ports {
             blob: None,
             push: None,
             payments: None,
+            realtime: None,
             http: None,
             clock: None,
             id_gen: None,
@@ -180,6 +187,9 @@ impl Ports {
         }
         if self.payments.is_some() {
             provided.push(Port::Payments);
+        }
+        if self.realtime.is_some() {
+            provided.push(Port::Realtime);
         }
         if self.http.is_some() {
             provided.push(Port::HttpClient);
@@ -240,6 +250,9 @@ impl Ports {
         }
         if allows(&declared, Port::Payments) {
             view.payments.clone_from(&self.payments);
+        }
+        if allows(&declared, Port::Realtime) {
+            view.realtime.clone_from(&self.realtime);
         }
         if allows(&declared, Port::HttpClient) {
             view.http.clone_from(&self.http);

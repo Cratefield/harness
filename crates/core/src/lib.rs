@@ -56,11 +56,11 @@ pub use ports::{
     Blob, BlobError, BlobObject, Captcha, CaptchaError, Charge, CheckoutRequest, CheckoutSession,
     Clock, ConnectAccountLink, ConnectAccountLinkRequest, Database, DbError, Decision, Defer,
     DispatchError, Dispatcher, HttpClient, HttpError, IdGen, KeyValue, Kid, KvError, LineItem,
-    MailError, Mailer, Message, Money, NoopDefer, Notification, Payload, Payments, PaymentsError,
-    Port, Ports, Priority, Push, PushError, PushOutcome, RateLimitError, RateLimiter, Refund,
-    RefundRequest, Row, Rows, ScopedBlob, SendOutcome, SignatureError, Signer, Statement,
-    SubscriptionCheckoutRequest, SystemClock, TransferCharge, TryFromValue, UlidIdGen, Verdict,
-    WebhookEvent, timeout,
+    MailError, Mailer, Member, Message, Money, NoopDefer, Notification, Payload, Payments,
+    PaymentsError, Port, Ports, Priority, Push, PushError, PushOutcome, RateLimitError,
+    RateLimiter, Realtime, RealtimeError, Refund, RefundRequest, RoomContext, RoomHandler, Row,
+    Rows, ScopedBlob, SendOutcome, SignatureError, Signer, Statement, SubscriptionCheckoutRequest,
+    SystemClock, TransferCharge, TryFromValue, UlidIdGen, Verdict, WebhookEvent, timeout,
 };
 pub use problem::Problem;
 pub use problems::{ProblemDef, SLUGS, registry as problem_registry};

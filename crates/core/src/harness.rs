@@ -221,6 +221,7 @@ impl Harness {
             blob: _,
             push: _,
             payments: _,
+            realtime: _,
             http: _,
             clock,
             id_gen,

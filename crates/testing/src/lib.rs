@@ -37,8 +37,8 @@ pub use conformance::{
 pub use dialect::Dialect;
 pub use fakes::{
     EmptyDatabase, FakeCaptcha, FakeDefer, FakeDispatcher, FakeHttpClient, FakeMailer,
-    FakePayments, FakePush, FakeRateLimiter, FixedClock, MailerMode, MemoryBlob, MemoryKeyValue,
-    PaymentsCall, PaymentsMode, PushMode,
+    FakePayments, FakePush, FakeRateLimiter, FakeRealtime, FixedClock, MailerMode, MemoryBlob,
+    MemoryKeyValue, PaymentsCall, PaymentsMode, PushMode,
 };
 pub use harness::TestHarness;
 pub use request::{TestResponse, request};
