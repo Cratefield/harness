@@ -1,0 +1,27 @@
+[package]
+name = "factory0-kms"
+description = "Factory Zero harness KMS port: wrap and unwrap data keys, with a local-file provider for development"
+readme = "README.md"
+keywords = ["factory0", "harness", "kms", "encryption", "secrets"]
+categories = ["cryptography"]
+include = ["src/**/*", "tests/**/*", "README.md"]
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+async-trait = { workspace = true }
+thiserror = { workspace = true }
+zeroize = { workspace = true }
+getrandom = { workspace = true }
+base64 = { workspace = true }
+# ADR 0102: XChaCha20-Poly1305, pure Rust, wasm-safe, no C toolchain.
+chacha20poly1305 = { workspace = true }
+
+[dev-dependencies]
+pollster = { workspace = true }
