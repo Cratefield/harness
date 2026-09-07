@@ -22,11 +22,24 @@ impl HttpClient for FetchClient {
             let _ = headers.set(name.as_str(), value.to_str().unwrap_or_default());
         }
         init.headers = headers;
-        // The port's adapters send JSON bodies; non-UTF-8 is a hard error
-        // rather than a lossy corruption.
-        let body_text = String::from_utf8(body.to_vec())
-            .map_err(|err| HttpError::Transport(err.to_string()))?;
-        init.with_body(Some(worker::wasm_bindgen::JsValue::from_str(&body_text)));
+
+        // A body is attached only when there is one. The Fetch spec refuses
+        // to construct a Request whose method is GET or HEAD and whose body
+        // is non-null, and an empty JS string is not null: setting it
+        // unconditionally makes every GET through this port throw a
+        // TypeError before it leaves the isolate.
+        //
+        // Nothing caught it because every adapter shipped so far POSTs
+        // (Resend, Turnstile). The first GET consumer is OpenID Connect
+        // discovery in Factory-Zero/auth, which fetches a configuration
+        // document and a JWKS.
+        if !body.is_empty() {
+            // The port's adapters send JSON bodies; non-UTF-8 is a hard
+            // error rather than a lossy corruption.
+            let body_text = String::from_utf8(body.to_vec())
+                .map_err(|err| HttpError::Transport(err.to_string()))?;
+            init.with_body(Some(worker::wasm_bindgen::JsValue::from_str(&body_text)));
+        }
         let worker_request = WorkerRequest::new_with_init(&parts.uri.to_string(), &init)
             .map_err(|err| HttpError::Transport(err.to_string()))?;
 
