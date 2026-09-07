@@ -20,6 +20,7 @@ cratefield-runtime-cloudflare = { workspace = true }
 cratefield-ui = { workspace = true }
 cratefield-secrets = { workspace = true }
 cratefield-kms = { workspace = true }
+cratefield-console = { path = "../console" }
 axum = { workspace = true }
 http = { workspace = true }
 serde = { workspace = true }

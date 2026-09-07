@@ -31,8 +31,10 @@ fn instance() -> &'static (Harness, Cloudflare) {
                     .public_url("https://app.cratefield.com")
                     .cors_origins(["https://app.cratefield.com"]),
             )
-            // Modules land with the epic's children: accounts (#4), the
-            // catalog (#5), connections (#6), provisioning (#7).
+            // The console (#3): session guard, login skeleton, operator
+            // allowlist. More modules land with the wizard (#8) and dashboard
+            // (#11).
+            .module(cratefield_console::Console)
             .runtime(Cloudflare::new().db("DB"))
             .build()
             .expect("the control-plane harness is valid");
