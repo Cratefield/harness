@@ -652,3 +652,73 @@ mod on_postgres {
         );
     }
 }
+
+/// A venture with a sidecar has tables in its database that `fz` cannot
+/// see (issue #66). Exporting them silently would hand someone an
+/// artifact that looks complete, which is the one thing a data move must
+/// never do.
+#[test]
+fn export_refuses_a_venture_with_sidecars_until_the_omission_is_acknowledged() {
+    let scratch = Scratch::new("sidecar_export");
+    let db_path = seeded_sqlite(&scratch, "venture");
+    let out = scratch.path("data.jsonl");
+
+    let mut argv = args(&[
+        "--sidecars",
+        r#"{"acme-pricing":"ACME"}"#,
+        "data",
+        "export",
+        "--db",
+    ]);
+    argv.push(db_path.to_string_lossy().into_owned());
+    argv.push("--out".to_owned());
+    argv.push(out.to_string_lossy().into_owned());
+    assert_eq!(
+        run(harness_v1, argv.clone()),
+        ExitCode::FAILURE,
+        "an export that cannot see a sidecar's tables must not look complete"
+    );
+    assert!(!out.exists(), "nothing is written when the export refuses");
+
+    // Acknowledged: it runs, and the artifact records what it left out.
+    argv.push("--without-sidecar-tables".to_owned());
+    assert_eq!(run(harness_v1, argv), ExitCode::SUCCESS);
+    let manifest: serde_json::Value = serde_json::from_str(
+        std::fs::read_to_string(&out)
+            .expect("export written")
+            .lines()
+            .next()
+            .expect("manifest line"),
+    )
+    .expect("manifest is JSON");
+    assert_eq!(
+        manifest["omitted_sidecars"],
+        serde_json::json!(["acme-pricing"]),
+        "the export file is the audit record: it has to say what did not move"
+    );
+}
+
+/// A mount naming a compiled-in module is a misconfiguration the runtime
+/// papers over (it ignores the mount), so the doctor says it plainly.
+#[test]
+fn doctor_rejects_a_sidecar_mount_that_shadows_a_compiled_in_module() {
+    let scratch = Scratch::new("sidecar_doctor");
+    let migrations = scratch.path("migrations");
+    let collect = args(&["migrations", "collect", "--out"])
+        .into_iter()
+        .chain([migrations.to_string_lossy().into_owned()])
+        .collect::<Vec<_>>();
+    assert_eq!(run(harness_v1, collect), ExitCode::SUCCESS);
+
+    let doctor = |table: &str| {
+        let mut argv = args(&["--sidecars", table, "doctor", "--out"]);
+        argv.push(migrations.to_string_lossy().into_owned());
+        run(harness_v1, argv)
+    };
+    // A sidecar the venture does not compile in: fine, warned about.
+    assert_eq!(doctor(r#"{"acme-pricing":"ACME"}"#), ExitCode::SUCCESS);
+    // One that shadows a compiled-in module: a failure, not a warning.
+    assert_eq!(doctor(r#"{"email-signup":"ES"}"#), ExitCode::FAILURE);
+    // A malformed table is a failure too, not a silent empty mount set.
+    assert_eq!(doctor("not json"), ExitCode::FAILURE);
+}

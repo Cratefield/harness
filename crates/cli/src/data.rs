@@ -43,6 +43,12 @@ struct TableManifest {
 #[derive(Debug, Serialize, Deserialize)]
 struct Manifest {
     tables: Vec<TableManifest>,
+    /// Sidecar modules whose tables this export deliberately omits
+    /// (issue #66). Present only when `--without-sidecar-tables` was
+    /// given: the artifact is the audit record of what moved, so it has
+    /// to record what did not.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    omitted_sidecars: Vec<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -144,7 +150,29 @@ pub fn export(
     db_path: &Path,
     out_path: &Path,
     plan: bool,
+    without_sidecar_tables: bool,
+    sidecars: Option<&str>,
 ) -> Result<(), String> {
+    // A sidecar's tables live in the same database and are invisible
+    // here (issue #66). Exporting them silently would hand someone an
+    // artifact that looks complete and is not, which is the one thing a
+    // data move must never do.
+    let omitted_sidecars = match crate::sidecars::parse(sidecars) {
+        Ok(mounts) if !mounts.is_empty() => {
+            if !without_sidecar_tables {
+                return Err(format!(
+                    "this venture mounts {} as sidecars. Their tables are in this database but \
+                     `fz` cannot see them: they are declared in another repository. Export those \
+                     tables from there, then re-run with --without-sidecar-tables to record the \
+                     omission in the manifest. See docs/MOUNTING.md",
+                    crate::sidecars::listed(&mounts)
+                ));
+            }
+            mounts.iter().map(|m| m.name.clone()).collect()
+        }
+        Ok(_) => Vec::new(),
+        Err(errors) => return Err(errors.join("; ")),
+    };
     let tables = harness_tables(harness);
     if tables.is_empty() {
         return Err("the harness's modules declare no tables; nothing to export".to_owned());
@@ -155,7 +183,10 @@ pub fn export(
     let db = SqliteDatabase::open(&db_path.to_string_lossy())
         .map_err(|err| format!("cannot open {}: {err}", db_path.display()))?;
 
-    let mut manifest = Manifest { tables: Vec::new() };
+    let mut manifest = Manifest {
+        tables: Vec::new(),
+        omitted_sidecars,
+    };
     let mut body = String::new();
     for table in &tables {
         let rows =

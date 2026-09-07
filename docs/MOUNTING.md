@@ -56,10 +56,16 @@ Each of these is otherwise discovered the hard way.
 - **Use a token another module minted.** Separate signing keys, by
   design. Anything relying on the host's `Signer` is out.
 - **Be seen by the schema tooling.** `fz migrations collect`, the
-  table-collision check and `fz data export` all walk
-  `harness.modules()`, which cannot see a sidecar. Its migrations,
-  collisions and rows are its own problem until issue #66 lands. This is
-  the sharpest edge on the list.
+  runtime table-collision check and `fz data export` all walk
+  `harness.modules()`, which cannot see a sidecar. Its migrations and
+  its rows are its own repository's problem. The tools no longer pretend
+  otherwise: pass the mount table (`--sidecars '<json>'`, or
+  `HARNESS_SIDECARS` in the environment) and `fz doctor` warns that it
+  cannot check those modules, while `fz data export` **refuses** rather
+  than write an artifact that looks complete. Acknowledge the gap with
+  `--without-sidecar-tables` and the manifest records which modules were
+  left out. The cross-boundary collision check still needs the sidecar to
+  declare its tables (#61).
 
 What a sidecar **can** do, and is easy to assume it cannot: serve its UI.
 The host fetches each mounted sidecar's `/__surface` and merges the

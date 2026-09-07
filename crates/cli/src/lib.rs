@@ -27,6 +27,7 @@ pub mod data;
 mod doctor;
 pub mod lint;
 mod lock;
+pub mod sidecars;
 
 use clap::{Parser, Subcommand};
 use factory0_core::Harness;
@@ -36,6 +37,12 @@ use std::process::ExitCode;
 #[derive(Parser)]
 #[command(name = "fz", about = "Factory Zero venture CLI")]
 struct Cli {
+    /// The sidecar mount table, as the runtime reads it from config:
+    /// `{"module-name":"BINDING"}`. Defaults to the `HARNESS_SIDECARS`
+    /// environment variable. Commands that walk the compiled-in modules
+    /// use it to say what they cannot see (issue #66).
+    #[arg(long, global = true, value_name = "JSON")]
+    sidecars: Option<String>,
     #[command(subcommand)]
     command: Command,
 }
@@ -77,6 +84,12 @@ enum DataCommand {
         /// The SQLite database file to read.
         #[arg(long, value_name = "PATH")]
         db: PathBuf,
+        /// Export without the tables of any sidecar-mounted module,
+        /// recording the omission in the manifest. Without this, an
+        /// export refuses to run when `HARNESS_SIDECARS` is set, rather
+        /// than producing an artifact that looks complete (issue #66).
+        #[arg(long)]
+        without_sidecar_tables: bool,
         /// The JSONL file to write (manifest line first).
         #[arg(long, value_name = "FILE")]
         out: PathBuf,
@@ -140,6 +153,7 @@ pub fn run(build: impl Fn() -> Harness, args: impl IntoIterator<Item = String>) 
     full_argv.extend(args);
     let cli = Cli::parse_from(full_argv);
     let harness = build();
+    let sidecars = crate::sidecars::from_cli_or_env(cli.sidecars.as_deref());
     let result = match cli.command {
         Command::Migrations {
             command: MigrationsCommand::Collect { dialect, out },
@@ -150,14 +164,32 @@ pub fn run(build: impl Fn() -> Harness, args: impl IntoIterator<Item = String>) 
         Command::Doctor {
             out,
             allow_no_captcha,
-        } => doctor::doctor(&harness, &out, allow_no_captcha.as_deref()),
+        } => doctor::doctor(
+            &harness,
+            &out,
+            allow_no_captcha.as_deref(),
+            sidecars.as_deref(),
+        ),
         Command::Modules => {
             print_modules(&harness);
             Ok(())
         }
         Command::Data {
-            command: DataCommand::Export { db, out, plan },
-        } => data::export(&harness, &db, &out, plan),
+            command:
+                DataCommand::Export {
+                    db,
+                    out,
+                    plan,
+                    without_sidecar_tables,
+                },
+        } => data::export(
+            &harness,
+            &db,
+            &out,
+            plan,
+            without_sidecar_tables,
+            sidecars.as_deref(),
+        ),
         Command::Data {
             command:
                 DataCommand::Import {
