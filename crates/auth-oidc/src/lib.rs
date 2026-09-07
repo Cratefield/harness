@@ -17,8 +17,13 @@
 //! the provider says is at the other end, and hand that over.
 //!
 //! Both routes are public, and both are guarded by the same thing: a signed,
-//! origin-locked, single-flight cookie that this service issued minutes
-//! earlier. Nothing about a callback is trusted because it arrived.
+//! origin-locked cookie that this service issued minutes earlier. It is not
+//! server-side single-use — spending it is not recorded anywhere — so what
+//! it gives is a browser binding and a ten-minute window, not a one-shot
+//! token. That is enough because everything a holder could replay it for
+//! needs the rest of the flow too: the PKCE verifier it carries only
+//! matches the challenge Google already holds, and the nonce only matches
+//! one ID token.
 
 #![forbid(unsafe_code)]
 

@@ -5,9 +5,10 @@
 //! Apple, Meta and every method that arrives with an email — and this module
 //! only carries out what they return.
 
-use factory0_auth_core::linking::{IncomingIdentity, Outcome, link, resolve};
+use factory0_auth_core::linking::{IncomingIdentity, Outcome, create_user, link, resolve};
 use factory0_auth_core::{
-    IssuedSession, Login, UserRow, insert_user, issue as issue_session, set_cookie,
+    IssuedSession, Login, SessionError, delete_user, identity_by_provider_subject,
+    issue as issue_session, set_cookie, touch_identity_login,
 };
 use factory0_core::{Clock, Database, IdGen, ModuleContext, Problem, Scope};
 use serde_json::json;
@@ -85,7 +86,22 @@ pub(crate) async fn complete(
         })?;
 
     let user_id = match outcome {
-        Outcome::Known { user_id } => user_id,
+        Outcome::Known { user_id } => {
+            // The column exists so the account page can say when a provider
+            // was last used; nothing else writes it.
+            match identity_by_provider_subject(db, provider.slug, &identity.subject).await {
+                Ok(Some(row)) => {
+                    if let Err(err) =
+                        touch_identity_login(db, &row.id, &crate::iso(clock.now())).await
+                    {
+                        tracing::warn!(error = %err, "could not record the last login");
+                    }
+                }
+                Ok(None) => {}
+                Err(err) => tracing::warn!(error = %err, "could not read the identity"),
+            }
+            user_id
+        }
         Outcome::AutoLinked {
             user_id,
             notify_email,
@@ -110,7 +126,7 @@ pub(crate) async fn complete(
                 })?;
             user_id
         }
-        Outcome::NewUser => create_user(ports, scope, identity, &incoming).await?,
+        Outcome::NewUser => new_user(ports, scope, &incoming).await?,
         // Both of these need a person to decide something, and the page
         // that would let them does not exist yet (#22 owns the confirm
         // step). Say so plainly rather than guessing an account.
@@ -142,9 +158,17 @@ pub(crate) async fn complete(
         },
     )
     .await
-    .map_err(|err| {
-        tracing::error!(error = %err, "could not issue a session");
-        Problem::internal().instance(&scope.request_id)
+    .map_err(|err| match err {
+        // The account exists but is switched off. Same answer as any other
+        // refused callback: it is not a caller's business which.
+        SessionError::NotActive => {
+            tracing::warn!(user = %user_id, "a disabled account signed in through a provider");
+            Problem::new(&crate::CALLBACK_REFUSED).instance(&scope.request_id)
+        }
+        err => {
+            tracing::error!(error = %err, "could not issue a session");
+            Problem::internal().instance(&scope.request_id)
+        }
     })?;
 
     ctx.events.emit_in(
@@ -161,42 +185,42 @@ pub(crate) async fn complete(
 }
 
 /// Creates the account a first sign-in earns, and links the identity to it.
-async fn create_user(
+///
+/// Not atomic, because the `Database` port has no transaction that spans
+/// two statements. Two first logins for the same provider subject can race,
+/// and the loser's `link` hits the unique constraint *after* its user row
+/// exists. That row would carry an email, no identity, and no way to reach
+/// it — and a later verified-email match from another provider would link a
+/// stranger to it. So the loser cleans up after itself and takes the
+/// winner's account.
+async fn new_user(
     ports: &Ports<'_>,
     scope: &Scope,
-    identity: &Identity,
     incoming: &IncomingIdentity<'_>,
 ) -> Result<String, Problem> {
     let Ports { db, clock, id_gen } = *ports;
-    let now = crate::iso(clock.now());
-    let user_id = id_gen.ulid();
-    insert_user(
-        db,
-        &UserRow {
-            id: user_id.clone(),
-            display_name: identity.name.clone(),
-            primary_email: identity.email.clone(),
-            // Only the provider's word, carried forward honestly: an
-            // unverified address stored as verified would let the next
-            // provider auto-link a stranger's account to this one.
-            primary_email_verified: identity.email_verified,
-            status: factory0_auth_core::STATUS_ACTIVE.to_owned(),
-            created_at: now.clone(),
-            updated_at: now,
-        },
-    )
-    .await
-    .map_err(|err| {
-        tracing::error!(error = %err, "could not create the user");
-        Problem::internal().instance(&scope.request_id)
-    })?;
-    link(db, clock, id_gen, &user_id, incoming)
+    // auth-core's own, rather than a second copy of the same insert: it is
+    // where the rule that an absent address is never "verified" lives.
+    let user = create_user(db, clock, id_gen, incoming)
         .await
         .map_err(|err| {
-            tracing::error!(error = %err, "could not link the identity");
+            tracing::error!(error = %err, "could not create the user");
             Problem::internal().instance(&scope.request_id)
         })?;
-    Ok(user_id)
+
+    if let Err(err) = link(db, clock, id_gen, &user.id, incoming).await {
+        tracing::warn!(error = %err, "linking a new user failed; undoing the account");
+        if let Err(err) = delete_user(db, &user.id).await {
+            tracing::error!(error = %err, "could not undo the orphaned account");
+        }
+        // Somebody else got there first. Ask again: by now the identity
+        // exists and the answer is their account.
+        return match resolve(db, incoming, None).await {
+            Ok(Outcome::Known { user_id }) => Ok(user_id),
+            _ => Err(Problem::internal().instance(&scope.request_id)),
+        };
+    }
+    Ok(user.id)
 }
 
 /// The `Set-Cookie` value for an issued session.

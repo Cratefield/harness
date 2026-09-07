@@ -100,6 +100,9 @@ struct Cached {
 #[derive(Default)]
 pub(crate) struct Cache {
     entries: RwLock<Vec<(&'static str, Cached)>>,
+    /// When discovery last failed, per provider. While a provider is down,
+    /// every request would otherwise re-run two upstream fetches.
+    failures: RwLock<Vec<(&'static str, i64)>>,
 }
 
 impl Cache {
@@ -159,6 +162,12 @@ impl Cache {
         if let Some(metadata) = self.read(provider.slug, now, force) {
             return Ok(metadata);
         }
+        if self.failed_recently(provider.slug, now) {
+            return Err(DiscoveryError::Failed {
+                provider: provider.slug,
+                detail: "discovery failed moments ago; not retrying yet".to_owned(),
+            });
+        }
 
         let issuer =
             IssuerUrl::new(provider.issuer.to_owned()).map_err(|err| DiscoveryError::Failed {
@@ -168,13 +177,37 @@ impl Cache {
         let client = PortHttpClient::new(http);
         let metadata = CoreProviderMetadata::discover_async(issuer, &client)
             .await
-            .map_err(|err| DiscoveryError::Failed {
-                provider: provider.slug,
-                detail: err.to_string(),
+            .map_err(|err| {
+                self.remember_failure(provider.slug, now);
+                DiscoveryError::Failed {
+                    provider: provider.slug,
+                    detail: err.to_string(),
+                }
             })?;
 
         self.write(provider.slug, &metadata, now, force);
         Ok(metadata)
+    }
+
+    fn failed_recently(&self, slug: &str, now: i64) -> bool {
+        let Ok(failures) = self.failures.read() else {
+            return false;
+        };
+        failures
+            .iter()
+            .find(|(key, _)| *key == slug)
+            .is_some_and(|(_, at)| now - at < FORCE_COOLDOWN_SECS)
+    }
+
+    fn remember_failure(&self, slug: &'static str, now: i64) {
+        let Ok(mut failures) = self.failures.write() else {
+            return;
+        };
+        if let Some(slot) = failures.iter_mut().find(|(key, _)| *key == slug) {
+            slot.1 = now;
+        } else {
+            failures.push((slug, now));
+        }
     }
 
     /// Whether the cached JWKS holds a given key id. Used to decide whether

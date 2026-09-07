@@ -138,6 +138,42 @@ fn a_new_account_records_what_the_provider_vouched_for() {
 }
 
 #[test]
+fn a_disabled_account_cannot_sign_in_through_a_provider() {
+    pollster::block_on(async {
+        let kit = kit();
+        // First login creates the account.
+        let started = start(&kit, "").await;
+        assert_eq!(
+            callback(&kit, &started, "auth-code", &started.state)
+                .await
+                .status,
+            StatusCode::FOUND
+        );
+
+        // An administrator switches it off. `users.status` is the service's
+        // one kill switch, and a login method that ignored it would make
+        // the switch useless.
+        pollster::block_on(kit.db.execute(&factory0_core::Statement::new(
+            "UPDATE users SET status = 'disabled'",
+        )))
+        .expect("status updates");
+
+        let started = start(&kit, "").await;
+        let response = callback(&kit, &started, "auth-code", &started.state).await;
+        assert_eq!(response.status, StatusCode::BAD_REQUEST);
+        assert!(
+            response.cookie("__Host-fz_session").is_none(),
+            "issued a session"
+        );
+        assert_eq!(
+            count(&kit, "sessions"),
+            1,
+            "a disabled account got a second session"
+        );
+    });
+}
+
+#[test]
 fn a_google_account_with_no_email_still_signs_in() {
     pollster::block_on(async {
         let kit = kit();

@@ -263,6 +263,18 @@ async fn callback(
         return Ok(expired_page());
     };
 
+    // The state is compared first, on the error path too. The provider
+    // returns it with an error response, so checking it first means a
+    // stranger cannot abort somebody's login in progress by sending their
+    // browser to `/callback?error=...`.
+    let Some(returned_state) = query.state.as_deref() else {
+        return Ok(clear_flow(expired_page()));
+    };
+    if returned_state != flow.state {
+        tracing::warn!("the state in a callback did not match the flow cookie");
+        return Ok(refused(&scope).into_response());
+    }
+
     // The provider refused, or the person cancelled. Logged, never rendered.
     if let Some(error) = query.error.as_deref() {
         tracing::info!(provider = provider.slug, provider_error = %error, "sign-in was not granted");
@@ -272,13 +284,9 @@ async fn callback(
         )));
     }
 
-    let (Some(code), Some(returned_state)) = (query.code.as_deref(), query.state.as_deref()) else {
+    let Some(code) = query.code.as_deref() else {
         return Ok(clear_flow(expired_page()));
     };
-    if returned_state != flow.state {
-        tracing::warn!("the state in a callback did not match the flow cookie");
-        return Ok(clear_flow(refused(&scope).into_response()));
-    }
 
     let identity = match exchange(&state, provider, &config, clock, &http, &flow, code).await {
         Ok(identity) => identity,
@@ -410,7 +418,16 @@ async fn exchange(
         let now = || {
             chrono::DateTime::from_timestamp(clock.now().unix_timestamp(), 0).unwrap_or_default()
         };
-        let verifier = client.id_token_verifier().set_time_fn(now);
+        let verifier = client
+            .id_token_verifier()
+            // Pinned here rather than taken from the discovery document.
+            // The client holds a secret, and openidconnect verifies an
+            // HS256 token with it, so a provider document that listed HS256
+            // would quietly turn our own client secret into the signing
+            // key. Google lists only RS256; this makes that a rule rather
+            // than a coincidence.
+            .set_allowed_algs(provider.signing_algorithms.iter().cloned())
+            .set_time_fn(now);
         id_token
             .claims(&verifier, &Nonce::new(flow.nonce.clone()))
             .map_err(|err| {

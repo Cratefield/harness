@@ -204,6 +204,23 @@ pub async fn insert_user(db: &dyn Database, row: &UserRow) -> Result<(), DbError
     Ok(())
 }
 
+/// Deletes a user row. Used for exactly one thing: undoing a user that was
+/// created moments ago when linking its first identity then failed, which
+/// happens when two first logins for the same provider subject race. A row
+/// left behind that way carries an email and no identity, and the next
+/// verified-email match would link a stranger's provider to it.
+///
+/// # Errors
+///
+/// [`DbError::Execute`] when the statement fails.
+pub async fn delete_user(db: &dyn Database, id: &str) -> Result<u64, DbError> {
+    let mut delete = Query::delete();
+    delete
+        .from_table(iden("users"))
+        .and_where(Expr::col(iden("id")).eq(id));
+    db.execute(&Statement::render(&delete)).await
+}
+
 /// Finds a user by id.
 ///
 /// # Errors

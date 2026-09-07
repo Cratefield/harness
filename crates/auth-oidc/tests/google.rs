@@ -219,9 +219,13 @@ fn a_provider_that_refuses_is_reported_without_reflecting_anything() {
         let kit = kit();
         let started = start(&kit, "").await;
         let payload = "%3Cscript%3Ealert(1)%3C%2Fscript%3E";
+        // A real provider returns the state with an error response too.
         let response = get(
             &kit,
-            &format!("{CALLBACK}?error=access_denied&error_description={payload}"),
+            &format!(
+                "{CALLBACK}?error=access_denied&error_description={payload}&state={}",
+                started.state
+            ),
             &[("__Host-fz_oidc", &started.flow_cookie)],
         )
         .await;
@@ -235,6 +239,37 @@ fn a_provider_that_refuses_is_reported_without_reflecting_anything() {
             "reflected the error: {body}"
         );
         assert_eq!(count(&kit, "users"), 0);
+    });
+}
+
+#[test]
+fn a_stranger_cannot_abort_a_login_in_progress() {
+    pollster::block_on(async {
+        let kit = kit();
+        let started = start(&kit, "").await;
+
+        // A cross-site top-level navigation to the callback with an error
+        // and no valid state. If the error were acted on first, this would
+        // clear the flow cookie and the real callback would then fail as
+        // "expired" — a login anyone could break from anywhere.
+        let interference = get(
+            &kit,
+            &format!("{CALLBACK}?error=access_denied&state=not-the-state"),
+            &[("__Host-fz_oidc", &started.flow_cookie)],
+        )
+        .await;
+        assert_eq!(interference.status, StatusCode::BAD_REQUEST);
+        assert!(
+            interference
+                .cookies()
+                .iter()
+                .all(|header| !header.contains("Max-Age=0")),
+            "the flow cookie was cleared by a stranger"
+        );
+
+        // The real callback still completes.
+        let response = callback(&kit, &started, "auth-code", &started.state).await;
+        assert_eq!(response.status, StatusCode::FOUND, "{}", response.text());
     });
 }
 

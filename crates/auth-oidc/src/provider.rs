@@ -5,6 +5,7 @@
 //! compliant provider arrive as data plus whatever quirk they insist on.
 
 use factory0_auth_core::PROVIDER_GOOGLE;
+use openidconnect::core::CoreJwsSigningAlgorithm;
 
 /// One OpenID Connect provider.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -20,6 +21,9 @@ pub struct Provider {
     pub config: &'static str,
     /// Human label, for the pages this module renders.
     pub label: &'static str,
+    /// The signing algorithms an ID token from this provider may use.
+    /// Policy, not discovery: see the comment where it is applied.
+    pub signing_algorithms: &'static [CoreJwsSigningAlgorithm],
 }
 
 pub const GOOGLE: Provider = Provider {
@@ -28,6 +32,7 @@ pub const GOOGLE: Provider = Provider {
     scopes: &["email", "profile"],
     config: "GOOGLE",
     label: "Google",
+    signing_algorithms: &[CoreJwsSigningAlgorithm::RsaSsaPkcs1V15Sha256],
 };
 
 /// Every provider this module serves. Adding one is a line here plus its
@@ -53,6 +58,16 @@ mod tests {
         assert_eq!(by_slug("google"), Some(&GOOGLE));
         assert_eq!(by_slug("Google"), None);
         assert_eq!(by_slug("apple"), None, "apple arrives with #16");
+    }
+
+    #[test]
+    fn only_rs256_is_accepted_from_google() {
+        // A document that listed HS256 would otherwise be believed, and
+        // openidconnect verifies HS256 with the client secret we hold.
+        assert_eq!(
+            GOOGLE.signing_algorithms,
+            [CoreJwsSigningAlgorithm::RsaSsaPkcs1V15Sha256]
+        );
     }
 
     #[test]
