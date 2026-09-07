@@ -244,6 +244,7 @@ examples/
   venture/                 smallest complete venture; CI builds it to wasm
 docs/
   ARCHITECTURE.md
+  MOUNTING.md              compile a module in, or run it as a sidecar
   UI.md                    the UI surface, its markup contract, UiSpec, admin
   ui-llms.txt              the same contract written for a generator
   adr/                     0000 … 0010
