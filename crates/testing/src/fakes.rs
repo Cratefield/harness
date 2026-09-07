@@ -492,9 +492,9 @@ impl cratefield_core::Dispatcher for FakeDispatcher {
     }
 }
 
-/// An in-memory [`Blob`] store for module tests: keeps objects in a map, and
-/// has no presigned URLs (so `signed_url` reports `Unsupported`, as a directory
-/// store does).
+/// An in-memory [`cratefield_core::Blob`] store for module tests: keeps objects
+/// in a map, and has no presigned URLs (so `signed_url` reports `Unsupported`,
+/// as a directory store does).
 #[derive(Clone, Default)]
 pub struct MemoryBlob {
     objects: Arc<std::sync::Mutex<std::collections::HashMap<String, cratefield_core::BlobObject>>>,
