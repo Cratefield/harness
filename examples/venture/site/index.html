@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Venture example · the forms, embedded</title>
+  <!-- The harness base stylesheet (layered), then the site's own rules.
+       Nothing here uses !important: cf.css sits in @layer cf, so any
+       unlayered rule below wins on its own. -->
+  <link rel="stylesheet" href="http://127.0.0.1:8787/ui/cf.css">
+  <link rel="stylesheet" href="site.css">
+  <!-- The embed. `base` is only needed because this page is not served
+       from the API origin; on a real site the script's own origin is used. -->
+  <script type="module" src="http://127.0.0.1:8787/ui/cf.js"></script>
+</head>
+<body>
+  <main class="site">
+    <header class="site-header">
+      <p class="site-kicker">Venture example</p>
+      <h1>Two forms, no form code</h1>
+      <p class="site-lead">
+        Both forms below are rendered by the harness and embedded with one
+        script tag. The left one keeps the default look; the right one is
+        restyled by <code>site.css</code> with custom properties and plain
+        rules only.
+      </p>
+    </header>
+
+    <section class="pair">
+      <article class="card">
+        <h2>Default look</h2>
+        <cf-form module="waitlist" action="join" product="kontinuum"
+                 base="http://127.0.0.1:8787"></cf-form>
+      </article>
+
+      <article class="card card--themed">
+        <h2>Restyled</h2>
+        <cf-form module="email-signup" action="subscribe" source="example-site"
+                 base="http://127.0.0.1:8787"></cf-form>
+      </article>
+    </section>
+
+    <footer class="site-footer">
+      <p>Status of a waitlist place, from a signed link:
+        <cf-status module="waitlist" base="http://127.0.0.1:8787"></cf-status>
+      </p>
+    </footer>
+  </main>
+</body>
+</html>

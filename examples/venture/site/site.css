@@ -1,0 +1,97 @@
+/* The venture's stylesheet. Two ways to restyle the harness forms, both
+   with no important flags and without touching the markup:
+   1. set the --cf-* custom properties (here: on one card only), and
+   2. write plain rules against the cf-* classes (unlayered, so they win
+      over cf.css's @layer cf). */
+
+:root {
+  --site-ink: #16202a;
+  --site-paper: #f7f4ee;
+  --site-brand: #b3412f;
+}
+
+body {
+  margin: 0;
+  font-family: Georgia, "Times New Roman", serif;
+  color: var(--site-ink);
+  background: var(--site-paper);
+}
+
+.site {
+  max-width: 64rem;
+  margin: 0 auto;
+  padding: 3rem 1.5rem;
+}
+
+.site-kicker {
+  margin: 0;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  font-size: 0.75rem;
+  color: var(--site-brand);
+}
+
+.site-lead {
+  max-width: 40rem;
+}
+
+.pair {
+  display: grid;
+  gap: 1.5rem;
+  grid-template-columns: repeat(auto-fit, minmax(18rem, 1fr));
+}
+
+.card {
+  padding: 1.5rem;
+  background: #fff;
+  border: 1px solid #d9d2c5;
+}
+
+/* 1. Properties: the themed card re-tones every harness control inside
+   it. Scoped to the card, so the default card next to it is untouched. */
+.card--themed {
+  --cf-font: inherit;
+  --cf-fg: var(--site-ink);
+  --cf-bg: #fffdf8;
+  --cf-muted: #6b6257;
+  --cf-border: var(--site-ink);
+  --cf-accent: var(--site-brand);
+  --cf-accent-fg: #fff;
+  --cf-radius: 0;
+  --cf-gap: 1.25rem;
+  background: #fffdf8;
+  border-color: var(--site-ink);
+}
+
+/* 2. Rules: a few unlayered rules on the contract classes. */
+.card--themed .cf-label {
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-size: 0.75rem;
+}
+
+.card--themed .cf-input {
+  border-width: 0 0 2px;
+  padding-left: 0;
+  padding-right: 0;
+  background: transparent;
+}
+
+.card--themed .cf-submit {
+  width: 100%;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.card--themed .cf-notice {
+  border-left-width: 8px;
+}
+
+.cf-embed-link {
+  color: var(--site-brand);
+}
+
+.site-footer {
+  margin-top: 3rem;
+  color: #6b6257;
+}

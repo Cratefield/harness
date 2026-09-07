@@ -153,6 +153,19 @@ class CfStatus extends CfForm {
   fallback(text) {
     super.fallback(text.replace("the form", "the status page"));
   }
+
+  /** No token on the page: say so instead of fetching a 400. */
+  load() {
+    if (this.extraParams().length === 0) {
+      const p = document.createElement("p");
+      p.className = "cf-help cf-status-empty";
+      p.textContent = this.getAttribute("empty") || "Open the link from your email to see your status.";
+      this.replaceChildren(p);
+      this.dispatchEvent(new CustomEvent("cf:loaded", { detail: { status: 0 } }));
+      return Promise.resolve();
+    }
+    return super.load();
+  }
 }
 
 if (!customElements.get("cf-form")) customElements.define("cf-form", CfForm);

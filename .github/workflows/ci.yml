@@ -200,6 +200,11 @@ jobs:
         run: |
           bun install --frozen-lockfile
           node test.mjs
+      - name: Example static site against the running worker (issue #77)
+        run: |
+          (cd examples/venture/site && python3 -m http.server 8788 --bind 127.0.0.1 > /tmp/site.log 2>&1 &)
+          for i in $(seq 1 20); do curl -sf -o /dev/null http://127.0.0.1:8788/ && break; sleep 1; done
+          cd tools/cfjs && node site.mjs
           echo "-- insert"
           curl -sf -m 15 -X POST http://127.0.0.1:8787/v1/sample/rows \
             -H 'content-type: application/json' \

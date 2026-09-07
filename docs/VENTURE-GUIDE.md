@@ -243,6 +243,39 @@ via the production routes/custom domain in `wrangler.toml`. `public_url`
 and `cors_origins` in `src/harness.rs` must list the real origin — no
 wildcards in production.
 
+## 8b. Add the forms to your site
+
+With `factory0-ui` mounted (`.ui(Ui::from_spec(include_str!("../ui.json")))`
+in `harness.rs`), every module's forms are served by the API and your site
+writes no form code. Two ways in:
+
+- **Embed.** One script tag and one element per form:
+
+  ```html
+  <script type="module" src="https://api.<your-domain>/ui/cf.js"></script>
+  <cf-form module="waitlist" action="join" product="<slug>"></cf-form>
+  <cf-form module="email-signup" action="subscribe" source="footer"></cf-form>
+  ```
+
+  Your site's origin must be in `cors_origins`: the embed fetches the form
+  from the API. Attributes that name a field pre-fill and hide it.
+
+- **Link.** `https://api.<your-domain>/ui/waitlist/join` is a complete page;
+  the confirm and status links in the emails already land on `/ui` pages.
+
+**Styling contract.** The markup is fixed `cf-*` classes and `data-cf-*`
+attributes, no shadow DOM. The base stylesheet (`/ui/cf.css`) sits in
+`@layer cf` and is written entirely against `--cf-*` custom properties, so
+any unlayered rule on your site wins on its own: set the properties on the
+container that holds the form, add rules against the classes, and never
+reach for `!important`. `examples/venture/site/` shows one card with the
+default look next to one restyled with properties and plain rules; the
+base stylesheet's dark scheme applies only to the harness's own pages, so
+an embed keeps your site's colours under a dark OS. Copy, field order and
+theme tokens that should live with the venture rather than the site go in
+`ui.json` (`docs/UI.md`). The full contract, including the admin pages, is
+`docs/UI.md`; `docs/ui-llms.txt` is the same contract for a generator.
+
 ## 9. Ship
 
 The template's deploy workflow (mirrored by its README):
