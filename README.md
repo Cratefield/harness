@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/readme-banner.png" alt="Cratefield Harness. The open-source core. Modules are crates, compiled into one stateless Worker with its own database." width="100%">
+  <img src="https://raw.githubusercontent.com/Cratefield/harness/main/assets/readme-banner.png" alt="Cratefield Harness. The open-source core. Modules are crates, compiled into one stateless Worker with its own database." width="100%">
 </p>
 
 <p align="center">
@@ -44,14 +44,14 @@ site says so on every page.
 > answer. That one rule is what makes the later move off Cloudflare a change of
 > a single runtime crate.
 
-Read [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full design.
+Read [docs/ARCHITECTURE.md](https://github.com/Cratefield/harness/blob/main/docs/ARCHITECTURE.md) for the full design.
 Decisions, including why the TypeScript attempt was thrown away, are in
-[docs/adr](docs/adr). Security controls and reporting:
-[docs/SECURITY.md](docs/SECURITY.md). What we store and for how long:
-[docs/PRIVACY.md](docs/PRIVACY.md). Which module version runs on which
-core: [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md), generated and
+[docs/adr](https://github.com/Cratefield/harness/blob/main/docs/adr). Security controls and reporting:
+[docs/SECURITY.md](https://github.com/Cratefield/harness/blob/main/docs/SECURITY.md). What we store and for how long:
+[docs/PRIVACY.md](https://github.com/Cratefield/harness/blob/main/docs/PRIVACY.md). Which module version runs on which
+core: [docs/COMPATIBILITY.md](https://github.com/Cratefield/harness/blob/main/docs/COMPATIBILITY.md), generated and
 drift-checked in CI. How crates reach crates.io:
-[docs/RELEASING.md](docs/RELEASING.md).
+[docs/RELEASING.md](https://github.com/Cratefield/harness/blob/main/docs/RELEASING.md).
 
 ## How a venture uses it
 
@@ -137,7 +137,7 @@ convenience, not a layer.
 > These crates were `factory0-*` until the first release. Renaming a
 > published crate breaks every consumer, so the rename had exactly one
 > free moment: before anything reached crates.io. It was taken then
-> (ADR [0011](docs/adr/0011-crates-are-published-as-cratefield.md)).
+> (ADR [0011](https://github.com/Cratefield/harness/blob/main/docs/adr/0011-crates-are-published-as-cratefield.md)).
 > Private modules stay `fz-*` and stay unpublished.
 
 | Crate | Role |
@@ -185,7 +185,7 @@ in** is the default this README describes: the crate is linked into the Worker.
 mounted at the same `/v1/<name>` over a Cloudflare service binding, binding the
 same database and secrets. It exists so a module whose source should not enter
 the shared artifact can still run as a real module with real ports. Designed,
-not built: [epic #56](../../issues/56).
+not built: [epic #56](https://github.com/Cratefield/harness/issues/56).
 
 Migrations are plain SQL in a subset SQLite and Postgres both accept. Queries go
 through sea-query, which renders for either. Confirmation and unsubscribe
@@ -203,11 +203,11 @@ conformance kit includes the concurrent-request test that proves it.
 | **M3 Self-hosted portability** | Postgres adapter, native runtime, parity suite, data move | #18–#21 |
 
 Three epics sit outside the milestones because they are specified but not
-scheduled: [#23](../../issues/23) multi-tenant schema, [#24](../../issues/24)
-embedded secrets, and [#56](../../issues/56) custom modules without rebuilding
+scheduled: [#23](https://github.com/Cratefield/harness/issues/23) multi-tenant schema, [#24](https://github.com/Cratefield/harness/issues/24)
+embedded secrets, and [#56](https://github.com/Cratefield/harness/issues/56) custom modules without rebuilding
 the shared bundle.
 
-Progress is visible in the [milestones](../../milestones).
+Progress is visible in the [milestones](https://github.com/Cratefield/harness/milestones).
 
 ## Observability
 
