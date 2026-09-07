@@ -351,13 +351,66 @@ fn an_unknown_provider_is_not_found() {
     pollster::block_on(async {
         let kit = kit();
         for path in [
-            "/v1/auth-oidc/apple/start",
             "/v1/auth-oidc/nonsense/start",
             "/v1/auth-oidc/nonsense/callback?code=x&state=y",
         ] {
             let response = get(&kit, path, &[]).await;
             assert_eq!(response.status, StatusCode::NOT_FOUND, "{path}");
         }
+
+        // Apple is a provider this module serves (#16); on a kit that
+        // configures only Google it is unconfigured, which is a different
+        // answer from unknown and a much more useful one.
+        let response = get(&kit, "/v1/auth-oidc/apple/start", &[]).await;
+        assert_eq!(response.status, StatusCode::SERVICE_UNAVAILABLE);
+    });
+}
+
+#[test]
+fn the_apple_only_user_field_is_ignored_on_a_redirect_callback() {
+    // `user` is Apple's one-time name field and the params struct is
+    // shared. Honouring it for every provider would let a redirect
+    // callback carry a name the provider never vouched for.
+    pollster::block_on(async {
+        let kit = kit();
+        kit.provider.set_claims(TokenClaims {
+            name: None,
+            ..TokenClaims::default()
+        });
+        let started = start(&kit, "").await;
+        let response = get(
+            &kit,
+            &format!(
+                "{CALLBACK}?code=auth-code&state={}&user=%7B%22name%22%3A%7B%22firstName%22%3A%22Mallory%22%7D%7D",
+                started.state
+            ),
+            &[("__Host-fz_oidc", &started.flow_cookie)],
+        )
+        .await;
+        assert_eq!(response.status, StatusCode::FOUND, "{}", response.text());
+        assert_eq!(
+            support::column(&kit, "SELECT name_at_link FROM identities", "name_at_link"),
+            None,
+            "a redirect provider's callback accepted Apple's name field"
+        );
+    });
+}
+
+#[test]
+fn each_provider_answers_only_on_the_callback_method_it_uses() {
+    // Apple posts and Google redirects. Serving both methods for both
+    // would mean an authorization response could be delivered through a
+    // path the provider never uses.
+    pollster::block_on(async {
+        let kit = kit();
+        // Google has no form_post callback.
+        let response =
+            support::post_form(&kit, "/v1/auth-oidc/google/callback", "code=x&state=y").await;
+        assert_eq!(response.status, StatusCode::NOT_FOUND);
+
+        // Apple has no redirect callback.
+        let response = get(&kit, "/v1/auth-oidc/apple/callback?code=x&state=y", &[]).await;
+        assert_eq!(response.status, StatusCode::NOT_FOUND);
     });
 }
 
