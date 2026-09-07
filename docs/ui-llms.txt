@@ -1,0 +1,102 @@
+# Cratefield harness UI: what a generator needs (ADR 0010)
+
+You are producing a `UiSpec` (JSON) and optionally a stylesheet for a
+venture's harness UI. Read `GET /__surface` on the venture's API for the
+modules, actions and fields that exist; everything you emit must refer
+to those names, because the harness rejects unknown references with the
+JSON path of each problem and renders nothing from a half-valid spec.
+
+## What you may change
+- Copy: per action `title`, `intro`, `submit`, `success`; per field
+  `label`, `placeholder`, `help`; per landing page (`done`, `expired`)
+  `title`, `message`; per module `title`.
+- Layout: per action `order` (a list of field names; unlisted fields
+  follow in declared order) and per field `hidden: true`.
+- Theme: `theme.tokens` (only `--cf-*` custom properties, below) and
+  `theme.css_url` (an `https://` URL or a path on the API origin).
+
+## What you may not change
+Anything that is code: which fields exist, their types, validation,
+routes, the markup contract. A field the module marks `x-cf-hidden`
+stays hidden. Admin pages take no spec.
+
+## The spec
+Schema: `schemas/ui-spec-v1.schema.json` (`additionalProperties: false`
+everywhere; an unknown key is an error). Minimal valid spec: `{}`.
+
+```json
+{
+  "version": 1,
+  "theme": { "tokens": { "--cf-accent": "#0a7", "--cf-radius": "0" } },
+  "modules": {
+    "waitlist": {
+      "title": "Early access",
+      "actions": {
+        "join": {
+          "title": "Get early access",
+          "intro": "We open the doors in small batches.",
+          "submit": "Put me on the list",
+          "success": "You're on the list. Check your inbox.",
+          "fields": {
+            "email": { "label": "Your email", "placeholder": "you@example.com" },
+            "product": { "hidden": true }
+          },
+          "order": ["product", "email"]
+        },
+        "confirm": {
+          "pages": { "done": { "title": "You're in", "message": "Your place is confirmed." } }
+        }
+      }
+    }
+  }
+}
+```
+
+## Custom properties (theme.tokens)
+--cf-font, --cf-fg, --cf-bg, --cf-muted, --cf-border, --cf-accent,
+--cf-accent-fg, --cf-error, --cf-success, --cf-warning, --cf-radius,
+--cf-gap, --cf-max-width. Values are CSS values; `;`, `{` and `}` are
+stripped. The harness serves them as `/ui/theme.css` (`:root { … }`).
+
+## Markup contract (for a stylesheet)
+Classes, all light DOM, no shadow roots, no inline styles. The base
+stylesheet sits in `@layer cf`, so any unlayered rule you write wins.
+
+form.cf-form[data-cf-module][data-cf-action]
+  p.cf-intro
+  p.cf-error.cf-error--form
+  div.cf-field[data-cf-field] (.cf-field--invalid, .cf-field--captcha)
+    label.cf-label (.cf-label--checkbox) > span.cf-required
+    .cf-input (input, select.cf-input--select, textarea.cf-input--textarea, .cf-input--checkbox)
+    p.cf-help
+    p.cf-error
+    div.cf-turnstile
+  div.cf-actions > button.cf-submit
+div.cf-notice (.cf-notice--success | --warning | --error) > h2.cf-notice-title + p.cf-notice-text
+dl.cf-status > div.cf-status-row[data-cf-field] > dt.cf-status-key + dd.cf-status-value
+body.cf-page > main.cf-main > header.cf-header > p.cf-venture + h1.cf-title
+
+## Worked example: "make it feel like a record label site"
+Spec: warm dark theme, short imperative copy.
+```json
+{"theme":{"tokens":{"--cf-bg":"#120d0b","--cf-fg":"#f5ede4","--cf-muted":"#a89b8f","--cf-border":"#3a2d27","--cf-accent":"#e0553b","--cf-accent-fg":"#120d0b","--cf-radius":"2px","--cf-font":"Georgia, serif"}},
+ "modules":{"waitlist":{"actions":{"join":{"title":"Join the list","submit":"Sign me up","success":"You're on it. Watch your inbox.","fields":{"email":{"label":"Email"}}}}}}}
+```
+Stylesheet (optional, linked via theme.css_url):
+```css
+.cf-title { letter-spacing: 0.08em; text-transform: uppercase; }
+.cf-submit { border-radius: 0; text-transform: uppercase; }
+```
+
+## Worked example: "one-field footer signup, nothing else"
+```json
+{"modules":{"email-signup":{"actions":{"subscribe":{"title":"Newsletter","submit":"Subscribe","success":"Thanks. One email a month.","fields":{"email":{"label":"Email","placeholder":"you@example.com"}}}}}}}
+```
+Embed on the site: `<cf-form module="email-signup" action="subscribe" source="footer"></cf-form>` after `<script type="module" src="https://api.<venture>/ui/cf.js"></script>`.
+
+## Delivery
+Give the spec to the venture: `Ui::from_spec(include_str!("../ui.json"))` in its
+`harness.rs` (validated at build), or set it as the `UI_SPEC` config value
+without a rebuild (validated on the first request; a bad one disables `/ui`
+with the error in the response). Read back the effective spec at
+`GET /ui/spec.json`.

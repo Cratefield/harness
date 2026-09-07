@@ -18,6 +18,7 @@
 mod admin;
 mod fields;
 pub mod render;
+pub mod spec;
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -33,6 +34,9 @@ use serde_json::Value;
 use tower::ServiceExt;
 
 pub use fields::{Field, JsonType, Values, Widget, fields_of, form_to_json, humanize};
+pub use spec::{
+    ActionSpec, FieldSpec, ModuleSpec, PageCopy, Theme, UI_SPEC_KEY, UI_SPEC_VERSION, UiSpec,
+};
 
 /// The base stylesheet served at `/ui/cf.css`: `@layer cf`, `--cf-*`
 /// custom properties, nothing that an unlayered venture rule cannot beat.
@@ -49,6 +53,7 @@ pub const TURNSTILE_SITE_KEY: &str = "TURNSTILE_SITE_KEY";
 #[derive(Debug, Clone, Default)]
 pub struct Ui {
     theme_css: Option<String>,
+    spec: UiSpec,
 }
 
 impl Ui {
@@ -58,21 +63,91 @@ impl Ui {
     }
 
     /// A stylesheet linked after `cf.css` on every page: the venture's
-    /// theme. Absolute URL or a path on the API origin.
+    /// theme. Absolute URL or a path on the API origin. The spec's
+    /// `theme.css_url` wins when both are set.
     #[must_use]
     pub fn theme_css(mut self, url: impl Into<String>) -> Self {
         self.theme_css = Some(url.into());
         self
     }
+
+    /// The venture's `UiSpec` as JSON (`include_str!("../ui.json")`).
+    /// Parsed here; validated against the surface by `Harness::build`.
+    /// A runtime `UI_SPEC` in config replaces it without a rebuild.
+    ///
+    /// # Errors
+    ///
+    /// The parse error, with its path.
+    pub fn from_spec(json: &str) -> Result<Self, String> {
+        Ok(Self::new().spec(UiSpec::parse(json)?))
+    }
+
+    #[must_use]
+    pub fn spec(mut self, spec: UiSpec) -> Self {
+        self.spec = spec;
+        self
+    }
 }
 
 impl UiMount for Ui {
+    fn validate(
+        &self,
+        surface: &factory0_core::SurfaceDocument,
+        errors: &mut factory0_core::ConfigError,
+    ) {
+        if let Err(problems) = self.spec.validate(surface) {
+            for problem in problems {
+                errors.push(format!("ui spec: {problem}"));
+            }
+        }
+    }
+
+    fn describe(&self) -> Option<Value> {
+        (self.spec != UiSpec::default())
+            .then(|| serde_json::to_value(&self.spec).ok())
+            .flatten()
+    }
+
     fn router(&self, ctx: UiContext) -> Router {
+        // A runtime spec replaces the built-in one; a broken runtime spec
+        // takes the whole UI down loudly rather than rendering from half
+        // of it, and says why on every request.
+        let runtime = ctx
+            .config
+            .get(UI_SPEC_KEY)
+            .filter(|json| !json.trim().is_empty())
+            .map(|json| {
+                UiSpec::parse(&json).and_then(|spec| {
+                    spec.validate(&ctx.surface)
+                        .map(|()| spec)
+                        .map_err(|problems| {
+                            format!("ui spec ({UI_SPEC_KEY}): {}", problems.join("; "))
+                        })
+                })
+            });
+        let spec = match runtime {
+            Some(Ok(spec)) => spec,
+            Some(Err(problem)) => {
+                tracing::error!(%problem, "runtime UI spec rejected; /ui is disabled");
+                return Router::new().fallback(move |scope: Scope| {
+                    let problem = problem.clone();
+                    async move {
+                        Problem::internal()
+                            .with_detail(problem)
+                            .instance(&scope.request_id)
+                    }
+                });
+            }
+            None => self.spec.clone(),
+        };
         let state = Arc::new(UiState {
             ui: self.clone(),
+            spec,
             ctx,
         });
         Router::new()
+            .route("/theme.css", get(theme_css))
+            .route("/spec.json", get(spec_json))
             .route("/cf.css", get(css))
             .route("/cf.js", get(js))
             .route("/admin", get(admin::index))
@@ -93,7 +168,30 @@ impl UiMount for Ui {
 
 struct UiState {
     ui: Ui,
+    /// The effective spec: runtime `UI_SPEC` if set, else the builder's.
+    spec: UiSpec,
     ctx: UiContext,
+}
+
+async fn theme_css(State(state): State<Arc<UiState>>) -> impl IntoResponse {
+    (
+        [
+            (header::CONTENT_TYPE, "text/css; charset=utf-8"),
+            (header::CACHE_CONTROL, "public, max-age=300"),
+        ],
+        state.spec.theme_css(),
+    )
+}
+
+/// The effective spec, for tooling and the control plane to read back.
+async fn spec_json(State(state): State<Arc<UiState>>) -> impl IntoResponse {
+    (
+        [
+            (header::CONTENT_TYPE, "application/json"),
+            (header::CACHE_CONTROL, "no-cache"),
+        ],
+        serde_json::to_string(&state.spec).unwrap_or_else(|_| "{}".to_owned()),
+    )
 }
 
 async fn css() -> impl IntoResponse {
@@ -288,6 +386,12 @@ async fn landing(
         (_, "done") => ("success", "Done".to_owned(), "Done.".to_owned()),
         _ => return not_found(&scope, &format!("{module}/{action}/{landing}")),
     };
+    let copy = state
+        .spec
+        .action(&module, &action)
+        .and_then(|c| c.pages.get(&landing));
+    let title = copy.and_then(|c| c.title.clone()).unwrap_or(title);
+    let message = copy.and_then(|c| c.message.clone()).unwrap_or(message);
     let body = render::notice(&module, &action, tone, &title, &message);
     respond(&state, fragment, (title, body, false))
 }
@@ -305,18 +409,65 @@ fn render_form(
         .flatten()
         .filter(|key| !key.is_empty());
     let post_to = format!("/ui/{module}/{}", spec.name);
-    let title = humanize(&spec.name);
+    let copy = state.spec.action(module, &spec.name);
+    let title = copy
+        .and_then(|c| c.title.clone())
+        .unwrap_or_else(|| humanize(&spec.name));
+    let submit = copy
+        .and_then(|c| c.submit.clone())
+        .unwrap_or_else(|| humanize(&spec.name));
+    let fields = apply_spec(fields, copy);
     let body = render::form(&render::FormSpec {
         module,
         action: &spec.name,
         post_to: &post_to,
-        fields,
+        intro: copy.and_then(|c| c.intro.as_deref()),
+        fields: &fields,
         values,
         errors,
         captcha_site_key: site_key.as_deref(),
-        submit_label: &title,
+        submit_label: &submit,
     });
     (title, body, site_key.is_some())
+}
+
+/// Copy overrides, hidden flags and order from the spec, over the
+/// fields the schema produced.
+fn apply_spec(fields: &[Field], copy: Option<&ActionSpec>) -> Vec<Field> {
+    let Some(copy) = copy else {
+        return fields.to_vec();
+    };
+    let mut out: Vec<Field> = fields
+        .iter()
+        .map(|field| {
+            let mut field = field.clone();
+            if let Some(over) = copy.fields.get(&field.name) {
+                if let Some(label) = &over.label {
+                    field.label = label.clone();
+                }
+                if over.placeholder.is_some() {
+                    field.placeholder = over.placeholder.clone();
+                }
+                if over.help.is_some() {
+                    field.help = over.help.clone();
+                }
+                if over.hidden {
+                    field.widget = Widget::Hidden;
+                }
+            }
+            field
+        })
+        .collect();
+    if !copy.order.is_empty() {
+        let rank = |name: &str| {
+            copy.order
+                .iter()
+                .position(|n| n == name)
+                .unwrap_or(copy.order.len())
+        };
+        out.sort_by_key(|field| rank(&field.name));
+    }
+    out
 }
 
 /// Builds the internal request and sends it through the `/v1` router.
@@ -402,12 +553,16 @@ async fn render_result(
     tracing::debug!(status = %status, "ui dispatch answered");
 
     if status.is_success() {
-        let title = humanize(&spec.name);
+        let copy = state.spec.action(module, &spec.name);
+        let title = copy
+            .and_then(|c| c.title.clone())
+            .unwrap_or_else(|| humanize(&spec.name));
         let body = match &spec.outcome {
             Outcome::Json => {
                 render::status(module, &spec.name, json.as_ref().unwrap_or(&Value::Null))
             }
             Outcome::Accepted { message } => {
+                let message = copy.and_then(|c| c.success.as_deref()).unwrap_or(message);
                 render::notice(module, &spec.name, "success", &title, message)
             }
             Outcome::Redirect => render::notice(module, &spec.name, "success", &title, "Done."),
@@ -528,18 +683,20 @@ fn respond(
     if fragment {
         return Html(body.into_string()).into_response();
     }
+    let theme = effective_theme_css(state);
     let page = render::page(
         &render::PageSpec {
             venture: &state.ctx.venture.name,
             title: &title,
-            theme_css: state.ui.theme_css.as_deref(),
+            theme_tokens: !state.spec.theme.tokens.is_empty(),
+            theme_css: theme.as_deref(),
             turnstile,
             admin: false,
         },
         &body,
     );
     let mut response = Html(page.into_string()).into_response();
-    let csp = content_security_policy(state.ui.theme_css.as_deref(), turnstile);
+    let csp = content_security_policy(theme.as_deref(), turnstile);
     if let Ok(value) = HeaderValue::from_str(&csp) {
         response
             .headers_mut()
@@ -559,18 +716,20 @@ fn respond(
 /// An admin page: the shell with the admin navigation, never cached,
 /// never framed. `logged_in` decides whether the navigation shows.
 fn respond_admin(state: &UiState, title: &str, body: &maud::Markup, logged_in: bool) -> Response {
+    let theme = effective_theme_css(state);
     let page = render::page(
         &render::PageSpec {
             venture: &state.ctx.venture.name,
             title,
-            theme_css: state.ui.theme_css.as_deref(),
+            theme_tokens: !state.spec.theme.tokens.is_empty(),
+            theme_css: theme.as_deref(),
             turnstile: false,
             admin: logged_in,
         },
         body,
     );
     let mut response = Html(page.into_string()).into_response();
-    let csp = content_security_policy(state.ui.theme_css.as_deref(), false);
+    let csp = content_security_policy(theme.as_deref(), false);
     if let Ok(value) = HeaderValue::from_str(&csp) {
         response
             .headers_mut()
@@ -588,6 +747,16 @@ fn respond_admin(state: &UiState, title: &str, body: &maud::Markup, logged_in: b
     );
     headers.insert("x-frame-options", HeaderValue::from_static("DENY"));
     response
+}
+
+/// The spec's stylesheet wins over the builder's.
+fn effective_theme_css(state: &UiState) -> Option<String> {
+    state
+        .spec
+        .theme
+        .css_url
+        .clone()
+        .or_else(|| state.ui.theme_css.clone())
 }
 
 fn content_security_policy(theme_css: Option<&str>, turnstile: bool) -> String {

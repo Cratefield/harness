@@ -114,6 +114,31 @@ Full pages link `/ui/cf.css`, then the theme stylesheet from
 only the API origin for styles (plus the theme's origin), no scripts except
 Turnstile's when a widget is on the page, and `form-action 'self'`.
 
+## `UiSpec`: copy, order and theme
+
+Everything about the UI that is copy, layout or theme rather than code
+lives in a `UiSpec`: JSON, schema at `crates/ui/schemas/ui-spec-v1.schema.json`
+(generated from the Rust types; a test fails on drift, regenerate with
+`UPDATE_SCHEMAS=1 cargo test -p factory0-ui`). Per module a `title`; per
+action `title`, `intro`, `submit`, `success`, per-field `label`,
+`placeholder`, `help`, `hidden`, an `order`, and copy for the `done` and
+`expired` landing pages; a `theme` of `--cf-*` token values and an
+optional `css_url`. Unknown keys and unknown references (a module, action,
+field or page that the surface does not have) are errors with their JSON
+path, never ignored.
+
+| Where | When it is checked |
+|---|---|
+| `Ui::from_spec(include_str!("../ui.json"))` in the venture's `harness.rs` | `Harness::build()`, alongside every other build error |
+| `UI_SPEC` config value (the control plane, per venture, no rebuild) | The first request; a bad spec answers a problem naming the error on every `/ui` route until it is fixed, and replaces the built-in spec when valid |
+
+The renderer applies it everywhere; the theme tokens are served as
+`/ui/theme.css` (`:root { --cf-…: …; }`) and linked after `cf.css`, then the
+spec's `css_url`. `GET /ui/spec.json` returns the effective spec and
+`GET /__surface` carries the built-in one under `ui`. `docs/ui-llms.txt` is
+the same contract written for a generator: what may change, what may not,
+the tokens, the markup, and two worked examples.
+
 ## Admin pages
 
 `/ui/admin` needs a session. `GET /ui/admin/login` takes the admin token

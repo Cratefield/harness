@@ -1,0 +1,162 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "version": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0,
+      "description": "Must be `1`.",
+      "default": 1
+    },
+    "theme": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "tokens": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Custom property values, keys starting with `--cf-` (`\"--cf-accent\":\n\"#0a7\"`). Served as `/ui/theme.css` and linked after `cf.css`.",
+          "default": {}
+        },
+        "css_url": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "A stylesheet linked after the tokens: absolute `https://` URL or a\npath on the API origin."
+        }
+      },
+      "description": "Theme: `--cf-*` custom property values and an optional stylesheet.",
+      "default": {
+        "tokens": {}
+      }
+    },
+    "modules": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "title": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Shown instead of the humanized module name."
+          },
+          "actions": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "title": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "Page title and heading."
+                },
+                "intro": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "A paragraph above the form."
+                },
+                "submit": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "The submit button label."
+                },
+                "success": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "The notice after an accepted submit; overrides the module's\n`Outcome::Accepted` message."
+                },
+                "fields": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                      "label": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "placeholder": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "help": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "hidden": {
+                        "type": "boolean",
+                        "description": "Never rendered as a control (the page or the embed supplies it)."
+                      }
+                    }
+                  },
+                  "description": "Per field, by property name.",
+                  "default": {}
+                },
+                "order": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "description": "Field order; unlisted fields follow in their declared order."
+                },
+                "pages": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                      "title": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "message": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      }
+                    }
+                  },
+                  "description": "Landing pages of a link action: `done`, `expired`.",
+                  "default": {}
+                }
+              }
+            },
+            "description": "Per action, by action name.",
+            "default": {}
+          }
+        }
+      },
+      "description": "Per module, by module name.",
+      "default": {}
+    }
+  },
+  "title": "UiSpec v1",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cratefield.com/schemas/ui-spec-v1.schema.json",
+  "description": "Copy, field order, hidden fields and theme tokens for a Cratefield harness UI (ADR 0010). Everything a prompt may change; nothing that is code."
+}

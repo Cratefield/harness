@@ -462,3 +462,23 @@ async fn render_timing() {
     let per = start.elapsed() / rounds;
     eprintln!("fragment through the router: {per:?} per request");
 }
+
+/// `schemas/ui-spec-v1.schema.json` is generated from the `UiSpec` types
+/// and committed. Run with `UPDATE_SCHEMAS=1` to regenerate; CI fails on
+/// drift so the file is never hand-edited.
+#[test]
+fn ui_spec_schema_is_committed_and_current() {
+    let path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/schemas/ui-spec-v1.schema.json"
+    );
+    let generated = serde_json::to_string_pretty(&factory0_ui::UiSpec::schema()).unwrap() + "\n";
+    if std::env::var("UPDATE_SCHEMAS").is_ok() {
+        std::fs::write(path, &generated).unwrap();
+    }
+    let committed = std::fs::read_to_string(path).unwrap_or_default();
+    assert_eq!(
+        committed, generated,
+        "schemas/ui-spec-v1.schema.json is stale: run UPDATE_SCHEMAS=1 cargo test -p factory0-ui"
+    );
+}
