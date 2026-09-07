@@ -1603,3 +1603,28 @@ pub async fn set_password_lockout(
         .and_where(Expr::col(iden("id")).eq(id));
     db.execute(&Statement::render(&update)).await
 }
+
+/// Marks a user's primary address verified.
+///
+/// Only ever called after proof: consuming a link sent to that address
+/// (#21). It matters because the linking rules auto-link on a verified
+/// address, so a wrong write here hands somebody an account.
+///
+/// # Errors
+///
+/// [`DbError::Execute`] when the statement fails.
+pub async fn set_primary_email_verified(
+    db: &dyn Database,
+    id: &str,
+    updated_at: &str,
+) -> Result<u64, DbError> {
+    let mut update = Query::update();
+    update
+        .table(iden("users"))
+        .values([
+            (iden("primary_email_verified"), true.into()),
+            (iden("updated_at"), updated_at.into()),
+        ])
+        .and_where(Expr::col(iden("id")).eq(id));
+    db.execute(&Statement::render(&update)).await
+}

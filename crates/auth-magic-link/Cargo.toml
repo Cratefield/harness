@@ -1,0 +1,38 @@
+[package]
+name = "factory0-auth-magic-link"
+description = "Magic links for the Factory Zero auth service: a single-use bearer credential sent by mail, which is also how an address gets verified and how a locked or passwordless account gets back in (issue #21)"
+readme = "README.md"
+publish = false
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+factory0-core = { workspace = true }
+factory0-auth-core = { path = "../auth-core" }
+askama = { workspace = true }
+axum = { workspace = true }
+http = { workspace = true }
+bytes = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+time = { workspace = true }
+tracing = { workspace = true }
+base64ct = { workspace = true }
+getrandom = { workspace = true }
+sha2 = { workspace = true }
+url = { workspace = true }
+
+[dev-dependencies]
+factory0-testing = { workspace = true }
+factory0-adapter-sqlite = { workspace = true }
+pollster = { workspace = true }
+tower = { workspace = true }
+async-trait = { workspace = true }
+futures-lite = { version = "2", default-features = false, features = ["std"] }
+sha2 = { workspace = true }
