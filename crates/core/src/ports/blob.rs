@@ -111,6 +111,11 @@ impl Blob for ScopedBlob {
 
 #[cfg(test)]
 mod tests {
+    // A recording test fixture, not request state (ADR 0007). The scoped
+    // allow follows the policy in the workspace clippy.toml, as the fakes
+    // in `cratefield-testing` and the sibling tests in this crate do.
+    #![allow(clippy::disallowed_types)]
+
     use super::*;
     use std::sync::Mutex;
 
