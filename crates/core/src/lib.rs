@@ -27,6 +27,7 @@ mod problem;
 mod problems;
 mod rate_limit;
 mod scope;
+mod sidecar;
 mod signer;
 mod surface;
 mod template;
@@ -50,15 +51,16 @@ pub use module::{
     BoxFuture, HARNESS_API, Migrations, Module, ModuleContext, SqlMigration, harness_api_mismatch,
 };
 pub use ports::{
-    Captcha, CaptchaError, Clock, Database, DbError, Decision, Defer, HttpClient, HttpError, IdGen,
-    KeyValue, Kid, KvError, MailError, Mailer, Message, NoopDefer, Payload, Port, Ports,
-    RateLimitError, RateLimiter, Row, Rows, SendOutcome, SignatureError, Signer, Statement,
-    SystemClock, TryFromValue, UlidIdGen, Verdict, timeout,
+    Captcha, CaptchaError, Clock, Database, DbError, Decision, Defer, DispatchError, Dispatcher,
+    HttpClient, HttpError, IdGen, KeyValue, Kid, KvError, MailError, Mailer, Message, NoopDefer,
+    Payload, Port, Ports, RateLimitError, RateLimiter, Row, Rows, SendOutcome, SignatureError,
+    Signer, Statement, SystemClock, TryFromValue, UlidIdGen, Verdict, timeout,
 };
 pub use problem::Problem;
 pub use problems::{ProblemDef, SLUGS, registry as problem_registry};
 pub use rate_limit::{client_ip, rate_limit_keys};
 pub use scope::Scope;
+pub use sidecar::{HARNESS_SIDECARS, SidecarMount, SidecarMounts, X_HARNESS_API, X_HARNESS_MODULE};
 pub use signer::{HmacSigner, MIN_SECRET_BYTES, SignerError};
 pub use surface::{
     Action, Audience, Column, HINT_KEYWORDS, ModuleSurface, Outcome, RenderedSurface, SURFACE_API,

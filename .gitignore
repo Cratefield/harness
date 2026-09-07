@@ -6,3 +6,6 @@ build/
 .DS_Store
 PROGRESS.md
 node_modules/
+
+# Local worktrees. `git add -A` otherwise stages one as a gitlink.
+.worktrees/

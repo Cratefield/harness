@@ -33,8 +33,8 @@ mod request;
 pub use conformance::{assert_wasm_safe_deps, conformance};
 pub use dialect::Dialect;
 pub use fakes::{
-    EmptyDatabase, FakeCaptcha, FakeDefer, FakeHttpClient, FakeMailer, FakeRateLimiter, FixedClock,
-    MailerMode, MemoryKeyValue,
+    EmptyDatabase, FakeCaptcha, FakeDefer, FakeDispatcher, FakeHttpClient, FakeMailer,
+    FakeRateLimiter, FixedClock, MailerMode, MemoryKeyValue,
 };
 pub use harness::TestHarness;
 pub use request::{TestResponse, request};

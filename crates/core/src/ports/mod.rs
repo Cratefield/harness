@@ -9,6 +9,7 @@ mod captcha;
 mod clock;
 mod database;
 mod defer;
+mod dispatcher;
 mod http;
 mod idgen;
 mod kv;
@@ -20,6 +21,7 @@ pub use captcha::{Captcha, CaptchaError, Verdict};
 pub use clock::{Clock, SystemClock, timeout};
 pub use database::{Database, DbError, Row, Rows, Statement, TryFromValue};
 pub use defer::{Defer, NoopDefer};
+pub use dispatcher::{DispatchError, Dispatcher};
 pub use http::{HttpClient, HttpError};
 pub use idgen::{IdGen, UlidIdGen};
 pub use kv::{KeyValue, KvError};
@@ -95,6 +97,9 @@ pub struct Ports {
     pub clock: Option<Arc<dyn Clock>>,
     pub id_gen: Option<Arc<dyn IdGen>>,
     pub defer: Option<Arc<dyn Defer>>,
+    /// Set by the runtime when the venture mounts sidecar modules. Not a
+    /// [`Port`], so `view_for` never copies it and no module can reach it.
+    pub dispatcher: Option<Arc<dyn Dispatcher>>,
 }
 
 impl Ports {
@@ -117,6 +122,7 @@ impl Ports {
             clock: None,
             id_gen: None,
             defer: None,
+            dispatcher: None,
         }
     }
 

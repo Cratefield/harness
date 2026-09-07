@@ -384,3 +384,110 @@ impl Database for EmptyDatabase {
         Err(DbError::Batch("empty database".to_string()))
     }
 }
+
+/// An in-process [`Dispatcher`](factory0_core::Dispatcher) that answers from an
+/// axum [`Router`](axum::Router), so a
+/// module can be exercised through a sidecar mount without a network or a
+/// second Worker (ADR 0009). The conformance kit uses it to run the same
+/// assertions against both mounts (#64).
+///
+/// Also the failure fixture: [`unbound`](FakeDispatcher::unbound) has no
+/// binding at all, and [`failing`](FakeDispatcher::failing) accepts the
+/// binding and then refuses to answer.
+#[derive(Clone)]
+pub struct FakeDispatcher {
+    binding: String,
+    behaviour: FakeDispatch,
+    calls: Arc<AtomicUsize>,
+}
+
+#[derive(Clone)]
+enum FakeDispatch {
+    Serve(Arc<Mutex<axum::Router>>),
+    Unbound,
+    Failing(String),
+}
+
+impl FakeDispatcher {
+    /// Serves `router` on `binding`.
+    #[must_use]
+    pub fn serving(binding: impl Into<String>, router: axum::Router) -> Self {
+        Self {
+            binding: binding.into(),
+            behaviour: FakeDispatch::Serve(Arc::new(Mutex::new(router))),
+            calls: Arc::new(AtomicUsize::new(0)),
+        }
+    }
+
+    /// Has no bindings, so `has()` is always false: the "mounted but this
+    /// deployment has no such binding" case.
+    #[must_use]
+    pub fn unbound() -> Self {
+        Self {
+            binding: String::new(),
+            behaviour: FakeDispatch::Unbound,
+            calls: Arc::new(AtomicUsize::new(0)),
+        }
+    }
+
+    /// Accepts `binding` and then fails to answer.
+    #[must_use]
+    pub fn failing(binding: impl Into<String>, reason: impl Into<String>) -> Self {
+        Self {
+            binding: binding.into(),
+            behaviour: FakeDispatch::Failing(reason.into()),
+            calls: Arc::new(AtomicUsize::new(0)),
+        }
+    }
+
+    /// How many dispatches were attempted. A forwarder must not retry, so a
+    /// single request must leave this at one.
+    #[must_use]
+    pub fn calls(&self) -> usize {
+        self.calls.load(Ordering::SeqCst)
+    }
+}
+
+#[async_trait]
+impl factory0_core::Dispatcher for FakeDispatcher {
+    fn has(&self, binding: &str) -> bool {
+        !matches!(self.behaviour, FakeDispatch::Unbound) && binding == self.binding
+    }
+
+    async fn dispatch(
+        &self,
+        binding: &str,
+        request: Request<Bytes>,
+    ) -> Result<Response<Bytes>, factory0_core::DispatchError> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        match &self.behaviour {
+            FakeDispatch::Unbound => {
+                Err(factory0_core::DispatchError::NotBound(binding.to_owned()))
+            }
+            FakeDispatch::Failing(reason) => Err(factory0_core::DispatchError::Unavailable {
+                binding: binding.to_owned(),
+                reason: reason.clone(),
+            }),
+            FakeDispatch::Serve(router) => {
+                let router = router.lock().unwrap().clone();
+                let (parts, body) = request.into_parts();
+                let request = Request::from_parts(parts, axum::body::Body::from(body));
+                let response =
+                    tower::ServiceExt::oneshot(router, request)
+                        .await
+                        .map_err(|err| factory0_core::DispatchError::Unavailable {
+                            binding: binding.to_owned(),
+                            reason: err.to_string(),
+                        })?;
+                let (parts, body) = response.into_parts();
+                let bytes = axum::body::to_bytes(body, usize::MAX)
+                    .await
+                    .map_err(|err| factory0_core::DispatchError::Unavailable {
+                        binding: binding.to_owned(),
+                        reason: err.to_string(),
+                    })?;
+                Ok(Response::from_parts(parts, bytes))
+            }
+        }
+    }
+}
