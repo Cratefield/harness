@@ -126,7 +126,22 @@ async fn success_returns_sent_with_provider_id() {
     assert_eq!(body["to"], "nick@example.com");
     assert_eq!(body["html"], "<p>hi</p>");
     assert_eq!(body["text"], "hi");
-    assert_eq!(body["tags"][0], "transactional");
+    // Resend requires tags as `{ name, value }` objects; a bare string array
+    // is rejected with `422 Invalid input` (verified against the live API).
+    assert_eq!(body["tags"][0]["name"], "transactional");
+    assert_eq!(body["tags"][0]["value"], "1");
+}
+
+#[pollster::test]
+async fn tag_names_are_sanitized_to_resend_charset() {
+    let (http, rx) = fixture(200, r#"{"id":"x"}"#, None);
+    let mut msg = message();
+    // A tag with characters Resend forbids (only a-z A-Z 0-9 _ - allowed).
+    msg.tags = vec!["waitlist:cratefield".to_string()];
+    adapter(http).send(msg).await.expect("send ok");
+    let captured = rx.try_recv().expect("one request");
+    let body: serde_json::Value = serde_json::from_str(&captured.body).unwrap();
+    assert_eq!(body["tags"][0]["name"], "waitlist_cratefield");
 }
 
 #[pollster::test]
