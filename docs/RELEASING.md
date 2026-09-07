@@ -26,6 +26,17 @@ Authentication is **trusted publishing**: the workflow exchanges the
 GitHub Actions OIDC token (`id-token: write`) for a short-lived
 crates.io token. No `CARGO_REGISTRY_TOKEN` is stored anywhere.
 
+Step 2 is **switched off** until the owner setup below is done: the
+`release` step runs only when the repository variable
+`CRATES_IO_READY` is `true`. A crate's trusted publisher cannot be
+configured before the crate exists, so until the first manual publish
+every `release` run would fail on authentication and leave `main` red.
+`release-pr` always runs; it needs no registry credentials.
+
+The workflow also takes a manual run (Actions → Release → *Run
+workflow*) with a `dry_run` checkbox, on by default, so the pipeline
+can be exercised without publishing.
+
 ## Owner setup (once)
 
 These steps need the crates.io account that will own the `factory0-*`
@@ -59,8 +70,15 @@ crate exists**, so the very first release of each crate is manual:
    repository `Cratefield/harness`, workflow `release.yml`,
    environment *(leave empty)*. From then on the release workflow
    publishes that crate with OIDC and no token.
-4. **Revoke the token from step 1.**
-5. **Add the team owner.** On each crate page → *Owners* → add the
+4. **Switch publishing on.** Repository → *Settings* → *Secrets and
+   variables* → *Actions* → *Variables* → *New repository variable*:
+   name `CRATES_IO_READY`, value `true`. Until this exists the release
+   step is skipped and the run says so in an annotation. Verify with a
+   manual dry run: Actions → *Release* → *Run workflow*, leave
+   `dry_run` checked; the release step should now execute and report
+   what it *would* publish.
+5. **Revoke the token from step 1.**
+6. **Add the team owner.** On each crate page → *Owners* → add the
    Factory Zero GitHub org team, so a second human can recover the
    crates.
 
@@ -68,6 +86,16 @@ If trusted publishing ever needs to be bypassed temporarily: create a
 token with the *Update crates* scope and add it as the GitHub Actions
 secret `CARGO_REGISTRY_TOKEN` — release-plz picks it up automatically
 and skips OIDC. Remove the secret when done.
+
+Two traps in the workflow itself, both commented where they bite:
+
+- The action is pinned to an exact version (`release-plz/action@v0.5.x`).
+  It moved from `MarcoIeni/release-plz-action` and publishes no floating
+  major tag, so `@v0` does not resolve and the job never starts.
+- Its `dry_run` input is tested with `[[ -n ... ]]`, so **any** non-empty
+  value turns a dry run on, the string `false` included. The workflow
+  passes an empty string for a real release; do not "simplify" it to
+  `false` or nothing will ever be published.
 
 ## Prerelease flow (0.x, `-rc.N`)
 
