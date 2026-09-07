@@ -133,6 +133,17 @@ impl TryFromValue for String {
     }
 }
 
+/// Blob columns. A `Database` that cannot return bytes cannot hold a
+/// ciphertext, a wrapped key or a nonce (issue #39).
+impl TryFromValue for Vec<u8> {
+    fn try_from_value(value: &SeaValue) -> Option<Self> {
+        match value {
+            SeaValue::Bytes(Some(bytes)) => Some(bytes.as_ref().clone()),
+            _ => None,
+        }
+    }
+}
+
 impl TryFromValue for bool {
     fn try_from_value(value: &SeaValue) -> Option<Self> {
         match value {

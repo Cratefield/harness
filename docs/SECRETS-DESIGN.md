@@ -182,6 +182,26 @@ Managed providers are not written yet: they need credentials and a
 nightly job against the real service, and an unexercised vendor
 integration here would be worse than an absent one.
 
+### The store
+
+`factory0-secrets` (issue #39) holds the two tables in every store —
+`harness_secret_keys` and `harness_secrets` — and the API modules call.
+`Secrets::tenant()` is what a module gets; `Secrets::global()` takes a
+token type only the harness can construct, so the control database's
+store is unreachable from module code however public the method looks.
+
+`SecretBytes` zeroises on drop, prints as `[redacted]`, and implements
+neither `Display`, `Serialize` nor `Clone`. Every method takes an
+`Actor` and records an `AuditEvent` before returning, on failure as well
+as success; the event type carries no value. `Audit` is the seam the
+append-only log (#41) fills, and until then accesses go to `tracing`.
+
+One thing the schema settles that this document left implicit: the
+foreign key from a secret to its key row means **a ciphertext cannot be
+orphaned**. A key row cannot be deleted while secrets reference it, so
+the offboarding shred is dropping the tenant's database — which is what
+offboarding is under ADR 0008 anyway — rather than removing one row.
+
 ## 6. Operations
 
 **DEK lifecycle.** *Provision*: generate 256 bits from the OS RNG, wrap
