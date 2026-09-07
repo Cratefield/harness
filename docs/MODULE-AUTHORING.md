@@ -547,6 +547,26 @@ waitlist addresses into the signup list — with **no crate dependency**
 between the two modules. Read `crates/module-email-signup/src/lib.rs`
 (`fn events`) for the pattern.
 
+### Durable and idempotent work
+
+The event bus and `Defer` are execution *opportunities*, not durable
+delivery — a crash or deadline after the commit loses the work. When a
+side effect must survive that (a confirmation mail, a paid entitlement),
+reach for two core primitives:
+
+- **`cratefield_core::Outbox`** — write `enqueue_statement(..)` into the
+  **same `db.batch`** as your state change so the work is durable exactly
+  when the change is, then use `Defer` only to *attempt* immediate
+  delivery (`claim_due` → deliver → `complete`/`retry_later`); drain the
+  rest from the venture's scheduled entry point. At-least-once.
+- **`cratefield_core::Inbox`** — before applying an inbound effect (a
+  Stripe webhook, a redelivered event), `claim(db, event_id, now)`; only
+  the first caller gets `true`. Exactly-once for the consumer.
+
+Each owns a table the module declares — ship `create_table_sql()` as a
+migration (Step 3). Pair them: an outbox gives at-least-once delivery, an
+inbox key makes the consumer idempotent.
+
 ## Step 7 — Conformance
 
 `examples/module-hello/tests/conformance.rs` — the whole file:
