@@ -270,23 +270,27 @@ impl Allowlist {
         now: &str,
     ) -> Result<AllowEntry, AccessError> {
         let value = normalise_value(value, kind);
+        // The mutation and its audit row commit together (`batch` is one unit
+        // of work on SQLite and D1), so the whitelist can never change without
+        // a matching audit record, and vice versa.
         self.db
-            .execute(&Statement::with_values(
-                "INSERT INTO allowlist (value, kind, note, added_by, added_at) \
-                 VALUES (?, ?, ?, ?, ?) \
-                 ON CONFLICT(value) DO UPDATE SET \
-                 kind = excluded.kind, note = excluded.note, \
-                 added_by = excluded.added_by, added_at = excluded.added_at",
-                vec![
-                    text(&value),
-                    text(kind.as_str()),
-                    text(note),
-                    text(actor),
-                    text(now),
-                ],
-            ))
-            .await?;
-        self.audit(audit_id, "allow", &value, kind, actor, now)
+            .batch(&[
+                Statement::with_values(
+                    "INSERT INTO allowlist (value, kind, note, added_by, added_at) \
+                     VALUES (?, ?, ?, ?, ?) \
+                     ON CONFLICT(value) DO UPDATE SET \
+                     kind = excluded.kind, note = excluded.note, \
+                     added_by = excluded.added_by, added_at = excluded.added_at",
+                    vec![
+                        text(&value),
+                        text(kind.as_str()),
+                        text(note),
+                        text(actor),
+                        text(now),
+                    ],
+                ),
+                audit_statement(audit_id, "allow", &value, kind, actor, now),
+            ])
             .await?;
         Ok(AllowEntry {
             value,
@@ -316,12 +320,13 @@ impl Allowlist {
             return Ok(false);
         };
         self.db
-            .execute(&Statement::with_values(
-                "DELETE FROM allowlist WHERE value = ?",
-                vec![text(&entry.value)],
-            ))
-            .await?;
-        self.audit(audit_id, "revoke", &entry.value, entry.kind, actor, now)
+            .batch(&[
+                Statement::with_values(
+                    "DELETE FROM allowlist WHERE value = ?",
+                    vec![text(&entry.value)],
+                ),
+                audit_statement(audit_id, "revoke", &entry.value, entry.kind, actor, now),
+            ])
             .await?;
         Ok(true)
     }
@@ -369,32 +374,30 @@ impl Allowlist {
             .await?;
         Ok(!rows.is_empty())
     }
+}
 
-    async fn audit(
-        &self,
-        id: &str,
-        action: &str,
-        value: &str,
-        kind: EntryKind,
-        actor: &str,
-        now: &str,
-    ) -> Result<(), AccessError> {
-        self.db
-            .execute(&Statement::with_values(
-                "INSERT INTO allowlist_audit (id, action, value, kind, actor, at) \
-                 VALUES (?, ?, ?, ?, ?, ?)",
-                vec![
-                    text(id),
-                    text(action),
-                    text(value),
-                    text(kind.as_str()),
-                    text(actor),
-                    text(now),
-                ],
-            ))
-            .await?;
-        Ok(())
-    }
+/// The audit insert for one whitelist mutation, batched alongside it so the
+/// two commit together.
+fn audit_statement(
+    id: &str,
+    action: &str,
+    value: &str,
+    kind: EntryKind,
+    actor: &str,
+    now: &str,
+) -> Statement {
+    Statement::with_values(
+        "INSERT INTO allowlist_audit (id, action, value, kind, actor, at) \
+         VALUES (?, ?, ?, ?, ?, ?)",
+        vec![
+            text(id),
+            text(action),
+            text(value),
+            text(kind.as_str()),
+            text(actor),
+            text(now),
+        ],
+    )
 }
 
 /// The domain key (`@domain`) to test for an email, preferring the
