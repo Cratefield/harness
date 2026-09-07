@@ -856,6 +856,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "factory0-module-cms"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "factory0-adapter-sqlite",
+ "factory0-core",
+ "factory0-testing",
+ "http",
+ "pollster",
+ "schemars",
+ "sea-query",
+ "serde",
+ "serde_json",
+ "time",
+ "tower",
+ "tracing",
+ "ulid",
+]
+
+[[package]]
 name = "factory0-module-email-signup"
 version = "0.1.0"
 dependencies = [
