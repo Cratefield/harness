@@ -49,7 +49,7 @@ security headers.
 
 | Piece | What it is |
 |---|---|
-| `Module` / `ModuleContext` | the module contract; see [docs/MODULE-AUTHORING.md](../../docs/MODULE-AUTHORING.md) |
+| `Module` / `ModuleContext` | the module contract; see [docs/MODULE-AUTHORING.md](https://github.com/Cratefield/harness/blob/main/docs/MODULE-AUTHORING.md) |
 | `Harness` / `HarnessBuilder` | composition, validation, router assembly |
 | `ports::*` | `Database`, `Mailer`, `Captcha`, `RateLimiter`, `Signer`, `KeyValue`, `HttpClient`, `Clock`, `IdGen`, `Defer` — `Send + Sync` trait objects |
 | `Problem` / `problems!` | RFC 9457 errors with a stable slug taxonomy (generated into `docs/ERRORS.md`) |
@@ -61,11 +61,11 @@ security headers.
 
 ## Writing a module
 
-Start with [docs/MODULE-AUTHORING.md](../../docs/MODULE-AUTHORING.md) —
+Start with [docs/MODULE-AUTHORING.md](https://github.com/Cratefield/harness/blob/main/docs/MODULE-AUTHORING.md) —
 it builds a complete module, `cratefield-module-hello`, step by step.
 
 ## Testing a module
 
-[`cratefield-testing`](../testing/) is the conformance kit: fake ports, an
+[`cratefield-testing`](https://github.com/Cratefield/harness/tree/main/crates/testing) is the conformance kit: fake ports, an
 in-memory SQLite `Database`, and request helpers over the real axum
 router, no network. Every module — public or private — passes it.

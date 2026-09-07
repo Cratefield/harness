@@ -51,7 +51,7 @@ Workers path. `serve(harness, runtime)` binds, sanitizes client IPs,
 starts the cron scheduler and serves until SIGTERM/SIGINT.
 
 A complete example binary — the example venture's modules on Postgres or
-SQLite — is [`examples/venture-native`](../../examples/venture-native/),
+SQLite — is [`examples/venture-native`](https://github.com/Cratefield/harness/tree/main/examples/venture-native),
 with the multi-stage distroless `Dockerfile` and the repo-root
 `docker-compose.example.yml` (app + Postgres + Redis).
 
