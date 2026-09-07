@@ -526,6 +526,13 @@ fn validate_name(name: &str) -> Result<(), SecretsError> {
             "a secret name is at most 200 bytes".to_owned(),
         ));
     }
+    if let Some(frag) = cratefield_core::card_data_hit(name) {
+        return Err(SecretsError::Invalid(format!(
+            "a secret name must not look like card data (`{frag}`): the harness never stores \
+             primary account numbers, verification codes or expiry (PCI DSS SAQ A). Store \
+             Stripe's own secrets (webhook signing secret, API key) under a plain name instead"
+        )));
+    }
     Ok(())
 }
 
