@@ -103,14 +103,22 @@ function of the module set. A mount that collides with a compiled-in
 module is ignored and logged; shipped code always keeps its prefix.
 
 Then deploy the sidecar itself: a one-module Worker built from the same
-crate, with its own `HARNESS_SECRET`, its own `ADMIN_TOKEN` and its own
-database binding. Its migrations are applied by whoever owns it.
+crate, with its own `HARNESS_SECRET`, its own `ADMIN_TOKEN` and the same
+database binding. Its migrations are applied by whoever owns it, from
+its own stream: two streams share one database cleanly, provided they
+are applied one after the other and never in parallel
+([MIGRATION-STREAMS.md](MIGRATION-STREAMS.md)).
 
 **Sidecar → in-process.** The reverse: add the crate back, delete the
-binding and the `HARNESS_SIDECARS` entry, apply the module's migrations
-to the venture's database and move its rows across
-([DATA-MOVE.md](DATA-MOVE.md)). The API does not change; the data does
-not move itself.
+binding and the `HARNESS_SIDECARS` entry. The tables are already in the
+venture's database, so nothing moves — but **carry the migration's file
+name across**: put the name the sidecar's stream used into the host's
+`.harness-lock.json` before running `fz migrations collect`, or the host
+writes a new number, wrangler sees a name it has never applied, and runs
+the migration a second time ([MIGRATION-STREAMS.md](MIGRATION-STREAMS.md)
+§3). Moving the other way has the same hazard in reverse. Rows only ever
+move when the venture itself moves database
+([DATA-MOVE.md](DATA-MOVE.md)).
 
 ## Before you ship either way
 
