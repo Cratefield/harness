@@ -121,8 +121,18 @@ flowchart LR
 
 ## Crates
 
-All public crates are `cratefield-*`, MIT. Nothing is published to crates.io yet;
-depend on this repository by git.
+All public crates are `cratefield-*`, MIT, plus the `cratefield` facade that
+pulls them together. Nothing is published to crates.io yet; depend on this
+repository by git.
+
+Most ventures want one line:
+
+```toml
+cratefield = { version = "0.1", features = ["cloudflare", "resend", "waitlist"] }
+```
+
+The individual crates stay available and are the same types; the facade is a
+convenience, not a layer.
 
 > These crates were `factory0-*` until the first release. Renaming a
 > published crate breaks every consumer, so the rename had exactly one
@@ -132,6 +142,7 @@ depend on this repository by git.
 
 | Crate | Role |
 |---|---|
+| `cratefield` | The facade: one dependency that re-exports the core and pulls in a runtime, adapters and modules by feature (ADR 0011, 0012). Start here |
 | `cratefield-core` | `Module` trait, `Harness` builder, port traits, problem+json errors, request scope, event bus, templates |
 | `cratefield-runtime-cloudflare` | workers-rs entry points; D1, KV, Rate Limiting and `wait_until` mapped to ports |
 | `cratefield-adapter-resend` | `Mailer` over the Resend REST API, with a `NotConfigured` mode until a sending domain is verified |

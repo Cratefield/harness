@@ -17,15 +17,20 @@ crate-type = ["cdylib", "rlib"]
 workspace = true
 
 [dependencies]
-cratefield-core = { workspace = true }
-cratefield-runtime-cloudflare = { workspace = true }
-cratefield-module-email-signup = { workspace = true }
-cratefield-module-waitlist = { workspace = true }
-cratefield-ui = { workspace = true }
-# The example mounts modules that require a Mailer; the Resend adapter with
-# no key is NotConfigured, which is what the example wants: the port exists,
-# nothing is ever sent.
-cratefield-adapter-resend = { workspace = true }
+# One dependency, not six. This is the front door a venture is meant to
+# use, and building the wasm canary through it is how we know the facade
+# actually works on Workers rather than only in a unit test.
+#
+# `resend` is here because the example mounts modules that require a
+# Mailer; with no key the adapter is NotConfigured, which is what an
+# example wants: the port exists, nothing is ever sent.
+cratefield = { path = "../../crates/facade", version = "0.1.0", features = [
+    "cloudflare",
+    "ui",
+    "resend",
+    "email-signup",
+    "waitlist",
+] }
 axum = { workspace = true }
 http = { workspace = true }
 tower = { workspace = true }
