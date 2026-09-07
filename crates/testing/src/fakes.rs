@@ -810,3 +810,71 @@ impl cratefield_core::Payments for FakePayments {
         })
     }
 }
+
+// ---------------------------------------------------------------------------
+// FakeRealtime
+
+/// Room id -> the member ids a [`FakeRealtime`] reports for it.
+type RealtimeMembers = std::collections::HashMap<String, Vec<String>>;
+/// The `(room_id, message)` broadcasts a [`FakeRealtime`] recorded.
+type RealtimeBroadcasts = Vec<(String, Vec<u8>)>;
+
+/// An in-memory [`cratefield_core::Realtime`] for module tests: records every
+/// broadcast per room and reports a fixed member list. It exercises the port a
+/// module holds (broadcast/members from outside a socket); the socket lifecycle
+/// and `RoomHandler` are the runtime adapter's job, covered by the native
+/// adapter's own tests.
+#[derive(Clone, Default)]
+pub struct FakeRealtime {
+    broadcasts: Arc<Mutex<RealtimeBroadcasts>>,
+    members: Arc<Mutex<RealtimeMembers>>,
+}
+
+impl FakeRealtime {
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Presets the members a room reports (for `members` assertions).
+    pub fn set_members(&self, room_id: &str, ids: &[&str]) {
+        self.members.lock().expect("realtime lock").insert(
+            room_id.to_owned(),
+            ids.iter().map(|id| (*id).to_owned()).collect(),
+        );
+    }
+
+    /// Every `(room_id, message)` broadcast so far.
+    #[must_use]
+    pub fn broadcasts(&self) -> Vec<(String, Vec<u8>)> {
+        self.broadcasts.lock().expect("realtime lock").clone()
+    }
+}
+
+#[async_trait]
+impl cratefield_core::Realtime for FakeRealtime {
+    async fn broadcast(
+        &self,
+        room_id: &str,
+        message: &[u8],
+    ) -> Result<(), cratefield_core::RealtimeError> {
+        self.broadcasts
+            .lock()
+            .expect("realtime lock")
+            .push((room_id.to_owned(), message.to_vec()));
+        Ok(())
+    }
+
+    async fn members(
+        &self,
+        room_id: &str,
+    ) -> Result<Vec<cratefield_core::Member>, cratefield_core::RealtimeError> {
+        Ok(self
+            .members
+            .lock()
+            .expect("realtime lock")
+            .get(room_id)
+            .map(|ids| ids.iter().map(cratefield_core::Member::new).collect())
+            .unwrap_or_default())
+    }
+}
