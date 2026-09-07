@@ -14,10 +14,13 @@
 
 #![forbid(unsafe_code)]
 
+mod google;
+pub use google::{GoogleClient, GoogleError};
+
 use std::sync::Arc;
 
-use axum::extract::State;
-use axum::response::{Html, IntoResponse, Redirect, Response};
+use axum::extract::{Query, State};
+use axum::response::{AppendHeaders, Html, IntoResponse, Redirect, Response};
 use axum::routing::{get, post};
 use cratefield_access::{
     Admission, Allowlist, DEFAULT_TTL_SECS, EntryKind, Session, VerifiedIdentity,
@@ -25,14 +28,19 @@ use cratefield_access::{
     session_token_from_cookie_header,
 };
 use cratefield_core::{
-    Config, ConfigError, Migrations, Module, ModuleContext, Port, Signer, SqlMigration,
-    require_admin,
+    Config, ConfigError, Migrations, Module, ModuleConfig, ModuleContext, Port, Signer,
+    SqlMigration, require_admin,
 };
 use http::{HeaderMap, StatusCode, header};
 use time::format_description::well_known::Rfc3339;
 
 /// Where the console is mounted (`/v1/<name>`), so its own redirects resolve.
 const BASE: &str = "/v1/console";
+
+/// The short-lived CSRF cookie carrying the OAuth `state` across the Google
+/// round-trip. `SameSite=Lax` so it *is* sent on the top-level GET redirect
+/// back from Google (Strict would not be).
+const STATE_COOKIE: &str = "cf_oauth_state";
 
 /// The control-plane console.
 pub struct Console;
@@ -48,8 +56,8 @@ impl Module for Console {
 
     fn requires(&self) -> &'static [Port] {
         // The signer proves the session cookie; the database holds the
-        // allowlist and its audit.
-        &[Port::Signer, Port::Db]
+        // allowlist and its audit; the http client runs the Google exchange.
+        &[Port::Signer, Port::Db, Port::HttpClient]
     }
 
     fn migrations(&self) -> Migrations {
@@ -68,6 +76,7 @@ impl Module for Console {
         axum::Router::new()
             .route("/", get(home))
             .route("/login", get(login_page))
+            .route("/auth/start", get(auth_start))
             .route("/auth/callback", get(callback))
             .route("/logout", get(logout))
             .route("/admin/allowlist", post(invite))
@@ -162,34 +171,109 @@ async fn home(State(state): State<Arc<ConsoleState>>, headers: HeaderMap) -> Res
 }
 
 async fn login_page() -> Response {
-    // The button is inert until the auth service can receive the callback
-    // (auth#41). The page is honest about it rather than dead.
     Html(page(
         "Sign in · Cratefield",
         &format!(
             "<p>Cratefield is invite-only. Sign in with the Google account on the allowlist.</p>\
-             <p><a class=\"btn\" href=\"{BASE}/auth/callback\">Sign in with Google</a></p>\
-             <p class=\"muted\">Sign-in is not live yet: it goes through the Factory Zero auth \
-             service, which is not deployable yet (auth#41). The session, allowlist and guard are \
-             in place; the exchange plugs in when auth ships.</p>",
+             <p><a class=\"btn\" href=\"{BASE}/auth/start\">Sign in with Google</a></p>",
         ),
     ))
     .into_response()
 }
 
-async fn callback() -> Response {
-    // The real handler will exchange the auth service's response for a
-    // `VerifiedIdentity`, then call `complete_login`. Until auth is deployable
-    // there is nothing to exchange, so we say so plainly rather than pretend.
+/// Begins the OAuth flow: mints a CSRF `state`, sets it as a `SameSite=Lax`
+/// cookie, and redirects to Google. Returns a plain page when the console has
+/// no Google client configured (`CONSOLE_GOOGLE_CLIENT_*`).
+async fn auth_start(State(state): State<Arc<ConsoleState>>) -> Response {
+    let ctx = &state.ctx;
+    let Some(client) = google_client(ctx) else {
+        return not_configured();
+    };
+    let token = ctx
+        .ports
+        .id_gen
+        .as_ref()
+        .map_or_else(|| "state".to_owned(), |generator| generator.ulid());
     (
-        StatusCode::SERVICE_UNAVAILABLE,
-        Html(page(
-            "Sign-in unavailable · Cratefield",
-            "<p>Sign-in is not available yet: the Factory Zero auth service is not deployed \
-             (auth#41). No account was created.</p>",
-        )),
+        AppendHeaders([(header::SET_COOKIE, set_state_cookie(&token))]),
+        Redirect::to(&client.authorize_url(&token)),
     )
         .into_response()
+}
+
+#[derive(serde::Deserialize)]
+struct CallbackParams {
+    code: Option<String>,
+    state: Option<String>,
+}
+
+/// The OAuth redirect target: verify the CSRF `state`, exchange the `code` for
+/// a Google-verified identity, and admit it (session) or refuse it
+/// (invite-only). Card-clean: only Google identifiers cross here.
+async fn callback(
+    State(app): State<Arc<ConsoleState>>,
+    headers: HeaderMap,
+    Query(params): Query<CallbackParams>,
+) -> Response {
+    let ctx = &app.ctx;
+    let Some(client) = google_client(ctx) else {
+        return not_configured();
+    };
+    let (Some(code), Some(returned_state)) = (params.code, params.state) else {
+        return (StatusCode::BAD_REQUEST, "missing code or state").into_response();
+    };
+    // CSRF: the state returned by Google must match the cookie we set.
+    match state_from_cookies(&headers) {
+        Some(cookie_state) if cookie_state == returned_state => {}
+        _ => return (StatusCode::BAD_REQUEST, "state mismatch").into_response(),
+    }
+
+    let (Some(http), Some(db), Some(signer)) = (
+        ctx.ports.http.clone(),
+        ctx.ports.db.clone(),
+        ctx.ports.signer.clone(),
+    ) else {
+        return internal("a required port is unavailable");
+    };
+
+    let identity = match client.exchange(http.as_ref(), &code).await {
+        Ok(identity) => identity,
+        Err(err) => {
+            tracing::error!(error = %err, "google exchange failed");
+            return (StatusCode::BAD_GATEWAY, "sign-in with Google failed").into_response();
+        }
+    };
+
+    let now = ctx.ports.clock.as_ref().map_or(0, |clock| {
+        u64::try_from(clock.now().unix_timestamp()).unwrap_or(0)
+    });
+    let allowlist = Allowlist::new(db);
+    match complete_login(signer.as_ref(), &allowlist, &identity, now).await {
+        Ok(LoginOutcome::Admitted { set_cookie }) => (
+            AppendHeaders([
+                (header::SET_COOKIE, set_cookie),
+                (header::SET_COOKIE, clear_state_cookie()),
+            ]),
+            Redirect::to(&format!("{BASE}/")),
+        )
+            .into_response(),
+        Ok(LoginOutcome::Refused) => (
+            StatusCode::FORBIDDEN,
+            Html(page(
+                "Invite-only · Cratefield",
+                &format!(
+                    "<p><strong>{}</strong> is not on the Cratefield allowlist.</p>\
+                     <p>Cratefield is invite-only. No account was created.</p>",
+                    escape(&identity.email)
+                ),
+            )),
+        )
+            .into_response(),
+        Err(err) => {
+            tracing::error!(error = %err, "login failed");
+            internal("login failed")
+        }
+    }
 }
 
 async fn logout() -> Response {
@@ -275,6 +359,50 @@ struct InviteRequest {
     kind: String,
     #[serde(default)]
     note: String,
+}
+
+/// The console's Google client from config, or `None` if `CONSOLE_GOOGLE_*`
+/// are not set (then sign-in is disabled and [`auth_start`] says so).
+fn google_client(ctx: &ModuleContext) -> Option<crate::google::GoogleClient> {
+    let cfg = ModuleConfig::new("console", &*ctx.config);
+    let client_id = cfg.get_str("GOOGLE_CLIENT_ID", "");
+    let client_secret = cfg.get_str("GOOGLE_CLIENT_SECRET", "");
+    let base = cfg.get_str("BASE_URL", "");
+    if client_id.is_empty() || client_secret.is_empty() || base.is_empty() {
+        return None;
+    }
+    Some(crate::google::GoogleClient {
+        client_id,
+        client_secret,
+        redirect_uri: format!("{}{BASE}/auth/callback", base.trim_end_matches('/')),
+    })
+}
+
+fn set_state_cookie(state: &str) -> String {
+    format!("{STATE_COOKIE}={state}; HttpOnly; Secure; SameSite=Lax; Path={BASE}; Max-Age=600")
+}
+
+fn clear_state_cookie() -> String {
+    format!("{STATE_COOKIE}=; HttpOnly; Secure; SameSite=Lax; Path={BASE}; Max-Age=0")
+}
+
+fn state_from_cookies(headers: &HeaderMap) -> Option<String> {
+    let cookie = headers.get(header::COOKIE)?.to_str().ok()?;
+    cookie.split(';').find_map(|pair| {
+        let (name, value) = pair.trim().split_once('=')?;
+        (name == STATE_COOKIE).then(|| value.to_owned())
+    })
+}
+
+fn not_configured() -> Response {
+    (
+        StatusCode::SERVICE_UNAVAILABLE,
+        Html(page(
+            "Sign-in unavailable · Cratefield",
+            "<p>Google sign-in is not configured on this console              (<code>CONSOLE_GOOGLE_CLIENT_ID</code>/<code>_SECRET</code>/<code>BASE_URL</code>).</p>",
+        )),
+    )
+        .into_response()
 }
 
 fn internal(detail: &str) -> Response {

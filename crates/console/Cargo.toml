@@ -16,6 +16,7 @@ cratefield-core = { workspace = true }
 cratefield-access = { path = "../access" }
 axum = { workspace = true }
 http = { workspace = true }
+bytes = "1"
 serde = { workspace = true }
 serde_json = { workspace = true }
 tracing = { workspace = true }
@@ -25,3 +26,4 @@ time = { workspace = true }
 cratefield-adapter-sqlite = { git = "https://github.com/Cratefield/harness", rev = "b0858003713c5bc449ef617154ca375842ec1a4b" }
 pollster = { version = "0.4", features = ["macro"] }
 tower = { version = "0.5", features = ["util"] }
+async-trait = "0.1"

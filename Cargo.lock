@@ -256,7 +256,9 @@ dependencies = [
 name = "cratefield-console"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "axum",
+ "bytes",
  "cratefield-access",
  "cratefield-adapter-sqlite",
  "cratefield-core",
