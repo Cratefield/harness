@@ -226,6 +226,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "cratefield-connections"
+version = "0.1.0"
+dependencies = [
+ "cratefield-catalog",
+ "factory0-adapter-sqlite",
+ "factory0-core",
+ "factory0-kms",
+ "factory0-secrets",
+ "pollster",
+ "sea-query",
+ "serde",
+]
+
+[[package]]
 name = "cratefield-control-plane"
 version = "0.1.0"
 dependencies = [
