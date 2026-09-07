@@ -453,6 +453,11 @@ pub struct UiContext {
     /// Whether the `Captcha` port is configured, so the renderer knows to
     /// include the widget on actions that declare `captcha`.
     pub captcha_configured: bool,
+    /// The `Signer`, for the admin session cookie (issue #74). Absent
+    /// means no admin UI, the way an unset `ADMIN_TOKEN` does.
+    pub signer: Option<std::sync::Arc<dyn crate::ports::Signer>>,
+    /// The `RateLimiter`, for the admin login form.
+    pub rate_limiter: Option<std::sync::Arc<dyn crate::ports::RateLimiter>>,
 }
 
 /// A renderer the venture mounts at `/ui` with `HarnessBuilder::ui`

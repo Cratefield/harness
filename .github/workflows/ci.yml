@@ -154,6 +154,9 @@ jobs:
       - name: Start wrangler dev
         working-directory: examples/venture
         run: |
+          # Throwaway secrets so the signer and the admin UI are on; the
+          # example's mailer stays NotConfigured, nothing is ever sent.
+          printf 'HARNESS_SECRET=ci-only-secret-0123456789abcdef-xyz\nADMIN_TOKEN=ci-only-admin-token\n' > .dev.vars
           nohup bunx wrangler dev --local > /tmp/wrangler.log 2>&1 &
           for i in $(seq 1 60); do
             code=$(curl -s -o /dev/null -w "%{http_code}" -m 3 http://127.0.0.1:8787/__health || true)
@@ -183,6 +186,15 @@ jobs:
           grep -q 'cf-field--invalid' /tmp/ui.body
           echo "-- ui css"
           curl -sf -m 10 http://127.0.0.1:8787/ui/cf.css | grep -q '@layer cf'
+          echo "-- admin: login redirect, login, table"
+          curl -s -m 10 -o /dev/null -w "%{http_code}" http://127.0.0.1:8787/ui/admin | grep -q '^303$'
+          curl -s -m 10 -o /dev/null -D /tmp/login.headers -X POST http://127.0.0.1:8787/ui/admin/login \
+            -H 'origin: http://127.0.0.1:8787' -H 'content-type: application/x-www-form-urlencoded' \
+            --data 'token=ci-only-admin-token'
+          grep -qi '^set-cookie: cf_admin=' /tmp/login.headers
+          COOKIE=$(grep -i '^set-cookie:' /tmp/login.headers | sed 's/^[^:]*: *//' | cut -d';' -f1)
+          curl -sf -m 10 -H "cookie: $COOKIE" http://127.0.0.1:8787/ui/admin/waitlist/export \
+            | grep -q '<table class="cf-table"'
       - name: cf.js embed against the running worker (issue #73)
         working-directory: tools/cfjs
         run: |

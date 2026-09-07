@@ -30,8 +30,8 @@ win.
 | `GET /ui/cf.css` | The base stylesheet. |
 | `GET /ui/cf.js` | The embed, below. |
 
-Admin actions are not served by `/ui` until the admin UI (issue #74); they
-answer `404` like an unknown action.
+Admin actions are not served on the public routes; they answer `404` like
+an unknown action there and live under `/ui/admin`, below.
 
 ## Field rendering
 
@@ -90,7 +90,7 @@ is this table rendered; it fails first when the contract changes.
 
 ## Styling
 
-`cf.css` is under 4 KB, sits entirely inside `@layer cf`, and uses only the
+`cf.css` is under 6 KB (about 1.5 KB gzipped), sits entirely inside `@layer cf`, and uses only the
 custom properties below. Any **unlayered** author rule beats it without
 `!important`, whatever its specificity, because unlayered styles win over
 layered ones. To restyle: set the properties on `:root`, add your own rules
@@ -113,6 +113,40 @@ Full pages link `/ui/cf.css`, then the theme stylesheet from
 `Ui::theme_css` if set, and carry a `Content-Security-Policy` that allows
 only the API origin for styles (plus the theme's origin), no scripts except
 Turnstile's when a widget is on the page, and `form-action 'self'`.
+
+## Admin pages
+
+`/ui/admin` needs a session. `GET /ui/admin/login` takes the admin token
+in a password field; a correct token (compared in constant time, rate
+limited per IP when the `RateLimiter` port is configured) answers a `303`
+to `/ui/admin` with a `cf_admin` cookie: `HttpOnly; Secure;
+SameSite=Strict; Path=/ui/admin`, holding a `Signer`-signed session
+(purpose `admin-session`, twelve hours, `kid`-rotated like every other
+token). The token itself is never stored. Without a `Signer` or an
+`ADMIN_TOKEN` the login page says admin is switched off, the same way the
+admin routes are.
+
+The session proves the token was presented once. On every admin dispatch
+the harness attaches `Authorization: Bearer <ADMIN_TOKEN>` from its own
+config, so the modules' `require_admin` stays the single gate. Every admin
+`POST` must also carry an `Origin` (or `Referer`) matching `Host`.
+
+| Route | Answer |
+|---|---|
+| `GET /ui/admin` | Index: per module, its tables and its admin form actions. |
+| `GET /ui/admin/<module>/<action>` | A `Table` view over the admin export named `action` (CSV parsed, columns from the view, `cf-table` markup), or the form of an admin `POST` action. |
+| `POST /ui/admin/<module>/<action>` | An admin form dispatched as JSON; or a row action (an admin `DELETE` whose path parameter names a column): without `confirm=1` the confirm page, with it the `DELETE` and a `303` back to the table. Both are plain form posts. |
+| `POST /ui/admin/logout` | Clears the cookie. |
+
+Admin pages carry `Cache-Control: no-store`, `X-Frame-Options: DENY` and
+the page CSP. Markup: `cf-nav`, `cf-nav-link`, `cf-logout`, `cf-table`,
+`cf-table-head`, `cf-table-row`, `cf-table-cell`, `cf-table-actions`,
+`cf-table-empty`, `cf-row-action`, `cf-submit--row`, `cf-submit--danger`,
+`cf-cancel`, `cf-admin-index`, `cf-admin-module`, `cf-admin-links`,
+`cf-admin-link`, and the `cf-form--confirm` notice.
+
+This is the interim until an accounts module exists; the cookie scheme is
+replaced then, not extended.
 
 ## The embed: `cf.js`
 
