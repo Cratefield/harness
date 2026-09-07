@@ -11,6 +11,18 @@
 #   whose version is not on crates.io yet, in dependency order, and
 #   tags `<crate>-v<version>`.
 #
+# Two human prerequisites, each with its own switch so an unfinished
+# setup leaves `main` green with an annotation rather than red:
+#
+# - Opening the release PR needs a token GitHub lets create PRs. The
+#   built-in `GITHUB_TOKEN` may not: "GitHub Actions is not permitted to
+#   create or approve pull requests" is a 403 unless the org/repo
+#   setting is on. Prefer a `RELEASE_PLZ_TOKEN` secret (a fine-grained
+#   PAT or GitHub App token with contents + pull-requests write): it
+#   sidesteps the setting *and* makes the release PR run CI, which a
+#   `GITHUB_TOKEN`-authored PR never does.
+# - Publishing needs crates.io setup, below.
+#
 # `release` is gated on the repository variable `CRATES_IO_READY`: a
 # crate's trusted publisher can only be configured after the crate
 # exists, so until the owner has first-published each crate by hand and
@@ -56,11 +68,12 @@ jobs:
       # to `release-plz/action`, which publishes no floating major tag, so
       # `@v0` cannot resolve and the job never starts. Bump deliberately.
       - name: Open or update the release PR
+        if: secrets.RELEASE_PLZ_TOKEN != '' || vars.ACTIONS_MAY_OPEN_PRS == 'true'
         uses: release-plz/action@v0.5.133
         with:
           command: release-pr
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN || secrets.GITHUB_TOKEN }}
       - name: Publish crates and tag releases (no-op until the release PR merges)
         if: vars.CRATES_IO_READY == 'true'
         uses: release-plz/action@v0.5.133
@@ -71,8 +84,20 @@ jobs:
           # and publishing would silently never happen.
           dry_run: ${{ inputs.dry_run && 'true' || '' }}
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      - name: Say why publishing was skipped
-        if: vars.CRATES_IO_READY != 'true'
+          GITHUB_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN || secrets.GITHUB_TOKEN }}
+      - name: Say what is still switched off
+        if: always()
+        # The secret is passed as a boolean, never interpolated into the
+        # script: a secret in a shell line can leak through tracing or an
+        # error message.
+        env:
+          HAS_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN != '' }}
+          MAY_OPEN_PRS: ${{ vars.ACTIONS_MAY_OPEN_PRS }}
+          CRATES_IO_READY: ${{ vars.CRATES_IO_READY }}
         run: |
-          echo "::notice title=Publishing is off::The repository variable CRATES_IO_READY is not 'true', so the release command did not run. The crates have not been first-published by hand yet: see docs/RELEASING.md, Owner setup."
+          if [ "$HAS_TOKEN" != "true" ] && [ "$MAY_OPEN_PRS" != "true" ]; then
+            echo "::notice title=The release PR is off::No RELEASE_PLZ_TOKEN secret and ACTIONS_MAY_OPEN_PRS is not 'true', so release-pr did not run: GitHub refuses PR creation by GITHUB_TOKEN unless the repository setting allows it. See docs/RELEASING.md, Owner setup."
+          fi
+          if [ "$CRATES_IO_READY" != "true" ]; then
+            echo "::notice title=Publishing is off::CRATES_IO_READY is not 'true', so the release command did not run: the crates have not been first-published by hand yet. See docs/RELEASING.md, Owner setup."
+          fi
