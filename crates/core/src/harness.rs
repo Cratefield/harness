@@ -147,6 +147,32 @@ impl Harness {
             let ctx = self.module_context(module.as_ref(), &ports);
             api = api.nest(&format!("/v1/{}", module.name()), module.router(ctx));
         }
+        // Sidecar mounts come from configuration, not from the composition
+        // (ADR 0009), so the same artifact serves ventures with and without
+        // them. A malformed table mounts nothing and is logged; it must not
+        // take down the in-process modules.
+        let mounts = match crate::sidecar::SidecarMounts::from_config(ports.config.as_ref()) {
+            Ok(mounts) => mounts,
+            Err(errors) => {
+                for error in errors {
+                    tracing::error!(error, "ignoring the sidecar mount table");
+                }
+                crate::sidecar::SidecarMounts::default()
+            }
+        };
+        let module_names: Vec<&str> = self.modules.iter().map(|m| m.name()).collect();
+        for collision in mounts.collisions(&module_names) {
+            tracing::error!(error = collision, "ignoring the colliding sidecar mount");
+        }
+        for mount in mounts.iter() {
+            if module_names.contains(&mount.name.as_str()) {
+                continue;
+            }
+            api = api.nest(
+                &format!("/v1/{}", mount.name),
+                crate::sidecar::router(mount.clone(), ports.dispatcher.clone()),
+            );
+        }
         let api = api
             .layer(axum::middleware::from_fn(security_headers_layer))
             .layer(DefaultBodyLimit::max(MAX_BODY_BYTES));
@@ -174,6 +200,7 @@ impl Harness {
             clock,
             id_gen,
             defer,
+            dispatcher: _,
         } = ports;
 
         let health_state = HealthState {

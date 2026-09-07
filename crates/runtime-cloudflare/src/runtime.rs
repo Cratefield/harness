@@ -1,13 +1,18 @@
 //! The `Cloudflare` runtime builder (issue #5).
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use factory0_core::{Captcha, Defer, HarnessConfig, Mailer, Port, Ports, Runtime, UlidIdGen};
+use factory0_core::{
+    Captcha, Defer, HarnessConfig, Mailer, Port, Ports, Runtime, SidecarMounts, UlidIdGen,
+};
 use worker::Env;
 
 use crate::config::EnvConfig;
-use crate::ports::{D1Database, FetchClient, KvStorePort, RateLimitPort, WorkersClock};
+use crate::ports::{
+    D1Database, FetchClient, KvStorePort, RateLimitPort, ServiceDispatcher, WorkersClock,
+};
 
 fn warn_once(flag: &AtomicBool, message: &str) {
     if !flag.load(Ordering::Relaxed) {
@@ -40,6 +45,7 @@ static WARNED_DB: AtomicBool = AtomicBool::new(false);
 static WARNED_KV: AtomicBool = AtomicBool::new(false);
 static WARNED_RATE_LIMIT: AtomicBool = AtomicBool::new(false);
 static WARNED_SIGNER: AtomicBool = AtomicBool::new(false);
+static WARNED_SIDECAR: AtomicBool = AtomicBool::new(false);
 
 /// The Workers runtime. Binding names are static; `.mailer()`/`.captcha()`
 /// take adapter instances (`factory0-adapter-resend`,
@@ -154,6 +160,38 @@ impl Cloudflare {
                 &WARNED_SIGNER,
                 "HARNESS_SECRET missing or invalid: Signer port not provided",
             ),
+        }
+
+        // Sidecar bindings come from the mount table in config, not from the
+        // composition (ADR 0009), so the same artifact serves ventures with
+        // and without sidecars. A binding named by the table but absent from
+        // this deployment is left unresolved: `has()` then reports false and
+        // that one prefix answers 503, rather than the Worker failing.
+        match SidecarMounts::from_config(&EnvConfig(env.clone())) {
+            Ok(mounts) if !mounts.is_empty() => {
+                let mut bindings = BTreeMap::new();
+                for mount in mounts.iter() {
+                    match env.service(&mount.binding) {
+                        Ok(fetcher) => {
+                            bindings.insert(mount.binding.clone(), fetcher);
+                        }
+                        Err(err) => warn_once(
+                            &WARNED_SIDECAR,
+                            &format!(
+                                "service binding {:?} for sidecar {:?} not available: {err}",
+                                mount.binding, mount.name
+                            ),
+                        ),
+                    }
+                }
+                ports.dispatcher = Some(Arc::new(ServiceDispatcher::new(bindings)));
+            }
+            Ok(_) => {}
+            Err(errors) => {
+                for error in errors {
+                    warn_once(&WARNED_SIDECAR, &error);
+                }
+            }
         }
 
         ports.http = Some(Arc::new(FetchClient));

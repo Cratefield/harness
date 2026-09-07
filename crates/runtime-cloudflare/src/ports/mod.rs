@@ -3,6 +3,7 @@
 mod clock;
 mod d1;
 mod defer;
+mod dispatcher;
 mod http;
 mod kv;
 mod rate_limit;
@@ -10,6 +11,7 @@ mod rate_limit;
 pub use clock::WorkersClock;
 pub use d1::D1Database;
 pub use defer::{ContextDefer, ScheduleDefer};
+pub use dispatcher::ServiceDispatcher;
 pub use http::FetchClient;
 pub use kv::KvStorePort;
 pub use rate_limit::RateLimitPort;

@@ -46,6 +46,12 @@ pub struct Slugs {
     /// 503: readiness probe failed (`/__ready`): database missing, slow or
     /// erroring.
     pub not_ready: ProblemDef,
+    /// 503: a sidecar-mounted module could not be reached (ADR 0009). Only
+    /// that prefix fails; every in-process module keeps serving.
+    pub sidecar_unavailable: ProblemDef,
+    /// 503: a sidecar answered with a different `HARNESS_API` than this
+    /// harness speaks, so its responses cannot be trusted.
+    pub sidecar_contract_mismatch: ProblemDef,
 }
 
 pub const SLUGS: Slugs = Slugs {
@@ -121,6 +127,18 @@ pub const SLUGS: Slugs = Slugs {
         title: "Service not ready",
         description: "Readiness probe failed: the database is missing, erroring or too slow.",
     },
+    sidecar_unavailable: ProblemDef {
+        slug: "sidecar-unavailable",
+        status: StatusCode::SERVICE_UNAVAILABLE,
+        title: "Sidecar module unavailable",
+        description: "A sidecar-mounted module could not be reached; other modules are unaffected.",
+    },
+    sidecar_contract_mismatch: ProblemDef {
+        slug: "sidecar-contract-mismatch",
+        status: StatusCode::SERVICE_UNAVAILABLE,
+        title: "Sidecar contract mismatch",
+        description: "A sidecar answers a different HARNESS_API than this harness speaks.",
+    },
 };
 
 /// Every core slug definition, for tests and docs.
@@ -138,5 +156,7 @@ pub fn registry() -> Vec<&'static ProblemDef> {
         &SLUGS.internal,
         &SLUGS.mail_not_configured,
         &SLUGS.not_ready,
+        &SLUGS.sidecar_unavailable,
+        &SLUGS.sidecar_contract_mismatch,
     ]
 }

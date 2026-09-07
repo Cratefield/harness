@@ -19,5 +19,7 @@ request id.
 | `not-ready` | 503 | Service not ready | Readiness probe failed: the database is missing, erroring or too slow. |
 | `rate-limited` | 429 | Rate limit exceeded | Too many requests from this IP or address; retry after the pause. |
 | `request-too-large` | 413 | Request body too large | The request body exceeded the 64 KiB limit for /v1 endpoints. |
+| `sidecar-contract-mismatch` | 503 | Sidecar contract mismatch | A sidecar answers a different HARNESS_API than this harness speaks. |
+| `sidecar-unavailable` | 503 | Sidecar module unavailable | A sidecar-mounted module could not be reached; other modules are unaffected. |
 | `unknown-product` | 400 | Unknown product | The named product is not on this waitlist. |
 | `validation-failed` | 400 | Request validation failed | The request body or query did not deserialize into a valid request. |

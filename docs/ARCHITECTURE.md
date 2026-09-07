@@ -201,6 +201,7 @@ ergonomic for trait objects.
 - Every response carries `x-request-id` (accepted from the client if it matches `^[A-Za-z0-9_-]{8,128}$`, else a fresh ULID). Tracing spans carry it; logs are JSON keyed by it.
 - Public write endpoints require a Turnstile token when the `Captcha` port is configured, and are rate limited per IP and per email.
 - Admin endpoints (`/v1/<module>/admin/*`) require `Authorization: Bearer <ADMIN_TOKEN>` and are disabled when the token is unset.
+- Sidecar modules (ADR 0009) are mounted from `HARNESS_SIDECARS`, a JSON object of `{"<module name>": "<service binding>"}` read from configuration, never from the composition, so the same artifact serves ventures with and without them. A mount whose name collides with an in-process module is ignored and logged; the in-process module keeps its prefix. A mount with no dispatcher, no binding or no answer returns `503 sidecar-unavailable` on **that prefix only**, and a sidecar answering a different `HARNESS_API` returns `503 sidecar-contract-mismatch`. The forwarded request carries the caller's `x-request-id` and `cf-connecting-ip`; `host` and hop-by-hop headers are dropped.
 
 ### Email signup module
 
