@@ -87,6 +87,7 @@ fn full_fake_ports() -> Ports {
         HmacSigner::new(crate::TEST_HARNESS_SECRET, None).expect("test secret is long enough"),
     ));
     ports.kv = Some(Arc::new(crate::fakes::MemoryKeyValue::new()));
+    ports.blob = Some(Arc::new(crate::fakes::MemoryBlob::new()));
     ports.http = Some(Arc::new(crate::fakes::FakeHttpClient::ok_json("{}")));
     ports.clock = Some(Arc::new(crate::fakes::FixedClock(
         time::OffsetDateTime::from_unix_timestamp(1_800_000_000).expect("fixed epoch"),
@@ -244,6 +245,7 @@ fn check_visibility_and_scope(
         (Port::RateLimiter, view.rate_limiter.is_some()),
         (Port::Signer, view.signer.is_some()),
         (Port::KeyValue, view.kv.is_some()),
+        (Port::Blob, view.blob.is_some()),
         (Port::HttpClient, view.http.is_some()),
         (Port::Clock, view.clock.is_some()),
         (Port::IdGen, view.id_gen.is_some()),

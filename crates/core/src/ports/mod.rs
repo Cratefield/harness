@@ -5,6 +5,7 @@
 //! Async methods use `async_trait` until native `async fn` in traits is
 //! ergonomic for trait objects.
 
+mod blob;
 mod captcha;
 mod clock;
 mod database;
@@ -17,6 +18,7 @@ mod mailer;
 mod rate_limiter;
 pub(crate) mod signer;
 
+pub use blob::{Blob, BlobError, BlobObject, ScopedBlob};
 pub use captcha::{Captcha, CaptchaError, Verdict};
 pub use clock::{Clock, SystemClock, timeout};
 pub use database::{Database, DbError, Row, Rows, Statement, TryFromValue};
@@ -44,6 +46,7 @@ pub enum Port {
     RateLimiter,
     Signer,
     KeyValue,
+    Blob,
     HttpClient,
     Clock,
     IdGen,
@@ -58,6 +61,7 @@ impl Port {
         Port::RateLimiter,
         Port::Signer,
         Port::KeyValue,
+        Port::Blob,
         Port::HttpClient,
         Port::Clock,
         Port::IdGen,
@@ -72,6 +76,7 @@ impl Port {
             Port::RateLimiter => "RateLimiter",
             Port::Signer => "Signer",
             Port::KeyValue => "KeyValue",
+            Port::Blob => "Blob",
             Port::HttpClient => "HttpClient",
             Port::Clock => "Clock",
             Port::IdGen => "IdGen",
@@ -93,6 +98,7 @@ pub struct Ports {
     pub rate_limiter: Option<Arc<dyn RateLimiter>>,
     pub signer: Option<Arc<dyn Signer>>,
     pub kv: Option<Arc<dyn KeyValue>>,
+    pub blob: Option<Arc<dyn Blob>>,
     pub http: Option<Arc<dyn HttpClient>>,
     pub clock: Option<Arc<dyn Clock>>,
     pub id_gen: Option<Arc<dyn IdGen>>,
@@ -118,6 +124,7 @@ impl Ports {
             rate_limiter: None,
             signer: None,
             kv: None,
+            blob: None,
             http: None,
             clock: None,
             id_gen: None,
@@ -193,6 +200,13 @@ impl Ports {
         }
         if allows(&declared, Port::KeyValue) {
             view.kv.clone_from(&self.kv);
+        }
+        if allows(&declared, Port::Blob) {
+            // Scope the store to this module's prefix, the blob equivalent of
+            // the table-ownership rule: a module cannot name another's objects.
+            view.blob = self.blob.as_ref().map(|blob| {
+                Arc::new(ScopedBlob::new(Arc::clone(blob), module.name())) as Arc<dyn Blob>
+            });
         }
         if allows(&declared, Port::HttpClient) {
             view.http.clone_from(&self.http);

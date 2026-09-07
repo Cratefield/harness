@@ -491,3 +491,68 @@ impl cratefield_core::Dispatcher for FakeDispatcher {
         }
     }
 }
+
+/// An in-memory [`Blob`] store for module tests: keeps objects in a map, and
+/// has no presigned URLs (so `signed_url` reports `Unsupported`, as a directory
+/// store does).
+#[derive(Clone, Default)]
+pub struct MemoryBlob {
+    objects: Arc<std::sync::Mutex<std::collections::HashMap<String, cratefield_core::BlobObject>>>,
+}
+
+impl MemoryBlob {
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// How many objects are stored, for assertions.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.objects.lock().unwrap().len()
+    }
+
+    /// Whether the store is empty, for assertions.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+}
+
+#[async_trait]
+impl cratefield_core::Blob for MemoryBlob {
+    async fn put(
+        &self,
+        key: &str,
+        bytes: &[u8],
+        content_type: &str,
+    ) -> Result<(), cratefield_core::BlobError> {
+        self.objects.lock().unwrap().insert(
+            key.to_owned(),
+            cratefield_core::BlobObject {
+                bytes: bytes.to_vec(),
+                content_type: content_type.to_owned(),
+            },
+        );
+        Ok(())
+    }
+    async fn get(
+        &self,
+        key: &str,
+    ) -> Result<Option<cratefield_core::BlobObject>, cratefield_core::BlobError> {
+        Ok(self.objects.lock().unwrap().get(key).cloned())
+    }
+    async fn delete(&self, key: &str) -> Result<(), cratefield_core::BlobError> {
+        self.objects.lock().unwrap().remove(key);
+        Ok(())
+    }
+    async fn signed_url(
+        &self,
+        _key: &str,
+        _ttl: std::time::Duration,
+    ) -> Result<String, cratefield_core::BlobError> {
+        Err(cratefield_core::BlobError::Unsupported(
+            "in-memory store has no presigned URLs".to_owned(),
+        ))
+    }
+}

@@ -3,12 +3,14 @@
 //! resolution, the one place a native deployment must behave
 //! differently from Workers.
 
+mod blob;
 mod clock;
 mod defer;
 mod http;
 mod kv;
 mod rate_limit;
 
+pub use blob::DirBlob;
 pub use clock::TokioClock;
 pub use defer::SpawnDefer;
 pub use http::ReqwestClient;
