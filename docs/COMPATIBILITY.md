@@ -31,11 +31,13 @@ compatibility-doc` and checked in CI for drift. Do not edit by hand.
 | `factory0-adapter-sqlite` | 0.1.0 | 1 | `^0.3` — `>=0.3.0, <0.4.0` |
 | `factory0-adapter-turnstile` | 0.1.0 | 1 | `^0.3` — `>=0.3.0, <0.4.0` |
 | `factory0-cli` | 0.1.0 | 1 | `^0.3` — `>=0.3.0, <0.4.0` |
+| `factory0-module-cms` | 0.1.0 | 1 | `^0.3` — `>=0.3.0, <0.4.0` |
 | `factory0-module-email-signup` | 0.1.0 | 1 | `^0.3` — `>=0.3.0, <0.4.0` |
 | `factory0-module-hello` | 0.1.0 | 1 | `^0.3` — `>=0.3.0, <0.4.0` |
 | `factory0-module-waitlist` | 0.1.0 | 1 | `^0.3` — `>=0.3.0, <0.4.0` |
 | `factory0-runtime-cloudflare` | 0.1.0 | 1 | `^0.3` — `>=0.3.0, <0.4.0` |
 | `factory0-runtime-native` | 0.1.0 | 1 | `^0.3` — `>=0.3.0, <0.4.0` |
+| `factory0-secrets` | 0.1.0 | 1 | `^0.3` — `>=0.3.0, <0.4.0` |
 | `factory0-testing` | 0.1.0 | 1 | `^0.3` — `>=0.3.0, <0.4.0` |
 | `factory0-ui` | 0.1.0 | 1 | `^0.3` — `>=0.3.0, <0.4.0` |
 | `venture` | 0.1.0 | 1 | `^0.3` — `>=0.3.0, <0.4.0` |
