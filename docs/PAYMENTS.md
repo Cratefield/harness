@@ -58,6 +58,25 @@ processing anything. A billing **module** subscribes to the verified event and
 decides what it means (a trial started, a subscription lapsed, a charge
 succeeded) — the adapter never interprets it.
 
+### Idempotency
+
+A verified signature authenticates a *delivery*, not a *first* delivery: Stripe
+retries, and two workers can process the same event at once. Before applying an
+effect, a handler claims the event id through `cratefield_core::Inbox` — a dedup
+ledger over the `Database` port whose primary key + `ON CONFLICT DO NOTHING` lets
+exactly one caller win:
+
+```rust,ignore
+let inbox = Inbox::new("billing_inbox"); // the module ships create_table_sql() as a migration
+let event = payments.verify_webhook(sig, body).await?;
+if inbox.claim(db, &event.id, &now).await? {
+    // first time: apply the effect exactly once
+} // else: a duplicate/replayed/concurrent delivery — already handled
+```
+
+So a duplicate, replayed, concurrent or out-of-order delivery applies its effect
+at most once (issue #134).
+
 ## Configuration
 
 Two secrets, through the secrets layer (never plain env in production):
