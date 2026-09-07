@@ -145,3 +145,78 @@ mod tests {
         );
     }
 }
+
+// ---------------------------------------------------------------------------
+// Internal-error forwarder (issue #107)
+
+use std::sync::OnceLock;
+
+/// A process-wide sink for internal-error diagnostics, installed by the
+/// runtime. See [`set_error_forwarder`].
+type ErrorForwarder = fn(&str);
+
+static ERROR_FORWARDER: OnceLock<ErrorForwarder> = OnceLock::new();
+
+/// Installs a process-wide forwarder for internal-error diagnostics
+/// (architecture section 11).
+///
+/// On `wasm32` a tracing dispatcher cannot be installed — it hangs the
+/// workerd/miniflare isolate — so every `tracing::error!` core emits when it
+/// maps an internal failure to a 500 is dropped, and a Workers 500 becomes a
+/// black box (issue #107). The Cloudflare runtime therefore points this
+/// forwarder at `worker::console_error!`, and core calls it alongside its
+/// `tracing::error!` so the same one-line diagnostic reaches Workers Logs.
+///
+/// Native runs leave it unset and rely on the tracing subscriber. This is
+/// boot-time infrastructure installed before the first response, not request
+/// state (ADR 0007); the first installation wins and later calls are ignored.
+pub fn set_error_forwarder(forwarder: ErrorForwarder) {
+    let _ = ERROR_FORWARDER.set(forwarder);
+}
+
+/// Forwards a one-line internal-error diagnostic to the installed sink, if
+/// any; a no-op when none is installed (native, tests). Callers pass a message
+/// already safe to log — no raw field values that could carry a secret or an
+/// email (the [`redacted_value`] rules apply to structured `tracing` fields,
+/// not to this pre-formatted line).
+pub(crate) fn forward_internal_error(line: &str) {
+    if let Some(forwarder) = ERROR_FORWARDER.get() {
+        forwarder(line);
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::disallowed_types)] // test-only capture of the forwarded line
+mod forwarder_tests {
+    use super::*;
+    use std::sync::Mutex;
+
+    static CAPTURED: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+    fn capture(line: &str) {
+        CAPTURED.lock().unwrap().push(line.to_owned());
+    }
+
+    #[test]
+    fn an_installed_forwarder_receives_the_line() {
+        // The forwarder is a process-wide `OnceLock`, so this is the only test
+        // that installs one; `set` after the first is a no-op by contract.
+        set_error_forwarder(capture);
+        forward_internal_error("database error mapped to internal problem: boom");
+        assert!(
+            CAPTURED
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|line| line.contains("boom")),
+            "the installed forwarder should have received the diagnostic"
+        );
+    }
+
+    #[test]
+    fn forwarding_without_a_sink_is_a_noop() {
+        // No panic, no output when nothing is installed (native, tests that do
+        // not opt in). This asserts the call is safe regardless of ordering.
+        forward_internal_error("ignored when no sink or captured when set");
+    }
+}

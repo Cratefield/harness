@@ -332,6 +332,7 @@ async fn ready_handler(State(state): State<ReadyState>) -> impl IntoResponse {
         Some(Ok(_rows)) => Json(json!({ "ok": true })).into_response(),
         Some(Err(err)) => {
             error!(error = %err, "readiness probe query failed");
+            crate::logging::forward_internal_error(&format!("readiness probe query failed: {err}"));
             Problem::not_ready("database query failed").into_response()
         }
         None => Problem::not_ready("database did not answer within 2 s").into_response(),

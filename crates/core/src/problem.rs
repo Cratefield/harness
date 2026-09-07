@@ -108,6 +108,12 @@ impl std::error::Error for Problem {}
 impl From<crate::ports::DbError> for Problem {
     fn from(error: crate::ports::DbError) -> Self {
         tracing::error!(error = %error, "database error mapped to internal problem");
+        // wasm has no tracing dispatcher (it hangs the isolate), so also
+        // forward the diagnostic to the runtime's sink — otherwise this 500 is
+        // invisible on Workers (issue #107). DbError is sanitized for logs.
+        crate::logging::forward_internal_error(&format!(
+            "database error mapped to internal problem: {error}"
+        ));
         Self::internal()
     }
 }

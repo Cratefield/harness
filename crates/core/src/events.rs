@@ -76,6 +76,9 @@ impl EventBus {
             scope.defer.wait_until(Box::pin(async move {
                 if let Err(err) = fut.await {
                     error!(event = %event, error = %err, "event handler failed");
+                    crate::logging::forward_internal_error(&format!(
+                        "event handler failed for {event}: {err}"
+                    ));
                 }
             }));
         }

@@ -45,7 +45,8 @@ pub use harness::{Harness, HarnessBuilder, Runtime};
 pub use http::{Form, Json, MAX_BODY_BYTES, X_REQUEST_ID, rate_limited, request_id_is_valid};
 pub use lint::{card_data_hit, lint_card_data, lint_portable_sql};
 pub use logging::{
-    RedactingVisitor, is_email_field, is_secret_field, redacted_value, subject_hash,
+    RedactingVisitor, is_email_field, is_secret_field, redacted_value, set_error_forwarder,
+    subject_hash,
 };
 pub use module::{
     BoxFuture, HARNESS_API, Migrations, Module, ModuleContext, SqlMigration, harness_api_mismatch,
