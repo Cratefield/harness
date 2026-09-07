@@ -1,6 +1,6 @@
 # Factory Zero auth service — architecture
 
-Status: v1, adopted 2026-09-06. Built on the [harness](https://github.com/Factory-Zero/harness); its ADRs 0001 to 0008 apply here unchanged. Decisions specific to this service go in [docs/adr](adr).
+Status: v1, adopted 2026-09-06. Built on the [harness](https://github.com/Cratefield/harness); its ADRs 0001 to 0008 apply here unchanged. Decisions specific to this service go in [docs/adr](adr).
 
 ## What this is
 

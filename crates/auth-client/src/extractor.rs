@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use axum::extract::FromRequestParts;
 use axum::http::request::Parts;
-use factory0_core::Problem;
+use cratefield_core::Problem;
 
 use crate::jwks::AuthClient;
 use crate::verify::{Claims, token_fingerprint};
@@ -76,7 +76,7 @@ fn bearer(parts: &Parts) -> Option<&str> {
 /// expired: all the same. A caller learns that it is not authenticated
 /// and nothing else, because each distinguishable answer is a hint
 /// about how to get closer.
-pub const UNAUTHENTICATED: factory0_core::ProblemDef = factory0_core::ProblemDef {
+pub const UNAUTHENTICATED: cratefield_core::ProblemDef = cratefield_core::ProblemDef {
     slug: "unauthenticated",
     status: axum::http::StatusCode::UNAUTHORIZED,
     title: "Not authenticated",

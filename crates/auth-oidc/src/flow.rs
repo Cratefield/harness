@@ -11,7 +11,7 @@
 //! port, not through the signer's own `exp`, which reads the wall clock
 //! directly and so cannot be driven by a test clock.
 
-use factory0_core::{Clock, Kid, Payload, Signer};
+use cratefield_core::{Clock, Kid, Payload, Signer};
 use serde::{Deserialize, Serialize};
 
 /// The signed payload's purpose (ADR 0006), so a flow cookie can never be
@@ -185,7 +185,7 @@ pub(crate) fn cookie_value(headers: &http::HeaderMap) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use factory0_core::HmacSigner;
+    use cratefield_core::HmacSigner;
 
     struct FixedClock(i64);
     impl Clock for FixedClock {

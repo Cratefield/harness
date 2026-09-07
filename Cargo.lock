@@ -372,6 +372,70 @@ dependencies = [
 ]
 
 [[package]]
+name = "cratefield-adapter-sqlite"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6a6922aaed353d01be576d1dbb0736181cf3ad442fd4dbba9a4f489e21ed1eac"
+dependencies = [
+ "async-trait",
+ "cratefield-core",
+ "rusqlite",
+ "sea-query",
+ "time",
+ "tracing",
+]
+
+[[package]]
+name = "cratefield-core"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f69d8f16d57306636888d64b5300fa77a16463936ebed81b271cd51a3b04bd75"
+dependencies = [
+ "async-trait",
+ "axum",
+ "base64 0.23.1",
+ "bytes",
+ "futures-core",
+ "hmac 0.13.0",
+ "http",
+ "schemars 1.2.2",
+ "sea-query",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "subtle",
+ "thiserror 2.0.20",
+ "time",
+ "tower",
+ "tower-http",
+ "tracing",
+ "ulid",
+ "unicode-normalization",
+]
+
+[[package]]
+name = "cratefield-testing"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2f2d067c33f934b27d242785d1f39875584ee767d5162f1e92dfdc6dd64fe2d2"
+dependencies = [
+ "async-trait",
+ "axum",
+ "bytes",
+ "cratefield-adapter-sqlite",
+ "cratefield-core",
+ "futures-core",
+ "http",
+ "pollster",
+ "sea-query",
+ "serde",
+ "serde_json",
+ "time",
+ "tower",
+ "tracing",
+]
+
+[[package]]
 name = "crunchy"
 version = "0.2.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -705,19 +769,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "877a4ace8713b0bcf2a4e7eec82529c029f1d0619886d18145fea96c3ffe5c0f"
 
 [[package]]
-name = "factory0-adapter-sqlite"
-version = "0.1.0"
-source = "git+https://github.com/Cratefield/harness?rev=45c34a4cc1ad8e2ed0c0077093590a424623f0bd#45c34a4cc1ad8e2ed0c0077093590a424623f0bd"
-dependencies = [
- "async-trait",
- "factory0-core",
- "rusqlite",
- "sea-query",
- "time",
- "tracing",
-]
-
-[[package]]
 name = "factory0-auth-client"
 version = "0.1.0"
 dependencies = [
@@ -725,8 +776,8 @@ dependencies = [
  "axum",
  "base64ct",
  "bytes",
- "factory0-core",
- "factory0-testing",
+ "cratefield-core",
+ "cratefield-testing",
  "http",
  "p256 0.14.0",
  "pollster",
@@ -747,9 +798,9 @@ dependencies = [
  "askama",
  "axum",
  "base64ct",
- "factory0-adapter-sqlite",
- "factory0-core",
- "factory0-testing",
+ "cratefield-adapter-sqlite",
+ "cratefield-core",
+ "cratefield-testing",
  "getrandom 0.4.3",
  "http",
  "p256 0.14.0",
@@ -773,10 +824,10 @@ dependencies = [
  "axum",
  "base64ct",
  "bytes",
- "factory0-adapter-sqlite",
+ "cratefield-adapter-sqlite",
+ "cratefield-core",
+ "cratefield-testing",
  "factory0-auth-core",
- "factory0-core",
- "factory0-testing",
  "futures-lite",
  "getrandom 0.4.3",
  "http",
@@ -798,10 +849,10 @@ dependencies = [
  "axum",
  "base64ct",
  "bytes",
- "factory0-adapter-sqlite",
+ "cratefield-adapter-sqlite",
+ "cratefield-core",
+ "cratefield-testing",
  "factory0-auth-core",
- "factory0-core",
- "factory0-testing",
  "getrandom 0.4.3",
  "hmac 0.13.0",
  "http",
@@ -826,10 +877,10 @@ dependencies = [
  "base64ct",
  "bytes",
  "chrono",
- "factory0-adapter-sqlite",
+ "cratefield-adapter-sqlite",
+ "cratefield-core",
+ "cratefield-testing",
  "factory0-auth-core",
- "factory0-core",
- "factory0-testing",
  "getrandom 0.4.3",
  "http",
  "openidconnect",
@@ -856,11 +907,11 @@ dependencies = [
  "base64ct",
  "ciborium",
  "coset",
+ "cratefield-adapter-sqlite",
+ "cratefield-core",
+ "cratefield-testing",
  "ed25519-dalek",
- "factory0-adapter-sqlite",
  "factory0-auth-core",
- "factory0-core",
- "factory0-testing",
  "getrandom 0.4.3",
  "http",
  "p256 0.14.0",
@@ -888,63 +939,15 @@ dependencies = [
  "base16ct 0.2.0",
  "base64ct",
  "bytes",
- "factory0-adapter-sqlite",
+ "cratefield-adapter-sqlite",
+ "cratefield-core",
+ "cratefield-testing",
  "factory0-auth-core",
- "factory0-core",
- "factory0-testing",
  "http",
  "pollster",
  "serde",
  "serde_json",
  "sha1",
- "time",
- "tower",
- "tracing",
-]
-
-[[package]]
-name = "factory0-core"
-version = "0.3.0"
-source = "git+https://github.com/Cratefield/harness?rev=45c34a4cc1ad8e2ed0c0077093590a424623f0bd#45c34a4cc1ad8e2ed0c0077093590a424623f0bd"
-dependencies = [
- "async-trait",
- "axum",
- "base64 0.23.1",
- "bytes",
- "futures-core",
- "hmac 0.13.0",
- "http",
- "schemars 1.2.2",
- "sea-query",
- "serde",
- "serde_json",
- "sha2 0.11.0",
- "subtle",
- "thiserror 2.0.20",
- "time",
- "tower",
- "tower-http",
- "tracing",
- "ulid",
- "unicode-normalization",
-]
-
-[[package]]
-name = "factory0-testing"
-version = "0.1.0"
-source = "git+https://github.com/Cratefield/harness?rev=45c34a4cc1ad8e2ed0c0077093590a424623f0bd#45c34a4cc1ad8e2ed0c0077093590a424623f0bd"
-dependencies = [
- "async-trait",
- "axum",
- "bytes",
- "factory0-adapter-sqlite",
- "factory0-core",
- "futures-core",
- "http",
- "pollster",
- "sea-query",
- "serde",
- "serde_json",
  "time",
  "tower",
  "tracing",

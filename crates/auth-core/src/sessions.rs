@@ -17,7 +17,7 @@ use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use base64ct::{Base64UrlUnpadded, Encoding};
-use factory0_core::{Clock, Database, DbError, IdGen, Json, Problem, Scope, subject_hash};
+use cratefield_core::{Clock, Database, DbError, IdGen, Json, Problem, Scope, subject_hash};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::sync::Arc;
@@ -46,7 +46,7 @@ pub const ABSOLUTE_CAP_DAYS: i64 = 90;
 /// The single 401 every signed-out caller sees: missing cookie,
 /// unknown cookie, revoked session and expired session are
 /// indistinguishable.
-pub const SESSION_INVALID: factory0_core::ProblemDef = factory0_core::ProblemDef {
+pub const SESSION_INVALID: cratefield_core::ProblemDef = cratefield_core::ProblemDef {
     slug: "auth/session-invalid",
     status: StatusCode::UNAUTHORIZED,
     title: "A valid session is required",

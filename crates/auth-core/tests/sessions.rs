@@ -8,8 +8,8 @@
 
 use axum::http::{Method, StatusCode, header};
 use axum::response::Response;
+use cratefield_testing::{FixedClock, TestHarness};
 use factory0_auth_core::{AuthCore, Login, UserRow, issue, sessions_by_user, validate};
-use factory0_testing::{FixedClock, TestHarness};
 use serde_json::Value;
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
@@ -60,9 +60,11 @@ fn a_session_is_never_issued_to_an_account_that_is_not_active() {
     pollster::block_on(async {
         let kit = TestHarness::new(vec![Box::new(AuthCore::new())]);
         user(&kit, "u1").await;
-        factory0_core::Database::execute(
+        cratefield_core::Database::execute(
             &*kit.db,
-            &factory0_core::Statement::new("UPDATE users SET status = 'disabled' WHERE id = 'u1'"),
+            &cratefield_core::Statement::new(
+                "UPDATE users SET status = 'disabled' WHERE id = 'u1'",
+            ),
         )
         .await
         .expect("status updates");
@@ -70,7 +72,7 @@ fn a_session_is_never_issued_to_an_account_that_is_not_active() {
         let refused = issue(
             &*kit.db,
             &at(EPOCH),
-            &factory0_core::UlidIdGen,
+            &cratefield_core::UlidIdGen,
             Login {
                 user_id: "u1",
                 ip: None,
@@ -90,7 +92,7 @@ fn a_session_is_never_issued_to_an_account_that_is_not_active() {
         let missing = issue(
             &*kit.db,
             &at(EPOCH),
-            &factory0_core::UlidIdGen,
+            &cratefield_core::UlidIdGen,
             Login {
                 user_id: "nobody",
                 ip: None,
@@ -119,7 +121,7 @@ async fn login(
     issue(
         &*kit.db,
         &at(EPOCH),
-        &factory0_core::UlidIdGen,
+        &cratefield_core::UlidIdGen,
         Login {
             user_id,
             ip: Some("203.0.113.7"),
@@ -431,7 +433,7 @@ async fn the_expired_shape_through_the_router_is_the_same_401() {
     let stale = issue(
         &*kit.db,
         &at(EPOCH - 40 * DAY),
-        &factory0_core::UlidIdGen,
+        &cratefield_core::UlidIdGen,
         Login {
             user_id: "u1",
             ip: None,
@@ -464,7 +466,7 @@ async fn listing_shows_ip_hash_ua_family_and_the_current_flag() {
     let chrome = issue(
         &*kit.db,
         &at(EPOCH),
-        &factory0_core::UlidIdGen,
+        &cratefield_core::UlidIdGen,
         Login {
             user_id: "u1",
             ip: Some("198.51.100.9"),

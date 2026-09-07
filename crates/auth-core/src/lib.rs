@@ -76,7 +76,7 @@ pub use tokens::{
     exchange_refresh_token, mint_access_token, mint_refresh_token,
 };
 
-use factory0_core::{
+use cratefield_core::{
     AnyError, BoxFuture, Config, ConfigError, Module, ModuleConfig, ModuleContext, Port,
     SqlMigration,
 };
@@ -219,7 +219,7 @@ impl Module for AuthCore {
         ]
     }
 
-    fn migrations(&self) -> factory0_core::Migrations {
+    fn migrations(&self) -> cratefield_core::Migrations {
         const MIGRATIONS: [SqlMigration; 6] = [
             MIGRATION_INIT,
             MIGRATION_ROTATION,
@@ -228,7 +228,7 @@ impl Module for AuthCore {
             MIGRATION_DELETION_JOBS,
             MIGRATION_PASSWORD_LOCKOUT,
         ];
-        factory0_core::Migrations {
+        cratefield_core::Migrations {
             sqlite: &MIGRATIONS,
             postgres: &[],
         }
@@ -316,7 +316,7 @@ impl Module for AuthCore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use factory0_core::{HARNESS_API, MapConfig};
+    use cratefield_core::{HARNESS_API, MapConfig};
 
     #[test]
     fn module_metadata_matches_the_issues() {

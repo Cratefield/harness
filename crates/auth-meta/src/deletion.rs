@@ -17,13 +17,13 @@
 //! about Meta's data.
 
 use base64ct::{Base64UrlUnpadded, Encoding as _};
+use cratefield_core::{AnyError, Clock, Database, IdGen, ModuleContext};
 use factory0_auth_core::{
     DELETION_DELETED_USER, DELETION_NOTHING_TO_DO, DELETION_PENDING, DELETION_UNLINKED,
     DeletionJobRow, complete_deletion_job, credentials_by_user, delete_identity,
     identities_by_user, identity_by_provider_subject, insert_deletion_job, pending_deletion_jobs,
     purge_user,
 };
-use factory0_core::{AnyError, Clock, Database, IdGen, ModuleContext};
 
 use crate::session::PROVIDER;
 

@@ -17,12 +17,12 @@
 
 use axum::http::{Method, StatusCode, header};
 use base64ct::{Base64UrlUnpadded, Encoding};
+use cratefield_core::{MapConfig, UlidIdGen};
+use cratefield_testing::{FixedClock, TestHarness};
 use factory0_auth_core::{
     AuthCore, ClientRedirectUriRow, ClientRow, Login, Redacted, UserRow, insert_client,
     insert_redirect_uri, issue, session_by_token_hash,
 };
-use factory0_core::{MapConfig, UlidIdGen};
-use factory0_testing::{FixedClock, TestHarness};
 use p256::ecdsa;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -543,7 +543,7 @@ async fn an_absolute_request_target_still_yields_a_path_return_to() {
 /// that 404s.
 #[test]
 fn an_unknown_login_method_slug_is_refused_at_build() {
-    use factory0_core::{Config, MapConfig, Module};
+    use cratefield_core::{Config, MapConfig, Module};
     let cfg = MapConfig::from_pairs([
         (
             "AUTH_CORE_SIGNING_KEYS",

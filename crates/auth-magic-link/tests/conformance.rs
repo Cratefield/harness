@@ -1,7 +1,7 @@
 //! The shared conformance suite plus the wasm dependency boundary.
 
+use cratefield_testing::{assert_wasm_safe_deps, conformance};
 use factory0_auth_magic_link::MagicLink;
-use factory0_testing::{assert_wasm_safe_deps, conformance};
 
 #[test]
 fn auth_magic_link_conforms() {

@@ -17,7 +17,7 @@
 //! names, which are `<module>.<event>` and must match the module's
 //! `emits()`. So this returns what happened and the module announces it.
 
-use factory0_core::{Clock, Database, IdGen};
+use cratefield_core::{Clock, Database, IdGen};
 
 use crate::linking::{IncomingIdentity, Outcome, create_user, link, resolve};
 use crate::sessions::{IssuedSession, Login, SessionError, issue};

@@ -27,7 +27,7 @@
 //! that look equally plausible, and a relay address tells us nothing
 //! about who controls the real mailbox behind it (ADR 0100).
 
-use factory0_core::{Clock, Database, DbError, IdGen};
+use cratefield_core::{Clock, Database, DbError, IdGen};
 
 use crate::store::{self, IdentityRow, UserRow};
 

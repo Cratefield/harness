@@ -35,7 +35,7 @@
 mod handlers;
 mod mail;
 
-use factory0_core::{
+use cratefield_core::{
     Config, ConfigError, Migrations, Module, ModuleConfig, ModuleContext, Port, ProblemDef,
 };
 use http::StatusCode;
@@ -260,7 +260,7 @@ impl Module for MagicLink {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use factory0_core::MapConfig;
+    use cratefield_core::MapConfig;
 
     fn config(pairs: &[(&str, &str)]) -> MapConfig {
         MapConfig::from_pairs(

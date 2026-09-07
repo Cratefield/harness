@@ -5,11 +5,11 @@
 //! `["federated"]` and an address nobody verified, and announces the result
 //! under this module's own event names.
 
+use cratefield_core::{ModuleContext, Problem, Scope};
 use factory0_auth_core::federated::{
     self, Caller, CompleteError, Completed as CoreCompleted, FederatedIdentity, Ports,
 };
 use factory0_auth_core::{IssuedSession, set_cookie};
-use factory0_core::{ModuleContext, Problem, Scope};
 use serde_json::json;
 
 pub(crate) const EVENT_LOGGED_IN: &str = "auth-meta.logged_in";
@@ -41,7 +41,10 @@ pub(crate) async fn complete(
     // already normalised, so `Ada@Example.com` would otherwise miss an
     // existing `ada@example.com` and quietly make a second account whose
     // address no normalised lookup will ever find again.
-    let email = profile.email.as_deref().map(factory0_core::normalize_email);
+    let email = profile
+        .email
+        .as_deref()
+        .map(cratefield_core::normalize_email);
 
     let outcome = federated::complete(
         ports,

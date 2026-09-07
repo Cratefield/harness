@@ -35,7 +35,7 @@ mod handlers;
 mod session;
 mod signed_request;
 
-use factory0_core::{
+use cratefield_core::{
     Config, ConfigError, Migrations, Module, ModuleConfig, ModuleContext, Port, Problem, ProblemDef,
 };
 use http::StatusCode;
@@ -261,7 +261,7 @@ impl Module for Meta {
         &'a self,
         ctx: &'a ModuleContext,
         cron: &'a str,
-    ) -> factory0_core::BoxFuture<'a, Result<(), factory0_core::AnyError>> {
+    ) -> cratefield_core::BoxFuture<'a, Result<(), cratefield_core::AnyError>> {
         Box::pin(deletion::run_pending(ctx, cron))
     }
 
@@ -299,7 +299,7 @@ impl Module for Meta {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use factory0_core::MapConfig;
+    use cratefield_core::MapConfig;
 
     fn config(pairs: &[(&str, &str)]) -> MapConfig {
         MapConfig::from_pairs(

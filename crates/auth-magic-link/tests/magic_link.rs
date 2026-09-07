@@ -1,12 +1,12 @@
 //! Issue #21 end to end.
 
 use async_trait::async_trait;
-use factory0_auth_core::{AuthCore, STATUS_ACTIVE, UserRow, insert_user, user_by_primary_email};
-use factory0_auth_magic_link::MagicLink;
-use factory0_core::{
+use cratefield_core::{
     Clock, Config, Database, MailError, Mailer, MapConfig, Message, SendOutcome, Statement,
 };
-use factory0_testing::TestHarness;
+use cratefield_testing::TestHarness;
+use factory0_auth_core::{AuthCore, STATUS_ACTIVE, UserRow, insert_user, user_by_primary_email};
+use factory0_auth_magic_link::MagicLink;
 use http::{HeaderMap, Method, Request, StatusCode, header};
 use serde_json::{Value, json};
 use std::sync::atomic::{AtomicI64, Ordering};

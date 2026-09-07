@@ -38,7 +38,7 @@ mod breach;
 mod handlers;
 mod lockout;
 
-use factory0_core::{
+use cratefield_core::{
     Config, ConfigError, Migrations, Module, ModuleConfig, ModuleContext, Port, ProblemDef,
 };
 use http::StatusCode;
@@ -276,7 +276,7 @@ pub(crate) fn password_length_ok(password: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use factory0_core::MapConfig;
+    use cratefield_core::MapConfig;
 
     fn config(pairs: &[(&str, &str)]) -> MapConfig {
         MapConfig::from_pairs(

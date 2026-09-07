@@ -6,9 +6,9 @@
 
 use axum::http::{Method, StatusCode, header};
 use axum::response::Response;
+use cratefield_core::Statement;
+use cratefield_testing::TestHarness;
 use factory0_auth_core::AuthCore;
-use factory0_core::Statement;
-use factory0_testing::TestHarness;
 use serde_json::Value;
 use std::sync::Arc;
 use tower::ServiceExt;
@@ -36,7 +36,7 @@ async fn reply(response: Response) -> Reply {
 
 fn admin_kit() -> TestHarness {
     TestHarness::with_ports(vec![Box::new(AuthCore::new())], |ports| {
-        ports.config = Arc::new(factory0_core::MapConfig::from_pairs([(
+        ports.config = Arc::new(cratefield_core::MapConfig::from_pairs([(
             "ADMIN_TOKEN",
             ADMIN,
         )]));
@@ -109,7 +109,7 @@ async fn admin_routes_without_a_token_are_disabled() {
             "/v1/auth-core/admin/clients/app1/rotate-secret",
         ),
     ] {
-        let response = factory0_testing::request(&kit.router, method.clone(), path, None).await;
+        let response = cratefield_testing::request(&kit.router, method.clone(), path, None).await;
         assert_eq!(response.status, StatusCode::UNAUTHORIZED, "{path}");
         assert_eq!(
             response.json()["type"],

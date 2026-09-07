@@ -1,6 +1,6 @@
 //! The harness `HttpClient` port, copied verbatim from
 //! `Factory-Zero/harness` `crates/core/src/ports/http.rs` so the spike can
-//! prove the wiring without pulling `factory0-core` (and its axum tree) into
+//! prove the wiring without pulling `cratefield-core` (and its axum tree) into
 //! the wasm build. The trait is identical; when the auth modules are built on
 //! the real harness crate, this file disappears.
 

@@ -13,7 +13,7 @@ workspace = true
 
 [dependencies]
 askama = { workspace = true }
-factory0-core = { workspace = true }
+cratefield-core = { workspace = true }
 axum = { workspace = true }
 http = { workspace = true }
 sea-query = { workspace = true }
@@ -29,7 +29,7 @@ sha2 = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]
-factory0-testing = { workspace = true }
-factory0-adapter-sqlite = { workspace = true }
+cratefield-testing = { workspace = true }
+cratefield-adapter-sqlite = { workspace = true }
 pollster = { workspace = true }
 tower = { workspace = true }

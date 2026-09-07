@@ -7,7 +7,7 @@
 //! are [`Redacted`] in the row model: their `Debug` never prints the
 //! digest, so a logged row cannot leak a value that can log a user in.
 
-use factory0_core::{AnyError, Clock, Database, DbError, ModuleContext, Row, Statement};
+use cratefield_core::{AnyError, Clock, Database, DbError, ModuleContext, Row, Statement};
 use sea_query::{Alias, Expr, Query};
 use time::format_description::well_known::Rfc3339;
 

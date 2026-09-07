@@ -15,8 +15,8 @@ use axum::extract::{Path, Query, State};
 use axum::response::{Html, IntoResponse, Response};
 use axum::routing::get;
 use base64ct::{Base64UrlUnpadded, Encoding as _};
+use cratefield_core::{Clock, Problem, Scope};
 use factory0_auth_core::cookie_value as session_cookie_value;
-use factory0_core::{Clock, Problem, Scope};
 use http::{HeaderMap, StatusCode, header};
 use openidconnect::core::{CoreAuthenticationFlow, CoreClient};
 use openidconnect::{
@@ -130,11 +130,11 @@ fn page(status: StatusCode, message: &str) -> Response {
 
 async fn limit(state: &ModuleState, headers: &HeaderMap) -> Option<Response> {
     let limiter = state.ctx.ports.rate_limiter.as_deref()?;
-    let ip = factory0_core::client_ip(headers);
-    for key in factory0_core::rate_limit_keys(ip.as_deref(), None) {
+    let ip = cratefield_core::client_ip(headers);
+    for key in cratefield_core::rate_limit_keys(ip.as_deref(), None) {
         match limiter.limit(&format!("auth-oidc:{key}")).await {
             Ok(decision) if !decision.ok => {
-                return Some(factory0_core::rate_limited(decision.retry_after).into_response());
+                return Some(cratefield_core::rate_limited(decision.retry_after).into_response());
             }
             Ok(_) => {}
             Err(err) => {
@@ -430,7 +430,7 @@ async fn complete_callback(
         },
     };
 
-    let ip = factory0_core::client_ip(&headers);
+    let ip = cratefield_core::client_ip(&headers);
     let user_agent = headers
         .get(header::USER_AGENT)
         .and_then(|value| value.to_str().ok());
@@ -478,7 +478,7 @@ async fn exchange(
     provider: &Provider,
     config: &crate::ProviderConfig,
     clock: &dyn Clock,
-    http: &Arc<dyn factory0_core::HttpClient>,
+    http: &Arc<dyn cratefield_core::HttpClient>,
     flow: &Flow,
     code: &str,
 ) -> Result<Identity, Problem> {
@@ -571,7 +571,7 @@ async fn exchange(
         subject: claims.subject().to_string(),
         email: claims
             .email()
-            .map(|email| factory0_core::normalize_email(email.as_str())),
+            .map(|email| cratefield_core::normalize_email(email.as_str())),
         email_verified: claims.email_verified().unwrap_or(false),
         name: claims
             .name()

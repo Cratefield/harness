@@ -3,10 +3,10 @@
 
 #![allow(dead_code)]
 
+use cratefield_core::{Clock, Config, Database, IdGen, MapConfig, UlidIdGen};
+use cratefield_testing::TestHarness;
 use factory0_auth_core::AuthCore;
 use factory0_auth_oidc::Oidc;
-use factory0_core::{Clock, Config, Database, IdGen, MapConfig, UlidIdGen};
-use factory0_testing::TestHarness;
 use http::StatusCode;
 use serde_json::Value;
 use std::sync::Arc;
@@ -308,7 +308,7 @@ pub async fn callback(kit: &Kit, started: &Started, code: &str, state: &str) -> 
 pub fn count(kit: &Kit, table: &str) -> i64 {
     let sql = format!("SELECT COUNT(*) AS n FROM {table}");
     let rows =
-        pollster::block_on(kit.db.query(&factory0_core::Statement::new(sql))).expect("query");
+        pollster::block_on(kit.db.query(&cratefield_core::Statement::new(sql))).expect("query");
     rows.first()
         .and_then(|row| row.get::<i64>("n"))
         .unwrap_or_default()
@@ -316,6 +316,6 @@ pub fn count(kit: &Kit, table: &str) -> i64 {
 
 pub fn column(kit: &Kit, sql: &str, name: &str) -> Option<String> {
     let rows =
-        pollster::block_on(kit.db.query(&factory0_core::Statement::new(sql))).expect("query");
+        pollster::block_on(kit.db.query(&cratefield_core::Statement::new(sql))).expect("query");
     rows.first().and_then(|row| row.get::<String>(name))
 }

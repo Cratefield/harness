@@ -9,11 +9,11 @@
 //! Only the hash is stored. The challenge itself exists in the response to
 //! the options call and in the authenticator's signature, and nowhere else.
 
+use cratefield_core::{Clock, Database, DbError, IdGen};
 use factory0_auth_core::{
     Bytes, Redacted, SingleUseTokenRow, TOKEN_WEBAUTHN_CHALLENGE, consume_single_use_token,
     insert_single_use_token, single_use_token_by_hash,
 };
-use factory0_core::{Clock, Database, DbError, IdGen};
 use sha2::{Digest, Sha256};
 
 /// Registration and login challenges are not interchangeable: a challenge

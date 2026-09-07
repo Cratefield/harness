@@ -153,7 +153,7 @@ fn a_disabled_account_cannot_sign_in_through_a_provider() {
         // An administrator switches it off. `users.status` is the service's
         // one kill switch, and a login method that ignored it would make
         // the switch useless.
-        pollster::block_on(kit.db.execute(&factory0_core::Statement::new(
+        pollster::block_on(kit.db.execute(&cratefield_core::Statement::new(
             "UPDATE users SET status = 'disabled'",
         )))
         .expect("status updates");
@@ -221,7 +221,7 @@ fn a_disabled_account_gains_nothing_from_a_provider_sign_in() {
         );
         assert!(before.is_some(), "a repeat login should be recorded");
 
-        pollster::block_on(kit.db.execute(&factory0_core::Statement::new(
+        pollster::block_on(kit.db.execute(&cratefield_core::Statement::new(
             "UPDATE users SET status = 'disabled'",
         )))
         .expect("status updates");
@@ -260,7 +260,7 @@ fn a_disabled_account_gains_no_identity_from_an_auto_link() {
     pollster::block_on(async {
         let kit = kit();
         let existing = seed_user(&kit, "nick@example.com", true).await;
-        pollster::block_on(kit.db.execute(&factory0_core::Statement::new(
+        pollster::block_on(kit.db.execute(&cratefield_core::Statement::new(
             "UPDATE users SET status = 'disabled'",
         )))
         .expect("status updates");

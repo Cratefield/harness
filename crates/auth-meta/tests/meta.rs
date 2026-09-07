@@ -8,10 +8,12 @@
 
 use async_trait::async_trait;
 use bytes::Bytes;
+use cratefield_core::{
+    Clock, Config, Database, HttpClient, HttpError, IdGen, MapConfig, UlidIdGen,
+};
+use cratefield_testing::TestHarness;
 use factory0_auth_core::{AuthCore, UserRow, identity_by_provider_subject, insert_user};
 use factory0_auth_meta::Meta;
-use factory0_core::{Clock, Config, Database, HttpClient, HttpError, IdGen, MapConfig, UlidIdGen};
-use factory0_testing::TestHarness;
 use http::{Method, Request, Response, StatusCode, header};
 use serde_json::{Value, json};
 use std::sync::atomic::{AtomicI64, Ordering};
@@ -293,7 +295,7 @@ async fn start(kit: &Kit, cookies: &[(&str, &str)]) -> Started {
 fn count(kit: &Kit, table: &str) -> i64 {
     let sql = format!("SELECT COUNT(*) AS n FROM {table}");
     let rows =
-        pollster::block_on(kit.db.query(&factory0_core::Statement::new(sql))).expect("query");
+        pollster::block_on(kit.db.query(&cratefield_core::Statement::new(sql))).expect("query");
     rows.first()
         .and_then(|row| row.get::<i64>("n"))
         .unwrap_or_default()
@@ -747,7 +749,7 @@ fn a_disabled_account_gets_no_session() {
         // one kill switch, and a login method that ignored it would make
         // the switch useless.
         kit.db
-            .execute(&factory0_core::Statement::new(
+            .execute(&cratefield_core::Statement::new(
                 "UPDATE users SET status = 'disabled'",
             ))
             .await
@@ -836,7 +838,7 @@ async fn sign_in(kit: &Kit, subject: &str) {
 /// Runs the module's scheduled handler, which is what drains the queue.
 /// The callback only records; nothing is deleted until this runs.
 fn run_jobs(kit: &Kit) {
-    let mut ports = factory0_core::Ports::empty();
+    let mut ports = cratefield_core::Ports::empty();
     ports.db = Some(kit.db.clone());
     ports.clock = Some(kit.clock_port.clone());
     ports.id_gen = Some(kit.id_gen.clone());
@@ -1035,7 +1037,7 @@ fn running_a_job_twice_and_deleting_an_unknown_subject_are_both_harmless() {
         // Every job closed, none left pending.
         let rows = kit
             .db
-            .query(&factory0_core::Statement::new(
+            .query(&cratefield_core::Statement::new(
                 "SELECT COUNT(*) AS n FROM deletion_jobs WHERE status = 'pending'",
             ))
             .await

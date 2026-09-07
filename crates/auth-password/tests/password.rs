@@ -7,13 +7,13 @@
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use factory0_auth_core::{AuthCore, STATUS_ACTIVE, UserRow, insert_user, user_by_primary_email};
-use factory0_auth_password::Password;
-use factory0_core::{
+use cratefield_core::{
     Clock, Config, Database, Decision, HttpClient, HttpError, MapConfig, RateLimitError,
     RateLimiter, Statement,
 };
-use factory0_testing::TestHarness;
+use cratefield_testing::TestHarness;
+use factory0_auth_core::{AuthCore, STATUS_ACTIVE, UserRow, insert_user, user_by_primary_email};
+use factory0_auth_password::Password;
 use http::{Method, Request, Response, StatusCode, header};
 use serde_json::{Value, json};
 use std::sync::atomic::{AtomicI64, AtomicUsize, Ordering};

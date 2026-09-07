@@ -22,7 +22,7 @@
 //! log line.
 
 use base64ct::{Base64UrlUnpadded, Encoding as _};
-use factory0_core::Clock;
+use cratefield_core::Clock;
 use p256::ecdsa::{self, signature::Signer as _};
 use p256::pkcs8::DecodePrivateKey as _;
 use serde_json::{Value, json};
@@ -269,8 +269,8 @@ mod tests {
     use p256::pkcs8::EncodePrivateKey as _;
 
     /// A clock the tests drive, so nothing here reads the wall clock.
-    fn at(secs: i64) -> factory0_testing::FixedClock {
-        factory0_testing::FixedClock(
+    fn at(secs: i64) -> cratefield_testing::FixedClock {
+        cratefield_testing::FixedClock(
             time::OffsetDateTime::from_unix_timestamp(secs).expect("in range"),
         )
     }

@@ -33,7 +33,7 @@ use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use base64ct::{Base64UrlUnpadded, Encoding};
-use factory0_core::{Config, Database, ModuleConfig, Problem, Scope, subject_hash};
+use cratefield_core::{Config, Database, ModuleConfig, Problem, Scope, subject_hash};
 use serde::Deserialize;
 use serde_json::json;
 use sha2::{Digest, Sha256};

@@ -30,8 +30,11 @@ on its own.
 > six on one account.
 
 Built as a consumer of the
-[Factory Zero harness](https://github.com/Factory-Zero/harness): one Worker,
-one D1 database, modules that see only ports. Read
+[Cratefield harness](https://github.com/Cratefield/harness): one Worker,
+one D1 database, modules that see only ports. It depends on the published
+crates (`cratefield-core` and friends on crates.io), not on a git revision.
+Its own crates stay `factory0-auth-*` and are never published: they are
+Factory Zero's service, not part of the harness (harness ADR 0011). Read
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for how it fits, what was
 validated before the issues were written, and what is deferred.
 

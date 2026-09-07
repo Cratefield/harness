@@ -23,7 +23,7 @@ are below.
 - `src/port.rs` — the harness `HttpClient` port, copied verbatim from
   `Factory-Zero/harness` `crates/core/src/ports/http.rs` (commit `f0c0179`,
   2026-09-06). Copied instead of a git dependency so the spike does not pull
-  `factory0-core`'s axum tree into the wasm build; the trait is identical, so
+  `cratefield-core`'s axum tree into the wasm build; the trait is identical, so
   the adapter proven here transfers unchanged.
 
 ## Build and run

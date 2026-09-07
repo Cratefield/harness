@@ -13,8 +13,8 @@
 //! Everything runs against the embedded migrations — the same bytes
 //! `fz migrations collect` writes and the conformance kit applies.
 
+use cratefield_core::Module;
 use factory0_auth_core::AuthCore;
-use factory0_core::Module;
 
 /// Column names that are never valid, regardless of suffix: adding any of
 /// them means a raw secret went into the clear.

@@ -2,8 +2,8 @@
 
 use axum::response::{IntoResponse, Response};
 use base64ct::{Base64UrlUnpadded, Encoding as _};
+use cratefield_core::{Clock, Database, IdGen, Json, Problem, Scope};
 use factory0_auth_core::{SESSION_INVALID, ValidSession, cookie_value, validate};
-use factory0_core::{Clock, Database, IdGen, Json, Problem, Scope};
 use http::HeaderMap;
 use http::StatusCode;
 
@@ -60,11 +60,11 @@ pub(crate) async fn require_session(
 /// pass a single-use challenge and a signature.
 pub(crate) async fn limit_login(state: &ModuleState, headers: &HeaderMap) -> Option<Response> {
     let limiter = state.ctx.ports.rate_limiter.as_deref()?;
-    let ip = factory0_core::client_ip(headers);
-    for key in factory0_core::rate_limit_keys(ip.as_deref(), None) {
+    let ip = cratefield_core::client_ip(headers);
+    for key in cratefield_core::rate_limit_keys(ip.as_deref(), None) {
         match limiter.limit(&format!("auth-passkeys:{key}")).await {
             Ok(decision) if !decision.ok => {
-                return Some(factory0_core::rate_limited(decision.retry_after).into_response());
+                return Some(cratefield_core::rate_limited(decision.retry_after).into_response());
             }
             Ok(_) => {}
             Err(err) => {
@@ -106,7 +106,7 @@ pub(crate) fn ok(body: serde_json::Value) -> Response {
 /// The client address and user agent a session records, as far as the edge
 /// tells us.
 pub(crate) fn client_hints(headers: &HeaderMap) -> (Option<String>, Option<String>) {
-    let ip = factory0_core::client_ip(headers);
+    let ip = cratefield_core::client_ip(headers);
     let user_agent = headers
         .get(http::header::USER_AGENT)
         .and_then(|value| value.to_str().ok())

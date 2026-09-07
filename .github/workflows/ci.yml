@@ -86,7 +86,12 @@ jobs:
   conformance:
     name: conformance (module kit)
     needs: detect-modules
-    uses: Cratefield/harness/.github/workflows/conformance.yml@main
+    # Pinned to a commit, not `@main`: a reusable workflow resolved at
+    # `@main` means an unrelated push to the harness can change what this
+    # repository's CI runs, with no diff here. The harness has no release
+    # tags yet (release-plz has never produced one), and a SHA is
+    # immutable where a tag can be moved. Bump deliberately.
+    uses: Cratefield/harness/.github/workflows/conformance.yml@b0858003713c5bc449ef617154ca375842ec1a4b
     with:
       module-glob: ${{ needs.detect-modules.outputs.modules }}
 

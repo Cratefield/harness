@@ -40,7 +40,7 @@ mod handlers;
 mod provider;
 mod session;
 
-use factory0_core::{
+use cratefield_core::{
     Config, ConfigError, Migrations, Module, ModuleConfig, ModuleContext, Port, Problem, ProblemDef,
 };
 use http::StatusCode;
@@ -301,7 +301,7 @@ impl ModuleState {
     pub(crate) fn provider_config(
         &self,
         provider: &Provider,
-        clock: &dyn factory0_core::Clock,
+        clock: &dyn cratefield_core::Clock,
     ) -> Result<ProviderConfig, Problem> {
         let credentials = self
             .settings()?
@@ -420,7 +420,7 @@ impl Module for Oidc {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use factory0_core::MapConfig;
+    use cratefield_core::MapConfig;
 
     fn config(pairs: &[(&str, &str)]) -> MapConfig {
         MapConfig::from_pairs(
