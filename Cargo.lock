@@ -966,6 +966,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "factory0-secrets"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "chacha20poly1305",
+ "factory0-adapter-sqlite",
+ "factory0-core",
+ "factory0-kms",
+ "getrandom 0.4.3",
+ "pollster",
+ "sea-query",
+ "thiserror",
+ "time",
+ "tracing",
+ "zeroize",
+]
+
+[[package]]
 name = "factory0-testing"
 version = "0.1.0"
 dependencies = [

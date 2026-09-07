@@ -138,6 +138,7 @@ depend on this repository by git.
 | `factory0-adapter-sqlite` | `Database` over rusqlite: every test, and single-node self-hosting |
 | `factory0-module-email-signup` | Email signup with double opt-in, unsubscribe, admin export |
 | `factory0-module-waitlist` | Per-product waitlist with confirm, position, referral codes |
+| `factory0-secrets` | Envelope-encrypted secrets over the `Database` port, two tiers, ciphertexts bound to their row (#39) |
 | `factory0-kms` | The KMS port: wrap and unwrap data keys, with a local-file provider that refuses production (ADR 0102) |
 | `factory0-ui` | Renders the module surface as HTML at `/ui`: pages, fragments, in-process form dispatch, the `cf-*` styling contract (ADR 0010) |
 | `factory0-cli` | Binary `fz`: `migrations collect`, `doctor`, `modules` |
@@ -239,6 +240,7 @@ crates/
   module-email-signup/     factory0-module-email-signup
   module-waitlist/         factory0-module-waitlist
   kms/                     factory0-kms
+  secrets/                 factory0-secrets
   ui/                      factory0-ui
   cli/                     factory0-cli  →  fz
   testing/                 factory0-testing
