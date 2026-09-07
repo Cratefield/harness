@@ -34,9 +34,7 @@ use async_trait::async_trait;
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use bytes::Bytes;
-use cratefield_core::{
-    Clock, HttpClient, Notification, Priority, Push, PushError, PushOutcome,
-};
+use cratefield_core::{Clock, HttpClient, Notification, Priority, Push, PushError, PushOutcome};
 use http::header::AUTHORIZATION;
 use http::{Request, StatusCode};
 use p256::ecdsa::SigningKey;
@@ -308,8 +306,7 @@ impl Push for Apns {
             // The device token is no longer active: the caller deletes it.
             StatusCode::GONE => Err(PushError::Unregistered),
             _ => {
-                let detail = reason(response.body())
-                    .unwrap_or_else(|| status.as_u16().to_string());
+                let detail = reason(response.body()).unwrap_or_else(|| status.as_u16().to_string());
                 // An expired/invalid provider token is our JWT, not the
                 // request: drop the cache so the next send re-signs, and ask
                 // the caller to retry.
@@ -317,12 +314,20 @@ impl Push for Apns {
                     && (detail == "ExpiredProviderToken" || detail == "InvalidProviderToken")
                 {
                     live.invalidate_jwt();
-                    return Err(PushError::Transient(format!("provider token rejected: {detail}")));
+                    return Err(PushError::Transient(format!(
+                        "provider token rejected: {detail}"
+                    )));
                 }
                 if status.is_server_error() {
-                    Err(PushError::Transient(format!("apns {}: {detail}", status.as_u16())))
+                    Err(PushError::Transient(format!(
+                        "apns {}: {detail}",
+                        status.as_u16()
+                    )))
                 } else {
-                    Err(PushError::Rejected(format!("apns {}: {detail}", status.as_u16())))
+                    Err(PushError::Rejected(format!(
+                        "apns {}: {detail}",
+                        status.as_u16()
+                    )))
                 }
             }
         }

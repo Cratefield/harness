@@ -630,7 +630,10 @@ impl cratefield_core::Push for FakePush {
         let mode = *self.inner.mode.lock().expect("push lock");
         match mode {
             PushMode::DeliverOk => {
-                let id = format!("fake-apns-{}", self.inner.sent.lock().expect("push lock").len());
+                let id = format!(
+                    "fake-apns-{}",
+                    self.inner.sent.lock().expect("push lock").len()
+                );
                 self.inner
                     .sent
                     .lock()
@@ -640,9 +643,9 @@ impl cratefield_core::Push for FakePush {
             }
             PushMode::NotConfigured => Ok(cratefield_core::PushOutcome::NotConfigured),
             PushMode::Unregistered => Err(cratefield_core::PushError::Unregistered),
-            PushMode::Transient => {
-                Err(cratefield_core::PushError::Transient("fake push failure".to_owned()))
-            }
+            PushMode::Transient => Err(cratefield_core::PushError::Transient(
+                "fake push failure".to_owned(),
+            )),
         }
     }
 }

@@ -139,7 +139,12 @@ fn delivers_and_signs_a_valid_jwt() {
 
     let outcome =
         pollster::block_on(apns.send("devicetoken1", &Notification::new("Hi", "there"))).unwrap();
-    assert_eq!(outcome, PushOutcome::Delivered { id: Some("apns-xyz".to_owned()) });
+    assert_eq!(
+        outcome,
+        PushOutcome::Delivered {
+            id: Some("apns-xyz".to_owned())
+        }
+    );
 
     let req = http.last();
     assert_eq!(req.method(), "POST");
@@ -152,7 +157,12 @@ fn delivers_and_signs_a_valid_jwt() {
     assert_eq!(req.headers().get("apns-priority").unwrap(), "10");
 
     // The Authorization header is `bearer <jwt>` with a well-formed ES256 JWT.
-    let auth = req.headers().get("authorization").unwrap().to_str().unwrap();
+    let auth = req
+        .headers()
+        .get("authorization")
+        .unwrap()
+        .to_str()
+        .unwrap();
     let jwt = auth.strip_prefix("bearer ").expect("bearer scheme");
     let parts: Vec<&str> = jwt.split('.').collect();
     assert_eq!(parts.len(), 3, "header.payload.signature");
