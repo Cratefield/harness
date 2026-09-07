@@ -719,6 +719,16 @@ mod tests {
     }
 
     #[pollster::test]
+    async fn disconnecting_something_never_connected_is_a_harmless_no_op() {
+        let (conns, _db) = connections();
+        let c = conns
+            .disconnect("ten_a", &ConnectionKind::VentureGoogleOauth, &actor(), "t0")
+            .await
+            .expect("no error");
+        assert_eq!(c.state, ConnectionState::NotConnected);
+    }
+
+    #[pollster::test]
     async fn one_venture_does_not_see_anothers_connections() {
         let (conns, _db) = connections();
         conns
