@@ -13,7 +13,7 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
-factory0-core = { workspace = true }
+cratefield-core = { workspace = true }
 # auth-core owns the schema, the linking rules, the argon2 parameters and
 # the step that turns a verified identity into a session.
 factory0-auth-core = { path = "../auth-core" }
@@ -28,8 +28,8 @@ sha1 = "0.10"
 base16ct = { version = "0.2", default-features = false, features = ["alloc"] }
 
 [dev-dependencies]
-factory0-testing = { workspace = true }
-factory0-adapter-sqlite = { workspace = true }
+cratefield-testing = { workspace = true }
+cratefield-adapter-sqlite = { workspace = true }
 pollster = { workspace = true }
 tower = { workspace = true }
 async-trait = { workspace = true }

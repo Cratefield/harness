@@ -13,12 +13,12 @@
 use axum::extract::State;
 use axum::response::{IntoResponse, Response};
 use axum::routing::post;
+use cratefield_core::{Json, Problem, Scope};
 use factory0_auth_core::{
     CREDENTIAL_PASSKEY, Login, STATUS_ACTIVE, credentials_by_user, issue as issue_session,
     mark_passkey_suspect, passkey_by_credential_id, set_cookie, touch_credential_used,
     update_passkey_sign_count, user_by_id, user_by_primary_email,
 };
-use factory0_core::{Json, Problem, Scope};
 use http::HeaderMap;
 use http::header;
 use serde::Deserialize;
@@ -81,7 +81,7 @@ async fn options(
     };
     let email = parsed
         .email
-        .map(|email| factory0_core::normalize_email(&email))
+        .map(|email| cratefield_core::normalize_email(&email))
         .filter(|email| !email.is_empty());
 
     let mut allow = Vec::new();
@@ -158,7 +158,7 @@ pub(crate) struct VerifyBody {
 /// already flagged as a possible clone, and a challenge that was issued for
 /// a different account.
 async fn lookup(
-    db: &dyn factory0_core::Database,
+    db: &dyn cratefield_core::Database,
     scope: &Scope,
     consumed: &crate::challenge::Consumed,
     credential: &PublicKeyCredential,
@@ -215,9 +215,9 @@ async fn lookup(
 /// Issues the session a successful assertion earns, with the
 /// authentication-method references that say how it was earned.
 async fn start_session(
-    db: &dyn factory0_core::Database,
-    clock: &dyn factory0_core::Clock,
-    id_gen: &dyn factory0_core::IdGen,
+    db: &dyn cratefield_core::Database,
+    clock: &dyn cratefield_core::Clock,
+    id_gen: &dyn cratefield_core::IdGen,
     headers: &HeaderMap,
     user_id: &str,
     user_verified: bool,
@@ -250,8 +250,8 @@ async fn start_session(
 /// that means something beyond "no" into a lasting mark: a counter that went
 /// backwards is the only clone signal WebAuthn gives a relying party.
 async fn check_assertion(
-    db: &dyn factory0_core::Database,
-    clock: &dyn factory0_core::Clock,
+    db: &dyn cratefield_core::Database,
+    clock: &dyn cratefield_core::Clock,
     scope: &Scope,
     rp: &crate::RelyingParty,
     challenge_bytes: &[u8],

@@ -13,7 +13,7 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
-factory0-core = { workspace = true }
+cratefield-core = { workspace = true }
 # auth-core owns the schema, the linking rules and the step that turns a
 # verified identity into a session; this module adds no tables.
 factory0-auth-core = { path = "../auth-core" }
@@ -33,8 +33,8 @@ hmac = { workspace = true }
 sha2 = { workspace = true }
 
 [dev-dependencies]
-factory0-testing = { workspace = true }
-factory0-adapter-sqlite = { workspace = true }
+cratefield-testing = { workspace = true }
+cratefield-adapter-sqlite = { workspace = true }
 pollster = { workspace = true }
 tower = { workspace = true }
 async-trait = { workspace = true }

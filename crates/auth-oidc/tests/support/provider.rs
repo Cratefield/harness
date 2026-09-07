@@ -10,7 +10,7 @@
 use async_trait::async_trait;
 use base64ct::{Base64UrlUnpadded, Encoding as _};
 use bytes::Bytes;
-use factory0_core::{HttpClient, HttpError};
+use cratefield_core::{HttpClient, HttpError};
 use http::{Request, Response};
 use rsa::signature::{SignatureEncoding as _, Signer as _};
 use serde_json::{Value, json};

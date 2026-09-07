@@ -4,12 +4,12 @@ use axum::extract::{Query, State};
 use axum::response::{Html, IntoResponse, Response};
 use axum::routing::{get, post};
 use base64ct::{Base64UrlUnpadded, Encoding as _};
+use cratefield_core::{Json, Message, Problem, Scope, SendOutcome};
 use factory0_auth_core::{
     Redacted, STATUS_ACTIVE, SingleUseTokenRow, TOKEN_MAGIC_LINK, UserRow,
     consume_single_use_token, cookie_value as session_cookie_value, insert_single_use_token,
     insert_user, set_cookie, single_use_token_by_hash, user_by_id, user_by_primary_email,
 };
-use factory0_core::{Json, Message, Problem, Scope, SendOutcome};
 use http::{HeaderMap, StatusCode, header};
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -100,13 +100,13 @@ border:0;background:#1a1a1a;color:#fff;font-weight:600;cursor:pointer\">Sign in<
 
 async fn limit(state: &ModuleState, headers: &HeaderMap, email: Option<&str>) -> Option<Response> {
     let limiter = state.ctx.ports.rate_limiter.as_deref()?;
-    let ip = factory0_core::client_ip(headers);
+    let ip = cratefield_core::client_ip(headers);
     // Keyed on the address as well as the caller: an unlimited request
     // endpoint is a way to send somebody a hundred emails.
-    for key in factory0_core::rate_limit_keys(ip.as_deref(), email) {
+    for key in cratefield_core::rate_limit_keys(ip.as_deref(), email) {
         match limiter.limit(&format!("auth-magic-link:{key}")).await {
             Ok(decision) if !decision.ok => {
-                return Some(factory0_core::rate_limited(decision.retry_after).into_response());
+                return Some(cratefield_core::rate_limited(decision.retry_after).into_response());
             }
             Ok(_) => {}
             Err(err) => {
@@ -122,7 +122,7 @@ async fn captcha_ok(state: &ModuleState, token: Option<&str>, headers: &HeaderMa
     let Some(captcha) = state.ctx.ports.captcha.as_deref() else {
         return true;
     };
-    let ip = factory0_core::client_ip(headers);
+    let ip = cratefield_core::client_ip(headers);
     match captcha
         .verify(token.unwrap_or_default(), ip.as_deref())
         .await
@@ -149,7 +149,7 @@ async fn request(
 ) -> Result<Response, Problem> {
     let body: Value = serde_json::from_slice(&raw).unwrap_or(Value::Null);
     let parsed: RequestBody = serde_json::from_value(body.clone()).unwrap_or_default();
-    let email = factory0_core::normalize_email(&parsed.email);
+    let email = cratefield_core::normalize_email(&parsed.email);
 
     if let Some(limited) = limit(&state, &headers, Some(&email)).await {
         return Ok(limited);
@@ -240,18 +240,18 @@ async fn request(
 /// a caller the mail bounced would tell them the address exists.
 #[allow(clippy::too_many_arguments)]
 async fn issue_link(
-    db: &dyn factory0_core::Database,
-    clock: &dyn factory0_core::Clock,
-    id_gen: &dyn factory0_core::IdGen,
-    mailer: &dyn factory0_core::Mailer,
-    ctx: &factory0_core::ModuleContext,
+    db: &dyn cratefield_core::Database,
+    clock: &dyn cratefield_core::Clock,
+    id_gen: &dyn cratefield_core::IdGen,
+    mailer: &dyn cratefield_core::Mailer,
+    ctx: &cratefield_core::ModuleContext,
     settings: &crate::Settings,
     user_id: &str,
     email: &str,
     return_to: Option<&str>,
-) -> Result<(), factory0_core::DbError> {
+) -> Result<(), cratefield_core::DbError> {
     let Some(token) = random_token() else {
-        return Err(factory0_core::DbError::Query(
+        return Err(cratefield_core::DbError::Query(
             "the entropy source failed".to_owned(),
         ));
     };
@@ -290,7 +290,7 @@ async fn issue_link(
         Ok(rendered) => rendered,
         Err(err) => {
             tracing::error!(error = %err, "could not render the sign-in mail");
-            return Err(factory0_core::DbError::Query(err.to_string()));
+            return Err(cratefield_core::DbError::Query(err.to_string()));
         }
     };
 
@@ -349,11 +349,11 @@ pub(crate) fn iso(at: time::OffsetDateTime) -> String {
 }
 
 async fn create_account(
-    db: &dyn factory0_core::Database,
-    clock: &dyn factory0_core::Clock,
-    id_gen: &dyn factory0_core::IdGen,
+    db: &dyn cratefield_core::Database,
+    clock: &dyn cratefield_core::Clock,
+    id_gen: &dyn cratefield_core::IdGen,
     email: &str,
-) -> Result<String, factory0_core::DbError> {
+) -> Result<String, cratefield_core::DbError> {
     let now = iso(clock.now());
     let id = id_gen.ulid();
     insert_user(
@@ -516,7 +516,7 @@ async fn spend(
         id_gen,
         factory0_auth_core::Login {
             user_id: &user.id,
-            ip: factory0_core::client_ip(headers).as_deref(),
+            ip: cratefield_core::client_ip(headers).as_deref(),
             user_agent: headers
                 .get(header::USER_AGENT)
                 .and_then(|value| value.to_str().ok()),

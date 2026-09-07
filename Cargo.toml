@@ -12,15 +12,18 @@ repository = "https://github.com/Factory-Zero/auth"
 [workspace.dependencies]
 askama = "0.14.0"
 # Harness crates, pinned to a harness main commit (45c34a4, 2026-09-07).
-# They are NOT on crates.io yet; when they publish, these git pins become
-# version pins (issue #25).
+# Published on crates.io as of 2026-09-07, so these are ordinary version
+# requirements rather than git revisions (issue #25). The crates were
+# renamed from `factory0-*` to `cratefield-*` before that first release
+# (harness ADR 0011); this service keeps its own `factory0-auth-*` names,
+# which are Factory Zero's and are never published.
 #
-# The repository moved to the Cratefield organisation. git follows the
-# rename, but the address is written out here so a reader is not misled
-# about where the code lives.
-factory0-core = { git = "https://github.com/Cratefield/harness", rev = "45c34a4cc1ad8e2ed0c0077093590a424623f0bd" }
-factory0-testing = { git = "https://github.com/Cratefield/harness", rev = "45c34a4cc1ad8e2ed0c0077093590a424623f0bd" }
-factory0-adapter-sqlite = { git = "https://github.com/Cratefield/harness", rev = "45c34a4cc1ad8e2ed0c0077093590a424623f0bd" }
+# The ranges follow the harness's own policy in its docs/COMPATIBILITY.md:
+# a caret on the current minor while pre-1.0, so `"0.3"` accepts 0.3.x and
+# a core minor bump can never be picked up silently.
+cratefield-core = "0.3"
+cratefield-testing = "0.1"
+cratefield-adapter-sqlite = "0.1"
 
 # Versions mirror the harness workspace so the git harness crates and our
 # direct dependencies unify into one dependency tree.
@@ -125,11 +128,11 @@ p256 = { version = "0.14.0", default-features = false, features = [
 # Meta's data deletion callback (#18) verifies an HMAC-SHA256 over a
 # `signed_request`. hmac 0.13 pairs with sha2 0.11; both are pure Rust.
 hmac = { version = "0.13.0", default-features = false }
-# sha2 matches the harness pin (factory0-core depends on 0.11).
+# sha2 matches the harness pin (cratefield-core depends on 0.11).
 sha2 = { version = "0.11.0", default-features = false }
 
 # Enabled by wasm leaf crates (same as the harness venture example):
-# getrandom (via ulid/rand through factory0-core) needs the opt-in
+# getrandom (via ulid/rand through cratefield-core) needs the opt-in
 # wasm_js backend on wasm32-unknown-unknown.
 getrandom = { version = "0.4.3", default-features = false, features = [
     "wasm_js",

@@ -15,7 +15,7 @@
 //! one normalization `http::Uri` performs — an absent path on an
 //! authority-form URI reads as `/` — applies to both sides equally.
 
-use factory0_core::Problem;
+use cratefield_core::Problem;
 
 use crate::store::CLIENT_PUBLIC;
 

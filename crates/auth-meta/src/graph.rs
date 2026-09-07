@@ -7,7 +7,7 @@
 //! exchange, authenticated with the app secret. See ADR 0104.
 
 use bytes::Bytes;
-use factory0_core::HttpClient;
+use cratefield_core::HttpClient;
 use serde::Deserialize;
 use std::future::Future;
 use std::pin::Pin;
@@ -53,7 +53,7 @@ pub(crate) struct Profile {
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum GraphError {
     #[error("http port: {0}")]
-    Port(#[from] factory0_core::HttpError),
+    Port(#[from] cratefield_core::HttpError),
     #[error("the graph api answered {status}")]
     Status { status: u16 },
     #[error("the graph api answered something that is not a profile")]
@@ -110,7 +110,7 @@ impl PortHttpClient {
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum PortHttpError {
     #[error("http port: {0}")]
-    Port(#[from] factory0_core::HttpError),
+    Port(#[from] cratefield_core::HttpError),
 }
 
 impl<'c> oauth2::AsyncHttpClient<'c> for PortHttpClient {

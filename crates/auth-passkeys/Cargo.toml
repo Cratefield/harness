@@ -13,7 +13,7 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
-factory0-core = { workspace = true }
+cratefield-core = { workspace = true }
 # auth-core owns the schema (users, credentials, sessions, single_use_tokens)
 # and publishes the typed store API the login-method modules write through.
 # This is a dependency on its *published surface*, not on its internals.
@@ -41,8 +41,8 @@ rsa = { workspace = true }
 ed25519-dalek = { workspace = true }
 
 [dev-dependencies]
-factory0-testing = { workspace = true }
-factory0-adapter-sqlite = { workspace = true }
+cratefield-testing = { workspace = true }
+cratefield-adapter-sqlite = { workspace = true }
 pollster = { workspace = true }
 tower = { workspace = true }
 rand = "0.8"

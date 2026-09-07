@@ -10,13 +10,13 @@
 use axum::extract::State;
 use axum::response::{IntoResponse, Response};
 use axum::routing::post;
+use cratefield_core::{Json, Problem, Scope};
 use factory0_auth_core::{
     CREDENTIAL_PASSWORD, CredentialRow, IssuedSession, Login, PROVIDER_PASSWORD, STATUS_ACTIVE,
     SessionError, cookie_value as session_cookie_value, hash_password, insert_credential,
     insert_identity, issue as issue_session, password_credential, set_cookie, set_password_hash,
     set_password_lockout, user_by_id, user_by_primary_email, verify_password,
 };
-use factory0_core::{Json, Problem, Scope};
 use http::{HeaderMap, StatusCode, header};
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -90,14 +90,14 @@ fn accepted() -> Response {
 
 async fn limit(state: &ModuleState, headers: &HeaderMap, email: Option<&str>) -> Option<Response> {
     let limiter = state.ctx.ports.rate_limiter.as_deref()?;
-    let ip = factory0_core::client_ip(headers);
+    let ip = cratefield_core::client_ip(headers);
     // Keyed on the address as well as the caller: an attacker with a
     // botnet defeats an IP limit, and a person's account is worth
     // protecting from a distributed guess even before the lockout bites.
-    for key in factory0_core::rate_limit_keys(ip.as_deref(), email) {
+    for key in cratefield_core::rate_limit_keys(ip.as_deref(), email) {
         match limiter.limit(&format!("auth-password:{key}")).await {
             Ok(decision) if !decision.ok => {
-                return Some(factory0_core::rate_limited(decision.retry_after).into_response());
+                return Some(cratefield_core::rate_limited(decision.retry_after).into_response());
             }
             Ok(_) => {}
             Err(err) => {
@@ -118,7 +118,7 @@ async fn captcha_ok(state: &ModuleState, token: Option<&str>, headers: &HeaderMa
     let Some(captcha) = state.ctx.ports.captcha.as_deref() else {
         return true;
     };
-    let ip = factory0_core::client_ip(headers);
+    let ip = cratefield_core::client_ip(headers);
     match captcha
         .verify(token.unwrap_or_default(), ip.as_deref())
         .await
@@ -198,7 +198,7 @@ async fn register(
         return Err(Problem::new(&PASSWORD_UNSUITABLE).instance(&scope.request_id));
     }
 
-    let email = factory0_core::normalize_email(&credentials.email);
+    let email = cratefield_core::normalize_email(&credentials.email);
     if !looks_like_an_address(&email) {
         // Not an address. Answered like everything else here, because
         // "that is not an email" and "that email is taken" must not be
@@ -255,12 +255,12 @@ async fn register(
 /// owner can recover from by registering again — the duplicate path finds
 /// the row and mails them.
 async fn create_account(
-    db: &dyn factory0_core::Database,
-    clock: &dyn factory0_core::Clock,
-    id_gen: &dyn factory0_core::IdGen,
+    db: &dyn cratefield_core::Database,
+    clock: &dyn cratefield_core::Clock,
+    id_gen: &dyn cratefield_core::IdGen,
     email: &str,
     password_hash: &str,
-) -> Result<String, factory0_core::DbError> {
+) -> Result<String, cratefield_core::DbError> {
     let now = lockout::iso(clock.now());
     let user_id = id_gen.ulid();
     let user = factory0_auth_core::UserRow {
@@ -323,7 +323,7 @@ async fn login(
 ) -> Result<Response, Problem> {
     let body = body_of(&raw);
     let credentials: Credentials = serde_json::from_value(body.clone()).unwrap_or_default();
-    let email = factory0_core::normalize_email(&credentials.email);
+    let email = cratefield_core::normalize_email(&credentials.email);
 
     if let Some(limited) = limit(&state, &headers, Some(&email)).await {
         return Ok(limited);
@@ -393,7 +393,7 @@ async fn login(
     }
 
     let presented = session_cookie_value(&headers);
-    let ip = factory0_core::client_ip(&headers);
+    let ip = cratefield_core::client_ip(&headers);
     let user_agent = headers
         .get(header::USER_AGENT)
         .and_then(|value| value.to_str().ok());
@@ -428,8 +428,8 @@ async fn login(
 
 /// Records a failed attempt, and announces a lock when this one caused it.
 async fn record_failure(
-    db: &dyn factory0_core::Database,
-    ctx: &factory0_core::ModuleContext,
+    db: &dyn cratefield_core::Database,
+    ctx: &cratefield_core::ModuleContext,
     scope: &Scope,
     credential: &CredentialRow,
     settings: &crate::Settings,
@@ -473,7 +473,7 @@ struct Attempt {
 /// every step here has to happen for every attempt: returning early on a
 /// missing account would make the answer's *timing* say so.
 async fn attempt(
-    db: &dyn factory0_core::Database,
+    db: &dyn cratefield_core::Database,
     email: &str,
     password: &str,
     now: time::OffsetDateTime,
@@ -609,7 +609,7 @@ async fn change(
         id_gen,
         Login {
             user_id: &user.id,
-            ip: factory0_core::client_ip(&headers).as_deref(),
+            ip: cratefield_core::client_ip(&headers).as_deref(),
             user_agent: headers
                 .get(header::USER_AGENT)
                 .and_then(|value| value.to_str().ok()),

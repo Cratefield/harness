@@ -10,7 +10,7 @@ use std::sync::{Arc, RwLock};
 
 use base64ct::{Base64UrlUnpadded, Encoding};
 use bytes::Bytes;
-use factory0_core::{Clock, HttpClient};
+use cratefield_core::{Clock, HttpClient};
 use p256::ecdsa::VerifyingKey;
 use serde::Deserialize;
 

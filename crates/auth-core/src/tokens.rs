@@ -36,7 +36,9 @@ use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use base64ct::{Base64UrlUnpadded, Encoding};
-use factory0_core::{Clock, Config, Database, DbError, IdGen, Json, ModuleConfig, Problem, Scope};
+use cratefield_core::{
+    Clock, Config, Database, DbError, IdGen, Json, ModuleConfig, Problem, Scope,
+};
 use p256::ecdsa::{self, signature::Signer};
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -65,7 +67,7 @@ pub const OIDC_CACHE_CONTROL: &str = "public, max-age=3600";
 /// The one answer of the discovery endpoints and the token endpoints
 /// when signing keys are not configured: `503`, stable, and naming
 /// nothing but the misconfiguration.
-pub const TOKENS_UNCONFIGURED: factory0_core::ProblemDef = factory0_core::ProblemDef {
+pub const TOKENS_UNCONFIGURED: cratefield_core::ProblemDef = cratefield_core::ProblemDef {
     slug: "auth/tokens-unconfigured",
     status: StatusCode::SERVICE_UNAVAILABLE,
     title: "Token issuing is not configured",
@@ -579,8 +581,8 @@ pub(crate) fn well_known_router(cell: SigningKeysCell) -> axum::Router {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use factory0_core::MapConfig;
-    use factory0_testing::FixedClock;
+    use cratefield_core::MapConfig;
+    use cratefield_testing::FixedClock;
     use p256::ecdsa::{self, signature::Verifier};
 
     /// A throwaway key generated in the test, never a real one.

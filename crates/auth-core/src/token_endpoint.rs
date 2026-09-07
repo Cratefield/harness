@@ -25,7 +25,7 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::post;
 use base64ct::{Base64UrlUnpadded, Encoding};
-use factory0_core::{Clock, Database, Json, Problem, Scope, constant_time_eq, subject_hash};
+use cratefield_core::{Clock, Database, Json, Problem, Scope, constant_time_eq, subject_hash};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -42,7 +42,7 @@ use crate::tokens::{
 
 /// The one answer every refused token request sees. The description
 /// says what it does not distinguish, on purpose.
-pub const TOKEN_REFUSED: factory0_core::ProblemDef = factory0_core::ProblemDef {
+pub const TOKEN_REFUSED: cratefield_core::ProblemDef = cratefield_core::ProblemDef {
     slug: "auth/token-request-refused",
     status: StatusCode::BAD_REQUEST,
     title: "Token request refused",
@@ -55,7 +55,7 @@ struct GrantContext<'a> {
     scope: &'a Scope,
     db: &'a dyn Database,
     clock: &'a dyn Clock,
-    id_gen: &'a dyn factory0_core::IdGen,
+    id_gen: &'a dyn cratefield_core::IdGen,
     keys: &'a SigningKeys,
     client_id: &'a str,
 }
@@ -134,7 +134,7 @@ fn amr_of(session: &store::SessionRow) -> Vec<String> {
 async fn mint_pair(
     db: &dyn Database,
     clock: &dyn Clock,
-    id_gen: &dyn factory0_core::IdGen,
+    id_gen: &dyn cratefield_core::IdGen,
     keys: &SigningKeys,
     session: &store::SessionRow,
     user: &UserRow,

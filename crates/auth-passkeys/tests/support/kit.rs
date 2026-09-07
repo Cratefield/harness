@@ -3,10 +3,10 @@
 
 #![allow(dead_code)]
 
+use cratefield_core::{Clock, Config, Database, IdGen, MapConfig, UlidIdGen};
+use cratefield_testing::TestHarness;
 use factory0_auth_core::{AuthCore, Login, UserRow, insert_user, issue};
 use factory0_auth_passkeys::Passkeys;
-use factory0_core::{Clock, Config, Database, IdGen, MapConfig, UlidIdGen};
-use factory0_testing::TestHarness;
 use http::StatusCode;
 use serde_json::Value;
 use std::sync::Arc;
@@ -64,9 +64,9 @@ pub fn kit() -> Kit {
 pub fn kit_rate_limited() -> Kit {
     kit_patched(config_pairs(), |ports| {
         ports.rate_limiter = Some(std::sync::Arc::new(
-            factory0_testing::FakeRateLimiter::scripted(
+            cratefield_testing::FakeRateLimiter::scripted(
                 Vec::new(),
-                factory0_core::Decision {
+                cratefield_core::Decision {
                     ok: false,
                     retry_after: Some(std::time::Duration::from_secs(30)),
                 },
@@ -81,7 +81,7 @@ pub fn kit_with(pairs: Vec<(String, String)>) -> Kit {
 
 pub fn kit_patched(
     pairs: Vec<(String, String)>,
-    patch: impl FnOnce(&mut factory0_core::Ports),
+    patch: impl FnOnce(&mut cratefield_core::Ports),
 ) -> Kit {
     let clock = TestClock::new();
     let config: Arc<dyn Config> = Arc::new(MapConfig::from_pairs(pairs));
@@ -131,7 +131,7 @@ impl Kit {
     /// Flips the account to `disabled`, the schema's kill switch.
     pub async fn disable(&self, user_id: &str) {
         self.db
-            .execute(&factory0_core::Statement::with_values(
+            .execute(&cratefield_core::Statement::with_values(
                 "UPDATE users SET status = ? WHERE id = ?".to_owned(),
                 vec!["disabled".into(), user_id.into()],
             ))
@@ -241,7 +241,7 @@ pub async fn post(kit: &Kit, path: &str, body: &str, cookie: Option<&str>) -> Re
 pub fn count(kit: &Kit, table: &str) -> i64 {
     let sql = format!("SELECT COUNT(*) AS n FROM {table}");
     let rows =
-        pollster::block_on(kit.db.query(&factory0_core::Statement::new(sql))).expect("query");
+        pollster::block_on(kit.db.query(&cratefield_core::Statement::new(sql))).expect("query");
     rows.first()
         .and_then(|row| row.get::<i64>("n"))
         .unwrap_or_default()

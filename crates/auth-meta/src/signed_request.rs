@@ -12,7 +12,7 @@
 //! that looks like a wrong secret.
 
 use base64ct::{Base64UrlUnpadded, Encoding as _};
-use factory0_core::constant_time_eq;
+use cratefield_core::constant_time_eq;
 use hmac::{KeyInit, Mac, SimpleHmac};
 use serde::Deserialize;
 use sha2::Sha256;

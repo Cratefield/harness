@@ -18,7 +18,7 @@ use std::pin::Pin;
 use std::sync::RwLock;
 
 use bytes::Bytes;
-use factory0_core::{Clock, HttpClient};
+use cratefield_core::{Clock, HttpClient};
 use openidconnect::core::CoreProviderMetadata;
 use openidconnect::{IssuerUrl, JsonWebKey as _, JsonWebKeySet};
 
@@ -62,7 +62,7 @@ impl PortHttpClient {
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum PortHttpError {
     #[error("http port: {0}")]
-    Port(#[from] factory0_core::HttpError),
+    Port(#[from] cratefield_core::HttpError),
 }
 
 impl<'c> openidconnect::AsyncHttpClient<'c> for PortHttpClient {

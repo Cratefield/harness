@@ -6,8 +6,8 @@
 //! issue #10, which is where `/authorize` exists.
 
 use axum::http::{Method, StatusCode, header};
+use cratefield_testing::TestHarness;
 use factory0_auth_core::AuthCore;
-use factory0_testing::TestHarness;
 use serde_json::Value;
 use std::sync::Arc;
 use tower::ServiceExt;
@@ -16,7 +16,7 @@ const ADMIN: &str = "test-admin-token-0123456789abcdef";
 
 fn kit() -> TestHarness {
     TestHarness::with_ports(vec![Box::new(AuthCore::new())], |ports| {
-        ports.config = Arc::new(factory0_core::MapConfig::from_pairs([(
+        ports.config = Arc::new(cratefield_core::MapConfig::from_pairs([(
             "ADMIN_TOKEN",
             ADMIN,
         )]));

@@ -16,7 +16,7 @@
 //! registration when an external service is down — turns somebody else's
 //! outage into ours, and the check is advice rather than authentication.
 
-use factory0_core::HttpClient;
+use cratefield_core::HttpClient;
 use sha1::{Digest, Sha1};
 use std::sync::Arc;
 

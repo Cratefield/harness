@@ -12,7 +12,7 @@
 //! that Apple's `form_post` needs would be a widening with nothing asking
 //! for it.
 
-use factory0_core::{Clock, Kid, Payload, Signer};
+use cratefield_core::{Clock, Kid, Payload, Signer};
 use serde::{Deserialize, Serialize};
 
 /// The signed payload's purpose (ADR 0006), so a flow cookie can never be
@@ -114,7 +114,7 @@ pub(crate) fn cookie_value(headers: &http::HeaderMap) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use factory0_core::HmacSigner;
+    use cratefield_core::HmacSigner;
     use time::OffsetDateTime;
 
     struct FixedClock(i64);

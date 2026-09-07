@@ -4,13 +4,13 @@
 //! `single_use_tokens` and `sessions`, and `Debug` redaction on every
 //! hash column.
 
-use factory0_adapter_sqlite::SqliteDatabase;
+use cratefield_adapter_sqlite::SqliteDatabase;
+use cratefield_core::{Module, Ports, UlidIdGen};
+use cratefield_testing::TestHarness;
 use factory0_auth_core::{
     AuthCore, Bytes, ClientRedirectUriRow, ClientRow, CredentialRow, IdentityRow, Redacted,
     SessionRow, SingleUseTokenRow, UserRow,
 };
-use factory0_core::{Module, Ports, UlidIdGen};
-use factory0_testing::TestHarness;
 use std::sync::Arc;
 use time::format_description::well_known::Rfc3339;
 

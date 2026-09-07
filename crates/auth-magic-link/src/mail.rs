@@ -6,7 +6,7 @@
 //! kit (which registers nothing) still works.
 
 use askama::Template as _;
-use factory0_core::{Rendered, Template, TemplateError, TemplateRegistry};
+use cratefield_core::{Rendered, Template, TemplateError, TemplateRegistry};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 

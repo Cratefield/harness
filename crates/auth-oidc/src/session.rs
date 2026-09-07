@@ -6,12 +6,12 @@
 //! the identical step — so this module's job is to say what the provider
 //! vouched for and to announce what happened under its own event names.
 
+use cratefield_core::{Clock, Database, IdGen, ModuleContext, Problem, Scope};
 use factory0_auth_core::federated::{
     self, Caller as CoreCaller, CompleteError, Completed as CoreCompleted, FederatedIdentity,
     Ports as CorePorts,
 };
 use factory0_auth_core::{IssuedSession, set_cookie};
-use factory0_core::{Clock, Database, IdGen, ModuleContext, Problem, Scope};
 use serde_json::json;
 
 use crate::provider::Provider;

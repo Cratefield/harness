@@ -5,12 +5,12 @@
 //!
 //! Verification re-derives the hash with the parameters read back from
 //! the stored PHC string and compares digests with the harness
-//! [`constant_time_eq`](factory0_core::constant_time_eq) helper, so no
+//! [`constant_time_eq`](cratefield_core::constant_time_eq) helper, so no
 //! secret comparison is timing-sensitive.
 
 use argon2::{Algorithm, Argon2, Params, Version, password_hash::phc::PasswordHash};
 use base64ct::{Base64Unpadded as PhcB64, Base64UrlUnpadded, Encoding};
-use factory0_core::constant_time_eq;
+use cratefield_core::constant_time_eq;
 
 use crate::store::{CLIENT_CONFIDENTIAL, ClientRow};
 
@@ -119,16 +119,16 @@ pub fn verify_client_secret(client: &ClientRow, presented: &str, now: &str) -> b
 /// # Errors
 ///
 /// The `auth/client-disabled` problem when the client is disabled.
-pub fn ensure_client_usable(client: &ClientRow) -> Result<(), factory0_core::Problem> {
+pub fn ensure_client_usable(client: &ClientRow) -> Result<(), cratefield_core::Problem> {
     if client.status != crate::store::STATUS_ACTIVE {
-        return Err(factory0_core::Problem::new(&CLIENT_DISABLED));
+        return Err(cratefield_core::Problem::new(&CLIENT_DISABLED));
     }
     Ok(())
 }
 
 /// Stable problem for a disabled client, refused at `/authorize` and
 /// `/token` (wired there by issues #9 and #10).
-pub const CLIENT_DISABLED: factory0_core::ProblemDef = factory0_core::ProblemDef {
+pub const CLIENT_DISABLED: cratefield_core::ProblemDef = cratefield_core::ProblemDef {
     slug: "auth/client-disabled",
     status: axum::http::StatusCode::FORBIDDEN,
     title: "Client is disabled",
