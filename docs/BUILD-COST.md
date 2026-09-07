@@ -63,3 +63,25 @@ module" and not "one more line":
 
 Use the rustup toolchain explicitly (`~/.cargo/bin/cargo`). A Homebrew rustc on
 `PATH` shadows it and is too old for this workspace's edition.
+
+## Re-measured 2026-09-07
+
+Same host and method, `examples/venture` as it stands after the UI epic
+(#69). The binary has grown; the build has not become a problem.
+
+| Case | wasm |
+| :--- | ---: |
+| 2026-09-06, as measured above | 2.66 MB |
+| Today, without the UI renderer mounted | 2.98 MB |
+| **Today, as shipped** | **3.50 MB** |
+
+`factory0-ui` and its `ui.json` account for **0.52 MB** of that, measured
+by dropping the `.ui(..)` call and the dependency and rebuilding. The
+0.32 MB between the two older figures is everything else landed since:
+`schemars` for the module surface, the sidecar dispatcher and mount, the
+admin pages.
+
+Nothing here changes the finding above: a warm build with a new module
+crate is still seconds. If the size ever matters — a cold-start budget,
+not a build budget — `opt-level = "s"` is the first lever, and mounting
+the UI is optional per venture.

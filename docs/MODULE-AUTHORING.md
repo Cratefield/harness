@@ -587,6 +587,8 @@ pass because the mount quietly stopped working.
 If a module genuinely cannot be sidecar-mounted, use
 `conformance_in_process_only(module, "why")`. The reason is required and
 printed by the run: it is the only record of the exception.
+[MOUNTING.md](MOUNTING.md) lists what a sidecar cannot do, and when to
+choose one at all.
 
 `assert_wasm_safe_deps` runs `cargo tree -p <crate> --edges normal` and
 fails on `worker`, `wasm-bindgen`, `tokio` or `reqwest` — the
