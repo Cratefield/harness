@@ -162,6 +162,26 @@ A row that survives being moved, renamed or repointed is not a valid
 ciphertext anymore. Renaming a secret means writing a new version under
 the new name, not editing the row.
 
+### The port
+
+The trait is `factory0_kms::Kms` (issue #40): `provider()`, `key_ref()`,
+`wrap()`, `unwrap()`, and nothing else, because wrapping is the only
+thing the KMS does for us. Errors split **unavailable** (retry) from
+**denied** (a human has to change something) from **tampered** (never
+retry, never fall back), since collapsing them makes a permissions
+mistake look like an outage.
+
+`LocalFileKms` is the development provider and **refuses to construct
+when the environment is production**: its master key sits on a local
+disk, which is the property a KMS exists to remove. `factory0_kms::
+conformance` is the suite every future provider passes — round trip,
+a fresh nonce per wrap, every single-bit change to the wrapped blob
+refused, and a truncated or empty blob refused rather than panicking.
+
+Managed providers are not written yet: they need credentials and a
+nightly job against the real service, and an unexercised vendor
+integration here would be worse than an absent one.
+
 ## 6. Operations
 
 **DEK lifecycle.** *Provision*: generate 256 bits from the OS RNG, wrap
