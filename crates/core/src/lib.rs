@@ -52,10 +52,11 @@ pub use module::{
     migration_checksum, migration_edited,
 };
 pub use ports::{
-    Captcha, CaptchaError, Clock, Database, DbError, Decision, Defer, DispatchError, Dispatcher,
-    HttpClient, HttpError, IdGen, KeyValue, Kid, KvError, MailError, Mailer, Message, NoopDefer,
-    Payload, Port, Ports, RateLimitError, RateLimiter, Row, Rows, SendOutcome, SignatureError,
-    Signer, Statement, SystemClock, TryFromValue, UlidIdGen, Verdict, timeout,
+    Blob, BlobError, BlobObject, Captcha, CaptchaError, Clock, Database, DbError, Decision, Defer,
+    DispatchError, Dispatcher, HttpClient, HttpError, IdGen, KeyValue, Kid, KvError, MailError,
+    Mailer, Message, NoopDefer, Payload, Port, Ports, RateLimitError, RateLimiter, Row, Rows,
+    ScopedBlob, SendOutcome, SignatureError, Signer, Statement, SystemClock, TryFromValue,
+    UlidIdGen, Verdict, timeout,
 };
 pub use problem::Problem;
 pub use problems::{ProblemDef, SLUGS, registry as problem_registry};

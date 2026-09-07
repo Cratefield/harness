@@ -183,6 +183,7 @@ module. The template ships `tests/harness_builds.rs` asserting `build()` is
 | `RateLimiter` | `limit(key) -> Result<Decision{ok, retry_after}>` | Workers Rate Limiting binding | Redis |
 | `Signer` | `sign(Payload) -> String`, `verify(token, purpose) -> Option<Payload>` | HMAC-SHA256 (`hmac` + `sha2`) with `HARNESS_SECRET`; in core | same |
 | `KeyValue` | `get/put/delete` with TTL | KV | Redis |
+| `Blob` | `put(key, bytes, content_type)`, `get -> Option<BlobObject>`, `delete` (idempotent), `signed_url(key, ttl)`; keys are module-prefixed and the harness hands each module a `ScopedBlob` so it cannot name another's objects | R2 (planned) | directory (`DirBlob`); S3-compatible later |
 | `HttpClient` | `send(http::Request<Bytes>) -> http::Response<Bytes>` | `worker::Fetch` | `reqwest` |
 | `Clock`, `IdGen` | `now() -> OffsetDateTime`, `ulid() -> String` | in core | in core |
 | `Defer` | `wait_until(BoxFuture)` | `worker::Context::wait_until` | `tokio::spawn` |

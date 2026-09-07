@@ -21,7 +21,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use cratefield_core::{
-    Captcha, Database, HarnessConfig, KeyValue, Mailer, Port, Ports, RateLimiter, Runtime,
+    Blob, Captcha, Database, HarnessConfig, KeyValue, Mailer, Port, Ports, RateLimiter, Runtime,
     UlidIdGen,
 };
 
@@ -52,6 +52,7 @@ pub struct Native {
     db: Option<Arc<dyn Database>>,
     rate_limiter: Option<Arc<dyn RateLimiter>>,
     kv: Option<Arc<dyn KeyValue>>,
+    blob: Option<Arc<dyn Blob>>,
     mailer: Option<Arc<dyn Mailer>>,
     captcha: Option<Arc<dyn Captcha>>,
 }
@@ -106,6 +107,14 @@ impl Native {
         self
     }
 
+    /// The `Blob` port: a directory store ([`crate::DirBlob`]) or an
+    /// S3-compatible adapter.
+    #[must_use]
+    pub fn blob_arc(mut self, blob: Arc<dyn Blob>) -> Self {
+        self.blob = Some(blob);
+        self
+    }
+
     #[must_use]
     pub fn mailer(mut self, mailer: impl Mailer + 'static) -> Self {
         self.mailer = Some(Arc::new(mailer));
@@ -147,6 +156,7 @@ impl Native {
         ports.db.clone_from(&self.db);
         ports.rate_limiter.clone_from(&self.rate_limiter);
         ports.kv.clone_from(&self.kv);
+        ports.blob.clone_from(&self.blob);
         ports.mailer.clone_from(&self.mailer);
         ports.captcha.clone_from(&self.captcha);
 
@@ -187,6 +197,9 @@ impl Runtime for Native {
         if self.kv.is_some() {
             provided.push(Port::KeyValue);
         }
+        if self.blob.is_some() {
+            provided.push(Port::Blob);
+        }
         if self.mailer.is_some() {
             provided.push(Port::Mailer);
         }
@@ -209,6 +222,7 @@ pub(crate) fn clone_ports(ports: &Ports) -> Ports {
     snapshot.rate_limiter.clone_from(&ports.rate_limiter);
     snapshot.signer.clone_from(&ports.signer);
     snapshot.kv.clone_from(&ports.kv);
+    snapshot.blob.clone_from(&ports.blob);
     snapshot.http.clone_from(&ports.http);
     snapshot.clock.clone_from(&ports.clock);
     snapshot.id_gen.clone_from(&ports.id_gen);

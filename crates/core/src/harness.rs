@@ -218,6 +218,7 @@ impl Harness {
             rate_limiter: _,
             signer: _,
             kv: _,
+            blob: _,
             http: _,
             clock,
             id_gen,

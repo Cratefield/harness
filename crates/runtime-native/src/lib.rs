@@ -83,8 +83,8 @@ mod tracing_setup;
 pub use config::EnvConfig;
 pub use cron::{CronError, fan_out, spawn_cron_scheduler};
 pub use ports::{
-    CLIENT_IP_HEADER, RedisBundle, RedisKv, RedisPortError, RedisRateLimiter, ReqwestClient,
-    SpawnDefer, TokioClock, client_ip, redis_from_env, trusted_proxy_headers,
+    CLIENT_IP_HEADER, DirBlob, RedisBundle, RedisKv, RedisPortError, RedisRateLimiter,
+    ReqwestClient, SpawnDefer, TokioClock, client_ip, redis_from_env, trusted_proxy_headers,
 };
 pub use runtime::Native;
 pub use server::{ServeError, serve, serve_on, shutdown_signal};
