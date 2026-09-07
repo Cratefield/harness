@@ -41,6 +41,29 @@ use std::sync::Arc;
 use tower::ServiceExt;
 use worker::{Context, Env, Request as WorkerRequest, Response as WorkerResponse};
 
+/// Runs every module's [`Module::validate_config`] against the live config
+/// once per isolate and logs any failure to `console_error!`. `validate_config`
+/// cannot run at build or in `fz doctor` (neither has the deploy config; it
+/// lives on the `Env`), so cold start is the first place it can, and this
+/// makes a misconfigured deployment loud in Workers Logs (issue #101). It only
+/// logs — a bad module still degrades per request rather than failing the whole
+/// Worker's boot; that harder behaviour is a decision for an ADR.
+fn check_module_config_once(harness: &Harness, config: &dyn cratefield_core::Config) {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    static CHECKED: AtomicBool = AtomicBool::new(false);
+    if CHECKED.swap(true, Ordering::Relaxed) {
+        return;
+    }
+    for module in harness.modules() {
+        if let Err(err) = module.validate_config(config) {
+            worker::console_error!(
+                "[config] module `{}` has invalid configuration: {err}",
+                module.name()
+            );
+        }
+    }
+}
+
 /// Serves one fetch event: resolves ports from the bindings, builds the
 /// router, hands a fully-buffered request over, and converts the response.
 ///
@@ -64,6 +87,7 @@ pub async fn serve(
 ) -> worker::Result<WorkerResponse> {
     install_tracing();
     let ports = runtime.ports(&env, Arc::new(ContextDefer(ctx)));
+    check_module_config_once(harness, ports.config.as_ref());
     let router = harness.router(ports);
 
     let bytes = req.bytes().await?;
@@ -133,6 +157,7 @@ pub async fn serve_scheduled(
     install_tracing();
     let cron = event.cron();
     let ports = runtime.ports(&env, Arc::new(ScheduleDefer(ctx)));
+    check_module_config_once(harness, ports.config.as_ref());
     for module in harness.modules() {
         let module_ctx = harness.module_context(module.as_ref(), &ports);
         if let Err(err) = module.scheduled(&module_ctx, &cron).await {

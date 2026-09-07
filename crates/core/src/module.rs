@@ -165,8 +165,18 @@ pub trait Module: Send + Sync + 'static {
     }
     /// The module's migrations, embedded per dialect.
     fn migrations(&self) -> Migrations;
-    /// Rejects invalid configuration. Called by `fz doctor` and by tests;
-    /// missing required keys are reported together with the module name.
+    /// Rejects invalid configuration: missing required keys or malformed
+    /// values, reported together with the module name.
+    ///
+    /// **When it runs.** The conformance kit calls it, and a module's own
+    /// tests should. It cannot run at `Harness::build` or in `fz doctor`,
+    /// because neither has the deploy config — the values live on the runtime
+    /// `Env` and only exist per request. The Cloudflare runtime therefore runs
+    /// it **once at cold start** and logs any failure loudly (`console_error!`,
+    /// so it reaches Workers Logs); it does not fail the boot, so a
+    /// misconfigured module still degrades per request (issue #101) rather
+    /// than taking the whole Worker down. Turning that into a hard boot
+    /// failure is a deployment decision for an ADR.
     ///
     /// # Errors
     ///
