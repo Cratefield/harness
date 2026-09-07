@@ -55,7 +55,7 @@ validated before the issues were written, and what is deferred.
 | `auth-oidc` | Google and Apple: discovery, PKCE, ID tokens, minted Apple client secret, form_post callback |
 | `auth-meta` | Facebook Login: OAuth 2.0 plus a Graph profile call, with no OpenID Connect anywhere. The data deletion callback is #18 |
 | `auth-password` | Email and password: argon2id, a per-account lockout, a breach check, and answers that reveal nothing about who has an account. **Needs the paid Workers plan** (ADR 0100) |
-| `auth-magic-link` | request and single-use consume |
+| `auth-magic-link` | Sign in by email: a single-use bearer credential, the way an address gets verified, and the way back in for a locked or passwordless account |
 
 ## The login chooser
 

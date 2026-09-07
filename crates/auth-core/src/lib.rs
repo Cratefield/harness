@@ -65,9 +65,10 @@ pub use store::{
     pending_deletion_jobs, purge_expired_sessions, purge_expired_single_use_tokens, purge_user,
     redirect_uris_for_client, replace_redirect_uris, revoke_all_sessions, revoke_session,
     rotate_client_secret, session_by_id, session_by_token_hash, sessions_by_user,
-    set_password_hash, set_password_lockout, single_use_token_by_hash, slide_session,
-    touch_credential_used, touch_identity_login, touch_session_seen, update_client_name,
-    update_client_status, update_passkey_sign_count, user_by_id, user_by_primary_email,
+    set_password_hash, set_password_lockout, set_primary_email_verified, single_use_token_by_hash,
+    slide_session, touch_credential_used, touch_identity_login, touch_session_seen,
+    update_client_name, update_client_status, update_passkey_sign_count, user_by_id,
+    user_by_primary_email,
 };
 pub use tokens::{
     ACCESS_TOKEN_SECS, JWKS_CACHE_CONTROL, OIDC_CACHE_CONTROL, REFRESH_TOKEN_DAYS, RefreshGrant,
