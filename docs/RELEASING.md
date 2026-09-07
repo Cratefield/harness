@@ -71,9 +71,25 @@ own the `cratefield-*` names.
  A crate's trusted publisher can only be configured **after the
 crate exists**, so the very first release of each crate is manual:
 
-1. **Create a scoped token.** Sign in to crates.io → *Account settings*
-   → *API Tokens* → *New token*. Scope: **Publish new crates**. This
-   token exists only for the first publishes; revoke it afterwards.
+1. **Create a scoped token, on an account with a verified email.**
+   Sign in to crates.io → *Account settings* → *API Tokens* → *New
+   token*. Scope: **Publish new crates**. This token exists only for the
+   first publishes; revoke it afterwards.
+
+   crates.io refuses to publish from an account whose email address is
+   unverified, and it refuses **at upload**, after packaging and the
+   verification build have both succeeded:
+
+   ```
+   error: failed to publish cratefield-core v0.3.0 to registry at https://crates.io
+   Caused by:
+     the remote server responded with an error (status 400 Bad Request):
+     A verified email address is required to publish crates to crates.io.
+   ```
+
+   A `--dry-run` cannot catch this, because a dry run stops before the
+   upload. Check <https://crates.io/settings/profile> first: the address
+   must be present *and* confirmed through the mail crates.io sends.
 2. **First-publish each crate manually**, in dependency order, from a
    checkout of `main` at the version being released:
 
