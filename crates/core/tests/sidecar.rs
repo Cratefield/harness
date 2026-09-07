@@ -148,10 +148,23 @@ async fn a_mounted_sidecar_answers_under_its_prefix() {
         Some(dispatcher.clone()),
     ));
 
-    let response = request(&router, Method::GET, "/v1/acme-pricing/quote", &[], None).await;
+    let response = request(
+        &router,
+        Method::GET,
+        "/v1/acme-pricing/quote?plan=pro",
+        &[],
+        None,
+    )
+    .await;
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(body_json(response).await["from"], "sidecar");
     assert_eq!(dispatcher.calls.load(Ordering::SeqCst), 1, "must not retry");
+
+    // The sidecar is a whole harness serving its module at /v1/<name>, so it
+    // must receive the path the caller used, not the nest remainder.
+    let seen = dispatcher.seen.lock().unwrap();
+    assert_eq!(seen[0].uri().path(), "/v1/acme-pricing/quote");
+    assert_eq!(seen[0].uri().query(), Some("plan=pro"));
 }
 
 #[pollster::test]

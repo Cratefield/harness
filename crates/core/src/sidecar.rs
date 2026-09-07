@@ -11,7 +11,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use axum::Router;
-use axum::extract::State;
+use axum::extract::{OriginalUri, State};
 use axum::response::{IntoResponse, Response};
 use bytes::Bytes;
 
@@ -152,6 +152,10 @@ pub(crate) fn router(mount: SidecarMount, dispatcher: Option<Arc<dyn Dispatcher>
 async fn forward(
     State(state): State<Arc<SidecarState>>,
     scope: Scope,
+    // `nest` strips the mount prefix from `parts.uri`, but a sidecar is a
+    // whole harness serving its module at `/v1/<name>`: it must be given the
+    // path the caller used, or every forwarded request 404s at the far end.
+    OriginalUri(uri): OriginalUri,
     request: axum::extract::Request,
 ) -> Response {
     let unavailable = |detail: String| -> Response {
@@ -192,7 +196,7 @@ async fn forward(
 
     let mut outbound = http::Request::builder()
         .method(parts.method.clone())
-        .uri(parts.uri.clone());
+        .uri(uri);
     if let Some(headers) = outbound.headers_mut() {
         for (name, value) in &parts.headers {
             if NOT_FORWARDED.contains(&name.as_str()) {
