@@ -56,6 +56,14 @@ without writing.
 
 Keep the artifact: it is the audit record of exactly what moved.
 
+**A venture with sidecars exports in two parts.** `fz` sees only the
+modules compiled into it, so an export refuses to run when the mount
+table names sidecars: their tables are in the same database and it
+cannot enumerate them. Export those from the sidecar's own repository,
+then re-run here with `--without-sidecar-tables`, which records the
+omitted module names in the manifest so the artifact says what it does
+not contain ([MOUNTING.md](MOUNTING.md), issue #66).
+
 ## 4. Import into the rehearsal target
 
 ```sh

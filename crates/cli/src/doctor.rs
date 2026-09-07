@@ -5,7 +5,7 @@
 use crate::collect::verify_locked;
 use crate::lint::banned_tokens;
 use crate::lock::{Lock, read_lock};
-use factory0_core::{HARNESS_API, Harness, VentureEnv, harness_api_mismatch};
+use factory0_core::{HARNESS_API, HARNESS_SIDECARS, Harness, VentureEnv, harness_api_mismatch};
 use std::path::Path;
 
 /// Runs every doctor check. `allow_no_captcha` downgrades the
@@ -19,6 +19,7 @@ pub fn doctor(
     harness: &Harness,
     migrations_dir: &Path,
     allow_no_captcha: Option<&str>,
+    sidecars: Option<&str>,
 ) -> Result<(), String> {
     let mut failures: Vec<String> = Vec::new();
 
@@ -79,6 +80,32 @@ pub fn doctor(
                 )),
             }
         }
+    }
+
+    // Sidecars (issue #66). The doctor sees only compiled-in modules, so
+    // it says plainly what it cannot check rather than reporting a clean
+    // bill for half the venture. A mount that shadows a compiled-in
+    // module is a real misconfiguration: the runtime ignores it and
+    // keeps the compiled-in module, so someone believes a sidecar is
+    // serving a prefix that it is not.
+    match crate::sidecars::parse(sidecars) {
+        Ok(mounts) if !mounts.is_empty() => {
+            for mount in crate::sidecars::shadowing(harness, &mounts) {
+                failures.push(format!(
+                    "sidecar mount `{}` names a module compiled into this venture; the runtime \
+                     ignores the mount and serves the compiled-in module. Remove it from \
+                     {HARNESS_SIDECARS} or remove the module from the composition",
+                    mount.name
+                ));
+            }
+            eprintln!(
+                "fz: warning: {} is sidecar-mounted, so its tables, migrations and SQL are not \
+                 checked here — they live in its own repository (docs/MOUNTING.md)",
+                crate::sidecars::listed(&mounts)
+            );
+        }
+        Ok(_) => {}
+        Err(errors) => failures.extend(errors),
     }
 
     // Portable-SQL lint over every migration.
