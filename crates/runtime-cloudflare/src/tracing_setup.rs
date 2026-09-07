@@ -2,10 +2,13 @@
 //!
 //! **wasm32:** installing any tracing dispatcher (`set_global_default`,
 //! `set_default`) hangs the single-threaded workerd/miniflare isolate
-//! (verified empirically on wrangler 4.129). `install_tracing` is therefore
-//! a no-op on wasm, and runtime logging goes through the crate's `rt_log!`
-//! macro, which writes plain lines to `worker::console_log!`/`console_error!`
-//! (Workers Logs picks them up).
+//! (verified empirically on wrangler 4.129). So `install_tracing` installs no
+//! dispatcher on wasm; instead it registers a forwarder with core
+//! ([`cratefield_core::set_error_forwarder`]) so core's internal-error
+//! diagnostics — every `tracing::error!` that maps a failure to a 500 — reach
+//! `worker::console_error!` instead of vanishing (issue #107). Runtime logging
+//! goes through the crate's `rt_log!` macro, which writes plain lines to
+//! `worker::console_log!`/`console_error!` (Workers Logs picks them up).
 //!
 //! **Native (tests, the future `runtime-native`):** a hand-rolled
 //! subscriber writes one JSON line per event with field redaction per
@@ -25,9 +28,13 @@ static INSTALLED: OnceLock<()> = OnceLock::new();
 /// request state (ADR 0007). No-op on wasm32 (see module docs).
 pub fn install_tracing() {
     #[cfg(target_arch = "wasm32")]
-    {
-        let _ = INSTALLED;
-    }
+    INSTALLED.get_or_init(|| {
+        // No tracing dispatcher on wasm (it hangs the isolate). Instead give
+        // core a forwarder so its internal-error diagnostics — the ones that
+        // map a failure to a 500 — reach Workers Logs via `console_error!`,
+        // rather than vanishing (issue #107).
+        cratefield_core::set_error_forwarder(|line| worker::console_error!("[error] {line}"));
+    });
     #[cfg(not(target_arch = "wasm32"))]
     INSTALLED.get_or_init(|| {
         let guard = tracing::dispatcher::set_default(&tracing::dispatcher::Dispatch::new(
