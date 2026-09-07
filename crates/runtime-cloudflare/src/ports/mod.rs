@@ -1,5 +1,6 @@
 //! Port adapters over Workers bindings (ADR 0002).
 
+mod blob;
 mod clock;
 mod d1;
 mod defer;
@@ -8,6 +9,7 @@ mod http;
 mod kv;
 mod rate_limit;
 
+pub use blob::R2Blob;
 pub use clock::WorkersClock;
 pub use d1::D1Database;
 pub use defer::{ContextDefer, ScheduleDefer};

@@ -11,7 +11,7 @@ use worker::Env;
 
 use crate::config::EnvConfig;
 use crate::ports::{
-    D1Database, FetchClient, KvStorePort, RateLimitPort, ServiceDispatcher, WorkersClock,
+    D1Database, FetchClient, KvStorePort, R2Blob, RateLimitPort, ServiceDispatcher, WorkersClock,
 };
 
 fn warn_once(flag: &AtomicBool, message: &str) {
@@ -43,6 +43,7 @@ use rt_log;
 
 static WARNED_DB: AtomicBool = AtomicBool::new(false);
 static WARNED_KV: AtomicBool = AtomicBool::new(false);
+static WARNED_BLOB: AtomicBool = AtomicBool::new(false);
 static WARNED_RATE_LIMIT: AtomicBool = AtomicBool::new(false);
 static WARNED_SIGNER: AtomicBool = AtomicBool::new(false);
 static WARNED_SIDECAR: AtomicBool = AtomicBool::new(false);
@@ -53,6 +54,7 @@ static WARNED_SIDECAR: AtomicBool = AtomicBool::new(false);
 pub struct Cloudflare {
     db_binding: Option<&'static str>,
     kv_binding: Option<&'static str>,
+    blob_binding: Option<&'static str>,
     rate_limiter_binding: Option<&'static str>,
     mailer: Option<Arc<dyn Mailer>>,
     captcha: Option<Arc<dyn Captcha>>,
@@ -69,6 +71,7 @@ impl Cloudflare {
         Self {
             db_binding: None,
             kv_binding: None,
+            blob_binding: None,
             rate_limiter_binding: None,
             mailer: None,
             captcha: None,
@@ -84,6 +87,13 @@ impl Cloudflare {
     #[must_use]
     pub fn kv(mut self, binding: &'static str) -> Self {
         self.kv_binding = Some(binding);
+        self
+    }
+
+    /// The R2 bucket binding backing the `Blob` port.
+    #[must_use]
+    pub fn blob(mut self, binding: &'static str) -> Self {
+        self.blob_binding = Some(binding);
         self
     }
 
@@ -130,6 +140,15 @@ impl Cloudflare {
                 Err(err) => warn_once(
                     &WARNED_DB,
                     &format!("D1 binding {name:?} not available: {err}"),
+                ),
+            }
+        }
+        if let Some(name) = self.blob_binding {
+            match env.bucket(name) {
+                Ok(bucket) => ports.blob = Some(Arc::new(R2Blob(bucket))),
+                Err(err) => warn_once(
+                    &WARNED_BLOB,
+                    &format!("R2 bucket binding {name:?} not available: {err}"),
                 ),
             }
         }
@@ -220,6 +239,9 @@ impl Runtime for Cloudflare {
         }
         if self.kv_binding.is_some() {
             provided.push(Port::KeyValue);
+        }
+        if self.blob_binding.is_some() {
+            provided.push(Port::Blob);
         }
         if self.rate_limiter_binding.is_some() {
             provided.push(Port::RateLimiter);
