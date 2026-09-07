@@ -62,11 +62,13 @@ pub fn lint_portable_sql(sql: &str) -> Vec<(&'static str, &'static str)> {
         .collect()
 }
 
-/// Card-data fragments the harness never stores (PCI DSS, posture SAQ A):
-/// Stripe owns the primary account number, verification code and expiry, and we
-/// keep only its identifiers. Deliberately the *specific* forms and not bare
-/// `pan`, `track` or `expiry`, which collide with legitimate columns — an audio
-/// `pan`, a music `track`, a `session_expiry` (issue #44).
+/// Card-data fragments the harness never stores. With a normal Stripe
+/// integration the card details go straight to Stripe (Checkout, Elements, the
+/// SDKs) and never reach a backend, so a column or secret shaped like a card
+/// number, verification code or full expiry is a mistake. Deliberately the
+/// *specific* forms and not bare `pan`, `track` or `expiry`, which collide with
+/// legitimate columns — an audio `pan`, a music `track`, a `session_expiry`
+/// (issue #44).
 const CARD_DATA: &[&str] = &[
     "card_number",
     "cardnumber",
@@ -91,8 +93,9 @@ const CARD_DATA: &[&str] = &[
 ];
 
 /// The first card-data fragment `text` contains (case-insensitive), or `None`.
-/// Keeps primary account numbers, verification codes and full expiry out of
-/// migrations and secret names (issue #44).
+/// Keeps card numbers, verification codes and full expiry out of migrations and
+/// secret names — with a normal Stripe integration none of them should exist
+/// (issue #44).
 #[must_use]
 pub fn card_data_hit(text: &str) -> Option<&'static str> {
     let hay = text.to_ascii_lowercase();
@@ -107,8 +110,8 @@ pub fn lint_card_data(sql: &str) -> Vec<(&'static str, &'static str)> {
     match card_data_hit(&strip_non_ddl(sql)) {
         Some(frag) => vec![(
             frag,
-            "looks like card data; the harness never stores PANs, verification codes or \
-             expiry (PCI DSS SAQ A). Keep only Stripe's identifiers",
+            "looks like card data; with a normal Stripe integration the card never \
+             reaches a backend — store only Stripe's identifiers",
         )],
         None => Vec::new(),
     }
