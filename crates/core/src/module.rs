@@ -49,6 +49,40 @@ pub struct SqlMigration {
     pub sql: &'static str,
 }
 
+/// The sha256 of a migration's SQL, lowercase hex. Recorded in
+/// `harness_migrations` when the migration is applied, so a later run
+/// can tell "already applied" from "applied, then edited" — the rule
+/// forward-only migrations rest on, enforced by the database rather
+/// than by a lockfile in one repository (issues #28, #34).
+///
+/// The lockfile's hash covers the collected *file*; this covers the
+/// embedded SQL. They answer different questions and are not compared.
+#[must_use]
+pub fn migration_checksum(sql: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let digest = Sha256::digest(sql.as_bytes());
+    let mut hex = String::with_capacity(64);
+    for byte in digest {
+        use std::fmt::Write as _;
+        let _ = write!(hex, "{byte:02x}");
+    }
+    hex
+}
+
+/// The message a migration whose recorded checksum no longer matches
+/// gets. Shared so both engines say the same thing.
+#[must_use]
+pub fn migration_edited(key: &str, recorded: &str, found: &str) -> String {
+    format!(
+        "migration `{key}` was already applied to this database with different SQL \
+         (recorded sha256 {}…, embedded {}…). Applied migrations are never edited: \
+         revert the change and write a new migration instead \
+         (docs/MODULE-AUTHORING.md, step 3)",
+        &recorded[..recorded.len().min(12)],
+        &found[..found.len().min(12)]
+    )
+}
+
 /// The module's migrations, per dialect. `postgres` differs from `sqlite`
 /// only where the SQL truly differs (ADR 0004).
 #[derive(Debug, Clone)]

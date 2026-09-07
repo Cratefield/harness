@@ -10,7 +10,7 @@ use crate::convert::{bind_values, rebind_placeholders};
 use factory0_core::{Database, DbError, Harness, Migrations, SqlMigration, Statement};
 use sea_query::{Alias, ColumnDef, PostgresQueryBuilder, Query, Table};
 use sqlx::postgres::{PgArguments, PgConnection};
-use std::collections::HashSet;
+use std::collections::HashMap;
 
 /// Selects the migration set a module contributes to a Postgres
 /// deployment: its `postgres` set when it ships one, else its `sqlite`
@@ -45,26 +45,41 @@ fn tracking_table_ddl() -> Statement {
         .if_not_exists()
         .col(ColumnDef::new(Alias::new("id")).text().primary_key())
         .col(ColumnDef::new(Alias::new("applied_at")).text().not_null())
+        .col(ColumnDef::new(Alias::new("checksum")).text())
         .build(PostgresQueryBuilder);
     Statement::new(sql)
 }
 
-fn applied_ids_query() -> Statement {
+/// Databases migrated before checksums were recorded have the
+/// two-column table. Their existing rows stay NULL, which reads as
+/// "applied, cannot verify" rather than as a mismatch.
+fn tracking_table_backfill_ddl() -> Statement {
+    Statement::new(
+        "ALTER TABLE harness_migrations ADD COLUMN IF NOT EXISTS checksum text".to_owned(),
+    )
+}
+
+fn applied_query() -> Statement {
     let (sql, values) = Query::select()
         .column(Alias::new("id"))
+        .column(Alias::new("checksum"))
         .from(Alias::new("harness_migrations"))
         .build(PostgresQueryBuilder);
-    debug_assert!(values.0.is_empty(), "the applied-ids query binds nothing");
+    debug_assert!(values.0.is_empty(), "the applied query binds nothing");
     Statement::new(sql)
 }
 
 /// Renders `INSERT INTO harness_migrations (id, applied_at)`
 /// `VALUES ($1, $2)` with the values as binds (`PostgresQueryBuilder`).
-fn record_insert(id: &str, applied_at: &str) -> Result<Statement, DbError> {
+fn record_insert(id: &str, applied_at: &str, checksum: &str) -> Result<Statement, DbError> {
     let (sql, values) = Query::insert()
         .into_table(Alias::new("harness_migrations"))
-        .columns([Alias::new("id"), Alias::new("applied_at")])
-        .values([id.into(), applied_at.into()])
+        .columns([
+            Alias::new("id"),
+            Alias::new("applied_at"),
+            Alias::new("checksum"),
+        ])
+        .values([id.into(), applied_at.into(), checksum.into()])
         .map_err(|err| DbError::Batch(err.to_string()))?
         .build(PostgresQueryBuilder);
     Ok(Statement::with_values(sql, values.0))
@@ -118,13 +133,14 @@ impl crate::Postgres {
         migrations: &[SqlMigration],
     ) -> Result<(), DbError> {
         self.execute(&tracking_table_ddl()).await?;
+        self.execute(&tracking_table_backfill_ddl()).await?;
 
-        let applied: HashSet<String> = self
-            .query(&applied_ids_query())
+        let applied: HashMap<String, Option<String>> = self
+            .query(&applied_query())
             .await?
             .rows
             .iter()
-            .filter_map(|row| row.get::<String>("id"))
+            .filter_map(|row| Some((row.get::<String>("id")?, row.get::<String>("checksum"))))
             .collect();
 
         // Lock order: ids are zero-padded, so lexical order is apply order
@@ -134,7 +150,13 @@ impl crate::Postgres {
 
         for migration in ordered {
             let key = format!("{module}/{}", migration.id);
-            if applied.contains(&key) {
+            let checksum = factory0_core::migration_checksum(migration.sql);
+            if let Some(recorded) = applied.get(&key) {
+                if let Some(recorded) = recorded.as_ref().filter(|hash| *hash != &checksum) {
+                    return Err(DbError::Batch(factory0_core::migration_edited(
+                        &key, recorded, &checksum,
+                    )));
+                }
                 continue;
             }
             let mut tx = self
@@ -153,7 +175,7 @@ impl crate::Postgres {
                         first_line(&err.to_string())
                     ))
                 })?;
-            let record = record_insert(&key, &iso_now())?;
+            let record = record_insert(&key, &iso_now(), &checksum)?;
             exec_on(&mut tx, &record).await?;
             tx.commit()
                 .await

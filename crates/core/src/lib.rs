@@ -49,6 +49,7 @@ pub use logging::{
 };
 pub use module::{
     BoxFuture, HARNESS_API, Migrations, Module, ModuleContext, SqlMigration, harness_api_mismatch,
+    migration_checksum, migration_edited,
 };
 pub use ports::{
     Captcha, CaptchaError, Clock, Database, DbError, Decision, Defer, DispatchError, Dispatcher,

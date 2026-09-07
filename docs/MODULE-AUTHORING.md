@@ -343,6 +343,13 @@ In CI, the conformance kit applies your migrations **twice** to fresh
 in-memory databases — write them idempotent (`IF NOT EXISTS`, or add-only
 `ALTER TABLE`s).
 
+**Never edit an applied migration.** Both engines record the sha256 of
+each migration's SQL in `harness_migrations`, so a changed migration is
+refused with an error naming it rather than silently skipped. `fz doctor`
+catches the same edit inside the repository through
+`.harness-lock.json`; the hash in the database is what catches it on a
+deployment that already ran the old SQL. Write a new migration instead.
+
 ## Step 4 — Router and handlers
 
 `examples/module-hello/src/handlers.rs`:
