@@ -496,6 +496,7 @@ dependencies = [
  "cratefield-adapter-postgres",
  "cratefield-adapter-resend",
  "cratefield-adapter-sqlite",
+ "cratefield-adapter-stripe",
  "cratefield-adapter-turnstile",
  "cratefield-core",
  "cratefield-kms",
@@ -565,6 +566,24 @@ dependencies = [
  "pollster",
  "rusqlite",
  "sea-query",
+ "time",
+ "tracing",
+]
+
+[[package]]
+name = "cratefield-adapter-stripe"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "cratefield-core",
+ "hmac 0.13.0",
+ "http",
+ "pollster",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "thiserror",
  "time",
  "tracing",
 ]

@@ -34,28 +34,11 @@ pub fn doctor(
         }
     }
 
-    // Harness::build already succeeded by construction; the venture
-    // captcha rule is checked against the runtime's provided ports.
+    // Harness::build already succeeded by construction; the production-only
+    // port rules (captcha, payments webhook) are checked against the runtime's
+    // provided ports.
     if harness.venture().env == VentureEnv::Production {
-        let public_writers: Vec<&str> = harness
-            .modules()
-            .iter()
-            .filter(|module| module.public_writes())
-            .map(|module| module.name())
-            .collect();
-        if !public_writers.is_empty() && !captcha_provided(harness) {
-            let message = format!(
-                "production venture with public writes from [{}] but no Captcha port \
-                 — configure Turnstile (architecture section 11)",
-                public_writers.join(", ")
-            );
-            match allow_no_captcha {
-                Some(reason) => {
-                    eprintln!("fz: warning: captcha override accepted ({reason}): {message}");
-                }
-                None => failures.push(message),
-            }
-        }
+        production_port_checks(harness, allow_no_captcha, &mut failures);
     }
 
     // Lockfile consistency: every module migration locked, every locked
@@ -153,8 +136,88 @@ pub fn doctor(
     }
 }
 
+/// The production-only port rules, gathered so `doctor` stays a flat list of
+/// checks: the captcha rule (with its override) and the payments webhook rule.
+fn production_port_checks(
+    harness: &Harness,
+    allow_no_captcha: Option<&str>,
+    failures: &mut Vec<String>,
+) {
+    let public_writers: Vec<&str> = harness
+        .modules()
+        .iter()
+        .filter(|module| module.public_writes())
+        .map(|module| module.name())
+        .collect();
+    if !public_writers.is_empty() && !captcha_provided(harness) {
+        let message = format!(
+            "production venture with public writes from [{}] but no Captcha port \
+             — configure Turnstile (architecture section 11)",
+            public_writers.join(", ")
+        );
+        match allow_no_captcha {
+            Some(reason) => {
+                eprintln!("fz: warning: captcha override accepted ({reason}): {message}");
+            }
+            None => failures.push(message),
+        }
+    }
+
+    // A production venture that can take money must be able to verify webhook
+    // signatures, or it will process forged events (issue #102). Doctor has no
+    // venture config, but it runs natively where the operator can export the
+    // secret, so the presence check reads the conventional env var.
+    let webhook_secret_present =
+        std::env::var("STRIPE_WEBHOOK_SECRET").is_ok_and(|value| !value.trim().is_empty());
+    if let Some(message) =
+        payments_webhook_failure(payments_provided(harness), webhook_secret_present)
+    {
+        failures.push(message);
+    }
+}
+
 fn captcha_provided(harness: &Harness) -> bool {
     harness
         .runtime()
         .is_some_and(|runtime| runtime.provides().contains(&cratefield_core::Port::Captcha))
+}
+
+fn payments_provided(harness: &Harness) -> bool {
+    harness.runtime().is_some_and(|runtime| {
+        runtime
+            .provides()
+            .contains(&cratefield_core::Port::Payments)
+    })
+}
+
+/// The production-payments rule: a production venture that provides the
+/// `Payments` port without a webhook signing secret cannot verify Stripe
+/// webhooks, so it would process forged events. Pure so the truth table is
+/// unit-tested; the caller supplies the env-derived booleans.
+fn payments_webhook_failure(
+    payments_provided: bool,
+    webhook_secret_present: bool,
+) -> Option<String> {
+    if payments_provided && !webhook_secret_present {
+        Some(
+            "production venture provides the Payments port but STRIPE_WEBHOOK_SECRET is unset \
+             — webhook signatures cannot be verified and forged events would be trusted \
+             (issue #102)"
+                .to_owned(),
+        )
+    } else {
+        None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::payments_webhook_failure;
+
+    #[test]
+    fn payments_in_production_needs_a_webhook_secret() {
+        assert!(payments_webhook_failure(true, false).is_some());
+        assert!(payments_webhook_failure(true, true).is_none());
+        assert!(payments_webhook_failure(false, false).is_none());
+    }
 }

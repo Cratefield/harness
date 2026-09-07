@@ -15,6 +15,7 @@ mod http;
 mod idgen;
 mod kv;
 mod mailer;
+mod payments;
 mod push;
 mod rate_limiter;
 pub(crate) mod signer;
@@ -29,6 +30,11 @@ pub use http::{HttpClient, HttpError};
 pub use idgen::{IdGen, UlidIdGen};
 pub use kv::{KeyValue, KvError};
 pub use mailer::{MailError, Mailer, Message, SendOutcome};
+pub use payments::{
+    Charge, CheckoutRequest, CheckoutSession, ConnectAccountLink, ConnectAccountLinkRequest,
+    LineItem, Money, Payments, PaymentsError, Refund, RefundRequest, SubscriptionCheckoutRequest,
+    TransferCharge, WebhookEvent,
+};
 pub use push::{Notification, Priority, Push, PushError, PushOutcome};
 pub use rate_limiter::{Decision, RateLimitError, RateLimiter};
 pub use signer::{Kid, Payload, SignatureError, Signer};
@@ -50,6 +56,7 @@ pub enum Port {
     KeyValue,
     Blob,
     Push,
+    Payments,
     HttpClient,
     Clock,
     IdGen,
@@ -66,6 +73,7 @@ impl Port {
         Port::KeyValue,
         Port::Blob,
         Port::Push,
+        Port::Payments,
         Port::HttpClient,
         Port::Clock,
         Port::IdGen,
@@ -82,6 +90,7 @@ impl Port {
             Port::KeyValue => "KeyValue",
             Port::Blob => "Blob",
             Port::Push => "Push",
+            Port::Payments => "Payments",
             Port::HttpClient => "HttpClient",
             Port::Clock => "Clock",
             Port::IdGen => "IdGen",
@@ -105,6 +114,7 @@ pub struct Ports {
     pub kv: Option<Arc<dyn KeyValue>>,
     pub blob: Option<Arc<dyn Blob>>,
     pub push: Option<Arc<dyn Push>>,
+    pub payments: Option<Arc<dyn Payments>>,
     pub http: Option<Arc<dyn HttpClient>>,
     pub clock: Option<Arc<dyn Clock>>,
     pub id_gen: Option<Arc<dyn IdGen>>,
@@ -132,6 +142,7 @@ impl Ports {
             kv: None,
             blob: None,
             push: None,
+            payments: None,
             http: None,
             clock: None,
             id_gen: None,
@@ -166,6 +177,9 @@ impl Ports {
         }
         if self.push.is_some() {
             provided.push(Port::Push);
+        }
+        if self.payments.is_some() {
+            provided.push(Port::Payments);
         }
         if self.http.is_some() {
             provided.push(Port::HttpClient);
@@ -223,6 +237,9 @@ impl Ports {
         }
         if allows(&declared, Port::Push) {
             view.push.clone_from(&self.push);
+        }
+        if allows(&declared, Port::Payments) {
+            view.payments.clone_from(&self.payments);
         }
         if allows(&declared, Port::HttpClient) {
             view.http.clone_from(&self.http);

@@ -220,6 +220,7 @@ impl Harness {
             kv: _,
             blob: _,
             push: _,
+            payments: _,
             http: _,
             clock,
             id_gen,
