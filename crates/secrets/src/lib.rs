@@ -20,6 +20,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod audit;
 mod store;
 
 use std::fmt;
@@ -27,15 +28,43 @@ use std::fmt;
 use thiserror::Error;
 use zeroize::Zeroizing;
 
+pub use audit::{Anchor, ChainAudit, verify};
 pub use store::{HarnessOnly, SecretStore, Secrets};
 
-/// The migration that creates a store's two tables. Applied to a
-/// database the same way a module's are.
-pub const MIGRATION: factory0_core::SqlMigration = factory0_core::SqlMigration {
-    id: "0001",
-    name: "init",
-    sql: include_str!("../migrations/sqlite/0001_init.sql"),
-};
+/// The store's schema, per dialect, applied the same way a module's is.
+/// The tables are portable; only the append-only trigger differs, which
+/// is what `Migrations`' two sets are for (ADR 0004).
+#[must_use]
+pub fn migrations() -> factory0_core::Migrations {
+    const SQLITE: [factory0_core::SqlMigration; 2] = [
+        factory0_core::SqlMigration {
+            id: "0001",
+            name: "init",
+            sql: include_str!("../migrations/sqlite/0001_init.sql"),
+        },
+        factory0_core::SqlMigration {
+            id: "0002",
+            name: "audit",
+            sql: include_str!("../migrations/sqlite/0002_audit.sql"),
+        },
+    ];
+    const POSTGRES: [factory0_core::SqlMigration; 2] = [
+        factory0_core::SqlMigration {
+            id: "0001",
+            name: "init",
+            sql: include_str!("../migrations/postgres/0001_init.sql"),
+        },
+        factory0_core::SqlMigration {
+            id: "0002",
+            name: "audit",
+            sql: include_str!("../migrations/postgres/0002_audit.sql"),
+        },
+    ];
+    factory0_core::Migrations {
+        sqlite: &SQLITE,
+        postgres: &POSTGRES,
+    }
+}
 
 /// The AEAD this crate seals with, recorded on every key row so a store
 /// can never mix ciphers within one key id (design §4).
@@ -180,6 +209,19 @@ pub enum SecretsError {
     NoKey(String),
     #[error("invalid input: {0}")]
     Invalid(String),
+    /// The access could not be recorded, so it did not happen: the
+    /// store refuses rather than serving a secret nobody can account
+    /// for.
+    #[error("the access could not be audited, so it was refused: {0}")]
+    NotAudited(String),
+    /// The audit chain does not verify. The `seq` is the first row whose
+    /// hash does not follow from its predecessor.
+    #[error("the audit chain for store `{store}` breaks at seq {seq}: {detail}")]
+    ChainBroken {
+        store: String,
+        seq: i64,
+        detail: String,
+    },
 }
 
 /// Where the append-only audit log (#41) attaches. Every store method
@@ -188,8 +230,16 @@ pub enum SecretsError {
 ///
 /// The event never carries a secret value; the type makes that hard by
 /// not offering one.
+#[async_trait::async_trait]
 pub trait Audit: Send + Sync {
-    fn record(&self, event: &AuditEvent<'_>);
+    /// Records one access. A sink that writes to a database is async,
+    /// which is why this is: the store awaits it **before returning**,
+    /// so a value never reaches a caller whose access went unrecorded.
+    ///
+    /// A sink that cannot record must say so. The store turns that into
+    /// a refusal rather than serving the secret anyway: an unrecorded
+    /// read is exactly what the log exists to make impossible.
+    async fn record(&self, event: &AuditEvent<'_>) -> Result<(), SecretsError>;
 }
 
 /// One access, as the audit log will store it.
@@ -202,6 +252,20 @@ pub enum Access {
 }
 
 impl Access {
+    /// The inverse of [`Access::as_str`], for reading a chain back.
+    /// Deliberately not `FromStr`: an unknown action is `None` rather
+    /// than an error type nobody would match on.
+    #[must_use]
+    pub fn parse(text: &str) -> Option<Self> {
+        Some(match text {
+            "put" => Access::Put,
+            "get" => Access::Get,
+            "list" => Access::List,
+            "delete" => Access::Delete,
+            _ => return None,
+        })
+    }
+
     #[must_use]
     pub fn as_str(self) -> &'static str {
         match self {
@@ -225,14 +289,18 @@ pub struct AuditEvent<'a> {
     /// `false` when the call returned an error; the log records the
     /// attempt either way.
     pub allowed: bool,
+    /// The request this access belongs to, when there is one, so an
+    /// audit row can be tied to a log line (`factory0_core::Scope`).
+    pub request_id: Option<&'a str>,
 }
 
 /// The default audit sink until #41 lands: one structured `tracing` line
 /// per access, with no value in it.
 pub struct TracingAudit;
 
+#[async_trait::async_trait]
 impl Audit for TracingAudit {
-    fn record(&self, event: &AuditEvent<'_>) {
+    async fn record(&self, event: &AuditEvent<'_>) -> Result<(), SecretsError> {
         tracing::info!(
             store = %event.store,
             access = event.access.as_str(),
@@ -242,6 +310,7 @@ impl Audit for TracingAudit {
             allowed = event.allowed,
             "secret access"
         );
+        Ok(())
     }
 }
 

@@ -127,7 +127,8 @@ impl SecretStore {
             Some(name),
             result.as_ref().ok().copied(),
             result.is_ok(),
-        );
+        )
+        .await?;
         result
     }
 
@@ -187,7 +188,8 @@ impl SecretStore {
             .as_ref()
             .ok()
             .and_then(|found| found.as_ref().map(|(v, _)| *v));
-        self.audit(Access::Get, actor, Some(name), version, result.is_ok());
+        self.audit(Access::Get, actor, Some(name), version, result.is_ok())
+            .await?;
         result.map(|found| found.map(|(_, value)| value))
     }
 
@@ -249,7 +251,8 @@ impl SecretStore {
     /// As [`SecretStore::put`].
     pub async fn list(&self, actor: &Actor) -> Result<Vec<SecretMeta>, SecretsError> {
         let result = self.list_inner().await;
-        self.audit(Access::List, actor, None, None, result.is_ok());
+        self.audit(Access::List, actor, None, None, result.is_ok())
+            .await?;
         result
     }
 
@@ -289,7 +292,8 @@ impl SecretStore {
     /// As [`SecretStore::put`].
     pub async fn delete(&self, name: &str, actor: &Actor) -> Result<(), SecretsError> {
         let result = self.delete_inner(name).await;
-        self.audit(Access::Delete, actor, Some(name), None, result.is_ok());
+        self.audit(Access::Delete, actor, Some(name), None, result.is_ok())
+            .await?;
         result
     }
 
@@ -381,22 +385,29 @@ impl SecretStore {
         }
     }
 
-    fn audit(
+    /// Records the access. A sink that cannot record turns the call into
+    /// [`SecretsError::NotAudited`]: an unrecorded read is what the log
+    /// exists to make impossible, so it is a refusal rather than a
+    /// warning.
+    async fn audit(
         &self,
         access: Access,
         actor: &Actor,
         name: Option<&str>,
         version: Option<Version>,
         allowed: bool,
-    ) {
-        self.audit.record(&AuditEvent {
-            store: &self.id,
-            access,
-            actor,
-            name,
-            version,
-            allowed,
-        });
+    ) -> Result<(), SecretsError> {
+        self.audit
+            .record(&AuditEvent {
+                store: &self.id,
+                access,
+                actor,
+                name,
+                version,
+                allowed,
+                request_id: None,
+            })
+            .await
     }
 }
 

@@ -108,8 +108,15 @@ pub fn doctor(
         Err(errors) => failures.extend(errors),
     }
 
-    // Portable-SQL lint over every migration.
+    // Portable-SQL lint over every migration. A module that ships a
+    // `postgres` set has declared where its SQL differs, so its sqlite
+    // set is allowed to be sqlite-specific — the same rule
+    // `factory0_adapter_postgres::select_set` applies when it chooses a
+    // set, and the doctor should not disagree with the runner.
     for module in harness.modules() {
+        if !module.migrations().postgres.is_empty() {
+            continue;
+        }
         for migration in module.migrations().sqlite {
             for (token, why) in banned_tokens(migration.sql) {
                 failures.push(format!(

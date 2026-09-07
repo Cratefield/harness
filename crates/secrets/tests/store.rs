@@ -18,7 +18,7 @@ fn kms() -> Arc<dyn Kms> {
 /// A store on a fresh in-memory database, migrated.
 fn store_on(secrets: &Secrets, id: &str) -> (SecretStore, Arc<dyn Database>) {
     let db = SqliteDatabase::in_memory().expect("in-memory db");
-    db.apply_migrations("secrets", &[factory0_secrets::MIGRATION])
+    db.apply_migrations("secrets", factory0_secrets::migrations().sqlite)
         .expect("schema applies");
     let db: Arc<dyn Database> = Arc::new(db);
     (secrets.tenant(id, Arc::clone(&db)), db)
@@ -42,13 +42,15 @@ struct Recorder {
     seen: std::sync::Mutex<Vec<(String, Access, bool)>>,
 }
 
+#[async_trait::async_trait]
 impl Audit for Recorder {
-    fn record(&self, event: &AuditEvent<'_>) {
+    async fn record(&self, event: &AuditEvent<'_>) -> Result<(), SecretsError> {
         self.seen.lock().expect("uncontended").push((
             event.name.unwrap_or("-").to_owned(),
             event.access,
             event.allowed,
         ));
+        Ok(())
     }
 }
 
