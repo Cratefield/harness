@@ -121,16 +121,30 @@ fn control(field: &Field, id: &str, value: Option<&str>) -> Markup {
                 @if let Some(value) = value { (value) }
             }
         },
-        Widget::Email | Widget::Number | Widget::Text | Widget::Checkbox | Widget::Hidden => {
+        Widget::Email
+        | Widget::Number
+        | Widget::Text
+        | Widget::Password
+        | Widget::Checkbox
+        | Widget::Hidden => {
             let kind = match field.widget {
                 Widget::Email => "email",
                 Widget::Number => "number",
+                Widget::Password => "password",
                 _ => "text",
+            };
+            let value = (field.widget != Widget::Password)
+                .then_some(value)
+                .flatten();
+            let autocomplete = match field.widget {
+                Widget::Email => Some("email"),
+                Widget::Password => Some("off"),
+                _ => None,
             };
             html! {
                 input class="cf-input" type=(kind) id=(id) name=(field.name)
                     required[field.required] placeholder=[field.placeholder.as_deref()]
-                    value=[value] autocomplete=[(field.widget == Widget::Email).then_some("email")];
+                    value=[value] autocomplete=[autocomplete];
             }
         }
     }
@@ -186,6 +200,8 @@ pub struct PageSpec<'a> {
     /// venture's own theme stylesheet, if configured, is linked after.
     pub theme_css: Option<&'a str>,
     pub turnstile: bool,
+    /// Render the admin navigation (home link, log-out form).
+    pub admin: bool,
 }
 
 /// Wraps a fragment in the page shell. Scripts: none of ours; Turnstile's
@@ -213,8 +229,108 @@ pub fn page(spec: &PageSpec<'_>, body: &Markup) -> Markup {
                     header class="cf-header" {
                         p class="cf-venture" { (spec.venture) }
                         h1 class="cf-title" { (spec.title) }
+                        @if spec.admin {
+                            nav class="cf-nav" {
+                                a class="cf-nav-link" href="/ui/admin" { "Admin" }
+                                form class="cf-logout" method="post" action="/ui/admin/logout" {
+                                    button class="cf-nav-link cf-logout-button" type="submit" { "Log out" }
+                                }
+                            }
+                        }
                     }
                     (body)
+                }
+            }
+        }
+    }
+}
+
+/// One row of a table: cells in column order, plus the per-row forms
+/// (a delete button whose confirm step is a normal post).
+pub struct TableRow<'a> {
+    pub cells: Vec<&'a str>,
+    /// `(action, hidden fields)` for each row action.
+    pub actions: Vec<(&'a str, Vec<(&'a str, &'a str)>)>,
+}
+
+/// An admin `Table` view.
+#[must_use]
+pub fn table(module: &str, source: &str, columns: &[&str], rows: &[TableRow<'_>]) -> Markup {
+    html! {
+        div class="cf-table-wrap" {
+            table class="cf-table" data-cf-module=(module) data-cf-action=(source) {
+                thead {
+                    tr {
+                        @for column in columns { th class="cf-table-head" scope="col" { (column) } }
+                        @if rows.iter().any(|r| !r.actions.is_empty()) { th class="cf-table-head" scope="col" { "" } }
+                    }
+                }
+                tbody {
+                    @if rows.is_empty() {
+                        tr { td class="cf-table-empty" colspan=(columns.len()) { "No rows." } }
+                    }
+                    @for row in rows {
+                        tr class="cf-table-row" {
+                            @for cell in &row.cells { td class="cf-table-cell" { (cell) } }
+                            @if !row.actions.is_empty() {
+                                td class="cf-table-cell cf-table-actions" {
+                                    @for (action, hidden) in &row.actions {
+                                        form class="cf-row-action" method="post"
+                                            action=(format!("/ui/admin/{module}/{action}")) {
+                                            @for (name, value) in hidden {
+                                                input type="hidden" name=(name) value=(value);
+                                            }
+                                            button class="cf-submit cf-submit--row" type="submit" { (humanize(action)) }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// The confirm step of a destructive row action: the same hidden fields
+/// plus `confirm=1`, and a way back.
+#[must_use]
+pub fn confirm(
+    module: &str,
+    action: &str,
+    what: &str,
+    hidden: &[(String, String)],
+    back: &str,
+) -> Markup {
+    html! {
+        div class="cf-notice cf-notice--warning" data-cf-module=(module) data-cf-action=(action) role="status" {
+            h2 class="cf-notice-title" { (humanize(action)) " " (what) "?" }
+            p class="cf-notice-text" { "This cannot be undone." }
+            form class="cf-form cf-form--confirm" method="post" action=(format!("/ui/admin/{module}/{action}")) {
+                @for (name, value) in hidden { input type="hidden" name=(name) value=(value); }
+                input type="hidden" name="confirm" value="1";
+                div class="cf-actions" {
+                    button class="cf-submit cf-submit--danger" type="submit" { (humanize(action)) }
+                    a class="cf-cancel" href=(back) { "Cancel" }
+                }
+            }
+        }
+    }
+}
+
+/// The admin index: per module, its tables and its form actions.
+#[must_use]
+pub fn admin_index(entries: &[(String, Vec<(String, String)>)]) -> Markup {
+    html! {
+        div class="cf-admin-index" {
+            @if entries.is_empty() { p class="cf-help" { "No module declares an admin surface." } }
+            @for (module, links) in entries {
+                section class="cf-admin-module" data-cf-module=(module) {
+                    h2 class="cf-admin-module-title" { (humanize(module)) }
+                    ul class="cf-admin-links" {
+                        @for (href, label) in links { li { a class="cf-admin-link" href=(href) { (label) } } }
+                    }
                 }
             }
         }

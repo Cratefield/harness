@@ -184,6 +184,8 @@ impl Harness {
                 config: Arc::clone(&ports.config),
                 venture: Arc::clone(&self.venture),
                 captcha_configured: ports.captcha.is_some(),
+                signer: ports.signer.clone(),
+                rate_limiter: ports.rate_limiter.clone(),
             })
             .layer(DefaultBodyLimit::max(MAX_BODY_BYTES))
         });

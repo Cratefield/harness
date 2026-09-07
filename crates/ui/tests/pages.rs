@@ -359,8 +359,8 @@ async fn assets_are_served_with_the_layer_contract() {
     assert!(css.body.contains("@layer cf {"));
     assert!(!css.body.contains("!important"));
     assert!(
-        css.body.len() < 4096,
-        "cf.css is {} bytes; keep it under 4 KB",
+        css.body.len() < 6144,
+        "cf.css is {} bytes; keep it under 6 KB (about 1.5 KB gzipped)",
         css.body.len()
     );
     let js = send(&kit, Method::GET, "/ui/cf.js", None).await;

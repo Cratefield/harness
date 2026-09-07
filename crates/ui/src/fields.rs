@@ -19,6 +19,8 @@ pub enum Widget {
     Select,
     Textarea,
     Checkbox,
+    /// A secret typed by the visitor (the admin token); never pre-filled.
+    Password,
     /// Never rendered as a control; carried as `<input type="hidden">`
     /// when the page supplies a value, omitted otherwise.
     Hidden,
@@ -116,6 +118,7 @@ fn field_of(name: &str, property: &Value, required: bool) -> Field {
             Some("textarea") => Widget::Textarea,
             Some("checkbox") => Widget::Checkbox,
             Some("number") => Widget::Number,
+            Some("password") => Widget::Password,
             Some("text") => Widget::Text,
             _ if !options.is_empty() => Widget::Select,
             _ => match json_type {

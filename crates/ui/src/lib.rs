@@ -15,6 +15,7 @@
 
 #![forbid(unsafe_code)]
 
+mod admin;
 mod fields;
 pub mod render;
 
@@ -74,6 +75,16 @@ impl UiMount for Ui {
         Router::new()
             .route("/cf.css", get(css))
             .route("/cf.js", get(js))
+            .route("/admin", get(admin::index))
+            .route(
+                "/admin/login",
+                get(admin::login_get).post(admin::login_post),
+            )
+            .route("/admin/logout", axum::routing::post(admin::logout))
+            .route(
+                "/admin/{module}/{action}",
+                get(admin::page_get).post(admin::page_post),
+            )
             .route("/{module}/{action}", get(page_get).post(page_post))
             .route("/{module}/{action}/{landing}", get(landing))
             .with_state(state)
@@ -523,6 +534,7 @@ fn respond(
             title: &title,
             theme_css: state.ui.theme_css.as_deref(),
             turnstile,
+            admin: false,
         },
         &body,
     );
@@ -541,6 +553,40 @@ fn respond(
         "x-content-type-options",
         HeaderValue::from_static("nosniff"),
     );
+    response
+}
+
+/// An admin page: the shell with the admin navigation, never cached,
+/// never framed. `logged_in` decides whether the navigation shows.
+fn respond_admin(state: &UiState, title: &str, body: &maud::Markup, logged_in: bool) -> Response {
+    let page = render::page(
+        &render::PageSpec {
+            venture: &state.ctx.venture.name,
+            title,
+            theme_css: state.ui.theme_css.as_deref(),
+            turnstile: false,
+            admin: logged_in,
+        },
+        body,
+    );
+    let mut response = Html(page.into_string()).into_response();
+    let csp = content_security_policy(state.ui.theme_css.as_deref(), false);
+    if let Ok(value) = HeaderValue::from_str(&csp) {
+        response
+            .headers_mut()
+            .insert(header::CONTENT_SECURITY_POLICY, value);
+    }
+    let headers = response.headers_mut();
+    headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    headers.insert(
+        header::REFERRER_POLICY,
+        HeaderValue::from_static("strict-origin-when-cross-origin"),
+    );
+    headers.insert(
+        "x-content-type-options",
+        HeaderValue::from_static("nosniff"),
+    );
+    headers.insert("x-frame-options", HeaderValue::from_static("DENY"));
     response
 }
 

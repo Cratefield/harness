@@ -166,4 +166,62 @@
     margin: 0;
     overflow-wrap: anywhere;
   }
+  .cf-nav {
+    display: flex;
+    gap: var(--cf-gap);
+    align-items: center;
+    margin-top: 0.5rem;
+  }
+  .cf-nav-link {
+    font: inherit;
+    color: var(--cf-accent);
+    background: none;
+    border: 0;
+    padding: 0;
+    cursor: pointer;
+    text-decoration: underline;
+  }
+  .cf-table-wrap {
+    overflow-x: auto;
+  }
+  .cf-table {
+    border-collapse: collapse;
+    width: 100%;
+    font-size: 0.9375rem;
+  }
+  .cf-table-head,
+  .cf-table-cell,
+  .cf-table-empty {
+    text-align: left;
+    padding: 0.5rem 0.625rem;
+    border-bottom: 1px solid var(--cf-border);
+    vertical-align: top;
+  }
+  .cf-table-head {
+    color: var(--cf-muted);
+    font-weight: 600;
+  }
+  .cf-table-actions {
+    white-space: nowrap;
+  }
+  .cf-submit--row,
+  .cf-submit--danger {
+    background: var(--cf-error);
+    padding: 0.375rem 0.75rem;
+  }
+  .cf-cancel {
+    align-self: center;
+    color: var(--cf-muted);
+  }
+  .cf-admin-module {
+    margin-bottom: var(--cf-gap);
+  }
+  .cf-admin-module-title {
+    margin: 0 0 0.25rem;
+    font-size: 1.125rem;
+  }
+  .cf-admin-links {
+    margin: 0;
+    padding-left: 1.25rem;
+  }
 }
