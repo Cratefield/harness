@@ -56,6 +56,13 @@ jobs:
       contents: write # release PR commits, git tags, GitHub releases
       pull-requests: write # open and update the release PR
       id-token: write # crates.io trusted publishing (OIDC)
+    env:
+      # `secrets` is not a permitted context in a step `if:` — GitHub
+      # rejects the whole workflow with "Unrecognized named-value:
+      # 'secrets'", so it never parses and never runs. It IS permitted
+      # here, so the presence of the token becomes a plain string the
+      # steps below can test.
+      HAS_RELEASE_PLZ_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN != '' }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -68,7 +75,7 @@ jobs:
       # to `release-plz/action`, which publishes no floating major tag, so
       # `@v0` cannot resolve and the job never starts. Bump deliberately.
       - name: Open or update the release PR
-        if: secrets.RELEASE_PLZ_TOKEN != '' || vars.ACTIONS_MAY_OPEN_PRS == 'true'
+        if: env.HAS_RELEASE_PLZ_TOKEN == 'true' || vars.ACTIONS_MAY_OPEN_PRS == 'true'
         uses: release-plz/action@v0.5.133
         with:
           command: release-pr
@@ -91,7 +98,7 @@ jobs:
         # script: a secret in a shell line can leak through tracing or an
         # error message.
         env:
-          HAS_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN != '' }}
+          HAS_TOKEN: ${{ env.HAS_RELEASE_PLZ_TOKEN }}
           MAY_OPEN_PRS: ${{ vars.ACTIONS_MAY_OPEN_PRS }}
           CRATES_IO_READY: ${{ vars.CRATES_IO_READY }}
         run: |

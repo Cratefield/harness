@@ -98,6 +98,20 @@ jobs:
     with:
       module-glob: "crates/module-* examples/module-hello"
 
+  workflows:
+    name: actionlint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # `release.yml` only runs on a push to `main`, so a syntax error in
+      # it is invisible: GitHub refuses the file and reports nothing on the
+      # PR that introduced it. That is exactly what happened — `secrets` in
+      # a step `if:` is not a permitted context, and the release pipeline
+      # could not parse from the day it was written.
+      - uses: docker://rhysd/actionlint:1.7.7
+        with:
+          args: -color
+
   deny:
     name: cargo deny
     runs-on: ubuntu-latest
@@ -158,7 +172,7 @@ jobs:
           # example's mailer stays NotConfigured, nothing is ever sent.
           printf 'HARNESS_SECRET=ci-only-secret-0123456789abcdef-xyz\nADMIN_TOKEN=ci-only-admin-token\n' > .dev.vars
           nohup bunx wrangler dev --local > /tmp/wrangler.log 2>&1 &
-          for i in $(seq 1 60); do
+          for _ in $(seq 1 60); do
             code=$(curl -s -o /dev/null -w "%{http_code}" -m 3 http://127.0.0.1:8787/__health || true)
             if [ "$code" = "200" ]; then echo "worker ready"; exit 0; fi
             sleep 5
@@ -203,7 +217,7 @@ jobs:
       - name: Example static site against the running worker (issue #77)
         run: |
           (cd examples/venture/site && python3 -m http.server 8788 --bind 127.0.0.1 > /tmp/site.log 2>&1 &)
-          for i in $(seq 1 20); do curl -sf -o /dev/null http://127.0.0.1:8788/ && break; sleep 1; done
+          for _ in $(seq 1 20); do curl -sf -o /dev/null http://127.0.0.1:8788/ && break; sleep 1; done
           cd tools/cfjs && node site.mjs
           echo "-- insert"
           curl -sf -m 15 -X POST http://127.0.0.1:8787/v1/sample/rows \
