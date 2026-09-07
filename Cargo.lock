@@ -762,6 +762,36 @@ dependencies = [
 ]
 
 [[package]]
+name = "factory0-auth-oidc"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "axum",
+ "base64ct",
+ "bytes",
+ "chrono",
+ "factory0-adapter-sqlite",
+ "factory0-auth-core",
+ "factory0-core",
+ "factory0-testing",
+ "getrandom 0.4.3",
+ "http",
+ "openidconnect",
+ "p256 0.14.0",
+ "pollster",
+ "rand 0.8.8",
+ "rsa",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "thiserror 2.0.20",
+ "time",
+ "tower",
+ "tracing",
+ "url",
+]
+
+[[package]]
 name = "factory0-auth-passkeys"
 version = "0.1.0"
 dependencies = [
