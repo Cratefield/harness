@@ -18,8 +18,11 @@
     --cf-gap: 1rem;
     --cf-max-width: 32rem;
   }
+  /* Dark scheme only on the harness's own pages. An embedded fragment
+     sits inside a site with its own colours, and must not go dark under
+     a dark OS unless that site sets the properties. */
   @media (prefers-color-scheme: dark) {
-    :root {
+    .cf-page {
       --cf-fg: #f2f2f2;
       --cf-bg: #111111;
       --cf-muted: #a3a3a3;

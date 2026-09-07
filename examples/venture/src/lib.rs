@@ -31,7 +31,10 @@ fn instance() -> &'static (Harness, Cloudflare) {
             .venture(
                 factory0_core::Venture::new("venture-example", "example.factory0.dev")
                     .public_url("https://example.factory0.dev")
-                    .cors_origins(["https://example.factory0.dev"]),
+                    // The second origin is the example static site served
+                    // next to the API in the CI smoke (`site/`); a real
+                    // venture lists only its own sites.
+                    .cors_origins(["https://example.factory0.dev", "http://127.0.0.1:8788"]),
             )
             .module(sample::SampleRowModule)
             .module(EmailSignup::new())

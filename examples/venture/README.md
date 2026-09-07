@@ -33,7 +33,9 @@ http://127.0.0.1:8787/ui/waitlist/join
 http://127.0.0.1:8787/ui/email-signup/subscribe
 ```
 
-and a static site on an allowed origin embeds them with one script:
+and a static site on an allowed origin embeds them with one script
+(`site/` is one, restyled with `site.css`; serve it next to the API with
+`python3 -m http.server 8788 --directory site` and open it):
 
 ```html
 <script type="module" src="http://127.0.0.1:8787/ui/cf.js"></script>
