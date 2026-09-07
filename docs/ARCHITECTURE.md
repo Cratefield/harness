@@ -59,6 +59,49 @@ engine runs.
 scripts); **Workers for Platforms** (`$25`, 1,000 scripts, dispatch-
 namespace isolation) before that wall. Free-tier economics are #12.
 
+## 4. The deployment credential model, v1 (resolves harness#67)
+
+Decided 2026-09-07 (Nick: *"as easy as possible"*). harness#67 asks how a
+**customer-supplied** module is deployed without a customer holding an
+account-scoped `Workers Scripts: Edit` token that could overwrite every other
+customer's Worker. The simplest resolution is to remove the premise for v1:
+
+- **v1 hosts only first-party catalog modules.** Every module a customer can
+  select is a harness module we wrote and vetted. There is no customer-supplied
+  code, so **no customer ever holds a deploy credential** — the hazard in
+  harness#67 does not arise on the default path.
+- **The control plane deploys, with one credential it alone holds.** A single
+  platform Cloudflare token lives only where the provisioning engine runs
+  (a control-plane secret), never in a customer's hands, a rendered page, a
+  log, or an error. It is the platform's most-guarded secret.
+- **Isolation stays the database boundary**, not the deploy credential: one D1
+  and one secrets store per tenant (ADR 0008), exactly as section 3 says.
+- **Deployment primitive:** a plain Worker + D1 per venture through the
+  Cloudflare API on the `$5` plan is enough for the whitelist phase. **Workers
+  for Platforms** dispatch namespaces are the pre-scale upgrade (before the
+  ~100-script wall), not a v1 requirement — an operational change behind the
+  `Deployer` port, invisible to the rest of the engine.
+- **Deferred:** customer-supplied / custom modules, where harness#67's three
+  candidates (WfP customer upload, control-plane upload, one-account-per-
+  customer) actually bite. That decision is taken when custom modules land,
+  not before, and it is reversible — nothing here forecloses it.
+
+**Consequence for the site's wording.** "You pick modules and we run it" is
+true today; "you write your own module and deploy it" is a later, separately
+designed capability. The site must not claim the second while only the first
+ships (COPY.md discipline).
+
+## 5. Provisioning is a resumable state machine (issue #7)
+
+The engine turns a module set into a live venture through a fixed sequence —
+**artifact, database, schema, secrets, route, health** — behind a `Deployer`
+port. Each completed step is recorded against the venture, so a failure names
+its step, leaves the venture `provisioning` and retryable, and a re-run resumes
+from where it stopped rather than repeating work. `plan()` lists the steps
+without touching Cloudflare. The port is faked in tests; the live Cloudflare
+adapter (the one that needs the platform credential and does real deploys) is
+the seam that stays out of the host-tested core.
+
 ## What answers today
 
 `crates/venture` builds to wasm and serves the harness's `/__health`,
