@@ -260,6 +260,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "cratefield-provisioning"
+version = "0.1.0"
+dependencies = [
+ "cratefield-accounts",
+ "factory0-adapter-sqlite",
+ "factory0-core",
+ "pollster",
+ "sea-query",
+ "serde",
+]
+
+[[package]]
 name = "cratefield-ui-generator"
 version = "0.1.0"
 dependencies = [

@@ -1,0 +1,22 @@
+[package]
+name = "cratefield-provisioning"
+description = "The provisioning engine: a module set to a live venture, idempotent and resumable, behind a Deployer port"
+publish = false
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+factory0-core = { workspace = true }
+cratefield-accounts = { path = "../accounts" }
+serde = { workspace = true }
+sea-query = { workspace = true }
+
+[dev-dependencies]
+factory0-adapter-sqlite = { git = "https://github.com/Cratefield/harness", rev = "c2fd9ccc57909c4d82bc80a259148380fb520726" }
+pollster = { version = "0.4", features = ["macro"] }
