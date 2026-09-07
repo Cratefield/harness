@@ -232,7 +232,9 @@ current shape is years away. Re-measure before assuming it.
 **DEK lifecycle.** *Provision*: generate 256 bits from the OS RNG, wrap
 under the KEK, store the wrapped blob in the store's database, warm the
 cache. *Rotate*: new `key_id`, re-encrypt secret versions, retire the old
-row after grace. *Shred (offboarding)*: delete the wrapped DEK row with
+row once nothing references it — implemented as
+`SecretStore::rotate_dek`, with the runbook in
+[KEY-ROTATION.md](KEY-ROTATION.md). *Shred (offboarding)*: delete the wrapped DEK row with
 the database or independently — the ciphertexts become permanent noise.
 Crypto-shred is irreversible; a tenant returning starts with fresh keys.
 

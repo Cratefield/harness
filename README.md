@@ -248,6 +248,7 @@ examples/
   venture/                 smallest complete venture; CI builds it to wasm
 docs/
   ARCHITECTURE.md
+  KEY-ROTATION.md          rotating data keys and re-wrapping under a new master key
   MIGRATION-STREAMS.md     two repositories applying migrations to one database
   RECONCILIATION.md        boot-time reconciliation across tenant databases
   MOUNTING.md              compile a module in, or run it as a sidecar

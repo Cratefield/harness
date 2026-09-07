@@ -21,6 +21,7 @@
 #![forbid(unsafe_code)]
 
 pub mod audit;
+mod rotate;
 mod store;
 
 use std::fmt;
@@ -29,6 +30,7 @@ use thiserror::Error;
 use zeroize::Zeroizing;
 
 pub use audit::{Anchor, ChainAudit, verify};
+pub use rotate::{RewrapReport, RotationReport};
 pub use store::{HarnessOnly, SecretStore, Secrets};
 
 /// The store's schema, per dialect, applied the same way a module's is.
@@ -249,6 +251,11 @@ pub enum Access {
     Get,
     List,
     Delete,
+    /// The data key was replaced and every live secret re-encrypted.
+    RotateDek,
+    /// Every data key was re-wrapped under the master key's current
+    /// material. No secret changed.
+    Rewrap,
 }
 
 impl Access {
@@ -262,6 +269,8 @@ impl Access {
             "get" => Access::Get,
             "list" => Access::List,
             "delete" => Access::Delete,
+            "rotate_dek" => Access::RotateDek,
+            "rewrap" => Access::Rewrap,
             _ => return None,
         })
     }
@@ -273,6 +282,8 @@ impl Access {
             Access::Get => "get",
             Access::List => "list",
             Access::Delete => "delete",
+            Access::RotateDek => "rotate_dek",
+            Access::Rewrap => "rewrap",
         }
     }
 }

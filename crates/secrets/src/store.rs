@@ -106,6 +106,126 @@ impl SecretStore {
         &self.id
     }
 
+    pub(crate) fn db(&self) -> &Arc<dyn Database> {
+        &self.db
+    }
+
+    pub(crate) fn kms(&self) -> &Arc<dyn Kms> {
+        &self.kms
+    }
+
+    /// Seals `plaintext` for one row, returning its nonce and
+    /// ciphertext. Shared by `put` and by rotation so both bind the same
+    /// context.
+    pub(crate) fn seal(
+        &self,
+        name: &str,
+        version: Version,
+        key_id: &str,
+        dek: &Dek,
+        plaintext: &[u8],
+    ) -> Result<(Vec<u8>, Vec<u8>), SecretsError> {
+        let mut nonce = [0_u8; NONCE_LEN];
+        getrandom::fill(&mut nonce)
+            .map_err(|err| SecretsError::Invalid(format!("the OS random source failed: {err}")))?;
+        let cipher = chacha20poly1305::XChaCha20Poly1305::new_from_slice(dek.expose())
+            .map_err(|_| SecretsError::NoKey(self.id.to_string()))?;
+        let ciphertext = cipher
+            .encrypt(
+                (&nonce).into(),
+                Payload {
+                    msg: plaintext,
+                    aad: &aad(&self.id, name, version, key_id),
+                },
+            )
+            .map_err(|_| SecretsError::Invalid("the secret could not be sealed".to_owned()))?;
+        Ok((nonce.to_vec(), ciphertext))
+    }
+
+    /// Opens one named version under a key the caller already holds.
+    /// Used by rotation, which reads under the outgoing key.
+    pub(crate) async fn open_version(
+        &self,
+        name: &str,
+        version: Version,
+        key_id: &str,
+        dek: &Dek,
+    ) -> Result<SecretBytes, SecretsError> {
+        let rows = self
+            .db
+            .query(&Statement::with_values(
+                "SELECT nonce, ciphertext FROM harness_secrets WHERE name = ? AND version = ?",
+                vec![text(name), SeaValue::BigInt(Some(i64::from(version)))],
+            ))
+            .await?;
+        let row = rows.first().ok_or_else(|| SecretsError::NotAuthentic {
+            store: self.id.to_string(),
+            name: name.to_owned(),
+            version,
+        })?;
+        let nonce: Vec<u8> = row.get("nonce").unwrap_or_default();
+        let ciphertext: Vec<u8> = row.get("ciphertext").unwrap_or_default();
+        let nonce: [u8; NONCE_LEN] = nonce.try_into().map_err(|_| SecretsError::NotAuthentic {
+            store: self.id.to_string(),
+            name: name.to_owned(),
+            version,
+        })?;
+        let cipher = chacha20poly1305::XChaCha20Poly1305::new_from_slice(dek.expose())
+            .map_err(|_| SecretsError::NoKey(self.id.to_string()))?;
+        let plaintext = cipher
+            .decrypt(
+                (&nonce).into(),
+                Payload {
+                    msg: &ciphertext,
+                    aad: &aad(&self.id, name, version, key_id),
+                },
+            )
+            .map_err(|_| SecretsError::NotAuthentic {
+                store: self.id.to_string(),
+                name: name.to_owned(),
+                version,
+            })?;
+        Ok(SecretBytes::new(plaintext))
+    }
+
+    /// A fresh data key plus the statement that records it, so a caller
+    /// can install it inside a batch with whatever else must happen at
+    /// the same moment.
+    pub(crate) async fn prepare_key(
+        &self,
+        state: &str,
+    ) -> Result<(String, Dek, Statement), SecretsError> {
+        let dek = Dek::generate()?;
+        let wrapped = self.kms.wrap(&dek).await?;
+        let key_id = new_key_id()?;
+        let insert = Statement::with_values(
+            "INSERT INTO harness_secret_keys \
+             (key_id, kms_provider, kms_key_ref, wrapped_dek, cipher, state, created_at) \
+             VALUES (?, ?, ?, ?, ?, ?, ?)",
+            vec![
+                text(&key_id),
+                text(self.kms.provider()),
+                text(self.kms.key_ref()),
+                bytes(wrapped),
+                text(CIPHER),
+                text(state),
+                text(&now()),
+            ],
+        );
+        Ok((key_id, dek, insert))
+    }
+
+    /// An audit event for an operation that is about the store rather
+    /// than one secret.
+    pub(crate) async fn audit_action(
+        &self,
+        access: Access,
+        actor: &Actor,
+        allowed: bool,
+    ) -> Result<(), SecretsError> {
+        self.audit(access, actor, None, None, allowed).await
+    }
+
     /// Writes a new version of `name` and returns it. Versions are
     /// monotonic per name and start at 1; a value is never overwritten,
     /// because the previous version is what a rollback needs and what
@@ -309,7 +429,7 @@ impl SecretStore {
     }
 
     /// This store's active data key, provisioning one on first use.
-    async fn active_key(&self) -> Result<(String, Dek), SecretsError> {
+    pub(crate) async fn active_key(&self) -> Result<(String, Dek), SecretsError> {
         let rows = self
             .db
             .query(&Statement::new(
@@ -331,7 +451,7 @@ impl SecretStore {
     }
 
     /// One named key, for decrypting a version sealed under it.
-    async fn key(&self, key_id: &str) -> Result<Dek, SecretsError> {
+    pub(crate) async fn key(&self, key_id: &str) -> Result<Dek, SecretsError> {
         let rows = self
             .db
             .query(&Statement::with_values(
@@ -350,24 +470,8 @@ impl SecretStore {
     /// records the wrapped blob here. The KMS holds no per-store state
     /// (design §3).
     async fn provision(&self) -> Result<(String, Dek), SecretsError> {
-        let dek = Dek::generate()?;
-        let wrapped = self.kms.wrap(&dek).await?;
-        let key_id = new_key_id()?;
-        self.db
-            .execute(&Statement::with_values(
-                "INSERT INTO harness_secret_keys \
-                 (key_id, kms_provider, kms_key_ref, wrapped_dek, cipher, state, created_at) \
-                 VALUES (?, ?, ?, ?, ?, 'active', ?)",
-                vec![
-                    text(&key_id),
-                    text(self.kms.provider()),
-                    text(self.kms.key_ref()),
-                    bytes(wrapped),
-                    text(CIPHER),
-                    text(&now()),
-                ],
-            ))
-            .await?;
+        let (key_id, dek, insert) = self.prepare_key("active").await?;
+        self.db.execute(&insert).await?;
         Ok((key_id, dek))
     }
 
