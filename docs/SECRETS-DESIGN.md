@@ -202,6 +202,31 @@ orphaned**. A key row cannot be deleted while secrets reference it, so
 the offboarding shred is dropping the tenant's database — which is what
 offboarding is under ADR 0008 anyway — rather than removing one row.
 
+### The audit chain
+
+`harness_secret_audit`, one per store, in the store's own database
+(issue #41). Every `Secrets` method writes exactly one row before
+returning — successes and refusals alike — and the store **refuses the
+access** when the sink cannot record it, because an unrecorded read is
+what the log exists to make impossible.
+
+Three separate mechanisms, easily conflated:
+
+| Mechanism | Catches | How |
+| :--- | :--- | :--- |
+| Append-only | An `UPDATE` or `DELETE` through the application | A trigger that raises for every role, including the migration role. Role grants that stop an application role even trying are deployment configuration and are not in the schema. |
+| Hash chain | An edit by something that bypasses the trigger: a superuser, an edit to the file | Each row's hash covers the previous row's, so `verify` names the **first** broken link |
+| Anchor | Truncation of the tail | A chain cannot notice losing its own end: a shorter valid chain is still valid. `verify` returns an `Anchor` — store, seq, last hash — to publish where the database cannot reach it |
+
+**Volume.** A row is ~200 bytes with its two hashes. A venture that
+reads one secret per request would be unusable, so reads are per
+process start and per rotation, not per request: today's modules resolve
+a mailer key and a captcha secret at boot. At six tenants that is tens
+of rows a day per store, thousands a year — nothing. The number to watch
+is **reads per tenant per day**; partitioning is worth considering past
+roughly a million rows in one store's table, which at anything like the
+current shape is years away. Re-measure before assuming it.
+
 ## 6. Operations
 
 **DEK lifecycle.** *Provision*: generate 256 bits from the OS RNG, wrap

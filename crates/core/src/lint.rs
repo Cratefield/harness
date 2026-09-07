@@ -32,6 +32,10 @@ pub fn lint_portable_sql(sql: &str) -> Vec<(&'static str, &'static str)> {
             "`",
             "backtick quoting is MySQL/SQLite; use double quotes or none",
         ),
+        (
+            "BLOB",
+            "SQLite-only type; Postgres has BYTEA — ship a migrations/postgres override",
+        ),
     ];
 
     let haystack = sql.to_ascii_lowercase();
