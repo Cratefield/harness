@@ -118,7 +118,7 @@ impl UiMount for Ui {
             .filter(|json| !json.trim().is_empty())
             .map(|json| {
                 UiSpec::parse(&json).and_then(|spec| {
-                    spec.validate(&ctx.surface)
+                    spec.validate(&ctx.surface.built())
                         .map(|()| spec)
                         .map_err(|problems| {
                             format!("ui spec ({UI_SPEC_KEY}): {}", problems.join("; "))
@@ -216,10 +216,12 @@ async fn js() -> impl IntoResponse {
 
 /// Looks an action up; admin actions are not served here until the admin
 /// UI (issue #74) exists, so they are `404` like an unknown one.
-fn find_action<'a>(state: &'a UiState, module: &str, action: &str) -> Option<&'a Action> {
-    state
-        .ctx
-        .surface
+fn find_action<'a>(
+    surface: &'a factory0_core::SurfaceDocument,
+    module: &str,
+    action: &str,
+) -> Option<&'a Action> {
+    surface
         .modules
         .iter()
         .find(|m| m.name == module)?
@@ -288,7 +290,8 @@ async fn page_get(
     Query(query): Query<Values>,
     headers: HeaderMap,
 ) -> Response {
-    let Some(spec) = find_action(&state, &module, &action) else {
+    let surface = state.ctx.surface.current().await;
+    let Some(spec) = find_action(&surface, &module, &action) else {
         return not_found(&scope, &format!("{module}/{action}"));
     };
     let (values, switches) = split_switches(query);
@@ -318,7 +321,8 @@ async fn page_post(
     headers: HeaderMap,
     axum::Form(form): axum::Form<Vec<(String, String)>>,
 ) -> Response {
-    let Some(spec) = find_action(&state, &module, &action) else {
+    let surface = state.ctx.surface.current().await;
+    let Some(spec) = find_action(&surface, &module, &action) else {
         return not_found(&scope, &format!("{module}/{action}"));
     };
     if spec.method != Method::POST {
@@ -363,7 +367,8 @@ async fn landing(
     Path((module, action, landing)): Path<(String, String, String)>,
     Query(query): Query<Values>,
 ) -> Response {
-    if find_action(&state, &module, &action).is_none() {
+    let surface = state.ctx.surface.current().await;
+    if find_action(&surface, &module, &action).is_none() {
         return not_found(&scope, &format!("{module}/{action}"));
     }
     let (_, fragment) = split_fragment(query);

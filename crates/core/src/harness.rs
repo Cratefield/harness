@@ -27,9 +27,11 @@ use crate::http::{
     Json, MAX_BODY_BYTES, ScopeState, cors_layer, scope_layer, security_headers_layer,
 };
 use crate::module::{HARNESS_API, Module, ModuleContext, harness_api_mismatch};
+use crate::ports::Dispatcher;
 use crate::ports::{Clock, Database, Port, Ports, Statement, SystemClock, warn_undeclared_ports};
 use crate::problem::Problem;
-use crate::surface::{RenderedSurface, SurfaceDocument, UiContext, UiMount};
+use crate::sidecar::SidecarMount;
+use crate::surface::{RenderedSurface, SurfaceDocument, SurfaceSource, UiContext, UiMount};
 use crate::template::{Template, TemplateRegistry};
 use crate::venture::Venture;
 
@@ -126,6 +128,32 @@ impl Harness {
         }
     }
 
+    /// The sidecar mounts that apply: read from configuration, not from
+    /// the composition (ADR 0009), so the same artifact serves ventures
+    /// with and without them. A malformed table mounts nothing and is
+    /// logged; a mount that collides with an in-process module is
+    /// dropped and logged. Neither takes down the in-process modules.
+    fn sidecar_mounts(&self, ports: &Ports) -> Vec<SidecarMount> {
+        let mounts = match crate::sidecar::SidecarMounts::from_config(ports.config.as_ref()) {
+            Ok(mounts) => mounts,
+            Err(errors) => {
+                for error in errors {
+                    tracing::error!(error, "ignoring the sidecar mount table");
+                }
+                crate::sidecar::SidecarMounts::default()
+            }
+        };
+        let module_names: Vec<&str> = self.modules.iter().map(|m| m.name()).collect();
+        for collision in mounts.collisions(&module_names) {
+            tracing::error!(error = collision, "ignoring the colliding sidecar mount");
+        }
+        mounts
+            .iter()
+            .filter(|m| !module_names.contains(&m.name.as_str()))
+            .cloned()
+            .collect()
+    }
+
     /// The runtime this harness was validated against, if one was supplied.
     pub fn runtime(&self) -> Option<&Arc<dyn Runtime>> {
         self.runtime.as_ref()
@@ -152,27 +180,8 @@ impl Harness {
             let ctx = self.module_context(module.as_ref(), &ports);
             api = api.nest(&format!("/v1/{}", module.name()), module.router(ctx));
         }
-        // Sidecar mounts come from configuration, not from the composition
-        // (ADR 0009), so the same artifact serves ventures with and without
-        // them. A malformed table mounts nothing and is logged; it must not
-        // take down the in-process modules.
-        let mounts = match crate::sidecar::SidecarMounts::from_config(ports.config.as_ref()) {
-            Ok(mounts) => mounts,
-            Err(errors) => {
-                for error in errors {
-                    tracing::error!(error, "ignoring the sidecar mount table");
-                }
-                crate::sidecar::SidecarMounts::default()
-            }
-        };
-        let module_names: Vec<&str> = self.modules.iter().map(|m| m.name()).collect();
-        for collision in mounts.collisions(&module_names) {
-            tracing::error!(error = collision, "ignoring the colliding sidecar mount");
-        }
-        for mount in mounts.iter() {
-            if module_names.contains(&mount.name.as_str()) {
-                continue;
-            }
+        let mounted = self.sidecar_mounts(&ports);
+        for mount in &mounted {
             api = api.nest(
                 &format!("/v1/{}", mount.name),
                 crate::sidecar::router(mount.clone(), ports.dispatcher.clone()),
@@ -182,9 +191,15 @@ impl Harness {
             .layer(axum::middleware::from_fn(security_headers_layer))
             .layer(DefaultBodyLimit::max(MAX_BODY_BYTES));
 
+        let surface_source: Arc<dyn SurfaceSource> = Arc::new(MergedSurface {
+            base: Arc::clone(&self.surface),
+            mounts: mounted,
+            dispatcher: ports.dispatcher.clone(),
+        });
+
         let ui = self.ui.as_ref().map(|ui| {
             ui.router(UiContext {
-                surface: Arc::clone(&self.surface.document),
+                surface: Arc::clone(&surface_source),
                 api: api.clone(),
                 config: Arc::clone(&ports.config),
                 venture: Arc::clone(&self.venture),
@@ -231,7 +246,7 @@ impl Harness {
 
         let surface_state = SurfaceState {
             config,
-            variants: Arc::clone(&self.surface),
+            source: surface_source,
         };
 
         let root = Router::new()
@@ -324,7 +339,92 @@ async fn ready_handler(State(state): State<ReadyState>) -> impl IntoResponse {
 #[derive(Clone)]
 struct SurfaceState {
     config: Arc<dyn Config>,
-    variants: Arc<SurfaceVariants>,
+    source: Arc<dyn SurfaceSource>,
+}
+
+/// The build-time surface plus whatever the mounted sidecars answer
+/// (issue #76). Sidecar surfaces are fetched on every call: a sidecar's
+/// own `/__surface` is prerendered, the service binding runs on the same
+/// thread (ADR 0009), and a cache here would hide a redeploy. Only the
+/// public part of a sidecar merges: its admin routes take its own token,
+/// which this host does not hold.
+struct MergedSurface {
+    base: Arc<SurfaceVariants>,
+    mounts: Vec<SidecarMount>,
+    dispatcher: Option<Arc<dyn Dispatcher>>,
+}
+
+impl MergedSurface {
+    /// What each mounted sidecar contributes, in mount order.
+    async fn sidecar_modules(&self) -> Vec<crate::surface::ModuleSurface> {
+        let mut extra = Vec::new();
+        let Some(dispatcher) = &self.dispatcher else {
+            return extra;
+        };
+        for mount in &self.mounts {
+            if !dispatcher.has(&mount.binding) {
+                continue;
+            }
+            let request = axum::http::Request::builder()
+                .method(axum::http::Method::GET)
+                .uri("/__surface")
+                .header(header::ACCEPT, "application/json")
+                .body(bytes::Bytes::new())
+                .expect("static request builds");
+            let answer = match dispatcher.dispatch(&mount.binding, request).await {
+                Ok(response) if response.status().is_success() => response,
+                Ok(response) => {
+                    tracing::warn!(module = mount.name, status = %response.status(), "sidecar surface not available");
+                    continue;
+                }
+                Err(err) => {
+                    tracing::warn!(module = mount.name, error = %err, "sidecar surface fetch failed");
+                    continue;
+                }
+            };
+            match serde_json::from_slice::<SurfaceDocument>(answer.body()) {
+                Ok(document) => extra.extend(
+                    document
+                        .modules
+                        .into_iter()
+                        .filter(|m| m.name == mount.name)
+                        .map(|m| crate::surface::ModuleSurface {
+                            name: m.name,
+                            version: m.version,
+                            surface: m.surface.public(),
+                        }),
+                ),
+                Err(err) => {
+                    tracing::warn!(module = mount.name, error = %err, "sidecar surface is not a surface document");
+                }
+            }
+        }
+        extra
+    }
+}
+
+#[async_trait::async_trait]
+impl SurfaceSource for MergedSurface {
+    async fn current(&self) -> Arc<SurfaceDocument> {
+        if self.mounts.is_empty() {
+            return Arc::clone(&self.base.document);
+        }
+        let mut document = (*self.base.document).clone();
+        document.modules.extend(self.sidecar_modules().await);
+        Arc::new(document)
+    }
+
+    fn built(&self) -> Arc<SurfaceDocument> {
+        Arc::clone(&self.base.document)
+    }
+
+    fn rendered(&self, admin: bool) -> Option<&RenderedSurface> {
+        Some(if admin {
+            &self.base.full
+        } else {
+            &self.base.public
+        })
+    }
 }
 
 /// `GET /__surface` (ADR 0010): the composed surface, public subset by
@@ -338,10 +438,22 @@ async fn surface_handler(
     headers: HeaderMap,
 ) -> impl IntoResponse {
     let admin = require_admin(&*state.config, &headers).is_ok();
-    let rendered = if admin {
-        &state.variants.full
+    // With no sidecar the source hands back the build-time Arc, and the
+    // prerendered variants are reused; with sidecars the merged document
+    // is rendered per request (a hash, microseconds).
+    let current = state.source.current().await;
+    let built = state.source.built();
+    let prerendered = Arc::ptr_eq(&current, &built).then(|| state.source.rendered(admin));
+    let fresh;
+    let rendered: &RenderedSurface = if let Some(rendered) = prerendered.flatten() {
+        rendered
     } else {
-        &state.variants.public
+        fresh = if admin {
+            RenderedSurface::render(&current)
+        } else {
+            RenderedSurface::render(&current.public())
+        };
+        &fresh
     };
     let matches = headers
         .get(header::IF_NONE_MATCH)

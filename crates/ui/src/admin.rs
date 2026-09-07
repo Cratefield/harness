@@ -240,16 +240,15 @@ pub(crate) async fn index(State(state): State<Arc<UiState>>, headers: HeaderMap)
     if !has_session(&state, &headers) {
         return to_login();
     }
-    let entries: Vec<(String, Vec<(String, String)>)> = state
-        .ctx
-        .surface
+    let surface = state.ctx.surface.current().await;
+    let entries: Vec<(String, Vec<(String, String)>)> = surface
         .modules
         .iter()
         .filter_map(|m| {
             let mut links = Vec::new();
             for view in &m.surface.views {
                 if let View::Table { source, .. } = view
-                    && admin_action(&state, &m.name, source).is_some()
+                    && admin_action(&surface, &m.name, source).is_some()
                 {
                     links.push((
                         format!("/ui/admin/{}/{source}", m.name),
@@ -274,10 +273,10 @@ pub(crate) async fn index(State(state): State<Arc<UiState>>, headers: HeaderMap)
     respond_admin(&state, "Admin", &render::admin_index(&entries), true)
 }
 
-fn admin_action<'a>(state: &'a UiState, module: &str, action: &str) -> Option<&'a Action> {
-    state
-        .ctx
-        .surface
+type Doc = factory0_core::SurfaceDocument;
+
+fn admin_action<'a>(surface: &'a Doc, module: &str, action: &str) -> Option<&'a Action> {
+    surface
         .modules
         .iter()
         .find(|m| m.name == module)?
@@ -287,10 +286,8 @@ fn admin_action<'a>(state: &'a UiState, module: &str, action: &str) -> Option<&'
         .find(|a| a.name == action && a.audience == Audience::Admin)
 }
 
-fn table_view<'a>(state: &'a UiState, module: &str, source: &str) -> Option<&'a View> {
-    state
-        .ctx
-        .surface
+fn table_view<'a>(surface: &'a Doc, module: &str, source: &str) -> Option<&'a View> {
+    surface
         .modules
         .iter()
         .find(|m| m.name == module)?
@@ -302,8 +299,8 @@ fn table_view<'a>(state: &'a UiState, module: &str, source: &str) -> Option<&'a 
 
 /// The row actions a table offers: admin `DELETE` actions whose path
 /// parameter names one of the table's columns.
-fn row_actions<'a>(state: &'a UiState, module: &str) -> Vec<(&'a Action, String)> {
-    let Some(m) = state.ctx.surface.modules.iter().find(|m| m.name == module) else {
+fn row_actions<'a>(surface: &'a Doc, module: &str) -> Vec<(&'a Action, String)> {
+    let Some(m) = surface.modules.iter().find(|m| m.name == module) else {
         return Vec::new();
     };
     m.surface
@@ -341,7 +338,8 @@ pub(crate) async fn page_get(
     if !has_session(&state, &headers) {
         return to_login();
     }
-    let Some(spec) = admin_action(&state, &module, &action) else {
+    let surface = state.ctx.surface.current().await;
+    let Some(spec) = admin_action(&surface, &module, &action) else {
         return Problem::not_found()
             .with_detail(format!("no admin UI for {module}/{action}"))
             .instance(&scope.request_id)
@@ -357,7 +355,7 @@ pub(crate) async fn page_get(
         let body = retarget(body, &module, &action);
         return respond_admin(&state, &title, &body, true);
     }
-    let Some(View::Table { columns, .. }) = table_view(&state, &module, &action) else {
+    let Some(View::Table { columns, .. }) = table_view(&surface, &module, &action) else {
         return Problem::not_found()
             .with_detail(format!("{module}/{action} has no table view"))
             .instance(&scope.request_id)
@@ -404,7 +402,7 @@ pub(crate) async fn page_get(
     } else {
         columns.iter().map(|c| c.label.as_str()).collect()
     };
-    let actions = row_actions(&state, &module);
+    let actions = row_actions(&surface, &module);
     let rows: Vec<render::TableRow<'_>> = records
         .iter()
         .map(|record| render::TableRow {
@@ -454,7 +452,8 @@ pub(crate) async fn page_post(
     if !same_origin(&headers) {
         return forbidden(&scope, "admin actions must be posted from this origin");
     }
-    let Some(spec) = admin_action(&state, &module, &action) else {
+    let surface = state.ctx.surface.current().await;
+    let Some(spec) = admin_action(&surface, &module, &action) else {
         return Problem::not_found()
             .with_detail(format!("no admin UI for {module}/{action}"))
             .instance(&scope.request_id)
@@ -498,7 +497,7 @@ pub(crate) async fn page_post(
             out
         }
         Method::DELETE => {
-            let Some((_, param)) = row_actions(&state, &module)
+            let Some((_, param)) = row_actions(&surface, &module)
                 .into_iter()
                 .find(|(a, _)| a.name == action)
             else {
@@ -509,7 +508,7 @@ pub(crate) async fn page_post(
                     .instance(&scope.request_id)
                     .into_response();
             };
-            let back = back_to_table(&state, &module);
+            let back = back_to_table(&surface, &module);
             if values.get("confirm").map(String::as_str) != Some("1") {
                 let hidden = vec![(param.clone(), target.clone())];
                 let body = render::confirm(&module, &action, target, &hidden, &back);
@@ -544,10 +543,8 @@ pub(crate) async fn page_post(
 }
 
 /// After a row action: the module's first table, else the index.
-fn back_to_table(state: &UiState, module: &str) -> String {
-    state
-        .ctx
-        .surface
+fn back_to_table(surface: &Doc, module: &str) -> String {
+    surface
         .modules
         .iter()
         .find(|m| m.name == module)

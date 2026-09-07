@@ -942,9 +942,12 @@ dependencies = [
 name = "factory0-ui"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "axum",
+ "bytes",
  "factory0-core",
  "factory0-module-email-signup",
+ "factory0-module-hello",
  "factory0-module-waitlist",
  "factory0-testing",
  "http",
