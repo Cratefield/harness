@@ -27,6 +27,7 @@ cratefield-runtime-native = { path = "crates/runtime-native", version = "0.1.0" 
 cratefield-adapter-resend = { path = "crates/adapter-resend", version = "0.1.0" }
 cratefield-adapter-turnstile = { path = "crates/adapter-turnstile", version = "0.1.0" }
 cratefield-adapter-apns = { path = "crates/adapter-apns", version = "0.1.0" }
+cratefield-adapter-stripe = { path = "crates/adapter-stripe", version = "0.1.0" }
 cratefield-adapter-sqlite = { path = "crates/adapter-sqlite", version = "0.1.0" }
 # Phase 3 (issue #18): native-only Postgres adapter. Never a dependency of
 # anything on the wasm path — CI asserts the venture wasm graph stays

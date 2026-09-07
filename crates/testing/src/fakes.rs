@@ -649,3 +649,164 @@ impl cratefield_core::Push for FakePush {
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// FakePayments
+
+/// How a [`FakePayments`] responds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PaymentsMode {
+    /// Succeed and record the call.
+    Ok,
+    /// Report `NotConfigured` (no Stripe key).
+    NotConfigured,
+    /// A retryable failure.
+    Transient,
+}
+
+/// What a [`FakePayments`] recorded, for assertions.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PaymentsCall {
+    Checkout,
+    SubscriptionCheckout,
+    ConnectAccountLink,
+    ChargeWithTransfer,
+    Refund,
+    VerifyWebhook,
+}
+
+/// An in-memory [`cratefield_core::Payments`] for module tests: records which
+/// calls were made and answers per its [`PaymentsMode`]. `verify_webhook`
+/// treats a signature header of `"invalid"` as a tampered event.
+#[derive(Clone)]
+pub struct FakePayments {
+    inner: Arc<FakePaymentsInner>,
+}
+
+struct FakePaymentsInner {
+    mode: Mutex<PaymentsMode>,
+    calls: Mutex<Vec<PaymentsCall>>,
+}
+
+impl FakePayments {
+    #[must_use]
+    pub fn new(mode: PaymentsMode) -> Self {
+        Self {
+            inner: Arc::new(FakePaymentsInner {
+                mode: Mutex::new(mode),
+                calls: Mutex::new(Vec::new()),
+            }),
+        }
+    }
+
+    /// The calls recorded so far.
+    #[must_use]
+    pub fn calls(&self) -> Vec<PaymentsCall> {
+        self.inner.calls.lock().expect("payments lock").clone()
+    }
+
+    pub fn set_mode(&self, mode: PaymentsMode) {
+        *self.inner.mode.lock().expect("payments lock") = mode;
+    }
+
+    fn record(&self, call: PaymentsCall) {
+        self.inner.calls.lock().expect("payments lock").push(call);
+    }
+
+    fn guard(&self) -> Result<(), cratefield_core::PaymentsError> {
+        match *self.inner.mode.lock().expect("payments lock") {
+            PaymentsMode::Ok => Ok(()),
+            PaymentsMode::NotConfigured => Err(cratefield_core::PaymentsError::NotConfigured),
+            PaymentsMode::Transient => Err(cratefield_core::PaymentsError::Transient(
+                "fake payments failure".to_owned(),
+            )),
+        }
+    }
+}
+
+impl Default for FakePayments {
+    fn default() -> Self {
+        Self::new(PaymentsMode::Ok)
+    }
+}
+
+#[async_trait]
+impl cratefield_core::Payments for FakePayments {
+    async fn create_checkout(
+        &self,
+        _request: &cratefield_core::CheckoutRequest,
+    ) -> Result<cratefield_core::CheckoutSession, cratefield_core::PaymentsError> {
+        self.guard()?;
+        self.record(PaymentsCall::Checkout);
+        Ok(cratefield_core::CheckoutSession {
+            id: "cs_fake".to_owned(),
+            url: "https://checkout.stripe.test/cs_fake".to_owned(),
+        })
+    }
+
+    async fn create_subscription_checkout(
+        &self,
+        _request: &cratefield_core::SubscriptionCheckoutRequest,
+    ) -> Result<cratefield_core::CheckoutSession, cratefield_core::PaymentsError> {
+        self.guard()?;
+        self.record(PaymentsCall::SubscriptionCheckout);
+        Ok(cratefield_core::CheckoutSession {
+            id: "cs_sub_fake".to_owned(),
+            url: "https://checkout.stripe.test/cs_sub_fake".to_owned(),
+        })
+    }
+
+    async fn create_connect_account_link(
+        &self,
+        _request: &cratefield_core::ConnectAccountLinkRequest,
+    ) -> Result<cratefield_core::ConnectAccountLink, cratefield_core::PaymentsError> {
+        self.guard()?;
+        self.record(PaymentsCall::ConnectAccountLink);
+        Ok(cratefield_core::ConnectAccountLink {
+            account_id: "acct_fake".to_owned(),
+            url: "https://connect.stripe.test/acct_fake".to_owned(),
+        })
+    }
+
+    async fn charge_with_transfer(
+        &self,
+        _request: &cratefield_core::TransferCharge,
+    ) -> Result<cratefield_core::Charge, cratefield_core::PaymentsError> {
+        self.guard()?;
+        self.record(PaymentsCall::ChargeWithTransfer);
+        Ok(cratefield_core::Charge {
+            id: "pi_fake".to_owned(),
+            status: "succeeded".to_owned(),
+        })
+    }
+
+    async fn refund(
+        &self,
+        _request: &cratefield_core::RefundRequest,
+    ) -> Result<cratefield_core::Refund, cratefield_core::PaymentsError> {
+        self.guard()?;
+        self.record(PaymentsCall::Refund);
+        Ok(cratefield_core::Refund {
+            id: "re_fake".to_owned(),
+        })
+    }
+
+    async fn verify_webhook(
+        &self,
+        signature_header: &str,
+        _body: &[u8],
+    ) -> Result<cratefield_core::WebhookEvent, cratefield_core::PaymentsError> {
+        self.record(PaymentsCall::VerifyWebhook);
+        if signature_header == "invalid" {
+            return Err(cratefield_core::PaymentsError::SignatureInvalid(
+                "fake tampered signature".to_owned(),
+            ));
+        }
+        self.guard()?;
+        Ok(cratefield_core::WebhookEvent {
+            id: "evt_fake".to_owned(),
+            kind: "checkout.session.completed".to_owned(),
+            data: serde_json::json!({ "object": "checkout.session" }),
+        })
+    }
+}

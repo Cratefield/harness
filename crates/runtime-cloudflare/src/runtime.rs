@@ -5,7 +5,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use cratefield_core::{
-    Captcha, Defer, HarnessConfig, Mailer, Port, Ports, Push, Runtime, SidecarMounts, UlidIdGen,
+    Captcha, Defer, HarnessConfig, Mailer, Payments, Port, Ports, Push, Runtime, SidecarMounts,
+    UlidIdGen,
 };
 use worker::Env;
 
@@ -58,6 +59,7 @@ pub struct Cloudflare {
     rate_limiter_binding: Option<&'static str>,
     mailer: Option<Arc<dyn Mailer>>,
     push: Option<Arc<dyn Push>>,
+    payments: Option<Arc<dyn Payments>>,
     captcha: Option<Arc<dyn Captcha>>,
 }
 
@@ -76,6 +78,7 @@ impl Cloudflare {
             rate_limiter_binding: None,
             mailer: None,
             push: None,
+            payments: None,
             captcha: None,
         }
     }
@@ -129,6 +132,21 @@ impl Cloudflare {
     #[must_use]
     pub fn push_arc(mut self, push: Arc<dyn Push>) -> Self {
         self.push = Some(push);
+        self
+    }
+
+    /// The `Payments` port. Like `mailer`, the adapter is built from the
+    /// venture's secrets (`cratefield-adapter-stripe` from the Stripe keys)
+    /// and passed in, not resolved from a Worker binding.
+    #[must_use]
+    pub fn payments(mut self, payments: impl Payments + 'static) -> Self {
+        self.payments = Some(Arc::new(payments));
+        self
+    }
+
+    #[must_use]
+    pub fn payments_arc(mut self, payments: Arc<dyn Payments>) -> Self {
+        self.payments = Some(payments);
         self
     }
 
@@ -236,6 +254,7 @@ impl Cloudflare {
         ports.defer = Some(defer);
         ports.mailer.clone_from(&self.mailer);
         ports.push.clone_from(&self.push);
+        ports.payments.clone_from(&self.payments);
         ports.captcha.clone_from(&self.captcha);
         ports
     }
@@ -269,6 +288,9 @@ impl Runtime for Cloudflare {
         }
         if self.push.is_some() {
             provided.push(Port::Push);
+        }
+        if self.payments.is_some() {
+            provided.push(Port::Payments);
         }
         if self.captcha.is_some() {
             provided.push(Port::Captcha);

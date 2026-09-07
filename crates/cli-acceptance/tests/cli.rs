@@ -406,10 +406,14 @@ fn doctor_production_captcha_rule_and_override() {
     struct NoCaptcha;
     impl Runtime for NoCaptcha {
         fn provides(&self) -> Vec<Port> {
+            // Everything but Captcha (the rule under test). Payments is also
+            // excluded: it carries its own production precondition (a webhook
+            // secret, issue #102), which this captcha-focused fixture must not
+            // trip.
             Port::ALL
                 .iter()
                 .copied()
-                .filter(|port| *port != Port::Captcha)
+                .filter(|port| *port != Port::Captcha && *port != Port::Payments)
                 .collect()
         }
     }

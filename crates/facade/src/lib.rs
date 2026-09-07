@@ -32,6 +32,9 @@ pub use cratefield_adapter_turnstile as turnstile;
 #[cfg(feature = "apns")]
 pub use cratefield_adapter_apns as apns;
 
+#[cfg(feature = "stripe")]
+pub use cratefield_adapter_stripe as stripe;
+
 #[cfg(feature = "ui")]
 pub use cratefield_ui as ui;
 
