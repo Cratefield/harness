@@ -12,8 +12,8 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
-factory0-core = { workspace = true }
-factory0-ui = { workspace = true }
+cratefield-core = { workspace = true }
+cratefield-ui = { workspace = true }
 serde_json = { workspace = true }
 
 [dev-dependencies]

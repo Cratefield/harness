@@ -15,11 +15,11 @@ crate-type = ["cdylib", "rlib"]
 workspace = true
 
 [dependencies]
-factory0-core = { workspace = true }
-factory0-runtime-cloudflare = { workspace = true }
-factory0-ui = { workspace = true }
-factory0-secrets = { workspace = true }
-factory0-kms = { workspace = true }
+cratefield-core = { workspace = true }
+cratefield-runtime-cloudflare = { workspace = true }
+cratefield-ui = { workspace = true }
+cratefield-secrets = { workspace = true }
+cratefield-kms = { workspace = true }
 axum = { workspace = true }
 http = { workspace = true }
 serde = { workspace = true }

@@ -17,12 +17,12 @@
 
 use std::sync::Arc;
 
-use factory0_core::{Database, DbError, Statement};
+use cratefield_core::{Database, DbError, Statement};
 use sea_query::Value as SeaValue;
 use serde::{Deserialize, Serialize};
 
 /// The schema migration, applied the way a harness module's is.
-pub const MIGRATION: factory0_core::SqlMigration = factory0_core::SqlMigration {
+pub const MIGRATION: cratefield_core::SqlMigration = cratefield_core::SqlMigration {
     id: "0001",
     name: "init",
     sql: include_str!("../migrations/sqlite/0001_init.sql"),
@@ -377,7 +377,7 @@ impl Repository {
     }
 }
 
-fn account_from_row(row: &factory0_core::Row) -> Result<Account, RepoError> {
+fn account_from_row(row: &cratefield_core::Row) -> Result<Account, RepoError> {
     Ok(Account {
         id: field(row, "id")?,
         identity: field(row, "identity")?,
@@ -388,7 +388,7 @@ fn account_from_row(row: &factory0_core::Row) -> Result<Account, RepoError> {
     })
 }
 
-fn venture_from_row(row: &factory0_core::Row) -> Result<Venture, RepoError> {
+fn venture_from_row(row: &cratefield_core::Row) -> Result<Venture, RepoError> {
     Ok(Venture {
         id: field(row, "id")?,
         account_id: field(row, "account_id")?,
@@ -403,7 +403,7 @@ fn venture_from_row(row: &factory0_core::Row) -> Result<Venture, RepoError> {
     })
 }
 
-fn field(row: &factory0_core::Row, name: &str) -> Result<String, RepoError> {
+fn field(row: &cratefield_core::Row, name: &str) -> Result<String, RepoError> {
     row.get(name)
         .ok_or_else(|| RepoError::Invalid(format!("row has no `{name}`")))
 }
@@ -415,7 +415,7 @@ fn text(value: &str) -> SeaValue {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use factory0_adapter_sqlite::SqliteDatabase;
+    use cratefield_adapter_sqlite::SqliteDatabase;
 
     fn repo() -> Repository {
         let db = SqliteDatabase::in_memory().expect("db");

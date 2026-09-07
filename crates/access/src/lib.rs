@@ -31,12 +31,12 @@
 
 use std::sync::Arc;
 
-use factory0_core::{Database, DbError, Kid, Payload, Signer, Statement};
+use cratefield_core::{Database, DbError, Kid, Payload, Signer, Statement};
 use sea_query::Value as SeaValue;
 use serde::{Deserialize, Serialize};
 
 /// The schema migration, applied the way a harness module's is.
-pub const MIGRATION: factory0_core::SqlMigration = factory0_core::SqlMigration {
+pub const MIGRATION: cratefield_core::SqlMigration = cratefield_core::SqlMigration {
     id: "0001",
     name: "init",
     sql: include_str!("../migrations/sqlite/0001_init.sql"),
@@ -425,7 +425,7 @@ fn normalise_value(value: &str, kind: EntryKind) -> String {
     }
 }
 
-fn entry_from_row(row: &factory0_core::Row) -> Result<AllowEntry, AccessError> {
+fn entry_from_row(row: &cratefield_core::Row) -> Result<AllowEntry, AccessError> {
     Ok(AllowEntry {
         value: field(row, "value")?,
         kind: EntryKind::parse(&field(row, "kind")?)
@@ -436,7 +436,7 @@ fn entry_from_row(row: &factory0_core::Row) -> Result<AllowEntry, AccessError> {
     })
 }
 
-fn field(row: &factory0_core::Row, name: &str) -> Result<String, AccessError> {
+fn field(row: &cratefield_core::Row, name: &str) -> Result<String, AccessError> {
     row.get(name)
         .ok_or_else(|| AccessError::Invalid(format!("row has no `{name}`")))
 }
@@ -448,8 +448,8 @@ fn text(value: &str) -> SeaValue {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use factory0_adapter_sqlite::SqliteDatabase;
-    use factory0_core::HmacSigner;
+    use cratefield_adapter_sqlite::SqliteDatabase;
+    use cratefield_core::HmacSigner;
 
     const SECRET: &str = "0123456789abcdef0123456789abcdef"; // 32 bytes
 

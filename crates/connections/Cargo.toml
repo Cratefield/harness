@@ -12,13 +12,13 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
-factory0-core = { workspace = true }
-factory0-secrets = { workspace = true }
+cratefield-core = { workspace = true }
+cratefield-secrets = { workspace = true }
 cratefield-catalog = { path = "../catalog" }
 serde = { workspace = true }
 sea-query = { workspace = true }
 
 [dev-dependencies]
-factory0-kms = { workspace = true }
-factory0-adapter-sqlite = { git = "https://github.com/Cratefield/harness", rev = "c2fd9ccc57909c4d82bc80a259148380fb520726" }
+cratefield-kms = { workspace = true }
+cratefield-adapter-sqlite = { git = "https://github.com/Cratefield/harness", rev = "b0858003713c5bc449ef617154ca375842ec1a4b" }
 pollster = { version = "0.4", features = ["macro"] }

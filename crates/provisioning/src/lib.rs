@@ -24,11 +24,11 @@
 use std::sync::Arc;
 
 use cratefield_accounts::{RepoError, Repository, Venture, VentureStatus};
-use factory0_core::{Database, DbError, Statement};
+use cratefield_core::{Database, DbError, Statement};
 use sea_query::Value as SeaValue;
 
 /// The schema migration: the `provision_progress` table.
-pub const MIGRATION: factory0_core::SqlMigration = factory0_core::SqlMigration {
+pub const MIGRATION: cratefield_core::SqlMigration = cratefield_core::SqlMigration {
     id: "0001",
     name: "init",
     sql: include_str!("../migrations/sqlite/0001_init.sql"),
@@ -419,7 +419,7 @@ mod tests {
     #![allow(clippy::unused_async_trait_impl)] // the sync test fakes implement an async port
     use super::*;
     use cratefield_accounts::MIGRATION as ACCOUNTS_MIGRATION;
-    use factory0_adapter_sqlite::SqliteDatabase;
+    use cratefield_adapter_sqlite::SqliteDatabase;
     use std::cell::{Cell, RefCell};
 
     /// A deployer that logs every call, can be told to fail one step, and

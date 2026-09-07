@@ -14,8 +14,8 @@
 
 use std::sync::OnceLock;
 
-use factory0_core::{Harness, Venture};
-use factory0_runtime_cloudflare::{Cloudflare, serve, serve_scheduled};
+use cratefield_core::{Harness, Venture};
+use cratefield_runtime_cloudflare::{Cloudflare, serve, serve_scheduled};
 use worker::{Context, Env, Request, Response, event};
 
 static INSTANCE: OnceLock<(Harness, Cloudflare)> = OnceLock::new();

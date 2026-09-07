@@ -198,8 +198,8 @@ dependencies = [
 name = "cratefield-access"
 version = "0.1.0"
 dependencies = [
- "factory0-adapter-sqlite",
- "factory0-core",
+ "cratefield-adapter-sqlite",
+ "cratefield-core",
  "pollster",
  "sea-query",
  "serde",
@@ -209,12 +209,25 @@ dependencies = [
 name = "cratefield-accounts"
 version = "0.1.0"
 dependencies = [
- "factory0-adapter-sqlite",
- "factory0-core",
+ "cratefield-adapter-sqlite",
+ "cratefield-core",
  "pollster",
  "sea-query",
  "serde",
  "time",
+]
+
+[[package]]
+name = "cratefield-adapter-sqlite"
+version = "0.1.1"
+source = "git+https://github.com/Cratefield/harness?rev=b0858003713c5bc449ef617154ca375842ec1a4b#b0858003713c5bc449ef617154ca375842ec1a4b"
+dependencies = [
+ "async-trait",
+ "cratefield-core",
+ "rusqlite",
+ "sea-query",
+ "time",
+ "tracing",
 ]
 
 [[package]]
@@ -229,11 +242,11 @@ dependencies = [
 name = "cratefield-connections"
 version = "0.1.0"
 dependencies = [
+ "cratefield-adapter-sqlite",
  "cratefield-catalog",
- "factory0-adapter-sqlite",
- "factory0-core",
- "factory0-kms",
- "factory0-secrets",
+ "cratefield-core",
+ "cratefield-kms",
+ "cratefield-secrets",
  "pollster",
  "sea-query",
  "serde",
@@ -244,11 +257,11 @@ name = "cratefield-control-plane"
 version = "0.1.0"
 dependencies = [
  "axum",
- "factory0-core",
- "factory0-kms",
- "factory0-runtime-cloudflare",
- "factory0-secrets",
- "factory0-ui",
+ "cratefield-core",
+ "cratefield-kms",
+ "cratefield-runtime-cloudflare",
+ "cratefield-secrets",
+ "cratefield-ui",
  "getrandom",
  "http",
  "sea-query",
@@ -260,23 +273,120 @@ dependencies = [
 ]
 
 [[package]]
+name = "cratefield-core"
+version = "0.3.1"
+source = "git+https://github.com/Cratefield/harness?rev=b0858003713c5bc449ef617154ca375842ec1a4b#b0858003713c5bc449ef617154ca375842ec1a4b"
+dependencies = [
+ "async-trait",
+ "axum",
+ "base64",
+ "bytes",
+ "futures-core",
+ "hmac",
+ "http",
+ "schemars",
+ "sea-query",
+ "serde",
+ "serde_json",
+ "sha2",
+ "subtle",
+ "thiserror",
+ "time",
+ "tower",
+ "tower-http",
+ "tracing",
+ "ulid",
+ "unicode-normalization",
+]
+
+[[package]]
+name = "cratefield-kms"
+version = "0.1.1"
+source = "git+https://github.com/Cratefield/harness?rev=b0858003713c5bc449ef617154ca375842ec1a4b#b0858003713c5bc449ef617154ca375842ec1a4b"
+dependencies = [
+ "async-trait",
+ "base64",
+ "chacha20poly1305",
+ "getrandom",
+ "thiserror",
+ "zeroize",
+]
+
+[[package]]
 name = "cratefield-provisioning"
 version = "0.1.0"
 dependencies = [
  "cratefield-accounts",
- "factory0-adapter-sqlite",
- "factory0-core",
+ "cratefield-adapter-sqlite",
+ "cratefield-core",
  "pollster",
  "sea-query",
  "serde",
 ]
 
 [[package]]
+name = "cratefield-runtime-cloudflare"
+version = "0.1.1"
+source = "git+https://github.com/Cratefield/harness?rev=b0858003713c5bc449ef617154ca375842ec1a4b#b0858003713c5bc449ef617154ca375842ec1a4b"
+dependencies = [
+ "async-trait",
+ "axum",
+ "bytes",
+ "cratefield-core",
+ "futures-core",
+ "futures-util",
+ "getrandom",
+ "http",
+ "sea-query",
+ "serde",
+ "serde_json",
+ "sha2",
+ "time",
+ "tower",
+ "tracing",
+ "worker",
+]
+
+[[package]]
+name = "cratefield-secrets"
+version = "0.1.1"
+source = "git+https://github.com/Cratefield/harness?rev=b0858003713c5bc449ef617154ca375842ec1a4b#b0858003713c5bc449ef617154ca375842ec1a4b"
+dependencies = [
+ "async-trait",
+ "chacha20poly1305",
+ "cratefield-core",
+ "cratefield-kms",
+ "getrandom",
+ "sea-query",
+ "sha2",
+ "thiserror",
+ "time",
+ "tracing",
+ "zeroize",
+]
+
+[[package]]
+name = "cratefield-ui"
+version = "0.1.1"
+source = "git+https://github.com/Cratefield/harness?rev=b0858003713c5bc449ef617154ca375842ec1a4b#b0858003713c5bc449ef617154ca375842ec1a4b"
+dependencies = [
+ "axum",
+ "cratefield-core",
+ "http",
+ "maud",
+ "schemars",
+ "serde",
+ "serde_json",
+ "tower",
+ "tracing",
+]
+
+[[package]]
 name = "cratefield-ui-generator"
 version = "0.1.0"
 dependencies = [
- "factory0-core",
- "factory0-ui",
+ "cratefield-core",
+ "cratefield-ui",
  "schemars",
  "serde_json",
 ]
@@ -339,116 +449,6 @@ name = "equivalent"
 version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "877a4ace8713b0bcf2a4e7eec82529c029f1d0619886d18145fea96c3ffe5c0f"
-
-[[package]]
-name = "factory0-adapter-sqlite"
-version = "0.1.0"
-source = "git+https://github.com/Cratefield/harness?rev=c2fd9ccc57909c4d82bc80a259148380fb520726#c2fd9ccc57909c4d82bc80a259148380fb520726"
-dependencies = [
- "async-trait",
- "factory0-core",
- "rusqlite",
- "sea-query",
- "time",
- "tracing",
-]
-
-[[package]]
-name = "factory0-core"
-version = "0.3.0"
-source = "git+https://github.com/Cratefield/harness?rev=c2fd9ccc57909c4d82bc80a259148380fb520726#c2fd9ccc57909c4d82bc80a259148380fb520726"
-dependencies = [
- "async-trait",
- "axum",
- "base64",
- "bytes",
- "futures-core",
- "hmac",
- "http",
- "schemars",
- "sea-query",
- "serde",
- "serde_json",
- "sha2",
- "subtle",
- "thiserror",
- "time",
- "tower",
- "tower-http",
- "tracing",
- "ulid",
- "unicode-normalization",
-]
-
-[[package]]
-name = "factory0-kms"
-version = "0.1.0"
-source = "git+https://github.com/Cratefield/harness?rev=c2fd9ccc57909c4d82bc80a259148380fb520726#c2fd9ccc57909c4d82bc80a259148380fb520726"
-dependencies = [
- "async-trait",
- "base64",
- "chacha20poly1305",
- "getrandom",
- "thiserror",
- "zeroize",
-]
-
-[[package]]
-name = "factory0-runtime-cloudflare"
-version = "0.1.0"
-source = "git+https://github.com/Cratefield/harness?rev=c2fd9ccc57909c4d82bc80a259148380fb520726#c2fd9ccc57909c4d82bc80a259148380fb520726"
-dependencies = [
- "async-trait",
- "axum",
- "bytes",
- "factory0-core",
- "futures-core",
- "futures-util",
- "getrandom",
- "http",
- "sea-query",
- "serde",
- "serde_json",
- "sha2",
- "time",
- "tower",
- "tracing",
- "worker",
-]
-
-[[package]]
-name = "factory0-secrets"
-version = "0.1.0"
-source = "git+https://github.com/Cratefield/harness?rev=c2fd9ccc57909c4d82bc80a259148380fb520726#c2fd9ccc57909c4d82bc80a259148380fb520726"
-dependencies = [
- "async-trait",
- "chacha20poly1305",
- "factory0-core",
- "factory0-kms",
- "getrandom",
- "sea-query",
- "sha2",
- "thiserror",
- "time",
- "tracing",
- "zeroize",
-]
-
-[[package]]
-name = "factory0-ui"
-version = "0.1.0"
-source = "git+https://github.com/Cratefield/harness?rev=c2fd9ccc57909c4d82bc80a259148380fb520726#c2fd9ccc57909c4d82bc80a259148380fb520726"
-dependencies = [
- "axum",
- "factory0-core",
- "http",
- "maud",
- "schemars",
- "serde",
- "serde_json",
- "tower",
- "tracing",
-]
 
 [[package]]
 name = "fallible-iterator"

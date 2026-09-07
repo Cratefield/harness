@@ -26,10 +26,10 @@
 
 use std::collections::BTreeMap;
 
-use factory0_core::SurfaceDocument;
-use factory0_ui::{ActionSpec, ModuleSpec, Theme, UI_SPEC_VERSION, UiSpec, humanize};
+use cratefield_core::SurfaceDocument;
+use cratefield_ui::{ActionSpec, ModuleSpec, Theme, UI_SPEC_VERSION, UiSpec, humanize};
 
-pub use factory0_ui::UI_SPEC_KEY;
+pub use cratefield_ui::UI_SPEC_KEY;
 
 /// Why a brief could not be turned into a shippable spec.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -262,7 +262,7 @@ fn theme_tokens(brief: &str) -> BTreeMap<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use factory0_core::{Action, ModuleSurface, Surface, SurfaceDocument, VentureSurface};
+    use cratefield_core::{Action, ModuleSurface, Surface, SurfaceDocument, VentureSurface};
 
     fn document(modules: Vec<ModuleSurface>) -> SurfaceDocument {
         SurfaceDocument {
@@ -394,7 +394,7 @@ mod tests {
         let mut action = ActionSpec::default();
         action.fields.insert(
             "phone".into(), // the join action only has `email`
-            factory0_ui::FieldSpec::default(),
+            cratefield_ui::FieldSpec::default(),
         );
         let mut module = ModuleSpec::default();
         module.actions.insert("join".into(), action);

@@ -10,7 +10,7 @@
 //!
 //! **Where the secret lives, and where it does not.** Secret material — an
 //! OAuth client secret, an API key — goes into that venture's tenant store in
-//! [`factory0_secrets`]: encrypted, AAD-bound to the store, audited on every
+//! [`cratefield_secrets`]: encrypted, AAD-bound to the store, audited on every
 //! access, and rotated on every re-connect. This crate's own `connection`
 //! table holds only metadata: the connection kind, its
 //! [`ConnectionState`], a reason when it is invalid, and a **non-secret**
@@ -27,14 +27,14 @@
 use std::sync::Arc;
 
 use cratefield_catalog::ModuleSet;
-use factory0_core::{Database, DbError, Statement};
-use factory0_secrets::{Actor, SecretBytes, Secrets, SecretsError};
+use cratefield_core::{Database, DbError, Statement};
+use cratefield_secrets::{Actor, SecretBytes, Secrets, SecretsError};
 use sea_query::Value as SeaValue;
 use serde::{Deserialize, Serialize};
 
 /// The schema migration for the connection-metadata table. The secret store's
-/// own migrations ([`factory0_secrets::migrations`]) are applied separately.
-pub const MIGRATION: factory0_core::SqlMigration = factory0_core::SqlMigration {
+/// own migrations ([`cratefield_secrets::migrations`]) are applied separately.
+pub const MIGRATION: cratefield_core::SqlMigration = cratefield_core::SqlMigration {
     id: "0001",
     name: "init",
     sql: include_str!("../migrations/sqlite/0001_init.sql"),
@@ -379,7 +379,7 @@ impl Connections {
 
     // -- internals ------------------------------------------------------
 
-    fn store(&self, tenant: &str) -> factory0_secrets::SecretStore {
+    fn store(&self, tenant: &str) -> cratefield_secrets::SecretStore {
         self.secrets.tenant(tenant, self.db.clone())
     }
 
@@ -525,7 +525,7 @@ impl KeyRegistry {
 // helpers
 // ---------------------------------------------------------------------------
 
-fn connection_from_row(row: &factory0_core::Row) -> Result<Connection, ConnError> {
+fn connection_from_row(row: &cratefield_core::Row) -> Result<Connection, ConnError> {
     let kind_key = field(row, "kind")?;
     Ok(Connection {
         kind: ConnectionKind::parse(&kind_key)
@@ -538,7 +538,7 @@ fn connection_from_row(row: &factory0_core::Row) -> Result<Connection, ConnError
     })
 }
 
-fn field(row: &factory0_core::Row, name: &str) -> Result<String, ConnError> {
+fn field(row: &cratefield_core::Row, name: &str) -> Result<String, ConnError> {
     row.get(name)
         .ok_or_else(|| ConnError::Malformed(format!("row has no `{name}`")))
 }
@@ -550,8 +550,8 @@ fn text(value: &str) -> SeaValue {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use factory0_kms::{Dek, Kms, LocalFileKms};
-    use factory0_secrets::migrations as secret_migrations;
+    use cratefield_kms::{Dek, Kms, LocalFileKms};
+    use cratefield_secrets::migrations as secret_migrations;
 
     const GOOD_ID: &str = "1234567890-abc.apps.googleusercontent.com";
 
@@ -576,7 +576,7 @@ mod tests {
         Actor::new("operator").expect("named")
     }
 
-    use factory0_adapter_sqlite::SqliteDatabase;
+    use cratefield_adapter_sqlite::SqliteDatabase;
 
     // -- kind round-trips ----------------------------------------------
 

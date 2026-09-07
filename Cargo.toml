@@ -16,11 +16,11 @@ repository = "https://github.com/Cratefield/control-plane"
 [workspace.dependencies]
 # The harness, pinned. Bump the rev deliberately; the control plane ships
 # on the same runtime it provisions, so a harness change is a real change.
-factory0-core = { git = "https://github.com/Cratefield/harness", rev = "c2fd9ccc57909c4d82bc80a259148380fb520726" }
-factory0-runtime-cloudflare = { git = "https://github.com/Cratefield/harness", rev = "c2fd9ccc57909c4d82bc80a259148380fb520726" }
-factory0-ui = { git = "https://github.com/Cratefield/harness", rev = "c2fd9ccc57909c4d82bc80a259148380fb520726" }
-factory0-secrets = { git = "https://github.com/Cratefield/harness", rev = "c2fd9ccc57909c4d82bc80a259148380fb520726" }
-factory0-kms = { git = "https://github.com/Cratefield/harness", rev = "c2fd9ccc57909c4d82bc80a259148380fb520726" }
+cratefield-core = { git = "https://github.com/Cratefield/harness", rev = "b0858003713c5bc449ef617154ca375842ec1a4b" }
+cratefield-runtime-cloudflare = { git = "https://github.com/Cratefield/harness", rev = "b0858003713c5bc449ef617154ca375842ec1a4b" }
+cratefield-ui = { git = "https://github.com/Cratefield/harness", rev = "b0858003713c5bc449ef617154ca375842ec1a4b" }
+cratefield-secrets = { git = "https://github.com/Cratefield/harness", rev = "b0858003713c5bc449ef617154ca375842ec1a4b" }
+cratefield-kms = { git = "https://github.com/Cratefield/harness", rev = "b0858003713c5bc449ef617154ca375842ec1a4b" }
 
 axum = { version = "0.8.9", default-features = false, features = ["json", "query"] }
 http = "1.5.0"
