@@ -385,7 +385,8 @@ impl Database for EmptyDatabase {
     }
 }
 
-/// An in-process [`Dispatcher`] that answers from an axum [`Router`], so a
+/// An in-process [`Dispatcher`](factory0_core::Dispatcher) that answers from an
+/// axum [`Router`](axum::Router), so a
 /// module can be exercised through a sidecar mount without a network or a
 /// second Worker (ADR 0009). The conformance kit uses it to run the same
 /// assertions against both mounts (#64).
