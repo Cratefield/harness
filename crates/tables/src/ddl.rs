@@ -6,9 +6,17 @@
 //! problem and is not solved here.
 //!
 //! Deterministic. The same definition always renders byte-identical SQL:
-//! tables come out in name order, columns in declaration order, and every
-//! clause on a column has a fixed position. Nothing here reads a clock, a
-//! random number or a hash map.
+//! tables come out in creation order, columns in declaration order, and
+//! every clause on a column has a fixed position. Nothing here reads a
+//! clock, a random number or a hash map.
+//!
+//! Creation order is a topological sort of the foreign-key graph, so a
+//! table is always created after the tables it references. Postgres
+//! refuses an inline `REFERENCES` to a table that does not exist yet, and
+//! plain name order puts `line_item` before `product`. Among the tables
+//! whose references are already created, the alphabetically first goes
+//! next, which makes the order the lexicographically smallest one that
+//! works and keeps the output byte-identical for a given schema.
 //!
 //! The output stays inside the portable subset the hand-written module
 //! migrations use (ADR 0004): text ids, ISO-8601 text timestamps, integer
@@ -109,10 +117,67 @@ pub(crate) fn needs_own_index(table: &TableDef, field: &FieldDef) -> bool {
     field.indexed && !field.unique && !table.is_primary_key(&field.name)
 }
 
+/// The tables `table` has to be created after: every declared table it
+/// points a foreign key at, other than itself. A self-reference is legal
+/// inline in both engines, so it is not a dependency and not a cycle. A
+/// reference to an undeclared table is reported by
+/// [`Schema::validate`] and is not a dependency either.
+fn depends_on<'a>(schema: &'a Schema, table: &'a TableDef) -> impl Iterator<Item = &'a str> {
+    table
+        .foreign_keys
+        .iter()
+        .map(|key| key.references.as_str())
+        .filter(move |name| *name != table.name && schema.table(name).is_some())
+}
+
+/// The order `CREATE TABLE` statements must come in, and the tables no
+/// order can satisfy.
+///
+/// The first list is the lexicographically smallest topological sort of
+/// the foreign-key graph: at every step the alphabetically first table
+/// whose references are already created. The second holds whatever is
+/// left, which is exactly the tables on or downstream of a reference
+/// cycle. [`Schema::validate`] rejects those and [`Schema::ddl`]
+/// validates first, so a rendering never sees a non-empty second list.
+pub(crate) fn creation_order(schema: &Schema) -> (Vec<&TableDef>, Vec<&TableDef>) {
+    let mut done = vec![false; schema.tables.len()];
+    let mut created: Vec<&str> = Vec::with_capacity(schema.tables.len());
+    let mut order: Vec<&TableDef> = Vec::with_capacity(schema.tables.len());
+
+    while let Some((index, table)) = schema
+        .tables
+        .iter()
+        .enumerate()
+        .filter(|(index, table)| {
+            !done[*index] && depends_on(schema, table).all(|name| created.contains(&name))
+        })
+        // `min_by_key` keeps the first of equal keys, so a schema whose
+        // tables were not sorted still renders one fixed order.
+        .min_by_key(|(_, table)| table.name.as_str())
+    {
+        done[index] = true;
+        created.push(&table.name);
+        order.push(table);
+    }
+
+    let cyclic = schema
+        .tables
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| !done[*index])
+        .map(|(_, table)| table)
+        .collect();
+    (order, cyclic)
+}
+
 impl Schema {
     /// Renders every declared table for `dialect` as one script:
-    /// a `CREATE TABLE` per table, in name order, each followed by its
-    /// `CREATE INDEX` statements in field order.
+    /// a `CREATE TABLE` per table, in creation order, each followed by
+    /// its `CREATE INDEX` statements in field order.
+    ///
+    /// Creation order is the topological sort of the foreign-key graph
+    /// described on this module, so a referenced table is always created
+    /// first and the script runs on Postgres as written.
     ///
     /// The schema is validated first, so SQL can never come from a
     /// definition whose identifiers were not checked.
@@ -127,7 +192,9 @@ impl Schema {
              -- Dialect: {}. Forward-only: this file only creates.\n",
             dialect.name()
         );
-        for table in &self.tables {
+        // `validate` rejected every cycle, so the second list is empty.
+        let (ordered, _) = creation_order(self);
+        for table in ordered {
             out.push('\n');
             out.push_str(&self.create_table_sql(table, dialect));
             for index in create_index_sql(table) {

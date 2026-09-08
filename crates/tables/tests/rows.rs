@@ -123,6 +123,7 @@ fn uniqueness_is_not_a_row_check() {
 [[tables.post.fields]]
 name = "id"
 kind = "text"
+required = true
 [[tables.post.fields]]
 name = "slug"
 kind = "text"

@@ -1,7 +1,8 @@
 //! DDL generation: the exact text, both dialects, and determinism.
 
-use cratefield_tables::{Schema, SqlDialect};
+use cratefield_tables::{ErrorCode, Schema, SqlDialect, json_schema, validate_row};
 use serde::Deserialize;
+use serde_json::json;
 
 #[derive(Deserialize)]
 struct Manifest {
@@ -96,10 +97,12 @@ primary_key = ["post_id", "label"]
 [[tables.tag.fields]]
 name = "post_id"
 kind = "uuid"
+required = true
 
 [[tables.tag.fields]]
 name = "label"
 kind = "text"
+required = true
 
 [[tables.tag.foreign_keys]]
 field = "post_id"
@@ -248,6 +251,7 @@ fn an_invalid_definition_renders_no_sql() {
 [[tables.post.fields]]
 name = "id"
 kind = "uuid"
+required = true
 [[tables.post.fields]]
 name = "order"
 kind = "text"
@@ -271,6 +275,7 @@ fn a_quote_in_a_literal_is_doubled() {
 [[tables.post.fields]]
 name = "id"
 kind = "uuid"
+required = true
 [[tables.post.fields]]
 name = "note"
 kind = "text"
@@ -296,6 +301,7 @@ primary_key = "id"
 [[tables.post.fields]]
 name = "id"
 kind = "uuid"
+required = true
 indexed = true
 [[tables.post.fields]]
 name = "slug"
@@ -323,6 +329,7 @@ fn an_index_name_longer_than_an_identifier_is_rejected() {
 [[tables.post.fields]]
 name = "id"
 kind = "uuid"
+required = true
 [[tables.post.fields]]
 name = "{long}"
 kind = "text"
@@ -343,6 +350,179 @@ indexed = true
 }
 
 #[test]
+fn a_referenced_table_is_created_first_even_when_its_name_sorts_later() {
+    // Name order puts `line_item` before `product`, and Postgres then
+    // answers `relation "product" does not exist` and creates nothing.
+    let sql = schema(
+        r#"
+[tables.line_item]
+primary_key = "id"
+[[tables.line_item.fields]]
+name = "id"
+kind = "uuid"
+required = true
+[[tables.line_item.fields]]
+name = "product_id"
+kind = "uuid"
+[[tables.line_item.foreign_keys]]
+field = "product_id"
+references = "product"
+
+[tables.product]
+primary_key = "id"
+[[tables.product.fields]]
+name = "id"
+kind = "uuid"
+required = true
+"#,
+    )
+    .ddl(SqlDialect::Postgres)
+    .expect("renders");
+
+    let product = sql
+        .find("CREATE TABLE IF NOT EXISTS product")
+        .expect("product");
+    let line_item = sql
+        .find("CREATE TABLE IF NOT EXISTS line_item")
+        .expect("line_item");
+    assert!(product < line_item, "{sql}");
+}
+
+#[test]
+fn creation_order_is_the_smallest_one_that_works_and_is_stable() {
+    // Only `line_item` has to move, so `alpha` and `zulu` stay in name
+    // order around it and two renderings are byte-identical.
+    let fragment = r#"
+[tables.alpha]
+primary_key = "id"
+[[tables.alpha.fields]]
+name = "id"
+kind = "uuid"
+required = true
+
+[tables.line_item]
+primary_key = "id"
+[[tables.line_item.fields]]
+name = "id"
+kind = "uuid"
+required = true
+[[tables.line_item.fields]]
+name = "product_id"
+kind = "uuid"
+[[tables.line_item.foreign_keys]]
+field = "product_id"
+references = "product"
+
+[tables.product]
+primary_key = "id"
+[[tables.product.fields]]
+name = "id"
+kind = "uuid"
+required = true
+
+[tables.zulu]
+primary_key = "id"
+[[tables.zulu.fields]]
+name = "id"
+kind = "uuid"
+required = true
+"#;
+    let sql = schema(fragment).ddl(SqlDialect::Sqlite).expect("renders");
+    let order: Vec<&str> = sql
+        .lines()
+        .filter_map(|line| line.strip_prefix("CREATE TABLE IF NOT EXISTS "))
+        .map(|rest| rest.trim_end_matches(" ("))
+        .collect();
+    assert_eq!(order, ["alpha", "product", "line_item", "zulu"], "{sql}");
+
+    let again = schema(fragment).ddl(SqlDialect::Sqlite).expect("renders");
+    assert_eq!(sql.as_bytes(), again.as_bytes());
+}
+
+#[test]
+fn a_reference_cycle_renders_no_sql() {
+    let error = schema(
+        r#"
+[tables.author]
+primary_key = "id"
+[[tables.author.fields]]
+name = "id"
+kind = "uuid"
+required = true
+[[tables.author.fields]]
+name = "post_id"
+kind = "uuid"
+[[tables.author.foreign_keys]]
+field = "post_id"
+references = "post"
+
+[tables.post]
+primary_key = "id"
+[[tables.post.fields]]
+name = "id"
+kind = "uuid"
+required = true
+[[tables.post.fields]]
+name = "author_id"
+kind = "uuid"
+[[tables.post.foreign_keys]]
+field = "author_id"
+references = "author"
+"#,
+    )
+    .ddl(SqlDialect::Postgres)
+    .expect_err("a cycle has no creation order");
+    assert!(
+        error
+            .problems
+            .iter()
+            .any(|line| line.contains("reference cycle")),
+        "{:#?}",
+        error.problems
+    );
+}
+
+#[test]
+fn a_not_null_primary_key_is_required_by_the_validator_and_the_view_too() {
+    // Finding 5: `column_sql` writes NOT NULL for a primary key, so a
+    // primary key the row validator or the JSON Schema treated as
+    // optional would be a 500 where a 400 was correct.
+    let schema = schema(EVERYTHING);
+    let sql = schema.ddl(SqlDialect::Sqlite).expect("renders");
+    for table in &schema.tables {
+        for key in &table.primary_key {
+            let field = table.field(key).expect("the primary key is declared");
+            let column = sql
+                .lines()
+                .find(|line| line.trim_start().starts_with(&format!("{key} ")))
+                .expect("the column is rendered");
+            assert!(column.contains("NOT NULL"), "{column}");
+            assert!(!column.contains("DEFAULT"), "{column}");
+            assert!(field.default.is_none(), "the fixture has no default here");
+
+            let errors = validate_row(table, &json!({})).expect_err("an empty row is rejected");
+            assert!(
+                errors
+                    .errors()
+                    .iter()
+                    .any(|error| error.field == *key && error.code == ErrorCode::Required),
+                "{key} is NOT NULL but the validator accepted its absence: {errors}"
+            );
+
+            let view = json_schema(table);
+            assert!(
+                view["required"]
+                    .as_array()
+                    .expect("required is a list")
+                    .iter()
+                    .any(|name| name == key.as_str()),
+                "{key} is NOT NULL but the JSON Schema does not require it"
+            );
+        }
+    }
+}
+
+#[test]
 fn an_integral_default_written_as_a_decimal_renders_as_an_integer() {
     let sql = schema(
         r#"
@@ -350,6 +530,7 @@ fn an_integral_default_written_as_a_decimal_renders_as_an_integer() {
 [[tables.post.fields]]
 name = "id"
 kind = "uuid"
+required = true
 [[tables.post.fields]]
 name = "views"
 kind = "integer"

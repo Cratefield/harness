@@ -24,86 +24,221 @@ pub const MAX_IDENTIFIER_CHARS: usize = 63;
 /// bookkeeping or an engine catalogue.
 pub const RESERVED_PREFIXES: &[&str] = &["harness_", "sqlite_", "pg_", "cf_"];
 
-/// Words SQLite or Postgres treat as keywords in a column or table
-/// position. A declared name is rejected rather than quoted, which is why
-/// the generated DDL needs no quoting at all.
+/// Every word either engine treats as a keyword in a table or column
+/// position, plus the Postgres system column names. A declared name is
+/// rejected rather than quoted, which is why the generated DDL needs no
+/// quoting at all.
+///
+/// Sorted, deduplicated, and merged from four lists:
+///
+/// - PostgreSQL's `reserved` category, the `reserved_keyword` production
+///   in its grammar, listed in Appendix C of the manual. These can never
+///   be a table or column name unquoted.
+/// - PostgreSQL's `type_func_name_keyword` category, Appendix C's
+///   "reserved (can be function or type name)". A column named `binary`
+///   or `similar` is a syntax error the same way.
+/// - SQLite's keyword list, <https://sqlite.org/lang_keywords.html>.
+///   SQLite accepts most of these in some positions and rejects them in
+///   others, so the whole list is rejected rather than the subset that
+///   happens to break today.
+/// - The Postgres system column names, which every table has whether or
+///   not they are declared: `tableoid`, `xmin`, `cmin`, `xmax`, `cmax`
+///   and `ctid`. A declared column of one of those names is refused at
+///   `CREATE TABLE`.
+///
+/// Two entries are a version ahead of the engines the review ran
+/// against: `system_user` became reserved in PostgreSQL 16, and `xmax`
+/// is a system column the review's list did not spell out.
 pub const RESERVED_WORDS: &[&str] = &[
     "abort",
+    "action",
     "add",
+    "after",
     "all",
     "alter",
+    "always",
+    "analyse",
+    "analyze",
     "and",
+    "any",
+    "array",
     "as",
     "asc",
+    "asymmetric",
+    "attach",
+    "authorization",
+    "autoincrement",
+    "before",
+    "begin",
     "between",
+    "binary",
+    "both",
     "by",
+    "cascade",
     "case",
     "cast",
     "check",
+    "cmax",
+    "cmin",
     "collate",
+    "collation",
     "column",
     "commit",
+    "concurrently",
+    "conflict",
     "constraint",
     "create",
     "cross",
+    "ctid",
+    "current",
+    "current_catalog",
+    "current_date",
+    "current_role",
+    "current_schema",
+    "current_time",
+    "current_timestamp",
+    "current_user",
+    "database",
     "default",
+    "deferrable",
+    "deferred",
     "delete",
     "desc",
+    "detach",
     "distinct",
+    "do",
     "drop",
+    "each",
     "else",
     "end",
     "escape",
     "except",
+    "exclude",
+    "exclusive",
     "exists",
+    "explain",
+    "fail",
     "false",
+    "fetch",
+    "filter",
+    "first",
+    "following",
+    "for",
     "foreign",
+    "freeze",
     "from",
     "full",
+    "generated",
+    "glob",
+    "grant",
     "group",
+    "groups",
     "having",
+    "if",
+    "ignore",
+    "ilike",
+    "immediate",
     "in",
     "index",
+    "indexed",
+    "initially",
     "inner",
     "insert",
+    "instead",
     "intersect",
     "into",
     "is",
+    "isnull",
     "join",
+    "key",
+    "last",
+    "lateral",
+    "leading",
     "left",
     "like",
     "limit",
+    "localtime",
+    "localtimestamp",
+    "match",
+    "materialized",
     "natural",
+    "no",
     "not",
+    "nothing",
+    "notnull",
     "null",
+    "nulls",
     "of",
     "offset",
     "on",
+    "only",
     "or",
     "order",
+    "others",
     "outer",
+    "over",
+    "overlaps",
+    "partition",
+    "placing",
+    "plan",
+    "pragma",
+    "preceding",
     "primary",
+    "query",
+    "raise",
+    "range",
+    "recursive",
     "references",
+    "regexp",
+    "reindex",
+    "release",
+    "rename",
+    "replace",
+    "restrict",
     "returning",
     "right",
     "rollback",
+    "row",
+    "rows",
+    "savepoint",
     "select",
+    "session_user",
     "set",
+    "similar",
+    "some",
+    "symmetric",
+    "system_user",
     "table",
+    "tableoid",
+    "tablesample",
+    "temp",
+    "temporary",
     "then",
+    "ties",
     "to",
+    "trailing",
     "transaction",
+    "trigger",
     "true",
+    "unbounded",
     "union",
     "unique",
     "update",
     "user",
     "using",
+    "vacuum",
     "values",
+    "variadic",
+    "verbose",
     "view",
+    "virtual",
     "when",
     "where",
+    "window",
     "with",
+    "without",
+    "xmax",
+    "xmin",
 ];
 
 /// A text field's declared format. The row validator asserts these; JSON
@@ -367,10 +502,13 @@ impl Schema {
     ///
     /// The rules: identifiers are lowercase snake-case, not reserved and
     /// not card-shaped; field and table names do not repeat; the primary
-    /// key names declared fields; a foreign key points at a declared
-    /// table with a single-column primary key of a matching kind; an enum
-    /// declares at least one member; bounds are the right way round; a
-    /// default matches its field's kind.
+    /// key names declared fields and every one of them is required or
+    /// defaulted; a foreign key points at a declared table with a
+    /// single-column primary key of a matching kind, and the references
+    /// hold no cycle; an enum declares at least one member; bounds are
+    /// the right way round; a default matches its field's kind; and no
+    /// two generated index names collide with each other or with a
+    /// declared table name.
     ///
     /// # Errors
     ///
@@ -388,7 +526,98 @@ impl Schema {
             self.validate_table(&mut errors, table);
         }
 
+        self.validate_index_names(&mut errors);
+        self.validate_no_reference_cycle(&mut errors);
+
         errors.into_result()
+    }
+
+    /// Index names live in the same namespace as table names, in both
+    /// engines, and that namespace is the whole schema rather than one
+    /// table. `{table}_{field}_idx` is ambiguous because an underscore is
+    /// legal in both halves, so `post.author_id` and `post_author.id`
+    /// generate the same name. `CREATE INDEX IF NOT EXISTS` then leaves
+    /// the second one silently absent, and a name that lands on a table
+    /// loses the table instead.
+    fn validate_index_names(&self, errors: &mut ConfigError) {
+        let mut generated: Vec<(String, String, String)> = Vec::new();
+        for table in &self.tables {
+            for field in &table.fields {
+                if !crate::ddl::needs_own_index(table, field) {
+                    continue;
+                }
+                let index = crate::ddl::index_name(&table.name, &field.name);
+                if let Some((_, first_table, first_field)) =
+                    generated.iter().find(|(name, _, _)| name == &index)
+                {
+                    errors.push(format!(
+                        "table `{}`, field `{}`: the generated index name `{index}` is already \
+                         generated by table `{first_table}`, field `{first_field}`",
+                        table.name, field.name
+                    ));
+                }
+                if self.table(&index).is_some() {
+                    errors.push(format!(
+                        "table `{}`, field `{}`: the generated index name `{index}` is also a \
+                         declared table name, and both engines keep indexes and tables in one \
+                         namespace",
+                        table.name, field.name
+                    ));
+                }
+                generated.push((index, table.name.clone(), field.name.clone()));
+            }
+        }
+    }
+
+    /// A foreign key makes the referenced table a prerequisite, so a
+    /// cycle has no creation order at all. Reported here rather than left
+    /// for the renderer, because the script it would produce runs on
+    /// neither engine.
+    fn validate_no_reference_cycle(&self, errors: &mut ConfigError) {
+        let (_, cyclic) = crate::ddl::creation_order(self);
+        let Some(first) = cyclic.first() else {
+            return;
+        };
+        let names: Vec<&str> = cyclic.iter().map(|table| table.name.as_str()).collect();
+        let path = self.walk_cycle(&first.name, &names);
+        errors.push(format!(
+            "table `{}`: the foreign keys form a reference cycle, {}, so there is no order that \
+             creates a table after the tables it references",
+            first.name,
+            path.join(" -> ")
+        ));
+    }
+
+    /// Follows unresolved references from `start`, taking the
+    /// alphabetically first each time, until a name repeats. Every table
+    /// in `unresolved` has at least one unresolved reference, which is
+    /// what left it there, so the walk always closes.
+    fn walk_cycle(&self, start: &str, unresolved: &[&str]) -> Vec<String> {
+        let mut path: Vec<&str> = Vec::new();
+        let mut current = start;
+        loop {
+            if let Some(at) = path.iter().position(|name| *name == current) {
+                let mut cycle: Vec<String> =
+                    path[at..].iter().map(|&name| name.to_owned()).collect();
+                cycle.push(current.to_owned());
+                return cycle;
+            }
+            path.push(current);
+            let next = self.table(current).and_then(|table| {
+                table
+                    .foreign_keys
+                    .iter()
+                    .map(|key| key.references.as_str())
+                    .filter(|name| unresolved.contains(name))
+                    .min()
+            });
+            match next {
+                Some(next) => current = next,
+                // Unreachable while `unresolved` comes from the sort, and
+                // a partial path still names the table that is stuck.
+                None => return path.iter().map(|&name| name.to_owned()).collect(),
+            }
+        }
     }
 
     fn validate_table(&self, errors: &mut ConfigError, table: &TableDef) {
@@ -464,11 +693,23 @@ fn validate_primary_key(errors: &mut ConfigError, table: &TableDef) {
     }
     let mut seen: Vec<&String> = Vec::new();
     for key in &table.primary_key {
-        if table.field(key).is_none() {
-            errors.push(format!(
+        match table.field(key) {
+            None => errors.push(format!(
                 "table `{}`: primary key names `{key}`, which is not a declared field",
                 table.name
-            ));
+            )),
+            // The rendered column is `NOT NULL` whether or not the field
+            // says `required`, so a primary key that is neither required
+            // nor defaulted is a column the row validator and the JSON
+            // Schema would both let through and the insert would then
+            // reject. Rejecting the declaration is what keeps the three
+            // from ever disagreeing.
+            Some(field) if !field.required && field.default.is_none() => errors.push(format!(
+                "table `{}`: primary key `{key}` must be required or have a default, because a \
+                 primary-key column is NOT NULL",
+                table.name
+            )),
+            Some(_) => {}
         }
         if seen.contains(&key) {
             errors.push(format!(

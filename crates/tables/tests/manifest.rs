@@ -125,6 +125,7 @@ fn every_kind_parses() {
 [[tables.everything.fields]]
 name = "id"
 kind = "uuid"
+required = true
 
 [[tables.everything.fields]]
 name = "label"

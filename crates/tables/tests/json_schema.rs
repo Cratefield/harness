@@ -129,6 +129,7 @@ fn an_optional_enum_lists_the_null_it_accepts() {
 [[tables.post.fields]]
 name = "id"
 kind = "text"
+required = true
 [[tables.post.fields]]
 name = "status"
 kind = "enum"
@@ -162,6 +163,7 @@ fn nothing_the_database_owns_leaks_into_the_view() {
 [[tables.post.fields]]
 name = "id"
 kind = "text"
+required = true
 [[tables.post.fields]]
 name = "slug"
 kind = "text"

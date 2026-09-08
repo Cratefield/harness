@@ -57,7 +57,7 @@
     "bounded": {
       "primary_key": "id",
       "fields": [
-        { "name": "id", "kind": "text" },
+        { "name": "id", "kind": "text", "required": true },
         { "name": "short", "kind": "text", "min_len": 1, "max_len": 3 },
         { "name": "count", "kind": "integer", "min": 0, "max": 10 },
         { "name": "ratio", "kind": "real", "min": 0.0, "max": 1.0 }
@@ -66,7 +66,7 @@
     "typed": {
       "primary_key": "id",
       "fields": [
-        { "name": "id", "kind": "text" },
+        { "name": "id", "kind": "text", "required": true },
         { "name": "count", "kind": "integer" },
         { "name": "ratio", "kind": "real" },
         { "name": "live", "kind": "boolean" },

@@ -54,16 +54,35 @@ schema.validate().expect("the declaration itself is valid");
   harness keeps (`harness_`, `sqlite_`, `pg_`, `cf_`), and is not shaped
   like card data;
 - no table name repeats, and no field name repeats inside a table;
-- the primary key is non-empty and names declared fields;
+- the primary key is non-empty, names declared fields, and every one of
+  those fields is `required` or has a default;
 - a foreign key names a declared field and points at a declared table
-  whose primary key is a single column of the same kind;
+  whose primary key is a single column of the same kind, and the
+  references across the schema hold no cycle;
+- no two generated index names collide with each other, and none equals a
+  declared table name;
 - an enum declares at least one value, with no duplicates;
 - bounds are the right way round, and a default is a value its own field
   would accept.
 
 Identifiers are rejected rather than quoted. That is deliberate: it is
 what lets the generated DDL leave every identifier unquoted, the way the
-hand-written module migrations do.
+hand-written module migrations do. `RESERVED_WORDS` is PostgreSQL's
+`reserved` and `type_func_name_keyword` categories, SQLite's keyword
+list, and the Postgres system column names, merged and sorted.
+
+A primary-key column is `NOT NULL` in the rendered DDL whether or not the
+field says `required`, so a primary key that is neither required nor
+defaulted would be a row `validate_row` and the JSON Schema accept and
+the insert then rejects. Rejecting the declaration is what keeps the
+three from disagreeing.
+
+Index names and table names share one namespace, and it is the whole
+schema rather than one table. `{table}_{field}_idx` is ambiguous because
+an underscore is legal in both halves, so `post.author_id` and
+`post_author.id` generate the same name; `CREATE INDEX IF NOT EXISTS`
+would leave the second index silently absent, and a generated name
+landing on a declared table loses the table instead.
 
 ## The manifest
 
@@ -228,8 +247,16 @@ CREATE INDEX IF NOT EXISTS post_created_at_idx ON post (created_at);
 NOT EXISTS` are rendered, never `DROP` and never `ALTER`. The diff
 between two versions of a definition is a separate problem.
 
+**Ordered by dependency.** Tables are topologically sorted on the
+foreign-key graph, so a table is always created after the tables it
+references. Postgres refuses an inline `REFERENCES` to a table that does
+not exist yet, and plain name order puts `line_item` before `product`.
+Among the tables whose references are already created, the alphabetically
+first goes next, which makes the order the lexicographically smallest one
+that works.
+
 **Deterministic.** The same definition always renders byte-identical SQL,
-and a test asserts it: tables in name order, columns in declaration
+and a test asserts it: tables in creation order, columns in declaration
 order, every clause on a column in a fixed position, and no hash map
 anywhere in the path.
 
@@ -391,6 +418,29 @@ Does not carry over: `format` is an annotation in JSON Schema and an
 assertion here; a validator that distinguishes null from a missing key
 will still disagree about a required field set to `null`; and
 uniqueness, foreign keys, indexes and defaults do not appear at all.
+
+## Known gaps
+
+Reproduced in review against SQLite 3.51.0 and PostgreSQL 15.13, and
+deliberately left for a follow-up rather than fixed here:
+
+- A JSON number above `i64::MAX` is accepted and silently truncated, both
+  by the row validator and by a rendered `DEFAULT`.
+- `corpus/rows.json` has no case for a bound above 2^53, which is the one
+  drift class a TypeScript client cannot reproduce.
+- A declared `email` field is not normalised before storage, so `unique`
+  on one means something different here than it does in the modules.
+- A control character inside an enum member is escaped as itself and
+  produces DDL neither engine can parse.
+- The unknown-key error echoes a caller-supplied key into the problem
+  `detail` with no length bound.
+- The JSON Schema view lists properties in declaration order only because
+  `schemars` pulls in `serde_json/preserve_order`, which this workspace
+  happens to unify in; the crate does not require it itself.
+- Three dialect divergences are unstated: an integer primary key is a
+  rowid alias in SQLite, a boolean column is unconstrained there because
+  it is stored as `INTEGER`, and foreign keys are inert in SQLite without
+  `PRAGMA foreign_keys=ON`, which nothing in the repository sets.
 
 ## Not built here
 
