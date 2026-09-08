@@ -63,10 +63,25 @@ impl Module for Console {
     fn migrations(&self) -> Migrations {
         // The console owns the tables its domain crates use: the allowlist +
         // audit (access), accounts + ventures, and provisioning progress.
+        // Re-id the three sub-schemas so they are unique WITHIN this module:
+        // each crate's own MIGRATION is id "0001", which would collide under
+        // one module and apply only one table set. Same SQL, distinct ids.
         const MIGRATIONS: [SqlMigration; 3] = [
-            cratefield_access::MIGRATION,
-            cratefield_accounts::MIGRATION,
-            cratefield_provisioning::MIGRATION,
+            SqlMigration {
+                id: "0001",
+                name: "access",
+                sql: cratefield_access::MIGRATION.sql,
+            },
+            SqlMigration {
+                id: "0002",
+                name: "accounts",
+                sql: cratefield_accounts::MIGRATION.sql,
+            },
+            SqlMigration {
+                id: "0003",
+                name: "provisioning",
+                sql: cratefield_provisioning::MIGRATION.sql,
+            },
         ];
         Migrations::sqlite(&MIGRATIONS)
     }
