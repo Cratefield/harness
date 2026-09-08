@@ -1,0 +1,108 @@
+# Cratefield control plane — architecture
+
+The managed service: a customer signs in (invite-only), picks modules,
+connects Google SSO, and gets a running harness venture on Cratefield's
+Cloudflare. This document records the decisions taken 2026-09-07
+(control-plane #2); it is the ADR the epic asked for.
+
+## 1. The control plane is a harness venture
+
+Decided. "The same Rust backend as we do now" is literal: the control
+plane is one more Worker + D1 built on `Cratefield/harness`, and it
+dogfoods what it provisions.
+
+- **Auth and the whitelist** ride on the `auth-*` crates (Google SSO).
+- **Customer credentials** — the Google client secret, module keys — are
+  secrets in that account's tenant store (`factory0-secrets`): encrypted,
+  AAD-bound, audited, rotatable. This is why the secrets layer exists.
+- **Its own admin and wizard** are served through the harness UI surface
+  (`factory0-ui`): `maud` pages, cf.js, the `cf-*` styling contract.
+- **A provisioned venture is a function of its module set** (harness ADR
+  0009): choosing modules chooses the artifact, the schema and the deploy.
+
+**The cost, stated plainly.** The control plane ships on the same runtime
+it provisions, so a control-plane bug can land on the platform that runs
+every customer. The harness pin is a deliberate `rev`, not a floating
+branch, and a bump is a real change.
+
+**Layout.** A Cargo workspace: `crates/venture` is the wasm entry and
+composition root; the logic lives in module crates (`accounts`, `catalog`,
+`connections`, `provisioning`, `cms`) added as the children land. The
+harness crates are git dependencies pinned to a revision — nothing is on
+crates.io yet.
+
+## 2. The GUI is server-rendered Rust
+
+Decided: **try Rust.** The wizard is `maud` pages served by control-plane
+modules, with cf.js for the interactive steps, dogfooding the harness UI
+rather than standing up a second toolchain. The multi-step OAuth wizard is
+the part that stresses this; where a step genuinely cannot be
+server-rendered (an OAuth popup), the fallback is a **scoped island** of
+custom JavaScript on that page only, named where it happens, never a
+whole SPA. The **Advanced** disclosure reveals in place, on the same page.
+
+## 3. Cloudflare is the platform, hosted by default
+
+Decided: **we use Cloudflare for the SaaS.** Customer ventures deploy into
+**Cratefield's own** Cloudflare account. The customer connects no
+Cloudflare account in the default path; *bring your own account* is a
+later Advanced option, not v1.
+
+**The hazard, recorded (harness#67).** A platform `Workers Scripts: Edit`
+credential reaches every customer's script in the account. So isolation
+rests on **one database and one secrets store per tenant** (harness ADR
+0008), not on the deploy credential — and that credential is the
+platform's single most sensitive secret, held only where the provisioning
+engine runs.
+
+**The plan.** `$5` Workers Paid through the whitelist phase (caps ~100
+scripts); **Workers for Platforms** (`$25`, 1,000 scripts, dispatch-
+namespace isolation) before that wall. Free-tier economics are #12.
+
+## 4. The deployment credential model, v1 (resolves harness#67)
+
+Decided 2026-09-07 (Nick: *"as easy as possible"*). harness#67 asks how a
+**customer-supplied** module is deployed without a customer holding an
+account-scoped `Workers Scripts: Edit` token that could overwrite every other
+customer's Worker. The simplest resolution is to remove the premise for v1:
+
+- **v1 hosts only first-party catalog modules.** Every module a customer can
+  select is a harness module we wrote and vetted. There is no customer-supplied
+  code, so **no customer ever holds a deploy credential** — the hazard in
+  harness#67 does not arise on the default path.
+- **The control plane deploys, with one credential it alone holds.** A single
+  platform Cloudflare token lives only where the provisioning engine runs
+  (a control-plane secret), never in a customer's hands, a rendered page, a
+  log, or an error. It is the platform's most-guarded secret.
+- **Isolation stays the database boundary**, not the deploy credential: one D1
+  and one secrets store per tenant (ADR 0008), exactly as section 3 says.
+- **Deployment primitive:** a plain Worker + D1 per venture through the
+  Cloudflare API on the `$5` plan is enough for the whitelist phase. **Workers
+  for Platforms** dispatch namespaces are the pre-scale upgrade (before the
+  ~100-script wall), not a v1 requirement — an operational change behind the
+  `Deployer` port, invisible to the rest of the engine.
+- **Deferred:** customer-supplied / custom modules, where harness#67's three
+  candidates (WfP customer upload, control-plane upload, one-account-per-
+  customer) actually bite. That decision is taken when custom modules land,
+  not before, and it is reversible — nothing here forecloses it.
+
+**Consequence for the site's wording.** "You pick modules and we run it" is
+true today; "you write your own module and deploy it" is a later, separately
+designed capability. The site must not claim the second while only the first
+ships (COPY.md discipline).
+
+## 5. Provisioning is a resumable state machine (issue #7)
+
+The engine turns a module set into a live venture through a fixed sequence —
+**artifact, database, schema, secrets, route, health** — behind a `Deployer`
+port. Each completed step is recorded against the venture, so a failure names
+its step, leaves the venture `provisioning` and retryable, and a re-run resumes
+from where it stopped rather than repeating work. `plan()` lists the steps
+without touching Cloudflare. The port is faked in tests; the live Cloudflare
+adapter (the one that needs the platform credential and does real deploys) is
+the seam that stays out of the host-tested core.
+
+## What answers today
+
+`crates/venture` builds to wasm and serves the harness's `/__health`,
+`/__ready` and `/__surface`. Everything else is a child of the epic.

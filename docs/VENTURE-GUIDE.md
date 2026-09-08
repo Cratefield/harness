@@ -2,9 +2,9 @@
 
 Every Factory Zero venture gets its own backend: its own Worker, its own
 D1 database, its own secrets, its own domain. This guide is the ordered
-path from [venture-backend-template](https://github.com/Factory-Zero/venture-backend-template)
-to a production API on `api.<your-domain>`. It mirrors the template's
-README checklist and expands each step with the exact commands.
+path from [`ventures/_template`](../ventures/_template) to a production
+API on `api.<your-domain>`. It mirrors the template's README checklist and
+expands each step with the exact commands.
 
 > **Which steps need a human.** Everything that touches a Cloudflare
 > dashboard, a Resend dashboard, DNS, or a production secret is a human
@@ -34,9 +34,9 @@ domain for `example.factory0.dev`.
 
 ## 1. Use the template
 
-**Human.** Click **Use this template** on
-[venture-backend-template](https://github.com/Factory-Zero/venture-backend-template)
-and name the new repo `<venture>-backend`.
+**Human.** Copy [`ventures/_template`](../ventures/_template) to
+`ventures/<venture>/` and add it to the workspace `members` in the root
+`Cargo.toml` (ADR [0013](adr/0013-one-repository.md)).
 
 You get this shape (template README):
 

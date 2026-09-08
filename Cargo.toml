@@ -1,7 +1,18 @@
 [workspace]
 resolver = "3"
-members = ["crates/*", "examples/*"]
-exclude = ["crates/cli-acceptance/fixture"]
+members = ["crates/*", "examples/*", "ventures/cratefield-waitlist"]
+# `crates/cli-acceptance/fixture` is a fixture, not a package. The three
+# venture-side `fz` binaries are excluded for the reason their own manifests
+# give: they are native builds that link a venture's harness so
+# `fz migrations collect` sees its modules, and their native-only
+# dependencies (clap, rusqlite) must never reach a wasm build. Each was
+# already excluded in its own repository before the consolidation.
+exclude = [
+    "crates/cli-acceptance/fixture",
+    "crates/auth-fz",
+    "crates/control-plane-fz",
+    "crates/control-plane-dev",
+]
 
 [workspace.package]
 version = "0.1.1"
@@ -169,6 +180,73 @@ tokio = { version = "1.53.1", default-features = false, features = [
 insta = "1.48.0"
 pollster = { version = "0.4", features = ["macro"] }
 futures-channel = "0.3.34"
+
+# --- Brought in with Factory-Zero/auth (ADR 0013). These are the login
+# stack's own dependencies; nothing else in the workspace uses them.
+# `p256` is deliberately absent: auth is on 0.14 and `cratefield-adapter-apns`
+# on 0.13, so the four auth crates pin it directly rather than force a
+# major bump on a published crate (issue: unify the two).
+# Apple posts its authorization response as a form body (#16). axum parses
+# one with this crate; the module parses it directly so a malformed body
+# gets the module's own answer rather than axum's rejection text.
+serde_urlencoded = "0.7.1"
+
+# WebAuthn (ADR 0100): wire types plus pure-Rust CBOR/COSE and signature
+# crates, because upstream webauthn-rs pulls OpenSSL and cannot reach wasm32.
+# These are the pins the wasm-auth spike proved on wasm32.
+webauthn-rs-proto = { version = "0.5.5", default-features = false }
+
+ciborium = { version = "0.2.2", default-features = false, features = ["std"] }
+
+coset = { version = "0.4.2", default-features = false, features = ["std"] }
+
+url = { version = "2.5.7", default-features = false }
+
+# rsa 0.10 is still a release candidate, so the stable 0.9 line it is. Its
+# own `sha2` re-export is used for RS256 so the digest types stay consistent
+# inside rsa's tree, which pins sha2 0.10 while the workspace is on 0.11.
+rsa = { version = "0.9", default-features = false, features = ["sha2"] }
+
+ed25519-dalek = { version = "2", default-features = false, features = [
+    "alloc",
+] }
+
+rand_core = { version = "0.6", default-features = false }
+
+# OIDC (ADR 0100 Q3): openidconnect and oauth2 build to wasm32 with default
+# features off — no reqwest, no OpenSSL. These are the pins the wasm-auth
+# spike validated. `chrono` comes with them as an API type; its `clock`
+# feature is deliberately OFF, because `Utc::now()` panics on wasm32 and
+# modules read the wall clock through the `Clock` port anyway.
+#
+# `accept-string-booleans` exists for exactly one provider: Apple documents
+# `email_verified` as "a String or Boolean" and sends `"true"`. Without it
+# every real Apple sign-in fails ID-token verification with an "invalid
+# type: string" that no fake provider reproduces. Pure serde, wasm-safe.
+openidconnect = { version = "4.0.1", default-features = false, features = [
+    "accept-string-booleans",
+] }
+
+chrono = { version = "0.4", default-features = false, features = ["alloc"] }
+
+# Facebook Login is OAuth 2.0 without OpenID Connect: no ID token, no
+# discovery document, and the profile comes from a Graph call. So Meta
+# (#17) uses `oauth2` directly, which is the crate `openidconnect` is
+# built on and is already in the tree.
+oauth2 = { version = "5.0.0", default-features = false }
+
+# Auth cryptography: argon2id for client secrets (ADR 0100 parameters,
+# default features off — no OpenSSL, wasm32-safe, same pin as the spike);
+# base64ct for cookie/secret encoding (PHC-compatible, constant-time);
+# p256 for ES256 signing and JWK parsing (ADR 0100/0101 stack: `ecdsa`
+# gives deterministic RFC 6979 signing, no RNG, no OpenSSL — the pin the
+# wasm-auth spike validated on wasm32).
+argon2 = { version = "0.6.0", default-features = false, features = [
+    "alloc",
+    "password-hash",
+] }
+
+base64ct = { version = "1.8.3", default-features = false, features = ["alloc"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

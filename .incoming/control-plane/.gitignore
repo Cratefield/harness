@@ -1,7 +1,0 @@
-/target
-/build
-**/build/worker
-.dev.vars
-node_modules
-.DS_Store
-target/

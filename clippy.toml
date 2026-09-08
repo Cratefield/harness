@@ -17,3 +17,24 @@ disallowed-macros = [
 disallowed-types = [
     { path = "std::sync::Mutex", reason = "shared mutable state; request state travels in Scope (ADR 0007)" },
 ]
+
+# Proper nouns, not identifiers. Without this, clippy::doc_markdown (pedantic)
+# asks for backticks around every mention of WebAuthn or LinkedIn in prose.
+# The union of the lists the auth service and the LinkedIn module each kept
+# in their own repositories before the consolidation (ADR 0013); `".."` keeps
+# clippy's own defaults alongside them.
+doc-valid-idents = [
+    "WebAuthn",
+    "OpenSSL",
+    "OAuth",
+    "OpenID",
+    "PKCE",
+    "EdDSA",
+    "RustCrypto",
+    "LinkedIn",
+    "RestLi",
+    "XChaCha",
+    "DevTestCo",
+    "PostgreSQL",
+    "..",
+]

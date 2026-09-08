@@ -21,4 +21,4 @@ let module = Hello::new().max_name_len(64);
 - Passes the `cratefield-testing` conformance suite.
 
 This crate is an example (`publish = false`); real modules live in
-`crates/module-*` here or as `fz-*` crates in `harness-private`.
+`crates/module-*` here; private ones are `fz-*` crates in the same directory, kept off crates.io with `publish = false` (ADR 0013).

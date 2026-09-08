@@ -2,10 +2,11 @@
 #
 # Runs the `cratefield-testing` conformance kit for every module crate in
 # the CALLING repository. This repo's CI calls it via
-# `uses: ./.github/workflows/conformance.yml`; `harness-private` calls it
-# across repos with
-# `uses: Cratefield/harness/.github/workflows/conformance.yml@<ref>`,
-# so private modules pass the same suite as public ones (ADR 0005).
+# `uses: ./.github/workflows/conformance.yml`, which now covers every
+# module in the workspace, public and private alike (ADR 0013). It stays
+# a reusable workflow so a module built out of tree can run the identical
+# suite with
+# `uses: Cratefield/harness/.github/workflows/conformance.yml@<ref>`.
 #
 # Expected layout (same as this repo): module crates live in directories
 # matching `module-glob` (default `crates/module-*`), each with a

@@ -1,0 +1,34 @@
+[package]
+name = "cratefield-control-plane"
+description = "The Cratefield control-plane venture: the managed service, built on the harness it provisions"
+publish = false
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[lints]
+workspace = true
+
+[dependencies]
+cratefield-core = { workspace = true }
+cratefield-runtime-cloudflare = { workspace = true }
+cratefield-ui = { workspace = true }
+cratefield-secrets = { workspace = true }
+cratefield-kms = { workspace = true }
+cratefield-console = { path = "../control-plane-console" }
+axum = { workspace = true }
+http = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sea-query = { workspace = true }
+worker = { workspace = true }
+tracing = { workspace = true }
+time = { workspace = true }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+getrandom = { workspace = true }
