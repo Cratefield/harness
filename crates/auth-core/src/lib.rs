@@ -134,6 +134,25 @@ const MIGRATION_TOKENS: SqlMigration = SqlMigration {
     sql: include_str!("../migrations/sqlite/0003_token_issuing.sql"),
 };
 
+/// The Postgres form of the init migration: the same DDL with `BYTEA`
+/// where SQLite has `BLOB` (harness issue #18, ADR 0004). The `id` is
+/// identical to the sqlite one so the tracking key `<module>/<id>` — and
+/// with it the id-stability contract in the migration runner — holds on
+/// both dialects.
+const MIGRATION_INIT_POSTGRES: SqlMigration = SqlMigration {
+    id: "0001",
+    name: "init",
+    sql: include_str!("../migrations/postgres/0001_init.sql"),
+};
+
+/// The Postgres form of the token-issuing migration: the rebuild
+/// applies as written; only the byte column type differs.
+const MIGRATION_TOKENS_POSTGRES: SqlMigration = SqlMigration {
+    id: "0003",
+    name: "token_issuing",
+    sql: include_str!("../migrations/postgres/0003_token_issuing.sql"),
+};
+
 /// Router state: the module context and the resolved rotation overlap.
 pub(crate) struct ModuleState {
     pub(crate) ctx: Arc<ModuleContext>,
@@ -228,9 +247,21 @@ impl Module for AuthCore {
             MIGRATION_DELETION_JOBS,
             MIGRATION_PASSWORD_LOCKOUT,
         ];
+        // The runner selects one set wholesale (harness issue #18), so the
+        // Postgres list carries all six: the two whose SQL truly differs
+        // (BYTEA for the byte columns) and the four portable ones reused
+        // from the sqlite files unchanged (ADR 0004).
+        const MIGRATIONS_POSTGRES: [SqlMigration; 6] = [
+            MIGRATION_INIT_POSTGRES,
+            MIGRATION_ROTATION,
+            MIGRATION_TOKENS_POSTGRES,
+            MIGRATION_SUSPECT,
+            MIGRATION_DELETION_JOBS,
+            MIGRATION_PASSWORD_LOCKOUT,
+        ];
         cratefield_core::Migrations {
             sqlite: &MIGRATIONS,
-            postgres: &[],
+            postgres: &MIGRATIONS_POSTGRES,
         }
     }
 
@@ -357,7 +388,28 @@ mod tests {
         assert_eq!(migrations.sqlite[4].name, "deletion_jobs");
         assert_eq!(migrations.sqlite[5].id, "0006");
         assert_eq!(migrations.sqlite[5].name, "password_lockout");
-        assert!(migrations.postgres.is_empty());
+        // The Postgres set is selected wholesale (harness issue #18), so it
+        // must mirror the sqlite one id-for-id: only the two files whose SQL
+        // truly differs carry BYTEA overrides, the rest are the same const.
+        assert_eq!(migrations.postgres.len(), 6);
+        for (pg, sqlite) in migrations.postgres.iter().zip(migrations.sqlite) {
+            assert_eq!(pg.id, sqlite.id);
+            assert_eq!(pg.name, sqlite.name);
+        }
+        for migration in migrations.postgres {
+            // The lint strips comments and literals: the override files
+            // explain themselves with the word it flags, the DDL must not.
+            assert!(cratefield_core::lint_portable_sql(migration.sql).is_empty());
+        }
+        assert_eq!(
+            migrations.postgres[0].sql,
+            include_str!("../migrations/postgres/0001_init.sql")
+        );
+        assert_eq!(
+            migrations.postgres[2].sql,
+            include_str!("../migrations/postgres/0003_token_issuing.sql")
+        );
+        assert_eq!(migrations.postgres[1].sql, migrations.sqlite[1].sql);
         assert_eq!(
             migrations.sqlite[0].sql,
             include_str!("../migrations/sqlite/0001_init.sql")

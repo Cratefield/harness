@@ -1,10 +1,45 @@
 # cargo deny configuration (issue #1).
-# Licenses: MIT / Apache-2.0 / BSD / ISC / Unicode allowlist, per the brief.
+# Licenses: MIT / Apache-2.0 / BSD / ISC / Unicode allowlist, per the brief;
+# later additions (Zlib, CDLA-Permissive-2.0, BSL-1.0, MPL-2.0) carry inline
+# justifications below.
 # Advisories: vulnerabilities deny (cargo-deny v2 field layout).
 
 [advisories]
 version = 2
 yanked = "deny"
+# RUSTSEC-2023-0071 (rsa, "Marvin Attack", CVE-2023-49092) — ACCEPTED 2026-09-09,
+# review-by 2026-12-01 (or immediately if any module starts RSA private-key work).
+# What is accepted: the `rsa` crate's PKCS#1 v1.5 *private-key* ops (decrypt/sign)
+# leak timing (and Ok/Err) information usable for key recovery; no patch exists.
+# 0.9.10 is the newest STABLE release (crates.io, 2026-09); the fix (implicit
+# rejection #680, default-path blinding #702, RustCrypto/RSA#626) is unreleased
+# (0.10.0-rc.18) and even rc.18 still carries the behavioral oracle. No upgrade path.
+# Why it is not exploitable HERE — this workspace performs no RSA private-key
+# operation on any attacker-reachable path (verified by code reading, PR #166):
+#   * auth-passkeys (prod dep): verify-only — `pkcs1v15::VerifyingKey` built from
+#     the authenticator's PUBLIC key (src/webauthn.rs:489-511,599-606). The RP
+#     holds no keypair; the private key lives on the user's hardware key.
+#   * auth-oidc (prod dep via openidconnect 4.0.1): rsa is used in exactly one
+#     place in that crate, `verify_rsa_signature` (core/crypto.rs:73-86) — RS256
+#     ID-token verification against IdP JWKS public keys (handlers.rs:557
+#     `id_token_verifier()`). No JWE/decryption key is ever configured (grep:
+#     zero `decryption_key` references). Apple client-secret signing is ES256 via
+#     `p256` (src/apple.rs:184) — ECDSA, a different crate, outside this advisory.
+#   * crates/kms `unwrap` is XChaCha20Poly1305 (symmetric AEAD), not RSA.
+#   * Public-key verification computes c^e mod n with a public exponent and no
+#     secret input — nothing for a timing channel to leak.
+#   * The (dev) leg is test-only: auth-oidc's rsa is a dev-dependency generating
+#     an EPHEMERAL 2048-bit mock-IdP key per test run (tests/support/provider.rs),
+#     and auth-passkeys' fake authenticator likewise (tests/support/
+#     authenticator.rs). Never compiled into the wasm Worker
+#     (crates/auth-worker: crate-type cdylib on Cloudflare; dev-deps never ship).
+# Scope note: ignore is by advisory id (narrowest cargo-deny form), not by crate —
+# any *other* rsa advisory will still fail. Removal trigger: rsa 0.10.0 stable
+# (track RustCrypto/RSA#647) or dropping RS256/JWKS-RSA support.
+# Decision: recommended by the PR #166 security workstream and SIGNED OFF by the
+# maintainer 2026-09-09, on the evidence above. Re-open this acceptance if any
+# module starts RSA private-key work, or if rsa 0.10.0 stable lands first.
+ignore = ["RUSTSEC-2023-0071"]
 
 [licenses]
 version = 2
@@ -16,6 +51,10 @@ allow = [
     "BSD-3-Clause",
     "ISC",
     "Unicode-3.0",
+    # Kept deliberately: currently unmatched (cargo-deny warns license-not-encountered
+    # since unicode-ident moved to Unicode-3.0), but older 1.0.x unicode-ident and
+    # icu data crates still carry it — removing would only re-error on the next bump.
+    # Non-blocking warning; re-review if it is still unmatched after 2027-01.
     "Unicode-DFS-2016",
     # foldhash (transitive via hashbrown/rusqlite) — OSI approved.
     "Zlib",
@@ -26,6 +65,26 @@ allow = [
     # #19) — the Boost Software License 1.0: OSI-approved, permissive,
     # attribution + license-copy only.
     "BSL-1.0",
+    # MPL-2.0 (webauthn-rs-proto + base64urlsafedata, via factory0-auth-passkeys'
+    # WebAuthn wire types, ADR 0200; PR #166) — FIRST copyleft license accepted by
+    # this project, so the reasoning is recorded. ACCEPTED 2026-09-09, review-by
+    # 2027-03-01. OSI-approved/FSF-free weak FILE-level copyleft: obligations attach
+    # only to modified MPL files, not to a larger work that links them (§3.2). This
+    # workspace links UNMODIFIED crates.io sources — no [patch], no vendored copy, no
+    # fork (verified: registry source in Cargo.lock, no vendor config). Shipping the
+    # compiled wasm Worker triggers no source-disclosure duty beyond pointing at the
+    # upstream repos. Replacement instead of acceptance was evaluated and rejected as
+    # disproportionate: pure-Rust alternatives exist (passkey-auth-rs, kangoufu,
+    # webauthn-kit) but webauthn-rs-proto is the ecosystem-standard wire-type layer
+    # this module's hand-rolled verification (webauthn.rs) is built on and validated
+    # against on wasm32; swapping it to dodge a linked, unmodified, OSI license means
+    # rewriting audited auth code for zero legal gain. webauthn-kit needs `ring`
+    # (native) — disqualified by the same wasm32 constraint as OpenSSL.
+    # Decision: recommended by the PR #166 security workstream and SIGNED OFF by
+    # the maintainer 2026-09-09, as the project's first copyleft acceptance. Any
+    # further copyleft license (LGPL/GPL/AGPL, MPL variants) needs its own
+    # explicit sign-off rather than inheriting this one.
+    "MPL-2.0",
 ]
 
 [bans]

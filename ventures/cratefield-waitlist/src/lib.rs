@@ -9,7 +9,7 @@
 //! reports success, and it sends its confirmation `from` `no-reply@send.
 //! cratefield.com`. When the `RESEND_API_KEY` secret is set, this worker uses
 //! the Resend adapter and double opt-in comes to life; until then it falls
-//! back to [`NoopMailer`], which reports success without sending so the
+//! back to `NoopMailer`, which reports success without sending so the
 //! address is still captured as a pending entry. The key is read from the
 //! Worker `Env` at init — not `std::env`, which is empty on Workers.
 
