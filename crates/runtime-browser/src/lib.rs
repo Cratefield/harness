@@ -1,4 +1,4 @@
-//! `cratefield-runtime-browser` runs a Factory Zero [`Harness`] entirely in a
+//! `cratefield-runtime-browser` runs a Factory Zero [`Harness`](cratefield_core::Harness) entirely in a
 //! browser tab (Fable's "compose" engine): the same modules and axum router
 //! that ship to Cloudflare, over ports backed by browser primitives instead of
 //! Worker bindings.
@@ -12,7 +12,7 @@
 //!
 //! A venture's browser entry is a small `cdylib` that builds a `Harness` with
 //! `.runtime(Browser::new())` and, from a `#[wasm_bindgen]` `handle`, calls
-//! [`serve`]. A Service Worker turns `fetch` of `/api/*` into those calls; the
+//! `serve`. A Service Worker turns `fetch` of `/api/*` into those calls; the
 //! same venture manifest promotes to Cloudflare + D1 with no recompilation.
 //! See `web/` and `crates/runtime-browser-demo` for the worked example.
 //!
@@ -57,10 +57,10 @@ impl Config for BrowserConfig {
     }
 }
 
-/// The browser runtime. Like [`Cloudflare`](cratefield_runtime_cloudflare) it
+/// The browser runtime. Like the `Cloudflare` runtime it
 /// carries adapter instances built from the venture's secrets (`mailer`,
 /// `captcha`); the database, signer, clock, id generator, defer and HTTP
-/// client are resolved from browser primitives at [`Browser::ports`] time.
+/// client are resolved from browser primitives at `Browser::ports` time.
 #[derive(Clone, Default)]
 pub struct Browser {
     config: Arc<BrowserConfig>,

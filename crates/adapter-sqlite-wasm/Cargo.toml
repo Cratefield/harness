@@ -1,4 +1,5 @@
 [package]
+publish = false  # new crate: publish manually first, then wire into the facade
 name = "cratefield-adapter-sqlite-wasm"
 description = "Browser SQLite (sqlite-wasm/OPFS) Database port for the Factory Zero harness"
 readme = "README.md"
