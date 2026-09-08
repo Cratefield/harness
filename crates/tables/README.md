@@ -337,3 +337,71 @@ group loses them.
 Match on the `code`, never on a message: codes are the stable vocabulary,
 messages are prose. The file lists its own vocabulary, and a test fails
 if that list and the crate's codes drift apart.
+
+## The JSON Schema view
+
+`json_schema` renders a table as a JSON Schema (draft 2020-12) object.
+**It is a derived view and never the source.** Nothing here reads a JSON
+Schema back. It exists so an outside tool that speaks JSON Schema can
+describe a declared table, and if the two ever disagree the `TableDef` is
+right.
+
+```rust
+use cratefield_tables::{Schema, json_schema};
+
+#[derive(serde::Deserialize)]
+struct Manifest {
+    tables: Schema,
+}
+
+let manifest: Manifest = toml::from_str(r#"
+[tables.post]
+primary_key = "id"
+
+[[tables.post.fields]]
+name = "id"
+kind = "uuid"
+required = true
+
+[[tables.post.fields]]
+name = "title"
+kind = "text"
+max_len = 200
+required = true
+
+[[tables.post.fields]]
+name = "note"
+kind = "text"
+"#).unwrap();
+
+let view = json_schema(manifest.tables.table("post").unwrap());
+assert_eq!(view["type"], "object");
+assert_eq!(view["required"], serde_json::json!(["id", "title"]));
+assert_eq!(view["additionalProperties"], false);
+// An optional field is nullable, because null and absent are the same here.
+assert_eq!(view["properties"]["note"]["type"], serde_json::json!(["string", "null"]));
+```
+
+Carries over exactly: `minLength` and `maxLength` count Unicode code
+points in JSON Schema too; `type: "integer"` in draft 2020-12 is a number
+with a zero fractional part, the same rule; `additionalProperties: false`
+is the unknown-key rejection; `minimum` and `maximum` are inclusive.
+
+Does not carry over: `format` is an annotation in JSON Schema and an
+assertion here; a validator that distinguishes null from a missing key
+will still disagree about a required field set to `null`; and
+uniqueness, foreign keys, indexes and defaults do not appear at all.
+
+## Not built here
+
+This crate is the schema definition and nothing downstream of it. Each of
+these is a follow-up:
+
+- CRUD route handlers, the `public-read | owner | tenant-members | admin`
+  access vocabulary, and the batched read endpoint.
+- The migration diff between two versions of a definition. Everything
+  here only creates.
+- The generated `@cratefield/client` TypeScript package, and the second
+  run of `corpus/rows.json` against its Zod schemas.
+- Publishing declared tables on `/__surface`, and any control plane or
+  manifest generator wiring.

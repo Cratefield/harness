@@ -322,7 +322,7 @@ fn check_format(text: &str, format: Option<TextFormat>) -> Result<(), ValueError
 
 /// An absolute `http` or `https` URL: a case-insensitive scheme, `://`, a
 /// non-empty authority, and no ASCII whitespace or control character
-/// anywhere. Deliberately narrow — a declared field is a form input, not
+/// anywhere. Deliberately narrow: a declared field is a form input, not
 /// a URL parser test suite.
 #[must_use]
 pub fn is_url(text: &str) -> bool {

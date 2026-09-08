@@ -148,8 +148,8 @@ pub enum FieldKind {
     Real { min: Option<f64>, max: Option<f64> },
     /// `true` or `false`, never `0`, `1` or `"true"`.
     Boolean,
-    /// An RFC 3339 timestamp, stored as ISO-8601 text — the portable
-    /// subset every module migration already uses.
+    /// An RFC 3339 timestamp, stored as ISO-8601 text. That is the
+    /// portable subset every module migration already uses.
     Timestamp,
     /// A hyphenated 8-4-4-4-12 UUID string, stored as text.
     Uuid,
@@ -583,7 +583,7 @@ fn check_identifier(errors: &mut ConfigError, what: &str, name: &str, at: &str) 
     // exactly where it would otherwise appear.
     if let Some(fragment) = cratefield_core::card_data_hit(name) {
         errors.push(format!(
-            "{where_}: `{fragment}` looks like card data — with a normal Stripe integration the \
+            "{where_}: `{fragment}` looks like card data. With a normal Stripe integration the \
              card never reaches a backend, so store only Stripe's identifiers"
         ));
     }
