@@ -1,0 +1,8 @@
+# A content-only venture: the cms module, no mailer needed.
+# `fz build examples/docs-site.toml` generates a Cloudflare venture crate.
+name = "docs-site"
+host = "docs.factory0.dev"
+modules = ["cms"]
+
+[config]
+brand = "Docs"
