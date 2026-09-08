@@ -411,6 +411,7 @@ fn signing_in_while_signed_in_adds_a_provider_rather_than_a_second_account() {
                 ip: None,
                 user_agent: None,
                 presented_cookie: None,
+                presented_session_id: None,
                 amr: &["password"],
             },
         )
@@ -460,6 +461,105 @@ fn signing_in_while_signed_in_adds_a_provider_rather_than_a_second_account() {
             count(&kit, "users"),
             1,
             "adding Apple to an account made a second account"
+        );
+    });
+}
+
+#[test]
+fn the_form_post_callback_revokes_the_session_it_replaces() {
+    // The fixation defence in `issue` revokes the session the browser was
+    // carrying, identifying it by the raw cookie the request presented.
+    // That cookie is `SameSite=Lax`, so it never arrives on Apple's
+    // cross-site POST: for this provider the revoke could not fire at all,
+    // and the superseded row stayed live until it expired (auth #36).
+    //
+    // `/start` IS same-site, so the session id is sealed into the signed
+    // flow there and handed back at the callback. Signing in twice with
+    // Apple, carrying the first session into the second `/start`, is the
+    // path that exercises it.
+    pollster::block_on(async {
+        let kit = apple_kit();
+
+        // First sign-in: creates the account and a session.
+        kit.provider.set_claims(TokenClaims::apple());
+        let first = start_at(&kit, APPLE_START, "").await;
+        let response = post_form_with(
+            &kit,
+            APPLE_CALLBACK,
+            &body("code-1", &first.state),
+            &[("__Host-fz_oidc", &first.flow_cookie)],
+        )
+        .await;
+        assert_eq!(response.status, StatusCode::FOUND, "{}", response.text());
+        let old_value = session_cookie(&response).expect("the first sign-in set a session");
+
+        let old = factory0_auth_core::validate(&*kit.db, &*kit.clock, &old_value)
+            .await
+            .expect("validate runs")
+            .expect("the first session is valid to begin with");
+
+        // Second sign-in. `/start` is same-site, so the session cookie
+        // arrives here and its id is sealed into the flow.
+        kit.provider.set_claims(TokenClaims::apple());
+        let started = {
+            let response = get(&kit, APPLE_START, &[("__Host-fz_session", &old_value)]).await;
+            assert_eq!(response.status, StatusCode::FOUND);
+            let url = response.location().expect("a Location");
+            let parsed = url::Url::parse(&url).expect("a url");
+            let state = parsed
+                .query_pairs()
+                .find(|(key, _)| key == "state")
+                .map(|(_, value)| value.to_string())
+                .expect("a state");
+            let nonce = parsed
+                .query_pairs()
+                .find(|(key, _)| key == "nonce")
+                .map(|(_, value)| value.to_string())
+                .expect("a nonce");
+            kit.provider.set_nonce(&nonce);
+            (
+                response.cookie("__Host-fz_oidc").expect("a flow cookie"),
+                state,
+            )
+        };
+
+        // The callback carries NO session cookie. That is the whole point.
+        let response = post_form_with(
+            &kit,
+            APPLE_CALLBACK,
+            &body("code-2", &started.1),
+            &[("__Host-fz_oidc", &started.0)],
+        )
+        .await;
+        assert_eq!(response.status, StatusCode::FOUND, "{}", response.text());
+        let new_value = session_cookie(&response).expect("the second sign-in set a session");
+        assert_ne!(new_value, old_value, "the same session value came back");
+
+        // The cookie the browser arrived with is now worthless.
+        assert!(
+            factory0_auth_core::validate(&*kit.db, &*kit.clock, &old_value)
+                .await
+                .expect("validate runs")
+                .is_none(),
+            "the session the login replaced is still valid: the fixation revoke did not fire"
+        );
+
+        // Revoked, not merely deleted or expired, and the new one is live.
+        let rows = factory0_auth_core::sessions_by_user(&*kit.db, &old.user_id)
+            .await
+            .expect("sessions read");
+        let superseded = rows
+            .iter()
+            .find(|row| row.id == old.id)
+            .expect("the superseded session row still exists");
+        assert!(
+            superseded.revoked_at.is_some(),
+            "the superseded session row was not marked revoked"
+        );
+        assert!(
+            rows.iter()
+                .any(|row| row.id != old.id && row.revoked_at.is_none()),
+            "the callback issued no live session"
         );
     });
 }

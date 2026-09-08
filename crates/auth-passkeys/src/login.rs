@@ -240,6 +240,9 @@ async fn start_session(
             // Any cookie the login request carried is revoked before the new
             // session exists, which is auth-core's fixation defence.
             presented_cookie: factory0_auth_core::cookie_value(headers).as_deref(),
+            // A same-origin POST from our own page, so the cookie above
+            // arrives and names the session itself (auth #36).
+            presented_session_id: None,
             amr: &amr,
         },
     )

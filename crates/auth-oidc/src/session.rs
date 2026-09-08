@@ -50,6 +50,10 @@ pub(crate) struct Caller<'a> {
     /// The session cookie the request presented, revoked before a new
     /// session exists (auth-core's fixation defence).
     pub presented_cookie: Option<&'a str>,
+    /// The id of that session, sealed into the flow at `/start`. On a
+    /// `form_post` callback the cookie above never arrives, so this is the
+    /// only thing that can name the session being superseded (auth #36).
+    pub presented_session_id: Option<&'a str>,
     pub ip: Option<&'a str>,
     pub user_agent: Option<&'a str>,
 }
@@ -86,6 +90,7 @@ pub(crate) async fn complete(
         &CoreCaller {
             current_user: caller.current_user,
             presented_cookie: caller.presented_cookie,
+            presented_session_id: caller.presented_session_id,
             ip: caller.ip,
             user_agent: caller.user_agent,
         },

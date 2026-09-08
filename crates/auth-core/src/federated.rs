@@ -50,6 +50,9 @@ pub struct Caller<'a> {
     /// The session cookie the request presented, revoked before a new
     /// session exists (the fixation defence in [`issue`]).
     pub presented_cookie: Option<&'a str>,
+    /// The id of that session, for a `form_post` callback where the cookie
+    /// itself cannot arrive. See [`Login::presented_session_id`].
+    pub presented_session_id: Option<&'a str>,
     pub ip: Option<&'a str>,
     pub user_agent: Option<&'a str>,
 }
@@ -200,6 +203,7 @@ pub async fn complete(
             ip: caller.ip,
             user_agent: caller.user_agent,
             presented_cookie: caller.presented_cookie,
+            presented_session_id: caller.presented_session_id,
             amr,
         },
     )

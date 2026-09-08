@@ -521,6 +521,9 @@ async fn spend(
                 .get(header::USER_AGENT)
                 .and_then(|value| value.to_str().ok()),
             presented_cookie: presented.as_deref(),
+            // A top-level GET from the mailed link, so the cookie above
+            // arrives and names the session itself (auth #36).
+            presented_session_id: None,
             amr: &AMR,
         },
     )

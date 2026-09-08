@@ -175,10 +175,24 @@ pub struct Login<'a> {
     pub ip: Option<&'a str>,
     pub user_agent: Option<&'a str>,
     /// The raw cookie the login request presented, if any: the session it
-    /// names is revoked before the new one exists (fixation). `None` on a
-    /// `form_post` callback, where the `SameSite=Lax` cookie does not arrive,
-    /// so the revoke does not fire there (see [`issue`]; auth #36).
+    /// names is revoked before the new one exists (fixation).
     pub presented_cookie: Option<&'a str>,
+    /// The **id** of the session the browser had, for the paths where the
+    /// cookie itself cannot arrive.
+    ///
+    /// On a `form_post` callback the session cookie is `SameSite=Lax` and
+    /// does not come with a cross-site POST, so `presented_cookie` is
+    /// always `None` there and the revoke above could never fire (auth
+    /// #36). The provider modules seal this id into the signed flow at
+    /// `/start`, which *is* same-site, and hand it back here.
+    ///
+    /// It is the id and not the value on purpose: the value is a bearer
+    /// credential, and putting a second copy of it inside another cookie
+    /// widens its exposure for nothing. An id is useless without the row.
+    ///
+    /// Ignored when `presented_cookie` is `Some` — that path already
+    /// identifies the same session, from the stronger evidence.
+    pub presented_session_id: Option<&'a str>,
     /// Authentication-method references (RFC 8176) for this login —
     /// `passkey` methods say `["user","passkey"]`-style values when the
     /// login-method issues wire them (issues #13-#22). Stored as the
@@ -208,19 +222,23 @@ fn audit(action: &str, user_id: &str) {
 /// Issues a session on a successful login: 32 random bytes in the
 /// cookie, only the SHA-256 stored, expiry `now + 30 days`.
 ///
-/// **Fixation defence, and its one blind spot.** A session whose raw
-/// cookie the request presents ([`Login::presented_cookie`]) is revoked
-/// first, so a fixed pre-login value dies here. This does not fire on a
-/// `form_post` callback (Apple): the session cookie is `SameSite=Lax` and
-/// does not arrive on a cross-site POST, so `presented_cookie` is `None`
-/// there. That is not a hole — the cookie is `__Host-` and `HttpOnly`, so
-/// it cannot be planted cross-site, which is the attack the revoke exists
-/// for; the browser has also just overwritten it with the new value. The
-/// only residue is the old server-side row living until it expires. Firing
-/// the revoke on every path needs the session **id** sealed into the flow
-/// at `/start` and a `presented_session_id` on [`Login`]
-/// ([auth #36](https://github.com/Factory-Zero/auth/issues/36)); until then,
-/// do not read this as "always revokes".
+/// **Fixation defence.** The session the browser was carrying is revoked
+/// before the new one exists, so a fixed pre-login value dies here. It is
+/// identified either by the raw cookie the request presented
+/// ([`Login::presented_cookie`]) or, where that cannot arrive, by the id
+/// the caller carried across ([`Login::presented_session_id`]).
+///
+/// The second exists because a `form_post` callback is a cross-site POST
+/// and the session cookie is `SameSite=Lax`, so it is simply not sent: for
+/// Apple and Meta the cookie path can never fire (auth #36). Those modules
+/// seal the session id into their signed flow at `/start`, which is
+/// same-site, and pass it back here.
+///
+/// Revoking is deliberate rather than incidental. The browser overwrites
+/// its own cookie either way, so what this buys is the server-side row not
+/// outliving the login that replaced it — a session listing that tells the
+/// truth, and a revoked row that cannot be resurrected by anyone who
+/// captured the old value earlier.
 ///
 /// # Errors
 ///
@@ -248,10 +266,18 @@ pub async fn issue(
         }
     }
 
-    if let Some(presented) = login.presented_cookie
-        && let Some(old) =
+    // The cookie is the stronger evidence, so it wins where both are
+    // present; the id is the fallback for the paths a cookie cannot reach.
+    let superseded = match login.presented_cookie {
+        Some(presented) => {
             store::session_by_token_hash(db, &sha256_raw(presented.as_bytes())).await?
-    {
+        }
+        None => match login.presented_session_id {
+            Some(id) => store::session_by_id(db, id).await?,
+            None => None,
+        },
+    };
+    if let Some(old) = superseded {
         store::revoke_session(db, &old.id, &iso(clock.now())).await?;
         audit("session.revoke", login.user_id);
     }

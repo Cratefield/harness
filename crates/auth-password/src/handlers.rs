@@ -406,6 +406,9 @@ async fn login(
             ip: ip.as_deref(),
             user_agent,
             presented_cookie: presented.as_deref(),
+            // A same-origin POST from our own form, so the cookie above
+            // arrives and names the session itself (auth #36).
+            presented_session_id: None,
             amr: &AMR,
         },
     )
@@ -615,6 +618,9 @@ async fn change(
                 .and_then(|value| value.to_str().ok()),
             // Already revoked above.
             presented_cookie: None,
+            // A same-origin POST from our own form, so the cookie above
+            // arrives and names the session itself (auth #36).
+            presented_session_id: None,
             amr: &AMR,
         },
     )

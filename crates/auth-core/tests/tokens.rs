@@ -121,6 +121,7 @@ async fn seed_session(
             ip: Some("203.0.113.7"),
             user_agent: Some("Mozilla/5.0 Macintosh Safari/605.1.15"),
             presented_cookie: None,
+            presented_session_id: None,
             amr,
         },
     )
