@@ -1,4 +1,5 @@
 [package]
+publish = false  # new crate: publish manually first, then wire into the facade
 name = "cratefield-manifest"
 description = "The venture manifest and deterministic Rust composition generator for Factory Zero"
 readme = "README.md"

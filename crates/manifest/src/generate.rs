@@ -1,7 +1,7 @@
 //! The deterministic Rust composition generator (issue #138).
 //!
-//! Given a resolved [`ModuleSet`](crate::catalog::ModuleSet) and a
-//! [`VentureManifest`](crate::VentureManifest), emit the source of a
+//! Given a resolved [`ModuleSet`] and a
+//! [`VentureManifest`], emit the source of a
 //! complete Cloudflare venture crate — `Cargo.toml`, `src/lib.rs`,
 //! `src/fz_main.rs`, `wrangler.toml`, and (if present) `seed.sql`. The
 //! output is a pure function of the inputs: the same manifest always

@@ -13,7 +13,7 @@
 //!   wasm-clean canonical home of control-plane's `cratefield_catalog`
 //!   logic; see that module's docs).
 //! - [`manifest`] — the [`VentureManifest`] format and parsing.
-//! - [`generate`] — the deterministic Rust composition generator.
+//! - [`generate`](mod@generate) — the deterministic Rust composition generator.
 
 #![forbid(unsafe_code)]
 
