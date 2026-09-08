@@ -235,7 +235,7 @@ ergonomic for trait objects.
 | `GET /v1/email-signup/confirm?token=` | Verifies signature and TTL, flips to `confirmed`, `303` to the configured confirmed URL. |
 | `POST /v1/email-signup/unsubscribe` `{ token }` and `GET .../unsubscribe?token=` | Flips to `unsubscribed`. Link is in every mail. |
 | `GET /v1/email-signup/admin/export.csv` | Admin. |
-| `DELETE /v1/email-signup/admin/subscribers/:email` | Admin. Hard delete for deletion requests. |
+| `DELETE /v1/email-signup/admin/subscribers/:id` | Admin. Hard delete for deletion requests, keyed on the opaque row id — an email never travels in a path (issue #135). |
 
 Table `subscribers(id, email, email_normalized unique, status, source, locale, confirmed_at, unsubscribed_at, created_at, updated_at)`.
 

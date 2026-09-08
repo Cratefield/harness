@@ -48,12 +48,19 @@ fn accept_any_answers() -> AnswersSchema {
     Arc::new(|_answers| Ok(()))
 }
 
-/// The module's one migration: the `waitlist_entries` table in the
-/// portable SQL subset (issue #11).
+/// The module's migrations: the `waitlist_entries` table in the portable
+/// SQL subset (issue #11), plus the entry generation that confirm tokens
+/// bind to (issue #127).
 const MIGRATION_INIT: SqlMigration = SqlMigration {
     id: "0001",
     name: "init",
     sql: include_str!("../migrations/sqlite/0001_init.sql"),
+};
+
+const MIGRATION_ENTRY_GENERATION: SqlMigration = SqlMigration {
+    id: "0002",
+    name: "entry_generation",
+    sql: include_str!("../migrations/sqlite/0002_entry_generation.sql"),
 };
 
 /// A per-product waitlist.
@@ -172,7 +179,7 @@ impl Module for Waitlist {
     }
 
     fn migrations(&self) -> Migrations {
-        const MIGRATIONS: [SqlMigration; 1] = [MIGRATION_INIT];
+        const MIGRATIONS: [SqlMigration; 2] = [MIGRATION_INIT, MIGRATION_ENTRY_GENERATION];
         Migrations {
             sqlite: &MIGRATIONS,
             postgres: &[],

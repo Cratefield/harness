@@ -290,6 +290,21 @@ async fn signed_link_redirect_passes_through_and_status_renders_a_list() {
     )
     .await;
     assert_eq!(status.status, StatusCode::OK, "{}", status.body);
+    // The token in the URL is the credential (issue #135): the response
+    // must never be stored and must never leak the token through a
+    // Referer header on outbound navigation.
+    assert_eq!(
+        status.headers.get(header::CACHE_CONTROL).unwrap(),
+        "no-store"
+    );
+    assert_eq!(
+        status.headers.get(header::X_CONTENT_TYPE_OPTIONS).unwrap(),
+        "nosniff"
+    );
+    assert_eq!(
+        status.headers.get("referrer-policy").unwrap(),
+        "no-referrer"
+    );
     assert!(
         status.body.contains(
             r#"<dl class="cf-status" data-cf-module="waitlist" data-cf-action="status">"#
@@ -461,6 +476,42 @@ async fn render_timing() {
     }
     let per = start.elapsed() / rounds;
     eprintln!("fragment through the router: {per:?} per request");
+}
+
+/// Issue #130: rendered UI carries one visitor's state — pre-filled
+/// values, dispatched results, landing pages — so every dynamic response
+/// is `no-store` and only the static assets stay cacheable.
+#[pollster::test]
+async fn rendered_ui_is_no_store_and_static_assets_stay_cacheable() {
+    let kit = kit();
+
+    let page = send(&kit, Method::GET, "/ui/waitlist/join", None).await;
+    assert_eq!(page.headers.get(header::CACHE_CONTROL).unwrap(), "no-store");
+
+    let fragment = send(
+        &kit,
+        Method::GET,
+        "/ui/waitlist/join?fragment=1&product=kontinuum",
+        None,
+    )
+    .await;
+    assert_eq!(
+        fragment.headers.get(header::CACHE_CONTROL).unwrap(),
+        "no-store"
+    );
+
+    let landing = send(&kit, Method::GET, "/ui/waitlist/confirm/done", None).await;
+    assert_eq!(landing.status, StatusCode::OK);
+    assert_eq!(
+        landing.headers.get(header::CACHE_CONTROL).unwrap(),
+        "no-store"
+    );
+
+    let css = send(&kit, Method::GET, "/ui/cf.css", None).await;
+    assert_eq!(
+        css.headers.get(header::CACHE_CONTROL).unwrap(),
+        "public, max-age=300"
+    );
 }
 
 /// `schemas/ui-spec-v1.schema.json` is generated from the `UiSpec` types

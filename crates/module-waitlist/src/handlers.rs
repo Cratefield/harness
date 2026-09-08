@@ -32,6 +32,29 @@ pub(crate) const EVENT_CONFIRMED: &str = "waitlist.confirmed";
 /// `module-email-signup`'s throttle.
 pub(crate) const REMAIL_AFTER_SECS: i64 = 3600;
 
+/// Builds a confirm-token subject: the immutable entry id plus the
+/// generation it may confirm (issue #127), mirroring
+/// `module-email-signup`.
+fn confirm_subject(id: &str, generation: i64) -> String {
+    format!("{id}.{generation}")
+}
+
+/// Parses a confirm-token subject into `(id, generation)`. Pre-#127
+/// tokens carry the bare id and read as generation 1, which is what
+/// every existing row holds; a generation bump (should the state machine
+/// ever grow one) invalidates them atomically.
+fn parse_confirm_subject(subject: &str) -> Option<(&str, i64)> {
+    match subject.split_once('.') {
+        Some((id, generation)) if !id.is_empty() => generation
+            .parse::<i64>()
+            .ok()
+            .filter(|generation| *generation >= 1)
+            .map(|generation| (id, generation)),
+        None if !subject.is_empty() => Some((subject, 1)),
+        _ => None,
+    }
+}
+
 /// How the allowed product set is configured.
 #[derive(Debug, Clone)]
 pub(crate) enum Products {
@@ -248,12 +271,13 @@ fn unique_code_violation(err: &cratefield_core::DbError) -> bool {
 async fn confirm_with_code(
     db: &dyn cratefield_core::Database,
     row: &store::WaitlistRow,
+    generation: i64,
     now: &str,
 ) -> Result<bool, cratefield_core::DbError> {
     let mut last_err = None;
     for _ in 0..3 {
         let code = referral_code();
-        match store::confirm_entry(db, row, now, &code).await {
+        match store::confirm_entry(db, row, generation, now, &code).await {
             Ok(flipped) => return Ok(flipped),
             Err(err) if unique_code_violation(&err) => {
                 tracing::warn!("referral code collision; retrying with a fresh code");
@@ -389,9 +413,13 @@ async fn join(
     };
 
     let ttl_days = cfg.get_u32("CONFIRM_TTL_DAYS", state.settings.confirm_ttl_days);
-    let id = existing
-        .as_ref()
-        .map_or_else(|| UlidIdGen.ulid(), |row| row.id.clone());
+    // Only pending rows reach here (confirmed early-returns above), and
+    // `refresh_pending` keeps a pending row's generation: the token is
+    // signed for the generation the row holds now (issue #127).
+    let (id, generation) = match &existing {
+        Some(row) => (row.id.clone(), row.generation),
+        None => (UlidIdGen.ulid(), 1),
+    };
     let now = now_iso();
     send_join_confirmation(
         &state,
@@ -400,6 +428,7 @@ async fn join(
         &cfg,
         JoinMail {
             id: id.clone(),
+            generation,
             normalized: normalized.clone(),
             product: body.product.clone(),
             locale: locale.clone(),
@@ -423,6 +452,7 @@ async fn join(
             &*db,
             &WaitlistRow {
                 id: id.clone(),
+                generation,
                 email: body.email.trim().to_owned(),
                 email_normalized: normalized.clone(),
                 product: body.product.clone(),
@@ -479,6 +509,7 @@ fn validate_join(
 /// Everything [`send_join_confirmation`] needs for one address.
 struct JoinMail {
     id: String,
+    generation: i64,
     normalized: String,
     product: String,
     locale: String,
@@ -498,7 +529,7 @@ async fn send_join_confirmation(
 ) -> Result<(), Problem> {
     let confirm_token = signer.sign(&Payload {
         purpose: PURPOSE_CONFIRM.to_owned(),
-        subject: mail.id.clone(),
+        subject: confirm_subject(&mail.id, mail.generation),
         exp: Some(unix_now().saturating_add(u64::from(mail.ttl_days) * 86_400)),
         kid: Kid::Cur,
     });
@@ -568,13 +599,16 @@ async fn confirm(
     let Some(payload) = signer.verify(&query.token, PURPOSE_CONFIRM) else {
         return see_other(expired_target);
     };
-    let Ok(Some(row)) = store::find_by_id(&*db, &payload.subject).await else {
+    let Some((id, generation)) = parse_confirm_subject(&payload.subject) else {
+        return see_other(expired_target);
+    };
+    let Ok(Some(row)) = store::find_by_id(&*db, id).await else {
         return see_other(expired_target);
     };
 
     if row.status != STATUS_CONFIRMED {
         let now = now_iso();
-        let flipped = match confirm_with_code(&*db, &row, &now).await {
+        let flipped = match confirm_with_code(&*db, &row, generation, &now).await {
             Ok(flipped) => flipped,
             Err(err) => {
                 tracing::error!(error = %err, "waitlist confirm batch failed");

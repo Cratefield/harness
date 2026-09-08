@@ -134,7 +134,7 @@ async fn unauthenticated_admin_pages_redirect_to_login() {
         Method::POST,
         "/ui/admin/email-signup/delete",
         &[ORIGIN],
-        Some("email=a%40b.co"),
+        Some("id=x"),
     )
     .await;
     assert_eq!(reply.status, StatusCode::SEE_OTHER);
@@ -146,7 +146,7 @@ async fn login_form_and_failures() {
     let page = send(&kit, Method::GET, "/ui/admin/login", &[], None).await;
     assert_eq!(page.status, StatusCode::OK);
     assert!(page.body.contains(r#"<input class="cf-input" type="password" id="cf-admin-login-token" name="token" required autocomplete="off">"#), "{}", page.body);
-    assert_eq!(page.header(header::CACHE_CONTROL), "no-store");
+    assert_eq!(page.header(header::CACHE_CONTROL), "private, no-store");
     assert_eq!(
         page.header(header::HeaderName::from_static("x-frame-options")),
         "DENY"
@@ -254,7 +254,24 @@ async fn table_shows_rows_and_delete_takes_two_posts() {
             .body
             .contains(r#"<td class="cf-table-cell">ada@example.com</td>"#)
     );
-    assert!(table.body.contains(r#"<form class="cf-row-action" method="post" action="/ui/admin/email-signup/delete"><input type="hidden" name="email" value="ada@example.com"><button class="cf-submit cf-submit--row" type="submit">Delete</button></form>"#), "{}", table.body);
+    // The row action posts the opaque id, never the email (issue #135).
+    let marker = r#"<input type="hidden" name="id" value=""#;
+    let start = table.body.find(marker).expect("row form carries the id") + marker.len();
+    let end = start + table.body[start..].find('"').expect("id value closes");
+    let id = table.body[start..end].to_owned();
+    assert!(!id.is_empty() && !id.contains('@'), "id is opaque: {id}");
+    assert!(
+        table.body.contains(&format!(
+            r#"<form class="cf-row-action" method="post" action="/ui/admin/email-signup/delete"><input type="hidden" name="id" value="{id}"><button class="cf-submit cf-submit--row" type="submit">Delete</button></form>"#
+        )),
+        "{}",
+        table.body
+    );
+    assert!(
+        !table.body.contains(r#"name="email""#),
+        "no email travels in the delete flow: {}",
+        table.body
+    );
 
     // First post: the confirm step, nothing deleted.
     let confirm = send(
@@ -262,11 +279,15 @@ async fn table_shows_rows_and_delete_takes_two_posts() {
         Method::POST,
         "/ui/admin/email-signup/delete",
         &[ORIGIN, ("cookie", &cookie)],
-        Some("email=ada%40example.com"),
+        Some(&format!("id={id}")),
     )
     .await;
     assert_eq!(confirm.status, StatusCode::OK, "{}", confirm.body);
-    assert!(confirm.body.contains("Delete ada@example.com?"));
+    assert!(
+        confirm.body.contains(&format!("Delete {id}?")),
+        "{}",
+        confirm.body
+    );
     assert!(
         confirm
             .body
@@ -293,7 +314,7 @@ async fn table_shows_rows_and_delete_takes_two_posts() {
         Method::POST,
         "/ui/admin/email-signup/delete",
         &[ORIGIN, ("cookie", &cookie)],
-        Some("email=ada%40example.com&confirm=1"),
+        Some(&format!("id={id}&confirm=1")),
     )
     .await;
     assert_eq!(done.status, StatusCode::SEE_OTHER, "{}", done.body);
@@ -318,7 +339,7 @@ async fn table_shows_rows_and_delete_takes_two_posts() {
         Method::POST,
         "/ui/admin/email-signup/delete",
         &[("origin", "https://evil.example"), ("cookie", &cookie)],
-        Some("email=x%40y.z&confirm=1"),
+        Some("id=x&confirm=1"),
     )
     .await;
     assert_eq!(cross.status, StatusCode::FORBIDDEN);
@@ -358,4 +379,141 @@ async fn without_admin_token_the_admin_ui_is_off() {
     .await;
     assert!(post.header(header::SET_COOKIE).is_empty());
     assert!(post.body.contains("Admin is switched off"));
+}
+
+/// Issue #130: hiding an admin action from the public UI is visibility,
+/// not authorization — invoking it directly on the public route must not
+/// reach the module, and presenting the admin token there must not
+/// unlock it either. The doors to an admin action are the session-gated
+/// admin UI and a direct `/v1` request with the bearer.
+#[pollster::test]
+async fn hidden_admin_actions_are_not_executable_through_the_public_ui() {
+    let kit = kit(true);
+    // A subscriber a successful delete would remove.
+    let reply = cratefield_testing::request(
+        &kit.router,
+        Method::POST,
+        "/v1/email-signup",
+        Some(r#"{"email":"ada@example.com","captchaToken":"tok"}"#),
+    )
+    .await;
+    assert_eq!(reply.status, StatusCode::ACCEPTED);
+
+    // The destructive row action posted to the public route: 404 like
+    // any unknown action, session or no session.
+    let posted = send(
+        &kit,
+        Method::POST,
+        "/ui/email-signup/delete",
+        &[],
+        Some("email=ada%40example.com&confirm=1"),
+    )
+    .await;
+    assert_eq!(posted.status, StatusCode::NOT_FOUND, "{}", posted.body);
+    assert_eq!(
+        posted.header(header::CONTENT_TYPE),
+        "application/problem+json"
+    );
+
+    // The admin export is hidden the same way, for GET and POST.
+    let exported = send(&kit, Method::GET, "/ui/email-signup/export", &[], None).await;
+    assert_eq!(exported.status, StatusCode::NOT_FOUND);
+    let posted_export = send(&kit, Method::POST, "/ui/email-signup/export", &[], Some("")).await;
+    assert_eq!(posted_export.status, StatusCode::NOT_FOUND);
+
+    // A valid admin bearer on the public route changes nothing: the
+    // action stays hidden there.
+    let with_bearer = send(
+        &kit,
+        Method::POST,
+        "/ui/email-signup/delete",
+        &[("authorization", &format!("Bearer {TOKEN}"))],
+        Some("email=ada%40example.com&confirm=1"),
+    )
+    .await;
+    assert_eq!(with_bearer.status, StatusCode::NOT_FOUND);
+
+    // Proof nothing executed: the direct admin export still lists the
+    // subscriber, and the bearer works on the real `/v1` route.
+    let export = send(
+        &kit,
+        Method::GET,
+        "/v1/email-signup/admin/export.csv",
+        &[("authorization", &format!("Bearer {TOKEN}"))],
+        None,
+    )
+    .await;
+    assert_eq!(export.status, StatusCode::OK);
+    assert!(export.body.contains("ada@example.com"), "{}", export.body);
+}
+
+/// Issue #130: the session is a cookie credential, so every admin POST
+/// needs its same-origin proof — a missing `Origin`/`Referer` is refused
+/// like a foreign one (the browsers that strip `Origin`), and a matching
+/// `Referer` is accepted. The check runs before any dispatch, so a
+/// refused post cannot have side effects.
+#[pollster::test]
+async fn admin_posts_need_same_origin_proof_beyond_the_cookie() {
+    let kit = kit(true);
+    let cookie = login(&kit).await;
+
+    // The delete action takes the opaque row id, never the email (issue #135),
+    // so the same-origin proof is exercised against a real seeded row.
+    let reply = cratefield_testing::request(
+        &kit.router,
+        Method::POST,
+        "/v1/email-signup",
+        Some(r#"{"email":"ada@example.com","captchaToken":"tok"}"#),
+    )
+    .await;
+    assert_eq!(reply.status, StatusCode::ACCEPTED);
+    let table = send(
+        &kit,
+        Method::GET,
+        "/ui/admin/email-signup/export",
+        &[("cookie", &cookie)],
+        None,
+    )
+    .await;
+    assert_eq!(table.status, StatusCode::OK, "{}", table.body);
+    let marker = r#"<input type="hidden" name="id" value=""#;
+    let start = table.body.find(marker).expect("row form carries the id") + marker.len();
+    let end = start + table.body[start..].find('"').expect("id value closes");
+    let id = table.body[start..end].to_owned();
+
+    let no_proof = send(
+        &kit,
+        Method::POST,
+        "/ui/admin/email-signup/delete",
+        &[("cookie", &cookie)],
+        Some(&format!("id={id}&confirm=1")),
+    )
+    .await;
+    assert_eq!(no_proof.status, StatusCode::FORBIDDEN);
+    assert_eq!(
+        no_proof.header(header::CONTENT_TYPE),
+        "application/problem+json"
+    );
+
+    // The same post with a matching Referer reaches the confirm step.
+    let referer = send(
+        &kit,
+        Method::POST,
+        "/ui/admin/email-signup/delete",
+        &[
+            ("cookie", &cookie),
+            (
+                "referer",
+                "https://api.test.example/ui/admin/email-signup/export",
+            ),
+        ],
+        Some(&format!("id={id}")),
+    )
+    .await;
+    assert_eq!(referer.status, StatusCode::OK, "{}", referer.body);
+    assert!(
+        referer.body.contains(&format!("Delete {id}?")),
+        "{}",
+        referer.body
+    );
 }

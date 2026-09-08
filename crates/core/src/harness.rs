@@ -25,6 +25,7 @@ use crate::config::ConfigError;
 use crate::events::EventBus;
 use crate::http::{
     Json, MAX_BODY_BYTES, ScopeState, cors_layer, scope_layer, security_headers_layer,
+    token_response_layer,
 };
 use crate::module::{HARNESS_API, Module, ModuleContext, harness_api_mismatch};
 use crate::ports::Dispatcher;
@@ -172,8 +173,9 @@ impl Harness {
     /// `GET /__health`, `GET /__ready`, `GET /__surface`, the UI renderer
     /// at `/ui` when one is mounted, and the shared middleware
     /// (request-id/Scope, CORS allowlist, 64 KiB body limit, `/v1/*`
-    /// security headers). Nothing but `/.well-known`, `/ui` and the
-    /// `/__*` probes is ever mounted at the root.
+    /// security headers, no-store headers for any request carrying a
+    /// `token` query parameter — issue #135). Nothing but `/.well-known`,
+    /// `/ui` and the `/__*` probes is ever mounted at the root.
     pub fn router(&self, ports: Ports) -> Router {
         let mut api = Router::new();
         for module in &self.modules {
@@ -276,6 +278,7 @@ impl Harness {
         };
 
         root.layer(from_fn_with_state(scope_state, scope_layer))
+            .layer(axum::middleware::from_fn(token_response_layer))
             .layer(cors_layer(&self.venture.cors_origins))
     }
 }
@@ -438,6 +441,15 @@ impl SurfaceSource for MergedSurface {
 /// it just gets the public document: this route exists to be read by
 /// renderers and tooling, and a `403` would leak whether admin is on.
 /// Strong `ETag` per variant; `If-None-Match` answers `304`.
+///
+/// Both variants share this URL, so caching is split per variant (issue
+/// #130): the public document stays `no-cache` (shared caches may store
+/// it but must revalidate — nothing in it is a secret), while the
+/// authenticated document is `private, no-store` on the `200` *and* on
+/// the `304`, because a `304` refreshes what a cache already holds.
+/// `Vary: Authorization` alone is not enough: an intermediary that
+/// ignores `Vary` could otherwise store the admin variant and expose it
+/// to an unauthenticated caller.
 async fn surface_handler(
     State(state): State<SurfaceState>,
     headers: HeaderMap,
@@ -485,7 +497,11 @@ async fn surface_handler(
     );
     response_headers.insert(
         header::CACHE_CONTROL,
-        header::HeaderValue::from_static("no-cache"),
+        if admin {
+            header::HeaderValue::from_static("private, no-store")
+        } else {
+            header::HeaderValue::from_static("no-cache")
+        },
     );
     response_headers.insert(
         header::VARY,

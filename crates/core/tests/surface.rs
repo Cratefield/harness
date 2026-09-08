@@ -209,6 +209,88 @@ async fn if_none_match_answers_304_for_the_same_variant_only() {
     assert_eq!(admin.status(), StatusCode::OK);
 }
 
+/// Issue #130: both variants share the URL, so the authenticated one may
+/// never be storable by a shared cache — a different `ETag` and
+/// `Vary: Authorization` do not stop an intermediary that ignores `Vary`
+/// from exposing the admin document to an unauthenticated caller. The
+/// public document stays revalidatable (`no-cache`), the caching ADR
+/// 0010 promises tooling.
+#[pollster::test]
+async fn the_admin_variant_is_private_no_store_and_the_public_stays_revalidatable() {
+    let router = harness().router(ports_with_admin_token());
+
+    let public = request(&router, Method::GET, "/__surface", &[], None).await;
+    assert_eq!(public.status(), StatusCode::OK);
+    assert_eq!(
+        public.headers().get(header::CACHE_CONTROL).unwrap(),
+        "no-cache"
+    );
+    assert_eq!(public.headers().get(header::VARY).unwrap(), "Authorization");
+    let public_etag = public
+        .headers()
+        .get(header::ETAG)
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_owned();
+
+    let admin = request(
+        &router,
+        Method::GET,
+        "/__surface",
+        &[("authorization", "Bearer test-admin-token")],
+        None,
+    )
+    .await;
+    assert_eq!(admin.status(), StatusCode::OK);
+    assert_eq!(
+        admin.headers().get(header::CACHE_CONTROL).unwrap(),
+        "private, no-store"
+    );
+    assert_eq!(admin.headers().get(header::VARY).unwrap(), "Authorization");
+    let admin_etag = admin
+        .headers()
+        .get(header::ETAG)
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_owned();
+
+    // Conditional requests carry the variant's policy too: a `304`
+    // refreshes whatever a cache already holds, so the admin `304` must
+    // forbid storage exactly like the `200`.
+    let admin_again = request(
+        &router,
+        Method::GET,
+        "/__surface",
+        &[
+            ("if-none-match", &admin_etag),
+            ("authorization", "Bearer test-admin-token"),
+        ],
+        None,
+    )
+    .await;
+    assert_eq!(admin_again.status(), StatusCode::NOT_MODIFIED);
+    assert_eq!(
+        admin_again.headers().get(header::CACHE_CONTROL).unwrap(),
+        "private, no-store"
+    );
+
+    let public_again = request(
+        &router,
+        Method::GET,
+        "/__surface",
+        &[("if-none-match", &public_etag)],
+        None,
+    )
+    .await;
+    assert_eq!(public_again.status(), StatusCode::NOT_MODIFIED);
+    assert_eq!(
+        public_again.headers().get(header::CACHE_CONTROL).unwrap(),
+        "no-cache"
+    );
+}
+
 #[pollster::test]
 async fn harness_exposes_the_full_document_for_tooling() {
     let harness = harness();
