@@ -5,7 +5,7 @@
 
 use axum::body::Body;
 use axum::http::{Method, Request, StatusCode, header};
-use cratefield_core::{Clock, Decision, MapConfig, Statement, SystemClock};
+use cratefield_core::{Clock, Decision, Kid, MapConfig, Payload, Signer, Statement, SystemClock};
 use cratefield_module_waitlist::Waitlist;
 use cratefield_testing::{MailerMode, TestHarness, request};
 use std::sync::Arc;
@@ -15,6 +15,7 @@ use tower::ServiceExt;
 
 const BASE: &str = "https://api.test.example";
 const ADMIN: &str = "test-admin-token-0123456789abcdef";
+const EXPIRED_PAGE: &str = "https://test.example/confirm-expired";
 
 fn kits() -> Vec<TestHarness> {
     TestHarness::all_dialects(|| {
@@ -76,6 +77,19 @@ fn column_text(kit: &TestHarness, email: &str, column: &str) -> Option<String> {
     );
     let rows = pollster::block_on(kit.db.query(&stmt)).expect("select");
     rows.first().and_then(|row| row.get::<String>(column))
+}
+
+fn age_entry(kit: &TestHarness, email: &str, secs: i64) {
+    let sql = format!(
+        "UPDATE waitlist_entries SET created_at = '{}' WHERE email_normalized = '{email}'",
+        iso_ago(secs)
+    );
+    pollster::block_on(kit.db.execute(&Statement::new(sql))).expect("age update");
+}
+
+fn delete_entry(kit: &TestHarness, email: &str) {
+    let sql = format!("DELETE FROM waitlist_entries WHERE email_normalized = '{email}'");
+    pollster::block_on(kit.db.execute(&Statement::new(sql))).expect("delete");
 }
 
 #[pollster::test]
@@ -578,5 +592,194 @@ fn double_submit_of_one_confirm_link_credits_the_referrer_once() {
             referrals, 1,
             "referrer credited once per confirmed referral"
         );
+    }
+}
+
+/// Issue #127, replay: a consumed confirm link never re-assigns anything —
+/// position, `confirmed_at` and referral credit stay exactly as the single
+/// flip wrote them.
+#[pollster::test]
+async fn replayed_confirm_keeps_position_and_does_not_reflip() {
+    for kit in kits() {
+        join(&kit, "nick@example.com", "kontinuum").await;
+        let path = confirm_path(&kit, 0);
+        request(&kit.router, Method::GET, &path, None).await;
+        assert_eq!(column_int(&kit, "nick@example.com", "position"), Some(1));
+        let confirmed_at = column_text(&kit, "nick@example.com", "confirmed_at").expect("stamp");
+
+        let replay = request(&kit.router, Method::GET, &path, None).await;
+        assert_eq!(replay.status, StatusCode::SEE_OTHER);
+        assert_eq!(column_int(&kit, "nick@example.com", "position"), Some(1));
+        assert_eq!(
+            column_text(&kit, "nick@example.com", "confirmed_at").as_deref(),
+            Some(confirmed_at.as_str()),
+            "a replay does not rewrite confirmed_at"
+        );
+        assert_eq!(
+            column_text(&kit, "nick@example.com", "status").as_deref(),
+            Some("confirmed")
+        );
+    }
+}
+
+/// Issue #127, delete/recreate: tokens bind to the immutable entry id, so
+/// a purged entry's link cannot confirm the fresh entry a later join
+/// creates under a new id.
+#[pollster::test]
+async fn purged_entry_token_cannot_confirm_a_recreated_entry() {
+    for kit in kits() {
+        join(&kit, "nick@example.com", "kontinuum").await;
+        let old_path = confirm_path(&kit, 0);
+        let old_id = column_text(&kit, "nick@example.com", "id").expect("id");
+
+        delete_entry(&kit, "nick@example.com");
+        join(&kit, "nick@example.com", "kontinuum").await;
+        let new_path = confirm_path(&kit, 1);
+        let new_id = column_text(&kit, "nick@example.com", "id").expect("id");
+        assert_ne!(old_id, new_id, "recreation is a new immutable record");
+
+        let stale = request(&kit.router, Method::GET, &old_path, None).await;
+        assert_eq!(stale.status, StatusCode::SEE_OTHER);
+        assert_eq!(
+            stale.headers.get(header::LOCATION).unwrap(),
+            EXPIRED_PAGE,
+            "the purged entry's token is dead"
+        );
+        assert!(
+            column_int(&kit, "nick@example.com", "position").is_none(),
+            "the recreated entry is still pending"
+        );
+
+        let fresh = request(&kit.router, Method::GET, &new_path, None).await;
+        assert_eq!(fresh.status, StatusCode::SEE_OTHER);
+        assert_eq!(column_int(&kit, "nick@example.com", "position"), Some(1));
+    }
+}
+
+/// Issue #127, migration grace: a legacy bare-id token (signed before the
+/// generation binding shipped) still confirms a first-generation entry.
+#[pollster::test]
+async fn legacy_bare_subject_token_confirms_a_first_generation_entry() {
+    for kit in kits() {
+        let seeded = format!(
+            "INSERT INTO waitlist_entries (id, email, email_normalized, product, status, referrals, created_at) \
+             VALUES ('01HW00000000000000000000001', 'legacy@example.com', 'legacy@example.com', \
+             'kontinuum', 'pending', 0, '{}')",
+            iso_ago(60)
+        );
+        pollster::block_on(kit.db.execute(&Statement::new(seeded))).expect("seed");
+
+        let token = kit.signer.sign(&Payload {
+            purpose: "waitlist.confirm".to_owned(),
+            subject: "01HW00000000000000000000001".to_owned(),
+            exp: None,
+            kid: Kid::Cur,
+        });
+        let response = request(
+            &kit.router,
+            Method::GET,
+            &format!("/v1/waitlist/confirm?token={token}"),
+            None,
+        )
+        .await;
+        assert_eq!(response.status, StatusCode::SEE_OTHER);
+        assert_eq!(column_int(&kit, "legacy@example.com", "position"), Some(1));
+    }
+}
+
+/// Issue #127: a token naming a generation the entry does not hold is
+/// rejected by the atomic conditional update — no flip, no position, no
+/// referral credit.
+#[pollster::test]
+async fn mismatched_generation_token_never_flips() {
+    for kit in kits() {
+        let seeded = format!(
+            "INSERT INTO waitlist_entries (id, email, email_normalized, product, status, referrals, created_at) \
+             VALUES ('01HW00000000000000000000002', 'stale@example.com', 'stale@example.com', \
+             'kontinuum', 'pending', 0, '{}')",
+            iso_ago(60)
+        );
+        pollster::block_on(kit.db.execute(&Statement::new(seeded))).expect("seed");
+
+        let token = kit.signer.sign(&Payload {
+            purpose: "waitlist.confirm".to_owned(),
+            subject: "01HW00000000000000000000002.7".to_owned(),
+            exp: None,
+            kid: Kid::Cur,
+        });
+        let response = request(
+            &kit.router,
+            Method::GET,
+            &format!("/v1/waitlist/confirm?token={token}"),
+            None,
+        )
+        .await;
+        assert_eq!(response.status, StatusCode::SEE_OTHER);
+        assert_eq!(
+            column_text(&kit, "stale@example.com", "status").as_deref(),
+            Some("pending"),
+            "the wrong generation flips nothing"
+        );
+        assert!(column_int(&kit, "stale@example.com", "position").is_none());
+        assert!(column_text(&kit, "stale@example.com", "referral_code").is_none());
+    }
+}
+
+/// Issue #127, concurrent confirmation: a re-mailed join link racing the
+/// original (two mails, one pending entry) confirms exactly once and
+/// credits the referrer exactly once.
+#[pollster::test]
+async fn two_remailed_tokens_race_to_one_confirm_and_one_credit() {
+    for kit in kits() {
+        join(&kit, "ref@example.com", "kontinuum").await;
+        request(&kit.router, Method::GET, &confirm_path(&kit, 0), None).await;
+        let code = column_text(&kit, "ref@example.com", "referral_code").expect("code");
+        let referrer_id = column_text(&kit, "ref@example.com", "id").expect("id");
+
+        let join_body = format!(
+            r#"{{"email":"friend@example.com","product":"kontinuum","ref":"{code}","captchaToken":"x"}}"#
+        );
+        request(&kit.router, Method::POST, "/v1/waitlist", Some(&join_body)).await;
+        let first_link = confirm_path(&kit, 1);
+
+        age_entry(&kit, "friend@example.com", 2 * 3600);
+        request(&kit.router, Method::POST, "/v1/waitlist", Some(&join_body)).await;
+        let second_link = confirm_path(&kit, 2);
+
+        let mut handles = Vec::new();
+        for path in [first_link, second_link] {
+            let router = kit.router.clone();
+            handles.push(std::thread::spawn(move || {
+                let req = Request::builder()
+                    .method(Method::GET)
+                    .uri(path)
+                    .body(Body::empty())
+                    .expect("request");
+                let response = pollster::block_on(router.oneshot(req)).expect("answers");
+                assert_eq!(response.status(), StatusCode::SEE_OTHER);
+            }));
+        }
+        for handle in handles {
+            handle.join().expect("confirm thread");
+        }
+
+        assert_eq!(
+            column_text(&kit, "friend@example.com", "status").as_deref(),
+            Some("confirmed")
+        );
+        assert!(
+            column_int(&kit, "friend@example.com", "position").is_some(),
+            "exactly one position assigned"
+        );
+        let stmt = Statement::with_values(
+            "SELECT referrals FROM waitlist_entries WHERE id = ?".to_string(),
+            vec![referrer_id.into()],
+        );
+        let rows = pollster::block_on(kit.db.query(&stmt)).expect("select");
+        let referrals = rows
+            .first()
+            .and_then(|row| row.get::<i64>("referrals"))
+            .expect("referrals");
+        assert_eq!(referrals, 1, "one referral, one credit under the race");
     }
 }

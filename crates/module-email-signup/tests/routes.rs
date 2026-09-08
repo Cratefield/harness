@@ -77,6 +77,23 @@ fn column(kit: &TestHarness, email: &str, column: &str) -> Option<String> {
     rows.first().and_then(|row| row.get::<String>(column))
 }
 
+fn column_i64(kit: &TestHarness, email: &str, column: &str) -> Option<i64> {
+    let stmt = Statement::with_values(
+        format!("SELECT {column} FROM subscribers WHERE email_normalized = ?"),
+        vec![email.into()],
+    );
+    let rows = pollster::block_on(kit.db.query(&stmt)).expect("select");
+    rows.first().and_then(|row| row.get::<i64>(column))
+}
+
+fn age_row(kit: &TestHarness, email: &str, secs: i64) {
+    let sql = format!(
+        "UPDATE subscribers SET updated_at = '{}' WHERE email_normalized = '{email}'",
+        iso_ago(secs)
+    );
+    pollster::block_on(kit.db.execute(&Statement::new(sql))).expect("age update");
+}
+
 /// The mail's text body puts every link on its own line.
 fn links(kit: &TestHarness) -> Vec<String> {
     let message = kit.mailer.last_message().expect("a mail was sent");
@@ -749,5 +766,280 @@ async fn redirect_params_are_ignored() {
                 "no route reads a {param} query parameter"
             );
         }
+    }
+}
+
+/// Issue #127, the core regression: a token from an earlier subscription
+/// generation must never become usable again when an unauthenticated
+/// signup refreshes the row back to pending — not the module's own
+/// `id.generation` token, and not a legacy bare-id token from before the
+/// generation binding existed.
+#[pollster::test]
+async fn old_generation_tokens_die_after_unsubscribe_and_resubscribe() {
+    for kit in kits() {
+        signup(&kit, "nick@example.com").await;
+        let id = column(&kit, "nick@example.com", "id").expect("id");
+        assert_eq!(column_i64(&kit, "nick@example.com", "generation"), Some(1));
+        let first = links(&kit);
+        let confirm1 = path_of(&first[0]);
+        let unsub1 = path_of(&first[1]);
+        // A pre-#127 in-flight mail: bare-id subject, no generation.
+        let legacy = kit.signer.sign(&Payload {
+            purpose: "email-signup.confirm".to_owned(),
+            subject: id.clone(),
+            exp: None,
+            kid: Kid::Cur,
+        });
+
+        request(&kit.router, Method::GET, &confirm1, None).await;
+        assert_eq!(
+            column(&kit, "nick@example.com", "status").as_deref(),
+            Some("confirmed")
+        );
+        request(&kit.router, Method::GET, &unsub1, None).await;
+        assert_eq!(
+            column(&kit, "nick@example.com", "status").as_deref(),
+            Some("unsubscribed")
+        );
+
+        // Replay straight after the unsubscribe: dead link, state untouched.
+        let replay = request(&kit.router, Method::GET, &confirm1, None).await;
+        assert_eq!(replay.headers.get(header::LOCATION).unwrap(), EXPIRED_PAGE);
+        assert_eq!(
+            column(&kit, "nick@example.com", "status").as_deref(),
+            Some("unsubscribed"),
+            "a replayed token cannot resurrect an unsubscribed row"
+        );
+
+        // Resubscribe past the hourly throttle: a new generation.
+        age_row(&kit, "nick@example.com", 2 * 3600);
+        signup(&kit, "nick@example.com").await;
+        assert_eq!(
+            column(&kit, "nick@example.com", "status").as_deref(),
+            Some("pending")
+        );
+        assert_eq!(
+            column_i64(&kit, "nick@example.com", "generation"),
+            Some(2),
+            "resubscription is a new generation"
+        );
+        let confirm2 = path_of(&links(&kit)[0]);
+
+        for stale in [
+            &confirm1,
+            &format!("/v1/email-signup/confirm?token={legacy}"),
+        ] {
+            let response = request(&kit.router, Method::GET, stale, None).await;
+            assert_eq!(
+                response.headers.get(header::LOCATION).unwrap(),
+                EXPIRED_PAGE,
+                "an old-generation token is a dead link"
+            );
+            assert_eq!(
+                column(&kit, "nick@example.com", "status").as_deref(),
+                Some("pending"),
+                "the old token left the new generation pending"
+            );
+            assert!(column(&kit, "nick@example.com", "confirmed_at").is_none());
+        }
+
+        // The new generation's own token confirms.
+        let fresh = request(&kit.router, Method::GET, &confirm2, None).await;
+        assert_eq!(fresh.headers.get(header::LOCATION).unwrap(), CONFIRMED_PAGE);
+        assert_eq!(
+            column(&kit, "nick@example.com", "status").as_deref(),
+            Some("confirmed")
+        );
+    }
+}
+
+/// Issue #127, the liveness side of the state machine: re-mailing a
+/// pending row is the SAME subscription lifecycle, so a confirmation
+/// link already in flight stays valid and the generation does not move.
+#[pollster::test]
+async fn pending_remail_keeps_the_earlier_link_valid() {
+    for kit in kits() {
+        signup(&kit, "nick@example.com").await;
+        let confirm1 = path_of(&links(&kit)[0]);
+
+        age_row(&kit, "nick@example.com", 2 * 3600);
+        signup(&kit, "nick@example.com").await;
+        assert_eq!(kit.mailer.sent().len(), 2, "stale pending row re-mailed");
+        assert_eq!(
+            column_i64(&kit, "nick@example.com", "generation"),
+            Some(1),
+            "a pending re-mail keeps the generation"
+        );
+
+        let response = request(&kit.router, Method::GET, &confirm1, None).await;
+        assert_eq!(
+            response.headers.get(header::LOCATION).unwrap(),
+            CONFIRMED_PAGE,
+            "the first mail's link still confirms"
+        );
+        assert_eq!(
+            column(&kit, "nick@example.com", "status").as_deref(),
+            Some("confirmed")
+        );
+    }
+}
+
+/// Issue #127: an unauthenticated signup can never reset a confirmed
+/// record — no re-mail, no rewrite, generation untouched.
+#[pollster::test]
+async fn signup_never_resets_a_confirmed_row() {
+    for kit in kits() {
+        signup(&kit, "nick@example.com").await;
+        let confirm1 = path_of(&links(&kit)[0]);
+        request(&kit.router, Method::GET, &confirm1, None).await;
+        let confirmed_at = column(&kit, "nick@example.com", "confirmed_at").expect("confirmed_at");
+
+        age_row(&kit, "nick@example.com", 2 * 3600);
+        let response = signup(&kit, "nick@example.com").await;
+        assert_eq!(response.status, StatusCode::ACCEPTED);
+        assert_eq!(
+            kit.mailer.sent().len(),
+            1,
+            "a confirmed row is never re-mailed"
+        );
+        assert_eq!(
+            column(&kit, "nick@example.com", "status").as_deref(),
+            Some("confirmed")
+        );
+        assert_eq!(
+            column(&kit, "nick@example.com", "confirmed_at").as_deref(),
+            Some(confirmed_at.as_str())
+        );
+        assert_eq!(column_i64(&kit, "nick@example.com", "generation"), Some(1));
+    }
+}
+
+/// Issue #127, delete/recreate: a hard-deleted row's tokens target the
+/// immutable id, so they die with the row and cannot confirm the fresh
+/// row a later signup creates.
+#[pollster::test]
+async fn deleted_row_tokens_do_not_confirm_a_recreated_row() {
+    for kit in admin_kits() {
+        signup(&kit, "gone@example.com").await;
+        let old_id = column(&kit, "gone@example.com", "id").expect("id");
+        let confirm1 = path_of(&links(&kit)[0]);
+
+        let deleted = kit
+            .router
+            .clone()
+            .oneshot(
+                axum::http::Request::builder()
+                    .method(Method::DELETE)
+                    .uri("/v1/email-signup/admin/subscribers/gone@example.com")
+                    .header(header::AUTHORIZATION, format!("Bearer {ADMIN}"))
+                    .body(axum::body::Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("answers");
+        assert_eq!(deleted.status(), StatusCode::OK);
+
+        signup(&kit, "gone@example.com").await;
+        let new_id = column(&kit, "gone@example.com", "id").expect("id");
+        assert_ne!(old_id, new_id, "recreation is a new immutable record");
+        let confirm2 = path_of(&links(&kit)[0]);
+
+        let stale = request(&kit.router, Method::GET, &confirm1, None).await;
+        assert_eq!(
+            stale.headers.get(header::LOCATION).unwrap(),
+            EXPIRED_PAGE,
+            "the deleted row's token is dead"
+        );
+        assert_eq!(
+            column(&kit, "gone@example.com", "status").as_deref(),
+            Some("pending"),
+            "the recreated row is untouched"
+        );
+
+        let fresh = request(&kit.router, Method::GET, &confirm2, None).await;
+        assert_eq!(fresh.headers.get(header::LOCATION).unwrap(), CONFIRMED_PAGE);
+    }
+}
+
+/// Issue #127, concurrent confirmation: two hits on one link (a mail
+/// scanner prefetching while the human clicks) flip the row exactly once
+/// and both land on the confirmed page.
+#[pollster::test]
+async fn concurrent_confirms_flip_the_row_once() {
+    for kit in kits() {
+        signup(&kit, "nick@example.com").await;
+        let confirm_path = path_of(&links(&kit)[0]);
+
+        let mut handles = Vec::new();
+        for _ in 0..2 {
+            let router = kit.router.clone();
+            let path = confirm_path.clone();
+            handles.push(std::thread::spawn(move || {
+                let req = axum::http::Request::builder()
+                    .method(Method::GET)
+                    .uri(path)
+                    .body(axum::body::Body::empty())
+                    .expect("request");
+                let response = pollster::block_on(router.oneshot(req)).expect("answers");
+                assert_eq!(response.status(), StatusCode::SEE_OTHER);
+                assert_eq!(
+                    response.headers().get(header::LOCATION).unwrap(),
+                    CONFIRMED_PAGE
+                );
+            }));
+        }
+        for handle in handles {
+            handle.join().expect("confirm thread");
+        }
+
+        assert_eq!(
+            column(&kit, "nick@example.com", "status").as_deref(),
+            Some("confirmed")
+        );
+        assert_eq!(column_i64(&kit, "nick@example.com", "generation"), Some(1));
+    }
+}
+
+/// Issue #127, migration grace: a legacy bare-id token (signed before
+/// the generation binding shipped) still confirms a first-generation
+/// pending row — and only one, see
+/// `old_generation_tokens_die_after_unsubscribe_and_resubscribe`.
+#[pollster::test]
+async fn legacy_bare_subject_token_confirms_a_first_generation_row() {
+    for kit in kits() {
+        seed(
+            &kit,
+            "01HC00000000000000000000010",
+            "legacy@example.com",
+            "pending",
+            &now_iso(),
+            "launch",
+        );
+        assert_eq!(
+            column_i64(&kit, "legacy@example.com", "generation"),
+            Some(1),
+            "the migration default is generation 1"
+        );
+        let token = kit.signer.sign(&Payload {
+            purpose: "email-signup.confirm".to_owned(),
+            subject: "01HC00000000000000000000010".to_owned(),
+            exp: None,
+            kid: Kid::Cur,
+        });
+        let response = request(
+            &kit.router,
+            Method::GET,
+            &format!("/v1/email-signup/confirm?token={token}"),
+            None,
+        )
+        .await;
+        assert_eq!(
+            response.headers.get(header::LOCATION).unwrap(),
+            CONFIRMED_PAGE
+        );
+        assert_eq!(
+            column(&kit, "legacy@example.com", "status").as_deref(),
+            Some("confirmed")
+        );
     }
 }
