@@ -22,6 +22,7 @@
 #![forbid(unsafe_code)]
 
 pub mod apply;
+pub mod build;
 mod collect;
 pub mod data;
 mod doctor;
@@ -68,6 +69,24 @@ enum Command {
     },
     /// Prints modules, versions, route prefixes, emitted events, tables.
     Modules,
+    /// Generates a deterministic Cloudflare venture crate from a venture
+    /// manifest (issue #138): resolve the module set, write `Cargo.toml`,
+    /// `src/lib.rs`, `src/fz_main.rs`, `wrangler.toml`. Standalone — it
+    /// needs no compiled-in harness because it produces one. The final
+    /// `worker-build` + `wrangler deploy` are printed as the next steps.
+    Build {
+        /// The venture manifest (`.json` or `.toml`).
+        #[arg(value_name = "MANIFEST")]
+        manifest: PathBuf,
+        /// Output directory for the generated venture crate.
+        #[arg(long, default_value = "dist")]
+        out: PathBuf,
+        /// Point the generated crate at a local harness checkout (path
+        /// deps) instead of published versions — for offline / in-repo
+        /// builds, as the Docker image does.
+        #[arg(long, value_name = "PATH")]
+        harness_path: Option<String>,
+    },
     /// Moves venture data between engines (issue #21): export D1/SQLite
     /// data to JSONL with a manifest, import into Postgres.
     Data {
@@ -152,6 +171,16 @@ pub fn run(build: impl Fn() -> Harness, args: impl IntoIterator<Item = String>) 
     full_argv.push("fz".to_string());
     full_argv.extend(args);
     let cli = Cli::parse_from(full_argv);
+    // `build` generates a harness rather than needing one, so it runs
+    // before (and without) the venture's compiled-in harness.
+    if let Command::Build {
+        manifest,
+        out,
+        harness_path,
+    } = &cli.command
+    {
+        return finish(build::run(manifest, out, harness_path.as_deref()));
+    }
     let harness = build();
     let sidecars = crate::sidecars::from_cli_or_env(cli.sidecars.as_deref());
     let result = match cli.command {
@@ -199,7 +228,38 @@ pub fn run(build: impl Fn() -> Harness, args: impl IntoIterator<Item = String>) 
                     plan,
                 },
         } => data::import(&harness, &file, &url, append, plan),
+        // Handled before `build()` above; it needs no harness.
+        Command::Build { .. } => unreachable!("build is dispatched before the harness is built"),
     };
+    finish(result)
+}
+
+/// Runs the harness-free `fz` commands from a standalone binary (no
+/// compiled-in venture). Today that is only `fz build <manifest>`; every
+/// other command needs the venture's harness and says so.
+#[must_use = "call process::exit with the returned ExitCode"]
+pub fn run_standalone(args: impl IntoIterator<Item = String>) -> ExitCode {
+    let mut full_argv: Vec<String> = Vec::with_capacity(8);
+    full_argv.push("fz".to_string());
+    full_argv.extend(args);
+    let cli = Cli::parse_from(full_argv);
+    if let Command::Build {
+        manifest,
+        out,
+        harness_path,
+    } = cli.command
+    {
+        finish(build::run(&manifest, &out, harness_path.as_deref()))
+    } else {
+        eprintln!(
+            "fz: this command must run inside a venture (it needs the compiled-in harness — \
+             see the cratefield-cli README). Only `fz build <manifest>` runs standalone."
+        );
+        ExitCode::FAILURE
+    }
+}
+
+fn finish(result: Result<(), String>) -> ExitCode {
     match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(message) => {
