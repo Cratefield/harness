@@ -254,3 +254,86 @@ is the one kind whose storage differs, `0` and `1` against `FALSE` and
 
 `indexed` on a field that is already `unique` or part of the primary key
 adds no second index: the constraint has one.
+
+## Row validation
+
+`validate_row` checks a `serde_json` object against a table and answers
+with a structured list. The list renders into the harness's existing
+RFC 9457 problem, `validation-failed`, so a declared table's 400 reads
+like a module's. No new slug and no new error style.
+
+```rust
+use cratefield_tables::{ErrorCode, Schema, validate_row};
+use serde_json::json;
+
+#[derive(serde::Deserialize)]
+struct Manifest {
+    tables: Schema,
+}
+
+let manifest: Manifest = toml::from_str(r#"
+[tables.post]
+primary_key = "id"
+
+[[tables.post.fields]]
+name = "id"
+kind = "text"
+required = true
+
+[[tables.post.fields]]
+name = "title"
+kind = "text"
+min_len = 1
+max_len = 5
+required = true
+"#).unwrap();
+
+let post = manifest.tables.table("post").unwrap();
+
+validate_row(post, &json!({"id": "x", "title": "hi"})).unwrap();
+
+let errors = validate_row(post, &json!({"id": "x", "title": "far too long"})).unwrap_err();
+assert_eq!(errors.errors()[0].code, ErrorCode::TooLong);
+
+let problem = errors.problem();
+assert_eq!(problem.slug, "validation-failed");
+assert_eq!(problem.status.as_u16(), 400);
+```
+
+The rules, which are also the rules a generated client has to match:
+
+- **A row is a JSON object.** Anything else is one error against the row
+  itself, reported with an empty field name.
+- **`null` is absence.** `{"note": null}` and `{}` always reach the same
+  verdict.
+- **A default satisfies `required`.** Only a field that is required and
+  has no default has to be sent.
+- **An unknown key is an error**, never a dropped key.
+- **No coercion.** `"42"` is not an integer, `1` is not `true`.
+- **An integer is a JSON number with no fractional part**, which is
+  `Number.isInteger(v)` in JavaScript, so `42.0` is accepted.
+- **Length is counted in Unicode scalar values**, so a JavaScript
+  implementation counts `[...s].length` and never `s.length`. There is no
+  normalisation: `e` plus a combining acute is two characters.
+- **Nothing is trimmed.** Whitespace is part of the value.
+- **Bounds are inclusive** at both ends.
+- **Uniqueness and foreign keys are not checked here.** They read other
+  rows, which makes them the database's job and marks the line between a
+  field and a function.
+
+Errors come out in a fixed order: declared fields in declaration order,
+then unknown keys sorted by name.
+
+## The conformance corpus
+
+`corpus/rows.json` holds triples of table, input and expected verdict.
+`tests/corpus.rs` runs the Rust validator over all of them, and a second
+implementation in another language runs over the same file. That is what
+stops this validator and a generated client disagreeing about empty
+versus absent, number coercion, null versus missing, Unicode length and
+whitespace. Every one of those five has cases, and a test fails if any
+group loses them.
+
+Match on the `code`, never on a message: codes are the stable vocabulary,
+messages are prose. The file lists its own vocabulary, and a test fails
+if that list and the crate's codes drift apart.

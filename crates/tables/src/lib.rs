@@ -32,6 +32,7 @@
 mod ddl;
 mod manifest;
 mod schema;
+mod validate;
 mod value;
 
 pub use ddl::{SqlDialect, index_name};
@@ -39,4 +40,5 @@ pub use schema::{
     FieldDef, FieldKind, ForeignKey, MAX_IDENTIFIER_CHARS, RESERVED_PREFIXES, RESERVED_WORDS,
     Schema, TableDef, TextFormat, is_identifier,
 };
+pub use validate::{MAX_DETAIL_ERRORS, RowError, RowErrors, validate_row};
 pub use value::{ErrorCode, ValueError, check_value, is_rfc3339, is_url, is_uuid};
