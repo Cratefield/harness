@@ -25,6 +25,7 @@ fn select_all() -> sea_query::SelectStatement {
             "email_normalized",
             "product",
             "status",
+            "generation",
             "position",
             "referral_code",
             "referred_by",
@@ -44,6 +45,7 @@ pub(crate) struct WaitlistRow {
     pub email_normalized: String,
     pub product: String,
     pub status: String,
+    pub generation: i64,
     pub position: Option<i64>,
     pub referral_code: Option<String>,
     pub referred_by: Option<String>,
@@ -60,6 +62,7 @@ fn row_from(row: &Row) -> WaitlistRow {
         email_normalized: row.get::<String>("email_normalized").unwrap_or_default(),
         product: row.get::<String>("product").unwrap_or_default(),
         status: row.get::<String>("status").unwrap_or_default(),
+        generation: row.get::<i64>("generation").unwrap_or(1),
         position: row.get::<i64>("position"),
         referral_code: row.get::<Option<String>>("referral_code").flatten(),
         referred_by: row.get::<Option<String>>("referred_by").flatten(),
@@ -126,6 +129,7 @@ pub(crate) async fn insert_row(db: &dyn Database, row: &WaitlistRow) -> Result<(
             "email_normalized",
             "product",
             "status",
+            "generation",
             "position",
             "referral_code",
             "referred_by",
@@ -140,6 +144,7 @@ pub(crate) async fn insert_row(db: &dyn Database, row: &WaitlistRow) -> Result<(
             row.email_normalized.clone().into(),
             row.product.clone().into(),
             row.status.as_str().into(),
+            row.generation.into(),
             row.position.into(),
             row.referral_code.clone().into(),
             row.referred_by.clone().into(),
@@ -160,6 +165,14 @@ pub(crate) async fn insert_row(db: &dyn Database, row: &WaitlistRow) -> Result<(
 /// Refreshes a pending row for a re-mailed join request: answers and
 /// `created_at` (which doubles as the last-join-request timestamp; the
 /// table has no `updated_at` column) move to now.
+///
+/// Issue #127: same generation rule as module-email-signup — re-entering
+/// pending from another state would bump `generation` atomically (the
+/// `CASE` sees the row's state at write time), invalidating confirm
+/// tokens from an earlier lifecycle. Today's state machine never leaves
+/// pending through this path (the `status <> 'confirmed'` guard plus the
+/// handler's early return on confirmed rows), so a re-mail keeps its
+/// generation and links already in flight stay valid.
 pub(crate) async fn refresh_pending(
     db: &dyn Database,
     id: &str,
@@ -167,11 +180,19 @@ pub(crate) async fn refresh_pending(
     referred_by: Option<&str>,
     now: &str,
 ) -> Result<u64, DbError> {
+    let generation = SimpleExpr::Case(Box::new(
+        Expr::case(
+            Expr::col(iden("status")).ne(STATUS_PENDING),
+            Expr::col(iden("generation")).add(1),
+        )
+        .finally(Expr::col(iden("generation"))),
+    ));
     let mut update = Query::update();
     update
         .table(iden("waitlist_entries"))
         .values([
             (iden("status"), STATUS_PENDING.into()),
+            (iden("generation"), generation),
             (iden("answers"), answers.into()),
             (iden("referred_by"), referred_by.into()),
             (iden("created_at"), now.into()),
@@ -202,7 +223,8 @@ fn next_position_expr(product: &str) -> SimpleExpr {
 /// Flips a pending entry to confirmed, assigns its dense per-product
 /// position and referral code, and credits the referrer — all inside one
 /// atomic [`Database::batch`]. Returns `Ok(false)` when the entry was
-/// already confirmed (a replayed link).
+/// already confirmed (a replayed link) or when `generation` is not the
+/// entry's current one (a token from an earlier lifecycle, issue #127).
 ///
 /// Positions are never recomputed: the `MAX` only looks forward, and
 /// deleting rows leaves gaps on purpose (issue #11).
@@ -218,6 +240,7 @@ fn next_position_expr(product: &str) -> SimpleExpr {
 pub(crate) async fn confirm_entry(
     db: &dyn Database,
     row: &WaitlistRow,
+    generation: i64,
     now: &str,
     referral_code: &str,
 ) -> Result<bool, DbError> {
@@ -235,13 +258,14 @@ pub(crate) async fn confirm_entry(
             (iden("referral_code"), referral_code.into()),
         ])
         .and_where(Expr::col(iden("id")).eq(row.id.as_str()))
-        .and_where(Expr::col(iden("status")).eq(STATUS_PENDING));
+        .and_where(Expr::col(iden("status")).eq(STATUS_PENDING))
+        .and_where(Expr::col(iden("generation")).eq(generation));
 
     // The credit runs BEFORE the flip and carries the same guard: it applies
-    // only while this entry is still pending, i.e. only when this batch is
-    // the one that confirms it. Ordered the other way the credit cannot tell
-    // whether the flip was its own, and a replayed or interleaved confirm
-    // credits the referrer again for one referral.
+    // only while this entry is still pending at this generation, i.e. only
+    // when this batch is the one that confirms it. Ordered the other way the
+    // credit cannot tell whether the flip was its own, and a replayed or
+    // interleaved confirm credits the referrer again for one referral.
     let mut stmts = vec![Statement::render(&lock)];
     if let Some(referrer) = row.referred_by.as_deref() {
         let mut still_pending = Query::select();
@@ -249,7 +273,8 @@ pub(crate) async fn confirm_entry(
             .expr(Expr::val(1))
             .from(iden("waitlist_entries"))
             .and_where(Expr::col(iden("id")).eq(row.id.as_str()))
-            .and_where(Expr::col(iden("status")).eq(STATUS_PENDING));
+            .and_where(Expr::col(iden("status")).eq(STATUS_PENDING))
+            .and_where(Expr::col(iden("generation")).eq(generation));
 
         let mut credit = Query::update();
         credit
@@ -303,7 +328,8 @@ mod tests {
     /// A true interleave hands both callers a snapshot that still says
     /// "pending": each read the row before either wrote. The flip is
     /// guarded, so only one applies; the credit must carry the same guard,
-    /// or the referrer is paid twice for one referral.
+    /// or the referrer is paid twice for one referral. A token from the
+    /// wrong generation never flips at all (issue #127).
     #[test]
     fn replayed_confirm_credits_the_referrer_once() {
         let module = crate::Waitlist::new().products(["kontinuum"]);
@@ -332,11 +358,23 @@ mod tests {
         let snapshot = pollster::block_on(find_by_id(&db, "friend"))
             .expect("query")
             .expect("row");
+        assert_eq!(snapshot.generation, 1);
+
+        let stale = pollster::block_on(confirm_entry(
+            &db,
+            &snapshot,
+            snapshot.generation + 1,
+            "2026-01-01T00:00:01Z",
+            "CODE1234",
+        ))
+        .expect("confirm");
+        assert!(!stale, "a token from another generation flips nothing");
 
         for _ in 0..2 {
             pollster::block_on(confirm_entry(
                 &db,
                 &snapshot,
+                snapshot.generation,
                 "2026-01-01T00:00:01Z",
                 "CODE1234",
             ))

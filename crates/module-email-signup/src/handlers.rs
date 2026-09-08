@@ -33,6 +33,29 @@ pub(crate) const WAITLIST_CONFIRMED: &str = "waitlist.confirmed";
 /// One confirmation mail per address per hour (issue #10).
 pub(crate) const REMAIL_AFTER_SECS: i64 = 3600;
 
+/// Builds a confirm-token subject: the immutable row id plus the
+/// subscription generation it may confirm (issue #127).
+fn confirm_subject(id: &str, generation: i64) -> String {
+    format!("{id}.{generation}")
+}
+
+/// Parses a confirm-token subject into `(id, generation)`. Pre-#127
+/// tokens carry the bare id and read as generation 1: they keep working
+/// for rows that never crossed a state change since the migration, and
+/// die on the first resubscription, which moves the row to generation 2
+/// that no bare subject can match.
+fn parse_confirm_subject(subject: &str) -> Option<(&str, i64)> {
+    match subject.split_once('.') {
+        Some((id, generation)) if !id.is_empty() => generation
+            .parse::<i64>()
+            .ok()
+            .filter(|generation| *generation >= 1)
+            .map(|generation| (id, generation)),
+        None if !subject.is_empty() => Some((subject, 1)),
+        _ => None,
+    }
+}
+
 /// The builder's compile-time settings, cloned into the router state
 /// alongside the module context.
 #[derive(Debug, Clone)]
@@ -309,9 +332,23 @@ async fn signup(
         return Err(internal(&scope));
     };
     let ttl_days = cfg.get_u32("CONFIRM_TTL_DAYS", state.settings.confirm_ttl_days);
-    let id = existing
-        .as_ref()
-        .map_or_else(|| UlidIdGen.ulid(), |row| row.id.clone());
+    // The generation the token is signed for, mirroring what
+    // `refresh_to_pending`'s `CASE` will compute at write time: a pending
+    // row keeps its generation (re-mail), any other state re-enters
+    // pending as a new one (resubscription). If a concurrent write moves
+    // the row in between, the prediction misses and the mailed link is
+    // simply dead — fail-closed, never fail-replayable (issue #127).
+    let (id, generation) = match &existing {
+        Some(row) => (
+            row.id.clone(),
+            if row.status == STATUS_PENDING {
+                row.generation
+            } else {
+                row.generation.saturating_add(1)
+            },
+        ),
+        None => (UlidIdGen.ulid(), 1),
+    };
     send_confirmation(
         &state,
         &scope,
@@ -319,6 +356,7 @@ async fn signup(
         &cfg,
         Confirmation {
             id: id.clone(),
+            generation,
             normalized: normalized.clone(),
             locale: locale.clone(),
             ttl_days,
@@ -337,6 +375,7 @@ async fn signup(
                 &*db,
                 &SubscriberRow {
                     id,
+                    generation,
                     email: body.email.trim().to_owned(),
                     email_normalized: normalized,
                     status: STATUS_PENDING.to_owned(),
@@ -357,6 +396,7 @@ async fn signup(
 /// Everything [`send_confirmation`] needs for one address.
 struct Confirmation {
     id: String,
+    generation: i64,
     normalized: String,
     locale: String,
     ttl_days: u32,
@@ -375,6 +415,7 @@ async fn send_confirmation(
 ) -> Result<(), Problem> {
     let Confirmation {
         id,
+        generation,
         normalized,
         locale,
         ttl_days,
@@ -382,7 +423,7 @@ async fn send_confirmation(
     } = confirmation;
     let confirm_token = signer.sign(&Payload {
         purpose: PURPOSE_CONFIRM.to_owned(),
-        subject: id.clone(),
+        subject: confirm_subject(&id, generation),
         exp: Some(unix_now().saturating_add(u64::from(ttl_days) * 86_400)),
         kid: Kid::Cur,
     });
@@ -437,13 +478,14 @@ async fn signup_without_opt_in(
     };
     match existing {
         Some(row) if row.status == STATUS_PENDING => {
-            store::confirm(&*db, &row.id, now).await?;
+            store::confirm(&*db, &row.id, row.generation, now).await?;
         }
         None => {
             store::insert_row(
                 &*db,
                 &SubscriberRow {
                     id: UlidIdGen.ulid(),
+                    generation: 1,
                     email: normalized.to_owned(),
                     email_normalized: normalized.to_owned(),
                     status: STATUS_CONFIRMED.to_owned(),
@@ -512,10 +554,12 @@ async fn confirm(
     let Some(payload) = signer.verify(&query.token, PURPOSE_CONFIRM) else {
         return see_other(expired_target);
     };
-    let subject = payload.subject;
+    let Some((id, generation)) = parse_confirm_subject(&payload.subject) else {
+        return see_other(expired_target);
+    };
     let now = now_iso();
 
-    let flipped = match store::confirm(&*db, &subject, &now).await {
+    let flipped = match store::confirm(&*db, id, generation, &now).await {
         Ok(affected) => affected > 0,
         Err(err) => {
             tracing::error!(error = %err, "confirm update failed");
@@ -524,15 +568,17 @@ async fn confirm(
     };
 
     if !flipped {
-        // Replay (already confirmed) or the row is gone; both are no-ops,
-        // but a missing row means the link is dead — say so.
-        return match store::find_by_id(&*db, &subject).await {
-            Ok(Some(_)) => see_other(confirmed_target),
+        // A consumed token replayed, a token from an older generation
+        // (the row resubscribed since, issue #127), or the row is gone.
+        // Only a genuinely confirmed row lands on the confirmed page;
+        // anything else is a dead link.
+        return match store::find_by_id(&*db, id).await {
+            Ok(Some(row)) if row.status == STATUS_CONFIRMED => see_other(confirmed_target),
             _ => see_other(expired_target),
         };
     }
 
-    if let Ok(Some(row)) = store::find_by_id(&*db, &subject).await {
+    if let Ok(Some(row)) = store::find_by_id(&*db, id).await {
         state.ctx.events.emit_in(
             &scope,
             EVENT_CONFIRMED,

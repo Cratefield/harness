@@ -38,12 +38,19 @@ use std::sync::{Arc, OnceLock};
 
 use handlers::Settings;
 
-/// The module's one migration: the `subscribers` table in the portable
-/// SQL subset (issue #10, architecture section 7).
+/// The module's migrations: the `subscribers` table in the portable SQL
+/// subset (issue #10, architecture section 7), plus the subscription
+/// generation that confirmation tokens bind to (issue #127).
 const MIGRATION_INIT: SqlMigration = SqlMigration {
     id: "0001",
     name: "init",
     sql: include_str!("../migrations/sqlite/0001_init.sql"),
+};
+
+const MIGRATION_SUBSCRIPTION_GENERATION: SqlMigration = SqlMigration {
+    id: "0002",
+    name: "subscription_generation",
+    sql: include_str!("../migrations/sqlite/0002_subscription_generation.sql"),
 };
 
 /// Email signup with double opt-in.
@@ -179,7 +186,7 @@ impl Module for EmailSignup {
     }
 
     fn migrations(&self) -> Migrations {
-        const MIGRATIONS: [SqlMigration; 1] = [MIGRATION_INIT];
+        const MIGRATIONS: [SqlMigration; 2] = [MIGRATION_INIT, MIGRATION_SUBSCRIPTION_GENERATION];
         Migrations {
             sqlite: &MIGRATIONS,
             postgres: &[],
@@ -333,6 +340,7 @@ async fn subscribe_waitlist_confirmed(
         &*db,
         &store::SubscriberRow {
             id: UlidIdGen.ulid(),
+            generation: 1,
             email: normalized.clone(),
             email_normalized: normalized,
             status: store::STATUS_CONFIRMED.to_owned(),
