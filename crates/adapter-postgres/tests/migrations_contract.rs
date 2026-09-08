@@ -63,7 +63,8 @@ async fn every_shipped_migration_applies_on_postgres_16() {
         .await
         .expect("re-apply is idempotent");
 
-    // Both modules' first migrations are tracked under <module>/<id>.
+    // Inventory of every shipped migration, tracked as <module>/<id> —
+    // appending a migration to a module means appending it here too.
     let rows = db
         .query(&Statement::new(
             "SELECT id FROM harness_migrations ORDER BY id",
@@ -75,7 +76,15 @@ async fn every_shipped_migration_applies_on_postgres_16() {
         .iter()
         .filter_map(|row| row.get::<String>("id"))
         .collect();
-    assert_eq!(ids, ["email-signup/0001", "waitlist/0001"]);
+    assert_eq!(
+        ids,
+        [
+            "email-signup/0001",
+            "email-signup/0002",
+            "waitlist/0001",
+            "waitlist/0002"
+        ]
+    );
 
     // The tables exist with the columns the modules query: the portable
     // DDL really landed (missing columns would error).
@@ -117,7 +126,11 @@ async fn runner_applies_a_module_directly_and_is_idempotent() {
         .query(&Statement::new("SELECT id FROM harness_migrations"))
         .await
         .expect("tracking readable");
-    assert_eq!(rows.len(), 1, "exactly one tracked migration");
+    assert_eq!(
+        rows.len(),
+        2,
+        "both shipped waitlist migrations are tracked"
+    );
 
     // Through the port as a trait object, like a venture wires it.
     let port: Arc<dyn Database> = Arc::new(db);
