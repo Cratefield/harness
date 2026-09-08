@@ -211,8 +211,9 @@ becomes `TURNSTILE_SECRET`.
 ## 6. Secrets, per environment
 
 **Human** for production; staging values live in GitHub Environment
-secrets for the deploy workflow (template README). The four secrets
-(architecture section 9):
+secrets for the deploy workflow (template README). The four required
+secrets, plus two optional ones that shape the signer's key ring (issue
+#137, ADR 0014; architecture section 9):
 
 | Secret | Used by | Set with |
 |---|---|---|
@@ -220,12 +221,21 @@ secrets for the deploy workflow (template README). The four secrets
 | `RESEND_API_KEY` | `Mailer` (absent → `NotConfigured`, `503` on send paths) | `wrangler secret put RESEND_API_KEY` |
 | `TURNSTILE_SECRET` | `Captcha` (absent → port not provided) | `wrangler secret put TURNSTILE_SECRET` |
 | `ADMIN_TOKEN` | admin endpoints (unset → disabled entirely) | `wrangler secret put ADMIN_TOKEN` |
+| `HARNESS_SECRET_PREVIOUS` | `Signer`: the demoted key, verification-only (≥ 32 bytes) | `wrangler secret put HARNESS_SECRET_PREVIOUS` |
+| `HARNESS_SECRET_REVOKED` | `Signer`: key ids whose signatures are refused even while configured (comma-separated) | `wrangler secret put HARNESS_SECRET_REVOKED` |
+| `HARNESS_VENTURE` | `Signer`: venture label stamped into tokens (`iss`) so links never cross ventures or environments | plain var (not secret — a name, not a key) |
 
 Production is set by a person with `wrangler secret put <NAME>
 --env production`. For local development use `.dev.vars` (step 2).
 Rotating `HARNESS_SECRET`: set `HARNESS_SECRET_PREVIOUS` to the old
-value, roll the new one, drop `PREVIOUS` after the confirm TTL (7 days
-by default) — tokens name their key id, so links in flight keep working.
+value, roll the new one, drop `PREVIOUS` once no live bounded token can
+still carry it (confirm tokens expire after 7 days, status after 90 —
+mint-time ceilings, ADR 0014) — tokens name their key id, and the ring
+still verifies them, so links in flight keep working. A compromised key
+is revoked by id through `HARNESS_SECRET_REVOKED`, which refuses its
+signatures even while its secret stays configured. The full runbook,
+including what revocation costs an in-flight link, is
+[`docs/KEY-ROTATION.md`](KEY-ROTATION.md).
 
 ## 7. Mail domain (Resend)
 

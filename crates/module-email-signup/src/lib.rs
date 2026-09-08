@@ -53,6 +53,13 @@ const MIGRATION_SUBSCRIPTION_GENERATION: SqlMigration = SqlMigration {
     sql: include_str!("../migrations/sqlite/0002_subscription_generation.sql"),
 };
 
+/// The revocable per-subscription unsubscribe token (issue #137).
+const MIGRATION_UNSUBSCRIBE_TOKEN: SqlMigration = SqlMigration {
+    id: "0003",
+    name: "unsubscribe_token",
+    sql: include_str!("../migrations/sqlite/0003_unsubscribe_token.sql"),
+};
+
 /// Email signup with double opt-in.
 ///
 /// The `waitlist.confirmed` handler needs a [`ModuleContext`], but event
@@ -186,7 +193,11 @@ impl Module for EmailSignup {
     }
 
     fn migrations(&self) -> Migrations {
-        const MIGRATIONS: [SqlMigration; 2] = [MIGRATION_INIT, MIGRATION_SUBSCRIPTION_GENERATION];
+        const MIGRATIONS: [SqlMigration; 3] = [
+            MIGRATION_INIT,
+            MIGRATION_SUBSCRIPTION_GENERATION,
+            MIGRATION_UNSUBSCRIBE_TOKEN,
+        ];
         Migrations {
             sqlite: &MIGRATIONS,
             postgres: &[],
@@ -348,6 +359,7 @@ async fn subscribe_waitlist_confirmed(
             locale: None,
             confirmed_at: Some(now.clone()),
             unsubscribed_at: None,
+            unsubscribe_token: None,
             created_at: now.clone(),
             updated_at: now,
         },

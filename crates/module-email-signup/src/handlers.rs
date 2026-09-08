@@ -9,7 +9,7 @@ use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, post};
 use cratefield_core::{
-    Action, Audience, Captcha, Clock, Column, Decision, IdGen, Json, Kid, ModuleConfig,
+    Action, Audience, Captcha, Clock, Column, Database, Decision, IdGen, Json, Kid, ModuleConfig,
     ModuleContext, Outcome, Payload, Problem, RateLimiter, SLUGS, Scope, SendOutcome, Signer,
     Surface, SystemClock, UlidIdGen, View, client_ip, csv_row, invalid_email_problem,
     normalize_email, rate_limit_keys, rate_limited, require_admin, validation_error,
@@ -54,6 +54,20 @@ fn parse_confirm_subject(subject: &str) -> Option<(&str, i64)> {
         None if !subject.is_empty() => Some((subject, 1)),
         _ => None,
     }
+}
+
+/// Mints a revocable per-subscription unsubscribe token (issue #137,
+/// ADR 0014): two independent ULIDs, ~160 bits of entropy, dot-free.
+///
+/// The dot is the discriminator: a signed token is exactly one dot of
+/// base64url parts, an opaque token has none, so one endpoint serves both
+/// formats without parsing games. The value is randomness through the
+/// harness's own id generator — never a direct `getrandom` in a module.
+/// Revocation is row state: the next mail rotates it, a delete removes it.
+fn new_unsubscribe_token() -> String {
+    let left = UlidIdGen.ulid();
+    let right = UlidIdGen.ulid();
+    format!("{left}{right}")
 }
 
 /// The builder's compile-time settings, cloned into the router state
@@ -349,6 +363,7 @@ async fn signup(
         ),
         None => (UlidIdGen.ulid(), 1),
     };
+    let unsubscribe_token = new_unsubscribe_token();
     send_confirmation(
         &state,
         &scope,
@@ -360,6 +375,7 @@ async fn signup(
             normalized: normalized.clone(),
             locale: locale.clone(),
             ttl_days,
+            unsubscribe_token: unsubscribe_token.clone(),
             now: now.clone(),
         },
     )
@@ -367,8 +383,15 @@ async fn signup(
 
     match existing {
         Some(row) => {
-            store::refresh_to_pending(&*db, &row.id, source.as_deref(), Some(&locale), &now)
-                .await?;
+            store::refresh_to_pending(
+                &*db,
+                &row.id,
+                source.as_deref(),
+                Some(&locale),
+                &unsubscribe_token,
+                &now,
+            )
+            .await?;
         }
         None => {
             store::insert_row(
@@ -383,6 +406,7 @@ async fn signup(
                     locale: Some(locale),
                     confirmed_at: None,
                     unsubscribed_at: None,
+                    unsubscribe_token: Some(unsubscribe_token),
                     created_at: now.clone(),
                     updated_at: now,
                 },
@@ -400,6 +424,7 @@ struct Confirmation {
     normalized: String,
     locale: String,
     ttl_days: u32,
+    unsubscribe_token: String,
     now: String,
 }
 
@@ -419,18 +444,13 @@ async fn send_confirmation(
         normalized,
         locale,
         ttl_days,
+        unsubscribe_token,
         now,
     } = confirmation;
     let confirm_token = signer.sign(&Payload {
         purpose: PURPOSE_CONFIRM.to_owned(),
         subject: confirm_subject(&id, generation),
         exp: Some(unix_now().saturating_add(u64::from(ttl_days) * 86_400)),
-        kid: Kid::Cur,
-    });
-    let unsubscribe_token = signer.sign(&Payload {
-        purpose: PURPOSE_UNSUBSCRIBE.to_owned(),
-        subject: id.clone(),
-        exp: None,
         kid: Kid::Cur,
     });
     let base = api_base(cfg, &state.ctx);
@@ -493,6 +513,7 @@ async fn signup_without_opt_in(
                     locale: Some(locale.to_owned()),
                     confirmed_at: Some(now.to_owned()),
                     unsubscribed_at: None,
+                    unsubscribe_token: None,
                     created_at: now.to_owned(),
                     updated_at: now.to_owned(),
                 },
@@ -588,39 +609,69 @@ async fn confirm(
                 "source": row.source,
             }),
         );
-        let welcome = cfg.get_bool("WELCOME_ON_CONFIRM", state.settings.welcome_on_confirm);
-        if welcome {
-            let unsubscribe_token = signer.sign(&Payload {
-                purpose: PURPOSE_UNSUBSCRIBE.to_owned(),
-                subject: row.id.clone(),
-                exp: None,
-                kid: Kid::Cur,
-            });
-            let base = api_base(&cfg, &state.ctx);
-            let mail = OutgoingMail {
-                to: row.email_normalized.clone(),
-                template_id: TEMPLATE_WELCOME,
-                data: json!(mail::WelcomeMailData {
-                    venture: state.ctx.venture.name.clone(),
-                    email: row.email.clone(),
-                    unsubscribe_url: format!(
-                        "{base}/v1/email-signup/unsubscribe?token={unsubscribe_token}"
-                    ),
-                    brand: state.ctx.venture.brand.clone(),
-                }),
-                locale: row.locale.clone().unwrap_or_else(|| "en".to_owned()),
-                idempotency_key: format!(
-                    "welcome:{}:{}",
-                    row.id,
-                    row.confirmed_at.as_deref().unwrap_or(&now)
-                ),
-            };
-            scope
-                .defer
-                .wait_until(mail::spawn_deferred(Arc::clone(&state.ctx), mail));
-        }
+        send_welcome(&state, &scope, &cfg, &*db, &*signer, &row, &now).await;
     }
     see_other(confirmed_target)
+}
+
+/// The welcome mail, when `WELCOME_ON_CONFIRM` is on.
+async fn send_welcome(
+    state: &ModuleState,
+    scope: &Scope,
+    cfg: &ModuleConfig<'_>,
+    db: &dyn Database,
+    signer: &dyn Signer,
+    row: &SubscriberRow,
+    now: &str,
+) {
+    if !cfg.get_bool("WELCOME_ON_CONFIRM", state.settings.welcome_on_confirm) {
+        return;
+    }
+    // The welcome mail carries the row's current opaque token (issue
+    // #137); rows that predate the migration get one backfilled so the
+    // revocable path is not opt-in later.
+    let unsubscribe_token = if let Some(token) = row.unsubscribe_token.clone() {
+        token
+    } else {
+        let token = new_unsubscribe_token();
+        match store::rotate_unsubscribe_token(db, &row.id, &token, now).await {
+            Ok(_) => token,
+            Err(err) => {
+                // A backfill that cannot be written must not send a dead
+                // link: fall back to the signed format, which needs no
+                // row state.
+                tracing::error!(error = %err, "unsubscribe token backfill failed");
+                signer.sign(&Payload {
+                    purpose: PURPOSE_UNSUBSCRIBE.to_owned(),
+                    subject: row.id.clone(),
+                    exp: None,
+                    kid: Kid::Cur,
+                })
+            }
+        }
+    };
+    let base = api_base(cfg, &state.ctx);
+    let mail = OutgoingMail {
+        to: row.email_normalized.clone(),
+        template_id: TEMPLATE_WELCOME,
+        data: json!(mail::WelcomeMailData {
+            venture: state.ctx.venture.name.clone(),
+            email: row.email.clone(),
+            unsubscribe_url: format!(
+                "{base}/v1/email-signup/unsubscribe?token={unsubscribe_token}"
+            ),
+            brand: state.ctx.venture.brand.clone(),
+        }),
+        locale: row.locale.clone().unwrap_or_else(|| "en".to_owned()),
+        idempotency_key: format!(
+            "welcome:{}:{}",
+            row.id,
+            row.confirmed_at.as_deref().unwrap_or(now)
+        ),
+    };
+    scope
+        .defer
+        .wait_until(mail::spawn_deferred(Arc::clone(&state.ctx), mail));
 }
 
 async fn unsubscribe_get(
@@ -674,12 +725,27 @@ async fn unsubscribe(
         unsubscribed_default,
     );
 
-    let Some(payload) = signer.verify(token, PURPOSE_UNSUBSCRIBE) else {
-        return Err(Problem::new(&SLUGS.invalid_token).instance(&scope.request_id));
+    // Two unsubscribe link formats coexist by design (issue #137). The
+    // dotless token is the current opaque one, revocable per subscription
+    // without touching the signing key ring. The dotted token is the
+    // pre-#137 signed link: it keeps working while its signing key is in
+    // the ring, and `unsubscribe_tokens_do_not_expire` explains what that
+    // costs. Discriminator is the dot: signed payloads are exactly
+    // `part.part`, opaque tokens are dot-free by construction.
+    let (subject, row) = if token.contains('.') {
+        let Some(payload) = signer.verify(token, PURPOSE_UNSUBSCRIBE) else {
+            return Err(Problem::new(&SLUGS.invalid_token).instance(&scope.request_id));
+        };
+        let row = store::find_by_id(&*db, &payload.subject).await?;
+        (payload.subject, row)
+    } else {
+        let Some(row) = store::find_by_unsubscribe_token(&*db, token).await? else {
+            return Err(Problem::new(&SLUGS.invalid_token).instance(&scope.request_id));
+        };
+        (row.id.clone(), Some(row))
     };
     let now = now_iso();
-    let row = store::find_by_id(&*db, &payload.subject).await?;
-    let affected = store::unsubscribe(&*db, &payload.subject, &now).await?;
+    let affected = store::unsubscribe(&*db, &subject, &now).await?;
     if affected > 0
         && let Some(row) = row
     {

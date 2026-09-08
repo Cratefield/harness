@@ -23,6 +23,11 @@ crate, not held as a placeholder.
 ADR 0013 supersedes the distribution half of 0005 and 0011: every crate
 lives in this repository, and `publish = false` — not a separate
 repository — is what makes a crate private.
+ADR 0014 amends ADR 0006 without retracting it: the signer's two secret
+slots become a bounded key ring with revocation as a state, expiry becomes
+a mint-time policy, tokens gain a venture/environment binding, and the
+never-dies unsubscribe link gains an opaque, per-subscription revocable
+form.
 
 [0102](0102-crypto-crate.md) chose the crypto crate: RustCrypto's
 `chacha20poly1305`.
