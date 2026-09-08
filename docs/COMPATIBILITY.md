@@ -41,6 +41,7 @@ compatibility-doc` and checked in CI for drift. Do not edit by hand.
 | `cratefield-runtime-cloudflare` | 0.1.1 | 1 | `^0.3` — `>=0.3.0, <0.4.0` |
 | `cratefield-runtime-native` | 0.1.1 | 1 | `^0.3` — `>=0.3.0, <0.4.0` |
 | `cratefield-secrets` | 0.1.1 | 1 | `^0.3` — `>=0.3.0, <0.4.0` |
+| `cratefield-tables` | 0.1.1 | 1 | `^0.3` — `>=0.3.0, <0.4.0` |
 | `cratefield-testing` | 0.1.1 | 1 | `^0.3` — `>=0.3.0, <0.4.0` |
 | `cratefield-ui` | 0.1.1 | 1 | `^0.3` — `>=0.3.0, <0.4.0` |
 | `venture-native` | 0.1.1 | 1 | `^0.3` — `>=0.3.0, <0.4.0` |

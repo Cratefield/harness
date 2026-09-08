@@ -1,0 +1,559 @@
+{
+  "corpus": "cratefield-tables row validation",
+  "version": 1,
+  "about": [
+    "Triples of (table, input, expected verdict). The Rust validator runs over every",
+    "case in crates/tables/tests/corpus.rs. A second implementation in another language",
+    "runs over the same file, which is what stops it and the Rust validator disagreeing",
+    "about empty versus absent, number coercion, null versus missing, Unicode length and",
+    "whitespace.",
+    "",
+    "How to read it. `tables` is the same shape as the manifest's [tables] section, keyed",
+    "by table name. Each case names one of those tables, supplies an `input`, and expects",
+    "either {\"verdict\": \"accept\"} or {\"verdict\": \"reject\", \"errors\": [...]}.",
+    "",
+    "How to run it. Match on `code`, never on a message: codes are the stable vocabulary",
+    "and messages are prose that may be reworded. Expected errors are ordered: declared",
+    "fields in declaration order, then unknown keys sorted by name. `field` is an empty",
+    "string when the row itself is wrong, which is the RFC 6901 pointer to the whole",
+    "document.",
+    "",
+    "The rules a reimplementation has to match, in one place:",
+    "1. A row is a JSON object. Anything else is one not_an_object error.",
+    "2. null is absence. {\"x\": null} and {} always reach the same verdict.",
+    "3. A field must be present only when it is required and has no default.",
+    "4. An unknown key is an error, never a dropped key.",
+    "5. No coercion. \"42\" is not an integer, 1 is not true, \"true\" is not a boolean.",
+    "6. An integer is a JSON number with no fractional part: Number.isInteger(v). 42.0",
+    "   is accepted because JSON cannot tell it from 42.",
+    "7. Length is Unicode scalar values. In JavaScript that is [...s].length, never",
+    "   s.length. No normalisation: e + combining acute is two characters.",
+    "8. Nothing is trimmed. Whitespace is part of the value and counts toward length.",
+    "9. Bounds are inclusive at both ends.",
+    "10. Uniqueness and foreign keys are not checked here. They read other rows."
+  ],
+  "codes": [
+    "not_an_object",
+    "unknown_field",
+    "required",
+    "wrong_type",
+    "too_short",
+    "too_long",
+    "too_small",
+    "too_large",
+    "not_in_enum",
+    "bad_format"
+  ],
+  "tables": {
+    "post": {
+      "primary_key": "id",
+      "fields": [
+        { "name": "id", "kind": "uuid", "required": true },
+        { "name": "title", "kind": "text", "required": true },
+        { "name": "note", "kind": "text" },
+        { "name": "status", "kind": "enum", "values": ["draft", "published"], "required": true, "default": "draft" }
+      ]
+    },
+    "bounded": {
+      "primary_key": "id",
+      "fields": [
+        { "name": "id", "kind": "text", "required": true },
+        { "name": "short", "kind": "text", "min_len": 1, "max_len": 3 },
+        { "name": "count", "kind": "integer", "min": 0, "max": 10 },
+        { "name": "ratio", "kind": "real", "min": 0.0, "max": 1.0 }
+      ]
+    },
+    "typed": {
+      "primary_key": "id",
+      "fields": [
+        { "name": "id", "kind": "text", "required": true },
+        { "name": "count", "kind": "integer" },
+        { "name": "ratio", "kind": "real" },
+        { "name": "live", "kind": "boolean" },
+        { "name": "seen_at", "kind": "timestamp" },
+        { "name": "external_id", "kind": "uuid" },
+        { "name": "payload", "kind": "json" },
+        { "name": "email", "kind": "text", "format": "email" },
+        { "name": "site", "kind": "text", "format": "url" }
+      ]
+    },
+    "single": {
+      "primary_key": "id",
+      "fields": [{ "name": "id", "kind": "text", "required": true }]
+    }
+  },
+  "cases": [
+    {
+      "name": "a complete row is accepted",
+      "table": "post",
+      "input": {
+        "id": "0b3f2d0e-1a4b-4c8d-9e2f-5a6b7c8d9e0f",
+        "title": "Hello",
+        "note": "a note",
+        "status": "published"
+      },
+      "expect": { "verdict": "accept" }
+    },
+
+    {
+      "name": "empty string: an empty string is a value, not an absence",
+      "why": "The first drift risk. An empty title is present, so `required` is satisfied.",
+      "table": "post",
+      "input": { "id": "0b3f2d0e-1a4b-4c8d-9e2f-5a6b7c8d9e0f", "title": "" },
+      "expect": { "verdict": "accept" }
+    },
+    {
+      "name": "empty string: an absent required field is missing",
+      "table": "post",
+      "input": { "id": "0b3f2d0e-1a4b-4c8d-9e2f-5a6b7c8d9e0f" },
+      "expect": { "verdict": "reject", "errors": [{ "field": "title", "code": "required" }] }
+    },
+    {
+      "name": "empty string: an empty string fails a min_len of 1",
+      "table": "bounded",
+      "input": { "id": "x", "short": "" },
+      "expect": { "verdict": "reject", "errors": [{ "field": "short", "code": "too_short" }] }
+    },
+
+    {
+      "name": "coercion: a number arriving as a string is rejected",
+      "why": "The second drift risk. No coercion, ever.",
+      "table": "typed",
+      "input": { "id": "x", "count": "42" },
+      "expect": { "verdict": "reject", "errors": [{ "field": "count", "code": "wrong_type" }] }
+    },
+    {
+      "name": "coercion: a plain integer is accepted",
+      "table": "typed",
+      "input": { "id": "x", "count": 42 },
+      "expect": { "verdict": "accept" }
+    },
+    {
+      "name": "coercion: an integer written with a decimal point is accepted",
+      "why": "JSON has one number type: 42.0 and 42 are the same value. Number.isInteger(42.0) is true.",
+      "table": "typed",
+      "input": { "id": "x", "count": 42.0 },
+      "expect": { "verdict": "accept" }
+    },
+    {
+      "name": "coercion: a fractional number is not an integer",
+      "table": "typed",
+      "input": { "id": "x", "count": 42.5 },
+      "expect": { "verdict": "reject", "errors": [{ "field": "count", "code": "wrong_type" }] }
+    },
+    {
+      "name": "coercion: an integer is an acceptable real",
+      "table": "typed",
+      "input": { "id": "x", "ratio": 2 },
+      "expect": { "verdict": "accept" }
+    },
+    {
+      "name": "coercion: 1 is not true",
+      "table": "typed",
+      "input": { "id": "x", "live": 1 },
+      "expect": { "verdict": "reject", "errors": [{ "field": "live", "code": "wrong_type" }] }
+    },
+    {
+      "name": "coercion: the string \"true\" is not true",
+      "table": "typed",
+      "input": { "id": "x", "live": "true" },
+      "expect": { "verdict": "reject", "errors": [{ "field": "live", "code": "wrong_type" }] }
+    },
+    {
+      "name": "coercion: a boolean is accepted",
+      "table": "typed",
+      "input": { "id": "x", "live": false },
+      "expect": { "verdict": "accept" }
+    },
+
+    {
+      "name": "null: an explicit null on an optional field is the same as leaving it out",
+      "why": "The third drift risk. These two cases must always match each other.",
+      "table": "post",
+      "input": { "id": "0b3f2d0e-1a4b-4c8d-9e2f-5a6b7c8d9e0f", "title": "Hello", "note": null },
+      "expect": { "verdict": "accept" }
+    },
+    {
+      "name": "null: leaving an optional field out is the same as an explicit null",
+      "table": "post",
+      "input": { "id": "0b3f2d0e-1a4b-4c8d-9e2f-5a6b7c8d9e0f", "title": "Hello" },
+      "expect": { "verdict": "accept" }
+    },
+    {
+      "name": "null: an explicit null on a required field is missing",
+      "table": "post",
+      "input": { "id": "0b3f2d0e-1a4b-4c8d-9e2f-5a6b7c8d9e0f", "title": null },
+      "expect": { "verdict": "reject", "errors": [{ "field": "title", "code": "required" }] }
+    },
+    {
+      "name": "null: a required field with a default may be null",
+      "why": "`status` is required and defaults to 'draft', so the database supplies it.",
+      "table": "post",
+      "input": { "id": "0b3f2d0e-1a4b-4c8d-9e2f-5a6b7c8d9e0f", "title": "Hello", "status": null },
+      "expect": { "verdict": "accept" }
+    },
+    {
+      "name": "null: a required field with a default may be left out",
+      "table": "post",
+      "input": { "id": "0b3f2d0e-1a4b-4c8d-9e2f-5a6b7c8d9e0f", "title": "Hello" },
+      "expect": { "verdict": "accept" }
+    },
+    {
+      "name": "null: a null json field is an absence, not a JSON null value",
+      "table": "typed",
+      "input": { "id": "x", "payload": null },
+      "expect": { "verdict": "accept" }
+    },
+
+    {
+      "name": "unicode: an astral emoji is one character, not two and not four",
+      "why": "The fourth drift risk. In JavaScript this is [...s].length, never s.length.",
+      "table": "bounded",
+      "input": { "id": "x", "short": "😀" },
+      "expect": { "verdict": "accept" }
+    },
+    {
+      "name": "unicode: four astral emoji are four characters and exceed a max_len of 3",
+      "table": "bounded",
+      "input": { "id": "x", "short": "😀😀😀😀" },
+      "expect": { "verdict": "reject", "errors": [{ "field": "short", "code": "too_long" }] }
+    },
+    {
+      "name": "unicode: a three-character string of four-byte characters fits a max_len of 3",
+      "why": "Twelve bytes. A byte count would reject this.",
+      "table": "bounded",
+      "input": { "id": "x", "short": "😀😀😀" },
+      "expect": { "verdict": "accept" }
+    },
+    {
+      "name": "unicode: three precomposed accented characters fit a max_len of 3",
+      "table": "bounded",
+      "input": { "id": "x", "short": "\u00e9\u00e9\u00e9" },
+      "expect": { "verdict": "accept" }
+    },
+    {
+      "name": "unicode: the same three glyphs decomposed are six characters and do not fit",
+      "why": "No normalisation. e plus a combining acute renders as one glyph and counts as two. This case and the one above render identically on screen and reach opposite verdicts, which is the point.",
+      "table": "bounded",
+      "input": { "id": "x", "short": "e\u0301e\u0301e\u0301" },
+      "expect": { "verdict": "reject", "errors": [{ "field": "short", "code": "too_long" }] }
+    },
+
+    {
+      "name": "whitespace: surrounding whitespace counts toward length",
+      "why": "The fifth drift risk. Nothing is trimmed: ' ab ' is four characters.",
+      "table": "bounded",
+      "input": { "id": "x", "short": " ab " },
+      "expect": { "verdict": "reject", "errors": [{ "field": "short", "code": "too_long" }] }
+    },
+    {
+      "name": "whitespace: a single space satisfies a min_len of 1",
+      "table": "bounded",
+      "input": { "id": "x", "short": " " },
+      "expect": { "verdict": "accept" }
+    },
+    {
+      "name": "whitespace: a whitespace-only string is present",
+      "table": "post",
+      "input": { "id": "0b3f2d0e-1a4b-4c8d-9e2f-5a6b7c8d9e0f", "title": "   " },
+      "expect": { "verdict": "accept" }
+    },
+    {
+      "name": "whitespace: a leading space breaks an email",
+      "table": "typed",
+      "input": { "id": "x", "email": " nick@example.com" },
+      "expect": { "verdict": "reject", "errors": [{ "field": "email", "code": "bad_format" }] }
+    },
+    {
+      "name": "whitespace: an email with no surrounding space is accepted",
+      "table": "typed",
+      "input": { "id": "x", "email": "nick@example.com" },
+      "expect": { "verdict": "accept" }
+    },
+
+    {
+      "name": "row: an array is not a row",
+      "table": "post",
+      "input": [],
+      "expect": { "verdict": "reject", "errors": [{ "field": "", "code": "not_an_object" }] }
+    },
+    {
+      "name": "row: a string is not a row",
+      "table": "post",
+      "input": "id=1",
+      "expect": { "verdict": "reject", "errors": [{ "field": "", "code": "not_an_object" }] }
+    },
+    {
+      "name": "row: a null is not a row",
+      "table": "post",
+      "input": null,
+      "expect": { "verdict": "reject", "errors": [{ "field": "", "code": "not_an_object" }] }
+    },
+
+    {
+      "name": "unknown: a misspelled column is an error, not a dropped key",
+      "table": "single",
+      "input": { "id": "x", "titel": "Hello" },
+      "expect": { "verdict": "reject", "errors": [{ "field": "titel", "code": "unknown_field" }] }
+    },
+    {
+      "name": "unknown: unknown keys come after declared fields and are sorted",
+      "table": "single",
+      "input": { "zzz": 1, "aaa": 2 },
+      "expect": {
+        "verdict": "reject",
+        "errors": [
+          { "field": "id", "code": "required" },
+          { "field": "aaa", "code": "unknown_field" },
+          { "field": "zzz", "code": "unknown_field" }
+        ]
+      }
+    },
+
+    {
+      "name": "enum: a declared value is accepted",
+      "table": "post",
+      "input": { "id": "0b3f2d0e-1a4b-4c8d-9e2f-5a6b7c8d9e0f", "title": "Hello", "status": "draft" },
+      "expect": { "verdict": "accept" }
+    },
+    {
+      "name": "enum: an undeclared value is rejected",
+      "table": "post",
+      "input": { "id": "0b3f2d0e-1a4b-4c8d-9e2f-5a6b7c8d9e0f", "title": "Hello", "status": "archived" },
+      "expect": { "verdict": "reject", "errors": [{ "field": "status", "code": "not_in_enum" }] }
+    },
+    {
+      "name": "enum: matching is case sensitive",
+      "table": "post",
+      "input": { "id": "0b3f2d0e-1a4b-4c8d-9e2f-5a6b7c8d9e0f", "title": "Hello", "status": "Draft" },
+      "expect": { "verdict": "reject", "errors": [{ "field": "status", "code": "not_in_enum" }] }
+    },
+    {
+      "name": "enum: a number is not one of the values",
+      "table": "post",
+      "input": { "id": "0b3f2d0e-1a4b-4c8d-9e2f-5a6b7c8d9e0f", "title": "Hello", "status": 0 },
+      "expect": { "verdict": "reject", "errors": [{ "field": "status", "code": "wrong_type" }] }
+    },
+
+    {
+      "name": "bounds: an integer at the minimum is inclusive",
+      "table": "bounded",
+      "input": { "id": "x", "count": 0 },
+      "expect": { "verdict": "accept" }
+    },
+    {
+      "name": "bounds: an integer at the maximum is inclusive",
+      "table": "bounded",
+      "input": { "id": "x", "count": 10 },
+      "expect": { "verdict": "accept" }
+    },
+    {
+      "name": "bounds: an integer below the minimum is rejected",
+      "table": "bounded",
+      "input": { "id": "x", "count": -1 },
+      "expect": { "verdict": "reject", "errors": [{ "field": "count", "code": "too_small" }] }
+    },
+    {
+      "name": "bounds: an integer above the maximum is rejected",
+      "table": "bounded",
+      "input": { "id": "x", "count": 11 },
+      "expect": { "verdict": "reject", "errors": [{ "field": "count", "code": "too_large" }] }
+    },
+    {
+      "name": "bounds: a real below the minimum is rejected",
+      "table": "bounded",
+      "input": { "id": "x", "ratio": -0.0001 },
+      "expect": { "verdict": "reject", "errors": [{ "field": "ratio", "code": "too_small" }] }
+    },
+    {
+      "name": "bounds: a real above the maximum is rejected",
+      "table": "bounded",
+      "input": { "id": "x", "ratio": 1.0001 },
+      "expect": { "verdict": "reject", "errors": [{ "field": "ratio", "code": "too_large" }] }
+    },
+    {
+      "name": "bounds: a real at both ends is inclusive",
+      "table": "bounded",
+      "input": { "id": "x", "ratio": 1.0 },
+      "expect": { "verdict": "accept" }
+    },
+
+    {
+      "name": "timestamp: an RFC 3339 instant in UTC is accepted",
+      "table": "typed",
+      "input": { "id": "x", "seen_at": "2026-09-08T09:30:00Z" },
+      "expect": { "verdict": "accept" }
+    },
+    {
+      "name": "timestamp: a fractional second is accepted",
+      "why": "This is what new Date().toISOString() emits.",
+      "table": "typed",
+      "input": { "id": "x", "seen_at": "2026-09-08T09:30:00.123Z" },
+      "expect": { "verdict": "accept" }
+    },
+    {
+      "name": "timestamp: a numeric offset is accepted",
+      "table": "typed",
+      "input": { "id": "x", "seen_at": "2026-09-08T09:30:00+02:00" },
+      "expect": { "verdict": "accept" }
+    },
+    {
+      "name": "timestamp: a space instead of T is rejected",
+      "table": "typed",
+      "input": { "id": "x", "seen_at": "2026-09-08 09:30:00Z" },
+      "expect": { "verdict": "reject", "errors": [{ "field": "seen_at", "code": "bad_format" }] }
+    },
+    {
+      "name": "timestamp: a lowercase z is rejected",
+      "why": "One spelling only. Uppercase T and Z is what toISOString() produces.",
+      "table": "typed",
+      "input": { "id": "x", "seen_at": "2026-09-08T09:30:00z" },
+      "expect": { "verdict": "reject", "errors": [{ "field": "seen_at", "code": "bad_format" }] }
+    },
+    {
+      "name": "timestamp: no offset at all is rejected",
+      "table": "typed",
+      "input": { "id": "x", "seen_at": "2026-09-08T09:30:00" },
+      "expect": { "verdict": "reject", "errors": [{ "field": "seen_at", "code": "bad_format" }] }
+    },
+    {
+      "name": "timestamp: a day the month does not have is rejected",
+      "table": "typed",
+      "input": { "id": "x", "seen_at": "2026-02-30T09:30:00Z" },
+      "expect": { "verdict": "reject", "errors": [{ "field": "seen_at", "code": "bad_format" }] }
+    },
+    {
+      "name": "timestamp: 29 February in a leap year is accepted",
+      "table": "typed",
+      "input": { "id": "x", "seen_at": "2024-02-29T09:30:00Z" },
+      "expect": { "verdict": "accept" }
+    },
+    {
+      "name": "timestamp: 29 February in a common year is rejected",
+      "table": "typed",
+      "input": { "id": "x", "seen_at": "2026-02-29T09:30:00Z" },
+      "expect": { "verdict": "reject", "errors": [{ "field": "seen_at", "code": "bad_format" }] }
+    },
+    {
+      "name": "timestamp: a date with no time is rejected",
+      "table": "typed",
+      "input": { "id": "x", "seen_at": "2026-09-08" },
+      "expect": { "verdict": "reject", "errors": [{ "field": "seen_at", "code": "bad_format" }] }
+    },
+    {
+      "name": "timestamp: a unix epoch number is not a timestamp",
+      "table": "typed",
+      "input": { "id": "x", "seen_at": 1757324400 },
+      "expect": { "verdict": "reject", "errors": [{ "field": "seen_at", "code": "wrong_type" }] }
+    },
+
+    {
+      "name": "uuid: a lowercase hyphenated UUID is accepted",
+      "table": "typed",
+      "input": { "id": "x", "external_id": "0b3f2d0e-1a4b-4c8d-9e2f-5a6b7c8d9e0f" },
+      "expect": { "verdict": "accept" }
+    },
+    {
+      "name": "uuid: an uppercase UUID is accepted",
+      "table": "typed",
+      "input": { "id": "x", "external_id": "0B3F2D0E-1A4B-4C8D-9E2F-5A6B7C8D9E0F" },
+      "expect": { "verdict": "accept" }
+    },
+    {
+      "name": "uuid: a braced UUID is rejected",
+      "table": "typed",
+      "input": { "id": "x", "external_id": "{0b3f2d0e-1a4b-4c8d-9e2f-5a6b7c8d9e0f}" },
+      "expect": { "verdict": "reject", "errors": [{ "field": "external_id", "code": "bad_format" }] }
+    },
+    {
+      "name": "uuid: an unhyphenated UUID is rejected",
+      "table": "typed",
+      "input": { "id": "x", "external_id": "0b3f2d0e1a4b4c8d9e2f5a6b7c8d9e0f" },
+      "expect": { "verdict": "reject", "errors": [{ "field": "external_id", "code": "bad_format" }] }
+    },
+    {
+      "name": "uuid: a ULID is not a UUID",
+      "why": "The harness mints ULIDs. A uuid field is for an identifier that arrives from elsewhere.",
+      "table": "typed",
+      "input": { "id": "x", "external_id": "01JBQ7X4M8Z9WQ2K3T5V6N7P8R" },
+      "expect": { "verdict": "reject", "errors": [{ "field": "external_id", "code": "bad_format" }] }
+    },
+
+    {
+      "name": "url: an https URL is accepted",
+      "table": "typed",
+      "input": { "id": "x", "site": "https://factory0.ventures/ventures" },
+      "expect": { "verdict": "accept" }
+    },
+    {
+      "name": "url: an http URL is accepted",
+      "table": "typed",
+      "input": { "id": "x", "site": "http://localhost:8787" },
+      "expect": { "verdict": "accept" }
+    },
+    {
+      "name": "url: a scheme other than http or https is rejected",
+      "table": "typed",
+      "input": { "id": "x", "site": "ftp://example.com" },
+      "expect": { "verdict": "reject", "errors": [{ "field": "site", "code": "bad_format" }] }
+    },
+    {
+      "name": "url: a relative path is rejected",
+      "table": "typed",
+      "input": { "id": "x", "site": "/ventures" },
+      "expect": { "verdict": "reject", "errors": [{ "field": "site", "code": "bad_format" }] }
+    },
+    {
+      "name": "url: a space anywhere is rejected",
+      "table": "typed",
+      "input": { "id": "x", "site": "https://example.com/a b" },
+      "expect": { "verdict": "reject", "errors": [{ "field": "site", "code": "bad_format" }] }
+    },
+    {
+      "name": "url: an empty authority is rejected",
+      "table": "typed",
+      "input": { "id": "x", "site": "https:///ventures" },
+      "expect": { "verdict": "reject", "errors": [{ "field": "site", "code": "bad_format" }] }
+    },
+
+    {
+      "name": "json: an object is accepted",
+      "table": "typed",
+      "input": { "id": "x", "payload": { "a": 1 } },
+      "expect": { "verdict": "accept" }
+    },
+    {
+      "name": "json: an array is accepted",
+      "table": "typed",
+      "input": { "id": "x", "payload": [1, 2, 3] },
+      "expect": { "verdict": "accept" }
+    },
+    {
+      "name": "json: a scalar is accepted",
+      "table": "typed",
+      "input": { "id": "x", "payload": 7 },
+      "expect": { "verdict": "accept" }
+    },
+
+    {
+      "name": "order: declared fields are reported in declaration order",
+      "table": "post",
+      "input": { "title": 1, "status": "archived", "extra": true },
+      "expect": {
+        "verdict": "reject",
+        "errors": [
+          { "field": "id", "code": "required" },
+          { "field": "title", "code": "wrong_type" },
+          { "field": "status", "code": "not_in_enum" },
+          { "field": "extra", "code": "unknown_field" }
+        ]
+      }
+    },
+    {
+      "name": "order: a uuid primary key still has to be a UUID",
+      "table": "post",
+      "input": { "id": "not-a-uuid", "title": "Hello" },
+      "expect": { "verdict": "reject", "errors": [{ "field": "id", "code": "bad_format" }] }
+    }
+  ]
+}

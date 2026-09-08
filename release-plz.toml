@@ -19,3 +19,12 @@ publish = false
 [[package]]
 name = "cratefield-cli-acceptance"
 publish = false
+
+# Held back until the CRUD layer and the first in-repo consumer land.
+# Nothing depends on it yet, and its public surface is still moving, which
+# a 0.1 on crates.io would pin permanently. Its first publish is manual
+# like every other new crate (docs/RELEASING.md), so leaving it in would
+# only make the release run fail authentication over OIDC.
+[[package]]
+name = "cratefield-tables"
+publish = false

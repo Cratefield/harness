@@ -22,6 +22,14 @@ Configuration lives in `release-plz.toml` (per-crate versioning,
 conventional-commit changelogs, `publish = false` for `examples/*` and
 the CLI acceptance crate).
 
+`cratefield-tables` also carries `publish = false`, and is held back from
+crates.io until the CRUD layer and the first in-repo consumer land.
+Nothing depends on it yet and its public surface is still moving, which a
+0.1 on crates.io would pin permanently. When it is ready its first
+publish is manual, the same as every other new crate: add it to the
+ordered list in step 2 below, then enable its trusted publisher and drop
+the `publish = false` entry.
+
 Authentication is **trusted publishing**: the workflow exchanges the
 GitHub Actions OIDC token (`id-token: write`) for a short-lived
 crates.io token. No `CARGO_REGISTRY_TOKEN` is stored anywhere.
