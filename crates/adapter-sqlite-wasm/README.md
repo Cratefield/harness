@@ -1,0 +1,1 @@
+# cratefield-adapter-sqlite-wasm
