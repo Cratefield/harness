@@ -134,7 +134,7 @@ async fn unauthenticated_admin_pages_redirect_to_login() {
         Method::POST,
         "/ui/admin/email-signup/delete",
         &[ORIGIN],
-        Some("email=a%40b.co"),
+        Some("id=x"),
     )
     .await;
     assert_eq!(reply.status, StatusCode::SEE_OTHER);
@@ -254,7 +254,24 @@ async fn table_shows_rows_and_delete_takes_two_posts() {
             .body
             .contains(r#"<td class="cf-table-cell">ada@example.com</td>"#)
     );
-    assert!(table.body.contains(r#"<form class="cf-row-action" method="post" action="/ui/admin/email-signup/delete"><input type="hidden" name="email" value="ada@example.com"><button class="cf-submit cf-submit--row" type="submit">Delete</button></form>"#), "{}", table.body);
+    // The row action posts the opaque id, never the email (issue #135).
+    let marker = r#"<input type="hidden" name="id" value=""#;
+    let start = table.body.find(marker).expect("row form carries the id") + marker.len();
+    let end = start + table.body[start..].find('"').expect("id value closes");
+    let id = table.body[start..end].to_owned();
+    assert!(!id.is_empty() && !id.contains('@'), "id is opaque: {id}");
+    assert!(
+        table.body.contains(&format!(
+            r#"<form class="cf-row-action" method="post" action="/ui/admin/email-signup/delete"><input type="hidden" name="id" value="{id}"><button class="cf-submit cf-submit--row" type="submit">Delete</button></form>"#
+        )),
+        "{}",
+        table.body
+    );
+    assert!(
+        !table.body.contains(r#"name="email""#),
+        "no email travels in the delete flow: {}",
+        table.body
+    );
 
     // First post: the confirm step, nothing deleted.
     let confirm = send(
@@ -262,11 +279,15 @@ async fn table_shows_rows_and_delete_takes_two_posts() {
         Method::POST,
         "/ui/admin/email-signup/delete",
         &[ORIGIN, ("cookie", &cookie)],
-        Some("email=ada%40example.com"),
+        Some(&format!("id={id}")),
     )
     .await;
     assert_eq!(confirm.status, StatusCode::OK, "{}", confirm.body);
-    assert!(confirm.body.contains("Delete ada@example.com?"));
+    assert!(
+        confirm.body.contains(&format!("Delete {id}?")),
+        "{}",
+        confirm.body
+    );
     assert!(
         confirm
             .body
@@ -293,7 +314,7 @@ async fn table_shows_rows_and_delete_takes_two_posts() {
         Method::POST,
         "/ui/admin/email-signup/delete",
         &[ORIGIN, ("cookie", &cookie)],
-        Some("email=ada%40example.com&confirm=1"),
+        Some(&format!("id={id}&confirm=1")),
     )
     .await;
     assert_eq!(done.status, StatusCode::SEE_OTHER, "{}", done.body);
@@ -318,7 +339,7 @@ async fn table_shows_rows_and_delete_takes_two_posts() {
         Method::POST,
         "/ui/admin/email-signup/delete",
         &[("origin", "https://evil.example"), ("cookie", &cookie)],
-        Some("email=x%40y.z&confirm=1"),
+        Some("id=x&confirm=1"),
     )
     .await;
     assert_eq!(cross.status, StatusCode::FORBIDDEN);
@@ -436,12 +457,36 @@ async fn admin_posts_need_same_origin_proof_beyond_the_cookie() {
     let kit = kit(true);
     let cookie = login(&kit).await;
 
+    // The delete action takes the opaque row id, never the email (issue #135),
+    // so the same-origin proof is exercised against a real seeded row.
+    let reply = cratefield_testing::request(
+        &kit.router,
+        Method::POST,
+        "/v1/email-signup",
+        Some(r#"{"email":"ada@example.com","captchaToken":"tok"}"#),
+    )
+    .await;
+    assert_eq!(reply.status, StatusCode::ACCEPTED);
+    let table = send(
+        &kit,
+        Method::GET,
+        "/ui/admin/email-signup/export",
+        &[("cookie", &cookie)],
+        None,
+    )
+    .await;
+    assert_eq!(table.status, StatusCode::OK, "{}", table.body);
+    let marker = r#"<input type="hidden" name="id" value=""#;
+    let start = table.body.find(marker).expect("row form carries the id") + marker.len();
+    let end = start + table.body[start..].find('"').expect("id value closes");
+    let id = table.body[start..end].to_owned();
+
     let no_proof = send(
         &kit,
         Method::POST,
         "/ui/admin/email-signup/delete",
         &[("cookie", &cookie)],
-        Some("email=ada%40example.com&confirm=1"),
+        Some(&format!("id={id}&confirm=1")),
     )
     .await;
     assert_eq!(no_proof.status, StatusCode::FORBIDDEN);
@@ -462,12 +507,12 @@ async fn admin_posts_need_same_origin_proof_beyond_the_cookie() {
                 "https://api.test.example/ui/admin/email-signup/export",
             ),
         ],
-        Some("email=ada%40example.com"),
+        Some(&format!("id={id}")),
     )
     .await;
     assert_eq!(referer.status, StatusCode::OK, "{}", referer.body);
     assert!(
-        referer.body.contains("Delete ada@example.com?"),
+        referer.body.contains(&format!("Delete {id}?")),
         "{}",
         referer.body
     );

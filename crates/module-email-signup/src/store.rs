@@ -233,14 +233,11 @@ pub(crate) async fn unsubscribe(db: &dyn Database, id: &str, now: &str) -> Resul
     db.execute(&Statement::render(&update)).await
 }
 
-pub(crate) async fn delete_by_normalized_email(
-    db: &dyn Database,
-    email_normalized: &str,
-) -> Result<u64, DbError> {
+pub(crate) async fn delete_by_id(db: &dyn Database, id: &str) -> Result<u64, DbError> {
     let mut delete = Query::delete();
     delete
         .from_table(iden("subscribers"))
-        .and_where(Expr::col(iden("email_normalized")).eq(email_normalized));
+        .and_where(Expr::col(iden("id")).eq(id));
     db.execute(&Statement::render(&delete)).await
 }
 

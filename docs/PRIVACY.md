@@ -70,8 +70,10 @@ not by storage: nothing about links is stored server-side.
 
 - `GET /v1/<module>/admin/export.csv` (Bearer `ADMIN_TOKEN`) exports
   every stored column for the subject's records.
-- `DELETE /v1/email-signup/admin/subscribers/{email}` hard-deletes the
-  subscriber row. Waitlist rows are removed by direct database access or
+- `DELETE /v1/email-signup/admin/subscribers/{id}` hard-deletes the
+  subscriber row. The path carries the opaque row id, never the email
+  (issue #135): URLs outlive requests in access logs, proxies and
+  browser history. Waitlist rows are removed by direct database access or
   a scheduled purge; an admin route for waitlist deletion is future work
   (see PROGRESS.md, deviations).
 - Deletion invalidates outstanding links (tokens name the deleted row

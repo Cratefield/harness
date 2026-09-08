@@ -158,18 +158,41 @@ pub(crate) async fn security_headers_layer(request: Request, next: Next) -> Axum
     let is_api = request.uri().path().starts_with("/v1/");
     let mut response = next.run(request).await;
     if is_api {
-        let headers = response.headers_mut();
-        headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
-        headers.insert(
-            header::X_CONTENT_TYPE_OPTIONS,
-            HeaderValue::from_static("nosniff"),
-        );
-        headers.insert(
-            header::HeaderName::from_static("referrer-policy"),
-            HeaderValue::from_static("no-referrer"),
-        );
+        insert_no_store_headers(response.headers_mut());
     }
     response
+}
+
+/// Middleware for token-bearing URLs (issue #135). A `token` query
+/// parameter is the credential — confirmation links and
+/// `/ui/waitlist/status?token=…` authenticate with the URL itself, and
+/// `/ui/*` is outside the `/v1/*` rule above. Any response to a request
+/// whose query carries a `token` parameter therefore gets the same
+/// no-store headers at the root: no cache may keep the credential and no
+/// outbound navigation may leak it through `Referer`.
+pub(crate) async fn token_response_layer(request: Request, next: Next) -> AxumResponse {
+    let carries_token = request.uri().query().is_some_and(|query| {
+        query
+            .split('&')
+            .any(|pair| pair == "token" || pair.starts_with("token="))
+    });
+    let mut response = next.run(request).await;
+    if carries_token {
+        insert_no_store_headers(response.headers_mut());
+    }
+    response
+}
+
+fn insert_no_store_headers(headers: &mut axum::http::HeaderMap) {
+    headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    headers.insert(
+        header::X_CONTENT_TYPE_OPTIONS,
+        HeaderValue::from_static("nosniff"),
+    );
+    headers.insert(
+        header::HeaderName::from_static("referrer-policy"),
+        HeaderValue::from_static("no-referrer"),
+    );
 }
 
 /// A `Json` extractor and response whose rejections and serializations are

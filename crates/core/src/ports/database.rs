@@ -3,7 +3,6 @@
 
 use async_trait::async_trait;
 use sea_query::Value as SeaValue;
-use thiserror::Error;
 
 /// A rendered SQL statement: `(sql, values)` with `?` placeholders, produced
 /// by rendering a sea-query query for a dialect. Modules build queries with
@@ -182,15 +181,35 @@ impl TryFromValue for SeaValue {
 }
 
 /// Database failures, sanitized for logs and problem details.
-#[derive(Debug, Clone, PartialEq, Eq, Error)]
+///
+/// The adapters wrap the raw driver message (`sqlx`, D1, rusqlite), which
+/// is **not** safe on its own: a Postgres unique violation quotes the
+/// offending row in its `DETAIL:` line — an email address — and a connect
+/// failure can echo the connection URL with its credentials. `Display`
+/// therefore runs the message through [`crate::logging::scrub_text`]
+/// (issue #135), so every `tracing` field, forwarded diagnostic or
+/// `format!` that renders a `DbError` gets the sanitized text. `Debug`
+/// still shows the raw string for tests; the logging formatters scrub
+/// `{:?}` output too.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DbError {
-    #[error("execute failed: {0}")]
     Execute(String),
-    #[error("query failed: {0}")]
     Query(String),
-    #[error("batch failed: {0}")]
     Batch(String),
 }
+
+impl std::fmt::Display for DbError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let (label, message) = match self {
+            Self::Execute(message) => ("execute failed", message),
+            Self::Query(message) => ("query failed", message),
+            Self::Batch(message) => ("batch failed", message),
+        };
+        write!(f, "{label}: {}", crate::logging::scrub_text(message))
+    }
+}
+
+impl std::error::Error for DbError {}
 
 /// Execute statements against the venture database. Implementations: D1
 /// (Workers), rusqlite (tests, self-hosted), Postgres (phase 3).
@@ -203,4 +222,43 @@ pub trait Database: Send + Sync {
     async fn execute(&self, stmt: &Statement) -> Result<u64, DbError>;
     async fn query(&self, stmt: &Statement) -> Result<Rows, DbError>;
     async fn batch(&self, stmts: &[Statement]) -> Result<(), DbError>;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn display_sanitizes_the_driver_message() {
+        // The finding: `DbError::Execute(err.to_string())` wraps the raw
+        // driver error, and a Postgres unique violation quotes the row —
+        // an email — in its DETAIL line.
+        let error = DbError::Execute(
+            "duplicate key value violates unique constraint \"subscribers_email_normalized_key\" \
+             DETAIL:  Key (email_normalized)=(nick@example.com) already exists."
+                .to_owned(),
+        );
+        let text = error.to_string();
+        assert!(text.starts_with("execute failed: "), "{text}");
+        assert!(!text.contains('@'), "{text}");
+        assert!(!text.contains("nick"), "{text}");
+        assert!(text.contains("[subject_hash:"), "{text}");
+
+        // A connect failure echoing the URL must not disclose credentials.
+        let error = DbError::Execute(
+            "error connecting to postgres://venture:sup3r-s3cret@db.internal:5432/app".to_owned(),
+        );
+        let text = error.to_string();
+        assert!(!text.contains("sup3r-s3cret"), "{text}");
+        assert!(text.contains("postgres://[redacted]@db.internal"), "{text}");
+
+        assert_eq!(
+            DbError::Query("no such table: subscribers".to_owned()).to_string(),
+            "query failed: no such table: subscribers"
+        );
+        assert_eq!(
+            DbError::Batch("batch aborted".to_owned()).to_string(),
+            "batch failed: batch aborted"
+        );
+    }
 }

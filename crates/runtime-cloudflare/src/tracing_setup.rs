@@ -72,7 +72,10 @@ mod native_subscriber {
                 self.fields
                     .insert(format!("{name}_hash"), json!(format!("sha256:{hash}")));
             } else {
-                self.fields.insert(name.to_owned(), json!(value));
+                // The redacted form, not the raw value: for a generic field
+                // it is the value with embedded emails, tokens and query
+                // strings scrubbed (issue #135).
+                self.fields.insert(name.to_owned(), json!(redacted));
             }
         }
     }
