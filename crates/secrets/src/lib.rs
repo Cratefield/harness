@@ -29,7 +29,7 @@ use std::fmt;
 use thiserror::Error;
 use zeroize::Zeroizing;
 
-pub use audit::{Anchor, ChainAudit, verify};
+pub use audit::{Anchor, ChainAudit, chain_sink, verify};
 pub use rotate::{RewrapReport, RotationReport};
 pub use store::{HarnessOnly, SecretStore, Secrets};
 
@@ -38,7 +38,7 @@ pub use store::{HarnessOnly, SecretStore, Secrets};
 /// is what `Migrations`' two sets are for (ADR 0004).
 #[must_use]
 pub fn migrations() -> cratefield_core::Migrations {
-    const SQLITE: [cratefield_core::SqlMigration; 2] = [
+    const SQLITE: [cratefield_core::SqlMigration; 3] = [
         cratefield_core::SqlMigration {
             id: "0001",
             name: "init",
@@ -49,8 +49,13 @@ pub fn migrations() -> cratefield_core::Migrations {
             name: "audit",
             sql: include_str!("../migrations/sqlite/0002_audit.sql"),
         },
+        cratefield_core::SqlMigration {
+            id: "0003",
+            name: "audit-store",
+            sql: include_str!("../migrations/sqlite/0003_audit_store.sql"),
+        },
     ];
-    const POSTGRES: [cratefield_core::SqlMigration; 2] = [
+    const POSTGRES: [cratefield_core::SqlMigration; 3] = [
         cratefield_core::SqlMigration {
             id: "0001",
             name: "init",
@@ -60,6 +65,11 @@ pub fn migrations() -> cratefield_core::Migrations {
             id: "0002",
             name: "audit",
             sql: include_str!("../migrations/postgres/0002_audit.sql"),
+        },
+        cratefield_core::SqlMigration {
+            id: "0003",
+            name: "audit-store",
+            sql: include_str!("../migrations/postgres/0003_audit_store.sql"),
         },
     ];
     cratefield_core::Migrations {

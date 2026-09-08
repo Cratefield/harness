@@ -21,6 +21,26 @@
 //! [`Connections::module_key`]) return a [`SecretBytes`], which zeroizes on
 //! drop and does not print its contents — the provisioning engine (#7) reads
 //! them to configure a venture, and nothing renders them.
+//!
+//! **Who may reach a credential: [`VentureScope`] (issue #142).** The unit
+//! of authorization is the *venture*, never a caller's memory of a tenant
+//! id. Every credential method takes a [`VentureScope`], and the only way
+//! to build one is [`Connections::grant`], which resolves the venture
+//! against the control plane's `venture` table and **refuses a venture
+//! that is not there** — recording the refusal on the durable audit chain
+//! *before* any secret store is touched. A granted scope then carries its
+//! venture into every access as the audit actor (`venture:<id>`), so "who
+//! read this credential" is never a free-text field the caller chose. Even
+//! a store collision fails closed: a scope reaches only the tenant store
+//! it was granted for, and the store seals its ciphertexts with that
+//! tenant in the AAD (issue #142's attribution), so another venture's
+//! bytes fail as `NotAuthentic` — as a recorded, denied access.
+//!
+//! The audit sink is owned by [`Connections::new`], which wires the
+//! durable per-store chain router ([`cratefield_secrets::chain_sink`])
+//! over the shared control database: credential accesses are verifiable
+//! by default with [`cratefield_secrets::verify`], not verifiable only if
+//! a caller remembered to ask.
 
 #![forbid(unsafe_code)]
 
@@ -28,7 +48,10 @@ use std::sync::Arc;
 
 use cratefield_catalog::ModuleSet;
 use cratefield_core::{Database, DbError, Statement};
-use cratefield_secrets::{Actor, SecretBytes, Secrets, SecretsError};
+use cratefield_secrets::{
+    Access, Actor, Audit, AuditEvent, ChainAudit, SecretBytes, Secrets, SecretsError, StoreId,
+    chain_sink,
+};
 use sea_query::Value as SeaValue;
 use serde::{Deserialize, Serialize};
 
@@ -165,6 +188,10 @@ pub enum ConnError {
     Db(DbError),
     /// A stored row was malformed (an unknown state or kind).
     Malformed(String),
+    /// A [`Connections::grant`] named a venture the control plane does not
+    /// have, so no scope can exist for it. The denial is on the audit
+    /// chain before this error is returned (issue #142).
+    UnknownVenture(String),
 }
 
 impl std::fmt::Display for ConnError {
@@ -173,6 +200,7 @@ impl std::fmt::Display for ConnError {
             ConnError::Secrets(err) => write!(f, "secrets: {err}"),
             ConnError::Db(err) => write!(f, "database: {err}"),
             ConnError::Malformed(what) => write!(f, "malformed: {what}"),
+            ConnError::UnknownVenture(id) => write!(f, "unknown venture `{id}`"),
         }
     }
 }
@@ -194,19 +222,117 @@ impl From<DbError> for ConnError {
 // The connections service
 // ---------------------------------------------------------------------------
 
+/// Proof that a venture was resolved to its tenant by
+/// [`Connections::grant`] — the only way one exists (issue #142).
+///
+/// The fields are private and there is no constructor, `From`, or
+/// deserialization: a caller cannot name a tenant store it was not
+/// granted, so every credential method below receives a checked
+/// authorization rather than a string it would have to trust.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VentureScope {
+    venture: String,
+    tenant: String,
+}
+
+impl VentureScope {
+    /// The venture this scope was granted for.
+    #[must_use]
+    pub fn venture(&self) -> &str {
+        &self.venture
+    }
+    /// The tenant store that venture's credentials live in.
+    #[must_use]
+    pub fn tenant(&self) -> &str {
+        &self.tenant
+    }
+    /// The actor every credential access under this scope is attributed
+    /// to: the venture itself, never a caller-chosen string.
+    fn actor(&self) -> Actor {
+        Actor::new(format!("venture:{}", self.venture))
+            .expect("a venture-prefixed actor is never empty")
+    }
+}
+
 /// Connects a venture's credentials and tracks their state. Secret material
 /// goes to the tenant secret store; this type's own table holds only
 /// metadata, scoped by tenant id (isolation by query, harness #32, as with
-/// accounts).
+/// accounts). Every credential method takes a [`VentureScope`] (issue
+/// #142), and every store access lands on the durable audit chain wired by
+/// [`Connections::new`].
 pub struct Connections {
     secrets: Secrets,
     db: Arc<dyn Database>,
 }
 
 impl Connections {
+    /// A service over the shared control database. The audit sink is
+    /// owned here: the durable per-store chain router replaces whatever
+    /// sink the passed [`Secrets`] was built with, because an access of
+    /// a live credential that survives only as a log line is the gap
+    /// issue #142 closes — every access must land on a chain
+    /// [`cratefield_secrets::verify`] can check.
     #[must_use]
     pub fn new(secrets: Secrets, db: Arc<dyn Database>) -> Self {
-        Self { secrets, db }
+        Self {
+            secrets: secrets.with_audit(chain_sink(Arc::clone(&db))),
+            db,
+        }
+    }
+
+    /// Resolves a venture id into the [`VentureScope`] every credential
+    /// method demands.
+    ///
+    /// The venture must exist in the control plane's `venture` table (the
+    /// accounts module's, read here directly so this crate does not gain
+    /// a dependency on it), and the tenant it maps to becomes the only
+    /// store the returned scope can reach. An unknown venture is a
+    /// **recorded refusal**: a denied `Get` is appended to the durable
+    /// chain of the store the attempt tried to name *before* the error is
+    /// returned, so probing for valid venture ids leaves evidence, and no
+    /// secret store is opened on the refusal path. An empty id is refused
+    /// outright — it names no store a refusal could be recorded against.
+    ///
+    /// `actor` is who asked for the grant (a console operator) and rides
+    /// on the refusal event; afterwards, credential accesses are
+    /// attributed to the venture itself.
+    ///
+    /// # Errors
+    ///
+    /// [`ConnError::UnknownVenture`] when no such venture exists;
+    /// [`ConnError::Secrets`] or [`ConnError::Db`] on infrastructure
+    /// failure.
+    pub async fn grant(&self, venture_id: &str, actor: &Actor) -> Result<VentureScope, ConnError> {
+        if venture_id.trim().is_empty() {
+            return Err(ConnError::UnknownVenture(String::new()));
+        }
+        let rows = self
+            .db
+            .query(&Statement::with_values(
+                "SELECT tenant_id FROM venture WHERE id = ?",
+                vec![text(venture_id)],
+            ))
+            .await?;
+        if let Some(tenant) = rows.first().and_then(|row| row.get::<String>("tenant_id")) {
+            return Ok(VentureScope {
+                venture: venture_id.to_owned(),
+                tenant,
+            });
+        }
+        let store = StoreId::Tenant(venture_id.to_owned());
+        let denied = AuditEvent {
+            store: &store,
+            access: Access::Get,
+            actor,
+            name: None,
+            version: None,
+            allowed: false,
+            request_id: None,
+        };
+        ChainAudit::new(store.clone(), Arc::clone(&self.db))
+            .record(&denied)
+            .await?;
+        Err(ConnError::UnknownVenture(venture_id.to_owned()))
     }
 
     /// Connects a venture's Google OAuth client. The client **id** is public
@@ -224,10 +350,9 @@ impl Connections {
     /// [`ConnError::Secrets`] or [`ConnError::Db`] on infrastructure failure.
     pub async fn connect_google(
         &self,
-        tenant: &str,
+        scope: &VentureScope,
         client_id: &str,
         client_secret: &str,
-        actor: &Actor,
         now: &str,
     ) -> Result<Connection, ConnError> {
         let kind = ConnectionKind::VentureGoogleOauth;
@@ -235,7 +360,7 @@ impl Connections {
         if !client_id.ends_with(GOOGLE_CLIENT_ID_SUFFIX) {
             return self
                 .record_invalid(
-                    tenant,
+                    scope,
                     &kind,
                     "the client id is not a Google OAuth client id (expected one ending in \
                      .apps.googleusercontent.com)",
@@ -246,12 +371,11 @@ impl Connections {
         }
         if client_secret.trim().is_empty() {
             return self
-                .record_invalid(tenant, &kind, "the client secret is empty", client_id, now)
+                .record_invalid(scope, &kind, "the client secret is empty", client_id, now)
                 .await;
         }
-        self.store_secret(tenant, &kind, client_secret, actor)
-            .await?;
-        self.record_connected(tenant, &kind, client_id, now).await
+        self.store_secret(scope, &kind, client_secret).await?;
+        self.record_connected(scope, &kind, client_id, now).await
     }
 
     /// Connects a module's third-party key. Stored the same way; the key is
@@ -262,11 +386,10 @@ impl Connections {
     /// [`ConnError::Secrets`] or [`ConnError::Db`].
     pub async fn connect_module_key(
         &self,
-        tenant: &str,
+        scope: &VentureScope,
         module: &str,
         service: &str,
         key: &str,
-        actor: &Actor,
         now: &str,
     ) -> Result<Connection, ConnError> {
         let kind = ConnectionKind::ModuleKey {
@@ -275,12 +398,12 @@ impl Connections {
         };
         if key.trim().is_empty() {
             return self
-                .record_invalid(tenant, &kind, "the key is empty", "", now)
+                .record_invalid(scope, &kind, "the key is empty", "", now)
                 .await;
         }
-        self.store_secret(tenant, &kind, key, actor).await?;
+        self.store_secret(scope, &kind, key).await?;
         // No hint: a key is secret, so nothing about it is shown.
-        self.record_connected(tenant, &kind, "", now).await
+        self.record_connected(scope, &kind, "", now).await
     }
 
     /// Removes a connection: deletes the stored secret (audited by the secrets
@@ -291,16 +414,22 @@ impl Connections {
     /// [`ConnError::Secrets`] or [`ConnError::Db`].
     pub async fn disconnect(
         &self,
-        tenant: &str,
+        scope: &VentureScope,
         kind: &ConnectionKind,
-        actor: &Actor,
         now: &str,
     ) -> Result<Connection, ConnError> {
-        self.store(tenant)
-            .delete(&kind.secret_name(), actor)
+        self.store(scope)
+            .delete(&kind.secret_name(), &scope.actor())
             .await?;
-        self.upsert(tenant, kind, ConnectionState::NotConnected, "", "", now)
-            .await
+        self.upsert(
+            scope.tenant(),
+            kind,
+            ConnectionState::NotConnected,
+            "",
+            "",
+            now,
+        )
+        .await
     }
 
     /// The state of one connection, or `None` if the venture has never
@@ -311,7 +440,7 @@ impl Connections {
     /// [`ConnError::Db`].
     pub async fn state_of(
         &self,
-        tenant: &str,
+        scope: &VentureScope,
         kind: &ConnectionKind,
     ) -> Result<Option<Connection>, ConnError> {
         let rows = self
@@ -319,7 +448,7 @@ impl Connections {
             .query(&Statement::with_values(
                 "SELECT kind, state, reason, hint, updated_at FROM connection \
                  WHERE tenant_id = ? AND kind = ?",
-                vec![text(tenant), text(&kind.key())],
+                vec![text(scope.tenant()), text(&kind.key())],
             ))
             .await?;
         rows.first().map(connection_from_row).transpose()
@@ -330,13 +459,13 @@ impl Connections {
     /// # Errors
     ///
     /// [`ConnError::Db`].
-    pub async fn all(&self, tenant: &str) -> Result<Vec<Connection>, ConnError> {
+    pub async fn all(&self, scope: &VentureScope) -> Result<Vec<Connection>, ConnError> {
         let rows = self
             .db
             .query(&Statement::with_values(
                 "SELECT kind, state, reason, hint, updated_at FROM connection \
                  WHERE tenant_id = ? ORDER BY kind ASC",
-                vec![text(tenant)],
+                vec![text(scope.tenant())],
             ))
             .await?;
         rows.rows.iter().map(connection_from_row).collect()
@@ -350,10 +479,12 @@ impl Connections {
     /// [`ConnError::Secrets`].
     pub async fn google_client_secret(
         &self,
-        tenant: &str,
-        actor: &Actor,
+        scope: &VentureScope,
     ) -> Result<Option<SecretBytes>, ConnError> {
-        Ok(self.store(tenant).get(GOOGLE_SECRET_NAME, actor).await?)
+        Ok(self
+            .store(scope)
+            .get(GOOGLE_SECRET_NAME, &scope.actor())
+            .await?)
     }
 
     /// Reads a module's stored key for provisioning. Audited by the secrets
@@ -364,37 +495,35 @@ impl Connections {
     /// [`ConnError::Secrets`].
     pub async fn module_key(
         &self,
-        tenant: &str,
+        scope: &VentureScope,
         module: &str,
         service: &str,
-        actor: &Actor,
     ) -> Result<Option<SecretBytes>, ConnError> {
         let name = ConnectionKind::ModuleKey {
             module: module.to_owned(),
             service: service.to_owned(),
         }
         .secret_name();
-        Ok(self.store(tenant).get(&name, actor).await?)
+        Ok(self.store(scope).get(&name, &scope.actor()).await?)
     }
 
     // -- internals ------------------------------------------------------
 
-    fn store(&self, tenant: &str) -> cratefield_secrets::SecretStore {
-        self.secrets.tenant(tenant, self.db.clone())
+    fn store(&self, scope: &VentureScope) -> cratefield_secrets::SecretStore {
+        self.secrets.tenant(scope.tenant(), self.db.clone())
     }
 
     async fn store_secret(
         &self,
-        tenant: &str,
+        scope: &VentureScope,
         kind: &ConnectionKind,
         value: &str,
-        actor: &Actor,
     ) -> Result<(), ConnError> {
-        self.store(tenant)
+        self.store(scope)
             .put(
                 &kind.secret_name(),
                 &SecretBytes::new(value.as_bytes().to_vec()),
-                actor,
+                &scope.actor(),
             )
             .await?;
         Ok(())
@@ -402,25 +531,39 @@ impl Connections {
 
     async fn record_connected(
         &self,
-        tenant: &str,
+        scope: &VentureScope,
         kind: &ConnectionKind,
         hint: &str,
         now: &str,
     ) -> Result<Connection, ConnError> {
-        self.upsert(tenant, kind, ConnectionState::Connected, "", hint, now)
-            .await
+        self.upsert(
+            scope.tenant(),
+            kind,
+            ConnectionState::Connected,
+            "",
+            hint,
+            now,
+        )
+        .await
     }
 
     async fn record_invalid(
         &self,
-        tenant: &str,
+        scope: &VentureScope,
         kind: &ConnectionKind,
         reason: &str,
         hint: &str,
         now: &str,
     ) -> Result<Connection, ConnError> {
-        self.upsert(tenant, kind, ConnectionState::Invalid, reason, hint, now)
-            .await
+        self.upsert(
+            scope.tenant(),
+            kind,
+            ConnectionState::Invalid,
+            reason,
+            hint,
+            now,
+        )
+        .await
     }
 
     async fn upsert(
@@ -577,6 +720,61 @@ mod tests {
     }
 
     use cratefield_adapter_sqlite::SqliteDatabase;
+    use cratefield_secrets::verify;
+
+    fn bytes(value: Vec<u8>) -> SeaValue {
+        SeaValue::Bytes(Some(Box::new(value)))
+    }
+
+    /// The accounts module's `venture` table in the minimum shape
+    /// `grant` reads. Seeded here rather than depended on: connections
+    /// must not gain a compile-time tie to that crate to enforce the
+    /// venture boundary (issue #142).
+    async fn ensure_venture_table(db: &Arc<dyn Database>) {
+        db.execute(&Statement::new(
+            "CREATE TABLE IF NOT EXISTS venture (id TEXT PRIMARY KEY, account_id TEXT NOT \
+             NULL, tenant_id TEXT NOT NULL)",
+        ))
+        .await
+        .expect("venture table");
+    }
+
+    async fn grant_scope(
+        conns: &Connections,
+        db: &Arc<dyn Database>,
+        venture: &str,
+        tenant: &str,
+    ) -> VentureScope {
+        ensure_venture_table(db).await;
+        db.execute(&Statement::with_values(
+            "INSERT INTO venture (id, account_id, tenant_id) VALUES (?, ?, ?)",
+            vec![text(venture), text("acc_test"), text(tenant)],
+        ))
+        .await
+        .expect("seed venture");
+        conns.grant(venture, &actor()).await.expect("grant")
+    }
+
+    /// One store's audit rows: `(action, actor, allowed)`, in chain order.
+    async fn audit_rows(db: &Arc<dyn Database>, store: &str) -> Vec<(String, String, i64)> {
+        db.query(&Statement::with_values(
+            "SELECT action, actor, allowed FROM harness_secret_audit WHERE store = ? \
+             ORDER BY seq ASC",
+            vec![text(store)],
+        ))
+        .await
+        .expect("audit rows")
+        .rows
+        .iter()
+        .map(|row| {
+            (
+                row.get("action").unwrap_or_default(),
+                row.get("actor").unwrap_or_default(),
+                row.get::<i64>("allowed").unwrap_or_default(),
+            )
+        })
+        .collect()
+    }
 
     // -- kind round-trips ----------------------------------------------
 
@@ -598,16 +796,17 @@ mod tests {
 
     #[pollster::test]
     async fn a_good_google_pair_connects_and_stores_the_secret() {
-        let (conns, _db) = connections();
+        let (conns, db) = connections();
+        let scope = grant_scope(&conns, &db, "ven_a", "ten_a").await;
         let c = conns
-            .connect_google("ten_a", GOOD_ID, "super-secret-value", &actor(), "t0")
+            .connect_google(&scope, GOOD_ID, "super-secret-value", "t0")
             .await
             .expect("infra ok");
         assert_eq!(c.state, ConnectionState::Connected);
         assert_eq!(c.hint, GOOD_ID, "the public client id is the hint");
         // The secret is retrievable for provisioning.
         let got = conns
-            .google_client_secret("ten_a", &actor())
+            .google_client_secret(&scope)
             .await
             .expect("read")
             .expect("present");
@@ -616,9 +815,10 @@ mod tests {
 
     #[pollster::test]
     async fn a_bad_client_id_is_refused_with_a_reason_and_not_stored() {
-        let (conns, _db) = connections();
+        let (conns, db) = connections();
+        let scope = grant_scope(&conns, &db, "ven_a", "ten_a").await;
         let c = conns
-            .connect_google("ten_a", "not-a-google-id", "whatever", &actor(), "t0")
+            .connect_google(&scope, "not-a-google-id", "whatever", "t0")
             .await
             .expect("a decision, not an error");
         assert_eq!(c.state, ConnectionState::Invalid);
@@ -630,7 +830,7 @@ mod tests {
         // Nothing was stored.
         assert!(
             conns
-                .google_client_secret("ten_a", &actor())
+                .google_client_secret(&scope)
                 .await
                 .expect("read")
                 .is_none(),
@@ -640,9 +840,10 @@ mod tests {
 
     #[pollster::test]
     async fn an_empty_google_secret_is_refused() {
-        let (conns, _db) = connections();
+        let (conns, db) = connections();
+        let scope = grant_scope(&conns, &db, "ven_a", "ten_a").await;
         let c = conns
-            .connect_google("ten_a", GOOD_ID, "   ", &actor(), "t0")
+            .connect_google(&scope, GOOD_ID, "   ", "t0")
             .await
             .unwrap();
         assert_eq!(c.state, ConnectionState::Invalid);
@@ -651,20 +852,17 @@ mod tests {
 
     #[pollster::test]
     async fn reconnecting_rotates_the_stored_secret() {
-        let (conns, _db) = connections();
+        let (conns, db) = connections();
+        let scope = grant_scope(&conns, &db, "ven_a", "ten_a").await;
         conns
-            .connect_google("ten_a", GOOD_ID, "first-secret", &actor(), "t0")
+            .connect_google(&scope, GOOD_ID, "first-secret", "t0")
             .await
             .unwrap();
         conns
-            .connect_google("ten_a", GOOD_ID, "second-secret", &actor(), "t1")
+            .connect_google(&scope, GOOD_ID, "second-secret", "t1")
             .await
             .unwrap();
-        let got = conns
-            .google_client_secret("ten_a", &actor())
-            .await
-            .unwrap()
-            .unwrap();
+        let got = conns.google_client_secret(&scope).await.unwrap().unwrap();
         assert_eq!(got.expose(), b"second-secret", "the rotation won");
     }
 
@@ -672,22 +870,16 @@ mod tests {
 
     #[pollster::test]
     async fn a_module_key_connects_without_leaking_a_hint() {
-        let (conns, _db) = connections();
+        let (conns, db) = connections();
+        let scope = grant_scope(&conns, &db, "ven_a", "ten_a").await;
         let c = conns
-            .connect_module_key(
-                "ten_a",
-                "email-signup",
-                "resend",
-                "re_live_abc123",
-                &actor(),
-                "t0",
-            )
+            .connect_module_key(&scope, "email-signup", "resend", "re_live_abc123", "t0")
             .await
             .unwrap();
         assert_eq!(c.state, ConnectionState::Connected);
         assert_eq!(c.hint, "", "a key is secret; no hint");
         let got = conns
-            .module_key("ten_a", "email-signup", "resend", &actor())
+            .module_key(&scope, "email-signup", "resend")
             .await
             .unwrap()
             .unwrap();
@@ -698,31 +890,29 @@ mod tests {
 
     #[pollster::test]
     async fn disconnect_removes_the_secret_and_marks_not_connected() {
-        let (conns, _db) = connections();
+        let (conns, db) = connections();
+        let scope = grant_scope(&conns, &db, "ven_a", "ten_a").await;
         conns
-            .connect_google("ten_a", GOOD_ID, "secret", &actor(), "t0")
+            .connect_google(&scope, GOOD_ID, "secret", "t0")
             .await
             .unwrap();
         let c = conns
-            .disconnect("ten_a", &ConnectionKind::VentureGoogleOauth, &actor(), "t1")
+            .disconnect(&scope, &ConnectionKind::VentureGoogleOauth, "t1")
             .await
             .unwrap();
         assert_eq!(c.state, ConnectionState::NotConnected);
         assert!(
-            conns
-                .google_client_secret("ten_a", &actor())
-                .await
-                .unwrap()
-                .is_none(),
+            conns.google_client_secret(&scope).await.unwrap().is_none(),
             "the secret is gone"
         );
     }
 
     #[pollster::test]
     async fn disconnecting_something_never_connected_is_a_harmless_no_op() {
-        let (conns, _db) = connections();
+        let (conns, db) = connections();
+        let scope = grant_scope(&conns, &db, "ven_a", "ten_a").await;
         let c = conns
-            .disconnect("ten_a", &ConnectionKind::VentureGoogleOauth, &actor(), "t0")
+            .disconnect(&scope, &ConnectionKind::VentureGoogleOauth, "t0")
             .await
             .expect("no error");
         assert_eq!(c.state, ConnectionState::NotConnected);
@@ -730,19 +920,21 @@ mod tests {
 
     #[pollster::test]
     async fn one_venture_does_not_see_anothers_connections() {
-        let (conns, _db) = connections();
+        let (conns, db) = connections();
+        let sa = grant_scope(&conns, &db, "ven_a", "ten_a").await;
+        let sb = grant_scope(&conns, &db, "ven_b", "ten_b").await;
         conns
-            .connect_google("ten_a", GOOD_ID, "a-secret", &actor(), "t0")
+            .connect_google(&sa, GOOD_ID, "a-secret", "t0")
             .await
             .unwrap();
-        assert_eq!(conns.all("ten_a").await.unwrap().len(), 1);
+        assert_eq!(conns.all(&sa).await.unwrap().len(), 1);
         assert!(
-            conns.all("ten_b").await.unwrap().is_empty(),
+            conns.all(&sb).await.unwrap().is_empty(),
             "tenant b sees nothing of tenant a"
         );
         assert!(
             conns
-                .state_of("ten_b", &ConnectionKind::VentureGoogleOauth)
+                .state_of(&sb, &ConnectionKind::VentureGoogleOauth)
                 .await
                 .unwrap()
                 .is_none()
@@ -753,9 +945,10 @@ mod tests {
     #[pollster::test]
     async fn no_secret_reaches_the_connection_table_or_a_rendered_connection() {
         let (conns, db) = connections();
+        let scope = grant_scope(&conns, &db, "ven_a", "ten_a").await;
         let secret = "TOP-SECRET-DO-NOT-LEAK";
         let c = conns
-            .connect_google("ten_a", GOOD_ID, secret, &actor(), "t0")
+            .connect_google(&scope, GOOD_ID, secret, "t0")
             .await
             .unwrap();
         // Not in the returned, renderable Connection.
@@ -778,11 +971,199 @@ mod tests {
         }
     }
 
+    // -- issue #142: venture scopes and the durable chain --------------
+
+    #[pollster::test]
+    async fn an_unknown_venture_grant_is_denied_on_the_chain_before_any_store() {
+        let (conns, db) = connections();
+        ensure_venture_table(&db).await;
+        let err = conns
+            .grant("ghost", &actor())
+            .await
+            .expect_err("no such venture exists");
+        assert!(
+            matches!(&err, ConnError::UnknownVenture(id) if id == "ghost"),
+            "{err}"
+        );
+        // The attempt is evidence: a denied Get on the chain of the very
+        // store it tried to name, attributed to who asked.
+        assert_eq!(
+            audit_rows(&db, "ghost").await,
+            vec![("get".to_owned(), "operator".to_owned(), 0)],
+            "the refusal is the store's first chain row"
+        );
+        verify(&StoreId::Tenant("ghost".to_owned()), &*db)
+            .await
+            .expect("a refusal is still a chain");
+        // And the secret store itself was never opened: a denial that
+        // planted or read a secret row would be a store touch.
+        assert!(
+            db.query(&Statement::new("SELECT name FROM harness_secrets"))
+                .await
+                .expect("query")
+                .is_empty(),
+            "a refusal must not touch a secret store"
+        );
+    }
+
+    #[pollster::test]
+    async fn a_scope_cannot_read_another_ventures_credential_even_in_one_database() {
+        let (conns, db) = connections();
+        let sa = grant_scope(&conns, &db, "ven_a", "ten_a").await;
+        let sb = grant_scope(&conns, &db, "ven_b", "ten_b").await;
+        conns
+            .connect_google(&sa, GOOD_ID, "a-secret-for-ten-a-only", "t0")
+            .await
+            .unwrap();
+        // The bytes sit in the shared physical database; venture B's
+        // scope still cannot read them: the store seals its ciphertext
+        // with the tenant the scope was granted for (issue #142).
+        let err = conns
+            .google_client_secret(&sb)
+            .await
+            .expect_err("not venture b's credential");
+        assert!(
+            matches!(
+                &err,
+                ConnError::Secrets(SecretsError::NotAuthentic { store, .. }) if store == "ten_b"
+            ),
+            "{err}"
+        );
+        // The denial is itself an audited access — recorded as refused,
+        // attributed to the venture that attempted it, on its own chain.
+        let rows = audit_rows(&db, "ten_b").await;
+        assert!(
+            rows.contains(&("get".to_owned(), "venture:ven_b".to_owned(), 0)),
+            "{rows:?}"
+        );
+        verify(&StoreId::Tenant("ten_b".to_owned()), &*db)
+            .await
+            .expect("venture b's chain verifies");
+    }
+
+    #[pollster::test]
+    async fn credential_accesses_form_a_verifiable_chain_attributed_to_the_venture() {
+        let (conns, db) = connections();
+        let scope = grant_scope(&conns, &db, "ven_a", "ten_a").await;
+        conns
+            .connect_google(&scope, GOOD_ID, "secret-value", "t0")
+            .await
+            .unwrap();
+        conns
+            .google_client_secret(&scope)
+            .await
+            .unwrap()
+            .expect("present");
+        conns
+            .disconnect(&scope, &ConnectionKind::VentureGoogleOauth, "t1")
+            .await
+            .unwrap();
+        assert_eq!(
+            audit_rows(&db, "ten_a").await,
+            vec![
+                ("put".to_owned(), "venture:ven_a".to_owned(), 1),
+                ("get".to_owned(), "venture:ven_a".to_owned(), 1),
+                ("delete".to_owned(), "venture:ven_a".to_owned(), 1),
+            ],
+            "one row per call, every row attributed to the venture — not a caller-chosen name"
+        );
+        verify(&StoreId::Tenant("ten_a".to_owned()), &*db)
+            .await
+            .expect("the credential chain verifies end to end");
+    }
+
+    #[pollster::test]
+    async fn a_hand_crafted_plaintext_row_is_refused_as_not_authentic() {
+        let (conns, db) = connections();
+        let scope = grant_scope(&conns, &db, "ven_a", "ten_a").await;
+        conns
+            .connect_google(&scope, GOOD_ID, "real-secret", "t0")
+            .await
+            .unwrap();
+        let key_id = db
+            .query(&Statement::with_values(
+                "SELECT key_id FROM harness_secrets WHERE name = ? AND version = 1",
+                vec![text(GOOGLE_SECRET_NAME)],
+            ))
+            .await
+            .expect("query")
+            .first()
+            .and_then(|row| row.get::<String>("key_id"))
+            .expect("the real row's key");
+        // Plant a row shaped like the store's own but carrying raw bytes
+        // where the sealed envelope should be: writing to the table is
+        // not reading the credential (issue #142).
+        db.execute(&Statement::with_values(
+            "INSERT INTO harness_secrets (name, version, key_id, nonce, ciphertext, \
+             created_at, created_by) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            vec![
+                text(GOOGLE_SECRET_NAME),
+                SeaValue::BigInt(Some(999)),
+                text(&key_id),
+                bytes(vec![0; 24]),
+                bytes(b"hunter2-plaintext-credential".to_vec()),
+                text("t9"),
+                text("hand-crafted"),
+            ],
+        ))
+        .await
+        .expect("plant row");
+        let err = conns
+            .google_client_secret(&scope)
+            .await
+            .expect_err("a planted row must not serve as a credential");
+        assert!(
+            matches!(
+                &err,
+                ConnError::Secrets(SecretsError::NotAuthentic { store, .. }) if store == "ten_a"
+            ),
+            "{err}"
+        );
+    }
+
+    #[pollster::test]
+    async fn stored_credential_bytes_never_look_like_the_credential() {
+        let (conns, db) = connections();
+        let scope = grant_scope(&conns, &db, "ven_a", "ten_a").await;
+        let sentinel = b"SENTINEL-CREDENTIAL-MATERIAL";
+        conns
+            .connect_google(&scope, GOOD_ID, "SENTINEL-CREDENTIAL-MATERIAL", "t0")
+            .await
+            .unwrap();
+        let rows = db
+            .query(&Statement::with_values(
+                "SELECT nonce, ciphertext FROM harness_secrets WHERE name = ?",
+                vec![text(GOOGLE_SECRET_NAME)],
+            ))
+            .await
+            .expect("query");
+        assert_eq!(rows.len(), 1, "the connect stored exactly one row");
+        for row in &rows.rows {
+            for column in ["nonce", "ciphertext"] {
+                let stored: Vec<u8> = row.get(column).unwrap_or_default();
+                assert!(
+                    !stored.windows(sentinel.len()).any(|w| w == &sentinel[..]),
+                    "{column} holds the credential in the clear"
+                );
+            }
+        }
+    }
+
     // -- module-key surfacing ------------------------------------------
 
     #[test]
     fn a_key_is_surfaced_only_when_its_module_is_selected() {
-        use cratefield_catalog::{Catalog, CatalogModule, Tier};
+        use cratefield_catalog::{Catalog, CatalogModule, ModuleRelease, ReleaseReview, Tier};
+        fn pin() -> Vec<ModuleRelease> {
+            vec![ModuleRelease {
+                version: "1.0.0".into(),
+                digest: format!("sha256:{}", "a".repeat(64)),
+                review: ReleaseReview::Approved {
+                    reviewer: "test".into(),
+                    reviewed_at: "2026-01-01T00:00:00Z".into(),
+                },
+            }]
+        }
         let registry = KeyRegistry::new(vec![KeyNeed {
             module: "newsletter".into(),
             service: "resend".into(),
@@ -797,6 +1178,7 @@ mod tests {
                     summary: String::new(),
                     tier: Tier::Optional,
                     depends_on: vec![],
+                    releases: pin(),
                 },
                 CatalogModule {
                     slug: "waitlist".into(),
@@ -804,6 +1186,7 @@ mod tests {
                     summary: String::new(),
                     tier: Tier::Optional,
                     depends_on: vec![],
+                    releases: pin(),
                 },
             ],
         };
