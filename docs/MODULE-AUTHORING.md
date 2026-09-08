@@ -35,7 +35,8 @@ pub trait Module: Send + Sync + 'static {
     fn optional(&self) -> &'static [Port] { &[] } // used when present
     fn tables(&self) -> &'static [&'static str] { &[] }
     fn emits(&self) -> &'static [&'static str] { &[] }
-    fn public_writes(&self) -> bool { false }     // drives the production-captcha rule
+    fn public_writes(&self) -> bool { false }     // legacy gate fallback;
+        // declare `.captcha()` / `.policy(..)` per route (issue #133)
     fn migrations(&self) -> Migrations;           // include_str! SQL, per dialect
     fn validate_config(&self, cfg: &dyn Config) -> Result<(), ConfigError>;
     fn router(&self, ctx: ModuleContext) -> axum::Router;
@@ -278,9 +279,13 @@ Decisions, one per method:
   `"<module>.<event>"`. Listed by `/__health` so operators can see what
   fires.
 - **`public_writes()`** — `true` because `POST /v1/hello` is a public
-  write. This drives the section-11 rule: `fz doctor` fails a production
-  venture whose runtime lacks the `Captcha` port while any mounted module
-  has public writes. Set it honestly.
+  write. Since issue #133 this is the *legacy fallback* of the
+  production-captcha rule; the primary declaration is per route in
+  `surface()` (below). The rule is no longer a `fz doctor` advisory —
+  `Harness::builder().build()` REFUSES to produce a production venture
+  whose modules guard public writes (by route policy or by
+  `public_writes()`) unless the runtime reports an *effective* `Captcha`
+  port. Set it honestly; better yet, declare policies on the routes.
 - **`migrations()`** — see step 3.
 - **`validate_config()`** — see step 5. Always collect every problem into
   one `ConfigError` instead of failing on the first.
@@ -496,14 +501,29 @@ The patterns that matter:
 - **JSON in, JSON out**; `cratefield_core::Json` re-exports the axum
   `Json` extractor/responder.
 
-Captcha, rate limiting, and admin auth: public writes take an optional
-`captchaToken` field and verify it when the `Captcha` port is present
-(fail-closed); rate limiting goes through the `RateLimiter` port keyed by
-IP and, for writes, by normalized email; admin endpoints under
-`/v1/<module>/admin/*` require `Authorization: Bearer <ADMIN_TOKEN>` via
-`cratefield_core::require_admin` and are disabled when the token is unset.
-Copy the exact patterns from `crates/module-waitlist/src/handlers.rs` —
-`check_captcha`, `rate_limited`, `require_admin` are the reusable pieces.
+Captcha, rate limiting, and admin auth: public writes declare their
+protection per route in `surface()` — `.captcha()` for a human form,
+`.policy(RoutePolicy::Signature)` for a platform-signed webhook. The
+`Captcha` bool on a route and the module-level `public_writes()` are
+legacy mirrors, kept honest by `Route::validate()` (issue #133).
+Handlers verify through `cratefield_core::verify_human_form`, which
+fails closed in production for a missing port, a missing token, or a
+provider/transport error. Rate limiting goes through `check_rate_limit`,
+keyed by IP and, for writes, by normalized email, with an EXPLICIT
+failure posture at every call site: `RateLimitFailure::FailClosed` for
+abuse-critical paths (password reset, login), `FailOpen` where blocking
+real users is worse than a throttle gap and something else carries the
+load. Anything that sends mail to an address must additionally hold a
+`SendCooldown` claim (`crates/core/src/cooldown.rs`, one table per
+module) so a downed limiter can never become a mail flood. Admin
+endpoints under `/v1/<module>/admin/*` require `Authorization: Bearer
+<ADMIN_TOKEN>` via `cratefield_core::require_admin` and are disabled
+when the token is unset. `Harness::build` refuses to produce a
+production binary for a venture whose guards lack an effective `Captcha`
+port; `fz doctor` re-checks the same rule at deploy time. Copy the exact
+patterns from `crates/module-waitlist/src/handlers.rs` —
+`check_captcha`, `rate_limited`, `require_admin` are the reusable
+pieces.
 
 ## Step 5 — Config keys
 
@@ -812,8 +832,10 @@ Before opening a PR that adds or changes a module:
 - [ ] migrations portable (subset above), idempotent, `include_str!`'d
 - [ ] `surface()` declares every route a visitor or admin should see, and
       `JsonSchema` is derived on the same types the handlers deserialize
-- [ ] `name()`, `tables()`, `emits()` complete and honest;
-      `public_writes()` reflects reality
+- [ ] `name()`, `tables()`, `emits()` complete and honest; every public
+      write declares `.captcha()` and every provider webhook
+      `.policy(RoutePolicy::Signature)` (issue #133); `public_writes()`
+      reflects reality as the legacy fallback
 - [ ] config keys prefixed, `validate_config` collects all problems
 - [ ] `tests/conformance.rs` passes locally
 - [ ] route tests cover the happy path and every problem response

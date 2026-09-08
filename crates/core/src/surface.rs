@@ -95,8 +95,21 @@ pub struct Action {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub input: Option<Schema>,
     pub outcome: Outcome,
-    /// Whether the module verifies a captcha token on this action when the
-    /// `Captcha` port is configured; the renderer then includes the widget.
+    /// The explicit protection this route demands (issue #133). Kept in
+    /// sync with [`captcha`](Self::captcha) by the builders and asserted
+    /// consistent by [`Surface::validate`]: `true` ⟺ [`HumanForm`].
+    /// Deliberately not serialized: the surface document's wire shape is
+    /// unchanged (`captcha` carries the human-route signal; machine
+    /// routes never reach the public subset), so existing consumers and
+    /// the compatibility-doc example are unaffected.
+    ///
+    /// [`HumanForm`]: crate::route_policy::RoutePolicy::HumanForm
+    #[serde(skip)]
+    pub policy: crate::route_policy::RoutePolicy,
+    /// Whether the module verifies a captcha token on this action and the
+    /// renderer includes the widget. A legacy mirror of `policy ==
+    /// HumanForm` — the surface JSON keeps the `captcha` key for existing
+    /// consumers; new code declares a `policy`.
     pub captcha: bool,
 }
 
@@ -136,6 +149,7 @@ impl Action {
             outcome: Outcome::Accepted {
                 message: "Thanks, you're in.".to_owned(),
             },
+            policy: crate::route_policy::RoutePolicy::default(),
             captcha: false,
         }
     }
@@ -175,9 +189,22 @@ impl Action {
         })
     }
 
+    /// Shorthand for `.policy(RoutePolicy::HumanForm)` (issue #133).
     #[must_use]
     pub fn captcha(mut self) -> Self {
+        self.policy = crate::route_policy::RoutePolicy::HumanForm;
         self.captcha = true;
+        self
+    }
+
+    /// Declares how this route proves its requests are legitimate
+    /// (issue #133). A payments webhook is `.policy(RoutePolicy::Signature)`
+    /// — never `.captcha()`, which would render a widget a machine cannot
+    /// fill and let the route be counted as captcha-protected.
+    #[must_use]
+    pub fn policy(mut self, policy: crate::route_policy::RoutePolicy) -> Self {
+        self.policy = policy;
+        self.captcha = policy == crate::route_policy::RoutePolicy::HumanForm;
         self
     }
 }
@@ -330,6 +357,26 @@ impl Surface {
                      object (a struct with named fields), so a renderer can lay out fields"
                 ));
             }
+            match action.policy {
+                crate::route_policy::RoutePolicy::HumanForm if !action.captcha => {
+                    errors.push(format!(
+                        "module `{module}` surface action `{name}` declares policy=HumanForm \
+                         but captcha=false; the renderer would omit the widget the policy \
+                         demands — declare protection with `.captcha()` (issue #133)",
+                    ));
+                }
+                crate::route_policy::RoutePolicy::Signature if action.captcha => {
+                    errors.push(format!(
+                        "module `{module}` surface action `{name}` declares policy=Signature \
+                         (a machine caller) but captcha=true; a captcha cannot protect a \
+                         webhook — drop `.captcha()` (issue #133)",
+                    ));
+                }
+                // `Open` accepts either: `captcha: true` is the legacy
+                // pre-#133 mirror (WriteGuards treats it as HumanForm),
+                // and an Open unprotected route is the default.
+                _ => {}
+            }
         }
         for view in &self.views {
             for referenced in view.action_names() {
@@ -344,13 +391,20 @@ impl Surface {
     }
 
     /// The subset a renderer may show without the admin session: every
-    /// non-admin action and every view that references only those.
+    /// non-admin action that is not a machine route, and every view that
+    /// references only those. [`Signature`](crate::route_policy::RoutePolicy::Signature)
+    /// actions (webhooks) are called by providers, never by browsers —
+    /// exposing them in the public surface was part of the issue #133
+    /// confusion (a captcha widget rendered on a route no human submits).
     #[must_use]
     pub fn public(&self) -> Surface {
         let actions: Vec<Action> = self
             .actions
             .iter()
-            .filter(|action| action.audience != Audience::Admin)
+            .filter(|action| {
+                action.audience != Audience::Admin
+                    && action.policy != crate::route_policy::RoutePolicy::Signature
+            })
             .cloned()
             .collect();
         let names: BTreeSet<&str> = actions.iter().map(|a| a.name.as_str()).collect();

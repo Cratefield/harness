@@ -299,4 +299,21 @@ impl Runtime for Cloudflare {
         }
         provided
     }
+
+    /// `Harness::build` gate (issue #133): a Turnstile adapter that is not
+    /// hostname-bound, or left fail-open, cannot verify a production
+    /// `HumanForm` route — the port is present but not usable, so report
+    /// it as not effectively configured. Adapters that do not report
+    /// (`binding() == None`) count as effective when present: presence is
+    /// all the runtime can know about them.
+    fn effectively_configured(&self, port: Port) -> bool {
+        match port {
+            Port::Captcha => self.captcha.as_ref().is_some_and(|captcha| {
+                captcha
+                    .binding()
+                    .is_some_and(|binding| binding.hostname_bound && !binding.fail_open)
+            }),
+            _ => self.provides().contains(&port),
+        }
+    }
 }

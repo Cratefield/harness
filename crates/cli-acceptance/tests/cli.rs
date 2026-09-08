@@ -373,7 +373,7 @@ fn sorted_listing(dir: &std::path::Path) -> Vec<String> {
 }
 
 #[test]
-fn doctor_production_captcha_rule_and_override() {
+fn production_captcha_gate_moves_from_the_doctor_to_the_build() {
     use cratefield_core::{
         Config, ConfigError, Harness, Migrations, Module, ModuleContext, Port, Runtime, Venture,
         VentureEnv,
@@ -406,10 +406,9 @@ fn doctor_production_captcha_rule_and_override() {
     struct NoCaptcha;
     impl Runtime for NoCaptcha {
         fn provides(&self) -> Vec<Port> {
-            // Everything but Captcha (the rule under test). Payments is also
-            // excluded: it carries its own production precondition (a webhook
-            // secret, issue #102), which this captcha-focused fixture must not
-            // trip.
+            // Everything but Captcha (the gate under test). Payments is
+            // also excluded: WritingModule declares no Signature policy,
+            // so including it would add noise, not coverage.
             Port::ALL
                 .iter()
                 .copied()
@@ -417,6 +416,39 @@ fn doctor_production_captcha_rule_and_override() {
                 .collect()
         }
     }
+    struct BoundCaptcha;
+    impl Runtime for BoundCaptcha {
+        fn provides(&self) -> Vec<Port> {
+            Port::ALL.to_vec()
+        }
+    }
+
+    // The strictly stronger guarantee issue #133 bought: a production
+    // venture with captcha-guarded public writes never becomes a runnable
+    // harness at all when the port is missing. Before #133 this exact
+    // composition built fine and only `fz doctor` noticed — and only if
+    // someone ran it.
+    let refused = Harness::builder()
+        .venture(
+            Venture::new("prod-venture", "prod.example")
+                .cors_origins(["https://prod.example"])
+                .env(VentureEnv::Production),
+        )
+        .module(WritingModule)
+        .runtime(NoCaptcha)
+        .build();
+    let Err(error) = refused else {
+        panic!("captcha-guarded writes must not build without an effective Captcha");
+    };
+    let problems = error.problems.join("\n");
+    assert!(problems.contains("writer"), "{problems}");
+    assert!(problems.contains("Captcha"), "{problems}");
+
+    // With an effectively configured captcha the same venture builds, and
+    // the doctor — now a re-check of the build gate — passes both plainly
+    // and with the override flag. (The override's warning path is
+    // unit-tested in `doctor.rs`; through `Harness::builder` it is
+    // unreachable by construction, which is exactly the #133 fix.)
     let build = move || {
         Harness::builder()
             .venture(
@@ -425,35 +457,24 @@ fn doctor_production_captcha_rule_and_override() {
                     .env(VentureEnv::Production),
             )
             .module(WritingModule)
-            .runtime(NoCaptcha)
+            .runtime(BoundCaptcha)
             .build()
             .expect("fixture builds")
     };
-
-    // Without the override the rule fails the build check.
-    assert_eq!(
-        run(
-            build,
-            args(&["doctor", "--out", "/tmp/fz-doctor-test-migrations"])
-        ),
-        ExitCode::FAILURE
-    );
-
-    // The override downgrades the failure to a warning and passes
-    // (no migrations to check, so an empty dir is fine).
     let tmp = TempDir::new("doctor-captcha");
     std::fs::create_dir_all(tmp.migrations()).expect("dir");
-    assert_eq!(
-        run(
-            build,
-            args(&[
-                "doctor",
-                "--out",
-                tmp.migrations().to_str().unwrap(),
-                "--allow-no-captcha",
-                "internal staging form"
-            ]),
-        ),
-        ExitCode::SUCCESS
-    );
+    success(run(
+        build,
+        args(&["doctor", "--out", tmp.migrations().to_str().unwrap()]),
+    ));
+    success(run(
+        build,
+        args(&[
+            "doctor",
+            "--out",
+            tmp.migrations().to_str().unwrap(),
+            "--allow-no-captcha",
+            "internal staging form",
+        ]),
+    ));
 }

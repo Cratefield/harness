@@ -14,6 +14,7 @@
 
 mod admin;
 mod config;
+mod cooldown;
 mod csv;
 mod email;
 mod events;
@@ -28,6 +29,7 @@ mod ports;
 mod problem;
 mod problems;
 mod rate_limit;
+mod route_policy;
 mod scope;
 mod sidecar;
 mod signer;
@@ -37,6 +39,7 @@ mod venture;
 
 pub use admin::{bearer_token, constant_time_eq, require_admin};
 pub use config::{Config, ConfigError, EmptyConfig, HarnessConfig, MapConfig, ModuleConfig};
+pub use cooldown::SendCooldown;
 pub use csv::{FORMULA_PREFIXES, escape as csv_escape, row as csv_row};
 pub use email::{
     MAX_EMAIL_BYTES, MAX_LOCAL_BYTES, invalid_email_problem, is_valid,
@@ -57,18 +60,22 @@ pub use module::{
 };
 pub use outbox::{Outbox, OutboxRecord};
 pub use ports::{
-    Blob, BlobError, BlobObject, Captcha, CaptchaError, Charge, CheckoutRequest, CheckoutSession,
-    Clock, ConnectAccountLink, ConnectAccountLinkRequest, Database, DbError, Decision, Defer,
-    DispatchError, Dispatcher, HttpClient, HttpError, IdGen, KeyValue, Kid, KvError, LineItem,
-    MailError, Mailer, Member, Message, Money, NoopDefer, Notification, Payload, Payments,
-    PaymentsError, Port, Ports, Priority, Push, PushError, PushOutcome, RateLimitError,
+    Blob, BlobError, BlobObject, Captcha, CaptchaBinding, CaptchaError, Charge, CheckoutRequest,
+    CheckoutSession, Clock, ConnectAccountLink, ConnectAccountLinkRequest, Database, DbError,
+    Decision, Defer, DispatchError, Dispatcher, HttpClient, HttpError, IdGen, KeyValue, Kid,
+    KvError, LineItem, MailError, Mailer, Member, Message, Money, NoopDefer, Notification, Payload,
+    Payments, PaymentsError, Port, Ports, Priority, Push, PushError, PushOutcome, RateLimitError,
     RateLimiter, Realtime, RealtimeError, Refund, RefundRequest, RoomContext, RoomHandler, Row,
     Rows, ScopedBlob, SendOutcome, SignatureError, Signer, Statement, SubscriptionCheckoutRequest,
     SystemClock, TransferCharge, TryFromValue, UlidIdGen, Verdict, WebhookEvent, timeout,
 };
 pub use problem::Problem;
 pub use problems::{ProblemDef, SLUGS, registry as problem_registry};
-pub use rate_limit::{client_ip, rate_limit_keys};
+pub use rate_limit::{RateLimit, RateLimitFailure, check_rate_limit, client_ip, rate_limit_keys};
+pub use route_policy::{
+    RoutePolicy, WriteGuards, captcha_effective, payments_effective, production_readiness,
+    verify_human_form,
+};
 pub use scope::Scope;
 pub use sidecar::{HARNESS_SIDECARS, SidecarMount, SidecarMounts, X_HARNESS_API, X_HARNESS_MODULE};
 pub use signer::{HmacSigner, MIN_SECRET_BYTES, SignerError};

@@ -82,13 +82,14 @@ async fn every_shipped_migration_applies_on_postgres_16() {
             "email-signup/0001",
             "email-signup/0002",
             "waitlist/0001",
-            "waitlist/0002"
+            "waitlist/0002",
+            "waitlist/0003"
         ]
     );
 
     // The tables exist with the columns the modules query: the portable
     // DDL really landed (missing columns would error).
-    for table in ["subscribers", "waitlist_entries"] {
+    for table in ["subscribers", "waitlist_entries", "waitlist_send_cooldown"] {
         db.query(&Statement::new(format!(
             "SELECT * FROM {table} WHERE 1 = 0"
         )))
@@ -126,11 +127,7 @@ async fn runner_applies_a_module_directly_and_is_idempotent() {
         .query(&Statement::new("SELECT id FROM harness_migrations"))
         .await
         .expect("tracking readable");
-    assert_eq!(
-        rows.len(),
-        2,
-        "both shipped waitlist migrations are tracked"
-    );
+    assert_eq!(rows.len(), 3, "all shipped waitlist migrations are tracked");
 
     // Through the port as a trait object, like a venture wires it.
     let port: Arc<dyn Database> = Arc::new(db);

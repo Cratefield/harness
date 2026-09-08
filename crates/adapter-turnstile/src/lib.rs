@@ -5,15 +5,21 @@
 //! Fail-closed by default: a transport failure (or timeout) verifies as
 //! `{ ok: false, reason: "unavailable" }`. `.fail_open(true)` is for
 //! staging only. If the secret is absent, [`Turnstile::from_env`] returns
-//! `None` so the port is not provided at all — `fz doctor` then refuses a
-//! production build without captcha.
+//! `None` so the port is not provided at all — and `Harness::build` then
+//! refuses a production venture with `HumanForm` routes (issue #133).
+//!
+//! A bound adapter checks what it was bound to: an expected hostname
+//! rejects responses from any other site (including a response that omits
+//! the hostname), and an expected action rejects a token minted for a
+//! different flow. [`Captcha::binding`] reports both, so the harness can
+//! tell "port present" from "verification configured".
 
 #![doc = include_str!("../README.md")]
 #![forbid(unsafe_code)]
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use cratefield_core::{Captcha, CaptchaError, Clock, HttpClient, Verdict, timeout};
+use cratefield_core::{Captcha, CaptchaBinding, CaptchaError, Clock, HttpClient, Verdict, timeout};
 use http::Request;
 use std::sync::Arc;
 use std::time::Duration;
@@ -27,6 +33,7 @@ pub struct Turnstile {
     clock: Arc<dyn Clock>,
     secret: String,
     expected_hostname: Option<String>,
+    expected_action: Option<String>,
     fail_open: bool,
 }
 
@@ -41,23 +48,42 @@ impl Turnstile {
             clock,
             secret: secret.into(),
             expected_hostname: None,
+            expected_action: None,
             fail_open: false,
         }
     }
 
     /// `Some(...)` only when `TURNSTILE_SECRET` is set: an absent secret
-    /// means the port is not provided at all.
+    /// means the port is not provided at all. `TURNSTILE_HOSTNAME` and
+    /// `TURNSTILE_ACTION` bind the checks when present (issue #133: an
+    /// unbound adapter cannot support a production `HumanForm` route).
     pub fn from_env(http: Arc<dyn HttpClient>, clock: Arc<dyn Clock>) -> Option<Self> {
-        std::env::var("TURNSTILE_SECRET")
-            .ok()
-            .map(|secret| Self::new(http, clock, secret))
+        let secret = std::env::var("TURNSTILE_SECRET").ok()?;
+        let mut turnstile = Self::new(http, clock, secret);
+        if let Ok(hostname) = std::env::var("TURNSTILE_HOSTNAME") {
+            turnstile = turnstile.expected_hostname(hostname);
+        }
+        if let Ok(action) = std::env::var("TURNSTILE_ACTION") {
+            turnstile = turnstile.expected_action(action);
+        }
+        Some(turnstile)
     }
 
-    /// Verifies the response hostname against this expectation; a mismatch
-    /// fails the verdict with `hostname-mismatch`.
+    /// Verifies the response hostname against this expectation. A mismatch
+    /// — or a response that carries no hostname at all — fails the verdict
+    /// with `hostname-mismatch` (issue #133: absent is not "passed").
     #[must_use]
     pub fn expected_hostname(mut self, hostname: impl Into<String>) -> Self {
         self.expected_hostname = Some(hostname.into());
+        self
+    }
+
+    /// Verifies the response `action` against this expectation, so a token
+    /// minted for another flow on the same site does not authorize this
+    /// one. Mismatch or absence fails the verdict with `action-mismatch`.
+    #[must_use]
+    pub fn expected_action(mut self, action: impl Into<String>) -> Self {
+        self.expected_action = Some(action.into());
         self
     }
 
@@ -89,6 +115,8 @@ struct SiteverifyResponse {
     error_codes: Vec<String>,
     #[serde(default)]
     hostname: Option<String>,
+    #[serde(default)]
+    action: Option<String>,
 }
 
 #[async_trait]
@@ -142,8 +170,14 @@ impl Captcha for Turnstile {
             });
         }
 
-        if let (Some(expected), Some(actual)) = (&self.expected_hostname, &parsed.hostname)
-            && expected != actual
+        // A bound check that the provider did not answer is a mismatch:
+        // absent hostname/action means the widget was not bound as this
+        // deployment requires (issue #133).
+        if let Some(expected) = &self.expected_hostname
+            && parsed
+                .hostname
+                .as_deref()
+                .is_none_or(|actual| actual != expected)
         {
             return Ok(Verdict {
                 ok: false,
@@ -151,9 +185,29 @@ impl Captcha for Turnstile {
             });
         }
 
+        if let Some(expected) = &self.expected_action
+            && parsed
+                .action
+                .as_deref()
+                .is_none_or(|actual| actual != expected)
+        {
+            return Ok(Verdict {
+                ok: false,
+                reason: Some("action-mismatch".to_string()),
+            });
+        }
+
         Ok(Verdict {
             ok: true,
             reason: None,
+        })
+    }
+
+    fn binding(&self) -> Option<CaptchaBinding> {
+        Some(CaptchaBinding {
+            hostname_bound: self.expected_hostname.is_some(),
+            action_bound: self.expected_action.is_some(),
+            fail_open: self.fail_open,
         })
     }
 }

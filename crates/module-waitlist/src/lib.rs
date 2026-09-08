@@ -63,6 +63,14 @@ const MIGRATION_ENTRY_GENERATION: SqlMigration = SqlMigration {
     sql: include_str!("../migrations/sqlite/0002_entry_generation.sql"),
 };
 
+/// The durable send-cooldown table backing the one-mail-per-window claim
+/// (issue #133). Name must match `handlers::SEND_COOLDOWN_TABLE`.
+const MIGRATION_MAIL_COOLDOWN: SqlMigration = SqlMigration {
+    id: "0003",
+    name: "mail_cooldown",
+    sql: include_str!("../migrations/sqlite/0003_mail_cooldown.sql"),
+};
+
 /// A per-product waitlist.
 pub struct Waitlist {
     settings: Settings,
@@ -167,7 +175,7 @@ impl Module for Waitlist {
     }
 
     fn tables(&self) -> &'static [&'static str] {
-        &["waitlist_entries"]
+        &["waitlist_entries", "waitlist_send_cooldown"]
     }
 
     fn emits(&self) -> &'static [&'static str] {
@@ -179,7 +187,11 @@ impl Module for Waitlist {
     }
 
     fn migrations(&self) -> Migrations {
-        const MIGRATIONS: [SqlMigration; 2] = [MIGRATION_INIT, MIGRATION_ENTRY_GENERATION];
+        const MIGRATIONS: [SqlMigration; 3] = [
+            MIGRATION_INIT,
+            MIGRATION_ENTRY_GENERATION,
+            MIGRATION_MAIL_COOLDOWN,
+        ];
         Migrations {
             sqlite: &MIGRATIONS,
             postgres: &[],
@@ -260,6 +272,17 @@ impl Module for Waitlist {
             if deleted > 0 {
                 tracing::info!(deleted, cron, "purged stale pending waitlist entries");
             }
+            // Claims whose window has closed are dead rows (issue #133).
+            let claims = cratefield_core::SendCooldown::new(handlers::SEND_COOLDOWN_TABLE)
+                .prune(
+                    &*db,
+                    &handlers::iso_ago(handlers::REMAIL_AFTER_SECS.saturating_mul(2)),
+                )
+                .await
+                .map_err(|err| Box::new(err) as AnyError)?;
+            if claims > 0 {
+                tracing::info!(claims, cron, "pruned expired waitlist send claims");
+            }
             Ok(())
         })
     }
@@ -283,7 +306,10 @@ mod tests {
         assert_eq!(module.settings.retention_days_pending, 30);
         assert!(module.settings.referrals);
         assert_eq!(module.name(), "waitlist");
-        assert_eq!(module.tables(), ["waitlist_entries"]);
+        assert_eq!(
+            module.tables(),
+            ["waitlist_entries", "waitlist_send_cooldown"]
+        );
         assert!(module.public_writes());
         assert_eq!(module.requires(), [Port::Db, Port::Mailer, Port::Signer]);
         assert_eq!(module.optional(), [Port::Captcha, Port::RateLimiter]);

@@ -158,8 +158,20 @@ pub trait Module: Send + Sync + 'static {
     fn emits(&self) -> &'static [&'static str] {
         &[]
     }
-    /// Whether the module has public write endpoints; drives the
-    /// production-captcha rule (section 11).
+    /// Whether the module has public write endpoints.
+    ///
+    /// **Advisory since issue #133.** The enforcement point is each
+    /// route's [`RoutePolicy`] on the declared surface, collected by
+    /// [`WriteGuards::collect`] and gated at `HarnessBuilder::build`.
+    /// A module that writes publicly but declares **no** policy on any
+    /// action counts as a [`HumanForm`] writer (the conservative
+    /// fallback for pre-surface modules); declaring an explicit
+    /// `Open`/`Signature` policy on every action opts out of the
+    /// fallback.
+    ///
+    /// [`RoutePolicy`]: crate::route_policy::RoutePolicy
+    /// [`WriteGuards::collect`]: crate::route_policy::WriteGuards::collect
+    /// [`HumanForm`]: crate::route_policy::RoutePolicy::HumanForm
     fn public_writes(&self) -> bool {
         false
     }
