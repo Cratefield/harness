@@ -29,6 +29,7 @@
 #![doc = include_str!("../README.md")]
 #![forbid(unsafe_code)]
 
+mod manifest;
 mod schema;
 mod value;
 

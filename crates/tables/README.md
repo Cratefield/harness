@@ -64,3 +64,111 @@ schema.validate().expect("the declaration itself is valid");
 Identifiers are rejected rather than quoted. That is deliberate: it is
 what lets the generated DDL leave every identifier unquoted, the way the
 hand-written module migrations do.
+
+## The manifest
+
+`[tables]` is a map keyed by table name. A field is one entry in that
+table's `fields` array, flat: a `kind` and the attributes that kind
+accepts. An attribute that does not apply to the kind is an error, not an
+ignored key. A silently dropped `max_len` is the drift this crate exists
+to prevent.
+
+A `venture.toml` fragment, parsed here by a real TOML parser so the
+example cannot drift from what the crate accepts:
+
+```rust
+use cratefield_tables::{FieldKind, Schema};
+
+#[derive(serde::Deserialize)]
+struct Manifest {
+    tables: Schema,
+}
+
+let fragment = r#"
+[tables.author]
+primary_key = "id"
+
+[[tables.author.fields]]
+name = "id"
+kind = "uuid"
+required = true
+
+[[tables.author.fields]]
+name = "email"
+kind = "text"
+format = "email"
+max_len = 254
+required = true
+unique = true
+
+[tables.post]
+primary_key = "id"
+
+[[tables.post.fields]]
+name = "id"
+kind = "uuid"
+required = true
+
+[[tables.post.fields]]
+name = "title"
+kind = "text"
+min_len = 1
+max_len = 200
+required = true
+
+[[tables.post.fields]]
+name = "status"
+kind = "enum"
+values = ["draft", "published"]
+required = true
+default = "draft"
+
+[[tables.post.fields]]
+name = "read_minutes"
+kind = "integer"
+min = 0
+max = 600
+
+[[tables.post.fields]]
+name = "author_id"
+kind = "uuid"
+indexed = true
+
+[[tables.post.foreign_keys]]
+field = "author_id"
+references = "author"
+"#;
+
+let manifest: Manifest = toml::from_str(fragment).expect("the fragment parses");
+manifest.tables.validate().expect("the declaration is valid");
+
+// Tables arrive in name order, whatever order the manifest listed them in.
+let names: Vec<&str> = manifest.tables.tables.iter().map(|t| t.name.as_str()).collect();
+assert_eq!(names, ["author", "post"]);
+
+let status = manifest.tables.table("post").unwrap().field("status").unwrap();
+assert_eq!(
+    status.kind,
+    FieldKind::Enum { values: vec!["draft".to_owned(), "published".to_owned()] }
+);
+```
+
+Keys, and where each applies:
+
+| Key | Applies to | Meaning |
+|---|---|---|
+| `name` | every field | the column name |
+| `kind` | every field | `text`, `integer`, `real`, `boolean`, `timestamp`, `uuid`, `json`, `enum` |
+| `required` | every field | `NOT NULL`; a field with a default may still be left out of a write |
+| `unique` | every field | `UNIQUE`, enforced by the database |
+| `indexed` | every field | gets its own `CREATE INDEX` |
+| `default` | every field | a literal the field would itself accept |
+| `min_len`, `max_len` | `text` | length in Unicode characters |
+| `format` | `text` | `email` or `url` |
+| `min`, `max` | `integer`, `real` | inclusive bounds |
+| `values` | `enum` | the allowed strings, at least one |
+
+`primary_key` takes a string or an array of strings and defaults to
+`"id"`. `foreign_keys` entries are `{ field, references }`, where
+`references` names another declared table and the referenced column is
+that table's primary key.
