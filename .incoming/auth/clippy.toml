@@ -1,0 +1,23 @@
+# Clippy configuration for every crate in the workspace.
+#
+# Mirrors the harness: ADR 0007 (which applies here unchanged) bans ambient
+# request state. `static mut` and `thread_local!` are additionally unusable
+# in module crates because they forbid `unsafe_code` (accessing a
+# `static mut` requires an unsafe block) and `static_mut_refs` is
+# warn-by-default in edition 2024.
+#
+# Crates that have a legitimate, non-request-scoped need for interior
+# mutability must annotate the specific item with
+# `#[allow(clippy::disallowed_types)]` and a justification comment.
+
+disallowed-macros = [
+    { path = "std::thread_local", reason = "ADR 0007: no ambient per-isolate request state" },
+]
+
+disallowed-types = [
+    { path = "std::sync::Mutex", reason = "shared mutable state; request state travels in Scope (ADR 0007)" },
+]
+
+# Proper nouns, not identifiers. Without this, clippy::doc_markdown (pedantic)
+# asks for backticks around every mention of WebAuthn in prose.
+doc-valid-idents = ["WebAuthn", "OpenSSL", "OAuth", "OpenID", "PKCE", "EdDSA", "RustCrypto", ".."]

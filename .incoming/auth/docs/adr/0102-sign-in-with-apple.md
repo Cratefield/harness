@@ -1,0 +1,211 @@
+# ADR 0102: Sign in with Apple's three departures from OIDC
+
+Status: accepted, 2026-09-07
+
+Resolves the spike in issue #3 and records the decisions issue #16 was built on.
+
+## Context
+
+Apple is an OpenID Connect provider, and the flow written for Google (#15)
+is written against a provider descriptor precisely so a second provider is
+data rather than a second copy of the flow. Apple is that test, and it
+mostly passes it: discovery, PKCE, the ID token, the nonce, the linking
+rules and the session are all shared, unchanged.
+
+Three things are not shared, and each one breaks a naive integration in a
+way that is hard to diagnose from the outside:
+
+1. **The client secret is not a string.** Apple issues a `.p8` private key,
+   and the client secret is an ES256 JWT signed with it, valid at most six
+   months. There is nothing to paste into `AUTH_OIDC_APPLE_CLIENT_SECRET`.
+2. **The authorization response arrives as a cross-site `form_post`.** Once
+   `name` or `email` is requested, Apple posts the response to the redirect
+   URI instead of redirecting to it. A browser sends no `SameSite=Lax`
+   cookie on a cross-site POST, so the flow cookie the Google path relies on
+   simply does not arrive.
+3. **The person's name arrives exactly once.** It is in the first
+   authorization's form body, as JSON in a `user` field, and never in the ID
+   token and never again. If it is not captured then, it is gone.
+
+A fourth difference surfaced while building: Apple accepts only
+`client_secret_post` at the token endpoint and answers HTTP Basic with
+`invalid_client`, which names nothing and reads exactly like a bad key.
+
+## Decision
+
+### 1. The client secret is minted, never stored
+
+`AUTH_OIDC_APPLE_CLIENT_SECRET` does not exist and is **refused** if set,
+rather than ignored: someone who sets one has misunderstood the setup, and
+silently ignoring it leaves them debugging Apple's error instead of ours.
+Apple is configured with four values:
+
+| Setting | What it is |
+| :--- | :--- |
+| `AUTH_OIDC_APPLE_CLIENT_ID` | The Services ID. Also the JWT's `sub`. |
+| `AUTH_OIDC_APPLE_TEAM_ID` | The Team ID. The JWT's `iss`. |
+| `AUTH_OIDC_APPLE_KEY_ID` | The key's id. The JWT header's `kid`. |
+| `AUTH_OIDC_APPLE_PRIVATE_KEY` | The `.p8` contents. A **Worker secret**. |
+
+The key is never in D1, never in a repository, and never in a log: the
+`AppleConfig` `Debug` is hand-written to print the two identifiers and
+withhold the key, and the one error type is deliberately vague, because
+the ways a PKCS#8 parse can fail are a description of the bytes it was
+given.
+
+`Minter::mint` signs `{alg: ES256, kid}` over
+`{iss: team, iat, exp, aud: https://appleid.apple.com, sub: services_id}`
+with `p256`, the same crate that signs this service's own access tokens
+(ADR 0101). **Lifetime is one hour, not six months.** Nothing here needs
+more than a single token exchange, so the lifetime is set by clock skew
+rather than by convenience, and a secret that somehow escapes a log is
+worthless within the hour. A `const` assertion keeps the lifetime under
+Apple's ceiling at build time rather than in a test, because a secret past
+it fails at Apple on every sign-in and in no test that does not call Apple.
+
+The minted secret is cached in memory until five minutes before it expires,
+keyed by the client id **and the key id** it was minted for: configuration
+can change under a live isolate, and a secret whose `sub` names the old
+Services ID, or that was signed by a key since revoked, is refused by Apple
+in a way that looks like a key problem rather than a stale-cache one. The
+key id is the one that matters, because the rotation below leaves the client
+id alone.
+
+**Rotation is a secret swap.** Replace `AUTH_OIDC_APPLE_PRIVATE_KEY` and
+`AUTH_OIDC_APPLE_KEY_ID` together and redeploy. There is no stored secret
+to rotate and no window in which two are valid, because every secret this
+service presents was minted seconds earlier.
+
+The `.p8` is accepted armoured or bare. An operator moving a key through a
+secret store often loses the `-----BEGIN-----` lines, and refusing that
+costs an afternoon for no security gain.
+
+### 2. The flow cookie is widened to `SameSite=None`, not moved to a row
+
+The descriptor gains a `ResponseMode`, and `SameSite=None; Secure` is set
+for `form_post` providers only. Google's cookie is untouched.
+
+The spike weighed the alternative, a D1 row keyed by the `state` value, and
+rejected it for the reason the cookie exists at all: **a row is spendable by
+anyone who saw the state**, in a redirect chain or a referrer, while a
+cookie is bound to the browser that started the flow. Widening `SameSite`
+gives up cross-site request protection that this cookie was never providing
+on its own: it is signed so it cannot be forged, `__Host-` keeps it
+origin-locked, it lives ten minutes, and the only thing a holder can do
+with it is finish the flow it belongs to, which also needs Apple's own code
+and a `state` that matches. The `state` comparison is what defends the
+callback, and it happens before anything is spent, cleared or persisted.
+
+**And nothing is cleared before it.** A review caught the opposite: the
+unparseable-body and missing-`state` paths both cleared the flow cookie
+before comparing. On a `SameSite=None` cookie that is a real capability a
+redirect provider never handed anyone — any page the victim has open can
+`fetch(..., {credentials: 'include'})` at the callback, the browser
+attaches the cookie, and the reply clears it, so Apple's real response
+seconds later reads as an expired flow. It is a denial of one sign-in
+attempt rather than a bypass, and Safari and Firefox partition third-party
+cookies so it is Chrome-shaped, but it was ours to give away and we were
+giving it. The cookie is now spent only once the state has matched.
+
+### 3. The name is taken from the form body, once
+
+`user` is parsed on the callback and fills `Identity.name` **only when the
+ID token did not carry one**, so a provider that does send a name is never
+overwritten by a form field. A malformed or absent `user` is not an error:
+that is what every sign-in after the first looks like. A name with a control
+character or over 200 characters is dropped rather than stored, because it
+is displayed and Apple promises nothing about the bytes.
+
+Where the name goes is not this module's decision. It is handed to the
+linking rules as `IncomingIdentity.name` and stored as `name_at_link`, the
+same as every other provider.
+
+### 4. The token-endpoint auth method is pinned, not discovered
+
+`Provider::auth_type` says `client_secret_post` for Apple and HTTP Basic for
+Google, pinned in the descriptor for the same reason the signing algorithms
+are: the alternative is believing a document fetched over the network. This
+is the same class of trap as the HS256 one fixed in #15, where a discovery
+document listing HS256 would have turned our own client secret into the
+signing key.
+
+### 5. The signed-in user is carried in the flow, not in a cookie
+
+The session cookie is `SameSite=Lax`, so by this ADR's own reasoning it does
+**not** arrive on Apple's cross-site POST either. Left alone, a signed-in
+person adding Apple looks like a stranger to the linking rules: `ConfirmLink`
+can never fire, and a relay address or an address that is not theirs
+silently creates a **second account** and switches the browser into it.
+
+`/start` is same-site, a top-level navigation from our own page, so the
+session cookie does arrive there. The signed-in user id is validated there
+and sealed into the signed flow, and the callback uses it when no live
+cookie arrives, re-checking that the account still exists and is active
+because it may have been disabled in the ten minutes since.
+
+What is not carried is the session cookie's own value, so the fixation
+revoke in `sessions::issue` does not fire on this path: the person's
+previous session row stays live server-side until it expires, with no
+cookie pointing at it, because the browser has just overwritten it. That is
+untidy rather than exploitable — the cookie is `__Host-` and `HttpOnly`, so
+it cannot be planted cross-site, which is the attack the revoke exists for.
+Filed rather than bodged.
+
+> **Update, 2026-09-08 (issue #36).** Fixed, by the first of the two options
+> that issue lists. `/start` now seals the session **id** alongside the user
+> id, and `Login` takes a `presented_session_id` the callback fills from the
+> flow. The value is still never carried: an id is useless without the row,
+> where the value is a bearer credential. The paragraph above describes the
+> state between #35 and that fix.
+
+### 6. Private relay addresses were already handled
+
+Apple may return a `@privaterelay.appleid.com` address. It is a per-app
+alias, so two different people can hold relay addresses that look equally
+plausible, and one can never be evidence that an incoming identity is an
+existing account. This rule landed with the linking work (#22) and needed
+nothing here; `apple.rs` adds a test that proves it end to end through a
+real Apple flow rather than through the rules in isolation.
+
+## Consequences
+
+- Apple is `PROVIDERS[1]` and the flow did not fork. The only Apple-shaped
+  code is `apple.rs`, two enum variants on the descriptor and one extra
+  route method.
+- A half-configured Apple block fails `validate_config`, naming the missing
+  keys, so `fz doctor` and `Harness::build` refuse it rather than answering
+  requests that will fail at Apple later. **A key that parses to nothing
+  fails it too**: presence is not usability, and the key is otherwise first
+  parsed at request time, so a corrupt `.p8` would pass the check and then
+  503 every Apple request.
+- `openidconnect` is built with `accept-string-booleans`. Apple documents
+  `email_verified` as "a String or Boolean" and sends `"true"`; without the
+  feature every real Apple sign-in fails ID-token verification with an
+  "invalid type: string" that no fake reproduces unless it is told to. The
+  test provider now sends the string, so the suite covers it.
+- The secret cache is keyed on the client id **and the key id**. The
+  documented rotation swaps the `.p8` and the key id together and leaves the
+  client id alone, so keying on the client id by itself would keep signing
+  with the revoked key for the rest of the window.
+- `p256` gains the `pkcs8` and `pem` features. Both are pure Rust and the
+  workspace still builds to `wasm32` with no `openssl`, `reqwest` or `mio`
+  in the tree.
+- The token endpoint is reached with the credentials in the body for Apple
+  and in the header for Google, which is now visible in the descriptor
+  rather than implied by whatever each provider's document happens to say.
+
+## What is not proven
+
+Every test here runs against a fake Apple: real ES256 minting, a real
+`form_post` body, a real RS256 ID token verified through the real
+verification path, and Apple's own discovery shape. **Nothing has talked to
+Apple.** No Apple Developer account, Services ID or `.p8` exists on this
+machine, so these remain untested against the live provider:
+
+- that Apple accepts a secret minted exactly this way,
+- that the registered return URL matches byte for byte,
+- the real `user` field's shape on a first authorization.
+
+Issue #16's last acceptance criterion, a manual run against a staging
+Services ID, stays open for whoever has the account. The runbook it needs
+is in `docs/ARCHITECTURE.md`.

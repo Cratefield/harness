@@ -1,0 +1,124 @@
+name: CI
+ 
+on:
+  push:
+    branches: [main]
+  pull_request:
+ 
+env:
+  CARGO_TERM_COLOR: always
+ 
+jobs:
+  fmt:
+    name: rustfmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.98.1"
+          components: rustfmt
+      - run: cargo fmt --all --check
+ 
+  clippy:
+    name: clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.98.1"
+          components: clippy
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+ 
+  test:
+    name: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.98.1"
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --workspace
+ 
+  # Which crates are modules, worked out rather than listed. A hand-kept
+  # list is a trap: forgetting to add a new module means its conformance
+  # test silently never runs, which is the one failure this job exists to
+  # prevent. `crates/auth-client` is a consumer library, not a module, and
+  # is correctly absent because it implements no `Module`.
+  detect-modules:
+    name: detect module crates
+    runs-on: ubuntu-latest
+    outputs:
+      modules: ${{ steps.find.outputs.modules }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: find
+        shell: bash
+        run: |
+          set -euo pipefail
+          modules=""
+          for dir in crates/*/; do
+            dir="${dir%/}"
+            if grep -rqs "^impl Module for" "$dir/src"; then
+              modules="$modules $dir"
+            fi
+          done
+          modules="${modules# }"
+          if [ -z "$modules" ]; then
+            echo "::error::no crate implements Module; the conformance kit would test nothing"
+            exit 1
+          fi
+          echo "found: $modules"
+          echo "modules=$modules" >> "$GITHUB_OUTPUT"
+
+  # The module conformance kit, run through the harness's reusable workflow
+  # so this repo's modules pass the identical suite as the harness's own.
+  #
+  # The harness moved to the Cratefield organisation. The GitHub API and git
+  # both follow that rename, but Actions does not resolve a reusable
+  # workflow through it: the old address fails the whole run at startup,
+  # with no jobs and a generic "workflow file issue".
+  conformance:
+    name: conformance (module kit)
+    needs: detect-modules
+    # Pinned to a commit, not `@main`: a reusable workflow resolved at
+    # `@main` means an unrelated push to the harness can change what this
+    # repository's CI runs, with no diff here. The harness has no release
+    # tags yet (release-plz has never produced one), and a SHA is
+    # immutable where a tag can be moved. Bump deliberately.
+    uses: Cratefield/harness/.github/workflows/conformance.yml@b0858003713c5bc449ef617154ca375842ec1a4b
+    with:
+      module-glob: ${{ needs.detect-modules.outputs.modules }}
+
+  deny:
+    name: cargo deny
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EmbarkStudios/cargo-deny-action@v2
+ 
+  wasm:
+    name: wasm build (workspace)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.98.1"
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - name: Build the workspace for wasm32
+        run: cargo build --target wasm32-unknown-unknown
+      - name: No openssl/reqwest/mio in the wasm tree (BUILD-BRIEF.md)
+        run: |
+          count=$(cargo tree --target wasm32-unknown-unknown | grep -cE '^\S*(openssl|reqwest|mio) ' || true)
+          if [ "$count" != "0" ]; then
+            echo "forbidden dependencies in the wasm tree:"
+            cargo tree --target wasm32-unknown-unknown | grep -E '(openssl|reqwest|mio) v'
+            exit 1
+          fi

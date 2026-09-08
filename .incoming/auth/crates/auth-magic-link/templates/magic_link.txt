@@ -1,0 +1,8 @@
+Sign in to {{ venture }}
+
+Open this link to sign in. It works once and expires in {{ minutes }} minutes.
+
+{{ link }}
+
+If you did not ask to sign in, you can ignore this message. Nobody can use
+the link without opening it, and it will expire on its own.

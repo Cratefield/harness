@@ -1,0 +1,53 @@
+# cargo deny configuration, mirroring the harness allowlist with one
+# addition: MPL-2.0, because the wasm-auth spike depends on kanidm's
+# `webauthn-rs-proto` and `base64urlsafedata` (MPL-2.0).
+#
+# Advisories: vulnerabilities deny (cargo-deny v2 field layout).
+
+[advisories]
+version = 2
+yanked = "deny"
+ignore = [
+    # rsa 0.9 (via openidconnect, pulled by the wasm-auth spike): Marvin
+    # Attack timing sidechannel — no upstream patch exists ("no safe
+    # upgrade available"). The spike only verifies fixture-driven token
+    # exchanges; no attacker-controlled RSA ciphertext is decrypted.
+    # Re-evaluate when RustCrypto ships the constant-time rewrite, before
+    # the production OIDC module adopts openidconnect.
+    "RUSTSEC-2023-0071",
+]
+
+[licenses]
+version = 2
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "MPL-2.0",
+    "Unicode-3.0",
+    "Unicode-DFS-2016",
+    # foldhash (transitive via hashbrown/rusqlite) — OSI approved.
+    "Zlib",
+]
+
+[bans]
+multiple-versions = "warn"
+wildcards = "allow"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+# The harness crates are consumed as git dependencies until they publish
+# to crates.io (issue #25); this is the one allowed git source.
+#
+# It moved to the Cratefield organisation. git follows the rename, so the
+# dependency kept resolving, but this allowlist matches on the literal
+# string and correctly refused the new address. That makes three places a
+# repo rename has to be chased by hand: here, the Cargo pins, and the
+# reusable CI workflow, which is the only one that fails loudly.
+allow-git = [
+    "https://github.com/Cratefield/harness",
+]
