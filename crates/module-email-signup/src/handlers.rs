@@ -59,7 +59,7 @@ pub(crate) fn router(ctx: Arc<ModuleContext>, settings: Settings) -> axum::Route
         .route("/confirm", get(confirm))
         .route("/unsubscribe", get(unsubscribe_get).post(unsubscribe_post))
         .route("/admin/export.csv", get(admin_export))
-        .route("/admin/subscribers/{email}", delete(admin_delete))
+        .route("/admin/subscribers/{id}", delete(admin_delete))
         .with_state(state)
 }
 
@@ -238,7 +238,7 @@ pub(crate) fn surface(settings: &Settings) -> Surface {
                 .audience(Audience::Admin)
                 .outcome(Outcome::Json),
         )
-        .action(Action::delete("delete", "/admin/subscribers/{email}"))
+        .action(Action::delete("delete", "/admin/subscribers/{id}"))
         .view(View::form("subscribe"))
         .view(View::table(
             "export",
@@ -701,18 +701,21 @@ async fn admin_export(
         .into_response())
 }
 
+/// Hard-deletes one subscriber by its opaque row id. The path never
+/// carries the email (issue #135): request paths outlive the request in
+/// access logs, proxies and browser history, so the id — already a column
+/// of the admin export table the UI renders — is the delete key.
 async fn admin_delete(
     scope: Scope,
     State(state): State<Arc<ModuleState>>,
     headers: HeaderMap,
-    Path(email): Path<String>,
+    Path(id): Path<String>,
 ) -> Result<Response, Problem> {
     require_admin(&*state.ctx.config, &headers)
         .map_err(|problem| problem.instance(&scope.request_id))?;
     let Some(db) = state.ctx.ports.db.clone() else {
         return Err(internal(&scope));
     };
-    let normalized = normalize_email(&email);
-    let deleted = store::delete_by_normalized_email(&*db, &normalized).await?;
+    let deleted = store::delete_by_id(&*db, &id).await?;
     Ok(Json(json!({ "deleted": deleted })).into_response())
 }

@@ -482,6 +482,7 @@ async fn admin_export_escapes_formula_leading_cells() {
 async fn admin_delete_is_a_hard_delete() {
     for kit in admin_kits() {
         signup(&kit, "gone@example.com").await;
+        let id = column(&kit, "gone@example.com", "id").expect("signed-up row has an id");
 
         let response = kit
             .router
@@ -489,7 +490,7 @@ async fn admin_delete_is_a_hard_delete() {
             .oneshot(
                 axum::http::Request::builder()
                     .method(Method::DELETE)
-                    .uri("/v1/email-signup/admin/subscribers/GONE@example.com")
+                    .uri(format!("/v1/email-signup/admin/subscribers/{id}"))
                     .header(header::AUTHORIZATION, format!("Bearer {ADMIN}"))
                     .body(axum::body::Body::empty())
                     .expect("request"),
@@ -498,6 +499,41 @@ async fn admin_delete_is_a_hard_delete() {
             .expect("answers");
         assert_eq!(response.status(), StatusCode::OK);
         assert!(column(&kit, "gone@example.com", "id").is_none(), "row gone");
+    }
+}
+
+/// The delete path takes the opaque row id, never the email (issue #135):
+/// an email in a URL outlives the request in access logs, proxies and
+/// browser history. Deleting "by email" now matches nothing — the path
+/// value is treated strictly as an id — and the row survives.
+#[pollster::test]
+async fn admin_delete_with_an_email_in_the_path_is_a_no_op() {
+    for kit in admin_kits() {
+        signup(&kit, "gone@example.com").await;
+
+        let response = kit
+            .router
+            .clone()
+            .oneshot(
+                axum::http::Request::builder()
+                    .method(Method::DELETE)
+                    .uri("/v1/email-signup/admin/subscribers/gone@example.com")
+                    .header(header::AUTHORIZATION, format!("Bearer {ADMIN}"))
+                    .body(axum::body::Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("answers");
+        assert_eq!(response.status(), StatusCode::OK);
+        let (parts, body) = response.into_parts();
+        drop(parts);
+        let bytes = pollster::block_on(axum::body::to_bytes(body, usize::MAX)).expect("body");
+        let json: serde_json::Value = serde_json::from_slice(&bytes).expect("json");
+        assert_eq!(json["deleted"], 0, "nothing matches an email as id");
+        assert!(
+            column(&kit, "gone@example.com", "id").is_some(),
+            "row survives the email-in-path delete"
+        );
     }
 }
 

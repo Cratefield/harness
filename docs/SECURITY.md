@@ -38,9 +38,26 @@
   appear only as a 12-hex `subject_hash` — a **keyed** HMAC pseudonym
   (`HMAC-SHA256` under a key the runtime derives from `HARNESS_SECRET`,
   domain-separated) so a low-entropy address is not dictionary-reversible
-  (issue #135); it degrades to a bare hash only when no key is installed.
+  (issue #135); with no key installed it emits the fixed placeholder
+  `000000000000` instead — fail-closed, never a bare digest.
+  Redaction is also **value-level**: any other logged string — a generic
+  `error`, `uri` or message — is scrubbed by `cratefield_core::scrub_text`
+  before it reaches a sink, replacing embedded emails with their
+  pseudonym and URL/path queries, dotted signed tokens, `Bearer`
+  credentials and URL userinfo with `[redacted]`. `DbError`'s `Display`
+  scrubs the wrapped driver message the same way, so a Postgres
+  `DETAIL:` line quoting a row cannot disclose it. The internal-error
+  forwarder scrubs each line it hands to the runtime sink.
   Rules in `cratefield_core::logging`, shared by every runtime formatter;
   verified by tests.
+- **Token-bearing URLs.** Signed links carry their credential in the
+  query (`?token=`). Every response to a request whose query has a
+  `token` parameter — on any path, including `/ui/*` — carries
+  `Cache-Control: no-store`, `X-Content-Type-Options: nosniff` and
+  `Referrer-Policy: no-referrer`, so no cache stores the credential and
+  no outbound navigation leaks it through `Referer` (issue #135). The
+  admin hard-delete route keys on the opaque row id, never the email
+  (`DELETE /v1/email-signup/admin/subscribers/{id}`).
 - **No `unsafe`** in core or any module (`#![forbid(unsafe_code)]`); the
   only `unsafe`-adjacent code is `worker::send::SendWrapper` inside the
   `worker` crate (ADR 0002).

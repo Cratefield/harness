@@ -210,6 +210,51 @@ async fn security_headers_on_v1_only() {
     assert!(headers.get("referrer-policy").is_none());
 }
 
+/// A `token` query parameter is a credential in the URL (issue #135):
+/// `/ui/waitlist/status?token=…` authenticates with the URL itself and is
+/// outside `/v1/*`, so the root-level middleware must give any
+/// token-bearing request the no-store headers — whatever the path.
+#[pollster::test]
+async fn token_bearing_requests_get_no_store_even_off_v1() {
+    let harness = harness_with_sample();
+    let router = harness.router(Ports::empty());
+
+    let response = request(&router, Method::GET, "/__health?token=abc", &[], None).await;
+    let headers = response.headers();
+    assert_eq!(headers.get(header::CACHE_CONTROL).unwrap(), "no-store");
+    assert_eq!(
+        headers.get(header::X_CONTENT_TYPE_OPTIONS).unwrap(),
+        "nosniff"
+    );
+    assert_eq!(headers.get("referrer-policy").unwrap(), "no-referrer");
+
+    // The token may sit behind other parameters…
+    let response = request(
+        &router,
+        Method::GET,
+        "/__health?page=2&token=abc",
+        &[],
+        None,
+    )
+    .await;
+    assert_eq!(
+        response.headers().get(header::CACHE_CONTROL).unwrap(),
+        "no-store"
+    );
+
+    // …and a look-alike parameter must not be mistaken for one.
+    let response = request(
+        &router,
+        Method::GET,
+        "/__health?access_token=abc&tokenizer=1",
+        &[],
+        None,
+    )
+    .await;
+    assert!(response.headers().get(header::CACHE_CONTROL).is_none());
+    assert!(response.headers().get("referrer-policy").is_none());
+}
+
 /// Deserialization failures become a 400 `validation-failed` problem
 /// naming the field, with `instance` set to the request id.
 #[pollster::test]

@@ -91,7 +91,10 @@ impl RedactingVisitor {
             self.fields
                 .insert(format!("{name}_hash"), json!(format!("sha256:{hash}")));
         } else {
-            self.fields.insert(name.to_owned(), json!(value));
+            // The redacted form, not the raw value: for a generic field it
+            // is the value with embedded emails, tokens and query strings
+            // scrubbed (issue #135).
+            self.fields.insert(name.to_owned(), json!(redacted));
         }
     }
 }
@@ -131,5 +134,18 @@ mod tests {
                 .is_some_and(|hash| hash.starts_with("sha256:"))
         );
         assert_eq!(visitor.fields["outcome"], "sent");
+
+        // A secret inside a *generic* field name (issue #135): the value
+        // itself is scrubbed, so a driver DETAIL or a redirect target
+        // cannot carry an email or a token into the JSON line.
+        let mut visitor = RedactingVisitor::default();
+        visitor.record_field(
+            "error",
+            "DETAIL: Key (email)=(nick@example.com) exists; see /v1/waitlist/status?token=abc",
+        );
+        let error = visitor.fields["error"].as_str().expect("error field");
+        assert!(!error.contains('@'), "{error}");
+        assert!(!error.contains("token=abc"), "{error}");
+        assert!(error.contains("subject_hash:"), "{error}");
     }
 }

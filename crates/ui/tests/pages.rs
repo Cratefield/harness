@@ -290,6 +290,21 @@ async fn signed_link_redirect_passes_through_and_status_renders_a_list() {
     )
     .await;
     assert_eq!(status.status, StatusCode::OK, "{}", status.body);
+    // The token in the URL is the credential (issue #135): the response
+    // must never be stored and must never leak the token through a
+    // Referer header on outbound navigation.
+    assert_eq!(
+        status.headers.get(header::CACHE_CONTROL).unwrap(),
+        "no-store"
+    );
+    assert_eq!(
+        status.headers.get(header::X_CONTENT_TYPE_OPTIONS).unwrap(),
+        "nosniff"
+    );
+    assert_eq!(
+        status.headers.get("referrer-policy").unwrap(),
+        "no-referrer"
+    );
     assert!(
         status.body.contains(
             r#"<dl class="cf-status" data-cf-module="waitlist" data-cf-action="status">"#
