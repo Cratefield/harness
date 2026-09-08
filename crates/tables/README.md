@@ -19,6 +19,13 @@ Schema view for anyone who wants one.
 Pure logic. No I/O, no database driver, no clock and no randomness, so it
 builds for `wasm32-unknown-unknown` alongside `cratefield-core`.
 
+**Not on crates.io yet.** The crate is held back until the CRUD layer and
+the first in-repo consumer land, so `release-plz.toml` carries
+`publish = false` for it. Nothing depends on it yet and its public
+surface is still moving, which a 0.1 on the registry would pin
+permanently. Its first publish is manual, the same as every other new
+crate ([RELEASING.md](../../docs/RELEASING.md)).
+
 ## The schema type
 
 ```rust
