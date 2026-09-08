@@ -1,0 +1,7 @@
+# Keep the build context small: never ship build output, VCS, or agent state.
+target
+**/target
+.git
+.github
+.claude
+dist
