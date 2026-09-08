@@ -158,6 +158,7 @@ impl Kit {
                 ip: None,
                 user_agent: None,
                 presented_cookie: None,
+                presented_session_id: None,
                 amr: &["test"],
             },
         )

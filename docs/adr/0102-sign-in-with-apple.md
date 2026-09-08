@@ -151,6 +151,13 @@ untidy rather than exploitable — the cookie is `__Host-` and `HttpOnly`, so
 it cannot be planted cross-site, which is the attack the revoke exists for.
 Filed rather than bodged.
 
+> **Update, 2026-09-08 (issue #36).** Fixed, by the first of the two options
+> that issue lists. `/start` now seals the session **id** alongside the user
+> id, and `Login` takes a `presented_session_id` the callback fills from the
+> flow. The value is still never carried: an id is useless without the row,
+> where the value is a bearer credential. The paragraph above describes the
+> state between #35 and that fix.
+
 ### 6. Private relay addresses were already handled
 
 Apple may return a `@privaterelay.appleid.com` address. It is a per-app

@@ -154,6 +154,7 @@ async fn signed_in(kit: &TestHarness, user_id: &str) -> String {
             ip: None,
             user_agent: None,
             presented_cookie: None,
+            presented_session_id: None,
             amr: &[],
         },
     )

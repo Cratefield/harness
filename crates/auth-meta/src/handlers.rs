@@ -207,14 +207,19 @@ async fn start(
     };
 
     // Who is signed in now, read here because `/start` is same-site.
-    let signed_in_user = match (ctx.ports.db.as_deref(), session_cookie_value(&headers)) {
+    // Both halves of the answer: who it is, and which session row it is,
+    // so the callback can revoke that row even though the cookie naming it
+    // will not arrive there (auth #36).
+    let signed_in = match (ctx.ports.db.as_deref(), session_cookie_value(&headers)) {
         (Some(db), Some(value)) => factory0_auth_core::validate(db, clock, &value)
             .await
             .ok()
-            .flatten()
-            .map(|session| session.user_id),
+            .flatten(),
         _ => None,
     };
+    let (signed_in_user, signed_in_session_id) = signed_in.map_or((None, None), |session| {
+        (Some(session.user_id), Some(session.id))
+    });
 
     let challenge =
         PkceCodeChallenge::from_code_verifier_sha256(&PkceCodeVerifier::new(verifier.clone()));
@@ -234,6 +239,7 @@ async fn start(
             .unwrap_or_else(|| settings.default_return_to.clone()),
         expires_at: clock.now().unix_timestamp() + flow::TTL_SECS,
         signed_in_user,
+        signed_in_session_id,
     }
     .seal(signer);
 
@@ -389,6 +395,7 @@ async fn callback(
         &Caller {
             current_user: current_user.as_deref(),
             presented_cookie: presented.as_deref(),
+            presented_session_id: flow.signed_in_session_id.as_deref(),
             ip: ip.as_deref(),
             user_agent,
         },

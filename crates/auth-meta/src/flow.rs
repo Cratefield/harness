@@ -48,6 +48,16 @@ pub(crate) struct Flow {
     /// the answer `/start` saw is the one the linking rules asked about.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub signed_in_user: Option<String>,
+    /// The id of the session that person was carrying at `/start`.
+    ///
+    /// Carried for the same reason as `signed_in_user` and revoked at the
+    /// callback: the fixation defence in `auth-core`'s `issue` needs to
+    /// name the superseded session, and on a `form_post` callback the
+    /// cookie that would name it never arrives (auth #36). The id, not the
+    /// value — the value is a bearer credential and does not belong in a
+    /// second cookie.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signed_in_session_id: Option<String>,
 }
 
 impl Flow {
@@ -135,6 +145,7 @@ mod tests {
             return_to: "/".to_owned(),
             expires_at,
             signed_in_user: None,
+            signed_in_session_id: None,
         }
     }
 

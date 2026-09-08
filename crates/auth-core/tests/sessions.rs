@@ -78,6 +78,7 @@ fn a_session_is_never_issued_to_an_account_that_is_not_active() {
                 ip: None,
                 user_agent: None,
                 presented_cookie: None,
+                presented_session_id: None,
                 amr: &["passkey"],
             },
         )
@@ -98,6 +99,7 @@ fn a_session_is_never_issued_to_an_account_that_is_not_active() {
                 ip: None,
                 user_agent: None,
                 presented_cookie: None,
+                presented_session_id: None,
                 amr: &["passkey"],
             },
         )
@@ -127,6 +129,7 @@ async fn login(
             ip: Some("203.0.113.7"),
             user_agent: Some("Mozilla/5.0 Macintosh Safari/605.1.15"),
             presented_cookie: presented,
+            presented_session_id: None,
             amr: &["passkey"],
         },
     )
@@ -439,6 +442,7 @@ async fn the_expired_shape_through_the_router_is_the_same_401() {
             ip: None,
             user_agent: None,
             presented_cookie: None,
+            presented_session_id: None,
             amr: &[],
         },
     )
@@ -472,6 +476,7 @@ async fn listing_shows_ip_hash_ua_family_and_the_current_flag() {
             ip: Some("198.51.100.9"),
             user_agent: Some("Mozilla/5.0 Windows Chrome/120.0 Safari/537.36"),
             presented_cookie: None,
+            presented_session_id: None,
             amr: &[],
         },
     )
