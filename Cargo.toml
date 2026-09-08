@@ -5,7 +5,7 @@
 [workspace]
 resolver = "2"
 members = ["crates/*"]
-exclude = ["crates/control-plane-fz"]
+exclude = ["crates/control-plane-fz", "crates/control-plane-dev"]
 
 [workspace.package]
 version = "0.1.0"

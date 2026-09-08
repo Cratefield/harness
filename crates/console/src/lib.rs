@@ -56,8 +56,16 @@ impl Module for Console {
 
     fn requires(&self) -> &'static [Port] {
         // The signer proves the session cookie; the database holds the
-        // allowlist and its audit; the http client runs the Google exchange.
-        &[Port::Signer, Port::Db, Port::HttpClient]
+        // allowlist and its audit; the http client runs the Google exchange;
+        // the clock and id-gen mint sessions, ids and timestamps (without them
+        // declared, view_for hides them and every session's expiry is 0).
+        &[
+            Port::Signer,
+            Port::Db,
+            Port::HttpClient,
+            Port::Clock,
+            Port::IdGen,
+        ]
     }
 
     fn migrations(&self) -> Migrations {
@@ -86,10 +94,16 @@ impl Module for Console {
         Migrations::sqlite(&MIGRATIONS)
     }
 
-    fn validate_config(&self, _cfg: &dyn Config) -> Result<(), ConfigError> {
-        // Nothing is required for the stub. The Google/auth-service settings
-        // land with the real exchange (auth#41).
-        Ok(())
+    fn validate_config(&self, cfg: &dyn Config) -> Result<(), ConfigError> {
+        let mut errors = ConfigError::new();
+        // The dev-login bypass (CONSOLE_DEV_LOGIN) may never be enabled in
+        // production — it would be an unauthenticated way into the console.
+        let dev_login = ModuleConfig::new("console", cfg).get_str("DEV_LOGIN", "");
+        let production = cfg.get("ENV").as_deref() == Some("production");
+        if !dev_login.is_empty() && production {
+            errors.push("CONSOLE_DEV_LOGIN must never be set in production");
+        }
+        errors.into_result()
     }
 
     fn router(&self, ctx: ModuleContext) -> axum::Router {
@@ -97,6 +111,7 @@ impl Module for Console {
         axum::Router::new()
             .route("/", get(home))
             .route("/login", get(login_page))
+            .route("/dev-login", get(dev_login))
             .route("/auth/start", get(auth_start))
             .route("/auth/callback", get(callback))
             .route("/logout", get(logout))
@@ -359,7 +374,7 @@ async fn venture_detail(
              <p class=\"muted\">Deploying onto Cratefield's Cloudflare is a live step \
              (needs-human): it needs the account's Cloudflare credentials and the deploy \
              pipeline. The plan above is what will run.</p>\
-             <p><a href=\"{BASE}/\">Back</a></p>",
+             <p><a href=\"{BASE}\">Back</a></p>",
             slug = escape(&venture.slug),
             modules = escape(&venture.module_set),
             status = escape(status_label(venture.status)),
@@ -552,7 +567,7 @@ async fn callback(
                 (header::SET_COOKIE, set_cookie),
                 (header::SET_COOKIE, clear_state_cookie()),
             ]),
-            Redirect::to(&format!("{BASE}/")),
+            Redirect::to(BASE),
         )
             .into_response(),
         Ok(LoginOutcome::Refused) => (
@@ -699,6 +714,49 @@ fn not_configured() -> Response {
             "Sign-in unavailable · Cratefield",
             "<p>Google sign-in is not configured on this console              (<code>CONSOLE_GOOGLE_CLIENT_ID</code>/<code>_SECRET</code>/<code>BASE_URL</code>).</p>",
         )),
+    )
+        .into_response()
+}
+
+/// Whether the dev-login bypass is enabled (a non-empty `CONSOLE_DEV_LOGIN`).
+/// `validate_config` guarantees it is never on in production.
+fn dev_login_enabled(ctx: &ModuleContext) -> bool {
+    !ModuleConfig::new("console", &*ctx.config)
+        .get_str("DEV_LOGIN", "")
+        .is_empty()
+}
+
+fn now_unix(ctx: &ModuleContext) -> u64 {
+    ctx.ports.clock.as_ref().map_or(0, |clock| {
+        u64::try_from(clock.now().unix_timestamp()).unwrap_or(0)
+    })
+}
+
+/// A dev-only shortcut past Google sign-in, for local testing of the guarded
+/// console (the wizard, the dashboard) without a Google client. Inert unless
+/// `CONSOLE_DEV_LOGIN` is set, and `validate_config` forbids that in
+/// production. Mints a session for a fixed local operator.
+async fn dev_login(State(state): State<Arc<ConsoleState>>) -> Response {
+    let ctx = &state.ctx;
+    if !dev_login_enabled(ctx) {
+        return (StatusCode::NOT_FOUND, "not found").into_response();
+    }
+    let Some(signer) = ctx.ports.signer.clone() else {
+        return internal("signer unavailable");
+    };
+    let token = issue_session(
+        signer.as_ref(),
+        "dev@cratefield.local",
+        now_unix(ctx),
+        DEFAULT_TTL_SECS,
+    );
+    // Dev-only: omit `Secure` so the cookie survives http://localhost (the
+    // real login uses the Secure cookie from `access::session_cookie`).
+    let cookie =
+        format!("cf_session={token}; HttpOnly; SameSite=Lax; Path=/; Max-Age={DEFAULT_TTL_SECS}");
+    (
+        AppendHeaders([(header::SET_COOKIE, cookie)]),
+        Redirect::to(BASE),
     )
         .into_response()
 }
