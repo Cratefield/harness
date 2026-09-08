@@ -3,12 +3,16 @@
 //! the form's in-process dispatch goes out over the same mount.
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use async_trait::async_trait;
 use axum::body::Body;
 use axum::http::{Method, Request, StatusCode, header};
 use bytes::Bytes;
-use cratefield_core::{DispatchError, Dispatcher, HARNESS_SIDECARS, MapConfig};
+use cratefield_core::{
+    Action, DispatchError, Dispatcher, HARNESS_API, HARNESS_SIDECARS, MapConfig, ModuleSurface,
+    SURFACE_API, Surface, SurfaceDocument, VentureSurface,
+};
 use cratefield_module_hello::Hello;
 use cratefield_module_waitlist::Waitlist;
 use cratefield_testing::TestHarness;
@@ -47,9 +51,13 @@ async fn send(
     kit: &TestHarness,
     method: Method,
     uri: &str,
+    headers: &[(&str, &str)],
     form: Option<&str>,
 ) -> (StatusCode, String) {
     let mut builder = Request::builder().method(method).uri(uri);
+    for (name, value) in headers {
+        builder = builder.header(*name, *value);
+    }
     let body = match form {
         Some(form) => {
             builder = builder.header(header::CONTENT_TYPE, "application/x-www-form-urlencoded");
@@ -87,11 +95,11 @@ async fn sidecar_module_renders_and_submits_through_the_host_ui() {
         },
     );
 
-    let (status, surface) = send(&host, Method::GET, "/__surface", None).await;
+    let (status, surface) = send(&host, Method::GET, "/__surface", &[], None).await;
     assert_eq!(status, StatusCode::OK);
     assert!(surface.contains(r#""name":"hello""#), "{surface}");
 
-    let (status, html) = send(&host, Method::GET, "/ui/hello/record?fragment=1", None).await;
+    let (status, html) = send(&host, Method::GET, "/ui/hello/record?fragment=1", &[], None).await;
     assert_eq!(status, StatusCode::OK, "{html}");
     assert!(html.contains(r#"data-cf-module="hello" data-cf-action="record""#));
     assert!(html.contains(r#"name="name""#));
@@ -100,6 +108,7 @@ async fn sidecar_module_renders_and_submits_through_the_host_ui() {
         &host,
         Method::POST,
         "/ui/hello/record?fragment=1",
+        &[],
         Some("name=Ada"),
     )
     .await;
@@ -108,7 +117,135 @@ async fn sidecar_module_renders_and_submits_through_the_host_ui() {
     assert!(html.contains("Recorded. Hello!"), "{html}");
 
     // The row landed in the sidecar's database, not the host's.
-    let (status, body) = send(&sidecar, Method::GET, "/v1/hello/count", None).await;
+    let (status, body) = send(&sidecar, Method::GET, "/v1/hello/count", &[], None).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body, r#"{"visits":1}"#);
+}
+
+/// A sidecar whose `/__surface` declares an `/admin/` path with a
+/// `public` audience — a drift the host's build-time validation can never
+/// catch, because the document arrives at runtime and is merged per
+/// request. Every non-surface fetch is counted, then answered `202`.
+struct DriftedDispatcher {
+    surface: Bytes,
+    forwarded: Arc<AtomicUsize>,
+}
+
+#[async_trait]
+impl Dispatcher for DriftedDispatcher {
+    fn has(&self, binding: &str) -> bool {
+        binding == "DRIFT"
+    }
+    async fn dispatch(
+        &self,
+        binding: &str,
+        request: http::Request<Bytes>,
+    ) -> Result<http::Response<Bytes>, DispatchError> {
+        if binding != "DRIFT" {
+            return Err(DispatchError::NotBound(binding.to_owned()));
+        }
+        let (status, body) = if request.uri().path() == "/__surface" {
+            (StatusCode::OK, self.surface.clone())
+        } else {
+            self.forwarded.fetch_add(1, Ordering::SeqCst);
+            (StatusCode::ACCEPTED, Bytes::from_static(br#"{"ok":true}"#))
+        };
+        Ok(http::Response::builder()
+            .status(status)
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(body)
+            .expect("static response builds"))
+    }
+}
+
+fn drifted_surface() -> Bytes {
+    let document = SurfaceDocument {
+        surface_api: SURFACE_API,
+        harness_api: HARNESS_API,
+        venture: VentureSurface {
+            name: "drift".to_owned(),
+            public_url: "https://drift.test".to_owned(),
+        },
+        modules: vec![ModuleSurface {
+            name: "drift".to_owned(),
+            version: "9.9.9".to_owned(),
+            surface: Surface::new().action(Action::post("wipe", "/admin/wipe").accepted("Wiped.")),
+        }],
+        ui: None,
+    };
+    Bytes::from(serde_json::to_vec(&document).expect("document serializes"))
+}
+
+/// Issue #130: hiding is not authorizing. A surface that reaches the
+/// renderer at runtime is not re-validated by the host, so an action can
+/// misdeclare its audience; the dispatch gate must then authorize the
+/// execution with the same `require_admin` the target route runs — the
+/// answer a direct `/v1` request would get, and no dispatch behind it.
+#[pollster::test]
+async fn a_misdeclared_admin_action_is_authorized_at_dispatch_not_by_visibility() {
+    const TOKEN: &str = "test-admin-token-with-enough-entropy";
+    let forwarded = Arc::new(AtomicUsize::new(0));
+    let dispatcher: Arc<dyn Dispatcher> = Arc::new(DriftedDispatcher {
+        surface: drifted_surface(),
+        forwarded: Arc::clone(&forwarded),
+    });
+    let host = TestHarness::with_builder(
+        vec![Box::new(Hello::new())],
+        |builder| builder.ui(Ui::new()),
+        move |ports| {
+            ports.config = Arc::new(MapConfig::from_pairs([
+                ("HARNESS_SECRET", cratefield_testing::TEST_HARNESS_SECRET),
+                (HARNESS_SIDECARS, r#"{"drift":"DRIFT"}"#),
+                ("ADMIN_TOKEN", TOKEN),
+            ]));
+            ports.dispatcher = Some(dispatcher);
+        },
+    );
+
+    // The action is visible on the public UI: the document claims the
+    // public audience, and that is all the renderer's lookup consults.
+    let (status, html) = send(&host, Method::GET, "/ui/drift/wipe?fragment=1", &[], None).await;
+    assert_eq!(status, StatusCode::OK, "{html}");
+    assert!(
+        html.contains(r#"data-cf-module="drift" data-cf-action="wipe""#),
+        "{html}"
+    );
+
+    // Execution is the other question. No credential: the 401 the target
+    // route answers, and the sidecar never sees the request.
+    let (status, _) = send(&host, Method::POST, "/ui/drift/wipe", &[], Some("x=1")).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    assert_eq!(forwarded.load(Ordering::SeqCst), 0, "dispatched uncredited");
+
+    // A wrong token: the route's 403, still nothing dispatched.
+    let (status, _) = send(
+        &host,
+        Method::POST,
+        "/ui/drift/wipe",
+        &[("authorization", "Bearer not-the-token")],
+        Some("x=1"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(
+        forwarded.load(Ordering::SeqCst),
+        0,
+        "dispatched on a wrong token"
+    );
+
+    // The right token: the gate passes and the sidecar is reached — the
+    // in-process dispatch traverses the same authorization as the direct
+    // `/v1` request, in both directions.
+    let (status, html) = send(
+        &host,
+        Method::POST,
+        "/ui/drift/wipe",
+        &[("authorization", &format!("Bearer {TOKEN}"))],
+        Some("x=1"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{html}");
+    assert!(html.contains("cf-notice--success"), "{html}");
+    assert!(html.contains("Wiped."), "{html}");
+    assert_eq!(forwarded.load(Ordering::SeqCst), 1);
 }
