@@ -279,7 +279,7 @@ mismatch.
 ## 9. Deployment
 
 - One Worker per venture per environment (`<venture>-api-staging`, `<venture>-api`), custom domain `api.<venture domain>`. `wrangler.toml` uses `main = "build/worker/shim.mjs"` and `[build] command = "cargo install -q worker-build && worker-build --release"`.
-- Secrets: `HARNESS_SECRET`, `RESEND_API_KEY`, `TURNSTILE_SECRET`, `ADMIN_TOKEN`. Set with `wrangler secret put` by a human for production; staging via GitHub Environment secrets.
+- Secrets: `HARNESS_SECRET`, `RESEND_API_KEY`, `TURNSTILE_SECRET`, `ADMIN_TOKEN`. Set with `wrangler secret put` by a human for production; staging via GitHub Environment secrets. Optional signer entries: `HARNESS_SECRET_PREVIOUS` (demoted, verification-only), `HARNESS_SECRET_REVOKED` (key ids whose signatures are refused while configured), `HARNESS_VENTURE` (the `iss` binding label; a name, not a secret).
 - Mail sends from a **verified sending subdomain** `send.<domain>` (never the apex, which carries inbound Email Routing MX). Until verified, the adapter reports `NotConfigured` and the endpoints return `503 problem type=mail-not-configured` so forms can show a direct address.
 - Deploy workflow: `main` -> staging automatically; tag `v*` -> production behind a GitHub Environment approval.
 
@@ -299,8 +299,8 @@ module's tests against SQLite and Postgres in CI from phase 3 onward.
 ## 11. Security and privacy rules
 
 - **No enumeration.** Signup and waitlist always answer `202` with the same body whether the address is new, pending, confirmed or unsubscribed.
-- **Tokens carry a purpose.** Signed payload is `{ purpose, subject, exp?, kid }`. Confirm tokens expire (default 7 days); unsubscribe tokens do not. A confirm token is single-use because the row state is checked before flipping.
-- **Key rotation.** `Signer` accepts `HARNESS_SECRET` plus `HARNESS_SECRET_PREVIOUS`; tokens name their `kid`, so rotation never breaks links in flight. MAC comparison uses `subtle::ConstantTimeEq`.
+- **Tokens carry a purpose.** Signed payload is `{ purpose, subject, exp?, kid, iss? }`. Lifetimes are a mint-time policy, not a caller habit: `confirm` expires in 7 days, `status` in 90, anything else in 30; only the `unsubscribe` action has a deliberately non-expiring ceiling (ADR 0014), and the never-dying unsubscribe link now also has an opaque per-subscription form in `module-email-signup` that revocation can reach. A confirm token is single-use because the row state is checked before flipping.
+- **Key rotation.** `Signer` verifies against a bounded key ring (four entries: `HARNESS_SECRET` signs; `HARNESS_SECRET_PREVIOUS` verifies only; ids named in `HARNESS_SECRET_REVOKED` are refused even while configured); tokens name their `kid`, so rotation never breaks links in flight, and revocation kills a key's signatures without a deletion race. New tokens carry a venture/environment `iss` binding, so one venture's links never verify in another. MAC comparison uses `subtle::ConstantTimeEq`, over every live key with no early exit.
 - **Fixed redirects.** Confirm endpoints redirect only to URLs from `Venture` config. No `redirect` query parameter.
 - **Admin auth** uses a constant-time compare and is disabled entirely when `ADMIN_TOKEN` is unset. CSV exports escape leading `= + - @ \t \r` to block formula injection.
 - **Rate limits** apply to every public endpoint, including confirm and status, keyed by IP (`cf-connecting-ip`, never `x-forwarded-for` on Workers) and, for writes, by normalized email.

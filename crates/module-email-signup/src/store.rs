@@ -50,6 +50,7 @@ fn select_all() -> sea_query::SelectStatement {
             "locale",
             "confirmed_at",
             "unsubscribed_at",
+            "unsubscribe_token",
             "created_at",
             "updated_at",
         ])
@@ -68,6 +69,10 @@ pub(crate) struct SubscriberRow {
     pub locale: Option<String>,
     pub confirmed_at: Option<String>,
     pub unsubscribed_at: Option<String>,
+    /// The current revocable per-subscription unsubscribe token
+    /// (issue #137). `None` until the first mail minted after the
+    /// migration; rotating it retires every older opaque link.
+    pub unsubscribe_token: Option<String>,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -83,6 +88,7 @@ fn row_from(row: &Row) -> SubscriberRow {
         locale: row.get::<Option<String>>("locale").flatten(),
         confirmed_at: row.get::<Option<String>>("confirmed_at").flatten(),
         unsubscribed_at: row.get::<Option<String>>("unsubscribed_at").flatten(),
+        unsubscribe_token: row.get::<Option<String>>("unsubscribe_token").flatten(),
         created_at: row.get::<String>("created_at").unwrap_or_default(),
         updated_at: row.get::<String>("updated_at").unwrap_or_default(),
     }
@@ -128,6 +134,7 @@ pub(crate) async fn insert_row(db: &dyn Database, row: &SubscriberRow) -> Result
             "locale",
             "confirmed_at",
             "unsubscribed_at",
+            "unsubscribe_token",
             "created_at",
             "updated_at",
         ])
@@ -141,6 +148,7 @@ pub(crate) async fn insert_row(db: &dyn Database, row: &SubscriberRow) -> Result
             row.locale.clone().into(),
             row.confirmed_at.clone().into(),
             row.unsubscribed_at.clone().into(),
+            row.unsubscribe_token.clone().into(),
             row.created_at.clone().into(),
             row.updated_at.clone().into(),
         ])
@@ -162,11 +170,15 @@ pub(crate) async fn insert_row(db: &dyn Database, row: &SubscriberRow) -> Result
 /// token signed for an earlier generation. A pending row keeps its
 /// generation (a re-mail is the same lifecycle), so links already in
 /// flight stay valid.
+/// Also rotates the revocable unsubscribe token (issue #137): the mail
+/// this refresh accompanies carries the new opaque link, and the next
+/// mail will carry the next one.
 pub(crate) async fn refresh_to_pending(
     db: &dyn Database,
     id: &str,
     source: Option<&str>,
     locale: Option<&str>,
+    unsubscribe_token: &str,
     now: &str,
 ) -> Result<u64, DbError> {
     let generation = SimpleExpr::Case(Box::new(
@@ -186,10 +198,43 @@ pub(crate) async fn refresh_to_pending(
             (iden("locale"), locale.into()),
             (iden("confirmed_at"), Option::<String>::None.into()),
             (iden("unsubscribed_at"), Option::<String>::None.into()),
+            (iden("unsubscribe_token"), unsubscribe_token.into()),
             (iden("updated_at"), now.into()),
         ])
         .and_where(Expr::col(iden("id")).eq(id))
         .and_where(Expr::col(iden("status")).ne(STATUS_CONFIRMED));
+    db.execute(&Statement::render(&update)).await
+}
+
+/// The row the current opaque unsubscribe token belongs to (issue #137).
+pub(crate) async fn find_by_unsubscribe_token(
+    db: &dyn Database,
+    token: &str,
+) -> Result<Option<SubscriberRow>, DbError> {
+    let query = select_all()
+        .and_where(Expr::col(iden("unsubscribe_token")).eq(token))
+        .limit(1)
+        .to_owned();
+    let rows = db.query(&Statement::render(&query)).await?;
+    Ok(rows.first().map(row_from))
+}
+
+/// Backfills the opaque token onto a row that predates the #137 mail
+/// path, so a welcome mail can always carry a revocable link.
+pub(crate) async fn rotate_unsubscribe_token(
+    db: &dyn Database,
+    id: &str,
+    token: &str,
+    now: &str,
+) -> Result<u64, DbError> {
+    let mut update = Query::update();
+    update
+        .table(iden("subscribers"))
+        .values([
+            (iden("unsubscribe_token"), token.into()),
+            (iden("updated_at"), now.into()),
+        ])
+        .and_where(Expr::col(iden("id")).eq(id));
     db.execute(&Statement::render(&update)).await
 }
 
@@ -316,10 +361,33 @@ mod tests {
         seed(&db, "confirmed-row", STATUS_CONFIRMED, 5);
 
         let now = "2026-01-02T00:00:00Z";
-        pollster::block_on(refresh_to_pending(&db, "pending-row", None, None, now)).expect("ok");
-        pollster::block_on(refresh_to_pending(&db, "unsubscribed-row", None, None, now))
-            .expect("ok");
-        pollster::block_on(refresh_to_pending(&db, "confirmed-row", None, None, now)).expect("ok");
+        pollster::block_on(refresh_to_pending(
+            &db,
+            "pending-row",
+            None,
+            None,
+            "tok-1",
+            now,
+        ))
+        .expect("ok");
+        pollster::block_on(refresh_to_pending(
+            &db,
+            "unsubscribed-row",
+            None,
+            None,
+            "tok-2",
+            now,
+        ))
+        .expect("ok");
+        pollster::block_on(refresh_to_pending(
+            &db,
+            "confirmed-row",
+            None,
+            None,
+            "tok-3",
+            now,
+        ))
+        .expect("ok");
 
         assert_eq!(
             state(&db, "pending-row"),

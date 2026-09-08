@@ -81,6 +81,7 @@ async fn every_shipped_migration_applies_on_postgres_16() {
         [
             "email-signup/0001",
             "email-signup/0002",
+            "email-signup/0003",
             "waitlist/0001",
             "waitlist/0002"
         ]
