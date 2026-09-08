@@ -46,7 +46,7 @@ const UNKEYED_PSEUDONYM: &str = "000000000000";
 /// dictionary-reversible, so a runtime derives this from `HARNESS_SECRET` and
 /// installs it once at startup; `subject_hash` then emits `HMAC(key, email)`
 /// instead. Unset (tests, or a runtime whose `HARNESS_SECRET` failed
-/// validation) makes `subject_hash` emit the fixed [`UNKEYED_PSEUDONYM`]
+/// validation) makes `subject_hash` emit a fixed all-zero `000000000000`
 /// placeholder — fail-closed; no digest of the address ever reaches a sink.
 /// Boot-time infrastructure, not request state (ADR 0007); first-install-wins.
 pub fn set_log_pseudonym_key(key: &[u8]) {
@@ -73,9 +73,9 @@ pub fn is_email_field(name: &str) -> bool {
 /// The redacted form of an email-ish value: a 12-hex pseudonym, no `@` ever
 /// reaching the logs. When a [pseudonym key](set_log_pseudonym_key) is
 /// installed it is `HMAC-SHA256(key, domain ‖ value)` (a keyed pseudonym,
-/// resistant to dictionary reversal); when it is not, a fixed
-/// [placeholder](UNKEYED_PSEUDONYM) — correlation is lost, but a bare digest
-/// never leaks (issue #135, fail-closed).
+/// resistant to dictionary reversal); when it is not, a fixed all-zero
+/// placeholder — correlation is lost, but a bare digest never leaks
+/// (issue #135, fail-closed).
 #[must_use]
 pub fn subject_hash(value: &str) -> String {
     pseudonym_hex(LOG_PSEUDONYM_KEY.get().map(Vec::as_slice), value)
