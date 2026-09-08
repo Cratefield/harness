@@ -14,6 +14,9 @@ workspace = true
 [dependencies]
 cratefield-core = { workspace = true }
 cratefield-access = { path = "../access" }
+cratefield-accounts = { path = "../accounts" }
+cratefield-catalog = { path = "../catalog" }
+cratefield-provisioning = { path = "../provisioning" }
 axum = { workspace = true }
 http = { workspace = true }
 bytes = "1"

@@ -61,7 +61,13 @@ impl Module for Console {
     }
 
     fn migrations(&self) -> Migrations {
-        const MIGRATIONS: [SqlMigration; 1] = [cratefield_access::MIGRATION];
+        // The console owns the tables its domain crates use: the allowlist +
+        // audit (access), accounts + ventures, and provisioning progress.
+        const MIGRATIONS: [SqlMigration; 3] = [
+            cratefield_access::MIGRATION,
+            cratefield_accounts::MIGRATION,
+            cratefield_provisioning::MIGRATION,
+        ];
         Migrations::sqlite(&MIGRATIONS)
     }
 
@@ -79,6 +85,8 @@ impl Module for Console {
             .route("/auth/start", get(auth_start))
             .route("/auth/callback", get(callback))
             .route("/logout", get(logout))
+            .route("/new", get(new_wizard).post(create_venture_handler))
+            .route("/ventures/{id}", get(venture_detail))
             .route("/admin/allowlist", post(invite))
             .with_state(state)
     }
@@ -153,21 +161,296 @@ pub async fn complete_login(
 // Handlers
 // ---------------------------------------------------------------------------
 
+#[allow(clippy::format_push_string)]
 async fn home(State(state): State<Arc<ConsoleState>>, headers: HeaderMap) -> Response {
-    let session = match guard(&state.ctx, &headers) {
+    let ctx = &state.ctx;
+    let session = match guard(ctx, &headers) {
         Ok(session) => session,
         Err(redirect) => return redirect,
     };
+    let (account, repo) = match account_of(ctx, &session).await {
+        Ok(pair) => pair,
+        Err(response) => return response,
+    };
+    let ventures = repo.ventures_for(&account.id).await.unwrap_or_default();
+
+    let mut list = String::new();
+    if ventures.is_empty() {
+        list.push_str("<p>No backends yet.</p>");
+    } else {
+        list.push_str("<ul>");
+        for venture in &ventures {
+            list.push_str(&format!(
+                "<li><a href=\"{BASE}/ventures/{id}\">{slug}</a> — {status}</li>",
+                id = escape(&venture.id),
+                slug = escape(&venture.slug),
+                status = escape(status_label(venture.status)),
+            ));
+        }
+        list.push_str("</ul>");
+    }
+
     Html(page(
         "Cratefield console",
         &format!(
-            "<p>Signed in as <strong>{}</strong>.</p>\
-             <p>The provisioning wizard (#8) and the account dashboard (#11) land here.</p>\
+            "<p>Signed in as <strong>{email}</strong>.</p>\
+             <h2>Your backends</h2>{list}\
+             <p><a class=\"btn\" href=\"{BASE}/new\">New backend</a></p>\
              <p><a href=\"{BASE}/logout\">Sign out</a></p>",
-            escape(&session.account_id)
+            email = escape(&session.account_id),
         ),
     ))
     .into_response()
+}
+
+/// The new-backend wizard (#8): pick modules from the catalog and name it.
+/// Server-rendered; one page, dependencies resolved on submit.
+#[allow(clippy::format_push_string)]
+async fn new_wizard(State(state): State<Arc<ConsoleState>>, headers: HeaderMap) -> Response {
+    let ctx = &state.ctx;
+    if let Err(redirect) = guard(ctx, &headers) {
+        return redirect;
+    }
+    let catalog = cratefield_catalog::curated();
+    let mut modules = String::new();
+    for module in &catalog.modules {
+        modules.push_str(&format!(
+            "<label><input type=\"checkbox\" name=\"module\" value=\"{slug}\"> \
+             <strong>{name}</strong> — {summary}</label><br>",
+            slug = escape(&module.slug),
+            name = escape(&module.name),
+            summary = escape(&module.summary),
+        ));
+    }
+    Html(page(
+        "New backend · Cratefield",
+        &format!(
+            "<h1>New backend</h1>\
+             <form method=\"post\" action=\"{BASE}/new\">\
+             <p>Pick what your backend does:</p>{modules}\
+             <p><label>Name (slug): <input name=\"slug\" required></label></p>\
+             <p><button type=\"submit\">Create</button></p></form>",
+        ),
+    ))
+    .into_response()
+}
+
+/// Creates the venture record from the wizard: resolve the module set, then
+/// `create_venture`. Provisioning it onto Cloudflare (the live deploy) is a
+/// separate, needs-human step shown on the venture page.
+async fn create_venture_handler(
+    State(state): State<Arc<ConsoleState>>,
+    headers: HeaderMap,
+    body: String,
+) -> Response {
+    let ctx = &state.ctx;
+    let session = match guard(ctx, &headers) {
+        Ok(session) => session,
+        Err(redirect) => return redirect,
+    };
+    let (account, repo) = match account_of(ctx, &session).await {
+        Ok(pair) => pair,
+        Err(response) => return response,
+    };
+
+    let form = parse_form(&body);
+    let selected: Vec<String> = form
+        .iter()
+        .filter(|(k, _)| k == "module")
+        .map(|(_, v)| v.clone())
+        .collect();
+    let slug = form
+        .iter()
+        .find(|(k, _)| k == "slug")
+        .map(|(_, v)| v.trim().to_owned())
+        .unwrap_or_default();
+    if slug.is_empty() {
+        return (StatusCode::BAD_REQUEST, "a slug is required").into_response();
+    }
+
+    let catalog = cratefield_catalog::curated();
+    let selected_refs: Vec<&str> = selected.iter().map(String::as_str).collect();
+    let module_set = match catalog.resolve(&selected_refs) {
+        Ok(set) => set.content_key(),
+        Err(err) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                format!("could not resolve modules: {err}"),
+            )
+                .into_response();
+        }
+    };
+
+    let id = ulid(ctx);
+    let now = now_rfc3339(ctx);
+    match repo
+        .create_venture(&id, &account.id, &slug, &slug, &module_set, &id, &now)
+        .await
+    {
+        Ok(venture) => Redirect::to(&format!("{BASE}/ventures/{}", venture.id)).into_response(),
+        Err(err) => {
+            tracing::error!(error = %err, "create venture failed");
+            internal("could not create the backend")
+        }
+    }
+}
+
+/// One venture: its module set and the provisioning plan (what would run on
+/// Cloudflare). The live deploy is needs-human.
+#[allow(clippy::format_push_string)]
+async fn venture_detail(
+    State(state): State<Arc<ConsoleState>>,
+    headers: HeaderMap,
+    axum::extract::Path(id): axum::extract::Path<String>,
+) -> Response {
+    let ctx = &state.ctx;
+    let session = match guard(ctx, &headers) {
+        Ok(session) => session,
+        Err(redirect) => return redirect,
+    };
+    let (account, repo) = match account_of(ctx, &session).await {
+        Ok(pair) => pair,
+        Err(response) => return response,
+    };
+    let Some(db) = ctx.ports.db.clone() else {
+        return internal("db port unavailable");
+    };
+    let venture = match repo.venture_for(&account.id, &id).await {
+        Ok(Some(venture)) => venture,
+        Ok(None) => return (StatusCode::NOT_FOUND, "no such backend").into_response(),
+        Err(err) => {
+            tracing::error!(error = %err, "venture lookup failed");
+            return internal("could not load the backend");
+        }
+    };
+
+    let engine = cratefield_provisioning::Engine::new(db);
+    let plan = engine.plan(&venture).await.unwrap_or_default();
+    let mut steps = String::from("<ol>");
+    for step in &plan {
+        steps.push_str(&format!(
+            "<li>{desc}{mark}</li>",
+            desc = escape(&step.description),
+            mark = if step.done { " ✓" } else { "" },
+        ));
+    }
+    steps.push_str("</ol>");
+
+    Html(page(
+        &format!("{} · Cratefield", venture.slug),
+        &format!(
+            "<h1>{slug}</h1><p>Modules: <code>{modules}</code> — status {status}.</p>\
+             <h2>Provisioning plan</h2>{steps}\
+             <p class=\"muted\">Deploying onto Cratefield's Cloudflare is a live step \
+             (needs-human): it needs the account's Cloudflare credentials and the deploy \
+             pipeline. The plan above is what will run.</p>\
+             <p><a href=\"{BASE}/\">Back</a></p>",
+            slug = escape(&venture.slug),
+            modules = escape(&venture.module_set),
+            status = escape(status_label(venture.status)),
+        ),
+    ))
+    .into_response()
+}
+
+/// The signed-in account (created on first login) and a repository over it.
+#[allow(clippy::result_large_err)]
+async fn account_of(
+    ctx: &ModuleContext,
+    session: &Session,
+) -> Result<
+    (
+        cratefield_accounts::Account,
+        cratefield_accounts::Repository,
+    ),
+    Response,
+> {
+    let db = ctx
+        .ports
+        .db
+        .clone()
+        .ok_or_else(|| internal("db port unavailable"))?;
+    let repo = cratefield_accounts::Repository::new(db);
+    let account = repo
+        .account_for_login(
+            &session.account_id,
+            &session.account_id,
+            &ulid(ctx),
+            &now_rfc3339(ctx),
+        )
+        .await
+        .map_err(|err| {
+            tracing::error!(error = %err, "account_for_login failed");
+            internal("could not load the account")
+        })?;
+    Ok((account, repo))
+}
+
+fn status_label(status: cratefield_accounts::VentureStatus) -> &'static str {
+    use cratefield_accounts::VentureStatus::{Archived, Degraded, Draft, Live, Provisioning};
+    match status {
+        Draft => "draft",
+        Provisioning => "provisioning",
+        Live => "live",
+        Degraded => "degraded",
+        Archived => "archived",
+    }
+}
+
+fn ulid(ctx: &ModuleContext) -> String {
+    ctx.ports
+        .id_gen
+        .as_ref()
+        .map_or_else(|| "id".to_owned(), |generator| generator.ulid())
+}
+
+fn now_rfc3339(ctx: &ModuleContext) -> String {
+    ctx.ports
+        .clock
+        .as_ref()
+        .and_then(|clock| clock.now().format(&Rfc3339).ok())
+        .unwrap_or_default()
+}
+
+/// Parses an `application/x-www-form-urlencoded` body into ordered pairs,
+/// keeping repeated keys (checkboxes) rather than collapsing them.
+fn parse_form(body: &str) -> Vec<(String, String)> {
+    body.split('&')
+        .filter(|pair| !pair.is_empty())
+        .map(|pair| {
+            let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
+            (urldecode(key), urldecode(value))
+        })
+        .collect()
+}
+
+fn urldecode(input: &str) -> String {
+    let bytes = input.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        match bytes[index] {
+            b'+' => {
+                out.push(b' ');
+                index += 1;
+            }
+            b'%' if index + 2 < bytes.len() => {
+                let hex = std::str::from_utf8(&bytes[index + 1..index + 3]).ok();
+                if let Some(byte) = hex.and_then(|h| u8::from_str_radix(h, 16).ok()) {
+                    out.push(byte);
+                    index += 3;
+                } else {
+                    out.push(bytes[index]);
+                    index += 1;
+                }
+            }
+            other => {
+                out.push(other);
+                index += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 async fn login_page() -> Response {
@@ -447,6 +730,10 @@ mod tests {
         let db = SqliteDatabase::in_memory().expect("sqlite");
         db.apply_migrations("access", &[cratefield_access::MIGRATION])
             .expect("access schema");
+        db.apply_migrations("accounts", &[cratefield_accounts::MIGRATION])
+            .expect("accounts schema");
+        db.apply_migrations("provisioning", &[cratefield_provisioning::MIGRATION])
+            .expect("provisioning schema");
         Arc::new(db)
     }
 
@@ -541,12 +828,78 @@ mod tests {
         assert_eq!(session.account_id, "op@cratefield.com");
     }
 
+    #[test]
+    fn parse_form_keeps_repeated_checkbox_keys() {
+        let pairs = parse_form("module=waitlist&module=cms&slug=my-app&x=a%20b");
+        let modules: Vec<&str> = pairs
+            .iter()
+            .filter(|(k, _)| k == "module")
+            .map(|(_, v)| v.as_str())
+            .collect();
+        assert_eq!(modules, ["waitlist", "cms"]);
+        assert_eq!(
+            pairs
+                .iter()
+                .find(|(k, _)| k == "slug")
+                .map(|(_, v)| v.as_str()),
+            Some("my-app")
+        );
+        assert_eq!(
+            pairs
+                .iter()
+                .find(|(k, _)| k == "x")
+                .map(|(_, v)| v.as_str()),
+            Some("a b"),
+            "percent + plus decoded"
+        );
+    }
+
+    #[test]
+    fn account_and_venture_round_trip_with_a_plan() {
+        let ctx = test_ctx(db());
+        pollster::block_on(async {
+            let session = Session {
+                account_id: "op@cratefield.com".to_owned(),
+                expires_at: None,
+            };
+            let (account, repo) = account_of(&ctx, &session).await.expect("account");
+            assert_eq!(account.identity, "op@cratefield.com");
+
+            let venture = repo
+                .create_venture(
+                    "v1",
+                    &account.id,
+                    "my-app",
+                    "my-app",
+                    "waitlist",
+                    "v1",
+                    "2026-09-08T00:00:00Z",
+                )
+                .await
+                .expect("create venture");
+
+            let listed = repo.ventures_for(&account.id).await.unwrap();
+            assert_eq!(
+                listed.iter().map(|v| v.slug.as_str()).collect::<Vec<_>>(),
+                ["my-app"]
+            );
+
+            // The provisioning engine can plan the fresh venture (nothing done).
+            let engine = cratefield_provisioning::Engine::new(ctx.ports.db.clone().unwrap());
+            let plan = engine.plan(&venture).await.expect("plan");
+            assert!(!plan.is_empty());
+            assert!(plan.iter().all(|step| !step.done));
+        });
+    }
+
     /// Builds a `ModuleContext` with a signer + db for the guard tests.
     fn test_ctx(db: Arc<dyn Database>) -> ModuleContext {
         use cratefield_core::{EmptyConfig, EventBus, Ports, TemplateRegistry, Venture};
         let mut ports = Ports::with_config(Arc::new(EmptyConfig));
         ports.signer = Some(Arc::new(signer()));
         ports.db = Some(db);
+        ports.id_gen = Some(Arc::new(cratefield_core::UlidIdGen));
+        ports.clock = Some(Arc::new(cratefield_core::SystemClock));
         ModuleContext {
             ports,
             config: Arc::new(EmptyConfig),
