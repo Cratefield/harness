@@ -1,0 +1,22 @@
+# Local dev server for testing the guarded console (the wizard, the dashboard)
+# WITHOUT Cloudflare or a Google client: runs the console over the native
+# runtime + in-memory SQLite. EXCLUDED from the workspace (native-only deps).
+# Pinned to the same harness git rev as the console so cratefield-core unifies.
+[package]
+name = "cratefield-control-plane-dev"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.98"
+license = "MIT"
+publish = false
+
+[[bin]]
+name = "serve"
+path = "src/main.rs"
+
+[dependencies]
+cratefield-core = { git = "https://github.com/Cratefield/harness", rev = "b0858003713c5bc449ef617154ca375842ec1a4b" }
+cratefield-runtime-native = { git = "https://github.com/Cratefield/harness", rev = "b0858003713c5bc449ef617154ca375842ec1a4b" }
+cratefield-adapter-sqlite = { git = "https://github.com/Cratefield/harness", rev = "b0858003713c5bc449ef617154ca375842ec1a4b" }
+cratefield-console = { path = "../console" }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net"] }
