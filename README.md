@@ -158,12 +158,18 @@ convenience, not a layer.
 | `cratefield-adapter-postgres` | Phase 3. `Database` over sqlx for the native runtime |
 | `cratefield-runtime-native` | Phase 3. The same harness as a single binary on tokio |
 
-Private modules are `fz-*` crates in
-[harness-private](https://github.com/Factory-Zero/harness-private), consumed as
-pinned git dependencies. New ventures start from
-[venture-backend-template](https://github.com/Factory-Zero/venture-backend-template).
-The first consumer is
-[factory0-backend](https://github.com/Factory-Zero/factory0-backend).
+Everything else in the workspace is unpublished — `publish = false` is what
+makes a crate private now, not a separate repository (ADR
+[0013](https://github.com/Cratefield/harness/blob/main/docs/adr/0013-one-repository.md)):
+
+| Crate | Role |
+|---|---|
+| `factory0-auth-*` | The auth service: `auth-core` plus one crate per login method (passkeys, OIDC/Google/Apple, password, magic link, Meta) and the deployable `auth-worker` |
+| `fz-module-linkedin` | Private Factory Zero module: run a LinkedIn Company Page from the harness |
+| `cratefield-control-plane`, `cratefield-console`, `cratefield-accounts`, `cratefield-access`, `cratefield-catalog`, `cratefield-connections`, `cratefield-provisioning`, `cratefield-ui-generator` | The managed service: sign up, pick modules, connect Cloudflare and SSO, get a running venture |
+
+Ventures live in [`ventures/`](ventures): `cratefield-waitlist` serves
+`api.cratefield.com`, and `_template` is the layout a new one copies.
 
 ## What a module is
 

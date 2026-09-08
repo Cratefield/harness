@@ -1,0 +1,22 @@
+name = "cratefield-waitlist"
+main = "build/worker/shim.mjs"
+compatibility_date = "2026-09-01"
+
+[build]
+command = "worker-build --release"
+
+[observability]
+enabled = true
+
+[vars]
+ENV = "production"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "cratefield-waitlist"
+database_id = "7d3f9bef-1b23-400b-b462-f1f6c2e37d29"
+migrations_dir = "migrations"
+
+[[routes]]
+pattern = "api.cratefield.com"
+custom_domain = true

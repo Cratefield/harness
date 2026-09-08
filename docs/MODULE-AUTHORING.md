@@ -96,9 +96,10 @@ different port; step 9 points at the real modules for those.
 
 ## Step 1 — Scaffold the crate
 
-Module crates live in `crates/module-<name>/` inside this workspace (or in
-`harness-private` as `fz-<name>`; see ADR
-[0005](adr/0005-crate-naming-and-distribution.md)). The guide's crate is
+Module crates live in `crates/module-<name>/` inside this workspace. A
+private one is named `fz-<name>` and carries `publish = false`; it sits in
+the same directory as the public ones (ADR
+[0013](adr/0013-one-repository.md)). The guide's crate is
 `examples/module-hello/` because it ships as an example. Either way, the
 scaffold is identical. `examples/module-hello/Cargo.toml`:
 
@@ -621,9 +622,9 @@ choose one at all.
 fails on `worker`, `wasm-bindgen`, `tokio` or `reqwest` — the
 wasm-boundary check you can run locally before CI does.
 
-Public modules in this repo run both tests; `harness-private` runs the
-identical suite through the shared conformance workflow, so a private
-module cannot drift either.
+Every module in this repo runs both tests, public and private alike, in
+the same CI job — so a private module cannot drift either. The shared
+conformance workflow stays exported for modules built out of tree.
 
 ## Step 8 — Route tests
 
@@ -796,10 +797,10 @@ Everything else a module can do, with the module that does it:
 - **`/.well-known` discovery routes**: `Module::well_known` (root-level
   only; at most one module per venture may provide one).
 - **CSV admin export with formula-injection escaping**: `cratefield_core::csv_row`.
-- **Private modules**: same guide, different repo — `fz-*` crates in
-  `harness-private`, consumed by ventures as pinned git dependencies
-  (ADR [0005](adr/0005-crate-naming-and-distribution.md)), passing the
-  same conformance suite.
+- **Private modules**: same guide, same repo — `fz-*` crates with
+  `publish = false`, consumed by ventures as ordinary path dependencies
+  (ADR [0013](adr/0013-one-repository.md)), passing the same conformance
+  suite.
 
 ### Checklist
 

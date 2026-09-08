@@ -1,0 +1,33 @@
+{
+  "note": "recorded by examples/mint_passkey.rs (software authenticator, deterministic ECDSA)",
+  "rp_id": "localhost",
+  "origin": "http://localhost:5173",
+  "registration_challenge": "6jvYCn-2Ql56w9uU-h55jZCzpjNW5kCOnuRq7qC8_gE",
+  "assertion_challenge": "C03xGQLaqgBMlFhVkEpvw4NBgrIyUp1CswEv43ot1Lk",
+  "registration": {
+    "id": "HRgwt0pJOwY3PxpKPYkj01JsbuWNj2FYZZAJ6HVgnC0",
+    "rawId": "HRgwt0pJOwY3PxpKPYkj01JsbuWNj2FYZZAJ6HVgnC0",
+    "response": {
+      "attestationObject": "o2NmbXRkbm9uZWdhdHRTdG10oGhhdXRoRGF0YVikSZYN5YgOjGh0NBcPZHZgW4_krrmihjLHmVzzuoMdl2NFAAAAAQAAAAAAAAAAAAAAAAAAAAAAIB0YMLdKSTsGNz8aSj2JI9NSbG7ljY9hWGWQCeh1YJwtpQECAyYgASFYIB4YUy_UdUwC8wQdnHXOszuD_9gax85P6ILMscmLxYluIlggpGwxHE4v9A3ZajZT5uRURdMt_khuztdcepDGoYiBwKM",
+      "clientDataJSON": "eyJjaGFsbGVuZ2UiOiI2anZZQ24tMlFsNTZ3OXVVLWg1NWpaQ3pwak5XNWtDT251UnE3cUM4X2dFIiwiY3Jvc3NPcmlnaW4iOmZhbHNlLCJvcmlnaW4iOiJodHRwOi8vbG9jYWxob3N0OjUxNzMiLCJ0eXBlIjoid2ViYXV0aG4uY3JlYXRlIn0",
+      "transports": null
+    },
+    "type": "public-key",
+    "extensions": {}
+  },
+  "assertion": {
+    "id": "HRgwt0pJOwY3PxpKPYkj01JsbuWNj2FYZZAJ6HVgnC0",
+    "rawId": "HRgwt0pJOwY3PxpKPYkj01JsbuWNj2FYZZAJ6HVgnC0",
+    "response": {
+      "authenticatorData": "SZYN5YgOjGh0NBcPZHZgW4_krrmihjLHmVzzuoMdl2MFAAAAAg",
+      "clientDataJSON": "eyJjaGFsbGVuZ2UiOiJDMDN4R1FMYXFnQk1sRmhWa0Vwdnc0TkJnckl5VXAxQ3N3RXY0M290MUxrIiwiY3Jvc3NPcmlnaW4iOmZhbHNlLCJvcmlnaW4iOiJodHRwOi8vbG9jYWxob3N0OjUxNzMiLCJ0eXBlIjoid2ViYXV0aG4uZ2V0In0",
+      "signature": "MEUCIGx1zklgO7tDagF5EoVAzDnQOFmGm1hN53DrgHxGJ6z3AiEA0PqZYaXHkVidZ3quZ9V9DsQnbpXnJgTN0iRNELCEXqo",
+      "userHandle": null
+    },
+    "extensions": {
+      "appid": null,
+      "hmac_get_secret": null
+    },
+    "type": "public-key"
+  }
+}

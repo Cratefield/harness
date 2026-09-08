@@ -1,0 +1,14 @@
+{
+  "console/0001": {
+    "file": "0001_console_0001_access.sql",
+    "sha256": "6a43af46f2d2ea61b41d6f74d5911b571f912a38a7f48f0d51d7a1f20e668400"
+  },
+  "console/0002": {
+    "file": "0002_console_0002_accounts.sql",
+    "sha256": "38c7ab75c25179c0c14523d18ac5a5b44b910a879896e1a9544bdd72502f3550"
+  },
+  "console/0003": {
+    "file": "0003_console_0003_provisioning.sql",
+    "sha256": "b4c1de9b14da20522a99e5c359f7d5dab2d1d4a88877a0b87ff2b780f31b1bcb"
+  }
+}

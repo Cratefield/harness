@@ -58,12 +58,17 @@ a **waitlist** module, deployed for factory0.ventures.
 Crate names encode visibility and distribution. There are no scopes on
 crates.io, so the prefix does the job.
 
-| Prefix | Distribution | Visibility | Lives in |
-|---|---|---|---|
-| `cratefield-*` | crates.io | public, MIT | `Cratefield/harness` |
-| `fz-*` | git dependency (`git = "ssh://git@github.com/Factory-Zero/harness-private"`, pinned `tag`) | private | `Factory-Zero/harness-private` |
+Every crate lives in this repository (ADR 0013). The prefix says who owns
+the name and whether it is published; `publish = false` in the manifest is
+what actually keeps a crate off crates.io.
 
-### `Cratefield/harness` (public Cargo workspace)
+| Prefix | Distribution | Visibility |
+|---|---|---|
+| `cratefield-*` | crates.io, except where `publish = false` | public, MIT |
+| `factory0-auth-*` | never published | public source, Factory Zero's service |
+| `fz-*` | never published | public source, Factory Zero's module |
+
+### The published crates
 
 | Crate | Role |
 |---|---|
@@ -81,29 +86,42 @@ crates.io, so the prefix does the job.
 | `cratefield-adapter-postgres` | (phase 3) `Database` over `sqlx` Postgres, for the native runtime. |
 | `cratefield-runtime-native` | (phase 3) The same harness served by axum on tokio as a single binary, for the self-hosted move. |
 
-### `Factory-Zero/harness-private` (private Cargo workspace)
+### The unpublished crates
 
-Same layout and tooling as `harness`. Crates are `fz-*` and are consumed as
-pinned git dependencies; they are never published. Modules here pass the same
-`cratefield-testing` conformance kit. Candidate first module: `fz-module-admin`
-(cross-module ops endpoints: stats, exports, deletion requests) because it
-encodes internal process and needs no public API stability.
+**The auth service** (`crates/auth-*`, packages `factory0-auth-*`). One
+crate per login method over a shared `auth-core`, plus the deployable
+`auth-worker`. Its ADRs are the 0200 block. It moved here from
+`Factory-Zero/auth`.
 
-### `Factory-Zero/venture-backend-template` (public, GitHub template)
+**Private modules** are `fz-*` crates alongside the public ones and pass the
+same `cratefield-testing` conformance kit in this repo's own CI.
+`fz-module-linkedin` runs a LinkedIn Company Page from the harness.
 
-What a new venture clicks "Use this template" on. A Cargo project with
-`src/harness.rs` (composition), `src/lib.rs` (Worker entry via the runtime
-crate), `wrangler.toml` with `staging`/`production` envs, D1 and rate-limit
-bindings, a `migrations/` dir maintained by `fz migrations collect`, a `tests/`
-dir with a `harness_builds` test, CI (fmt, clippy, test, `fz doctor`,
-`worker-build` dry run) and a deploy workflow (staging on `main`, production on
-tag with a GitHub Environment approval gate).
+**The control plane** (`crates/control-plane*`) is the managed service: sign
+up, pick modules, connect Cloudflare and SSO, and get a running harness
+venture. It is itself a harness venture. See
+[`docs/control-plane/`](control-plane/).
 
-### `Factory-Zero/factory0-backend` (private, first consumer)
+Three native `fz` binaries — `crates/auth-fz`, `crates/control-plane-fz`,
+`crates/control-plane-dev` — are **excluded** from the workspace so their
+`clap`/`rusqlite` dependencies never reach a wasm graph. They use path
+dependencies and are built from their own directories.
 
-Built from the template. Modules: `email-signup`, `waitlist`. Serves
-`api.factory0.ventures`. The website's "enter" form and the ventures' waitlist
-forms post here.
+### `ventures/`
+
+A venture is a Worker composing modules. `ventures/_template` is the layout
+a new one copies: `src/lib.rs` (Worker entry via the runtime crate),
+`wrangler.toml` with `staging`/`production` envs, D1 and rate-limit
+bindings, and a `migrations/` dir maintained by `fz migrations collect`.
+
+| Venture | Serves |
+|---|---|
+| `cratefield-waitlist` | `api.cratefield.com` — Cratefield's own early-access waitlist |
+| `factory0` | `api.factory0.ventures` — signup and waitlist for factory0.ventures. Not deployed |
+
+Deployable Workers that are crates rather than ventures keep their
+`wrangler.toml` and `migrations/` beside the crate: `crates/auth-worker`
+and `crates/control-plane`.
 
 ## 4. The module contract
 

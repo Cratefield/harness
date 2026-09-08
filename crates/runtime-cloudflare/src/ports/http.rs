@@ -31,7 +31,7 @@ impl HttpClient for FetchClient {
         //
         // Nothing caught it because every adapter shipped so far POSTs
         // (Resend, Turnstile). The first GET consumer is OpenID Connect
-        // discovery in Factory-Zero/auth, which fetches a configuration
+        // discovery in the `auth-oidc` crate, which fetches a configuration
         // document and a JWKS.
         if !body.is_empty() {
             // The port's adapters send JSON bodies; non-UTF-8 is a hard

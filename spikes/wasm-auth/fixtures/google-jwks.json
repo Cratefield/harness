@@ -1,0 +1,11 @@
+{
+  "keys": [
+    {
+      "e": "AQAB",
+      "kid": "spike-fixture-key-1",
+      "kty": "RSA",
+      "n": "43wkzCoBcQLiF1wKd2LUfZrK8lLwXjrCN4l_A6ilobPSauXLE-jDIq1neWMtZ5mQZ-Iq1aop8hBx0GwH8HLG84E9VWB1wyYApyuPzw5u50cE8HWu2Z9dqMDswlspTvsGZ-jGd4CrHeEcA6k2H-FaFWAi39j-CCxNksErDkWVdEHQ9ImwCGMod40DlmthgFznutxo9RYEfgDBtz4CWjJdmcvXdripC0c96mmTXU4ZBdjlFBGPYB74iMB2VW93Bq0AYMP9qlWKur2xEAPBFACer_Cq-B3PezvzIBpUsRobqt9Mg_YRwoWzq6HIHLboutdWxebR41VvOPwgEhH_pN1ehQ",
+      "use": "sig"
+    }
+  ]
+}

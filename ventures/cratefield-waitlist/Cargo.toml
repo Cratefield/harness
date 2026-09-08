@@ -1,0 +1,31 @@
+[package]
+name = "cratefield-waitlist"
+description = "Cratefield's own early-access waitlist, on the harness waitlist module"
+publish = false
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+crate-type = ["cdylib"]
+
+[lints]
+workspace = true
+
+[dependencies]
+cratefield-core = { workspace = true }
+cratefield-runtime-cloudflare = { workspace = true }
+cratefield-module-waitlist = { workspace = true }
+cratefield-adapter-resend = { workspace = true }
+worker = { workspace = true }
+async-trait = { workspace = true }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+getrandom = { workspace = true }
+
+# NOTE: this crate carried `[profile.release] opt-level = "s", lto = true`
+# as a standalone repo. Cargo ignores profiles in a workspace member, so it
+# is dropped here rather than kept as a no-op. `worker-build --release`
+# still runs wasm-opt, which is the main size lever.

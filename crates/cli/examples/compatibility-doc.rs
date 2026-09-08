@@ -147,7 +147,7 @@ fn markdown(rows: &[Consumer]) -> String {
          against every `cratefield-core` its range accepts at the time of release\n\
          (the caret keeps it to one pre-1.0 minor). The conformance suite runs\n\
          per module crate via `.github/workflows/conformance.yml`, which is also\n\
-         exported as a reusable workflow for `harness-private`.\n",
+         exported as a reusable workflow for modules built out of tree.\n",
     );
     out
 }

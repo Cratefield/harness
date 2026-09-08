@@ -27,6 +27,8 @@ compatibility-doc` and checked in CI for drift. Do not edit by hand.
 | Crate | Version | HARNESS_API | `cratefield-core` range |
 |---|---|---|---|
 | `cratefield` | 0.1.1 | 1 | `^0.3` — `>=0.3.0, <0.4.0` |
+| `cratefield-access` | 0.1.1 | 1 | `^0.3` — `>=0.3.0, <0.4.0` |
+| `cratefield-accounts` | 0.1.1 | 1 | `^0.3` — `>=0.3.0, <0.4.0` |
 | `cratefield-adapter-apns` | 0.1.1 | 1 | `^0.3` — `>=0.3.0, <0.4.0` |
 | `cratefield-adapter-postgres` | 0.1.1 | 1 | `^0.3` — `>=0.3.0, <0.4.0` |
 | `cratefield-adapter-resend` | 0.1.1 | 1 | `^0.3` — `>=0.3.0, <0.4.0` |
@@ -35,10 +37,14 @@ compatibility-doc` and checked in CI for drift. Do not edit by hand.
 | `cratefield-adapter-stripe` | 0.1.1 | 1 | `^0.3` — `>=0.3.0, <0.4.0` |
 | `cratefield-adapter-turnstile` | 0.1.1 | 1 | `^0.3` — `>=0.3.0, <0.4.0` |
 | `cratefield-cli` | 0.1.1 | 1 | `^0.3` — `>=0.3.0, <0.4.0` |
+| `cratefield-connections` | 0.1.1 | 1 | `^0.3` — `>=0.3.0, <0.4.0` |
+| `cratefield-console` | 0.1.1 | 1 | `^0.3` — `>=0.3.0, <0.4.0` |
+| `cratefield-control-plane` | 0.1.1 | 1 | `^0.3` — `>=0.3.0, <0.4.0` |
 | `cratefield-module-cms` | 0.1.1 | 1 | `^0.3` — `>=0.3.0, <0.4.0` |
 | `cratefield-module-email-signup` | 0.1.1 | 1 | `^0.3` — `>=0.3.0, <0.4.0` |
 | `cratefield-module-hello` | 0.1.1 | 1 | `^0.3` — `>=0.3.0, <0.4.0` |
 | `cratefield-module-waitlist` | 0.1.1 | 1 | `^0.3` — `>=0.3.0, <0.4.0` |
+| `cratefield-provisioning` | 0.1.1 | 1 | `^0.3` — `>=0.3.0, <0.4.0` |
 | `cratefield-runtime-browser` | 0.1.1 | 1 | `^0.3` — `>=0.3.0, <0.4.0` |
 | `cratefield-runtime-browser-demo` | 0.1.1 | 1 | `^0.3` — `>=0.3.0, <0.4.0` |
 | `cratefield-runtime-cloudflare` | 0.1.1 | 1 | `^0.3` — `>=0.3.0, <0.4.0` |
@@ -47,10 +53,21 @@ compatibility-doc` and checked in CI for drift. Do not edit by hand.
 | `cratefield-tables` | 0.1.1 | 1 | `^0.3` — `>=0.3.0, <0.4.0` |
 | `cratefield-testing` | 0.1.1 | 1 | `^0.3` — `>=0.3.0, <0.4.0` |
 | `cratefield-ui` | 0.1.1 | 1 | `^0.3` — `>=0.3.0, <0.4.0` |
+| `cratefield-ui-generator` | 0.1.1 | 1 | `^0.3` — `>=0.3.0, <0.4.0` |
+| `cratefield-waitlist` | 0.1.1 | 1 | `^0.3` — `>=0.3.0, <0.4.0` |
+| `factory0-auth-client` | 0.1.1 | 1 | `^0.3` — `>=0.3.0, <0.4.0` |
+| `factory0-auth-core` | 0.1.1 | 1 | `^0.3` — `>=0.3.0, <0.4.0` |
+| `factory0-auth-magic-link` | 0.1.1 | 1 | `^0.3` — `>=0.3.0, <0.4.0` |
+| `factory0-auth-meta` | 0.1.1 | 1 | `^0.3` — `>=0.3.0, <0.4.0` |
+| `factory0-auth-oidc` | 0.1.1 | 1 | `^0.3` — `>=0.3.0, <0.4.0` |
+| `factory0-auth-passkeys` | 0.1.1 | 1 | `^0.3` — `>=0.3.0, <0.4.0` |
+| `factory0-auth-password` | 0.1.1 | 1 | `^0.3` — `>=0.3.0, <0.4.0` |
+| `factory0-auth-worker` | 0.1.1 | 1 | `^0.3` — `>=0.3.0, <0.4.0` |
+| `fz-module-linkedin` | 0.1.1 | 1 | `^0.3` — `>=0.3.0, <0.4.0` |
 | `venture-native` | 0.1.1 | 1 | `^0.3` — `>=0.3.0, <0.4.0` |
 
 A module row means: that module version was built and conformance-tested
 against every `cratefield-core` its range accepts at the time of release
 (the caret keeps it to one pre-1.0 minor). The conformance suite runs
 per module crate via `.github/workflows/conformance.yml`, which is also
-exported as a reusable workflow for `harness-private`.
+exported as a reusable workflow for modules built out of tree.

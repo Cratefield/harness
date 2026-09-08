@@ -88,10 +88,11 @@ jobs:
       - name: Compatibility matrix drift check (issue #17)
         run: cargo run -q -p cratefield-cli --example compatibility-doc -- --check
 
-  # The module conformance kit, run through the reusable workflow so
-  # `harness-private` consumes the identical job (issue #17). Includes
-  # the authoring guide's example module (issue #16); the workflow's bash
-  # loop word-splits and glob-expands the module-glob string.
+  # The module conformance kit, run through the reusable workflow so a
+  # module built out of tree consumes the identical job (issue #17). The
+  # glob covers every module in the workspace, private ones included
+  # (ADR 0013), plus the authoring guide's example module (issue #16);
+  # the workflow's bash loop word-splits and glob-expands the string.
   conformance:
     name: conformance (module kit)
     uses: ./.github/workflows/conformance.yml
