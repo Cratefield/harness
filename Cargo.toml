@@ -38,6 +38,10 @@ cratefield-module-waitlist = { path = "crates/module-waitlist", version = "0.1.0
 cratefield-module-cms = { path = "crates/module-cms", version = "0.1.0" }
 cratefield-testing = { path = "crates/testing", version = "0.1.0" }
 cratefield-cli = { path = "crates/cli", version = "0.1.0" }
+# The venture manifest + deterministic composition generator (issue #138).
+# Depends only on serde/serde_json so both engines can consume it: the
+# native compile engine (fz build) and, later, the wasm compose engine.
+cratefield-manifest = { path = "crates/manifest", version = "0.1.0" }
 
 # These entries carry a `version`, which is what makes them publishable as
 # real dependencies. Internal **dev**-dependencies deliberately do NOT use
@@ -76,6 +80,9 @@ futures-util = { version = "0.3.34", default-features = false, features = [
 # Serialization and diagnostics.
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
+# TOML manifest parsing for `fz build` (CLI-only; the manifest crate itself
+# stays JSON/serde-only so it can compile to wasm for the compose engine).
+toml = "0.8"
 tracing = "0.1.44"
 
 # SQL. sea-query 1.0 exists but the brief pins the stable 0.32 line (ADR 0004).

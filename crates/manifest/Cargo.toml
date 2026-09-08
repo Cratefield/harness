@@ -1,0 +1,25 @@
+[package]
+publish = false  # new crate: publish manually first, then wire into the facade
+name = "cratefield-manifest"
+description = "The venture manifest and deterministic Rust composition generator for Factory Zero"
+readme = "README.md"
+keywords = ["cratefield", "manifest", "codegen", "venture"]
+categories = ["config", "development-tools"]
+include = ["src/**/*", "examples/**/*", "README.md"]
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+# Deliberately serde-only: no toml, no OS, no proc-macro-heavy deps beyond
+# serde derive. This is the SHARED contract — the native compile engine
+# (`fz build`) and, later, the wasm compose engine both link it, so it must
+# stay wasm-clean. TOML parsing lives in the CLI, not here.
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }

@@ -1,14 +1,13 @@
-//! `fz` standalone binary. The real `fz` runs inside a venture repo where
-//! it links against the venture's harness (see the library docs). This
-//! standalone build can only explain that.
+//! `fz` standalone binary. Most `fz` commands run inside a venture repo
+//! where the binary links the venture's compiled-in harness (see the
+//! library docs). The one exception is `fz build <manifest>`, which
+//! *generates* a venture from a manifest and so needs no harness — that is
+//! what this standalone binary (and the Docker image) exists to run.
 
 #![forbid(unsafe_code)]
 
-fn main() {
-    eprintln!(
-        "fz must run inside a venture: add the [[bin]] target that calls \
-         cratefield_cli::main_for(your::harness) — see \
-         https://github.com/Cratefield/harness (cratefield-cli README)."
-    );
-    std::process::exit(2);
+use std::process::ExitCode;
+
+fn main() -> ExitCode {
+    cratefield_cli::run_standalone(std::env::args().skip(1))
 }

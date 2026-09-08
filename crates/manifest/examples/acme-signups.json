@@ -1,0 +1,14 @@
+{
+  "name": "acme-signups",
+  "host": "acme.factory0.dev",
+  "public_url": "https://acme.factory0.dev",
+  "cors_origins": ["https://acme.example", "https://www.acme.example"],
+  "modules": [
+    "waitlist",
+    { "slug": "email-signup" }
+  ],
+  "config": {
+    "brand": "Acme"
+  },
+  "seed_sql": "INSERT INTO waitlist_product (slug) VALUES ('launch');"
+}
