@@ -29,10 +29,12 @@
 #![doc = include_str!("../README.md")]
 #![forbid(unsafe_code)]
 
+mod ddl;
 mod manifest;
 mod schema;
 mod value;
 
+pub use ddl::{SqlDialect, index_name};
 pub use schema::{
     FieldDef, FieldKind, ForeignKey, MAX_IDENTIFIER_CHARS, RESERVED_PREFIXES, RESERVED_WORDS,
     Schema, TableDef, TextFormat, is_identifier,

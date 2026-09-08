@@ -125,7 +125,15 @@ pub fn check_value(kind: &FieldKind, value: &Value) -> Result<(), ValueError> {
             check_format(text, *format)
         }
         FieldKind::Integer { min, max } => {
-            let integer = as_integer(as_number(value)?)?;
+            // `as_number` first, so a string or a boolean is reported as
+            // the wrong JSON type rather than as a fractional number.
+            as_number(value)?;
+            let integer = integral(value).ok_or_else(|| {
+                ValueError::new(
+                    ErrorCode::WrongType,
+                    "must be a whole number that fits in 64 bits",
+                )
+            })?;
             if let Some(min) = *min
                 && integer < min
             {
@@ -247,20 +255,25 @@ fn as_number(value: &Value) -> Result<f64, ValueError> {
         .ok_or_else(|| wrong_type(value, "a number"))
 }
 
-/// A number with no fractional part, inside `i64`. `42.0` passes; `42.5`
-/// does not. JSON has one number type, so this is the only rule that
-/// means the same thing in Rust and in a browser.
-fn as_integer(number: f64) -> Result<i64, ValueError> {
+/// A JSON number with no fractional part, inside `i64`. `42.0` passes;
+/// `42.5` does not. JSON has one number type, so this is the only rule
+/// that means the same thing in Rust and in a browser: it is
+/// `Number.isInteger(v)` in JavaScript.
+///
+/// Shared with the DDL renderer, so a default written as `42.0` in the
+/// manifest renders as the literal `42` rather than as a quoted string.
+pub(crate) fn integral(value: &Value) -> Option<i64> {
+    if let Some(integer) = value.as_i64() {
+        return Some(integer);
+    }
+    let number = value.as_f64()?;
     #[allow(clippy::cast_precision_loss)]
     let in_range = number >= i64::MIN as f64 && number <= i64::MAX as f64;
-    if number.fract() != 0.0 || !in_range {
-        return Err(ValueError::new(
-            ErrorCode::WrongType,
-            "must be a whole number that fits in 64 bits",
-        ));
+    if !number.is_finite() || number.fract() != 0.0 || !in_range {
+        return None;
     }
     #[allow(clippy::cast_possible_truncation)]
-    Ok(number as i64)
+    Some(number as i64)
 }
 
 fn check_length(text: &str, min_len: Option<u32>, max_len: Option<u32>) -> Result<(), ValueError> {

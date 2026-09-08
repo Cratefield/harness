@@ -534,6 +534,18 @@ fn validate_field(errors: &mut ConfigError, table: &TableDef, field: &FieldDef) 
     {
         errors.push(format!("{at}: the default {default} {}", error.message));
     }
+
+    // The generated index name has to be a legal identifier too, and it
+    // is longer than either name it is built from.
+    if crate::ddl::needs_own_index(table, field) {
+        let index = crate::ddl::index_name(&table.name, &field.name);
+        if index.chars().count() > MAX_IDENTIFIER_CHARS {
+            errors.push(format!(
+                "{at}: the generated index name `{index}` is longer than \
+                 {MAX_IDENTIFIER_CHARS} characters"
+            ));
+        }
+    }
 }
 
 /// Identifier rules, shared by table and field names. `what` is the noun

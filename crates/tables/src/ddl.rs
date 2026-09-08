@@ -1,0 +1,247 @@
+//! DDL generation: one definition, two dialects.
+//!
+//! Forward-only. Everything rendered here creates: `CREATE TABLE IF NOT
+//! EXISTS` and `CREATE INDEX IF NOT EXISTS`, never `DROP` and never
+//! `ALTER`. The diff between two versions of a definition is a separate
+//! problem and is not solved here.
+//!
+//! Deterministic. The same definition always renders byte-identical SQL:
+//! tables come out in name order, columns in declaration order, and every
+//! clause on a column has a fixed position. Nothing here reads a clock, a
+//! random number or a hash map.
+//!
+//! The output stays inside the portable subset the hand-written module
+//! migrations use (ADR 0004): text ids, ISO-8601 text timestamps, integer
+//! counters, no `AUTOINCREMENT`, no `SERIAL`, no dialect function in DDL.
+//! A test runs [`cratefield_core::lint_portable_sql`] over both dialects'
+//! output, which is the same predicate `fz doctor` applies to a module.
+//!
+//! Identifiers are never quoted, because [`Schema::validate`] rejects any
+//! name that would need quoting. String literals are quoted, with an
+//! embedded quote doubled.
+//!
+//! # Column types
+//!
+//! | kind | SQLite | Postgres |
+//! |---|---|---|
+//! | `text`, `uuid`, `json`, `enum` | `TEXT` | `TEXT` |
+//! | `timestamp` | `TEXT` | `TEXT` |
+//! | `integer` | `INTEGER` | `BIGINT` |
+//! | `real` | `REAL` | `DOUBLE PRECISION` |
+//! | `boolean` | `INTEGER` | `BOOLEAN` |
+//!
+//! A timestamp is text in both, and a UUID is text in both, because the
+//! harness stores ISO-8601 timestamps and text ids everywhere else and a
+//! declared table should not be the one place that does not. JSON is text
+//! for the same reason: `module-cms` already keeps its structured fields
+//! as text in the portable subset.
+//!
+//! Boolean is the one kind whose storage differs, `0` and `1` against
+//! `FALSE` and `TRUE`, because SQLite has no boolean type. Row values
+//! stay `true` and `false` on the wire in both cases. Converting them for
+//! the engine belongs to the writer, which is not built yet.
+
+use cratefield_core::ConfigError;
+use serde_json::Value;
+use std::fmt::Write as _;
+
+use crate::schema::{FieldDef, FieldKind, Schema, TableDef};
+
+/// The engine a rendering targets.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SqlDialect {
+    /// SQLite, which is what D1 is.
+    Sqlite,
+    /// Postgres, the phase-3 target.
+    Postgres,
+}
+
+impl SqlDialect {
+    /// Both dialects, in a fixed order, for a test that renders each.
+    pub const ALL: &'static [SqlDialect] = &[SqlDialect::Sqlite, SqlDialect::Postgres];
+
+    /// The lowercase engine name, the same spelling the testing kit's
+    /// dialect uses: `sqlite` or `postgres`.
+    #[must_use]
+    pub fn name(self) -> &'static str {
+        match self {
+            SqlDialect::Sqlite => "sqlite",
+            SqlDialect::Postgres => "postgres",
+        }
+    }
+
+    fn column_type(self, kind: &FieldKind) -> &'static str {
+        match kind {
+            FieldKind::Text { .. }
+            | FieldKind::Timestamp
+            | FieldKind::Uuid
+            | FieldKind::Json
+            | FieldKind::Enum { .. } => "TEXT",
+            FieldKind::Integer { .. } => match self {
+                SqlDialect::Sqlite => "INTEGER",
+                SqlDialect::Postgres => "BIGINT",
+            },
+            FieldKind::Real { .. } => match self {
+                SqlDialect::Sqlite => "REAL",
+                SqlDialect::Postgres => "DOUBLE PRECISION",
+            },
+            FieldKind::Boolean => match self {
+                SqlDialect::Sqlite => "INTEGER",
+                SqlDialect::Postgres => "BOOLEAN",
+            },
+        }
+    }
+}
+
+/// The name of the index a declared `indexed` field gets:
+/// `<table>_<field>_idx`. Postgres index names are unique across a
+/// schema and not per table, so the table name is part of it.
+#[must_use]
+pub fn index_name(table: &str, field: &str) -> String {
+    format!("{table}_{field}_idx")
+}
+
+/// Whether an `indexed` field actually gets its own `CREATE INDEX`. A
+/// unique or primary-key column is already indexed by its constraint, so
+/// a second index on it would only cost writes.
+#[must_use]
+pub(crate) fn needs_own_index(table: &TableDef, field: &FieldDef) -> bool {
+    field.indexed && !field.unique && !table.is_primary_key(&field.name)
+}
+
+impl Schema {
+    /// Renders every declared table for `dialect` as one script:
+    /// a `CREATE TABLE` per table, in name order, each followed by its
+    /// `CREATE INDEX` statements in field order.
+    ///
+    /// The schema is validated first, so SQL can never come from a
+    /// definition whose identifiers were not checked.
+    ///
+    /// # Errors
+    ///
+    /// The [`ConfigError`] from [`Schema::validate`], unchanged.
+    pub fn ddl(&self, dialect: SqlDialect) -> Result<String, ConfigError> {
+        self.validate()?;
+        let mut out = format!(
+            "-- Generated by cratefield-tables from the venture manifest.\n\
+             -- Dialect: {}. Forward-only: this file only creates.\n",
+            dialect.name()
+        );
+        for table in &self.tables {
+            out.push('\n');
+            out.push_str(&self.create_table_sql(table, dialect));
+            for index in create_index_sql(table) {
+                out.push_str(&index);
+            }
+        }
+        Ok(out)
+    }
+
+    /// One table's `CREATE TABLE IF NOT EXISTS`, ending in a newline.
+    /// Rendering lives on the schema because a foreign key names the
+    /// target table's primary-key column, which only the schema knows.
+    fn create_table_sql(&self, table: &TableDef, dialect: SqlDialect) -> String {
+        let mut parts: Vec<String> = table
+            .fields
+            .iter()
+            .map(|field| column_sql(table, field, dialect))
+            .collect();
+
+        parts.push(format!("PRIMARY KEY ({})", table.primary_key.join(", ")));
+        for key in &table.foreign_keys {
+            let column = self
+                .table(&key.references)
+                .and_then(|target| target.primary_key.first())
+                .map_or("id", String::as_str);
+            parts.push(format!(
+                "FOREIGN KEY ({}) REFERENCES {} ({column})",
+                key.field, key.references
+            ));
+        }
+
+        format!(
+            "CREATE TABLE IF NOT EXISTS {} (\n    {}\n);\n",
+            table.name,
+            parts.join(",\n    ")
+        )
+    }
+}
+
+/// `<name> <type>[ NOT NULL][ UNIQUE][ DEFAULT <literal>][ CHECK (...)]`,
+/// always in that order.
+fn column_sql(table: &TableDef, field: &FieldDef, dialect: SqlDialect) -> String {
+    let mut sql = format!("{} {}", field.name, dialect.column_type(&field.kind));
+    if field.required || table.is_primary_key(&field.name) {
+        sql.push_str(" NOT NULL");
+    }
+    if field.unique {
+        sql.push_str(" UNIQUE");
+    }
+    if let Some(default) = &field.default {
+        sql.push_str(" DEFAULT ");
+        sql.push_str(&literal(&field.kind, default, dialect));
+    }
+    if let FieldKind::Enum { values } = &field.kind {
+        let allowed: Vec<String> = values.iter().map(|value| quoted(value)).collect();
+        let _ = write!(sql, " CHECK ({} IN ({}))", field.name, allowed.join(", "));
+    }
+    sql
+}
+
+/// One `CREATE INDEX IF NOT EXISTS` per indexed field, in declaration
+/// order. Each ends in a newline. The syntax is the same in both
+/// dialects, so there is nothing to switch on.
+fn create_index_sql(table: &TableDef) -> Vec<String> {
+    table
+        .fields
+        .iter()
+        .filter(|field| needs_own_index(table, field))
+        .map(|field| {
+            format!(
+                "CREATE INDEX IF NOT EXISTS {} ON {} ({});\n",
+                index_name(&table.name, &field.name),
+                table.name,
+                field.name
+            )
+        })
+        .collect()
+}
+
+/// A SQL string literal: single quotes, with an embedded quote doubled.
+fn quoted(text: &str) -> String {
+    format!("'{}'", text.replace('\'', "''"))
+}
+
+/// A default rendered for `dialect`. The value was already checked
+/// against `kind` by [`Schema::validate`], so an unexpected shape here
+/// falls back to the quoted JSON form rather than inventing a literal.
+fn literal(kind: &FieldKind, value: &Value, dialect: SqlDialect) -> String {
+    match kind {
+        FieldKind::Boolean => match (value.as_bool(), dialect) {
+            (Some(true), SqlDialect::Sqlite) => "1".to_owned(),
+            (Some(false), SqlDialect::Sqlite) => "0".to_owned(),
+            (Some(true), SqlDialect::Postgres) => "TRUE".to_owned(),
+            (Some(false), SqlDialect::Postgres) => "FALSE".to_owned(),
+            (None, _) => quoted(&value.to_string()),
+        },
+        FieldKind::Integer { .. } => crate::value::integral(value)
+            .map_or_else(|| quoted(&value.to_string()), |integer| integer.to_string()),
+        FieldKind::Real { .. } => value.as_f64().map_or_else(
+            || quoted(&value.to_string()),
+            |number| {
+                if number.is_finite() && number.fract() == 0.0 {
+                    format!("{number:.1}")
+                } else {
+                    number.to_string()
+                }
+            },
+        ),
+        FieldKind::Json => quoted(&value.to_string()),
+        FieldKind::Text { .. }
+        | FieldKind::Timestamp
+        | FieldKind::Uuid
+        | FieldKind::Enum { .. } => value
+            .as_str()
+            .map_or_else(|| quoted(&value.to_string()), quoted),
+    }
+}
