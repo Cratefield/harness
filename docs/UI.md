@@ -167,8 +167,15 @@ admin routes are.
 
 The session proves the token was presented once. On every admin dispatch
 the harness attaches `Authorization: Bearer <ADMIN_TOKEN>` from its own
-config, so the modules' `require_admin` stays the single gate. Every admin
-`POST` must also carry an `Origin` (or `Referer`) matching `Host`.
+config, so the modules' `require_admin` sees the real credential. Dispatch
+does not trust the surface to say who may run an action: before anything
+is sent it re-checks any action that is admin-audience *or* served under
+`/admin/` with the same `require_admin` the target route runs, so a
+surface that arrives at runtime (a sidecar's, merged per request) cannot
+misdeclare an admin path as public and be executed without the bearer.
+Hiding an action from `/__surface` and from the public pages is
+visibility, not authorization. Every admin `POST` must also carry an
+`Origin` (or `Referer`) matching `Host`.
 
 | Route | Answer |
 |---|---|
@@ -177,8 +184,12 @@ config, so the modules' `require_admin` stays the single gate. Every admin
 | `POST /ui/admin/<module>/<action>` | An admin form dispatched as JSON; or a row action (an admin `DELETE` whose path parameter names a column): without `confirm=1` the confirm page, with it the `DELETE` and a `303` back to the table. Both are plain form posts. |
 | `POST /ui/admin/logout` | Clears the cookie. |
 
-Admin pages carry `Cache-Control: no-store`, `X-Frame-Options: DENY` and
-the page CSP. Markup: `cf-nav`, `cf-nav-link`, `cf-logout`, `cf-table`,
+Admin pages carry `Cache-Control: private, no-store` (a session-gated
+response is never storable by a shared cache), `X-Frame-Options: DENY` and
+the page CSP. Public rendered pages and fragments carry `no-store`: one
+visitor's pre-filled values and dispatched results must not be served to
+the next caller. The authenticated `/__surface` variant is likewise
+`private, no-store` while the public one stays `no-cache`. Markup: `cf-nav`, `cf-nav-link`, `cf-logout`, `cf-table`,
 `cf-table-head`, `cf-table-row`, `cf-table-cell`, `cf-table-actions`,
 `cf-table-empty`, `cf-row-action`, `cf-submit--row`, `cf-submit--danger`,
 `cf-cancel`, `cf-admin-index`, `cf-admin-module`, `cf-admin-links`,

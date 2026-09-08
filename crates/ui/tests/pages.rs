@@ -463,6 +463,42 @@ async fn render_timing() {
     eprintln!("fragment through the router: {per:?} per request");
 }
 
+/// Issue #130: rendered UI carries one visitor's state — pre-filled
+/// values, dispatched results, landing pages — so every dynamic response
+/// is `no-store` and only the static assets stay cacheable.
+#[pollster::test]
+async fn rendered_ui_is_no_store_and_static_assets_stay_cacheable() {
+    let kit = kit();
+
+    let page = send(&kit, Method::GET, "/ui/waitlist/join", None).await;
+    assert_eq!(page.headers.get(header::CACHE_CONTROL).unwrap(), "no-store");
+
+    let fragment = send(
+        &kit,
+        Method::GET,
+        "/ui/waitlist/join?fragment=1&product=kontinuum",
+        None,
+    )
+    .await;
+    assert_eq!(
+        fragment.headers.get(header::CACHE_CONTROL).unwrap(),
+        "no-store"
+    );
+
+    let landing = send(&kit, Method::GET, "/ui/waitlist/confirm/done", None).await;
+    assert_eq!(landing.status, StatusCode::OK);
+    assert_eq!(
+        landing.headers.get(header::CACHE_CONTROL).unwrap(),
+        "no-store"
+    );
+
+    let css = send(&kit, Method::GET, "/ui/cf.css", None).await;
+    assert_eq!(
+        css.headers.get(header::CACHE_CONTROL).unwrap(),
+        "public, max-age=300"
+    );
+}
+
 /// `schemas/ui-spec-v1.schema.json` is generated from the `UiSpec` types
 /// and committed. Run with `UPDATE_SCHEMAS=1` to regenerate; CI fails on
 /// drift so the file is never hand-edited.

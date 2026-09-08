@@ -29,7 +29,9 @@ use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, HeaderValue, Method, Request, StatusCode, header};
 use axum::response::{Html, IntoResponse, Response};
 use axum::routing::get;
-use cratefield_core::{Action, Audience, Outcome, Problem, Scope, UiContext, UiMount};
+use cratefield_core::{
+    Action, Audience, Outcome, Problem, Scope, UiContext, UiMount, require_admin,
+};
 use serde_json::Value;
 use tower::ServiceExt;
 
@@ -475,11 +477,32 @@ fn apply_spec(fields: &[Field], copy: Option<&ActionSpec>) -> Vec<Field> {
     out
 }
 
+/// Whether an action is admin-gated: declared for the `Admin` audience,
+/// or served under `/admin/` no matter what the surface declares.
+///
+/// Security invariant (issue #130): the audience filter in [`find_action`]
+/// and the public subset of `/__surface` are *visibility*, not
+/// authorization. A surface document that reaches the renderer at runtime
+/// (a sidecar's, merged per request) is not re-validated by this host, so
+/// an entry could claim a public audience over an admin path. Execution
+/// therefore re-derives the gate from the path as well as the audience,
+/// and [`dispatch`] checks it with the same [`require_admin`] the target
+/// route uses.
+fn is_admin_gated(spec: &Action) -> bool {
+    spec.audience == Audience::Admin || spec.path == "/admin" || spec.path.starts_with("/admin/")
+}
+
 /// Builds the internal request and sends it through the `/v1` router.
 /// The caller's `Scope` rides along in the extensions (the scope layer
 /// sits above `/v1` and will not run again), and the headers that
 /// identify the caller are forwarded so rate limiting, captcha and admin
 /// checks see the browser, not the renderer.
+///
+/// An admin-gated action ([`is_admin_gated`]) is authorized here, before
+/// anything is sent: [`require_admin`] over the forwarded headers is the
+/// same check the target route runs, so in-process dispatch cannot be a
+/// path around it. On failure the problem the direct request would have
+/// answered (`401`/`403`) is returned and the module is never invoked.
 async fn dispatch(
     state: &UiState,
     scope: &Scope,
@@ -489,6 +512,11 @@ async fn dispatch(
     query: &str,
     json: Option<Value>,
 ) -> Response {
+    if is_admin_gated(spec)
+        && let Err(problem) = require_admin(&*state.ctx.config, headers)
+    {
+        return problem.instance(&scope.request_id).into_response();
+    }
     // An action at `/` is the nest root: `/v1/<module>`, no trailing
     // slash, or axum's nesting answers 404.
     let mut uri = format!("/v1/{module}{}", spec.path.trim_end_matches('/'));
@@ -572,10 +600,7 @@ async fn render_result(
             }
             Outcome::Redirect => render::notice(module, &spec.name, "success", &title, "Done."),
         };
-        let mut out = respond(state, fragment, (title, body, false));
-        out.headers_mut()
-            .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
-        return out;
+        return respond(state, fragment, (title, body, false));
     }
 
     let problem = json.as_ref();
@@ -607,8 +632,6 @@ async fn render_result(
         let body = render::notice(module, &spec.name, "error", &humanize(&spec.name), &message);
         let mut out = respond(state, fragment, (humanize(&spec.name), body, false));
         *out.status_mut() = status;
-        out.headers_mut()
-            .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
         return out;
     };
     let slug = problem
@@ -643,8 +666,6 @@ async fn render_result(
     } else {
         status
     };
-    out.headers_mut()
-        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
     out
 }
 
@@ -680,13 +701,22 @@ fn attribute_by_slug(slug: &str, fields: &[Field]) -> Option<String> {
 
 /// Wraps a fragment for the wire: as is with `?fragment=1`, inside the
 /// page shell with a CSP otherwise.
+///
+/// Every rendered page and fragment is `no-store` (issue #130): the same
+/// URL can carry one visitor's pre-filled values, dispatched results and
+/// landing states, and nothing an intermediary could serve to the next
+/// caller. The static assets (`cf.css`, `cf.js`, `theme.css`) are the
+/// cacheable exceptions.
 fn respond(
     state: &UiState,
     fragment: bool,
     (title, body, turnstile): (String, maud::Markup, bool),
 ) -> Response {
     if fragment {
-        return Html(body.into_string()).into_response();
+        let mut out = Html(body.into_string()).into_response();
+        out.headers_mut()
+            .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+        return out;
     }
     let theme = effective_theme_css(state);
     let page = render::page(
@@ -707,6 +737,9 @@ fn respond(
             .headers_mut()
             .insert(header::CONTENT_SECURITY_POLICY, value);
     }
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
     response.headers_mut().insert(
         header::REFERRER_POLICY,
         HeaderValue::from_static("strict-origin-when-cross-origin"),
@@ -718,8 +751,10 @@ fn respond(
     response
 }
 
-/// An admin page: the shell with the admin navigation, never cached,
-/// never framed. `logged_in` decides whether the navigation shows.
+/// An admin page: the shell with the admin navigation, never cached
+/// (`private, no-store` — a session-gated response must not be stored by
+/// a shared cache even for revalidation, issue #130), never framed.
+/// `logged_in` decides whether the navigation shows.
 fn respond_admin(state: &UiState, title: &str, body: &maud::Markup, logged_in: bool) -> Response {
     let theme = effective_theme_css(state);
     let page = render::page(
@@ -741,7 +776,10 @@ fn respond_admin(state: &UiState, title: &str, body: &maud::Markup, logged_in: b
             .insert(header::CONTENT_SECURITY_POLICY, value);
     }
     let headers = response.headers_mut();
-    headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    headers.insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static("private, no-store"),
+    );
     headers.insert(
         header::REFERRER_POLICY,
         HeaderValue::from_static("strict-origin-when-cross-origin"),

@@ -438,6 +438,15 @@ impl SurfaceSource for MergedSurface {
 /// it just gets the public document: this route exists to be read by
 /// renderers and tooling, and a `403` would leak whether admin is on.
 /// Strong `ETag` per variant; `If-None-Match` answers `304`.
+///
+/// Both variants share this URL, so caching is split per variant (issue
+/// #130): the public document stays `no-cache` (shared caches may store
+/// it but must revalidate — nothing in it is a secret), while the
+/// authenticated document is `private, no-store` on the `200` *and* on
+/// the `304`, because a `304` refreshes what a cache already holds.
+/// `Vary: Authorization` alone is not enough: an intermediary that
+/// ignores `Vary` could otherwise store the admin variant and expose it
+/// to an unauthenticated caller.
 async fn surface_handler(
     State(state): State<SurfaceState>,
     headers: HeaderMap,
@@ -485,7 +494,11 @@ async fn surface_handler(
     );
     response_headers.insert(
         header::CACHE_CONTROL,
-        header::HeaderValue::from_static("no-cache"),
+        if admin {
+            header::HeaderValue::from_static("private, no-store")
+        } else {
+            header::HeaderValue::from_static("no-cache")
+        },
     );
     response_headers.insert(
         header::VARY,
