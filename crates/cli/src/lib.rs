@@ -86,6 +86,21 @@ enum Command {
         /// builds, as the Docker image does.
         #[arg(long, value_name = "PATH")]
         harness_path: Option<String>,
+        /// A stamped catalog JSON instead of the built-in one (issue
+        /// #142): the build service points this at the release-stamped
+        /// catalog whose digests are real content addresses.
+        #[arg(long, value_name = "PATH")]
+        catalog: Option<PathBuf>,
+        /// RFC 3339 timestamp recorded in provenance (issue #142). The
+        /// CLI owns no clock, so a build without this (or
+        /// `FZ_BUILD_TIMESTAMP`) records `built-at: null` rather than
+        /// inventing one.
+        #[arg(long, value_name = "RFC3339")]
+        built_at: Option<String>,
+        /// Builder identity recorded in provenance (issue #142);
+        /// `FZ_BUILDER` is the fallback, then `"local"`.
+        #[arg(long, value_name = "WHO")]
+        builder: Option<String>,
     },
     /// Moves venture data between engines (issue #21): export D1/SQLite
     /// data to JSONL with a manifest, import into Postgres.
@@ -177,9 +192,19 @@ pub fn run(build: impl Fn() -> Harness, args: impl IntoIterator<Item = String>) 
         manifest,
         out,
         harness_path,
+        catalog,
+        built_at,
+        builder,
     } = &cli.command
     {
-        return finish(build::run(manifest, out, harness_path.as_deref()));
+        return finish(build::run(
+            manifest,
+            out,
+            harness_path.as_deref(),
+            catalog.as_deref(),
+            built_at.as_deref(),
+            builder.as_deref(),
+        ));
     }
     let harness = build();
     let sidecars = crate::sidecars::from_cli_or_env(cli.sidecars.as_deref());
@@ -247,9 +272,19 @@ pub fn run_standalone(args: impl IntoIterator<Item = String>) -> ExitCode {
         manifest,
         out,
         harness_path,
+        catalog,
+        built_at,
+        builder,
     } = cli.command
     {
-        finish(build::run(&manifest, &out, harness_path.as_deref()))
+        finish(build::run(
+            &manifest,
+            &out,
+            harness_path.as_deref(),
+            catalog.as_deref(),
+            built_at.as_deref(),
+            builder.as_deref(),
+        ))
     } else {
         eprintln!(
             "fz: this command must run inside a venture (it needs the compiled-in harness — \

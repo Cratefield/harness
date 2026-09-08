@@ -287,3 +287,48 @@ async fn a_secret_is_refused_when_it_cannot_be_audited() {
         .expect_err("an unauditable read is refused");
     assert!(matches!(err, SecretsError::NotAudited(_)), "{err}");
 }
+
+/// Issue #142: an audit record names the store it belongs to, so the
+/// log is self-describing even where the database itself is not a
+/// tenant boundary.
+#[pollster::test]
+async fn chain_rows_are_stamped_with_their_store() {
+    let (store, db, id) = store();
+    store
+        .put("a/key", &"one".into(), &actor())
+        .await
+        .expect("put");
+    let row = db
+        .query(&Statement::new(
+            "SELECT store FROM harness_secret_audit WHERE seq = 1",
+        ))
+        .await
+        .expect("read")
+        .rows
+        .first()
+        .and_then(|r| r.get::<String>("store"))
+        .unwrap_or_default();
+    assert_eq!(row, id.as_str());
+}
+
+/// The attack the stamp defeats: paste a whole valid chain from one
+/// store into another's place and claim it as history. The hashes are
+/// internally consistent, so only the attribution check says no.
+#[pollster::test]
+async fn a_chain_from_another_store_does_not_verify_here() {
+    let (store, db, _id) = store();
+    store
+        .put("a/key", &"one".into(), &actor())
+        .await
+        .expect("put");
+    let err = verify(&StoreId::Global, &*db)
+        .await
+        .expect_err("this is a tenant's history, not the global store's");
+    match err {
+        SecretsError::ChainBroken { seq, detail, .. } => {
+            assert_eq!(seq, 1);
+            assert!(detail.contains("belongs to store"), "{detail}");
+        }
+        other => panic!("expected an attribution refusal, got {other}"),
+    }
+}
