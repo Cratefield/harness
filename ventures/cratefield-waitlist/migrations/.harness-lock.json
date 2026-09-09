@@ -1,0 +1,18 @@
+{
+  "waitlist/0001": {
+    "file": "0001_waitlist_0001_init.sql",
+    "sha256": "504c3e013f921975e286b27f6253ac5f2b9f884bf2b89f6d077c4931760c54ea"
+  },
+  "waitlist/0002": {
+    "file": "0002_waitlist_0002_entry_generation.sql",
+    "sha256": "33dc5cf8d71a3c484e3fc8f838f1a8b3a04f2cb8281b5b1e149ad9e4e7fb41d4"
+  },
+  "waitlist/0003": {
+    "file": "0003_waitlist_0003_mail_cooldown.sql",
+    "sha256": "8f8319f4f0613d9f08ec9f17e5a2356f33efedb4a49e3e5d4fb1805f878d3507"
+  },
+  "waitlist/0004": {
+    "file": "0004_waitlist_0004_position_lock.sql",
+    "sha256": "44eeab454a0a322e77a6cc81640ab25fb4fb038af9eea8458224925579c83414"
+  }
+}
