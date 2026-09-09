@@ -7,7 +7,8 @@
 
 use std::fmt;
 
-use crate::signer::{HmacSigner, MIN_SECRET_BYTES};
+use crate::ports::signer::Kid;
+use crate::signer::{HmacSigner, KeyRing, MIN_SECRET_BYTES};
 use crate::venture::VentureEnv;
 
 /// Read-only key/value configuration, resolved per runtime from environment
@@ -156,7 +157,12 @@ impl<'a> ModuleConfig<'a> {
 /// The harness-level keys, parsed once from the environment `Config`
 /// (issue #3): `HARNESS_SECRET` (required, ≥ 32 bytes),
 /// `HARNESS_SECRET_PREVIOUS` (optional), `ADMIN_TOKEN` (optional),
-/// `ENV` (`development|staging|production`, default `development`).
+/// `ENV` (`development|staging|production`, default `development`), and
+/// the issue #137 key-ring keys: `HARNESS_SECRET_REVOKED` (optional,
+/// comma-separated key ids whose tokens must be refused immediately) and
+/// `HARNESS_VENTURE` (optional label binding tokens to this venture, so
+/// one venture's links cannot verify in another that shares its secret by
+/// mistake).
 ///
 /// Dummy secrets only, in tests:
 /// `HARNESS_SECRET = "test-secret-0123456789abcdef-0123"`.
@@ -164,6 +170,11 @@ impl<'a> ModuleConfig<'a> {
 pub struct HarnessConfig {
     pub harness_secret: String,
     pub harness_secret_previous: Option<String>,
+    /// Key ids revoked at boot (issue #137). Ids and states, never
+    /// key material — this list is safe to log.
+    pub harness_secret_revoked: Vec<String>,
+    /// The venture binding label for issued tokens (issue #137).
+    pub harness_venture: Option<String>,
     pub admin_token: Option<String>,
     pub env: VentureEnv,
 }
@@ -204,26 +215,63 @@ impl HarnessConfig {
             }
         };
 
+        // Revoking "cur" is a secret rotation, not a ring state change,
+        // and silently signing nothing would take every confirm link
+        // down: the id is dropped here and named in the runbook.
+        let harness_secret_revoked: Vec<String> = config
+            .get("HARNESS_SECRET_REVOKED")
+            .map(|raw| {
+                raw.split(',')
+                    .map(str::trim)
+                    .filter(|kid| !kid.is_empty() && *kid != "cur")
+                    .map(<str>::to_owned)
+                    .collect()
+            })
+            .unwrap_or_default();
+
         errors.into_result()?;
         Ok(Self {
             harness_secret: harness_secret.unwrap_or_default(),
             harness_secret_previous: config.get("HARNESS_SECRET_PREVIOUS"),
+            harness_secret_revoked,
+            harness_venture: config
+                .get("HARNESS_VENTURE")
+                .map(|value| value.trim().to_owned())
+                .filter(|value| !value.is_empty()),
             admin_token: config.get("ADMIN_TOKEN"),
             env: env.unwrap_or_default(),
         })
     }
 
-    /// The HMAC signer for this configuration (ADR 0006).
+    /// The HMAC signer for this configuration: a bounded key ring (ADR
+    /// 0006 as amended by ADR 0014, issue #137). `HARNESS_SECRET` is the
+    /// signing key, `HARNESS_SECRET_PREVIOUS` a verification-only key, and
+    /// every id named in `HARNESS_SECRET_REVOKED` is burned before the
+    /// ring is frozen. Tokens are bound to `HARNESS_VENTURE` and `ENV` so
+    /// a link minted in one venture or environment never verifies in
+    /// another.
     ///
     /// # Panics
     ///
     /// Only when `from_config` was bypassed with an invalid secret.
     pub fn signer(&self) -> HmacSigner {
-        HmacSigner::new(
-            self.harness_secret.clone(),
-            self.harness_secret_previous.clone(),
+        let mut ring = KeyRing::new();
+        ring.rotate_signing(Kid::Cur, self.harness_secret.clone().into_bytes())
+            .expect("from_config validated the secret");
+        if let Some(previous) = &self.harness_secret_previous {
+            let _ = ring.add_verifying_only(Kid::Prev, previous.clone().into_bytes());
+        }
+        for kid in &self.harness_secret_revoked {
+            let key = match kid.as_str() {
+                "prev" => Kid::Prev,
+                other => Kid::named(other.to_owned()),
+            };
+            ring.revoke(&key);
+        }
+        HmacSigner::from_ring(ring).with_binding(
+            self.harness_venture.clone(),
+            Some(self.env.as_str().to_owned()),
         )
-        .expect("from_config validated the secret")
     }
 }
 

@@ -4,7 +4,7 @@
 
 | Asset | Exposure |
 |---|---|
-| `HARNESS_SECRET` (and `HARNESS_SECRET_PREVIOUS`) | Workers secret; signs confirm/unsubscribe/status tokens (ADR 0006) |
+| `HARNESS_SECRET` (and `HARNESS_SECRET_PREVIOUS`) | Workers secret; signs confirm/unsubscribe/status tokens (ADR 0006, as amended by ADR 0014: a bounded key ring with revocation as a state — ids in `HARNESS_SECRET_REVOKED` are refused while configured — and a venture/environment `iss` binding, so a leaked token or secret does not replay across ventures or environments) |
 | `ADMIN_TOKEN` | Workers secret; gates `/v1/<module>/admin/*` |
 | `RESEND_API_KEY`, `TURNSTILE_SECRET` | Adapter secrets, read by the venture's runtime composition |
 | Subscriber/waitlist tables (D1/SQLite) | Email addresses + state; per-venture database |

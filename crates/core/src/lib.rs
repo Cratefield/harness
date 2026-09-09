@@ -63,11 +63,12 @@ pub use ports::{
     Blob, BlobError, BlobObject, Captcha, CaptchaBinding, CaptchaError, Charge, CheckoutRequest,
     CheckoutSession, Clock, ConnectAccountLink, ConnectAccountLinkRequest, Database, DbError,
     Decision, Defer, DispatchError, Dispatcher, HttpClient, HttpError, IdGen, KeyValue, Kid,
-    KvError, LineItem, MailError, Mailer, Member, Message, Money, NoopDefer, Notification, Payload,
-    Payments, PaymentsError, Port, Ports, Priority, Push, PushError, PushOutcome, RateLimitError,
-    RateLimiter, Realtime, RealtimeError, Refund, RefundRequest, RoomContext, RoomHandler, Row,
-    Rows, ScopedBlob, SendOutcome, SignatureError, Signer, Statement, SubscriptionCheckoutRequest,
-    SystemClock, TransferCharge, TryFromValue, UlidIdGen, Verdict, WebhookEvent, timeout,
+    KvError, LineItem, MAX_KID_NAME, MailError, Mailer, Member, Message, Money, NoopDefer,
+    Notification, Payload, Payments, PaymentsError, Port, Ports, Priority, Push, PushError,
+    PushOutcome, RateLimitError, RateLimiter, Realtime, RealtimeError, Refund, RefundRequest,
+    RoomContext, RoomHandler, Row, Rows, ScopedBlob, SendOutcome, SignatureError, Signer,
+    Statement, SubscriptionCheckoutRequest, SystemClock, TransferCharge, TryFromValue, UlidIdGen,
+    Verdict, WebhookEvent, timeout,
 };
 pub use problem::Problem;
 pub use problems::{ProblemDef, SLUGS, registry as problem_registry};
@@ -78,7 +79,11 @@ pub use route_policy::{
 };
 pub use scope::Scope;
 pub use sidecar::{HARNESS_SIDECARS, SidecarMount, SidecarMounts, X_HARNESS_API, X_HARNESS_MODULE};
-pub use signer::{HmacSigner, MIN_SECRET_BYTES, SignerError};
+pub use signer::{
+    CONFIRM_TOKEN_MAX_TTL_SECS, DEFAULT_TOKEN_MAX_TTL_SECS, HmacSigner, KeyRing, KeyState,
+    MIN_SECRET_BYTES, RingKey, STATUS_TOKEN_MAX_TTL_SECS, SignerError, TokenPolicy,
+    UNSUBSCRIBE_ACTION,
+};
 pub use surface::{
     Action, Audience, Column, HINT_KEYWORDS, ModuleSurface, Outcome, RenderedSurface, SURFACE_API,
     Surface, SurfaceDocument, SurfaceSource, UiContext, UiMount, VentureSurface, View, hint_field,

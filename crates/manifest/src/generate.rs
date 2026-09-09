@@ -177,7 +177,7 @@ pub fn generate(
         });
     }
 
-    let composition_hash = hash_files(&files);
+    let composition_hash = composition_hash_of(&files);
 
     Ok(GeneratedVenture {
         name: manifest.name.clone(),
@@ -440,7 +440,11 @@ fn ensure_trailing_newline(text: &str) -> String {
     }
 }
 
-fn hash_files(files: &[GeneratedFile]) -> String {
+/// The sha256 composition hash over a file set, in write order. Exported
+/// so provenance verification (issue #142) can recompute it from the
+/// artifact on disk and compare it against what the build recorded.
+#[must_use]
+pub fn composition_hash_of(files: &[GeneratedFile]) -> String {
     let mut hasher = Sha256::new();
     for file in files {
         hasher.update(file.path.as_bytes());

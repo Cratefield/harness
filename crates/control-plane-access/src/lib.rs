@@ -473,11 +473,40 @@ mod tests {
 
     #[test]
     fn a_session_round_trips() {
+        // Issue #137 (ADR 0014) moved lifetimes to a mint-time policy: an
+        // expiry past a purpose's ceiling is clamped down, so the old
+        // year-2100 trick no longer round-trips — and no longer needs to.
+        // Eight hours is well under the 30-day default ceiling, so the
+        // requested lifetime must survive untouched against the real clock.
+        use cratefield_core::{Clock as _, SystemClock};
         let s = signer();
-        let token = issue_session(&s, "ada@example.com", now(), DEFAULT_TTL_SECS);
+        let issued_at = u64::try_from(SystemClock.now().unix_timestamp()).expect("post-1970");
+        let token = issue_session(&s, "ada@example.com", issued_at, DEFAULT_TTL_SECS);
         let session = read_session(&s, &token).expect("valid");
         assert_eq!(session.account_id, "ada@example.com");
-        assert_eq!(session.expires_at, Some(now() + DEFAULT_TTL_SECS));
+        assert_eq!(
+            session.expires_at,
+            Some(issued_at + DEFAULT_TTL_SECS),
+            "a lifetime under the ceiling round-trips exactly"
+        );
+    }
+
+    #[test]
+    fn an_absurd_session_expiry_is_clamped_to_the_ceiling() {
+        use cratefield_core::{Clock as _, DEFAULT_TOKEN_MAX_TTL_SECS, SystemClock};
+        let s = signer();
+        let before = u64::try_from(SystemClock.now().unix_timestamp()).expect("post-1970");
+        let token = issue_session(&s, "ada@example.com", now(), DEFAULT_TTL_SECS);
+        let session = read_session(&s, &token).expect("a clamped session is still valid");
+        let ceiling = u64::try_from(DEFAULT_TOKEN_MAX_TTL_SECS).expect("positive");
+        let after = u64::try_from(SystemClock.now().unix_timestamp()).expect("post-1970");
+        assert!(
+            session
+                .expires_at
+                .is_some_and(|exp| (before + ceiling..=after + ceiling).contains(&exp)),
+            "year-2100 must come back capped at the default ceiling, got {:?}",
+            session.expires_at
+        );
     }
 
     #[test]

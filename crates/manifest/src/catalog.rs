@@ -8,6 +8,25 @@
 //! control-plane can later depend on this crate and delete its copy. The
 //! manifest ([`crate::VentureManifest`]) is the serializable front-end to
 //! this resolver; it does not fork the logic.
+//!
+//! ## What may be selected (issue #142)
+//!
+//! A catalog entry is **data, not a security boundary**: a `Port`
+//! declaration is not a sandbox, and in-process modules are not a
+//! sandbox, so the non-coder tier must never be able to pull an
+//! unreviewed or drifting build out of a compile. Selection is therefore
+//! gated on [`ModuleRelease`] rows: an entry resolves only when it
+//! carries at least one **pinned** release — an exact version plus a
+//! content digest — that is **reviewed** (approved), and a release that
+//! has been **revoked** is refused even when an existing manifest
+//! already referenced it. Unpinned, unreviewed and revoked are hard
+//! refusals ([`ResolveError`]), never warnings. Revoking an unsafe
+//! release makes every future resolution that needs it fail, which is
+//! the supportable half of the story: what the build *service* owes the
+//! pin (fetch-by-digest, isolated construction) is the
+//! `BuildEnvironmentAttestation` contract in [`crate::provenance`], and
+//! the registry-side revocation feed is infrastructure (see the issue's
+//! scope notes).
 
 use std::collections::{HashMap, HashSet};
 
@@ -21,6 +40,77 @@ pub enum Tier {
     Core,
     /// The customer picks it.
     Optional,
+}
+
+/// The review state of one release (issue #142). A release is only
+/// selectable while it is [`ReleaseReview::Approved`]; approval is a
+/// human decision recorded here so it can be audited and, crucially,
+/// reversed: [`ReleaseReview::Revoked`] is the state an unsafe release
+/// is moved into, and resolution refuses it by name and reason.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ReleaseReview {
+    /// Cut but not reviewed yet. Never selectable.
+    Pending,
+    /// Reviewed and approved for selection by the named reviewer.
+    Approved {
+        reviewer: String,
+        reviewed_at: String,
+    },
+    /// Withdrawn as unsafe. Every resolution that would pick this
+    /// release fails, naming the reason, even for a manifest that
+    /// referenced it before revocation (issue #142).
+    Revoked {
+        by: String,
+        revoked_at: String,
+        reason: String,
+    },
+}
+
+/// One pinned module release: an exact version and a content digest,
+/// under a [`ReleaseReview`]. `version` must be an exact number
+/// (`N.N.N`, no ranges, no pre-release tags) and `digest` a
+/// `sha256:<64 hex>` content address — anything else is not a pin and
+/// resolution will not build from it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ModuleRelease {
+    /// Exact version, e.g. `"0.1.1"`. A range (`^0.1`) is not a pin.
+    pub version: String,
+    /// Content digest of the release artifact, `sha256:<64 hex>`.
+    pub digest: String,
+    pub review: ReleaseReview,
+}
+
+impl ModuleRelease {
+    /// Whether this release is **pinned**: an exact `N.N.N` version
+    /// paired with a well-formed `sha256:` content digest. Both halves
+    /// are required — a version without a digest is a drifting tag.
+    #[must_use]
+    pub fn is_pinned(&self) -> bool {
+        is_exact_version(&self.version) && is_sha256_digest(&self.digest)
+    }
+
+    /// Whether a human has approved this release for selection.
+    #[must_use]
+    pub fn is_approved(&self) -> bool {
+        matches!(self.review, ReleaseReview::Approved { .. })
+    }
+
+    /// Whether this release has been revoked as unsafe (issue #142).
+    #[must_use]
+    pub fn is_revoked(&self) -> bool {
+        matches!(self.review, ReleaseReview::Revoked { .. })
+    }
+}
+
+/// The release [`ModuleSet`] resolution actually selected for one slug:
+/// the pin the build must fetch and the provenance must record
+/// (issue #142).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PinnedRelease {
+    pub slug: String,
+    pub version: String,
+    pub digest: String,
 }
 
 /// One catalog entry: a module a venture may carry.
@@ -37,6 +127,11 @@ pub struct CatalogModule {
     /// before it in a resolved set.
     #[serde(default)]
     pub depends_on: Vec<String>,
+    /// The reviewed, pinned releases this entry offers (issue #142),
+    /// newest first. Resolution takes the first usable one; an entry
+    /// with none selectable is refused, not warned about.
+    #[serde(default)]
+    pub releases: Vec<ModuleRelease>,
 }
 
 /// The curated set of modules a venture may be built from.
@@ -47,10 +142,12 @@ pub struct Catalog {
 
 /// A validated, resolved selection: the modules a venture will carry, in
 /// an order where a module's dependencies come before it (build and mount
-/// order). Core modules are always present.
+/// order), each pinned to the exact reviewed release resolution picked
+/// (issue #142). Core modules are always present.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ModuleSet {
     ordered: Vec<String>,
+    releases: Vec<PinnedRelease>,
 }
 
 impl ModuleSet {
@@ -66,16 +163,58 @@ impl ModuleSet {
         self.ordered.iter().any(|s| s == slug)
     }
 
+    /// The exact reviewed releases the resolution pinned, in slug order
+    /// of [`Self::slugs`] (issue #142). Provenance records these, so a
+    /// built artifact says what it was built from.
+    #[must_use]
+    pub fn releases(&self) -> &[PinnedRelease] {
+        &self.releases
+    }
+
+    /// The pin chosen for one slug, if it is in the set.
+    #[must_use]
+    pub fn release(&self, slug: &str) -> Option<&PinnedRelease> {
+        self.releases.iter().find(|r| r.slug == slug)
+    }
+
     /// The content address of the set: the sorted slugs joined with `+`,
     /// so two selections with the same modules produce the same key
     /// whatever order they were picked in (harness ADR 0009 keys the
-    /// artifact on the module set, not the customer).
+    /// artifact on the module set, not the customer). The pinned
+    /// versions are deliberately *not* in this key: it names the set,
+    /// [`Self::releases`] names the exact builds, and provenance binds
+    /// the two.
     #[must_use]
     pub fn content_key(&self) -> String {
         let mut sorted: Vec<&str> = self.ordered.iter().map(String::as_str).collect();
         sorted.sort_unstable();
         sorted.join("+")
     }
+}
+
+/// Whether `version` is an exact `N.N.N` pin (issue #142): digits only,
+/// no ranges, no wildcards, no pre-release tags. A non-coder build must
+/// be reconstructible from the number alone.
+#[must_use]
+pub fn is_exact_version(version: &str) -> bool {
+    let parts: Vec<&str> = version.split('.').collect();
+    parts.len() == 3
+        && parts
+            .iter()
+            .all(|p| !p.is_empty() && p.chars().all(|c| c.is_ascii_digit()))
+}
+
+/// Whether `digest` is a `sha256:<64 lowercase hex>` content address
+/// (issue #142).
+#[must_use]
+pub fn is_sha256_digest(digest: &str) -> bool {
+    let Some(hex) = digest.strip_prefix("sha256:") else {
+        return false;
+    };
+    hex.len() == 64
+        && hex
+            .chars()
+            .all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c))
 }
 
 /// Why a catalog will not resolve.
@@ -90,6 +229,12 @@ pub enum CatalogError {
     /// A core module depends on an optional one, which would make the
     /// optional one un-removable and therefore not optional.
     CoreDependsOnOptional { core: String, optional: String },
+    /// A release row carries a digest that is not a `sha256:<64 hex>`
+    /// content address (issue #142). Malformed pins are a data bug, so
+    /// `validate` fails on them the way it fails on a dangling
+    /// dependency; a *well-formed but unreviewed or revoked* pin is a
+    /// policy state, and refuses at resolve time instead.
+    BadDigest { slug: String, digest: String },
 }
 
 impl std::fmt::Display for CatalogError {
@@ -108,6 +253,11 @@ impl std::fmt::Display for CatalogError {
                 "core module `{core}` depends on optional module `{optional}`, which would make \
                  `{optional}` un-removable and so not optional"
             ),
+            CatalogError::BadDigest { slug, digest } => write!(
+                f,
+                "module `{slug}` carries a release digest `{digest}` that is not a \
+                 `sha256:<64 hex>` content address"
+            ),
         }
     }
 }
@@ -121,6 +271,22 @@ pub enum ResolveError {
     UnknownModule(String),
     /// The catalog itself is broken; fix it before anyone selects.
     Catalog(CatalogError),
+    /// The entry carries no release pinned to an exact version and a
+    /// content digest (issue #142). The non-coder tier never floats:
+    /// refusal, not a warning.
+    Unpinned(String),
+    /// The entry's pinned releases exist but none is approved (issue
+    /// #142). `version` names the newest pinned-but-unreviewed release.
+    Unreviewed { slug: String, version: String },
+    /// Resolution would have to build from a release revoked as unsafe
+    /// (issue #142). This fires even when the requesting manifest
+    /// referenced the release before it was revoked: revocation is
+    /// forward-effective at every resolution and build.
+    Revoked {
+        slug: String,
+        version: String,
+        reason: String,
+    },
 }
 
 impl std::fmt::Display for ResolveError {
@@ -130,6 +296,25 @@ impl std::fmt::Display for ResolveError {
                 write!(f, "`{slug}` is not a module in the catalog")
             }
             ResolveError::Catalog(err) => write!(f, "the catalog is invalid: {err}"),
+            ResolveError::Unpinned(slug) => write!(
+                f,
+                "`{slug}` has no pinned release (an exact version plus a `sha256:` digest); \
+                 the non-coder tier does not build from floating or unpublished versions"
+            ),
+            ResolveError::Unreviewed { slug, version } => write!(
+                f,
+                "`{slug}` release `{version}` is pinned but not reviewed; only reviewed \
+                 releases may be selected"
+            ),
+            ResolveError::Revoked {
+                slug,
+                version,
+                reason,
+            } => write!(
+                f,
+                "`{slug}` release `{version}` was revoked as unsafe: {reason}. Resolve refuses \
+                 it even though the manifest referenced it; wait for a reviewed replacement."
+            ),
         }
     }
 }
@@ -148,6 +333,14 @@ impl Catalog {
         for module in &self.modules {
             if !seen.insert(&module.slug) {
                 return Err(CatalogError::Duplicate(module.slug.clone()));
+            }
+            for release in &module.releases {
+                if !is_sha256_digest(&release.digest) {
+                    return Err(CatalogError::BadDigest {
+                        slug: module.slug.clone(),
+                        digest: release.digest.clone(),
+                    });
+                }
             }
         }
         let by_slug = self.by_slug();
@@ -175,13 +368,22 @@ impl Catalog {
 
     /// The module set for a selection: every core module, the selected
     /// optional ones, and the dependency closure of both, ordered so a
-    /// module's dependencies come before it.
+    /// module's dependencies come before it. Every member must resolve
+    /// to a reviewed, pinned release or the selection is refused
+    /// (issue #142) — the closure gets no trust exemption.
     ///
     /// # Errors
     ///
     /// [`ResolveError::UnknownModule`] for a selected slug the catalog
-    /// does not have, or [`ResolveError::Catalog`] if the catalog is
-    /// itself invalid.
+    /// does not have, [`ResolveError::Catalog`] if the catalog is
+    /// itself invalid, or [`ResolveError::Unpinned`] /
+    /// [`ResolveError::Unreviewed`] / [`ResolveError::Revoked`] naming
+    /// the first closure member with no usable release (issue #142).
+    ///
+    /// # Panics
+    ///
+    /// Never: every slug pinned in the loop was collected from the same
+    /// `by_slug` map a line above, so the lookup cannot miss.
     pub fn resolve(&self, selected: &[&str]) -> Result<ModuleSet, ResolveError> {
         self.validate().map_err(ResolveError::Catalog)?;
         let by_slug = self.by_slug();
@@ -204,7 +406,19 @@ impl Catalog {
         for root in roots {
             visit(root, &by_slug, &mut visited, &mut ordered);
         }
-        Ok(ModuleSet { ordered })
+        // Every module in the closure — selected, core, or pulled in as
+        // a dependency — must offer a reviewed, pinned release
+        // (issue #142). The dependency graph is not a trust exemption:
+        // a blog that depends on an unreviewed `accounts` fails for
+        // `accounts`, not quietly.
+        let mut releases: Vec<PinnedRelease> = Vec::with_capacity(ordered.len());
+        for slug in &ordered {
+            let module = by_slug
+                .get(slug.as_str())
+                .expect("ordered slugs come from by_slug");
+            releases.push(pin(module)?);
+        }
+        Ok(ModuleSet { ordered, releases })
     }
 
     /// Whether `slug` can be removed from a resolved set: no, if it is a
@@ -318,9 +532,71 @@ fn visit<'a>(
     ordered.push(slug.to_owned());
 }
 
+/// The release resolution will build `module` from, or the refusal
+/// (issue #142). Releases are consulted in listed order (newest first);
+/// the first one that is both fully pinned and approved wins. With no
+/// winner, the refusal names the sharpest reason available: a revoked
+/// release outranks an unreviewed one outranks a missing pin, because
+/// revocation means somebody withdrew this exact build as unsafe and a
+/// stale manifest must see that, not a generic "no releases".
+fn pin(module: &CatalogModule) -> Result<PinnedRelease, ResolveError> {
+    let slug = module.slug.clone();
+    let mut revoked: Option<(&ModuleRelease, String)> = None;
+    let mut unreviewed: Option<&ModuleRelease> = None;
+    for release in &module.releases {
+        if !release.is_pinned() {
+            continue;
+        }
+        match &release.review {
+            ReleaseReview::Approved { .. } => {
+                return Ok(PinnedRelease {
+                    slug,
+                    version: release.version.clone(),
+                    digest: release.digest.clone(),
+                });
+            }
+            ReleaseReview::Revoked { reason, .. } => {
+                if revoked.is_none() {
+                    revoked = Some((release, reason.clone()));
+                }
+            }
+            ReleaseReview::Pending => {
+                if unreviewed.is_none() {
+                    unreviewed = Some(release);
+                }
+            }
+        }
+    }
+    if let Some((release, reason)) = revoked {
+        return Err(ResolveError::Revoked {
+            slug,
+            version: release.version.clone(),
+            reason,
+        });
+    }
+    if let Some(release) = unreviewed {
+        return Err(ResolveError::Unreviewed {
+            slug,
+            version: release.version.clone(),
+        });
+    }
+    Err(ResolveError::Unpinned(slug))
+}
+
 /// The built-in catalog: the harness modules that exist today, matching
-/// control-plane's `curated()` slugs and tiers. Dependency edges are
-/// added as modules gain them.
+/// control-plane's `curated()` slugs, tiers and pins. Dependency edges
+/// are added as modules gain them.
+///
+/// Each entry carries one reviewed release pinned to the current crate
+/// version. The seed digests are the all-zero `sha256:` value on purpose
+/// and visibly so: a digest is stamped when CI cuts a release from the
+/// built artifact (control-plane infrastructure, out of this repo), and a
+/// placeholder nobody can mistake for a real one beats a fabricated one
+/// that would pass every format check while meaning nothing (issue #142
+/// honesty rule). Resolution gates on review state and pin *shape*; the
+/// build service must additionally refuse any pin whose digest is the
+/// zero placeholder until release stamping lands — see
+/// [`crate::provenance`].
 #[must_use]
 pub fn builtin() -> Catalog {
     fn m(slug: &str, name: &str, summary: &str, tier: Tier, deps: &[&str]) -> CatalogModule {
@@ -330,6 +606,14 @@ pub fn builtin() -> Catalog {
             summary: summary.to_owned(),
             tier,
             depends_on: deps.iter().map(|s| (*s).to_owned()).collect(),
+            releases: vec![ModuleRelease {
+                version: "0.1.1".to_owned(),
+                digest: format!("sha256:{}", "0".repeat(64)),
+                review: ReleaseReview::Approved {
+                    reviewer: "release-review".to_owned(),
+                    reviewed_at: "2026-09-01T00:00:00Z".to_owned(),
+                },
+            }],
         }
     }
     Catalog {

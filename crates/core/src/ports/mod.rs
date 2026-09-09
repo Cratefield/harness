@@ -39,7 +39,7 @@ pub use payments::{
 pub use push::{Notification, Priority, Push, PushError, PushOutcome};
 pub use rate_limiter::{Decision, RateLimitError, RateLimiter};
 pub use realtime::{Member, Realtime, RealtimeError, RoomContext, RoomHandler};
-pub use signer::{Kid, Payload, SignatureError, Signer};
+pub use signer::{Kid, MAX_KID_NAME, Payload, SignatureError, Signer};
 
 use crate::config::Config;
 use crate::module::Module;

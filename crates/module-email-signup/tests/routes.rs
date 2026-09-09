@@ -140,15 +140,24 @@ async fn new_signup_sends_one_mail_with_two_valid_links() {
                 .verify(confirm_token, "email-signup.confirm")
                 .is_some()
         );
+        // The unsubscribe link is the row's opaque token (issue #137),
+        // not a signature: dot-free by construction and persisted so the
+        // next mail can rotate it. Clicking it must unsubscribe.
         assert!(
-            kit.signer
-                .verify(unsub_token, "email-signup.unsubscribe")
-                .is_some()
+            !unsub_token.contains('.'),
+            "opaque tokens carry no signature separator"
         );
-
+        assert_eq!(
+            column(&kit, "nick@example.com", "unsubscribe_token").as_deref(),
+            Some(unsub_token),
+            "the mailed link is exactly the stored revocable token"
+        );
+        let gone = request(&kit.router, Method::GET, &path_of(&urls[1]), None).await;
+        assert_eq!(gone.status, StatusCode::SEE_OTHER);
         assert_eq!(
             column(&kit, "nick@example.com", "status").as_deref(),
-            Some("pending")
+            Some("unsubscribed"),
+            "the opaque link unsubscribes through the same endpoint"
         );
     }
 }
@@ -342,6 +351,82 @@ async fn unsubscribe_from_confirmed_and_from_pending() {
         assert_eq!(response.status, StatusCode::SEE_OTHER);
         assert_eq!(
             column(&kit, "soon@example.com", "status").as_deref(),
+            Some("unsubscribed")
+        );
+    }
+}
+
+#[pollster::test]
+async fn resubscribe_rotates_the_opaque_token_and_retires_the_old_link() {
+    for kit in kits() {
+        signup(&kit, "nick@example.com").await;
+        let first = column(&kit, "nick@example.com", "unsubscribe_token")
+            .expect("first mail stored its token");
+
+        age_row(&kit, "nick@example.com", 2 * 3600);
+        signup(&kit, "nick@example.com").await;
+        let second = column(&kit, "nick@example.com", "unsubscribe_token")
+            .expect("second mail stored its token");
+        assert_ne!(first, second, "each mail rotates the revocable link");
+
+        let stale = request(
+            &kit.router,
+            Method::GET,
+            &format!("/v1/email-signup/unsubscribe?token={first}"),
+            None,
+        )
+        .await;
+        assert_eq!(
+            stale.status,
+            StatusCode::BAD_REQUEST,
+            "the retired link from an older mail must not unsubscribe"
+        );
+        assert_ne!(
+            column(&kit, "nick@example.com", "status").as_deref(),
+            Some("unsubscribed"),
+            "a stale token leaves the subscription untouched"
+        );
+
+        let current = request(
+            &kit.router,
+            Method::GET,
+            &format!("/v1/email-signup/unsubscribe?token={second}"),
+            None,
+        )
+        .await;
+        assert_eq!(current.status, StatusCode::SEE_OTHER);
+        assert_eq!(
+            column(&kit, "nick@example.com", "status").as_deref(),
+            Some("unsubscribed"),
+            "the newest mailed link still works"
+        );
+    }
+}
+
+#[pollster::test]
+async fn legacy_signed_unsubscribe_links_still_unsubscribe() {
+    for kit in kits() {
+        signup(&kit, "nick@example.com").await;
+        let id = column(&kit, "nick@example.com", "id").expect("row id");
+        // Exactly the link format mailed before issue #137: a signed
+        // payload with no expiry. Links already in the wild keep working.
+        let signed = kit.signer.sign(&Payload {
+            purpose: "email-signup.unsubscribe".to_owned(),
+            subject: id,
+            exp: None,
+            kid: Kid::Cur,
+        });
+        assert!(signed.contains('.'), "signed form keeps its separator");
+        let response = request(
+            &kit.router,
+            Method::POST,
+            "/v1/email-signup/unsubscribe",
+            Some(&format!(r#"{{"token":"{signed}"}}"#)),
+        )
+        .await;
+        assert_eq!(response.status, StatusCode::OK);
+        assert_eq!(
+            column(&kit, "nick@example.com", "status").as_deref(),
             Some("unsubscribed")
         );
     }
