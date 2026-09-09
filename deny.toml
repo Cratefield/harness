@@ -39,6 +39,37 @@ yanked = "deny"
 # Decision: recommended by the PR #166 security workstream and SIGNED OFF by the
 # maintainer 2026-09-09, on the evidence above. Re-open this acceptance if any
 # module starts RSA private-key work, or if rsa 0.10.0 stable lands first.
+#
+# AMENDMENT 2026-09-09 (issue #178) — the "no RSA private-key operation"
+# statement above is NO LONGER LITERALLY TRUE and this records the change, for
+# the maintainer to re-sign. `cratefield-push-auth::Rs256Signer` performs an
+# RSA private-key **signing** operation: Google's OAuth 2.0 service-account
+# flow, `RSASSA-PKCS1-v1_5` over SHA-256 of a JWT this workspace constructs.
+# Why it is still not exploitable:
+#   * The Marvin attack (and every variant in RUSTSEC-2023-0071) is a
+#     *decryption* oracle: the attacker submits chosen ciphertexts to a
+#     private-key operation and times the Ok/Err answer. Nothing here decrypts;
+#     `Rs256Signer` exposes signing only, and the crate has no RSA decrypt path.
+#   * The signing input is not attacker-controlled: it is a fixed set of JWT
+#     claims (iss/scope/aud/iat/exp) built by the adapter, never a value from a
+#     request body, and never echoed back with per-attempt timing.
+#   * The key is our own service-account key, read from the secrets layer; an
+#     attacker who could supply it already owns the account.
+#   * An attacker cannot observe the signing timing: the JWT is minted inside
+#     the isolate on a schedule of our own (mint-once-reuse, ~50 minutes) and
+#     is never produced in response to, or returned on the same path as, a
+#     request an attacker can trigger and time.
+# What is NOT an argument, and was claimed here before: that PKCS#1 v1.5
+# signing takes no RNG. `rsa` 0.9 blinds the private-key modexp only in
+# `sign_with_rng`; `Rs256Signer` calls `sign`, so **our signing modexp is
+# unblinded** and the timing countermeasure is simply absent. The absence of
+# an RNG is a portability fact (it is what lets this run on a Workers isolate),
+# not a security one. The acceptance rests entirely on the three points above
+# — no decryption oracle, no attacker-controlled input, no attacker-observable
+# timing — and not on any property of the modexp itself. If a future caller
+# signs attacker-supplied bytes, or signs on the request path where its
+# duration can be measured, this acceptance must be re-opened, not re-argued.
+# The two verify-only usages above are unchanged. Same removal trigger.
 ignore = ["RUSTSEC-2023-0071"]
 
 [licenses]

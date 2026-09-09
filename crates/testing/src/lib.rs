@@ -32,7 +32,8 @@ mod request;
 mod sidecar;
 
 pub use conformance::{
-    assert_wasm_safe_deps, conformance, conformance_in_process_only, sidecar_parity,
+    assert_wasm_safe_deps, conformance, conformance_in_process_only, push_recipient_conformance,
+    sidecar_parity,
 };
 pub use dialect::Dialect;
 pub use fakes::{

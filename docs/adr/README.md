@@ -28,6 +28,9 @@ slots become a bounded key ring with revocation as a state, expiry becomes
 a mint-time policy, tokens gain a venture/environment binding, and the
 never-dies unsubscribe link gains an opaque, per-subscription revocable
 form.
+ADR 0015 extends ADR 0002 for the `Push` port: a recipient is an enum with
+one variant per transport, `platform()` is a transport fact rather than a
+device fact, and the routing combinator sits above the adapters in core.
 
 [0102](0102-crypto-crate.md) chose the crypto crate: RustCrypto's
 `chacha20poly1305`.

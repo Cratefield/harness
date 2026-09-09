@@ -583,7 +583,12 @@ pub enum PushMode {
 }
 
 /// An in-memory [`cratefield_core::Push`] for module tests: records every
-/// `(token, notification)` and answers according to its [`PushMode`].
+/// `(recipient, notification)` and answers according to its [`PushMode`].
+///
+/// The mode is global by default and can be overridden **per recipient**
+/// ([`FakePush::set_mode_for`]), so a fan-out test can make exactly one of
+/// five devices dead and assert that only that one is pruned — the thing a
+/// single global mode cannot express (issue #177).
 #[derive(Clone)]
 pub struct FakePush {
     inner: Arc<FakePushInner>,
@@ -591,7 +596,8 @@ pub struct FakePush {
 
 struct FakePushInner {
     mode: Mutex<PushMode>,
-    sent: Mutex<Vec<(String, cratefield_core::Notification)>>,
+    per_recipient: Mutex<HashMap<cratefield_core::Recipient, PushMode>>,
+    sent: Mutex<Vec<(cratefield_core::Recipient, cratefield_core::Notification)>>,
 }
 
 impl FakePush {
@@ -600,26 +606,76 @@ impl FakePush {
         Self {
             inner: Arc::new(FakePushInner {
                 mode: Mutex::new(mode),
+                per_recipient: Mutex::new(HashMap::new()),
                 sent: Mutex::new(Vec::new()),
             }),
         }
     }
 
-    /// Every `(token, notification)` recorded so far.
+    /// Every `(recipient, notification)` delivered so far. A send that
+    /// answered `NotConfigured` or failed is not recorded.
     #[must_use]
-    pub fn sent(&self) -> Vec<(String, cratefield_core::Notification)> {
+    pub fn sent(&self) -> Vec<(cratefield_core::Recipient, cratefield_core::Notification)> {
         self.inner.sent.lock().expect("push lock").clone()
     }
 
-    /// The most recent `(token, notification)`.
+    /// The most recent `(recipient, notification)`.
     #[must_use]
-    pub fn last(&self) -> Option<(String, cratefield_core::Notification)> {
+    pub fn last(&self) -> Option<(cratefield_core::Recipient, cratefield_core::Notification)> {
         self.inner.sent.lock().expect("push lock").last().cloned()
     }
 
-    /// Switches the mode (e.g. flip to `Unregistered` mid-test).
+    /// Everything delivered to one recipient.
+    #[must_use]
+    pub fn sent_to(
+        &self,
+        recipient: &cratefield_core::Recipient,
+    ) -> Vec<cratefield_core::Notification> {
+        self.inner
+            .sent
+            .lock()
+            .expect("push lock")
+            .iter()
+            .filter(|(to, _)| to == recipient)
+            .map(|(_, notification)| notification.clone())
+            .collect()
+    }
+
+    /// Switches the mode every recipient without an override answers with
+    /// (e.g. flip to `Unregistered` mid-test).
     pub fn set_mode(&self, mode: PushMode) {
         *self.inner.mode.lock().expect("push lock") = mode;
+    }
+
+    /// Makes one recipient answer with `mode`, whatever the global mode is —
+    /// one dead token among live ones, say.
+    pub fn set_mode_for(&self, recipient: &cratefield_core::Recipient, mode: PushMode) {
+        self.inner
+            .per_recipient
+            .lock()
+            .expect("push lock")
+            .insert(recipient.clone(), mode);
+    }
+
+    /// Drops one recipient's override, putting it back on the global mode.
+    pub fn clear_mode_for(&self, recipient: &cratefield_core::Recipient) {
+        self.inner
+            .per_recipient
+            .lock()
+            .expect("push lock")
+            .remove(recipient);
+    }
+
+    /// The mode `recipient` will answer with.
+    #[must_use]
+    pub fn mode_for(&self, recipient: &cratefield_core::Recipient) -> PushMode {
+        self.inner
+            .per_recipient
+            .lock()
+            .expect("push lock")
+            .get(recipient)
+            .copied()
+            .unwrap_or_else(|| *self.inner.mode.lock().expect("push lock"))
     }
 }
 
@@ -633,28 +689,25 @@ impl Default for FakePush {
 impl cratefield_core::Push for FakePush {
     async fn send(
         &self,
-        device_token: &str,
+        to: &cratefield_core::Recipient,
         notification: &cratefield_core::Notification,
     ) -> Result<cratefield_core::PushOutcome, cratefield_core::PushError> {
-        let mode = *self.inner.mode.lock().expect("push lock");
-        match mode {
+        match self.mode_for(to) {
             PushMode::DeliverOk => {
                 let id = format!(
-                    "fake-apns-{}",
+                    "fake-push-{}",
                     self.inner.sent.lock().expect("push lock").len()
                 );
                 self.inner
                     .sent
                     .lock()
                     .expect("push lock")
-                    .push((device_token.to_owned(), notification.clone()));
+                    .push((to.clone(), notification.clone()));
                 Ok(cratefield_core::PushOutcome::Delivered { id: Some(id) })
             }
             PushMode::NotConfigured => Ok(cratefield_core::PushOutcome::NotConfigured),
             PushMode::Unregistered => Err(cratefield_core::PushError::Unregistered),
-            PushMode::Transient => Err(cratefield_core::PushError::Transient(
-                "fake push failure".to_owned(),
-            )),
+            PushMode::Transient => Err(cratefield_core::PushError::transient("fake push failure")),
         }
     }
 }

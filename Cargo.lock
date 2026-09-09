@@ -623,6 +623,7 @@ dependencies = [
  "cratefield-module-cms",
  "cratefield-module-email-signup",
  "cratefield-module-waitlist",
+ "cratefield-push-auth",
  "cratefield-runtime-cloudflare",
  "cratefield-runtime-native",
  "cratefield-secrets",
@@ -661,8 +662,9 @@ dependencies = [
  "base64 0.23.1",
  "bytes",
  "cratefield-core",
+ "cratefield-push-auth",
+ "cratefield-testing",
  "http",
- "p256 0.13.2",
  "pollster",
  "serde",
  "serde_json",
@@ -1011,6 +1013,21 @@ dependencies = [
  "pollster",
  "sea-query",
  "serde",
+]
+
+[[package]]
+name = "cratefield-push-auth"
+version = "0.1.1"
+dependencies = [
+ "async-trait",
+ "base64 0.23.1",
+ "cratefield-core",
+ "getrandom 0.4.3",
+ "p256 0.13.2",
+ "rsa",
+ "serde_json",
+ "thiserror 2.0.20",
+ "time",
 ]
 
 [[package]]

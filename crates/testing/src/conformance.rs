@@ -591,3 +591,79 @@ fn compare(name: &str, what: &str, direct: &crate::TestResponse, hopped: &crate:
         );
     }
 }
+
+// ---------------------------------------------------------------------------
+// Push adapters (issue #177)
+
+/// The three recipients an adapter can be handed, one per transport.
+///
+/// Every `Recipient` variant appears here, so a new transport added to the
+/// port makes this list — and therefore every adapter's conformance run —
+/// fail to compile until it is decided what the existing adapters answer.
+fn every_recipient() -> Vec<cratefield_core::Recipient> {
+    let all = [
+        cratefield_core::Recipient::apns("conformance-device-token"),
+        cratefield_core::Recipient::fcm("conformance-registration-token"),
+        cratefield_core::Recipient::web_push(
+            "https://push.example.test/conformance",
+            "BConformanceP256dhKey",
+            "ConformanceAuthKey",
+        ),
+    ];
+    for recipient in &all {
+        // Exhaustive by construction: adding a variant breaks this match.
+        match recipient {
+            cratefield_core::Recipient::Apns { .. }
+            | cratefield_core::Recipient::Fcm { .. }
+            | cratefield_core::Recipient::WebPush { .. } => {}
+        }
+    }
+    all.to_vec()
+}
+
+/// Runs a [`Push`](cratefield_core::Push) adapter against **every**
+/// [`Recipient`](cratefield_core::Recipient) variant and asserts the port's
+/// contract for transports it does not serve (issue #177): a clean
+/// [`PushError::Rejected`](cratefield_core::PushError::Rejected) naming the
+/// recipient as unsupported — never a panic, never a silent success, and
+/// never a `Transient` that an outbox would retry forever.
+///
+/// `serves` lists the transports this adapter does speak; those must answer
+/// something other than an unsupported-recipient rejection.
+///
+/// ```rust,ignore
+/// // The APNs adapter serves iOS and nothing else.
+/// push_recipient_conformance(&apns, &[Platform::Ios]).await;
+/// ```
+///
+/// # Panics
+///
+/// Panics with the failing recipient named when the contract is broken.
+pub async fn push_recipient_conformance(
+    push: &dyn cratefield_core::Push,
+    serves: &[cratefield_core::Platform],
+) {
+    use cratefield_core::PushError;
+
+    let notification = cratefield_core::Notification::new("conformance", "probe");
+    for recipient in every_recipient() {
+        let platform = recipient.platform();
+        let result = push.send(&recipient, &notification).await;
+        let unsupported = matches!(
+            &result,
+            Err(PushError::Rejected(message)) if message.contains("unsupported recipient")
+        );
+        if serves.contains(&platform) {
+            assert!(
+                !unsupported,
+                "adapter claims to serve {platform} but rejected its recipient as unsupported"
+            );
+        } else {
+            assert!(
+                unsupported,
+                "adapter does not serve {platform}: the port's answer is \
+                 PushError::Rejected(\"unsupported recipient…\"), got {result:?}"
+            );
+        }
+    }
+}
