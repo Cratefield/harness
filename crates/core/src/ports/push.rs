@@ -142,7 +142,7 @@ fn fingerprint(value: &str) -> String {
     hex
 }
 
-/// Prints the transport and a [`fingerprint`] of each part, never the parts
+/// Prints the transport and a short fingerprint of each part, never the parts
 /// themselves — the same rule `Es256Signer`, `Rs256Signer` and `CachedToken`
 /// follow in `cratefield-push-auth`. The RFC 8291 `auth` secret is not even
 /// fingerprinted: nothing about it is safe to correlate on.
