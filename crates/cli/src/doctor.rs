@@ -9,10 +9,20 @@ use crate::lint::banned_tokens;
 use crate::lock::{Lock, read_lock};
 use cratefield_core::lint_card_data;
 use cratefield_core::{
-    HARNESS_API, HARNESS_SIDECARS, Harness, SIDECAR_GATEWAY_SECRET, VentureEnv,
-    harness_api_mismatch,
+    Config, HARNESS_API, HARNESS_SIDECARS, Harness, SIDECAR_GATEWAY_SECRET, VentureEnv,
+    deployed_env, env_disagreement, harness_api_mismatch,
 };
 use std::path::Path;
+
+/// The process environment as a [`Config`], so the doctor reads `ENV` the
+/// same way a deployed runtime does (issue #143).
+struct EnvVars;
+
+impl Config for EnvVars {
+    fn get(&self, key: &str) -> Option<String> {
+        std::env::var(key).ok().filter(|value| !value.is_empty())
+    }
+}
 
 /// Runs every doctor check. `allow_no_captcha` downgrades the
 /// production-captcha failure to a printed warning for the stated
@@ -42,7 +52,15 @@ pub fn doctor(
     // Harness::build already succeeded by construction; the production-only
     // port rules (captcha, payments webhook) are checked against the runtime's
     // provided ports.
-    if harness.venture().env == VentureEnv::Production {
+    //
+    // The environment is the deployment's, not only the compiled one
+    // (issue #143): the doctor runs where `ENV` is set, and a venture that
+    // never called `.env()` still ships to production.
+    let env = deployed_env(harness.venture().env, &EnvVars);
+    if let Some(note) = env_disagreement(harness.venture().env, env) {
+        eprintln!("fz: warning: {note}");
+    }
+    if env == VentureEnv::Production {
         production_port_checks(harness, allow_no_captcha, &mut failures);
     }
 
@@ -169,7 +187,23 @@ fn production_port_checks(
     ) {
         match allow_no_captcha {
             Some(reason) => {
+                // An override of a production abuse control is a decision
+                // someone has to answer for later, so it is recorded, not
+                // just printed (issue #143). `tracing` is the audited sink
+                // — scrubbed by #135 and shipped wherever the operator
+                // sends logs — while the stderr line keeps the operator
+                // running the command informed.
+                tracing::warn!(
+                    control = "captcha",
+                    reason,
+                    modules = guards.captcha_modules.join(","),
+                    "production abuse control overridden by an operator"
+                );
                 eprintln!("fz: warning: captcha override accepted ({reason}): {message}");
+                eprintln!(
+                    "fz: note: this override is recorded; it is for previews only and must \
+                     not stand in for a Captcha port in production"
+                );
             }
             None => failures.push(message),
         }
@@ -239,6 +273,7 @@ mod tests {
                 Vec::new()
             },
             signature_modules: Vec::new(),
+            signed_link_modules: Vec::new(),
         }
     }
 

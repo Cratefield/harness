@@ -71,6 +71,13 @@ fn instance(env: &Env) -> &'static (Harness, Cloudflare) {
             .venture(
                 Venture::new("cratefield-waitlist", "cratefield.com")
                     .public_url("https://cratefield.com")
+                    // The environment is the deployment's to declare, through
+                    // `ENV` in wrangler.toml, which this Worker has always set to
+                    // production (issue #143). Deliberately not hardcoded here:
+                    // `HarnessBuilder::build` takes no config, so it cannot see
+                    // the operator's recorded acceptance and would refuse to build
+                    // at all — a panic at boot instead of a serving Worker that
+                    // says loudly what it is missing.
                     .cors_origins(["https://cratefield.com", "https://www.cratefield.com"]),
             )
             .templates(cratefield_module_waitlist::default_templates())

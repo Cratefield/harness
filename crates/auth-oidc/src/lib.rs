@@ -380,6 +380,14 @@ impl Module for Oidc {
         true
     }
 
+    /// The callback is proved by the `state` parameter this service
+    /// issued and signed, not by a widget (issue #143) — a surface-less
+    /// module's only place to say so, and without it a production
+    /// venture had to provide a `Captcha` port this flow never uses.
+    fn public_write_policy(&self) -> cratefield_core::RoutePolicy {
+        cratefield_core::RoutePolicy::SignedLink
+    }
+
     fn migrations(&self) -> Migrations {
         Migrations::EMPTY
     }

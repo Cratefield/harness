@@ -175,6 +175,25 @@ pub trait Module: Send + Sync + 'static {
     fn public_writes(&self) -> bool {
         false
     }
+    /// What actually protects those public writes, for a module with no
+    /// ADR 0010 surface to hang a per-action [`RoutePolicy`] on
+    /// (issue #143).
+    ///
+    /// Consulted **only** when [`public_writes`] is true and the surface
+    /// declares no guarded action, so a module with a surface is
+    /// unaffected and the conservative default is unchanged: say nothing
+    /// and you are still a [`HumanForm`] writer. The auth login methods
+    /// are the reason it exists — they are public writers whose proof is
+    /// a single-use challenge or a signed link, never a CAPTCHA widget,
+    /// and before this they could only be filed under a gate they can
+    /// never satisfy.
+    ///
+    /// [`public_writes`]: Module::public_writes
+    /// [`RoutePolicy`]: crate::route_policy::RoutePolicy
+    /// [`HumanForm`]: crate::route_policy::RoutePolicy::HumanForm
+    fn public_write_policy(&self) -> crate::route_policy::RoutePolicy {
+        crate::route_policy::RoutePolicy::HumanForm
+    }
     /// The module's migrations, embedded per dialect.
     fn migrations(&self) -> Migrations;
     /// Rejects invalid configuration: missing required keys or malformed

@@ -13,8 +13,8 @@ use std::time::Duration;
 use axum::Router;
 use axum::extract::{DefaultBodyLimit, State};
 use axum::http::{HeaderMap, StatusCode, header};
-use axum::middleware::from_fn_with_state;
-use axum::response::IntoResponse;
+use axum::middleware::{Next, from_fn_with_state};
+use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use serde_json::json;
 use tracing::error;
@@ -31,6 +31,9 @@ use crate::module::{HARNESS_API, Module, ModuleContext, harness_api_mismatch};
 use crate::ports::Dispatcher;
 use crate::ports::{Clock, Database, Port, Ports, Statement, SystemClock, warn_undeclared_ports};
 use crate::problem::Problem;
+use crate::problems::SLUGS;
+use crate::route_policy::deployed_env;
+use crate::scope::Scope;
 use crate::sidecar::{
     GatewayGuard, SIDECAR_REQUIRE_GATEWAY, SidecarMount, X_HARNESS_GATEWAY, gateway_guard,
     gateway_signer, mint_gateway, truthy,
@@ -164,6 +167,80 @@ impl Harness {
         }
     }
 
+    /// The surface this deployment serves: the composed one, plus any
+    /// mounted sidecar's public part merged in per request (issue #131).
+    fn merged_surface(
+        &self,
+        mounts: Vec<SidecarMount>,
+        ports: &Ports,
+        gateway: Option<Arc<HmacSigner>>,
+        env: VentureEnv,
+    ) -> Arc<dyn SurfaceSource> {
+        Arc::new(MergedSurface {
+            base: Arc::clone(&self.surface),
+            mounts,
+            dispatcher: ports.dispatcher.clone(),
+            gateway,
+            env,
+            captcha_configured: ports.captcha.is_some(),
+        })
+    }
+
+    /// Nests each in-process module under its `/v1/<name>` prefix.
+    /// Split out of [`Harness::router`] so that method stays readable.
+    fn nest_modules(&self, ports: &Ports) -> Router {
+        let mut api = Router::new();
+        for module in &self.modules {
+            let ctx = self.module_context(module.as_ref(), ports);
+            api = api.nest(&format!("/v1/{}", module.name()), module.router(ctx));
+        }
+        api
+    }
+
+    /// The production readiness verdict for the environment this
+    /// deployment actually runs in (issue #143).
+    ///
+    /// `HarnessBuilder::build` already ran this against the **compiled**
+    /// `Venture::env`. When the deployment declares a stricter one that
+    /// check was made against the wrong environment, so it is re-made
+    /// here against the same runtime report — the answer must not depend
+    /// on whether anyone remembered to call `.env()`.
+    fn production_readiness_now(&self, env: VentureEnv, config: &dyn Config) -> Vec<String> {
+        if let Some(note) = crate::route_policy::env_disagreement(self.venture.env, env) {
+            tracing::warn!("{note}");
+        }
+        let problems = crate::route_policy::production_readiness(
+            env,
+            &crate::route_policy::WriteGuards::collect(&self.modules),
+            self.runtime.as_ref(),
+            None,
+        );
+        if problems.is_empty() {
+            return problems;
+        }
+        // An operator may accept this deployment's gap explicitly, and
+        // the acceptance is recorded on every boot rather than discarded
+        // (issue #143). The routes then serve, and the record is what
+        // someone answers for later.
+        if let Some(reason) = crate::route_policy::unprotected_writes_override(config) {
+            tracing::warn!(
+                control = "production-readiness",
+                reason,
+                problems = problems.join("; "),
+                "serving guarded routes unprotected on an operator's recorded acceptance"
+            );
+            return Vec::new();
+        }
+        for problem in &problems {
+            error!(
+                "refusing guarded routes: {problem} — set {} to a reason to accept this \
+                 explicitly while the port is wired",
+                crate::route_policy::ALLOW_UNPROTECTED_WRITES
+            );
+        }
+        problems
+    }
+
     /// Nests one forwarding router per mounted sidecar (issue #131).
     /// Split out of [`Harness::router`] so that method stays readable.
     fn nest_sidecars(
@@ -230,16 +307,13 @@ impl Harness {
     /// `token` query parameter — issue #135). Nothing but `/.well-known`,
     /// `/ui` and the `/__*` probes is ever mounted at the root.
     pub fn router(&self, ports: Ports) -> Router {
-        let mut api = Router::new();
-        for module in &self.modules {
-            let ctx = self.module_context(module.as_ref(), &ports);
-            api = api.nest(&format!("/v1/{}", module.name()), module.router(ctx));
-        }
+        // The environment the *deployment* declares, not only the one
+        // compiled in (issue #143).
+        let env = deployed_env(self.venture.env, ports.config.as_ref());
+        let readiness = self.production_readiness_now(env, ports.config.as_ref());
+        let mut api = self.nest_modules(&ports);
         // The gateway signer is this deployment's half of the sidecar
-        // trust boundary (issue #131): absent secret, absent capability —
-        // forwarded requests carry no stamp and a sidecar that requires one
-        // will refuse them. The clock only expires tokens, so the default
-        // system clock is fine when the runtime supplies none.
+        // trust boundary (issue #131): absent secret, absent capability.
         let gateway = gateway_signer(
             ports.config.as_ref(),
             ports.clock.clone().unwrap_or_else(|| Arc::new(SystemClock)),
@@ -251,14 +325,7 @@ impl Harness {
             .layer(axum::middleware::from_fn(security_headers_layer))
             .layer(DefaultBodyLimit::max(MAX_BODY_BYTES));
 
-        let surface_source: Arc<dyn SurfaceSource> = Arc::new(MergedSurface {
-            base: Arc::clone(&self.surface),
-            mounts: mounted,
-            dispatcher: ports.dispatcher.clone(),
-            gateway: gateway.clone(),
-            env: self.venture.env,
-            captcha_configured: ports.captcha.is_some(),
-        });
+        let surface_source = self.merged_surface(mounted, &ports, gateway.clone(), env);
 
         let ui = self.ui.as_ref().map(|ui| {
             ui.router(UiContext {
@@ -343,10 +410,17 @@ impl Harness {
         // and `/__surface` alike (issue #131). Tower order: the layer
         // applied first is the innermost, so this line must come before
         // `scope_layer` in the chain.
-        root.layer(from_fn_with_state(gateway_state, gateway_guard))
-            .layer(from_fn_with_state(scope_state, scope_layer))
-            .layer(axum::middleware::from_fn(token_response_layer))
-            .layer(cors_layer(&self.venture.cors_origins))
+        // Innermost of all: a deployment that declares production and
+        // cannot satisfy its own declared abuse controls refuses the
+        // guarded routes rather than serving them unprotected (#143).
+        root.layer(from_fn_with_state(
+            Arc::new(readiness),
+            production_readiness_guard,
+        ))
+        .layer(from_fn_with_state(gateway_state, gateway_guard))
+        .layer(from_fn_with_state(scope_state, scope_layer))
+        .layer(axum::middleware::from_fn(token_response_layer))
+        .layer(cors_layer(&self.venture.cors_origins))
     }
 }
 
@@ -835,6 +909,31 @@ fn is_module_name(name: &str) -> bool {
                 .chars()
                 .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
     })
+}
+
+/// Refuses every guarded route when the deployment declares production
+/// and cannot satisfy the abuse controls its own routes declare
+/// (issue #143).
+///
+/// Fail *closed*, not fatal: a panicking Worker is an outage with no
+/// diagnosis, so the probes and the UI stay up to say why while `/v1/*`
+/// answers `503 not-production-ready`. `Harness::build` still refuses the
+/// same composition outright when the venture declares its environment
+/// honestly; this catches the deployment that did not.
+async fn production_readiness_guard(
+    State(problems): State<Arc<Vec<String>>>,
+    request: axum::extract::Request,
+    next: Next,
+) -> Response {
+    if problems.is_empty() || !request.uri().path().starts_with("/v1/") {
+        return next.run(request).await;
+    }
+    let problem = Problem::new(&SLUGS.not_production_ready).with_detail(problems.join("; "));
+    match request.extensions().get::<Scope>() {
+        Some(scope) => problem.instance(&scope.request_id.clone()),
+        None => problem,
+    }
+    .into_response()
 }
 
 /// Collects the modules' `/.well-known` routers (issue #46): at most one

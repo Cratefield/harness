@@ -10,6 +10,13 @@ enabled = true
 
 [vars]
 ENV = "production"
+# needs-human (issue #143): `POST /v1/waitlist/` declares a CAPTCHA
+# (`Action::post("join", "/").captcha()`) and this Worker has never bound a
+# Captcha port, so the write has been serving production traffic unprotected.
+# The harness now refuses that composition; this recorded acceptance keeps
+# signups working until a Turnstile secret is set on the Cloudflare account
+# and `.captcha(..)` is added to the runtime above. Delete both then.
+HARNESS_ALLOW_UNPROTECTED_WRITES = "issue #143: waitlist join has no Captcha port yet; Turnstile pending on the Kontinuum Cloudflare account"
 
 [[d1_databases]]
 binding = "DB"

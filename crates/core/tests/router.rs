@@ -6,9 +6,10 @@ mod common;
 
 use std::sync::Arc;
 
+use axum::Router;
 use axum::http::{Method, StatusCode, header};
 use common::*;
-use cratefield_core::{Harness, Ports};
+use cratefield_core::{Config, Harness, MapConfig, Module, Port, Ports};
 
 /// `GET /__health` lists modules and versions without touching the db.
 #[pollster::test]
@@ -525,4 +526,154 @@ async fn health_lists_contract_and_port_detail() {
     let body = body_json(response).await;
     assert_eq!(body["harness_build"], serde_json::Value::Null);
     assert_eq!(body["mailer"], "not_configured");
+}
+
+// ------------------------------------------ deployed readiness (issue #143)
+
+/// A runtime that provides everything but can back none of it usefully —
+/// the shape of a venture whose Captcha binding is absent or fail-open.
+struct UnusableCaptcha;
+
+impl cratefield_core::Runtime for UnusableCaptcha {
+    fn provides(&self) -> Vec<Port> {
+        Port::ALL.to_vec()
+    }
+    fn effectively_configured(&self, port: Port) -> bool {
+        port != Port::Captcha
+    }
+}
+
+/// A public writer with no surface — the shape of the auth login methods.
+struct PublicWriter;
+
+impl Module for PublicWriter {
+    fn name(&self) -> &'static str {
+        "writer"
+    }
+    fn version(&self) -> &'static str {
+        "0.0.0-test"
+    }
+    fn requires(&self) -> &'static [Port] {
+        &[]
+    }
+    fn public_writes(&self) -> bool {
+        true
+    }
+    fn migrations(&self) -> cratefield_core::Migrations {
+        cratefield_core::Migrations::default()
+    }
+    fn validate_config(&self, _: &dyn Config) -> Result<(), cratefield_core::ConfigError> {
+        Ok(())
+    }
+    fn router(&self, _: cratefield_core::ModuleContext) -> Router {
+        Router::new().route("/join", axum::routing::post(|| async { "ok" }))
+    }
+}
+
+/// Issue #143. The production gate keyed off the **compiled**
+/// `Venture::env`, which defaults to `Development` and which
+/// `ventures/cratefield-waitlist` never sets — while its wrangler.toml
+/// ships `ENV = "production"`. So the one venture actually in production
+/// ran with every production-only rule switched off. The deployment's
+/// answer now counts, and a deployment that cannot back its own declared
+/// abuse controls refuses the guarded routes instead of serving them.
+#[pollster::test]
+async fn a_deployment_that_declares_production_is_held_to_it() {
+    let harness = Harness::builder()
+        .venture(base_venture())
+        .module(PublicWriter)
+        .runtime(UnusableCaptcha)
+        .build()
+        .expect("a development venture builds: the compiled env says development");
+
+    // Deployed as production, exactly as the waitlist Worker is.
+    let ports = Ports::with_config(Arc::new(MapConfig::from_pairs([("ENV", "production")])));
+    let router = harness.router(ports);
+
+    let refused = request(
+        &router,
+        Method::POST,
+        "/v1/writer/join",
+        &[],
+        Some(b"{}".to_vec()),
+    )
+    .await;
+    assert_eq!(refused.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(
+        body_json(refused).await["type"]
+            .as_str()
+            .unwrap()
+            .rsplit('/')
+            .next()
+            .unwrap(),
+        "not-production-ready"
+    );
+
+    // The probes stay up: an operator has to be able to see why.
+    let health = request(&router, Method::GET, "/__health", &[], None).await;
+    assert_eq!(health.status(), StatusCode::OK);
+}
+
+#[pollster::test]
+async fn the_same_venture_serves_normally_when_the_deployment_is_not_production() {
+    let harness = Harness::builder()
+        .venture(base_venture())
+        .module(PublicWriter)
+        .runtime(UnusableCaptcha)
+        .build()
+        .expect("builds");
+    let router = harness.router(Ports::with_config(Arc::new(MapConfig::default())));
+    let ok = request(
+        &router,
+        Method::POST,
+        "/v1/writer/join",
+        &[],
+        Some(b"{}".to_vec()),
+    )
+    .await;
+    assert_ne!(ok.status(), StatusCode::SERVICE_UNAVAILABLE);
+}
+
+#[pollster::test]
+async fn an_operator_can_accept_the_gap_explicitly_and_it_is_recorded() {
+    let harness = Harness::builder()
+        .venture(base_venture())
+        .module(PublicWriter)
+        .runtime(UnusableCaptcha)
+        .build()
+        .expect("builds");
+
+    // An empty reason is not an acceptance: an override nobody has to
+    // answer for is the silent default this gate exists to remove.
+    let blank = harness.router(Ports::with_config(Arc::new(MapConfig::from_pairs([
+        ("ENV", "production"),
+        (cratefield_core::ALLOW_UNPROTECTED_WRITES, "   "),
+    ]))));
+    let refused = request(
+        &blank,
+        Method::POST,
+        "/v1/writer/join",
+        &[],
+        Some(b"{}".to_vec()),
+    )
+    .await;
+    assert_eq!(refused.status(), StatusCode::SERVICE_UNAVAILABLE);
+
+    // A stated reason serves, and the reason is what someone answers for.
+    let accepted = harness.router(Ports::with_config(Arc::new(MapConfig::from_pairs([
+        ("ENV", "production"),
+        (
+            cratefield_core::ALLOW_UNPROTECTED_WRITES,
+            "issue #143: Turnstile pending on the Cloudflare account",
+        ),
+    ]))));
+    let served = request(
+        &accepted,
+        Method::POST,
+        "/v1/writer/join",
+        &[],
+        Some(b"{}".to_vec()),
+    )
+    .await;
+    assert_ne!(served.status(), StatusCode::SERVICE_UNAVAILABLE);
 }

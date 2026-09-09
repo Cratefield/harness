@@ -256,6 +256,25 @@ impl Runtime for Native {
         }
         provided
     }
+
+    /// The same production gate the Cloudflare runtime applies
+    /// (issue #133), which this runtime never did (issue #143): a
+    /// Turnstile adapter that is not hostname-bound, or left fail-open,
+    /// cannot protect a production `HumanForm` route, so the port is
+    /// present but not usable. Without this a self-hosted venture booted
+    /// past a check its Workers twin refuses. Adapters that do not report
+    /// (`binding() == None`) count as effective when present: presence is
+    /// all the runtime can know about them.
+    fn effectively_configured(&self, port: Port) -> bool {
+        match port {
+            Port::Captcha => self.captcha.as_ref().is_some_and(|captcha| {
+                captcha
+                    .binding()
+                    .is_none_or(|binding| binding.hostname_bound && !binding.fail_open)
+            }),
+            _ => self.provides().contains(&port),
+        }
+    }
 }
 
 /// Snapshots a [`Ports`] bundle by cloning every `Arc` (core's `Ports`
