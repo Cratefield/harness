@@ -8,10 +8,11 @@ use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use cratefield_core::{
-    Action, Audience, Captcha, Clock, Column, Decision, IdGen, Json, Kid, ModuleConfig,
-    ModuleContext, Outcome, Payload, Problem, RateLimiter, SLUGS, Scope, SendOutcome, Signer,
-    Surface, SystemClock, UlidIdGen, View, client_ip, csv_row, hint_field, invalid_email_problem,
-    normalize_email, rate_limit_keys, rate_limited, require_admin, validation_error,
+    Action, Audience, Clock, Column, Database, IdGen, Json, Kid, ModuleConfig, ModuleContext,
+    Outcome, Payload, Problem, RateLimit, RateLimitFailure, SLUGS, Scope, SendCooldown,
+    SendOutcome, Signer, Surface, SystemClock, UlidIdGen, View, check_rate_limit, client_ip,
+    csv_row, hint_field, invalid_email_problem, normalize_email, rate_limit_keys, rate_limited,
+    require_admin, validation_error, verify_human_form,
 };
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -31,6 +32,10 @@ pub(crate) const EVENT_CONFIRMED: &str = "waitlist.confirmed";
 /// One confirmation mail per address+product per hour, mirroring
 /// `module-email-signup`'s throttle.
 pub(crate) const REMAIL_AFTER_SECS: i64 = 3600;
+
+/// The durable send-claim table (issue #133). Must match
+/// `0003_mail_cooldown.sql` and `Waitlist::tables()`.
+pub(crate) const SEND_COOLDOWN_TABLE: &str = "waitlist_send_cooldown";
 
 /// Builds a confirm-token subject: the immutable entry id plus the
 /// generation it may confirm (issue #127), mirroring
@@ -181,47 +186,45 @@ fn product_allowed(products: &Products, product: &str) -> bool {
     }
 }
 
-/// See `module-email-signup::handlers::rate_limit`: fails open with a
-/// warning when the limiter is unreachable.
+/// Shared limiter loop (issue #133). `FailOpen` is deliberate: the captcha
+/// gate and the DB-enforced send cooldown in [`join`] bound abuse even
+/// when the limiter transport is down; failing closed would take the
+/// whole invite queue down on a transient limiter outage.
 async fn rate_limit(
     state: &ModuleState,
     headers: &HeaderMap,
     email: Option<&str>,
 ) -> Option<Response> {
-    let limiter: Arc<dyn RateLimiter> = state.ctx.ports.rate_limiter.clone()?;
-    let ip = client_ip(headers);
-    for key in rate_limit_keys(ip.as_deref(), email) {
-        match limiter.limit(&key).await {
-            Ok(Decision { ok: true, .. }) => {}
-            Ok(Decision {
-                ok: false,
-                retry_after,
-            }) => return Some(rate_limited(retry_after)),
-            Err(err) => {
-                tracing::warn!(error = %err, key = %key, "rate limiter unavailable; allowing");
-            }
-        }
+    let keys = rate_limit_keys(client_ip(headers).as_deref(), email);
+    match check_rate_limit(
+        state.ctx.ports.rate_limiter.as_ref(),
+        &keys,
+        RateLimitFailure::FailOpen,
+    )
+    .await
+    {
+        RateLimit::Denied { retry_after } => Some(rate_limited(retry_after)),
+        RateLimit::Allowed => None,
     }
-    None
 }
 
+/// The shared human-form gate (issue #133): any non-`ok` verdict or a
+/// missing token is refused; in production a missing port is refused
+/// too, so no composition can reach this handler unverified.
 async fn check_captcha(
     state: &ModuleState,
     headers: &HeaderMap,
     token: Option<&str>,
     scope: &Scope,
 ) -> Result<(), Problem> {
-    let Some(captcha): Option<Arc<dyn Captcha>> = state.ctx.ports.captcha.clone() else {
-        return Ok(());
-    };
-    let Some(token) = token else {
-        return Err(Problem::new(&SLUGS.captcha_failed).instance(&scope.request_id));
-    };
-    let ip = client_ip(headers);
-    match captcha.verify(token, ip.as_deref()).await {
-        Ok(verdict) if verdict.ok => Ok(()),
-        _ => Err(Problem::new(&SLUGS.captcha_failed).instance(&scope.request_id)),
-    }
+    verify_human_form(
+        state.ctx.ports.captcha.as_ref(),
+        state.ctx.venture.env,
+        token,
+        client_ip(headers).as_deref(),
+        &scope.request_id,
+    )
+    .await
 }
 
 fn sanitize_locale(raw: Option<String>) -> String {
@@ -366,6 +369,31 @@ pub(crate) fn surface(settings: &Settings) -> Surface {
         ))
 }
 
+/// Issue #133: the one-send-per-window claim is a row in the database,
+/// not a `created_at` read — a limiter fail-open or two concurrent
+/// first-time joins can no longer leak a second mail.
+async fn acquire_send_claim(db: &dyn Database, subject: &str, now: &str) -> Result<bool, Problem> {
+    Ok(SendCooldown::new(SEND_COOLDOWN_TABLE)
+        .try_acquire(db, subject, now, &iso_ago(REMAIL_AFTER_SECS))
+        .await?)
+}
+
+/// Referral credit lookup (issue #11): only a confirmed referrer for the
+/// same product counts, and a code is ignored when referrals are off.
+async fn referral_target(
+    db: &dyn Database,
+    referrals: bool,
+    product: &str,
+    code: Option<&str>,
+) -> Result<Option<String>, Problem> {
+    match code {
+        Some(code) if referrals => Ok(store::find_confirmed_by_referral_code(db, product, code)
+            .await?
+            .map(|referrer| referrer.id)),
+        _ => Ok(None),
+    }
+}
+
 async fn join(
     scope: Scope,
     State(state): State<Arc<ModuleState>>,
@@ -394,49 +422,47 @@ async fn join(
     {
         return Ok(accepted());
     }
-    if existing
-        .as_ref()
-        .is_some_and(|row| row.created_at > iso_ago(REMAIL_AFTER_SECS))
-    {
+    let now = now_iso();
+    let cooldown = SendCooldown::new(SEND_COOLDOWN_TABLE);
+    let cooldown_subject = format!("{normalized}:{}", body.product);
+    if !acquire_send_claim(&*db, &cooldown_subject, &now).await? {
         return Ok(accepted());
     }
 
     let locale = sanitize_locale(body.locale);
     let answers_text = body.answers.as_ref().map(ToString::to_string);
-    let referred_by = match body.referral.as_deref() {
-        Some(code) if state.settings.referrals => {
-            store::find_confirmed_by_referral_code(&*db, &body.product, code)
-                .await?
-                .map(|referrer| referrer.id)
-        }
-        _ => None,
-    };
+    let referred_by = referral_target(
+        &*db,
+        state.settings.referrals,
+        &body.product,
+        body.referral.as_deref(),
+    )
+    .await?;
 
     let ttl_days = cfg.get_u32("CONFIRM_TTL_DAYS", state.settings.confirm_ttl_days);
     // Only pending rows reach here (confirmed early-returns above), and
     // `refresh_pending` keeps a pending row's generation: the token is
     // signed for the generation the row holds now (issue #127).
-    let (id, generation) = match &existing {
-        Some(row) => (row.id.clone(), row.generation),
-        None => (UlidIdGen.ulid(), 1),
+    let id = existing
+        .as_ref()
+        .map_or_else(|| UlidIdGen.ulid(), |row| row.id.clone());
+    let generation = existing.as_ref().map_or(1, |row| row.generation);
+    let mail = JoinMail {
+        id: id.clone(),
+        generation,
+        normalized: normalized.clone(),
+        product: body.product.clone(),
+        locale: locale.clone(),
+        ttl_days,
+        now: now.clone(),
     };
-    let now = now_iso();
-    send_join_confirmation(
-        &state,
-        &scope,
-        &signer,
-        &cfg,
-        JoinMail {
-            id: id.clone(),
-            generation,
-            normalized: normalized.clone(),
-            product: body.product.clone(),
-            locale: locale.clone(),
-            ttl_days,
-            now: now.clone(),
-        },
-    )
-    .await?;
+    if let Err(problem) = send_join_confirmation(&state, &scope, &signer, &cfg, mail).await {
+        // The claim was taken but no mail went out (mailer unconfigured
+        // or failing): hand the window back so a genuine retry is not
+        // locked out for the rest of the hour (issue #133).
+        let _ = cooldown.release(&*db, &cooldown_subject).await;
+        return Err(problem);
+    }
 
     if let Some(row) = &existing {
         store::refresh_pending(

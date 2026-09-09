@@ -1,6 +1,8 @@
-//! `fz doctor` (issue #8): harness validity, the production-captcha rule,
-//! lockfile consistency and the portable-SQL lint. Since issue #17 it
-//! also re-asserts the contract-version rule.
+//! `fz doctor` (issue #8): harness validity, lockfile consistency and the
+//! portable-SQL lint. It re-asserts the contract-version rule (issue #17)
+//! and the production abuse-port rules (issues #13/#102/#133) — the same
+//! checks `Harness::build` enforces at initialization, kept visible here
+//! for operator tooling.
 
 use crate::collect::verify_locked;
 use crate::lint::banned_tokens;
@@ -143,18 +145,11 @@ fn production_port_checks(
     allow_no_captcha: Option<&str>,
     failures: &mut Vec<String>,
 ) {
-    let public_writers: Vec<&str> = harness
-        .modules()
-        .iter()
-        .filter(|module| module.public_writes())
-        .map(|module| module.name())
-        .collect();
-    if !public_writers.is_empty() && !captcha_provided(harness) {
-        let message = format!(
-            "production venture with public writes from [{}] but no Captcha port \
-             — configure Turnstile (architecture section 11)",
-            public_writers.join(", ")
-        );
+    let guards = cratefield_core::WriteGuards::collect(harness.modules());
+    if let Some(message) = captcha_production_failure(
+        &guards,
+        cratefield_core::captcha_effective(harness.runtime()),
+    ) {
         match allow_no_captcha {
             Some(reason) => {
                 eprintln!("fz: warning: captcha override accepted ({reason}): {message}");
@@ -163,44 +158,48 @@ fn production_port_checks(
         }
     }
 
-    // A production venture that can take money must be able to verify webhook
-    // signatures, or it will process forged events (issue #102). Doctor has no
-    // venture config, but it runs natively where the operator can export the
-    // secret, so the presence check reads the conventional env var.
     let webhook_secret_present =
         std::env::var("STRIPE_WEBHOOK_SECRET").is_ok_and(|value| !value.trim().is_empty());
-    if let Some(message) =
-        payments_webhook_failure(payments_provided(harness), webhook_secret_present)
+    if let Some(message) = payments_webhook_failure(guards.needs_payments(), webhook_secret_present)
     {
         failures.push(message);
     }
 }
 
-fn captcha_provided(harness: &Harness) -> bool {
-    harness
-        .runtime()
-        .is_some_and(|runtime| runtime.provides().contains(&cratefield_core::Port::Captcha))
+/// The production captcha rule (issue #133): captcha-guarded writes need a
+/// Captcha port that is *effectively* configured — provided **and** bound per
+/// the adapter's report — not merely present. The builder already refuses
+/// this composition (`Harness::build`); the doctor re-checks it so the rule
+/// stays visible in operator tooling.
+fn captcha_production_failure(
+    guards: &cratefield_core::WriteGuards,
+    captcha_effective: bool,
+) -> Option<String> {
+    if guards.needs_captcha() && !captcha_effective {
+        Some(format!(
+            "production venture has captcha-guarded public writes from [{}] but the Captcha port \
+             is not effectively configured — provide Turnstile with its secret and expected \
+             hostname (architecture section 11; issue #133)",
+            guards.captcha_modules.join(", ")
+        ))
+    } else {
+        None
+    }
 }
 
-fn payments_provided(harness: &Harness) -> bool {
-    harness.runtime().is_some_and(|runtime| {
-        runtime
-            .provides()
-            .contains(&cratefield_core::Port::Payments)
-    })
-}
-
-/// The production-payments rule: a production venture that provides the
-/// `Payments` port without a webhook signing secret cannot verify Stripe
-/// webhooks, so it would process forged events. Pure so the truth table is
-/// unit-tested; the caller supplies the env-derived booleans.
+/// The production-payments rule: a production venture that declares
+/// [`Signature`]-guarded routes without a webhook signing secret cannot
+/// verify Stripe webhooks, so it would process forged events. Pure so the
+/// truth table is unit-tested; the caller supplies the env-derived booleans.
+///
+/// [`Signature`]: cratefield_core::RoutePolicy::Signature
 fn payments_webhook_failure(
-    payments_provided: bool,
+    signature_routes_present: bool,
     webhook_secret_present: bool,
 ) -> Option<String> {
-    if payments_provided && !webhook_secret_present {
+    if signature_routes_present && !webhook_secret_present {
         Some(
-            "production venture provides the Payments port but STRIPE_WEBHOOK_SECRET is unset \
+            "production venture has signature-guarded routes but STRIPE_WEBHOOK_SECRET is unset \
              — webhook signatures cannot be verified and forged events would be trusted \
              (issue #102)"
                 .to_owned(),
@@ -212,7 +211,30 @@ fn payments_webhook_failure(
 
 #[cfg(test)]
 mod tests {
-    use super::payments_webhook_failure;
+    use super::{captcha_production_failure, payments_webhook_failure};
+    use cratefield_core::WriteGuards;
+
+    fn guards(needs_captcha: bool) -> WriteGuards {
+        WriteGuards {
+            captcha_modules: if needs_captcha {
+                vec!["writer".to_owned()]
+            } else {
+                Vec::new()
+            },
+            signature_modules: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn captcha_rule_keys_on_declared_policies_and_effectiveness() {
+        // Guarded writes without an effective port fail — even if the port
+        // is *present*, since effectiveness is what the gate measures.
+        let failure = captcha_production_failure(&guards(true), false).expect("fails closed");
+        assert!(failure.contains("writer"));
+        assert!(failure.contains("effectively configured"));
+        assert!(captcha_production_failure(&guards(true), true).is_none());
+        assert!(captcha_production_failure(&guards(false), false).is_none());
+    }
 
     #[test]
     fn payments_in_production_needs_a_webhook_secret() {

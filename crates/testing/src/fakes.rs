@@ -135,6 +135,14 @@ impl Captcha for FakeCaptcha {
             reason: (!ok).then(|| "token not allowed".to_string()),
         })
     }
+
+    fn binding(&self) -> Option<cratefield_core::CaptchaBinding> {
+        Some(cratefield_core::CaptchaBinding {
+            hostname_bound: true,
+            action_bound: true,
+            fail_open: false,
+        })
+    }
 }
 
 // ---------------------------------------------------------------------------

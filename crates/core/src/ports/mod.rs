@@ -22,7 +22,7 @@ mod realtime;
 pub(crate) mod signer;
 
 pub use blob::{Blob, BlobError, BlobObject, ScopedBlob};
-pub use captcha::{Captcha, CaptchaError, Verdict};
+pub use captcha::{Captcha, CaptchaBinding, CaptchaError, Verdict};
 pub use clock::{Clock, SystemClock, timeout};
 pub use database::{Database, DbError, Row, Rows, Statement, TryFromValue};
 pub use defer::{Defer, NoopDefer};

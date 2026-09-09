@@ -80,16 +80,28 @@ fn column_text(kit: &TestHarness, email: &str, column: &str) -> Option<String> {
 }
 
 fn age_entry(kit: &TestHarness, email: &str, secs: i64) {
+    // "Aged past the re-mail window" means every record that gates a
+    // re-send: the entry row and, since issue #133, the send-claim rows.
     let sql = format!(
         "UPDATE waitlist_entries SET created_at = '{}' WHERE email_normalized = '{email}'",
         iso_ago(secs)
     );
     pollster::block_on(kit.db.execute(&Statement::new(sql))).expect("age update");
+    let claim = format!(
+        "UPDATE waitlist_send_cooldown SET last_sent_at = '{}' WHERE subject LIKE '{email}:%'",
+        iso_ago(secs)
+    );
+    pollster::block_on(kit.db.execute(&Statement::new(claim))).expect("age claim");
 }
 
 fn delete_entry(kit: &TestHarness, email: &str) {
+    // A purge erases the whole record — including the #133 send claim.
+    // Leaving the claim behind would block the next join's confirmation
+    // mail for an hour, with no entry left to confirm.
     let sql = format!("DELETE FROM waitlist_entries WHERE email_normalized = '{email}'");
     pollster::block_on(kit.db.execute(&Statement::new(sql))).expect("delete");
+    let claim = format!("DELETE FROM waitlist_send_cooldown WHERE subject LIKE '{email}:%'");
+    pollster::block_on(kit.db.execute(&Statement::new(claim))).expect("delete claim");
 }
 
 #[pollster::test]
@@ -357,6 +369,44 @@ async fn byte_identical_join_responses_across_states() {
             4,
             "new + pending + done + stale-re-mail"
         );
+    }
+}
+
+#[pollster::test]
+async fn send_cooldown_claims_one_mail_per_window() {
+    for kit in kits() {
+        join(&kit, "once@example.com", "kontinuum").await;
+        // A repeat join inside the window answers position-only. The claim
+        // in waitlist_send_cooldown — not the FailOpen test limiter — is
+        // what keeps a header burst from becoming a mail burst (#133).
+        let repeat = join(&kit, "once@example.com", "kontinuum").await;
+        assert_eq!(repeat.status, StatusCode::ACCEPTED);
+        assert_eq!(kit.mailer.sent().len(), 1, "the repeat must not re-send");
+        // A different product is a different claim.
+        join(&kit, "once@example.com", "undercover").await;
+        assert_eq!(kit.mailer.sent().len(), 2, "one claim per address+product");
+        // An expired claim renews.
+        let sql = format!(
+            "UPDATE waitlist_send_cooldown SET last_sent_at = '{}' \
+         WHERE subject = 'once@example.com:kontinuum'",
+            iso_ago(2 * 3600)
+        );
+        pollster::block_on(kit.db.execute(&Statement::new(sql))).expect("age claim");
+        join(&kit, "once@example.com", "kontinuum").await;
+        assert_eq!(kit.mailer.sent().len(), 3, "an aged-out claim re-sends");
+    }
+}
+
+#[pollster::test]
+async fn send_claim_releases_when_the_mail_fails() {
+    for kit in kits() {
+        // A failed send must not consume the claim: the next join mails.
+        kit.mailer.set_mode(MailerMode::NotConfigured);
+        let failed = join(&kit, "retry@example.com", "kontinuum").await;
+        assert_eq!(failed.status, StatusCode::SERVICE_UNAVAILABLE);
+        kit.mailer.set_mode(MailerMode::SendOk);
+        join(&kit, "retry@example.com", "kontinuum").await;
+        assert_eq!(kit.mailer.sent().len(), 1, "the 503 released the claim");
     }
 }
 

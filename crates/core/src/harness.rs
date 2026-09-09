@@ -42,6 +42,14 @@ use crate::venture::Venture;
 /// (ADR 0002). Reference implementation: `cratefield-runtime-cloudflare`.
 pub trait Runtime: Send + Sync + 'static {
     fn provides(&self) -> Vec<Port>;
+    /// Whether the named port is not merely present but usable for its
+    /// production duty (issue #133): a captcha adapter that reports
+    /// itself unbound cannot protect a `HumanForm` route, so the runtime
+    /// that wraps it says "no" here even though `provides()` lists the
+    /// port. Default: presence in `provides()`.
+    fn effectively_configured(&self, port: Port) -> bool {
+        self.provides().contains(&port)
+    }
 }
 
 /// A built harness: immutable after `build()`.
@@ -619,11 +627,8 @@ impl HarnessBuilder {
                     "module name `{name}` must be kebab-case ([a-z0-9]+ separated by '-')"
                 ));
             }
-            match names.get(name) {
-                Some(_) => errors.push(format!("duplicate module name `{name}`")),
-                None => {
-                    names.insert(name, 1);
-                }
+            if names.insert(name, 1).is_some() {
+                errors.push(format!("duplicate module name `{name}`"));
             }
 
             for port in module.requires().iter().chain(module.optional()) {
@@ -671,6 +676,8 @@ impl HarnessBuilder {
             }
             warn_undeclared_ports(module.as_ref(), &self.provides);
         }
+
+        append_production_readiness(&venture, &self.modules, self.runtime.as_ref(), &mut errors);
 
         check_template_ids(
             self.overrides.iter().chain(self.module_templates.iter()),
@@ -743,6 +750,28 @@ fn is_module_name(name: &str) -> bool {
 /// Collects the modules' `/.well-known` routers (issue #46): at most one
 /// module may provide one — `/.well-known` is a singleton discovery
 /// namespace — and more is a build error naming every provider.
+/// Production abuse controls are an initialization rule, not a doctor
+/// suggestion (issue #133): a venture that boots in production cannot
+/// rely on captcha or payment verification it does not actually have.
+/// `allow_no_captcha` is deliberately `None` here — the operator
+/// override belongs to `fz doctor`'s deploy-time re-check, never to
+/// the binary that ships.
+fn append_production_readiness(
+    venture: &Venture,
+    modules: &[Arc<dyn Module>],
+    runtime: Option<&Arc<dyn Runtime>>,
+    errors: &mut ConfigError,
+) {
+    for error in crate::route_policy::production_readiness(
+        venture.env,
+        &crate::route_policy::WriteGuards::collect(modules),
+        runtime,
+        None,
+    ) {
+        errors.push(error);
+    }
+}
+
 fn collect_well_known(modules: &[Arc<dyn Module>], errors: &mut ConfigError) -> Option<Router> {
     let mut providers: Vec<&'static str> = Vec::new();
     let mut well_known = None;

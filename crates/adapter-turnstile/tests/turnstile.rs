@@ -5,7 +5,7 @@
 use async_trait::async_trait;
 use bytes::Bytes;
 use cratefield_adapter_turnstile::Turnstile;
-use cratefield_core::{Captcha, Clock, HttpClient, HttpError, Verdict};
+use cratefield_core::{Captcha, CaptchaBinding, Clock, HttpClient, HttpError, Verdict};
 use http::{Request, Response, StatusCode};
 use std::sync::Arc;
 use std::sync::mpsc;
@@ -233,4 +233,85 @@ async fn request_carries_secret_and_token() {
     let body = rx.try_recv().expect("captured");
     assert!(body.contains(&format!("secret={DUMMY_SECRET}")));
     assert!(body.contains("response=the-token"));
+}
+
+// --- issue #133: bound checks fail closed, and the adapter reports ---
+
+#[pollster::test]
+async fn bound_hostname_rejects_response_without_hostname() {
+    // Provider says success but returns no hostname: the widget was not
+    // bound the way this deployment expects — absent is not "passed".
+    let captcha =
+        turnstile(ok_json(r#"{"success":true,"error-codes":[]}"#)).expected_hostname("example.com");
+    let verdict = captcha.verify("tok", None).await.expect("ok");
+    assert_eq!(
+        verdict,
+        Verdict {
+            ok: false,
+            reason: Some("hostname-mismatch".to_string()),
+        }
+    );
+}
+
+#[pollster::test]
+async fn action_mismatch_fails() {
+    let captcha = turnstile(ok_json(
+        r#"{"success":true,"hostname":"example.com","action":"login"}"#,
+    ))
+    .expected_action("signup");
+    let verdict = captcha.verify("tok", None).await.expect("ok");
+    assert_eq!(
+        verdict,
+        Verdict {
+            ok: false,
+            reason: Some("action-mismatch".to_string()),
+        }
+    );
+}
+
+#[pollster::test]
+async fn action_match_passes() {
+    let captcha = turnstile(ok_json(
+        r#"{"success":true,"hostname":"example.com","action":"signup"}"#,
+    ))
+    .expected_action("signup");
+    let verdict = captcha.verify("tok", None).await.expect("ok");
+    assert!(verdict.ok, "{verdict:?}");
+}
+
+#[pollster::test]
+async fn binding_reports_configured_checks() {
+    let unbound = turnstile(ok_json(r#"{"success":true}"#));
+    assert_eq!(
+        unbound.binding(),
+        Some(CaptchaBinding {
+            hostname_bound: false,
+            action_bound: false,
+            fail_open: false,
+        })
+    );
+
+    let bound = turnstile(ok_json(r#"{"success":true}"#))
+        .expected_hostname("example.com")
+        .expected_action("signup");
+    assert_eq!(
+        bound.binding(),
+        Some(CaptchaBinding {
+            hostname_bound: true,
+            action_bound: true,
+            fail_open: false,
+        })
+    );
+
+    let staging = turnstile(ok_json(r#"{"success":true}"#))
+        .expected_hostname("example.com")
+        .fail_open(true);
+    assert_eq!(
+        staging.binding(),
+        Some(CaptchaBinding {
+            hostname_bound: true,
+            action_bound: false,
+            fail_open: true,
+        })
+    );
 }

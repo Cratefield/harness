@@ -24,8 +24,10 @@ use cratefield_adapter_turnstile::Turnstile;
 use cratefield_runtime_cloudflare::{FetchClient, WorkersClock};
 
 // Turnstile::from_env returns None when TURNSTILE_SECRET is absent — the
-// port is then simply not provided, and fz doctor refuses a production
-// build whose modules write publicly without captcha.
+// port is then simply not provided, and Harness::build refuses a
+// production venture whose routes declare a HumanForm policy without an
+// effectively configured captcha (issue #133). TURNSTILE_HOSTNAME and
+// TURNSTILE_ACTION, when set, bind the matching checks.
 let runtime = match Turnstile::from_env(Arc::new(FetchClient), Arc::new(WorkersClock)) {
     Some(turnstile) => runtime.captcha(turnstile),
     None => runtime,
@@ -41,4 +43,11 @@ Behavior:
   `{ ok: false, reason: "unavailable" }`. `.fail_open(true)` flips that
   for staging only.
 - `.expected_hostname("example.com")` checks the response `hostname`; a
-  mismatch fails with `hostname-mismatch`.
+  mismatch — or a response that omits the hostname — fails with
+  `hostname-mismatch`.
+- `.expected_action("signup")` checks the response `action`, so a token
+  minted for another widget flow cannot authorize this one; mismatch or
+  absence fails with `action-mismatch`.
+- `Captcha::binding()` reports both checks (and the fail-open posture) so
+  `Harness::build` can tell "port provided" from "verification actually
+  configured" for `HumanForm` routes (issue #133).
