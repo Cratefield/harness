@@ -32,6 +32,9 @@ pub use cratefield_adapter_turnstile as turnstile;
 #[cfg(feature = "apns")]
 pub use cratefield_adapter_apns as apns;
 
+#[cfg(feature = "push-auth")]
+pub use cratefield_push_auth as push_auth;
+
 #[cfg(feature = "stripe")]
 pub use cratefield_adapter_stripe as stripe;
 

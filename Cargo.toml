@@ -39,6 +39,9 @@ cratefield-runtime-browser = { path = "crates/runtime-browser", version = "0.1.0
 cratefield-adapter-resend = { path = "crates/adapter-resend", version = "0.1.0" }
 cratefield-adapter-turnstile = { path = "crates/adapter-turnstile", version = "0.1.0" }
 cratefield-adapter-apns = { path = "crates/adapter-apns", version = "0.1.0" }
+# The provider tokens the push adapters present (issue #178): ES256 for APNs
+# and VAPID, RS256 for Google service accounts, one keyed cache for all three.
+cratefield-push-auth = { path = "crates/push-auth", version = "0.1.0" }
 cratefield-adapter-stripe = { path = "crates/adapter-stripe", version = "0.1.0" }
 cratefield-adapter-sqlite = { path = "crates/adapter-sqlite", version = "0.1.0" }
 cratefield-adapter-sqlite-wasm = { path = "crates/adapter-sqlite-wasm", version = "0.1.0" }

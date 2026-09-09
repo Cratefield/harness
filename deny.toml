@@ -39,6 +39,25 @@ yanked = "deny"
 # Decision: recommended by the PR #166 security workstream and SIGNED OFF by the
 # maintainer 2026-09-09, on the evidence above. Re-open this acceptance if any
 # module starts RSA private-key work, or if rsa 0.10.0 stable lands first.
+#
+# AMENDMENT 2026-09-09 (issue #178) — the "no RSA private-key operation"
+# statement above is NO LONGER LITERALLY TRUE and this records the change, for
+# the maintainer to re-sign. `cratefield-push-auth::Rs256Signer` performs an
+# RSA private-key **signing** operation: Google's OAuth 2.0 service-account
+# flow, `RSASSA-PKCS1-v1_5` over SHA-256 of a JWT this workspace constructs.
+# Why it is still not exploitable:
+#   * The Marvin attack (and every variant in RUSTSEC-2023-0071) is a
+#     *decryption* oracle: the attacker submits chosen ciphertexts to a
+#     private-key operation and times the Ok/Err answer. Nothing here decrypts;
+#     `Rs256Signer` exposes signing only, and the crate has no RSA decrypt path.
+#   * The signing input is not attacker-controlled: it is a fixed set of JWT
+#     claims (iss/scope/aud/iat/exp) built by the adapter, never a value from a
+#     request body, and never echoed back with per-attempt timing.
+#   * The key is our own service-account key, read from the secrets layer; an
+#     attacker who could supply it already owns the account.
+#   * PKCS#1 v1.5 signing here is deterministic and takes no RNG (which is what
+#     lets it run on a Workers isolate); it is not the blinding-dependent path.
+# The two verify-only usages above are unchanged. Same removal trigger.
 ignore = ["RUSTSEC-2023-0071"]
 
 [licenses]

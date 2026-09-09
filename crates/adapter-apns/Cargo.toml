@@ -16,6 +16,9 @@ workspace = true
 
 [dependencies]
 cratefield-core = { workspace = true }
+# The provider JWT: signing and the mint-once cache moved out to the shared
+# push-auth crate in #178, so VAPID and Google reuse them unchanged.
+cratefield-push-auth = { workspace = true }
 async-trait = { workspace = true }
 http = { workspace = true }
 bytes = { workspace = true }
@@ -23,10 +26,14 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 tracing = { workspace = true }
 thiserror = { workspace = true }
-base64 = { workspace = true }
-p256 = { workspace = true }
 
 [dev-dependencies]
+# Path-only on purpose: `cargo publish` resolves dev-dependencies against
+# crates.io, and a path-only one is stripped from the packaged manifest
+# (see the note in the workspace manifest).
+cratefield-testing = { path = "../testing" }
 pollster = { workspace = true }
 time = { workspace = true }
 async-trait = { workspace = true }
+# The tests decode the JWT segments they assert on.
+base64 = { workspace = true }

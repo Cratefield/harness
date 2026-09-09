@@ -1,0 +1,41 @@
+[package]
+publish = false  # new crate: publish manually first, then wire into the facade
+name = "cratefield-push-auth"
+description = "Provider-JWT signing for push adapters: ES256 (APNs, VAPID) and RS256 (Google service accounts), with a keyed token cache"
+readme = "README.md"
+keywords = ["cratefield", "push", "jwt", "apns", "vapid"]
+categories = ["api-bindings", "cryptography"]
+include = ["src/**/*", "README.md"]
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+cratefield-core = { workspace = true }
+base64 = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+# ES256 (P-256 ECDSA): the same pin adapter-apns already used, with
+# deterministic RFC 6979 nonces so signing needs no RNG on a Workers isolate.
+p256 = { workspace = true }
+# RS256 for Google service-account JWTs. `pem` is added on top of the
+# workspace pin: the auth crates verify against JWKS components and never
+# parse a PEM, so the workspace entry leaves it off.
+rsa = { workspace = true, features = ["pem"] }
+# Not called from this crate — signing here is deterministic and needs no RNG.
+# It is here to pick getrandom's `wasm_js` backend, which `ulid` (via
+# cratefield-core) pulls in and which otherwise only a leaf crate selects, so
+# that `cargo build --target wasm32-unknown-unknown -p cratefield-push-auth`
+# stands on its own (issue #178). The same line, for the same reason, is in
+# cratefield-kms and the auth crates.
+getrandom = { workspace = true }
+
+[dev-dependencies]
+# The cache's TTL is driven by the `Clock` port, so its tests implement one.
+async-trait = { workspace = true }
+time = { workspace = true }

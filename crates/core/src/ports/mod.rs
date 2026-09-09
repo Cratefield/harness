@@ -39,7 +39,9 @@ pub use payments::{
     LineItem, Money, Payments, PaymentsError, Refund, RefundRequest, SubscriptionCheckoutRequest,
     TransferCharge, WebhookEvent,
 };
-pub use push::{Notification, Priority, Push, PushError, PushOutcome};
+pub use push::{
+    LocKeys, Notification, Platform, Priority, Push, PushError, PushOutcome, Recipient, RoutingPush,
+};
 pub use rate_limiter::{Decision, RateLimitError, RateLimiter};
 pub use realtime::{Member, Realtime, RealtimeError, RoomContext, RoomHandler};
 pub use signer::{Kid, MAX_KID_NAME, Payload, SignatureError, Signer};

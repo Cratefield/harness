@@ -30,6 +30,15 @@ publish is manual, the same as every other new crate: add it to the
 ordered list in step 2 below, then enable its trusted publisher and drop
 the `publish = false` entry.
 
+`cratefield-push-auth` (issue #178) carries `publish = false` in its own
+manifest for the same reason, but with one difference that matters to the
+order below: two **published** crates already depend on it —
+`cratefield-adapter-apns` and the `cratefield` facade (behind its
+`push-auth` feature). So it must be first-published *before* either of
+them, or their `cargo publish` fails resolving a crate that is not on
+crates.io. It is in the ordered list below in that position; drop its
+`publish = false` at the same time.
+
 Authentication is **trusted publishing**: the workflow exchanges the
 GitHub Actions OIDC token (`id-token: write`) for a short-lived
 crates.io token. No `CARGO_REGISTRY_TOKEN` is stored anywhere.
@@ -109,6 +118,8 @@ crate exists**, so the very first release of each crate is manual:
    cargo publish -p cratefield-adapter-postgres
    cargo publish -p cratefield-adapter-resend
    cargo publish -p cratefield-adapter-turnstile
+   cargo publish -p cratefield-push-auth      # before adapter-apns
+   cargo publish -p cratefield-adapter-apns
    cargo publish -p cratefield-secrets
    cargo publish -p cratefield-runtime-cloudflare
    cargo publish -p cratefield-runtime-native
@@ -121,7 +132,7 @@ crate exists**, so the very first release of each crate is manual:
    cargo publish -p cratefield            # the facade: depends on all of them
    ```
 
-   Sixteen crates, and the order is the dependency order: `--dry-run` for
+   Eighteen crates, and the order is the dependency order: `--dry-run` for
    a crate whose upstream `cratefield-*` dependencies are not on crates.io
    yet resolves against the registry and fails until those are published.
    Regenerate the list with the topological sort in

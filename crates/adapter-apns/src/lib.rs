@@ -1,15 +1,23 @@
 //! `cratefield-adapter-apns`: the [`Push`] port over Apple Push Notification
-//! service (issue #104). Uses the runtime's [`HttpClient`] and [`Clock`] ports
-//! — no vendor SDK, no `reqwest`, no `openssl` — so the same adapter runs on
-//! Workers (`worker::Fetch`) and natively.
+//! service (issues #104, #177). Uses the runtime's [`HttpClient`] and
+//! [`Clock`] ports — no vendor SDK, no `reqwest`, no `openssl` — so the same
+//! adapter runs on Workers (`worker::Fetch`) and natively.
+//!
+//! **Recipients.** It serves [`Recipient::Apns`] and returns
+//! [`PushError::unsupported_recipient`] for FCM and Web Push. A venture with
+//! more than one transport wires
+//! [`RoutingPush`](cratefield_core::RoutingPush), which dispatches by variant
+//! (ADR 0015).
 //!
 //! **Authentication.** APNs takes a provider JWT signed ES256 with the `.p8`
-//! key from the Apple developer portal. The token is minted once and reused:
-//! Apple rejects regenerating it more than once per ~20 minutes
-//! (`TooManyProviderTokenUpdates`) and accepts it for up to 60, so the adapter
-//! caches it for [`JWT_TTL`] and re-mints past that. Signing is pure-Rust
-//! P-256 ECDSA with a deterministic RFC6979 nonce, so it needs no RNG on the
-//! isolate.
+//! key from the Apple developer portal. Signing and caching live in
+//! [`cratefield_push_auth`] (issue #178), shared with the VAPID and Google
+//! signers: the token is minted once and reused, because Apple rejects
+//! regenerating it more than once per ~20 minutes
+//! (`TooManyProviderTokenUpdates`) and accepts it for up to 60, so the
+//! adapter caches it for [`JWT_TTL`] and re-mints past that. Signing is
+//! pure-Rust P-256 ECDSA with a deterministic RFC6979 nonce, so it needs no
+//! RNG on the isolate.
 //!
 //! **Degraded mode.** [`Apns::not_configured`] reports
 //! [`PushOutcome::NotConfigured`] without any network call, the same contract
@@ -22,25 +30,20 @@
 //! of which live in the repo.
 #![doc = include_str!("../README.md")]
 #![forbid(unsafe_code)]
-// The JWT cache is not request state: it is the adapter's own provider token,
-// shared across sends for its TTL (ADR 0007 allows a scoped, justified Mutex).
-#![allow(clippy::disallowed_types)]
 
 use std::sync::Arc;
-use std::sync::Mutex;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use base64::Engine;
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use bytes::Bytes;
-use cratefield_core::{Clock, HttpClient, Notification, Priority, Push, PushError, PushOutcome};
+use cratefield_core::{
+    Clock, HttpClient, Notification, Priority, Push, PushError, PushOutcome, Recipient,
+};
+use cratefield_push_auth::{CachedToken, Es256Signer};
 use http::header::AUTHORIZATION;
-use http::{Request, StatusCode};
-use p256::ecdsa::SigningKey;
-use p256::ecdsa::signature::Signer;
-use p256::pkcs8::DecodePrivateKey;
+use http::{HeaderMap, Request, StatusCode};
 use serde_json::{Map, Value, json};
+
+use bytes::Bytes;
 
 /// How long a minted provider JWT is reused before it is re-signed. Apple
 /// accepts a token for 60 minutes and rejects regenerating one more than once
@@ -112,17 +115,14 @@ enum Inner {
 struct Live {
     http: Arc<dyn HttpClient>,
     clock: Arc<dyn Clock>,
-    key: SigningKey,
+    signer: Es256Signer,
     key_id: String,
     team_id: String,
     topic: String,
     host: ApnsHost,
-    cache: Mutex<Option<CachedJwt>>,
-}
-
-struct CachedJwt {
-    token: String,
-    minted_unix: i64,
+    /// One provider token for the whole adapter, hence the `()` key
+    /// (VAPID is the variant that keys per push-service origin).
+    jwt: CachedToken<()>,
 }
 
 impl Apns {
@@ -138,18 +138,18 @@ impl Apns {
         clock: Arc<dyn Clock>,
         creds: ApnsCredentials,
     ) -> Result<Self, ApnsConfigError> {
-        let key = SigningKey::from_pkcs8_pem(&creds.key_p8_pem)
+        let signer = Es256Signer::from_p8_pem(&creds.key_p8_pem)
             .map_err(|err| ApnsConfigError::Key(err.to_string()))?;
         Ok(Self {
             inner: Inner::Live(Box::new(Live {
                 http,
                 clock,
-                key,
+                signer,
                 key_id: creds.key_id,
                 team_id: creds.team_id,
                 topic: creds.topic,
                 host: creds.host,
-                cache: Mutex::new(None),
+                jwt: CachedToken::new(JWT_TTL),
             })),
         })
     }
@@ -167,66 +167,88 @@ impl Apns {
 impl Live {
     /// The current provider JWT, minting and caching a new one when the cached
     /// token is missing or older than [`JWT_TTL`].
-    fn provider_jwt(&self, now_unix: i64) -> String {
-        {
-            let cache = self.cache.lock().expect("apns jwt cache");
-            let ttl = i64::try_from(JWT_TTL.as_secs()).unwrap_or(i64::MAX);
-            if let Some(cached) = cache.as_ref()
-                && now_unix.saturating_sub(cached.minted_unix) < ttl
-            {
-                return cached.token.clone();
-            }
-        }
-        let token = self.mint_jwt(now_unix);
-        *self.cache.lock().expect("apns jwt cache") = Some(CachedJwt {
-            token: token.clone(),
-            minted_unix: now_unix,
-        });
-        token
+    fn provider_jwt(&self) -> String {
+        self.jwt.get_or_mint(self.clock.as_ref(), &(), |now_unix| {
+            self.signer.sign_jwt(
+                &json!({ "alg": "ES256", "kid": self.key_id }),
+                &json!({ "iss": self.team_id, "iat": now_unix }),
+            )
+        })
     }
 
     /// Invalidates the cached JWT so the next send re-signs (used when APNs
     /// reports the token expired).
     fn invalidate_jwt(&self) {
-        *self.cache.lock().expect("apns jwt cache") = None;
-    }
-
-    fn mint_jwt(&self, now_unix: i64) -> String {
-        let header = json!({ "alg": "ES256", "kid": self.key_id });
-        let payload = json!({ "iss": self.team_id, "iat": now_unix });
-        let signing_input = format!(
-            "{}.{}",
-            URL_SAFE_NO_PAD.encode(header.to_string()),
-            URL_SAFE_NO_PAD.encode(payload.to_string()),
-        );
-        // ES256: a fixed 64-byte r||s signature — exactly JWT's encoding.
-        let signature: p256::ecdsa::Signature = self.key.sign(signing_input.as_bytes());
-        let signature = URL_SAFE_NO_PAD.encode(signature.to_bytes());
-        format!("{signing_input}.{signature}")
+        self.jwt.invalidate(&());
     }
 }
 
 /// The `apns-priority` header value for a [`Priority`].
-fn priority_header(priority: Priority) -> &'static str {
-    match priority {
-        Priority::Immediate => "10",
-        Priority::Conserve => "5",
+///
+/// A silent (`content-available`) push is always `5`: Apple rejects a
+/// background push sent at `10`.
+fn priority_header(priority: Priority, silent: bool) -> &'static str {
+    match (silent, priority) {
+        (true, _) | (false, Priority::Conserve) => "5",
+        (false, Priority::Immediate) => "10",
     }
+}
+
+/// `apns-expiration` for a notification's TTL. The header is an **absolute**
+/// UNIX epoch, not a duration, so a TTL becomes `now + ttl`; `0` is the one
+/// value APNs reads as "deliver now or drop", which is what a zero TTL means.
+fn expiration_header(ttl: Duration, now_unix: i64) -> String {
+    if ttl.is_zero() {
+        return "0".to_owned();
+    }
+    let seconds = i64::try_from(ttl.as_secs()).unwrap_or(i64::MAX);
+    now_unix.saturating_add(seconds).to_string()
 }
 
 /// Builds the APNs JSON payload: an `aps` block from the notification, with the
 /// caller's `data` merged in at the top level alongside it.
+///
+/// Fields APNs has no home for are dropped on purpose: `icon` (the icon comes
+/// from the app bundle) and `collapse_id` (a header, not payload).
 fn build_payload(notification: &Notification) -> Vec<u8> {
     let mut aps = Map::new();
-    aps.insert(
-        "alert".to_owned(),
-        json!({ "title": notification.title, "body": notification.body }),
-    );
+    if notification.silent {
+        // A data-only push carries no alert at all; the app is woken instead.
+        aps.insert("content-available".to_owned(), json!(1));
+    } else {
+        let mut alert = Map::new();
+        alert.insert(
+            "title".to_owned(),
+            Value::String(notification.title.clone()),
+        );
+        alert.insert("body".to_owned(), Value::String(notification.body.clone()));
+        if let Some(loc) = &notification.loc {
+            // Apple's own names: the title keys are prefixed, the body keys
+            // are not. Where a loc key is present the device prefers it over
+            // the literal title/body, which stay as the fallback.
+            if let Some(key) = &loc.title_loc_key {
+                alert.insert("title-loc-key".to_owned(), Value::String(key.clone()));
+            }
+            if !loc.title_loc_args.is_empty() {
+                alert.insert("title-loc-args".to_owned(), json!(loc.title_loc_args));
+            }
+            if let Some(key) = &loc.body_loc_key {
+                alert.insert("loc-key".to_owned(), Value::String(key.clone()));
+            }
+            if !loc.body_loc_args.is_empty() {
+                alert.insert("loc-args".to_owned(), json!(loc.body_loc_args));
+            }
+        }
+        aps.insert("alert".to_owned(), Value::Object(alert));
+    }
     if let Some(category) = &notification.category {
         aps.insert("category".to_owned(), Value::String(category.clone()));
     }
     if let Some(thread_id) = &notification.thread_id {
         aps.insert("thread-id".to_owned(), Value::String(thread_id.clone()));
+    }
+    if let Some(badge) = notification.badge {
+        aps.insert("badge".to_owned(), json!(badge));
     }
 
     let mut root = Map::new();
@@ -238,6 +260,12 @@ fn build_payload(notification: &Notification) -> Vec<u8> {
                 root.insert(key.clone(), value.clone());
             }
         }
+    }
+    // APNs has no click-target of its own, so the tap URL travels in the
+    // custom payload, where the app reads it — the same key Web Push and FCM
+    // use.
+    if let Some(url) = &notification.url {
+        root.insert("url".to_owned(), Value::String(url.clone()));
     }
     root.insert("aps".to_owned(), Value::Object(aps));
     Value::Object(root).to_string().into_bytes()
@@ -252,20 +280,40 @@ fn reason(body: &[u8]) -> Option<String> {
         .map(str::to_owned)
 }
 
+/// `Retry-After` as a duration, so the outbox can honour it. Only the
+/// delta-seconds form is read; the HTTP-date form needs a parsed clock the
+/// port does not promise, and its absence just means "retry on your own
+/// schedule".
+fn retry_after(headers: &HeaderMap) -> Option<Duration> {
+    headers
+        .get("retry-after")?
+        .to_str()
+        .ok()?
+        .trim()
+        .parse::<u64>()
+        .ok()
+        .map(Duration::from_secs)
+}
+
 #[async_trait]
 impl Push for Apns {
     async fn send(
         &self,
-        device_token: &str,
+        to: &Recipient,
         notification: &Notification,
     ) -> Result<PushOutcome, PushError> {
         let live = match &self.inner {
             Inner::NotConfigured => return Ok(PushOutcome::NotConfigured),
             Inner::Live(live) => live,
         };
+        // One transport per adapter: a venture that also speaks FCM or Web
+        // Push puts a `RoutingPush` in front (ADR 0015).
+        let Recipient::Apns { device_token } = to else {
+            return Err(PushError::unsupported_recipient(to));
+        };
 
         let now_unix = live.clock.now().unix_timestamp();
-        let jwt = live.provider_jwt(now_unix);
+        let jwt = live.provider_jwt();
         let url = format!(
             "https://{}/3/device/{}",
             live.host.authority(),
@@ -278,10 +326,23 @@ impl Push for Apns {
             .uri(&url)
             .header(AUTHORIZATION, format!("bearer {jwt}"))
             .header("apns-topic", &live.topic)
-            .header("apns-push-type", "alert")
-            .header("apns-priority", priority_header(notification.priority));
+            .header(
+                "apns-push-type",
+                if notification.silent {
+                    "background"
+                } else {
+                    "alert"
+                },
+            )
+            .header(
+                "apns-priority",
+                priority_header(notification.priority, notification.silent),
+            );
         if let Some(collapse_id) = &notification.collapse_id {
             builder = builder.header("apns-collapse-id", collapse_id);
+        }
+        if let Some(ttl) = notification.ttl {
+            builder = builder.header("apns-expiration", expiration_header(ttl, now_unix));
         }
         let request = builder
             .body(Bytes::from(payload))
@@ -291,7 +352,7 @@ impl Push for Apns {
             .http
             .send(request)
             .await
-            .map_err(|err| PushError::Transient(err.to_string()))?;
+            .map_err(|err| PushError::transient(err.to_string()))?;
 
         let status = response.status();
         match status {
@@ -314,15 +375,15 @@ impl Push for Apns {
                     && (detail == "ExpiredProviderToken" || detail == "InvalidProviderToken")
                 {
                     live.invalidate_jwt();
-                    return Err(PushError::Transient(format!(
+                    return Err(PushError::transient(format!(
                         "provider token rejected: {detail}"
                     )));
                 }
-                if status.is_server_error() {
-                    Err(PushError::Transient(format!(
-                        "apns {}: {detail}",
-                        status.as_u16()
-                    )))
+                if status == StatusCode::TOO_MANY_REQUESTS || status.is_server_error() {
+                    Err(PushError::transient_after(
+                        format!("apns {}: {detail}", status.as_u16()),
+                        retry_after(response.headers()),
+                    ))
                 } else {
                     Err(PushError::Rejected(format!(
                         "apns {}: {detail}",

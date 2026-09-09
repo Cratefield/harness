@@ -31,6 +31,11 @@ turnstile = ["dep:cratefield-adapter-turnstile"]
 apns = ["dep:cratefield-adapter-apns"]
 stripe = ["dep:cratefield-adapter-stripe"]
 
+# The push adapters' provider tokens (ES256 for APNs and VAPID, RS256 for
+# Google service accounts). Pulled in by `apns` already; a feature of its own
+# for a venture that mints a VAPID token without an APNs adapter.
+push-auth = ["dep:cratefield-push-auth"]
+
 # Everything else that is optional.
 ui = ["dep:cratefield-ui"]
 secrets = ["dep:cratefield-secrets"]
@@ -53,6 +58,10 @@ cratefield-adapter-postgres = { workspace = true, optional = true }
 cratefield-adapter-resend = { workspace = true, optional = true }
 cratefield-adapter-turnstile = { workspace = true, optional = true }
 cratefield-adapter-apns = { workspace = true, optional = true }
+# `publish = false` until its first manual publish (docs/RELEASING.md), so it
+# must be published before the facade's next release — it is a dependency of
+# `cratefield-adapter-apns` as well as of this crate.
+cratefield-push-auth = { workspace = true, optional = true }
 cratefield-adapter-stripe = { workspace = true, optional = true }
 cratefield-ui = { workspace = true, optional = true }
 cratefield-secrets = { workspace = true, optional = true }
