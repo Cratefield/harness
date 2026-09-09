@@ -22,7 +22,11 @@ adapters, one signer, one cache:
 Pure Rust, `forbid(unsafe_code)`, and it builds for `wasm32-unknown-unknown`:
 no `jsonwebtoken`, no `ring`, no OpenSSL. Signing is deterministic
 (RFC 6979 for ES256, PKCS#1 v1.5 for RS256), so nothing here needs an RNG on
-a Workers isolate.
+a Workers isolate. That is portability, not hardening: RSA signing without an
+RNG is *unblinded*, and it is safe here only because there is no decryption
+oracle, the claims are ours rather than an attacker's, and the token is minted
+off the request path where its timing cannot be observed (see the
+RUSTSEC-2023-0071 acceptance in `deny.toml`).
 
 ## Usage
 

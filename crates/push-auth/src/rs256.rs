@@ -20,7 +20,14 @@ use crate::{KeyError, signing_input};
 /// takes either, so a venture never has to know which it was handed.
 ///
 /// PKCS#1 v1.5 signing is deterministic and takes no RNG, which is what lets
-/// this run on a Workers isolate.
+/// this run on a Workers isolate. That is a portability property, not a
+/// security one: `rsa` 0.9 blinds the private-key modexp only in
+/// `sign_with_rng`, so signing here is **unblinded** and carries no timing
+/// countermeasure. It is safe in this crate because there is no decryption
+/// oracle, the claims are ours rather than an attacker's, and the JWT is
+/// minted off the request path where nobody can time it — see the
+/// RUSTSEC-2023-0071 acceptance in `deny.toml`. Signing attacker-supplied
+/// bytes, or signing where the duration can be observed, re-opens that.
 pub struct Rs256Signer {
     key: SigningKey<Sha256>,
 }

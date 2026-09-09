@@ -55,8 +55,20 @@ yanked = "deny"
 #     request body, and never echoed back with per-attempt timing.
 #   * The key is our own service-account key, read from the secrets layer; an
 #     attacker who could supply it already owns the account.
-#   * PKCS#1 v1.5 signing here is deterministic and takes no RNG (which is what
-#     lets it run on a Workers isolate); it is not the blinding-dependent path.
+#   * An attacker cannot observe the signing timing: the JWT is minted inside
+#     the isolate on a schedule of our own (mint-once-reuse, ~50 minutes) and
+#     is never produced in response to, or returned on the same path as, a
+#     request an attacker can trigger and time.
+# What is NOT an argument, and was claimed here before: that PKCS#1 v1.5
+# signing takes no RNG. `rsa` 0.9 blinds the private-key modexp only in
+# `sign_with_rng`; `Rs256Signer` calls `sign`, so **our signing modexp is
+# unblinded** and the timing countermeasure is simply absent. The absence of
+# an RNG is a portability fact (it is what lets this run on a Workers isolate),
+# not a security one. The acceptance rests entirely on the three points above
+# — no decryption oracle, no attacker-controlled input, no attacker-observable
+# timing — and not on any property of the modexp itself. If a future caller
+# signs attacker-supplied bytes, or signs on the request path where its
+# duration can be measured, this acceptance must be re-opened, not re-argued.
 # The two verify-only usages above are unchanged. Same removal trigger.
 ignore = ["RUSTSEC-2023-0071"]
 

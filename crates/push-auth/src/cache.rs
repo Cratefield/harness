@@ -10,14 +10,19 @@
 //! The cache holds a `Mutex` and is not request state: it is the adapter's
 //! own credential, shared across sends for its TTL (ADR 0007 allows a
 //! scoped, justified `Mutex`).
-#![allow(clippy::disallowed_types)]
 
 use std::collections::HashMap;
 use std::hash::Hash;
-use std::sync::Mutex;
 use std::time::Duration;
 
 use cratefield_core::Clock;
+
+// The adapter's own credential, held for its TTL (see module docs) — not
+// request state, which is what ADR 0007 bans. Named, so the allow sits on
+// this one item instead of the whole file, as the workspace `clippy.toml`
+// requires and `cratefield-adapter-sqlite` already does for its connection.
+#[allow(clippy::disallowed_types)]
+type Guarded<T> = std::sync::Mutex<T>;
 
 /// A minted token and when it was minted.
 struct Minted {
@@ -29,18 +34,39 @@ struct Minted {
 ///
 /// `K` is what the token varies by: `()` where an adapter has exactly one
 /// (APNs), a push-service origin for VAPID, a service-account id for Google.
+///
+/// The map is **bounded** at [`Self::CAPACITY`] (#136/#137: no unbounded
+/// resource on an isolate). A VAPID cache is keyed by push-service origin
+/// and a UnifiedPush endpoint is an arbitrary host, so without a bound the
+/// map grows for the isolate's lifetime and never sheds an expired entry.
 pub struct CachedToken<K = ()> {
     ttl: Duration,
-    entries: Mutex<HashMap<K, Minted>>,
+    /// The adapter's own credential, shared across sends for its TTL — not
+    /// request state (see [`Guarded`]). A mutex and not an `RwLock`: the
+    /// miss path mints under the lock, so writers must exclude each other
+    /// anyway.
+    #[allow(clippy::disallowed_types)]
+    entries: Guarded<HashMap<K, Minted>>,
 }
 
 impl<K: Eq + Hash + Clone> CachedToken<K> {
+    /// How many keys the cache holds at once.
+    ///
+    /// Sized for the realistic key space: one entry for an APNs adapter,
+    /// one per push-service origin for VAPID (the browsers' four, plus the
+    /// UnifiedPush hosts a venture's users actually chose), one per service
+    /// account for Google. Past it, the **oldest-minted** entry is dropped —
+    /// mint time is what an entry records, and the oldest is the one closest
+    /// to needing a re-mint anyway. Eviction costs one extra mint, never
+    /// correctness.
+    pub const CAPACITY: usize = 64;
+
     /// A cache that re-mints a token once it is older than `ttl`.
     #[must_use]
     pub fn new(ttl: Duration) -> Self {
         Self {
             ttl,
-            entries: Mutex::new(HashMap::new()),
+            entries: Guarded::new(HashMap::new()),
         }
     }
 
@@ -48,6 +74,27 @@ impl<K: Eq + Hash + Clone> CachedToken<K> {
     #[must_use]
     pub fn ttl(&self) -> Duration {
         self.ttl
+    }
+
+    /// How many keys are cached right now, expired entries included until
+    /// the next insert prunes them.
+    ///
+    /// # Panics
+    ///
+    /// If the cache mutex was poisoned by a panic inside a previous mint.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.entries.lock().expect("push-auth token cache").len()
+    }
+
+    /// Whether nothing is cached.
+    ///
+    /// # Panics
+    ///
+    /// If the cache mutex was poisoned by a panic inside a previous mint.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
     }
 
     /// The token for `key`, minting one if there is none or the cached one
@@ -60,9 +107,21 @@ impl<K: Eq + Hash + Clone> CachedToken<K> {
     /// direction: the worst case is one provider rejection, and every caller
     /// of this already handles that with [`Self::invalidate`].
     ///
+    /// **`mint` runs while the lock is held**, so a TTL miss mints exactly
+    /// once however many threads race into it. Dropping the lock first would
+    /// let two threads both mint and present two provider JWTs to Apple
+    /// milliseconds apart — `TooManyProviderTokenUpdates`, the precise
+    /// failure this cache exists to prevent. Signing takes microseconds and
+    /// the losing threads want that same token anyway, so the contention is
+    /// the point. `mint` must therefore not call back into this cache, and
+    /// is a plain `FnOnce` (not a future) so it cannot await while holding
+    /// the lock.
+    ///
     /// # Panics
     ///
-    /// If the cache mutex was poisoned by a panic inside a previous `mint`.
+    /// If the cache mutex was poisoned by a panic inside a previous `mint`
+    /// — which now runs under the lock, so a panicking `mint` poisons the
+    /// cache for the isolate rather than only failing its own send.
     pub fn get_or_mint(
         &self,
         clock: &dyn Clock,
@@ -71,16 +130,15 @@ impl<K: Eq + Hash + Clone> CachedToken<K> {
     ) -> String {
         let now_unix = clock.now().unix_timestamp();
         let ttl = i64::try_from(self.ttl.as_secs()).unwrap_or(i64::MAX);
+        let mut entries = self.entries.lock().expect("push-auth token cache");
+        if let Some(cached) = entries.get(key)
+            && now_unix.saturating_sub(cached.minted_unix) < ttl
         {
-            let entries = self.entries.lock().expect("push-auth token cache");
-            if let Some(cached) = entries.get(key)
-                && now_unix.saturating_sub(cached.minted_unix) < ttl
-            {
-                return cached.token.clone();
-            }
+            return cached.token.clone();
         }
         let token = mint(now_unix);
-        self.entries.lock().expect("push-auth token cache").insert(
+        Self::make_room(&mut entries, now_unix, ttl);
+        entries.insert(
             key.clone(),
             Minted {
                 token: token.clone(),
@@ -88,6 +146,24 @@ impl<K: Eq + Hash + Clone> CachedToken<K> {
             },
         );
         token
+    }
+
+    /// Keeps the map inside [`Self::CAPACITY`] before one more entry goes in:
+    /// every entry past its TTL is dropped (it would be re-minted on its next
+    /// use regardless), and if that is not enough the oldest-minted entries
+    /// go until there is room.
+    fn make_room(entries: &mut HashMap<K, Minted>, now_unix: i64, ttl: i64) {
+        entries.retain(|_, minted| now_unix.saturating_sub(minted.minted_unix) < ttl);
+        while entries.len() >= Self::CAPACITY {
+            let Some(oldest) = entries
+                .iter()
+                .min_by_key(|(_, minted)| minted.minted_unix)
+                .map(|(key, _)| key.clone())
+            else {
+                break;
+            };
+            entries.remove(&oldest);
+        }
     }
 
     /// Drops the token for `key`, so the next [`Self::get_or_mint`] re-mints
@@ -224,6 +300,85 @@ mod tests {
 
         cache.clear();
         assert_ne!(cache.get_or_mint(&clock, &firefox, minter.mint()), b);
+    }
+
+    /// Two threads racing an empty cache must mint **once**: Apple counts a
+    /// second provider JWT within ~20 minutes as
+    /// `TooManyProviderTokenUpdates` and rejects it, which is the whole
+    /// reason this cache exists.
+    #[test]
+    fn a_race_on_a_cold_cache_mints_exactly_once() {
+        use std::sync::Barrier;
+        use std::sync::atomic::AtomicUsize;
+
+        const THREADS: usize = 8;
+
+        let clock = StepClock::at(1_000);
+        let mints = AtomicUsize::new(0);
+        let cache: CachedToken<()> = CachedToken::new(Duration::from_mins(50));
+        let gate = Barrier::new(THREADS);
+
+        let tokens: Vec<String> = std::thread::scope(|scope| {
+            let handles: Vec<_> = (0..THREADS)
+                .map(|_| {
+                    scope.spawn(|| {
+                        gate.wait();
+                        cache.get_or_mint(&clock, &(), |now| {
+                            let n = mints.fetch_add(1, Ordering::SeqCst);
+                            // Widen the window a lock-free miss would race in,
+                            // so the unguarded version fails every run rather
+                            // than one in a hundred.
+                            std::thread::sleep(std::time::Duration::from_millis(20));
+                            format!("token-{n}-at-{now}")
+                        })
+                    })
+                })
+                .collect();
+            handles
+                .into_iter()
+                .map(|handle| handle.join().expect("thread"))
+                .collect()
+        });
+
+        assert_eq!(
+            mints.load(Ordering::SeqCst),
+            1,
+            "a cold-cache race must present one provider token, not {THREADS}"
+        );
+        assert!(
+            tokens.windows(2).all(|pair| pair[0] == pair[1]),
+            "every racing caller gets the same token: {tokens:?}"
+        );
+    }
+
+    #[test]
+    fn expired_entries_are_pruned_and_the_map_is_bounded() {
+        let clock = StepClock::at(0);
+        let minter = Minter::default();
+        let cache: CachedToken<String> = CachedToken::new(Duration::from_mins(50));
+
+        // Expired entries do not accumulate: a VAPID cache is keyed by
+        // push-service origin, and a UnifiedPush endpoint is an arbitrary
+        // host, so nothing else would ever remove them.
+        for n in 0..10 {
+            cache.get_or_mint(&clock, &format!("https://push-{n}.example"), minter.mint());
+        }
+        assert_eq!(cache.len(), 10);
+        clock.advance(4_000); // past the TTL for all ten
+        cache.get_or_mint(&clock, &"https://fresh.example".to_owned(), minter.mint());
+        assert_eq!(cache.len(), 1, "the ten expired entries were pruned");
+
+        // And the live set is bounded, however many distinct origins arrive.
+        for n in 0..(CachedToken::<String>::CAPACITY * 2) {
+            cache.get_or_mint(&clock, &format!("https://live-{n}.example"), minter.mint());
+            assert!(
+                cache.len() <= CachedToken::<String>::CAPACITY,
+                "cache grew past its bound at {n}: {}",
+                cache.len()
+            );
+        }
+        assert_eq!(cache.len(), CachedToken::<String>::CAPACITY);
+        assert!(!cache.is_empty());
     }
 
     #[test]
