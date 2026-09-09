@@ -287,6 +287,15 @@ Decisions, one per method:
   `public_writes()`) unless the runtime reports an *effective* `Captcha`
   port. Set it honestly; better yet, declare policies on the routes.
 - **`migrations()`** — see step 3.
+- **`depends_on()`** — the modules whose tables yours references, by
+  name. It orders **migrations**, not routes: declare it when a foreign
+  key of yours points at a table another module owns, so that table
+  exists by the time your migration runs. Most modules own their schema
+  outright and declare nothing, which is the default and costs nothing —
+  the ordering is stable, so a venture that declares no dependencies
+  keeps exactly the order it composed. Naming a module the venture did
+  not compose fails the build, and so does a cycle; both at
+  `Harness::builder().build()`, never at boot.
 - **`validate_config()`** — see step 5. Always collect every problem into
   one `ConfigError` instead of failing on the first.
 - **`router()`** — receives the `ModuleContext`; wrap it in an `Arc`,
