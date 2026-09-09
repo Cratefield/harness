@@ -5,8 +5,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use cratefield_core::{
-    Captcha, Defer, HarnessConfig, Mailer, Payments, Port, Ports, Push, Runtime, SidecarMounts,
-    UlidIdGen,
+    BoundedHttpClient, Captcha, Clock, Defer, HarnessConfig, Mailer, Payments, Port, Ports, Push,
+    Runtime, SidecarMounts, UlidIdGen,
 };
 use worker::Env;
 
@@ -250,8 +250,12 @@ impl Cloudflare {
             }
         }
 
-        ports.http = Some(Arc::new(FetchClient));
-        ports.clock = Some(Arc::new(WorkersClock));
+        let clock: Arc<dyn Clock> = Arc::new(WorkersClock);
+        ports.clock = Some(Arc::clone(&clock));
+        ports.http = Some(Arc::new(BoundedHttpClient::new(
+            Arc::new(FetchClient),
+            clock,
+        )));
         ports.id_gen = Some(Arc::new(UlidIdGen));
         ports.defer = Some(defer);
         ports.mailer.clone_from(&self.mailer);

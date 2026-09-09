@@ -2,7 +2,7 @@
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use cratefield_core::{HttpClient, HttpError};
+use cratefield_core::{HttpClient, HttpError, HttpPolicy};
 use worker::send::IntoSendFuture;
 use worker::{Fetch, Headers, Method, Request as WorkerRequest, RequestInit};
 
@@ -14,6 +14,7 @@ impl HttpClient for FetchClient {
         &self,
         request: http::Request<Bytes>,
     ) -> Result<http::Response<Bytes>, HttpError> {
+        let policy = HttpPolicy::of_request(&request);
         let (parts, body) = request.into_parts();
         let mut init = RequestInit::new();
         init.method = Method::from(parts.method.as_str().to_string());
@@ -48,6 +49,20 @@ impl HttpClient for FetchClient {
             .into_send()
             .await
             .map_err(|err| HttpError::Transport(err.to_string()))?;
+
+        // `bytes()` buffers the whole body, so refuse a declared body the
+        // cap has already out before allocating it (issue #136).
+        let declared = response
+            .headers()
+            .get("content-length")
+            .ok()
+            .flatten()
+            .and_then(|length| length.trim().parse::<usize>().ok());
+        if declared.is_some_and(|declared| declared > policy.max_response_bytes) {
+            return Err(HttpError::ResponseTooLarge {
+                limit: policy.max_response_bytes,
+            });
+        }
 
         let mut builder = http::Response::builder().status(response.status_code());
         let response_headers = response.headers();

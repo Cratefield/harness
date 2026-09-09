@@ -14,7 +14,7 @@ mod realtime;
 pub use blob::DirBlob;
 pub use clock::TokioClock;
 pub use defer::SpawnDefer;
-pub use http::ReqwestClient;
+pub use http::{OutboundOptions, ReqwestClient, vet_ip_ok};
 pub use kv::{RedisBundle, RedisKv, RedisPortError, redis_from_env};
 pub use rate_limit::RedisRateLimiter;
 pub use realtime::{Connection, InProcessRealtime};

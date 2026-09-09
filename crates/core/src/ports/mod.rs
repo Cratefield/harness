@@ -21,13 +21,16 @@ mod rate_limiter;
 mod realtime;
 pub(crate) mod signer;
 
-pub use blob::{Blob, BlobError, BlobObject, ScopedBlob};
+pub use blob::{Blob, BlobError, BlobObject, MAX_BLOB_BYTES, ScopedBlob, check_blob_size};
 pub use captcha::{Captcha, CaptchaBinding, CaptchaError, Verdict};
 pub use clock::{Clock, SystemClock, timeout};
 pub use database::{Database, DbError, Row, Rows, Statement, TryFromValue};
 pub use defer::{Defer, NoopDefer};
 pub use dispatcher::{DispatchError, Dispatcher};
-pub use http::{HttpClient, HttpError};
+pub use http::{
+    BoundedHttpClient, DEFAULT_RESPONSE_TIMEOUT, HttpClient, HttpError, HttpPolicy,
+    MAX_CONCURRENT_REQUESTS, MAX_RESPONSE_BYTES, MAX_RESPONSE_TIMEOUT, declared_content_length,
+};
 pub use idgen::{IdGen, UlidIdGen};
 pub use kv::{KeyValue, KvError};
 pub use mailer::{MailError, Mailer, Message, SendOutcome};

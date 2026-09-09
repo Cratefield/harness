@@ -21,8 +21,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use cratefield_core::{
-    Blob, Captcha, Database, HarnessConfig, KeyValue, Mailer, Payments, Port, Ports, Push,
-    RateLimiter, Realtime, Runtime, UlidIdGen,
+    Blob, BoundedHttpClient, Captcha, Clock, Database, HarnessConfig, KeyValue, Mailer, Payments,
+    Port, Ports, Push, RateLimiter, Realtime, Runtime, UlidIdGen,
 };
 
 use crate::config::EnvConfig;
@@ -203,8 +203,12 @@ impl Native {
             ),
         }
 
-        ports.http = Some(Arc::new(ReqwestClient::new()));
-        ports.clock = Some(Arc::new(TokioClock));
+        let clock: Arc<dyn Clock> = Arc::new(TokioClock);
+        ports.clock = Some(Arc::clone(&clock));
+        ports.http = Some(Arc::new(BoundedHttpClient::new(
+            Arc::new(ReqwestClient::new()),
+            clock,
+        )));
         ports.id_gen = Some(Arc::new(UlidIdGen));
         ports.defer = Some(Arc::new(SpawnDefer));
         ports

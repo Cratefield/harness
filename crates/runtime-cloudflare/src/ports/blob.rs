@@ -11,7 +11,7 @@
 //! trusted (issue #105 acceptance) — cargo tests never touch R2.
 
 use async_trait::async_trait;
-use cratefield_core::{Blob, BlobError, BlobObject};
+use cratefield_core::{Blob, BlobError, BlobObject, check_blob_size};
 use std::time::Duration;
 use worker::send::IntoSendFuture;
 use worker::{Bucket, HttpMetadata};
@@ -26,6 +26,7 @@ fn op_err(err: &worker::Error) -> BlobError {
 #[async_trait]
 impl Blob for R2Blob {
     async fn put(&self, key: &str, bytes: &[u8], content_type: &str) -> Result<(), BlobError> {
+        check_blob_size(bytes)?;
         self.0
             .put(key, bytes.to_vec())
             .http_metadata(HttpMetadata {

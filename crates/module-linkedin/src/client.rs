@@ -201,6 +201,10 @@ impl<'a> Client<'a> {
         self.spent.fetch_add(1, Ordering::Relaxed);
         self.http.send(request).await.map_err(|err| match err {
             HttpError::Transport(detail) => ApiError::Transport(detail),
+            // Port bounds (issue #136): the cap, the deadline and a
+            // refused destination are all upstream transport failures to
+            // a caller that only knows "LinkedIn's API is not answering".
+            other => ApiError::Transport(other.to_string()),
         })
     }
 
