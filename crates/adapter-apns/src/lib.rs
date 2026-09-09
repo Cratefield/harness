@@ -22,7 +22,9 @@
 //! **Degraded mode.** [`Apns::not_configured`] reports
 //! [`PushOutcome::NotConfigured`] without any network call, the same contract
 //! [`Resend`](cratefield_core::Mailer) uses when its key is absent, so a
-//! venture with no APNs credentials still builds and runs.
+//! venture with no APNs credentials still builds and runs. It answers that
+//! only for the transport it serves: an FCM or Web Push recipient is still
+//! [`PushError::unsupported_recipient`], configured or not.
 //!
 //! **Verification.** Signing and payload construction are unit-tested here,
 //! but the live path against Apple's sandbox is `needs-human` (issue #104
@@ -36,7 +38,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use cratefield_core::{
-    Clock, HttpClient, Notification, Priority, Push, PushError, PushOutcome, Recipient,
+    Clock, HttpClient, Notification, Priority, Push, PushError, PushOutcome, Recipient, ttl_secs,
 };
 use cratefield_push_auth::{CachedToken, Es256Signer};
 use http::header::AUTHORIZATION;
@@ -197,12 +199,33 @@ fn priority_header(priority: Priority, silent: bool) -> &'static str {
 /// `apns-expiration` for a notification's TTL. The header is an **absolute**
 /// UNIX epoch, not a duration, so a TTL becomes `now + ttl`; `0` is the one
 /// value APNs reads as "deliver now or drop", which is what a zero TTL means.
+///
+/// A sub-second TTL is rounded up to one second by
+/// [`ttl_secs`](cratefield_core::ttl_secs) rather than truncated, so
+/// `from_millis(900)` asks APNs to hold the notification for a second and not
+/// to discard it the instant the device is offline.
 fn expiration_header(ttl: Duration, now_unix: i64) -> String {
     if ttl.is_zero() {
         return "0".to_owned();
     }
-    let seconds = i64::try_from(ttl.as_secs()).unwrap_or(i64::MAX);
+    let seconds = i64::try_from(ttl_secs(ttl)).unwrap_or(i64::MAX);
     now_unix.saturating_add(seconds).to_string()
+}
+
+/// Whether a device token can be spliced into the request path as-is.
+///
+/// An APNs device token is the hex of the 32 bytes
+/// `application:didRegisterForRemoteNotificationsWithDeviceToken:` hands over.
+/// Anything else — a `/`, `?`, `#`, `%`, whitespace, the `<...>` wrapper of
+/// an old `Data` description — is not a token, and interpolating it would
+/// silently retarget the request (or fail far downstream as "could not build
+/// request"). Hyphen and underscore are tolerated because test and staging
+/// registries use them and neither can change the path's shape.
+fn is_wellformed_device_token(token: &str) -> bool {
+    !token.is_empty()
+        && token
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
 }
 
 /// Builds the APNs JSON payload: an `aps` block from the notification, with the
@@ -213,7 +236,13 @@ fn expiration_header(ttl: Duration, now_unix: i64) -> String {
 fn build_payload(notification: &Notification) -> Vec<u8> {
     let mut aps = Map::new();
     if notification.silent {
-        // A data-only push carries no alert at all; the app is woken instead.
+        // A background push carries `content-available` and **nothing else**.
+        // Apple ("Pushing background updates to your app"): omit the `alert`,
+        // `badge` and `sound` keys, or the notification is delivered as a
+        // user-visible one and the silent wake never happens. `category` and
+        // `thread-id` go with them: both only describe how an alert is shown
+        // and grouped, and Apple documents neither as usable in a background
+        // push — so they are dropped rather than gambled on.
         aps.insert("content-available".to_owned(), json!(1));
     } else {
         let mut alert = Map::new();
@@ -226,44 +255,49 @@ fn build_payload(notification: &Notification) -> Vec<u8> {
             // Apple's own names: the title keys are prefixed, the body keys
             // are not. Where a loc key is present the device prefers it over
             // the literal title/body, which stay as the fallback.
+            //
+            // `*-loc-args` are the substitutions for a `*-loc-key`, so each
+            // list is nested inside its key's arm: args without a key
+            // substitute into nothing and Apple defines no meaning for them.
             if let Some(key) = &loc.title_loc_key {
                 alert.insert("title-loc-key".to_owned(), Value::String(key.clone()));
-            }
-            if !loc.title_loc_args.is_empty() {
-                alert.insert("title-loc-args".to_owned(), json!(loc.title_loc_args));
+                if !loc.title_loc_args.is_empty() {
+                    alert.insert("title-loc-args".to_owned(), json!(loc.title_loc_args));
+                }
             }
             if let Some(key) = &loc.body_loc_key {
                 alert.insert("loc-key".to_owned(), Value::String(key.clone()));
-            }
-            if !loc.body_loc_args.is_empty() {
-                alert.insert("loc-args".to_owned(), json!(loc.body_loc_args));
+                if !loc.body_loc_args.is_empty() {
+                    alert.insert("loc-args".to_owned(), json!(loc.body_loc_args));
+                }
             }
         }
         aps.insert("alert".to_owned(), Value::Object(alert));
-    }
-    if let Some(category) = &notification.category {
-        aps.insert("category".to_owned(), Value::String(category.clone()));
-    }
-    if let Some(thread_id) = &notification.thread_id {
-        aps.insert("thread-id".to_owned(), Value::String(thread_id.clone()));
-    }
-    if let Some(badge) = notification.badge {
-        aps.insert("badge".to_owned(), json!(badge));
+        if let Some(category) = &notification.category {
+            aps.insert("category".to_owned(), Value::String(category.clone()));
+        }
+        if let Some(thread_id) = &notification.thread_id {
+            aps.insert("thread-id".to_owned(), Value::String(thread_id.clone()));
+        }
+        if let Some(badge) = notification.badge {
+            aps.insert("badge".to_owned(), json!(badge));
+        }
     }
 
     let mut root = Map::new();
-    // Merge the app's custom payload first, then write `aps`, so a caller can
-    // never clobber the `aps` block by putting an "aps" key in `data`.
+    // The app's custom payload goes in first and the adapter's own keys are
+    // written over it: last write wins, so `data` can carry an "aps" or a
+    // "url" without either reaching the wire in place of the real one.
     if let Value::Object(data) = &notification.data {
         for (key, value) in data {
-            if key != "aps" {
-                root.insert(key.clone(), value.clone());
-            }
+            root.insert(key.clone(), value.clone());
         }
     }
     // APNs has no click-target of its own, so the tap URL travels in the
     // custom payload, where the app reads it — the same key Web Push and FCM
-    // use.
+    // use. The typed field wins over a "url" in `data`: it is the field the
+    // port documents, and a caller that wants its own key can use another
+    // name. With no `url` set, a "url" in `data` is left alone.
     if let Some(url) = &notification.url {
         root.insert("url".to_owned(), Value::String(url.clone()));
     }
@@ -302,15 +336,22 @@ impl Push for Apns {
         to: &Recipient,
         notification: &Notification,
     ) -> Result<PushOutcome, PushError> {
+        // One transport per adapter: a venture that also speaks FCM or Web
+        // Push puts a `RoutingPush` in front (ADR 0015). This is decided
+        // *before* configuration is: an unconfigured APNs adapter still does
+        // not serve Web Push, and answering `NotConfigured` for an FCM
+        // recipient would claim a transport it will never carry — a router
+        // reading that answer would stop looking for the adapter that does.
+        let Recipient::Apns { device_token } = to else {
+            return Err(PushError::unsupported_recipient(to));
+        };
         let live = match &self.inner {
             Inner::NotConfigured => return Ok(PushOutcome::NotConfigured),
             Inner::Live(live) => live,
         };
-        // One transport per adapter: a venture that also speaks FCM or Web
-        // Push puts a `RoutingPush` in front (ADR 0015).
-        let Recipient::Apns { device_token } = to else {
-            return Err(PushError::unsupported_recipient(to));
-        };
+        if !is_wellformed_device_token(device_token) {
+            return Err(PushError::Rejected("malformed device token".to_owned()));
+        }
 
         let now_unix = live.clock.now().unix_timestamp();
         let jwt = live.provider_jwt();

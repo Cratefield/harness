@@ -55,7 +55,21 @@ impl std::fmt::Display for Platform {
 /// Where a notification is sent. One variant per push transport, because the
 /// three do not share a shape: APNs and FCM take an opaque token, Web Push
 /// takes a subscription of three parts (RFC 8291).
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+///
+/// **Every variant holds credential material.** A device token and an FCM
+/// registration token address one device; a Web Push `endpoint` is a bearer
+/// capability URL (whoever holds it can push to that browser) and `auth` is
+/// the RFC 8291 shared secret the payload is encrypted under. Hence the
+/// hand-written [`Debug`](#impl-Debug-for-Recipient), which prints
+/// fingerprints and never the values: core's log redaction keys off the
+/// *field name* ([`is_secret_field`](crate::is_secret_field)) and cannot see
+/// inside a `{:?}` of this enum.
+///
+/// [`Serialize`]/[`Deserialize`] stay, because a subscription has to be
+/// persisted and read back — but a serialised `Recipient` **is** the
+/// credential: store it where secrets go, never in a log, an event payload,
+/// or an error body.
+#[derive(Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Recipient {
     /// An APNs device token (hex, from `application:didRegister...`).
@@ -106,6 +120,55 @@ impl Recipient {
             Recipient::Apns { .. } => Platform::Ios,
             Recipient::Fcm { .. } => Platform::Android,
             Recipient::WebPush { .. } => Platform::Web,
+        }
+    }
+}
+
+/// A short, non-reversible stand-in for credential material in `Debug`
+/// output: the first six bytes of its SHA-256, hex. Enough to tell two log
+/// lines about the same recipient apart, useless for reaching a device — the
+/// inputs (a 32-byte device token, a random endpoint path, a 16-byte auth
+/// secret) have far too much entropy to guess back through a digest.
+fn fingerprint(value: &str) -> String {
+    use sha2::{Digest as _, Sha256};
+    use std::fmt::Write as _;
+
+    let digest = Sha256::digest(value.as_bytes());
+    let mut hex = String::with_capacity(12);
+    for byte in digest.iter().take(6) {
+        // Writing to a String cannot fail.
+        let _ = write!(hex, "{byte:02x}");
+    }
+    hex
+}
+
+/// Prints the transport and a [`fingerprint`] of each part, never the parts
+/// themselves — the same rule `Es256Signer`, `Rs256Signer` and `CachedToken`
+/// follow in `cratefield-push-auth`. The RFC 8291 `auth` secret is not even
+/// fingerprinted: nothing about it is safe to correlate on.
+impl std::fmt::Debug for Recipient {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Recipient::Apns { device_token } => write!(
+                f,
+                "Recipient::Apns {{ device_token: fp:{} }}",
+                fingerprint(device_token)
+            ),
+            Recipient::Fcm { registration_token } => write!(
+                f,
+                "Recipient::Fcm {{ registration_token: fp:{} }}",
+                fingerprint(registration_token)
+            ),
+            // The endpoint is fingerprinted whole, host included: a
+            // self-hosted UnifiedPush host is itself identifying.
+            Recipient::WebPush {
+                endpoint, p256dh, ..
+            } => write!(
+                f,
+                "Recipient::WebPush {{ endpoint: fp:{}, p256dh: fp:{}, auth: [redacted] }}",
+                fingerprint(endpoint),
+                fingerprint(p256dh)
+            ),
         }
     }
 }
@@ -181,12 +244,19 @@ pub struct Notification {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
     /// How long the push service may hold the notification while the device
-    /// is offline. Serialised as whole seconds.
+    /// is offline. Serialised as whole seconds, through [`ttl_secs`].
     ///
     /// Note the wire forms differ: `apns-expiration` is an **absolute** UNIX
     /// epoch, so the APNs adapter sends `now + ttl`; `android.ttl` is
     /// `"<s>s"`; Web Push `TTL` is seconds. A zero TTL means "deliver now or
     /// drop" in all three.
+    ///
+    /// **Sub-second TTLs round up to one second**, on the wire and in every
+    /// adapter: `Duration::from_millis(900)` is a request to hold the
+    /// notification *briefly*, and truncating it to `0` would turn it into
+    /// the opposite instruction — drop it the moment the device is offline —
+    /// silently, and again on every serde round trip. Only
+    /// `Duration::ZERO` means "drop if undeliverable now".
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
@@ -211,6 +281,22 @@ fn is_false(value: &bool) -> bool {
     !*value
 }
 
+/// A [`Notification::ttl`] as the whole seconds every push protocol takes.
+///
+/// A non-zero TTL shorter than a second rounds **up** to one. Truncating it
+/// would say "deliver now or drop" — the opposite of what a caller asking
+/// for 900 ms meant — and would do so silently, including across a serde
+/// round trip, which is why the rounding lives here and is applied by the
+/// serialiser as well as by each adapter. `Duration::ZERO` is left alone:
+/// that one really does mean "drop if undeliverable now".
+#[must_use]
+pub fn ttl_secs(ttl: Duration) -> u64 {
+    match ttl.as_secs() {
+        0 if !ttl.is_zero() => 1,
+        secs => secs,
+    }
+}
+
 /// `Option<Duration>` on the wire as whole seconds, so a notification
 /// round-trips as `{"ttl": 3600}` and not serde's `{"secs":…,"nanos":…}`.
 mod duration_secs {
@@ -225,7 +311,9 @@ mod duration_secs {
         serializer: S,
     ) -> Result<S::Ok, S::Error> {
         match value {
-            Some(duration) => serializer.serialize_some(&duration.as_secs()),
+            // `ttl_secs`, not `as_secs`: a sub-second TTL must not round-trip
+            // into `Duration::ZERO`, which means the opposite thing.
+            Some(duration) => serializer.serialize_some(&super::ttl_secs(*duration)),
             None => serializer.serialize_none(),
         }
     }
@@ -449,6 +537,55 @@ mod tests {
     }
 
     #[test]
+    fn debug_prints_no_credential_material() {
+        // The Web Push `auth` secret, the endpoint capability URL and the
+        // device token must never reach a log through `{:?}` — core's
+        // redaction is by field name and cannot see inside this enum.
+        let web = Recipient::web_push(
+            "https://fcm.googleapis.com/wp/cAPABILITYtokenPATH",
+            "BP256dhPublicKeyValue",
+            "AuthSecretValue",
+        );
+        let printed = format!("{web:?}");
+        assert!(printed.contains("WebPush"), "{printed}");
+        assert!(!printed.contains("AuthSecretValue"), "{printed}");
+        assert!(!printed.contains("cAPABILITYtokenPATH"), "{printed}");
+        assert!(!printed.contains("fcm.googleapis.com"), "{printed}");
+        assert!(!printed.contains("BP256dhPublicKeyValue"), "{printed}");
+
+        let apns = format!("{:?}", Recipient::apns("deadbeefDEVICEtoken"));
+        assert!(apns.contains("Apns"), "{apns}");
+        assert!(!apns.contains("deadbeefDEVICEtoken"), "{apns}");
+
+        let fcm = format!("{:?}", Recipient::fcm("REGISTRATIONtokenValue"));
+        assert!(fcm.contains("Fcm"), "{fcm}");
+        assert!(!fcm.contains("REGISTRATIONtokenValue"), "{fcm}");
+
+        // A fingerprint still correlates: same recipient, same line.
+        assert_eq!(printed, format!("{web:?}"));
+        assert_ne!(
+            printed,
+            format!("{:?}", Recipient::web_push("https://other", "p", "a"))
+        );
+    }
+
+    #[test]
+    fn a_recipient_inside_a_struct_is_redacted_too() {
+        // The realistic leak: `tracing::error!(?recipient)` on a struct that
+        // merely contains one, where the derived Debug delegates to ours.
+        #[derive(Debug)]
+        struct Row {
+            recipient: Recipient,
+        }
+        let row = Row {
+            recipient: Recipient::apns("deadbeefDEVICEtoken"),
+        };
+        let printed = format!("{row:?}");
+        assert!(!printed.contains("deadbeefDEVICEtoken"), "{printed}");
+        assert_eq!(row.recipient.platform(), Platform::Ios);
+    }
+
+    #[test]
     fn platform_is_a_transport_fact() {
         assert_eq!(Recipient::apns("t").platform(), Platform::Ios);
         assert_eq!(Recipient::fcm("t").platform(), Platform::Android);
@@ -511,6 +648,40 @@ mod tests {
         assert_eq!(notification.title, "Hi");
         assert_eq!(notification.ttl, None);
         assert!(!notification.silent);
+    }
+
+    #[test]
+    fn a_sub_second_ttl_rounds_up_and_never_becomes_drop_now() {
+        // 900ms is "hold it briefly", not "drop it the moment the device is
+        // offline" — and truncating to 0 would silently say the latter, on
+        // the wire and on every round trip through it.
+        assert_eq!(ttl_secs(Duration::from_millis(900)), 1);
+        assert_eq!(ttl_secs(Duration::from_nanos(1)), 1);
+        assert_eq!(ttl_secs(Duration::ZERO), 0, "zero is the deliberate drop");
+        assert_eq!(ttl_secs(Duration::from_secs(3_600)), 3_600);
+        assert_eq!(
+            ttl_secs(Duration::from_millis(1_900)),
+            1,
+            "whole seconds otherwise truncate, as every protocol does"
+        );
+
+        let mut notification = Notification::new("a", "b");
+        notification.ttl = Some(Duration::from_millis(900));
+        let json = serde_json::to_value(&notification).unwrap();
+        assert_eq!(json["ttl"], 1, "sub-second serialises as one second");
+        let back: Notification = serde_json::from_value(json).unwrap();
+        assert_eq!(
+            back.ttl,
+            Some(Duration::from_secs(1)),
+            "and comes back meaning one second, not Duration::ZERO"
+        );
+
+        let mut zero = Notification::new("a", "b");
+        zero.ttl = Some(Duration::ZERO);
+        let json = serde_json::to_value(&zero).unwrap();
+        assert_eq!(json["ttl"], 0);
+        let back: Notification = serde_json::from_value(json).unwrap();
+        assert_eq!(back.ttl, Some(Duration::ZERO));
     }
 
     #[test]

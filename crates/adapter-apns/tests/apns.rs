@@ -156,6 +156,23 @@ fn not_configured_never_calls_the_network() {
 }
 
 #[test]
+fn not_configured_still_refuses_the_transports_it_does_not_serve() {
+    // Being unconfigured is a fact about credentials, not about transports:
+    // answering `NotConfigured` for a Web Push recipient would claim to serve
+    // it, and a router reading that answer would stop looking for the adapter
+    // that actually does.
+    let apns = Apns::not_configured();
+    pollster::block_on(push_recipient_conformance(&apns, &[Platform::Ios]));
+
+    let err = pollster::block_on(apns.send(
+        &Recipient::web_push("https://push.example/x", "p256dh", "auth"),
+        &Notification::new("a", "b"),
+    ))
+    .unwrap_err();
+    assert!(matches!(err, PushError::Rejected(m) if m.contains("unsupported recipient")));
+}
+
+#[test]
 fn delivers_and_signs_a_valid_jwt() {
     let http = ScriptedHttp::ok();
     let clock = Arc::new(StepClock::at(1_700_000_000));
@@ -422,6 +439,155 @@ fn badge_url_and_loc_keys_reach_the_payload() {
     assert!(
         body["icon"].is_null(),
         "APNs takes its icon from the bundle"
+    );
+}
+
+#[test]
+fn a_silent_push_carries_content_available_and_nothing_else() {
+    // Apple's background-push contract: `content-available` with no `alert`,
+    // `badge` or `sound`. A `badge` (or a `category`/`thread-id`, which only
+    // describe how an alert is shown) turns the wake into a user-visible
+    // notification, so the silent delivery the caller asked for never happens.
+    let http = ScriptedHttp::ok();
+    let clock = Arc::new(StepClock::at(1));
+    let apns = Apns::new(http.clone(), clock, creds()).unwrap();
+
+    let mut n = Notification::new("a", "b");
+    n.silent = true;
+    n.badge = Some(3);
+    n.category = Some("SESSION".to_owned());
+    n.thread_id = Some("room-42".to_owned());
+    pollster::block_on(apns.send(&device(), &n)).unwrap();
+
+    let req = http.last();
+    assert_eq!(req.headers().get("apns-push-type").unwrap(), "background");
+    let body: serde_json::Value = serde_json::from_slice(req.body()).unwrap();
+    let block = body["aps"].as_object().expect("aps object");
+    assert_eq!(block["content-available"], 1);
+    assert_eq!(
+        block.keys().collect::<Vec<_>>(),
+        vec!["content-available"],
+        "a background push carries content-available alone: {block:?}"
+    );
+}
+
+#[test]
+fn an_alert_push_still_carries_badge_category_and_thread_id() {
+    // The other direction of the same rule: dropping them when silent must
+    // not drop them when the notification is visible.
+    let http = ScriptedHttp::ok();
+    let clock = Arc::new(StepClock::at(1));
+    let apns = Apns::new(http.clone(), clock, creds()).unwrap();
+
+    let mut n = Notification::new("a", "b");
+    n.badge = Some(3);
+    n.category = Some("SESSION".to_owned());
+    n.thread_id = Some("room-42".to_owned());
+    pollster::block_on(apns.send(&device(), &n)).unwrap();
+
+    let body: serde_json::Value = serde_json::from_slice(http.last().body()).unwrap();
+    assert_eq!(body["aps"]["badge"], 3);
+    assert_eq!(body["aps"]["category"], "SESSION");
+    assert_eq!(body["aps"]["thread-id"], "room-42");
+}
+
+#[test]
+fn loc_args_are_only_emitted_with_their_key() {
+    // `*-loc-args` are the substitutions for a `*-loc-key`. Without the key
+    // they substitute into nothing and Apple defines no meaning for them.
+    let http = ScriptedHttp::ok();
+    let clock = Arc::new(StepClock::at(1));
+    let apns = Apns::new(http.clone(), clock, creds()).unwrap();
+
+    let mut n = Notification::new("a", "b");
+    n.loc = Some(LocKeys {
+        title_loc_key: None,
+        title_loc_args: vec!["Yoga".to_owned()],
+        body_loc_key: None,
+        body_loc_args: vec!["10".to_owned()],
+    });
+    pollster::block_on(apns.send(&device(), &n)).unwrap();
+
+    let body: serde_json::Value = serde_json::from_slice(http.last().body()).unwrap();
+    let alert = body["aps"]["alert"].as_object().expect("alert object");
+    assert!(
+        !alert.contains_key("title-loc-args"),
+        "no title-loc-key, no title-loc-args: {alert:?}"
+    );
+    assert!(
+        !alert.contains_key("loc-args"),
+        "no loc-key, no loc-args: {alert:?}"
+    );
+}
+
+#[test]
+fn the_notifications_url_wins_over_one_in_data() {
+    let http = ScriptedHttp::ok();
+    let clock = Arc::new(StepClock::at(1));
+    let apns = Apns::new(http.clone(), clock, creds()).unwrap();
+
+    let mut n = Notification::new("a", "b");
+    n.data = serde_json::json!({ "url": "https://example.test/from-data", "room_id": "42" });
+    n.url = Some("https://example.test/from-field".to_owned());
+    pollster::block_on(apns.send(&device(), &n)).unwrap();
+
+    let body: serde_json::Value = serde_json::from_slice(http.last().body()).unwrap();
+    assert_eq!(
+        body["url"], "https://example.test/from-field",
+        "the typed field is the documented one and wins"
+    );
+    assert_eq!(body["room_id"], "42");
+
+    // ...and with no `url` set, the caller's own key survives untouched.
+    let mut n = Notification::new("a", "b");
+    n.data = serde_json::json!({ "url": "https://example.test/from-data" });
+    pollster::block_on(apns.send(&device(), &n)).unwrap();
+    let body: serde_json::Value = serde_json::from_slice(http.last().body()).unwrap();
+    assert_eq!(body["url"], "https://example.test/from-data");
+}
+
+#[test]
+fn a_malformed_device_token_is_rejected_before_the_request() {
+    let clock = Arc::new(StepClock::at(1));
+    let http = ScriptedHttp::ok();
+    let apns = Apns::new(http.clone(), clock, creds()).unwrap();
+
+    for token in [
+        "tok/../../3/device/other",
+        "tok?query=1",
+        "tok#frag",
+        "tok en",
+        "",
+        "tok%2F",
+    ] {
+        let err =
+            pollster::block_on(apns.send(&Recipient::apns(token), &Notification::new("a", "b")))
+                .unwrap_err();
+        assert!(
+            matches!(&err, PushError::Rejected(m) if m == "malformed device token"),
+            "{token:?} -> {err:?}"
+        );
+    }
+    assert_eq!(
+        http.count(),
+        0,
+        "a token that is not a token never reaches the wire"
+    );
+}
+
+#[test]
+fn a_sub_second_ttl_rounds_up_instead_of_expiring_immediately() {
+    let http = ScriptedHttp::ok();
+    let clock = Arc::new(StepClock::at(1_700_000_000));
+    let apns = Apns::new(http.clone(), clock, creds()).unwrap();
+
+    let mut n = Notification::new("a", "b");
+    n.ttl = Some(Duration::from_millis(900));
+    pollster::block_on(apns.send(&device(), &n)).unwrap();
+    assert_eq!(
+        http.last().headers().get("apns-expiration").unwrap(),
+        "1700000001",
+        "900ms is a short hold, not `now` — which would mean drop on the spot"
     );
 }
 

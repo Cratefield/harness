@@ -61,13 +61,33 @@ transport does its best with it.
 `ttl` is the field most easily got wrong, so the port states the shape in
 one place: it is a **duration**, and `apns-expiration` is an **absolute UNIX
 epoch**, so the APNs adapter sends `now + ttl`. `android.ttl` is `"<s>s"`,
-Web Push `TTL` is seconds. Zero means "deliver now or drop" everywhere.
+Web Push `TTL` is seconds. Zero means "deliver now or drop" everywhere —
+and *only* zero does: a sub-second TTL rounds **up** to one second
+(`core::ttl_secs`, applied by the serialiser and by every adapter), because
+truncating `900ms` to `0` would silently invert the caller's instruction,
+including on a serde round trip.
+
+**A field an adapter maps may still be dropped by the protocol's own rules.**
+Apple's background push is `content-available` and nothing else, so a
+`silent` notification to APNs drops `badge`, `category` and `thread_id`;
+sending them makes APNs deliver a visible notification and the wake the
+caller asked for never happens. The rule is the same one as `icon`: the
+adapter obeys its protocol and documents it, rather than passing a field
+through because the struct has it.
 
 **The router lives above the adapters, in core.** `RoutingPush` dispatches
 by variant to whichever adapters a venture configured, and is itself a
 `Push`, so venture code holds one `Arc<dyn Push>` and never matches on a
 transport. An adapter serves one transport and answers
 `PushError::Rejected("unsupported recipient…")` for the rest.
+
+**An unconfigured adapter still refuses the transports it does not serve.**
+Whether credentials are set is a fact about the adapter; which transports it
+carries is a fact about the adapter's *type*. So the recipient variant is
+matched first and `NotConfigured` answered second — otherwise an
+unconfigured APNs adapter answers `NotConfigured` for a Web Push recipient,
+claiming a leg it will never carry, and a caller reading that answer stops
+looking for the adapter that would.
 
 A recipient whose transport has **no** adapter is `PushOutcome::NotConfigured`,
 not `Rejected`. The distinction is the caller's action: `Rejected` means the
@@ -80,6 +100,15 @@ be pruned.
 FCM `RESOURCE_EXHAUSTED`/`UNAVAILABLE` and Web Push `429`/`503` all answer
 with `Retry-After`; throwing it away means the outbox re-hammers a provider
 that just asked it not to.
+
+**A `Recipient` is credential material.** The Web Push `endpoint` is a
+bearer capability URL and `auth` is the RFC 8291 shared secret; a device
+token addresses one device. Core's log redaction works on field *names*
+(`is_secret_field`) and cannot see inside a `{:?}`, so `Recipient` writes its
+own `Debug`: the variant, plus a truncated SHA-256 fingerprint of each part,
+and `[redacted]` for `auth`. `Serialize` stays — a subscription has to be
+persisted — with the rule stated on the type: a serialised `Recipient` goes
+where secrets go, never into a log, an event payload or an error body.
 
 ## Consequences
 
