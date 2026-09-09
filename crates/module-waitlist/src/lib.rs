@@ -14,9 +14,11 @@
 //! **Positions are atomic.** Confirmation runs `1 + MAX(position)` for
 //! the product *inside* the position UPDATE, and that UPDATE plus the
 //! referrer credit run in one [`cratefield_core::Database::batch`] —
-//! atomic on D1, a transaction on the sqlite adapter — so concurrent
-//! confirmations never share a position. Positions are dense at assign
-//! time per product and never recomputed on delete.
+//! atomic on D1, a transaction on the sqlite adapter — behind a
+//! single-row per-product mutex on `waitlist_position_lock` that
+//! serializes concurrent confirms of one product on every engine
+//! (issues #20, #173). Positions are dense at assign time per product
+//! and never recomputed on delete.
 //!
 //! **No enumeration** (section 11): `POST /v1/waitlist` answers the same
 //! `202 {"ok":true}` bytes whatever the row state; an unknown `ref` code
@@ -69,6 +71,14 @@ const MIGRATION_MAIL_COOLDOWN: SqlMigration = SqlMigration {
     id: "0003",
     name: "mail_cooldown",
     sql: include_str!("../migrations/sqlite/0003_mail_cooldown.sql"),
+};
+
+/// The single-row per-product position mutex used by `confirm_entry`
+/// (issue #173). Name must match the table in `store::confirm_entry`.
+const MIGRATION_POSITION_LOCK: SqlMigration = SqlMigration {
+    id: "0004",
+    name: "position_lock",
+    sql: include_str!("../migrations/sqlite/0004_position_lock.sql"),
 };
 
 /// A per-product waitlist.
@@ -175,7 +185,11 @@ impl Module for Waitlist {
     }
 
     fn tables(&self) -> &'static [&'static str] {
-        &["waitlist_entries", "waitlist_send_cooldown"]
+        &[
+            "waitlist_entries",
+            "waitlist_send_cooldown",
+            "waitlist_position_lock",
+        ]
     }
 
     fn emits(&self) -> &'static [&'static str] {
@@ -187,10 +201,11 @@ impl Module for Waitlist {
     }
 
     fn migrations(&self) -> Migrations {
-        const MIGRATIONS: [SqlMigration; 3] = [
+        const MIGRATIONS: [SqlMigration; 4] = [
             MIGRATION_INIT,
             MIGRATION_ENTRY_GENERATION,
             MIGRATION_MAIL_COOLDOWN,
+            MIGRATION_POSITION_LOCK,
         ];
         Migrations {
             sqlite: &MIGRATIONS,
@@ -308,7 +323,11 @@ mod tests {
         assert_eq!(module.name(), "waitlist");
         assert_eq!(
             module.tables(),
-            ["waitlist_entries", "waitlist_send_cooldown"]
+            [
+                "waitlist_entries",
+                "waitlist_send_cooldown",
+                "waitlist_position_lock"
+            ]
         );
         assert!(module.public_writes());
         assert_eq!(module.requires(), [Port::Db, Port::Mailer, Port::Signer]);
