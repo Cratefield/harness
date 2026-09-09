@@ -26,18 +26,33 @@ const NONCE_LEN: usize = 24;
 ///
 /// This is the compile-time half of the two-tier rule. The runtime half
 /// is that a `ModuleContext` never carries a `Secrets`.
+///
+/// The type is nameable outside the crate — a signature that mentions it
+/// has to be writable — but not constructible. Its field is private and
+/// it has no public constructor:
+///
+/// ```compile_fail
+/// use cratefield_secrets::HarnessOnly;
+/// // The tuple field is private: module code cannot build the proof.
+/// let _proof = HarnessOnly(());
+/// ```
+///
+/// ```compile_fail
+/// use cratefield_secrets::Secrets;
+/// # use std::sync::Arc;
+/// # fn kms() -> Arc<dyn cratefield_kms::Kms> { unimplemented!() }
+/// // Nor mint one through the harness's own constructor, which is
+/// // `pub(crate)` precisely so this does not compile.
+/// let _proof = Secrets::harness_only();
+/// ```
+///
+/// Naming the type is fine, which is what keeps the signature writable:
+///
+/// ```
+/// use cratefield_secrets::HarnessOnly;
+/// fn takes_proof(_proof: HarnessOnly) {}
+/// ```
 pub struct HarnessOnly(());
-
-impl HarnessOnly {
-    /// Called by the harness when it wires the control database.
-    ///
-    /// Not `pub`: outside this crate the only way to obtain one is for
-    /// the harness to hand it over, which it does not do to modules.
-    #[must_use]
-    pub(crate) fn new() -> Self {
-        Self(())
-    }
-}
 
 /// Owns the KMS and the audit sink; hands out per-store handles.
 pub struct Secrets {
@@ -64,6 +79,32 @@ impl Secrets {
 
     /// The control database's store: connection strings and platform
     /// keys. Needs a [`HarnessOnly`], which module code cannot build.
+    ///
+    /// The proof is the whole gate, so the call is unreachable without
+    /// one — a module holding a `Secrets` and a `Database` still cannot
+    /// open the global store:
+    ///
+    /// ```compile_fail
+    /// # use std::sync::Arc;
+    /// # use cratefield_core::Database;
+    /// # use cratefield_secrets::Secrets;
+    /// fn reach_the_control_database(secrets: &Secrets, db: Arc<dyn Database>) {
+    ///     // No second argument can be constructed here.
+    ///     let _global = secrets.global(db);
+    /// }
+    /// ```
+    ///
+    /// The tenant store, which is what a module is actually given, needs
+    /// no proof at all:
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use cratefield_core::Database;
+    /// # use cratefield_secrets::Secrets;
+    /// fn a_module_reaches_its_own_store(secrets: &Secrets, db: Arc<dyn Database>) {
+    ///     let _mine = secrets.tenant("acme", db);
+    /// }
+    /// ```
     #[must_use]
     pub fn global(&self, db: Arc<dyn Database>, _proof: HarnessOnly) -> SecretStore {
         self.store(StoreId::Global, db)
@@ -86,9 +127,24 @@ impl Secrets {
     }
 
     /// The harness's own proof token, for wiring the control store.
+    ///
+    /// `pub(crate)`, and that is the whole point: while this was `pub`,
+    /// any caller could mint the proof [`Secrets::global`] demands and
+    /// reach the control database — the two-tier rule's only
+    /// compile-time guarantee, undone by its own escape hatch.
+    ///
+    /// `allow(dead_code)` because the one production caller does not
+    /// exist yet: nothing wires the control database until the boot
+    /// reconciliation of #23/#29, and the alternative — leaving the
+    /// constructor `pub` so it looks used — is the bug this replaced.
+    /// The unit test below is its only caller today.
     #[must_use]
-    pub fn harness_only() -> HarnessOnly {
-        HarnessOnly::new()
+    #[allow(
+        dead_code,
+        reason = "the harness wiring that calls this lands with #23/#29"
+    )]
+    pub(crate) fn harness_only() -> HarnessOnly {
+        HarnessOnly(())
     }
 }
 
@@ -570,4 +626,71 @@ fn new_key_id() -> Result<String, SecretsError> {
         let _ = write!(id, "{byte:02x}");
     }
     Ok(id)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{HarnessOnly, Secrets};
+    use crate::{Actor, SecretBytes, StoreId};
+    use cratefield_adapter_sqlite::SqliteDatabase;
+    use cratefield_core::Database;
+    use cratefield_kms::{Dek, Kms, LocalFileKms};
+    use std::sync::Arc;
+
+    fn kms() -> Arc<dyn Kms> {
+        let kek = Dek::generate().expect("rng");
+        Arc::new(LocalFileKms::from_key(kek, "test-kek", "test").expect("not production"))
+    }
+
+    fn migrated_db() -> Arc<dyn Database> {
+        let db = SqliteDatabase::in_memory().expect("in-memory db");
+        db.apply_migrations("secrets", crate::migrations().sqlite)
+            .expect("schema applies");
+        Arc::new(db)
+    }
+
+    /// The control store is what resolves a tenant's `db_ref` at boot, and
+    /// no test reached it before: every other test uses `tenant`, because
+    /// that is all module code can open. Proving it round-trips is also
+    /// what keeps [`Secrets::harness_only`] live — the proof token exists
+    /// for exactly one caller, and this is the only one until
+    /// `cratefield-core` wires the control database.
+    #[pollster::test]
+    async fn the_global_store_round_trips_for_a_caller_holding_the_proof() {
+        let secrets = Secrets::new(kms());
+        let db = migrated_db();
+        let proof: HarnessOnly = Secrets::harness_only();
+        let global = secrets.global(Arc::clone(&db), proof);
+        assert_eq!(global.id(), &StoreId::Global);
+
+        let actor = Actor::new("harness-boot").expect("named");
+        let version = global
+            .put(
+                "tenants/acme/db_ref",
+                &SecretBytes::from("postgres://acme"),
+                &actor,
+            )
+            .await
+            .expect("the control store accepts a write");
+        assert_eq!(version, 1);
+
+        let found = global
+            .get("tenants/acme/db_ref", &actor)
+            .await
+            .expect("readable")
+            .expect("present");
+        assert_eq!(found.expose(), b"postgres://acme");
+
+        // And it is a genuinely separate store: the same name in a
+        // tenant's database is a different secret, not this one.
+        let tenant = secrets.tenant("acme", migrated_db());
+        assert!(
+            tenant
+                .get("tenants/acme/db_ref", &actor)
+                .await
+                .expect("readable")
+                .is_none(),
+            "the global store's rows must not be visible to a tenant"
+        );
+    }
 }

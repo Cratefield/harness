@@ -142,6 +142,56 @@ impl Actor {
 /// implements neither `Display`, `Serialize` nor `Clone`: a secret that
 /// can be formatted, serialised or copied is a secret that ends up in a
 /// log line, a JSON body, or a buffer nobody cleared.
+///
+/// Each absence below is paired with the same operation on a type that
+/// does allow it, so a case that stopped compiling for the wrong reason —
+/// a renamed import, a typo — would fail its pair and be noticed.
+///
+/// **Not `Display`.** `{}` is how a value reaches a log line by accident:
+///
+/// ```compile_fail
+/// # use cratefield_secrets::SecretBytes;
+/// let secret = SecretBytes::new(b"hunter2".to_vec());
+/// println!("{secret}");
+/// ```
+///
+/// ```
+/// # use cratefield_secrets::SecretBytes;
+/// let secret = SecretBytes::new(b"hunter2".to_vec());
+/// // `Debug` is implemented, and redacts.
+/// assert_eq!(format!("{secret:?}"), "SecretBytes([redacted])");
+/// ```
+///
+/// **Not `Clone`.** A copy is a second buffer nobody is tracking:
+///
+/// ```compile_fail
+/// # use cratefield_secrets::SecretBytes;
+/// let secret = SecretBytes::new(b"hunter2".to_vec());
+/// let _copy = secret.clone();
+/// ```
+///
+/// ```
+/// # use cratefield_secrets::SecretBytes;
+/// let secret = SecretBytes::new(b"hunter2".to_vec());
+/// // Moving is fine: there is still exactly one buffer.
+/// let moved = secret;
+/// assert_eq!(moved.expose(), b"hunter2");
+/// ```
+///
+/// **Not `Serialize`.** Serialisation is how a secret reaches a JSON body:
+///
+/// ```compile_fail
+/// # use cratefield_secrets::SecretBytes;
+/// fn needs_serialize<T: serde::Serialize>(_value: &T) {}
+/// let secret = SecretBytes::new(b"hunter2".to_vec());
+/// needs_serialize(&secret);
+/// ```
+///
+/// ```
+/// fn needs_serialize<T: serde::Serialize>(_value: &T) {}
+/// // The bound itself is satisfiable — it is `SecretBytes` that refuses it.
+/// needs_serialize(&"an ordinary string");
+/// ```
 pub struct SecretBytes(Zeroizing<Vec<u8>>);
 
 impl SecretBytes {
