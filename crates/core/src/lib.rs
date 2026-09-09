@@ -76,8 +76,9 @@ pub use problem::Problem;
 pub use problems::{ProblemDef, SLUGS, registry as problem_registry};
 pub use rate_limit::{RateLimit, RateLimitFailure, check_rate_limit, client_ip, rate_limit_keys};
 pub use route_policy::{
-    RoutePolicy, WriteGuards, captcha_effective, payments_effective, production_readiness,
-    verify_human_form,
+    ALLOW_UNPROTECTED_WRITES, RoutePolicy, WriteGuards, captcha_effective, deployed_env,
+    env_disagreement, payments_effective, production_readiness, signer_effective,
+    unprotected_writes_override, verify_human_form,
 };
 pub use scope::Scope;
 pub use sidecar::{

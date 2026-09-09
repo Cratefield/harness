@@ -36,6 +36,10 @@ pub struct Slugs {
     /// `/__surface` on a sidecar that requires it) without a valid gateway
     /// token from the trusted host (issue #131).
     pub sidecar_unauthorized: ProblemDef,
+    /// 503: the deployment declares production but cannot satisfy the
+    /// abuse controls its own routes declare, so the guarded routes are
+    /// refused rather than served unprotected (issue #143).
+    pub not_production_ready: ProblemDef,
     /// 413: the request body exceeded the 64 KiB `/v1/*` limit.
     pub request_too_large: ProblemDef,
     /// 429: the rate limit for this IP or address was exceeded.
@@ -101,6 +105,12 @@ pub const SLUGS: Slugs = Slugs {
         title: "Unauthorized sidecar caller",
         description: "A request to a sidecar-guarded route could not be established as coming from the trusted gateway.",
     },
+    not_production_ready: ProblemDef {
+        slug: "not-production-ready",
+        status: StatusCode::SERVICE_UNAVAILABLE,
+        title: "Not ready for production traffic",
+        description: "This deployment declares production but cannot satisfy the abuse controls its routes declare.",
+    },
     request_too_large: ProblemDef {
         slug: "request-too-large",
         status: StatusCode::PAYLOAD_TOO_LARGE,
@@ -161,6 +171,7 @@ pub fn registry() -> Vec<&'static ProblemDef> {
         &SLUGS.admin_unauthorized,
         &SLUGS.admin_forbidden,
         &SLUGS.sidecar_unauthorized,
+        &SLUGS.not_production_ready,
         &SLUGS.request_too_large,
         &SLUGS.rate_limited,
         &SLUGS.not_found,

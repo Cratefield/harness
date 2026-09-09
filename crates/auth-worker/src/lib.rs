@@ -70,6 +70,12 @@ fn instance(env: &Env) -> &'static (Harness, Cloudflare) {
             .venture(
                 Venture::new("factory0-auth", "auth.factory0.ventures")
                     .public_url("https://auth.factory0.ventures")
+                    // Deliberately no `.env(..)`: one artifact serves both
+                    // staging and production here, so the environment is the
+                    // deployment's to declare through `ENV` (issue #143), and
+                    // hardcoding production would hold the staging Worker to
+                    // rules it does not run under. `ventures/cratefield-waitlist`
+                    // is the opposite case and does set it.
                     // Consumers call the discovery/JWKS documents (public GETs);
                     // the browser-facing authorize flow is a top-level redirect,
                     // not CORS. These are the first-party app origins.

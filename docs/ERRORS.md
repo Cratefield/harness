@@ -16,6 +16,7 @@ request id.
 | `invalid-token` | 400 | Invalid or expired token | A signed link or token is malformed, tampered with, or expired. |
 | `mail-not-configured` | 503 | Mail is not configured | No sending domain is verified; use the direct address shown by the form. |
 | `not-found` | 404 | Not found | No route matched the request. |
+| `not-production-ready` | 503 | Not ready for production traffic | This deployment declares production but cannot satisfy the abuse controls its routes declare. |
 | `not-ready` | 503 | Service not ready | Readiness probe failed: the database is missing, erroring or too slow. |
 | `rate-limited` | 429 | Rate limit exceeded | Too many requests from this IP or address; retry after the pause. |
 | `request-too-large` | 413 | Request body too large | The request body exceeded the 64 KiB limit for /v1 endpoints. |

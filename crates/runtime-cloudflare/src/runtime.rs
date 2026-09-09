@@ -312,10 +312,15 @@ impl Runtime for Cloudflare {
     /// all the runtime can know about them.
     fn effectively_configured(&self, port: Port) -> bool {
         match port {
+            // `is_none_or`, not `is_some_and`: the doc above and the
+            // `Captcha::binding` contract both say a non-reporting adapter
+            // counts as effective when present, and the code said the
+            // opposite — so a venture with any Captcha adapter that does
+            // not report could not boot in production (issue #143).
             Port::Captcha => self.captcha.as_ref().is_some_and(|captcha| {
                 captcha
                     .binding()
-                    .is_some_and(|binding| binding.hostname_bound && !binding.fail_open)
+                    .is_none_or(|binding| binding.hostname_bound && !binding.fail_open)
             }),
             _ => self.provides().contains(&port),
         }

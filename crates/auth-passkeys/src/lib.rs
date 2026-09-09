@@ -290,6 +290,15 @@ impl Module for Passkeys {
         true
     }
 
+    /// The challenge in the comment above, said where the harness can
+    /// act on it (issue #143). This module has no ADR 0010 surface, so
+    /// before this it fell to the CAPTCHA fallback and a production
+    /// venture had to provide a `Captcha` port for a widget no passkey
+    /// ceremony ever renders.
+    fn public_write_policy(&self) -> cratefield_core::RoutePolicy {
+        cratefield_core::RoutePolicy::SignedLink
+    }
+
     fn migrations(&self) -> Migrations {
         Migrations::EMPTY
     }

@@ -4,7 +4,10 @@ use crate::config::ConfigError;
 
 /// Deployment environment. Mirrors the `ENV` config key; `Production`
 /// drives the mandatory-captcha rule (architecture section 11).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+///
+/// Ordered least to most protected, so [`VentureEnv::strictest`] can take
+/// the safer of two answers (issue #143).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
 pub enum VentureEnv {
     #[default]
     Development,
@@ -19,6 +22,22 @@ impl VentureEnv {
             VentureEnv::Staging => "staging",
             VentureEnv::Production => "production",
         }
+    }
+
+    /// The safer of two answers about one deployment (issue #143).
+    ///
+    /// A venture carries a **compiled** environment — a builder default
+    /// the operator cannot change without a rebuild — while the
+    /// deployment carries an `ENV` binding it can. They disagreed
+    /// silently, and the disagreement always resolved toward the weaker
+    /// answer: `ventures/cratefield-waitlist` ships `ENV = "production"`
+    /// and never calls [`Venture::env`], so every production-only rule
+    /// read `Development` and did not apply to the one venture actually
+    /// in production. Neither source may downgrade the other: if either
+    /// says `Production`, the deployment is production.
+    #[must_use]
+    pub fn strictest(self, other: Self) -> Self {
+        self.max(other)
     }
 
     /// Parses the `ENV` config value; anything unknown is `None`.

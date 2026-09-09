@@ -27,6 +27,17 @@ migrations_dir = "migrations"
 [env.production]
 route = { pattern = "auth.factory0.ventures", custom_domain = true }
 
+# The harness enforces its production rules against this, not against a
+# compiled default (issue #143). Staging deliberately leaves it unset.
+#
+# needs-human before the first production deploy: `magic-link` verifies a
+# CAPTCHA on `POST /request` and this Worker binds no Captcha port, so the
+# harness will refuse the guarded routes. Bind Turnstile on the runtime, or
+# record an explicit `HARNESS_ALLOW_UNPROTECTED_WRITES` reason if the launch
+# has to go ahead without it.
+[env.production.vars]
+ENV = "production"
+
 [[env.production.d1_databases]]
 binding = "DB"
 database_name = "factory0-auth-production"

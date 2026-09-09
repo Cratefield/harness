@@ -30,8 +30,9 @@ use crate::venture::VentureEnv;
 /// How a request to a declared route proves it is legitimate.
 ///
 /// The variants are mutually exclusive by construction: a route is
-/// protected by a human proof, a machine signature, or nothing — never
-/// both, and never by whichever check the module happened to wire up.
+/// protected by a human proof, a machine signature, an artifact this
+/// service issued, or nothing — never two of them, and never by
+/// whichever check the module happened to wire up.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "kebab-case")]
 pub enum RoutePolicy {
@@ -53,6 +54,25 @@ pub enum RoutePolicy {
     /// [`Payments::verify_webhook`]: crate::ports::Payments::verify_webhook
     /// [`Inbox`]: crate::idempotency::Inbox
     Signature,
+    /// A public write whose proof is a single-use, purpose-bound
+    /// artifact **this service issued**: a magic link, a passkey or OAuth
+    /// challenge, an unsubscribe link (issue #143). The caller presents
+    /// something only a prior request of ours could have produced, so the
+    /// gate is the [`Signer`] key ring (issue #137), not a widget.
+    ///
+    /// This variant exists because the auth login methods had nowhere
+    /// honest to sit. They are public writers with no ADR 0010 surface,
+    /// so [`WriteGuards::collect`]'s conservative fallback filed them
+    /// under CAPTCHA — and a passkey challenge will never render one. A
+    /// production venture composing only auth modules therefore could not
+    /// boot at all except through `fz doctor --allow-no-captcha`, an
+    /// override the code itself documents as previews-only. This is not
+    /// an exemption: it carries its own production requirement, a
+    /// usable [`Signer`], because without one there is nothing to issue
+    /// or verify the artifact with.
+    ///
+    /// [`Signer`]: crate::ports::Signer
+    SignedLink,
 }
 
 impl RoutePolicy {
@@ -73,6 +93,9 @@ pub struct WriteGuards {
     pub captcha_modules: Vec<String>,
     /// Modules with a [`RoutePolicy::Signature`]-guarded write (webhooks).
     pub signature_modules: Vec<String>,
+    /// Modules whose public writes are proved by an artifact this service
+    /// issued ([`RoutePolicy::SignedLink`], issue #143).
+    pub signed_link_modules: Vec<String>,
 }
 
 impl WriteGuards {
@@ -89,17 +112,32 @@ impl WriteGuards {
         let mut guards = Self::default();
         for module in modules {
             let surface: Surface = module.surface();
-            let (mut form, signature) = Self::surface_flags(&surface);
+            let (mut form, mut signature) = Self::surface_flags(&surface);
+            let mut signed_link = surface
+                .actions
+                .iter()
+                .any(|action| action.policy == RoutePolicy::SignedLink);
             // The undeclared-public-writer fallback only applies when
-            // nothing in the surface is guarded.
-            if !form && !signature && module.public_writes() {
-                form = true;
+            // nothing in the surface is guarded. What it falls back *to*
+            // is the module's own answer (issue #143): a surface-less
+            // module has no action to hang a policy on, so this is the
+            // only place it can say what protects its writes. The default
+            // is still `HumanForm`, so saying nothing changes nothing.
+            if !form && !signature && !signed_link && module.public_writes() {
+                match module.public_write_policy() {
+                    RoutePolicy::Signature => signature = true,
+                    RoutePolicy::SignedLink => signed_link = true,
+                    RoutePolicy::HumanForm | RoutePolicy::Open => form = true,
+                }
             }
             if form {
                 guards.captcha_modules.push(module.name().to_owned());
             }
             if signature {
                 guards.signature_modules.push(module.name().to_owned());
+            }
+            if signed_link {
+                guards.signed_link_modules.push(module.name().to_owned());
             }
         }
         guards
@@ -116,9 +154,14 @@ impl WriteGuards {
     #[must_use]
     pub fn from_surface(module: &str, surface: &Surface) -> Self {
         let (form, signature) = Self::surface_flags(surface);
+        let signed_link = surface
+            .actions
+            .iter()
+            .any(|action| action.policy == RoutePolicy::SignedLink);
         Self {
             captcha_modules: form.then(|| module.to_owned()).into_iter().collect(),
             signature_modules: signature.then(|| module.to_owned()).into_iter().collect(),
+            signed_link_modules: signed_link.then(|| module.to_owned()).into_iter().collect(),
         }
     }
 
@@ -137,6 +180,15 @@ impl WriteGuards {
             }
         }
         (form, signature)
+    }
+
+    /// Whether any module proves a public write with an artifact this
+    /// service issued, and so needs a usable [`Signer`] (issue #143).
+    ///
+    /// [`Signer`]: crate::ports::Signer
+    #[must_use]
+    pub fn needs_signer(&self) -> bool {
+        !self.signed_link_modules.is_empty()
     }
 
     /// Whether any module needs the `Captcha` port.
@@ -175,6 +227,73 @@ pub fn payments_effective(runtime: Option<&Arc<dyn Runtime>>) -> bool {
     runtime.is_some_and(|runtime| runtime.effectively_configured(Port::Payments))
 }
 
+/// Config key holding an operator's explicit, recorded acceptance that
+/// this deployment serves guarded routes it cannot fully protect
+/// (issue #143).
+///
+/// The value is the **reason**, and an empty one does not count: an
+/// override with nothing to answer for is the silent default this issue
+/// exists to remove. It is recorded through `tracing` on every boot, so
+/// it appears wherever the operator ships logs, and `fz doctor` reports
+/// it. It exists because the gate landed on ventures that had already
+/// been serving unprotected for months — refusing their traffic outright
+/// on the next deploy would trade a quiet hole for a loud outage without
+/// anyone choosing it. Wire the missing port and delete the key.
+pub const ALLOW_UNPROTECTED_WRITES: &str = "HARNESS_ALLOW_UNPROTECTED_WRITES";
+
+/// The operator's recorded reason for serving guarded routes unprotected,
+/// if they set one (issue #143).
+#[must_use]
+pub fn unprotected_writes_override(config: &dyn crate::config::Config) -> Option<String> {
+    config
+        .get(ALLOW_UNPROTECTED_WRITES)
+        .map(|reason| reason.trim().to_owned())
+        .filter(|reason| !reason.is_empty())
+}
+
+/// The environment this **deployment** runs in (issue #143).
+///
+/// A venture carries a compiled [`VentureEnv`] — a builder default the
+/// operator cannot change without a rebuild — and a deployment carries
+/// an `ENV` binding it can. Every production-only rule used to read the
+/// compiled one alone, so a Worker deployed with `ENV = "production"`
+/// over a venture that never called [`Venture::env`] ran with all of
+/// them switched off. Neither source may downgrade the other: if either
+/// says `Production`, this is production.
+///
+/// [`Venture::env`]: crate::venture::Venture::env
+#[must_use]
+pub fn deployed_env(compiled: VentureEnv, config: &dyn crate::config::Config) -> VentureEnv {
+    let declared = config
+        .get("ENV")
+        .as_deref()
+        .and_then(VentureEnv::parse)
+        .unwrap_or_default();
+    compiled.strictest(declared)
+}
+
+/// Whether the deployment's environment contradicts the compiled one
+/// (issue #143). Not an error by itself — the stricter answer wins — but
+/// it means the build-time gate ran against the wrong environment, so
+/// the caller re-checks and says so.
+#[must_use]
+pub fn env_disagreement(compiled: VentureEnv, deployed: VentureEnv) -> Option<String> {
+    (compiled != deployed).then(|| {
+        format!(
+            "this deployment declares ENV={} but the venture was compiled with              VentureEnv::{compiled:?}: the production readiness gate at build time ran              against the wrong environment. Treating it as {} — call              `.env(VentureEnv::{deployed:?})` on the venture so the build refuses what              the deployment cannot serve (issue #143)",
+            deployed.as_str(),
+            deployed.as_str(),
+        )
+    })
+}
+
+/// Whether the runtime can issue and verify the artifacts a
+/// [`RoutePolicy::SignedLink`] route rests on (issue #143).
+#[must_use]
+pub fn signer_effective(runtime: Option<&Arc<dyn Runtime>>) -> bool {
+    runtime.is_some_and(|runtime| runtime.effectively_configured(Port::Signer))
+}
+
 /// The production abuse-control gate (issue #133), as collected error
 /// strings (the [`ConfigError`] convention: report every problem at
 /// once). Empty for anything but `Production`; pass
@@ -201,6 +320,12 @@ pub fn production_readiness(
              adapter (Turnstile needs its secret and expected hostname) — `fz doctor \
              --allow-no-captcha <reason>` overrides this check for previews only",
             guards.captcha_modules.join(", ")
+        ));
+    }
+    if guards.needs_signer() && !signer_effective(runtime) {
+        errors.push(format!(
+            "production venture has signed-link public writes from [{}] but the Signer port              is not provided — the magic links, challenges and unsubscribe links those routes              verify cannot be issued or checked without one (issue #143)",
+            guards.signed_link_modules.join(", ")
         ));
     }
     if guards.needs_payments() && !payments_effective(runtime) {
@@ -354,6 +479,7 @@ mod tests {
         name: &'static str,
         surface: Surface,
         public_writes: bool,
+        public_write_policy: RoutePolicy,
     }
 
     impl Module for Guarded {
@@ -368,6 +494,9 @@ mod tests {
         }
         fn public_writes(&self) -> bool {
             self.public_writes
+        }
+        fn public_write_policy(&self) -> RoutePolicy {
+            self.public_write_policy
         }
         fn migrations(&self) -> Migrations {
             Migrations::default()
@@ -394,6 +523,20 @@ mod tests {
                 views: vec![],
             },
             public_writes,
+            public_write_policy: RoutePolicy::HumanForm,
+        })
+    }
+
+    /// A surface-less public writer that declares what really guards it.
+    fn declaring(name: &'static str, policy: RoutePolicy) -> Arc<dyn Module> {
+        Arc::new(Guarded {
+            name,
+            surface: Surface {
+                actions: vec![],
+                views: vec![],
+            },
+            public_writes: true,
+            public_write_policy: policy,
         })
     }
 
@@ -499,6 +642,92 @@ mod tests {
         assert_eq!(
             production_readiness(VentureEnv::Production, &guards, None, Some("preview")).len(),
             1
+        );
+    }
+
+    // ------------------------------------------------ issue #143
+
+    use crate::config::MapConfig;
+
+    #[test]
+    fn the_deployment_environment_is_the_stricter_of_the_two() {
+        // The bug: `ventures/cratefield-waitlist` ships ENV="production"
+        // and never calls `.env()`, so every production rule read the
+        // compiled `Development` and did not apply in production.
+        let deployed = MapConfig::from_pairs([("ENV", "production")]);
+        assert_eq!(
+            deployed_env(VentureEnv::Development, &deployed),
+            VentureEnv::Production,
+        );
+        // And the other way: a binding must not be able to switch the
+        // protections off for a venture compiled as production.
+        let downgrade = MapConfig::from_pairs([("ENV", "development")]);
+        assert_eq!(
+            deployed_env(VentureEnv::Production, &downgrade),
+            VentureEnv::Production,
+        );
+        // No binding at all leaves the compiled answer standing.
+        assert_eq!(
+            deployed_env(VentureEnv::Staging, &MapConfig::default()),
+            VentureEnv::Staging,
+        );
+        // Agreement is not a disagreement.
+        assert!(env_disagreement(VentureEnv::Production, VentureEnv::Production).is_none());
+        let note = env_disagreement(VentureEnv::Development, VentureEnv::Production)
+            .expect("a compiled-vs-deployed mismatch is reported");
+        assert!(note.contains("ENV=production"), "{note}");
+    }
+
+    #[test]
+    fn a_surface_less_writer_declares_what_actually_guards_it() {
+        // Saying nothing is unchanged: still the conservative CAPTCHA
+        // fallback, so no existing module moves.
+        let guards = WriteGuards::collect(&[module("legacy", vec![], true)]);
+        assert_eq!(guards.captcha_modules, ["legacy"]);
+        assert!(!guards.needs_signer());
+
+        // A passkey ceremony or an OAuth callback is proved by an artifact
+        // this service issued, and will never render a widget.
+        let guards = WriteGuards::collect(&[declaring("passkeys", RoutePolicy::SignedLink)]);
+        assert!(
+            guards.captcha_modules.is_empty(),
+            "a signed-link writer must not demand a captcha it never renders"
+        );
+        assert_eq!(guards.signed_link_modules, ["passkeys"]);
+        assert!(guards.needs_signer());
+    }
+
+    #[test]
+    fn a_signed_link_writer_still_has_a_production_requirement_of_its_own() {
+        // Not an exemption: without a Signer there is nothing to issue or
+        // verify the artifact with, so production still refuses.
+        let guards = WriteGuards::collect(&[declaring("passkeys", RoutePolicy::SignedLink)]);
+        let errors = production_readiness(VentureEnv::Production, &guards, None, None);
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert!(errors[0].contains("signed-link"), "{}", errors[0]);
+        assert!(errors[0].contains("passkeys"), "{}", errors[0]);
+
+        // And nothing is demanded outside production.
+        assert!(production_readiness(VentureEnv::Staging, &guards, None, None).is_empty());
+    }
+
+    #[test]
+    fn a_declared_policy_on_an_action_still_wins_over_the_fallback() {
+        // The fallback applies only when the surface declares nothing —
+        // a module with a guarded action is untouched by #143.
+        let guards = WriteGuards::collect(&[Arc::new(Guarded {
+            name: "mixed",
+            surface: Surface {
+                actions: vec![Action::post("join", "/join").policy(RoutePolicy::HumanForm)],
+                views: vec![],
+            },
+            public_writes: true,
+            public_write_policy: RoutePolicy::SignedLink,
+        })]);
+        assert_eq!(guards.captcha_modules, ["mixed"]);
+        assert!(
+            guards.signed_link_modules.is_empty(),
+            "the module-level fallback must not override a declared action"
         );
     }
 }

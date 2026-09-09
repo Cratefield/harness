@@ -50,9 +50,30 @@
 - **Rate limits on every public route** — including confirm and status —
   keyed `ip:<cf-connecting-ip>` (never `x-forwarded-for` on Workers) and
   `email:<normalized>`; 429 carries `Retry-After`.
-- **Captcha mandatory in production** when any module has
-  `public_writes()`: `fz doctor` fails the build; `--allow-no-captcha
-  <reason>` downgrades to a warning for the stated reason.
+- **Production readiness is enforced against the deployment, not a
+  compiled default** (issue #143). A venture carries a `VentureEnv` set in
+  code, defaulting to `Development`; a deployment carries `ENV`. They
+  disagreed silently and the weaker answer won, so a Worker shipping
+  `ENV = "production"` over a venture that never called `.env(..)` ran
+  with every production-only rule switched off. The stricter of the two
+  now decides, and `Harness::router` re-checks readiness against the
+  resolved ports: guarded `/v1/*` routes answer `503
+  not-production-ready` rather than serve unprotected. Probes and the UI
+  stay up so an operator can see why.
+- **Captcha mandatory in production** when a module declares a
+  [`HumanForm`] write — or has `public_writes()` and declares no policy
+  at all, the conservative fallback. Two escapes exist and both are
+  recorded, never silent: `fz doctor --allow-no-captcha <reason>` for a
+  preview, and `HARNESS_ALLOW_UNPROTECTED_WRITES=<reason>` on a
+  deployment, which is logged on every boot. A blank reason is not an
+  acceptance.
+- **A public write that is not a browser form says so.** `SignedLink`
+  covers a write proved by a single-use, purpose-bound artifact this
+  service issued — a magic link, a passkey or OAuth challenge — and
+  requires a usable `Signer` rather than a `Captcha`. Surface-less
+  modules declare it with `Module::public_write_policy`. This is not an
+  exemption: without a signer there is nothing to issue or verify the
+  artifact with, and production refuses.
 - **PII minimalism and retention.** See [PRIVACY.md](PRIVACY.md).
 - **Redaction.** Field names matching `(?i)secret|token|key|
   authorization|password` are replaced with `[redacted]`; email values
