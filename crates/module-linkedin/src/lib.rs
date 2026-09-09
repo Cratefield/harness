@@ -215,6 +215,9 @@ impl Module for Linkedin {
 
     fn migrations(&self) -> Migrations {
         const MIGRATIONS: [SqlMigration; 1] = [MIGRATION_INIT];
+        // The array is the apply order; this refuses a gap, a duplicate
+        // or an entry out of order at build time (issue #27).
+        const _: () = cratefield_core::assert_migration_set(&MIGRATIONS);
         Migrations::sqlite(&MIGRATIONS)
     }
 

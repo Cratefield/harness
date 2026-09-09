@@ -55,6 +55,9 @@ pub fn migrations() -> cratefield_core::Migrations {
             sql: include_str!("../migrations/sqlite/0003_audit_store.sql"),
         },
     ];
+    // The array is the apply order; this refuses a gap, a duplicate
+    // or an entry out of order at build time (issue #27).
+    const _: () = cratefield_core::assert_migration_set(&SQLITE);
     const POSTGRES: [cratefield_core::SqlMigration; 3] = [
         cratefield_core::SqlMigration {
             id: "0001",
@@ -72,6 +75,9 @@ pub fn migrations() -> cratefield_core::Migrations {
             sql: include_str!("../migrations/postgres/0003_audit_store.sql"),
         },
     ];
+    // The array is the apply order; this refuses a gap, a duplicate
+    // or an entry out of order at build time (issue #27).
+    const _: () = cratefield_core::assert_migration_set(&POSTGRES);
     cratefield_core::Migrations {
         sqlite: &SQLITE,
         postgres: &POSTGRES,

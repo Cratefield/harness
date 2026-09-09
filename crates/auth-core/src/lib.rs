@@ -247,6 +247,9 @@ impl Module for AuthCore {
             MIGRATION_DELETION_JOBS,
             MIGRATION_PASSWORD_LOCKOUT,
         ];
+        // The array is the apply order; this refuses a gap, a duplicate
+        // or an entry out of order at build time (issue #27).
+        const _: () = cratefield_core::assert_migration_set(&MIGRATIONS);
         // The runner selects one set wholesale (harness issue #18), so the
         // Postgres list carries all six: the two whose SQL truly differs
         // (BYTEA for the byte columns) and the four portable ones reused
@@ -259,6 +262,9 @@ impl Module for AuthCore {
             MIGRATION_DELETION_JOBS,
             MIGRATION_PASSWORD_LOCKOUT,
         ];
+        // The array is the apply order; this refuses a gap, a duplicate
+        // or an entry out of order at build time (issue #27).
+        const _: () = cratefield_core::assert_migration_set(&MIGRATIONS_POSTGRES);
         cratefield_core::Migrations {
             sqlite: &MIGRATIONS,
             postgres: &MIGRATIONS_POSTGRES,
