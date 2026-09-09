@@ -176,13 +176,24 @@ fn drifted_surface() -> Bytes {
     Bytes::from(serde_json::to_vec(&document).expect("document serializes"))
 }
 
-/// Issue #130: hiding is not authorizing. A surface that reaches the
-/// renderer at runtime is not re-validated by the host, so an action can
-/// misdeclare its audience; the dispatch gate must then authorize the
-/// execution with the same `require_admin` the target route runs — the
-/// answer a direct `/v1` request would get, and no dispatch behind it.
+/// Issues #130 and #131. #130 established that hiding is not
+/// authorizing: a sidecar surface reaching the renderer at runtime was
+/// not re-validated, so an entry could claim the public audience over an
+/// admin path, and the dispatch gate had to authorize the execution with
+/// the same `require_admin` the target route runs.
+///
+/// #131 closes that at an earlier layer — a sidecar's document is now
+/// validated against the mount before anything merges, and a public
+/// audience over an admin path fails `Surface::validate`, so the whole
+/// document is refused rather than partly rendered. The action is
+/// therefore not renderable *at all*, which is strictly stronger than
+/// rendering it and gating the dispatch.
+///
+/// The dispatch gate itself is unchanged and remains defence in depth;
+/// it simply can no longer be reached through a merged sidecar surface,
+/// so this test asserts the refusal and that nothing is ever dispatched.
 #[pollster::test]
-async fn a_misdeclared_admin_action_is_authorized_at_dispatch_not_by_visibility() {
+async fn a_misdeclared_admin_action_never_merges_and_never_dispatches() {
     const TOKEN: &str = "test-admin-token-with-enough-entropy";
     let forwarded = Arc::new(AtomicUsize::new(0));
     let dispatcher: Arc<dyn Dispatcher> = Arc::new(DriftedDispatcher {
@@ -202,50 +213,35 @@ async fn a_misdeclared_admin_action_is_authorized_at_dispatch_not_by_visibility(
         },
     );
 
-    // The action is visible on the public UI: the document claims the
-    // public audience, and that is all the renderer's lookup consults.
+    // The document claims the public audience over `/admin/wipe`. It is
+    // refused at merge, so the action is on no rendered surface.
     let (status, html) = send(&host, Method::GET, "/ui/drift/wipe?fragment=1", &[], None).await;
-    assert_eq!(status, StatusCode::OK, "{html}");
-    assert!(
-        html.contains(r#"data-cf-module="drift" data-cf-action="wipe""#),
-        "{html}"
-    );
+    assert_eq!(status, StatusCode::NOT_FOUND, "{html}");
 
-    // Execution is the other question. No credential: the 401 the target
-    // route answers, and the sidecar never sees the request.
-    let (status, _) = send(&host, Method::POST, "/ui/drift/wipe", &[], Some("x=1")).await;
-    assert_eq!(status, StatusCode::UNAUTHORIZED);
-    assert_eq!(forwarded.load(Ordering::SeqCst), 0, "dispatched uncredited");
-
-    // A wrong token: the route's 403, still nothing dispatched.
-    let (status, _) = send(
-        &host,
-        Method::POST,
-        "/ui/drift/wipe",
-        &[("authorization", "Bearer not-the-token")],
-        Some("x=1"),
-    )
-    .await;
-    assert_eq!(status, StatusCode::FORBIDDEN);
+    // And it is not executable by any caller — no credential, a wrong
+    // one, or the real admin token. The sidecar is never reached.
+    for headers in [
+        Vec::new(),
+        vec![("authorization", "Bearer not-the-token".to_owned())],
+        vec![("authorization", format!("Bearer {TOKEN}"))],
+    ] {
+        let borrowed: Vec<(&str, &str)> = headers
+            .iter()
+            .map(|(name, value)| (*name, value.as_str()))
+            .collect();
+        let (status, html) = send(
+            &host,
+            Method::POST,
+            "/ui/drift/wipe",
+            &borrowed,
+            Some("x=1"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{html}");
+    }
     assert_eq!(
         forwarded.load(Ordering::SeqCst),
         0,
-        "dispatched on a wrong token"
+        "a refused surface must never dispatch, whatever the caller presents"
     );
-
-    // The right token: the gate passes and the sidecar is reached — the
-    // in-process dispatch traverses the same authorization as the direct
-    // `/v1` request, in both directions.
-    let (status, html) = send(
-        &host,
-        Method::POST,
-        "/ui/drift/wipe",
-        &[("authorization", &format!("Bearer {TOKEN}"))],
-        Some("x=1"),
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK, "{html}");
-    assert!(html.contains("cf-notice--success"), "{html}");
-    assert!(html.contains("Wiped."), "{html}");
-    assert_eq!(forwarded.load(Ordering::SeqCst), 1);
 }

@@ -16,8 +16,9 @@ use axum::http::{Method, StatusCode, header};
 use bytes::Bytes;
 use common::*;
 use cratefield_core::{
-    DispatchError, Dispatcher, HARNESS_SIDECARS, MapConfig, Ports, SidecarMounts, X_HARNESS_API,
-    X_REQUEST_ID,
+    DispatchError, Dispatcher, GATEWAY_ADMIN_PURPOSE, GATEWAY_PURPOSE, HARNESS_ONE_WORKER,
+    HARNESS_SIDECARS, HmacSigner, KeyRing, Kid, MapConfig, Payload, Ports, SIDECAR_GATEWAY_SECRET,
+    SIDECAR_REQUIRE_GATEWAY, SidecarMounts, Signer, X_HARNESS_API, X_HARNESS_GATEWAY, X_REQUEST_ID,
 };
 
 /// Records what it was asked to forward, and answers with whatever it was
@@ -27,6 +28,7 @@ struct RecordingDispatcher {
     binding: &'static str,
     status: StatusCode,
     contract: Option<String>,
+    extra_header: Option<(&'static str, &'static str)>,
     calls: Arc<AtomicUsize>,
     seen: Arc<std::sync::Mutex<Vec<http::Request<Bytes>>>>,
 }
@@ -37,6 +39,7 @@ impl RecordingDispatcher {
             binding,
             status: StatusCode::OK,
             contract: None,
+            extra_header: None,
             calls: Arc::new(AtomicUsize::new(0)),
             seen: Arc::new(std::sync::Mutex::new(Vec::new())),
         }
@@ -44,6 +47,11 @@ impl RecordingDispatcher {
 
     fn answering_contract(mut self, api: u32) -> Self {
         self.contract = Some(api.to_string());
+        self
+    }
+
+    fn answering_header(mut self, name: &'static str, value: &'static str) -> Self {
+        self.extra_header = Some((name, value));
         self
     }
 }
@@ -69,6 +77,9 @@ impl Dispatcher for RecordingDispatcher {
             .header(header::CONTENT_TYPE, "application/json");
         if let Some(api) = &self.contract {
             builder = builder.header(X_HARNESS_API, api);
+        }
+        if let Some((name, value)) = self.extra_header {
+            builder = builder.header(name, value);
         }
         Ok(builder
             .body(Bytes::from_static(b"{\"from\":\"sidecar\"}"))
@@ -334,4 +345,360 @@ async fn a_malformed_table_mounts_nothing_and_leaves_the_venture_serving() {
     let router = harness.router(ports_with_sidecars("not json", None));
     let ok = request(&router, Method::GET, "/__health", &[], None).await;
     assert_eq!(ok.status(), StatusCode::OK);
+}
+
+// ------------------------------------------------- the trust boundary (#131)
+
+/// Ports for a host that mounts one sidecar and holds the given extra
+/// configuration — a gateway secret, an admin token, the one-Worker
+/// declaration.
+fn ports_for(
+    table: &str,
+    extra: &[(&str, &str)],
+    dispatcher: Option<Arc<dyn Dispatcher>>,
+) -> Ports {
+    let mut pairs: Vec<(String, String)> = vec![(HARNESS_SIDECARS.to_owned(), table.to_owned())];
+    pairs.extend(
+        extra
+            .iter()
+            .map(|(k, v)| ((*k).to_owned(), (*v).to_owned())),
+    );
+    let mut ports = Ports::with_config(Arc::new(MapConfig::from_pairs(pairs)));
+    ports.dispatcher = dispatcher;
+    ports
+}
+
+/// A verifier built the way `gateway_signer` builds the host's minter, so a
+/// test can read what a forwarded stamp actually asserts.
+fn gateway_verifier(secret: &str) -> HmacSigner {
+    let mut ring = KeyRing::new();
+    ring.rotate_signing(Kid::Cur, secret.as_bytes().to_vec())
+        .expect("test secret is long enough");
+    HmacSigner::from_ring(ring)
+}
+
+const GATEWAY_SECRET: &str = "a-gateway-secret-long-enough-for-the-ring";
+const ADMIN_TOKEN: &str = "admin-token-for-the-host";
+
+#[test]
+fn a_one_worker_deployment_refuses_to_mount_a_sidecar() {
+    // Given a venture that declares it ships as a single Worker…
+    let config = MapConfig::from_pairs([
+        (HARNESS_SIDECARS, r#"{"acme-pricing":"ACME"}"#),
+        (HARNESS_ONE_WORKER, "true"),
+    ]);
+    // When it also names a sidecar, Then the table is rejected outright
+    // rather than starting a deployment that cannot reach it.
+    let errors = SidecarMounts::from_config(&config).unwrap_err();
+    assert!(errors[0].contains(HARNESS_ONE_WORKER), "{errors:?}");
+
+    // Without the declaration the same table mounts normally.
+    let config = MapConfig::from_pairs([(HARNESS_SIDECARS, r#"{"acme-pricing":"ACME"}"#)]);
+    assert!(!SidecarMounts::from_config(&config).unwrap().is_empty());
+}
+
+#[pollster::test]
+async fn caller_credentials_stop_at_the_host() {
+    let dispatcher = Arc::new(RecordingDispatcher::new("ACME"));
+    let harness = harness_with_sample();
+    let router = harness.router(ports_for(
+        r#"{"acme-pricing":"ACME"}"#,
+        &[],
+        Some(dispatcher.clone()),
+    ));
+
+    // Given a caller presenting credentials for the *venture*…
+    let _ = request(
+        &router,
+        Method::GET,
+        "/v1/acme-pricing/quote",
+        &[
+            ("authorization", "Bearer the-venture-admin-token"),
+            ("cookie", "session=abc123"),
+            ("x-some-extension", "surprise"),
+            ("accept", "application/json"),
+        ],
+        None,
+    )
+    .await;
+
+    // When the request is forwarded, Then only the allowlist crosses.
+    let seen = dispatcher.seen.lock().unwrap();
+    let headers = seen[0].headers();
+    assert!(
+        headers.get("authorization").is_none(),
+        "the venture's bearer belongs to the host alone"
+    );
+    assert!(headers.get("cookie").is_none(), "cookies stop at the host");
+    assert!(
+        headers.get("x-some-extension").is_none(),
+        "an allowlist, not a denylist: unknown headers do not cross"
+    );
+    assert_eq!(headers.get("accept").unwrap(), "application/json");
+}
+
+#[pollster::test]
+async fn a_sidecar_cannot_plant_a_cookie_on_the_ventures_origin() {
+    let dispatcher = Arc::new(
+        RecordingDispatcher::new("ACME")
+            .answering_header("set-cookie", "session=attacker; Path=/; HttpOnly"),
+    );
+    let harness = harness_with_sample();
+    let router = harness.router(ports_for(
+        r#"{"acme-pricing":"ACME"}"#,
+        &[],
+        Some(dispatcher),
+    ));
+
+    let response = request(&router, Method::GET, "/v1/acme-pricing/quote", &[], None).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(
+        response.headers().get("set-cookie").is_none(),
+        "a sidecar that can set cookies owns a session on a surface it does not serve"
+    );
+    assert_eq!(
+        response.headers().get(header::CONTENT_TYPE).unwrap(),
+        "application/json",
+        "the allowlisted response headers still cross"
+    );
+}
+
+#[pollster::test]
+async fn the_host_authorizes_admin_paths_before_forwarding_them() {
+    let dispatcher = Arc::new(RecordingDispatcher::new("ACME"));
+    let harness = harness_with_sample();
+    let router = harness.router(ports_for(
+        r#"{"acme-pricing":"ACME"}"#,
+        &[("ADMIN_TOKEN", ADMIN_TOKEN)],
+        Some(dispatcher.clone()),
+    ));
+
+    // Given an unauthenticated caller of a mounted admin path…
+    let response = request(
+        &router,
+        Method::GET,
+        "/v1/acme-pricing/admin/export",
+        &[],
+        None,
+    )
+    .await;
+
+    // When the host handles it, Then it is refused here — the sidecar is
+    // never asked, so a mount cannot become a way around the admin gate.
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(
+        dispatcher.calls.load(Ordering::SeqCst),
+        0,
+        "an unauthorized admin request must not reach the sidecar"
+    );
+}
+
+#[pollster::test]
+async fn the_gateway_stamp_asserts_admin_only_when_the_host_authorized_it() {
+    let dispatcher = Arc::new(RecordingDispatcher::new("ACME"));
+    let harness = harness_with_sample();
+    let router = harness.router(ports_for(
+        r#"{"acme-pricing":"ACME"}"#,
+        &[
+            (SIDECAR_GATEWAY_SECRET, GATEWAY_SECRET),
+            ("ADMIN_TOKEN", ADMIN_TOKEN),
+        ],
+        Some(dispatcher.clone()),
+    ));
+    let verifier = gateway_verifier(GATEWAY_SECRET);
+
+    // A public request is stamped, but only with the plain purpose.
+    let _ = request(&router, Method::GET, "/v1/acme-pricing/quote", &[], None).await;
+    // An admin request the host authorized is stamped with the admin purpose.
+    let _ = request(
+        &router,
+        Method::GET,
+        "/v1/acme-pricing/admin/export",
+        &[("authorization", &format!("Bearer {ADMIN_TOKEN}"))],
+        None,
+    )
+    .await;
+
+    let seen = dispatcher.seen.lock().unwrap();
+    let stamp = |i: usize| {
+        seen[i]
+            .headers()
+            .get(X_HARNESS_GATEWAY)
+            .expect("a stamp is minted whenever the secret is set")
+            .to_str()
+            .unwrap()
+            .to_owned()
+    };
+
+    let public = stamp(0);
+    assert!(
+        verifier.verify(&public, GATEWAY_PURPOSE).is_some(),
+        "a forwarded request carries the plain gateway purpose"
+    );
+    assert!(
+        verifier.verify(&public, GATEWAY_ADMIN_PURPOSE).is_none(),
+        "every proxied request carries a stamp, so a plain one must never \
+         read as the host having authorized an admin"
+    );
+
+    let admin = stamp(1);
+    assert!(
+        verifier.verify(&admin, GATEWAY_ADMIN_PURPOSE).is_some(),
+        "the host asserts its own admin verdict in the MAC"
+    );
+    assert!(
+        verifier.verify(&admin, GATEWAY_PURPOSE).is_none(),
+        "the purposes are disjoint (issue #137's rule)"
+    );
+}
+
+#[pollster::test]
+async fn no_gateway_secret_means_no_stamp() {
+    let dispatcher = Arc::new(RecordingDispatcher::new("ACME"));
+    let harness = harness_with_sample();
+    let router = harness.router(ports_for(
+        r#"{"acme-pricing":"ACME"}"#,
+        &[],
+        Some(dispatcher.clone()),
+    ));
+    let _ = request(&router, Method::GET, "/v1/acme-pricing/quote", &[], None).await;
+    let seen = dispatcher.seen.lock().unwrap();
+    assert!(
+        seen[0].headers().get(X_HARNESS_GATEWAY).is_none(),
+        "absent secret, absent capability — and a sidecar that requires the \
+         gateway then refuses every request rather than serving them open"
+    );
+}
+
+#[pollster::test]
+async fn requiring_the_gateway_without_a_secret_fails_closed() {
+    // Given a sidecar-role deployment that demands the gateway but has no
+    // key to verify one with…
+    let harness = harness_with_sample();
+    let router = harness.router(ports_for("", &[(SIDECAR_REQUIRE_GATEWAY, "true")], None));
+
+    // When a guarded route is called, Then it is refused loudly.
+    let response = request(&router, Method::GET, "/v1/sample/row", &[], None).await;
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+
+    // And the probe routes stay open: probes must probe.
+    let health = request(&router, Method::GET, "/__health", &[], None).await;
+    assert_eq!(health.status(), StatusCode::OK);
+}
+
+#[pollster::test]
+async fn a_sidecar_that_requires_the_gateway_refuses_an_unstamped_caller() {
+    let harness = harness_with_sample();
+    let router = harness.router(ports_for(
+        "",
+        &[
+            (SIDECAR_REQUIRE_GATEWAY, "true"),
+            (SIDECAR_GATEWAY_SECRET, GATEWAY_SECRET),
+        ],
+        None,
+    ));
+
+    // A direct caller, reaching the sidecar without going through the host.
+    let response = request(&router, Method::GET, "/v1/sample/row", &[], None).await;
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(
+        body_json(response).await["type"]
+            .as_str()
+            .unwrap()
+            .rsplit('/')
+            .next()
+            .unwrap(),
+        "sidecar-unauthorized"
+    );
+
+    // A forged stamp is no better than none.
+    let response = request(
+        &router,
+        Method::GET,
+        "/v1/sample/row",
+        &[(X_HARNESS_GATEWAY, "not-a-token")],
+        None,
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+
+    // The stamp the host actually mints is accepted.
+    let signer = gateway_verifier(GATEWAY_SECRET);
+    let token = signer.sign(&Payload {
+        purpose: GATEWAY_PURPOSE.to_owned(),
+        subject: "sample".to_owned(),
+        exp: None,
+        kid: Kid::Cur,
+    });
+    let response = request(
+        &router,
+        Method::GET,
+        "/v1/sample/row",
+        &[(X_HARNESS_GATEWAY, &token)],
+        None,
+    )
+    .await;
+    assert_ne!(response.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[pollster::test]
+async fn a_plain_gateway_stamp_does_not_open_the_sidecars_admin_plane() {
+    // Given a sidecar-role deployment that closes the gate and holds its
+    // own admin token…
+    let harness = harness_with_sample();
+    let router = harness.router(ports_for(
+        "",
+        &[
+            (SIDECAR_REQUIRE_GATEWAY, "true"),
+            (SIDECAR_GATEWAY_SECRET, GATEWAY_SECRET),
+            ("ADMIN_TOKEN", ADMIN_TOKEN),
+        ],
+        None,
+    ));
+    let signer = gateway_verifier(GATEWAY_SECRET);
+    let stamp = |purpose: &str| {
+        signer.sign(&Payload {
+            purpose: purpose.to_owned(),
+            subject: "sample".to_owned(),
+            exp: None,
+            kid: Kid::Cur,
+        })
+    };
+
+    // When an admin path is called with the stamp every *proxied* request
+    // carries, Then the gate lets it through — it did come from the host —
+    // but the admin token is not re-materialized for it. Otherwise any
+    // captured forwarded stamp would be an admin credential for its whole
+    // lifetime.
+    let response = request(
+        &router,
+        Method::GET,
+        "/v1/sample/admin/whoami",
+        &[(X_HARNESS_GATEWAY, &stamp(GATEWAY_PURPOSE))],
+        None,
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        body_json(response).await["authorized"],
+        false,
+        "a plain forwarded stamp must not confer admin"
+    );
+
+    // And when the stamp is the one the host mints only after its own
+    // admin gate passed, the sidecar's token is asserted for the module.
+    let response = request(
+        &router,
+        Method::GET,
+        "/v1/sample/admin/whoami",
+        &[(X_HARNESS_GATEWAY, &stamp(GATEWAY_ADMIN_PURPOSE))],
+        None,
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        body_json(response).await["authorized"],
+        true,
+        "the host's admin verdict is what re-materializes the token"
+    );
 }

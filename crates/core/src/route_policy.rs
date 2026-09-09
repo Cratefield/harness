@@ -89,32 +89,10 @@ impl WriteGuards {
         let mut guards = Self::default();
         for module in modules {
             let surface: Surface = module.surface();
-            let mut form = false;
-            let mut signature = false;
-            let mut any_guard = false;
-            for action in &surface.actions {
-                match action.policy {
-                    RoutePolicy::HumanForm => {
-                        form = true;
-                        any_guard = true;
-                    }
-                    RoutePolicy::Signature => {
-                        signature = true;
-                        any_guard = true;
-                    }
-                    // The legacy mirror: `captcha: true` on an undeclared
-                    // route (a struct literal, or a sidecar JSON loaded
-                    // before policies existed) still means the renderer
-                    // demands a widget — treat it as the form guard so it
-                    // can never escape the gate.
-                    RoutePolicy::Open if action.captcha => {
-                        form = true;
-                        any_guard = true;
-                    }
-                    RoutePolicy::Open => {}
-                }
-            }
-            if !any_guard && module.public_writes() {
+            let (mut form, signature) = Self::surface_flags(&surface);
+            // The undeclared-public-writer fallback only applies when
+            // nothing in the surface is guarded.
+            if !form && !signature && module.public_writes() {
                 form = true;
             }
             if form {
@@ -125,6 +103,40 @@ impl WriteGuards {
             }
         }
         guards
+    }
+
+    /// The guards a **declared surface** demands (issue #131). A sidecar's
+    /// merged surface is not a [`Module`] this process can ask
+    /// [`public_writes`](Module::public_writes) of, so the fallback has no
+    /// meaning here: whatever the document declares is exactly what it
+    /// needs. Same per-action reading as [`Self::collect`] through the one
+    /// [`Action::demands_captcha`] predicate.
+    ///
+    /// [`Action::demands_captcha`]: crate::surface::Action::demands_captcha
+    #[must_use]
+    pub fn from_surface(module: &str, surface: &Surface) -> Self {
+        let (form, signature) = Self::surface_flags(surface);
+        Self {
+            captcha_modules: form.then(|| module.to_owned()).into_iter().collect(),
+            signature_modules: signature.then(|| module.to_owned()).into_iter().collect(),
+        }
+    }
+
+    /// Whether any action needs a captcha and whether any is a signature
+    /// route. The `Open`-with-`captcha` legacy mirror resolves inside
+    /// [`Action::demands_captcha`].
+    fn surface_flags(surface: &Surface) -> (bool, bool) {
+        let mut form = false;
+        let mut signature = false;
+        for action in &surface.actions {
+            if action.demands_captcha() {
+                form = true;
+            }
+            if action.policy == RoutePolicy::Signature {
+                signature = true;
+            }
+        }
+        (form, signature)
     }
 
     /// Whether any module needs the `Captcha` port.

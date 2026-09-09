@@ -70,7 +70,60 @@ Each of these is otherwise discovered the hard way.
 What a sidecar **can** do, and is easy to assume it cannot: serve its UI.
 The host fetches each mounted sidecar's `/__surface` and merges the
 public part, so a sidecar module's forms render at `/ui/<module>/<action>`
-like any other (issue #76, [UI.md](UI.md)).
+like any other (issue #76, [UI.md](UI.md)). The merge is capped and
+validated — see the boundary below (issue #131).
+
+## The trust boundary
+
+A mount is a seam inside one deployment's trust, not a network hop
+between tenants. What crosses it is written down (issue #131, ADR 0009
+amendment), and both Workers enforce it.
+
+| | Crosses | Stops at the host |
+| :--- | :--- | :--- |
+| Request | Method, path, query, body; `content-type`, `content-length`, `accept`, `accept-language`, `user-agent`; the host's `x-request-id`; `cf-connecting-ip` **as the host resolved it** | `authorization`, `cookie`, anything unlisted — and a client-forged `cf-connecting-ip`, which is replaced, never copied |
+| Response | `content-type`, `location`, `cache-control`, `etag`, `last-modified`, `vary`, `retry-after`, `content-disposition`, `x-harness-api`, `x-harness-module`, `x-request-id` | `set-cookie` and anything unlisted: a sidecar cannot plant cookies on the venture's origin |
+
+**The gateway makes "not publicly routable" enforceable.**
+`SIDECAR_GATEWAY_SECRET` (at least 32 bytes) goes on **both** ends of a
+mounted pair; it is its own secret — `HARNESS_SECRET` never crosses, by
+the same forging argument as above. The host stamps every forwarded
+request with a short HMAC token (`x-harness-gateway`, purpose
+`sidecar-gateway`, 120 s lifetime). A sidecar that also sets
+`SIDECAR_REQUIRE_GATEWAY` refuses every `/v1/*` and `/__surface` request
+whose token it cannot verify (`401 sidecar-unauthorized`). `/__health`
+and the sidecar's own `/ui` stay open — probes must probe. Require the
+gate without a usable secret and the sidecar fails **closed** with `503`:
+a broken deploy must never quietly serve the open internet. `fz doctor`
+warns when a mount table is present without `SIDECAR_GATEWAY_SECRET`.
+
+**Admin stays the host's plane.** An `/admin` path under a mount is
+authorized by the host, against the host's own `ADMIN_TOKEN`, before
+anything is forwarded; the caller's bearer never crosses. A sidecar
+behind the gateway re-materializes its **own** token for module routes
+behind the gate — so the host's admin secret never enters the sidecar
+and the sidecar's never enters the host, and a mounted module's admin
+plane is only reachable over the gateway, which is the only channel that
+says "the host checked".
+
+**Abuse controls run on the host.** Forwarded writes (`POST`, `PUT`,
+`PATCH`, `DELETE`) pass the venture's rate limiter and fail closed: the
+sidecar cannot resolve the caller's address better than the host just
+did. Captcha stays with the module that serves the route — a single-use
+token is verified once, by whoever owns the form.
+
+**The merged surface is treated as hostile.** A sidecar's `/__surface`
+is byte-capped (256 KiB) before it is parsed, contract-checked, allowed
+to speak for exactly the module it is mounted as, validated (bad paths
+and oversized action lists reject the whole document), and — on a
+production host with no `Captcha` port — stripped of captcha-demanding
+actions the host could not render anyway.
+
+**One Worker and mounts are a contradiction.** A truthy
+`HARNESS_ONE_WORKER` (`1`, `true`, `yes` or `on`) with a non-empty
+`HARNESS_SIDECARS` is rejected where the table is read — by the runtime,
+which then serves no sidecars (the table is logged and dropped), and by
+`fz`, which says so plainly.
 
 ## Moving a module between mounts
 

@@ -134,6 +134,18 @@ impl Module for SampleModule {
             .route(
                 "/callback",
                 axum::routing::post(callback).with_state(Arc::clone(&state)),
+            )
+            // Reports whether an `authorization` header reached the module.
+            // The sidecar gateway re-materializes the sidecar's own admin
+            // token for a request the host authorized (issue #131), and this
+            // is where a test can see whether it did.
+            .route(
+                "/admin/whoami",
+                axum::routing::get(|headers: axum::http::HeaderMap| async move {
+                    Json(json!({
+                        "authorized": headers.contains_key("authorization"),
+                    }))
+                }),
             );
         if let Some(park) = &self.park {
             let park = Arc::clone(park);

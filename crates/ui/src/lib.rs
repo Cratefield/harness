@@ -482,12 +482,15 @@ fn apply_spec(fields: &[Field], copy: Option<&ActionSpec>) -> Vec<Field> {
 ///
 /// Security invariant (issue #130): the audience filter in [`find_action`]
 /// and the public subset of `/__surface` are *visibility*, not
-/// authorization. A surface document that reaches the renderer at runtime
-/// (a sidecar's, merged per request) is not re-validated by this host, so
-/// an entry could claim a public audience over an admin path. Execution
-/// therefore re-derives the gate from the path as well as the audience,
-/// and [`dispatch`] checks it with the same [`require_admin`] the target
-/// route uses.
+/// authorization. Execution re-derives the gate from the path as well as
+/// the audience, and [`dispatch`] checks it with the same
+/// [`require_admin`] the target route uses.
+///
+/// Since #131 a sidecar's document is validated against its mount before
+/// it merges, so a public audience over an admin path is refused there
+/// and cannot reach the renderer. The path half of this predicate is
+/// therefore defence in depth rather than the only gate — kept because a
+/// hole in merge validation must not become an authorization bypass.
 fn is_admin_gated(spec: &Action) -> bool {
     spec.audience == Audience::Admin || spec.path == "/admin" || spec.path.starts_with("/admin/")
 }

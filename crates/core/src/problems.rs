@@ -32,6 +32,10 @@ pub struct Slugs {
     pub admin_unauthorized: ProblemDef,
     /// 403: the presented admin token is wrong.
     pub admin_forbidden: ProblemDef,
+    /// 401: a request reached a sidecar-guarded route (`/v1/*` or
+    /// `/__surface` on a sidecar that requires it) without a valid gateway
+    /// token from the trusted host (issue #131).
+    pub sidecar_unauthorized: ProblemDef,
     /// 413: the request body exceeded the 64 KiB `/v1/*` limit.
     pub request_too_large: ProblemDef,
     /// 429: the rate limit for this IP or address was exceeded.
@@ -90,6 +94,12 @@ pub const SLUGS: Slugs = Slugs {
         status: StatusCode::FORBIDDEN,
         title: "Admin token rejected",
         description: "The presented admin token is wrong.",
+    },
+    sidecar_unauthorized: ProblemDef {
+        slug: "sidecar-unauthorized",
+        status: StatusCode::UNAUTHORIZED,
+        title: "Unauthorized sidecar caller",
+        description: "A request to a sidecar-guarded route could not be established as coming from the trusted gateway.",
     },
     request_too_large: ProblemDef {
         slug: "request-too-large",
@@ -150,6 +160,7 @@ pub fn registry() -> Vec<&'static ProblemDef> {
         &SLUGS.unknown_product,
         &SLUGS.admin_unauthorized,
         &SLUGS.admin_forbidden,
+        &SLUGS.sidecar_unauthorized,
         &SLUGS.request_too_large,
         &SLUGS.rate_limited,
         &SLUGS.not_found,

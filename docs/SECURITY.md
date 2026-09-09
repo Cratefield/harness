@@ -24,6 +24,27 @@
 - **Admin auth.** `cratefield_core::admin::require_admin`: disabled (401)
   when `ADMIN_TOKEN` is unset, SHA-256-digest constant-time compare,
   403 on a wrong token; the token never appears in tracing fields.
+- **Sidecar trust boundary** (issue #131, ADR 0009 amendment). A mount
+  forwards an allowlist only: `content-type`, `content-length`, `accept`,
+  `accept-language`, `user-agent`, the host's `x-request-id`, and a
+  `cf-connecting-ip` the host resolved itself — a client-forged one is
+  replaced, never copied. `authorization` and `cookie` never cross, and
+  responses return through an allowlist that drops `set-cookie`. With
+  `SIDECAR_GATEWAY_SECRET` configured the host stamps every forwarded
+  request with a purpose-bound, 120 s `x-harness-gateway` token; a sidecar
+  that sets `SIDECAR_REQUIRE_GATEWAY` answers `401 sidecar-unauthorized`
+  for `/v1/*` and `/__surface` it cannot verify, and fails closed (`503`)
+  when the gate is required without a usable secret. Admin paths under a
+  mount are authorized by the host against its own `ADMIN_TOKEN`, and
+  only then is the stamp minted under the distinct
+  `sidecar-gateway-admin` purpose; that purpose, and not the plain stamp
+  every forwarded request carries, is what lets the sidecar's gate
+  re-materialize the sidecar's own admin credential behind it. So no
+  bearer crosses in either direction, and a captured forwarded stamp is
+  not an admin credential.
+  Forwarded writes pass the host's rate limiter and fail closed. A merged
+  sidecar `/__surface` is byte-capped, contract-checked, limited to the
+  mounted module's public part, and validated.
 - **CSV formula-injection guard.** `cratefield_core::csv::escape` prefixes
   `= + - @ \t \r` leading cells with `'` before RFC 4180 quoting.
 - **Rate limits on every public route** — including confirm and status —

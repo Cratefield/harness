@@ -31,10 +31,17 @@ use crate::module::{HARNESS_API, Module, ModuleContext, harness_api_mismatch};
 use crate::ports::Dispatcher;
 use crate::ports::{Clock, Database, Port, Ports, Statement, SystemClock, warn_undeclared_ports};
 use crate::problem::Problem;
-use crate::sidecar::SidecarMount;
-use crate::surface::{RenderedSurface, SurfaceDocument, SurfaceSource, UiContext, UiMount};
+use crate::sidecar::{
+    GatewayGuard, SIDECAR_REQUIRE_GATEWAY, SidecarMount, X_HARNESS_GATEWAY, gateway_guard,
+    gateway_signer, mint_gateway, truthy,
+};
+use crate::signer::HmacSigner;
+use crate::surface::{
+    MAX_SIDECAR_SURFACE_BYTES, RenderedSurface, SurfaceDocument, SurfaceSource, UiContext, UiMount,
+    sanitize_sidecar_document, strip_unguarded_captcha_actions,
+};
 use crate::template::{Template, TemplateRegistry};
-use crate::venture::Venture;
+use crate::venture::{Venture, VentureEnv};
 
 /// A runtime resolves environment bindings into [`Ports`] and declares
 /// statically which ports it can provide, so `Harness::build` can reject a
@@ -142,6 +149,44 @@ impl Harness {
     /// with and without them. A malformed table mounts nothing and is
     /// logged; a mount that collides with an in-process module is
     /// dropped and logged. Neither takes down the in-process modules.
+    /// This deployment's sidecar-role enforcement state (issue #131):
+    /// whether the gate is closed, the key that verifies a stamp, and the
+    /// sidecar's own admin token — which never crosses the boundary and is
+    /// only ever re-asserted for a request the host already authorized.
+    fn gateway_guard_state(ports: &Ports, gateway: Option<&Arc<HmacSigner>>) -> GatewayGuard {
+        GatewayGuard {
+            require: truthy(ports.config.as_ref(), SIDECAR_REQUIRE_GATEWAY),
+            signer: gateway.map(Arc::clone),
+            admin_token: ports
+                .config
+                .get("ADMIN_TOKEN")
+                .filter(|token| !token.is_empty()),
+        }
+    }
+
+    /// Nests one forwarding router per mounted sidecar (issue #131).
+    /// Split out of [`Harness::router`] so that method stays readable.
+    fn nest_sidecars(
+        mut api: Router,
+        mounted: &[SidecarMount],
+        ports: &Ports,
+        gateway: Option<&Arc<HmacSigner>>,
+    ) -> Router {
+        for mount in mounted {
+            api = api.nest(
+                &format!("/v1/{}", mount.name),
+                crate::sidecar::router(
+                    mount.clone(),
+                    ports.dispatcher.clone(),
+                    Arc::clone(&ports.config),
+                    ports.rate_limiter.clone(),
+                    gateway.map(Arc::clone),
+                ),
+            );
+        }
+        api
+    }
+
     fn sidecar_mounts(&self, ports: &Ports) -> Vec<SidecarMount> {
         let mounts = match crate::sidecar::SidecarMounts::from_config(ports.config.as_ref()) {
             Ok(mounts) => mounts,
@@ -190,13 +235,18 @@ impl Harness {
             let ctx = self.module_context(module.as_ref(), &ports);
             api = api.nest(&format!("/v1/{}", module.name()), module.router(ctx));
         }
+        // The gateway signer is this deployment's half of the sidecar
+        // trust boundary (issue #131): absent secret, absent capability —
+        // forwarded requests carry no stamp and a sidecar that requires one
+        // will refuse them. The clock only expires tokens, so the default
+        // system clock is fine when the runtime supplies none.
+        let gateway = gateway_signer(
+            ports.config.as_ref(),
+            ports.clock.clone().unwrap_or_else(|| Arc::new(SystemClock)),
+        );
         let mounted = self.sidecar_mounts(&ports);
-        for mount in &mounted {
-            api = api.nest(
-                &format!("/v1/{}", mount.name),
-                crate::sidecar::router(mount.clone(), ports.dispatcher.clone()),
-            );
-        }
+        api = Self::nest_sidecars(api, &mounted, &ports, gateway.as_ref());
+        let gateway_state = Self::gateway_guard_state(&ports, gateway.as_ref());
         let api = api
             .layer(axum::middleware::from_fn(security_headers_layer))
             .layer(DefaultBodyLimit::max(MAX_BODY_BYTES));
@@ -205,6 +255,9 @@ impl Harness {
             base: Arc::clone(&self.surface),
             mounts: mounted,
             dispatcher: ports.dispatcher.clone(),
+            gateway: gateway.clone(),
+            env: self.venture.env,
+            captcha_configured: ports.captcha.is_some(),
         });
 
         let ui = self.ui.as_ref().map(|ui| {
@@ -285,7 +338,13 @@ impl Harness {
             None => root,
         };
 
-        root.layer(from_fn_with_state(scope_state, scope_layer))
+        // Innermost layer: the gate runs after `Scope`, so refusals carry
+        // the request id, and it wraps every route — nested `/v1/*`, `/ui`
+        // and `/__surface` alike (issue #131). Tower order: the layer
+        // applied first is the innermost, so this line must come before
+        // `scope_layer` in the chain.
+        root.layer(from_fn_with_state(gateway_state, gateway_guard))
+            .layer(from_fn_with_state(scope_state, scope_layer))
             .layer(axum::middleware::from_fn(token_response_layer))
             .layer(cors_layer(&self.venture.cors_origins))
     }
@@ -368,6 +427,11 @@ struct MergedSurface {
     base: Arc<SurfaceVariants>,
     mounts: Vec<SidecarMount>,
     dispatcher: Option<Arc<dyn Dispatcher>>,
+    /// Mints the gateway stamp for `/__surface` fetches: the host is not
+    /// exempt from the boundary it enforces on others (issue #131).
+    gateway: Option<Arc<HmacSigner>>,
+    env: VentureEnv,
+    captcha_configured: bool,
 }
 
 impl MergedSurface {
@@ -381,10 +445,16 @@ impl MergedSurface {
             if !dispatcher.has(&mount.binding) {
                 continue;
             }
-            let request = axum::http::Request::builder()
+            let mut builder = axum::http::Request::builder()
                 .method(axum::http::Method::GET)
                 .uri("/__surface")
-                .header(header::ACCEPT, "application/json")
+                .header(header::ACCEPT, "application/json");
+            if let Some(signer) = &self.gateway {
+                // A surface fetch is not an admin request: the plain purpose.
+                builder =
+                    builder.header(X_HARNESS_GATEWAY, mint_gateway(signer, &mount.name, false));
+            }
+            let request = builder
                 .body(bytes::Bytes::new())
                 .expect("static request builds");
             let answer = match dispatcher.dispatch(&mount.binding, request).await {
@@ -398,18 +468,38 @@ impl MergedSurface {
                     continue;
                 }
             };
+            // Cap before parsing: an unbounded document turns a merge into
+            // a memory attack on this Worker (issue #131).
+            if answer.body().len() > MAX_SIDECAR_SURFACE_BYTES {
+                tracing::warn!(
+                    module = mount.name,
+                    "sidecar surface exceeds {MAX_SIDECAR_SURFACE_BYTES} bytes and was not merged"
+                );
+                continue;
+            }
             match serde_json::from_slice::<SurfaceDocument>(answer.body()) {
-                Ok(document) => extra.extend(
-                    document
-                        .modules
-                        .into_iter()
-                        .filter(|m| m.name == mount.name)
-                        .map(|m| crate::surface::ModuleSurface {
-                            name: m.name,
-                            version: m.version,
-                            surface: m.surface.public(),
-                        }),
-                ),
+                Ok(document) => match sanitize_sidecar_document(&document, &mount.name) {
+                    Ok(entries) => extra.extend(entries.into_iter().filter_map(|mut entry| {
+                        // A production host with no Captcha port cannot
+                        // render the widget a merged action demands, so the
+                        // honest surface drops it (issue #131).
+                        if self.env == VentureEnv::Production
+                            && !self.captcha_configured
+                            && strip_unguarded_captcha_actions(&mut entry.surface) > 0
+                        {
+                            tracing::warn!(
+                                module = entry.name,
+                                "merged sidecar actions requiring a captcha were dropped: no Captcha port here"
+                            );
+                        }
+                        (!entry.surface.is_empty()).then_some(entry)
+                    })),
+                    Err(problems) => {
+                        for problem in problems {
+                            tracing::warn!(module = mount.name, error = problem, "sidecar surface rejected at merge");
+                        }
+                    }
+                },
                 Err(err) => {
                     tracing::warn!(module = mount.name, error = %err, "sidecar surface is not a surface document");
                 }

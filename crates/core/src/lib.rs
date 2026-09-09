@@ -80,15 +80,20 @@ pub use route_policy::{
     verify_human_form,
 };
 pub use scope::Scope;
-pub use sidecar::{HARNESS_SIDECARS, SidecarMount, SidecarMounts, X_HARNESS_API, X_HARNESS_MODULE};
+pub use sidecar::{
+    GATEWAY_ADMIN_PURPOSE, GATEWAY_PURPOSE, GATEWAY_TOKEN_TTL_SECS, HARNESS_ONE_WORKER,
+    HARNESS_SIDECARS, SIDECAR_GATEWAY_SECRET, SIDECAR_REQUIRE_GATEWAY, SidecarMount, SidecarMounts,
+    X_HARNESS_API, X_HARNESS_GATEWAY, X_HARNESS_MODULE,
+};
 pub use signer::{
     CONFIRM_TOKEN_MAX_TTL_SECS, DEFAULT_TOKEN_MAX_TTL_SECS, HmacSigner, KeyRing, KeyState,
     MIN_SECRET_BYTES, RingKey, STATUS_TOKEN_MAX_TTL_SECS, SignerError, TokenPolicy,
     UNSUBSCRIBE_ACTION,
 };
 pub use surface::{
-    Action, Audience, Column, HINT_KEYWORDS, ModuleSurface, Outcome, RenderedSurface, SURFACE_API,
-    Surface, SurfaceDocument, SurfaceSource, UiContext, UiMount, VentureSurface, View, hint_field,
+    Action, Audience, Column, HINT_KEYWORDS, MAX_SIDECAR_ACTIONS, MAX_SIDECAR_SURFACE_BYTES,
+    MAX_SIDECAR_VIEWS, ModuleSurface, Outcome, RenderedSurface, SURFACE_API, Surface,
+    SurfaceDocument, SurfaceSource, UiContext, UiMount, VentureSurface, View, hint_field,
     schema_for,
 };
 pub use template::{Rendered, Template, TemplateError, TemplateRegistry};

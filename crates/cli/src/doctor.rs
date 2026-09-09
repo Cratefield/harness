@@ -8,7 +8,10 @@ use crate::collect::verify_locked;
 use crate::lint::banned_tokens;
 use crate::lock::{Lock, read_lock};
 use cratefield_core::lint_card_data;
-use cratefield_core::{HARNESS_API, HARNESS_SIDECARS, Harness, VentureEnv, harness_api_mismatch};
+use cratefield_core::{
+    HARNESS_API, HARNESS_SIDECARS, Harness, SIDECAR_GATEWAY_SECRET, VentureEnv,
+    harness_api_mismatch,
+};
 use std::path::Path;
 
 /// Runs every doctor check. `allow_no_captcha` downgrades the
@@ -89,6 +92,20 @@ pub fn doctor(
                  checked here — they live in its own repository (docs/MOUNTING.md)",
                 crate::sidecars::listed(&mounts)
             );
+            // Gateway advisory (issue #131): without the shared secret the
+            // host stamps no token, so a sidecar that requires one refuses
+            // every forwarded request and a sidecar that does not cannot
+            // tell the host from the open internet.
+            if std::env::var(SIDECAR_GATEWAY_SECRET)
+                .ok()
+                .is_none_or(|value| value.trim().is_empty())
+            {
+                eprintln!(
+                    "fz: warning: {SIDECAR_GATEWAY_SECRET} is unset — the host stamps no gateway \
+                     token, so a sidecar that requires one (SIDECAR_REQUIRE_GATEWAY) refuses \
+                     every forwarded request (issue #131)"
+                );
+            }
         }
         Ok(_) => {}
         Err(errors) => failures.extend(errors),
