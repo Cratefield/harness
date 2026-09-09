@@ -1,10 +1,10 @@
 //! Sea-query data access for `waitlist_entries` (ADR 0004). Positions
 //! are assigned **inside** [`confirm_entry`]'s single
 //! [`cratefield_core::Database::batch`] call — the `1 + MAX(position)`
-//! subquery runs inside the UPDATE, under a per-product lock statement
-//! that serializes concurrent confirms of one product on every engine
-//! (atomic on D1, a locked transaction on the sqlite and Postgres
-//! adapters; issue #20).
+//! subquery runs inside the UPDATE, under a single-row per-product
+//! mutex on `waitlist_position_lock` that serializes concurrent confirms
+//! of one product on every engine (atomic on D1, a locked transaction
+//! on the sqlite and Postgres adapters; issues #20, #173).
 
 use cratefield_core::{Database, DbError, Row, Statement};
 use sea_query::{Alias, Expr, Func, Query, SimpleExpr};
@@ -229,14 +229,21 @@ fn next_position_expr(product: &str) -> SimpleExpr {
 /// Positions are never recomputed: the `MAX` only looks forward, and
 /// deleting rows leaves gaps on purpose (issue #11).
 ///
-/// The batch opens with a per-product lock statement — `UPDATE … SET
-/// referrals = referrals WHERE product = ?` — that changes no value but,
-/// on Postgres, takes the row locks of every entry in the product before
-/// the position `MAX` runs, so concurrent confirms of the same product
-/// serialize instead of each reading a pre-commit `MAX` and sharing a
-/// position (the parity suite, issue #20). SQLite and D1 serialize a
-/// whole batch on the single connection already; there the statement is
-/// a value-neutral no-op.
+/// The batch opens with a single-row per-product mutex on
+/// `waitlist_position_lock`: an `INSERT … ON CONFLICT DO NOTHING` that
+/// materialises the product's lock row, then an `UPDATE … WHERE
+/// product = ?` of that one row. Concurrent confirms of the product
+/// queue on that row (the conflict wait covers the cold-start race
+/// where the row does not exist yet), so each one's position `MAX`
+/// runs only after the previous confirm committed — positions stay
+/// distinct and dense (issues #20, #173). Locking exactly one row
+/// removes the deadlock the old bulk `UPDATE … WHERE product = ?` over
+/// all of `waitlist_entries` caused on Postgres: a multi-row UPDATE
+/// takes row locks in executor order, so two confirms could grab the
+/// same row set opposite ways and one was killed as the deadlock
+/// victim. SQLite and D1 serialize a whole batch on the single
+/// connection already; there the mutex statements are ordinary
+/// same-transaction writes.
 pub(crate) async fn confirm_entry(
     db: &dyn Database,
     row: &WaitlistRow,
@@ -244,9 +251,21 @@ pub(crate) async fn confirm_entry(
     now: &str,
     referral_code: &str,
 ) -> Result<bool, DbError> {
-    let mut lock = Query::update();
-    lock.table(iden("waitlist_entries"))
-        .value(iden("referrals"), Expr::col(iden("referrals")))
+    let mut ensure_lock_row = Query::insert();
+    ensure_lock_row
+        .into_table(iden("waitlist_position_lock"))
+        .columns(["product", "updated_at"])
+        .values_panic([row.product.clone().into(), now.to_owned().into()])
+        .on_conflict(
+            sea_query::OnConflict::column(iden("product"))
+                .do_nothing()
+                .to_owned(),
+        );
+
+    let mut take_lock = Query::update();
+    take_lock
+        .table(iden("waitlist_position_lock"))
+        .value(iden("updated_at"), now)
         .and_where(Expr::col(iden("product")).eq(row.product.as_str()));
 
     let mut flip = Query::update();
@@ -266,7 +285,10 @@ pub(crate) async fn confirm_entry(
     // when this batch is the one that confirms it. Ordered the other way the
     // credit cannot tell whether the flip was its own, and a replayed or
     // interleaved confirm credits the referrer again for one referral.
-    let mut stmts = vec![Statement::render(&lock)];
+    let mut stmts = vec![
+        Statement::render(&ensure_lock_row),
+        Statement::render(&take_lock),
+    ];
     if let Some(referrer) = row.referred_by.as_deref() {
         let mut still_pending = Query::select();
         still_pending

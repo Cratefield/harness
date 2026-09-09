@@ -258,19 +258,55 @@ pub(crate) fn referral_code() -> String {
         .to_lowercase()
 }
 
-fn unique_code_violation(err: &cratefield_core::DbError) -> bool {
-    let detail = match err {
+/// The driver message of a write failure, for the dialect-aware error
+/// predicates below. A `Query` error never reports a constraint or
+/// lock conflict on this path.
+fn write_failure_detail(err: &cratefield_core::DbError) -> Option<&str> {
+    match err {
         cratefield_core::DbError::Batch(detail) | cratefield_core::DbError::Execute(detail) => {
-            detail
+            Some(detail)
         }
-        cratefield_core::DbError::Query(_) => return false,
-    };
-    detail.contains("UNIQUE constraint failed") && detail.contains("referral_code")
+        cratefield_core::DbError::Query(_) => None,
+    }
 }
 
-/// Runs the confirm batch with up to three fresh referral codes; the
-/// whole batch (position included) rolls back on a code collision, so a
-/// retry assigns cleanly.
+/// Whether `err` is a UNIQUE violation on `referral_code` — SQLite/D1
+/// wording (`UNIQUE constraint failed: waitlist_entries.referral_code`)
+/// **or** Postgres wording (`duplicate key value violates unique
+/// constraint "waitlist_entries_referral_code_key"`), which quotes the
+/// column in the constraint name (issue #173: matching only the SQLite
+/// wording made the retry below dead code on Postgres). SQLSTATE 23505
+/// is not in sqlx's `Display`, which is what the adapter captures, so
+/// the messages are matched per dialect.
+fn unique_code_violation(err: &cratefield_core::DbError) -> bool {
+    write_failure_detail(err).is_some_and(|detail| {
+        (detail.contains("UNIQUE constraint failed")
+            || detail.contains("duplicate key value violates unique constraint"))
+            && detail.contains("referral_code")
+    })
+}
+
+/// Defence-in-depth (issue #173): whether `err` is a transaction the
+/// engine asks the client to redo — Postgres deadlock (this backend
+/// killed as the victim) or serialization failure, or SQLite/D1 losing
+/// the write lock. The confirm batch is all-or-nothing, so replaying it
+/// from scratch is safe. This is a backstop only: the root cause, the
+/// nondeterministic multi-row bulk lock, is removed in
+/// [`store::confirm_entry`] by the single-row position mutex.
+fn retriable_transaction_failure(err: &cratefield_core::DbError) -> bool {
+    write_failure_detail(err).is_some_and(|detail| {
+        detail.contains("deadlock detected")
+            || detail.contains("could not serialize access")
+            || detail.contains("database is locked")
+            || detail.contains("database table is locked")
+    })
+}
+
+/// Runs the confirm batch with up to three fresh referral codes,
+/// retrying a code collision ([`unique_code_violation`]) and an
+/// engine-retriable transaction failure ([`retriable_transaction_failure`],
+/// issue #173 backstop); the whole batch (position included) rolls back
+/// on either, so a retry assigns cleanly.
 async fn confirm_with_code(
     db: &dyn cratefield_core::Database,
     row: &store::WaitlistRow,
@@ -284,6 +320,10 @@ async fn confirm_with_code(
             Ok(flipped) => return Ok(flipped),
             Err(err) if unique_code_violation(&err) => {
                 tracing::warn!("referral code collision; retrying with a fresh code");
+                last_err = Some(err);
+            }
+            Err(err) if retriable_transaction_failure(&err) => {
+                tracing::warn!("confirm batch hit a retriable transaction failure; retrying");
                 last_err = Some(err);
             }
             Err(err) => return Err(err),
@@ -778,4 +818,75 @@ async fn admin_export(
         body,
     )
         .into_response())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{retriable_transaction_failure, unique_code_violation};
+    use cratefield_core::DbError;
+
+    fn batch(message: &str) -> DbError {
+        DbError::Batch(message.to_owned())
+    }
+
+    #[test]
+    fn unique_code_violation_recognizes_sqlite_and_postgres_wordings() {
+        // Given the two dialects' real messages for a referral_code clash…
+        let sqlite = batch("UNIQUE constraint failed: waitlist_entries.referral_code");
+        let postgres = batch(
+            "duplicate key value violates unique constraint \
+             \"waitlist_entries_referral_code_key\" DETAIL:  \
+             Key (referral_code)=(abc12345) already exists.",
+        );
+        // When each is classified, Then both retry — the Postgres leg of
+        // this is issue #173's second defect (it used to be dead code).
+        assert!(unique_code_violation(&sqlite), "sqlite wording");
+        assert!(unique_code_violation(&postgres), "postgres wording");
+    }
+
+    #[test]
+    fn unique_violations_on_other_columns_are_not_code_collisions() {
+        let other = batch(
+            "duplicate key value violates unique constraint \
+             \"waitlist_entries_email_normalized_product_key\" \
+             DETAIL:  Key (email_normalized, product)=(nick@example.com, kontinuum) already exists.",
+        );
+        assert!(!unique_code_violation(&other), "only referral_code retries");
+        assert!(
+            !retriable_transaction_failure(&other),
+            "and it is not retriable"
+        );
+    }
+
+    #[test]
+    fn retriable_transaction_failure_recognizes_deadlock_and_busy() {
+        // Real messages: the PG deadlock that killed confirms on #173,
+        // its serialization sibling, and SQLite's busy errors.
+        for message in [
+            "error returned from database: deadlock detected",
+            "could not serialize access due to concurrent update",
+            "database is locked",
+            "database table is locked",
+        ] {
+            let err = batch(message);
+            assert!(
+                retriable_transaction_failure(&err),
+                "{message} is retriable"
+            );
+            assert!(!unique_code_violation(&err), "{message} is not a collision");
+        }
+    }
+
+    #[test]
+    fn non_transaction_errors_are_never_retried() {
+        let syntax = batch("error returned from database: syntax error at or near \"UPDAT\"");
+        let query = DbError::Query("no such table: waitlist_entries".to_owned());
+        assert!(!retriable_transaction_failure(&syntax));
+        assert!(!unique_code_violation(&syntax));
+        assert!(
+            !retriable_transaction_failure(&query),
+            "query errors never retry"
+        );
+        assert!(!unique_code_violation(&query));
+    }
 }
