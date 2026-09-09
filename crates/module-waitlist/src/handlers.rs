@@ -4,15 +4,15 @@
 //! `202 {"ok":true}` bytes whatever the row state.
 
 use axum::extract::{Query, State};
-use axum::http::{HeaderMap, StatusCode, header};
+use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use cratefield_core::{
-    Action, Audience, Clock, Column, Database, IdGen, Json, Kid, ModuleConfig, ModuleContext,
-    Outcome, Payload, Problem, RateLimit, RateLimitFailure, SLUGS, Scope, SendCooldown,
-    SendOutcome, Signer, Surface, SystemClock, UlidIdGen, View, check_rate_limit, client_ip,
-    csv_row, hint_field, invalid_email_problem, normalize_email, rate_limit_keys, rate_limited,
-    require_admin, validation_error, verify_human_form,
+    Action, Audience, Clock, Column, Database, IdGen, Json, Kid, MAX_EXPORT_ROWS, ModuleConfig,
+    ModuleContext, Outcome, Payload, Problem, RateLimit, RateLimitFailure, SLUGS, Scope,
+    SendCooldown, SendOutcome, Signer, Surface, SystemClock, UlidIdGen, View, check_rate_limit,
+    client_ip, csv_row, hint_field, invalid_email_problem, normalize_email, rate_limit_keys,
+    rate_limited, require_admin, validation_error, verify_human_form,
 };
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -780,6 +780,8 @@ async fn status(
 struct ExportQuery {
     #[schemars(extend("x-cf-label" = "Product"))]
     product: Option<String>,
+    limit: Option<u32>,
+    offset: Option<u32>,
 }
 
 async fn admin_export(
@@ -793,11 +795,19 @@ async fn admin_export(
     let Some(db) = state.ctx.ports.db.clone() else {
         return Err(internal(&scope));
     };
-    let rows = store::list_for_export(&*db, query.product.as_deref()).await?;
+    let cap = u32::try_from(MAX_EXPORT_ROWS).unwrap_or(u32::MAX);
+    let limit = query.limit.unwrap_or(cap).clamp(1, cap);
+    let offset = u64::from(query.offset.unwrap_or(0));
+    // One row past the page: if it exists, there is more to export.
+    let rows = store::list_for_export(&*db, query.product.as_deref(), u64::from(limit) + 1, offset)
+        .await?;
+    let limit = usize::try_from(limit).unwrap_or(usize::MAX);
+    let more = rows.len() > limit;
+    let page = if more { &rows[..limit] } else { &rows[..] };
     let mut body = String::from(
         "id,email,product,status,position,referral_code,referred_by,referrals,created_at,confirmed_at\n",
     );
-    for row in &rows {
+    for row in page {
         let cells = [
             row.id.as_str(),
             row.email.as_str(),
@@ -812,12 +822,18 @@ async fn admin_export(
         ];
         body.push_str(&csv_row(&cells));
     }
-    Ok((
-        StatusCode::OK,
-        [(header::CONTENT_TYPE, "text/csv; charset=utf-8")],
-        body,
-    )
-        .into_response())
+    let mut response_headers = HeaderMap::new();
+    response_headers.insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("text/csv; charset=utf-8"),
+    );
+    if more {
+        response_headers.insert(
+            axum::http::HeaderName::from_static("x-cf-export-more"),
+            HeaderValue::from_static("true"),
+        );
+    }
+    Ok((StatusCode::OK, response_headers, body).into_response())
 }
 
 #[cfg(test)]

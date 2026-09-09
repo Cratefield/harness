@@ -15,7 +15,7 @@ use cratefield_core::{
     Config, ConfigError, Harness, HttpClient, Json, Migrations, Module, ModuleContext, Port,
     Venture,
 };
-use cratefield_runtime_native::{Native, ReqwestClient, serve_on};
+use cratefield_runtime_native::{Native, OutboundOptions, ReqwestClient, serve_on};
 use serde_json::Value;
 
 /// A module whose one route answers with exactly what
@@ -110,7 +110,13 @@ async fn serves_health_ready_and_spoofed_headers_go_nowhere() {
         let _ = serve_on(harness, runtime, listener).await;
     });
 
-    let client = ReqwestClient::new();
+    // The client under test probes this process's own loopback listener,
+    // which the hardened default refuses (issue #136) — the explicit
+    // opt-in is the sanctioned way a self-hosted caller says so.
+    let client = ReqwestClient::with_options(OutboundOptions {
+        allow_loopback: true,
+        ..Default::default()
+    });
 
     let health = get_until_ready(&client, &format!("http://{addr}/__health")).await;
     let body: Value = serde_json::from_slice(health.body()).expect("health is JSON");

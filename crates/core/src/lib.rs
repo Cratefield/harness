@@ -40,7 +40,7 @@ mod venture;
 pub use admin::{bearer_token, constant_time_eq, require_admin};
 pub use config::{Config, ConfigError, EmptyConfig, HarnessConfig, MapConfig, ModuleConfig};
 pub use cooldown::SendCooldown;
-pub use csv::{FORMULA_PREFIXES, escape as csv_escape, row as csv_row};
+pub use csv::{FORMULA_PREFIXES, MAX_EXPORT_ROWS, escape as csv_escape, row as csv_row};
 pub use email::{
     MAX_EMAIL_BYTES, MAX_LOCAL_BYTES, invalid_email_problem, is_valid,
     normalize as normalize_email, validation_error,
@@ -60,15 +60,17 @@ pub use module::{
 };
 pub use outbox::{Outbox, OutboxRecord};
 pub use ports::{
-    Blob, BlobError, BlobObject, Captcha, CaptchaBinding, CaptchaError, Charge, CheckoutRequest,
-    CheckoutSession, Clock, ConnectAccountLink, ConnectAccountLinkRequest, Database, DbError,
-    Decision, Defer, DispatchError, Dispatcher, HttpClient, HttpError, IdGen, KeyValue, Kid,
-    KvError, LineItem, MAX_KID_NAME, MailError, Mailer, Member, Message, Money, NoopDefer,
-    Notification, Payload, Payments, PaymentsError, Port, Ports, Priority, Push, PushError,
-    PushOutcome, RateLimitError, RateLimiter, Realtime, RealtimeError, Refund, RefundRequest,
-    RoomContext, RoomHandler, Row, Rows, ScopedBlob, SendOutcome, SignatureError, Signer,
-    Statement, SubscriptionCheckoutRequest, SystemClock, TransferCharge, TryFromValue, UlidIdGen,
-    Verdict, WebhookEvent, timeout,
+    Blob, BlobError, BlobObject, BoundedHttpClient, Captcha, CaptchaBinding, CaptchaError, Charge,
+    CheckoutRequest, CheckoutSession, Clock, ConnectAccountLink, ConnectAccountLinkRequest,
+    DEFAULT_RESPONSE_TIMEOUT, Database, DbError, Decision, Defer, DispatchError, Dispatcher,
+    HttpClient, HttpError, HttpPolicy, IdGen, KeyValue, Kid, KvError, LineItem, MAX_BLOB_BYTES,
+    MAX_CONCURRENT_REQUESTS, MAX_KID_NAME, MAX_RESPONSE_BYTES, MAX_RESPONSE_TIMEOUT, MailError,
+    Mailer, Member, Message, Money, NoopDefer, Notification, Payload, Payments, PaymentsError,
+    Port, Ports, Priority, Push, PushError, PushOutcome, RateLimitError, RateLimiter, Realtime,
+    RealtimeError, Refund, RefundRequest, RoomContext, RoomHandler, Row, Rows, ScopedBlob,
+    SendOutcome, SignatureError, Signer, Statement, SubscriptionCheckoutRequest, SystemClock,
+    TransferCharge, TryFromValue, UlidIdGen, Verdict, WebhookEvent, check_blob_size,
+    declared_content_length, timeout,
 };
 pub use problem::Problem;
 pub use problems::{ProblemDef, SLUGS, registry as problem_registry};

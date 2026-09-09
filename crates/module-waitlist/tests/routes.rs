@@ -515,6 +515,80 @@ async fn admin_export_requires_token_and_filters_by_product() {
     }
 }
 
+fn admin_get(uri: &str) -> axum::http::Request<axum::body::Body> {
+    Request::builder()
+        .method(Method::GET)
+        .uri(uri)
+        .header(header::AUTHORIZATION, format!("Bearer {ADMIN}"))
+        .body(Body::empty())
+        .expect("admin request")
+}
+
+async fn export_csv(kit: &TestHarness, uri: &str) -> (axum::http::HeaderMap, String) {
+    let response = kit
+        .router
+        .clone()
+        .oneshot(admin_get(uri))
+        .await
+        .expect("answers");
+    assert_eq!(response.status(), StatusCode::OK);
+    let headers = response.headers().clone();
+    let body = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+        .await
+        .expect("body");
+    (
+        headers,
+        String::from_utf8(body.to_vec()).expect("utf-8 csv"),
+    )
+}
+
+fn emails_in(body: &str) -> Vec<String> {
+    body.lines()
+        .skip(1)
+        .map(|line| line.split(',').nth(1).expect("email column").to_owned())
+        .collect()
+}
+
+#[pollster::test]
+async fn admin_export_pages_with_limit_offset_and_reports_more() {
+    for kit in admin_kits() {
+        for email in ["p1@example.com", "p2@example.com", "p3@example.com"] {
+            join(&kit, email, "kontinuum").await;
+        }
+
+        let (headers, first) = export_csv(&kit, "/v1/waitlist/admin/export.csv?limit=2").await;
+        assert_eq!(
+            headers
+                .get("x-cf-export-more")
+                .and_then(|value| value.to_str().ok()),
+            Some("true"),
+            "a truncated page must advertise that more rows exist"
+        );
+        let mut seen = emails_in(&first);
+        assert_eq!(seen.len(), 2, "{first}");
+
+        let (headers, tail) =
+            export_csv(&kit, "/v1/waitlist/admin/export.csv?limit=2&offset=2").await;
+        assert!(
+            !headers.contains_key("x-cf-export-more"),
+            "the last page must not advertise more"
+        );
+        seen.extend(emails_in(&tail));
+        seen.sort();
+        assert_eq!(
+            seen,
+            ["p1@example.com", "p2@example.com", "p3@example.com"],
+            "the pages must partition the export with no skips or repeats"
+        );
+
+        // The port's ceiling is a clamp, not an error.
+        let (headers, clamped) =
+            export_csv(&kit, "/v1/waitlist/admin/export.csv?limit=999999").await;
+        assert_eq!(emails_in(&clamped).len(), 3, "{clamped}");
+        assert!(!headers.contains_key("x-cf-export-more"));
+    }
+}
+
 #[pollster::test]
 async fn rate_limit_denial_is_429_with_retry_after() {
     let deny = Decision {

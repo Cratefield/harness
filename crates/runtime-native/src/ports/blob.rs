@@ -10,7 +10,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use cratefield_core::{Blob, BlobError, BlobObject};
+use cratefield_core::{Blob, BlobError, BlobObject, check_blob_size};
 
 /// Stores blobs as files under `base`.
 pub struct DirBlob {
@@ -63,6 +63,7 @@ impl DirBlob {
 #[async_trait]
 impl Blob for DirBlob {
     async fn put(&self, key: &str, bytes: &[u8], content_type: &str) -> Result<(), BlobError> {
+        check_blob_size(bytes)?;
         let path = self.object_path(key)?;
         if let Some(parent) = path.parent() {
             tokio::fs::create_dir_all(parent)

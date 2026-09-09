@@ -301,12 +301,19 @@ pub(crate) async fn purge_pending_older_than(
 pub(crate) async fn list_for_export(
     db: &dyn Database,
     status: Option<&str>,
+    fetch: u64,
+    offset: u64,
 ) -> Result<Vec<SubscriberRow>, DbError> {
     let mut query = select_all();
     query.order_by(iden("created_at"), sea_query::Order::Asc);
+    // `id` breaks ties among rows sharing a `created_at`, so a page
+    // boundary can never skip or repeat an entry (issue #136).
+    query.order_by(iden("id"), sea_query::Order::Asc);
     if let Some(status) = status {
         query.and_where(Expr::col(iden("status")).eq(status));
     }
+    query.limit(fetch);
+    query.offset(offset);
     let rows = db.query(&Statement::render(&query)).await?;
     Ok(rows.rows.iter().map(row_from).collect())
 }

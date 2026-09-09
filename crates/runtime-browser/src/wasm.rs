@@ -9,7 +9,8 @@ use base64::engine::general_purpose::STANDARD as BASE64;
 use bytes::Bytes;
 use cratefield_adapter_sqlite_wasm::SqliteWasmDatabase;
 use cratefield_core::{
-    Clock, Config, Defer, Harness, HarnessConfig, HttpClient, HttpError, Ports, UlidIdGen,
+    BoundedHttpClient, Clock, Config, Defer, Harness, HarnessConfig, HttpClient, HttpError, Ports,
+    UlidIdGen,
 };
 use futures_core::future::BoxFuture;
 use js_sys::Promise;
@@ -33,8 +34,12 @@ impl Browser {
         let mut ports = Ports::with_config(Arc::clone(&config));
 
         ports.db = Some(Arc::new(SqliteWasmDatabase::new()));
-        ports.http = Some(Arc::new(FetchClient));
-        ports.clock = Some(Arc::new(BrowserClock));
+        let clock: Arc<dyn Clock> = Arc::new(BrowserClock);
+        ports.clock = Some(Arc::clone(&clock));
+        ports.http = Some(Arc::new(BoundedHttpClient::new(
+            Arc::new(FetchClient),
+            clock,
+        )));
         ports.id_gen = Some(Arc::new(UlidIdGen));
         ports.defer = Some(Arc::new(SpawnLocalDefer));
 

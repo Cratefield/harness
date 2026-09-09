@@ -535,6 +535,7 @@ impl cratefield_core::Blob for MemoryBlob {
         bytes: &[u8],
         content_type: &str,
     ) -> Result<(), cratefield_core::BlobError> {
+        cratefield_core::check_blob_size(bytes)?;
         self.objects.lock().unwrap().insert(
             key.to_owned(),
             cratefield_core::BlobObject {

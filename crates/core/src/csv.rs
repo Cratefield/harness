@@ -9,6 +9,14 @@
 /// Characters that make a cell a formula when it starts with one of them.
 pub const FORMULA_PREFIXES: [char; 6] = ['=', '+', '-', '@', '\t', '\r'];
 
+/// Maximum rows one admin-export page may carry (issue #136). Exports are
+/// paged (`limit`/`offset` query params) and clamped to this: an
+/// unbounded `SELECT *` of a subscriber table into one in-memory String
+/// is an outage a hostile sign-up wave can trigger, and the bound is
+/// what a Worker isolate budgets for one response. `x-cf-export-more:
+/// true` tells the operator a next page exists.
+pub const MAX_EXPORT_ROWS: usize = 5_000;
+
 /// Escapes one CSV field: formula-guard, then RFC 4180 quoting.
 #[must_use]
 pub fn escape(field: &str) -> String {
