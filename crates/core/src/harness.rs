@@ -6,6 +6,7 @@
 //! `/v1/<name>` and adds `GET /__health` and `GET /__ready` plus the
 //! middleware stack from architecture section 6.
 
+use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
@@ -841,6 +842,8 @@ impl HarnessBuilder {
             warn_undeclared_ports(module.as_ref(), &self.provides);
         }
 
+        let ordered = resolve_dependency_order(&self.modules, &mut errors);
+
         append_production_readiness(&venture, &self.modules, self.runtime.as_ref(), &mut errors);
 
         check_template_ids(
@@ -873,7 +876,9 @@ impl HarnessBuilder {
 
         Ok(Harness {
             venture: Arc::new(venture),
-            modules: self.modules,
+            // Dependency order, which is composition order until a module
+            // declares something (RECONCILIATION.md §2).
+            modules: ordered,
             templates: Arc::new(registry),
             events,
             runtime: self.runtime,
@@ -885,6 +890,82 @@ impl HarnessBuilder {
 }
 
 /// A template id's module part must name a registered module.
+/// Orders modules so that every module follows the ones it declares in
+/// [`Module::depends_on`] (RECONCILIATION.md §2), reporting an unknown
+/// dependency or a cycle as a build error rather than a boot one.
+///
+/// The sort is **stable**: modules with no dependency between them keep
+/// composition order. With nothing declared anywhere — which is every
+/// venture today — the result is the input, so adopting this changes no
+/// ordering that already exists.
+///
+/// Returns composition order when the graph is unusable, so `build`
+/// collects the rest of its errors instead of stopping at the first.
+fn resolve_dependency_order(
+    modules: &[Arc<dyn Module>],
+    errors: &mut ConfigError,
+) -> Vec<Arc<dyn Module>> {
+    let names: BTreeSet<&str> = modules.iter().map(|module| module.name()).collect();
+    let mut unknown = false;
+    for module in modules {
+        for needed in module.depends_on() {
+            if !names.contains(needed) {
+                unknown = true;
+                errors.push(format!(
+                    "module `{}` depends on `{needed}`, which this venture does not compose: \
+                     add the module or drop the dependency",
+                    module.name()
+                ));
+            }
+        }
+    }
+    if unknown {
+        return modules.to_vec();
+    }
+
+    // Kahn's algorithm over composition order, which is what makes the
+    // result stable: at each step the earliest-composed ready module is
+    // taken, so an undeclared pair never reorders.
+    let mut remaining: Vec<Option<Arc<dyn Module>>> = modules
+        .iter()
+        .map(|module| Some(Arc::clone(module)))
+        .collect();
+    let mut placed: BTreeSet<&str> = BTreeSet::new();
+    let mut ordered: Vec<Arc<dyn Module>> = Vec::with_capacity(modules.len());
+
+    while ordered.len() < modules.len() {
+        let mut progressed = false;
+        for slot in &mut remaining {
+            let ready = slot.as_ref().is_some_and(|module| {
+                module
+                    .depends_on()
+                    .iter()
+                    .all(|needed| placed.contains(needed))
+            });
+            if ready {
+                let module = slot.take().expect("checked above");
+                placed.insert(module.name());
+                ordered.push(module);
+                progressed = true;
+            }
+        }
+        if !progressed {
+            // Everything left is waiting on something else left: a cycle.
+            let stuck: Vec<&str> = remaining
+                .iter()
+                .filter_map(|slot| slot.as_ref().map(|module| module.name()))
+                .collect();
+            errors.push(format!(
+                "modules [{}] depend on each other in a cycle: migrations cannot be ordered so \
+                 that every module follows the ones it sits on top of",
+                stuck.join(", ")
+            ));
+            return modules.to_vec();
+        }
+    }
+    ordered
+}
+
 fn check_template_ids<'a>(
     ids: impl Iterator<Item = &'a (String, Box<dyn Template>)>,
     names: &HashMap<&'static str, usize>,

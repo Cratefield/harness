@@ -36,6 +36,7 @@ pub struct SampleModule {
     pub tables: &'static [&'static str],
     pub park: Option<SharedParkGate>,
     pub well_known: bool,
+    pub depends_on: &'static [&'static str],
 }
 
 impl Default for SampleModule {
@@ -48,6 +49,7 @@ impl Default for SampleModule {
             tables: &[],
             park: None,
             well_known: false,
+            depends_on: &[],
         }
     }
 }
@@ -65,6 +67,11 @@ impl SampleModule {
             name,
             ..Self::default()
         }
+    }
+
+    /// Declares this module's schema dependencies (issue #26).
+    pub fn depending_on(self, depends_on: &'static [&'static str]) -> Self {
+        Self { depends_on, ..self }
     }
 
     pub fn with_well_known(self) -> Self {
@@ -90,6 +97,10 @@ pub struct CallbackBody {
 impl Module for SampleModule {
     fn name(&self) -> &'static str {
         self.name
+    }
+
+    fn depends_on(&self) -> &'static [&'static str] {
+        self.depends_on
     }
 
     fn version(&self) -> &'static str {

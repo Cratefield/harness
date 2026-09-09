@@ -677,3 +677,120 @@ async fn an_operator_can_accept_the_gap_explicitly_and_it_is_recorded() {
     .await;
     assert_ne!(served.status(), StatusCode::SERVICE_UNAVAILABLE);
 }
+
+// --------------------------------------- module dependency order (#26)
+
+/// The names the harness holds, in the order it holds them.
+fn order(harness: &Harness) -> Vec<&str> {
+    harness.modules().iter().map(|m| m.name()).collect()
+}
+
+fn build_with(modules: Vec<SampleModule>) -> Result<Harness, cratefield_core::ConfigError> {
+    let mut builder = Harness::builder()
+        .venture(base_venture())
+        .runtime(FakeRuntime(all_ports()));
+    for module in modules {
+        builder = builder.module(module);
+    }
+    builder.build()
+}
+
+/// Issue #26 / RECONCILIATION.md §2. `depends_on` is a partial order for
+/// migrations, and the sort that realises it is stable — so a venture
+/// that declares nothing, which is every venture today, keeps exactly the
+/// order it composed.
+#[test]
+fn with_nothing_declared_the_order_is_the_one_composed() {
+    let harness = build_with(vec![
+        SampleModule::named("charlie"),
+        SampleModule::named("alpha"),
+        SampleModule::named("bravo"),
+    ])
+    .expect("builds");
+    assert_eq!(order(&harness), ["charlie", "alpha", "bravo"]);
+}
+
+#[test]
+fn a_module_follows_what_it_sits_on_top_of() {
+    // Composed in an order that violates the declaration, so passing
+    // cannot be an accident of the input.
+    let harness = build_with(vec![
+        SampleModule::named("orders").depending_on(&["accounts"]),
+        SampleModule::named("accounts"),
+    ])
+    .expect("builds");
+    assert_eq!(order(&harness), ["accounts", "orders"]);
+
+    // A chain, and an unrelated module that keeps its composed position
+    // relative to the others it does not constrain.
+    let harness = build_with(vec![
+        SampleModule::named("shipping").depending_on(&["orders"]),
+        SampleModule::named("audit"),
+        SampleModule::named("orders").depending_on(&["accounts"]),
+        SampleModule::named("accounts"),
+    ])
+    .expect("builds");
+    let names = order(&harness);
+    let at = |needle: &str| names.iter().position(|n| *n == needle).expect("present");
+    assert!(at("accounts") < at("orders"), "{names:?}");
+    assert!(at("orders") < at("shipping"), "{names:?}");
+    assert!(names.contains(&"audit"), "{names:?}");
+}
+
+#[test]
+fn depending_on_a_module_the_venture_did_not_compose_fails_the_build() {
+    let errors = build_with(vec![
+        SampleModule::named("orders").depending_on(&["accounts"]),
+    ])
+    .expect_err("a dependency on nothing is a build error");
+    assert!(
+        errors
+            .problems
+            .iter()
+            .any(|e| e.contains("orders") && e.contains("accounts")),
+        "{:?}",
+        errors.problems
+    );
+}
+
+#[test]
+fn a_cycle_is_a_build_error_not_a_boot_error() {
+    // The whole reason this is checked in `build`: a boot error is one a
+    // deployment discovers in production.
+    let errors = build_with(vec![
+        SampleModule::named("alpha").depending_on(&["bravo"]),
+        SampleModule::named("bravo").depending_on(&["alpha"]),
+    ])
+    .expect_err("a cycle cannot be ordered");
+    assert!(
+        errors.problems.iter().any(|e| e.contains("cycle")),
+        "{:?}",
+        errors.problems
+    );
+
+    // A module outside the cycle does not rescue it.
+    let errors = build_with(vec![
+        SampleModule::named("solo"),
+        SampleModule::named("alpha").depending_on(&["bravo"]),
+        SampleModule::named("bravo").depending_on(&["charlie"]),
+        SampleModule::named("charlie").depending_on(&["alpha"]),
+    ])
+    .expect_err("a longer cycle is still a cycle");
+    let cycle = errors
+        .problems
+        .iter()
+        .find(|e| e.contains("cycle"))
+        .expect("named");
+    assert!(!cycle.contains("solo"), "only the stuck modules: {cycle}");
+}
+
+#[test]
+fn a_module_may_depend_on_itself_only_by_being_a_cycle() {
+    let errors = build_with(vec![SampleModule::named("alpha").depending_on(&["alpha"])])
+        .expect_err("self-dependency cannot be ordered");
+    assert!(
+        errors.problems.iter().any(|e| e.contains("cycle")),
+        "{:?}",
+        errors.problems
+    );
+}

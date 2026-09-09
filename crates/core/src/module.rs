@@ -148,6 +148,21 @@ pub trait Module: Send + Sync + 'static {
     fn optional(&self) -> &'static [Port] {
         &[]
     }
+    /// Modules this one's schema sits on top of, by name.
+    ///
+    /// A partial order, not a load order for routes: it exists so
+    /// migrations apply in an order where a foreign key can point at a
+    /// table another module owns (RECONCILIATION.md §2). Naming a module
+    /// the venture did not compose is a build error, and so is a cycle —
+    /// both at `HarnessBuilder::build`, never at boot, because a boot
+    /// error is one a deployment discovers in production.
+    ///
+    /// Declaring nothing is the common case and costs nothing: with no
+    /// dependencies anywhere the resolved order is composition order,
+    /// unchanged.
+    fn depends_on(&self) -> &'static [&'static str] {
+        &[]
+    }
     /// Table names this module owns; duplicates across modules are a build
     /// error.
     fn tables(&self) -> &'static [&'static str] {
