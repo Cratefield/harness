@@ -17,15 +17,21 @@ export async function installSqliteBridge(filename = '/cratefield.sqlite3') {
   const sqlite3 = await sqlite3InitModule();
 
   let db;
-  if (sqlite3.installOpfsSAHPoolVfs) {
-    // Persistent: OPFS synchronous-access-handle pool VFS.
+  let persistent = false;
+  try {
+    // Persistent: OPFS synchronous-access-handle pool VFS. This needs
+    // `createSyncAccessHandle`, which some contexts expose only in a Worker;
+    // fall back rather than fail the whole boot when it is missing/throws.
+    if (!sqlite3.installOpfsSAHPoolVfs) throw new Error('opfs-sahpool VFS not present');
     const poolUtil = await sqlite3.installOpfsSAHPoolVfs({ name: 'cratefield-opfs' });
     db = new poolUtil.OpfsSAHPoolDb(filename);
-  } else {
+    persistent = true;
+  } catch (err) {
     // Fallback: in-memory (does NOT persist across reloads).
-    console.warn('[cratefield] OPFS SAH pool unavailable; using in-memory DB (no persistence)');
+    console.warn(`[cratefield] OPFS SAH pool unavailable (${err}); using in-memory DB (no persistence)`);
     db = new sqlite3.oo1.DB(filename, 'ct');
   }
+  globalThis.__cratefieldPersistent = persistent;
 
   globalThis.__cratefieldSqlite = {
     async run(sql, params) {

@@ -33,7 +33,7 @@ impl Mailer for NoopMailer {
 
 static INSTANCE: OnceLock<(Harness, Browser)> = OnceLock::new();
 
-fn build(secret: &str, admin_token: &str) -> (Harness, Browser) {
+fn build(secret: &str, admin_token: &str) -> Result<(Harness, Browser), String> {
     let config = BrowserConfig::new()
         .with("HARNESS_SECRET", secret)
         .with("ADMIN_TOKEN", admin_token);
@@ -43,7 +43,11 @@ fn build(secret: &str, admin_token: &str) -> (Harness, Browser) {
 
     let harness = Harness::builder()
         .venture(
-            Venture::new("browser-demo", "demo.cratefield.app").public_url("http://localhost:8000"),
+            Venture::new("browser-demo", "demo.cratefield.app")
+                .public_url("http://localhost:8000")
+                // In the browser the app and the backend share the page's
+                // origin; the harness requires at least one CORS origin.
+                .cors_origins(["http://localhost:8000"]),
         )
         .templates(cratefield_module_waitlist::default_templates())
         .templates(cratefield_module_email_signup::default_templates())
@@ -52,9 +56,9 @@ fn build(secret: &str, admin_token: &str) -> (Harness, Browser) {
         .module(cratefield_module_cms::Cms::default())
         .runtime(runtime.clone())
         .build()
-        .expect("the browser-demo venture is a valid harness");
+        .map_err(|err| err.to_string())?;
 
-    (harness, runtime)
+    Ok((harness, runtime))
 }
 
 /// Initialises the venture with the `HARNESS_SECRET` and `ADMIN_TOKEN` handed
@@ -62,8 +66,14 @@ fn build(secret: &str, admin_token: &str) -> (Harness, Browser) {
 // wasm-bindgen exports must take owned `String`s.
 #[allow(clippy::needless_pass_by_value)]
 #[wasm_bindgen]
-pub fn init(secret: String, admin_token: String) {
-    let _ = INSTANCE.set(build(&secret, &admin_token));
+pub fn init(secret: String, admin_token: String) -> String {
+    match build(&secret, &admin_token) {
+        Ok(instance) => {
+            let _ = INSTANCE.set(instance);
+            String::new()
+        }
+        Err(err) => err,
+    }
 }
 
 /// Applies every built-in module's migrations to the OPFS-backed sqlite-wasm
