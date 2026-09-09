@@ -27,6 +27,15 @@ use crate::venture::Venture;
 /// reading the document.
 pub const SURFACE_API: u32 = 1;
 
+/// Largest sidecar surface document the host will merge (issue #131). A
+/// whole module's declaration is a few kilobytes; anything approaching
+/// this cap is hostile or accidental, and parsing it costs the host.
+pub const MAX_SIDECAR_SURFACE_BYTES: usize = 256 * 1024;
+/// Largest action list a merged sidecar surface may declare (issue #131).
+pub const MAX_SIDECAR_ACTIONS: usize = 64;
+/// Largest view list a merged sidecar surface may declare (issue #131).
+pub const MAX_SIDECAR_VIEWS: usize = 64;
+
 /// The `x-cf-*` extension keywords the renderer understands on a field
 /// schema. Anything else under `x-cf-` is ignored, never an error, so a
 /// module can target a newer renderer than the one that serves it.
@@ -207,6 +216,19 @@ impl Action {
         self.captcha = policy == crate::route_policy::RoutePolicy::HumanForm;
         self
     }
+
+    /// Whether this route needs the human-form gate: the declared
+    /// [`HumanForm`] policy, or the legacy `captcha: true` mirror on an
+    /// otherwise-`Open` route. The one place that alias is resolved, so
+    /// the [`WriteGuards`] audit, the sidecar merge (issue #131) and the
+    /// UI dispatch all check the same predicate.
+    ///
+    /// [`HumanForm`]: crate::route_policy::RoutePolicy::HumanForm
+    /// [`WriteGuards`]: crate::route_policy::WriteGuards
+    #[must_use]
+    pub fn demands_captcha(&self) -> bool {
+        self.policy == crate::route_policy::RoutePolicy::HumanForm || self.captcha
+    }
 }
 
 /// A column of a [`View::Table`].
@@ -333,6 +355,13 @@ impl Surface {
                 errors.push(format!(
                     "module `{module}` surface action `{name}` path `{}` must start with '/' \
                      (relative to /v1/{module})",
+                    action.path
+                ));
+            }
+            if action.path.split('/').any(|segment| segment == "..") {
+                errors.push(format!(
+                    "module `{module}` surface action `{name}` path `{}` must not contain '..' \
+                     segments (an action stays inside its module's mount)",
                     action.path
                 ));
             }
@@ -493,6 +522,107 @@ impl SurfaceDocument {
             ui: self.ui.clone(),
         }
     }
+}
+
+/// Validates a sidecar's `/__surface` answer against the mount it is
+/// served from, and returns the single public entry to merge (issue #131).
+/// A sidecar speaks for exactly one module and only its public part ever
+/// merges — its admin actions stay behind its own token — so anything
+/// else in the document is rejected wholesale rather than filtered:
+/// a wrong contract version, a missing or duplicated mount entry, or a
+/// surface that fails [`Surface::validate`] or exceeds the declaration
+/// caps. `Ok(empty)` means the sidecar declared no surface for the mount,
+/// which contributes nothing and is not a failure.
+pub(crate) fn sanitize_sidecar_document(
+    document: &SurfaceDocument,
+    mount: &str,
+) -> Result<Vec<ModuleSurface>, Vec<String>> {
+    let mut errors = Vec::new();
+    if document.surface_api != SURFACE_API {
+        errors.push(format!(
+            "surface contract {} is not {SURFACE_API}",
+            document.surface_api
+        ));
+    }
+    if document.harness_api != HARNESS_API {
+        errors.push(format!(
+            "harness contract {} is not {HARNESS_API}",
+            document.harness_api
+        ));
+    }
+    let named: Vec<&ModuleSurface> = document
+        .modules
+        .iter()
+        .filter(|entry| entry.name == mount)
+        .collect();
+    match named.len() {
+        0 => {
+            if !document.modules.is_empty() {
+                let others: Vec<&str> = document.modules.iter().map(|m| m.name.as_str()).collect();
+                errors.push(format!(
+                    "declares no surface for the mounted module `{mount}` (it names [{}] instead)",
+                    others.join(", ")
+                ));
+            }
+        }
+        1 => {}
+        count => errors.push(format!("declares module `{mount}` {count} times")),
+    }
+    if let Some(entry) = named.first() {
+        if entry.surface.actions.len() > MAX_SIDECAR_ACTIONS {
+            errors.push(format!(
+                "declares {} actions, more than the {MAX_SIDECAR_ACTIONS} a merged surface allows",
+                entry.surface.actions.len()
+            ));
+        }
+        if entry.surface.views.len() > MAX_SIDECAR_VIEWS {
+            errors.push(format!(
+                "declares {} views, more than the {MAX_SIDECAR_VIEWS} a merged surface allows",
+                entry.surface.views.len()
+            ));
+        }
+        let mut validation = ConfigError::default();
+        entry.surface.validate(mount, &mut validation);
+        errors.extend(validation.problems);
+    }
+    if !errors.is_empty() {
+        return Err(errors);
+    }
+    Ok(named
+        .into_iter()
+        .map(|entry| ModuleSurface {
+            name: entry.name.clone(),
+            version: entry.version.clone(),
+            surface: entry.surface.public(),
+        })
+        .collect())
+}
+
+/// Removes every action that demands the human-form gate, and the views
+/// left dangling by it, returning how many actions were dropped (issue
+/// #131). A production host with no `Captcha` port cannot render or
+/// verify a captcha widget for a merged sidecar action, so the honest
+/// answer is that the action is not publicly offered here — the same
+/// refusal [`crate::route_policy::production_readiness`] makes at boot
+/// for in-process modules, enforced at merge time because a sidecar's
+/// declaration is not known then.
+pub(crate) fn strip_unguarded_captcha_actions(surface: &mut Surface) -> usize {
+    let kept: Vec<Action> = surface
+        .actions
+        .iter()
+        .filter(|action| !action.demands_captcha())
+        .cloned()
+        .collect();
+    let dropped = surface.actions.len() - kept.len();
+    if dropped > 0 {
+        let names: std::collections::BTreeSet<&str> =
+            kept.iter().map(|a| a.name.as_str()).collect();
+        surface
+            .views
+            .retain(|view| view.action_names().iter().all(|n| names.contains(n)));
+        surface.actions = kept;
+    }
+    dropped
 }
 
 /// Where the current surface comes from (issue #76). With no sidecar
