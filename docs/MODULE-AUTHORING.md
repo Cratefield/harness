@@ -356,6 +356,16 @@ catches the same edit inside the repository through
 `.harness-lock.json`; the hash in the database is what catches it on a
 deployment that already ran the old SQL. Write a new migration instead.
 
+CI refuses it earlier still (issue #34). `tools/migration-guard.sh` runs
+on every pull request and fails it when a migration under any
+`migrations/` directory is edited, deleted or renamed relative to the base
+branch, when a sequence skips or repeats a number, when a
+`migrations/postgres/` override names an id or name the canonical SQLite
+set does not have, or when a migration mentions card data (#44) or carries
+a connection string. A boot-time checksum mismatch is the last line of
+defence and it fires in production; this is the first, where it is still a
+diff someone can revert.
+
 ## Step 4 — Router and handlers
 
 `examples/module-hello/src/handlers.rs`:

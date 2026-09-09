@@ -34,6 +34,22 @@ jobs:
           bun install --frozen-lockfile
           node size.mjs
 
+  migration-guard:
+    name: migrations are never edited (issue #34)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The guard diffs against the base branch, so it needs history,
+          # not the single commit a default checkout fetches.
+          fetch-depth: 0
+      - name: Never-edit rule
+        env:
+          BASE: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.ref || 'main' }}
+        run: |
+          git fetch --no-tags --depth=200 origin "$BASE"
+          tools/migration-guard.sh "origin/$BASE"
+
   clippy:
     name: clippy
     runs-on: ubuntu-latest
