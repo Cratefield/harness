@@ -55,8 +55,8 @@ pub use logging::{
     set_error_forwarder, set_log_pseudonym_key, subject_hash,
 };
 pub use module::{
-    BoxFuture, HARNESS_API, Migrations, Module, ModuleContext, SqlMigration, harness_api_mismatch,
-    migration_checksum, migration_edited,
+    BoxFuture, HARNESS_API, Migrations, Module, ModuleContext, SqlMigration, assert_migration_set,
+    harness_api_mismatch, migration_checksum, migration_edited,
 };
 pub use outbox::{Outbox, OutboxRecord};
 pub use ports::{

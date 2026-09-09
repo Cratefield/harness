@@ -207,6 +207,9 @@ impl Module for Waitlist {
             MIGRATION_MAIL_COOLDOWN,
             MIGRATION_POSITION_LOCK,
         ];
+        // The array is the apply order; this refuses a gap, a duplicate
+        // or an entry out of order at build time (issue #27).
+        const _: () = cratefield_core::assert_migration_set(&MIGRATIONS);
         Migrations {
             sqlite: &MIGRATIONS,
             postgres: &[],

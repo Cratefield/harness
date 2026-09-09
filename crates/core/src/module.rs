@@ -49,6 +49,92 @@ pub struct SqlMigration {
     pub sql: &'static str,
 }
 
+/// Rejects a malformed migration set **at compile time**.
+///
+/// The array a module hands to [`Migrations`] is the apply order, and
+/// nothing checked that it agreed with the ids in it. `auth-core` defines
+/// its six migration constants in the file in the order 1, 2, 5, 6, 4, 3
+/// and lists them in the arrays correctly; that is one careless edit away
+/// from applying `0005` before `0003`, against a database that would
+/// record both as applied and never notice (issue #27).
+///
+/// Call it in a `const` item beside the set, where a failure is a build
+/// error rather than something a boot discovers:
+///
+/// ```
+/// # use cratefield_core::{SqlMigration, assert_migration_set};
+/// const MIGRATIONS: [SqlMigration; 2] = [
+///     SqlMigration { id: "0001", name: "init", sql: "" },
+///     SqlMigration { id: "0002", name: "next", sql: "" },
+/// ];
+/// const _: () = assert_migration_set(&MIGRATIONS);
+/// ```
+///
+/// A gap does not compile:
+///
+/// ```compile_fail
+/// # use cratefield_core::{SqlMigration, assert_migration_set};
+/// const MIGRATIONS: [SqlMigration; 2] = [
+///     SqlMigration { id: "0001", name: "init", sql: "" },
+///     SqlMigration { id: "0003", name: "skipped", sql: "" },
+/// ];
+/// const _: () = assert_migration_set(&MIGRATIONS);
+/// ```
+///
+/// Nor a duplicate, nor an id out of order, nor one that is not four
+/// digits:
+///
+/// ```compile_fail
+/// # use cratefield_core::{SqlMigration, assert_migration_set};
+/// const MIGRATIONS: [SqlMigration; 2] = [
+///     SqlMigration { id: "0002", name: "second", sql: "" },
+///     SqlMigration { id: "0001", name: "first", sql: "" },
+/// ];
+/// const _: () = assert_migration_set(&MIGRATIONS);
+/// ```
+///
+/// ```compile_fail
+/// # use cratefield_core::{SqlMigration, assert_migration_set};
+/// const MIGRATIONS: [SqlMigration; 1] =
+///     [SqlMigration { id: "1", name: "unpadded", sql: "" }];
+/// const _: () = assert_migration_set(&MIGRATIONS);
+/// ```
+///
+/// # Panics
+///
+/// At compile time when called in a `const` item, at run time otherwise.
+/// The message is a fixed string: `panic!` in a `const fn` cannot format,
+/// so the offending id is not in it. The compile error points at the
+/// `const` item, which names the crate and the line — enough to find the
+/// set, which is the whole array anyway.
+pub const fn assert_migration_set(set: &[SqlMigration]) {
+    let mut index = 0;
+    while index < set.len() {
+        let id = set[index].id.as_bytes();
+        assert!(
+            id.len() == 4,
+            "a migration id is four digits, zero-padded: `0001`, not `1`"
+        );
+        let mut digit = 0;
+        while digit < 4 {
+            assert!(
+                id[digit] >= b'0' && id[digit] <= b'9',
+                "a migration id is four digits, zero-padded: `0001`, not `init`"
+            );
+            digit += 1;
+        }
+        let value = (id[0] - b'0') as usize * 1000
+            + (id[1] - b'0') as usize * 100
+            + (id[2] - b'0') as usize * 10
+            + (id[3] - b'0') as usize;
+        assert!(
+            value == index + 1,
+            "migration ids run contiguously from 0001 in apply order: a gap, a duplicate, or an entry listed out of order"
+        );
+        index += 1;
+    }
+}
+
 /// The sha256 of a migration's SQL, lowercase hex. Recorded in
 /// `harness_migrations` when the migration is applied, so a later run
 /// can tell "already applied" from "applied, then edited" — the rule
