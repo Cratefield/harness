@@ -45,6 +45,85 @@ const STRIPPED: [&str; 4] = [
     "forwarded",
 ];
 
+/// The `TRUSTED_HOSTS` list: extra `Host` values this deployment answers
+/// to, beyond the venture's own domain (issue #129).
+///
+/// A native process serves whatever `Host` a caller sends, and `Host` is
+/// the key ADR 0008's database-per-tenant resolution will read once phase
+/// three lands — so an unvalidated one is both a link-forgery and
+/// cache-poisoning vector today and the cross-tenant vector tomorrow.
+/// Entries are compared without their port, lowercased. Empty is not
+/// permissive: the venture's own domain still answers.
+#[must_use]
+pub fn trusted_hosts(config: &dyn Config) -> Vec<String> {
+    config
+        .get("TRUSTED_HOSTS")
+        .map(|raw| {
+            raw.split(',')
+                .map(|entry| entry.trim().to_ascii_lowercase())
+                .filter(|entry| !entry.is_empty())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// The hosts a venture answers to by construction: its apex domain, the
+/// `api.<domain>` the architecture says the API serves, and the host of
+/// its own public URL (issue #129).
+#[must_use]
+pub fn venture_hosts(venture: &cratefield_core::Venture) -> Vec<String> {
+    let domain = venture.domain.trim().to_ascii_lowercase();
+    let mut hosts = Vec::new();
+    if !domain.is_empty() {
+        hosts.push(format!("api.{domain}"));
+        hosts.push(domain);
+    }
+    if let Some(host) = venture
+        .public_url
+        .split("://")
+        .nth(1)
+        .and_then(|rest| rest.split('/').next())
+        .map(|host| host.trim().to_ascii_lowercase())
+        .filter(|host| !host.is_empty())
+    {
+        let host = host_without_port(&host);
+        if !hosts.iter().any(|known| known == &host) {
+            hosts.push(host);
+        }
+    }
+    hosts
+}
+
+/// The host part of an authority, without its port. IPv6 literals keep
+/// their brackets, which is how a `Host` header spells them.
+#[must_use]
+pub fn host_without_port(authority: &str) -> String {
+    let authority = authority.trim().to_ascii_lowercase();
+    if let Some(rest) = authority.strip_prefix('[') {
+        return match rest.split_once(']') {
+            Some((inner, _)) => format!("[{inner}]"),
+            None => authority,
+        };
+    }
+    match authority.rsplit_once(':') {
+        Some((host, port)) if port.chars().all(|c| c.is_ascii_digit()) => host.to_owned(),
+        _ => authority,
+    }
+}
+
+/// Whether `host` is a loopback name or literal, with or without a port.
+/// Local development and every in-process test reach the server this way.
+#[must_use]
+pub fn is_loopback_host(host: &str) -> bool {
+    let host = host_without_port(host);
+    host == "localhost"
+        || host.ends_with(".localhost")
+        || host == "[::1]"
+        || host
+            .parse::<std::net::IpAddr>()
+            .is_ok_and(|ip| ip.is_loopback())
+}
+
 /// The `TRUSTED_PROXY_HEADERS` list: the header names this deployment is
 /// willing to believe the client IP from (comma-separated, e.g.
 /// `TRUSTED_PROXY_HEADERS=x-forwarded-for` behind one nginx, or
@@ -213,5 +292,67 @@ mod tests {
             cratefield_core::client_ip(&headers).as_deref(),
             Some("203.0.113.7")
         );
+    }
+}
+
+#[cfg(test)]
+mod host_tests {
+    use super::{host_without_port, is_loopback_host, trusted_hosts, venture_hosts};
+    use cratefield_core::{MapConfig, Venture};
+
+    #[test]
+    fn a_venture_answers_to_its_own_domain_and_api_subdomain() {
+        let venture = Venture::new("cratefield-waitlist", "cratefield.com")
+            .public_url("https://cratefield.com");
+        let hosts = venture_hosts(&venture);
+        assert!(hosts.contains(&"cratefield.com".to_owned()), "{hosts:?}");
+        assert!(
+            hosts.contains(&"api.cratefield.com".to_owned()),
+            "{hosts:?}"
+        );
+        // A public URL on another host is answered to as well.
+        let split =
+            Venture::new("auth", "factory0.ventures").public_url("https://auth.factory0.ventures/");
+        let hosts = venture_hosts(&split);
+        assert!(
+            hosts.contains(&"auth.factory0.ventures".to_owned()),
+            "{hosts:?}"
+        );
+    }
+
+    #[test]
+    fn ports_are_not_part_of_the_comparison_and_ipv6_keeps_its_brackets() {
+        assert_eq!(host_without_port("cratefield.com:8443"), "cratefield.com");
+        assert_eq!(host_without_port("CrateField.com"), "cratefield.com");
+        assert_eq!(host_without_port("[::1]:8080"), "[::1]");
+        assert_eq!(host_without_port("[fd00::1]"), "[fd00::1]");
+        // Not a port: a bare colon with a non-numeric tail stays put.
+        assert_eq!(host_without_port("host:notaport"), "host:notaport");
+    }
+
+    #[test]
+    fn loopback_is_recognized_in_every_spelling_local_work_uses() {
+        for host in [
+            "localhost",
+            "localhost:8080",
+            "127.0.0.1",
+            "127.0.0.1:8080",
+            "127.9.9.9",
+            "[::1]",
+            "[::1]:8080",
+            "app.localhost",
+        ] {
+            assert!(is_loopback_host(host), "{host} is loopback");
+        }
+        for host in ["cratefield.com", "10.0.0.1", "[fd00::1]", "evil.example"] {
+            assert!(!is_loopback_host(host), "{host} is not loopback");
+        }
+    }
+
+    #[test]
+    fn the_extra_host_list_is_parsed_like_the_trusted_proxy_list() {
+        assert!(trusted_hosts(&MapConfig::default()).is_empty());
+        let cfg = MapConfig::from_pairs([("TRUSTED_HOSTS", " Api.Example.com , , other.test ")]);
+        assert_eq!(trusted_hosts(&cfg), ["api.example.com", "other.test"]);
     }
 }
