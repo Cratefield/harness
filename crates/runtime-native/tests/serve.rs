@@ -163,3 +163,95 @@ async fn serves_health_ready_and_spoofed_headers_go_nowhere() {
 
     server.abort();
 }
+
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+/// Sends one request with the given `Host` and returns its status line.
+async fn status_for_host(addr: std::net::SocketAddr, host: &str) -> String {
+    for _ in 0..50 {
+        let Ok(mut stream) = tokio::net::TcpStream::connect(addr).await else {
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            continue;
+        };
+        let request =
+            format!("GET /__health HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n");
+        if stream.write_all(request.as_bytes()).await.is_err() {
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            continue;
+        }
+        let mut answer = Vec::new();
+        if stream.read_to_end(&mut answer).await.is_err() {
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            continue;
+        }
+        let text = String::from_utf8_lossy(&answer);
+        if let Some(line) = text.lines().next() {
+            return line.to_owned();
+        }
+    }
+    panic!("server never answered");
+}
+
+/// Issue #129. A native process answered whatever `Host` a caller sent,
+/// and `Host` is the key ADR 0008's database-per-tenant resolution reads
+/// once phase three lands — so an unvalidated one is a link-forgery and
+/// cache-poisoning vector now and the cross-tenant vector then.
+///
+/// Driven over a raw socket rather than through a client library, because
+/// the assertion is about the exact bytes on the wire: a `Host` header
+/// naming another venture must not be served, whatever a client would
+/// normally put there.
+#[tokio::test]
+async fn a_production_deployment_refuses_another_ventures_host() {
+    let sqlite = Arc::new(SqliteDatabase::open(":memory:").expect("in-memory sqlite"));
+    let runtime = Native::new().db_arc(sqlite);
+    let harness = Arc::new(
+        Harness::builder()
+            .venture(
+                Venture::new("tenant-a", "tenant-a.example")
+                    .public_url("https://tenant-a.example")
+                    .cors_origins(["https://tenant-a.example"])
+                    // Compiled as production so the gate enforces without
+                    // mutating this process's environment, which the rest
+                    // of the suite shares.
+                    .env(cratefield_core::VentureEnv::Production),
+            )
+            .module(IpEchoModule)
+            .runtime(runtime.clone())
+            .build()
+            .expect("harness is valid"),
+    );
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("ephemeral port");
+    let addr = listener.local_addr().expect("local addr");
+    let server = tokio::spawn(async move {
+        let _ = serve_on(harness, runtime, listener).await;
+    });
+
+    // Its own host is served.
+    let own = status_for_host(addr, "tenant-a.example").await;
+    assert!(own.contains("200"), "own host must be served: {own}");
+
+    // Another venture's host is refused, before any handler runs.
+    let foreign = status_for_host(addr, "tenant-b.example").await;
+    assert!(
+        foreign.contains("421"),
+        "a neighbour's host must be refused: {foreign}"
+    );
+
+    // A lookalike is not a match either.
+    let lookalike = status_for_host(addr, "tenant-a.example.evil.test").await;
+    assert!(
+        lookalike.contains("421"),
+        "a suffix lookalike must be refused: {lookalike}"
+    );
+
+    // And the loopback probe keeps working, or the deployment is
+    // unmonitorable.
+    let probe = status_for_host(addr, &addr.to_string()).await;
+    assert!(probe.contains("200"), "loopback probe must work: {probe}");
+
+    server.abort();
+}

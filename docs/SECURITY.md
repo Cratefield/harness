@@ -116,14 +116,55 @@
 - Ventures pin exact crate versions; Renovate opens bumps, CI re-runs
   the full deny + build gate on every bump.
 
+## The native runtime
+
+The native runtime is no longer out of scope (issue #129). What holds
+today, for the one-venture-per-process shape it actually has:
+
+- **Host.** A production deployment answers only for its venture's own
+  domain, `api.<domain>`, its public URL's host, and any `TRUSTED_HOSTS`
+  entry; anything else gets `421 Misdirected Request` before a handler
+  runs. Loopback names and literals stay reachable so probes and local
+  work keep working. `Host` is what ADR 0008's per-tenant resolution will
+  key off, so this is the seam that becomes cross-tenant later.
+  `x-forwarded-host` is deliberately **not** consulted: a proxy that
+  rewrites the host must rewrite `Host` itself, rather than the harness
+  growing a second header-trust mechanism beside the one below.
+- **Forwarded client IP.** Only headers named in `TRUSTED_PROXY_HEADERS`
+  are believed, in the order given; with the list unset — the default —
+  nothing but the TCP peer is trusted. Every forwarding header is then
+  stripped before the router sees it, so a module's rate-limit key and
+  the request scope's `ip_hash` read one sanitized verdict.
+- **Outbound.** Destinations are vetted by scheme, userinfo, name and
+  address, with the IPv4 embedded in mapped, compatible, 6to4 and NAT64
+  forms judged on its own; every redirect hop is re-vetted and
+  credentials are stripped across an authority change; responses are size-
+  and deadline-bounded and the concurrency budget refuses rather than
+  queues (issue #136).
+- **Listening.** `LISTEN_ADDR` defaults to loopback: a deployment open to
+  the world says so explicitly.
+- **Production readiness.** The deployment's `ENV` decides, not a
+  compiled default, and a deployment that cannot back its declared abuse
+  controls refuses its guarded routes (issue #143).
+
+Not yet true, and not claimed: per-tenant database handles, secret
+scoping, blob namespaces, rate-limit keys, adapter caches, or tenant
+identity persisted with deferred work. Those are the phase-3 work of
+issues #23-#44 and ADR 0008; there is no tenant to bind them to yet.
+
 ## Out of scope
 
 - The Cloudflare account, D1 infrastructure and Workers secrets
   provisioning (managed by each venture's deployment workflow).
 - The `factory0.ventures` website and any front end that posts to the
   API.
-- The phase-3 native runtime and Postgres adapter (separate review when
-  they land).
+- Multi-tenant operation of the native runtime. ADR 0008 accepts
+  database-per-tenant with a control database and two-tier secrets, and
+  issues #23-#44 specify it, but `crates/runtime-native/` has no tenant
+  identity today: one process serves one venture. The isolation
+  guarantees below are the ones that hold for that shape. When tenant
+  resolution lands, the contract has to be restated against it — see
+  **The native runtime** above for what already binds.
 
 ## Reporting a vulnerability
 
