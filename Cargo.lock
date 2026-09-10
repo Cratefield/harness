@@ -824,6 +824,7 @@ dependencies = [
  "bytes",
  "cratefield-core",
  "cratefield-push-auth",
+ "cratefield-runtime-native",
  "cratefield-testing",
  "getrandom 0.4.3",
  "hkdf 0.13.0",
@@ -834,6 +835,7 @@ dependencies = [
  "sha2 0.11.0",
  "thiserror 2.0.20",
  "time",
+ "tokio",
  "url",
  "zeroize",
 ]
