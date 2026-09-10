@@ -13,7 +13,9 @@
 # cratefield-cli (`fz`)
 
 The venture CLI: `fz migrations collect`, `fz migrations apply`, `fz
-data export` / `fz data import`, `fz doctor`, `fz modules`.
+data export` / `fz data import`, `fz doctor`, `fz modules`, and the
+agent-safe manifest workflow — `fz plan`, `fz deploy --plan`, `fz
+add`, `fz init`, `fz verify` (harness #140).
 
 `fz` links against your venture's compiled-in harness, so it runs as a bin
 target **inside the venture repo** — the pattern the venture template
@@ -138,6 +140,83 @@ JSON object on stdout and nothing else —
 never renamed or removed, while message wording may change. The exit code
 still reflects the verdict; prose and operator warnings are unchanged
 without the flag.
+
+## `fz plan [--manifest venture.json] [--migrations migrations] [--json]`
+
+The agent-safe workflow (harness #140) starts here. Reads the manifest,
+the migration lockfile and the deploy record, and describes what would
+change: modules added or removed (with each added module's catalog
+tier, required modules, and whether a dependency pulled it in), venture
+config deltas, migrations not yet collected, and the migration files a
+removal would orphan. It changes nothing on disk.
+
+The JSON carries `"schema": 1` and a **`digest`**: the sha256 over the
+normalised destination state (venture identity, env, resolved modules,
+per-module config, venture config, seed SQL, migration status). The
+same inputs always give the same digest; any input change gives a
+different one. The baseline-dependent deltas (added/removed lists) are
+presentation, deliberately not hashed — an approval is of the
+destination, not the journey.
+
+## `fz deploy --plan <digest> [--manifest venture.json] [--i-am-deploying-to-production] [--json]`
+
+Applies exactly the approved plan: recomputes it from the current
+inputs and refuses any other digest — a stale approval cannot deploy
+(`stale-plan`), and the refusal names what moved since the recorded
+deployment.
+Deploying without `--plan` at all is refused (`deploy-plan-required`):
+approval is the point.
+
+What "applies" means here is deliberate and bounded: `fz deploy`
+records the plan, bound to its digest, in `.harness-deploy.json`
+beside the manifest (written atomically, so an interrupted deploy
+leaves either the old record or the new one and re-running
+reconciles). It never runs wrangler, never compiles, and never
+touches a database — the printed next steps (`fz migrations
+collect`, `worker-build`, `wrangler deploy`) are needs-human and need
+credentials `fz` does not hold. Running the same approved deploy
+twice is safe: the second records nothing and reports
+`changed: false`.
+
+Two consents, deliberately separate:
+
+- a venture whose manifest config resolves `ENV=production` refuses
+  without `--i-am-deploying-to-production`
+  (`production-deploy-unauthorized`);
+- a plan that removes modules — their data leaves the served venture —
+  refuses without the same flag (`destructive-change-unauthorized`).
+
+## `fz add <module> [--manifest venture.json] [--json]`
+
+Adds a module to the manifest's desired composition and nothing else:
+it never deploys, never provisions, never touches a database. The slug
+must be in the catalog (`module-unknown` otherwise); adding a module
+the manifest already lists is a no-op that succeeds with
+`changed: false`. `.toml` manifests are rewritten as TOML, others as
+JSON; comments and formatting are not preserved.
+
+## `fz init --name <name> --host <host> [--manifest venture.json] [--force] [--json]`
+
+Writes a new venture manifest — name and host, no modules yet. Refuses
+to overwrite an existing manifest unless `--force`
+(`manifest-exists`).
+
+## `fz verify [--manifest venture.json] [--migrations migrations] [--json]`
+
+Checks the recorded deployment still matches the manifest, reporting
+drift as coded failures in exactly the doctor's JSON shape: the
+module set (`composition-drift`), the config (`config-drift`), the
+resolved environment (`env-drift`), and — when nothing narrower
+explains it — the recorded digest no longer matching a recomputed
+plan (`manifest-drift`). No deployment recorded at all is
+`not-deployed`.
+
+Every workflow command speaks both disciplines `fz doctor --json`
+established: under `--json`, exactly one JSON object on stdout,
+nothing on stderr, every failure carrying a stable code from the
+catalogue; `--non-interactive` is accepted everywhere (the commands
+never prompt — anything needing a human is a coded refusal, and the
+flag suppresses the human `next:` steps from prose output).
 
 ## `fz modules`
 
