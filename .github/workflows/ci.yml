@@ -21,7 +21,8 @@ jobs:
       - run: cargo fmt --all --check
 
   cfjs-size:
-    name: cf.js size gate (4 KB gzipped, issue #73)
+    # Truncated at the `#` the same way; issue #73.
+    name: cf.js size gate (4 KB gzipped)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -35,7 +36,10 @@ jobs:
           node size.mjs
 
   migration-guard:
-    name: migrations are never edited (issue #34)
+    # No `#` in the name: GitHub truncates a check-run name there, which
+    # registered this as `migrations are never edited (issue` — an awkward
+    # string to have to name in branch protection. Issue #34.
+    name: migrations are never edited
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
