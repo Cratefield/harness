@@ -29,7 +29,7 @@
 //! - `notifications_dead_letters` — the terminal state core's outbox does
 //!   not have (ADR 0016).
 //!
-//! # The two rules that are easy to get wrong
+//! # The rules that are easy to get wrong
 //!
 //! **`PushError::Unregistered` is a delete instruction**, and the only
 //! error that ever prunes a subscription. Not `Rejected`, not `Transient`,
@@ -39,6 +39,20 @@
 //! **The preference is read in the drain**, immediately before
 //! `Push::send`, so an opt-out that arrives after the row was written
 //! still wins.
+//!
+//! **The subscription's account and the job's account are checked against
+//! each other**, in that same place. A sign-out deletes the row, but
+//! signing another account in on the same device only re-homes it, and a
+//! notification queued for the previous owner must be dropped rather than
+//! delivered to whoever holds the device now.
+//!
+//! **A device token is not an authenticator.** Re-homing is the one write
+//! that acts on one alone, so it is budgeted, evented and recoverable —
+//! see [`Notifications::rehome_max_per_hour`].
+//!
+//! **Scheduled work drains through the context it is handed**, never
+//! through one parked when a router was built: a cron invocation builds no
+//! router at all.
 //!
 //! # No UI surface
 //!
@@ -52,14 +66,17 @@
 #![doc = include_str!("../README.md")]
 #![forbid(unsafe_code)]
 
+mod clock;
 mod handlers;
 mod notify;
 mod store;
 
-pub use handlers::{ChannelPatch, PreferencesBody, RecipientBody, RegisterBody, UNKNOWN_CATEGORY};
+pub use handlers::{
+    ChannelPatch, PreferencesBody, REHOME_LIMIT, RecipientBody, RegisterBody, UNKNOWN_CATEGORY,
+};
 pub use notify::{
-    DrainReport, EVENT_REQUESTED, EVENT_SUBSCRIPTION_PRUNED, Enqueued, Notifier, NotifyError,
-    Skipped, TOPIC_SEND,
+    DrainReport, EVENT_REQUESTED, EVENT_SUBSCRIPTION_PRUNED, EVENT_SUBSCRIPTION_REHOMED, Enqueued,
+    Notifier, NotifyError, Skipped, TOPIC_SEND,
 };
 pub use store::{DeadLetterReason, Transport};
 
@@ -102,6 +119,20 @@ const MIGRATION_INIT: SqlMigration = SqlMigration {
     name: "init",
     sql: include_str!("../migrations/sqlite/0001_init.sql"),
 };
+
+/// The #182 review's schema half: the re-home record the take-over budget
+/// counts, and the index `Outbox::claim_due` reads. Its own migration
+/// because `0001` is applied and an applied migration is never edited.
+const MIGRATION_REHOME_AND_DUE_INDEX: SqlMigration = SqlMigration {
+    id: "0002",
+    name: "rehome_and_due_index",
+    sql: include_str!("../migrations/sqlite/0002_rehome_and_due_index.sql"),
+};
+
+/// Every migration this module ships, in order. One array, so a test that
+/// asserts something about the schema reads what actually ships rather
+/// than a second list that can drift from it.
+const SHIPPED_MIGRATIONS: [SqlMigration; 2] = [MIGRATION_INIT, MIGRATION_REHOME_AND_DUE_INDEX];
 
 /// One notification category the venture declares.
 ///
@@ -160,6 +191,8 @@ pub(crate) struct Settings {
     pub categories: Arc<Vec<Category>>,
     pub max_attempts: u32,
     pub drain_batch: u64,
+    pub drain_concurrency: u32,
+    pub rehome_max_per_hour: u32,
     pub transport_probe: Option<TransportProbe>,
 }
 
@@ -169,6 +202,8 @@ impl std::fmt::Debug for Settings {
             .field("categories", &self.categories)
             .field("max_attempts", &self.max_attempts)
             .field("drain_batch", &self.drain_batch)
+            .field("drain_concurrency", &self.drain_concurrency)
+            .field("rehome_max_per_hour", &self.rehome_max_per_hour)
             .field("transport_probe", &self.transport_probe.is_some())
             .finish()
     }
@@ -193,6 +228,20 @@ pub struct Notifications {
     /// module's router. The [`Notifier`] handle and the event
     /// subscription both read it.
     ctx_cell: Arc<OnceLock<Arc<ModuleContext>>>,
+    /// The settings as the composition finished them, parked at the same
+    /// moment, so a [`Notifier`] taken mid-build cannot serve a set the
+    /// module no longer has (see [`Notifier`]'s own `settings`).
+    settings_cell: Arc<OnceLock<Settings>>,
+    /// The token verifier, built once rather than per request.
+    ///
+    /// `router()` runs on **every** request on Workers, and an
+    /// `AuthClient` built inside it starts with an empty JWKS cache: one
+    /// extra outbound round-trip to the issuer per authenticated request,
+    /// which anyone can drive by sending junk bearers. Parked here it is
+    /// built once per isolate, cache and all. Every rebuild is handed an
+    /// equivalent `HttpClient` and `Clock`, which is what makes keeping
+    /// the first one sound — the same reasoning as `ctx_cell`.
+    auth_cell: Arc<OnceLock<Option<Arc<factory0_auth_client::AuthClient>>>>,
 }
 
 impl Default for Notifications {
@@ -203,7 +252,9 @@ impl Default for Notifications {
 
 impl Notifications {
     /// No categories (a venture must declare its own), five attempts
-    /// before a transient failure is given up on, fifty rows per drain.
+    /// before a transient failure is given up on, fifty rows per drain,
+    /// eight of them in flight at a time, and three device take-overs per
+    /// account per hour.
     #[must_use]
     pub fn new() -> Self {
         Self {
@@ -211,9 +262,13 @@ impl Notifications {
                 categories: Arc::new(Vec::new()),
                 max_attempts: 5,
                 drain_batch: 50,
+                drain_concurrency: 8,
+                rehome_max_per_hour: 3,
                 transport_probe: None,
             },
             ctx_cell: Arc::new(OnceLock::new()),
+            settings_cell: Arc::new(OnceLock::new()),
+            auth_cell: Arc::new(OnceLock::new()),
         }
     }
 
@@ -251,6 +306,43 @@ impl Notifications {
         self
     }
 
+    /// How many of those rows are in flight at a time (default 8;
+    /// `NOTIFICATIONS_DRAIN_CONCURRENCY`).
+    ///
+    /// Each in-flight row is one outbound provider request, so this is the
+    /// knob for a runtime that counts subrequests. `1` restores a strictly
+    /// sequential drain.
+    #[must_use]
+    pub fn drain_concurrency(mut self, rows: u32) -> Self {
+        self.settings.drain_concurrency = rows;
+        self
+    }
+
+    /// How many devices one account may take over from other accounts in
+    /// an hour (default 3; `NOTIFICATIONS_REHOME_MAX_PER_HOUR`).
+    ///
+    /// A device that signs into another account re-homes, which is the
+    /// behaviour a shared tablet needs — and the reason a *token* must not
+    /// be treated as proof of anything. Whoever holds a leaked
+    /// FCM/APNs token can present it with their own valid bearer and take
+    /// the device over: the previous owner stops receiving, and the
+    /// caller's notifications start arriving on someone else's phone.
+    /// Nothing in a push token distinguishes the two cases, so the module
+    /// bounds them instead: over this many take-overs in an hour the
+    /// registration answers [`REHOME_LIMIT`] (429), every one of them
+    /// emits [`EVENT_SUBSCRIPTION_REHOMED`], and a notification queued for
+    /// the previous owner is dropped rather than delivered to the new one.
+    ///
+    /// `0` refuses every cross-account re-home, for a venture whose
+    /// devices are never shared. Sign-out (`DELETE /subscriptions/{id}`)
+    /// still frees the device for the next account, because it deletes the
+    /// row rather than moving it.
+    #[must_use]
+    pub fn rehome_max_per_hour(mut self, devices: u32) -> Self {
+        self.settings.rehome_max_per_hour = devices;
+        self
+    }
+
     /// How the venture answers "is any push transport wired?", for the
     /// production readiness check (see [`TransportProbe`]).
     ///
@@ -270,12 +362,16 @@ impl Notifications {
     ///
     /// Take it before composing the harness and hand it to the modules
     /// that send notifications; it starts working when
-    /// `Harness::router` builds this module's router.
+    /// `Harness::router` builds this module's router. Taking it early is
+    /// safe in both directions: it reads the module's finished settings
+    /// through a shared cell, so a category declared after this call is
+    /// one the handle can send.
     #[must_use]
     pub fn notifier(&self) -> Notifier {
         Notifier {
             cell: Arc::clone(&self.ctx_cell),
-            settings: self.settings.clone(),
+            settings_cell: Arc::clone(&self.settings_cell),
+            settings_at_handout: self.settings.clone(),
         }
     }
 
@@ -326,7 +422,10 @@ impl Module for Notifications {
     }
 
     fn emits(&self) -> &'static [&'static str] {
-        &[notify::EVENT_SUBSCRIPTION_PRUNED]
+        &[
+            notify::EVENT_SUBSCRIPTION_PRUNED,
+            notify::EVENT_SUBSCRIPTION_REHOMED,
+        ]
     }
 
     fn public_writes(&self) -> bool {
@@ -338,10 +437,9 @@ impl Module for Notifications {
     }
 
     fn migrations(&self) -> Migrations {
-        const MIGRATIONS: [SqlMigration; 1] = [MIGRATION_INIT];
-        const _: () = cratefield_core::assert_migration_set(&MIGRATIONS);
+        const _: () = cratefield_core::assert_migration_set(&SHIPPED_MIGRATIONS);
         Migrations {
-            sqlite: &MIGRATIONS,
+            sqlite: &SHIPPED_MIGRATIONS,
             postgres: &[],
         }
     }
@@ -375,13 +473,25 @@ impl Module for Notifications {
             seen.push(&category.name);
         }
 
-        for (key, minimum) in [("MAX_ATTEMPTS", 1u64), ("DRAIN_BATCH", 1)] {
+        // Parsed as the `u32` the runtime reads, not as a `u64`: a value
+        // above `u32::MAX` used to validate clean and then fall back to
+        // the default at run time, which is the one outcome configuration
+        // validation exists to prevent — a deployment that was told its
+        // setting was fine and is not running it.
+        for (key, minimum) in [
+            ("MAX_ATTEMPTS", 1u32),
+            ("DRAIN_BATCH", 1),
+            ("DRAIN_CONCURRENCY", 1),
+            ("REHOME_MAX_PER_HOUR", 0),
+        ] {
             if let Some(raw) = module.get_opt(key) {
-                let valid = raw.parse::<u64>().is_ok_and(|value| value >= minimum);
+                let valid = raw.parse::<u32>().is_ok_and(|value| value >= minimum);
                 if !valid {
                     errors.push(format!(
-                        "notifications: {} must be an integer of at least {minimum}, got {raw:?}",
-                        module.key(key)
+                        "notifications: {} must be an integer between {minimum} and {}, got \
+                         {raw:?}",
+                        module.key(key),
+                        u32::MAX
                     ));
                 }
             }
@@ -442,7 +552,12 @@ impl Module for Notifications {
         // First build wins; on Workers every request rebuilds the router
         // with equivalent ports, so the parked context stays valid.
         let _ = self.ctx_cell.set(Arc::clone(&shared));
-        let auth = handlers::auth_client(&shared);
+        let _ = self.settings_cell.set(self.settings.clone());
+        // Built once per isolate, not once per request: see `auth_cell`.
+        let auth = self
+            .auth_cell
+            .get_or_init(|| handlers::auth_client(&shared))
+            .clone();
         handlers::router(Arc::new(handlers::ModuleState {
             ctx: shared,
             settings: self.settings.clone(),
@@ -469,10 +584,16 @@ impl Module for Notifications {
             // The recovery half of the outbox contract: whatever the
             // immediate `Defer` never got to — because the isolate died
             // between the commit and the drain — is delivered here.
+            //
+            // Through the ports of the context the runtime hands in, not
+            // the one parked at router-build time. Cloudflare's scheduled
+            // path builds no router, so on a cold isolate there is no
+            // parked context and this whole half never ran; on a warm one
+            // it ran against some earlier request's bindings.
             let scope = scheduled_scope(ctx);
             let report = self
                 .notifier()
-                .drain(&scope)
+                .drain_with(ctx, &scope)
                 .await
                 .map_err(|err| Box::new(err) as AnyError)?;
             if report.claimed > 0 {
@@ -557,7 +678,13 @@ mod tests {
                 "notifications_dead_letters",
             ]
         );
-        assert_eq!(module.emits(), ["notifications.subscription_pruned"]);
+        assert_eq!(
+            module.emits(),
+            [
+                "notifications.subscription_pruned",
+                "notifications.subscription_rehomed",
+            ]
+        );
         assert!(
             !module.public_writes(),
             "every route is behind the auth extractor"
@@ -635,6 +762,39 @@ mod tests {
     }
 
     #[test]
+    fn a_number_the_runtime_cannot_read_is_refused_by_validation() {
+        // The runtime reads these through `ModuleConfig::get_u32`, so a
+        // value above `u32::MAX` silently falls back to the default.
+        // Validating it as a `u64` accepted exactly that and told the
+        // deployment its setting was fine.
+        for key in [
+            "NOTIFICATIONS_MAX_ATTEMPTS",
+            "NOTIFICATIONS_DRAIN_BATCH",
+            "NOTIFICATIONS_DRAIN_CONCURRENCY",
+        ] {
+            let cfg = cratefield_core::MapConfig::from_pairs([(key, "4294967296")]);
+            let err = module()
+                .validate_config(&cfg)
+                .expect_err("a value above u32::MAX is not the value the runtime would read");
+            assert!(err.to_string().contains(key), "{err}");
+
+            let zero = cratefield_core::MapConfig::from_pairs([(key, "0")]);
+            module()
+                .validate_config(&zero)
+                .expect_err("zero is not a usable batch, attempt count or concurrency");
+        }
+
+        // And the one whose floor really is zero: a venture that refuses
+        // every cross-account device take-over.
+        module()
+            .validate_config(&cratefield_core::MapConfig::from_pairs([(
+                "NOTIFICATIONS_REHOME_MAX_PER_HOUR",
+                "0",
+            )]))
+            .expect("0 re-homes an hour is a policy, not a mistake");
+    }
+
+    #[test]
     fn half_an_auth_configuration_is_refused() {
         let cfg = cratefield_core::MapConfig::from_pairs([(
             "NOTIFICATIONS_AUTH_ISSUER",
@@ -667,16 +827,54 @@ mod tests {
     }
 
     #[test]
+    fn every_hot_read_has_an_index() {
+        // `claim_due` filters and orders on `next_attempt_at` and runs on
+        // every send and every scheduled tick — the hottest read the
+        // module has, and the one that scanned the whole table while a
+        // far colder one was indexed. This is core's first `Outbox`
+        // consumer, so this DDL is the template the next module copies.
+        for (index, table, column) in [
+            (
+                "notifications_outbox_due",
+                "notifications_outbox",
+                "next_attempt_at",
+            ),
+            (
+                "notifications_subscriptions_by_account",
+                "notifications_subscriptions",
+                "account_id",
+            ),
+        ] {
+            let expected = format!("CREATE INDEX IF NOT EXISTS {index}\n    ON {table} ({column})");
+            // Across the whole set, not one file: `notifications_outbox_due`
+            // arrives in `0002` because `0001` is applied and an applied
+            // migration is never edited. Which migration declares an index
+            // is not the property — shipping it is.
+            assert!(
+                SHIPPED_MIGRATIONS
+                    .iter()
+                    .any(|migration| migration.sql.contains(&expected)),
+                "some migration must index {table}.{column}:\n{expected}"
+            );
+        }
+    }
+
+    #[test]
     fn the_migration_is_portable() {
-        assert_eq!(
-            cratefield_core::lint_portable_sql(MIGRATION_INIT.sql),
-            Vec::new(),
-            "the migration left the portable subset (ADR 0004)"
-        );
-        assert_eq!(
-            cratefield_core::lint_card_data(MIGRATION_INIT.sql),
-            Vec::new()
-        );
+        for migration in SHIPPED_MIGRATIONS {
+            assert_eq!(
+                cratefield_core::lint_portable_sql(migration.sql),
+                Vec::new(),
+                "migration {} left the portable subset (ADR 0004)",
+                migration.id
+            );
+            assert_eq!(
+                cratefield_core::lint_card_data(migration.sql),
+                Vec::new(),
+                "migration {}",
+                migration.id
+            );
+        }
     }
 
     #[test]

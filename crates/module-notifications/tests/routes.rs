@@ -11,8 +11,8 @@ use cratefield_module_notifications::Transport;
 use http::{Method, StatusCode};
 use serde_json::json;
 use support::{
-    ALICE, BOB, BOOKING, CLIENT, COACH_NOTES, ISSUER, NOW, ROOM_STARTING, kit, register_body, send,
-    token_for, token_with,
+    ALICE, BOB, BOOKING, CLIENT, COACH_NOTES, ISSUER, NOW, ROOM_STARTING, kit, kit_with,
+    register_body, send, token_for, token_with,
 };
 
 const SUBS: &str = "/v1/notifications/subscriptions";
@@ -123,7 +123,7 @@ async fn a_device_that_signs_into_another_account_re_homes() {
         Some(body.clone()),
     )
     .await;
-    send(
+    let moved = send(
         &kit.harness.router,
         Method::PUT,
         SUBS,
@@ -131,6 +131,23 @@ async fn a_device_that_signs_into_another_account_re_homes() {
         Some(body),
     )
     .await;
+    assert_eq!(moved.status, StatusCode::OK, "{}", moved.text());
+
+    // A device token is not an authenticator and this is the one write
+    // that acts on one alone, so the venture is told — with no
+    // credential material in the payload, like the prune event.
+    kit.harness.defer.drain().await;
+    let events = kit
+        .events
+        .payloads(cratefield_module_notifications::EVENT_SUBSCRIPTION_REHOMED);
+    assert_eq!(events.len(), 1, "one take-over, one event");
+    assert_eq!(events[0]["account_id"], BOB);
+    assert_eq!(
+        events[0]["previous_account_id"], ALICE,
+        "the venture can tell the previous owner their device went quiet"
+    );
+    let text = events[0].to_string();
+    assert!(!text.contains("shared-device"), "{text}");
 
     assert_eq!(kit.count(TABLE).await, 1, "one device, one row");
     let alice = send(
@@ -158,6 +175,150 @@ async fn a_device_that_signs_into_another_account_re_homes() {
         bob.json()["subscriptions"].as_array().map(Vec::len),
         Some(1)
     );
+}
+
+#[pollster::test]
+async fn taking_over_device_after_device_is_refused_rather_than_served() {
+    // The attack the re-home behaviour costs: a device token is not an
+    // authenticator — it leaks through client logs, crash reports and
+    // third-party SDKs — and presenting one with any valid bearer used to
+    // move that device unconditionally. The victim goes quiet, their own
+    // listing goes empty, and the caller's notifications start arriving on
+    // a phone they have never touched. Nothing confirmed it, nothing
+    // bounded it, and nothing recorded it.
+    let kit = kit_with(
+        std::sync::Arc::new(cratefield_testing::FakePush::new(
+            cratefield_testing::PushMode::DeliverOk,
+        )),
+        support::categories(),
+        &[("NOTIFICATIONS_REHOME_MAX_PER_HOUR", "2")],
+    );
+    let stolen: Vec<_> = (0..3)
+        .map(|index| apns(&format!("victim-device-{index}")))
+        .collect();
+    for device in &stolen {
+        let created = send(
+            &kit.harness.router,
+            Method::PUT,
+            SUBS,
+            Some(&token_for(ALICE)),
+            Some(register_body(Transport::Apns, device)),
+        )
+        .await;
+        assert_eq!(created.status, StatusCode::OK);
+    }
+
+    // Two take-overs are inside the budget a shared tablet needs.
+    for device in &stolen[..2] {
+        let taken = send(
+            &kit.harness.router,
+            Method::PUT,
+            SUBS,
+            Some(&token_for(BOB)),
+            Some(register_body(Transport::Apns, device)),
+        )
+        .await;
+        assert_eq!(taken.status, StatusCode::OK, "{}", taken.text());
+    }
+
+    let refused = send(
+        &kit.harness.router,
+        Method::PUT,
+        SUBS,
+        Some(&token_for(BOB)),
+        Some(register_body(Transport::Apns, &stolen[2])),
+    )
+    .await;
+    assert_eq!(
+        refused.status,
+        StatusCode::TOO_MANY_REQUESTS,
+        "{}",
+        refused.text()
+    );
+    assert!(
+        refused.text().contains("device-rehome-limit"),
+        "{}",
+        refused.text()
+    );
+
+    // The third device is still the victim's, and still reachable.
+    let victim = send(
+        &kit.harness.router,
+        Method::GET,
+        SUBS,
+        Some(&token_for(ALICE)),
+        None,
+    )
+    .await;
+    assert_eq!(
+        victim.json()["subscriptions"].as_array().map(Vec::len),
+        Some(1)
+    );
+
+    // And the budget is the caller's, not the row's: the account that
+    // lost a device can take it straight back, which is what makes the
+    // next app launch on that device recover it.
+    let recovered = send(
+        &kit.harness.router,
+        Method::PUT,
+        SUBS,
+        Some(&token_for(ALICE)),
+        Some(register_body(Transport::Apns, &stolen[0])),
+    )
+    .await;
+    assert_eq!(recovered.status, StatusCode::OK, "{}", recovered.text());
+}
+
+#[pollster::test]
+async fn a_venture_can_refuse_every_cross_account_take_over() {
+    // For a venture whose devices are never shared. Sign-out still frees
+    // the device, because it deletes the row rather than moving it.
+    let kit = kit_with(
+        std::sync::Arc::new(cratefield_testing::FakePush::new(
+            cratefield_testing::PushMode::DeliverOk,
+        )),
+        support::categories(),
+        &[("NOTIFICATIONS_REHOME_MAX_PER_HOUR", "0")],
+    );
+    let device = apns("one-owner-device");
+    let created = send(
+        &kit.harness.router,
+        Method::PUT,
+        SUBS,
+        Some(&token_for(ALICE)),
+        Some(register_body(Transport::Apns, &device)),
+    )
+    .await;
+    let id = created.json()["id"].as_str().expect("an id").to_owned();
+
+    let refused = send(
+        &kit.harness.router,
+        Method::PUT,
+        SUBS,
+        Some(&token_for(BOB)),
+        Some(register_body(Transport::Apns, &device)),
+    )
+    .await;
+    assert_eq!(refused.status, StatusCode::TOO_MANY_REQUESTS);
+
+    // Alice signs out; the device is free again.
+    send(
+        &kit.harness.router,
+        Method::DELETE,
+        &format!("{SUBS}/{id}"),
+        Some(&token_for(ALICE)),
+        None,
+    )
+    .await;
+    let now_bobs = send(
+        &kit.harness.router,
+        Method::PUT,
+        SUBS,
+        Some(&token_for(BOB)),
+        Some(register_body(Transport::Apns, &device)),
+    )
+    .await;
+    assert_eq!(now_bobs.status, StatusCode::OK, "{}", now_bobs.text());
 }
 
 #[pollster::test]
@@ -462,6 +623,204 @@ async fn an_undeclared_category_is_refused_and_writes_nothing() {
         kit.count("notifications_preferences").await,
         0,
         "the whole write is refused, not the unknown half"
+    );
+}
+
+#[pollster::test]
+async fn a_preference_row_that_will_not_decode_is_refused_rather_than_skipped() {
+    // Skipping it made an explicit opt-out read as the category's
+    // default: the account switched `booking` off, the row exists
+    // precisely because of that, and dropping it silently answered
+    // "on" — to `GET /preferences`, and to the drain that asks the
+    // same reader whether it may send.
+    let kit = kit();
+    let off = send(
+        &kit.harness.router,
+        Method::PUT,
+        PREFS,
+        Some(&token_for(ALICE)),
+        Some(json!({ "preferences": { BOOKING: { "push": false } } })),
+    )
+    .await;
+    assert_eq!(off.json()["preferences"][BOOKING]["push"], false);
+
+    // A category no reader can decode: the damage `read_subscription`
+    // already raises `corrupt(..)` for.
+    kit.db()
+        .execute(&cratefield_core::Statement::new(
+            "UPDATE notifications_preferences SET category = x'ff' WHERE account_id = 'acct-alice'",
+        ))
+        .await
+        .expect("damaged the row");
+
+    let answer = send(
+        &kit.harness.router,
+        Method::GET,
+        PREFS,
+        Some(&token_for(ALICE)),
+        None,
+    )
+    .await;
+    assert_eq!(
+        answer.status,
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "sending to someone who opted out is the worse failure: {}",
+        answer.text()
+    );
+    assert!(
+        !answer.text().contains("\"push\":true"),
+        "an opt-out must never be reported as on: {}",
+        answer.text()
+    );
+}
+
+#[pollster::test]
+async fn two_registrations_of_one_device_at_once_do_not_collide() {
+    // An app registers on every launch, and a double-tap or a client
+    // retry puts two of those in flight together. Both read no row, both
+    // insert, and the loser used to answer 500 on the unique key —
+    // ordinary traffic, answered with an internal error.
+    let (kit, racing) = support::kit_racing(
+        std::sync::Arc::new(cratefield_testing::FakePush::new(
+            cratefield_testing::PushMode::DeliverOk,
+        )),
+        support::categories(),
+        &[],
+    );
+    let device = apns("device-alice-1");
+    let body = register_body(Transport::Apns, &device);
+
+    // Learn the identity the module derives, from the module itself.
+    let first = send(
+        &kit.harness.router,
+        Method::PUT,
+        SUBS,
+        Some(&token_for(ALICE)),
+        Some(body.clone()),
+    )
+    .await;
+    let id = first.json()["id"].as_str().expect("an id").to_owned();
+    let hash = kit.rows(TABLE).await[0]
+        .get::<String>("recipient_hash")
+        .expect("the stored identity");
+    send(
+        &kit.harness.router,
+        Method::DELETE,
+        &format!("{SUBS}/{id}"),
+        Some(&token_for(ALICE)),
+        None,
+    )
+    .await;
+    assert_eq!(kit.count(TABLE).await, 0, "back to the INSERT path");
+
+    // The other request commits between this one's read and its insert.
+    racing.interleave(
+        r#"INSERT INTO "notifications_subscriptions""#,
+        cratefield_core::Statement::new(format!(
+            "INSERT INTO notifications_subscriptions (id, account_id, transport, \
+             recipient_json, recipient_hash, created_at, last_seen_at) VALUES \
+             ('01JCONCURRENT', 'acct-alice', 'apns', \
+             '{{\"apns\":{{\"device_token\":\"device-alice-1\"}}}}', '{hash}', \
+             '2027-01-15T08:00:00Z', '2027-01-15T08:00:00Z')"
+        )),
+    );
+
+    let answer = send(
+        &kit.harness.router,
+        Method::PUT,
+        SUBS,
+        Some(&token_for(ALICE)),
+        Some(body),
+    )
+    .await;
+    assert!(racing.fired(), "the interleaved write must have happened");
+    assert_eq!(answer.status, StatusCode::OK, "{}", answer.text());
+    assert_eq!(kit.count(TABLE).await, 1, "one device, still one row");
+    assert_eq!(
+        answer.json()["id"],
+        "01JCONCURRENT",
+        "the loser takes the row the winner wrote rather than inventing a second"
+    );
+}
+
+#[pollster::test]
+async fn two_preference_writes_at_once_do_not_collide() {
+    let (kit, racing) = support::kit_racing(
+        std::sync::Arc::new(cratefield_testing::FakePush::new(
+            cratefield_testing::PushMode::DeliverOk,
+        )),
+        support::categories(),
+        &[],
+    );
+    // Another request writes this account's first `booking` row between
+    // our read (which found none) and our insert.
+    racing.interleave(
+        r#"INSERT INTO "notifications_preferences""#,
+        cratefield_core::Statement::new(
+            "INSERT INTO notifications_preferences (account_id, category, push, in_app, \
+             email, updated_at) VALUES ('acct-alice', 'booking', 1, 1, 1, \
+             '2027-01-15T08:00:00Z')",
+        ),
+    );
+
+    let answer = send(
+        &kit.harness.router,
+        Method::PUT,
+        PREFS,
+        Some(&token_for(ALICE)),
+        Some(json!({ "preferences": { BOOKING: { "push": false } } })),
+    )
+    .await;
+    assert!(racing.fired(), "the interleaved write must have happened");
+    assert_eq!(answer.status, StatusCode::OK, "{}", answer.text());
+    assert_eq!(
+        answer.json()["preferences"][BOOKING]["push"],
+        false,
+        "the caller's own change is what survives the retry"
+    );
+    assert_eq!(kit.count("notifications_preferences").await, 1);
+}
+
+#[pollster::test]
+async fn the_token_verifier_is_built_once_and_not_once_per_request() {
+    // `Module::router` runs per request on Workers, so an `AuthClient`
+    // built inside it starts every request with an empty JWKS cache: one
+    // extra outbound round-trip to the issuer per authenticated request,
+    // and anyone can drive it with junk bearers.
+    let kit = kit();
+    let module = cratefield_module_notifications::Notifications::new().categories([
+        BOOKING,
+        COACH_NOTES,
+        ROOM_STARTING,
+    ]);
+    let jwks = std::sync::Arc::new(support::StaticJwks::new());
+    let fetches = jwks.fetches();
+    let push = std::sync::Arc::new(cratefield_testing::FakePush::new(
+        cratefield_testing::PushMode::DeliverOk,
+    ));
+
+    for request in 0..2 {
+        let ctx = kit.context_over(push.clone(), Some(jwks.clone()));
+        let router = cratefield_core::Module::router(&module, ctx);
+        let answer = support::send_unmounted(
+            &router,
+            Method::GET,
+            "/subscriptions",
+            Some(&token_for(ALICE)),
+        )
+        .await;
+        assert_eq!(
+            answer.status,
+            StatusCode::OK,
+            "request {request}: {}",
+            answer.text()
+        );
+    }
+
+    assert_eq!(
+        fetches.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "the second request must reuse the first request's key set"
     );
 }
 

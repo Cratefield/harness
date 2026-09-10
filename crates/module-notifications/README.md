@@ -87,6 +87,35 @@ The `recipient` object is the `Push` port's own JSON form, so its Web Push
 tag is `web_push` while the `transport` field and the stored column say
 `webpush`. The two are checked against each other on every write.
 
+## A device that changes hands
+
+A subscription is identified by `(transport, recipient_hash)`, so a device
+that signs into a second account **re-homes** onto it rather than
+delivering both accounts' mail. That is the behaviour a shared tablet
+needs, and it is the one write in the module that acts on a push token
+alone — and a push token is not an authenticator. It leaks through client
+logs, crash reports and third-party SDKs, and whoever holds one can present
+it with their own valid bearer.
+
+So a take-over is bounded, recorded and recoverable rather than silent:
+
+- at most `NOTIFICATIONS_REHOME_MAX_PER_HOUR` devices per account per hour,
+  and `429 device-rehome-limit` past that. `0` refuses cross-account
+  re-homing outright, for a venture whose devices are never shared;
+- every one of them emits `notifications.subscription_rehomed`
+  (`subscription_id`, `account_id`, `previous_account_id`, `transport`,
+  `at` — and no recipient), so the venture can tell the previous owner;
+- a notification queued for the previous owner is **dropped**, never
+  delivered to the new one: the drain checks that the row's account and
+  the job's account still agree;
+- the budget is the caller's, not the row's, so the account that lost a
+  device takes it straight back on the next app launch.
+
+Signing out (`DELETE /subscriptions/{id}`) deletes the row instead of
+moving it, so it frees the device for the next account with no budget spent
+at all. What the module cannot do alone is prove the caller is holding the
+device; that needs a client-side confirmation this child does not ship.
+
 ## Delivery
 
 | Outcome | What happens |
@@ -103,6 +132,16 @@ Push subscription cannot be recreated server-side at all (ADR 0015).
 The preference is read in the drain, immediately before the send, so an
 opt-out that arrives after the row was written still wins.
 
+A row whose own database call fails is counted in `DrainReport::failed` and
+keeps its lease: the pass carries on, and that row is due again when the
+lease expires. Rows go out `NOTIFICATIONS_DRAIN_CONCURRENCY` at a time —
+one drain is one `wait_until` against a five-minute lease, and the rows
+share nothing.
+
+The venture's scheduled entry point drains through **the context it is
+handed**. A cron invocation builds no router, so a module that reached for
+one parked at router-build time recovered nothing at all on a cold isolate.
+
 ## Configuration
 
 | Key | Default | What |
@@ -111,6 +150,12 @@ opt-out that arrives after the row was written still wins.
 | `NOTIFICATIONS_AUTH_CLIENT_ID` | — | This app's registered client id, which every token's `aud` must equal |
 | `NOTIFICATIONS_MAX_ATTEMPTS` | `5` | Attempts before a transient failure is given up on |
 | `NOTIFICATIONS_DRAIN_BATCH` | `50` | Rows one drain pass leases |
+| `NOTIFICATIONS_DRAIN_CONCURRENCY` | `8` | Rows in flight at a time inside one pass |
+| `NOTIFICATIONS_REHOME_MAX_PER_HOUR` | `3` | Devices one account may take over from other accounts in an hour; `0` refuses every take-over |
+
+Every one is read as a `u32`, and `validate_config` refuses a value the
+runtime could not read — including one above `u32::MAX`, which used to
+validate clean and then silently run the default.
 
 Without the two auth keys every route answers `401`: the module cannot
 establish who is calling, and guessing is the one thing it must not do.

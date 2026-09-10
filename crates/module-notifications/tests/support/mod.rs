@@ -18,19 +18,20 @@
 // sections would add noise without information.
 #![allow(clippy::missing_panics_doc)]
 
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use base64ct::{Base64UrlUnpadded, Encoding};
 use bytes::Bytes;
 use cratefield_core::{
-    AnyError, BoxFuture, Clock, Config, ConfigError, Defer, EventBus, EventHandler, EventName,
-    HttpClient, HttpError, MapConfig, Migrations, Module, ModuleContext, Notification,
-    PersonalDataCatalog, Port, Ports, Push, PushError, PushOutcome, Recipient, Scope, Statement,
-    TemplateRegistry, UlidIdGen, Venture,
+    AnyError, BoxFuture, Clock, Config, ConfigError, Defer, EventHandler, EventName, HttpClient,
+    HttpError, MapConfig, Migrations, Module, ModuleContext, Notification, PersonalDataCatalog,
+    Port, Ports, Push, PushError, PushOutcome, Recipient, Scope, Statement, TemplateRegistry,
+    UlidIdGen, Venture,
 };
 use cratefield_module_notifications::{Category, Notifications, Notifier, Transport};
-use cratefield_testing::TestHarness;
+use cratefield_testing::{FakePush, PushMode, TestHarness};
 use p256::ecdsa::signature::Signer as _;
 use p256::ecdsa::{self, Signature};
 use serde_json::{Value, json};
@@ -98,13 +99,35 @@ pub fn token_with(claims: &Value) -> String {
     format!("{input}.{}", b64(&signature.to_bytes()))
 }
 
-/// An `HttpClient` that answers every request with the issuer's key set.
+/// An `HttpClient` that answers every request with the issuer's key set,
+/// and counts how many times it was asked.
 ///
 /// Deliberately not `FakeHttpClient`, whose scripted responses run out:
 /// the verifier refetches on an unknown `kid`, and a test that failed
 /// because the script was exhausted would look like a verification bug.
-struct StaticJwks {
+///
+/// The count is what makes "the token verifier is built once, not once per
+/// request" observable: a verifier rebuilt per request starts with an
+/// empty JWKS cache and fetches again.
+pub struct StaticJwks {
     body: String,
+    fetches: Arc<AtomicUsize>,
+}
+
+impl StaticJwks {
+    /// A key set server over the fixture's own signing key.
+    pub fn new() -> Self {
+        let (_, jwk) = signing_key();
+        Self {
+            body: json!({ "keys": [jwk] }).to_string(),
+            fetches: Arc::new(AtomicUsize::new(0)),
+        }
+    }
+
+    /// How many times the key set has been fetched.
+    pub fn fetches(&self) -> Arc<AtomicUsize> {
+        Arc::clone(&self.fetches)
+    }
 }
 
 #[async_trait]
@@ -113,6 +136,7 @@ impl HttpClient for StaticJwks {
         &self,
         _request: http::Request<Bytes>,
     ) -> Result<http::Response<Bytes>, HttpError> {
+        self.fetches.fetch_add(1, Ordering::SeqCst);
         http::Response::builder()
             .status(200)
             .body(Bytes::from(self.body.clone()))
@@ -168,19 +192,26 @@ impl Module for EventProbe {
         axum::Router::new()
     }
     fn events(&self) -> Vec<(EventName, EventHandler)> {
-        let log = Arc::clone(&self.log);
-        let event = cratefield_module_notifications::EVENT_SUBSCRIPTION_PRUNED;
-        let handler: EventHandler = Arc::new(move |_scope, payload| {
-            let log = Arc::clone(&log);
-            Box::pin(async move {
-                log.0
-                    .lock()
-                    .expect("event log")
-                    .push((event.to_owned(), payload));
-                Ok::<(), AnyError>(())
-            }) as BoxFuture<'static, Result<(), AnyError>>
-        });
-        vec![(event.to_owned(), handler)]
+        [
+            cratefield_module_notifications::EVENT_SUBSCRIPTION_PRUNED,
+            cratefield_module_notifications::EVENT_SUBSCRIPTION_REHOMED,
+        ]
+        .into_iter()
+        .map(|event| {
+            let log = Arc::clone(&self.log);
+            let handler: EventHandler = Arc::new(move |_scope, payload| {
+                let log = Arc::clone(&log);
+                Box::pin(async move {
+                    log.0
+                        .lock()
+                        .expect("event log")
+                        .push((event.to_owned(), payload));
+                    Ok::<(), AnyError>(())
+                }) as BoxFuture<'static, Result<(), AnyError>>
+            });
+            (event.to_owned(), handler)
+        })
+        .collect()
     }
 }
 
@@ -273,6 +304,152 @@ impl Push for ScriptedPush {
 }
 
 // ---------------------------------------------------------------------------
+// A database that lets another request win a race
+
+/// The kit's database with one interleaving hook: the first statement
+/// whose SQL contains `when` has `run` committed **immediately before**
+/// it, on the same database.
+///
+/// That is what a concurrent request looks like from inside a handler
+/// that read the table a moment ago — the read is stale by the time the
+/// write lands. Two `PUT`s arriving together is ordinary traffic (an app
+/// registers on every launch; a client retries), so the interleaving has
+/// to be reproducible rather than hoped for.
+#[derive(Clone)]
+pub struct RacingDb {
+    inner: Arc<dyn cratefield_core::Database>,
+    interloper: Arc<Mutex<Option<(String, Statement)>>>,
+}
+
+impl RacingDb {
+    pub fn new(inner: Arc<dyn cratefield_core::Database>) -> Self {
+        Self {
+            inner,
+            interloper: Arc::new(Mutex::new(None)),
+        }
+    }
+
+    /// Arms the hook: `run` commits just before the first statement whose
+    /// SQL contains `when`. One shot.
+    pub fn interleave(&self, when: &str, run: Statement) {
+        *self.interloper.lock().expect("interloper") = Some((when.to_owned(), run));
+    }
+
+    /// Whether the armed statement has fired.
+    pub fn fired(&self) -> bool {
+        self.interloper.lock().expect("interloper").is_none()
+    }
+
+    async fn maybe_race(&self, sql: &str) {
+        let armed = {
+            let mut slot = self.interloper.lock().expect("interloper");
+            match slot.as_ref() {
+                Some((when, _)) if sql.contains(when.as_str()) => slot.take().map(|(_, run)| run),
+                _ => None,
+            }
+        };
+        if let Some(statement) = armed {
+            self.inner
+                .execute(&statement)
+                .await
+                .expect("the concurrent write commits");
+        }
+    }
+}
+
+#[async_trait]
+impl cratefield_core::Database for RacingDb {
+    async fn execute(&self, stmt: &Statement) -> Result<u64, cratefield_core::DbError> {
+        self.maybe_race(&stmt.sql).await;
+        self.inner.execute(stmt).await
+    }
+
+    async fn query(
+        &self,
+        stmt: &Statement,
+    ) -> Result<cratefield_core::Rows, cratefield_core::DbError> {
+        self.inner.query(stmt).await
+    }
+
+    async fn batch(&self, stmts: &[Statement]) -> Result<(), cratefield_core::DbError> {
+        for stmt in stmts {
+            self.maybe_race(&stmt.sql).await;
+        }
+        self.inner.batch(stmts).await
+    }
+}
+
+// ---------------------------------------------------------------------------
+// A Push that reports how many sends were in flight at once
+
+/// Records the high-water mark of concurrent `send` calls.
+///
+/// Every send suspends once before answering, which is what a real
+/// provider round-trip does and what a synchronous fake cannot: a drain
+/// that awaits its rows one after another never has two in flight, and
+/// nothing else about the report would tell the two apart.
+#[derive(Clone, Default)]
+pub struct ConcurrentPush {
+    inner: Arc<ConcurrentInner>,
+}
+
+#[derive(Default)]
+struct ConcurrentInner {
+    in_flight: AtomicUsize,
+    peak: AtomicUsize,
+    calls: AtomicUsize,
+}
+
+impl ConcurrentPush {
+    /// The most sends that were ever in flight at the same moment.
+    pub fn peak_in_flight(&self) -> usize {
+        self.inner.peak.load(Ordering::SeqCst)
+    }
+
+    pub fn calls(&self) -> usize {
+        self.inner.calls.load(Ordering::SeqCst)
+    }
+}
+
+/// A future that is not ready the first time it is polled — one
+/// suspension point, so a caller that awaits sequentially can be told
+/// apart from one that does not.
+struct YieldOnce(bool);
+
+impl std::future::Future for YieldOnce {
+    type Output = ();
+
+    fn poll(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<()> {
+        if self.0 {
+            std::task::Poll::Ready(())
+        } else {
+            self.0 = true;
+            cx.waker().wake_by_ref();
+            std::task::Poll::Pending
+        }
+    }
+}
+
+#[async_trait]
+impl Push for ConcurrentPush {
+    async fn send(
+        &self,
+        _to: &Recipient,
+        _notification: &Notification,
+    ) -> Result<PushOutcome, PushError> {
+        let now = self.inner.in_flight.fetch_add(1, Ordering::SeqCst) + 1;
+        self.inner.peak.fetch_max(now, Ordering::SeqCst);
+        YieldOnce(false).await;
+        self.inner.calls.fetch_add(1, Ordering::SeqCst);
+        self.inner.in_flight.fetch_sub(1, Ordering::SeqCst);
+        Ok(PushOutcome::Delivered { id: None })
+    }
+}
+
+// ---------------------------------------------------------------------------
 // The kit
 
 pub struct Kit {
@@ -280,6 +457,12 @@ pub struct Kit {
     pub notifier: Notifier,
     pub events: Arc<EventLog>,
     pub clock: TestClock,
+    /// The `Push` reached only through [`Kit::scheduled_context`], never
+    /// through the router. A send that lands here came from the context
+    /// the scheduled entry point was handed.
+    pub scheduled_push: FakePush,
+    /// How many times the verifier fetched the issuer's key set.
+    pub jwks_fetches: Arc<AtomicUsize>,
     config: Arc<dyn Config>,
 }
 
@@ -307,18 +490,49 @@ pub fn kit() -> Kit {
 /// A kit over the caller's `Push`, with `categories` declared and `config`
 /// merged over the module's keys.
 pub fn kit_with(push: Arc<dyn Push>, categories: Vec<Category>, config: &[(&str, &str)]) -> Kit {
-    let (_, jwk) = signing_key();
-    let jwks = StaticJwks {
-        body: json!({ "keys": [jwk] }).to_string(),
-    };
+    build_kit(push, categories, config, |db| db)
+}
+
+/// [`kit_with`], plus the database the router runs against — wrapped by
+/// `wrap`, so a test can interleave a concurrent write into a handler.
+pub fn kit_racing(
+    push: Arc<dyn Push>,
+    categories: Vec<Category>,
+    config: &[(&str, &str)],
+) -> (Kit, RacingDb) {
+    let racing: Arc<Mutex<Option<RacingDb>>> = Arc::new(Mutex::new(None));
+    let captured = Arc::clone(&racing);
+    let kit = build_kit(push, categories, config, move |db| {
+        let wrapper = RacingDb::new(db);
+        *captured.lock().expect("racing db") = Some(wrapper.clone());
+        Arc::new(wrapper)
+    });
+    let wrapper = racing.lock().expect("racing db").clone().expect("wrapped");
+    (kit, wrapper)
+}
+
+fn build_kit(
+    push: Arc<dyn Push>,
+    categories: Vec<Category>,
+    config: &[(&str, &str)],
+    wrap_db: impl FnOnce(Arc<dyn cratefield_core::Database>) -> Arc<dyn cratefield_core::Database>,
+) -> Kit {
+    let jwks = StaticJwks::new();
+    let jwks_fetches = jwks.fetches();
 
     let mut module = Notifications::new();
+    // Taken **before** a single category is declared, on purpose. That is
+    // the composition order that used to fork the settings — `.category(..)`
+    // mutates an `Arc<Vec<_>>` through `make_mut`, so a handle cloned from
+    // it kept the vector as it was — and it is legal Rust that no test
+    // covered. Every kit test now sends through a handle taken first.
+    let notifier = module.notifier();
     for category in categories {
         module = module.category(category);
     }
-    let notifier = module.notifier();
     let events = Arc::new(EventLog::default());
     let clock = TestClock::at(NOW);
+    let scheduled_push = FakePush::new(PushMode::DeliverOk);
 
     let mut pairs: Vec<(String, String)> = vec![
         ("HARNESS_SECRET".to_owned(), TEST_SECRET.to_owned()),
@@ -340,6 +554,9 @@ pub fn kit_with(push: Arc<dyn Push>, categories: Vec<Category>, config: &[(&str,
         ports.http = Some(Arc::new(jwks));
         ports.clock = Some(Arc::new(ports_clock));
         ports.config = ports_config;
+        if let Some(db) = ports.db.take() {
+            ports.db = Some(wrap_db(db));
+        }
     });
 
     Kit {
@@ -347,6 +564,8 @@ pub fn kit_with(push: Arc<dyn Push>, categories: Vec<Category>, config: &[(&str,
         notifier,
         events,
         clock,
+        scheduled_push,
+        jwks_fetches,
         config: map,
     }
 }
@@ -364,17 +583,46 @@ impl Kit {
         }
     }
 
-    /// The context the venture's scheduled entry point would hand the
-    /// module. Only its `Defer` is read: the module drains through the
-    /// context it parked when its router was built.
+    /// The context the venture's scheduled entry point hands the module —
+    /// a **whole** context, the way `serve_scheduled` builds one, with
+    /// this deployment's database and its own `Push` handle.
+    ///
+    /// It used to carry neither, and documented that only its `Defer` was
+    /// read because the module drained through the context parked at
+    /// router-build time. That made the recovery test pass over a path
+    /// that cannot exist in production: Cloudflare's scheduled invocation
+    /// builds no router, so on a cold isolate there is nothing parked and
+    /// the whole recovery half of the outbox contract never ran. A
+    /// fixture that hands in less than the runtime does cannot notice.
+    ///
+    /// [`Kit::scheduled_push`] is deliberately a **different** `Push` from
+    /// the one the router holds, so a test can tell which context a drain
+    /// actually used.
     pub fn scheduled_context(&self) -> ModuleContext {
+        self.context_over(Arc::new(self.scheduled_push.clone()), None)
+    }
+
+    /// A `ModuleContext` over this kit's database and clock, with the
+    /// `Push` and `HttpClient` the caller names — one request's worth of
+    /// ports, the way a runtime assembles them per invocation.
+    pub fn context_over(
+        &self,
+        push: Arc<dyn Push>,
+        http: Option<Arc<dyn HttpClient>>,
+    ) -> ModuleContext {
         let mut ports = Ports::with_config(Arc::clone(&self.config));
+        ports.db = Some(Arc::clone(&self.harness.db));
+        ports.push = Some(push);
+        ports.http = http;
+        ports.clock = Some(Arc::new(self.clock.clone()));
         ports.defer = Some(Arc::new(self.harness.defer.clone()));
         ports.id_gen = Some(Arc::new(UlidIdGen));
         ModuleContext {
             ports,
             config: Arc::clone(&self.config),
-            events: EventBus::new(),
+            // The kit's own bus, so work done through this context is as
+            // observable as work done through a request's.
+            events: self.harness.harness.events().clone(),
             templates: Arc::new(TemplateRegistry::default()),
             venture: Arc::new(Venture::new("test-venture", "test.example")),
             unprotected_writes_accepted: false,
@@ -467,6 +715,45 @@ pub async fn send(
     let response = router
         .clone()
         .oneshot(builder.body(payload).expect("request builds"))
+        .await
+        .expect("router answers");
+    let status = response.status();
+    let body = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+        .await
+        .expect("body reads");
+    Answer { status, body }
+}
+
+/// A request straight at a module's own router, without the harness
+/// around it: paths are the module's (`/subscriptions`, not
+/// `/v1/notifications/subscriptions`), and the `Scope` the request-id
+/// layer would have inserted is supplied here instead.
+pub async fn send_unmounted(
+    router: &axum::Router,
+    method: http::Method,
+    path: &str,
+    token: Option<&str>,
+) -> Answer {
+    use tower::ServiceExt as _;
+
+    let mut builder = http::Request::builder()
+        .method(method)
+        .uri(path)
+        .extension(Scope {
+            request_id: "test-request-direct".to_owned(),
+            defer: Arc::new(cratefield_core::NoopDefer),
+            span: tracing::Span::none(),
+        });
+    if let Some(token) = token {
+        builder = builder.header(http::header::AUTHORIZATION, format!("Bearer {token}"));
+    }
+    let response = router
+        .clone()
+        .oneshot(
+            builder
+                .body(axum::body::Body::empty())
+                .expect("request builds"),
+        )
         .await
         .expect("router answers");
     let status = response.status();
