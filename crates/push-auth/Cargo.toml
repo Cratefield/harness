@@ -1,5 +1,4 @@
 [package]
-publish = false  # new crate: publish manually first, then wire into the facade
 name = "cratefield-push-auth"
 description = "Provider-JWT signing for push adapters: ES256 (APNs, VAPID) and RS256 (Google service accounts), with a keyed token cache"
 readme = "README.md"
