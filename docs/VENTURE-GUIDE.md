@@ -237,6 +237,30 @@ signatures even while its secret stays configured. The full runbook,
 including what revocation costs an in-flight link, is
 [`docs/KEY-ROTATION.md`](KEY-ROTATION.md).
 
+### 6b. Push secrets, if the venture sends notifications
+
+Each transport's secrets are all-or-none and are listed in
+[`docs/PUSH-ENV.md`](PUSH-ENV.md), generated from the one table every
+caller reads. `fz doctor` reports which transports this deployment routes
+and fails a production deploy that half-wires one (issue #191).
+
+Web Push needs a P-256 key pair the venture generates **once** and keeps:
+
+```sh
+fz push vapid keygen --file vapid.key   # prints the public applicationServerKey
+wrangler secret put VAPID_PRIVATE_KEY --env production < vapid.key
+wrangler secret put VAPID_SUBJECT --env production   # mailto: or https: contact URI
+```
+
+Rotating that key invalidates **every existing browser subscription** and
+no server can recreate one — each browser has to subscribe again — so
+`fz push vapid keygen` refuses to overwrite an existing key file without
+`--force`. APNs (a `.p8`, its key id, the team id, the bundle id) and FCM
+(the service-account JSON, whole) are `wrangler secret put` like the rest.
+`fz push send` sends one notification through whatever this environment
+configures, and `fz push inspect-subscription` checks a browser
+subscription and prints the `aud` the adapter will sign for it.
+
 ## 7. Mail domain (Resend)
 
 **Human** (Resend dashboard). Verify a **sending subdomain**

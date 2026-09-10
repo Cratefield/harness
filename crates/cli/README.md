@@ -13,7 +13,7 @@
 # cratefield-cli (`fz`)
 
 The venture CLI: `fz migrations collect`, `fz migrations apply`, `fz
-data export` / `fz data import`, `fz doctor`, `fz modules`.
+data export` / `fz data import`, `fz doctor`, `fz modules`, `fz push`.
 
 `fz` links against your venture's compiled-in harness, so it runs as a bin
 target **inside the venture repo** — the pattern the venture template
@@ -138,6 +138,77 @@ JSON object on stdout and nothing else —
 never renamed or removed, while message wording may change. The exit code
 still reflects the verdict; prose and operator warnings are unchanged
 without the flag.
+
+## `fz push` (issue #184)
+
+The operator side of the push transports. It reads the push environment
+through `cratefield-push-wiring` — the one `build_push` that `serve()` and
+`fz doctor` also call — so what `fz push` reaches is what the deployment
+reaches, and no second place in the workspace names a push variable
+(`crates/cli-acceptance/tests/push_env_guard.rs` fails the build if one
+does). None of it needs a compiled-in harness, so the standalone `fz` (and
+the Docker image) serve it too.
+
+### `fz push vapid keygen [--file PATH] [--force] [--print-private]`
+
+Generates the P-256 key pair Web Push identifies this application server by
+and prints the **public** key — base64url of the 65-byte uncompressed point,
+which is exactly what a browser passes to `pushManager.subscribe()` as
+`applicationServerKey`.
+
+- `--file` writes the private key, owner-readable only. Pipe it straight
+  into the secret: `wrangler secret put VAPID_PRIVATE_KEY < that file`.
+- The private key is **never** printed without `--print-private`.
+- An existing `--file` is not overwritten without `--force`, and both the
+  refusal and the `--force` run say what a rotation costs: every existing
+  browser subscription, none of which a server can recreate — each browser
+  has to subscribe again, with the user back on the site.
+- Neither `--file` nor `--print-private` is refused: the run would keep no
+  private key, and the public half alone is useless.
+
+A venture generates one of these once and keeps it forever.
+
+### `fz push send --transport apns|fcm|web-push --recipient … --title … --body …`
+
+Builds the venture's adapters from its environment and sends **one**
+notification — the live-proof tool (issue #186) and the first thing support
+runs. The report names the transport, a fingerprint of the recipient (never
+the token, the endpoint or the `auth` secret), the transport's wiring
+verdict, and then the outcome: `DELIVERED`, `FAILED` with the provider's
+reason and what to do about it, or `NOT SENT` with the reason nothing was
+routed.
+
+`--recipient` is the bare device/registration token for `apns` and `fcm`,
+and the browser's subscription JSON for `web-push` (`{"endpoint":…,
+"keys":{"p256dh":…,"auth":…}}`, or the flattened form). Also `--data`,
+`--url`, `--ttl`, `--priority` and `--silent`.
+
+`--dry-run` reports which transport would carry the send and why, without
+sending — it builds no HTTP client at all, so it cannot reach the network.
+
+The send itself needs the crate's `push-send` feature, which pulls the
+native runtime's HTTP client (reqwest behind the outbound policy) and the
+tokio runtime it needs — the same shape `fz migrations apply` needs
+`postgres`, and for the same reason:
+
+```toml
+[dependencies]
+cratefield-cli = { version = "0.1", features = ["push-send"] }
+```
+
+Without it every other `fz push` command still works, `--dry-run` included,
+and `send` says exactly that in one line. That outbound policy refuses
+loopback, private and link-local destinations, so a self-hosted push service
+on a private network is refused by the client, not by the protocol.
+
+### `fz push inspect-subscription <json>`
+
+Validates a Web Push subscription with the adapter's own rules and prints
+the `aud` it will sign for it — the push service's origin, never the
+subscription's path, because a path-bearing `aud` is the commonest cause of
+a VAPID `401`. Catches an endpoint that is not an absolute http(s) URL, a
+`p256dh` that is not a 65-byte uncompressed P-256 point on the curve, and an
+`auth` that is not 16 bytes.
 
 ## `fz modules`
 

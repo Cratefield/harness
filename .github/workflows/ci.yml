@@ -66,6 +66,11 @@ jobs:
           targets: wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@v2
       - run: cargo clippy --workspace --all-targets -- -D warnings
+      # `fz push send`'s network leg is behind an opt-in feature (issue
+      # #184), so the workspace run above never compiles it — and the live
+      # proofs (issue #186) would be the first thing to find out.
+      - name: fz push send, with its optional transport (issue #184)
+        run: cargo clippy -p cratefield-cli --all-targets --features push-send -- -D warnings
       - name: core dependency boundary (ADR 0001)
         run: |
           if cargo tree -p cratefield-core --edges normal | grep -qE '(worker|wasm-bindgen|tokio|reqwest|sqlx|rusqlite) v'; then

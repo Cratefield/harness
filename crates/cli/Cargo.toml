@@ -1,6 +1,6 @@
 [package]
 name = "cratefield-cli"
-description = "The fz CLI for Factory Zero ventures: migrations collect/apply, doctor, modules"
+description = "The fz CLI for Factory Zero ventures: migrations collect/apply, doctor, modules, push"
 readme = "README.md"
 keywords = ["cratefield", "cli", "migrations", "wrangler", "d1"]
 categories = ["command-line-utilities", "development-tools"]
@@ -20,6 +20,19 @@ workspace = true
 # the default fz dependency graph stays free of sqlx and tokio — a
 # venture's wasm build must never see them.
 postgres = ["dep:cratefield-adapter-postgres", "dep:tokio"]
+# `fz push send`'s network leg (issue #184): the runtime's own HTTP client —
+# reqwest behind the outbound policy — and the tokio runtime it needs. Opt-in
+# for the same reason `postgres` is, and the live-proof tool is documented as
+# needing it (README, issue #186).
+#
+# A feature-gated *send* is not the feature-gated *doctor* the push-wiring
+# note below refuses. The difference is what an `fz` without the feature
+# does: `fz push send` says, in one line, exactly what to rebuild, while a
+# doctor compiled without a check reports a clean bill and says nothing. Loud
+# absence is a build option; silent absence is not. Everything else under
+# `fz push` — keygen, inspect-subscription, and `send --dry-run`, which
+# reports the transport's wiring — works in every build.
+push-send = ["dep:cratefield-runtime-native", "dep:tokio"]
 
 [dependencies]
 cratefield-core = { workspace = true }
@@ -37,8 +50,27 @@ cratefield-adapter-sqlite = { workspace = true }
 # `cratefield-push-wiring` must be first-published before `cratefield-cli`
 # (docs/RELEASING.md).
 cratefield-push-wiring = { workspace = true }
+# `fz push vapid keygen` (issue #184) mints the P-256 key pair with the same
+# signer the adapters present their provider tokens with, so the public half
+# it prints is the one `WebPush::public_key()` derives — not a second
+# derivation that could disagree about the point encoding.
+cratefield-push-auth = { workspace = true }
+# `fz push inspect-subscription` validates with the Web Push adapter's own
+# rules — `vapid::origin_of` for the audience, `ece::SubscriptionKeys` for
+# the two keys — so a subscription the CLI accepts is one the adapter
+# accepts. Already in the graph through `cratefield-push-wiring`; named here
+# because this crate calls it directly.
+cratefield-adapter-webpush = { workspace = true }
 cratefield-manifest = { workspace = true }
 clap = { workspace = true }
+base64 = { workspace = true }
+# The VAPID scalar and its base64url form are key material: cleared on drop,
+# the workspace convention (`crates/kms`, `crates/secrets`, the adapters).
+zeroize = { workspace = true }
+# Draws the VAPID private scalar. Backend selection is the final crate's job
+# in this workspace, which for a native-only binary is the default one; the
+# line matches `cratefield-kms` and `cratefield-push-auth`.
+getrandom = { workspace = true }
 toml = { workspace = true }
 sha2 = { workspace = true }
 serde = { workspace = true }
@@ -47,4 +79,18 @@ tracing = { workspace = true }
 pollster = { workspace = true }
 sea-query = { workspace = true }
 cratefield-adapter-postgres = { workspace = true, optional = true }
-tokio = { workspace = true, optional = true }
+# `push-send` only: the native runtime's reqwest client and its outbound
+# policy. Native-only by construction (the crate refuses to compile on wasm),
+# which is why it is optional and off by default.
+cratefield-runtime-native = { workspace = true, optional = true }
+# `net` and `time` on top of the workspace pin: reqwest needs the IO and
+# timer drivers enabled, and `enable_all()` silently enables neither without
+# them — a runtime that then panics on the first request.
+tokio = { workspace = true, optional = true, features = ["net", "time"] }
+
+[dev-dependencies]
+# The push unit tests send through a scripted `HttpClient` rather than the
+# network. Path-only: `cargo publish` resolves dev-dependencies against
+# crates.io (the workspace manifest's note), and a path-only one is stripped
+# from the packaged manifest.
+cratefield-testing = { path = "../testing" }
