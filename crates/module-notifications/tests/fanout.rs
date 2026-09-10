@@ -9,8 +9,8 @@ mod support;
 use std::sync::Arc;
 use std::time::Duration;
 
-use cratefield_core::{Notification, PushError, PushOutcome, Recipient, Statement};
-use cratefield_module_notifications::{NotifyError, Skipped};
+use cratefield_core::{Module, Notification, Outbox, PushError, PushOutcome, Recipient, Statement};
+use cratefield_module_notifications::{Notifications, NotifyError, Skipped};
 use cratefield_testing::{FakePush, PushMode};
 use serde_json::{Value, json};
 use support::{
@@ -31,6 +31,13 @@ fn devices() -> [Recipient; 3] {
             "AlicesAuthSecret",
         ),
     ]
+}
+
+/// `count` distinct devices, for the passes that need more than three.
+fn phones(count: usize) -> Vec<Recipient> {
+    (0..count)
+        .map(|index| Recipient::apns(format!("device-alice-{index}")))
+        .collect()
 }
 
 /// Registers recipients for an account directly through the module's own
@@ -371,11 +378,19 @@ async fn retries_are_bounded_and_then_the_row_is_dead_lettered() {
         row.get::<String>("reason").as_deref(),
         Some("attempts_exhausted")
     );
+    let last_error = row.get::<String>("last_error").unwrap_or_default();
     assert!(
-        row.get::<String>("last_error")
-            .unwrap_or_default()
-            .contains("apns 503"),
+        last_error.contains("apns 503"),
         "the dead letter keeps the last error"
+    );
+    assert!(
+        last_error.contains("gave up after 3 attempts"),
+        "{last_error}"
+    );
+    assert_eq!(
+        row.get::<i64>("attempts"),
+        Some(3),
+        "the column must say what the message says: {last_error}"
     );
     assert_eq!(kit.count(SUBS).await, 1, "and still nothing is pruned");
 }
@@ -400,8 +415,207 @@ async fn a_crash_between_the_commit_and_the_drain_is_recovered_by_the_scheduled_
         .scheduled(&ctx, "*/5 * * * *")
         .await
         .expect("the scheduled drain runs");
-    assert_eq!(push.sent().len(), 2);
     assert_eq!(kit.count(OUTBOX).await, 0);
+    // Through the ports it was handed, which on a cron invocation are the
+    // only ports there are.
+    assert_eq!(kit.scheduled_push.sent().len(), 2);
+    assert!(
+        push.sent().is_empty(),
+        "the scheduled drain must not reach for a context some request parked"
+    );
+}
+
+#[pollster::test]
+async fn the_scheduled_drain_recovers_on_an_isolate_that_never_built_a_router() {
+    // Cloudflare's `serve_scheduled` never calls `Module::router`, so on a
+    // cold isolate a cron tick is the module's *first* work. Draining
+    // through a context parked at router-build time therefore failed with
+    // "the module's router has not been built" and the entire recovery
+    // half of the outbox contract never ran — rows sat queued forever,
+    // and nothing above the module could see it.
+    let kit = kit_with(
+        Arc::new(FakePush::new(PushMode::DeliverOk)),
+        categories(),
+        &[],
+    );
+    register(&kit, ALICE, &devices()[..2]).await;
+    notify_and_commit(&kit, ALICE, BOOKING).await;
+    assert_eq!(kit.count(OUTBOX).await, 2);
+
+    // A module instance whose router has never been built: exactly what
+    // the scheduled entry point is called on after an isolate restart.
+    let cold = Notifications::new()
+        .category(cratefield_module_notifications::Category::new(BOOKING))
+        .category(cratefield_module_notifications::Category::new(
+            ROOM_STARTING,
+        ));
+    let ctx = kit.scheduled_context();
+    cold.scheduled(&ctx, "*/5 * * * *")
+        .await
+        .expect("a cold isolate drains the outbox");
+
+    assert_eq!(kit.scheduled_push.sent().len(), 2);
+    assert_eq!(kit.count(OUTBOX).await, 0);
+}
+
+#[pollster::test]
+async fn a_device_that_changed_account_is_never_sent_the_previous_owners_notification() {
+    // The row is loaded by id and the preference is checked for the
+    // *job's* account; nothing used to check that the two still described
+    // the same account. A device that re-homes between the commit and the
+    // drain — Alice signs out, Bob signs in, the app re-registers — would
+    // deliver Alice's notification to Bob's phone, having consulted
+    // Alice's preferences to decide it was allowed.
+    let push = FakePush::new(PushMode::DeliverOk);
+    let kit = kit_with(Arc::new(push.clone()), categories(), &[]);
+    let device = Recipient::apns("shared-device");
+    register(&kit, ALICE, std::slice::from_ref(&device)).await;
+    assert_eq!(notify_and_commit(&kit, ALICE, BOOKING).await, 1);
+
+    // Bob signs in on the same device before the drain runs.
+    let answer = support::send(
+        &kit.harness.router,
+        http::Method::PUT,
+        "/v1/notifications/subscriptions",
+        Some(&support::token_for(BOB)),
+        Some(json!({ "transport": "apns", "recipient": device })),
+    )
+    .await;
+    assert_eq!(answer.status, http::StatusCode::OK, "{}", answer.text());
+
+    let report = kit.notifier.drain(&kit.scope()).await.expect("drain");
+    assert_eq!(report.claimed, 1);
+    assert_eq!(report.dropped, 1);
+    assert_eq!(report.delivered, 0);
+    assert!(
+        push.sent().is_empty(),
+        "one account's notification must never reach another account's device"
+    );
+    assert_eq!(kit.count(OUTBOX).await, 0, "and the row is not left behind");
+    assert_eq!(kit.count(DEAD).await, 0, "a re-home is not a failed send");
+}
+
+#[pollster::test]
+async fn one_rows_database_error_does_not_abandon_the_rest_of_the_pass() {
+    // `drain`'s own doc says a per-row failure never aborts the pass, and
+    // `?` on the per-row call said otherwise: one transient error on the
+    // third row abandoned rows four to fifty *while they stayed leased*
+    // for five minutes, and threw the report away with them.
+    let push = FakePush::new(PushMode::DeliverOk);
+    let kit = kit_with(Arc::new(push.clone()), categories(), &[]);
+    let ids = register(&kit, ALICE, &devices()).await;
+    assert_eq!(notify_and_commit(&kit, ALICE, BOOKING).await, 3);
+
+    // One subscription row is damaged the way a hand-edited database or a
+    // half-written migration damages one: reading it is a query error.
+    kit.db()
+        .execute(&Statement::new(format!(
+            "UPDATE {SUBS} SET recipient_json = 'not-a-recipient' WHERE id = '{}'",
+            ids[1]
+        )))
+        .await
+        .expect("damaged one row");
+
+    let report = kit
+        .notifier
+        .drain(&kit.scope())
+        .await
+        .expect("the pass finishes");
+    assert_eq!(report.claimed, 3);
+    assert_eq!(report.failed, 1, "the failure is reported, not swallowed");
+    assert_eq!(report.delivered, 2, "and the other rows still went");
+    assert_eq!(push.sent().len(), 2);
+    assert_eq!(
+        kit.count(OUTBOX).await,
+        1,
+        "only the failed row is left, and its lease expires"
+    );
+    assert_eq!(kit.count(DEAD).await, 0, "a database error is not terminal");
+}
+
+#[pollster::test]
+async fn a_dead_letter_agrees_with_itself() {
+    // `created_at` and `failed_at` both got the drain's start time, so
+    // every dead letter claimed the notification was created at the
+    // moment it was abandoned.
+    let push = ScriptedPush::new(vec![Err(PushError::Rejected("apns 400".to_owned()))]);
+    let kit = kit_with(Arc::new(push), categories(), &[]);
+    register(&kit, ALICE, &devices()[..1]).await;
+    notify_and_commit(&kit, ALICE, BOOKING).await;
+    let enqueued_at = kit.clock.now_unix();
+
+    kit.clock.advance(120);
+    kit.notifier.drain(&kit.scope()).await.expect("drain");
+
+    let row = &kit.rows(DEAD).await[0];
+    assert_eq!(
+        row.get::<String>("created_at").as_deref(),
+        Some(iso(enqueued_at).as_str()),
+        "created_at is when the notification was enqueued"
+    );
+    assert_eq!(
+        row.get::<String>("failed_at").as_deref(),
+        Some(iso(enqueued_at + 120).as_str()),
+        "failed_at is when it was given up on"
+    );
+    assert_eq!(
+        row.get::<i64>("attempts"),
+        Some(1),
+        "one attempt was made, and one is what the row says"
+    );
+}
+
+#[pollster::test]
+async fn the_drain_sends_a_bounded_number_of_rows_at_a_time() {
+    // Fifty rows end to end is fifty provider latencies added up inside
+    // one `wait_until`, against a 300 s lease, for work that shares
+    // nothing between rows.
+    let push = support::ConcurrentPush::default();
+    let kit = kit_with(
+        Arc::new(push.clone()),
+        categories(),
+        &[("NOTIFICATIONS_DRAIN_CONCURRENCY", "4")],
+    );
+    register(&kit, ALICE, &phones(6)).await;
+    assert_eq!(notify_and_commit(&kit, ALICE, BOOKING).await, 6);
+
+    let report = kit.notifier.drain(&kit.scope()).await.expect("drain");
+    assert_eq!(report.delivered, 6);
+    assert_eq!(push.calls(), 6, "every row is still delivered exactly once");
+    assert_eq!(
+        push.peak_in_flight(),
+        4,
+        "four in flight: bounded by the configured concurrency, and not one at a time"
+    );
+}
+
+#[pollster::test]
+async fn a_notifier_taken_before_the_last_category_can_still_send_it() {
+    // The kit takes its handle before declaring anything (support/mod.rs).
+    // With the settings forked at that moment, this `notify` answered
+    // `UnknownCategory` for a category `validate_config` accepted, the
+    // module mounted, and `GET /preferences` listed.
+    let push = FakePush::new(PushMode::DeliverOk);
+    let kit = kit_with(Arc::new(push.clone()), categories(), &[]);
+    register(&kit, ALICE, &devices()[..1]).await;
+    let db = kit.db();
+
+    let mut notification = Notification::new("Room", "Starting soon");
+    notification.badge = Some(2);
+    let enqueued = kit
+        .notifier
+        // The last category the kit declares, and the only one that opted
+        // into badge counts — so this also proves the handle sees the
+        // category's *settings*, not just its name.
+        .notify(&*db, ALICE, ROOM_STARTING, notification)
+        .await
+        .expect("the handle sends what the module declared");
+    db.batch(enqueued.statements()).await.expect("batch");
+    kit.notifier.drain(&kit.scope()).await.expect("drain");
+
+    let (_, sent) = push.last().expect("a send");
+    assert_eq!(sent.data["category"], ROOM_STARTING);
+    assert_eq!(sent.badge, Some(2));
 }
 
 #[pollster::test]
@@ -613,18 +827,45 @@ async fn a_requested_event_missing_its_account_is_an_error_not_a_send() {
 }
 
 #[pollster::test]
-async fn two_drainers_never_deliver_the_same_row_twice() {
+async fn a_second_drainer_skips_a_row_the_first_still_holds() {
     // The lease is core's, but a drain that ignored it would double-send,
     // so the module's use of it is asserted here.
+    //
+    // Asserted by *interleaving*: the second drain runs while the first
+    // still holds the lease. Running two drains one after the other
+    // proved nothing — the first one deletes the row on delivery, so the
+    // second finds an empty table and the assertion holds just as well
+    // with the lease deleted from core entirely.
     let push = ScriptedPush::new(vec![Ok(PushOutcome::Delivered { id: None })]);
     let kit = kit_with(Arc::new(push.clone()), categories(), &[]);
     register(&kit, ALICE, &devices()[..1]).await;
     notify_and_commit(&kit, ALICE, BOOKING).await;
 
-    let first = kit.notifier.drain(&kit.scope()).await.expect("drain");
+    // Drainer A leases the row and has not finished with it.
+    let db = kit.db();
+    let now = iso(kit.clock.now_unix());
+    let held = Outbox::new(OUTBOX)
+        .claim_due(&*db, &now, &iso(kit.clock.now_unix() + 300), 50)
+        .await
+        .expect("drainer A claims");
+    assert_eq!(held.len(), 1, "drainer A holds the row");
+
+    // Drainer B runs now, not after.
     let second = kit.notifier.drain(&kit.scope()).await.expect("drain");
-    assert_eq!(first.claimed, 1);
-    assert_eq!(second.claimed, 0);
+    assert_eq!(second.claimed, 0, "the row is another drainer's");
+    assert!(
+        push.calls().is_empty(),
+        "a leased row must not be delivered twice"
+    );
+    assert_eq!(kit.count(OUTBOX).await, 1, "and it is still queued");
+
+    // And the lease is a lease, not a grave: when it expires the row is
+    // due again, so the assertion above is about the lease and not about
+    // the row having gone missing.
+    kit.clock.advance(301);
+    let third = kit.notifier.drain(&kit.scope()).await.expect("drain");
+    assert_eq!(third.claimed, 1);
+    assert_eq!(third.delivered, 1);
     assert_eq!(push.calls().len(), 1);
 }
 

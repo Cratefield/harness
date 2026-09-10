@@ -29,6 +29,10 @@ serde = { workspace = true }
 schemars = { workspace = true }
 serde_json = { workspace = true }
 sea-query = { workspace = true }
+# The drain runs its provider round-trips a bounded number at a time
+# instead of end to end. No threads and no runtime: `buffer_unordered` is
+# the same single future on Workers as it is natively.
+futures-util = { workspace = true }
 tracing = { workspace = true }
 time = { workspace = true }
 ulid = { workspace = true }

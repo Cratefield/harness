@@ -22,6 +22,13 @@ CREATE TABLE IF NOT EXISTS notifications_subscriptions (
     user_agent TEXT,
     created_at TEXT NOT NULL,
     last_seen_at TEXT NOT NULL,
+    -- When this row last changed account, and NULL for the ordinary case
+    -- of a device that has only ever had one. A device token is not an
+    -- authenticator, so taking a device over needs no proof beyond
+    -- holding the token: this column is what bounds how many take-overs
+    -- one account gets in an hour, and it is the record ops reads when
+    -- someone reports a phone that went quiet.
+    rehomed_at TEXT,
     UNIQUE (transport, recipient_hash)
 );
 
@@ -59,6 +66,13 @@ CREATE TABLE IF NOT EXISTS notifications_outbox (
     locked_until TEXT,
     created_at TEXT NOT NULL
 );
+
+-- `Outbox::claim_due` filters and orders on `next_attempt_at`, and it runs
+-- on every request that sends a notification and on every scheduled tick.
+-- It is the hottest read the module has; without this it is the only one
+-- that scans the whole table.
+CREATE INDEX IF NOT EXISTS notifications_outbox_due
+    ON notifications_outbox (next_attempt_at);
 
 -- The terminal state core's `Outbox` does not have (ADR 0016). A row moves
 -- here from `notifications_outbox` in one batch: a send that will never

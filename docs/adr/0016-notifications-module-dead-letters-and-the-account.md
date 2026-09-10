@@ -101,6 +101,33 @@ adding a column each to one table in the same forward-only migration stream
 would collide, and a collision in that stream is skipped and reported as
 success (docs/MIGRATION-STREAMS.md §2).
 
+**A device that changes account re-homes, but a push token does not
+authenticate anything.** The identity of a subscription is `(transport,
+recipient_hash)`, so signing a second account in on one device moves the
+row rather than leaving two accounts sharing a phone. The registration
+that does it presents a bearer for the *new* account and a token for the
+device — and the device token is not evidence: it travels through client
+logs, crash reports and third-party SDKs, and anyone holding one could
+silence its owner and point their own notifications at that owner's phone,
+unconfirmed, unlimited and unrecorded.
+
+Refusing cross-account re-homing outright was rejected as the default: the
+app cannot always sign out (an offline sign-out, a reinstall that gets the
+same token back), and a device that then registers into silence fails in
+the direction nobody notices. Requiring proof that the caller holds the
+device is the right answer and needs a client-side confirmation this child
+cannot ship on its own.
+
+So the module makes the take-over **bounded, recorded and recoverable**: at
+most `NOTIFICATIONS_REHOME_MAX_PER_HOUR` per account per hour (`0` refuses
+them all, for a venture whose devices are never shared), a
+`notifications.subscription_rehomed` event carrying no recipient, and a
+drain that checks the row's account against the job's account so the
+previous owner's queued notifications are dropped rather than delivered to
+the new one. The budget is the caller's rather than the row's, so the
+account that lost a device takes it back on the next app launch instead of
+being locked out of its own phone by the attacker's spent budget.
+
 ## Consequences
 
 - `cratefield-core` is unchanged by this child. No breaking release.
@@ -115,6 +142,16 @@ success (docs/MIGRATION-STREAMS.md §2).
   wins. `notify` also skips enqueueing a category that is already off; that
   is an optimisation over rows the drain would drop anyway, and never the
   authority.
+- A venture that shares devices between accounts more often than the
+  re-home budget allows raises `NOTIFICATIONS_REHOME_MAX_PER_HOUR`; one
+  that never shares them sets `0`. Neither is the module guessing.
+- The residual risk is stated rather than hidden: the budget bounds how
+  many devices one account can take over at once, not how many times over
+  a long period, and it counts the rows an account currently holds — an
+  owner who takes their device back erases the record that it was taken.
+  The event is what carries that information onward, and closing the gap
+  properly means proving possession of the device, which is a client-side
+  confirmation for a later child.
 
 ## References
 

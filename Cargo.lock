@@ -1078,6 +1078,7 @@ dependencies = [
  "cratefield-push-wiring",
  "cratefield-testing",
  "factory0-auth-client",
+ "futures-util",
  "http",
  "p256 0.14.0",
  "pollster",

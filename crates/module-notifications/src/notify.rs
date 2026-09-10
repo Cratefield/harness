@@ -27,14 +27,14 @@ use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use cratefield_core::{
-    Clock, Database, DbError, IdGen, ModuleConfig, ModuleContext, Notification, Outbox,
-    OutboxRecord, Push, PushError, PushOutcome, Scope, Statement, SystemClock, UlidIdGen,
+    Database, DbError, ModuleConfig, ModuleContext, Notification, Outbox, OutboxRecord, Push,
+    PushError, PushOutcome, Scope, Statement,
 };
+use futures_util::StreamExt as _;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use time::OffsetDateTime;
-use time::format_description::well_known::Rfc3339;
 
+use crate::clock::{now_iso, plus_secs};
 use crate::store::{self, Channels, DeadLetterReason, Subscription};
 use crate::{Category, Settings};
 
@@ -50,12 +50,22 @@ pub const EVENT_REQUESTED: &str = "notifications.requested";
 /// [`cratefield_core::Recipient`] is credential material (ADR 0015).
 pub const EVENT_SUBSCRIPTION_PRUNED: &str = "notifications.subscription_pruned";
 
+/// Emitted when a device that was one account's became another's.
+///
+/// A device token is not an authenticator (see
+/// [`crate::Notifications::rehome_max_per_hour`]), so the venture is told
+/// every time a subscription changes hands and can act on it — mail the
+/// previous owner, raise it to whoever watches for abuse. Carries no
+/// recipient: like the prune event, a serialised
+/// [`cratefield_core::Recipient`] is credential material (ADR 0015).
+pub const EVENT_SUBSCRIPTION_REHOMED: &str = "notifications.subscription_rehomed";
+
 /// The first retry delay; each further attempt doubles it.
 const BACKOFF_BASE_SECS: u64 = 30;
 /// The ceiling on the doubling.
 const BACKOFF_MAX_SECS: u64 = 3_600;
 /// How long a claimed row stays leased to one drainer.
-const LEASE_SECS: i64 = 300;
+pub(crate) const LEASE_SECS: i64 = 300;
 
 /// One unit of work in `notifications_outbox`.
 ///
@@ -195,8 +205,36 @@ pub struct DrainReport {
     /// Rows moved to `notifications_dead_letters`.
     pub dead_lettered: usize,
     /// Rows dropped without sending: the category was switched off after
-    /// the row was written, or the device signed out.
+    /// the row was written, the device signed out, or the device now
+    /// belongs to another account.
     pub dropped: usize,
+    /// Rows whose own database call failed. The pass carries on: those
+    /// rows keep their lease and become due again when it expires, and
+    /// the rows behind them are not held hostage to one transient error.
+    pub failed: usize,
+}
+
+/// What happened to one leased row.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Outcome {
+    Delivered,
+    Retried,
+    Pruned,
+    DeadLettered,
+    Dropped,
+}
+
+impl DrainReport {
+    fn record(&mut self, outcome: Outcome) {
+        let counter = match outcome {
+            Outcome::Delivered => &mut self.delivered,
+            Outcome::Retried => &mut self.retried,
+            Outcome::Pruned => &mut self.pruned,
+            Outcome::DeadLettered => &mut self.dead_lettered,
+            Outcome::Dropped => &mut self.dropped,
+        };
+        *counter += 1;
+    }
 }
 
 /// The handle other modules call.
@@ -208,15 +246,22 @@ pub struct DrainReport {
 #[derive(Clone)]
 pub struct Notifier {
     pub(crate) cell: Arc<OnceLock<Arc<ModuleContext>>>,
-    pub(crate) settings: Settings,
+    /// The module's settings as they were **finished**, parked when its
+    /// router is built. Shared with the module, so a handle taken before
+    /// the last `.category(..)` cannot serve a smaller set than the one
+    /// the module validated, mounted and lists over `GET /preferences`.
+    pub(crate) settings_cell: Arc<OnceLock<Settings>>,
+    /// What the builder had when this handle was taken: all a handle has
+    /// to go on before the module is mounted.
+    pub(crate) settings_at_handout: Settings,
 }
 
 impl std::fmt::Debug for Notifier {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Notifier")
             .field("mounted", &self.cell.get().is_some())
-            .field("categories", &self.settings.categories.len())
-            .finish()
+            .field("categories", &self.settings().categories.len())
+            .finish_non_exhaustive()
     }
 }
 
@@ -225,9 +270,26 @@ impl Notifier {
         self.cell.get().ok_or(NotifyError::NotMounted)
     }
 
+    /// The module's settings: the finished set once it is mounted, and the
+    /// set this handle was taken from before that.
+    ///
+    /// The indirection is the fix for a whole class of silent
+    /// divergence. `Settings::categories` is an `Arc<Vec<..>>` that
+    /// `.category(..)` mutates through `Arc::make_mut`, so taking the
+    /// handle before the last one used to fork the vector: the module
+    /// kept both categories, the handle kept one, and `notify` failed
+    /// `UnknownCategory` at runtime for a category `validate_config`
+    /// accepted and `GET /preferences` listed. Reading through the shared
+    /// cell makes the two agree by construction.
+    pub(crate) fn settings(&self) -> &Settings {
+        self.settings_cell
+            .get()
+            .unwrap_or(&self.settings_at_handout)
+    }
+
     /// The declared category, or an error naming the unknown one.
     fn category(&self, name: &str) -> Result<&Category, NotifyError> {
-        self.settings
+        self.settings()
             .categories
             .iter()
             .find(|category| category.name == name)
@@ -235,18 +297,11 @@ impl Notifier {
     }
 
     fn now(&self) -> String {
-        let now = match self.cell.get().and_then(|ctx| ctx.ports.clock.clone()) {
-            Some(clock) => clock.now(),
-            None => SystemClock.now(),
-        };
-        iso(now)
+        now_iso(self.cell.get().and_then(|ctx| ctx.ports.clock.as_ref()))
     }
 
     fn new_id(&self) -> String {
-        match self.cell.get().and_then(|ctx| ctx.ports.id_gen.clone()) {
-            Some(id_gen) => id_gen.ulid(),
-            None => UlidIdGen.ulid(),
-        }
+        crate::clock::new_id(self.cell.get().and_then(|ctx| ctx.ports.id_gen.as_ref()))
     }
 
     /// The mounted context, once `Harness::router` has built the module's
@@ -258,23 +313,33 @@ impl Notifier {
 
     /// How many attempts a transient failure gets. The builder's value
     /// unless the deployment overrides it.
-    fn max_attempts(&self) -> i64 {
-        let configured = self.cell.get().map_or(self.settings.max_attempts, |ctx| {
-            ModuleConfig::new(crate::MODULE_NAME, &*ctx.config)
-                .get_u32("MAX_ATTEMPTS", self.settings.max_attempts)
-        });
+    fn max_attempts(&self, ctx: &ModuleContext) -> i64 {
+        let configured = ModuleConfig::new(crate::MODULE_NAME, &*ctx.config)
+            .get_u32("MAX_ATTEMPTS", self.settings().max_attempts);
         i64::from(configured.max(1))
     }
 
     /// How many rows one drain pass leases.
-    fn drain_batch(&self) -> u64 {
-        let configured = self.cell.get().map_or(self.settings.drain_batch, |ctx| {
-            u64::from(ModuleConfig::new(crate::MODULE_NAME, &*ctx.config).get_u32(
-                "DRAIN_BATCH",
-                u32::try_from(self.settings.drain_batch).unwrap_or(u32::MAX),
-            ))
-        });
-        configured.max(1)
+    fn drain_batch(&self, ctx: &ModuleContext) -> u64 {
+        let settings = self.settings();
+        let configured = ModuleConfig::new(crate::MODULE_NAME, &*ctx.config).get_u32(
+            "DRAIN_BATCH",
+            u32::try_from(settings.drain_batch).unwrap_or(u32::MAX),
+        );
+        u64::from(configured).max(1)
+    }
+
+    /// How many rows one drain pass has in flight at a time.
+    ///
+    /// The drain is one `wait_until` against a 300 s lease, and every row
+    /// is a provider round-trip: fifty of them end to end is fifty
+    /// latencies added up, for work that shares nothing between rows.
+    /// Bounded rather than unbounded because each in-flight row is a
+    /// subrequest, and a runtime counts those.
+    fn drain_concurrency(&self, ctx: &ModuleContext) -> usize {
+        let configured = ModuleConfig::new(crate::MODULE_NAME, &*ctx.config)
+            .get_u32("DRAIN_CONCURRENCY", self.settings().drain_concurrency);
+        usize::try_from(configured.max(1)).unwrap_or(1)
     }
 
     /// Whether `account_id` wants push for `category` **right now**.
@@ -399,7 +464,8 @@ impl Notifier {
         }));
     }
 
-    /// Delivers every due outbox row this drainer can lease.
+    /// Delivers every due outbox row this drainer can lease, through the
+    /// **mounted** module's ports.
     ///
     /// The whole delivery policy lives here: `Delivered` completes the
     /// row, `Unregistered` deletes the row **and** the subscription,
@@ -409,10 +475,30 @@ impl Notifier {
     ///
     /// # Errors
     ///
-    /// [`NotifyError`] when a port is missing or a database call fails.
-    /// A per-row failure never aborts the pass.
+    /// [`NotifyError`] when the module is not mounted, a port is missing,
+    /// or the claim itself fails. A per-row failure never aborts the
+    /// pass: it is counted in [`DrainReport::failed`] and the row keeps
+    /// its lease until it expires.
     pub async fn drain(&self, scope: &Scope) -> Result<DrainReport, NotifyError> {
-        let ctx = self.ctx()?;
+        self.drain_with(self.ctx()?, scope).await
+    }
+
+    /// [`Notifier::drain`] through the ports of the context handed in.
+    ///
+    /// This is what scheduled work must use. A cron invocation builds no
+    /// router, so on a cold isolate there is no mounted context to drain
+    /// through at all, and on a warm one draining through the parked
+    /// context means using some earlier request's database handle.
+    ///
+    /// # Errors
+    ///
+    /// As [`Notifier::drain`], minus [`NotifyError::NotMounted`]: this
+    /// entry point needs no mounted module.
+    pub async fn drain_with(
+        &self,
+        ctx: &ModuleContext,
+        scope: &Scope,
+    ) -> Result<DrainReport, NotifyError> {
         let db = ctx
             .ports
             .db
@@ -424,33 +510,53 @@ impl Notifier {
             .clone()
             .ok_or(NotifyError::MissingPort("Push"))?;
 
-        let now = self.now();
-        let lease_until = iso(parse(&now).saturating_add(time::Duration::seconds(LEASE_SECS)));
-        let outbox = Outbox::new(store::OUTBOX);
-        let records = outbox
-            .claim_due(&*db, &now, &lease_until, self.drain_batch())
+        let now = now_iso(ctx.ports.clock.as_ref());
+        let lease_until = plus_secs(&now, LEASE_SECS);
+        let records = Outbox::new(store::OUTBOX)
+            .claim_due(&*db, &now, &lease_until, self.drain_batch(ctx))
             .await?;
 
         let mut report = DrainReport {
             claimed: records.len(),
             ..DrainReport::default()
         };
-        for record in &records {
-            self.deliver_one(&*db, &*push, scope, record, &now, &mut report)
-                .await?;
+        let (db, push, now) = (&*db, &*push, now.as_str());
+        let pending: Vec<_> = records
+            .iter()
+            .map(|record| async move {
+                (
+                    record.id.as_str(),
+                    self.deliver_one(ctx, db, push, scope, record, now).await,
+                )
+            })
+            .collect();
+        let mut deliveries =
+            futures_util::stream::iter(pending).buffer_unordered(self.drain_concurrency(ctx));
+        while let Some((row, result)) = deliveries.next().await {
+            match result {
+                Ok(outcome) => report.record(outcome),
+                // The row keeps its lease and becomes due again when that
+                // expires. Abandoning the rest of the pass over one
+                // transient error would leave every row behind it leased
+                // and untouched for the whole lease.
+                Err(error) => {
+                    report.failed += 1;
+                    tracing::error!(row = %row, %error, "delivering a notification failed");
+                }
+            }
         }
         Ok(report)
     }
 
     async fn deliver_one(
         &self,
+        ctx: &ModuleContext,
         db: &dyn Database,
         push: &dyn Push,
         scope: &Scope,
         record: &OutboxRecord,
         now: &str,
-        report: &mut DrainReport,
-    ) -> Result<(), NotifyError> {
+    ) -> Result<Outcome, NotifyError> {
         let Ok(job) = serde_json::from_str::<SendJob>(&record.payload) else {
             tracing::error!(row = %record.id, "outbox row is not a notifications job");
             self.dead_letter(
@@ -461,8 +567,7 @@ impl Notifier {
                 now,
             )
             .await?;
-            report.dead_lettered += 1;
-            return Ok(());
+            return Ok(Outcome::DeadLettered);
         };
 
         let Some(subscription) = store::subscription_by_id(db, &job.subscription_id).await? else {
@@ -470,9 +575,26 @@ impl Notifier {
             // there is nothing left to deliver to.
             db.execute(&store::delete_outbox_statement(&record.id))
                 .await?;
-            report.dropped += 1;
-            return Ok(());
+            return Ok(Outcome::Dropped);
         };
+
+        // The device changed hands between the commit and the drain: a
+        // sign-out deletes the row, but signing *another* account in on
+        // the same device only re-homes it. Sending anyway would deliver
+        // this account's notification to whoever holds the device now,
+        // judged against this account's preferences — the row's account
+        // and the job's account have to be the same account or there is
+        // nothing here to deliver.
+        if subscription.account_id != job.account_id {
+            tracing::info!(
+                row = %record.id,
+                subscription = %subscription.id,
+                "dropped a notification whose device now belongs to another account"
+            );
+            db.execute(&store::delete_outbox_statement(&record.id))
+                .await?;
+            return Ok(Outcome::Dropped);
+        }
 
         // The check that counts. A preference read now, not when the row
         // was written, is what makes a late opt-out win.
@@ -481,21 +603,19 @@ impl Notifier {
             // and the drain. Silence is the safe answer.
             db.execute(&store::delete_outbox_statement(&record.id))
                 .await?;
-            report.dropped += 1;
-            return Ok(());
+            return Ok(Outcome::Dropped);
         };
         if !self.push_allowed(db, &job.account_id, &category).await? {
             db.execute(&store::delete_outbox_statement(&record.id))
                 .await?;
-            report.dropped += 1;
-            return Ok(());
+            return Ok(Outcome::Dropped);
         }
 
         match push.send(&subscription.recipient, &job.notification).await {
             Ok(PushOutcome::Delivered { .. }) => {
                 db.execute(&store::delete_outbox_statement(&record.id))
                     .await?;
-                report.delivered += 1;
+                Ok(Outcome::Delivered)
             }
             Ok(PushOutcome::NotConfigured) => {
                 self.dead_letter(
@@ -510,25 +630,25 @@ impl Notifier {
                     now,
                 )
                 .await?;
-                report.dead_lettered += 1;
+                Ok(Outcome::DeadLettered)
             }
             // A delete instruction, not a failed send, and the only error
             // that is ever allowed to prune (ADR 0015).
             Err(PushError::Unregistered) => {
-                self.prune(db, scope, record, &subscription).await?;
-                report.pruned += 1;
+                self.prune(ctx, db, scope, record, &subscription).await?;
+                Ok(Outcome::Pruned)
             }
             Err(PushError::Rejected(message)) => {
                 self.dead_letter(db, record, DeadLetterReason::Rejected, &message, now)
                     .await?;
-                report.dead_lettered += 1;
+                Ok(Outcome::DeadLettered)
             }
             Err(PushError::Transient {
                 message,
                 retry_after,
             }) => {
                 let attempts = record.attempts.saturating_add(1);
-                if attempts >= self.max_attempts() {
+                if attempts >= self.max_attempts(ctx) {
                     self.dead_letter(
                         db,
                         record,
@@ -537,28 +657,25 @@ impl Notifier {
                         now,
                     )
                     .await?;
-                    report.dead_lettered += 1;
+                    Ok(Outcome::DeadLettered)
                 } else {
                     let delay = backoff(attempts).max(retry_after.unwrap_or(Duration::ZERO));
-                    let next = iso(parse(now).saturating_add(
-                        time::Duration::try_from(delay).unwrap_or(time::Duration::seconds(
-                            i64::try_from(BACKOFF_MAX_SECS).unwrap_or(i64::MAX),
-                        )),
-                    ));
+                    let seconds = i64::try_from(delay.as_secs())
+                        .unwrap_or_else(|_| i64::try_from(BACKOFF_MAX_SECS).unwrap_or(i64::MAX));
                     Outbox::new(store::OUTBOX)
-                        .retry_later(db, &record.id, &next)
+                        .retry_later(db, &record.id, &plus_secs(now, seconds))
                         .await?;
-                    report.retried += 1;
+                    Ok(Outcome::Retried)
                 }
             }
         }
-        Ok(())
     }
 
     /// The provider says this recipient is gone: delete the subscription
     /// and the row in one batch, then say so on the bus.
     async fn prune(
         &self,
+        ctx: &ModuleContext,
         db: &dyn Database,
         scope: &Scope,
         record: &OutboxRecord,
@@ -574,17 +691,15 @@ impl Notifier {
             transport = %subscription.transport,
             "pruned a subscription the provider reported as gone"
         );
-        if let Some(ctx) = self.cell.get() {
-            ctx.events.emit_in(
-                scope,
-                EVENT_SUBSCRIPTION_PRUNED,
-                json!({
-                    "subscription_id": subscription.id,
-                    "account_id": subscription.account_id,
-                    "transport": subscription.transport.as_str(),
-                }),
-            );
-        }
+        ctx.events.emit_in(
+            scope,
+            EVENT_SUBSCRIPTION_PRUNED,
+            json!({
+                "subscription_id": subscription.id,
+                "account_id": subscription.account_id,
+                "transport": subscription.transport.as_str(),
+            }),
+        );
         Ok(())
     }
 
@@ -604,8 +719,25 @@ impl Notifier {
             error = last_error,
             "notification dead-lettered"
         );
+        // The attempt that just failed counts: `OutboxRecord::attempts` is
+        // what had already failed before it.
+        let attempts = record.attempts.saturating_add(1);
+        // And the row's own enqueue time, so `created_at` and `failed_at`
+        // are two facts rather than one written twice.
+        let created_at = store::outbox_created_at(db, &record.id)
+            .await?
+            .unwrap_or_else(|| now.to_owned());
         db.batch(&[
-            store::dead_letter_statement(record, reason, last_error, now),
+            store::dead_letter_statement(
+                record,
+                &store::DeadLetter {
+                    reason,
+                    last_error,
+                    attempts,
+                    created_at: &created_at,
+                    failed_at: now,
+                },
+            ),
             store::delete_outbox_statement(&record.id),
         ])
         .await?;
@@ -646,17 +778,6 @@ fn backoff(attempts: i64) -> Duration {
         .unwrap_or(BACKOFF_MAX_SECS)
         .min(BACKOFF_MAX_SECS);
     Duration::from_secs(secs)
-}
-
-fn iso(at: OffsetDateTime) -> String {
-    at.replace_nanosecond(0)
-        .unwrap_or(at)
-        .format(&Rfc3339)
-        .unwrap_or_default()
-}
-
-fn parse(iso: &str) -> OffsetDateTime {
-    OffsetDateTime::parse(iso, &Rfc3339).unwrap_or(OffsetDateTime::UNIX_EPOCH)
 }
 
 #[cfg(test)]
