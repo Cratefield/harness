@@ -805,6 +805,33 @@ pub fn inspect_push(config: &dyn Config) -> PushWiring {
     report
 }
 
+/// The `applicationServerKey` a browser must pass to
+/// `pushManager.subscribe()`, base64url — or `None` when this venture has
+/// not configured Web Push (issue #183).
+///
+/// It lives here for the same reason [`build_push`] does: the VAPID
+/// variables have one reader. The **public** half is derived from the
+/// private key rather than configured, so a venture that serves this
+/// cannot serve a key that has drifted from the one its sends are signed
+/// with — which would be invisible until every browser subscription
+/// silently stopped working.
+///
+/// The key is public by definition: it is handed to every browser that
+/// subscribes. Nothing else from the environment comes back out.
+#[must_use]
+pub fn vapid_public_key(config: &dyn Config) -> Option<String> {
+    let Survey::Complete(values) = survey(config, Platform::Web) else {
+        return None;
+    };
+    let keys = vapid_keys(&values).ok()?;
+    let http: Arc<dyn HttpClient> = Arc::new(OfflineHttpClient);
+    let clock: Arc<dyn Clock> = Arc::new(SystemClock);
+    WebPush::new(http, clock, keys)
+        .ok()?
+        .public_key()
+        .map(str::to_owned)
+}
+
 /// An [`HttpClient`] that refuses every send, for [`inspect_push`]. The
 /// adapters store it and never call it; if one ever did, this is a loud
 /// refusal rather than a surprise network call from a diagnostic command.

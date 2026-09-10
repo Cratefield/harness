@@ -35,6 +35,26 @@ jobs:
           bun install --frozen-lockfile
           node size.mjs
 
+  cfjs-push:
+    # The browser client (issue 183): cf.js's push half against stubbed
+    # push APIs, and the reference service worker in a fake
+    # ServiceWorkerGlobalScope. Neither needs a server, so this does not
+    # wait for the wrangler job. What it cannot prove is a real browser
+    # delivering a real push — that is the vendor-live leg, issue 186.
+    name: cf.js push and the reference service worker
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - working-directory: tools/cfjs
+        run: |
+          bun install --frozen-lockfile
+          node push.mjs
+          node sw.mjs
+
   migration-guard:
     # No `#` in the name: GitHub truncates a check-run name there, which
     # registered this as `migrations are never edited (issue` — an awkward
@@ -334,6 +354,19 @@ jobs:
           grep -q 'cf-field--invalid' /tmp/ui.body
           echo "-- ui css"
           curl -sf -m 10 http://127.0.0.1:8787/ui/cf.css | grep -q '@layer cf'
+          echo "-- reference push service worker, scopable (issue 183)"
+          curl -sf -m 10 -D /tmp/sw.headers http://127.0.0.1:8787/ui/sw-push.js \
+            | grep -q "self.addEventListener(\"pushsubscriptionchange\""
+          grep -qi '^service-worker-allowed: /' /tmp/sw.headers
+          grep -qi '^content-type: text/javascript' /tmp/sw.headers
+          echo "-- no application server key wired, so the route says so rather than serving an empty one"
+          curl -s -m 10 -o /tmp/vapid.body -w "%{http_code}" \
+            http://127.0.0.1:8787/v1/notifications/vapid-public-key | grep -q '^404$'
+          grep -q 'webpush-not-configured' /tmp/vapid.body
+          if grep -qi 'VAPID' /tmp/vapid.body; then
+            echo "the refusal named an environment variable"
+            exit 1
+          fi
           echo "-- admin: login redirect, login, table"
           curl -s -m 10 -o /dev/null -w "%{http_code}" http://127.0.0.1:8787/ui/admin | grep -q '^303$'
           curl -s -m 10 -o /dev/null -D /tmp/login.headers -X POST http://127.0.0.1:8787/ui/admin/login \

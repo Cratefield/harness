@@ -45,6 +45,14 @@ pub use spec::{
 pub const CF_CSS: &str = include_str!("../assets/cf.css");
 /// The embed served at `/ui/cf.js` (issue #73); empty until then.
 pub const CF_JS: &str = include_str!("../assets/cf.js");
+/// The reference push service worker served at `/ui/sw-push.js` (issue
+/// #183).
+///
+/// Served to be **read and copied**, not registered from here: a service
+/// worker may only be registered from the origin of the page registering
+/// it, and a venture's site is rarely the API origin. `cf.push.subscribe`
+/// registers `/sw.js` on the page's own origin by default.
+pub const CF_SW_PUSH: &str = include_str!("../assets/sw-push.js");
 
 /// Config key for the Turnstile **site** key (public; the secret stays
 /// with the adapter). Without it a captcha action renders no widget, and
@@ -152,6 +160,7 @@ impl UiMount for Ui {
             .route("/spec.json", get(spec_json))
             .route("/cf.css", get(css))
             .route("/cf.js", get(js))
+            .route("/sw-push.js", get(sw_push))
             .route("/admin", get(admin::index))
             .route(
                 "/admin/login",
@@ -213,6 +222,29 @@ async fn js() -> impl IntoResponse {
             (header::CACHE_CONTROL, "public, max-age=300"),
         ],
         CF_JS,
+    )
+}
+
+/// The reference push service worker.
+///
+/// `Service-Worker-Allowed: /` is the header that makes the file usable
+/// as more than a listing. A worker's default scope is the directory it
+/// is served from, so this one would be confined to `/ui/`; the header is
+/// how a server widens that, and a venture that serves the copy from a
+/// path rather than its site root needs the same header on it. Without
+/// it, `register(url, { scope: "/" })` is rejected — by the browser, with
+/// a `SecurityError` that says nothing about which side is wrong.
+async fn sw_push() -> impl IntoResponse {
+    (
+        [
+            (header::CONTENT_TYPE, "text/javascript; charset=utf-8"),
+            (header::CACHE_CONTROL, "public, max-age=300"),
+            (
+                header::HeaderName::from_static("service-worker-allowed"),
+                "/",
+            ),
+        ],
+        CF_SW_PUSH,
     )
 }
 

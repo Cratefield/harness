@@ -9,6 +9,15 @@
        unlayered rule below wins on its own. -->
   <link rel="stylesheet" href="http://127.0.0.1:8787/ui/cf.css">
   <link rel="stylesheet" href="site.css">
+  <!-- The push half's configuration, set before the embed loads (issue
+       #183). `base` is the API origin, as on the elements below. `auth`
+       is the one auth seam: a token, or a function returning one. This
+       example has no auth service, so it stands in for the shape — a
+       real site returns its session's access token here, and cf.js reads
+       it once per request and never stores it. -->
+  <script>
+    window.cf = { base: "http://127.0.0.1:8787", auth: () => null };
+  </script>
   <!-- The embed. `base` is only needed because this page is not served
        from the API origin; on a real site the script's own origin is used. -->
   <script type="module" src="http://127.0.0.1:8787/ui/cf.js"></script>
@@ -37,6 +46,27 @@
         <h2>Restyled</h2>
         <cf-form module="email-signup" action="subscribe" source="example-site"
                  base="http://127.0.0.1:8787"></cf-form>
+      </article>
+    </section>
+
+    <section class="pair">
+      <article class="card">
+        <h2>Browser notifications</h2>
+        <p>
+          One tag, and the harness handles the rest: the support check
+          (including the iOS case, which needs the site added to the Home
+          Screen), the permission prompt on the click, the subscription,
+          and the registration with the venture. This example wires no
+          VAPID key, so the block reports that this site does not offer
+          them — which is what it should say.
+        </p>
+        <cf-push
+          label="Turn notifications on"
+          off-label="Turn notifications off"
+          on="Notifications are on for this device."
+          install="Add this site to your Home Screen to turn notifications on."
+          error="This example has no VAPID key wired, so there is nothing to subscribe to."
+        ></cf-push>
       </article>
     </section>
 

@@ -91,6 +91,27 @@ reports a mailbox, not an account, and two people can share one. Only a
 `Permanent` bounce suppresses: a soft bounce is a full mailbox, not a
 dead address. Anything it does not act on still answers `200`, because a
 provider retries until it gets one.
+| `GET` | `/v1/notifications/vapid-public-key` | None needed — the value is public by construction (see below) |
+
+The key route is the exception because the value is public by
+construction: it is the derived public half of the VAPID pair and is
+handed to every browser that subscribes, and a site has to be able to put
+"turn notifications on" in front of a visitor who has not signed in.
+It answers `404 webpush-not-configured` unless the venture wired
+`Notifications::vapid_public_key` — with the key derived by
+`cratefield-push-wiring`, which is the one crate that reads the push
+environment, so the served key cannot drift from the one sends are
+signed with:
+
+```rust,ignore
+Notifications::new()
+    .vapid_public_key(cratefield::push_wiring::vapid_public_key)
+```
+
+The browser half that consumes it — `cf.push.subscribe()` and the
+reference service worker — is `cratefield-ui` (issue #183); the client
+contract, the iOS matrix and the `pushsubscriptionchange` repair are in
+`docs/UI.md`.
 
 ```http
 PUT /v1/notifications/subscriptions

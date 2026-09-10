@@ -505,7 +505,29 @@ pub fn kit() -> Kit {
 /// A kit over the caller's `Push`, with `categories` declared and `config`
 /// merged over the module's keys.
 pub fn kit_with(push: Arc<dyn Push>, categories: Vec<Category>, config: &[(&str, &str)]) -> Kit {
-    build_kit(push, categories, config, |db| db)
+    build_kit(push, categories, config, false, |db| db)
+}
+
+/// The config key [`kit_serving_vapid`]'s probe reads.
+///
+/// The probe reads it rather than closing over the key, so a test proves
+/// the module hands its venture's own config to the probe — the whole
+/// point of the seam (issue #183). A probe that ignored what it was
+/// given would still answer, and nothing else would notice.
+pub const VAPID_KEY_CONFIG: &str = "TEST_APPLICATION_SERVER_KEY";
+
+/// A kit whose `Notifications` serves `key` at
+/// `GET /vapid-public-key`, through a probe reading it from config.
+pub fn kit_serving_vapid(key: &str) -> Kit {
+    build_kit(
+        Arc::new(cratefield_testing::FakePush::new(
+            cratefield_testing::PushMode::DeliverOk,
+        )),
+        categories(),
+        &[(VAPID_KEY_CONFIG, key)],
+        true,
+        |db| db,
+    )
 }
 
 /// [`kit_with`], plus the database the router runs against — wrapped by
@@ -517,7 +539,7 @@ pub fn kit_racing(
 ) -> (Kit, RacingDb) {
     let racing: Arc<Mutex<Option<RacingDb>>> = Arc::new(Mutex::new(None));
     let captured = Arc::clone(&racing);
-    let kit = build_kit(push, categories, config, move |db| {
+    let kit = build_kit(push, categories, config, false, move |db| {
         let wrapper = RacingDb::new(db);
         *captured.lock().expect("racing db") = Some(wrapper.clone());
         Arc::new(wrapper)
@@ -530,6 +552,7 @@ fn build_kit(
     push: Arc<dyn Push>,
     categories: Vec<Category>,
     config: &[(&str, &str)],
+    vapid_key_probe: bool,
     wrap_db: impl FnOnce(Arc<dyn cratefield_core::Database>) -> Arc<dyn cratefield_core::Database>,
 ) -> Kit {
     let jwks = StaticJwks::new();
@@ -544,6 +567,9 @@ fn build_kit(
     let notifier = module.notifier();
     for category in categories {
         module = module.category(category);
+    }
+    if vapid_key_probe {
+        module = module.vapid_public_key(|cfg| cfg.get(VAPID_KEY_CONFIG));
     }
     let events = Arc::new(EventLog::default());
     let clock = TestClock::at(NOW);

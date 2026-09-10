@@ -187,6 +187,61 @@ async fn cors_allows_listed_origin_only() {
     );
 }
 
+/// The preflight a browser client actually sends (issue #183).
+///
+/// `cf.js` is served from the API origin and runs on the venture's site,
+/// so registering for notifications is a cross-origin
+/// `PUT /v1/notifications/subscriptions` carrying an `Authorization`
+/// header. Neither the method nor the header was on the allowlist, and
+/// the failure is entirely browser-side: a console line, no request, and
+/// nothing in the venture's logs to find.
+///
+/// Credentials stay off. That is what makes allowing the header safe —
+/// no cookie is ever attached cross-origin, so this only lets a script
+/// send a token it was deliberately given.
+#[pollster::test]
+async fn cors_preflight_admits_an_authenticated_put() {
+    let harness = harness_with_sample();
+    let router = harness.router(Ports::empty());
+
+    let preflight = request(
+        &router,
+        Method::OPTIONS,
+        "/v1/sample/hello",
+        &[
+            ("origin", "https://test.example"),
+            ("access-control-request-method", "PUT"),
+            (
+                "access-control-request-headers",
+                "authorization,content-type",
+            ),
+        ],
+        None,
+    )
+    .await;
+    let headers = preflight.headers().clone();
+    let methods = headers
+        .get("access-control-allow-methods")
+        .expect("a preflight names the methods")
+        .to_str()
+        .expect("ascii")
+        .to_ascii_uppercase();
+    assert!(methods.contains("PUT"), "{methods}");
+    assert!(methods.contains("DELETE"), "{methods}");
+    let allowed = headers
+        .get("access-control-allow-headers")
+        .expect("a preflight names the headers")
+        .to_str()
+        .expect("ascii")
+        .to_ascii_lowercase();
+    assert!(allowed.contains("authorization"), "{allowed}");
+    assert!(allowed.contains("content-type"), "{allowed}");
+    assert!(
+        headers.get("access-control-allow-credentials").is_none(),
+        "cookies must never ride along on a cross-origin request"
+    );
+}
+
 /// `/v1/*` responses carry the security headers; `/__health` does not.
 #[pollster::test]
 async fn security_headers_on_v1_only() {

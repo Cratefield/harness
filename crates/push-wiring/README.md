@@ -71,3 +71,17 @@ cargo run -p cratefield-push-wiring --example push-env-doc -- --check
 No other Rust source in the workspace may name one of those keys in a string
 literal; `crates/cli-acceptance/tests/push_env_guard.rs` fails the build if
 one does.
+
+## The browser's application server key
+
+`vapid_public_key(config)` answers the `applicationServerKey` a browser
+passes to `pushManager.subscribe()`, or `None` when Web Push is not
+configured. It lives here for the same reason `build_push` does — these are
+the same two variables — and it derives the public half from the private
+key rather than reading a third variable, so the key a venture serves to
+browsers cannot drift from the one its sends are signed with. A venture
+hands it to the notifications module, which serves it:
+
+```rust,ignore
+Notifications::new().vapid_public_key(cratefield::push_wiring::vapid_public_key)
+```

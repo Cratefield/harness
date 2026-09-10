@@ -1,11 +1,13 @@
 {
   "name": "cfjs-check",
   "private": true,
-  "description": "Size gate and embed test for crates/ui/assets/cf.js (issue #73)",
+  "description": "Size gate and tests for crates/ui/assets/cf.js and sw-push.js (issues #73, #183)",
   "type": "module",
   "scripts": {
     "size": "node size.mjs",
-    "test": "node test.mjs"
+    "test": "node test.mjs",
+    "push": "node push.mjs",
+    "sw": "node sw.mjs"
   },
   "devDependencies": {
     "jsdom": "27.0.0",
