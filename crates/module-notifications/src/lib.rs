@@ -129,10 +129,22 @@ const MIGRATION_REHOME_AND_DUE_INDEX: SqlMigration = SqlMigration {
     sql: include_str!("../migrations/sqlite/0002_rehome_and_due_index.sql"),
 };
 
+/// The in-app inbox (#187): the row every `notify` writes for a category
+/// that declares `in_app`, and the channel that needs no permission.
+const MIGRATION_INBOX: SqlMigration = SqlMigration {
+    id: "0003",
+    name: "inbox",
+    sql: include_str!("../migrations/sqlite/0003_inbox.sql"),
+};
+
 /// Every migration this module ships, in order. One array, so a test that
 /// asserts something about the schema reads what actually ships rather
 /// than a second list that can drift from it.
-const SHIPPED_MIGRATIONS: [SqlMigration; 2] = [MIGRATION_INIT, MIGRATION_REHOME_AND_DUE_INDEX];
+const SHIPPED_MIGRATIONS: [SqlMigration; 3] = [
+    MIGRATION_INIT,
+    MIGRATION_REHOME_AND_DUE_INDEX,
+    MIGRATION_INBOX,
+];
 
 /// One notification category the venture declares.
 ///
@@ -144,6 +156,7 @@ pub struct Category {
     pub(crate) name: String,
     pub(crate) default_enabled: bool,
     pub(crate) badge: bool,
+    pub(crate) in_app: bool,
 }
 
 impl Category {
@@ -155,6 +168,7 @@ impl Category {
             name: name.into(),
             default_enabled: true,
             badge: false,
+            in_app: true,
         }
     }
 
@@ -178,6 +192,20 @@ impl Category {
         self
     }
 
+    /// Whether this category writes an in-app inbox row (default
+    /// `true`).
+    ///
+    /// Turn it off for a notification that is noise once it is past —
+    /// "your room starts in ten minutes" is worth a push and worth
+    /// nothing in a list read tomorrow. This is the venture's decision
+    /// about the *category*; the account's own `in_app` switch is
+    /// separate and is checked as well.
+    #[must_use]
+    pub fn in_app(mut self, keeps_a_row: bool) -> Self {
+        self.in_app = keeps_a_row;
+        self
+    }
+
     /// The category's name.
     #[must_use]
     pub fn name(&self) -> &str {
@@ -193,6 +221,7 @@ pub(crate) struct Settings {
     pub drain_batch: u64,
     pub drain_concurrency: u32,
     pub rehome_max_per_hour: u32,
+    pub inbox_retention_days: u32,
     pub transport_probe: Option<TransportProbe>,
 }
 
@@ -204,6 +233,7 @@ impl std::fmt::Debug for Settings {
             .field("drain_batch", &self.drain_batch)
             .field("drain_concurrency", &self.drain_concurrency)
             .field("rehome_max_per_hour", &self.rehome_max_per_hour)
+            .field("inbox_retention_days", &self.inbox_retention_days)
             .field("transport_probe", &self.transport_probe.is_some())
             .finish()
     }
@@ -264,6 +294,7 @@ impl Notifications {
                 drain_batch: 50,
                 drain_concurrency: 8,
                 rehome_max_per_hour: 3,
+                inbox_retention_days: 90,
                 transport_probe: None,
             },
             ctx_cell: Arc::new(OnceLock::new()),
@@ -343,6 +374,18 @@ impl Notifications {
         self
     }
 
+    /// How long a read or archived inbox row is kept before the scheduled
+    /// tick deletes it (default 90 days; `0` keeps them forever).
+    ///
+    /// Only rows the account has finished with. An unread row is still
+    /// waiting to be seen however old it is, and deleting it would be the
+    /// module deciding the account missed its chance.
+    #[must_use]
+    pub fn inbox_retention_days(mut self, days: u32) -> Self {
+        self.settings.inbox_retention_days = days;
+        self
+    }
+
     /// How the venture answers "is any push transport wired?", for the
     /// production readiness check (see [`TransportProbe`]).
     ///
@@ -409,7 +452,10 @@ impl Module for Notifications {
         // `factory0-auth-client` fetches the issuer's JWKS through. A
         // venture that only fans out from its own modules never needs it,
         // and gets a module whose HTTP routes answer 401.
-        &[Port::Defer, Port::HttpClient]
+        // `Realtime` (#187) is what makes the inbox update while the app
+        // is open. Without it the client polls `unread-count`; the inbox
+        // row is written either way, so nothing depends on it.
+        &[Port::Defer, Port::HttpClient, Port::Realtime]
     }
 
     fn tables(&self) -> &'static [&'static str] {
@@ -418,6 +464,7 @@ impl Module for Notifications {
             store::PREFERENCES,
             store::OUTBOX,
             store::DEAD_LETTERS,
+            store::INBOX,
         ]
     }
 
@@ -599,6 +646,30 @@ impl Module for Notifications {
             if report.claimed > 0 {
                 tracing::info!(?report, cron, "drained the notifications outbox");
             }
+
+            // Retention, on the same tick. A failure here is logged rather
+            // than returned: the drain above already succeeded, and losing
+            // a scheduled run over housekeeping would stop the recovery
+            // half too.
+            let days = ModuleConfig::new(MODULE_NAME, &*ctx.config)
+                .get_u32("INBOX_RETENTION_DAYS", self.settings.inbox_retention_days);
+            if days > 0
+                && let Some(db) = ctx.ports.db.as_ref()
+            {
+                let cutoff = clock::plus_secs(
+                    &clock::now_iso(ctx.ports.clock.as_ref()),
+                    -(i64::from(days) * 86_400),
+                );
+                match store::prune_inbox(&**db, &cutoff).await {
+                    Ok(pruned) if pruned > 0 => {
+                        tracing::info!(pruned, cron, "pruned read notifications past retention");
+                    }
+                    Ok(_) => {}
+                    Err(err) => {
+                        tracing::error!(error = %err, "pruning the notifications inbox failed");
+                    }
+                }
+            }
             Ok(())
         })
     }
@@ -668,7 +739,10 @@ mod tests {
             module.requires(),
             [Port::Db, Port::Push, Port::Clock, Port::IdGen]
         );
-        assert_eq!(module.optional(), [Port::Defer, Port::HttpClient]);
+        assert_eq!(
+            module.optional(),
+            [Port::Defer, Port::HttpClient, Port::Realtime]
+        );
         assert_eq!(
             module.tables(),
             [
@@ -676,6 +750,7 @@ mod tests {
                 "notifications_preferences",
                 "notifications_outbox",
                 "notifications_dead_letters",
+                "notifications_inbox",
             ]
         );
         assert_eq!(

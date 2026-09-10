@@ -8,11 +8,11 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use axum::extract::{FromRequestParts, Path, State};
+use axum::extract::{FromRequestParts, Path, Query, State};
 use axum::http::request::Parts;
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{delete, get, put};
+use axum::routing::{delete, get, post, put};
 use cratefield_core::{Json, ModuleConfig, ModuleContext, Problem, ProblemDef, Recipient, Scope};
 use factory0_auth_client::{AuthClient, AuthState, Authenticated, UNAUTHENTICATED};
 use schemars::JsonSchema;
@@ -65,6 +65,11 @@ pub(crate) fn router(state: Arc<ModuleState>) -> axum::Router {
         .route("/subscriptions", put(register).get(list_subscriptions))
         .route("/subscriptions/{id}", delete(unregister))
         .route("/preferences", get(read_preferences).put(write_preferences))
+        .route("/", get(list_inbox))
+        .route("/unread-count", get(unread_count))
+        .route("/{id}/read", post(mark_read))
+        .route("/read-all", post(mark_all_read))
+        .route("/{id}", delete(archive))
         .with_state(state)
 }
 
@@ -584,5 +589,165 @@ mod tests {
                 .unwrap_or_else(|err| panic!("the mirror drifted from the port: {json}: {err}"));
             assert_eq!(Recipient::from(body), recipient);
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The in-app inbox (#187)
+
+/// The most rows one page may carry. A client asking for more gets this
+/// many rather than an error: the cap is the server's business, and a
+/// caller that wants everything should page.
+const INBOX_PAGE_MAX: u64 = 100;
+/// The page size a client that names none gets.
+const INBOX_PAGE_DEFAULT: u64 = 20;
+/// What joins the two halves of a cursor. A character no RFC 3339
+/// timestamp and no ULID contains, so the split is unambiguous.
+const CURSOR_SEPARATOR: char = '~';
+
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct InboxQuery {
+    /// The id of the oldest row already seen. Ids are ULIDs, so this is
+    /// both the cursor and the ordering key.
+    #[serde(default)]
+    cursor: Option<String>,
+    #[serde(default)]
+    limit: Option<u64>,
+    #[serde(default)]
+    unread: Option<bool>,
+}
+
+/// `GET /v1/notifications` — one page of this account's inbox, newest
+/// first. Archived rows are excluded.
+async fn list_inbox(
+    scope: Scope,
+    State(state): State<Arc<ModuleState>>,
+    Account(account_id): Account,
+    Query(query): Query<InboxQuery>,
+) -> Result<Response, Problem> {
+    let Some(db) = state.ctx.ports.db.clone() else {
+        return Err(internal(&scope));
+    };
+    let limit = query
+        .limit
+        .unwrap_or(INBOX_PAGE_DEFAULT)
+        .min(INBOX_PAGE_MAX);
+    // Opaque to the client, and deliberately so: it is the ordering pair,
+    // and which columns order the list is not part of the contract. A
+    // malformed one pages from the start rather than erroring — a cursor
+    // is a position, and losing it is not a failed request.
+    let cursor = query
+        .cursor
+        .as_deref()
+        .and_then(|raw| raw.split_once(CURSOR_SEPARATOR));
+    let items = store::inbox_page(
+        &*db,
+        &account_id,
+        cursor,
+        query.unread.unwrap_or(false),
+        limit,
+    )
+    .await
+    .map_err(|err| {
+        tracing::error!(error = %err, "reading the inbox failed");
+        internal(&scope)
+    })?;
+    // The cursor for the next page is the last id of this one, and absent
+    // when the page was not full — so a client stops without a second
+    // round trip that returns nothing.
+    let next = (items.len() as u64 == limit)
+        .then(|| {
+            items
+                .last()
+                .map(|item| format!("{}{CURSOR_SEPARATOR}{}", item.created_at, item.id))
+        })
+        .flatten();
+    Ok(Json(json!({ "notifications": items, "cursor": next })).into_response())
+}
+
+/// `GET /v1/notifications/unread-count` — a number the client asked for
+/// and renders itself. Not an OS badge: nothing here is pushed.
+async fn unread_count(
+    scope: Scope,
+    State(state): State<Arc<ModuleState>>,
+    Account(account_id): Account,
+) -> Result<Response, Problem> {
+    let Some(db) = state.ctx.ports.db.clone() else {
+        return Err(internal(&scope));
+    };
+    let unread = store::unread_count(&*db, &account_id)
+        .await
+        .map_err(|err| {
+            tracing::error!(error = %err, "counting unread failed");
+            internal(&scope)
+        })?;
+    Ok(Json(json!({ "unread": unread })).into_response())
+}
+
+/// `POST /v1/notifications/{id}/read`. Idempotent: reading twice keeps the
+/// first timestamp. Another account's id is a 404, never a 403.
+async fn mark_read(
+    scope: Scope,
+    State(state): State<Arc<ModuleState>>,
+    Account(account_id): Account,
+    Path(id): Path<String>,
+) -> Result<Response, Problem> {
+    let Some(db) = state.ctx.ports.db.clone() else {
+        return Err(internal(&scope));
+    };
+    let owned = store::mark_read(&*db, &id, &account_id, &now(&state))
+        .await
+        .map_err(|err| {
+            tracing::error!(error = %err, "marking read failed");
+            internal(&scope)
+        })?;
+    if owned {
+        Ok(StatusCode::NO_CONTENT.into_response())
+    } else {
+        Err(Problem::not_found().instance(&scope.request_id))
+    }
+}
+
+/// `POST /v1/notifications/read-all`. Answers how many moved, so a second
+/// call answering `0` is the visible proof it is idempotent.
+async fn mark_all_read(
+    scope: Scope,
+    State(state): State<Arc<ModuleState>>,
+    Account(account_id): Account,
+) -> Result<Response, Problem> {
+    let Some(db) = state.ctx.ports.db.clone() else {
+        return Err(internal(&scope));
+    };
+    let marked = store::mark_all_read(&*db, &account_id, &now(&state))
+        .await
+        .map_err(|err| {
+            tracing::error!(error = %err, "marking all read failed");
+            internal(&scope)
+        })?;
+    Ok(Json(json!({ "marked": marked })).into_response())
+}
+
+/// `DELETE /v1/notifications/{id}` — archive, a soft delete. The row stays
+/// for `fz data export` and for retention to collect.
+async fn archive(
+    scope: Scope,
+    State(state): State<Arc<ModuleState>>,
+    Account(account_id): Account,
+    Path(id): Path<String>,
+) -> Result<Response, Problem> {
+    let Some(db) = state.ctx.ports.db.clone() else {
+        return Err(internal(&scope));
+    };
+    let archived = store::archive(&*db, &id, &account_id, &now(&state))
+        .await
+        .map_err(|err| {
+            tracing::error!(error = %err, "archiving failed");
+            internal(&scope)
+        })?;
+    if archived {
+        Ok(StatusCode::NO_CONTENT.into_response())
+    } else {
+        Err(Problem::not_found().instance(&scope.request_id))
     }
 }
