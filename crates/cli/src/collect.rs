@@ -6,6 +6,7 @@
 
 use crate::lock::{Lock, read_lock, sha256_hex, write_lock};
 use cratefield_core::Harness;
+use std::fmt;
 use std::path::Path;
 
 /// Collects the harness's module migrations into `out`.
@@ -31,7 +32,7 @@ pub fn collect(harness: &Harness, dialect: &str, out: &Path) -> Result<(), Strin
         for migration in module.migrations().sqlite {
             let key = format!("{}/{}", module.name(), migration.id);
             if let Some(entry) = lock.get(&key) {
-                verify_locked(out, &key, entry)?;
+                verify_locked(out, &key, entry).map_err(|err| err.to_string())?;
                 continue;
             }
             let file = format!(
@@ -57,21 +58,51 @@ pub fn collect(harness: &Harness, dialect: &str, out: &Path) -> Result<(), Strin
     write_lock(out, &lock)
 }
 
-pub fn verify_locked(out: &Path, key: &str, entry: &crate::lock::LockEntry) -> Result<(), String> {
+/// Why a locked migration failed verification (harness #140): the doctor
+/// needs the distinction to attach its stable error code. The `Display`
+/// text is the exact prose `collect` and `doctor` have always printed.
+#[derive(Debug)]
+pub enum LockedMigrationError {
+    /// The pinned file is not on disk.
+    Missing { key: String, file: String },
+    /// The pinned file's content hash no longer matches the lock entry.
+    Edited { key: String, file: String },
+}
+
+impl fmt::Display for LockedMigrationError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Missing { key, file } => {
+                write!(
+                    formatter,
+                    "locked migration {key:?} is missing its file {file}"
+                )
+            }
+            Self::Edited { key, file } => write!(
+                formatter,
+                "locked migration {key:?} was edited after being applied ({file}) \
+                 — restore the file or add a new migration instead"
+            ),
+        }
+    }
+}
+
+pub fn verify_locked(
+    out: &Path,
+    key: &str,
+    entry: &crate::lock::LockEntry,
+) -> Result<(), LockedMigrationError> {
     let path = out.join(&entry.file);
-    let body = std::fs::read_to_string(&path).map_err(|_| {
-        format!(
-            "locked migration {key:?} is missing its file {}",
-            entry.file
-        )
+    let body = std::fs::read_to_string(&path).map_err(|_| LockedMigrationError::Missing {
+        key: key.to_owned(),
+        file: entry.file.clone(),
     })?;
     let actual = sha256_hex(body.as_bytes());
     if actual != entry.sha256 {
-        return Err(format!(
-            "locked migration {key:?} was edited after being applied ({}) \
-             — restore the file or add a new migration instead",
-            entry.file
-        ));
+        return Err(LockedMigrationError::Edited {
+            key: key.to_owned(),
+            file: entry.file.clone(),
+        });
     }
     Ok(())
 }

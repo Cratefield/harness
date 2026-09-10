@@ -23,9 +23,10 @@
 
 pub mod apply;
 pub mod build;
+pub mod codes;
 mod collect;
 pub mod data;
-mod doctor;
+pub mod doctor;
 pub mod lint;
 mod lock;
 pub mod sidecars;
@@ -66,6 +67,11 @@ enum Command {
         /// stated reason; prints a warning instead of failing.
         #[arg(long, value_name = "REASON")]
         allow_no_captcha: Option<String>,
+        /// Prints exactly one JSON object to stdout — `schema`, `ok` and
+        /// the failures with their stable codes (`cratefield_cli::codes`)
+        /// — instead of prose. The exit code still reflects the verdict.
+        #[arg(long)]
+        json: bool,
     },
     /// Prints modules, versions, route prefixes, emitted events, tables.
     Modules,
@@ -218,12 +224,23 @@ pub fn run(build: impl Fn() -> Harness, args: impl IntoIterator<Item = String>) 
         Command::Doctor {
             out,
             allow_no_captcha,
-        } => doctor::doctor(
-            &harness,
-            &out,
-            allow_no_captcha.as_deref(),
-            sidecars.as_deref(),
-        ),
+            json,
+        } => {
+            if json {
+                return doctor::doctor_json(
+                    &harness,
+                    &out,
+                    allow_no_captcha.as_deref(),
+                    sidecars.as_deref(),
+                );
+            }
+            doctor::doctor(
+                &harness,
+                &out,
+                allow_no_captcha.as_deref(),
+                sidecars.as_deref(),
+            )
+        }
         Command::Modules => {
             print_modules(&harness);
             Ok(())
