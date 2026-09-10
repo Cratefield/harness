@@ -456,6 +456,53 @@ impl Notifications {
         self
     }
 
+    /// What the venture's own probes say about the ports this module
+    /// cannot see for itself.
+    ///
+    /// Whether a `Push` transport or a `Mailer` exists is not readable
+    /// from config — a venture may hand the harness its own adapter — so
+    /// the venture answers, and a module with no probe says nothing
+    /// rather than guessing.
+    fn probe_problems(&self, cfg: &dyn Config, errors: &mut ConfigError) {
+        if self
+            .settings
+            .transport_probe
+            .as_ref()
+            .is_some_and(|probe| !probe(cfg))
+        {
+            errors.push(
+                "notifications: production, but this venture wired no push transport: every \
+                 send would dead-letter as `not_configured`. `fz doctor` names the variables"
+                    .to_owned(),
+            );
+        }
+
+        // Only when a category actually asks for email. A venture with no
+        // `email(true)` category never sends one, so a missing mailer is
+        // not a problem it has (#189).
+        let emails = self
+            .settings
+            .categories
+            .iter()
+            .filter(|category| category.defaults.email)
+            .map(|category| category.name.clone())
+            .collect::<Vec<_>>();
+        if !emails.is_empty()
+            && self
+                .settings
+                .mailer_probe
+                .as_ref()
+                .is_some_and(|probe| !probe(cfg))
+        {
+            errors.push(format!(
+                "notifications: production, and {} opted into email, but this venture wired no \
+                 Mailer port: every one of those would dead-letter as `not_configured`. \
+                 Configure the mailer, or drop `.email(true)` from those categories",
+                emails.join(", "),
+            ));
+        }
+    }
+
     /// How the venture answers "is a mailer wired?", for the same
     /// production check as [`Notifications::transport_probe`].
     ///
@@ -675,42 +722,7 @@ impl Module for Notifications {
                     module.key("AUTH_CLIENT_ID"),
                 ));
             }
-            if self
-                .settings
-                .transport_probe
-                .as_ref()
-                .is_some_and(|probe| !probe(cfg))
-            {
-                errors.push(
-                    "notifications: production, but this venture wired no push transport: every \
-                     send would dead-letter as `not_configured`. `fz doctor` names the variables"
-                        .to_owned(),
-                );
-            }
-            // Only when a category actually asks for email. A venture with
-            // no `email(true)` category never sends one, so a missing
-            // mailer is not a problem it has (#189).
-            let emails = self
-                .settings
-                .categories
-                .iter()
-                .filter(|category| category.defaults.email)
-                .map(|category| category.name.clone())
-                .collect::<Vec<_>>();
-            if !emails.is_empty()
-                && self
-                    .settings
-                    .mailer_probe
-                    .as_ref()
-                    .is_some_and(|probe| !probe(cfg))
-            {
-                errors.push(format!(
-                    "notifications: production, and {} opted into email, but this venture wired \
-                     no Mailer port: every one of those would dead-letter as `not_configured`. \
-                     Configure the mailer, or drop `.email(true)` from those categories",
-                    emails.join(", "),
-                ));
-            }
+            self.probe_problems(cfg, &mut errors);
         }
 
         errors.into_result()
