@@ -1,8 +1,10 @@
-# Notifications: the push environment
+# The push environment
+
+*Generated reference. The hand-written notifications guide (push, in-app, email and languages, with the per-platform client sections) is `docs/NOTIFICATIONS.md`, issue #185, which links here rather than repeating this table.*
 
 Every environment variable the push adapters read, generated from
 `cratefield-push-wiring`'s `PUSH_ENV` table by `cargo run -p
-cratefield-push-wiring --example notifications-doc` and checked in CI for
+cratefield-push-wiring --example push-env-doc` and checked in CI for
 drift (issue #191).
 
 One function reads these names — `build_push` — so no two callers can

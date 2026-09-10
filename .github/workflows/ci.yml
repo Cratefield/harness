@@ -108,7 +108,7 @@ jobs:
       - name: Compatibility matrix drift check (issue #17)
         run: cargo run -q -p cratefield-cli --example compatibility-doc -- --check
       - name: Push environment table drift check (issue #191)
-        run: cargo run -q -p cratefield-push-wiring --example notifications-doc -- --check
+        run: cargo run -q -p cratefield-push-wiring --example push-env-doc -- --check
 
   # The module conformance kit, run through the reusable workflow so a
   # module built out of tree consumes the identical job (issue #17). The

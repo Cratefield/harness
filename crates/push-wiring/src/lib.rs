@@ -52,8 +52,8 @@
 //!
 //! # The table is the documentation
 //!
-//! `docs/NOTIFICATIONS.md` is generated from [`PUSH_ENV`] by
-//! `cargo run -p cratefield-push-wiring --example notifications-doc`, and CI
+//! `docs/PUSH-ENV.md` is generated from [`PUSH_ENV`] by
+//! `cargo run -p cratefield-push-wiring --example push-env-doc`, and CI
 //! fails on drift — so the doc cannot describe variables the reader does not
 //! read.
 
@@ -85,7 +85,7 @@ pub struct PushVar {
     /// Whether the value is credential material. A `true` here means the
     /// value must never reach a log — only this name and a verdict.
     pub secret: bool,
-    /// What it is, for `docs/NOTIFICATIONS.md`.
+    /// What it is, for `docs/PUSH-ENV.md`.
     pub purpose: &'static str,
 }
 
@@ -220,7 +220,7 @@ pub enum TransportWiring {
 
 impl TransportWiring {
     /// `configured`, `absent`, `partial` or `invalid` — the word a log line
-    /// and `docs/NOTIFICATIONS.md` use.
+    /// and `docs/PUSH-ENV.md` use.
     #[must_use]
     pub fn verdict(&self) -> &'static str {
         match self {
@@ -627,20 +627,26 @@ impl HttpClient for OfflineHttpClient {
     }
 }
 
-/// `docs/NOTIFICATIONS.md`, generated from [`PUSH_ENV`] so the document
+/// `docs/PUSH-ENV.md`, generated from [`PUSH_ENV`] so the document
 /// cannot describe variables the reader does not read. Written and
 /// drift-checked by `cargo run -p cratefield-push-wiring --example
-/// notifications-doc`.
+/// push-env-doc`.
 #[must_use]
 pub fn notifications_doc() -> String {
     use fmt::Write as _;
 
     let mut out = String::new();
-    out.push_str("# Notifications: the push environment\n\n");
+    out.push_str("# The push environment\n\n");
+    out.push_str(
+        "*Generated reference. The hand-written notifications guide (push, in-app, \
+email and languages, with the per-platform client sections) is \
+`docs/NOTIFICATIONS.md`, issue #185, which links here rather than repeating this \
+table.*\n\n",
+    );
     out.push_str(
         "Every environment variable the push adapters read, generated from\n\
          `cratefield-push-wiring`'s `PUSH_ENV` table by `cargo run -p\n\
-         cratefield-push-wiring --example notifications-doc` and checked in CI for\n\
+         cratefield-push-wiring --example push-env-doc` and checked in CI for\n\
          drift (issue #191).\n\n\
          One function reads these names — `build_push` — so no two callers can\n\
          drift apart on a variable name. `serve()` reaches it through\n\

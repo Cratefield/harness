@@ -61,11 +61,11 @@ still boots and still answers every send.
 
 ## The variables
 
-`docs/NOTIFICATIONS.md` is generated from this crate's `PUSH_ENV` table:
+`docs/PUSH-ENV.md` is generated from this crate's `PUSH_ENV` table:
 
 ```sh
-cargo run -p cratefield-push-wiring --example notifications-doc          # write
-cargo run -p cratefield-push-wiring --example notifications-doc -- --check
+cargo run -p cratefield-push-wiring --example push-env-doc          # write
+cargo run -p cratefield-push-wiring --example push-env-doc -- --check
 ```
 
 No other Rust source in the workspace may name one of those keys in a string

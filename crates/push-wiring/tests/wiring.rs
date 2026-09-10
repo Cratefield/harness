@@ -466,12 +466,12 @@ fn the_generated_doc_covers_every_variable_in_the_table() {
 fn the_checked_in_doc_has_no_drift() {
     // The same check CI runs, so a table change that forgets the doc fails
     // here first rather than in the pipeline.
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/NOTIFICATIONS.md");
-    let current = std::fs::read_to_string(&path).expect("docs/NOTIFICATIONS.md exists");
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/PUSH-ENV.md");
+    let current = std::fs::read_to_string(&path).expect("docs/PUSH-ENV.md exists");
     assert_eq!(
         current,
         notifications_doc(),
-        "docs/NOTIFICATIONS.md is stale; regenerate with `cargo run -p \
-         cratefield-push-wiring --example notifications-doc`"
+        "docs/PUSH-ENV.md is stale; regenerate with `cargo run -p \
+         cratefield-push-wiring --example push-env-doc`"
     );
 }
