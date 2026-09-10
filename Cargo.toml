@@ -58,6 +58,7 @@ cratefield-adapter-sqlite-wasm = { path = "crates/adapter-sqlite-wasm", version 
 # sqlx-free.
 cratefield-adapter-postgres = { path = "crates/adapter-postgres", version = "0.1.0" }
 cratefield-module-email-signup = { path = "crates/module-email-signup", version = "0.1.0" }
+cratefield-module-privacy = { path = "crates/module-privacy", version = "0.1.0" }
 cratefield-module-waitlist = { path = "crates/module-waitlist", version = "0.1.0" }
 cratefield-module-cms = { path = "crates/module-cms", version = "0.1.0" }
 # `publish = false` until `factory0-auth-client` is published: the

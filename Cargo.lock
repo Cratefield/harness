@@ -652,6 +652,7 @@ dependencies = [
  "cratefield-module-cms",
  "cratefield-module-email-signup",
  "cratefield-module-notifications",
+ "cratefield-module-privacy",
  "cratefield-module-waitlist",
  "cratefield-push-auth",
  "cratefield-push-wiring",
@@ -1090,6 +1091,22 @@ dependencies = [
  "tower",
  "tracing",
  "ulid",
+]
+
+[[package]]
+name = "cratefield-module-privacy"
+version = "0.1.1"
+dependencies = [
+ "axum",
+ "cratefield-core",
+ "cratefield-testing",
+ "http",
+ "pollster",
+ "sea-query",
+ "serde",
+ "serde_json",
+ "tower",
+ "tracing",
 ]
 
 [[package]]

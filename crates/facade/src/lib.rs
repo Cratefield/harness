@@ -59,6 +59,8 @@ pub use cratefield_kms as kms;
 #[cfg(feature = "email-signup")]
 pub use cratefield_module_email_signup as email_signup;
 
+#[cfg(feature = "privacy")]
+pub use cratefield_module_privacy as privacy;
 #[cfg(feature = "waitlist")]
 pub use cratefield_module_waitlist as waitlist;
 
