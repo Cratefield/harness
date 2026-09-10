@@ -120,6 +120,17 @@ const MIGRATION_INIT: SqlMigration = SqlMigration {
     sql: include_str!("../migrations/sqlite/0001_init.sql"),
 };
 
+/// The review of #182 wanted two things 0001 did not have: the `rehomed_at`
+/// column that bounds device take-overs, and an index on the outbox's
+/// `next_attempt_at` — `claim_due` is the hottest read in the module and 0001
+/// indexed a colder one. 0001 had already shipped by then, and an applied
+/// migration is never edited, so they arrive here.
+const MIGRATION_REHOME_AND_DUE_INDEX: SqlMigration = SqlMigration {
+    id: "0002",
+    name: "rehome_and_due_index",
+    sql: include_str!("../migrations/sqlite/0002_rehome_and_due_index.sql"),
+};
+
 /// One notification category the venture declares.
 ///
 /// Categories are the vocabulary an account switches on and off, so they
@@ -423,7 +434,7 @@ impl Module for Notifications {
     }
 
     fn migrations(&self) -> Migrations {
-        const MIGRATIONS: [SqlMigration; 1] = [MIGRATION_INIT];
+        const MIGRATIONS: [SqlMigration; 2] = [MIGRATION_INIT, MIGRATION_REHOME_AND_DUE_INDEX];
         const _: () = cratefield_core::assert_migration_set(&MIGRATIONS);
         Migrations {
             sqlite: &MIGRATIONS,
@@ -833,9 +844,15 @@ mod tests {
             ),
         ] {
             let expected = format!("CREATE INDEX IF NOT EXISTS {index}\n    ON {table} ({column})");
+            // Across the whole set, not just 0001: an applied migration is
+            // never edited, so an index the review asks for after 0001 has
+            // shipped arrives in a later one.
+            let indexed = [MIGRATION_INIT, MIGRATION_REHOME_AND_DUE_INDEX]
+                .iter()
+                .any(|m| m.sql.contains(&expected));
             assert!(
-                MIGRATION_INIT.sql.contains(&expected),
-                "the migration must index {table}.{column}:\n{expected}"
+                indexed,
+                "some migration must index {table}.{column}:\n{expected}"
             );
         }
     }
