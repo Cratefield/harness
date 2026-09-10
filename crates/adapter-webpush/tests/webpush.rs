@@ -2,10 +2,10 @@
 //! request it builds, the RFC 8292 header it signs, and every status the
 //! push services answer with mapped to the port's outcome.
 //!
-//! No network. The live path against a real push service is the sibling
-//! issue's CI leg (#181), which stands up a self-hosted UnifiedPush server
-//! and asserts a 2xx; the mapping below stays a unit test because a real
-//! service will not produce a `410` on demand.
+//! No network. The live path against a real push service is
+//! `tests/ntfy_live.rs` (issue #181), which stands up a self-hosted
+//! UnifiedPush server and asserts a 2xx; the mapping below stays a unit
+//! test because a real service will not produce a `410` on demand.
 
 mod support;
 

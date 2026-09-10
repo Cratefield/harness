@@ -110,6 +110,90 @@ jobs:
       - name: Push environment table drift check (issue #191)
         run: cargo run -q -p cratefield-push-wiring --example push-env-doc -- --check
 
+  webpush-ntfy:
+    # No `#` in the name: GitHub truncates a check-run name there (issue #34).
+    name: web push conformance against a real ntfy server
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.98.1"
+      - uses: Swatinem/rust-cache@v2
+      # `docker run`, not a `services:` container. The image's ENTRYPOINT is
+      # `ntfy` with no CMD, so the server needs the `serve` argument — and a
+      # service container has no way to supply one (the workflow syntax
+      # exposes image, env, ports, volumes and `options`, and `options` is
+      # `docker create` flags, not the command). Either way the server is
+      # reached at `127.0.0.1:<published port>` from a job running directly
+      # on the runner, never by a hostname.
+      - name: Is Docker available
+        id: docker
+        run: |
+          if docker info > /dev/null 2>&1; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::Docker is unavailable on this runner; the ntfy conformance leg is skipped"
+            echo "available=false" >> "$GITHUB_OUTPUT"
+          fi
+      # ntfy v2.28.0, pinned by the manifest-list digest. Apache-2.0 /
+      # GPL-2.0, a single Go binary that is a UnifiedPush distributor: the
+      # UnifiedPush contract it implements ("a distributor endpoint accepts
+      # RFC 8030") is documented at https://docs.ntfy.sh/publish/#unifiedpush
+      # and https://unifiedpush.org/spec/definitions/.
+      #
+      # `NTFY_VISITOR_SUBSCRIBER_RATE_LIMITING=false` is pinned rather than
+      # left to the default. With it on — as the public ntfy.sh runs — a
+      # UnifiedPush publish answers `507` / code 50701 "cannot publish to
+      # UnifiedPush topic without previously active subscriber", even with a
+      # subscriber stream held open (verified against the public instance,
+      # 2026-09-09). It defaults to false self-hosted, and pinning it stops
+      # an upstream default change from turning this leg into a silent
+      # no-op. The test asserts a 2xx and fails loudly on that 507.
+      - name: Start ntfy (UnifiedPush distributor)
+        if: steps.docker.outputs.available == 'true'
+        run: |
+          docker run -d --name ntfy -p 8080:80 \
+            -e NTFY_LISTEN_HTTP=:80 \
+            -e NTFY_BASE_URL=http://127.0.0.1:8080 \
+            -e NTFY_VISITOR_SUBSCRIBER_RATE_LIMITING=false \
+            binwiederhier/ntfy@sha256:6ef4b819f722fccdc036af611c4774cfdc2de821ab74fdd48bbf4c9d6f8973da \
+            serve
+          for _ in $(seq 1 30); do
+            if curl -sf -m 3 http://127.0.0.1:8080/v1/health | grep -q '"healthy":true'; then
+              echo "ntfy is healthy"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "ntfy never became healthy"
+          docker logs ntfy
+          exit 1
+      # The proof: a real RFC 8030 POST to a server that is not ours, and the
+      # body read back out of ntfy's own JSON API and decrypted with the
+      # browser-side key the test generated (issue #181).
+      #
+      # The `grep` is the guard on the guard: the test skips itself when
+      # `NTFY_URL` is unset, and a skipped test is a green job that proved
+      # nothing.
+      - name: Web Push interop against ntfy
+        if: steps.docker.outputs.available == 'true'
+        env:
+          NTFY_URL: http://127.0.0.1:8080
+        run: |
+          set -o pipefail
+          cargo test -p cratefield-adapter-webpush --test ntfy_live -- --nocapture \
+            | tee /tmp/ntfy-live.log
+          if ! grep -q 'ntfy conformance: decrypted' /tmp/ntfy-live.log; then
+            echo "the ntfy leg skipped instead of running: NTFY_URL did not reach the test"
+            exit 1
+          fi
+      # Never the step that fails the job: it is here to explain one that
+      # already did.
+      - name: ntfy logs
+        if: always() && steps.docker.outputs.available == 'true'
+        run: docker logs ntfy || true
+
   # The module conformance kit, run through the reusable workflow so a
   # module built out of tree consumes the identical job (issue #17). The
   # glob covers every module in the workspace, private ones included

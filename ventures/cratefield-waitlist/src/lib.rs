@@ -19,9 +19,12 @@ use std::sync::{Arc, OnceLock};
 
 use async_trait::async_trait;
 use cratefield_adapter_resend::Resend;
+use cratefield_adapter_turnstile::Turnstile;
 use cratefield_core::{Harness, MailError, Mailer, Message, SendOutcome, Venture};
 use cratefield_module_waitlist::Waitlist;
-use cratefield_runtime_cloudflare::{Cloudflare, FetchClient, serve, serve_scheduled};
+use cratefield_runtime_cloudflare::{
+    Cloudflare, FetchClient, WorkersClock, serve, serve_scheduled,
+};
 use worker::{Context, Env, Request, Response, event};
 
 /// The address the confirmation mail is sent from; the sending subdomain
@@ -40,6 +43,29 @@ impl Mailer for NoopMailer {
             id: "noop".to_owned(),
         })
     }
+}
+
+/// Turnstile when `TURNSTILE_SECRET` is present on the Worker `Env`, else
+/// no `Captcha` port at all.
+///
+/// Read from the binding rather than `Turnstile::from_env`, which reads
+/// `std::env` and is therefore always empty on Workers.
+///
+/// The hostname is bound deliberately: an unbound adapter reports itself
+/// not effectively configured, so `production_readiness` would still
+/// refuse the composition (issue #133). `www.cratefield.com` 301s to the
+/// apex before the form is ever served, so the widget is only ever solved
+/// on `cratefield.com` and one expected hostname is right.
+fn build_captcha(env: &Env) -> Option<Turnstile> {
+    let secret = env
+        .secret("TURNSTILE_SECRET")
+        .ok()
+        .map(|secret| secret.to_string())
+        .filter(|secret| !secret.is_empty())?;
+    Some(
+        Turnstile::new(Arc::new(FetchClient), Arc::new(WorkersClock), secret)
+            .expected_hostname("cratefield.com"),
+    )
 }
 
 /// Resend when `RESEND_API_KEY` is present on the Worker `Env`, else the
@@ -90,11 +116,20 @@ fn instance(env: &Env) -> &'static (Harness, Cloudflare) {
                     // which this venture does not serve.
                     .status_redirect("https://cratefield.com/"),
             )
-            .runtime(Cloudflare::new().db("DB").mailer_arc(Arc::clone(&mailer)))
+            .runtime({
+                let mut runtime = Cloudflare::new().db("DB").mailer_arc(Arc::clone(&mailer));
+                if let Some(captcha) = build_captcha(env) {
+                    runtime = runtime.captcha(captcha);
+                }
+                runtime
+            })
             .build()
             .expect("cratefield waitlist harness is valid");
         // The runtime `serve` resolves ports from must carry the mailer too.
-        let runtime = Cloudflare::new().db("DB").mailer_arc(mailer);
+        let mut runtime = Cloudflare::new().db("DB").mailer_arc(mailer);
+        if let Some(captcha) = build_captcha(env) {
+            runtime = runtime.captcha(captcha);
+        }
         (harness, runtime)
     })
 }

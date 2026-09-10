@@ -111,7 +111,7 @@ apply`) loads that file into Postgres in lock order:
 The manifest must be exactly this venture's tables — another venture's
 export file is refused before anything touches the network.
 
-## `fz doctor [--out migrations]`
+## `fz doctor [--out migrations] [--json]`
 
 Fails when:
 
@@ -125,6 +125,19 @@ Fails when:
   edited;
 - a migration contains non-portable SQL: `AUTOINCREMENT`, `datetime(`,
   `SERIAL`, `NOW()`, `json_extract`, or backtick quoting.
+
+With `--json` the doctor speaks for agents (harness #140): exactly one
+JSON object on stdout and nothing else —
+
+```json
+{"schema":1,"ok":false,"failures":[{"code":"locked-migration-edited","message":"…"}]}
+```
+
+`schema` is `1` today so consumers can branch; every failure carries a
+`code` from the stable catalogue in `cratefield_cli::codes` — kebab-case,
+never renamed or removed, while message wording may change. The exit code
+still reflects the verdict; prose and operator warnings are unchanged
+without the flag.
 
 ## `fz modules`
 

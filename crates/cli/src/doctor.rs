@@ -3,8 +3,16 @@
 //! and the production abuse-port rules (issues #13/#102/#133) — the same
 //! checks `Harness::build` enforces at initialization, kept visible here
 //! for operator tooling.
+//!
+//! Output comes in two disciplines (harness #140). Without `--json` the
+//! doctor is prose: warnings on stderr, every failure joined into one
+//! message, byte-for-byte as it has always been. With `--json` it prints
+//! exactly one JSON object to stdout — `schema`, `ok` and the failures,
+//! each with its stable code from [`crate::codes`] — and nothing else,
+//! so an agent can parse the verdict without screen-scraping.
 
-use crate::collect::verify_locked;
+use crate::codes::{CODES, DoctorCodeDef};
+use crate::collect::{LockedMigrationError, verify_locked};
 use crate::lint::banned_tokens;
 use crate::lock::{Lock, read_lock};
 use cratefield_core::lint_card_data;
@@ -14,6 +22,71 @@ use cratefield_core::{
 };
 use cratefield_push_wiring::PushWiring;
 use std::path::Path;
+use std::process::ExitCode;
+
+/// The `schema` field of the `fz doctor --json` object (harness #140):
+/// consumers branch on it, so it only ever grows.
+pub const REPORT_SCHEMA: u32 = 1;
+
+/// One failed doctor check: its stable code from the catalogue
+/// ([`crate::codes`]) plus the human message, which is byte-identical to
+/// the prose path's.
+#[derive(Debug)]
+pub struct DoctorFailure {
+    /// The catalogue definition this failure is classified under.
+    pub code: &'static DoctorCodeDef,
+    /// The failure message, exactly as the prose path prints it.
+    pub message: String,
+}
+
+/// The outcome of a doctor run: every failed check, in check order.
+#[derive(Debug)]
+pub struct DoctorReport {
+    /// Empty when every check passed.
+    pub failures: Vec<DoctorFailure>,
+}
+
+impl DoctorReport {
+    /// `true` when every check passed.
+    #[must_use]
+    pub fn ok(&self) -> bool {
+        self.failures.is_empty()
+    }
+
+    /// The exact stdout payload of `fz doctor --json`: one object, one
+    /// line, no trailing newline.
+    ///
+    /// # Errors
+    ///
+    /// Only if `serde_json` cannot serialize the report — a struct of
+    /// strings and numbers cannot hit that, but the Result keeps every
+    /// caller total instead of panicking.
+    pub fn render_json(&self) -> Result<String, serde_json::Error> {
+        #[derive(serde::Serialize)]
+        struct Report<'a> {
+            schema: u32,
+            ok: bool,
+            failures: Vec<Failure<'a>>,
+        }
+        #[derive(serde::Serialize)]
+        struct Failure<'a> {
+            code: &'a str,
+            message: &'a str,
+        }
+        serde_json::to_string(&Report {
+            schema: REPORT_SCHEMA,
+            ok: self.ok(),
+            failures: self
+                .failures
+                .iter()
+                .map(|failure| Failure {
+                    code: failure.code.code,
+                    message: &failure.message,
+                })
+                .collect(),
+        })
+    }
+}
 
 /// The process environment as a [`Config`], so the doctor reads `ENV` the
 /// same way a deployed runtime does (issue #143).
@@ -25,30 +98,110 @@ impl Config for EnvVars {
     }
 }
 
+/// Which output discipline the doctor runs under.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Output {
+    /// Prose: operator warnings on stderr, failures joined into one
+    /// message by [`doctor`].
+    Human,
+    /// `--json`: exactly one object on stdout, operator warnings
+    /// suppressed so nothing but the JSON reaches a consumer.
+    Json,
+}
+
 /// Runs every doctor check. `allow_no_captcha` downgrades the
 /// production-captcha failure to a printed warning for the stated
 /// reason (issue #13).
 ///
 /// # Errors
 ///
-/// One message listing every failed check.
+/// One message listing every failed check — the same bytes `fz doctor`
+/// has always produced.
 pub fn doctor(
     harness: &Harness,
     migrations_dir: &Path,
     allow_no_captcha: Option<&str>,
     sidecars: Option<&str>,
 ) -> Result<(), String> {
-    let mut failures: Vec<String> = Vec::new();
+    let report = run_checks(
+        harness,
+        migrations_dir,
+        allow_no_captcha,
+        sidecars,
+        Output::Human,
+    );
+    if report.ok() {
+        return Ok(());
+    }
+    let messages: Vec<String> = report
+        .failures
+        .into_iter()
+        .map(|failure| failure.message)
+        .collect();
+    Err(messages.join("\n  - "))
+}
 
-    // Contract versions (issue #17). `Harness::build` already refuses a
-    // mismatched module, so a harness that reaches the doctor is coherent;
-    // the re-check keeps the rule visible here as well, and reports the
-    // module, its version and the core crate if it ever fires.
-    for module in harness.modules() {
-        if module.harness_api() != HARNESS_API {
-            failures.push(harness_api_mismatch(module.as_ref()));
+/// Runs every doctor check under `--json` discipline (harness #140):
+/// prints exactly one JSON object to stdout — `schema`, `ok`, `failures`
+/// with their stable codes — and nothing else, then reports the verdict
+/// as the exit code.
+#[must_use = "call process::exit with the returned ExitCode"]
+pub fn doctor_json(
+    harness: &Harness,
+    migrations_dir: &Path,
+    allow_no_captcha: Option<&str>,
+    sidecars: Option<&str>,
+) -> ExitCode {
+    let report = run_checks(
+        harness,
+        migrations_dir,
+        allow_no_captcha,
+        sidecars,
+        Output::Json,
+    );
+    match report.render_json() {
+        Ok(payload) => println!("{payload}"),
+        Err(err) => {
+            eprintln!("fz: cannot serialize the doctor report: {err}");
+            return ExitCode::FAILURE;
         }
     }
+    if report.ok() {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::FAILURE
+    }
+}
+
+/// The doctor's checks under `--json` discipline, without printing —
+/// the exact report [`doctor_json`] serializes, for tests and future
+/// consumers. Operator warnings are suppressed, as `--json` promises.
+#[must_use]
+pub fn doctor_report_json(
+    harness: &Harness,
+    migrations_dir: &Path,
+    allow_no_captcha: Option<&str>,
+    sidecars: Option<&str>,
+) -> DoctorReport {
+    run_checks(
+        harness,
+        migrations_dir,
+        allow_no_captcha,
+        sidecars,
+        Output::Json,
+    )
+}
+
+fn run_checks(
+    harness: &Harness,
+    migrations_dir: &Path,
+    allow_no_captcha: Option<&str>,
+    sidecars: Option<&str>,
+    output: Output,
+) -> DoctorReport {
+    let mut failures: Vec<DoctorFailure> = Vec::new();
+
+    contract_failures(harness, &mut failures);
 
     // Harness::build already succeeded by construction; the production-only
     // port rules (captcha, payments webhook) are checked against the runtime's
@@ -58,21 +211,48 @@ pub fn doctor(
     // (issue #143): the doctor runs where `ENV` is set, and a venture that
     // never called `.env()` still ships to production.
     let env = deployed_env(harness.venture().env, &EnvVars);
-    if let Some(note) = env_disagreement(harness.venture().env, env) {
+    if let Some(note) = env_disagreement(harness.venture().env, env)
+        && output == Output::Human
+    {
         eprintln!("fz: warning: {note}");
     }
     if env == VentureEnv::Production {
-        production_port_checks(harness, allow_no_captcha, &mut failures);
+        production_port_checks(harness, allow_no_captcha, output, &mut failures);
     }
 
-    push_checks(harness, env, &mut failures);
+    push_checks(harness, env, output, &mut failures);
+    lockfile_failures(harness, migrations_dir, &mut failures);
+    sidecar_failures(harness, sidecars, output, &mut failures);
+    lint_failures(harness, &mut failures);
 
-    // Lockfile consistency: every module migration locked, every locked
-    // file present and byte-identical.
+    DoctorReport { failures }
+}
+
+/// The contract-version re-check (issue #17). `Harness::build` already
+/// refuses a mismatched module, so a harness that reaches the doctor is
+/// coherent; the re-check keeps the rule visible here as well, and reports
+/// the module, its version and the core crate if it ever fires.
+fn contract_failures(harness: &Harness, failures: &mut Vec<DoctorFailure>) {
+    for module in harness.modules() {
+        if module.harness_api() != HARNESS_API {
+            failures.push(DoctorFailure {
+                code: &CODES.harness_api_mismatch,
+                message: harness_api_mismatch(module.as_ref()),
+            });
+        }
+    }
+}
+
+/// Lockfile consistency: every module migration locked, every locked
+/// file present and byte-identical.
+fn lockfile_failures(harness: &Harness, migrations_dir: &Path, failures: &mut Vec<DoctorFailure>) {
     let lock = match read_lock(migrations_dir) {
         Ok(lock) => lock,
         Err(err) => {
-            failures.push(err);
+            failures.push(DoctorFailure {
+                code: &CODES.lockfile_unreadable,
+                message: err,
+            });
             Lock::default()
         }
     };
@@ -82,97 +262,122 @@ pub fn doctor(
             match lock.get(&key) {
                 Some(entry) => {
                     if let Err(err) = verify_locked(migrations_dir, &key, entry) {
-                        failures.push(err);
+                        let code = match &err {
+                            LockedMigrationError::Missing { .. } => &CODES.locked_migration_missing,
+                            LockedMigrationError::Edited { .. } => &CODES.locked_migration_edited,
+                        };
+                        failures.push(DoctorFailure {
+                            code,
+                            message: err.to_string(),
+                        });
                     }
                 }
-                None => failures.push(format!(
-                    "migration {key} is not collected yet — run `fz migrations collect`"
-                )),
+                None => failures.push(DoctorFailure {
+                    code: &CODES.migration_not_collected,
+                    message: format!(
+                        "migration {key} is not collected yet — run `fz migrations collect`"
+                    ),
+                }),
             }
         }
     }
+}
 
-    // Sidecars (issue #66). The doctor sees only compiled-in modules, so
-    // it says plainly what it cannot check rather than reporting a clean
-    // bill for half the venture. A mount that shadows a compiled-in
-    // module is a real misconfiguration: the runtime ignores it and
-    // keeps the compiled-in module, so someone believes a sidecar is
-    // serving a prefix that it is not.
+/// Sidecars (issue #66). The doctor sees only compiled-in modules, so
+/// it says plainly what it cannot check rather than reporting a clean
+/// bill for half the venture. A mount that shadows a compiled-in
+/// module is a real misconfiguration: the runtime ignores it and
+/// keeps the compiled-in module, so someone believes a sidecar is
+/// serving a prefix that it is not.
+fn sidecar_failures(
+    harness: &Harness,
+    sidecars: Option<&str>,
+    output: Output,
+    failures: &mut Vec<DoctorFailure>,
+) {
     match crate::sidecars::parse(sidecars) {
         Ok(mounts) if !mounts.is_empty() => {
             for mount in crate::sidecars::shadowing(harness, &mounts) {
-                failures.push(format!(
-                    "sidecar mount `{}` names a module compiled into this venture; the runtime \
-                     ignores the mount and serves the compiled-in module. Remove it from \
-                     {HARNESS_SIDECARS} or remove the module from the composition",
-                    mount.name
-                ));
+                failures.push(DoctorFailure {
+                    code: &CODES.sidecar_shadows_module,
+                    message: format!(
+                        "sidecar mount `{}` names a module compiled into this venture; the runtime \
+                         ignores the mount and serves the compiled-in module. Remove it from \
+                         {HARNESS_SIDECARS} or remove the module from the composition",
+                        mount.name
+                    ),
+                });
             }
-            eprintln!(
-                "fz: warning: {} is sidecar-mounted, so its tables, migrations and SQL are not \
-                 checked here — they live in its own repository (docs/MOUNTING.md)",
-                crate::sidecars::listed(&mounts)
-            );
-            // Gateway advisory (issue #131): without the shared secret the
-            // host stamps no token, so a sidecar that requires one refuses
-            // every forwarded request and a sidecar that does not cannot
-            // tell the host from the open internet.
-            if std::env::var(SIDECAR_GATEWAY_SECRET)
-                .ok()
-                .is_none_or(|value| value.trim().is_empty())
-            {
+            if output == Output::Human {
                 eprintln!(
-                    "fz: warning: {SIDECAR_GATEWAY_SECRET} is unset — the host stamps no gateway \
-                     token, so a sidecar that requires one (SIDECAR_REQUIRE_GATEWAY) refuses \
-                     every forwarded request (issue #131)"
+                    "fz: warning: {} is sidecar-mounted, so its tables, migrations and SQL are not \
+                     checked here — they live in its own repository (docs/MOUNTING.md)",
+                    crate::sidecars::listed(&mounts)
                 );
+                // Gateway advisory (issue #131): without the shared secret the
+                // host stamps no token, so a sidecar that requires one refuses
+                // every forwarded request and a sidecar that does not cannot
+                // tell the host from the open internet.
+                if std::env::var(SIDECAR_GATEWAY_SECRET)
+                    .ok()
+                    .is_none_or(|value| value.trim().is_empty())
+                {
+                    eprintln!(
+                        "fz: warning: {SIDECAR_GATEWAY_SECRET} is unset — the host stamps no \
+                         gateway token, so a sidecar that requires one (SIDECAR_REQUIRE_GATEWAY) \
+                         refuses every forwarded request (issue #131)"
+                    );
+                }
             }
         }
         Ok(_) => {}
-        Err(errors) => failures.extend(errors),
+        Err(errors) => failures.extend(errors.into_iter().map(|message| DoctorFailure {
+            code: &CODES.sidecar_mount_invalid,
+            message,
+        })),
     }
+}
 
-    // Portable-SQL lint over every migration. A module that ships a
-    // `postgres` set has declared where its SQL differs, so its sqlite
-    // set is allowed to be sqlite-specific — the same rule
-    // `cratefield_adapter_postgres::select_set` applies when it chooses a
-    // set, and the doctor should not disagree with the runner.
+/// The SQL lints: the portable-SQL check and the card-data check (#44).
+/// The portable lint skips a module that ships a `postgres` set — it has
+/// declared where its SQL differs, the same rule
+/// `cratefield_adapter_postgres::select_set` applies when it chooses a set,
+/// and the doctor should not disagree with the runner. The card-data lint
+/// never skips: no dialect stores a card number, verification code or full
+/// expiry, unlike the portable lint above.
+fn lint_failures(harness: &Harness, failures: &mut Vec<DoctorFailure>) {
     for module in harness.modules() {
         if !module.migrations().postgres.is_empty() {
             continue;
         }
         for migration in module.migrations().sqlite {
             for (token, why) in banned_tokens(migration.sql) {
-                failures.push(format!(
-                    "module `{}` migration {}: banned token `{token}` — {why}",
-                    module.name(),
-                    migration.id
-                ));
+                failures.push(DoctorFailure {
+                    code: &CODES.non_portable_sql,
+                    message: format!(
+                        "module `{}` migration {}: banned token `{token}` — {why}",
+                        module.name(),
+                        migration.id
+                    ),
+                });
             }
         }
     }
 
-    // Card-data lint (#44): never a card number, verification code or full
-    // expiry in a migration, on either dialect (a normal Stripe integration
-    // stores none of them) — so, unlike the portable lint above, this does not
-    // skip a module that ships a postgres override.
     for module in harness.modules() {
         let migrations = module.migrations();
         for migration in migrations.sqlite.iter().chain(migrations.postgres.iter()) {
             for (fragment, why) in lint_card_data(migration.sql) {
-                failures.push(format!(
-                    "module `{}` migration {}: `{fragment}` {why}",
-                    module.name(),
-                    migration.id
-                ));
+                failures.push(DoctorFailure {
+                    code: &CODES.card_data_in_migration,
+                    message: format!(
+                        "module `{}` migration {}: `{fragment}` {why}",
+                        module.name(),
+                        migration.id
+                    ),
+                });
             }
         }
-    }
-
-    if failures.is_empty() {
-        Ok(())
-    } else {
-        Err(failures.join("\n  - "))
     }
 }
 
@@ -185,7 +390,12 @@ pub fn doctor(
 /// here: the process environment is shared, and a venture that mounts no push
 /// module at all must not fail its deploy because the env file it inherits
 /// exports someone else's `VAPID_SUBJECT`.
-fn push_checks(harness: &Harness, env: VentureEnv, failures: &mut Vec<String>) {
+fn push_checks(
+    harness: &Harness,
+    env: VentureEnv,
+    output: Output,
+    failures: &mut Vec<DoctorFailure>,
+) {
     let declaration = PushDeclaration::of(harness.modules());
     if !declaration.declared {
         return;
@@ -194,6 +404,7 @@ fn push_checks(harness: &Harness, env: VentureEnv, failures: &mut Vec<String>) {
         &cratefield_push_wiring::inspect_push(&EnvVars),
         env,
         declaration,
+        output,
         failures,
     );
 }
@@ -260,28 +471,41 @@ fn push_wiring_checks(
     wiring: &PushWiring,
     env: VentureEnv,
     declaration: PushDeclaration,
-    failures: &mut Vec<String>,
+    output: Output,
+    failures: &mut Vec<DoctorFailure>,
 ) {
     match wiring.check(env) {
-        Err(problems) => failures.push(problems),
+        // Half-wired and refused-credentials are one code, not two: the
+        // message already names which transport and which variables, and
+        // `check` reports every misconfigured transport in one string, so a
+        // venture with one of each has a single failure to classify. The
+        // operator action is the same either way — finish or correct that
+        // transport's variables, or unset them to say it is deliberately off.
+        Err(problems) => failures.push(DoctorFailure {
+            code: &CODES.push_transport_misconfigured,
+            message: problems,
+        }),
         // Below production the same problems are a warning: wiring a
         // transport one variable at a time is what development looks like.
         Ok(()) => {
-            for problem in wiring.problems() {
-                eprintln!("fz: warning: {problem}");
+            if output == Output::Human {
+                for problem in wiring.problems() {
+                    eprintln!("fz: warning: {problem}");
+                }
             }
         }
     }
 
     if declaration.required && env == VentureEnv::Production && !wiring.any_routed() {
-        failures.push(
-            "production venture has modules that require the Push port but no push transport \
-             is configured — every send would answer NotConfigured. Set one transport's \
-             variables (docs/PUSH-ENV.md), or drop the modules that require push. If this \
-             venture provides Push from an adapter of its own rather than from the \
-             environment, that adapter is not visible here (issue #191)"
+        failures.push(DoctorFailure {
+            code: &CODES.push_required_but_unrouted,
+            message: "production venture has modules that require the Push port but no push \
+                      transport is configured — every send would answer NotConfigured. Set one \
+                      transport's variables (docs/PUSH-ENV.md), or drop the modules that require \
+                      push. If this venture provides Push from an adapter of its own rather than \
+                      from the environment, that adapter is not visible here (issue #191)"
                 .to_owned(),
-        );
+        });
     }
 }
 
@@ -290,7 +514,8 @@ fn push_wiring_checks(
 fn production_port_checks(
     harness: &Harness,
     allow_no_captcha: Option<&str>,
-    failures: &mut Vec<String>,
+    output: Output,
+    failures: &mut Vec<DoctorFailure>,
 ) {
     let guards = cratefield_core::WriteGuards::collect(harness.modules());
     if let Some(message) = captcha_production_failure(
@@ -303,21 +528,27 @@ fn production_port_checks(
                 // someone has to answer for later, so it is recorded, not
                 // just printed (issue #143). `tracing` is the audited sink
                 // — scrubbed by #135 and shipped wherever the operator
-                // sends logs — while the stderr line keeps the operator
-                // running the command informed.
+                // sends logs — and fires in both disciplines, while the
+                // stderr line keeps the operator running the command
+                // informed.
                 tracing::warn!(
                     control = "captcha",
                     reason,
                     modules = guards.captcha_modules.join(","),
                     "production abuse control overridden by an operator"
                 );
-                eprintln!("fz: warning: captcha override accepted ({reason}): {message}");
-                eprintln!(
-                    "fz: note: this override is recorded; it is for previews only and must \
-                     not stand in for a Captcha port in production"
-                );
+                if output == Output::Human {
+                    eprintln!("fz: warning: captcha override accepted ({reason}): {message}");
+                    eprintln!(
+                        "fz: note: this override is recorded; it is for previews only and must \
+                         not stand in for a Captcha port in production"
+                    );
+                }
             }
-            None => failures.push(message),
+            None => failures.push(DoctorFailure {
+                code: &CODES.captcha_not_effective,
+                message,
+            }),
         }
     }
 
@@ -325,7 +556,10 @@ fn production_port_checks(
         std::env::var("STRIPE_WEBHOOK_SECRET").is_ok_and(|value| !value.trim().is_empty());
     if let Some(message) = payments_webhook_failure(guards.needs_payments(), webhook_secret_present)
     {
-        failures.push(message);
+        failures.push(DoctorFailure {
+            code: &CODES.payments_webhook_secret_missing,
+            message,
+        });
     }
 }
 
@@ -375,7 +609,8 @@ fn payments_webhook_failure(
 #[cfg(test)]
 mod tests {
     use super::{
-        PushDeclaration, captcha_production_failure, payments_webhook_failure, push_wiring_checks,
+        CODES, DoctorFailure, DoctorReport, Output, PushDeclaration, captcha_production_failure,
+        payments_webhook_failure, push_wiring_checks,
     };
     use cratefield_core::{MapConfig, Port, VentureEnv, WriteGuards};
     use cratefield_push_wiring::{PUSH_ENV, PushKey, PushWiring, inspect_push};
@@ -423,6 +658,43 @@ mod tests {
         assert!(payments_webhook_failure(false, false).is_none());
     }
 
+    /// The `--json` wire contract (harness #140): field order, the schema
+    /// number, and the code string straight from the catalogue.
+    #[test]
+    fn report_renders_the_json_contract() {
+        let report = DoctorReport {
+            failures: vec![
+                DoctorFailure {
+                    code: &CODES.captcha_not_effective,
+                    message: "production venture has captcha-guarded writes".to_owned(),
+                },
+                DoctorFailure {
+                    code: &CODES.payments_webhook_secret_missing,
+                    message: "STRIPE_WEBHOOK_SECRET is unset".to_owned(),
+                },
+            ],
+        };
+        let payload = report.render_json().expect("serializes");
+        assert_eq!(
+            payload,
+            "{\"schema\":1,\"ok\":false,\"failures\":[\
+             {\"code\":\"captcha-not-effective\",\"message\":\"production venture has \
+             captcha-guarded writes\"},\
+             {\"code\":\"payments-webhook-secret-missing\",\"message\":\"STRIPE_WEBHOOK_SECRET \
+             is unset\"}]}"
+        );
+        assert!(!report.ok());
+
+        let clean = DoctorReport {
+            failures: Vec::new(),
+        };
+        assert_eq!(
+            clean.render_json().expect("serializes"),
+            "{\"schema\":1,\"ok\":true,\"failures\":[]}"
+        );
+        assert!(clean.ok());
+    }
+
     /// A half-wired push environment, built through the real reader so this
     /// test names no environment variable of its own — the property
     /// `cli-acceptance`'s guard enforces across the workspace.
@@ -448,17 +720,27 @@ mod tests {
         let wiring = half_wired();
 
         let mut failures = Vec::new();
-        push_wiring_checks(&wiring, VentureEnv::Production, OPTIONAL, &mut failures);
+        push_wiring_checks(
+            &wiring,
+            VentureEnv::Production,
+            OPTIONAL,
+            Output::Human,
+            &mut failures,
+        );
         assert_eq!(failures.len(), 1, "{failures:?}");
         for problem in wiring.problems() {
-            assert!(failures[0].contains(&problem), "{failures:?}");
+            assert!(failures[0].message.contains(&problem), "{failures:?}");
         }
+        // The slug itself, written out: the catalogue's contract is that a
+        // code is never renamed, and a test that reads it back off `CODES`
+        // would rename with it.
+        assert_eq!(failures[0].code.code, "push-transport-misconfigured");
 
         // Below production it is a printed warning, not a failure: wiring a
         // transport one variable at a time is what development looks like.
         for env in [VentureEnv::Development, VentureEnv::Staging] {
             let mut failures = Vec::new();
-            push_wiring_checks(&wiring, env, OPTIONAL, &mut failures);
+            push_wiring_checks(&wiring, env, OPTIONAL, Output::Human, &mut failures);
             assert!(failures.is_empty(), "{env:?}: {failures:?}");
         }
     }
@@ -469,7 +751,13 @@ mod tests {
         // venture that sends no notifications, even in production.
         let wiring = inspect_push(&MapConfig::from_pairs(Vec::<(String, String)>::new()));
         let mut failures = Vec::new();
-        push_wiring_checks(&wiring, VentureEnv::Production, OPTIONAL, &mut failures);
+        push_wiring_checks(
+            &wiring,
+            VentureEnv::Production,
+            OPTIONAL,
+            Output::Human,
+            &mut failures,
+        );
         assert!(failures.is_empty(), "{failures:?}");
         assert!(wiring.problems().is_empty(), "{:?}", wiring.problems());
     }
@@ -485,21 +773,37 @@ mod tests {
         assert!(!nothing.any_routed());
 
         let mut failures = Vec::new();
-        push_wiring_checks(&nothing, VentureEnv::Production, REQUIRED, &mut failures);
+        push_wiring_checks(
+            &nothing,
+            VentureEnv::Production,
+            REQUIRED,
+            Output::Human,
+            &mut failures,
+        );
         assert_eq!(failures.len(), 1, "{failures:?}");
         assert!(
-            failures[0].contains("require the Push port"),
+            failures[0].message.contains("require the Push port"),
             "{failures:?}"
         );
+        // Its own code, not the half-wired one: nothing here is half-wired,
+        // and the operator's move is to route a transport or to drop the
+        // modules that require one.
+        assert_eq!(failures[0].code.code, "push-required-but-unrouted");
 
         // Only in production, and only when a module actually requires it.
         for env in [VentureEnv::Development, VentureEnv::Staging] {
             let mut failures = Vec::new();
-            push_wiring_checks(&nothing, env, REQUIRED, &mut failures);
+            push_wiring_checks(&nothing, env, REQUIRED, Output::Human, &mut failures);
             assert!(failures.is_empty(), "{env:?}: {failures:?}");
         }
         let mut failures = Vec::new();
-        push_wiring_checks(&nothing, VentureEnv::Production, OPTIONAL, &mut failures);
+        push_wiring_checks(
+            &nothing,
+            VentureEnv::Production,
+            OPTIONAL,
+            Output::Human,
+            &mut failures,
+        );
         assert!(failures.is_empty(), "{failures:?}");
     }
 
@@ -551,7 +855,13 @@ mod tests {
         assert!(wiring.any_routed(), "{}", wiring.summary());
 
         let mut failures = Vec::new();
-        push_wiring_checks(&wiring, VentureEnv::Production, REQUIRED, &mut failures);
+        push_wiring_checks(
+            &wiring,
+            VentureEnv::Production,
+            REQUIRED,
+            Output::Human,
+            &mut failures,
+        );
         assert!(failures.is_empty(), "{failures:?}");
     }
 }

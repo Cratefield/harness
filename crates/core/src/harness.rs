@@ -152,14 +152,7 @@ impl Harness {
         // Corrected here rather than at the call site so the field cannot
         // lie: leaving `ctx.venture.env` looking right and being wrong is
         // how this survived the fix that was meant to remove it.
-        let env = deployed_env(self.venture.env, ports.config.as_ref());
-        let venture = if env == self.venture.env {
-            Arc::clone(&self.venture)
-        } else {
-            let mut deployed = (*self.venture).clone();
-            deployed.env = env;
-            Arc::new(deployed)
-        };
+        let venture = self.venture_as_deployed(ports.config.as_ref());
         ModuleContext {
             config: Arc::clone(&ports.config),
             ports: ports.view_for(module),
@@ -211,6 +204,21 @@ impl Harness {
             env,
             captcha_configured: ports.captcha.is_some(),
         })
+    }
+
+    /// The venture descriptor with the environment the **deployment**
+    /// declares (issue #143), which is what anything reporting or
+    /// enforcing on it must read. Returns the original `Arc` untouched
+    /// when the two already agree, which is every venture that sets its
+    /// environment honestly in code.
+    fn venture_as_deployed(&self, config: &dyn Config) -> Arc<Venture> {
+        let env = deployed_env(self.venture.env, config);
+        if env == self.venture.env {
+            return Arc::clone(&self.venture);
+        }
+        let mut deployed = (*self.venture).clone();
+        deployed.env = env;
+        Arc::new(deployed)
     }
 
     /// Nests each in-process module under its `/v1/<name>` prefix.
@@ -387,7 +395,11 @@ impl Harness {
         } = ports;
 
         let health_state = HealthState {
-            venture: Arc::clone(&self.venture),
+            // The deployment's environment, not the compiled default:
+            // `cratefield-waitlist` answered `"env":"development"` while
+            // serving production, which is the same lie #143 removed from
+            // the gates and left here.
+            venture: self.venture_as_deployed(config.as_ref()),
             modules: self.modules.clone(),
             harness_build: config
                 .get("HARNESS_BUILD")
