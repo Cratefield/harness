@@ -25,6 +25,7 @@ mod lint;
 mod logging;
 mod module;
 mod outbox;
+mod personal_data;
 mod ports;
 mod problem;
 mod problems;
@@ -59,6 +60,9 @@ pub use module::{
     harness_api_mismatch, migration_checksum, migration_edited,
 };
 pub use outbox::{Outbox, OutboxRecord};
+pub use personal_data::{
+    CatalogEntry, DataKind, Disposition, PersonalDataCatalog, PersonalDataSet, is_plain_identifier,
+};
 pub use ports::{
     Blob, BlobError, BlobObject, BoundedHttpClient, Captcha, CaptchaBinding, CaptchaError, Charge,
     CheckoutRequest, CheckoutSession, Clock, ConnectAccountLink, ConnectAccountLinkRequest,

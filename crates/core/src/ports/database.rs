@@ -80,6 +80,20 @@ impl Row {
         self.columns.iter().map(|(name, _)| name.as_str())
     }
 
+    /// Every column, in result order, untyped.
+    ///
+    /// [`get`](Row::get) answers "is this column an `i64`" and returns `None`
+    /// for a NULL, a missing column and an unrepresentable one alike — three
+    /// different facts wearing one answer. A caller that must serialise a row
+    /// it did not write, like a subject-access export, needs to tell them
+    /// apart: reporting a value it could not read as `null` is a quiet claim
+    /// that the database held nothing there.
+    pub fn columns(&self) -> impl Iterator<Item = (&str, &SeaValue)> {
+        self.columns
+            .iter()
+            .map(|(name, value)| (name.as_str(), value))
+    }
+
     /// Typed column access. `None` when the column is missing, `NULL`, or
     /// not representable as `T`.
     pub fn get<T: TryFromValue>(&self, column: &str) -> Option<T> {

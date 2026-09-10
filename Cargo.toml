@@ -58,8 +58,13 @@ cratefield-adapter-sqlite-wasm = { path = "crates/adapter-sqlite-wasm", version 
 # sqlx-free.
 cratefield-adapter-postgres = { path = "crates/adapter-postgres", version = "0.1.0" }
 cratefield-module-email-signup = { path = "crates/module-email-signup", version = "0.1.0" }
+cratefield-module-privacy = { path = "crates/module-privacy", version = "0.1.0" }
 cratefield-module-waitlist = { path = "crates/module-waitlist", version = "0.1.0" }
 cratefield-module-cms = { path = "crates/module-cms", version = "0.1.0" }
+# `publish = false` until `factory0-auth-client` is published: the
+# notifications module is the first to depend on it, because the account a
+# route acts for comes from the auth extractor (ADR 0016).
+cratefield-module-notifications = { path = "crates/module-notifications", version = "0.1.0" }
 cratefield-testing = { path = "crates/testing", version = "0.1.0" }
 cratefield-cli = { path = "crates/cli", version = "0.1.0" }
 # The venture manifest + deterministic composition generator (issue #138).

@@ -219,6 +219,11 @@ pub struct ModuleContext {
     /// [`verify_human_form`](crate::route_policy::verify_human_form)
     /// rather than deciding from the environment alone.
     pub unprotected_writes_accepted: bool,
+    /// Every personal-data declaration in this composition, composed once at
+    /// build (issue: privacy module). A module reads it to export or erase a
+    /// subject's data without knowing which other modules the venture chose;
+    /// most modules ignore it, which costs them an `Arc` clone per request.
+    pub personal_data: std::sync::Arc<crate::PersonalDataCatalog>,
     /// `true` when the venture mounted a UI renderer (ADR 0010). A module
     /// then defaults its landing redirects (confirmed, expired,
     /// unsubscribed, status) to `<api base>/ui/<module>/<action>/<page>`
@@ -264,6 +269,31 @@ pub trait Module: Send + Sync + 'static {
     /// Table names this module owns; duplicates across modules are a build
     /// error.
     fn tables(&self) -> &'static [&'static str] {
+        &[]
+    }
+    /// What this module holds about a person, per table.
+    ///
+    /// Read by `cratefield-module-privacy` to export a subject's data, to
+    /// erase it, and to publish the "what is stored" table. Declaring it here
+    /// rather than in the privacy module is what makes that module reusable:
+    /// it never names a venture's tables, so a schema change cannot leave it
+    /// describing something that no longer exists.
+    ///
+    /// Validated at [`HarnessBuilder::build`]: a table this module does not
+    /// own is an error, and so is a declaration that cannot mean anything —
+    /// an `Anonymise` naming no columns, a `Retain` with no reason, a
+    /// published description left blank. See [`PersonalDataSet::none`] for a
+    /// table that legitimately holds nothing personal, which says so rather
+    /// than staying silent.
+    ///
+    /// Defaulting to empty keeps every existing module compiling unchanged.
+    /// It is deliberately **not** a build error to declare nothing: a module
+    /// with no tables has nothing to say, and forcing a ceremonial opt-out on
+    /// all of them would teach people to write one without reading it.
+    ///
+    /// [`HarnessBuilder::build`]: crate::HarnessBuilder::build
+    /// [`PersonalDataSet::none`]: crate::PersonalDataSet::none
+    fn personal_data(&self) -> &'static [crate::PersonalDataSet] {
         &[]
     }
     /// Event names this module emits (`"<module>.<event>"`), listed by

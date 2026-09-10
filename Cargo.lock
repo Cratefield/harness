@@ -651,6 +651,8 @@ dependencies = [
  "cratefield-kms",
  "cratefield-module-cms",
  "cratefield-module-email-signup",
+ "cratefield-module-notifications",
+ "cratefield-module-privacy",
  "cratefield-module-waitlist",
  "cratefield-push-auth",
  "cratefield-push-wiring",
@@ -1065,6 +1067,49 @@ dependencies = [
  "http",
  "pollster",
  "schemars 1.2.2",
+ "sea-query",
+ "serde",
+ "serde_json",
+ "tower",
+ "tracing",
+]
+
+[[package]]
+name = "cratefield-module-notifications"
+version = "0.1.1"
+dependencies = [
+ "async-trait",
+ "axum",
+ "base64ct",
+ "bytes",
+ "cratefield-adapter-sqlite",
+ "cratefield-core",
+ "cratefield-push-wiring",
+ "cratefield-testing",
+ "factory0-auth-client",
+ "http",
+ "p256 0.14.0",
+ "pollster",
+ "schemars 1.2.2",
+ "sea-query",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "time",
+ "tower",
+ "tracing",
+ "ulid",
+]
+
+[[package]]
+name = "cratefield-module-privacy"
+version = "0.1.1"
+dependencies = [
+ "axum",
+ "cratefield-core",
+ "cratefield-testing",
+ "http",
+ "pollster",
  "sea-query",
  "serde",
  "serde_json",
