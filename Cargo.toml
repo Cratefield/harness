@@ -158,9 +158,13 @@ hkdf = "0.13.0"
 # all. `getrandom` stays off — the salt and the ephemeral key are drawn
 # through the workspace's own `getrandom` pin, whose wasm backend is the leaf
 # crate's job.
+# `zeroize` for the same reason `chacha20poly1305` above carries it: the
+# cipher clears its expanded AES round keys on drop, so a CEK that the
+# adapter zeroizes does not survive inside the cipher it was handed to.
 aes-gcm = { version = "0.11.1", default-features = false, features = [
     "aes",
     "alloc",
+    "zeroize",
 ] }
 # Email NFC normalisation (core `email` module) — pure Rust, wasm-safe.
 unicode-normalization = "0.1.24"

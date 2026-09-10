@@ -21,12 +21,13 @@
 use aes_gcm::Aes128Gcm;
 use aes_gcm::aead::{Aead, Key, KeyInit, Nonce};
 use base64::Engine as _;
-use base64::engine::general_purpose::{URL_SAFE, URL_SAFE_NO_PAD};
+use base64::engine::general_purpose::{STANDARD, STANDARD_NO_PAD, URL_SAFE, URL_SAFE_NO_PAD};
 use hkdf::Hkdf;
 use p256::PublicKey;
 use p256::SecretKey;
 use p256::elliptic_curve::sec1::ToEncodedPoint as _;
 use sha2::Sha256;
+use zeroize::Zeroizing;
 
 /// The fixed part of the RFC 8188 §2.1 header: `salt(16) | rs(4) | idlen(1)`.
 pub const HEADER_FIXED_LEN: usize = 21;
@@ -142,14 +143,31 @@ pub enum EceError {
     Random(String),
 }
 
-/// Decodes base64url with or without the `=` padding. Browsers hand the
-/// subscription keys over unpadded, but a value that has been through a JSON
-/// round trip in another language often comes back padded, and refusing that
-/// would look like a corrupt subscription.
+/// Decodes a subscription key: base64url or standard base64, padded or not.
+///
+/// Browsers hand the keys over as **unpadded base64url**, which is the only
+/// form RFC 8291 needs — but a subscription is routinely stored and shipped
+/// by something other than the browser that made it, and every other form
+/// turns up on the way back:
+///
+/// - **padded** (`=`), from a JSON round trip through a library that pads;
+/// - the **standard alphabet** (`+` and `/` where base64url has `-` and
+///   `_`), from any encoder that re-encodes the raw bytes without asking for
+///   the URL-safe alphabet — Python's `base64.b64encode`, PHP's
+///   `base64_encode`, `JSON.stringify` over a `Buffer`.
+///
+/// The two alphabets do not overlap, so accepting both is unambiguous: a
+/// value is decoded by exactly one of them. Refusing the standard alphabet
+/// meant a `p256dh` that happens to contain a `+` or a `/` — roughly one
+/// subscription in a hundred does not, at 65 random-looking octets — could
+/// never be pushed to, and would look like a corrupt subscription rather
+/// than an encoding the adapter declined to read.
 fn decode_base64url(value: &str) -> Option<Vec<u8>> {
     URL_SAFE_NO_PAD
         .decode(value)
         .or_else(|_| URL_SAFE.decode(value))
+        .or_else(|_| STANDARD_NO_PAD.decode(value))
+        .or_else(|_| STANDARD.decode(value))
         .ok()
 }
 
@@ -163,7 +181,11 @@ pub struct SubscriptionKeys {
     /// The user agent's P-256 public key, uncompressed, exactly as it goes
     /// into `key_info`.
     ua_public: [u8; PUBLIC_KEY_LEN],
-    auth: [u8; AUTH_SECRET_LEN],
+    /// The RFC 8291 §3.2 authentication secret — the shared secret the
+    /// payload is encrypted under, so it is cleared on drop (the workspace
+    /// manifest's `zeroize` convention, the same one `crates/kms`,
+    /// `crates/secrets` and `module-linkedin` follow).
+    auth: Zeroizing<[u8; AUTH_SECRET_LEN]>,
 }
 
 impl SubscriptionKeys {
@@ -178,7 +200,10 @@ impl SubscriptionKeys {
     pub fn parse(p256dh: &str, auth: &str) -> Result<Self, EceError> {
         let p256dh = decode_base64url(p256dh)
             .ok_or_else(|| EceError::SubscriptionKey("not base64url".to_owned()))?;
-        let auth = decode_base64url(auth).ok_or(EceError::AuthSecretEncoding)?;
+        // The decoded secret is wrapped before anything else can hold it:
+        // wrapping only the copy inside `SubscriptionKeys` would leave this
+        // `Vec` to drop uncleared on both the success and the error path.
+        let auth = Zeroizing::new(decode_base64url(auth).ok_or(EceError::AuthSecretEncoding)?);
         Self::from_bytes(&p256dh, &auth)
     }
 
@@ -204,10 +229,18 @@ impl SubscriptionKeys {
         // anything off the curve.
         PublicKey::from_sec1_bytes(&ua_public)
             .map_err(|err| EceError::SubscriptionKey(err.to_string()))?;
-        let auth: [u8; AUTH_SECRET_LEN] = auth
-            .try_into()
-            .map_err(|_| EceError::AuthSecret(auth.len()))?;
-        Ok(Self { ua_public, auth })
+        if auth.len() != AUTH_SECRET_LEN {
+            return Err(EceError::AuthSecret(auth.len()));
+        }
+        // Copied *into* the cleared-on-drop buffer rather than built beside
+        // it: `[u8; 16]` is `Copy`, so `Zeroizing::new(array)` would leave
+        // the original array on the stack uncleared.
+        let mut secret = Zeroizing::new([0u8; AUTH_SECRET_LEN]);
+        secret.copy_from_slice(auth);
+        Ok(Self {
+            ua_public,
+            auth: secret,
+        })
     }
 }
 
@@ -219,40 +252,59 @@ impl std::fmt::Debug for SubscriptionKeys {
     }
 }
 
-/// The RFC 8291 §3.4 key schedule, every step named as the RFC names it, so
-/// each intermediate can be asserted against Appendix A.
+/// What the RFC 8291 §3.4 key schedule produces and a send actually reads:
+/// the input keying material for the content coding, and the public key the
+/// header carries as its `keyid`.
 ///
-/// Sending needs only `ikm` and `as_public`; the rest exist because a test
-/// that can only see the finished body cannot say *which* step broke, and
-/// two of these steps (the `key_info` operand order, the ECDH) are wrong in
-/// ways that still round-trip against our own decryptor.
-#[cfg_attr(not(test), allow(dead_code))]
+/// **Only what a send reads.** An earlier revision also carried
+/// `ecdh_secret`, `prk_key` and `key_info`, purely so one step-by-step test
+/// could assert them against Appendix A — the `#[cfg_attr(not(test),
+/// allow(dead_code))]` admitted it — so every production send copied ~96
+/// octets of key material that a release build never looks at and (before
+/// the `zeroize` wrapping below) never cleared. Those assertions live on
+/// against [`ecdh_secret`] and [`key_info`], which are the same functions the
+/// send itself calls, so the test still pins production's code rather than
+/// its own restatement of it.
 struct Schedule {
-    ecdh_secret: [u8; 32],
-    prk_key: [u8; 32],
-    key_info: Vec<u8>,
-    ikm: [u8; 32],
+    ikm: Zeroizing<[u8; 32]>,
     as_public: [u8; PUBLIC_KEY_LEN],
 }
 
-/// RFC 8188 §2.2/§2.3, the record's own keys. `prk` is published as an
-/// intermediate value by both vectors and is kept for the same reason as
-/// [`Schedule`]'s.
-#[cfg_attr(not(test), allow(dead_code))]
+/// RFC 8188 §2.2/§2.3, the record's own keys.
+///
+/// The PRK they are expanded from is not kept, for the reason [`Schedule`]
+/// gives: it is a plain `HKDF-Extract` of values the tests already hold, so
+/// the vectors' published PRK is asserted straight off `Hkdf::extract` there.
 struct RecordKeys {
-    prk: [u8; 32],
-    cek: [u8; 16],
-    nonce: [u8; 12],
+    cek: Zeroizing<[u8; 16]>,
+    nonce: Zeroizing<[u8; 12]>,
 }
 
-/// `HKDF-Extract(salt, ikm)` followed by one `HKDF-Expand` per output.
-/// Returns the PRK alongside, because the RFCs publish it as an intermediate
-/// value and a test that can see it localises a break to one step.
-fn extract(salt: &[u8], ikm: &[u8]) -> ([u8; 32], Hkdf<Sha256>) {
-    let (prk, hkdf) = Hkdf::<Sha256>::extract(Some(salt), ikm);
-    let mut out = [0u8; 32];
-    out.copy_from_slice(&prk);
-    (out, hkdf)
+/// RFC 8291 §3.1: the ECDH shared secret between the per-message
+/// application-server key and the subscription's `p256dh`.
+///
+/// `p256`'s own `SharedSecret` zeroizes on drop, so the copy taken out of it
+/// is wrapped as well — an unwrapped copy outlives the protection the
+/// library already provides, which is the worst of both.
+fn ecdh_secret(as_secret: &SecretKey, ua_public: &PublicKey) -> Zeroizing<[u8; 32]> {
+    let shared = p256::ecdh::diffie_hellman(as_secret.to_nonzero_scalar(), ua_public.as_affine());
+    let mut out = Zeroizing::new([0u8; 32]);
+    out.copy_from_slice(shared.raw_secret_bytes());
+    out
+}
+
+/// RFC 8291 §3.3: `key_info = "WebPush: info" || 0x00 || ua_public || as_public`.
+///
+/// Order matters and is not symmetric: user agent first, application server
+/// second. Swapping them yields a body that decrypts to garbage on every real
+/// browser while every round-trip test still passes, which is why Appendix
+/// A's `key_info` is asserted byte for byte against this function.
+fn key_info(ua_public: &[u8; PUBLIC_KEY_LEN], as_public: &[u8; PUBLIC_KEY_LEN]) -> Vec<u8> {
+    let mut info = Vec::with_capacity(KEY_INFO_PREFIX.len() + 2 * PUBLIC_KEY_LEN);
+    info.extend_from_slice(KEY_INFO_PREFIX);
+    info.extend_from_slice(ua_public);
+    info.extend_from_slice(as_public);
+    info
 }
 
 /// RFC 8291 §3.1–§3.3: ECDH, then combine with the authentication secret.
@@ -266,45 +318,29 @@ fn schedule(keys: &SubscriptionKeys, as_private: &[u8; 32]) -> Result<Schedule, 
     // Validated in `SubscriptionKeys::from_bytes`, so this cannot fail.
     let ua_public = PublicKey::from_sec1_bytes(&keys.ua_public)
         .map_err(|err| EceError::SubscriptionKey(err.to_string()))?;
-    let shared = p256::ecdh::diffie_hellman(as_secret.to_nonzero_scalar(), ua_public.as_affine());
-    let mut ecdh_secret = [0u8; 32];
-    ecdh_secret.copy_from_slice(shared.raw_secret_bytes());
-
-    let mut key_info = Vec::with_capacity(KEY_INFO_PREFIX.len() + 2 * PUBLIC_KEY_LEN);
-    key_info.extend_from_slice(KEY_INFO_PREFIX);
-    // Order matters and is not symmetric: user agent first, application
-    // server second. Swapping them yields a body that decrypts to garbage on
-    // every real browser while every round-trip test still passes, which is
-    // why Appendix A's `key_info` is asserted byte for byte below.
-    key_info.extend_from_slice(&keys.ua_public);
-    key_info.extend_from_slice(&as_public);
+    let ecdh = ecdh_secret(&as_secret, &ua_public);
+    let info = key_info(&keys.ua_public, &as_public);
 
     // salt = the authentication secret, IKM = the ECDH secret (RFC 8291 §3.3).
-    let (prk_key, hkdf) = extract(&keys.auth, &ecdh_secret);
-    let mut ikm = [0u8; 32];
+    let hkdf = Hkdf::<Sha256>::new(Some(keys.auth.as_slice()), ecdh.as_slice());
+    let mut ikm = Zeroizing::new([0u8; 32]);
     // L = 32, well inside HKDF's 255*HashLen ceiling.
-    hkdf.expand(&key_info, &mut ikm)
+    hkdf.expand(&info, ikm.as_mut_slice())
         .expect("HKDF-Expand of 32 octets is always in range");
 
-    Ok(Schedule {
-        ecdh_secret,
-        prk_key,
-        key_info,
-        ikm,
-        as_public,
-    })
+    Ok(Schedule { ikm, as_public })
 }
 
 /// RFC 8188 §2.2/§2.3.
 fn record_keys(salt: &[u8; SALT_LEN], ikm: &[u8]) -> RecordKeys {
-    let (prk, hkdf) = extract(salt, ikm);
-    let mut cek = [0u8; 16];
-    hkdf.expand(CEK_INFO, &mut cek)
+    let hkdf = Hkdf::<Sha256>::new(Some(salt), ikm);
+    let mut cek = Zeroizing::new([0u8; 16]);
+    hkdf.expand(CEK_INFO, cek.as_mut_slice())
         .expect("HKDF-Expand of 16 octets is always in range");
-    let mut nonce = [0u8; 12];
-    hkdf.expand(NONCE_INFO, &mut nonce)
+    let mut nonce = Zeroizing::new([0u8; 12]);
+    hkdf.expand(NONCE_INFO, nonce.as_mut_slice())
         .expect("HKDF-Expand of 12 octets is always in range");
-    RecordKeys { prk, cek, nonce }
+    RecordKeys { cek, nonce }
 }
 
 /// One RFC 8188 body: the §2.1 header followed by a single record.
@@ -331,15 +367,18 @@ fn encode(
     }
     let idlen = u8::try_from(keyid.len()).map_err(|_| EceError::ServerKey)?;
 
-    let RecordKeys { cek, nonce, .. } = record_keys(salt, ikm);
+    let RecordKeys { cek, nonce } = record_keys(salt, ikm);
 
     let mut padded = Vec::with_capacity(plaintext.len() + PAD_DELIMITER_LEN);
     padded.extend_from_slice(plaintext);
     padded.push(LAST_RECORD_DELIMITER);
 
-    let cipher = Aes128Gcm::new(&Key::<Aes128Gcm>::from(cek));
+    // `aes-gcm` is built with its `zeroize` feature (see the workspace
+    // manifest), so the cipher clears its expanded round keys on drop; the
+    // `Key` here is a statement temporary and goes with it.
+    let cipher = Aes128Gcm::new(&Key::<Aes128Gcm>::from(*cek));
     let ciphertext = cipher
-        .encrypt(&Nonce::<Aes128Gcm>::from(nonce), padded.as_slice())
+        .encrypt(&Nonce::<Aes128Gcm>::from(*nonce), padded.as_slice())
         .map_err(|_| EceError::Aead)?;
 
     let mut body = Vec::with_capacity(HEADER_FIXED_LEN + keyid.len() + ciphertext.len());
@@ -451,7 +490,7 @@ impl Ece {
     ) -> Result<Vec<u8>, EceError> {
         let schedule = schedule(keys, as_private)?;
         encode(
-            &schedule.ikm,
+            schedule.ikm.as_slice(),
             salt,
             &schedule.as_public,
             self.record_size,
@@ -460,7 +499,7 @@ impl Ece {
     }
 }
 
-/// A uniformly random P-256 private scalar.
+/// A uniformly random P-256 private scalar, cleared on drop.
 ///
 /// Drawn as 32 raw octets and offered to [`SecretKey::from_slice`], which
 /// rejects zero and anything at or above the curve order. Both rejections
@@ -468,12 +507,12 @@ impl Ece {
 /// zero), so the retry is bookkeeping rather than a hot path — but retrying
 /// is the only correct answer, since clamping or reducing the value would
 /// bias the key.
-fn random_scalar() -> Result<[u8; 32], EceError> {
+fn random_scalar() -> Result<Zeroizing<[u8; 32]>, EceError> {
     const ATTEMPTS: usize = 8;
-    let mut bytes = [0u8; 32];
+    let mut bytes = Zeroizing::new([0u8; 32]);
     for _ in 0..ATTEMPTS {
-        getrandom::fill(&mut bytes).map_err(|err| EceError::Random(err.to_string()))?;
-        if SecretKey::from_slice(&bytes).is_ok() {
+        getrandom::fill(bytes.as_mut_slice()).map_err(|err| EceError::Random(err.to_string()))?;
+        if SecretKey::from_slice(bytes.as_slice()).is_ok() {
             return Ok(bytes);
         }
     }
@@ -528,23 +567,62 @@ mod tests {
     /// break names the step it happened in — an ECDH that agrees but a
     /// `key_info` assembled in the wrong order look identical from the
     /// outside.
+    ///
+    /// Each step is read off the function the *send* calls
+    /// ([`ecdh_secret`], [`key_info`], [`schedule`], [`record_keys`]) rather
+    /// than off fields carried through a send for the test's benefit: the
+    /// assertions pin production code, and a release build carries none of
+    /// these values (see [`Schedule`]). The two PRKs are plain
+    /// `HKDF-Extract` outputs that no code here shapes, so they come
+    /// straight from `Hkdf`.
     #[test]
     fn the_rfc8291_key_schedule_matches_appendix_a_step_by_step() {
         let keys = vector_keys();
         let as_private: [u8; 32] = fixed(AS_PRIVATE);
         let schedule = schedule(&keys, &as_private).expect("the RFC's own keys");
-
         assert_eq!(schedule.as_public.as_slice(), b64(AS_PUBLIC), "as_public");
-        assert_eq!(schedule.ecdh_secret.as_slice(), b64(ECDH_SECRET), "ecdh");
-        assert_eq!(schedule.prk_key.as_slice(), b64(PRK_KEY), "PRK_key");
-        assert_eq!(schedule.key_info, b64(KEY_INFO), "key_info");
+
+        let as_secret = SecretKey::from_slice(&as_private).expect("the RFC's own key");
+        let ua_public = PublicKey::from_sec1_bytes(&keys.ua_public).expect("on the curve");
+        let ecdh = ecdh_secret(&as_secret, &ua_public);
+        assert_eq!(ecdh.as_slice(), b64(ECDH_SECRET), "ecdh");
+        assert_eq!(
+            key_info(&keys.ua_public, &schedule.as_public),
+            b64(KEY_INFO),
+            "key_info"
+        );
+        let (prk_key, _) = Hkdf::<Sha256>::extract(Some(keys.auth.as_slice()), ecdh.as_slice());
+        assert_eq!(prk_key.as_slice(), b64(PRK_KEY), "PRK_key");
         assert_eq!(schedule.ikm.as_slice(), b64(IKM), "IKM");
 
         let salt: [u8; SALT_LEN] = fixed(SALT);
-        let record = record_keys(&salt, &schedule.ikm);
-        assert_eq!(record.prk.as_slice(), b64(PRK), "PRK");
+        let (prk, _) = Hkdf::<Sha256>::extract(Some(salt.as_slice()), schedule.ikm.as_slice());
+        assert_eq!(prk.as_slice(), b64(PRK), "PRK");
+        let record = record_keys(&salt, schedule.ikm.as_slice());
         assert_eq!(record.cek.as_slice(), b64(CEK), "CEK");
         assert_eq!(record.nonce.as_slice(), b64(NONCE), "NONCE");
+    }
+
+    /// The production key schedule carries the two values a send reads and
+    /// nothing else.
+    ///
+    /// A size assertion rather than prose, because the thing that went wrong
+    /// before was silent: three extra fields of key material rode every send
+    /// for a test's benefit, admitted only by an `allow(dead_code)`. Adding
+    /// a field back — for a test, for a log line, for "we might need it" —
+    /// fails here.
+    #[test]
+    fn the_key_schedule_carries_no_test_only_key_material() {
+        assert_eq!(
+            size_of::<Schedule>(),
+            32 + PUBLIC_KEY_LEN,
+            "Schedule is the 32-octet IKM and the 65-octet public key, nothing else"
+        );
+        assert_eq!(
+            size_of::<RecordKeys>(),
+            16 + 12,
+            "RecordKeys is the CEK and the nonce, nothing else"
+        );
     }
 
     /// The header and the ciphertext are published separately in Appendix A,
@@ -587,12 +665,13 @@ mod tests {
         let ikm = b64("yqdlZ-tYemfogSmv7Ws5PQ");
         let salt: [u8; SALT_LEN] = fixed("I1BsxtFttlv3u_Oo94xnmw");
 
-        let keys = record_keys(&salt, &ikm);
+        let (prk, _) = Hkdf::<Sha256>::extract(Some(salt.as_slice()), &ikm);
         assert_eq!(
-            keys.prk.as_slice(),
+            prk.as_slice(),
             b64("zyeH5phsIsgUyd4oiSEIy35x-gIi4aM7y0hCF8mwn9g"),
             "PRK"
         );
+        let keys = record_keys(&salt, &ikm);
         assert_eq!(keys.cek.as_slice(), b64("_wniytB-ofscZDh4tbSjHw"), "CEK");
         assert_eq!(keys.nonce.as_slice(), b64("Bcs8gkIRKLI8GeI8"), "NONCE");
 
@@ -746,7 +825,45 @@ mod tests {
     #[test]
     fn a_random_scalar_is_a_usable_private_key() {
         let scalar = random_scalar().expect("randomness");
-        assert!(SecretKey::from_slice(&scalar).is_ok());
+        assert!(SecretKey::from_slice(scalar.as_slice()).is_ok());
         assert_ne!(scalar, random_scalar().expect("randomness"));
+    }
+
+    /// A subscription that came back through an encoder using the
+    /// **standard** base64 alphabet is the same subscription.
+    ///
+    /// The `p256dh` below contains both `+` and `/` in that alphabet, which
+    /// is exactly the value that could never be pushed to while only the
+    /// URL-safe alphabet was accepted — and "never" meant permanently, since
+    /// only the browser can re-subscribe.
+    #[test]
+    fn a_subscription_re_encoded_with_the_standard_alphabet_is_accepted() {
+        let standard = STANDARD_NO_PAD.encode(b64(UA_PUBLIC));
+        assert!(standard.contains('+'), "{standard}");
+        assert!(standard.contains('/'), "{standard}");
+
+        // The same keys, three encodings, one body: whichever alphabet the
+        // subscription arrived in, the schedule is identical.
+        let canonical = vector_keys();
+        for p256dh in [standard.clone(), STANDARD.encode(b64(UA_PUBLIC))] {
+            let keys = SubscriptionKeys::parse(&p256dh, AUTH_SECRET)
+                .unwrap_or_else(|err| panic!("{p256dh}: {err}"));
+            let salt: [u8; SALT_LEN] = fixed(SALT);
+            let as_private: [u8; 32] = fixed(AS_PRIVATE);
+            assert_eq!(
+                Ece::default()
+                    .seal_with(&keys, b"x", &salt, &as_private)
+                    .ok(),
+                Ece::default()
+                    .seal_with(&canonical, b"x", &salt, &as_private)
+                    .ok(),
+                "{p256dh}"
+            );
+        }
+
+        // The `auth` secret travels the same road.
+        assert!(
+            SubscriptionKeys::parse(UA_PUBLIC, &STANDARD_NO_PAD.encode(b64(AUTH_SECRET))).is_ok()
+        );
     }
 }

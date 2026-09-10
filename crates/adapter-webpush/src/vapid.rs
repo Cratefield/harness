@@ -133,6 +133,11 @@ fn parse_private_key(private_key: &str) -> Result<Es256Signer, VapidError> {
 /// (Mozilla autopush does), earns a `401 UnauthorizedRegistration` on every
 /// send. It is the classic VAPID bug, so it has a test of its own.
 ///
+/// `crates/ui` has a second `origin_of` that splits strings, feeding a
+/// Content-Security-Policy where its looseness matters more than it does
+/// here. Consolidating the two onto this one is issue #215; it is not done
+/// here because the sibling FCM adapter (#210) is open alongside.
+///
 /// # Errors
 ///
 /// [`VapidError::Endpoint`] if the endpoint is not an absolute `http`/`https`
@@ -142,8 +147,25 @@ pub fn origin_of(endpoint: &str) -> Result<String, VapidError> {
     // `http` is allowed alongside `https` on purpose: a self-hosted
     // UnifiedPush distributor is routinely reached over plain HTTP on a
     // private network (the ntfy container in issue #181 listens on port 80),
-    // and the payload's confidentiality does not rest on TLS — it is
-    // end-to-end encrypted under the subscription's own keys.
+    // and refusing the scheme would make this adapter unusable for the
+    // Google-free half of what it exists to serve.
+    //
+    // It is an allowance, not an endorsement, and the payload's end-to-end
+    // encryption is **not** the whole reason it is safe. Two things travel
+    // in cleartext over `http` that the RFC 8291 envelope does not cover:
+    //
+    // - the **endpoint** itself, which is a bearer capability — anyone who
+    //   reads it off the wire can push to that browser for as long as the
+    //   subscription lives, and
+    // - the **VAPID token**, valid for 12 hours against this origin, which
+    //   is the application server's identity.
+    //
+    // Neither lets an eavesdropper read a notification, but together they
+    // are a durable spoofing capability: an attacker can send notifications
+    // that arrive as the venture's own. That is a real cost, borne
+    // knowingly, on the private networks a self-hosted distributor lives on.
+    // A venture on the public internet wants `https` and gets it from every
+    // browser push service, none of which offers anything else.
     if !matches!(url.scheme(), "http" | "https") {
         return Err(VapidError::Endpoint(format!(
             "scheme {:?} is not http or https",
@@ -205,29 +227,35 @@ impl Vapid {
     /// `origin` must already be the output of [`origin_of`]: it is both the
     /// signed `aud` and the cache key, and the two must be the same string
     /// or the cache would key on something the token does not claim.
-    pub fn authorization(&self, clock: &dyn Clock, origin: &str) -> String {
+    // `&String` and not `&str`: [`origin_of`] hands the caller an owned
+    // `String` and `CachedToken`'s key type *is* `String`, so taking `&str`
+    // here meant allocating a second copy of the origin on every send purely
+    // to look one up. Borrowing what the caller already owns is the whole
+    // point of this signature.
+    #[allow(clippy::ptr_arg)]
+    pub fn authorization(&self, clock: &dyn Clock, origin: &String) -> String {
         let expiry = i64::try_from(TOKEN_EXPIRY.as_secs()).unwrap_or(i64::MAX);
-        let token = self
-            .tokens
-            .get_or_mint(clock, &origin.to_owned(), |now_unix| {
-                self.signer.sign_jwt(
-                    // RFC 8292 §2: the JWT is signed with ES256; `typ` is
-                    // carried because the services check it.
-                    &json!({ "typ": "JWT", "alg": "ES256" }),
-                    &json!({
-                        "aud": origin,
-                        "exp": now_unix.saturating_add(expiry),
-                        "sub": self.subject,
-                    }),
-                )
-            });
+        let token = self.tokens.get_or_mint(clock, origin, |now_unix| {
+            self.signer.sign_jwt(
+                // RFC 8292 §2: the JWT is signed with ES256; `typ` is
+                // carried because the services check it.
+                &json!({ "typ": "JWT", "alg": "ES256" }),
+                &json!({
+                    "aud": origin,
+                    "exp": now_unix.saturating_add(expiry),
+                    "sub": self.subject,
+                }),
+            )
+        });
         format!("vapid t={token}, k={}", self.public_key)
     }
 
     /// Drops the cached token for `origin`, so the next send re-signs — what
     /// the adapter does when a push service rejects the token.
-    pub fn invalidate(&self, origin: &str) {
-        self.tokens.invalidate(&origin.to_owned());
+    // `&String` for the reason [`Vapid::authorization`] gives.
+    #[allow(clippy::ptr_arg)]
+    pub fn invalidate(&self, origin: &String) {
+        self.tokens.invalidate(origin);
     }
 }
 

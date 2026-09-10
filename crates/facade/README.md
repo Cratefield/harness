@@ -43,6 +43,10 @@ feature, and each feature names exactly one crate:
 | `postgres` | `cratefield-adapter-postgres` | `cratefield::postgres` | `Database` over sqlx |
 | `resend` | `cratefield-adapter-resend` | `cratefield::resend` | `Mailer` over the Resend API |
 | `turnstile` | `cratefield-adapter-turnstile` | `cratefield::turnstile` | `Captcha` over Cloudflare Turnstile |
+| `stripe` | `cratefield-adapter-stripe` | `cratefield::stripe` | `Payments` over the Stripe API |
+| `apns` | `cratefield-adapter-apns` | `cratefield::apns` | `Push` over Apple Push Notification service |
+| `webpush` | `cratefield-adapter-webpush` | `cratefield::webpush` | `Push` over Web Push (RFC 8030), browsers and UnifiedPush |
+| `push-auth` | `cratefield-push-auth` | `cratefield::push_auth` | Provider-JWT signing for the push adapters (ES256 for APNs and VAPID, RS256 for Google service accounts) with a keyed token cache. Pulled in by `apns` and `webpush` already; a feature of its own for using it directly |
 | `ui` | `cratefield-ui` | `cratefield::ui` | Renders the module surface as HTML |
 | `secrets` | `cratefield-secrets` | `cratefield::secrets` | Envelope-encrypted secrets |
 | `kms` | `cratefield-kms` | `cratefield::kms` | The KMS port and its local-file provider |

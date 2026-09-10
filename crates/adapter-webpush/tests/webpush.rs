@@ -393,41 +393,47 @@ fn a_token_is_minted_per_push_service_origin_and_reused() {
     );
 }
 
-/// The classic VAPID bug: an `aud` built from the whole endpoint rather than
-/// its origin. A push service answers `401`, and the cached token for that
-/// origin is dropped so the next send cannot be a cache hit on a token the
-/// service already refused.
+/// A refused VAPID token drops the cached token for that origin **and** asks
+/// the caller to retry.
+///
+/// The commonest cause is a clock a few minutes out or a token that aged past
+/// its `exp` in flight, and both are fixed by the re-sign this send just
+/// arranged. Returning a non-retryable `Rejected` arranged that re-sign and
+/// then threw away the message that would have used it — the fix is never
+/// applied to the notification that triggered it.
 #[test]
-fn a_401_is_rejected_and_drops_the_cached_token_for_that_origin() {
-    let http = ScriptedHttp::new();
-    let clock = StepClock::at(1_700_000_000);
-    let push = adapter(&http, &clock);
-    let notification = Notification::new("a", "b");
+fn a_refused_vapid_token_re_signs_and_stays_retryable() {
+    for status in [401, 403] {
+        let http = ScriptedHttp::new();
+        let clock = StepClock::at(1_700_000_000);
+        let push = adapter(&http, &clock);
+        let notification = Notification::new("a", "b");
 
-    pollster::block_on(push.send(&subscriber(), &notification)).expect("delivered");
-    let first = http.nth(0, |seen| vapid_parts(seen.header("authorization")).0);
+        pollster::block_on(push.send(&subscriber(), &notification)).expect("delivered");
+        let first = http.nth(0, |seen| vapid_parts(seen.header("authorization")).0);
 
-    http.set(Reply::status(401).with_body("UnauthorizedRegistration"));
-    let error = pollster::block_on(push.send(&subscriber(), &notification)).unwrap_err();
-    assert!(
-        matches!(&error, PushError::Rejected(m)
-            if m.contains("401") && m.contains("UnauthorizedRegistration")),
-        "{error}"
-    );
+        http.set(Reply::status(status).with_body("UnauthorizedRegistration"));
+        let error = pollster::block_on(push.send(&subscriber(), &notification)).unwrap_err();
+        assert!(
+            matches!(&error, PushError::Transient { message, .. }
+                if message.contains(&status.to_string())
+                    && message.contains("UnauthorizedRegistration")),
+            "status {status}: a refused token discarded the notification: {error:?}"
+        );
 
-    // Same instant, so only a dropped cache entry can change the token —
-    // and ES256 here is deterministic, so a re-mint at the same second is
-    // the *same* string. What is asserted is therefore that the send still
-    // happened and still carried a token, and that the cache did not swallow
-    // the failure: advancing the clock by a second makes the re-mint visible.
-    http.set(Reply::created());
-    clock.advance(1);
-    pollster::block_on(push.send(&subscriber(), &notification)).expect("delivered");
-    let third = http.nth(2, |seen| vapid_parts(seen.header("authorization")).0);
-    assert_ne!(
-        third, first,
-        "the token was re-signed, not served from cache"
-    );
+        // Same instant, so only a dropped cache entry can change the token —
+        // and ES256 here is deterministic, so a re-mint at the same second is
+        // the *same* string. Advancing the clock by a second makes the
+        // re-mint visible.
+        http.set(Reply::created());
+        clock.advance(1);
+        pollster::block_on(push.send(&subscriber(), &notification)).expect("delivered");
+        let third = http.nth(2, |seen| vapid_parts(seen.header("authorization")).0);
+        assert_ne!(
+            third, first,
+            "status {status}: the token was served from cache, not re-signed"
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -457,21 +463,106 @@ fn every_success_status_is_delivered() {
     }
 }
 
+/// `410 Gone` is the only status that prunes a subscription — RFC 8030 §5
+/// defines no other, and `Unregistered` is a delete instruction.
 #[test]
 fn a_gone_subscription_is_unregistered() {
     let http = ScriptedHttp::new();
     let push = adapter(&http, &StepClock::at(0));
 
-    // Mozilla answers `410`, others `404` once the capability URL stops
-    // resolving. Both mean the same thing to the caller: delete it.
-    for status in [404, 410] {
-        http.set(Reply::status(status).with_body("subscription gone"));
+    http.set(Reply::status(410).with_body("subscription gone"));
+    let error =
+        pollster::block_on(push.send(&subscriber(), &Notification::new("a", "b"))).unwrap_err();
+    assert!(matches!(error, PushError::Unregistered), "{error}");
+}
+
+/// A `404` must **not** prune.
+///
+/// A self-hosted UnifiedPush distributor behind a proxy that came back
+/// without its routes, or an edited ingress rule, answers `404` for every
+/// path. Pruning on it deletes every Web Push subscription a venture holds,
+/// and unlike a device token none of them can be recreated server-side —
+/// only the browser can call `pushManager.subscribe()` again. So it is
+/// retryable, and the routing fix makes the next attempt succeed.
+#[test]
+fn a_404_is_retried_and_never_prunes_the_subscription() {
+    let http = ScriptedHttp::new();
+    let push = adapter(&http, &StepClock::at(0));
+
+    http.set(Reply::status(404).with_body("Not Found"));
+    let error =
+        pollster::block_on(push.send(&subscriber(), &Notification::new("a", "b"))).unwrap_err();
+    assert!(
+        !matches!(error, PushError::Unregistered),
+        "a 404 pruned the subscription: {error}"
+    );
+    assert!(
+        matches!(&error, PushError::Transient { message, .. } if message.contains("404")),
+        "{error:?}"
+    );
+
+    // And the proxy comes back: the same subscription still delivers,
+    // because nothing told the caller to delete it.
+    http.set(Reply::created());
+    pollster::block_on(push.send(&subscriber(), &Notification::new("a", "b")))
+        .expect("the subscription survived the outage");
+}
+
+/// `507` is an operator state, not load.
+///
+/// ntfy answers it — `"cannot publish to UnifiedPush topic without
+/// previously active subscriber"` — when it runs with
+/// `visitor-subscriber-rate-limiting` on, as the public `ntfy.sh` does. It
+/// never clears on its own, so retrying it as a 5xx retries forever.
+#[test]
+fn a_507_is_rejected_rather_than_retried_forever() {
+    let http = ScriptedHttp::new();
+    let push = adapter(&http, &StepClock::at(0));
+
+    http.set(
+        Reply::status(507)
+            .with_body("cannot publish to UnifiedPush topic without previously active subscriber"),
+    );
+    let error =
+        pollster::block_on(push.send(&subscriber(), &Notification::new("a", "b"))).unwrap_err();
+    match error {
+        PushError::Rejected(message) => {
+            assert!(message.contains("507"), "{message}");
+            assert!(
+                message.contains("previously active subscriber"),
+                "{message}"
+            );
+            // Named, because the fix is a setting on the push server and
+            // nobody reading a log line knows that without being told.
+            assert!(
+                message.contains("visitor-subscriber-rate-limiting"),
+                "{message}"
+            );
+        }
+        other => panic!("507 should be Rejected, got {other:?}"),
+    }
+}
+
+/// A distributor that moved answers `3xx`. The redirect is not followed —
+/// the VAPID token is signed over the original origin — but a move is at
+/// worst temporary and never a reason to destroy the notification.
+#[test]
+fn a_redirect_is_transient_rather_than_a_permanent_rejection() {
+    let http = ScriptedHttp::new();
+    let push = adapter(&http, &StepClock::at(0));
+
+    for status in [301, 302, 307, 308] {
+        http.set(
+            Reply::status(status).with_header("location", "https://push.example/wpush/v2/moved"),
+        );
         let error =
             pollster::block_on(push.send(&subscriber(), &Notification::new("a", "b"))).unwrap_err();
         assert!(
-            matches!(error, PushError::Unregistered),
-            "status {status}: {error}"
+            matches!(&error, PushError::Transient { message, .. } if message.contains(&status.to_string())),
+            "status {status}: {error:?}"
         );
+        // The `Location` is a push endpoint: it is not quoted back.
+        assert!(!error.to_string().contains("moved"), "{error}");
     }
 }
 
@@ -480,7 +571,9 @@ fn a_client_error_is_rejected_and_names_the_status() {
     let http = ScriptedHttp::new();
     let push = adapter(&http, &StepClock::at(0));
 
-    for status in [400, 401, 403, 413] {
+    // `401`/`403` are deliberately absent: a refused VAPID token is
+    // retryable, and has a test of its own.
+    for status in [400, 413] {
         http.set(Reply::status(status).with_body("nope"));
         let error =
             pollster::block_on(push.send(&subscriber(), &Notification::new("a", "b"))).unwrap_err();
@@ -491,6 +584,39 @@ fn a_client_error_is_rejected_and_names_the_status() {
             }
             other => panic!("status {status} should be Rejected, got {other:?}"),
         }
+    }
+}
+
+/// The subscription endpoint is a bearer capability that
+/// `crates/core/src/ports/push.rs` says must appear "never in a log, an
+/// event payload, or an error body". Error pages echo the request path, so
+/// the check is on what comes out of a real send.
+#[test]
+fn no_error_message_carries_the_subscription_endpoint() {
+    let http = ScriptedHttp::new();
+    let push = adapter(&http, &StepClock::at(0));
+
+    // What nginx, Apache and a CDN in front of a push service answer with:
+    // the request path, verbatim.
+    for status in [400, 404, 410, 401, 413, 429, 500, 507, 301] {
+        http.set(Reply::status(status).with_body(
+            "The requested URL \
+             https://updates.push.services.mozilla.com/wpush/v2/gAAAAAsubscription \
+             was not found on this server.",
+        ));
+        let outcome = pollster::block_on(push.send(&subscriber(), &Notification::new("a", "b")));
+        let message = match outcome {
+            Err(error) => error.to_string(),
+            Ok(outcome) => panic!("status {status} should not have delivered: {outcome:?}"),
+        };
+        assert!(
+            !message.contains("gAAAAAsubscription"),
+            "status {status} leaked the subscription path: {message}"
+        );
+        assert!(
+            !message.contains("mozilla.com"),
+            "status {status} leaked the push service host: {message}"
+        );
     }
 }
 

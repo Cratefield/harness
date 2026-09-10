@@ -40,6 +40,29 @@
 //! APNs or FCM recipient is still [`PushError::unsupported_recipient`],
 //! configured or not.
 //!
+//! # `Unregistered` is a delete instruction
+//!
+//! [`PushError::Unregistered`] does not mean "this send failed". It is the
+//! one error in the port that tells the caller to **destroy** the recipient,
+//! and it is far too easy to over-apply — this adapter and its FCM sibling
+//! each mapped an extra status onto it independently, before either was
+//! reviewed.
+//!
+//! It costs more here than anywhere else in the port. An APNs device token
+//! or an FCM registration token is re-registered by the app on its next
+//! launch, unattended; a Web Push subscription can be recreated **only** by
+//! the browser calling `pushManager.subscribe()`, which needs the user back
+//! on the site with notification permission still granted. Pruning a live
+//! subscription is not a lost message, it is a lost subscriber.
+//!
+//! So the bar is a status whose *only* meaning is "gone": RFC 8030 §5
+//! defines exactly one, `410 Gone`, and that is the only one mapped. A
+//! status that a misconfigured proxy, a stale ingress rule or a rate limiter
+//! can also produce is retried, however often it happens to mean a dead
+//! subscription in practice. When in doubt, retry: the cost of a wrong
+//! `Transient` is some wasted sends, and the cost of a wrong `Unregistered`
+//! cannot be undone from the server at all.
+//!
 //! [RFC 8030]: https://www.rfc-editor.org/rfc/rfc8030
 //! [RFC 8188]: https://www.rfc-editor.org/rfc/rfc8188
 //! [RFC 8291]: https://www.rfc-editor.org/rfc/rfc8291
@@ -50,7 +73,7 @@
 pub mod ece;
 pub mod vapid;
 
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -316,6 +339,12 @@ fn build_payload(notification: &Notification) -> Vec<u8> {
 /// an immediate retry. The date is resolved against the [`Clock`] port —
 /// the only clock this workspace may read — and a date already in the past
 /// becomes [`Duration::ZERO`] ("retry now") rather than being discarded.
+///
+/// This is the workspace's **fourth** `Retry-After` parser and the only one
+/// that reads the date form, so the bug it fixes is still live in the other
+/// three. Consolidating them into one `cratefield-core` helper beside
+/// `ttl_secs` is issue #214; it is not done here because the sibling FCM
+/// adapter (#210) is open over the same files.
 fn retry_after(headers: &HeaderMap, clock: &dyn Clock) -> Option<Duration> {
     let value = headers.get(RETRY_AFTER)?.to_str().ok()?.trim();
     if let Ok(seconds) = value.parse::<u64>() {
@@ -329,6 +358,23 @@ fn retry_after(headers: &HeaderMap, clock: &dyn Clock) -> Option<Duration> {
     Duration::try_from(delta).ok()
 }
 
+/// The IMF-fixdate description, parsed once.
+///
+/// Version 2 of the format-description syntax, pinned explicitly: `parse`
+/// without a version is deprecated precisely because the unversioned form's
+/// meaning can shift under a `time` upgrade.
+///
+/// Built once rather than per call: `Retry-After` is read on the throttling
+/// path, which by definition fires in bursts, and re-parsing a fixed
+/// description on every throttled send is work done once per process here.
+static IMF_FIXDATE: LazyLock<Vec<time::format_description::BorrowedFormatItem<'static>>> =
+    LazyLock::new(|| {
+        time::format_description::parse_borrowed::<2>(
+            "[weekday repr:short], [day] [month repr:short] [year] [hour]:[minute]:[second] GMT",
+        )
+        .expect("a format description that is a literal in this file")
+    });
+
 /// An IMF-fixdate, the one form RFC 9110 §5.6.7 allows a sender to generate:
 /// `Sun, 06 Nov 1994 08:49:37 GMT`.
 ///
@@ -337,31 +383,75 @@ fn retry_after(headers: &HeaderMap, clock: &dyn Clock) -> Option<Duration> {
 /// them, and mis-parsing a two-digit year is worse than falling back to
 /// "retry on your own schedule".
 fn parse_http_date(value: &str) -> Option<OffsetDateTime> {
-    // Version 2 of the format-description syntax, pinned explicitly:
-    // `parse` without a version is deprecated precisely because the
-    // unversioned form's meaning can shift under a `time` upgrade.
-    let format = time::format_description::parse_borrowed::<2>(
-        "[weekday repr:short], [day] [month repr:short] [year] [hour]:[minute]:[second] GMT",
-    )
-    .ok()?;
-    time::PrimitiveDateTime::parse(value, &format)
+    time::PrimitiveDateTime::parse(value, IMF_FIXDATE.as_slice())
         .ok()
         .map(time::PrimitiveDateTime::assume_utc)
 }
 
+/// What a redacted URL or path is replaced by in an error message.
+const REDACTED: &str = "[redacted]";
+
+/// How much of a push service's error body reaches the error message.
+const DETAIL_MAX_CHARS: usize = 200;
+
+/// The characters RFC 3986 allows in a URI reference — unreserved, reserved
+/// and the percent sign. A maximal run of them containing a `/` is treated
+/// as a URL or a path by [`redact_uris`].
+fn is_uri_char(c: char) -> bool {
+    c.is_ascii_alphanumeric() || "-._~:/?#[]@!$&'()*+,;=%".contains(c)
+}
+
+/// Replaces anything URL- or path-shaped with [`REDACTED`].
+///
+/// The rule is deliberately blunt — any run of URI characters containing a
+/// `/` goes — because the thing being protected is a bearer capability and
+/// the thing being preserved is a diagnostic string. Over-redacting an error
+/// body costs a line of log detail; under-redacting one publishes a
+/// subscription that anyone holding it can push to.
+fn redact_uris(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while !rest.is_empty() {
+        let start = rest.find(is_uri_char).unwrap_or(rest.len());
+        out.push_str(&rest[..start]);
+        rest = &rest[start..];
+        let end = rest.find(|c: char| !is_uri_char(c)).unwrap_or(rest.len());
+        let (run, tail) = rest.split_at(end);
+        if run.contains('/') {
+            out.push_str(REDACTED);
+        } else {
+            out.push_str(run);
+        }
+        rest = tail;
+    }
+    out
+}
+
 /// A push service's error body, made safe to put in an error message: the
-/// first 200 characters, control characters dropped.
+/// first [`DETAIL_MAX_CHARS`] characters, control characters dropped, and
+/// every URL or path redacted.
 ///
 /// Push services answer with anything from problem+json to a bare string, so
-/// the body is passed through as text rather than parsed. It is bounded
-/// because the message ends up in a log line and an error body is not a
-/// budgeted response.
+/// the body is passed through as text rather than parsed — the way the APNs
+/// adapter reads only its `reason` is not available here, because there is no
+/// error schema the vendors share.
+///
+/// **The redaction is the point.** ntfy, nginx and every CDN error page echo
+/// the request path, and a Web Push request path *is* the subscription:
+/// `crates/core/src/ports/push.rs` calls the endpoint a bearer capability —
+/// whoever holds it can push to that browser — that must appear "never in a
+/// log, an event payload, or an error body". This message is all three.
+///
+/// Bounded first and redacted second, so a 10 MB error page never becomes a
+/// 10 MB allocation. Truncation can only cut a URL's tail, never its head,
+/// so what survives the cut still carries the `/` that gets it redacted.
 fn detail(body: &[u8], status: StatusCode) -> String {
     let text: String = String::from_utf8_lossy(body)
         .chars()
         .filter(|c| !c.is_control())
-        .take(200)
+        .take(DETAIL_MAX_CHARS)
         .collect();
+    let text = redact_uris(&text);
     let text = text.trim();
     if text.is_empty() {
         status.as_u16().to_string()
@@ -438,6 +528,17 @@ impl Push for WebPush {
             .map_err(|err| PushError::transient(err.to_string()))?;
 
         let status = response.status();
+        // Every arm says the same thing: `web push <status>: <redacted
+        // body>`. Built once so no arm can forget the redaction.
+        let message = || {
+            format!(
+                "web push {}: {}",
+                status.as_u16(),
+                detail(response.body(), status)
+            )
+        };
+        let retry_after = || retry_after(response.headers(), live.clock.as_ref());
+
         match status {
             // RFC 8030 §5 answers `201 Created` with a `Location` naming the
             // push message resource. Any other 2xx is accepted too: ntfy
@@ -450,46 +551,88 @@ impl Push for WebPush {
                     .and_then(|value| value.to_str().ok())
                     .map(str::to_owned),
             }),
-            // The subscription is gone. `404` and `410` both mean it across
-            // vendors — Mozilla answers `410`, others `404` once the
-            // capability URL stops resolving — and the caller must delete
-            // the recipient either way.
-            StatusCode::NOT_FOUND | StatusCode::GONE => Err(PushError::Unregistered),
-            StatusCode::TOO_MANY_REQUESTS => Err(PushError::transient_after(
-                format!(
-                    "web push {}: {}",
-                    status.as_u16(),
-                    detail(response.body(), status)
-                ),
-                retry_after(response.headers(), live.clock.as_ref()),
-            )),
-            status if status.is_server_error() => Err(PushError::transient_after(
-                format!(
-                    "web push {}: {}",
-                    status.as_u16(),
-                    detail(response.body(), status)
-                ),
-                retry_after(response.headers(), live.clock.as_ref()),
-            )),
-            // `400` (malformed request), `401`/`403` (the VAPID token was
-            // refused) and `413` (body too large for this service) are all
-            // ours to fix, not to retry.
+            // The subscription is gone, and **only** this status says so.
+            // See the note on over-applying `Unregistered` in the module
+            // documentation before adding a second one.
+            StatusCode::GONE => Err(PushError::Unregistered),
+            // `404` is *not* that. RFC 8030 defines only `410`, and a `404`
+            // is what a proxy that came back without its routes, an edited
+            // ingress rule or a moved reverse proxy answers for **every**
+            // path — so pruning on it deletes a venture's whole Web Push
+            // register in one pass. That is unrecoverable server-side: a
+            // subscription can only be recreated by the browser calling
+            // `pushManager.subscribe()` again, which needs the user back on
+            // the site.
             //
-            // A `401` in particular is almost always an `aud` that is not
-            // the endpoint's origin, so the cached token for this origin is
-            // dropped: if the token was merely stale the next send re-signs,
-            // and if the audience is wrong the error repeats identically
-            // instead of being masked by a cache hit.
-            status => {
-                if status == StatusCode::UNAUTHORIZED || status == StatusCode::FORBIDDEN {
-                    live.vapid.invalidate(&origin);
-                }
-                Err(PushError::Rejected(format!(
-                    "web push {}: {}",
-                    status.as_u16(),
-                    detail(response.body(), status)
-                )))
+            // So it is retryable, and the cost of being wrong is the other
+            // way round: a subscription that really is gone behind a service
+            // that only ever says `404` is retried until the caller's own
+            // attempt budget gives up, and lingers in the register. Wasted
+            // sends against lost subscribers is the trade.
+            StatusCode::NOT_FOUND => Err(PushError::transient_after(
+                format!(
+                    "{} (a 404 is not a dead subscription; only 410 is)",
+                    message()
+                ),
+                retry_after(),
+            )),
+            // ntfy answers `507 "cannot publish to UnifiedPush topic without
+            // previously active subscriber"` when it runs with
+            // `visitor-subscriber-rate-limiting` on, as the public
+            // `ntfy.sh` does. It is an operator configuration state, not
+            // load: it never clears on its own, so retrying it as a 5xx
+            // retries forever. The README documents it; this arm is the
+            // README made executable.
+            StatusCode::INSUFFICIENT_STORAGE => Err(PushError::Rejected(format!(
+                "{} (a push service refusing storage is an operator state, not load: on ntfy \
+                 this is `visitor-subscriber-rate-limiting`, which needs a subscriber on the \
+                 topic or the setting turned off)",
+                message()
+            ))),
+            // The VAPID token was refused. The cached token for this origin
+            // is dropped so the next send re-signs — and the send is
+            // **retryable**, because the commonest cause is exactly that:
+            // a clock a few minutes out, or a token that aged past its
+            // `exp` in flight, both of which the re-sign fixes. Returning
+            // `Rejected` here arranged the re-sign and then threw away the
+            // message that would have used it.
+            //
+            // A genuinely wrong `aud` or a revoked key repeats the error
+            // instead of clearing, and is bounded by the caller's retry
+            // budget rather than by us. The APNs adapter makes the same
+            // trade for `ExpiredProviderToken`/`InvalidProviderToken`.
+            StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => {
+                live.vapid.invalidate(&origin);
+                Err(PushError::transient_after(
+                    format!(
+                        "{} (VAPID token refused; re-signing for this origin)",
+                        message()
+                    ),
+                    retry_after(),
+                ))
             }
+            // A push service that moved. This adapter does not follow the
+            // redirect — the VAPID token is signed over the *old* origin, so
+            // replaying the POST at the `Location` earns a `401` from any
+            // service that checks `aud` — but a move is at worst temporary
+            // and never a reason to destroy the notification. The `Location`
+            // is deliberately not quoted: it is a push endpoint.
+            status if status.is_redirection() => Err(PushError::transient_after(
+                format!(
+                    "{message} (redirects are not followed: the VAPID `aud` is signed over the original origin)",
+                    message = message()
+                ),
+                retry_after(),
+            )),
+            StatusCode::TOO_MANY_REQUESTS => {
+                Err(PushError::transient_after(message(), retry_after()))
+            }
+            status if status.is_server_error() => {
+                Err(PushError::transient_after(message(), retry_after()))
+            }
+            // `400` (malformed request) and `413` (body too large for this
+            // service) are ours to fix, not to retry.
+            _ => Err(PushError::Rejected(message())),
         }
     }
 }
@@ -573,5 +716,72 @@ mod tests {
         assert_eq!(detail(b"a\nb\tc", StatusCode::BAD_REQUEST), "abc");
         let long = vec![b'x'; 4_096];
         assert_eq!(detail(&long, StatusCode::BAD_REQUEST).len(), 200);
+    }
+
+    /// The subscription endpoint is a bearer capability, and error pages
+    /// echo the request path. Everything URL-shaped goes; the prose around
+    /// it, which is the diagnostic value, stays.
+    #[test]
+    fn an_error_detail_never_carries_a_url_or_a_path() {
+        // Apache's 404 page, and the one that started this: the path *is*
+        // the subscription.
+        let apache =
+            b"The requested URL /wpush/v2/gAAAAABsecret-capability was not found on this server.";
+        let redacted = detail(apache, StatusCode::NOT_FOUND);
+        assert_eq!(
+            redacted,
+            "The requested URL [redacted] was not found on this server."
+        );
+        assert!(!redacted.contains("wpush"), "{redacted}");
+        assert!(!redacted.contains("gAAAAAB"), "{redacted}");
+
+        // An absolute URL anywhere in the body, including one glued to the
+        // text by a stripped newline.
+        for body in [
+            &b"see https://updates.push.services.mozilla.com/wpush/v2/gAAAAABsecret"[..],
+            &b"Not Found\nhttps://push.example/wpush/v2/gAAAAABsecret"[..],
+            &b"{\"endpoint\":\"https://push.example/wpush/v2/gAAAAABsecret\"}"[..],
+        ] {
+            let redacted = detail(body, StatusCode::NOT_FOUND);
+            assert!(!redacted.contains("gAAAAABsecret"), "{redacted}");
+            assert!(!redacted.contains("push.example"), "{redacted}");
+            assert!(!redacted.contains("mozilla.com"), "{redacted}");
+            assert!(redacted.contains(REDACTED), "{redacted}");
+        }
+
+        // The diagnostic that matters is prose and survives intact — this is
+        // the ntfy body the README quotes.
+        assert_eq!(
+            detail(
+                b"cannot publish to UnifiedPush topic without previously active subscriber",
+                StatusCode::INSUFFICIENT_STORAGE
+            ),
+            "cannot publish to UnifiedPush topic without previously active subscriber"
+        );
+        assert_eq!(
+            detail(b"UnauthorizedRegistration", StatusCode::UNAUTHORIZED),
+            "UnauthorizedRegistration"
+        );
+
+        // A body that is nothing but the endpoint redacts to the endpoint's
+        // absence, not to a bare status — and one long enough to be
+        // truncated is still cut tail-first, so the `/` that triggers the
+        // redaction is always inside what survives.
+        let long_endpoint = format!("https://push.example/wpush/v2/{}", "A".repeat(4_000));
+        let redacted = detail(long_endpoint.as_bytes(), StatusCode::NOT_FOUND);
+        assert_eq!(redacted, REDACTED);
+    }
+
+    #[test]
+    fn redaction_leaves_text_that_is_not_a_path_alone() {
+        assert_eq!(
+            redact_uris("plain prose, with punctuation!"),
+            "plain prose, with punctuation!"
+        );
+        assert_eq!(redact_uris(""), "");
+        assert_eq!(redact_uris("410"), "410");
+        // Non-ASCII is not a URI character, so it neither joins a run nor
+        // splits one incorrectly.
+        assert_eq!(redact_uris("café /a/b naïve"), "café [redacted] naïve");
     }
 }

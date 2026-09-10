@@ -28,7 +28,6 @@ async-trait = { workspace = true }
 http = { workspace = true }
 bytes = { workspace = true }
 serde_json = { workspace = true }
-tracing = { workspace = true }
 thiserror = { workspace = true }
 base64 = { workspace = true }
 # `Retry-After` also comes in the HTTP-date form, which needs a parsed
@@ -45,6 +44,12 @@ p256 = { workspace = true }
 hkdf = { workspace = true }
 sha2 = { workspace = true }
 aes-gcm = { workspace = true }
+# The workspace convention for key material (`crates/kms`, `crates/secrets`,
+# `module-linkedin`): the ECDH secret, the IKM, the CEK, the nonce, the
+# subscription's `auth` and the per-message private scalar are all cleared on
+# drop. `p256`'s own `SharedSecret` zeroizes, so a copy taken out of it that
+# did not would outlive the protection the library already gives.
+zeroize = { workspace = true }
 # The 16-byte salt and the per-message ephemeral P-256 key. Also what picks
 # getrandom's `wasm_js` backend, which is the final crate's job in this
 # workspace, so `cargo build --target wasm32-unknown-unknown -p

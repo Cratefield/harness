@@ -365,7 +365,16 @@ pub enum PushOutcome {
 #[derive(Debug, Clone, Error)]
 pub enum PushError {
     /// The provider says the recipient is no longer valid (APNs `410`, Web
-    /// Push `404`/`410`, FCM `UNREGISTERED`): delete it.
+    /// Push `410`, FCM `UNREGISTERED`): delete it.
+    ///
+    /// This is a **delete instruction**, not a failed send, and an adapter
+    /// should map only a status whose sole meaning is "gone" onto it. A
+    /// status a misrouted proxy can also produce — Web Push `404`, which
+    /// RFC 8030 never defines as gone — belongs in
+    /// [`Transient`](Self::Transient): the cost of a wrong `Transient` is
+    /// some wasted sends, and a wrongly-pruned Web Push subscription cannot
+    /// be recreated server-side at all, only by the browser subscribing
+    /// again.
     #[error("device token is no longer registered; delete it")]
     Unregistered,
     /// The provider rejected the request (a `4xx` that is not `410`), or the

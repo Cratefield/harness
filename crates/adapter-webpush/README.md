@@ -36,7 +36,10 @@ device (ADR 0015).
 > with `visitor-subscriber-rate-limiting` on. It defaults to `false` on a
 > self-hosted server, which is what the CI leg in issue #181 uses. A 507 is
 > a configuration signal from ntfy, **not** a "subscription gone", and it is
-> not mapped to `Unregistered`.
+> not mapped to `Unregistered` — nor to `Transient`, despite being a 5xx,
+> because an operator state does not clear on its own and retrying it is
+> retrying forever. It is `Rejected`, with `visitor-subscriber-rate-limiting`
+> named in the message so the log line says what to change.
 
 ## Recipients
 
@@ -72,6 +75,22 @@ mixed with its `auth` secret by HKDF-SHA256 (RFC 8291 §3.3), and the result
 is the input keying material for one AES-128-GCM record (RFC 8188). The push
 service sees ciphertext; only the browser that created the subscription holds
 the key to open it.
+
+Every secret in that chain — the ECDH secret, the IKM, the CEK, the nonce,
+the subscription's `auth` and the per-message private scalar — is cleared on
+drop (`zeroize`, the workspace convention `crates/kms`, `crates/secrets` and
+`module-linkedin` follow), and `aes-gcm` carries the same feature so the
+cipher clears its expanded round keys too. `p256`'s `SharedSecret` already
+zeroizes, so a copy taken out of it that did not would be the worst of both.
+
+The subscription's two keys are read in **base64url or standard base64,
+padded or not**. Browsers hand them over as unpadded base64url, but a
+subscription is routinely stored and shipped by something that is not the
+browser that made it, and the standard alphabet (`+` and `/`) comes back from
+any encoder that was not asked for the URL-safe one. The alphabets do not
+overlap, so accepting both is unambiguous — and refusing one meant a `p256dh`
+containing a `+` could never be pushed to, permanently, since only the browser
+can re-subscribe.
 
 **The payload limit is computed, not remembered.** RFC 8188 §2 puts the
 content at "any length up to `rs-17`" — one padding delimiter and one
@@ -181,20 +200,55 @@ service worker that reads this payload — is issue #183.
   Created` with a `Location` naming the push message resource, which becomes
   the `id`; `200` and `202` are accepted too, because ntfy answers `200` to a
   UnifiedPush publish and refusing that would fail a delivery that succeeded.
-- `PushError::Unregistered` on `404` and `410` — the subscription is gone;
-  **delete it**. Mozilla answers `410`, others `404` once the capability URL
-  stops resolving, and both mean the same thing to the caller.
-- `PushError::Transient { retry_after }` on `429`, any `5xx`, and a transport
-  error — retry, and not before `retry_after`. Both forms of that header are
-  read: delta-seconds and the HTTP-date form, the latter resolved against the
-  `Clock` port.
-- `PushError::Rejected(..)` on any other `4xx` (`400` malformed, `401`/`403`
-  the token was refused, `413` body too large), for a recipient this adapter
-  does not serve, and — before any request is made — for a malformed
-  subscription, an endpoint that is not an absolute `http`/`https` URL, and
-  an oversize payload. On a `401`/`403` the cached token for that origin is
-  dropped, so a stale token re-signs on the next send and a genuinely wrong
-  `aud` repeats its error instead of being masked by a cache hit.
+- `PushError::Unregistered` on `410` — **and on nothing else**. See below.
+- `PushError::Transient { retry_after }` on `429`, `5xx` other than `507`,
+  `3xx`, `404`, `401`/`403`, and a transport error — retry, and not before
+  `retry_after`. Both forms of that header are read: delta-seconds and the
+  HTTP-date form, the latter resolved against the `Clock` port.
+  - On `401`/`403` the cached token for that origin is dropped **and** the
+    send stays retryable: a clock a few minutes out or a token that aged past
+    its `exp` in flight is exactly this case, and the re-sign the rejection
+    just arranged is what fixes it. A genuinely wrong `aud` repeats the error
+    instead of being masked by a cache hit, bounded by the caller's own
+    attempt budget.
+  - `3xx` is not followed. The VAPID token is signed over the original
+    origin, so replaying the POST at the `Location` earns a `401` from any
+    service that checks `aud`; a distributor that moved is at worst
+    temporary. The `Location` is never quoted back — it is a push endpoint.
+- `PushError::Rejected(..)` on `400` (malformed) and `413` (body too large),
+  on `507` (below), for a recipient this adapter does not serve, and — before
+  any request is made — for a malformed subscription, an endpoint that is not
+  an absolute `http`/`https` URL, and an oversize payload.
+
+Error messages carry at most 200 characters of the service's response body,
+control characters dropped and **everything URL- or path-shaped replaced with
+`[redacted]`**. A Web Push endpoint is a bearer capability — whoever holds it
+can push to that browser — and ntfy, nginx and CDN error pages all echo the
+request path, which for this protocol *is* the subscription.
+
+### `Unregistered` is a delete instruction
+
+`PushError::Unregistered` does not mean "this send failed". It is the one
+error in the port that tells the caller to **destroy** the recipient, and it
+is easy to over-apply: this adapter and its FCM sibling each mapped an extra
+status onto it independently, before either was reviewed.
+
+It costs more here than anywhere else in the port. An APNs device token or an
+FCM registration token is re-registered by the app on its next launch,
+unattended; a Web Push subscription can be recreated **only** by the browser
+calling `pushManager.subscribe()` again, which needs the user back on the site
+with notification permission still granted. Pruning a live subscription is not
+a lost message, it is a lost subscriber.
+
+So the bar is a status whose only meaning is "gone". RFC 8030 §5 defines
+exactly one — `410 Gone` — and that is the only one mapped. In particular
+`404` is **not**: a self-hosted UnifiedPush distributor behind a proxy that
+came back without its routes, or an edited ingress rule, answers `404` for
+every path, so pruning on it deletes a venture's whole Web Push register in
+one pass. It is retried instead. The trade is visible and deliberate: a
+subscription that really is gone behind a service that only ever says `404`
+is retried until the caller's attempt budget gives up, and lingers in the
+register. Wasted sends against lost subscribers beats deleting live ones.
 
 ## Verification
 
