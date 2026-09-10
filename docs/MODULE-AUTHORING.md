@@ -365,6 +365,19 @@ catches the same edit inside the repository through
 `.harness-lock.json`; the hash in the database is what catches it on a
 deployment that already ran the old SQL. Write a new migration instead.
 
+**A `no-transaction` migration must be idempotent.** The ones Postgres
+refuses to run inside a transaction — `CREATE INDEX CONCURRENTLY` is the
+one that comes up — cannot be atomic with their tracking row, so the
+sequence is: run the statement, then record it. A process that dies
+between the two leaves the work done and unrecorded, and the next
+reconcile runs it again.
+
+So write them so the second run is a no-op — `CREATE INDEX CONCURRENTLY
+IF NOT EXISTS` — and never `CREATE INDEX CONCURRENTLY` bare. A
+non-idempotent one fails on its second run, which is the run that
+happens after a crash: a new error at the worst possible moment.
+[ROLLBACK.md](ROLLBACK.md) §2 is the runbook for when it happens anyway.
+
 CI refuses it earlier still (issue #34). `tools/migration-guard.sh` runs
 on every pull request and fails it when a migration under any
 `migrations/` directory is edited, deleted or renamed relative to the base
