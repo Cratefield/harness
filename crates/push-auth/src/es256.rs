@@ -41,6 +41,22 @@ impl Es256Signer {
         Self::from_pkcs8_pem(pem)
     }
 
+    /// The bare 32-byte P-256 private scalar, with no PKCS#8 wrapper around
+    /// it — which is how a VAPID key is usually handed over (issue #180).
+    /// Every generator in that ecosystem prints the scalar base64url and
+    /// calls it `VAPID_PRIVATE_KEY`; the caller decodes it and passes the
+    /// bytes.
+    ///
+    /// # Errors
+    ///
+    /// [`KeyError::Parse`] if the scalar is zero or not below the curve
+    /// order, neither of which is a usable private key.
+    pub fn from_scalar(scalar: &[u8; 32]) -> Result<Self, KeyError> {
+        SigningKey::from_slice(scalar)
+            .map(|key| Self { key })
+            .map_err(|err| KeyError::parse("ES256", err))
+    }
+
     /// Signs `header`/`claims` into a compact JWS.
     ///
     /// The caller owns the claims because they differ per provider: APNs
@@ -129,6 +145,41 @@ mod tests {
              eyJpc3MiOiJURUFNOTg3NjU0IiwiaWF0IjoxNzAwMDAwMDAwfQ.\
              FLaMDTVoUcLQhdV3iub8kZEpb2FRTQcrjNgvBvt8mIdsVi6hnRSrdAgbM06sQEsGKInnfX_M1sknBYJIsrAH0Q"
         );
+    }
+
+    /// The PKCS#8 wrapper carries the same scalar, so a signer built from
+    /// the bare scalar must be the *same* signer — that is what lets a VAPID
+    /// key be configured in either form (issue #180).
+    #[test]
+    fn a_bare_scalar_and_its_pkcs8_wrapper_are_the_same_key() {
+        let from_pem = Es256Signer::from_p8_pem(TEST_P8).unwrap();
+        let scalar: [u8; 32] = from_pem.key.to_bytes().into();
+        let from_scalar = Es256Signer::from_scalar(&scalar).unwrap();
+
+        assert_eq!(
+            from_scalar.public_key_uncompressed(),
+            from_pem.public_key_uncompressed()
+        );
+        let header = json!({ "alg": "ES256" });
+        let claims = json!({ "sub": "mailto:ops@example.test" });
+        assert_eq!(
+            from_scalar.sign_jwt(&header, &claims),
+            from_pem.sign_jwt(&header, &claims)
+        );
+    }
+
+    #[test]
+    fn a_scalar_that_is_not_a_private_key_is_refused() {
+        // Zero is not a valid P-256 scalar, and neither is the curve order
+        // itself (n, from FIPS 186-4 D.1.2.3) or anything above it.
+        let error = Es256Signer::from_scalar(&[0u8; 32]).unwrap_err();
+        assert!(error.to_string().contains("ES256"), "{error}");
+        let order = [
+            0xff, 0xff, 0xff, 0xff, 0x00, 0x00, 0x00, 0x00, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            0xff, 0xff, 0xbc, 0xe6, 0xfa, 0xad, 0xa7, 0x17, 0x9e, 0x84, 0xf3, 0xb9, 0xca, 0xc2,
+            0xfc, 0x63, 0x25, 0x51,
+        ];
+        assert!(Es256Signer::from_scalar(&order).is_err());
     }
 
     #[test]

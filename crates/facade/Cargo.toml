@@ -31,6 +31,7 @@ turnstile = ["dep:cratefield-adapter-turnstile"]
 apns = ["dep:cratefield-adapter-apns"]
 fcm = ["dep:cratefield-adapter-fcm"]
 stripe = ["dep:cratefield-adapter-stripe"]
+webpush = ["dep:cratefield-adapter-webpush"]
 
 # The push adapters' provider tokens (ES256 for APNs and VAPID, RS256 for
 # Google service accounts). Pulled in by `apns` and by `fcm` already; a
@@ -69,6 +70,8 @@ cratefield-adapter-fcm = { workspace = true, optional = true }
 # `cratefield-adapter-apns` as well as of this crate.
 cratefield-push-auth = { workspace = true, optional = true }
 cratefield-adapter-stripe = { workspace = true, optional = true }
+# `publish = false` until its first manual publish (docs/RELEASING.md).
+cratefield-adapter-webpush = { workspace = true, optional = true }
 cratefield-ui = { workspace = true, optional = true }
 cratefield-secrets = { workspace = true, optional = true }
 cratefield-kms = { workspace = true, optional = true }

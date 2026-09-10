@@ -41,6 +41,9 @@ pub use cratefield_push_auth as push_auth;
 #[cfg(feature = "stripe")]
 pub use cratefield_adapter_stripe as stripe;
 
+#[cfg(feature = "webpush")]
+pub use cratefield_adapter_webpush as webpush;
+
 #[cfg(feature = "ui")]
 pub use cratefield_ui as ui;
 
