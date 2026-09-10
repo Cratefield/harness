@@ -18,10 +18,9 @@
 
 mod common;
 
-use std::path::{Path, PathBuf};
-
-use common::repo_root;
+use common::{relative_to, repo_root, rust_sources};
 use cratefield_push_wiring::{PUSH_ENV, PushVar};
+use cratefield_testing::TempDir;
 
 /// The crate that is allowed to name them: the one reader.
 ///
@@ -51,37 +50,6 @@ fn offenders_in(source: &str) -> Vec<&'static str> {
         .collect()
 }
 
-/// Every `.rs` file in the working tree, tracked or not — an untracked new
-/// file is exactly the one a guard must still see.
-///
-/// Symlinks are never followed. `Path::is_dir` follows them, and a working
-/// tree that holds a symlink to one of its own ancestors — a `docs/` link
-/// back to the root, a `target` link into a shared cache — then recurses
-/// until the stack runs out, which is a crashed test binary and not a
-/// guard result. `DirEntry::file_type` reads the entry itself.
-fn rust_sources(dir: &Path, out: &mut Vec<PathBuf>) {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        let name = entry.file_name();
-        let name = name.to_string_lossy();
-        let Ok(file_type) = entry.file_type() else {
-            continue;
-        };
-        if file_type.is_dir() {
-            // Build output and VCS internals are not sources.
-            if matches!(name.as_ref(), "target" | ".git" | "node_modules" | "build") {
-                continue;
-            }
-            rust_sources(&path, out);
-        } else if file_type.is_file() && path.extension().is_some_and(|ext| ext == "rs") {
-            out.push(path);
-        }
-    }
-}
-
 #[test]
 fn only_the_wiring_crate_names_a_push_environment_variable() {
     let root = repo_root();
@@ -95,11 +63,7 @@ fn only_the_wiring_crate_names_a_push_environment_variable() {
 
     let mut violations = Vec::new();
     for path in sources {
-        let relative = path
-            .strip_prefix(&root)
-            .unwrap_or(&path)
-            .to_string_lossy()
-            .replace('\\', "/");
+        let relative = relative_to(&root, &path);
         if is_reader(&relative) {
             continue;
         }
@@ -164,21 +128,14 @@ fn the_walk_does_not_follow_a_symlinked_cycle() {
     // ordinary — a `docs/` link back to the root, a `target` link into a
     // shared cache. Following it recurses until the stack runs out, and a
     // crashed test binary is not a guard result.
-    let dir = std::env::temp_dir().join(format!(
-        "fz-push-guard-symlink-{}",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .expect("clock")
-            .as_nanos()
-    ));
+    let dir = TempDir::new("fz-push-guard-symlink");
     let inner = dir.join("inner");
     std::fs::create_dir_all(&inner).expect("temp dir");
     std::fs::write(inner.join("source.rs"), "fn main() {}\n").expect("a source to find");
     std::os::unix::fs::symlink("..", inner.join("loop")).expect("symlink");
 
     let mut sources = Vec::new();
-    rust_sources(&dir, &mut sources);
-    std::fs::remove_dir_all(&dir).ok();
+    rust_sources(dir.path(), &mut sources);
 
     assert_eq!(sources.len(), 1, "{sources:?}");
 }

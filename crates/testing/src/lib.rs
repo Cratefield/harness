@@ -30,6 +30,8 @@ mod harness;
 mod pg;
 mod request;
 mod sidecar;
+mod tmp;
+pub mod vectors;
 
 pub use conformance::{
     assert_wasm_safe_deps, conformance, conformance_in_process_only, push_recipient_conformance,
@@ -44,6 +46,7 @@ pub use fakes::{
 pub use harness::TestHarness;
 pub use request::{TestResponse, request};
 pub use sidecar::{FakeSidecar, Fault, shared as shared_sidecar};
+pub use tmp::TempDir;
 
 // The fixed test secret for the kit's Signer — an obvious dummy, never real.
 pub const TEST_HARNESS_SECRET: &str = "cratefield-testing-dummy-secret-0123456789";

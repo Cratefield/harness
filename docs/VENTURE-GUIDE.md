@@ -261,6 +261,12 @@ no server can recreate one — each browser has to subscribe again — so
 configures, and `fz push inspect-subscription` checks a browser
 subscription and prints the `aud` the adapter will sign for it.
 
+The send needs an `fz` built with the `push-send` feature — a separately
+installed binary (`cargo install cratefield-cli --features push-send`), or
+the Docker image, which carries it. Never add that feature to the venture's
+own `cratefield-cli` dependency: it pulls the native runtime, which does
+not compile to wasm, into the crate that builds the Worker.
+
 ## 7. Mail domain (Resend)
 
 **Human** (Resend dashboard). Verify a **sending subdomain**

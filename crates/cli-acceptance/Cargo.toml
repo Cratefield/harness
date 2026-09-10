@@ -49,6 +49,10 @@ cratefield-push-wiring = { workspace = true }
 # send. Re-deriving it in the test would only prove the CLI agrees with
 # itself.
 cratefield-adapter-webpush = { workspace = true }
+# The scratch directory that survives a failed assertion (a keygen test
+# writes a private key), and the Web Push vectors, which live in one place
+# now — `crates/cli-acceptance/tests/vector_guard.rs` keeps them there.
+cratefield-testing = { path = "../testing" }
 sha2 = { workspace = true }
 venture-fixture = { path = "fixture" }
 cratefield-adapter-sqlite = { workspace = true }
