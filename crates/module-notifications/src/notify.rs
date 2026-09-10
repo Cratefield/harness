@@ -402,6 +402,64 @@ impl Notifier {
             .is_none_or(|channels: Channels| channels.in_app))
     }
 
+    /// The outbox insert for one device.
+    fn push_row(
+        &self,
+        account_id: &str,
+        notification_id: &str,
+        category: &Category,
+        notification: &Notification,
+        subscription_id: &str,
+        now: &str,
+    ) -> Result<Statement, NotifyError> {
+        let job = SendJob {
+            notification_id: notification_id.to_owned(),
+            account_id: account_id.to_owned(),
+            category: category.name.clone(),
+            subscription_id: subscription_id.to_owned(),
+            notification: notification.clone(),
+        };
+        let payload = serde_json::to_string(&job).map_err(|err| {
+            NotifyError::Database(DbError::Execute(format!(
+                "notification does not serialise: {err}"
+            )))
+        })?;
+        Ok(Outbox::new(store::OUTBOX).enqueue_statement(&self.new_id(), TOPIC_SEND, &payload, now))
+    }
+
+    /// The outbox insert for one account's email.
+    ///
+    /// One row per notification per account, not per device: a coach's
+    /// notes are one email however many phones the account has.
+    fn email_row(
+        &self,
+        account_id: &str,
+        notification_id: &str,
+        category: &Category,
+        notification: &Notification,
+        now: &str,
+    ) -> Result<Statement, NotifyError> {
+        let job = EmailJob {
+            notification_id: notification_id.to_owned(),
+            account_id: account_id.to_owned(),
+            category: category.name.clone(),
+            notification: notification.clone(),
+        };
+        let payload = serde_json::to_string(&job).map_err(|err| {
+            NotifyError::Database(DbError::Execute(format!(
+                "notification does not serialise: {err}"
+            )))
+        })?;
+        Ok(
+            Outbox::new(store::OUTBOX).enqueue_statement(
+                &self.new_id(),
+                TOPIC_EMAIL,
+                &payload,
+                now,
+            ),
+        )
+    }
+
     /// Whether `account_id` should be emailed for `category`.
     ///
     /// Three things, all of which must hold: the venture opted the
@@ -515,23 +573,13 @@ impl Notifier {
         // Email, also ahead of the push early returns and for the same
         // reason: an account with no device can still have a mailbox.
         if self.email_allowed(db, account_id, &category).await? {
-            let job = EmailJob {
-                notification_id: notification_id.clone(),
-                account_id: account_id.to_owned(),
-                category: category.name.clone(),
-                notification: notification.clone(),
-            };
-            let payload = serde_json::to_string(&job).map_err(|err| {
-                NotifyError::Database(DbError::Execute(format!(
-                    "notification does not serialise: {err}"
-                )))
-            })?;
-            statements.push(Outbox::new(store::OUTBOX).enqueue_statement(
-                &self.new_id(),
-                TOPIC_EMAIL,
-                &payload,
+            statements.push(self.email_row(
+                account_id,
+                &notification_id,
+                &category,
+                &notification,
                 &now,
-            ));
+            )?);
         }
 
         // Cheap skip, not the check that counts: the drain re-reads the
@@ -560,22 +608,16 @@ impl Notifier {
             });
         }
 
-        let outbox = Outbox::new(store::OUTBOX);
         statements.reserve(subscriptions.len());
         for subscription in &subscriptions {
-            let job = SendJob {
-                notification_id: notification_id.clone(),
-                account_id: account_id.to_owned(),
-                category: category.name.clone(),
-                subscription_id: subscription.id.clone(),
-                notification: notification.clone(),
-            };
-            let payload = serde_json::to_string(&job).map_err(|err| {
-                NotifyError::Database(DbError::Execute(format!(
-                    "notification does not serialise: {err}"
-                )))
-            })?;
-            statements.push(outbox.enqueue_statement(&self.new_id(), TOPIC_SEND, &payload, &now));
+            statements.push(self.push_row(
+                account_id,
+                &notification_id,
+                &category,
+                &notification,
+                &subscription.id,
+                &now,
+            )?);
         }
         Ok(Enqueued {
             devices: subscriptions.len(),
