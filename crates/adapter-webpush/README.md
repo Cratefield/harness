@@ -254,6 +254,57 @@ register. Wasted sends against lost subscribers beats deleting live ones.
 
 The RFC vectors, the decrypt-side round trip, the VAPID header (verified with
 `p256`'s own verifier under a fixed key and a fixed clock) and every status
-mapping are unit-tested here. The live path against a real push server is the
-sibling issue #181, which stands up a self-hosted UnifiedPush distributor in
-CI; the three vendor-live browser proofs are `needs-human` (issue #186).
+mapping are unit-tested here. The three vendor-live browser proofs are
+`needs-human` (issue #186).
+
+### The interop leg: a real ntfy server (issue #181)
+
+Everything above is this crate talking to itself, and two consistent
+misreadings of one RFC paragraph agree with each other perfectly.
+`tests/ntfy_live.rs` is the leg that cannot: it generates a subscription the
+way a browser does, sends through the adapter over the **native runtime's
+`HttpClient`** to a real ntfy server, reads the stored body back out of
+ntfy's own JSON API, and opens it with the private key it generated. A
+server that is not ours accepted the request, held ciphertext it could not
+read, and what came back out is the notification.
+
+CI runs it as the `web push conformance against a real ntfy server` job,
+against a digest-pinned `binwiederhier/ntfy` container. Locally:
+
+```sh
+docker run --rm -p 8090:80 \
+  -e NTFY_VISITOR_SUBSCRIBER_RATE_LIMITING=false \
+  binwiederhier/ntfy:v2.28.0 serve
+
+NTFY_URL=http://127.0.0.1:8090 cargo test -p cratefield-adapter-webpush \
+  --test ntfy_live -- --nocapture
+```
+
+Without `NTFY_URL` the test skips and prints that recipe, so
+`cargo test --workspace` stays green with no Docker.
+
+Three things that recipe is deliberate about:
+
+- **`127.0.0.1`, never `localhost`.** The native runtime's `HttpClient`
+  refuses loopback *names* outright, before any resolver is consulted, so
+  that the answer can never depend on `/etc/hosts`. The address form is
+  admitted by `OutboundOptions::allow_loopback`, which the test sets and a
+  deployment does not.
+- **`visitor-subscriber-rate-limiting` pinned off.** With it on, as the
+  public `ntfy.sh` runs it, a UnifiedPush publish answers the `507` quoted
+  above even with a subscriber stream held open. It is already the
+  self-hosted default; pinning it stops an upstream default change from
+  turning the leg into a silent no-op, and the test fails loudly on a 507
+  rather than skipping.
+- **An `up`-prefixed 14-character topic**, the shape a distributor's own
+  topics have — the shape ntfy's subscriber rate limiting is eligible for.
+  A differently-shaped topic would walk past that trap and prove less.
+
+What the leg does **not** prove: `Unregistered`. ntfy's "nobody is
+listening" signal is that `507`, not the `410` RFC 8030 defines as gone, and
+no real server produces a `410` on demand — so that mapping stays a unit
+test. And ntfy reads none of `TTL`, `Urgency` or `Topic` from the request
+(only `Content-Encoding`, which alone marks a publish as UnifiedPush, and
+its own `X-*` headers), so the leg proves a real distributor **accepts** the
+full RFC 8030 header set, not that it acts on it. A browser push service
+acts on all three.
