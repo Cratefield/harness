@@ -44,6 +44,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod guide;
 pub mod stripe;
 
 use std::sync::Arc;
@@ -359,16 +360,11 @@ impl Connections {
     ) -> Result<Connection, ConnError> {
         let kind = ConnectionKind::VentureGoogleOauth;
         let client_id = client_id.trim();
-        if !client_id.ends_with(GOOGLE_CLIENT_ID_SUFFIX) {
+        // The same check `guidance` shows beside the field, so a value the
+        // wizard accepted is never refused here (issue #6).
+        if let Some(reason) = kind.guidance("").expects.refuse(client_id) {
             return self
-                .record_invalid(
-                    scope,
-                    &kind,
-                    "the client id is not a Google OAuth client id (expected one ending in \
-                     .apps.googleusercontent.com)",
-                    client_id,
-                    now,
-                )
+                .record_invalid(scope, &kind, &reason, client_id, now)
                 .await;
         }
         if client_secret.trim().is_empty() {
