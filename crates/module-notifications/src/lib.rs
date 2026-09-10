@@ -70,9 +70,11 @@ mod clock;
 mod handlers;
 mod notify;
 mod store;
+mod webhook;
 
 pub use handlers::{
     ChannelPatch, PreferencesBody, REHOME_LIMIT, RecipientBody, RegisterBody, UNKNOWN_CATEGORY,
+    WEBHOOK_UNVERIFIED,
 };
 pub use notify::{
     DrainReport, EVENT_REQUESTED, EVENT_SUBSCRIPTION_PRUNED, EVENT_SUBSCRIPTION_REHOMED, Enqueued,
@@ -145,14 +147,23 @@ const MIGRATION_EMAIL_TARGETS: SqlMigration = SqlMigration {
     sql: include_str!("../migrations/sqlite/0004_email_targets.sql"),
 };
 
+/// Bounce suppression (#233): the index the provider webhook's lookup by
+/// address reads. Its own migration because `0004` is applied.
+const MIGRATION_EMAIL_BOUNCE_INDEX: SqlMigration = SqlMigration {
+    id: "0005",
+    name: "email_bounce_index",
+    sql: include_str!("../migrations/sqlite/0005_email_bounce_index.sql"),
+};
+
 /// Every migration this module ships, in order. One array, so a test that
 /// asserts something about the schema reads what actually ships rather
 /// than a second list that can drift from it.
-const SHIPPED_MIGRATIONS: [SqlMigration; 4] = [
+const SHIPPED_MIGRATIONS: [SqlMigration; 5] = [
     MIGRATION_INIT,
     MIGRATION_REHOME_AND_DUE_INDEX,
     MIGRATION_INBOX,
     MIGRATION_EMAIL_TARGETS,
+    MIGRATION_EMAIL_BOUNCE_INDEX,
 ];
 
 /// One notification category the venture declares.
