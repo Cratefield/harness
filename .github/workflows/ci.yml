@@ -107,6 +107,8 @@ jobs:
         run: cargo run -q -p cratefield-core --example errors-doc -- --check
       - name: Compatibility matrix drift check (issue #17)
         run: cargo run -q -p cratefield-cli --example compatibility-doc -- --check
+      - name: Push environment table drift check (issue #191)
+        run: cargo run -q -p cratefield-push-wiring --example push-env-doc -- --check
 
   webpush-ntfy:
     # No `#` in the name: GitHub truncates a check-run name there (issue #34).

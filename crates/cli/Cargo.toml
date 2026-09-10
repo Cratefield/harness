@@ -24,6 +24,19 @@ postgres = ["dep:cratefield-adapter-postgres", "dep:tokio"]
 [dependencies]
 cratefield-core = { workspace = true }
 cratefield-adapter-sqlite = { workspace = true }
+# `fz doctor` reads the push environment through the same `build_push` the
+# runtimes do (issue #191), so the doctor and `serve()` cannot check different
+# variable names. Pure Rust and native-safe: the push adapters speak HTTP
+# through the `HttpClient` port and pull no tokio, sqlx or OpenSSL.
+#
+# **Not** optional, unlike `postgres` below, and the difference is deliberate.
+# `fz` is built once and installed; a feature-gated doctor check is a doctor
+# that silently checks less depending on how somebody's `fz` was compiled,
+# which is the same class of invisible drift this crate exists to remove. The
+# cost is that every `fz` links the three adapters and their crypto, and that
+# `cratefield-push-wiring` must be first-published before `cratefield-cli`
+# (docs/RELEASING.md).
+cratefield-push-wiring = { workspace = true }
 cratefield-manifest = { workspace = true }
 clap = { workspace = true }
 toml = { workspace = true }

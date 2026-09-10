@@ -10,17 +10,12 @@
 //! the guard reads `git ls-files` and an untracked file is invisible to
 //! it — a test that forgot to commit would pass while proving nothing.
 
+mod common;
+
+use common::repo_root;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
-
-fn repo_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .ancestors()
-        .nth(2)
-        .expect("repo root is two levels above this crate")
-        .to_path_buf()
-}
 
 fn git(dir: &Path, args: &[&str]) {
     let status = Command::new("git")

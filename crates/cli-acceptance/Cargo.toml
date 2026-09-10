@@ -39,6 +39,10 @@ cratefield-adapter-postgres = { workspace = true, optional = true }
 [dev-dependencies]
 cratefield-core = { workspace = true }
 cratefield-cli = { workspace = true }
+# The push environment guard (issue #191) takes the variable names from the
+# one reader's table rather than writing them out, so a new variable is
+# guarded the moment it joins the table.
+cratefield-push-wiring = { workspace = true }
 sha2 = { workspace = true }
 venture-fixture = { path = "fixture" }
 cratefield-adapter-sqlite = { workspace = true }

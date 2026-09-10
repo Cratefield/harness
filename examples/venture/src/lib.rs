@@ -28,7 +28,28 @@ static INSTANCE: OnceLock<(Harness, Cloudflare)> = OnceLock::new();
 
 fn instance() -> &'static (Harness, Cloudflare) {
     INSTANCE.get_or_init(|| {
-        let runtime = Cloudflare::new().db("DB");
+        // **One** runtime, built once. `Harness::build` validates every
+        // module's `requires()` against the ports of the instance it is
+        // given, so a second, separately-built instance is a build that
+        // checked something other than what serves — and these two had
+        // already diverged: the one that served had no `.mailer(..)`, while
+        // both modules require the Mailer port.
+        let runtime = Cloudflare::new()
+            .db("DB")
+            // The `Push` port assembled from the environment (issue #191).
+            // Nothing is configured here, so the router answers
+            // NotConfigured for every recipient and `serve` logs that once
+            // at cold start — which is what the wrangler smoke exercises.
+            .push_from_env()
+            // Both modules require the Mailer port. With no API key the
+            // adapter is NotConfigured: the port is provided and no mail is
+            // ever sent, which is what an example wants.
+            .mailer(cratefield::resend::Resend::new(
+                std::sync::Arc::new(cratefield::cloudflare::FetchClient),
+                None,
+                "example@factory0.dev",
+                None,
+            ));
         let mut templates = cratefield::email_signup::default_templates();
         templates.extend(cratefield::waitlist::default_templates());
         let harness = Harness::builder()
@@ -51,23 +72,49 @@ fn instance() -> &'static (Harness, Cloudflare) {
             // The UI renderer (ADR 0010): pages at /ui/<module>/<action>,
             // copy and theme from ui.json (validated by build()).
             .ui(cratefield::ui::Ui::from_spec(include_str!("../ui.json")).expect("ui.json parses"))
-            .runtime(
-                Cloudflare::new()
-                    .db("DB")
-                    // Both modules require the Mailer port. With no API key
-                    // the adapter is NotConfigured: the port is provided and
-                    // no mail is ever sent, which is what an example wants.
-                    .mailer(cratefield::resend::Resend::new(
-                        std::sync::Arc::new(cratefield::cloudflare::FetchClient),
-                        None,
-                        "example@factory0.dev",
-                        None,
-                    )),
-            )
+            .runtime(runtime.clone())
             .build()
             .expect("example venture harness is valid");
         (harness, runtime)
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use cratefield::Runtime as _;
+    use cratefield::cloudflare::Cloudflare;
+
+    fn sorted(mut ports: Vec<cratefield::Port>) -> Vec<&'static str> {
+        ports.sort_by_key(cratefield::Port::name);
+        ports.iter().map(cratefield::Port::name).collect()
+    }
+
+    #[test]
+    fn the_runtime_that_serves_is_the_one_the_harness_was_built_against() {
+        // `Harness::build` rejects a module that requires a port the
+        // runtime does not provide — against the instance it was handed. A
+        // venture that builds one instance and serves with another has that
+        // check pointing at something other than what runs, and the failure
+        // is silent: the port is simply absent at runtime. These two had
+        // already diverged on the Mailer both modules require.
+        let (harness, serving) = super::instance();
+        let validated = harness.runtime().expect("the example declares a runtime");
+        assert_eq!(sorted(validated.provides()), sorted(serving.provides()));
+        assert!(
+            serving.provides().contains(&cratefield::Port::Mailer),
+            "the serving runtime lost the Mailer port both modules require"
+        );
+    }
+
+    /// `Cloudflare` has to be `Clone` for there to be one instance at all.
+    #[test]
+    fn the_runtime_is_clonable() {
+        let runtime = Cloudflare::new().db("DB");
+        assert_eq!(
+            sorted(runtime.clone().provides()),
+            sorted(runtime.provides())
+        );
+    }
 }
 
 #[event(fetch)]

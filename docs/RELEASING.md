@@ -47,6 +47,16 @@ on crates.io when the facade is packaged, so `cargo publish -p cratefield`
 fails until each is first-published. Both are in the ordered list below, after
 `cratefield-adapter-apns`; drop each `publish = false` at the same time.
 
+`cratefield-push-wiring` (issue #191) carries `publish = false` because it
+depends on those two, and it binds harder than they do: `cratefield-cli`
+depends on it **not** optionally (`fz doctor` reads the push environment
+through it, which is the point — one reader), and the two runtimes and the
+facade depend on it behind optional `push`/`push-wiring` features. So it must
+be first-published before `cratefield-cli`, both runtimes and the facade, and
+it cannot be first-published before `cratefield-adapter-fcm` and
+`cratefield-adapter-webpush`. It is in the ordered list below in that
+position; drop its `publish = false` at the same time.
+
 Authentication is **trusted publishing**: the workflow exchanges the
 GitHub Actions OIDC token (`id-token: write`) for a short-lived
 crates.io token. No `CARGO_REGISTRY_TOKEN` is stored anywhere.
@@ -131,6 +141,7 @@ crate exists**, so the very first release of each crate is manual:
    cargo publish -p cratefield-adapter-fcm    # before the facade
    cargo publish -p cratefield-adapter-webpush  # before the facade
    cargo publish -p cratefield-secrets
+   cargo publish -p cratefield-push-wiring    # before the runtimes and the CLI
    cargo publish -p cratefield-runtime-cloudflare
    cargo publish -p cratefield-runtime-native
    cargo publish -p cratefield-testing

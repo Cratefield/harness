@@ -39,6 +39,17 @@ webpush = ["dep:cratefield-adapter-webpush"]
 # adapter.
 push-auth = ["dep:cratefield-push-auth"]
 
+# The runtime push wiring (issue #191): `build_push` and the one table of
+# environment-variable names, plus `push_from_env()` on whichever runtime is
+# enabled. Pulls all three push adapters, which is the point — the wiring
+# answers which transports a venture configured, and an answer that depended
+# on which adapters were compiled in would be a second place to drift.
+push-wiring = [
+    "dep:cratefield-push-wiring",
+    "cratefield-runtime-cloudflare?/push",
+    "cratefield-runtime-native?/push",
+]
+
 # Everything else that is optional.
 ui = ["dep:cratefield-ui"]
 secrets = ["dep:cratefield-secrets"]
@@ -70,6 +81,9 @@ cratefield-adapter-fcm = { workspace = true, optional = true }
 # `cratefield-adapter-apns` as well as of this crate.
 cratefield-push-auth = { workspace = true, optional = true }
 cratefield-adapter-stripe = { workspace = true, optional = true }
+# `publish = false` until its first manual publish (docs/RELEASING.md), like
+# the two push adapters it depends on.
+cratefield-push-wiring = { workspace = true, optional = true }
 # `publish = false` until its first manual publish (docs/RELEASING.md).
 cratefield-adapter-webpush = { workspace = true, optional = true }
 cratefield-ui = { workspace = true, optional = true }

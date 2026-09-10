@@ -48,6 +48,7 @@ compatibility-doc` and checked in CI for drift. Do not edit by hand.
 | `cratefield-module-waitlist` | 0.1.1 | 1 | `^0.3` — `>=0.3.0, <0.4.0` |
 | `cratefield-provisioning` | 0.1.1 | 1 | `^0.3` — `>=0.3.0, <0.4.0` |
 | `cratefield-push-auth` | 0.1.1 | 1 | `^0.3` — `>=0.3.0, <0.4.0` |
+| `cratefield-push-wiring` | 0.1.1 | 1 | `^0.3` — `>=0.3.0, <0.4.0` |
 | `cratefield-runtime-browser` | 0.1.1 | 1 | `^0.3` — `>=0.3.0, <0.4.0` |
 | `cratefield-runtime-browser-demo` | 0.1.1 | 1 | `^0.3` — `>=0.3.0, <0.4.0` |
 | `cratefield-runtime-cloudflare` | 0.1.1 | 1 | `^0.3` — `>=0.3.0, <0.4.0` |

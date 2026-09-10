@@ -70,7 +70,10 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         );
     };
 
-    let mut runtime = Native::new().db_arc(db.port());
+    // The `Push` port assembled from the environment (issue #191): with
+    // nothing configured every send answers `NotConfigured`, and `serve`
+    // logs which transports were found once at cold start.
+    let mut runtime = Native::new().db_arc(db.port()).push_from_env();
     if let Some(redis) = cratefield_runtime_native::redis_from_env(&config).await? {
         let rate_limiter: Arc<dyn RateLimiter> = redis.rate_limiter;
         let kv: Arc<dyn KeyValue> = redis.kv;

@@ -48,6 +48,13 @@ pub struct Codes {
     /// A migration contains card data (number, verification code or
     /// full expiry).
     pub card_data_in_migration: DoctorCodeDef,
+    /// A push transport is half-wired, or its credentials were refused:
+    /// either way it routes nothing and every send to it reports
+    /// `NotConfigured`.
+    pub push_transport_misconfigured: DoctorCodeDef,
+    /// The production push rule: modules that `requires()` the Push port
+    /// on a venture whose environment routes no transport at all.
+    pub push_required_but_unrouted: DoctorCodeDef,
 }
 
 pub const CODES: Codes = Codes {
@@ -106,6 +113,16 @@ pub const CODES: Codes = Codes {
         title: "Card data in migration",
         description: "A migration contains card data: a card number, verification code or full expiry.",
     },
+    push_transport_misconfigured: DoctorCodeDef {
+        code: "push-transport-misconfigured",
+        title: "Push transport misconfigured",
+        description: "A push transport has some of its variables set and some unset, or its credentials were refused; it is left unrouted.",
+    },
+    push_required_but_unrouted: DoctorCodeDef {
+        code: "push-required-but-unrouted",
+        title: "Push required but unrouted",
+        description: "A production venture has modules that require the Push port but its environment routes no push transport.",
+    },
 };
 
 /// Every doctor code definition, for tests and docs. Sorted by code.
@@ -121,6 +138,8 @@ pub fn registry() -> Vec<&'static DoctorCodeDef> {
         &CODES.migration_not_collected,
         &CODES.non_portable_sql,
         &CODES.payments_webhook_secret_missing,
+        &CODES.push_required_but_unrouted,
+        &CODES.push_transport_misconfigured,
         &CODES.sidecar_mount_invalid,
         &CODES.sidecar_shadows_module,
     ]
@@ -181,6 +200,8 @@ mod tests {
             CODES.sidecar_mount_invalid.code,
             CODES.non_portable_sql.code,
             CODES.card_data_in_migration.code,
+            CODES.push_transport_misconfigured.code,
+            CODES.push_required_but_unrouted.code,
         ];
         assert_eq!(fields.len(), registered.len());
         for field in fields {
