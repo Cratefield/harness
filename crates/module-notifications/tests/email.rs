@@ -323,3 +323,65 @@ async fn an_address_that_is_not_an_address_is_refused() {
         http::StatusCode::BAD_REQUEST
     );
 }
+
+#[pollster::test]
+async fn the_footer_offers_stopping_every_category_and_it_holds() {
+    // The header one-click stops one category. Somebody who wants out
+    // entirely should not have to unsubscribe once per category as they
+    // arrive, so the footer carries an `all` link — and that one sets
+    // `unsubscribed_at` on the address rather than a preference row.
+    let kit = kit_with(
+        std::sync::Arc::new(cratefield_testing::FakePush::new(
+            cratefield_testing::PushMode::DeliverOk,
+        )),
+        vec![
+            Category::new(BOOKING).email(true),
+            Category::new("coach_notes").email(true),
+        ],
+        &[],
+    );
+    set_email(&kit, ALICE, "alice@example.test", true).await;
+    notify_and_drain(&kit, ALICE).await;
+
+    let mail = kit.harness.mailer.last_message().expect("one mail");
+    let all_link = mail
+        .text
+        .lines()
+        .find(|line| {
+            line.contains("unsubscribe?token=")
+                && !mail.headers.iter().any(|(_, v)| v.contains(line.trim()))
+        })
+        .map(str::trim)
+        .expect("an all link in the footer")
+        .to_owned();
+    let path = all_link.split_once("/v1").expect("absolute").1;
+
+    let answer = support::send(
+        &kit.harness.router,
+        http::Method::POST,
+        &format!("/v1{path}"),
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(answer.status, http::StatusCode::OK, "{}", answer.text());
+
+    // Every category, not just the one the mail was about.
+    let db = kit.db();
+    for category in [BOOKING, "coach_notes"] {
+        let enqueued = kit
+            .notifier
+            .notify(&*db, ALICE, category, Notification::new(BOOKED, "again"))
+            .await
+            .expect("notify");
+        if !enqueued.statements().is_empty() {
+            db.batch(enqueued.statements()).await.expect("batch");
+        }
+    }
+    kit.notifier.drain(&kit.scope()).await.expect("drain");
+    assert_eq!(
+        kit.harness.mailer.sent().len(),
+        1,
+        "the address is unsubscribed, so no category reaches it"
+    );
+}

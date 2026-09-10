@@ -1061,6 +1061,12 @@ impl Notifier {
         );
         let base = cfg.get_str("PUBLIC_URL", &format!("https://{}", ctx.venture.domain));
         let unsubscribe = Self::unsubscribe_url(ctx, &base, &job.account_id, &category.name);
+        // Two links, because they answer different questions. The header
+        // one-click stops *this* category, which is what somebody who
+        // clicked "unsubscribe" on one kind of mail means. The footer also
+        // offers every category, so a reader who wants out entirely does
+        // not have to unsubscribe once per category as they arrive.
+        let unsubscribe_all = Self::unsubscribe_url(ctx, &base, &job.account_id, UNSUBSCRIBE_ALL);
         let subject = category
             .subject_template
             .clone()
@@ -1072,12 +1078,13 @@ impl Notifier {
             .as_deref()
             .map_or_else(String::new, |url| format!("\n{url}\n"));
         let text = format!(
-            "{}\n\n{}\n{}\nTo stop receiving these, open:\n{}\n",
-            job.notification.title, job.notification.body, action, unsubscribe
+            "{}\n\n{}\n{}\nTo stop receiving these, open:\n{}\n\nTo stop every \
+             notification email:\n{}\n",
+            job.notification.title, job.notification.body, action, unsubscribe, unsubscribe_all
         );
         let html = format!(
             "<p><strong>{}</strong></p><p>{}</p>{}<hr><p><a href=\"{}\">Stop receiving \
-             these</a></p>",
+             these</a> &middot; <a href=\"{}\">stop all notification email</a></p>",
             escape(&job.notification.title),
             escape(&job.notification.body),
             job.notification
@@ -1087,6 +1094,7 @@ impl Notifier {
                     format!("<p><a href=\"{}\">Open</a></p>", escape(url))
                 }),
             escape(&unsubscribe),
+            escape(&unsubscribe_all),
         );
 
         let mut message = Message::new(to, from, subject, text, html)
@@ -1232,6 +1240,10 @@ fn prepare(
 /// Nothing is published here that the inbox row does not also hold, so a
 /// client that missed the event loses nothing by reading the list.
 pub const INBOX_ROOM_PREFIX: &str = "notifications:";
+
+/// The category name that means "every category" in an unsubscribe
+/// token's subject.
+pub const UNSUBSCRIBE_ALL: &str = "all";
 
 /// The purpose a one-click unsubscribe token is bound to.
 pub const PURPOSE_UNSUBSCRIBE: &str = "notifications.unsubscribe";
