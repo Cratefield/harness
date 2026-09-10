@@ -635,6 +635,28 @@ async fn captcha_denial_is_400() {
     }
 }
 
+/// A `Location` with the freshly minted status token dropped, and the
+/// remaining query in a stable order.
+///
+/// The token embeds an `exp` read from the clock, so two otherwise
+/// identical redirects differ whenever a second ticks between them.
+/// Comparing the raw header therefore made this a time-of-day flake that
+/// failed claiming "no route reads a redirect query parameter" — pointing
+/// at redirect handling when the only thing that had moved was the clock.
+/// The property under test is the redirect *destination*, which is
+/// exactly what survives here: a honoured `redirect=` would change the
+/// host or add a query pair, and both still fail.
+fn redirect_shape(location: &axum::http::HeaderValue) -> String {
+    let raw = location.to_str().expect("a text Location");
+    let (target, query) = raw.split_once('?').unwrap_or((raw, ""));
+    let mut kept: Vec<&str> = query
+        .split('&')
+        .filter(|pair| !pair.is_empty() && !pair.starts_with("token="))
+        .collect();
+    kept.sort_unstable();
+    format!("{target}?{}", kept.join("&"))
+}
+
 #[pollster::test]
 async fn redirect_params_are_ignored() {
     for kit in kits() {
@@ -649,10 +671,18 @@ async fn redirect_params_are_ignored() {
                 None,
             )
             .await;
+            let baited_location = baited.headers.get(header::LOCATION).unwrap();
             assert_eq!(
-                confirm.headers.get(header::LOCATION).unwrap(),
-                baited.headers.get(header::LOCATION).unwrap(),
+                redirect_shape(confirm.headers.get(header::LOCATION).unwrap()),
+                redirect_shape(baited_location),
                 "no route reads a {param} query parameter"
+            );
+            assert!(
+                !baited_location
+                    .to_str()
+                    .expect("a text Location")
+                    .contains("evil.example"),
+                "a {param} parameter reached the redirect"
             );
         }
     }
