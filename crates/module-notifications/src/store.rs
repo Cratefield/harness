@@ -182,53 +182,144 @@ pub(crate) struct NewSubscription<'a> {
     pub app_version: Option<&'a str>,
     pub user_agent: Option<&'a str>,
     pub now: &'a str,
+    /// The start of the window `rehome_limit` counts over.
+    pub rehome_cutoff: &'a str,
+    /// How many devices this account may take over from another account
+    /// inside that window. A device token is not an authenticator, so an
+    /// unbounded re-home is a mass-silencing primitive for anyone holding
+    /// a log full of them (see [`Upserted::RehomeRefused`]).
+    pub rehome_limit: usize,
+}
+
+/// What a registration did to the row it identified.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Upserted {
+    /// A device this venture had never seen.
+    Created(String),
+    /// The caller's own device, re-registering — an app launch.
+    Refreshed(String),
+    /// The row changed hands: this device was another account's and is
+    /// now this caller's. The previous owner stops receiving on it, and
+    /// its queued notifications are dropped rather than delivered to the
+    /// new owner (`deliver_one` re-checks the pairing).
+    Rehomed {
+        id: String,
+        previous_account_id: String,
+    },
+    /// The row is another account's and this caller has spent its re-home
+    /// budget for the window. Refused rather than served: a caller taking
+    /// over device after device is not a person signing in on a shared
+    /// tablet.
+    RehomeRefused,
+}
+
+/// The `(id, account_id)` of the row a recipient identifies, if any.
+async fn owner_of(
+    db: &dyn Database,
+    transport: Transport,
+    hash: &str,
+) -> Result<Option<(String, String)>, DbError> {
+    let mut select = Query::select();
+    select
+        .columns([iden("id"), iden("account_id")])
+        .from(iden(SUBSCRIPTIONS))
+        .and_where(Expr::col(iden("transport")).eq(transport.as_str()))
+        .and_where(Expr::col(iden("recipient_hash")).eq(hash));
+    let Some(row) = db
+        .query(&Statement::render(&select))
+        .await?
+        .first()
+        .cloned()
+    else {
+        return Ok(None);
+    };
+    let id = row
+        .get::<String>("id")
+        .ok_or_else(|| corrupt(SUBSCRIPTIONS, "?", "id"))?;
+    let account_id = row
+        .get::<String>("account_id")
+        .ok_or_else(|| corrupt(SUBSCRIPTIONS, &id, "account"))?;
+    Ok(Some((id, account_id)))
+}
+
+/// How many devices `account_id` has taken over from another account since
+/// `cutoff`, counted up to `limit` and no further.
+async fn rehomes_since(
+    db: &dyn Database,
+    account_id: &str,
+    cutoff: &str,
+    limit: usize,
+) -> Result<usize, DbError> {
+    // Deliberately not `COUNT(*)`: the answer is only ever compared
+    // against a small limit, and a bounded row count needs no aggregate
+    // and no result-column alias to stay portable (ADR 0004).
+    let mut select = Query::select();
+    select
+        .column(iden("id"))
+        .from(iden(SUBSCRIPTIONS))
+        .and_where(Expr::col(iden("account_id")).eq(account_id))
+        .and_where(Expr::col(iden("rehomed_at")).gt(cutoff))
+        .limit(u64::try_from(limit).unwrap_or(u64::MAX).saturating_add(1));
+    Ok(db.query(&Statement::render(&select)).await?.rows.len())
+}
+
+/// The `UPDATE` a registration applies to the row it found. `rehomed_from`
+/// is the account the row is being taken from, which both guards the write
+/// and stamps `rehomed_at`; `None` is the caller refreshing its own row.
+fn refresh_statement(
+    id: &str,
+    new: &NewSubscription<'_>,
+    recipient_json: &str,
+    rehomed_from: Option<&str>,
+) -> Statement {
+    let mut update = Query::update();
+    update
+        .table(iden(SUBSCRIPTIONS))
+        .value(iden("account_id"), new.account_id)
+        .value(iden("recipient_json"), recipient_json)
+        .value(iden("app_id"), new.app_id)
+        .value(iden("app_version"), new.app_version)
+        .value(iden("user_agent"), new.user_agent)
+        .value(iden("last_seen_at"), new.now)
+        .and_where(Expr::col(iden("id")).eq(id));
+    if let Some(previous) = rehomed_from {
+        update
+            .value(iden("rehomed_at"), new.now)
+            // Guarded on the owner the budget was checked against, so a
+            // re-home that raced another one cannot land unchecked.
+            .and_where(Expr::col(iden("account_id")).eq(previous));
+    }
+    Statement::render(&update)
 }
 
 /// Registers a device, or re-registers one already known.
 ///
 /// The identity is `(transport, recipient_hash)`, so re-registering on app
-/// launch updates the row it already has — including its `account_id`, so
-/// a shared device that signs into a second account moves rather than
-/// delivering that account's notifications to both. Returns the row's id,
-/// which for a re-registration is the id it already had.
+/// launch updates the row it already has, and a shared device that signs
+/// into a second account moves rather than delivering that account's
+/// notifications to both.
+///
+/// Both writes are safe under a client that registers twice at once (a
+/// double-tap, a retry): the `INSERT` is only reached when no row was
+/// found, and a lost race is answered by taking the row the winner wrote
+/// rather than by returning the unique-key violation as a 500. The
+/// engine's own constraint, not the read, is what decides.
 ///
 /// # Errors
 ///
-/// [`DbError`] when a read or write fails.
+/// [`DbError`] when a read or write fails for any reason other than losing
+/// that race.
 pub(crate) async fn upsert_subscription(
     db: &dyn Database,
     new: &NewSubscription<'_>,
-) -> Result<String, DbError> {
+) -> Result<Upserted, DbError> {
     let transport = Transport::of(new.recipient);
     let hash = recipient_hash(new.recipient);
     let recipient_json = serde_json::to_string(new.recipient)
         .map_err(|err| DbError::Execute(format!("recipient does not serialise: {err}")))?;
 
-    let mut existing = Query::select();
-    existing
-        .column(iden("id"))
-        .from(iden(SUBSCRIPTIONS))
-        .and_where(Expr::col(iden("transport")).eq(transport.as_str()))
-        .and_where(Expr::col(iden("recipient_hash")).eq(hash.as_str()));
-    let found = db
-        .query(&Statement::render(&existing))
-        .await?
-        .first()
-        .and_then(|row| row.get::<String>("id"));
-
-    if let Some(id) = found {
-        let mut update = Query::update();
-        update
-            .table(iden(SUBSCRIPTIONS))
-            .value(iden("account_id"), new.account_id)
-            .value(iden("recipient_json"), recipient_json.as_str())
-            .value(iden("app_id"), new.app_id)
-            .value(iden("app_version"), new.app_version)
-            .value(iden("user_agent"), new.user_agent)
-            .value(iden("last_seen_at"), new.now)
-            .and_where(Expr::col(iden("id")).eq(id.as_str()));
-        db.execute(&Statement::render(&update)).await?;
-        return Ok(id);
+    if let Some(existing) = owner_of(db, transport, &hash).await? {
+        return take_over(db, new, &recipient_json, existing).await;
     }
 
     let mut insert = Query::insert();
@@ -250,16 +341,72 @@ pub(crate) async fn upsert_subscription(
             new.id.into(),
             new.account_id.into(),
             transport.as_str().into(),
-            recipient_json.into(),
-            hash.into(),
+            recipient_json.as_str().into(),
+            hash.as_str().into(),
             new.app_id.into(),
             new.app_version.into(),
             new.user_agent.into(),
             new.now.into(),
             new.now.into(),
         ]);
-    db.execute(&Statement::render(&insert)).await?;
-    Ok(new.id.to_owned())
+    match db.execute(&Statement::render(&insert)).await {
+        Ok(_) => Ok(Upserted::Created(new.id.to_owned())),
+        Err(err) => match owner_of(db, transport, &hash).await? {
+            // A concurrent registration of the same device won the unique
+            // key between the read and this insert. Update its row.
+            Some(existing) => take_over(db, new, &recipient_json, existing).await,
+            None => Err(err),
+        },
+    }
+}
+
+/// The write for a row that already exists: a refresh when it is the
+/// caller's own, a budgeted re-home when it is not.
+async fn take_over(
+    db: &dyn Database,
+    new: &NewSubscription<'_>,
+    recipient_json: &str,
+    existing: (String, String),
+) -> Result<Upserted, DbError> {
+    let (id, owner) = existing;
+    if owner == new.account_id {
+        db.execute(&refresh_statement(&id, new, recipient_json, None))
+            .await?;
+        return Ok(Upserted::Refreshed(id));
+    }
+
+    // The budget bounds an attack; it is not a lock. Two simultaneous
+    // re-homes of the same row can both read a count below the limit, and
+    // one extra take-over does not change what the limit is for.
+    if rehomes_since(db, new.account_id, new.rehome_cutoff, new.rehome_limit).await?
+        >= new.rehome_limit
+    {
+        return Ok(Upserted::RehomeRefused);
+    }
+
+    let affected = db
+        .execute(&refresh_statement(&id, new, recipient_json, Some(&owner)))
+        .await?;
+    if affected == 0 {
+        // The row moved between the read and the guarded write. If it
+        // moved to this caller, this registration is a refresh after all;
+        // if it moved to a third account, this caller does not get to
+        // take it without a fresh budget check.
+        return match owner_of(
+            db,
+            Transport::of(new.recipient),
+            &recipient_hash(new.recipient),
+        )
+        .await?
+        {
+            Some((id, now_owner)) if now_owner == new.account_id => Ok(Upserted::Refreshed(id)),
+            _ => Ok(Upserted::RehomeRefused),
+        };
+    }
+    Ok(Upserted::Rehomed {
+        id,
+        previous_account_id: owner,
+    })
 }
 
 /// One account's subscriptions, oldest first.
@@ -365,7 +512,13 @@ fn flag(row: &Row, column: &str) -> bool {
 ///
 /// # Errors
 ///
-/// [`DbError`] when the read fails.
+/// [`DbError`] when the read fails, or when a row's category will not
+/// decode — the same refusal [`read_subscription`] makes, and for a
+/// stronger reason. Skipping the row would hand the caller the category's
+/// *default* for a row that exists precisely because the account chose
+/// something else: an explicit opt-out silently becomes an opt-in, and
+/// `GET /preferences` reports it as on. Sending to someone who switched a
+/// category off is the worse failure, so this answers 500 instead.
 pub(crate) async fn preferences_for_account(
     db: &dyn Database,
     account_id: &str,
@@ -381,24 +534,24 @@ pub(crate) async fn preferences_for_account(
         .from(iden(PREFERENCES))
         .and_where(Expr::col(iden("account_id")).eq(account_id))
         .order_by(iden("category"), Order::Asc);
-    Ok(db
-        .query(&Statement::render(&select))
+    db.query(&Statement::render(&select))
         .await?
         .rows
         .iter()
-        .filter_map(|row| {
-            row.get::<String>("category").map(|category| {
-                (
-                    category,
-                    Channels {
-                        push: flag(row, "push"),
-                        in_app: flag(row, "in_app"),
-                        email: flag(row, "email"),
-                    },
-                )
-            })
+        .map(|row| {
+            let category = row
+                .get::<String>("category")
+                .ok_or_else(|| corrupt(PREFERENCES, account_id, "category"))?;
+            Ok((
+                category,
+                Channels {
+                    push: flag(row, "push"),
+                    in_app: flag(row, "in_app"),
+                    email: flag(row, "email"),
+                },
+            ))
         })
-        .collect())
+        .collect()
 }
 
 /// One account's stored preference for one category, or `None` when it has
@@ -521,13 +674,51 @@ impl DeadLetterReason {
     }
 }
 
+/// When the outbox row was enqueued, so a dead letter can carry the
+/// moment the notification was created rather than the moment it was
+/// abandoned. `None` when the row is already gone.
+///
+/// # Errors
+///
+/// [`DbError`] when the read fails.
+pub(crate) async fn outbox_created_at(
+    db: &dyn Database,
+    id: &str,
+) -> Result<Option<String>, DbError> {
+    let mut select = Query::select();
+    select
+        .column(iden("created_at"))
+        .from(iden(OUTBOX))
+        .and_where(Expr::col(iden("id")).eq(id));
+    Ok(db
+        .query(&Statement::render(&select))
+        .await?
+        .first()
+        .and_then(|row| row.get::<String>("created_at")))
+}
+
+/// What a dead letter records about the delivery that gave up.
+pub(crate) struct DeadLetter<'a> {
+    pub reason: DeadLetterReason,
+    pub last_error: &'a str,
+    /// Attempts **made**, including the one that just failed — the same
+    /// number the `last_error` prose quotes. `OutboxRecord::attempts` is
+    /// the count *before* this attempt, and storing that while the message
+    /// said "gave up after N attempts" left every dead letter disagreeing
+    /// with itself by one.
+    pub attempts: i64,
+    /// When the notification was enqueued (the outbox row's own
+    /// `created_at`), not when it was abandoned.
+    pub created_at: &'a str,
+    /// When it was abandoned.
+    pub failed_at: &'a str,
+}
+
 /// Moves one outbox record into the dead-letter table.
 #[must_use]
 pub(crate) fn dead_letter_statement(
     record: &cratefield_core::OutboxRecord,
-    reason: DeadLetterReason,
-    last_error: &str,
-    now: &str,
+    dead: &DeadLetter<'_>,
 ) -> Statement {
     let mut insert = Query::insert();
     insert
@@ -546,11 +737,11 @@ pub(crate) fn dead_letter_statement(
             record.id.as_str().into(),
             record.topic.as_str().into(),
             record.payload.as_str().into(),
-            record.attempts.into(),
-            reason.as_str().into(),
-            last_error.into(),
-            now.into(),
-            now.into(),
+            dead.attempts.into(),
+            dead.reason.as_str().into(),
+            dead.last_error.into(),
+            dead.created_at.into(),
+            dead.failed_at.into(),
         ]);
     Statement::render(&insert)
 }
