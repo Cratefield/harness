@@ -946,6 +946,11 @@ async fn apply_unsubscribe(
 /// provider posts this on the recipient's behalf and has no session. It is
 /// signed and purpose-bound, so a link for one account cannot switch
 /// another's preference off.
+///
+/// **The POST is the acting verb** (issue #237). It applies immediately,
+/// which is what one-click needs, and answers the same page a person who
+/// used the form gets — a provider ignores the body, and a person should
+/// not be left looking at a blank tab.
 async fn unsubscribe_one_click(
     scope: Scope,
     State(state): State<Arc<ModuleState>>,
@@ -957,28 +962,58 @@ async fn unsubscribe_one_click(
     apply_unsubscribe(&state, &account_id, &category)
         .await
         .map_err(|problem| problem.instance(&scope.request_id))?;
-    Ok(StatusCode::OK.into_response())
+    Ok(html(
+        "<!doctype html><meta charset=utf-8><title>Unsubscribed</title>\
+         <p>You will not get these emails again.</p>"
+            .to_owned(),
+    ))
 }
 
 /// `GET` of the same link, for a person who clicked it.
+///
+/// It **confirms**; it does not act (issue #237). Corporate mail security
+/// — Microsoft Defender Safe Links, Proofpoint URL Defense, and most
+/// scanning gateways — fetches every link in a message before the
+/// recipient ever sees it, so a GET that applied the unsubscribe opted
+/// out every member at any such company without a click, and neither they
+/// nor the venture had a signal that it had happened: it is
+/// indistinguishable from a delivery failure from the venture's side.
+///
+/// RFC 8058 exists precisely so the POST is the acting verb. A scanner
+/// fetches; it does not submit forms.
 async fn unsubscribe_page(
     scope: Scope,
     State(state): State<Arc<ModuleState>>,
     Query(query): Query<TokenQuery>,
 ) -> Result<Response, Problem> {
-    let Some((account_id, category)) = unsubscribed_subject(&state, &query.token) else {
+    let Some((_, category)) = unsubscribed_subject(&state, &query.token) else {
         return Err(Problem::new(&cratefield_core::SLUGS.invalid_token).instance(&scope.request_id));
     };
-    apply_unsubscribe(&state, &account_id, &category)
-        .await
-        .map_err(|problem| problem.instance(&scope.request_id))?;
-    Ok((
+    let what = if category == crate::notify::UNSUBSCRIBE_ALL {
+        "every notification email".to_owned()
+    } else {
+        format!("<code>{}</code> emails", crate::notify::escape(&category))
+    };
+    // The form has no `action`, so it submits to the URL this page was
+    // fetched from — token and all. Writing the token into the markup
+    // would put it somewhere a shoulder, a screenshot or a "view source"
+    // can reach it, and it is already in the address bar.
+    Ok(html(format!(
+        "<!doctype html><meta charset=utf-8><title>Unsubscribe</title>\
+         <p>Stop sending you {what}?</p>\
+         <form method=\"post\"><button type=\"submit\">Unsubscribe</button></form>\
+         <p>Nothing changes until you press it.</p>"
+    )))
+}
+
+/// A `200 text/html` body.
+fn html(body: String) -> Response {
+    (
         StatusCode::OK,
         [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
-        "<!doctype html><meta charset=utf-8><title>Unsubscribed</title>\
-         <p>You will not get these emails again.</p>",
+        body,
     )
-        .into_response())
+        .into_response()
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]

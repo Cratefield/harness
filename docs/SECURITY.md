@@ -86,12 +86,21 @@
   `error`, `uri` or message — is scrubbed by `cratefield_core::scrub_text`
   before it reaches a sink, replacing embedded emails with their
   pseudonym and URL/path queries, dotted signed tokens, `Bearer`
-  credentials and URL userinfo with `[redacted]`. `DbError`'s `Display`
-  scrubs the wrapped driver message the same way, so a Postgres
-  `DETAIL:` line quoting a row cannot disclose it. The internal-error
+  credentials and URL userinfo with `[redacted]`. `DbError`, `MailError`
+  and `PushError` scrub the wrapped provider or driver message in their
+  own `Display`, so a Postgres `DETAIL:` line quoting a row, a Resend
+  `422` quoting the recipient, or a push service quoting an endpoint
+  cannot disclose it (issues #135, #235). The internal-error
   forwarder scrubs each line it hands to the runtime sink.
   Rules in `cratefield_core::logging`, shared by every runtime formatter;
   verified by tests.
+- **A column is not safer than a log.** An error string that is scrubbed
+  on the way to a log and stored raw is the worse half of the pair: it
+  outlives the request, it outlives erasure of the table the value came
+  from, and the log a developer checks says it was redacted. A module
+  that persists error text scrubs it where it **binds** the column, not
+  at each call site — `module-notifications`' `dead_letter_statement`
+  is the reference (issue #235).
 - **Token-bearing URLs.** Signed links carry their credential in the
   query (`?token=`). Every response to a request whose query has a
   `token` parameter — on any path, including `/ui/*` — carries

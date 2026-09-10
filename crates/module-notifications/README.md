@@ -85,6 +85,26 @@ see them:
 | `GET`/`POST` | `/v1/notifications/email/unsubscribe?token=` | An HMAC token signed for `(account, category)` — RFC 8058 one-click |
 | `POST` | `/v1/notifications/email/webhook` | The provider's Svix signature over the raw body |
 
+**Only the `POST` acts.** The `GET` renders the choice as a form that
+posts back to the same URL and changes nothing until it is submitted.
+Microsoft Defender Safe Links, Proofpoint URL Defense and most scanning
+gateways fetch every link in a message before the recipient sees it, so a
+`GET` that applied the unsubscribe opted out every member at any such
+company without a click — with no signal to them or to the venture, and
+indistinguishable from a delivery failure from the venture's side. RFC
+8058 exists precisely so the POST is the acting verb; a scanner fetches,
+it does not submit forms.
+
+The `List-Unsubscribe` and `List-Unsubscribe-Post` headers ship **only
+when a `Signer` is wired**. `Signer` is optional here, and without one
+the link falls back to a venture front-end path this module does not
+serve — which either 404s or hits a single-page app that answers the POST
+with `200 HTML`, reading as success while doing nothing. A mail with no
+one-click header is compliant; one whose header names a URI that cannot
+honour it is not, and it fails silently at Gmail and Yahoo. The footer
+link, which only ever promised a person somewhere to go, still points at
+the account's settings.
+
 The webhook takes Resend's `email.bounced` and `email.complained` and
 suppresses the address for **every** account that holds it — the provider
 reports a mailbox, not an account, and two people can share one. Only a
@@ -165,8 +185,24 @@ device; that needs a client-side confirmation this child does not ship.
 | `NotConfigured` | dead-lettered with its own reason, so ops sees "mounted without the adapter" |
 | `Transient` | retried with exponential backoff, never before the provider's `retry_after`, to `NOTIFICATIONS_MAX_ATTEMPTS` and then dead-lettered |
 
+Mail takes the same five shapes over `Mailer`'s outcomes: `Sent`
+completes the row and counts against the cooldown, `NotConfigured`
+dead-letters with its own reason rather than passing for success,
+`Unauthorized`/`DomainNotVerified`/`Invalid` dead-letter as `rejected`
+because nothing about that message will ever be accepted, `RateLimited`
+waits out the delay the provider named, and everything else retries to
+the same bound.
+
 `Unregistered` is the **only** error that prunes. A wrongly-pruned Web
 Push subscription cannot be recreated server-side at all (ADR 0015).
+
+`notifications_dead_letters.last_error` is **scrubbed where it is
+bound**, not by the callers that pass it. What ends up there is the
+provider's own words — a Resend `422` quotes the field it objected to,
+which for a send is the recipient address — and the row outlives erasure
+of `notifications_email_targets`. The log leg was already sanitized by
+the tracing formatter, so a column stored raw was the half nobody would
+look at (issue #235).
 
 The preference is read in the drain, immediately before the send, so an
 opt-out that arrives after the row was written still wins.

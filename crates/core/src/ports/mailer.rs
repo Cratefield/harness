@@ -3,7 +3,6 @@
 
 use async_trait::async_trait;
 use std::time::Duration;
-use thiserror::Error;
 
 /// An outbound mail. `text` is always sent alongside `html`.
 ///
@@ -102,24 +101,125 @@ pub enum SendOutcome {
 
 /// Mailer failures, mapped by the adapter from provider responses.
 ///
-/// `Display` output is safe for logs: it never includes the API key.
-#[derive(Debug, Clone, Error)]
+/// Every variant that carries provider text is sanitized in `Display`,
+/// the same way [`DbError`](crate::DbError)'s is (issue #235). "Never
+/// includes the API key" was too weak a promise: the text an adapter
+/// wraps is the provider's own response, and a `422` from Resend quotes
+/// the field it objected to — which for a send is the **recipient
+/// address**. `Display` therefore runs it through
+/// [`crate::logging::scrub_text`], so every `tracing` field, problem
+/// detail, report line and `format!` that renders a `MailError` gets the
+/// sanitized text rather than each call site remembering to. `Debug`
+/// still shows the raw string for tests; the logging formatters scrub
+/// `{:?}` output too.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MailError {
-    #[error("mailer rejected the request as unauthorized (check the API key)")]
+    /// The API key is missing, wrong or revoked.
     Unauthorized,
-    #[error("sending domain {domain:?} is not verified with the mailer")]
+    /// The sending domain is not verified with the provider, so nothing
+    /// from it will be accepted until somebody adds the DNS records.
     DomainNotVerified { domain: String },
-    #[error("mailer rejected the message as invalid: {detail}")]
+    /// The provider refused the message itself. `detail` is **its**
+    /// wording, so it can quote the recipient — see the type docs.
     Invalid { detail: String },
-    #[error("mailer rate limited the request; retry after {retry_after:?}")]
+    /// Too many sends; retry no earlier than `retry_after` when the
+    /// provider named one.
     RateLimited { retry_after: Option<Duration> },
-    #[error("mailer upstream error: {0}")]
+    /// The provider failed on its side (a `5xx`, an unparseable body).
     Upstream(String),
-    #[error("mailer transport error: {0}")]
+    /// The request never got an answer: a socket, a DNS failure, a
+    /// timeout.
     Transport(String),
 }
+
+impl std::fmt::Display for MailError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let scrub = crate::logging::scrub_text;
+        match self {
+            Self::Unauthorized => {
+                f.write_str("mailer rejected the request as unauthorized (check the API key)")
+            }
+            Self::DomainNotVerified { domain } => write!(
+                f,
+                "sending domain {:?} is not verified with the mailer",
+                scrub(domain)
+            ),
+            Self::Invalid { detail } => {
+                write!(
+                    f,
+                    "mailer rejected the message as invalid: {}",
+                    scrub(detail)
+                )
+            }
+            Self::RateLimited { retry_after } => write!(
+                f,
+                "mailer rate limited the request; retry after {retry_after:?}"
+            ),
+            Self::Upstream(message) => write!(f, "mailer upstream error: {}", scrub(message)),
+            Self::Transport(message) => write!(f, "mailer transport error: {}", scrub(message)),
+        }
+    }
+}
+
+impl std::error::Error for MailError {}
 
 #[async_trait]
 pub trait Mailer: Send + Sync {
     async fn send(&self, message: Message) -> Result<SendOutcome, MailError>;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn display_sanitizes_the_provider_text() {
+        // The finding (issue #235): `Invalid { detail }` is set from the
+        // provider's own response — and Resend's 422 quotes the field it
+        // objected to, which for a send is the recipient address. The
+        // adapter's fallback is `body.to_string()`, the whole body.
+        let error = MailError::Invalid {
+            detail: "validation_error: `to` must be a valid address: alice@example.test".to_owned(),
+        };
+        let text = error.to_string();
+        assert!(!text.contains('@'), "{text}");
+        assert!(!text.contains("alice"), "{text}");
+        assert!(text.contains("[subject_hash:"), "{text}");
+
+        // An upstream body echoing the request URL must not disclose the
+        // query it carried.
+        let error = MailError::Upstream(
+            "POST https://api.resend.com/emails?key=live-abcdef failed".to_owned(),
+        );
+        let text = error.to_string();
+        assert!(!text.contains("live-abcdef"), "{text}");
+        assert!(text.contains("?[redacted]"), "{text}");
+
+        // The variants with nothing to hide read exactly as before.
+        assert_eq!(
+            MailError::Unauthorized.to_string(),
+            "mailer rejected the request as unauthorized (check the API key)"
+        );
+        assert_eq!(
+            MailError::RateLimited { retry_after: None }.to_string(),
+            "mailer rate limited the request; retry after None"
+        );
+
+        // `Debug` still shows the raw string, which is what a failing
+        // test needs to be readable; the log formatters scrub `{:?}` too.
+        assert!(format!("{error:?}").contains("live-abcdef"));
+    }
+
+    #[test]
+    fn a_domain_that_is_an_address_is_still_scrubbed() {
+        // `DomainNotVerified` looks safe — a sending domain is not
+        // personal data — but adapters set it from whatever the provider
+        // named, and Resend names the whole `from` when it objects.
+        let error = MailError::DomainNotVerified {
+            domain: "no-reply@send.example.test".to_owned(),
+        };
+        let text = error.to_string();
+        assert!(!text.contains('@'), "{text}");
+        assert!(text.contains("[subject_hash:"), "{text}");
+    }
 }

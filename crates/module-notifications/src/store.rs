@@ -706,6 +706,8 @@ pub(crate) async fn outbox_created_at(
 /// What a dead letter records about the delivery that gave up.
 pub(crate) struct DeadLetter<'a> {
     pub reason: DeadLetterReason,
+    /// Why it gave up, as the provider put it. Sanitized where it is
+    /// **bound**, not here — see [`dead_letter_statement`].
     pub last_error: &'a str,
     /// Attempts **made**, including the one that just failed — the same
     /// number the `last_error` prose quotes. `OutboxRecord::attempts` is
@@ -721,6 +723,20 @@ pub(crate) struct DeadLetter<'a> {
 }
 
 /// Moves one outbox record into the dead-letter table.
+///
+/// `last_error` is scrubbed **here**, at the one place the column is
+/// bound, rather than at each caller (issue #235). The log leg of
+/// `dead_letter` was already sanitized — `tracing` runs every value it
+/// prints through [`scrub_text`](cratefield_core::scrub_text) — and the
+/// database leg was not, so a provider's `422` quoting the recipient
+/// address sat in plain text in a venture's own table, outliving the
+/// erasure of `notifications_email_targets`, while the log a developer
+/// checks showed it correctly redacted. That asymmetry is what made it
+/// easy to miss, so the fix is to give the column exactly the guarantee
+/// the log has, for every writer whatever it passes: `MailError` and
+/// `PushError` now scrub in their own `Display`, and a caller that hands
+/// over a bare provider string (`PushError::Rejected`'s inner text, a
+/// `format!` around it) is covered here regardless.
 #[must_use]
 pub(crate) fn dead_letter_statement(
     record: &cratefield_core::OutboxRecord,
@@ -745,7 +761,7 @@ pub(crate) fn dead_letter_statement(
             record.payload.as_str().into(),
             dead.attempts.into(),
             dead.reason.as_str().into(),
-            dead.last_error.into(),
+            cratefield_core::scrub_text(dead.last_error).into(),
             dead.created_at.into(),
             dead.failed_at.into(),
         ]);
