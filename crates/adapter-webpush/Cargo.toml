@@ -1,0 +1,69 @@
+[package]
+name = "cratefield-adapter-webpush"
+description = "Push port over Web Push (RFC 8030/8188/8291/8292) for the Factory Zero harness: browsers and UnifiedPush"
+readme = "README.md"
+keywords = ["cratefield", "web-push", "vapid", "unifiedpush", "adapter"]
+categories = ["api-bindings"]
+include = ["src/**/*", "README.md"]
+# `publish = false` until the first manual publish (docs/RELEASING.md). It is
+# already wired into the `cratefield` facade behind the `webpush` feature, so
+# `cargo add cratefield` reaches it from the workspace.
+publish = false
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+cratefield-core = { workspace = true }
+# VAPID is an ES256 JWT with different claims, so the signer and the
+# mint-once cache come from the shared push-auth crate (#178) rather than a
+# second copy of `base64url(header).base64url(claims).base64url(sig)`.
+cratefield-push-auth = { workspace = true }
+async-trait = { workspace = true }
+http = { workspace = true }
+bytes = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+thiserror = { workspace = true }
+base64 = { workspace = true }
+# `Retry-After` also comes in the HTTP-date form, which needs a parsed
+# calendar date to subtract the `Clock` port's `now` from.
+time = { workspace = true }
+# The VAPID `aud` is the push service's **origin** (RFC 6454): scheme, host
+# and a non-default port, never the path. `Url::origin` is that rule already
+# written down, including "drop :443 on https".
+url = { workspace = true }
+# RFC 8291: ECDH with the subscription's `p256dh`.
+p256 = { workspace = true }
+# RFC 8188/8291 key schedule and record encryption. See the workspace
+# manifest for why these particular lines.
+hkdf = { workspace = true }
+sha2 = { workspace = true }
+aes-gcm = { workspace = true }
+# The 16-byte salt and the per-message ephemeral P-256 key. Also what picks
+# getrandom's `wasm_js` backend, which is the final crate's job in this
+# workspace, so `cargo build --target wasm32-unknown-unknown -p
+# cratefield-adapter-webpush` stands on its own.
+getrandom = { workspace = true }
+
+[dev-dependencies]
+# Path-only on purpose: `cargo publish` resolves dev-dependencies against
+# crates.io, and a path-only one is stripped from the packaged manifest
+# (see the note in the workspace manifest).
+cratefield-testing = { path = "../testing" }
+pollster = { workspace = true }
+async-trait = { workspace = true }
+time = { workspace = true }
+# The tests decode the RFC vectors and the JWT segments they assert on, and
+# the decrypt-side test re-derives the RFC 8291 key schedule from the user
+# agent's half with its own copy of the primitives.
+base64 = { workspace = true }
+p256 = { workspace = true }
+hkdf = { workspace = true }
+sha2 = { workspace = true }
+aes-gcm = { workspace = true }

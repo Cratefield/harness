@@ -39,6 +39,14 @@ them, or their `cargo publish` fails resolving a crate that is not on
 crates.io. It is in the ordered list below in that position; drop its
 `publish = false` at the same time.
 
+`cratefield-adapter-webpush` (issue #180) is in exactly that position and
+inherits the same rule. It carries `publish = false`, and the `cratefield`
+facade depends on it behind an optional `webpush` feature — an **optional**
+dependency still has to resolve on crates.io when the facade is packaged, so
+it must be first-published before the facade's next release, in the list
+below alongside `cratefield-adapter-apns`, and its `publish = false` dropped
+at the same time.
+
 Authentication is **trusted publishing**: the workflow exchanges the
 GitHub Actions OIDC token (`id-token: write`) for a short-lived
 crates.io token. No `CARGO_REGISTRY_TOKEN` is stored anywhere.

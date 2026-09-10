@@ -43,6 +43,9 @@ cratefield-adapter-apns = { path = "crates/adapter-apns", version = "0.1.0" }
 # and VAPID, RS256 for Google service accounts, one keyed cache for all three.
 cratefield-push-auth = { path = "crates/push-auth", version = "0.1.0" }
 cratefield-adapter-stripe = { path = "crates/adapter-stripe", version = "0.1.0" }
+# Web Push (issue #180): RFC 8030/8188/8291/8292 over the HttpClient port, for
+# browsers and for the UnifiedPush distributors that speak the same protocol.
+cratefield-adapter-webpush = { path = "crates/adapter-webpush", version = "0.1.0" }
 cratefield-adapter-sqlite = { path = "crates/adapter-sqlite", version = "0.1.0" }
 cratefield-adapter-sqlite-wasm = { path = "crates/adapter-sqlite-wasm", version = "0.1.0" }
 # Phase 3 (issue #18): native-only Postgres adapter. Never a dependency of
@@ -133,10 +136,30 @@ subtle = "2.6.1"
 # ES256 (P-256 ECDSA) for the APNs provider JWT (adapter-apns, #104). Pure
 # Rust, wasm-safe; `ecdsa` signs with deterministic RFC6979 nonces so it
 # needs no RNG on the isolate, and `pem`/`pkcs8` parse Apple's `.p8` key.
+# `ecdh` is additive for every existing consumer: it adds
+# `p256::ecdh::diffie_hellman`, which RFC 8291 needs to combine the server's
+# ephemeral key with a browser subscription's `p256dh` (issue #180).
 p256 = { version = "0.13.2", default-features = false, features = [
     "ecdsa",
+    "ecdh",
     "pkcs8",
     "pem",
+    "alloc",
+] }
+# HKDF-SHA256 for the RFC 8188 / RFC 8291 key schedule. Pinned to the 0.13
+# line **because** that is the one built on `hmac` 0.13 / `digest` 0.11, the
+# stack `hmac`/`sha2` above already pull in; 0.12 would drag a second digest
+# stack (hmac 0.12 + sha2 0.10) into every build that touches Web Push.
+hkdf = "0.13.0"
+# AES-128-GCM, the one AEAD RFC 8188's `aes128gcm` content coding allows.
+# 0.11 and not the 0.10 line for the same reason: it is built on `aead` 0.6 /
+# `cipher` 0.5, which `chacha20poly1305` 0.11 above already brings, where 0.10
+# would add `aead` 0.5 and a second cipher stack. It does not use `sha2` at
+# all. `getrandom` stays off — the salt and the ephemeral key are drawn
+# through the workspace's own `getrandom` pin, whose wasm backend is the leaf
+# crate's job.
+aes-gcm = { version = "0.11.1", default-features = false, features = [
+    "aes",
     "alloc",
 ] }
 # Email NFC normalisation (core `email` module) — pure Rust, wasm-safe.
