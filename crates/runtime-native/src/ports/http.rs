@@ -12,7 +12,23 @@
 //! loop below, re-vetting each hop. `reqwest`'s own redirect policy is
 //! disabled because it would chase an attacker-chosen `Location` before
 //! any of this module saw it.
+//!
+//! # A failure message here never carries the request URL
+//!
+//! `reqwest::Error`'s `Display` appends ` for url (<the whole URL>)`, and
+//! for some callers that URL *is* the credential: an APNs request path is
+//! the device token (`/3/device/<token>`) and a Web Push endpoint is a
+//! bearer capability — whoever holds it can push to that browser, which is
+//! why `cratefield_core::Recipient` prints fingerprints and says the value
+//! must appear "never in a log, an event payload, or an error body". This
+//! module's errors are all three: they reach `tracing::error!`, an
+//! operator's terminal through `fz push send`, and whatever a module
+//! persists. So no `reqwest::Error` is ever stringified whole here — every
+//! one goes through [`safe_message`], which keeps the destination's origin
+//! and drops its path.
 
+use std::error::Error as _;
+use std::fmt::Write as _;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::sync::Arc;
 
@@ -214,10 +230,21 @@ impl ReqwestClient {
                         after: policy.timeout,
                     });
                 }
-                Err(err) if err.is_connect() && err.to_string().contains(GUARD_TAG) => {
-                    return Err(HttpError::BlockedDestination(err.to_string()));
+                Err(err) => {
+                    // Never `err.to_string()`: it appends the request URL,
+                    // which for a push transport is the recipient's
+                    // credential. See `safe_message`.
+                    let message = safe_message(&err);
+                    // The resolver's refusal arrives boxed *inside* the
+                    // error, so the tag is in the cause chain rather than
+                    // in `Display` — which is what `safe_message` walks,
+                    // and what asking `Display` alone could not see.
+                    return Err(if message.contains(GUARD_TAG) {
+                        HttpError::BlockedDestination(message)
+                    } else {
+                        HttpError::Transport(message)
+                    });
                 }
-                Err(err) => return Err(HttpError::Transport(err.to_string())),
             };
             let status = response.status();
             if !is_redirect(status) {
@@ -278,7 +305,7 @@ async fn read_capped(mut response: reqwest::Response, limit: usize) -> Result<By
     while let Some(chunk) = response
         .chunk()
         .await
-        .map_err(|err| HttpError::Transport(err.to_string()))?
+        .map_err(|err| HttpError::Transport(safe_message(&err)))?
     {
         if buffer.len() + chunk.len() > limit {
             return Err(HttpError::ResponseTooLarge { limit });
@@ -286,6 +313,74 @@ async fn read_capped(mut response: reqwest::Response, limit: usize) -> Result<By
         buffer.extend_from_slice(&chunk);
     }
     Ok(Bytes::from(buffer))
+}
+
+/// What a redacted request target is replaced by. The same word the Web
+/// Push adapter's body redaction uses, so one grep finds both.
+const REDACTED: &str = "[redacted]";
+
+/// The part of a destination that is safe to put in a message: scheme,
+/// host and port.
+///
+/// Never the path or the query. `https://api.push.apple.com/3/device/<t>`
+/// *is* the device token; a Web Push endpoint's path is the subscription's
+/// bearer capability. The origin is the line `fz push
+/// inspect-subscription` already draws (it prints the `aud` and withholds
+/// the path), and it is what makes a transport failure diagnosable at all:
+/// "could not reach api.push.apple.com" is the answer to most of them.
+fn destination(url: &Url) -> String {
+    let mut safe = format!("{}://{}", url.scheme(), url.host_str().unwrap_or("?"));
+    if let Some(port) = url.port() {
+        let _ = write!(safe, ":{port}");
+    }
+    safe
+}
+
+/// A `reqwest::Error` as a message this crate may hand on — to
+/// `HttpError`, and from there to a log, a dead-letter row or an
+/// operator's terminal.
+///
+/// Two things happen here, and the second is why this is not
+/// `err.to_string()`:
+///
+/// 1. **The URL comes out.** reqwest's own `Display` is the kind plus
+///    ` for url (<the whole URL>)`, path and query included — see the
+///    module note above for why that is a disclosure and not a detail.
+/// 2. **The causes go in.** With the URL redacted, `Display` alone is
+///    just "error sending request": reqwest 0.12 keeps the interesting
+///    half — "tcp connect error: Connection refused", a TLS failure, the
+///    resolver's own refusal — in the `source()` chain and no longer
+///    writes it into `Display`. So the chain is walked, and scrubbed too,
+///    because a cause is free to quote what it was handed.
+fn safe_message(err: &reqwest::Error) -> String {
+    let mut message = err.to_string();
+    let mut cause = err.source();
+    while let Some(current) = cause {
+        let _ = write!(message, ": {current}");
+        cause = current.source();
+    }
+    scrub_url(message, err.url())
+}
+
+/// Cuts `url` back to its [`destination`] everywhere it appears in
+/// `message`: as the whole URL reqwest appends, and as the bare request
+/// target (`/3/device/<token>`) a cause is free to quote on its own.
+fn scrub_url(message: String, url: Option<&Url>) -> String {
+    let Some(url) = url else {
+        return message;
+    };
+    let message = message.replace(url.as_str(), &destination(url));
+    let mut target = url.path().to_owned();
+    if let Some(query) = url.query() {
+        target.push('?');
+        target.push_str(query);
+    }
+    // `/` alone carries nothing and is in half the prose there is.
+    if target.len() > 1 {
+        message.replace(&target, REDACTED)
+    } else {
+        message
+    }
 }
 
 /// Every check that needs no network: scheme, userinfo, and the host —
@@ -655,6 +750,67 @@ mod tests {
         assert!(refused("http://LOCALHOST./x"));
         assert!(refused("http://sub.localhost/x"));
         assert!(!refused("http://api.example.com/x"));
+    }
+
+    /// The disclosure this module's `safe_message` exists to stop: a
+    /// transport failure that quotes the request URL hands out the
+    /// recipient's credential. APNs addresses a device by *path*
+    /// (`/3/device/<token>`), so a client that reports
+    /// `err.to_string()` publishes the token to every log, dead-letter
+    /// row and terminal the error reaches — while the caller two lines
+    /// away is carefully printing a fingerprint.
+    ///
+    /// A real failure, through the real client: a port nothing is
+    /// listening on, so the connect is refused without a network.
+    #[tokio::test]
+    async fn a_transport_failure_names_the_origin_and_never_the_request_path() {
+        const TOKEN: &str = "0a1b2c3d4e5f60718293a4b5c6d7e8f900112233445566778899aabbccddeeff";
+
+        // Bound and dropped: the port is guaranteed free, so connecting
+        // to it is refused rather than answered or hung.
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("a free port");
+        let addr = listener.local_addr().expect("its address");
+        drop(listener);
+
+        // Loopback is normally refused outright; this test is about the
+        // failure *message*, so the destination has to be reachable
+        // enough to fail on the connect.
+        let client = ReqwestClient::with_options(OutboundOptions {
+            allow_loopback: true,
+            ..OutboundOptions::default()
+        });
+        let request = http::Request::builder()
+            .method(http::Method::POST)
+            .uri(format!("http://{addr}/3/device/{TOKEN}"))
+            .body(Bytes::new())
+            .expect("test request");
+
+        let err = client
+            .send(request)
+            .await
+            .expect_err("nothing is listening");
+        let HttpError::Transport(message) = &err else {
+            panic!("a refused connect is a transport failure, got {err}");
+        };
+        assert!(
+            !message.contains(TOKEN),
+            "the device token reached the error message: {message}"
+        );
+        assert!(
+            !message.contains("/3/device"),
+            "the request path reached the error message: {message}"
+        );
+        // And it is still an error somebody can act on: which host, and
+        // what the operating system actually said.
+        assert!(
+            message.contains(&addr.to_string()),
+            "the destination is named: {message}"
+        );
+        assert!(
+            message.to_ascii_lowercase().contains("refused")
+                || message.to_ascii_lowercase().contains("connect"),
+            "the cause survives the redaction: {message}"
+        );
     }
 
     #[test]
