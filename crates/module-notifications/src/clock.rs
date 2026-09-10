@@ -39,6 +39,17 @@ pub(crate) fn now_iso(clock: Option<&Arc<dyn Clock>>) -> String {
     }
 }
 
+/// Now as Unix seconds, through the deployment's `Clock` port when it has
+/// one. The webhook's replay window is in seconds because that is the
+/// unit the provider signs, so it does not go through the stored RFC 3339
+/// spelling and back.
+pub(crate) fn now_unix(clock: Option<&Arc<dyn Clock>>) -> i64 {
+    match clock {
+        Some(clock) => clock.now().unix_timestamp(),
+        None => SystemClock.now().unix_timestamp(),
+    }
+}
+
 /// A fresh id, through the deployment's `IdGen` port when it has one.
 pub(crate) fn new_id(id_gen: Option<&Arc<dyn IdGen>>) -> String {
     match id_gen {

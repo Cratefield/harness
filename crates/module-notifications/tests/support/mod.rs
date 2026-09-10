@@ -804,6 +804,44 @@ pub async fn send_unmounted(
     Answer { status, body }
 }
 
+/// A request with arbitrary headers and an exact body, for a caller that
+/// signs bytes rather than presenting a token.
+///
+/// The body goes on the wire exactly as given: a webhook signature covers
+/// the bytes the provider sent, so a helper that re-serialised a `Value`
+/// would sign one string and send another.
+pub async fn send_raw(
+    router: &axum::Router,
+    method: http::Method,
+    path: &str,
+    headers: &[(&str, &str)],
+    body: &str,
+) -> Answer {
+    use tower::ServiceExt as _;
+
+    let mut builder = http::Request::builder()
+        .method(method)
+        .uri(path)
+        .header(http::header::CONTENT_TYPE, "application/json");
+    for (name, value) in headers {
+        builder = builder.header(*name, *value);
+    }
+    let response = router
+        .clone()
+        .oneshot(
+            builder
+                .body(axum::body::Body::from(body.to_owned()))
+                .expect("request builds"),
+        )
+        .await
+        .expect("router answers");
+    let status = response.status();
+    let body = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+        .await
+        .expect("body reads");
+    Answer { status, body }
+}
+
 /// The `PUT /subscriptions` body for one recipient.
 pub fn register_body(transport: Transport, recipient: &cratefield_core::Recipient) -> Value {
     json!({

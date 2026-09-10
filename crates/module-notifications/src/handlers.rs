@@ -1,9 +1,18 @@
 //! The routes under `/v1/notifications` (issue #182).
 //!
-//! Every route here is `public_writes = false`: the account comes from the
-//! [`Authenticated`] extractor and never from a body field, and a
-//! subscription that belongs to another account answers **404**, not 403 —
-//! a 403 would confirm that the id exists.
+//! Every route here takes its account from the [`Authenticated`]
+//! extractor and never from a body field, and a subscription that belongs
+//! to another account answers **404**, not 403 — a 403 would confirm that
+//! the id exists.
+//!
+//! Two routes are the exception, and both because the caller cannot hold
+//! a session: the RFC 8058 one-click unsubscribe a mailbox provider posts
+//! (#189), and the provider bounce delivery (#233). Each carries its own
+//! proof — a signed token, a Svix signature — and the module declares
+//! that with [`public_writes`] and [`public_write_policy`].
+//!
+//! [`public_writes`]: cratefield_core::Module::public_writes
+//! [`public_write_policy`]: cratefield_core::Module::public_write_policy
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -95,6 +104,7 @@ pub(crate) fn router(state: Arc<ModuleState>) -> axum::Router {
             "/email/unsubscribe",
             get(unsubscribe_page).post(unsubscribe_one_click),
         )
+        .route("/email/webhook", post(provider_webhook))
         .with_state(state)
 }
 
@@ -974,4 +984,184 @@ async fn unsubscribe_page(
 #[derive(Debug, Deserialize, JsonSchema)]
 struct TokenQuery {
     token: String,
+}
+
+// ---------------------------------------------------------------------------
+// Bounce and complaint suppression (#233)
+
+/// The header names Svix — and so Resend — signs a delivery with.
+const SVIX_ID: &str = "svix-id";
+const SVIX_TIMESTAMP: &str = "svix-timestamp";
+const SVIX_SIGNATURE: &str = "svix-signature";
+
+/// The provider event that says the mailbox is gone for good.
+const EVENT_BOUNCED: &str = "email.bounced";
+/// The provider event that says the recipient reported the mail as spam.
+const EVENT_COMPLAINED: &str = "email.complained";
+
+/// The bounce classification that means "never deliverable". Anything
+/// else — `Transient`, `Undetermined` — is a bad day, not a bad address.
+const PERMANENT: &str = "Permanent";
+
+/// What `unsubscribed_reason` records for each.
+const REASON_BOUNCE: &str = "bounce";
+const REASON_COMPLAINT: &str = "complaint";
+
+/// One refusal for every way a delivery fails to prove itself.
+///
+/// Deliberately one answer for "the signature is wrong" and "this
+/// deployment has no webhook secret configured": a caller learns whether
+/// it signed correctly, and nothing about how the endpoint is set up.
+pub const WEBHOOK_UNVERIFIED: ProblemDef = ProblemDef {
+    slug: "webhook-unverified",
+    status: StatusCode::UNAUTHORIZED,
+    title: "Unverified webhook delivery",
+    description: "The delivery did not carry a signature this deployment could verify.",
+};
+
+/// The provider's webhook envelope, narrowed to what suppression needs.
+#[derive(Debug, Deserialize)]
+struct ProviderEvent {
+    #[serde(rename = "type")]
+    kind: String,
+    #[serde(default)]
+    data: EventData,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct EventData {
+    /// The recipients the provider tried. An array, because one send can
+    /// have several.
+    #[serde(default)]
+    to: Vec<String>,
+    #[serde(default)]
+    bounce: Option<Bounce>,
+}
+
+#[derive(Debug, Deserialize)]
+struct Bounce {
+    #[serde(rename = "type", default)]
+    kind: String,
+}
+
+/// `POST /v1/notifications/email/webhook` — the provider's delivery
+/// events (#233).
+///
+/// Unauthenticated by necessity: the provider has no account here, so the
+/// Svix signature over the raw body is the whole authority. It is
+/// verified **before** the body is parsed, and the body is read as bytes
+/// rather than as `Json` for the same reason — the signature covers the
+/// exact bytes sent, and re-serialising parsed JSON would sign a
+/// different string.
+///
+/// A hard bounce or a complaint suppresses the address for every account
+/// that holds it. A soft bounce suppresses nobody: a full mailbox is not
+/// a reason to stop mailing somebody forever.
+///
+/// Answers `200` to everything it accepted, including events it does not
+/// act on — a provider retries until it gets a 2xx, and a delivery this
+/// module has no rule for is handled, not failed.
+async fn provider_webhook(
+    scope: Scope,
+    State(state): State<Arc<ModuleState>>,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> Result<Response, Problem> {
+    let unverified = || Problem::new(&WEBHOOK_UNVERIFIED).instance(&scope.request_id);
+
+    let Some(secret) =
+        ModuleConfig::new(crate::MODULE_NAME, &*state.ctx.config).get_opt("RESEND_WEBHOOK_SECRET")
+    else {
+        // Names the variable, never its value.
+        tracing::error!(
+            "notifications: no webhook secret — set NOTIFICATIONS_RESEND_WEBHOOK_SECRET; the \
+             bounce webhook refuses every delivery until then"
+        );
+        return Err(unverified());
+    };
+
+    let header = |name: &str| headers.get(name).and_then(|value| value.to_str().ok());
+    let (Some(id), Some(timestamp), Some(signatures)) = (
+        header(SVIX_ID),
+        header(SVIX_TIMESTAMP),
+        header(SVIX_SIGNATURE),
+    ) else {
+        return Err(unverified());
+    };
+
+    let delivery = crate::webhook::Delivery {
+        id,
+        timestamp,
+        signatures,
+    };
+    if !crate::webhook::is_signed(
+        &secret,
+        &delivery,
+        &body,
+        clock::now_unix(state.ctx.ports.clock.as_ref()),
+    ) {
+        return Err(unverified());
+    }
+
+    let Ok(event) = serde_json::from_slice::<ProviderEvent>(&body) else {
+        // Accepted, because it was genuinely signed by the provider, and
+        // refusing would only make it redeliver the same unparsable body
+        // until the endpoint is disabled. Logged without the body: a
+        // serde error quotes its input, and the input is a recipient.
+        tracing::warn!("a verified provider delivery did not parse as a webhook event");
+        return Ok(StatusCode::OK.into_response());
+    };
+
+    let Some(reason) = suppression_reason(&event) else {
+        return Ok(StatusCode::OK.into_response());
+    };
+
+    let Some(db) = state.ctx.ports.db.clone() else {
+        return Err(internal(&scope));
+    };
+    let at = now(&state);
+    let mut suppressed = 0;
+    for address in &event.data.to {
+        // Normalised the same way the authenticated route stores it, or
+        // a bounce for `Alice@Example.com` would never find the row that
+        // holds `alice@example.com`.
+        let email = cratefield_core::normalize_email(address);
+        if cratefield_core::validation_error(&email).is_some() {
+            continue;
+        }
+        suppressed += store::suppress_address(&*db, &email, reason, &at)
+            .await
+            .map_err(|err| {
+                tracing::error!(error = %err, "suppressing a bounced address failed");
+                internal(&scope)
+            })?;
+    }
+    // Counts and the event kind. Never the address.
+    tracing::info!(
+        event = %event.kind,
+        reason,
+        suppressed,
+        "suppressed accounts after a provider delivery event"
+    );
+    Ok(StatusCode::OK.into_response())
+}
+
+/// Why this event suppresses an address, or `None` when it does not.
+///
+/// A complaint always does: somebody pressed "this is spam", and the next
+/// mail is how a sending domain gets blocked. A bounce only does when the
+/// provider called it permanent — a soft bounce is a full mailbox or a
+/// greylist, and unsubscribing somebody over one would be silent and
+/// unrecoverable from their side.
+fn suppression_reason(event: &ProviderEvent) -> Option<&'static str> {
+    match event.kind.as_str() {
+        EVENT_COMPLAINED => Some(REASON_COMPLAINT),
+        EVENT_BOUNCED => event
+            .data
+            .bounce
+            .as_ref()
+            .filter(|bounce| bounce.kind.eq_ignore_ascii_case(PERMANENT))
+            .map(|_| REASON_BOUNCE),
+        _ => None,
+    }
 }

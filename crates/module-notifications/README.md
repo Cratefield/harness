@@ -62,9 +62,9 @@ on this one emits `notifications.requested` on the event bus instead:
 
 ## Routes
 
-Every route but one is authenticated. The account comes from the token's
-`sub`, never from a body field, and a subscription that belongs to
-another account answers `404` — a `403` would confirm the id exists.
+The account comes from the token's `sub`, never from a body field, and a
+subscription that belongs to another account answers `404` — a `403`
+would confirm the id exists.
 
 | Method | Path | What |
 |---|---|---|
@@ -73,7 +73,25 @@ another account answers `404` — a `403` would confirm the id exists.
 | `DELETE` | `/v1/notifications/subscriptions/{id}` | Sign-out |
 | `GET` | `/v1/notifications/preferences` | Every declared category, with the values that apply |
 | `PUT` | `/v1/notifications/preferences` | Change some of them; an unknown category is `400` |
-| `GET` | `/v1/notifications/vapid-public-key` | **No token.** The application server key a browser subscribes with |
+| `PUT` | `/v1/notifications/email` | The address this account is mailed at; verified only when the token's own `email_verified` claim covers it |
+
+Two routes are **not** authenticated, because neither caller can hold a
+session. Each carries its own proof instead, and the module declares that
+with `public_writes` + `public_write_policy` so the production check can
+see them:
+
+| Method | Path | Proof |
+|---|---|---|
+| `GET`/`POST` | `/v1/notifications/email/unsubscribe?token=` | An HMAC token signed for `(account, category)` — RFC 8058 one-click |
+| `POST` | `/v1/notifications/email/webhook` | The provider's Svix signature over the raw body |
+
+The webhook takes Resend's `email.bounced` and `email.complained` and
+suppresses the address for **every** account that holds it — the provider
+reports a mailbox, not an account, and two people can share one. Only a
+`Permanent` bounce suppresses: a soft bounce is a full mailbox, not a
+dead address. Anything it does not act on still answers `200`, because a
+provider retries until it gets one.
+| `GET` | `/v1/notifications/vapid-public-key` | None needed — the value is public by construction (see below) |
 
 The key route is the exception because the value is public by
 construction: it is the derived public half of the VAPID pair and is
@@ -173,6 +191,7 @@ one parked at router-build time recovered nothing at all on a cold isolate.
 | `NOTIFICATIONS_DRAIN_BATCH` | `50` | Rows one drain pass leases |
 | `NOTIFICATIONS_DRAIN_CONCURRENCY` | `8` | Rows in flight at a time inside one pass |
 | `NOTIFICATIONS_REHOME_MAX_PER_HOUR` | `3` | Devices one account may take over from other accounts in an hour; `0` refuses every take-over |
+| `NOTIFICATIONS_RESEND_WEBHOOK_SECRET` | — | The endpoint secret (`whsec_…`) the provider's bounce webhook is signed with. Unset, that route refuses every delivery rather than trusting one |
 
 Every one is read as a `u32`, and `validate_config` refuses a value the
 runtime could not read — including one above `u32::MAX`, which used to
@@ -194,6 +213,7 @@ Notifications::new()
 ## Tables
 
 `notifications_subscriptions`, `notifications_preferences`,
-`notifications_outbox` (the core `Outbox`) and
-`notifications_dead_letters`. All four are declared, so `fz data export`
+`notifications_outbox` (the core `Outbox`), `notifications_dead_letters`,
+`notifications_inbox`, `notifications_email_targets` and
+`notifications_email_sends`. All seven are declared, so `fz data export`
 sees them.

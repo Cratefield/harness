@@ -39,6 +39,13 @@ ulid = { workspace = true }
 # The recipient hash that makes re-registration an upsert. Pure Rust,
 # wasm-safe, already in the tree.
 sha2 = { workspace = true }
+# Verifying the provider's Svix webhook signature (#233): HMAC-SHA256 over
+# the raw body, its base64 encoding, and a comparison that does not leak
+# how much of a wrong signature was right. All pure Rust and wasm-safe,
+# and the same three crates `cratefield-core`'s own signer uses.
+hmac = { workspace = true }
+base64 = { workspace = true }
+subtle = { workspace = true }
 
 [dev-dependencies]
 http = { workspace = true }

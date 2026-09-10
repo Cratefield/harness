@@ -1159,6 +1159,42 @@ pub(crate) async fn set_email_target(
 /// # Errors
 ///
 /// [`DbError`] when the write fails.
+/// Suppresses every account holding `email`, for a reason the account did
+/// not choose — a hard bounce or a spam complaint (#233).
+///
+/// By address, not by account, because that is all the provider knows: it
+/// reports the mailbox it could not deliver to. Two accounts sharing one
+/// mailbox is ordinary, and a bounce is about the mailbox, so both are
+/// suppressed.
+///
+/// `unsubscribed_at IS NULL` makes a redelivery — which a provider will
+/// send, since it retries until it gets a 2xx — change nothing, and keeps
+/// the *first* reason: somebody who had already unsubscribed by hand did
+/// not un-choose that by later bouncing.
+///
+/// Returns how many accounts were suppressed, which is a count and safe
+/// to log. The address is not.
+///
+/// # Errors
+///
+/// [`DbError`] when the write fails.
+pub(crate) async fn suppress_address(
+    db: &dyn Database,
+    email: &str,
+    reason: &str,
+    now: &str,
+) -> Result<u64, DbError> {
+    let mut update = Query::update();
+    update
+        .table(iden(EMAIL_TARGETS))
+        .value(iden("unsubscribed_at"), now)
+        .value(iden("unsubscribed_reason"), reason)
+        .value(iden("updated_at"), now)
+        .and_where(Expr::col(iden("email")).eq(email))
+        .and_where(Expr::col(iden("unsubscribed_at")).is_null());
+    db.execute(&Statement::render(&update)).await
+}
+
 pub(crate) async fn unsubscribe_all(
     db: &dyn Database,
     account_id: &str,
