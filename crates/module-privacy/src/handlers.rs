@@ -1,15 +1,27 @@
 //! The two read-only routes, and the statement builder they share.
 
+use crate::erase;
 use axum::extract::{Query, State};
-use axum::routing::get;
+use axum::routing::{get, post};
 use cratefield_core::{
     CatalogEntry, Disposition, Json, ModuleContext, Problem, Scope, Statement, is_plain_identifier,
     require_admin,
 };
+use cratefield_core::{Clock, SystemClock};
 use http::HeaderMap;
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 use std::sync::Arc;
+
+/// Wall-clock seconds, from the system clock rather than the injected one.
+///
+/// The token's expiry is judged by `Signer::verify`, which reads real time. A
+/// token minted against a test fixture's frozen clock would be born expired —
+/// and the failure looks like a bad signature, which is a long way from the
+/// cause. The same reason `module-email-signup` does this.
+fn unix_now() -> u64 {
+    u64::try_from(SystemClock.now().unix_timestamp().max(0)).unwrap_or(0)
+}
 
 /// The most rows one table may contribute to a single export.
 ///
@@ -30,6 +42,8 @@ pub(crate) fn router(ctx: Arc<ModuleContext>) -> axum::Router {
     axum::Router::new()
         .route("/manifest", get(manifest))
         .route("/export", get(export))
+        .route("/erase", post(erase))
+        .route("/erase/confirm", post(erase_confirm))
         .with_state(state)
 }
 
@@ -244,4 +258,131 @@ fn value_to_json(value: &sea_query::Value) -> Value {
 /// absent.
 fn is_null(value: &sea_query::Value) -> bool {
     format!("{value:?}").ends_with("(None)")
+}
+
+#[derive(Deserialize)]
+struct EraseRequest {
+    subject: String,
+}
+
+/// `POST /v1/privacy/erase` — what erasure would do, and a token to do it.
+///
+/// Writes nothing. The response is the preview an operator reads before
+/// committing: per table, the action and the number of rows it matches, with
+/// retained tables and their reasons included, because "we keep your invoices
+/// for seven years" is the part of the answer a subject is least likely to
+/// expect.
+async fn erase(
+    State(state): State<PrivacyState>,
+    scope: Scope,
+    headers: HeaderMap,
+    Json(body): Json<EraseRequest>,
+) -> Result<Json<Value>, Problem> {
+    require_admin(&*state.ctx.config, &headers)
+        .map_err(|problem| problem.instance(&scope.request_id))?;
+    let subject = body.subject.trim();
+    if subject.is_empty() {
+        return Err(
+            Problem::validation_failed("subject must not be empty").instance(&scope.request_id)
+        );
+    }
+    let (db, signer) = ports(&state, &scope)?;
+
+    let planned = erase::plan(&db, &state.ctx.personal_data, subject)
+        .await
+        .map_err(|err| {
+            tracing::error!(error = %err, "erasure plan failed");
+            Problem::internal().instance(&scope.request_id)
+        })?;
+
+    Ok(Json(json!({
+        "subject": subject,
+        "plan": erase::render(&planned),
+        "confirm_token": erase::mint(&signer, subject, unix_now()),
+        "expires_in_seconds": erase::CONFIRM_TTL_SECS,
+    })))
+}
+
+#[derive(Deserialize)]
+struct ConfirmRequest {
+    token: String,
+}
+
+/// `POST /v1/privacy/erase/confirm` — carries out a previewed erasure.
+///
+/// The subject comes from the signed token, never from the request body: a
+/// confirmation that could name its own subject would be a one-step erasure
+/// wearing two steps.
+async fn erase_confirm(
+    State(state): State<PrivacyState>,
+    scope: Scope,
+    headers: HeaderMap,
+    Json(body): Json<ConfirmRequest>,
+) -> Result<Json<Value>, Problem> {
+    require_admin(&*state.ctx.config, &headers)
+        .map_err(|problem| problem.instance(&scope.request_id))?;
+    let (db, signer) = ports(&state, &scope)?;
+
+    let Some(subject) = erase::subject_of(&signer, body.token.trim()) else {
+        return Err(Problem::validation_failed(
+            "the confirmation token is not valid for erasure, or has expired",
+        )
+        .instance(&scope.request_id));
+    };
+
+    let planned = erase::plan(&db, &state.ctx.personal_data, &subject)
+        .await
+        .map_err(|err| {
+            tracing::error!(error = %err, "erasure plan failed");
+            Problem::internal().instance(&scope.request_id)
+        })?;
+
+    let statements = erase::statements(&planned, &subject);
+    if !statements.is_empty() {
+        db.batch(&statements).await.map_err(|err| {
+            tracing::error!(error = %err, "erasure batch failed");
+            Problem::internal().instance(&scope.request_id)
+        })?;
+    }
+
+    // The receipt says the rows are gone because this went back and counted.
+    let remaining = erase::verify(&db, &planned, &subject)
+        .await
+        .map_err(|err| {
+            tracing::error!(error = %err, "erasure verification failed");
+            Problem::internal().instance(&scope.request_id)
+        })?;
+    if !remaining.is_empty() {
+        tracing::error!(tables = ?remaining, "erasure did not remove everything it reported");
+        return Err(erase::not_verified(&remaining).instance(&scope.request_id));
+    }
+
+    Ok(Json(json!({
+        "subject": subject,
+        "erased": erase::render(&planned),
+        "verified": true,
+    })))
+}
+
+/// The database and the signer, which erasure needs together: without the
+/// signer there is no confirmation token, and a one-step erasure is not one
+/// this module is willing to serve.
+type ErasePorts = (
+    Arc<dyn cratefield_core::Database>,
+    Arc<dyn cratefield_core::Signer>,
+);
+
+/// Both ports, or a problem.
+///
+/// `Harness::build` already refuses a composition missing either, so reaching
+/// an error arm here means the runtime handed over a port view that disagrees
+/// with this module's own `requires()`.
+fn ports(state: &PrivacyState, scope: &Scope) -> Result<ErasePorts, Problem> {
+    let Some(db) = state.ctx.ports.db.clone() else {
+        return Err(Problem::internal().instance(&scope.request_id));
+    };
+    let Some(signer) = state.ctx.ports.signer.clone() else {
+        return Err(Problem::internal().instance(&scope.request_id));
+    };
+    Ok((db, signer))
 }

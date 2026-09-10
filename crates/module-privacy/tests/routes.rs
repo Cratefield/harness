@@ -243,3 +243,146 @@ async fn admin_get(kit: &TestHarness, path: &str) -> (StatusCode, String) {
         .expect("body");
     (status, String::from_utf8_lossy(&bytes).into_owned())
 }
+
+// ---------------------------------------------------------------- erasure
+
+async fn admin_post(kit: &TestHarness, path: &str, body: &str) -> (StatusCode, String) {
+    let req = axum::http::Request::builder()
+        .method(Method::POST)
+        .uri(path)
+        .header(header::AUTHORIZATION, format!("Bearer {ADMIN}"))
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(axum::body::Body::from(body.to_owned()))
+        .expect("request builds");
+    let response = kit
+        .router
+        .clone()
+        .oneshot(req)
+        .await
+        .expect("router answers");
+    let status = response.status();
+    let bytes = axum::body::to_bytes(response.into_body(), 4 * 1024 * 1024)
+        .await
+        .expect("body");
+    (status, String::from_utf8_lossy(&bytes).into_owned())
+}
+
+async fn count(kit: &TestHarness, account: &str) -> i64 {
+    let rows = kit
+        .db
+        .query(&Statement::with_values(
+            "SELECT COUNT(*) AS n FROM practice_sessions WHERE account_id = ?",
+            vec![account.into()],
+        ))
+        .await
+        .expect("count");
+    rows.first().and_then(|r| r.get("n")).unwrap_or(0)
+}
+
+#[tokio::test]
+async fn the_preview_writes_nothing() {
+    for kit in kits() {
+        seed(&kit).await;
+        let (status, raw) = admin_post(&kit, "/v1/privacy/erase", r#"{"subject":"acct-1"}"#).await;
+        assert_eq!(status, StatusCode::OK, "{raw}");
+        let body: Value = serde_json::from_str(&raw).expect("json");
+
+        assert_eq!(body["plan"][0]["table"], "practice_sessions");
+        assert_eq!(body["plan"][0]["action"], "erase");
+        assert_eq!(body["plan"][0]["rows"], 2);
+        assert!(
+            body["confirm_token"]
+                .as_str()
+                .is_some_and(|t| !t.is_empty())
+        );
+
+        // The whole point of a preview.
+        assert_eq!(count(&kit, "acct-1").await, 2, "the preview deleted rows");
+    }
+}
+
+#[tokio::test]
+async fn a_confirmed_erasure_removes_the_rows_and_leaves_other_subjects_alone() {
+    for kit in kits() {
+        seed(&kit).await;
+        let (_, raw) = admin_post(&kit, "/v1/privacy/erase", r#"{"subject":"acct-1"}"#).await;
+        let token = serde_json::from_str::<Value>(&raw).expect("json")["confirm_token"]
+            .as_str()
+            .expect("token")
+            .to_owned();
+
+        let (status, raw) = admin_post(
+            &kit,
+            "/v1/privacy/erase/confirm",
+            &format!(r#"{{"token":"{token}"}}"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{raw}");
+        let body: Value = serde_json::from_str(&raw).expect("json");
+        assert_eq!(body["verified"], Value::Bool(true));
+        assert_eq!(body["subject"], "acct-1");
+
+        assert_eq!(count(&kit, "acct-1").await, 0, "rows survived erasure");
+        assert_eq!(count(&kit, "acct-2").await, 1, "another subject was erased");
+    }
+}
+
+#[tokio::test]
+async fn a_confirmation_cannot_name_its_own_subject() {
+    // The subject comes from the signed token. A body naming one is ignored,
+    // or the two-step is a one-step wearing a costume.
+    for kit in kits() {
+        seed(&kit).await;
+        let (_, raw) = admin_post(&kit, "/v1/privacy/erase", r#"{"subject":"acct-1"}"#).await;
+        let token = serde_json::from_str::<Value>(&raw).expect("json")["confirm_token"]
+            .as_str()
+            .expect("token")
+            .to_owned();
+
+        let (status, _) = admin_post(
+            &kit,
+            "/v1/privacy/erase/confirm",
+            &format!(r#"{{"token":"{token}","subject":"acct-2"}}"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(count(&kit, "acct-2").await, 1, "the body chose the victim");
+    }
+}
+
+#[tokio::test]
+async fn a_forged_or_expired_token_erases_nothing() {
+    for kit in kits() {
+        seed(&kit).await;
+        for token in ["", "not-a-token", "aaaa.bbbb.cccc"] {
+            let (status, _) = admin_post(
+                &kit,
+                "/v1/privacy/erase/confirm",
+                &format!(r#"{{"token":"{token}"}}"#),
+            )
+            .await;
+            assert_eq!(
+                status,
+                StatusCode::BAD_REQUEST,
+                "token {token:?} was accepted"
+            );
+        }
+        assert_eq!(count(&kit, "acct-1").await, 2);
+    }
+}
+
+#[tokio::test]
+async fn erasure_without_admin_credentials_is_refused() {
+    for kit in kits() {
+        seed(&kit).await;
+        let response = request(
+            &kit.router,
+            Method::POST,
+            "/v1/privacy/erase",
+            Some(r#"{"subject":"acct-1"}"#),
+        )
+        .await;
+        assert_ne!(response.status, StatusCode::OK);
+        assert_eq!(count(&kit, "acct-1").await, 2);
+    }
+}
