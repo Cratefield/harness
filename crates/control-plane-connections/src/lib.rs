@@ -44,6 +44,8 @@
 
 #![forbid(unsafe_code)]
 
+pub mod stripe;
+
 use std::sync::Arc;
 
 use cratefield_catalog::ModuleSet;
