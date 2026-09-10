@@ -794,3 +794,42 @@ fn a_module_may_depend_on_itself_only_by_being_a_cycle() {
         errors.problems
     );
 }
+
+/// Issue #143, the half that survived its own fix.
+///
+/// `#143` corrected the boot gate and the surface merge to read the
+/// deployment's environment, and left `ModuleContext` handing modules the
+/// compiled one. That is the path that decides **per request**:
+/// `module-waitlist` passes `ctx.venture.env` to `verify_human_form`, so
+/// a Worker serving production with no `Captcha` port waved every public
+/// write through, because the venture claimed `Development`.
+#[pollster::test]
+async fn a_module_sees_the_environment_the_deployment_declares() {
+    let harness = Harness::builder()
+        .venture(base_venture())
+        .module(PublicWriter)
+        .runtime(UnusableCaptcha)
+        .build()
+        .expect("a development venture builds");
+    assert_eq!(
+        harness.venture().env,
+        cratefield_core::VentureEnv::Development,
+        "the compiled venture still says what it always said"
+    );
+
+    // Deployed as production, exactly as cratefield-waitlist is.
+    let ports = Ports::with_config(Arc::new(MapConfig::from_pairs([("ENV", "production")])));
+    let ctx = harness.module_context(&PublicWriter, &ports);
+    assert_eq!(
+        ctx.venture.env,
+        cratefield_core::VentureEnv::Production,
+        "a module must see the environment it is actually running in"
+    );
+
+    // And below production nothing changes.
+    let ctx = harness.module_context(
+        &PublicWriter,
+        &Ports::with_config(Arc::new(MapConfig::default())),
+    );
+    assert_eq!(ctx.venture.env, cratefield_core::VentureEnv::Development);
+}

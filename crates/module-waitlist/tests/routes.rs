@@ -907,3 +907,80 @@ async fn two_remailed_tokens_race_to_one_confirm_and_one_credit() {
         assert_eq!(referrals, 1, "one referral, one credit under the race");
     }
 }
+
+/// The live `cratefield-waitlist` configuration, exactly: deployed as
+/// production (`ENV=production`), no `Captcha` port bound, and the
+/// operator's recorded acceptance of that gap
+/// (`HARNESS_ALLOW_UNPROTECTED_WRITES`) present so the readiness gate
+/// serves rather than refusing.
+///
+/// The question this answers is what a join does in that configuration,
+/// because #143's per-request half decides it and an override that
+/// covers the boot gate but not this one would take the site down with a
+/// different status code instead of a 503.
+#[pollster::test]
+async fn the_live_waitlist_configuration_still_accepts_a_join() {
+    for kit in TestHarness::all_dialects_with_ports(
+        || vec![Box::new(Waitlist::new().products(["kontinuum"]))],
+        |ports| {
+            ports.captcha = None;
+            ports.config = Arc::new(cratefield_core::MapConfig::from_pairs([
+                ("ENV", "production"),
+                (
+                    cratefield_core::ALLOW_UNPROTECTED_WRITES,
+                    "issue #143: Turnstile pending on the Factory0 account",
+                ),
+            ]));
+        },
+    ) {
+        let response = request(
+            &kit.router,
+            Method::POST,
+            "/v1/waitlist",
+            Some(&join_json("live@example.com", "kontinuum")),
+        )
+        .await;
+        assert_eq!(
+            response.status,
+            StatusCode::ACCEPTED,
+            "the operator accepted the gap; the join must still be served: {:?}",
+            response.json()
+        );
+    }
+}
+
+/// The same deployment without the recorded acceptance. This is the rule
+/// #143 wrote and that never fired for the venture it was written for:
+/// production, no `Captcha` port, so the write is refused rather than
+/// waved through. Before the `ModuleContext` fix this returned 202,
+/// because the module was reading the compiled `Development`.
+#[pollster::test]
+async fn production_without_a_captcha_port_or_an_acceptance_refuses_the_join() {
+    for kit in TestHarness::all_dialects_with_ports(
+        || vec![Box::new(Waitlist::new().products(["kontinuum"]))],
+        |ports| {
+            ports.captcha = None;
+            ports.config = Arc::new(cratefield_core::MapConfig::from_pairs([(
+                "ENV",
+                "production",
+            )]));
+        },
+    ) {
+        let response = request(
+            &kit.router,
+            Method::POST,
+            "/v1/waitlist",
+            Some(&join_json("unprotected@example.com", "kontinuum")),
+        )
+        .await;
+        assert_eq!(
+            response.status,
+            StatusCode::BAD_REQUEST,
+            "an unaccepted unprotected write must not be served"
+        );
+        assert_eq!(
+            response.json()["type"],
+            "https://factory0.ventures/problems/captcha-failed"
+        );
+    }
+}
