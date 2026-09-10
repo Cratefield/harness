@@ -138,12 +138,38 @@ impl Harness {
     /// per module; `cratefield-runtime-cloudflare` uses it for scheduled
     /// fan-out.
     pub fn module_context(&self, module: &dyn Module, ports: &Ports) -> ModuleContext {
+        // `venture.env` here is the environment the **deployment**
+        // declares, not the compiled default (issue #143).
+        //
+        // #143 corrected the boot gate and the surface merge and left
+        // this path alone, which is the one that decides per request. A
+        // module reading `ctx.venture.env` was getting `Development` on a
+        // Worker serving production — and `module-waitlist` reads exactly
+        // that to decide whether a missing `Captcha` port fails closed.
+        // So the rule that says "no captcha port in production is a
+        // refusal" never fired for the venture it was written for.
+        //
+        // Corrected here rather than at the call site so the field cannot
+        // lie: leaving `ctx.venture.env` looking right and being wrong is
+        // how this survived the fix that was meant to remove it.
+        let env = deployed_env(self.venture.env, ports.config.as_ref());
+        let venture = if env == self.venture.env {
+            Arc::clone(&self.venture)
+        } else {
+            let mut deployed = (*self.venture).clone();
+            deployed.env = env;
+            Arc::new(deployed)
+        };
         ModuleContext {
             config: Arc::clone(&ports.config),
             ports: ports.view_for(module),
             events: self.events.clone(),
             templates: Arc::clone(&self.templates),
-            venture: Arc::clone(&self.venture),
+            venture,
+            unprotected_writes_accepted: crate::route_policy::unprotected_writes_override(
+                ports.config.as_ref(),
+            )
+            .is_some(),
             ui_mounted: self.ui.is_some(),
         }
     }

@@ -219,7 +219,11 @@ async fn check_captcha(
 ) -> Result<(), Problem> {
     verify_human_form(
         state.ctx.ports.captcha.as_ref(),
+        // The environment the deployment declares, which since #143 is
+        // what `ctx.venture` reports, and the operator's recorded
+        // acceptance if there is one.
         state.ctx.venture.env,
+        state.ctx.unprotected_writes_accepted,
         token,
         client_ip(headers).as_deref(),
         &scope.request_id,

@@ -349,7 +349,12 @@ pub fn production_readiness(
 /// - the port is absent in **production**: `captcha-failed` as well.
 ///   `Harness::build` refuses that composition, so reaching this branch
 ///   means a runtime lied about its binding — refuse rather than wave
-///   the request through;
+///   the request through. **Unless** `accepted_unprotected`: an operator
+///   has recorded that this deployment serves without the port
+///   (`HARNESS_ALLOW_UNPROTECTED_WRITES`, issue #143), the boot gate
+///   honoured that and served, and refusing here would be the same
+///   outage the acceptance exists to avoid, with a different status
+///   code. The record is the accountability, not this branch;
 /// - the port is absent in development/staging: allow, so a staging
 ///   deploy can drive the form without a live Turnstile.
 ///
@@ -359,6 +364,7 @@ pub fn production_readiness(
 pub async fn verify_human_form(
     captcha: Option<&Arc<dyn Captcha>>,
     env: VentureEnv,
+    accepted_unprotected: bool,
     token: Option<&str>,
     remote_ip: Option<&str>,
     instance: &str,
@@ -374,7 +380,10 @@ pub async fn verify_human_form(
                 _ => Err(refused()),
             }
         }
-        None if env == VentureEnv::Production => Err(refused()),
+        // No port, in production, with nobody having accepted that: the
+        // composition `Harness::build` refuses is somehow serving, so
+        // refuse the request rather than wave it through.
+        None if env == VentureEnv::Production && !accepted_unprotected => Err(refused()),
         None => Ok(()),
     }
 }
@@ -426,6 +435,7 @@ mod tests {
             verify_human_form(
                 Some(&port(true, false)),
                 env,
+                false,
                 Some("token"),
                 Some("203.0.113.7"),
                 "request-1",
@@ -442,17 +452,17 @@ mod tests {
         let unreachable = port(true, true);
         for env in [VentureEnv::Development, VentureEnv::Production] {
             assert!(
-                verify_human_form(Some(&refused), env, Some("t"), None, "r")
+                verify_human_form(Some(&refused), env, false, Some("t"), None, "r")
                     .await
                     .is_err()
             );
             assert!(
-                verify_human_form(Some(&unreachable), env, Some("t"), None, "r")
+                verify_human_form(Some(&unreachable), env, false, Some("t"), None, "r")
                     .await
                     .is_err()
             );
             assert!(
-                verify_human_form(Some(&good), env, None, None, "r")
+                verify_human_form(Some(&good), env, false, None, None, "r")
                     .await
                     .is_err()
             );
@@ -462,13 +472,13 @@ mod tests {
     #[pollster::test]
     async fn absent_port_refuses_production_and_allows_lower_envs() {
         assert!(
-            verify_human_form(None, VentureEnv::Production, Some("t"), None, "r")
+            verify_human_form(None, VentureEnv::Production, false, Some("t"), None, "r")
                 .await
                 .is_err()
         );
         for env in [VentureEnv::Development, VentureEnv::Staging] {
             assert!(
-                verify_human_form(None, env, Some("t"), None, "r")
+                verify_human_form(None, env, false, Some("t"), None, "r")
                     .await
                     .is_ok()
             );
