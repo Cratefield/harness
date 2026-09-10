@@ -267,6 +267,7 @@ pub(crate) struct Settings {
     pub email_window_secs: u32,
     pub email_max_per_window: u32,
     pub transport_probe: Option<TransportProbe>,
+    pub mailer_probe: Option<TransportProbe>,
 }
 
 impl std::fmt::Debug for Settings {
@@ -281,6 +282,7 @@ impl std::fmt::Debug for Settings {
             .field("email_window_secs", &self.email_window_secs)
             .field("email_max_per_window", &self.email_max_per_window)
             .field("transport_probe", &self.transport_probe.is_some())
+            .field("mailer_probe", &self.mailer_probe.is_some())
             .finish()
     }
 }
@@ -344,6 +346,7 @@ impl Notifications {
                 email_window_secs: 3_600,
                 email_max_per_window: 5,
                 transport_probe: None,
+                mailer_probe: None,
             },
             ctx_cell: Arc::new(OnceLock::new()),
             settings_cell: Arc::new(OnceLock::new()),
@@ -450,6 +453,24 @@ impl Notifications {
     #[must_use]
     pub fn email_window_secs(mut self, seconds: u32) -> Self {
         self.settings.email_window_secs = seconds;
+        self
+    }
+
+    /// How the venture answers "is a mailer wired?", for the same
+    /// production check as [`Notifications::transport_probe`].
+    ///
+    /// Needed for the same reason: whether a `Mailer` port exists is not
+    /// something config can be read for — a venture may hand the harness
+    /// its own adapter — so the venture answers, and a venture that
+    /// assembles Resend from the environment passes a check on its key.
+    ///
+    /// Without a probe the check is skipped, exactly as for transports.
+    #[must_use]
+    pub fn mailer_probe(
+        mut self,
+        probe: impl Fn(&dyn Config) -> bool + Send + Sync + 'static,
+    ) -> Self {
+        self.settings.mailer_probe = Some(Arc::new(probe));
         self
     }
 
@@ -665,6 +686,30 @@ impl Module for Notifications {
                      send would dead-letter as `not_configured`. `fz doctor` names the variables"
                         .to_owned(),
                 );
+            }
+            // Only when a category actually asks for email. A venture with
+            // no `email(true)` category never sends one, so a missing
+            // mailer is not a problem it has (#189).
+            let emails = self
+                .settings
+                .categories
+                .iter()
+                .filter(|category| category.defaults.email)
+                .map(|category| category.name.clone())
+                .collect::<Vec<_>>();
+            if !emails.is_empty()
+                && self
+                    .settings
+                    .mailer_probe
+                    .as_ref()
+                    .is_some_and(|probe| !probe(cfg))
+            {
+                errors.push(format!(
+                    "notifications: production, and {} opted into email, but this venture wired \
+                     no Mailer port: every one of those would dead-letter as `not_configured`. \
+                     Configure the mailer, or drop `.email(true)` from those categories",
+                    emails.join(", "),
+                ));
             }
         }
 
