@@ -101,6 +101,15 @@ pub enum Skipped {
 pub struct Enqueued {
     notification_id: String,
     statements: Vec<Statement>,
+    /// How many of `statements` are push rows. Counted rather than derived
+    /// from the length: since #187 the batch may also carry the in-app
+    /// inbox insert, and `len()` means devices.
+    devices: usize,
+    inbox: bool,
+    /// The room and payload for the live announcement, present exactly
+    /// when an inbox row is in `statements`. Built here so
+    /// [`Notifier::announce`] is a broadcast and nothing else.
+    announcement: Option<(String, Vec<u8>)>,
     skipped: Option<Skipped>,
 }
 
@@ -127,18 +136,32 @@ impl Enqueued {
     }
 
     /// How many devices this notification will be attempted on.
+    ///
+    /// Devices, not statements: the batch may also carry the in-app inbox
+    /// insert, which is not a send.
     #[must_use]
     pub fn len(&self) -> usize {
-        self.statements.len()
+        self.devices
     }
 
-    /// Whether nothing will be sent.
+    /// Whether nothing will be *sent*. An inbox row may still be written —
+    /// see [`Enqueued::wrote_inbox`].
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.statements.is_empty()
+        self.devices == 0
     }
 
-    /// Why nothing will be sent, when nothing will be.
+    /// Whether the batch carries an in-app inbox row (#187).
+    ///
+    /// Independent of [`Enqueued::is_empty`]: the inbox is written for an
+    /// account with no device and for one whose *push* preference is off,
+    /// because those switch off push, not the record.
+    #[must_use]
+    pub fn wrote_inbox(&self) -> bool {
+        self.inbox
+    }
+
+    /// Why nothing will be **pushed**, when nothing will be.
     #[must_use]
     pub fn skipped(&self) -> Option<Skipped> {
         self.skipped
@@ -342,6 +365,29 @@ impl Notifier {
         usize::try_from(configured.max(1)).unwrap_or(1)
     }
 
+    /// Whether `account_id` wants an inbox row for `category`.
+    ///
+    /// Two switches, both of which must be on: the venture's, which says
+    /// whether the category is worth keeping at all, and the account's.
+    async fn in_app_allowed(
+        &self,
+        db: &dyn Database,
+        account_id: &str,
+        category: &Category,
+    ) -> Result<bool, DbError> {
+        if !category.in_app {
+            return Ok(false);
+        }
+        // Falls back to `true`, not to `default_enabled`: that is the
+        // *push* default, and a category whose push is off by default —
+        // `coach_notes` — is exactly the one whose record the account
+        // still wants. A push opt-out switches off the interruption, not
+        // the history (#187).
+        Ok(store::preference(db, account_id, &category.name)
+            .await?
+            .is_none_or(|channels: Channels| channels.in_app))
+    }
+
     /// Whether `account_id` wants push for `category` **right now**.
     async fn push_allowed(
         &self,
@@ -375,13 +421,66 @@ impl Notifier {
         let category = self.category(category)?.clone();
         let notification_id = self.new_id();
 
+        // Prepared before either channel decides anything, so the row the
+        // inbox keeps and the payload a device receives are the same
+        // notification, and an invalid `data` is one error either way.
+        let notification = prepare(notification, &category, &notification_id)?;
+        let now = self.now();
+        let mut statements = Vec::new();
+
+        // In-app first, and unconditionally with respect to push: an
+        // account with no device, or with push switched off, still gets
+        // the record. Those switch off push, not the inbox.
+        let inbox = self.in_app_allowed(db, account_id, &category).await?;
+        let mut announcement = None;
+        if inbox {
+            let inbox_id = self.new_id();
+            announcement = Some((
+                format!("{INBOX_ROOM_PREFIX}{account_id}"),
+                serde_json::to_vec(&json!({
+                    "type": "notification",
+                    "id": inbox_id,
+                    "notification_id": notification_id,
+                    "category": category.name,
+                    "title": notification.title,
+                    "body": notification.body,
+                    "url": notification.url,
+                    "created_at": now,
+                }))
+                .map_err(|err| {
+                    NotifyError::Database(DbError::Execute(format!(
+                        "notification does not serialise: {err}"
+                    )))
+                })?,
+            ));
+            statements.push(store::insert_inbox_statement(
+                &inbox_id,
+                account_id,
+                &notification_id,
+                &category.name,
+                &notification.title,
+                &notification.body,
+                notification.url.as_deref(),
+                notification.icon.as_deref(),
+                &serde_json::to_string(&notification.data).map_err(|err| {
+                    NotifyError::Database(DbError::Execute(format!(
+                        "notification data does not serialise: {err}"
+                    )))
+                })?,
+                &now,
+            ));
+        }
+
         // Cheap skip, not the check that counts: the drain re-reads the
         // preference immediately before sending, so an opt-out that
         // arrives after this line still wins.
         if !self.push_allowed(db, account_id, &category).await? {
             return Ok(Enqueued {
                 notification_id,
-                statements: Vec::new(),
+                statements,
+                devices: 0,
+                inbox,
+                announcement,
                 skipped: Some(Skipped::PreferenceOff),
             });
         }
@@ -390,15 +489,16 @@ impl Notifier {
         if subscriptions.is_empty() {
             return Ok(Enqueued {
                 notification_id,
-                statements: Vec::new(),
+                statements,
+                devices: 0,
+                inbox,
+                announcement,
                 skipped: Some(Skipped::NoSubscriptions),
             });
         }
 
-        let notification = prepare(notification, &category, &notification_id)?;
-        let now = self.now();
         let outbox = Outbox::new(store::OUTBOX);
-        let mut statements = Vec::with_capacity(subscriptions.len());
+        statements.reserve(subscriptions.len());
         for subscription in &subscriptions {
             let job = SendJob {
                 notification_id: notification_id.clone(),
@@ -415,8 +515,11 @@ impl Notifier {
             statements.push(outbox.enqueue_statement(&self.new_id(), TOPIC_SEND, &payload, &now));
         }
         Ok(Enqueued {
+            devices: subscriptions.len(),
             notification_id,
             statements,
+            inbox,
+            announcement,
             skipped: None,
         })
     }
@@ -438,11 +541,46 @@ impl Notifier {
         notification: Notification,
     ) -> Result<Enqueued, NotifyError> {
         let enqueued = self.notify(db, account_id, category, notification).await?;
-        if !enqueued.is_empty() {
+        // `is_empty()` is about devices, and an account with none can
+        // still have an inbox row waiting in this batch. Commit on the
+        // statements, not on the device count.
+        if !enqueued.statements().is_empty() {
             db.batch(enqueued.statements()).await?;
+            self.announce(scope, &enqueued).await;
+        }
+        if !enqueued.is_empty() {
             self.deliver_now(scope);
         }
         Ok(enqueued)
+    }
+
+    /// Announces a just-committed inbox row to the account's room, when
+    /// the venture wired `Realtime`.
+    ///
+    /// Call it **after** your batch commits, for the same reason
+    /// [`Notifier::deliver_now`] says so: a client that received the event
+    /// will read the inbox, and the row has to be there.
+    /// [`Notifier::notify_now`] does it for you.
+    ///
+    /// Deliberately not part of the drain. The drain runs only when there
+    /// are push rows, and the account this matters most to — no device, or
+    /// push refused — has none. A failure is logged and swallowed: a live
+    /// update is an optimisation over the client's own polling, and losing
+    /// one must never fail the caller's write.
+    pub async fn announce(&self, scope: &Scope, enqueued: &Enqueued) {
+        let Some((room, payload)) = enqueued.announcement.as_ref() else {
+            return;
+        };
+        let Some(realtime) = self.cell.get().and_then(|ctx| ctx.ports.realtime.clone()) else {
+            return;
+        };
+        if let Err(err) = realtime.broadcast(room, payload).await {
+            tracing::warn!(
+                error = %err,
+                request = %scope.request_id,
+                "the inbox row is written; announcing it live failed"
+            );
+        }
     }
 
     /// Attempts immediate delivery on the request's `Defer`.
@@ -769,6 +907,13 @@ fn prepare(
     }
     Ok(notification)
 }
+
+/// The room one account's live inbox events go to. A client joins
+/// `notifications:<account_id>` when the app opens.
+///
+/// Nothing is published here that the inbox row does not also hold, so a
+/// client that missed the event loses nothing by reading the list.
+pub const INBOX_ROOM_PREFIX: &str = "notifications:";
 
 /// Exponential backoff on the number of failed attempts, capped.
 fn backoff(attempts: i64) -> Duration {

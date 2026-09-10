@@ -77,7 +77,9 @@ async fn notify_and_commit(kit: &Kit, account: &str, category: &str) -> usize {
         )
         .await
         .expect("notify");
-    if !enqueued.is_empty() {
+    // On the statements, not the device count: since #187 the batch can
+    // carry an inbox row for an account with no device at all.
+    if !enqueued.statements().is_empty() {
         db.batch(enqueued.statements()).await.expect("batch");
     }
     enqueued.len()

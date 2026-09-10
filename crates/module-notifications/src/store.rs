@@ -19,6 +19,8 @@ pub(crate) const PREFERENCES: &str = "notifications_preferences";
 pub(crate) const OUTBOX: &str = "notifications_outbox";
 /// The terminal state core's outbox does not have (ADR 0016).
 pub(crate) const DEAD_LETTERS: &str = "notifications_dead_letters";
+/// The per-account in-app inbox (#187).
+pub(crate) const INBOX: &str = "notifications_inbox";
 
 fn iden(name: &str) -> Alias {
     Alias::new(name)
@@ -744,4 +746,301 @@ pub(crate) fn dead_letter_statement(
             dead.failed_at.into(),
         ]);
     Statement::render(&insert)
+}
+
+// ---------------------------------------------------------------------------
+// The in-app inbox (#187)
+
+/// One inbox row, as the routes render it.
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct InboxItem {
+    pub id: String,
+    pub notification_id: String,
+    pub category: String,
+    pub title: String,
+    pub body: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub icon: Option<String>,
+    pub data: serde_json::Value,
+    pub created_at: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub read_at: Option<String>,
+}
+
+/// The insert `notify` appends to the caller's batch.
+///
+/// A statement rather than a write, because the inbox row has to commit in
+/// the same unit of work as the caller's own state change: a booking that
+/// rolls back must not leave "your booking is confirmed" in the list.
+#[must_use]
+#[allow(clippy::too_many_arguments, reason = "one row, one column each")]
+pub(crate) fn insert_inbox_statement(
+    id: &str,
+    account_id: &str,
+    notification_id: &str,
+    category: &str,
+    title: &str,
+    body: &str,
+    url: Option<&str>,
+    icon: Option<&str>,
+    data_json: &str,
+    now: &str,
+) -> Statement {
+    let mut insert = Query::insert();
+    insert
+        .into_table(iden(INBOX))
+        .columns([
+            "id",
+            "account_id",
+            "notification_id",
+            "category",
+            "title",
+            "body",
+            "url",
+            "icon",
+            "data_json",
+            "created_at",
+        ])
+        .values_panic([
+            id.into(),
+            account_id.into(),
+            notification_id.into(),
+            category.into(),
+            title.into(),
+            body.into(),
+            url.into(),
+            icon.into(),
+            data_json.into(),
+            now.into(),
+        ]);
+    Statement::render(&insert)
+}
+
+/// One page of an account's inbox, newest first.
+///
+/// Ordered by `(created_at, id)` and paged by the same pair. `created_at`
+/// alone is not unique — two notifications in one second tie — and paging
+/// on a non-unique key either skips rows or repeats them. `id` alone is
+/// not ordered: it comes from the `IdGen` port, whose ULIDs read the real
+/// clock and randomise the tail, so two minted in the same millisecond
+/// have no defined order and neither matches the `Clock` the API reports.
+/// The pair is both ordered and unique, which is what a cursor needs.
+///
+/// Archived rows are excluded: archiving is the account saying "not in my
+/// list".
+///
+/// # Errors
+///
+/// [`DbError`] when the read fails or a row will not decode.
+pub(crate) async fn inbox_page(
+    db: &dyn Database,
+    account_id: &str,
+    before: Option<(&str, &str)>,
+    unread_only: bool,
+    limit: u64,
+) -> Result<Vec<InboxItem>, DbError> {
+    let mut select = Query::select();
+    select
+        .columns([
+            iden("id"),
+            iden("notification_id"),
+            iden("category"),
+            iden("title"),
+            iden("body"),
+            iden("url"),
+            iden("icon"),
+            iden("data_json"),
+            iden("created_at"),
+            iden("read_at"),
+        ])
+        .from(iden(INBOX))
+        .and_where(Expr::col(iden("account_id")).eq(account_id))
+        .and_where(Expr::col(iden("archived_at")).is_null())
+        .order_by(iden("created_at"), Order::Desc)
+        .order_by(iden("id"), Order::Desc)
+        .limit(limit);
+    if let Some((at, id)) = before {
+        // Strictly older than the cursor row: an earlier instant, or the
+        // same instant and a lower id. Plain comparisons and OR, so it
+        // stays in the portable subset (ADR 0004).
+        select.and_where(
+            Expr::col(iden("created_at"))
+                .lt(at)
+                .or(Expr::col(iden("created_at"))
+                    .eq(at)
+                    .and(Expr::col(iden("id")).lt(id))),
+        );
+    }
+    if unread_only {
+        select.and_where(Expr::col(iden("read_at")).is_null());
+    }
+    db.query(&Statement::render(&select))
+        .await?
+        .rows
+        .iter()
+        .map(read_inbox_item)
+        .collect()
+}
+
+/// One row, or the query error a row that will not decode deserves.
+fn read_inbox_item(row: &Row) -> Result<InboxItem, DbError> {
+    let id = row
+        .get::<String>("id")
+        .ok_or_else(|| DbError::Query(format!("{INBOX} row has no id")))?;
+    let data = row
+        .get::<String>("data_json")
+        .as_deref()
+        .map_or_else(|| Ok(serde_json::Value::Null), serde_json::from_str)
+        .map_err(|err| DbError::Query(format!("{INBOX} row {id} has unreadable data: {err}")))?;
+    Ok(InboxItem {
+        notification_id: row
+            .get::<String>("notification_id")
+            .ok_or_else(|| corrupt(INBOX, &id, "notification_id"))?,
+        category: row
+            .get::<String>("category")
+            .ok_or_else(|| corrupt(INBOX, &id, "category"))?,
+        title: row
+            .get::<String>("title")
+            .ok_or_else(|| corrupt(INBOX, &id, "title"))?,
+        body: row
+            .get::<String>("body")
+            .ok_or_else(|| corrupt(INBOX, &id, "body"))?,
+        url: row.get::<String>("url"),
+        icon: row.get::<String>("icon"),
+        data,
+        created_at: row
+            .get::<String>("created_at")
+            .ok_or_else(|| corrupt(INBOX, &id, "created_at"))?,
+        read_at: row.get::<String>("read_at"),
+        id,
+    })
+}
+
+/// How many unread, unarchived rows the account has.
+///
+/// # Errors
+///
+/// [`DbError`] when the read fails.
+pub(crate) async fn unread_count(db: &dyn Database, account_id: &str) -> Result<i64, DbError> {
+    let mut select = Query::select();
+    select
+        .expr_as(Expr::col(iden("id")).count(), iden("unread"))
+        .from(iden(INBOX))
+        .and_where(Expr::col(iden("account_id")).eq(account_id))
+        .and_where(Expr::col(iden("archived_at")).is_null())
+        .and_where(Expr::col(iden("read_at")).is_null());
+    Ok(db
+        .query(&Statement::render(&select))
+        .await?
+        .first()
+        .and_then(|row| row.get::<i64>("unread"))
+        .unwrap_or(0))
+}
+
+/// Marks one row read, scoped to its owner. `false` when the account does
+/// not own a row with that id — which the route answers as a 404, never a
+/// 403, so it cannot be used to discover that somebody else's id exists.
+///
+/// Idempotent: `read_at` is only set where it is still NULL, so reading
+/// twice keeps the first timestamp.
+///
+/// # Errors
+///
+/// [`DbError`] when the write fails.
+pub(crate) async fn mark_read(
+    db: &dyn Database,
+    id: &str,
+    account_id: &str,
+    now: &str,
+) -> Result<bool, DbError> {
+    let mut exists = Query::select();
+    exists
+        .column(iden("id"))
+        .from(iden(INBOX))
+        .and_where(Expr::col(iden("id")).eq(id))
+        .and_where(Expr::col(iden("account_id")).eq(account_id));
+    if db
+        .query(&Statement::render(&exists))
+        .await?
+        .first()
+        .is_none()
+    {
+        return Ok(false);
+    }
+    let mut update = Query::update();
+    update
+        .table(iden(INBOX))
+        .value(iden("read_at"), now)
+        .and_where(Expr::col(iden("id")).eq(id))
+        .and_where(Expr::col(iden("account_id")).eq(account_id))
+        .and_where(Expr::col(iden("read_at")).is_null());
+    db.execute(&Statement::render(&update)).await?;
+    Ok(true)
+}
+
+/// Marks every unread row read. Returns how many moved, so a second call
+/// answering `0` is the visible proof it is idempotent.
+///
+/// # Errors
+///
+/// [`DbError`] when the write fails.
+pub(crate) async fn mark_all_read(
+    db: &dyn Database,
+    account_id: &str,
+    now: &str,
+) -> Result<u64, DbError> {
+    let mut update = Query::update();
+    update
+        .table(iden(INBOX))
+        .value(iden("read_at"), now)
+        .and_where(Expr::col(iden("account_id")).eq(account_id))
+        .and_where(Expr::col(iden("read_at")).is_null());
+    db.execute(&Statement::render(&update)).await
+}
+
+/// Archives one row, scoped to its owner. A soft delete: the row stays for
+/// `fz data export` and for retention to collect.
+///
+/// # Errors
+///
+/// [`DbError`] when the write fails.
+pub(crate) async fn archive(
+    db: &dyn Database,
+    id: &str,
+    account_id: &str,
+    now: &str,
+) -> Result<bool, DbError> {
+    let mut update = Query::update();
+    update
+        .table(iden(INBOX))
+        .value(iden("archived_at"), now)
+        .and_where(Expr::col(iden("id")).eq(id))
+        .and_where(Expr::col(iden("account_id")).eq(account_id))
+        .and_where(Expr::col(iden("archived_at")).is_null());
+    Ok(db.execute(&Statement::render(&update)).await? == 1)
+}
+
+/// Deletes inbox rows the account is finished with and that fell out of
+/// the retention window.
+///
+/// Only rows it has read or archived: an unread row is still waiting to be
+/// seen, however old, and deleting it would be the module deciding the
+/// account missed its chance.
+///
+/// # Errors
+///
+/// [`DbError`] when the write fails.
+pub(crate) async fn prune_inbox(db: &dyn Database, older_than: &str) -> Result<u64, DbError> {
+    let mut delete = Query::delete();
+    delete
+        .from_table(iden(INBOX))
+        .and_where(Expr::col(iden("created_at")).lt(older_than))
+        .and_where(
+            Expr::col(iden("read_at"))
+                .is_not_null()
+                .or(Expr::col(iden("archived_at")).is_not_null()),
+        );
+    db.execute(&Statement::render(&delete)).await
 }
