@@ -32,6 +32,38 @@ postgres = ["dep:cratefield-adapter-postgres", "dep:tokio"]
 # absence is a build option; silent absence is not. Everything else under
 # `fz push` — keygen, inspect-subscription, and `send --dry-run`, which
 # reports the transport's wiring — works in every build.
+#
+# This is never a feature a **venture** turns on: `cratefield-runtime-native`
+# `compile_error!`s on wasm32 and a generated venture depends on this crate
+# beside a wasm `cdylib`, so flipping it there breaks the build of the thing
+# the venture deploys. A send-capable `fz` is installed separately
+# (`cargo install cratefield-cli --features push-send`) and the Docker image
+# is built with it.
+#
+# It pulls the whole native runtime — axum, redis, croner,
+# tracing-subscriber — to obtain one `ReqwestClient` and one `TokioClock`,
+# and the alternative was weighed: an `http-client` feature on
+# `cratefield-runtime-native` that carried the ports without the server.
+# Not taken, deliberately.
+#
+#   - That crate's module graph is not separable along that line today.
+#     `ports/mod.rs` itself is built on axum types (`HeaderMap`,
+#     `HeaderName`, the client-IP resolution the server middleware calls),
+#     so an `http-client` build would have to `cfg` the ports module, the
+#     runtime, the server, cron and the tracing setup — and every one of
+#     those becomes a configuration nothing in CI compiles unless a matrix
+#     leg is added for it.
+#   - The cost it buys back is build time for one native binary that is
+#     compiled once and installed. Nothing ships this graph: the venture's
+#     wasm build never sees this crate (that is what the `compile_error!`
+#     enforces), and the image already carries a Rust toolchain.
+#   - The point of the live proof is that the send goes through *the
+#     client the runtime uses*, wired the way `serve()` wires it. A leaner
+#     dependency edge that reached a differently-assembled client would
+#     make the proof prove less.
+#
+# Revisit it if a second consumer wants the same thing, which is when the
+# split stops being a change made for one caller.
 push-send = ["dep:cratefield-runtime-native", "dep:tokio"]
 
 [dependencies]

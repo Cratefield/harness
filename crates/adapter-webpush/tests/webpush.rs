@@ -20,19 +20,15 @@ use cratefield_core::{Notification, Platform, Priority, Push, PushError, PushOut
 use cratefield_testing::push_recipient_conformance;
 use support::{Reply, ScriptedHttp, StepClock, decrypt, public_key_of};
 
-// A throwaway P-256 key, generated for these tests only — NOT a real VAPID
-// key. The same one `cratefield-push-auth` and `cratefield-adapter-apns`
-// use, so the three suites assert bytes from one key.
-const TEST_PEM: &str = "-----BEGIN PRIVATE KEY-----\nMIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgcXMgRpW+eLn7ZvCx\nIuTdd8csWMZ69azlRzS0dy2FN6GhRANCAATJ6GazR2lhWcC3JYsazLR0uWOyDKrC\nmeP4HPWghRmfoa4z3Ux7mG3Ylz+auRaBukKGicSdSvVG+jGeQwr3fNag\n-----END PRIVATE KEY-----";
-const SUBJECT: &str = "mailto:ops@example.test";
-
-/// The subscription every test pushes to: RFC 8291 Appendix A's user agent,
-/// so the request body can be opened with a key the RFC publishes.
-const UA_PRIVATE: &str = "q1dXpw3UpT5VOmu_cf_v6ih07Aems3njxI-JWgLcM94";
-const UA_PUBLIC: &str =
-    "BCVxsr7N_eNgVRqvHtD0zTZsEc6-VV-JvLexhqUzORcxaOzi6-AYWXvTBHm4bjyPjs7Vd8pZGH6SRpkNtoIAiw4";
-const AUTH_SECRET: &str = "BTBZMqHH6r4Tts7J_aSIgg";
-const ENDPOINT: &str = "https://updates.push.services.mozilla.com/wpush/v2/gAAAAAsubscription";
+// The throwaway P-256 key (NOT a real VAPID key), the subject, and the
+// subscription every test pushes to: RFC 8291 Appendix A's user agent, so
+// the request body can be opened with a key the RFC publishes. All from
+// `cratefield-testing::vectors` — one copy for the whole workspace.
+use cratefield_testing::vectors::{
+    RFC8291_AUTH_SECRET as AUTH_SECRET, RFC8291_UA_PRIVATE as UA_PRIVATE,
+    RFC8291_UA_PUBLIC as UA_PUBLIC, TEST_P256_PEM as TEST_PEM, TEST_VAPID_SUBJECT as SUBJECT,
+    WEB_PUSH_ENDPOINT as ENDPOINT,
+};
 
 fn b64(value: &str) -> Vec<u8> {
     URL_SAFE_NO_PAD.decode(value).expect("base64url")
@@ -601,7 +597,7 @@ fn no_error_message_carries_the_subscription_endpoint() {
     for status in [400, 404, 410, 401, 413, 429, 500, 507, 301] {
         http.set(Reply::status(status).with_body(
             "The requested URL \
-             https://updates.push.services.mozilla.com/wpush/v2/gAAAAAsubscription \
+             https://updates.push.services.example/wpush/v2/an-echoed-capability \
              was not found on this server.",
         ));
         let outcome = pollster::block_on(push.send(&subscriber(), &Notification::new("a", "b")));
@@ -610,11 +606,11 @@ fn no_error_message_carries_the_subscription_endpoint() {
             Ok(outcome) => panic!("status {status} should not have delivered: {outcome:?}"),
         };
         assert!(
-            !message.contains("gAAAAAsubscription"),
+            !message.contains("an-echoed-capability"),
             "status {status} leaked the subscription path: {message}"
         );
         assert!(
-            !message.contains("mozilla.com"),
+            !message.contains("push.services.example"),
             "status {status} leaked the push service host: {message}"
         );
     }

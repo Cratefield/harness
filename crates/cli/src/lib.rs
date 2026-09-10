@@ -530,9 +530,16 @@ fn run_push(command: &PushCommand) -> Result<(), String> {
                 force: *force,
                 print_private: *print_private,
             })?;
+            // The rotation warning is a diagnostic, so it goes to stderr:
+            // stdout is the stream the README's recipe reads the public
+            // key off, and a warning in it ends up in somebody's
+            // `applicationServerKey`.
+            if let Some(warning) = generated.warning() {
+                eprint!("{warning}");
+            }
             print!("{}", generated.render());
             if *print_private {
-                print!("\n{}", generated.private_key_disclosure());
+                print!("\n{}", *generated.private_key_disclosure());
             }
             Ok(())
         }

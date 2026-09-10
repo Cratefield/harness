@@ -16,12 +16,13 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use cratefield_adapter_webpush::ece::{self, Ece, EceError, SubscriptionKeys};
 use support::{DecryptError, decrypt, public_key_of};
 
-/// RFC 8291 §5 / Appendix A.
-const PLAINTEXT: &str = "When I grow up, I want to be a watermelon";
-const UA_PUBLIC: &str =
-    "BCVxsr7N_eNgVRqvHtD0zTZsEc6-VV-JvLexhqUzORcxaOzi6-AYWXvTBHm4bjyPjs7Vd8pZGH6SRpkNtoIAiw4";
-const UA_PRIVATE: &str = "q1dXpw3UpT5VOmu_cf_v6ih07Aems3njxI-JWgLcM94";
-const AUTH_SECRET: &str = "BTBZMqHH6r4Tts7J_aSIgg";
+/// RFC 8291 §5 / Appendix A. The user agent's half lives in
+/// `cratefield-testing::vectors`, so the key pair this decrypts with is
+/// the one every other suite encrypts to.
+use cratefield_testing::vectors::{
+    RFC8291_AUTH_SECRET as AUTH_SECRET, RFC8291_PLAINTEXT as PLAINTEXT,
+    RFC8291_UA_PRIVATE as UA_PRIVATE, RFC8291_UA_PUBLIC as UA_PUBLIC,
+};
 const SALT: &str = "DGv6ra1nlYgDCS1FRnbzlw";
 const AS_PRIVATE: &str = "yfWPiYE-n46HLnH0KqZOF1fJJU3MYrct3AELtAQ-oRw";
 /// The whole content body of RFC 8291 §5, its three presentation lines
