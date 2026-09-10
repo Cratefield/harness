@@ -145,16 +145,13 @@ async fn test_harness_applies_migrations_and_serves_module_routes() {
 async fn fake_mailer_records_and_switches_modes() {
     use cratefield_core::{Mailer, Message, SendOutcome};
     let mailer = FakeMailer::new(MailerMode::SendOk);
-    let message = Message {
-        to: "nick@example.com".into(),
-        from: "no-reply@test.example".into(),
-        reply_to: None,
-        subject: "hi".into(),
-        html: "<p>hi</p>".into(),
-        text: "hi".into(),
-        idempotency_key: None,
-        tags: vec![],
-    };
+    let message = Message::new(
+        "nick@example.com",
+        "no-reply@test.example",
+        "hi",
+        "hi",
+        "<p>hi</p>",
+    );
     let outcome = mailer.send(message.clone()).await.expect("send");
     assert!(matches!(outcome, SendOutcome::Sent { .. }));
     assert_eq!(mailer.sent().len(), 1);
@@ -170,16 +167,7 @@ async fn fake_mailer_records_and_switches_modes() {
     mailer.set_mode(MailerMode::Fail);
     assert!(
         mailer
-            .send(Message {
-                to: "x@y.dev".into(),
-                from: String::new(),
-                reply_to: None,
-                subject: String::new(),
-                html: String::new(),
-                text: String::new(),
-                idempotency_key: None,
-                tags: vec![],
-            })
+            .send(Message::new("x@y.dev", "", "", "", ""))
             .await
             .is_err()
     );

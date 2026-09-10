@@ -167,16 +167,18 @@ pub(crate) async fn send(
         })?;
     let cfg = ModuleConfig::new("waitlist", &*ctx.config);
     let from = cfg.get_str("FROM", &format!("no-reply@send.{}", ctx.venture.domain));
-    let message = Message {
-        to: mail.to.clone(),
+    let mut message = Message::new(
+        mail.to.clone(),
         from,
-        reply_to: cfg.get_opt("REPLY_TO"),
-        subject: rendered.subject,
-        html: rendered.html,
-        text: rendered.text,
-        idempotency_key: Some(mail.idempotency_key.clone()),
-        tags: vec!["waitlist".to_owned()],
-    };
+        rendered.subject,
+        rendered.text,
+        rendered.html,
+    )
+    .idempotency_key(mail.idempotency_key.clone())
+    .tags(["waitlist"]);
+    if let Some(reply_to) = cfg.get_opt("REPLY_TO") {
+        message = message.reply_to(reply_to);
+    }
     let Some(mailer) = ctx.ports.mailer.clone() else {
         return Ok(SendOutcome::NotConfigured);
     };
