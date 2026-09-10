@@ -65,5 +65,8 @@ pub use cratefield_module_waitlist as waitlist;
 #[cfg(feature = "cms")]
 pub use cratefield_module_cms as cms;
 
+#[cfg(feature = "notifications")]
+pub use cratefield_module_notifications as notifications;
+
 #[cfg(feature = "testing")]
 pub use cratefield_testing as testing;

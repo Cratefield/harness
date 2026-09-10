@@ -1,0 +1,62 @@
+[package]
+name = "cratefield-module-notifications"
+description = "Factory Zero module: push subscriptions, per-account per-category preferences, fan-out, prune and retry"
+readme = "README.md"
+keywords = ["cratefield", "notifications", "push", "apns", "module"]
+categories = ["web-programming"]
+include = ["src/**/*", "migrations/**/*", "tests/**/*", "README.md"]
+# `publish = false` until `factory0-auth-client` is published: this is the
+# first module to depend on it (ADR 0016), and a published crate cannot
+# resolve an unpublished dependency on crates.io.
+publish = false
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+cratefield-core = { workspace = true }
+# The account comes from the auth extractor, never from a body field
+# (ADR 0016). Path-only: the crate is `publish = false`.
+factory0-auth-client = { path = "../auth-client" }
+axum = { workspace = true }
+http = { workspace = true }
+serde = { workspace = true }
+schemars = { workspace = true }
+serde_json = { workspace = true }
+sea-query = { workspace = true }
+tracing = { workspace = true }
+time = { workspace = true }
+ulid = { workspace = true }
+# The recipient hash that makes re-registration an upsert. Pure Rust,
+# wasm-safe, already in the tree.
+sha2 = { workspace = true }
+
+[dev-dependencies]
+http = { workspace = true }
+serde_json = { workspace = true }
+# The `postgres` feature unlocks the Postgres parity leg of the testing kit;
+# the leg itself only runs when FZ_TEST_POSTGRES_URL names a server.
+cratefield-testing = { path = "../testing", features = ["postgres"] }
+cratefield-adapter-sqlite = { path = "../adapter-sqlite" }
+# Dev-only, and only so `tests/wiring.rs` can pin this module's copy of the
+# three "this transport is wired" environment variable names against the
+# crate that owns them. A normal dependency would drag all three push
+# adapters into a module that must see the port trait and nothing else.
+cratefield-push-wiring = { path = "../push-wiring" }
+pollster = { workspace = true }
+tower = { workspace = true }
+async-trait = { workspace = true }
+bytes = { workspace = true }
+base64ct = { workspace = true }
+# Mints the ES256 access tokens the route tests present. Pinned to the
+# login stack's major (0.14), like `factory0-auth-client` itself, so the
+# test signs with the same curve implementation that verifies.
+p256 = { version = "0.14.0", default-features = false, features = [
+    "ecdsa",
+    "pkcs8",
+] }

@@ -59,6 +59,7 @@ kms = ["dep:cratefield-kms"]
 email-signup = ["dep:cratefield-module-email-signup"]
 waitlist = ["dep:cratefield-module-waitlist"]
 cms = ["dep:cratefield-module-cms"]
+notifications = ["dep:cratefield-module-notifications"]
 
 # The conformance kit. Belongs under [dev-dependencies] in a venture.
 testing = ["dep:cratefield-testing"]
@@ -92,6 +93,9 @@ cratefield-kms = { workspace = true, optional = true }
 cratefield-module-email-signup = { workspace = true, optional = true }
 cratefield-module-waitlist = { workspace = true, optional = true }
 cratefield-module-cms = { workspace = true, optional = true }
+# `publish = false` until `factory0-auth-client` is published (ADR 0016),
+# like the two push adapters and the wiring crate above.
+cratefield-module-notifications = { workspace = true, optional = true }
 cratefield-testing = { workspace = true, optional = true }
 
 [package.metadata.docs.rs]
