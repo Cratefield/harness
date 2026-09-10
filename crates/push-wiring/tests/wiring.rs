@@ -107,6 +107,26 @@ fn owned(pairs: Vec<(&'static str, String)>) -> MapConfig {
     MapConfig::from_pairs(pairs)
 }
 
+/// Every variable in the table, all three transports validly configured.
+fn full_config() -> Vec<(&'static str, String)> {
+    let mut pairs = full_apns();
+    pairs.push(("FCM_SERVICE_ACCOUNT_JSON", service_account_json()));
+    pairs.push(("VAPID_PRIVATE_KEY", TEST_P8.to_owned()));
+    pairs.push(("VAPID_SUBJECT", "mailto:ops@example.test".to_owned()));
+    pairs
+}
+
+/// The full APNs configuration with one variable replaced.
+fn with(name: &str, value: &str) -> Vec<(&'static str, String)> {
+    let mut pairs = full_apns();
+    for pair in &mut pairs {
+        if pair.0 == name {
+            value.clone_into(&mut pair.1);
+        }
+    }
+    pairs
+}
+
 /// Refuses every request, so a routed adapter's send fails loudly rather
 /// than silently answering `NotConfigured`.
 struct NoNetwork;
@@ -199,12 +219,8 @@ fn with_nothing_configured_every_recipient_variant_is_not_configured() {
 
 #[test]
 fn a_fully_configured_transport_is_configured_and_routed() {
-    let mut pairs = full_apns();
-    pairs.push(("FCM_SERVICE_ACCOUNT_JSON", service_account_json()));
-    pairs.push(("VAPID_PRIVATE_KEY", TEST_P8.to_owned()));
-    pairs.push(("VAPID_SUBJECT", "mailto:ops@example.test".to_owned()));
-
-    let (push, wiring) = assemble(&owned(pairs));
+    let (push, wiring) = assemble(&owned(full_config()));
+    assert!(wiring.any_routed(), "{}", wiring.summary());
     for transport in TRANSPORTS {
         assert_eq!(
             wiring.get(transport),
@@ -362,18 +378,43 @@ fn credentials_the_adapter_refuses_are_invalid_and_not_routed() {
 fn a_mistyped_apns_host_is_invalid_rather_than_a_silent_default() {
     // Defaulting a typo to the sandbox is how every production send comes
     // back `BadDeviceToken` with nothing in the logs to explain it.
-    let mut pairs = full_apns();
-    for pair in &mut pairs {
-        if pair.0 == "APNS_HOST" {
-            pair.1 = "produciton".to_owned();
-        }
-    }
-    let wiring = inspect_push(&owned(pairs));
+    let wiring = inspect_push(&owned(with("APNS_HOST", "produciton")));
     let TransportWiring::Invalid { reason } = wiring.get(Platform::Ios) else {
         panic!("expected invalid, got {:?}", wiring.get(Platform::Ios));
     };
-    assert!(reason.contains("produciton"), "{reason}");
+    // The variable and what was expected of it — and **not** the value.
+    // `secret: false` in the table says what the variable is for, not what
+    // an operator actually pasted into it, and `wrangler secret put
+    // APNS_HOST` run by mistake with a `.p8` body would otherwise write the
+    // key to Workers Logs.
     assert!(reason.contains("APNS_HOST"), "{reason}");
+    assert!(reason.contains("production"), "{reason}");
+    assert!(reason.contains("sandbox"), "{reason}");
+    assert!(!reason.contains("produciton"), "{reason}");
+}
+
+#[test]
+fn a_pasted_newline_does_not_report_configured_and_then_fail_every_send() {
+    // ` mailto:…` and `mailto:…\n` are what a paste into `wrangler secret
+    // put` looks like. Untrimmed, the adapter refuses the subject — and for
+    // the variables whose adapters do not check (`APNS_KEY_ID` into the JWT
+    // `kid`) the transport reports `configured` and then 403s on every send.
+    for subject in [
+        " mailto:ops@example.test",
+        "mailto:ops@example.test\n",
+        "\tmailto:ops@example.test  ",
+    ] {
+        let wiring = inspect_push(&config(&[
+            ("VAPID_PRIVATE_KEY", TEST_P8),
+            ("VAPID_SUBJECT", subject),
+        ]));
+        assert_eq!(
+            wiring.get(Platform::Web),
+            &TransportWiring::Configured,
+            "{subject:?}: {}",
+            wiring.summary()
+        );
+    }
 }
 
 #[test]
@@ -391,6 +432,91 @@ fn a_service_account_that_is_not_json_is_invalid() {
 
 // ---------------------------------------------------------------------------
 // The report never carries a value
+
+/// Everything a runtime prints about a report at cold start: the one-line
+/// summary, every problem, and the `Debug` a `tracing` field would render.
+fn everything_printed(wiring: &PushWiring) -> String {
+    format!(
+        "{}\n{}\n{wiring:?}",
+        wiring.summary(),
+        wiring.problems().join("\n")
+    )
+}
+
+#[test]
+fn the_report_never_prints_any_variables_value() {
+    // Not just the secrets, and not just one of them: **every** variable in
+    // the table, one at a time, holding a value the adapter will refuse and
+    // have something to say about. The runtimes log this whole report at
+    // cold start (`console_error!`, `tracing::error!`, `fz doctor` stderr),
+    // so one adapter error string copied into a `reason` is a value in
+    // Workers Logs.
+    //
+    // `VAPID_SUBJECT` is what made this a leak rather than a principle:
+    // `Vapid::new` validates the subject *before* the key and
+    // `VapidError::Subject` quotes it, so `VAPID_SUBJECT` and
+    // `VAPID_PRIVATE_KEY` pasted the wrong way round — the mistake
+    // `VapidKeys`' own doc warns about — put the private key in the log.
+    // `APNS_HOST` is the other: `secret: false` describes what the variable
+    // is for, not what an operator pasted into it.
+    let marker = "SUPERSECRETMATERIALc0ffee";
+    let mut refused = Vec::new();
+    for var in PUSH_ENV {
+        let mut pairs = full_config();
+        for pair in &mut pairs {
+            if pair.0 == var.name() {
+                pair.1 = marker.to_owned();
+            }
+        }
+        let wiring = inspect_push(&owned(pairs));
+        let printed = everything_printed(&wiring);
+        assert!(
+            !printed.contains(marker),
+            "{} leaked its value into the report: {printed}",
+            var.name()
+        );
+        // And the report still says which transport and which variable.
+        assert!(printed.contains(transport_key(var.transport)), "{printed}");
+        if wiring.get(var.transport).is_problem() {
+            assert!(
+                printed.contains(var.name()),
+                "{} was refused without being named: {printed}",
+                var.name()
+            );
+            refused.push(var.name());
+        }
+    }
+
+    // Not vacuous: a report can only say something about a value when an
+    // adapter refuses it, and five of the eight variables are refused.
+    assert!(
+        refused.len() >= 5,
+        "only {refused:?} were refused, so the assertions above proved little"
+    );
+}
+
+#[test]
+fn a_swapped_vapid_pair_does_not_log_the_private_key() {
+    // The exact mistake, spelled out: the key in the subject's variable.
+    let wiring = inspect_push(&config(&[
+        ("VAPID_SUBJECT", TEST_P8),
+        ("VAPID_PRIVATE_KEY", "mailto:ops@example.test"),
+    ]));
+    let printed = everything_printed(&wiring);
+    for line in TEST_P8.lines().filter(|line| !line.starts_with("-----")) {
+        assert!(
+            !printed.contains(line),
+            "a line of the private key reached the report: {printed}"
+        );
+    }
+    let TransportWiring::Invalid { reason } = wiring.get(Platform::Web) else {
+        panic!("expected invalid, got {:?}", wiring.get(Platform::Web));
+    };
+    // It still says which variable and what was expected, which is what an
+    // operator needs to find the swap.
+    assert!(reason.contains("VAPID_SUBJECT"), "{reason}");
+    assert!(reason.contains("VAPID_PRIVATE_KEY"), "{reason}");
+}
 
 #[test]
 fn the_report_names_variables_and_never_prints_a_value() {
@@ -415,11 +541,7 @@ fn the_report_names_variables_and_never_prints_a_value() {
     ];
     let wiring = inspect_push(&owned(pairs));
 
-    let printed = format!(
-        "{}\n{}\n{wiring:?}",
-        wiring.summary(),
-        wiring.problems().join("\n")
-    );
+    let printed = everything_printed(&wiring);
     assert!(
         !printed.contains(marker),
         "the report leaked a secret value: {printed}"
@@ -441,9 +563,9 @@ fn the_summary_names_every_variable_of_a_partial_transport() {
     assert!(summary.contains("apns=partial"), "{summary}");
     for var in vars_for(Platform::Ios).filter(|var| var.required) {
         assert!(
-            summary.contains(var.name),
+            summary.contains(var.name()),
             "{} missing: {summary}",
-            var.name
+            var.name()
         );
     }
 }
@@ -455,7 +577,7 @@ fn the_summary_names_every_variable_of_a_partial_transport() {
 fn the_generated_doc_covers_every_variable_in_the_table() {
     let doc = notifications_doc();
     for var in PUSH_ENV {
-        assert!(doc.contains(var.name), "{} is not in the doc", var.name);
+        assert!(doc.contains(var.name()), "{} is not in the doc", var.name());
     }
     for transport in TRANSPORTS {
         assert!(doc.contains(transport_key(transport)), "{doc}");

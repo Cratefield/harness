@@ -9,10 +9,10 @@ use crate::lint::banned_tokens;
 use crate::lock::{Lock, read_lock};
 use cratefield_core::lint_card_data;
 use cratefield_core::{
-    Config, HARNESS_API, HARNESS_SIDECARS, Harness, SIDECAR_GATEWAY_SECRET, VentureEnv,
+    Config, HARNESS_API, HARNESS_SIDECARS, Harness, Port, SIDECAR_GATEWAY_SECRET, VentureEnv,
     deployed_env, env_disagreement, harness_api_mismatch,
 };
-use cratefield_push_wiring::{PushWiring, WiringSeverity};
+use cratefield_push_wiring::PushWiring;
 use std::path::Path;
 
 /// The process environment as a [`Config`], so the doctor reads `ENV` the
@@ -65,17 +65,7 @@ pub fn doctor(
         production_port_checks(harness, allow_no_captcha, &mut failures);
     }
 
-    // Push wiring (issue #191). The doctor does not read the push
-    // environment itself: it calls the same `build_push` `serve()` and
-    // `fz push` call, through `inspect_push`, so the three cannot check
-    // different variable names. A half-wired transport is a failure in
-    // production and a warning below it — nothing is reported at all when
-    // every transport is either configured or deliberately absent.
-    push_wiring_checks(
-        &cratefield_push_wiring::inspect_push(&EnvVars),
-        env,
-        &mut failures,
-    );
+    push_checks(harness, env, &mut failures);
 
     // Lockfile consistency: every module migration locked, every locked
     // file present and byte-identical.
@@ -186,18 +176,112 @@ pub fn doctor(
     }
 }
 
+/// The push-wiring section (issue #191). The doctor does not read the push
+/// environment itself: it calls the same `build_push` `serve()` and `fz push`
+/// call, through `inspect_push`, so the three cannot check different variable
+/// names.
+///
+/// Gated on what the harness declares, like every other production-only rule
+/// here: the process environment is shared, and a venture that mounts no push
+/// module at all must not fail its deploy because the env file it inherits
+/// exports someone else's `VAPID_SUBJECT`.
+fn push_checks(harness: &Harness, env: VentureEnv, failures: &mut Vec<String>) {
+    let declaration = PushDeclaration::of(harness.modules());
+    if !declaration.declared {
+        return;
+    }
+    push_wiring_checks(
+        &cratefield_push_wiring::inspect_push(&EnvVars),
+        env,
+        declaration,
+        failures,
+    );
+}
+
+/// What this venture says about push, so the doctor's push rules key on the
+/// harness rather than on whatever the process environment happens to
+/// export (issue #191).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct PushDeclaration {
+    /// A module lists [`Port::Push`] in `requires()` or `optional()`. Only
+    /// then is the push environment this venture's business.
+    declared: bool,
+    /// A module lists it in `requires()`: this venture does not work
+    /// without a transport that can actually send.
+    required: bool,
+}
+
+impl PushDeclaration {
+    fn of(modules: &[std::sync::Arc<dyn cratefield_core::Module>]) -> Self {
+        Self::from_ports(
+            modules
+                .iter()
+                .map(|module| (module.requires(), module.optional())),
+        )
+    }
+
+    /// The rule itself, over nothing but the port lists — so it is unit
+    /// tested without composing a harness, which for a module that
+    /// *requires* a port would mean a runtime that provides it too.
+    fn from_ports<'a>(modules: impl Iterator<Item = (&'a [Port], &'a [Port])>) -> Self {
+        let mut declaration = Self {
+            declared: false,
+            required: false,
+        };
+        for (requires, optional) in modules {
+            if requires.contains(&Port::Push) {
+                declaration.declared = true;
+                declaration.required = true;
+            } else if optional.contains(&Port::Push) {
+                declaration.declared = true;
+            }
+        }
+        declaration
+    }
+}
+
 /// Turns a push wiring report into doctor output: failures in production,
-/// warnings below it (issue #191). Split out so the severity rule is unit
-/// tested without a process environment.
-fn push_wiring_checks(wiring: &PushWiring, env: VentureEnv, failures: &mut Vec<String>) {
-    match wiring.severity(env) {
-        WiringSeverity::Ok => {}
-        WiringSeverity::Warning => {
+/// warnings below it (issue #191). Split out so the rules are unit tested
+/// without a process environment.
+///
+/// The severity rule itself is [`PushWiring::check`]'s, called rather than
+/// restated — the same rule encoded twice is the drift this crate exists to
+/// prevent, one copy short of a test.
+///
+/// The second rule is the build-time gate `push_from_env()` cannot keep. A
+/// runtime that assembles the port from the environment provides `Port::Push`
+/// whatever that environment holds — on Workers the `Env` does not exist
+/// until the first fetch, so `Harness::build` cannot know — and a module that
+/// requires push then compiles, deploys, and answers `NotConfigured` for
+/// every send. The doctor is where the deployment's environment *is* known,
+/// so the refusal lives here: in production, a venture whose modules require
+/// push and whose environment routes no transport at all fails.
+fn push_wiring_checks(
+    wiring: &PushWiring,
+    env: VentureEnv,
+    declaration: PushDeclaration,
+    failures: &mut Vec<String>,
+) {
+    match wiring.check(env) {
+        Err(problems) => failures.push(problems),
+        // Below production the same problems are a warning: wiring a
+        // transport one variable at a time is what development looks like.
+        Ok(()) => {
             for problem in wiring.problems() {
                 eprintln!("fz: warning: {problem}");
             }
         }
-        WiringSeverity::Error => failures.extend(wiring.problems()),
+    }
+
+    if declaration.required && env == VentureEnv::Production && !wiring.any_routed() {
+        failures.push(
+            "production venture has modules that require the Push port but no push transport \
+             is configured — every send would answer NotConfigured. Set one transport's \
+             variables (docs/PUSH-ENV.md), or drop the modules that require push. If this \
+             venture provides Push from an adapter of its own rather than from the \
+             environment, that adapter is not visible here (issue #191)"
+                .to_owned(),
+        );
     }
 }
 
@@ -290,9 +374,24 @@ fn payments_webhook_failure(
 
 #[cfg(test)]
 mod tests {
-    use super::{captcha_production_failure, payments_webhook_failure, push_wiring_checks};
-    use cratefield_core::{MapConfig, VentureEnv, WriteGuards};
-    use cratefield_push_wiring::{PUSH_ENV, PushWiring, inspect_push};
+    use super::{
+        PushDeclaration, captcha_production_failure, payments_webhook_failure, push_wiring_checks,
+    };
+    use cratefield_core::{MapConfig, Port, VentureEnv, WriteGuards};
+    use cratefield_push_wiring::{PUSH_ENV, PushKey, PushWiring, inspect_push};
+
+    /// A venture whose modules only *may* use push: the wiring is checked,
+    /// but nothing has to be routed.
+    const OPTIONAL: PushDeclaration = PushDeclaration {
+        declared: true,
+        required: false,
+    };
+
+    /// A venture whose modules cannot work without a transport.
+    const REQUIRED: PushDeclaration = PushDeclaration {
+        declared: true,
+        required: true,
+    };
 
     fn guards(needs_captcha: bool) -> WriteGuards {
         WriteGuards {
@@ -333,7 +432,7 @@ mod tests {
             .find(|var| var.required)
             .expect("the table has a required variable");
         let wiring = inspect_push(&MapConfig::from_pairs([(
-            var.name.to_owned(),
+            var.name().to_owned(),
             "set-but-alone".to_owned(),
         )]));
         assert!(
@@ -349,14 +448,17 @@ mod tests {
         let wiring = half_wired();
 
         let mut failures = Vec::new();
-        push_wiring_checks(&wiring, VentureEnv::Production, &mut failures);
-        assert_eq!(failures.len(), wiring.problems().len(), "{failures:?}");
+        push_wiring_checks(&wiring, VentureEnv::Production, OPTIONAL, &mut failures);
+        assert_eq!(failures.len(), 1, "{failures:?}");
+        for problem in wiring.problems() {
+            assert!(failures[0].contains(&problem), "{failures:?}");
+        }
 
         // Below production it is a printed warning, not a failure: wiring a
         // transport one variable at a time is what development looks like.
         for env in [VentureEnv::Development, VentureEnv::Staging] {
             let mut failures = Vec::new();
-            push_wiring_checks(&wiring, env, &mut failures);
+            push_wiring_checks(&wiring, env, OPTIONAL, &mut failures);
             assert!(failures.is_empty(), "{env:?}: {failures:?}");
         }
     }
@@ -367,8 +469,89 @@ mod tests {
         // venture that sends no notifications, even in production.
         let wiring = inspect_push(&MapConfig::from_pairs(Vec::<(String, String)>::new()));
         let mut failures = Vec::new();
-        push_wiring_checks(&wiring, VentureEnv::Production, &mut failures);
+        push_wiring_checks(&wiring, VentureEnv::Production, OPTIONAL, &mut failures);
         assert!(failures.is_empty(), "{failures:?}");
         assert!(wiring.problems().is_empty(), "{:?}", wiring.problems());
+    }
+
+    #[test]
+    fn a_module_that_requires_push_needs_a_transport_that_can_send() {
+        // The build-time gate `push_from_env()` cannot keep: on Workers the
+        // `Env` does not exist when `Harness::build` runs, so a module
+        // requiring Push compiles and deploys against an environment that
+        // configures nothing and answers NotConfigured for every send. The
+        // doctor runs where the environment is known, so it refuses.
+        let nothing = inspect_push(&MapConfig::from_pairs(Vec::<(String, String)>::new()));
+        assert!(!nothing.any_routed());
+
+        let mut failures = Vec::new();
+        push_wiring_checks(&nothing, VentureEnv::Production, REQUIRED, &mut failures);
+        assert_eq!(failures.len(), 1, "{failures:?}");
+        assert!(
+            failures[0].contains("require the Push port"),
+            "{failures:?}"
+        );
+
+        // Only in production, and only when a module actually requires it.
+        for env in [VentureEnv::Development, VentureEnv::Staging] {
+            let mut failures = Vec::new();
+            push_wiring_checks(&nothing, env, REQUIRED, &mut failures);
+            assert!(failures.is_empty(), "{env:?}: {failures:?}");
+        }
+        let mut failures = Vec::new();
+        push_wiring_checks(&nothing, VentureEnv::Production, OPTIONAL, &mut failures);
+        assert!(failures.is_empty(), "{failures:?}");
+    }
+
+    #[test]
+    fn the_push_rules_are_gated_on_what_the_venture_declares() {
+        // The process environment is shared. A venture that mounts no push
+        // module at all must not fail its production doctor run because the
+        // env file it inherits exports somebody else's VAPID_SUBJECT — every
+        // other production-only rule here keys on the harness, and this one
+        // did not.
+        let none = PushDeclaration::from_ports([(&[Port::Db][..], &[][..])].into_iter());
+        assert!(!none.declared);
+        assert!(!none.required);
+
+        let optional =
+            PushDeclaration::from_ports([(&[Port::Db][..], &[Port::Push][..])].into_iter());
+        assert!(optional.declared);
+        assert!(
+            !optional.required,
+            "a module that only *may* use push does not make one mandatory"
+        );
+
+        let required = PushDeclaration::from_ports(
+            [(&[Port::Db][..], &[][..]), (&[Port::Push][..], &[][..])].into_iter(),
+        );
+        assert!(required.declared);
+        assert!(required.required);
+    }
+
+    #[test]
+    fn a_configured_transport_satisfies_a_module_that_requires_push() {
+        // The rule must pass on the deployment it is meant to allow, or it
+        // is just a way to fail every production doctor run.
+        //
+        // The variables are named through `PushKey`, not written out: the
+        // guard in `cli-acceptance` allows exactly one source in the
+        // workspace to spell one of these names, and it is not this one.
+        let key = "-----BEGIN PRIVATE KEY-----\nMIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQg\
+                   cXMgRpW+eLn7ZvCx\nIuTdd8csWMZ69azlRzS0dy2FN6GhRANCAATJ6GazR2lhWcC3JYsazLR0\
+                   uWOyDKrC\nmeP4HPWghRmfoa4z3Ux7mG3Ylz+auRaBukKGicSdSvVG+jGeQwr3fNag\n\
+                   -----END PRIVATE KEY-----";
+        let wiring = inspect_push(&MapConfig::from_pairs([
+            (PushKey::VapidPrivateKey.name().to_owned(), key.to_owned()),
+            (
+                PushKey::VapidSubject.name().to_owned(),
+                "mailto:ops@example.test".to_owned(),
+            ),
+        ]));
+        assert!(wiring.any_routed(), "{}", wiring.summary());
+
+        let mut failures = Vec::new();
+        push_wiring_checks(&wiring, VentureEnv::Production, REQUIRED, &mut failures);
+        assert!(failures.is_empty(), "{failures:?}");
     }
 }

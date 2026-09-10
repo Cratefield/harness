@@ -31,7 +31,11 @@ use crate::tracing_setup::install_tracing;
 /// venture that meant to enable FCM and mistyped one variable must not boot
 /// into a state where every Android send silently answers `NotConfigured`,
 /// while a developer wiring a transport one variable at a time must still be
-/// able to boot.
+/// able to boot. `fz doctor` is what refuses a deploy.
+///
+/// Nothing is logged when the venture passed its own adapter: `push_wiring`
+/// answers `None`, so no environment is read and no transport the venture
+/// deliberately overrode is reported on.
 #[cfg(feature = "push")]
 fn log_push_wiring(harness: &Harness, runtime: &Native, config: &dyn Config) {
     use cratefield_push_wiring::WiringSeverity;

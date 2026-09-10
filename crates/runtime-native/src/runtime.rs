@@ -145,6 +145,19 @@ impl Native {
     /// unconfigured adapter does. `serve_on` logs the resulting
     /// [`PushWiring`](cratefield_push_wiring::PushWiring) report once at cold
     /// start, and an explicit `.push_arc(..)` still wins.
+    ///
+    /// # This is a declaration, and `fz doctor` is what checks it
+    ///
+    /// Declaring the port rather than gating it on what `std::env` holds at
+    /// build time is deliberate, and it keeps this runtime's answer the same
+    /// as the Workers one's: there a Worker's `Env` does not exist when
+    /// `Harness::build` runs, so a venture that built here and refused there
+    /// (or the reverse) is the divergence issue #143 was about.
+    ///
+    /// `fz doctor` is the gate that used to be the build's. It runs where
+    /// the deployment's environment is known, and refuses a production
+    /// venture whose modules require push and whose environment routes no
+    /// transport at all (issue #191).
     #[cfg(feature = "push")]
     #[must_use]
     pub fn push_from_env(mut self) -> Self {
@@ -153,10 +166,16 @@ impl Native {
     }
 
     /// The environment-assembled `Push` port and its report, built once per
-    /// process. `None` when the venture did not ask for it.
+    /// process.
+    ///
+    /// `None` when the venture did not ask for it — **and** when it passed
+    /// an explicit adapter, which wins: assembling a stack of adapters
+    /// nothing will serve with costs a `.p8` parse, an RSA parse and a VAPID
+    /// scalar, and then reports on transports the venture deliberately
+    /// overrode.
     #[cfg(feature = "push")]
     fn env_push(&self) -> Option<&(Arc<dyn Push>, cratefield_push_wiring::PushWiring)> {
-        if !self.push_from_env {
+        if !self.push_from_env || self.push.is_some() {
             return None;
         }
         Some(self.assembled_push.get_or_init(|| {
@@ -169,9 +188,17 @@ impl Native {
         }))
     }
 
-    /// Which push transports this deployment configured, once `ports()` has
-    /// assembled them. `serve_on` logs this at cold start. `None` when the
-    /// venture did not call [`push_from_env`](Self::push_from_env).
+    /// Which push transports this deployment configured. `serve_on` logs
+    /// this at cold start; nothing else needs it.
+    ///
+    /// `None` when the venture did not call
+    /// [`push_from_env`](Self::push_from_env), or passed an explicit adapter
+    /// that wins over it — there is nothing to report about an environment
+    /// nothing reads.
+    ///
+    /// Call it *after* `ports()`, as `serve_on` does: `ports()` has then
+    /// already assembled and memoised the adapters, and this is the getter
+    /// it looks like.
     #[cfg(feature = "push")]
     #[must_use]
     pub fn push_wiring(&self) -> Option<&cratefield_push_wiring::PushWiring> {
@@ -304,6 +331,13 @@ impl Runtime for Native {
         // with nothing configured the router answers `NotConfigured` for
         // every recipient, which is a provided port that sends nothing, not
         // an absent one (issue #191).
+        //
+        // `std::env` is readable here, unlike on Workers — and consulting it
+        // is still the wrong move: `provides()` would then answer one thing
+        // in CI and another on the box, and a venture would build here and
+        // refuse to build on its Workers twin, which is the divergence
+        // issue #143 was about. `fz doctor` carries the refusal instead, on
+        // both runtimes, where the deployment's environment is known.
         #[cfg(feature = "push")]
         let push_provided = self.push.is_some() || self.push_from_env;
         #[cfg(not(feature = "push"))]

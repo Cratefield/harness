@@ -74,7 +74,14 @@ fn check_module_config_once(harness: &Harness, config: &dyn cratefield_core::Con
 /// one variable must not boot into a state where every Android send silently
 /// answers `NotConfigured`, while a developer wiring a transport one variable
 /// at a time must still be able to boot. Like the module-config check this
-/// only logs; refusing to serve is a decision for an ADR.
+/// only logs; refusing to serve is a decision for an ADR, and `fz doctor` is
+/// what refuses a deploy.
+///
+/// Nothing is logged when the venture passed its own adapter: `push_wiring`
+/// answers `None`, so no environment is read and no transport the venture
+/// deliberately overrode is reported on. It runs after `ports()`, which has
+/// already assembled and memoised the adapters, so this reads a report
+/// rather than building one.
 #[cfg(feature = "push")]
 fn check_push_wiring_once(
     harness: &Harness,

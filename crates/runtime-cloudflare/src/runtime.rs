@@ -52,6 +52,14 @@ static WARNED_SIDECAR: AtomicBool = AtomicBool::new(false);
 /// The Workers runtime. Binding names are static; `.mailer()`/`.captcha()`
 /// take adapter instances (`cratefield-adapter-resend`,
 /// `cratefield-adapter-turnstile`).
+///
+/// `Clone`, like the native runtime's `Native`, so a venture can hand one
+/// instance to `Harness::builder().runtime(..)` and keep the same one to
+/// serve with. Two separately-built instances are the shape of a
+/// silent bug: `Harness::build` validates every module's `requires()`
+/// against the ports of the instance it was given, and the one that actually
+/// serves is the other.
+#[derive(Clone)]
 pub struct Cloudflare {
     db_binding: Option<&'static str>,
     kv_binding: Option<&'static str>,
@@ -66,8 +74,11 @@ pub struct Cloudflare {
     /// deferred to `ports()` and memoised for the isolate.
     #[cfg(feature = "push")]
     push_from_env: bool,
+    /// Shared through an `Arc` so a clone assembles the adapters once
+    /// between them, rather than parsing the `.p8`, the RSA key and the
+    /// VAPID scalar again per copy.
     #[cfg(feature = "push")]
-    assembled_push: std::sync::OnceLock<(Arc<dyn Push>, cratefield_push_wiring::PushWiring)>,
+    assembled_push: Arc<std::sync::OnceLock<(Arc<dyn Push>, cratefield_push_wiring::PushWiring)>>,
 }
 
 impl Default for Cloudflare {
@@ -90,7 +101,7 @@ impl Cloudflare {
             #[cfg(feature = "push")]
             push_from_env: false,
             #[cfg(feature = "push")]
-            assembled_push: std::sync::OnceLock::new(),
+            assembled_push: Arc::new(std::sync::OnceLock::new()),
         }
     }
 
@@ -158,6 +169,19 @@ impl Cloudflare {
     /// unconfigured adapter does. `serve()` logs the resulting
     /// [`PushWiring`](cratefield_push_wiring::PushWiring) report once at cold
     /// start, and an explicit `.push(..)`/`.push_arc(..)` still wins.
+    ///
+    /// # This is a declaration, and `fz doctor` is what checks it
+    ///
+    /// `Harness::build` asks the runtime for its ports before any `Env`
+    /// exists — a Worker's bindings arrive with the first fetch — so the
+    /// build cannot know whether this deployment configured a transport.
+    /// Calling this therefore *declares* the Push port: a module that
+    /// requires push builds against it either way.
+    ///
+    /// `fz doctor` is the gate that used to be the build's. It runs where
+    /// the deployment's environment is known, and refuses a production
+    /// venture whose modules require push and whose environment routes no
+    /// transport at all (issue #191).
     #[cfg(feature = "push")]
     #[must_use]
     pub fn push_from_env(mut self) -> Self {
@@ -166,10 +190,16 @@ impl Cloudflare {
     }
 
     /// The environment-assembled `Push` port and its report, built once per
-    /// isolate. `None` when the venture did not ask for it.
+    /// isolate.
+    ///
+    /// `None` when the venture did not ask for it — **and** when it passed
+    /// an explicit adapter, which wins: assembling a stack of adapters
+    /// nothing will serve with costs a `.p8` parse, an RSA parse and a VAPID
+    /// scalar per isolate, and then reports on transports the venture
+    /// deliberately overrode.
     #[cfg(feature = "push")]
     fn env_push(&self, env: &Env) -> Option<&(Arc<dyn Push>, cratefield_push_wiring::PushWiring)> {
-        if !self.push_from_env {
+        if !self.push_from_env || self.push.is_some() {
             return None;
         }
         Some(self.assembled_push.get_or_init(|| {
@@ -182,10 +212,17 @@ impl Cloudflare {
         }))
     }
 
-    /// Which push transports this deployment configured, once `ports()` has
-    /// assembled them. `serve()` logs this at cold start; nothing else needs
-    /// it. `None` when the venture did not call
-    /// [`push_from_env`](Self::push_from_env).
+    /// Which push transports this deployment configured. `serve()` logs this
+    /// at cold start; nothing else needs it.
+    ///
+    /// `None` when the venture did not call
+    /// [`push_from_env`](Self::push_from_env), or passed an explicit adapter
+    /// that wins over it — there is nothing to report about an environment
+    /// nothing reads.
+    ///
+    /// Call it *after* `ports()`, as `serve()` does: `ports()` has then
+    /// already assembled and memoised the adapters, and this is the getter
+    /// it looks like.
     #[cfg(feature = "push")]
     #[must_use]
     pub fn push_wiring(&self, env: &Env) -> Option<&cratefield_push_wiring::PushWiring> {
@@ -363,6 +400,14 @@ impl Runtime for Cloudflare {
         // with nothing configured the router answers `NotConfigured` for
         // every recipient, which is a provided port that sends nothing, not
         // an absent one (issue #191).
+        //
+        // It cannot be otherwise here. `provides()` runs inside
+        // `Harness::build`, and a Worker's `Env` does not exist until the
+        // first fetch, so there is nothing to consult. That does move a
+        // check: a module requiring push used to fail the build on a venture
+        // with no push wiring, and now builds. `fz doctor` carries that
+        // refusal instead, where the deployment's environment is readable —
+        // see `push_from_env`.
         #[cfg(feature = "push")]
         let push_provided = self.push.is_some() || self.push_from_env;
         #[cfg(not(feature = "push"))]

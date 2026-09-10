@@ -16,19 +16,24 @@
 //! file names none of them itself and a new variable is guarded the moment it
 //! joins the table.
 
+mod common;
+
 use std::path::{Path, PathBuf};
 
-use cratefield_push_wiring::PUSH_ENV;
+use common::repo_root;
+use cratefield_push_wiring::{PUSH_ENV, PushVar};
 
 /// The crate that is allowed to name them: the one reader.
-const READER: &str = "crates/push-wiring";
+///
+/// The trailing slash is load-bearing. As a bare prefix it also exempts
+/// every sibling whose directory name merely starts with it —
+/// `crates/push-wiring-anything` — which is a hole in a guard nobody would
+/// notice until a second reader lived in one.
+const READER: &str = "crates/push-wiring/";
 
-fn repo_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .ancestors()
-        .nth(2)
-        .expect("repo root is two levels above this crate")
-        .to_path_buf()
+/// Whether a workspace-relative path is the one reader's own source.
+fn is_reader(relative: &str) -> bool {
+    relative.starts_with(READER)
 }
 
 /// The push environment variables a source names in a **string literal** —
@@ -41,13 +46,19 @@ fn repo_root() -> PathBuf {
 fn offenders_in(source: &str) -> Vec<&'static str> {
     PUSH_ENV
         .iter()
-        .map(|var| var.name)
+        .map(PushVar::name)
         .filter(|name| source.contains(&format!("\"{name}\"")))
         .collect()
 }
 
 /// Every `.rs` file in the working tree, tracked or not — an untracked new
 /// file is exactly the one a guard must still see.
+///
+/// Symlinks are never followed. `Path::is_dir` follows them, and a working
+/// tree that holds a symlink to one of its own ancestors — a `docs/` link
+/// back to the root, a `target` link into a shared cache — then recurses
+/// until the stack runs out, which is a crashed test binary and not a
+/// guard result. `DirEntry::file_type` reads the entry itself.
 fn rust_sources(dir: &Path, out: &mut Vec<PathBuf>) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
@@ -56,13 +67,16 @@ fn rust_sources(dir: &Path, out: &mut Vec<PathBuf>) {
         let path = entry.path();
         let name = entry.file_name();
         let name = name.to_string_lossy();
-        if path.is_dir() {
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        if file_type.is_dir() {
             // Build output and VCS internals are not sources.
             if matches!(name.as_ref(), "target" | ".git" | "node_modules" | "build") {
                 continue;
             }
             rust_sources(&path, out);
-        } else if path.extension().is_some_and(|ext| ext == "rs") {
+        } else if file_type.is_file() && path.extension().is_some_and(|ext| ext == "rs") {
             out.push(path);
         }
     }
@@ -86,7 +100,7 @@ fn only_the_wiring_crate_names_a_push_environment_variable() {
             .unwrap_or(&path)
             .to_string_lossy()
             .replace('\\', "/");
-        if relative.starts_with(READER) {
+        if is_reader(&relative) {
             continue;
         }
         let source = std::fs::read_to_string(&path).unwrap_or_default();
@@ -109,8 +123,8 @@ fn the_guard_fires_on_a_source_that_reads_one() {
     // lesson). This is what `serve()` reading the environment itself would
     // look like.
     let var = PUSH_ENV.first().expect("the table is not empty");
-    let source = format!("let key = config.get(\"{}\").unwrap();\n", var.name);
-    assert_eq!(offenders_in(&source), vec![var.name]);
+    let source = format!("let key = config.get(\"{}\").unwrap();\n", var.name());
+    assert_eq!(offenders_in(&source), vec![var.name()]);
 }
 
 #[test]
@@ -118,7 +132,7 @@ fn the_guard_does_not_fire_on_prose() {
     // The adapters document their own variables in doc comments, and must
     // keep being able to.
     let var = PUSH_ENV.first().expect("the table is not empty");
-    let source = format!("//! Reads the `{}` secret at construction.\n", var.name);
+    let source = format!("//! Reads the `{}` secret at construction.\n", var.name());
     assert!(offenders_in(&source).is_empty(), "{source}");
 }
 
@@ -127,7 +141,44 @@ fn every_variable_in_the_table_is_guarded() {
     // Not one name is exempt: adding a variable to the table extends the
     // guard, with nothing to remember.
     for var in PUSH_ENV {
-        let source = format!("config.get(\"{}\")", var.name);
-        assert_eq!(offenders_in(&source), vec![var.name], "{}", var.name);
+        let source = format!("config.get(\"{}\")", var.name());
+        assert_eq!(offenders_in(&source), vec![var.name()], "{}", var.name());
     }
+}
+
+#[test]
+fn only_the_reader_itself_is_exempt_not_every_crate_whose_name_starts_with_it() {
+    // A bare prefix exempts a sibling directory as well, and a second
+    // reader living in one would never be reported.
+    assert!(is_reader("crates/push-wiring/src/lib.rs"));
+    assert!(is_reader("crates/push-wiring/tests/wiring.rs"));
+    assert!(!is_reader("crates/push-wiring-anything/src/lib.rs"));
+    assert!(!is_reader("crates/push-wiringly/src/lib.rs"));
+    assert!(!is_reader("crates/cli/src/doctor.rs"));
+}
+
+#[cfg(unix)]
+#[test]
+fn the_walk_does_not_follow_a_symlinked_cycle() {
+    // A working tree that holds a symlink to one of its own ancestors is
+    // ordinary — a `docs/` link back to the root, a `target` link into a
+    // shared cache. Following it recurses until the stack runs out, and a
+    // crashed test binary is not a guard result.
+    let dir = std::env::temp_dir().join(format!(
+        "fz-push-guard-symlink-{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos()
+    ));
+    let inner = dir.join("inner");
+    std::fs::create_dir_all(&inner).expect("temp dir");
+    std::fs::write(inner.join("source.rs"), "fn main() {}\n").expect("a source to find");
+    std::os::unix::fs::symlink("..", inner.join("loop")).expect("symlink");
+
+    let mut sources = Vec::new();
+    rust_sources(&dir, &mut sources);
+    std::fs::remove_dir_all(&dir).ok();
+
+    assert_eq!(sources.len(), 1, "{sources:?}");
 }

@@ -18,8 +18,11 @@
 //! This test is the check that was missing: it reproduces what collect
 //! would write and compares it against what is checked in.
 
+mod common;
+
+use common::repo_root;
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 /// One composed module: the name it is mounted under, and the crate
 /// directory whose `migrations/sqlite` it ships (`None` for an in-crate
@@ -49,15 +52,6 @@ fn is_sql(name: &str) -> bool {
     Path::new(name)
         .extension()
         .is_some_and(|ext| ext.eq_ignore_ascii_case("sql"))
-}
-
-fn repo_root() -> PathBuf {
-    // `crates/cli-acceptance` -> repo root.
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .ancestors()
-        .nth(2)
-        .expect("repo root is two levels above this crate")
-        .to_path_buf()
 }
 
 /// The `(id, name)` pairs a module ships, in id order — the same list

@@ -30,6 +30,19 @@
 //! everywhere else** ([`PushWiring::severity`]): a developer wiring APNs one
 //! variable at a time must still be able to boot.
 //!
+//! # Nothing that came out of the environment goes into the report
+//!
+//! The report is logged whole at cold start, so a single value copied into
+//! it reaches Workers Logs. An adapter's error is free to quote what it was
+//! handed — `VapidError::Subject` does — and `Vapid::new` validates the
+//! subject *before* the key, so `VAPID_SUBJECT` and `VAPID_PRIVATE_KEY`
+//! pasted the wrong way round (the mistake `VapidKeys`' own doc warns about)
+//! would have put the private key in the log. So an adapter's error string
+//! is never copied into [`TransportWiring::Invalid`]: every `reason` is a
+//! fixed phrase naming the variable and what was expected, and
+//! `the_report_never_prints_any_variables_value` holds every variable in the
+//! table to it.
+//!
 //! # Degraded, never broken
 //!
 //! A transport that is not configured is simply not routed: the
@@ -64,20 +77,74 @@ use std::fmt;
 use std::sync::Arc;
 
 use bytes::Bytes;
-use cratefield_adapter_apns::{Apns, ApnsCredentials, ApnsHost};
-use cratefield_adapter_fcm::Fcm;
-use cratefield_adapter_webpush::WebPush;
-use cratefield_adapter_webpush::vapid::VapidKeys;
+use cratefield_adapter_apns::{Apns, ApnsConfigError, ApnsCredentials, ApnsHost};
+use cratefield_adapter_fcm::{Fcm, FcmConfigError};
+use cratefield_adapter_webpush::vapid::{VapidError, VapidKeys};
+use cratefield_adapter_webpush::{WebPush, WebPushConfigError};
 use cratefield_core::{
     Clock, Config, HttpClient, HttpError, Platform, Push, RoutingPush, SystemClock, VentureEnv,
 };
 
+/// One push environment variable, as a **type**.
+///
+/// The table entry carries one of these and so does every lookup, so no
+/// variable is ever named a second time as a bare string literal: the name
+/// is spelled once, in [`PushKey::name`], and a lookup for a key the table
+/// does not carry does not compile.
+///
+/// That is the difference between a rename being a compile error and being a
+/// production incident. With a name-keyed lookup and an `unwrap_or_default`,
+/// renaming a table entry left the transport still reporting `Complete`
+/// while the credential handed to the adapter was `""` — which for
+/// `APNS_HOST` is a silent sandbox default in production and
+/// `BadDeviceToken` on every send.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum PushKey {
+    /// The `.p8` provider key, whole.
+    ApnsKeyP8,
+    /// The `.p8` key's 10-character id.
+    ApnsKeyId,
+    /// The Apple team id.
+    ApnsTeamId,
+    /// The app's bundle id.
+    ApnsTopic,
+    /// `production` or `sandbox`.
+    ApnsHost,
+    /// The Google service-account JSON, whole.
+    FcmServiceAccountJson,
+    /// The VAPID private key.
+    VapidPrivateKey,
+    /// The VAPID contact URI.
+    VapidSubject,
+}
+
+impl PushKey {
+    /// The `SCREAMING_SNAKE` name, read through [`Config`] so a Workers
+    /// secret and a native environment variable are the same thing.
+    ///
+    /// The one place in the workspace a push variable is spelled out: this
+    /// match is exhaustive, so a new key without a name does not compile.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            PushKey::ApnsKeyP8 => "APNS_KEY_P8",
+            PushKey::ApnsKeyId => "APNS_KEY_ID",
+            PushKey::ApnsTeamId => "APNS_TEAM_ID",
+            PushKey::ApnsTopic => "APNS_TOPIC",
+            PushKey::ApnsHost => "APNS_HOST",
+            PushKey::FcmServiceAccountJson => "FCM_SERVICE_ACCOUNT_JSON",
+            PushKey::VapidPrivateKey => "VAPID_PRIVATE_KEY",
+            PushKey::VapidSubject => "VAPID_SUBJECT",
+        }
+    }
+}
+
 /// One environment variable a push transport reads.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PushVar {
-    /// The `SCREAMING_SNAKE` key, read through [`Config`] so a Workers
-    /// secret and a native environment variable are the same thing.
-    pub name: &'static str,
+    /// Which variable this is. Its [`name`](PushKey::name) is what is read
+    /// from the environment; nothing looks a variable up by that string.
+    pub key: PushKey,
     /// The transport it belongs to.
     pub transport: Platform,
     /// Whether the transport cannot be built without it.
@@ -89,6 +156,14 @@ pub struct PushVar {
     pub purpose: &'static str,
 }
 
+impl PushVar {
+    /// The variable's name in the environment.
+    #[must_use]
+    pub const fn name(&self) -> &'static str {
+        self.key.name()
+    }
+}
+
 /// Every environment variable the push adapters read, in one table.
 ///
 /// This is the single source of truth the acceptance test in
@@ -96,35 +171,35 @@ pub struct PushVar {
 /// keys in a string literal.
 pub const PUSH_ENV: &[PushVar] = &[
     PushVar {
-        name: "APNS_KEY_P8",
+        key: PushKey::ApnsKeyP8,
         transport: Platform::Ios,
         required: true,
         secret: true,
         purpose: "The `.p8` provider key from the Apple developer portal, PKCS#8 PEM, whole.",
     },
     PushVar {
-        name: "APNS_KEY_ID",
+        key: PushKey::ApnsKeyId,
         transport: Platform::Ios,
         required: true,
         secret: false,
         purpose: "The key's 10-character id (the `.p8` filename suffix).",
     },
     PushVar {
-        name: "APNS_TEAM_ID",
+        key: PushKey::ApnsTeamId,
         transport: Platform::Ios,
         required: true,
         secret: false,
         purpose: "The 10-character Apple team id; the provider JWT's issuer.",
     },
     PushVar {
-        name: "APNS_TOPIC",
+        key: PushKey::ApnsTopic,
         transport: Platform::Ios,
         required: true,
         secret: false,
         purpose: "The app's bundle id, sent as `apns-topic`.",
     },
     PushVar {
-        name: "APNS_HOST",
+        key: PushKey::ApnsHost,
         transport: Platform::Ios,
         required: false,
         secret: false,
@@ -133,7 +208,7 @@ pub const PUSH_ENV: &[PushVar] = &[
                   fails every time.",
     },
     PushVar {
-        name: "FCM_SERVICE_ACCOUNT_JSON",
+        key: PushKey::FcmServiceAccountJson,
         transport: Platform::Android,
         required: true,
         secret: true,
@@ -142,7 +217,7 @@ pub const PUSH_ENV: &[PushVar] = &[
                   no second variable to keep in step.",
     },
     PushVar {
-        name: "VAPID_PRIVATE_KEY",
+        key: PushKey::VapidPrivateKey,
         transport: Platform::Web,
         required: true,
         secret: true,
@@ -150,7 +225,7 @@ pub const PUSH_ENV: &[PushVar] = &[
                   base64url. The public key is derived, never configured.",
     },
     PushVar {
-        name: "VAPID_SUBJECT",
+        key: PushKey::VapidSubject,
         transport: Platform::Web,
         required: true,
         secret: false,
@@ -209,11 +284,14 @@ pub enum TransportWiring {
         /// The required variables that are not, in table order.
         missing: Vec<&'static str>,
     },
-    /// Every variable is set and the adapter refused them. The reason is
-    /// the adapter's own message, which names the defect and never the
-    /// credential.
+    /// Every variable is set and the adapter refused them.
     Invalid {
-        /// Why the adapter refused the credentials.
+        /// Why the adapter refused the credentials: a fixed phrase naming
+        /// the variable and what was expected of it.
+        ///
+        /// Never the adapter's own error string, and so never a value out
+        /// of the environment — the whole report is logged at cold start
+        /// (see the crate documentation).
         reason: String,
     },
 }
@@ -349,11 +427,22 @@ impl PushWiring {
         problems
     }
 
+    /// Whether any transport is actually routed — the question `fz doctor`
+    /// asks of a venture whose modules require the [`Push`] port: with
+    /// nothing routed every send answers `NotConfigured`.
+    #[must_use]
+    pub fn any_routed(&self) -> bool {
+        self.iter().any(|(_, wiring)| wiring.is_routed())
+    }
+
     /// How loudly to report this. Partial and invalid configurations are an
     /// error in production and a warning everywhere else.
+    // Asks each transport rather than building `problems()`: this runs on
+    // every cold start, and formatting three paragraphs to find out whether
+    // there are any is three allocations to answer a `bool`.
     #[must_use]
     pub fn severity(&self, env: VentureEnv) -> WiringSeverity {
-        if self.problems().is_empty() {
+        if !self.iter().any(|(_, wiring)| wiring.is_problem()) {
             WiringSeverity::Ok
         } else if env == VentureEnv::Production {
             WiringSeverity::Error
@@ -397,28 +486,56 @@ enum Survey {
         present: Vec<&'static str>,
         missing: Vec<&'static str>,
     },
-    Complete(Vec<(&'static str, String)>),
+    Complete(Values),
 }
 
-impl Survey {
-    /// The value of `name`; only ever called for a variable this survey
-    /// found, so the `unwrap_or_default` is unreachable in practice and
-    /// still cannot panic.
-    fn value(values: &[(&'static str, String)], name: &str) -> String {
-        values
+/// The values one transport's variables held, keyed by [`PushKey`] and not
+/// by name: the survey that read them and the builder that hands them to an
+/// adapter cannot disagree about which variable a value came from.
+struct Values(Vec<(PushKey, String)>);
+
+impl Values {
+    /// The value read for `key`, or `None` when the variable was unset —
+    /// which is only ever the case for a variable the table marks optional.
+    fn get(&self, key: PushKey) -> Option<&str> {
+        self.0
             .iter()
-            .find(|(key, _)| *key == name)
-            .map(|(_, value)| value.clone())
-            .unwrap_or_default()
+            .find(|(found, _)| *found == key)
+            .map(|(_, value)| value.as_str())
     }
 }
 
-/// A value that is set and not blank. A variable present but empty is
-/// treated as unset: an empty Workers secret and an unset one mean the same
-/// thing to an operator, and treating `""` as configured would hand the
-/// adapter a credential it must then refuse.
-fn value_of(config: &dyn Config, name: &str) -> Option<String> {
-    config.get(name).filter(|value| !value.trim().is_empty())
+/// A value the survey reported present.
+///
+/// [`Survey::Complete`] means every required variable of the transport was
+/// read, so `None` cannot happen; it is still reported rather than defaulted
+/// to `""`, because handing an adapter an empty credential is the silent
+/// 403 this crate exists to prevent.
+fn required(values: &Values, key: PushKey) -> Result<String, TransportWiring> {
+    values.get(key).map(ToOwned::to_owned).ok_or_else(|| {
+        invalid(format!(
+            "{} was read from the environment and then lost (a cratefield-push-wiring bug)",
+            key.name()
+        ))
+    })
+}
+
+/// A value that is set and not blank, **trimmed**.
+///
+/// A variable present but empty is treated as unset: an empty Workers secret
+/// and an unset one mean the same thing to an operator, and treating `""` as
+/// configured would hand the adapter a credential it must then refuse.
+///
+/// The trim is not only for that test. A newline or a leading space picked
+/// up pasting a value into `wrangler secret put` is invisible, and an
+/// untrimmed `APNS_KEY_ID` reports `configured`, goes into the provider
+/// JWT's `kid`, and earns a 403 on every send — exactly the silent failure
+/// this crate exists to prevent. What is handed on is what was tested.
+fn value_of(config: &dyn Config, key: PushKey) -> Option<String> {
+    config
+        .get(key.name())
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
 }
 
 fn survey(config: &dyn Config, transport: Platform) -> Survey {
@@ -426,19 +543,19 @@ fn survey(config: &dyn Config, transport: Platform) -> Survey {
     let mut missing = Vec::new();
     let mut values = Vec::new();
     for var in vars_for(transport) {
-        match value_of(config, var.name) {
+        match value_of(config, var.key) {
             Some(value) => {
-                present.push(var.name);
-                values.push((var.name, value));
+                present.push(var.name());
+                values.push((var.key, value));
             }
-            None if var.required => missing.push(var.name),
+            None if var.required => missing.push(var.name()),
             None => {}
         }
     }
     if present.is_empty() {
         Survey::Absent
     } else if missing.is_empty() {
-        Survey::Complete(values)
+        Survey::Complete(Values(values))
     } else {
         Survey::Partial { present, missing }
     }
@@ -496,6 +613,78 @@ pub fn build_push(
 /// which is what an unrouted transport must do.
 type Built = (Option<Arc<dyn Push>>, TransportWiring);
 
+/// An [`TransportWiring::Invalid`] verdict.
+///
+/// Every caller passes a fixed phrase. Nothing that came out of the
+/// environment, and no adapter error string that might quote it, reaches a
+/// `reason` — the report is logged whole at cold start.
+fn invalid(reason: String) -> TransportWiring {
+    TransportWiring::Invalid { reason }
+}
+
+/// Why the APNs adapter refused the credentials, said without repeating any
+/// of them.
+fn apns_refusal(err: &ApnsConfigError) -> TransportWiring {
+    match err {
+        ApnsConfigError::Key(_) => invalid(format!(
+            "{} is not a PKCS#8 PEM P-256 private key — paste the `.p8` file whole, \
+             `-----BEGIN PRIVATE KEY-----` line included",
+            PushKey::ApnsKeyP8.name()
+        )),
+    }
+}
+
+/// The same for FCM. Each variant names the field of the service-account
+/// JSON at fault; the JSON itself is a secret and none of it is repeated.
+fn fcm_refusal(err: &FcmConfigError) -> TransportWiring {
+    let name = PushKey::FcmServiceAccountJson.name();
+    invalid(match err {
+        FcmConfigError::ServiceAccount(_) => format!(
+            "{name} is not the service-account JSON Firebase issues — it must parse as JSON \
+             and carry `project_id`, `private_key`, `client_email` and `token_uri`"
+        ),
+        FcmConfigError::Key(_) => {
+            format!("{name} carries a `private_key` that is not an RSA private key in PEM form")
+        }
+        FcmConfigError::ProjectId(_) => {
+            format!("{name} carries a `project_id` that is not a bare Firebase project id")
+        }
+        FcmConfigError::TokenUri(_) => {
+            format!("{name} carries a `token_uri` that is not an https URL")
+        }
+    })
+}
+
+/// The same for Web Push — and the one that matters most.
+///
+/// [`VapidError::Subject`]'s own `Display` quotes the subject it was given,
+/// and [`Vapid::new`](cratefield_adapter_webpush::vapid::Vapid::new)
+/// validates the subject *before* the key. A deployment that pasted
+/// `VAPID_SUBJECT` and `VAPID_PRIVATE_KEY` the wrong way round would
+/// therefore have put the private key into the report, and from there into
+/// the logs.
+fn web_push_refusal(err: &WebPushConfigError) -> TransportWiring {
+    invalid(match err {
+        WebPushConfigError::Vapid(VapidError::Key(_)) => format!(
+            "{} is neither a PKCS#8 PEM nor a base64url-encoded 32-byte P-256 scalar",
+            PushKey::VapidPrivateKey.name()
+        ),
+        WebPushConfigError::Vapid(VapidError::Subject(_)) => format!(
+            "{} is not a `mailto:` or `https:` contact URI (RFC 8292 §2.1). If it holds a \
+             key, it was swapped with {}",
+            PushKey::VapidSubject.name(),
+            PushKey::VapidPrivateKey.name()
+        ),
+        // Neither reaches `WebPush::new`: an endpoint belongs to a send and
+        // the record size is the adapter's own default. Named, not echoed.
+        WebPushConfigError::Vapid(VapidError::Endpoint(_)) | WebPushConfigError::Ece(_) => format!(
+            "the Web Push adapter refused the configuration built from {} and {}",
+            PushKey::VapidPrivateKey.name(),
+            PushKey::VapidSubject.name()
+        ),
+    })
+}
+
 fn build_apns(config: &dyn Config, http: &Arc<dyn HttpClient>, clock: &Arc<dyn Clock>) -> Built {
     let values = match survey(config, Platform::Ios) {
         Survey::Absent => return (None, TransportWiring::Absent),
@@ -505,42 +694,48 @@ fn build_apns(config: &dyn Config, http: &Arc<dyn HttpClient>, clock: &Arc<dyn C
         Survey::Complete(values) => values,
     };
 
-    let raw_host = Survey::value(&values, "APNS_HOST");
     // Unset is the sandbox, deliberately: a development build's device token
     // is a sandbox token, and the adapter's own README documents the same
     // default. A value that is set and unparseable is a typo, not a default.
-    let host = if raw_host.is_empty() {
-        Some(ApnsHost::Sandbox)
-    } else {
-        ApnsHost::parse(&raw_host)
-    };
-    let Some(host) = host else {
-        // `APNS_HOST` is not a secret (the table says so), so echoing the
-        // value is what makes the typo findable.
-        return (
-            None,
-            TransportWiring::Invalid {
-                reason: format!("APNS_HOST is {raw_host:?}; expected `production` or `sandbox`"),
-            },
-        );
+    let host = match values.get(PushKey::ApnsHost) {
+        None => ApnsHost::Sandbox,
+        Some(raw) => match ApnsHost::parse(raw) {
+            Some(host) => host,
+            None => {
+                // The value is not echoed even though the table marks this
+                // variable non-secret: `secret: false` describes what the
+                // variable is for, not what an operator actually pasted into
+                // it, and a `.p8` body put in the wrong secret would land in
+                // the logs.
+                return (
+                    None,
+                    invalid(format!(
+                        "{} is neither `production` nor `sandbox`",
+                        PushKey::ApnsHost.name()
+                    )),
+                );
+            }
+        },
     };
 
-    let creds = ApnsCredentials {
-        key_p8_pem: Survey::value(&values, "APNS_KEY_P8"),
-        key_id: Survey::value(&values, "APNS_KEY_ID"),
-        team_id: Survey::value(&values, "APNS_TEAM_ID"),
-        topic: Survey::value(&values, "APNS_TOPIC"),
-        host,
+    let creds = match apns_credentials(&values, host) {
+        Ok(creds) => creds,
+        Err(wiring) => return (None, wiring),
     };
     match Apns::new(Arc::clone(http), Arc::clone(clock), creds) {
         Ok(apns) => (Some(Arc::new(apns)), TransportWiring::Configured),
-        Err(err) => (
-            None,
-            TransportWiring::Invalid {
-                reason: err.to_string(),
-            },
-        ),
+        Err(err) => (None, apns_refusal(&err)),
     }
+}
+
+fn apns_credentials(values: &Values, host: ApnsHost) -> Result<ApnsCredentials, TransportWiring> {
+    Ok(ApnsCredentials {
+        key_p8_pem: required(values, PushKey::ApnsKeyP8)?,
+        key_id: required(values, PushKey::ApnsKeyId)?,
+        team_id: required(values, PushKey::ApnsTeamId)?,
+        topic: required(values, PushKey::ApnsTopic)?,
+        host,
+    })
 }
 
 fn build_fcm(config: &dyn Config, http: &Arc<dyn HttpClient>, clock: &Arc<dyn Clock>) -> Built {
@@ -552,15 +747,13 @@ fn build_fcm(config: &dyn Config, http: &Arc<dyn HttpClient>, clock: &Arc<dyn Cl
         Survey::Complete(values) => values,
     };
 
-    let json = Survey::value(&values, "FCM_SERVICE_ACCOUNT_JSON");
+    let json = match required(&values, PushKey::FcmServiceAccountJson) {
+        Ok(json) => json,
+        Err(wiring) => return (None, wiring),
+    };
     match Fcm::from_service_account_json(Arc::clone(http), Arc::clone(clock), &json) {
         Ok(fcm) => (Some(Arc::new(fcm)), TransportWiring::Configured),
-        Err(err) => (
-            None,
-            TransportWiring::Invalid {
-                reason: err.to_string(),
-            },
-        ),
+        Err(err) => (None, fcm_refusal(&err)),
     }
 }
 
@@ -577,19 +770,21 @@ fn build_web_push(
         Survey::Complete(values) => values,
     };
 
-    let keys = VapidKeys {
-        private_key: Survey::value(&values, "VAPID_PRIVATE_KEY"),
-        subject: Survey::value(&values, "VAPID_SUBJECT"),
+    let keys = match vapid_keys(&values) {
+        Ok(keys) => keys,
+        Err(wiring) => return (None, wiring),
     };
     match WebPush::new(Arc::clone(http), Arc::clone(clock), keys) {
         Ok(web_push) => (Some(Arc::new(web_push)), TransportWiring::Configured),
-        Err(err) => (
-            None,
-            TransportWiring::Invalid {
-                reason: err.to_string(),
-            },
-        ),
+        Err(err) => (None, web_push_refusal(&err)),
     }
+}
+
+fn vapid_keys(values: &Values) -> Result<VapidKeys, TransportWiring> {
+    Ok(VapidKeys {
+        private_key: required(values, PushKey::VapidPrivateKey)?,
+        subject: required(values, PushKey::VapidSubject)?,
+    })
 }
 
 /// The same verdicts as [`build_push`], for a caller that has no HTTP
@@ -672,7 +867,7 @@ table.*\n\n",
             let _ = writeln!(
                 out,
                 "| `{}` | {} | {} | {} |",
-                var.name,
+                var.name(),
                 if var.required { "yes" } else { "no" },
                 if var.secret { "yes" } else { "no" },
                 var.purpose,
@@ -710,14 +905,71 @@ table.*\n\n",
 #[cfg(test)]
 mod tests {
     use super::*;
+    use cratefield_core::MapConfig;
 
     #[test]
     fn every_variable_belongs_to_exactly_one_transport_and_is_unique() {
-        let mut names: Vec<&str> = PUSH_ENV.iter().map(|var| var.name).collect();
+        let mut names: Vec<&str> = PUSH_ENV.iter().map(PushVar::name).collect();
         names.sort_unstable();
         let count = names.len();
         names.dedup();
         assert_eq!(names.len(), count, "a variable is listed twice");
+    }
+
+    #[test]
+    fn every_key_appears_in_the_table_exactly_once() {
+        // The typed lookup is only infallible if the table carries every
+        // key: a key the table does not hold could be asked for and never
+        // found. `PushKey::name` is exhaustive, so this pairs the two
+        // directions — and a key added to the enum but not to the table
+        // fails here rather than in production as an empty credential.
+        let keys: Vec<PushKey> = PUSH_ENV.iter().map(|var| var.key).collect();
+        for key in [
+            PushKey::ApnsKeyP8,
+            PushKey::ApnsKeyId,
+            PushKey::ApnsTeamId,
+            PushKey::ApnsTopic,
+            PushKey::ApnsHost,
+            PushKey::FcmServiceAccountJson,
+            PushKey::VapidPrivateKey,
+            PushKey::VapidSubject,
+        ] {
+            assert_eq!(
+                keys.iter().filter(|found| **found == key).count(),
+                1,
+                "{} is not in PUSH_ENV exactly once",
+                key.name()
+            );
+        }
+        assert_eq!(
+            keys.len(),
+            8,
+            "a key was added to the table, not to this test"
+        );
+    }
+
+    #[test]
+    fn a_value_is_trimmed_before_it_reaches_an_adapter() {
+        // A newline or a leading space picked up in a paste is invisible.
+        // Untrimmed, `APNS_KEY_ID` reports `configured`, goes into the
+        // provider JWT's `kid` and earns a 403 on every send.
+        let config = MapConfig::from_pairs([(
+            PushKey::ApnsKeyId.name().to_owned(),
+            " ABCDE12345\n".to_owned(),
+        )]);
+        assert_eq!(
+            value_of(&config, PushKey::ApnsKeyId).as_deref(),
+            Some("ABCDE12345")
+        );
+    }
+
+    #[test]
+    fn a_blank_value_is_unset() {
+        // An empty Workers secret and an unset one mean the same thing to
+        // an operator — and a value that is only whitespace is empty.
+        let config =
+            MapConfig::from_pairs([(PushKey::ApnsKeyId.name().to_owned(), "   \n".to_owned())]);
+        assert_eq!(value_of(&config, PushKey::ApnsKeyId), None);
     }
 
     #[test]
@@ -729,6 +981,28 @@ mod tests {
                 vars_for(transport).any(|var| var.required),
                 "{} has no required variable",
                 transport_key(transport)
+            );
+        }
+    }
+
+    #[test]
+    fn severity_does_not_format_the_problems_to_find_out_whether_there_are_any() {
+        // A cheap assertion of a cheap implementation: `severity` runs on
+        // every cold start and must not allocate three paragraphs to answer
+        // a bool. Kept honest by agreeing with `problems()` either way.
+        for config in [
+            MapConfig::from_pairs(Vec::<(String, String)>::new()),
+            MapConfig::from_pairs([(
+                PushKey::VapidSubject.name().to_owned(),
+                "mailto:ops@example.test".to_owned(),
+            )]),
+        ] {
+            let wiring = inspect_push(&config);
+            assert_eq!(
+                wiring.severity(VentureEnv::Production) == WiringSeverity::Ok,
+                wiring.problems().is_empty(),
+                "{}",
+                wiring.summary()
             );
         }
     }
