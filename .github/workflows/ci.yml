@@ -363,7 +363,10 @@ jobs:
           curl -s -m 10 -o /tmp/vapid.body -w "%{http_code}" \
             http://127.0.0.1:8787/v1/notifications/vapid-public-key | grep -q '^404$'
           grep -q 'webpush-not-configured' /tmp/vapid.body
-          ! grep -qi 'VAPID_PRIVATE_KEY' /tmp/vapid.body
+          if grep -qi 'VAPID' /tmp/vapid.body; then
+            echo "the refusal named an environment variable"
+            exit 1
+          fi
           echo "-- admin: login redirect, login, table"
           curl -s -m 10 -o /dev/null -w "%{http_code}" http://127.0.0.1:8787/ui/admin | grep -q '^303$'
           curl -s -m 10 -o /dev/null -D /tmp/login.headers -X POST http://127.0.0.1:8787/ui/admin/login \
