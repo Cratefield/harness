@@ -23,6 +23,10 @@
     "file": "0011_notifications_0003_inbox.sql",
     "sha256": "1e52325d8b789684c781d1e7787d5574ea4d85a01f298190e7c34fa4de3071f6"
   },
+  "notifications/0004": {
+    "file": "0012_notifications_0004_email_targets.sql",
+    "sha256": "4fccb01cb0fa21c70f86b93c4734102f5743693f6198a6a95f1abe275c5eff1d"
+  },
   "sample/0001": {
     "file": "0001_sample_0001_init.sql",
     "sha256": "adbaf308f36585d92261aecefe4a06f65aa6d3408834a8f61babd87de0545945"

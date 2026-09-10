@@ -27,8 +27,8 @@ use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use cratefield_core::{
-    Database, DbError, ModuleConfig, ModuleContext, Notification, Outbox, OutboxRecord, Push,
-    PushError, PushOutcome, Scope, Statement,
+    Database, DbError, Kid, MailError, Message, ModuleConfig, ModuleContext, Notification, Outbox,
+    OutboxRecord, Payload, Push, PushError, PushOutcome, Scope, SendOutcome, Statement,
 };
 use futures_util::StreamExt as _;
 use serde::{Deserialize, Serialize};
@@ -38,8 +38,13 @@ use crate::clock::{now_iso, plus_secs};
 use crate::store::{self, Channels, DeadLetterReason, Subscription};
 use crate::{Category, Settings};
 
-/// The outbox topic every row this module writes carries.
+/// The outbox topic a push row carries.
 pub const TOPIC_SEND: &str = "notifications.send";
+/// The outbox topic an email row carries (#189).
+///
+/// One row per notification per **account**, not per device: a coach's
+/// notes are one email however many phones the account has.
+pub const TOPIC_EMAIL: &str = "notifications.email";
 
 /// The event a venture can subscribe to instead of taking a crate
 /// dependency on this module.
@@ -81,6 +86,15 @@ pub(crate) struct SendJob {
     pub account_id: String,
     pub category: String,
     pub subscription_id: String,
+    pub notification: Notification,
+}
+
+/// One queued email, the account-level sibling of [`SendJob`].
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct EmailJob {
+    pub notification_id: String,
+    pub account_id: String,
+    pub category: String,
     pub notification: Notification,
 }
 
@@ -375,7 +389,7 @@ impl Notifier {
         account_id: &str,
         category: &Category,
     ) -> Result<bool, DbError> {
-        if !category.in_app {
+        if !category.defaults.in_app {
             return Ok(false);
         }
         // Falls back to `true`, not to `default_enabled`: that is the
@@ -388,6 +402,91 @@ impl Notifier {
             .is_none_or(|channels: Channels| channels.in_app))
     }
 
+    /// The outbox insert for one device.
+    fn push_row(
+        &self,
+        account_id: &str,
+        notification_id: &str,
+        category: &Category,
+        notification: &Notification,
+        subscription_id: &str,
+        now: &str,
+    ) -> Result<Statement, NotifyError> {
+        let job = SendJob {
+            notification_id: notification_id.to_owned(),
+            account_id: account_id.to_owned(),
+            category: category.name.clone(),
+            subscription_id: subscription_id.to_owned(),
+            notification: notification.clone(),
+        };
+        let payload = serde_json::to_string(&job).map_err(|err| {
+            NotifyError::Database(DbError::Execute(format!(
+                "notification does not serialise: {err}"
+            )))
+        })?;
+        Ok(Outbox::new(store::OUTBOX).enqueue_statement(&self.new_id(), TOPIC_SEND, &payload, now))
+    }
+
+    /// The outbox insert for one account's email.
+    ///
+    /// One row per notification per account, not per device: a coach's
+    /// notes are one email however many phones the account has.
+    fn email_row(
+        &self,
+        account_id: &str,
+        notification_id: &str,
+        category: &Category,
+        notification: &Notification,
+        now: &str,
+    ) -> Result<Statement, NotifyError> {
+        let job = EmailJob {
+            notification_id: notification_id.to_owned(),
+            account_id: account_id.to_owned(),
+            category: category.name.clone(),
+            notification: notification.clone(),
+        };
+        let payload = serde_json::to_string(&job).map_err(|err| {
+            NotifyError::Database(DbError::Execute(format!(
+                "notification does not serialise: {err}"
+            )))
+        })?;
+        Ok(
+            Outbox::new(store::OUTBOX).enqueue_statement(
+                &self.new_id(),
+                TOPIC_EMAIL,
+                &payload,
+                now,
+            ),
+        )
+    }
+
+    /// Whether `account_id` should be emailed for `category`.
+    ///
+    /// Three things, all of which must hold: the venture opted the
+    /// category into email, the account did not switch it off, and the
+    /// account has a verified address it has not unsubscribed. All three
+    /// are re-checked in the drain, because an answer that changes after
+    /// the row is written must still win.
+    async fn email_allowed(
+        &self,
+        db: &dyn Database,
+        account_id: &str,
+        category: &Category,
+    ) -> Result<bool, DbError> {
+        if !category.defaults.email {
+            return Ok(false);
+        }
+        let wanted = store::preference(db, account_id, &category.name)
+            .await?
+            .is_none_or(|channels: Channels| channels.email);
+        if !wanted {
+            return Ok(false);
+        }
+        Ok(store::email_target(db, account_id)
+            .await?
+            .is_some_and(|target| target.mailable()))
+    }
+
     /// Whether `account_id` wants push for `category` **right now**.
     async fn push_allowed(
         &self,
@@ -397,7 +496,7 @@ impl Notifier {
     ) -> Result<bool, DbError> {
         Ok(store::preference(db, account_id, &category.name)
             .await?
-            .map_or(category.default_enabled, |channels: Channels| channels.push))
+            .map_or(category.defaults.push, |channels: Channels| channels.push))
     }
 
     /// Prepares one notification for every device `account_id` has.
@@ -471,6 +570,18 @@ impl Notifier {
             ));
         }
 
+        // Email, also ahead of the push early returns and for the same
+        // reason: an account with no device can still have a mailbox.
+        if self.email_allowed(db, account_id, &category).await? {
+            statements.push(self.email_row(
+                account_id,
+                &notification_id,
+                &category,
+                &notification,
+                &now,
+            )?);
+        }
+
         // Cheap skip, not the check that counts: the drain re-reads the
         // preference immediately before sending, so an opt-out that
         // arrives after this line still wins.
@@ -497,22 +608,16 @@ impl Notifier {
             });
         }
 
-        let outbox = Outbox::new(store::OUTBOX);
         statements.reserve(subscriptions.len());
         for subscription in &subscriptions {
-            let job = SendJob {
-                notification_id: notification_id.clone(),
-                account_id: account_id.to_owned(),
-                category: category.name.clone(),
-                subscription_id: subscription.id.clone(),
-                notification: notification.clone(),
-            };
-            let payload = serde_json::to_string(&job).map_err(|err| {
-                NotifyError::Database(DbError::Execute(format!(
-                    "notification does not serialise: {err}"
-                )))
-            })?;
-            statements.push(outbox.enqueue_statement(&self.new_id(), TOPIC_SEND, &payload, &now));
+            statements.push(self.push_row(
+                account_id,
+                &notification_id,
+                &category,
+                &notification,
+                &subscription.id,
+                &now,
+            )?);
         }
         Ok(Enqueued {
             devices: subscriptions.len(),
@@ -695,6 +800,10 @@ impl Notifier {
         record: &OutboxRecord,
         now: &str,
     ) -> Result<Outcome, NotifyError> {
+        if record.topic == TOPIC_EMAIL {
+            return self.deliver_email(ctx, db, record, now).await;
+        }
+
         let Ok(job) = serde_json::from_str::<SendJob>(&record.payload) else {
             tracing::error!(row = %record.id, "outbox row is not a notifications job");
             self.dead_letter(
@@ -785,28 +894,287 @@ impl Notifier {
                 message,
                 retry_after,
             }) => {
-                let attempts = record.attempts.saturating_add(1);
-                if attempts >= self.max_attempts(ctx) {
-                    self.dead_letter(
-                        db,
-                        record,
-                        DeadLetterReason::AttemptsExhausted,
-                        &format!("gave up after {attempts} attempts: {message}"),
-                        now,
-                    )
-                    .await?;
-                    Ok(Outcome::DeadLettered)
-                } else {
-                    let delay = backoff(attempts).max(retry_after.unwrap_or(Duration::ZERO));
-                    let seconds = i64::try_from(delay.as_secs())
-                        .unwrap_or_else(|_| i64::try_from(BACKOFF_MAX_SECS).unwrap_or(i64::MAX));
-                    Outbox::new(store::OUTBOX)
-                        .retry_later(db, &record.id, &plus_secs(now, seconds))
-                        .await?;
-                    Ok(Outcome::Retried)
-                }
+                self.retry_or_give_up(ctx, db, record, &message, retry_after, now)
+                    .await
             }
         }
+    }
+
+    /// One transient-failure policy, shared by both channels: back off to
+    /// a bound and then dead-letter, never retrying before the provider's
+    /// own `retry_after`.
+    async fn retry_or_give_up(
+        &self,
+        ctx: &ModuleContext,
+        db: &dyn Database,
+        record: &OutboxRecord,
+        message: &str,
+        retry_after: Option<Duration>,
+        now: &str,
+    ) -> Result<Outcome, NotifyError> {
+        let attempts = record.attempts.saturating_add(1);
+        if attempts >= self.max_attempts(ctx) {
+            self.dead_letter(
+                db,
+                record,
+                DeadLetterReason::AttemptsExhausted,
+                &format!("gave up after {attempts} attempts: {message}"),
+                now,
+            )
+            .await?;
+            return Ok(Outcome::DeadLettered);
+        }
+        let delay = backoff(attempts).max(retry_after.unwrap_or(Duration::ZERO));
+        let seconds = i64::try_from(delay.as_secs())
+            .unwrap_or_else(|_| i64::try_from(BACKOFF_MAX_SECS).unwrap_or(i64::MAX));
+        Outbox::new(store::OUTBOX)
+            .retry_later(db, &record.id, &plus_secs(now, seconds))
+            .await?;
+        Ok(Outcome::Retried)
+    }
+
+    /// Delivers one queued email.
+    ///
+    /// The same policy shape as push over `Mailer`'s outcomes: a permanent
+    /// refusal dead-letters with a reason ops can act on, a transient one
+    /// retries with backoff, and `NotConfigured` dead-letters rather than
+    /// passing for success — a venture that opted a category into email
+    /// and wired no mailer has a bug, not a quiet no-op.
+    async fn deliver_email(
+        &self,
+        ctx: &ModuleContext,
+        db: &dyn Database,
+        record: &OutboxRecord,
+        now: &str,
+    ) -> Result<Outcome, NotifyError> {
+        let Ok(job) = serde_json::from_str::<EmailJob>(&record.payload) else {
+            tracing::error!(row = %record.id, "outbox row is not a notifications email job");
+            self.dead_letter(
+                db,
+                record,
+                DeadLetterReason::Malformed,
+                "outbox payload is not a notifications email job",
+                now,
+            )
+            .await?;
+            return Ok(Outcome::DeadLettered);
+        };
+
+        let Some((category, target)) = self.email_still_wanted(ctx, db, &job, now).await? else {
+            db.execute(&store::delete_outbox_statement(&record.id))
+                .await?;
+            return Ok(Outcome::Dropped);
+        };
+
+        let Some(mailer) = ctx.ports.mailer.clone() else {
+            self.dead_letter(
+                db,
+                record,
+                DeadLetterReason::NotConfigured,
+                "the venture opted a category into email and wired no Mailer port",
+                now,
+            )
+            .await?;
+            return Ok(Outcome::DeadLettered);
+        };
+
+        match mailer
+            .send(Self::compose(ctx, &job, &category, &target.email))
+            .await
+        {
+            Ok(SendOutcome::Sent { .. }) => {
+                db.batch(&[
+                    store::record_email_statement(
+                        &self.new_id(),
+                        &job.account_id,
+                        &category.name,
+                        now,
+                    ),
+                    store::delete_outbox_statement(&record.id),
+                ])
+                .await?;
+                Ok(Outcome::Delivered)
+            }
+            Ok(SendOutcome::NotConfigured) => {
+                self.dead_letter(
+                    db,
+                    record,
+                    DeadLetterReason::NotConfigured,
+                    "the mailer has no API key or no verified sending domain",
+                    now,
+                )
+                .await?;
+                Ok(Outcome::DeadLettered)
+            }
+            // Nothing about this message will ever be accepted.
+            Err(
+                err @ (MailError::Unauthorized
+                | MailError::DomainNotVerified { .. }
+                | MailError::Invalid { .. }),
+            ) => {
+                self.dead_letter(
+                    db,
+                    record,
+                    DeadLetterReason::Rejected,
+                    &err.to_string(),
+                    now,
+                )
+                .await?;
+                Ok(Outcome::DeadLettered)
+            }
+            Err(err) => {
+                let retry_after = match &err {
+                    MailError::RateLimited { retry_after } => *retry_after,
+                    _ => None,
+                };
+                self.retry_or_give_up(ctx, db, record, &err.to_string(), retry_after, now)
+                    .await
+            }
+        }
+    }
+
+    /// Everything that can turn a queued email back into nothing,
+    /// re-checked at send time rather than trusted from when the row was
+    /// written: the category still exists, the account still wants it, the
+    /// address is still mailable, and the cooldown still has room.
+    ///
+    /// `None` means drop the row. All four are drops rather than retries —
+    /// a retry would deliver the moment the answer changed back, and for
+    /// the cooldown that is exactly the flood the cap exists to prevent.
+    async fn email_still_wanted(
+        &self,
+        ctx: &ModuleContext,
+        db: &dyn Database,
+        job: &EmailJob,
+        now: &str,
+    ) -> Result<Option<(Category, store::EmailTarget)>, NotifyError> {
+        let Ok(category) = self.category(&job.category).cloned() else {
+            return Ok(None);
+        };
+        if !self.email_allowed(db, &job.account_id, &category).await? {
+            return Ok(None);
+        }
+        let Some(target) = store::email_target(db, &job.account_id).await? else {
+            return Ok(None);
+        };
+        let cap = self.email_max_per_window(ctx);
+        let since = plus_secs(now, -self.email_window(ctx));
+        if cap == 0
+            || store::emails_since(db, &job.account_id, &category.name, &since).await?
+                >= i64::from(cap)
+        {
+            tracing::info!(
+                account = %job.account_id,
+                category = %category.name,
+                "email suppressed: the category is at its cooldown cap for this account"
+            );
+            return Ok(None);
+        }
+        Ok(Some((category, target)))
+    }
+
+    /// How long the per-category cooldown window is, in seconds.
+    fn email_window(&self, ctx: &ModuleContext) -> i64 {
+        i64::from(
+            ModuleConfig::new(crate::MODULE_NAME, &*ctx.config)
+                .get_u32("EMAIL_WINDOW_SECS", self.settings().email_window_secs),
+        )
+    }
+
+    /// How many mails one account may get for one category in a window.
+    /// `0` stops the channel, which is what a venture that wants email off
+    /// without editing its categories sets.
+    fn email_max_per_window(&self, ctx: &ModuleContext) -> u32 {
+        ModuleConfig::new(crate::MODULE_NAME, &*ctx.config)
+            .get_u32("EMAIL_MAX_PER_WINDOW", self.settings().email_max_per_window)
+    }
+
+    /// The mail one notification becomes.
+    ///
+    /// Text and HTML together, an unsubscribe link in both, and the RFC
+    /// 8058 headers beside it: Gmail and Yahoo have required one-click of
+    /// bulk senders since 2024, and a "click here" line in a footer is not
+    /// what they check for.
+    fn compose(ctx: &ModuleContext, job: &EmailJob, category: &Category, to: &str) -> Message {
+        let cfg = ModuleConfig::new(crate::MODULE_NAME, &*ctx.config);
+        let from = cfg.get_str(
+            "MAIL_FROM",
+            &format!("no-reply@send.{}", ctx.venture.domain),
+        );
+        let base = cfg.get_str("PUBLIC_URL", &format!("https://{}", ctx.venture.domain));
+        let unsubscribe = Self::unsubscribe_url(ctx, &base, &job.account_id, &category.name);
+        // Two links, because they answer different questions. The header
+        // one-click stops *this* category, which is what somebody who
+        // clicked "unsubscribe" on one kind of mail means. The footer also
+        // offers every category, so a reader who wants out entirely does
+        // not have to unsubscribe once per category as they arrive.
+        let unsubscribe_all = Self::unsubscribe_url(ctx, &base, &job.account_id, UNSUBSCRIBE_ALL);
+        let subject = category
+            .subject_template
+            .clone()
+            .unwrap_or_else(|| job.notification.title.clone());
+
+        let action = job
+            .notification
+            .url
+            .as_deref()
+            .map_or_else(String::new, |url| format!("\n{url}\n"));
+        let text = format!(
+            "{}\n\n{}\n{}\nTo stop receiving these, open:\n{}\n\nTo stop every \
+             notification email:\n{}\n",
+            job.notification.title, job.notification.body, action, unsubscribe, unsubscribe_all
+        );
+        let html = format!(
+            "<p><strong>{}</strong></p><p>{}</p>{}<hr><p><a href=\"{}\">Stop receiving \
+             these</a> &middot; <a href=\"{}\">stop all notification email</a></p>",
+            escape(&job.notification.title),
+            escape(&job.notification.body),
+            job.notification
+                .url
+                .as_deref()
+                .map_or_else(String::new, |url| {
+                    format!("<p><a href=\"{}\">Open</a></p>", escape(url))
+                }),
+            escape(&unsubscribe),
+            escape(&unsubscribe_all),
+        );
+
+        let mut message = Message::new(to, from, subject, text, html)
+            // One notification is one mail however often the row is
+            // retried: the fan-out id is stable, the outbox row id is not.
+            .idempotency_key(format!("{}-email", job.notification_id))
+            .tags(["notifications"])
+            .header("List-Unsubscribe", format!("<{unsubscribe}>"))
+            .header("List-Unsubscribe-Post", "List-Unsubscribe=One-Click");
+        if let Some(reply_to) = cfg.get_opt("MAIL_REPLY_TO") {
+            message = message.reply_to(reply_to);
+        }
+        message
+    }
+
+    /// The signed one-click unsubscribe link for one account and category.
+    ///
+    /// Signed and purpose-bound, so a link for one account cannot switch
+    /// another's preference off — the revocable-link pattern of ADR 0014.
+    fn unsubscribe_url(
+        ctx: &ModuleContext,
+        base: &str,
+        account_id: &str,
+        category: &str,
+    ) -> String {
+        let Some(signer) = ctx.ports.signer.as_ref() else {
+            // No signer: the footer still says how to stop, through the
+            // account's own settings, rather than carrying a link that
+            // would not verify.
+            return format!("{base}/settings/notifications");
+        };
+        let token = signer.sign(&Payload {
+            purpose: PURPOSE_UNSUBSCRIBE.to_owned(),
+            subject: format!("{account_id}:{category}"),
+            exp: None,
+            kid: Kid::Cur,
+        });
+        format!("{base}/v1/notifications/email/unsubscribe?token={token}")
     }
 
     /// The provider says this recipient is gone: delete the subscription
@@ -914,6 +1282,22 @@ fn prepare(
 /// Nothing is published here that the inbox row does not also hold, so a
 /// client that missed the event loses nothing by reading the list.
 pub const INBOX_ROOM_PREFIX: &str = "notifications:";
+
+/// The category name that means "every category" in an unsubscribe
+/// token's subject.
+pub const UNSUBSCRIBE_ALL: &str = "all";
+
+/// The purpose a one-click unsubscribe token is bound to.
+pub const PURPOSE_UNSUBSCRIBE: &str = "notifications.unsubscribe";
+
+/// The five characters that must not travel into HTML as themselves.
+fn escape(raw: &str) -> String {
+    raw.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&#39;")
+}
 
 /// Exponential backoff on the number of failed attempts, capped.
 fn backoff(attempts: i64) -> Duration {

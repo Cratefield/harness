@@ -70,6 +70,11 @@ pub(crate) fn router(state: Arc<ModuleState>) -> axum::Router {
         .route("/{id}/read", post(mark_read))
         .route("/read-all", post(mark_all_read))
         .route("/{id}", delete(archive))
+        .route("/email", put(set_email))
+        .route(
+            "/email/unsubscribe",
+            get(unsubscribe_page).post(unsubscribe_one_click),
+        )
         .with_state(state)
 }
 
@@ -112,6 +117,30 @@ impl FromRequestParts<Arc<ModuleState>> for Account {
         let Authenticated(claims) =
             Authenticated::from_request_parts(parts, &AuthState(client)).await?;
         Ok(Account(claims.sub))
+    }
+}
+
+/// [`Account`], keeping the rest of the claims.
+///
+/// Only the email route needs them, and it needs them for one reason: it
+/// is the only place the module can learn that an address is verified
+/// without inventing its own confirmation flow. Taking `Account` *and*
+/// `Authenticated` on one handler would verify the same token twice.
+pub(crate) struct AccountClaims(pub factory0_auth_client::Claims);
+
+impl FromRequestParts<Arc<ModuleState>> for AccountClaims {
+    type Rejection = Problem;
+
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &Arc<ModuleState>,
+    ) -> Result<Self, Self::Rejection> {
+        let Some(client) = state.auth.clone() else {
+            return Err(Problem::new(&UNAUTHENTICATED));
+        };
+        let Authenticated(claims) =
+            Authenticated::from_request_parts(parts, &AuthState(client)).await?;
+        Ok(AccountClaims(claims))
     }
 }
 
@@ -470,7 +499,7 @@ fn preference_writes(
                     state
                         .settings
                         .category(category)
-                        .is_some_and(|declared| declared.default_enabled),
+                        .is_some_and(|declared| declared.defaults.push),
                 )
             },
             |(_, channels)| *channels,
@@ -500,10 +529,7 @@ fn effective(settings: &Settings, stored: &[(String, Channels)]) -> serde_json::
         let channels = stored
             .iter()
             .find(|(name, _)| *name == category.name)
-            .map_or_else(
-                || Channels::all(category.default_enabled),
-                |(_, channels)| *channels,
-            );
+            .map_or_else(|| category.defaults, |(_, channels)| *channels);
         out.insert(
             category.name.clone(),
             json!({
@@ -750,4 +776,156 @@ async fn archive(
     } else {
         Err(Problem::not_found().instance(&scope.request_id))
     }
+}
+
+// ---------------------------------------------------------------------------
+// Email as a channel (#189)
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct EmailBody {
+    email: String,
+}
+
+/// `PUT /v1/notifications/email` — the address this account is mailed at.
+///
+/// This route exists because `notify()` has no claims to read: it runs
+/// inside another module's batch or off a bus event. Here there is a
+/// token, so `email_verified` in the claims is the only thing that can
+/// mark an address verified without the module inventing its own
+/// confirmation flow.
+async fn set_email(
+    scope: Scope,
+    State(state): State<Arc<ModuleState>>,
+    AccountClaims(claims): AccountClaims,
+    Json(body): Json<EmailBody>,
+) -> Result<Response, Problem> {
+    let account_id = claims.sub.clone();
+    let Some(db) = state.ctx.ports.db.clone() else {
+        return Err(internal(&scope));
+    };
+    // The workspace already has one address validator, and a module with
+    // its own would disagree with the waitlist's about some real address
+    // sooner or later.
+    let email = cratefield_core::normalize_email(&body.email);
+    if let Some(reason) = cratefield_core::validation_error(&email) {
+        return Err(cratefield_core::invalid_email_problem(reason).instance(&scope.request_id));
+    }
+
+    // Verified only when the issuer says this token's own address is this
+    // address and is verified. Anything else is stored unverified, and an
+    // unverified address is never mailed.
+    let verified = claims
+        .email
+        .as_deref()
+        .is_some_and(|claimed| claimed.eq_ignore_ascii_case(&email))
+        && claims.email_verified.unwrap_or(false);
+
+    store::set_email_target(&*db, &account_id, &email, verified, &now(&state))
+        .await
+        .map_err(|err| {
+            tracing::error!(error = %err, "storing an email target failed");
+            internal(&scope)
+        })?;
+    Ok(Json(json!({ "email": email, "verified": verified })).into_response())
+}
+
+/// The `(account, category)` a valid unsubscribe token names.
+fn unsubscribed_subject(state: &ModuleState, token: &str) -> Option<(String, String)> {
+    let signer = state.ctx.ports.signer.as_ref()?;
+    let payload = signer.verify(token, crate::notify::PURPOSE_UNSUBSCRIBE)?;
+    let (account, category) = payload.subject.split_once(':')?;
+    Some((account.to_owned(), category.to_owned()))
+}
+
+/// Applies one unsubscribe. `all` stops the channel for the address;
+/// anything else switches that one category's `email` off.
+async fn apply_unsubscribe(
+    state: &ModuleState,
+    account_id: &str,
+    category: &str,
+) -> Result<(), Problem> {
+    let Some(db) = state.ctx.ports.db.clone() else {
+        return Ok(());
+    };
+    let at = now(state);
+    if category == "all" {
+        store::unsubscribe_all(&*db, account_id, "one-click", &at)
+            .await
+            .map_err(|err| {
+                tracing::error!(error = %err, "unsubscribing failed");
+                Problem::internal()
+            })?;
+        return Ok(());
+    }
+    let existing = store::preference(&*db, account_id, category)
+        .await
+        .map_err(|_| Problem::internal())?;
+    let channels = Channels {
+        email: false,
+        ..existing.unwrap_or(Channels {
+            push: true,
+            in_app: true,
+            email: true,
+        })
+    };
+    db.execute(&store::write_preference_statement(
+        account_id,
+        category,
+        channels,
+        existing.is_some(),
+        &at,
+    ))
+    .await
+    .map_err(|err| {
+        tracing::error!(error = %err, "unsubscribing failed");
+        Problem::internal()
+    })?;
+    Ok(())
+}
+
+/// `POST /v1/notifications/email/unsubscribe?token=` — RFC 8058 one-click.
+///
+/// No login: the token *is* the authority, which is the point — a mailbox
+/// provider posts this on the recipient's behalf and has no session. It is
+/// signed and purpose-bound, so a link for one account cannot switch
+/// another's preference off.
+async fn unsubscribe_one_click(
+    scope: Scope,
+    State(state): State<Arc<ModuleState>>,
+    Query(query): Query<TokenQuery>,
+) -> Result<Response, Problem> {
+    let Some((account_id, category)) = unsubscribed_subject(&state, &query.token) else {
+        return Err(Problem::new(&cratefield_core::SLUGS.invalid_token).instance(&scope.request_id));
+    };
+    apply_unsubscribe(&state, &account_id, &category)
+        .await
+        .map_err(|problem| problem.instance(&scope.request_id))?;
+    Ok(StatusCode::OK.into_response())
+}
+
+/// `GET` of the same link, for a person who clicked it.
+async fn unsubscribe_page(
+    scope: Scope,
+    State(state): State<Arc<ModuleState>>,
+    Query(query): Query<TokenQuery>,
+) -> Result<Response, Problem> {
+    let Some((account_id, category)) = unsubscribed_subject(&state, &query.token) else {
+        return Err(Problem::new(&cratefield_core::SLUGS.invalid_token).instance(&scope.request_id));
+    };
+    apply_unsubscribe(&state, &account_id, &category)
+        .await
+        .map_err(|problem| problem.instance(&scope.request_id))?;
+    Ok((
+        StatusCode::OK,
+        [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
+        "<!doctype html><meta charset=utf-8><title>Unsubscribed</title>\
+         <p>You will not get these emails again.</p>",
+    )
+        .into_response())
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+struct TokenQuery {
+    token: String,
 }

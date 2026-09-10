@@ -295,16 +295,17 @@ async fn issue_link(
     };
 
     match mailer
-        .send(Message {
-            to: email.to_owned(),
-            from: settings.mail_from.clone(),
-            reply_to: None,
-            subject: rendered.subject,
-            html: rendered.html,
-            text: rendered.text,
-            idempotency_key: Some(row.id.clone()),
-            tags: vec!["auth-magic-link".to_owned()],
-        })
+        .send(
+            Message::new(
+                email,
+                settings.mail_from.clone(),
+                rendered.subject,
+                rendered.text,
+                rendered.html,
+            )
+            .idempotency_key(row.id.clone())
+            .tags(["auth-magic-link"]),
+        )
         .await
     {
         Ok(SendOutcome::Sent { .. }) => {}

@@ -137,13 +137,22 @@ const MIGRATION_INBOX: SqlMigration = SqlMigration {
     sql: include_str!("../migrations/sqlite/0003_inbox.sql"),
 };
 
+/// Email as a third channel (#189): where a verified address lives, and
+/// the window the per-category cooldown counts over.
+const MIGRATION_EMAIL_TARGETS: SqlMigration = SqlMigration {
+    id: "0004",
+    name: "email_targets",
+    sql: include_str!("../migrations/sqlite/0004_email_targets.sql"),
+};
+
 /// Every migration this module ships, in order. One array, so a test that
 /// asserts something about the schema reads what actually ships rather
 /// than a second list that can drift from it.
-const SHIPPED_MIGRATIONS: [SqlMigration; 3] = [
+const SHIPPED_MIGRATIONS: [SqlMigration; 4] = [
     MIGRATION_INIT,
     MIGRATION_REHOME_AND_DUE_INDEX,
     MIGRATION_INBOX,
+    MIGRATION_EMAIL_TARGETS,
 ];
 
 /// One notification category the venture declares.
@@ -154,9 +163,13 @@ const SHIPPED_MIGRATIONS: [SqlMigration; 3] = [
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Category {
     pub(crate) name: String,
-    pub(crate) default_enabled: bool,
     pub(crate) badge: bool,
-    pub(crate) in_app: bool,
+    /// What an account that has never expressed a preference gets, per
+    /// channel. One struct rather than three loose bools, so "the default
+    /// for this category" is one thing you can pass around — and so
+    /// `default_enabled` stops secretly meaning *push*.
+    pub(crate) defaults: crate::store::Channels,
+    pub(crate) subject_template: Option<String>,
 }
 
 impl Category {
@@ -166,9 +179,16 @@ impl Category {
     pub fn new(name: impl Into<String>) -> Self {
         Self {
             name: name.into(),
-            default_enabled: true,
             badge: false,
-            in_app: true,
+            defaults: crate::store::Channels {
+                push: true,
+                in_app: true,
+                // Off, unlike push and in-app. An email is the most
+                // intrusive of the three and the hardest to take back, so
+                // a venture opts a category in deliberately.
+                email: false,
+            },
+            subject_template: None,
         }
     }
 
@@ -176,7 +196,7 @@ impl Category {
     /// category (default `true`).
     #[must_use]
     pub fn default_enabled(mut self, enabled: bool) -> Self {
-        self.default_enabled = enabled;
+        self.defaults.push = enabled;
         self
     }
 
@@ -202,7 +222,29 @@ impl Category {
     /// separate and is checked as well.
     #[must_use]
     pub fn in_app(mut self, keeps_a_row: bool) -> Self {
-        self.in_app = keeps_a_row;
+        self.defaults.in_app = keeps_a_row;
+        self
+    }
+
+    /// Whether this category is emailed to an account with a verified
+    /// address (default **`false`**).
+    ///
+    /// Off by default because email is the most intrusive of the three
+    /// channels and the hardest to take back — a venture opts a category
+    /// in deliberately. The account's own `email` switch is separate and
+    /// is checked as well, and a category that is on here still sends
+    /// nothing to an account with no verified address.
+    #[must_use]
+    pub fn email(mut self, sends_mail: bool) -> Self {
+        self.defaults.email = sends_mail;
+        self
+    }
+
+    /// The subject line for this category's mail. Defaults to the
+    /// notification's own title.
+    #[must_use]
+    pub fn subject_template(mut self, subject: impl Into<String>) -> Self {
+        self.subject_template = Some(subject.into());
         self
     }
 
@@ -222,7 +264,10 @@ pub(crate) struct Settings {
     pub drain_concurrency: u32,
     pub rehome_max_per_hour: u32,
     pub inbox_retention_days: u32,
+    pub email_window_secs: u32,
+    pub email_max_per_window: u32,
     pub transport_probe: Option<TransportProbe>,
+    pub mailer_probe: Option<TransportProbe>,
 }
 
 impl std::fmt::Debug for Settings {
@@ -234,7 +279,10 @@ impl std::fmt::Debug for Settings {
             .field("drain_concurrency", &self.drain_concurrency)
             .field("rehome_max_per_hour", &self.rehome_max_per_hour)
             .field("inbox_retention_days", &self.inbox_retention_days)
+            .field("email_window_secs", &self.email_window_secs)
+            .field("email_max_per_window", &self.email_max_per_window)
             .field("transport_probe", &self.transport_probe.is_some())
+            .field("mailer_probe", &self.mailer_probe.is_some())
             .finish()
     }
 }
@@ -295,7 +343,10 @@ impl Notifications {
                 drain_concurrency: 8,
                 rehome_max_per_hour: 3,
                 inbox_retention_days: 90,
+                email_window_secs: 3_600,
+                email_max_per_window: 5,
                 transport_probe: None,
+                mailer_probe: None,
             },
             ctx_cell: Arc::new(OnceLock::new()),
             settings_cell: Arc::new(OnceLock::new()),
@@ -386,6 +437,90 @@ impl Notifications {
         self
     }
 
+    /// At most this many mails per account per category per window
+    /// (default 5 an hour; `0` stops the channel).
+    ///
+    /// A cap rather than a queue: over it the mail is dropped, not
+    /// deferred. Deferring would deliver the backlog the moment the
+    /// window rolled, which is the flood the cap exists to prevent.
+    #[must_use]
+    pub fn email_max_per_window(mut self, mails: u32) -> Self {
+        self.settings.email_max_per_window = mails;
+        self
+    }
+
+    /// How long that window is, in seconds (default one hour).
+    #[must_use]
+    pub fn email_window_secs(mut self, seconds: u32) -> Self {
+        self.settings.email_window_secs = seconds;
+        self
+    }
+
+    /// What the venture's own probes say about the ports this module
+    /// cannot see for itself.
+    ///
+    /// Whether a `Push` transport or a `Mailer` exists is not readable
+    /// from config — a venture may hand the harness its own adapter — so
+    /// the venture answers, and a module with no probe says nothing
+    /// rather than guessing.
+    fn probe_problems(&self, cfg: &dyn Config, errors: &mut ConfigError) {
+        if self
+            .settings
+            .transport_probe
+            .as_ref()
+            .is_some_and(|probe| !probe(cfg))
+        {
+            errors.push(
+                "notifications: production, but this venture wired no push transport: every \
+                 send would dead-letter as `not_configured`. `fz doctor` names the variables"
+                    .to_owned(),
+            );
+        }
+
+        // Only when a category actually asks for email. A venture with no
+        // `email(true)` category never sends one, so a missing mailer is
+        // not a problem it has (#189).
+        let emails = self
+            .settings
+            .categories
+            .iter()
+            .filter(|category| category.defaults.email)
+            .map(|category| category.name.clone())
+            .collect::<Vec<_>>();
+        if !emails.is_empty()
+            && self
+                .settings
+                .mailer_probe
+                .as_ref()
+                .is_some_and(|probe| !probe(cfg))
+        {
+            errors.push(format!(
+                "notifications: production, and {} opted into email, but this venture wired no \
+                 Mailer port: every one of those would dead-letter as `not_configured`. \
+                 Configure the mailer, or drop `.email(true)` from those categories",
+                emails.join(", "),
+            ));
+        }
+    }
+
+    /// How the venture answers "is a mailer wired?", for the same
+    /// production check as [`Notifications::transport_probe`].
+    ///
+    /// Needed for the same reason: whether a `Mailer` port exists is not
+    /// something config can be read for — a venture may hand the harness
+    /// its own adapter — so the venture answers, and a venture that
+    /// assembles Resend from the environment passes a check on its key.
+    ///
+    /// Without a probe the check is skipped, exactly as for transports.
+    #[must_use]
+    pub fn mailer_probe(
+        mut self,
+        probe: impl Fn(&dyn Config) -> bool + Send + Sync + 'static,
+    ) -> Self {
+        self.settings.mailer_probe = Some(Arc::new(probe));
+        self
+    }
+
     /// How the venture answers "is any push transport wired?", for the
     /// production readiness check (see [`TransportProbe`]).
     ///
@@ -455,7 +590,15 @@ impl Module for Notifications {
         // `Realtime` (#187) is what makes the inbox update while the app
         // is open. Without it the client polls `unread-count`; the inbox
         // row is written either way, so nothing depends on it.
-        &[Port::Defer, Port::HttpClient, Port::Realtime]
+        // `Mailer` (#189) is the third channel. A venture that declares no
+        // category with `email(true)` never needs it.
+        &[
+            Port::Defer,
+            Port::HttpClient,
+            Port::Realtime,
+            Port::Mailer,
+            Port::Signer,
+        ]
     }
 
     fn tables(&self) -> &'static [&'static str] {
@@ -465,6 +608,8 @@ impl Module for Notifications {
             store::OUTBOX,
             store::DEAD_LETTERS,
             store::INBOX,
+            store::EMAIL_TARGETS,
+            store::EMAIL_SENDS,
         ]
     }
 
@@ -577,18 +722,7 @@ impl Module for Notifications {
                     module.key("AUTH_CLIENT_ID"),
                 ));
             }
-            if self
-                .settings
-                .transport_probe
-                .as_ref()
-                .is_some_and(|probe| !probe(cfg))
-            {
-                errors.push(
-                    "notifications: production, but this venture wired no push transport: every \
-                     send would dead-letter as `not_configured`. `fz doctor` names the variables"
-                        .to_owned(),
-                );
-            }
+            self.probe_problems(cfg, &mut errors);
         }
 
         errors.into_result()
@@ -660,6 +794,11 @@ impl Module for Notifications {
                     &clock::now_iso(ctx.ports.clock.as_ref()),
                     -(i64::from(days) * 86_400),
                 );
+                // The send window only ever looks back one window, so
+                // anything older than the inbox cutoff is long dead.
+                if let Err(err) = store::prune_email_sends(&**db, &cutoff).await {
+                    tracing::error!(error = %err, "pruning the email send window failed");
+                }
                 match store::prune_inbox(&**db, &cutoff).await {
                     Ok(pruned) if pruned > 0 => {
                         tracing::info!(pruned, cron, "pruned read notifications past retention");
@@ -741,7 +880,13 @@ mod tests {
         );
         assert_eq!(
             module.optional(),
-            [Port::Defer, Port::HttpClient, Port::Realtime]
+            [
+                Port::Defer,
+                Port::HttpClient,
+                Port::Realtime,
+                Port::Mailer,
+                Port::Signer,
+            ]
         );
         assert_eq!(
             module.tables(),
@@ -751,6 +896,8 @@ mod tests {
                 "notifications_outbox",
                 "notifications_dead_letters",
                 "notifications_inbox",
+                "notifications_email_targets",
+                "notifications_email_sends",
             ]
         );
         assert_eq!(
@@ -773,9 +920,9 @@ mod tests {
     #[test]
     fn a_category_is_on_with_no_badge_until_told_otherwise() {
         let plain = Category::new("booking");
-        assert!(plain.default_enabled);
+        assert!(plain.defaults.push);
         assert!(!plain.badge, "no badge counts by default");
-        assert!(!Category::new("x").default_enabled(false).default_enabled);
+        assert!(!Category::new("x").default_enabled(false).defaults.push);
         assert!(Category::new("x").badge(true).badge);
     }
 

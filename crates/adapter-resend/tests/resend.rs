@@ -73,16 +73,9 @@ fn fixture(
 }
 
 fn message() -> Message {
-    Message {
-        to: "nick@example.com".to_string(),
-        from: String::new(),
-        reply_to: None,
-        subject: "Confirm".to_string(),
-        html: "<p>hi</p>".to_string(),
-        text: "hi".to_string(),
-        idempotency_key: Some("idem-123".to_string()),
-        tags: vec!["transactional".to_string()],
-    }
+    Message::new("nick@example.com", "", "Confirm", "hi", "<p>hi</p>")
+        .idempotency_key("idem-123")
+        .tags(["transactional"])
 }
 
 fn adapter(http: Arc<FakeHttp>) -> Resend {
@@ -142,6 +135,39 @@ async fn tag_names_are_sanitized_to_resend_charset() {
     let captured = rx.try_recv().expect("one request");
     let body: serde_json::Value = serde_json::from_str(&captured.body).unwrap();
     assert_eq!(body["tags"][0]["name"], "waitlist_cratefield");
+}
+
+#[pollster::test]
+async fn custom_headers_reach_the_provider() {
+    // RFC 8058 one-click unsubscribe is why `Message::headers` exists, and
+    // an adapter that accepted the field and dropped it would look exactly
+    // like one that works: the mail still sends, and only Gmail notices.
+    let (http, rx) = fixture(200, r#"{"id":"x"}"#, None);
+    let msg = message()
+        .header("List-Unsubscribe", "<https://test.example/u?token=abc>")
+        .header("List-Unsubscribe-Post", "List-Unsubscribe=One-Click");
+    adapter(http).send(msg).await.expect("send ok");
+    let captured = rx.try_recv().expect("one request");
+    let body: serde_json::Value = serde_json::from_str(&captured.body).unwrap();
+    assert_eq!(
+        body["headers"]["List-Unsubscribe"],
+        "<https://test.example/u?token=abc>"
+    );
+    assert_eq!(
+        body["headers"]["List-Unsubscribe-Post"],
+        "List-Unsubscribe=One-Click"
+    );
+}
+
+#[pollster::test]
+async fn a_message_with_no_headers_sends_no_headers_field() {
+    // Not `"headers": {}` — an empty object is a claim about headers, and
+    // the provider has no reason to see one.
+    let (http, rx) = fixture(200, r#"{"id":"x"}"#, None);
+    adapter(http).send(message()).await.expect("send ok");
+    let captured = rx.try_recv().expect("one request");
+    let body: serde_json::Value = serde_json::from_str(&captured.body).unwrap();
+    assert!(body.get("headers").is_none(), "{body}");
 }
 
 #[pollster::test]

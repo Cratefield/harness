@@ -15,6 +15,7 @@ use bytes::Bytes;
 use cratefield_core::{HttpClient, HttpError, MailError, Mailer, Message, SendOutcome};
 use http::header::{AUTHORIZATION, CONTENT_TYPE, RETRY_AFTER};
 use http::{Request, StatusCode};
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -68,6 +69,11 @@ struct OutboundEmail<'a> {
     text: &'a str,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     tags: Vec<ResendTag>,
+    /// Extra RFC 5322 headers. Resend takes them as a JSON object, so a
+    /// repeated header name would silently collapse — the harness sends
+    /// each name once, and `List-Unsubscribe` is one value by RFC 8058.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    headers: BTreeMap<&'a str, &'a str>,
 }
 
 /// Resend requires each tag to be a `{ name, value }` object whose fields
@@ -193,6 +199,11 @@ impl Mailer for Resend {
             html: &message.html,
             text: &message.text,
             tags: resend_tags(&message.tags),
+            headers: message
+                .headers
+                .iter()
+                .map(|(name, value)| (name.as_str(), value.as_str()))
+                .collect(),
         };
         let body =
             serde_json::to_vec(&payload).map_err(|err| MailError::Transport(err.to_string()))?;

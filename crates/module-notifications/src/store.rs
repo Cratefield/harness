@@ -21,6 +21,10 @@ pub(crate) const OUTBOX: &str = "notifications_outbox";
 pub(crate) const DEAD_LETTERS: &str = "notifications_dead_letters";
 /// The per-account in-app inbox (#187).
 pub(crate) const INBOX: &str = "notifications_inbox";
+/// Where an account's verified email address lives (#189).
+pub(crate) const EMAIL_TARGETS: &str = "notifications_email_targets";
+/// One row per mail actually sent, for the per-category cooldown (#189).
+pub(crate) const EMAIL_SENDS: &str = "notifications_email_sends";
 
 fn iden(name: &str) -> Alias {
     Alias::new(name)
@@ -1042,5 +1046,187 @@ pub(crate) async fn prune_inbox(db: &dyn Database, older_than: &str) -> Result<u
                 .is_not_null()
                 .or(Expr::col(iden("archived_at")).is_not_null()),
         );
+    db.execute(&Statement::render(&delete)).await
+}
+
+// ---------------------------------------------------------------------------
+// Email targets and the send window (#189)
+
+/// An account's email address, as the drain reads it.
+#[derive(Debug, Clone)]
+pub(crate) struct EmailTarget {
+    pub email: String,
+    pub verified_at: Option<String>,
+    pub unsubscribed_at: Option<String>,
+}
+
+impl EmailTarget {
+    /// Whether the drain may mail this address.
+    ///
+    /// Verified and not unsubscribed. Both halves matter and neither is
+    /// the other: an unverified address is somebody else's mailbox until
+    /// proven otherwise, and an unsubscribed one is this account's own
+    /// answer.
+    pub fn mailable(&self) -> bool {
+        self.verified_at.is_some() && self.unsubscribed_at.is_none()
+    }
+}
+
+/// The address for one account, if it has set one.
+///
+/// # Errors
+///
+/// [`DbError`] when the read fails or the row will not decode.
+pub(crate) async fn email_target(
+    db: &dyn Database,
+    account_id: &str,
+) -> Result<Option<EmailTarget>, DbError> {
+    let mut select = Query::select();
+    select
+        .columns([iden("email"), iden("verified_at"), iden("unsubscribed_at")])
+        .from(iden(EMAIL_TARGETS))
+        .and_where(Expr::col(iden("account_id")).eq(account_id));
+    let rows = db.query(&Statement::render(&select)).await?;
+    let Some(row) = rows.first() else {
+        return Ok(None);
+    };
+    Ok(Some(EmailTarget {
+        email: row
+            .get::<String>("email")
+            .ok_or_else(|| corrupt(EMAIL_TARGETS, account_id, "email"))?,
+        verified_at: row.get::<String>("verified_at"),
+        unsubscribed_at: row.get::<String>("unsubscribed_at"),
+    }))
+}
+
+/// Writes an account's address. An address that changed is unverified
+/// again: verification is of the address, not of the account.
+///
+/// # Errors
+///
+/// [`DbError`] when the write fails.
+pub(crate) async fn set_email_target(
+    db: &dyn Database,
+    account_id: &str,
+    email: &str,
+    verified: bool,
+    now: &str,
+) -> Result<(), DbError> {
+    let existing = email_target(db, account_id).await?;
+    let verified_at = verified.then(|| now.to_owned());
+    let statement = if let Some(current) = existing {
+        let mut update = Query::update();
+        update
+            .table(iden(EMAIL_TARGETS))
+            .value(iden("email"), email)
+            .value(iden("updated_at"), now)
+            .and_where(Expr::col(iden("account_id")).eq(account_id));
+        if current.email == email {
+            // The same address: keep whatever standing it already had,
+            // including an unsubscribe. Re-submitting your own address is
+            // not a way to undo opting out.
+            if let Some(at) = verified_at {
+                update.value(iden("verified_at"), at);
+            }
+        } else {
+            // A new address starts unverified and unsubscribed-clear: the
+            // previous address's answers were about a different mailbox.
+            update
+                .value(iden("verified_at"), verified_at)
+                .value(iden("unsubscribed_at"), None::<String>)
+                .value(iden("unsubscribed_reason"), None::<String>);
+        }
+        Statement::render(&update)
+    } else {
+        let mut insert = Query::insert();
+        insert
+            .into_table(iden(EMAIL_TARGETS))
+            .columns(["account_id", "email", "verified_at", "updated_at"])
+            .values_panic([
+                account_id.into(),
+                email.into(),
+                verified_at.into(),
+                now.into(),
+            ]);
+        Statement::render(&insert)
+    };
+    db.execute(&statement).await?;
+    Ok(())
+}
+
+/// Turns the whole channel off for this account's address.
+///
+/// # Errors
+///
+/// [`DbError`] when the write fails.
+pub(crate) async fn unsubscribe_all(
+    db: &dyn Database,
+    account_id: &str,
+    reason: &str,
+    now: &str,
+) -> Result<bool, DbError> {
+    let mut update = Query::update();
+    update
+        .table(iden(EMAIL_TARGETS))
+        .value(iden("unsubscribed_at"), now)
+        .value(iden("unsubscribed_reason"), reason)
+        .value(iden("updated_at"), now)
+        .and_where(Expr::col(iden("account_id")).eq(account_id))
+        .and_where(Expr::col(iden("unsubscribed_at")).is_null());
+    Ok(db.execute(&Statement::render(&update)).await? == 1)
+}
+
+/// How many mails this account has had for this category since `since`.
+///
+/// # Errors
+///
+/// [`DbError`] when the read fails.
+pub(crate) async fn emails_since(
+    db: &dyn Database,
+    account_id: &str,
+    category: &str,
+    since: &str,
+) -> Result<i64, DbError> {
+    let mut select = Query::select();
+    select
+        .expr_as(Expr::col(iden("id")).count(), iden("sent"))
+        .from(iden(EMAIL_SENDS))
+        .and_where(Expr::col(iden("account_id")).eq(account_id))
+        .and_where(Expr::col(iden("category")).eq(category))
+        .and_where(Expr::col(iden("sent_at")).gte(since));
+    Ok(db
+        .query(&Statement::render(&select))
+        .await?
+        .first()
+        .and_then(|row| row.get::<i64>("sent"))
+        .unwrap_or(0))
+}
+
+/// Records one mail against the cooldown window.
+#[must_use]
+pub(crate) fn record_email_statement(
+    id: &str,
+    account_id: &str,
+    category: &str,
+    now: &str,
+) -> Statement {
+    let mut insert = Query::insert();
+    insert
+        .into_table(iden(EMAIL_SENDS))
+        .columns(["id", "account_id", "category", "sent_at"])
+        .values_panic([id.into(), account_id.into(), category.into(), now.into()]);
+    Statement::render(&insert)
+}
+
+/// Drops send-window rows that fell out of every cooldown window.
+///
+/// # Errors
+///
+/// [`DbError`] when the write fails.
+pub(crate) async fn prune_email_sends(db: &dyn Database, older_than: &str) -> Result<u64, DbError> {
+    let mut delete = Query::delete();
+    delete
+        .from_table(iden(EMAIL_SENDS))
+        .and_where(Expr::col(iden("sent_at")).lt(older_than));
     db.execute(&Statement::render(&delete)).await
 }
