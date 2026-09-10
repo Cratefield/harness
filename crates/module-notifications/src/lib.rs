@@ -163,10 +163,12 @@ const SHIPPED_MIGRATIONS: [SqlMigration; 4] = [
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Category {
     pub(crate) name: String,
-    pub(crate) default_enabled: bool,
     pub(crate) badge: bool,
-    pub(crate) in_app: bool,
-    pub(crate) email: bool,
+    /// What an account that has never expressed a preference gets, per
+    /// channel. One struct rather than three loose bools, so "the default
+    /// for this category" is one thing you can pass around — and so
+    /// `default_enabled` stops secretly meaning *push*.
+    pub(crate) defaults: crate::store::Channels,
     pub(crate) subject_template: Option<String>,
 }
 
@@ -177,13 +179,15 @@ impl Category {
     pub fn new(name: impl Into<String>) -> Self {
         Self {
             name: name.into(),
-            default_enabled: true,
             badge: false,
-            in_app: true,
-            // Off by default, unlike push and in-app. An email is the
-            // most intrusive of the three and the hardest to take back:
-            // a venture opts a category in deliberately.
-            email: false,
+            defaults: crate::store::Channels {
+                push: true,
+                in_app: true,
+                // Off, unlike push and in-app. An email is the most
+                // intrusive of the three and the hardest to take back, so
+                // a venture opts a category in deliberately.
+                email: false,
+            },
             subject_template: None,
         }
     }
@@ -192,7 +196,7 @@ impl Category {
     /// category (default `true`).
     #[must_use]
     pub fn default_enabled(mut self, enabled: bool) -> Self {
-        self.default_enabled = enabled;
+        self.defaults.push = enabled;
         self
     }
 
@@ -218,7 +222,7 @@ impl Category {
     /// separate and is checked as well.
     #[must_use]
     pub fn in_app(mut self, keeps_a_row: bool) -> Self {
-        self.in_app = keeps_a_row;
+        self.defaults.in_app = keeps_a_row;
         self
     }
 
@@ -232,7 +236,7 @@ impl Category {
     /// nothing to an account with no verified address.
     #[must_use]
     pub fn email(mut self, sends_mail: bool) -> Self {
-        self.email = sends_mail;
+        self.defaults.email = sends_mail;
         self
     }
 
@@ -260,6 +264,8 @@ pub(crate) struct Settings {
     pub drain_concurrency: u32,
     pub rehome_max_per_hour: u32,
     pub inbox_retention_days: u32,
+    pub email_window_secs: u32,
+    pub email_max_per_window: u32,
     pub transport_probe: Option<TransportProbe>,
 }
 
@@ -272,6 +278,8 @@ impl std::fmt::Debug for Settings {
             .field("drain_concurrency", &self.drain_concurrency)
             .field("rehome_max_per_hour", &self.rehome_max_per_hour)
             .field("inbox_retention_days", &self.inbox_retention_days)
+            .field("email_window_secs", &self.email_window_secs)
+            .field("email_max_per_window", &self.email_max_per_window)
             .field("transport_probe", &self.transport_probe.is_some())
             .finish()
     }
@@ -333,6 +341,8 @@ impl Notifications {
                 drain_concurrency: 8,
                 rehome_max_per_hour: 3,
                 inbox_retention_days: 90,
+                email_window_secs: 3_600,
+                email_max_per_window: 5,
                 transport_probe: None,
             },
             ctx_cell: Arc::new(OnceLock::new()),
@@ -424,6 +434,25 @@ impl Notifications {
         self
     }
 
+    /// At most this many mails per account per category per window
+    /// (default 5 an hour; `0` stops the channel).
+    ///
+    /// A cap rather than a queue: over it the mail is dropped, not
+    /// deferred. Deferring would deliver the backlog the moment the
+    /// window rolled, which is the flood the cap exists to prevent.
+    #[must_use]
+    pub fn email_max_per_window(mut self, mails: u32) -> Self {
+        self.settings.email_max_per_window = mails;
+        self
+    }
+
+    /// How long that window is, in seconds (default one hour).
+    #[must_use]
+    pub fn email_window_secs(mut self, seconds: u32) -> Self {
+        self.settings.email_window_secs = seconds;
+        self
+    }
+
     /// How the venture answers "is any push transport wired?", for the
     /// production readiness check (see [`TransportProbe`]).
     ///
@@ -493,7 +522,15 @@ impl Module for Notifications {
         // `Realtime` (#187) is what makes the inbox update while the app
         // is open. Without it the client polls `unread-count`; the inbox
         // row is written either way, so nothing depends on it.
-        &[Port::Defer, Port::HttpClient, Port::Realtime]
+        // `Mailer` (#189) is the third channel. A venture that declares no
+        // category with `email(true)` never needs it.
+        &[
+            Port::Defer,
+            Port::HttpClient,
+            Port::Realtime,
+            Port::Mailer,
+            Port::Signer,
+        ]
     }
 
     fn tables(&self) -> &'static [&'static str] {
@@ -503,6 +540,8 @@ impl Module for Notifications {
             store::OUTBOX,
             store::DEAD_LETTERS,
             store::INBOX,
+            store::EMAIL_TARGETS,
+            store::EMAIL_SENDS,
         ]
     }
 
@@ -698,6 +737,11 @@ impl Module for Notifications {
                     &clock::now_iso(ctx.ports.clock.as_ref()),
                     -(i64::from(days) * 86_400),
                 );
+                // The send window only ever looks back one window, so
+                // anything older than the inbox cutoff is long dead.
+                if let Err(err) = store::prune_email_sends(&**db, &cutoff).await {
+                    tracing::error!(error = %err, "pruning the email send window failed");
+                }
                 match store::prune_inbox(&**db, &cutoff).await {
                     Ok(pruned) if pruned > 0 => {
                         tracing::info!(pruned, cron, "pruned read notifications past retention");
@@ -779,7 +823,13 @@ mod tests {
         );
         assert_eq!(
             module.optional(),
-            [Port::Defer, Port::HttpClient, Port::Realtime]
+            [
+                Port::Defer,
+                Port::HttpClient,
+                Port::Realtime,
+                Port::Mailer,
+                Port::Signer,
+            ]
         );
         assert_eq!(
             module.tables(),
@@ -789,6 +839,8 @@ mod tests {
                 "notifications_outbox",
                 "notifications_dead_letters",
                 "notifications_inbox",
+                "notifications_email_targets",
+                "notifications_email_sends",
             ]
         );
         assert_eq!(
@@ -811,9 +863,9 @@ mod tests {
     #[test]
     fn a_category_is_on_with_no_badge_until_told_otherwise() {
         let plain = Category::new("booking");
-        assert!(plain.default_enabled);
+        assert!(plain.defaults.push);
         assert!(!plain.badge, "no badge counts by default");
-        assert!(!Category::new("x").default_enabled(false).default_enabled);
+        assert!(!Category::new("x").default_enabled(false).defaults.push);
         assert!(Category::new("x").badge(true).badge);
     }
 
