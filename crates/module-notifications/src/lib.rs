@@ -86,7 +86,7 @@ use std::sync::{Arc, OnceLock};
 
 use cratefield_core::{
     AnyError, BoxFuture, Config, ConfigError, Migrations, Module, ModuleConfig, ModuleContext,
-    NoopDefer, Notification, Port, Scope, SqlMigration, VentureEnv,
+    NoopDefer, Notification, Port, RoutePolicy, Scope, SqlMigration, VentureEnv,
 };
 
 /// The name the module mounts under: `/v1/notifications`.
@@ -632,11 +632,37 @@ impl Module for Notifications {
     }
 
     fn public_writes(&self) -> bool {
-        // Every route is behind the auth extractor; there is no
-        // unauthenticated write in this child. The email child adds the
-        // one signed one-click unsubscribe and must flip this with its
-        // justification.
-        false
+        // Two routes, and only two, are not behind the auth extractor,
+        // because neither caller can hold a session:
+        //
+        // - `POST /email/unsubscribe` (#189) is RFC 8058 one-click. A
+        //   mailbox provider posts it on the recipient's behalf and has
+        //   never signed in to anything here; the signed token is the
+        //   authority.
+        // - `POST /email/webhook` (#233) is the provider's bounce
+        //   delivery. Resend has no account either; its Svix signature
+        //   is the authority.
+        //
+        // Everything else stays authenticated. This has to be `true`
+        // even though both are proved, because the flag is what makes
+        // `WriteGuards::collect` read `public_write_policy` at all —
+        // left `false`, a module with unauthenticated writes is simply
+        // invisible to the production check.
+        true
+    }
+
+    fn public_write_policy(&self) -> RoutePolicy {
+        // Not `HumanForm`: neither caller is a person and neither can
+        // solve a CAPTCHA. Not `Signature` either — that one means a
+        // payments webhook, and `WriteGuards::needs_payments` would
+        // demand a `Payments` port this module has no use for.
+        //
+        // `SignedLink` says what is actually true: the proof is an
+        // artifact this service issued, so production must have a usable
+        // `Signer`. Without one `unsubscribe_url` cannot mint a token,
+        // and every mail's `List-Unsubscribe` degrades to a page that
+        // does not accept the one-click POST it advertises.
+        RoutePolicy::SignedLink
     }
 
     fn migrations(&self) -> Migrations {
@@ -919,8 +945,16 @@ mod tests {
             ]
         );
         assert!(
-            !module.public_writes(),
-            "every route is behind the auth extractor"
+            module.public_writes(),
+            "the one-click unsubscribe (#189) and the provider webhook (#233) are \
+             unauthenticated; left false, the production check never sees them"
+        );
+        assert_eq!(
+            module.public_write_policy(),
+            RoutePolicy::SignedLink,
+            "both are proved by an artifact this service issued, not by a CAPTCHA \
+             nobody is there to solve — and not by `Signature`, which asks for a \
+             Payments port this module has no use for"
         );
         assert!(
             module.surface().is_empty(),
