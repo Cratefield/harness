@@ -1,13 +1,15 @@
-//! The catalogue of every `fz doctor` error code (harness #140): stable
-//! kebab-case slugs an agent can branch on forever, the seed of the MCP
-//! server's "stable error-code catalogue" (issue #160). Modelled on
+//! The catalogue of every `fz` error code: stable kebab-case slugs an
+//! agent can branch on forever, the seed of the MCP server's "stable
+//! error-code catalogue" (issue #160). Modelled on
 //! `cratefield_core::problems`: a struct of `&'static` definitions, a
-//! registry function, stable string codes.
+//! registry function, stable string codes. Seeded by `fz doctor` (#220);
+//! the agent-safe workflow commands (`fz plan` / `deploy` / `add` /
+//! `init` / `verify`, harness #140) appended theirs.
 //!
 //! The contract: a code is never renamed, reworded or removed. A failure
 //! *message* may change wording freely; a *code* may not. New codes append.
 
-/// Definition of one doctor error code.
+/// Definition of one `fz` error code.
 #[derive(Debug, Clone, Copy)]
 pub struct DoctorCodeDef {
     /// The stable kebab-case code, exactly as `fz doctor --json` emits it.
@@ -55,6 +57,49 @@ pub struct Codes {
     /// The production push rule: modules that `requires()` the Push port
     /// on a venture whose environment routes no transport at all.
     pub push_required_but_unrouted: DoctorCodeDef,
+    /// The workflow commands (#140): `fz add` / `fz init` name a slug
+    /// the catalog does not carry.
+    pub module_unknown: DoctorCodeDef,
+    /// `fz verify`: no deployment is recorded for this manifest.
+    pub not_deployed: DoctorCodeDef,
+    /// A production deploy without the explicit
+    /// `--i-am-deploying-to-production` consent flag.
+    pub production_deploy_unauthorized: DoctorCodeDef,
+    /// `fz deploy --plan <digest>`: the digest does not match a plan
+    /// recomputed from the current inputs.
+    pub stale_plan: DoctorCodeDef,
+    /// `fz verify`: the recorded deployment's module set no longer
+    /// matches the manifest's resolved composition.
+    pub composition_drift: DoctorCodeDef,
+    /// `fz verify`: the recorded deployment's config no longer matches
+    /// the manifest's.
+    pub config_drift: DoctorCodeDef,
+    /// `fz deploy` was run without `--plan <digest>`: approval is the
+    /// point, so there is no default.
+    pub deploy_plan_required: DoctorCodeDef,
+    /// The `.harness-deploy.json` record could not be read or parsed.
+    pub deploy_record_unreadable: DoctorCodeDef,
+    /// The plan removes modules from the served composition (their data
+    /// leaves the venture) without the explicit destructive-change
+    /// consent flag.
+    pub destructive_change_unauthorized: DoctorCodeDef,
+    /// `fz verify`: the resolved deployment environment changed since
+    /// the recorded deployment.
+    pub env_drift: DoctorCodeDef,
+    /// `fz verify`: the recorded digest no longer matches a plan
+    /// recomputed now, and no narrower drift (composition, config, env)
+    /// explains it — the change is in the venture's identity or seed.
+    pub manifest_drift: DoctorCodeDef,
+    /// `fz init` was pointed at a manifest that already exists, without
+    /// `--force`.
+    pub manifest_exists: DoctorCodeDef,
+    /// A manifest parsed but does not resolve: empty name/host, a
+    /// duplicate module, or a selection the catalog refuses.
+    pub manifest_invalid: DoctorCodeDef,
+    /// The venture manifest could not be read or parsed.
+    pub manifest_unreadable: DoctorCodeDef,
+    /// A manifest could not be written back to disk.
+    pub manifest_write_failed: DoctorCodeDef,
 }
 
 pub const CODES: Codes = Codes {
@@ -123,25 +168,115 @@ pub const CODES: Codes = Codes {
         title: "Push required but unrouted",
         description: "A production venture has modules that require the Push port but its environment routes no push transport.",
     },
+    module_unknown: DoctorCodeDef {
+        code: "module-unknown",
+        title: "Module unknown",
+        description: "`fz add` / `fz init` name a slug the catalog does not carry.",
+    },
+    not_deployed: DoctorCodeDef {
+        code: "not-deployed",
+        title: "Not deployed",
+        description: "`fz verify` finds no deployment recorded for this manifest.",
+    },
+    production_deploy_unauthorized: DoctorCodeDef {
+        code: "production-deploy-unauthorized",
+        title: "Production deploy unauthorized",
+        description: "A production deploy without the explicit --i-am-deploying-to-production consent flag.",
+    },
+    stale_plan: DoctorCodeDef {
+        code: "stale-plan",
+        title: "Stale plan",
+        description: "`fz deploy --plan <digest>`: the digest does not match a plan recomputed from the current inputs.",
+    },
+    composition_drift: DoctorCodeDef {
+        code: "composition-drift",
+        title: "Composition drift",
+        description: "The recorded deployment's module set no longer matches the manifest's resolved composition.",
+    },
+    config_drift: DoctorCodeDef {
+        code: "config-drift",
+        title: "Config drift",
+        description: "The recorded deployment's config no longer matches the manifest's.",
+    },
+    deploy_plan_required: DoctorCodeDef {
+        code: "deploy-plan-required",
+        title: "Deploy plan required",
+        description: "`fz deploy` refuses to run without --plan <digest>; approval is the point.",
+    },
+    deploy_record_unreadable: DoctorCodeDef {
+        code: "deploy-record-unreadable",
+        title: "Deploy record unreadable",
+        description: "The .harness-deploy.json record could not be read or parsed.",
+    },
+    destructive_change_unauthorized: DoctorCodeDef {
+        code: "destructive-change-unauthorized",
+        title: "Destructive change unauthorized",
+        description: "The plan removes modules (their data leaves the venture) without the explicit consent flag.",
+    },
+    env_drift: DoctorCodeDef {
+        code: "env-drift",
+        title: "Environment drift",
+        description: "The resolved deployment environment changed since the recorded deployment.",
+    },
+    manifest_drift: DoctorCodeDef {
+        code: "manifest-drift",
+        title: "Manifest drift",
+        description: "The recorded digest no longer matches a recomputed plan and no narrower drift explains it.",
+    },
+    manifest_exists: DoctorCodeDef {
+        code: "manifest-exists",
+        title: "Manifest exists",
+        description: "`fz init` was pointed at an existing manifest without --force.",
+    },
+    manifest_invalid: DoctorCodeDef {
+        code: "manifest-invalid",
+        title: "Manifest invalid",
+        description: "A manifest parsed but does not resolve: empty name/host, duplicate module, or a refused selection.",
+    },
+    manifest_unreadable: DoctorCodeDef {
+        code: "manifest-unreadable",
+        title: "Manifest unreadable",
+        description: "The venture manifest could not be read or parsed.",
+    },
+    manifest_write_failed: DoctorCodeDef {
+        code: "manifest-write-failed",
+        title: "Manifest write failed",
+        description: "A manifest could not be written back to disk.",
+    },
 };
 
-/// Every doctor code definition, for tests and docs. Sorted by code.
+/// Every `fz` code definition, for tests and docs. Sorted by code.
 #[must_use]
 pub fn registry() -> Vec<&'static DoctorCodeDef> {
     vec![
         &CODES.captcha_not_effective,
         &CODES.card_data_in_migration,
+        &CODES.composition_drift,
+        &CODES.config_drift,
+        &CODES.deploy_plan_required,
+        &CODES.deploy_record_unreadable,
+        &CODES.destructive_change_unauthorized,
+        &CODES.env_drift,
         &CODES.harness_api_mismatch,
         &CODES.locked_migration_edited,
         &CODES.locked_migration_missing,
         &CODES.lockfile_unreadable,
+        &CODES.manifest_drift,
+        &CODES.manifest_exists,
+        &CODES.manifest_invalid,
+        &CODES.manifest_unreadable,
+        &CODES.manifest_write_failed,
         &CODES.migration_not_collected,
+        &CODES.module_unknown,
         &CODES.non_portable_sql,
+        &CODES.not_deployed,
         &CODES.payments_webhook_secret_missing,
+        &CODES.production_deploy_unauthorized,
         &CODES.push_required_but_unrouted,
         &CODES.push_transport_misconfigured,
         &CODES.sidecar_mount_invalid,
         &CODES.sidecar_shadows_module,
+        &CODES.stale_plan,
     ]
 }
 
@@ -202,6 +337,21 @@ mod tests {
             CODES.card_data_in_migration.code,
             CODES.push_transport_misconfigured.code,
             CODES.push_required_but_unrouted.code,
+            CODES.module_unknown.code,
+            CODES.not_deployed.code,
+            CODES.production_deploy_unauthorized.code,
+            CODES.stale_plan.code,
+            CODES.composition_drift.code,
+            CODES.config_drift.code,
+            CODES.deploy_plan_required.code,
+            CODES.deploy_record_unreadable.code,
+            CODES.destructive_change_unauthorized.code,
+            CODES.env_drift.code,
+            CODES.manifest_drift.code,
+            CODES.manifest_exists.code,
+            CODES.manifest_invalid.code,
+            CODES.manifest_unreadable.code,
+            CODES.manifest_write_failed.code,
         ];
         assert_eq!(fields.len(), registered.len());
         for field in fields {
