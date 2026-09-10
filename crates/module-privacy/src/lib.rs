@@ -4,7 +4,8 @@
 //! The module knows no venture's schema. Every table it reads is one another
 //! module declared through
 //! [`Module::personal_data`](cratefield_core::Module::personal_data), composed
-//! at build into the [`PersonalDataCatalog`] this reads. Compose it and a
+//! at build into the
+//! [`PersonalDataCatalog`](cratefield_core::PersonalDataCatalog) this reads. Compose it and a
 //! venture gets subject access over whatever else it composed, with no wiring:
 //!
 //! ```no_run

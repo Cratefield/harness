@@ -112,7 +112,7 @@ async fn seed(kit: &TestHarness) {
         .expect("seed library");
 }
 
-#[tokio::test]
+#[pollster::test]
 async fn the_manifest_publishes_what_each_module_declared() {
     for kit in kits() {
         let response = request(&kit.router, Method::GET, "/v1/privacy/manifest", None).await;
@@ -145,7 +145,7 @@ async fn the_manifest_publishes_what_each_module_declared() {
     }
 }
 
-#[tokio::test]
+#[pollster::test]
 async fn the_manifest_needs_no_credentials() {
     // A privacy disclosure behind a login is not a disclosure.
     for kit in kits() {
@@ -154,7 +154,7 @@ async fn the_manifest_needs_no_credentials() {
     }
 }
 
-#[tokio::test]
+#[pollster::test]
 async fn an_export_returns_only_that_subjects_rows() {
     for kit in kits() {
         seed(&kit).await;
@@ -179,7 +179,7 @@ async fn an_export_returns_only_that_subjects_rows() {
     }
 }
 
-#[tokio::test]
+#[pollster::test]
 async fn an_export_for_a_subject_with_nothing_is_empty_rather_than_missing() {
     for kit in kits() {
         seed(&kit).await;
@@ -194,7 +194,7 @@ async fn an_export_for_a_subject_with_nothing_is_empty_rather_than_missing() {
     }
 }
 
-#[tokio::test]
+#[pollster::test]
 async fn an_export_without_admin_credentials_is_refused() {
     for kit in kits() {
         seed(&kit).await;
@@ -213,7 +213,7 @@ async fn an_export_without_admin_credentials_is_refused() {
     }
 }
 
-#[tokio::test]
+#[pollster::test]
 async fn an_export_needs_a_subject() {
     for kit in kits() {
         let (status, raw) = admin_get(&kit, "/v1/privacy/export?subject=%20").await;

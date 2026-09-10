@@ -25,5 +25,5 @@ tracing = { workspace = true }
 
 [dev-dependencies]
 cratefield-testing = { workspace = true }
-tokio = { workspace = true, features = ["macros", "rt"] }
+pollster = { workspace = true }
 tower = { workspace = true }

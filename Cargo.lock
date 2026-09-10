@@ -1101,10 +1101,10 @@ dependencies = [
  "cratefield-core",
  "cratefield-testing",
  "http",
+ "pollster",
  "sea-query",
  "serde",
  "serde_json",
- "tokio",
  "tower",
  "tracing",
 ]

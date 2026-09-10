@@ -80,8 +80,6 @@ impl Row {
         self.columns.iter().map(|(name, _)| name.as_str())
     }
 
-    /// Typed column access. `None` when the column is missing, `NULL`, or
-    /// not representable as `T`.
     /// Every column, in result order, untyped.
     ///
     /// [`get`](Row::get) answers "is this column an `i64`" and returns `None`
@@ -96,6 +94,8 @@ impl Row {
             .map(|(name, value)| (name.as_str(), value))
     }
 
+    /// Typed column access. `None` when the column is missing, `NULL`, or
+    /// not representable as `T`.
     pub fn get<T: TryFromValue>(&self, column: &str) -> Option<T> {
         let value = self
             .columns

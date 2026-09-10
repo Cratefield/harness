@@ -46,6 +46,7 @@ compatibility-doc` and checked in CI for drift. Do not edit by hand.
 | `cratefield-module-email-signup` | 0.1.1 | 1 | `^0.3` — `>=0.3.0, <0.4.0` |
 | `cratefield-module-hello` | 0.1.1 | 1 | `^0.3` — `>=0.3.0, <0.4.0` |
 | `cratefield-module-notifications` | 0.1.1 | 1 | `^0.3` — `>=0.3.0, <0.4.0` |
+| `cratefield-module-privacy` | 0.1.1 | 1 | `^0.3` — `>=0.3.0, <0.4.0` |
 | `cratefield-module-waitlist` | 0.1.1 | 1 | `^0.3` — `>=0.3.0, <0.4.0` |
 | `cratefield-provisioning` | 0.1.1 | 1 | `^0.3` — `>=0.3.0, <0.4.0` |
 | `cratefield-push-auth` | 0.1.1 | 1 | `^0.3` — `>=0.3.0, <0.4.0` |

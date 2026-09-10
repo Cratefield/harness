@@ -25,9 +25,9 @@ use base64ct::{Base64UrlUnpadded, Encoding};
 use bytes::Bytes;
 use cratefield_core::{
     AnyError, BoxFuture, Clock, Config, ConfigError, Defer, EventBus, EventHandler, EventName,
-    HttpClient, HttpError, MapConfig, Migrations, Module, ModuleContext, Notification, Port, Ports,
-    Push, PushError, PushOutcome, Recipient, Scope, Statement, TemplateRegistry, UlidIdGen,
-    Venture,
+    HttpClient, HttpError, MapConfig, Migrations, Module, ModuleContext, Notification,
+    PersonalDataCatalog, Port, Ports, Push, PushError, PushOutcome, Recipient, Scope, Statement,
+    TemplateRegistry, UlidIdGen, Venture,
 };
 use cratefield_module_notifications::{Category, Notifications, Notifier, Transport};
 use cratefield_testing::TestHarness;
@@ -379,6 +379,7 @@ impl Kit {
             venture: Arc::new(Venture::new("test-venture", "test.example")),
             unprotected_writes_accepted: false,
             ui_mounted: false,
+            personal_data: Arc::new(PersonalDataCatalog::default()),
         }
     }
 
