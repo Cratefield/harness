@@ -47,6 +47,10 @@ cratefield-adapter-stripe = { path = "crates/adapter-stripe", version = "0.1.0" 
 # Web Push (issue #180): RFC 8030/8188/8291/8292 over the HttpClient port, for
 # browsers and for the UnifiedPush distributors that speak the same protocol.
 cratefield-adapter-webpush = { path = "crates/adapter-webpush", version = "0.1.0" }
+# The runtime wiring for those three (issue #191): one table of environment
+# variable names, one `build_push`, shared by `serve()`, `fz push` and
+# `fz doctor` so they cannot drift on a name.
+cratefield-push-wiring = { path = "crates/push-wiring", version = "0.1.0" }
 cratefield-adapter-sqlite = { path = "crates/adapter-sqlite", version = "0.1.0" }
 cratefield-adapter-sqlite-wasm = { path = "crates/adapter-sqlite-wasm", version = "0.1.0" }
 # Phase 3 (issue #18): native-only Postgres adapter. Never a dependency of

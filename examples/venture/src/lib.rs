@@ -28,7 +28,7 @@ static INSTANCE: OnceLock<(Harness, Cloudflare)> = OnceLock::new();
 
 fn instance() -> &'static (Harness, Cloudflare) {
     INSTANCE.get_or_init(|| {
-        let runtime = Cloudflare::new().db("DB");
+        let runtime = Cloudflare::new().db("DB").push_from_env();
         let mut templates = cratefield::email_signup::default_templates();
         templates.extend(cratefield::waitlist::default_templates());
         let harness = Harness::builder()
@@ -54,6 +54,12 @@ fn instance() -> &'static (Harness, Cloudflare) {
             .runtime(
                 Cloudflare::new()
                     .db("DB")
+                    // The `Push` port assembled from the environment
+                    // (issue #191). Nothing is configured here, so the
+                    // router answers NotConfigured for every recipient and
+                    // `serve` logs that once at cold start — which is what
+                    // the wrangler smoke exercises.
+                    .push_from_env()
                     // Both modules require the Mailer port. With no API key
                     // the adapter is NotConfigured: the port is provided and
                     // no mail is ever sent, which is what an example wants.

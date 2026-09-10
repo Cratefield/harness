@@ -653,6 +653,7 @@ dependencies = [
  "cratefield-module-email-signup",
  "cratefield-module-waitlist",
  "cratefield-push-auth",
+ "cratefield-push-wiring",
  "cratefield-runtime-cloudflare",
  "cratefield-runtime-native",
  "cratefield-secrets",
@@ -855,6 +856,7 @@ dependencies = [
  "cratefield-adapter-sqlite",
  "cratefield-core",
  "cratefield-manifest",
+ "cratefield-push-wiring",
  "pollster",
  "sea-query",
  "serde",
@@ -874,6 +876,7 @@ dependencies = [
  "cratefield-adapter-sqlite",
  "cratefield-cli",
  "cratefield-core",
+ "cratefield-push-wiring",
  "insta",
  "pollster",
  "sea-query",
@@ -1110,6 +1113,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "cratefield-push-wiring"
+version = "0.1.1"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "cratefield-adapter-apns",
+ "cratefield-adapter-fcm",
+ "cratefield-adapter-webpush",
+ "cratefield-core",
+ "http",
+ "pollster",
+]
+
+[[package]]
 name = "cratefield-runtime-browser"
 version = "0.1.1"
 dependencies = [
@@ -1161,6 +1178,7 @@ dependencies = [
  "axum",
  "bytes",
  "cratefield-core",
+ "cratefield-push-wiring",
  "futures-core",
  "futures-util",
  "getrandom 0.4.3",
@@ -1185,6 +1203,7 @@ dependencies = [
  "chrono",
  "cratefield-adapter-sqlite",
  "cratefield-core",
+ "cratefield-push-wiring",
  "croner",
  "futures-core",
  "http",

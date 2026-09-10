@@ -24,10 +24,16 @@ workspace = true
 # `resend` is here because the example mounts modules that require a
 # Mailer; with no key the adapter is NotConfigured, which is what an
 # example wants: the port exists, nothing is ever sent.
+#
+# `push-wiring` is here because the example assembles the `Push` port from
+# the environment (issue #191). With nothing configured the router answers
+# `NotConfigured` for every recipient — which is exactly what the wasm build
+# and the `wrangler dev` smoke should exercise: the assembled router boots.
 cratefield = { path = "../../crates/facade", version = "0.1.0", features = [
     "cloudflare",
     "ui",
     "resend",
+    "push-wiring",
     "email-signup",
     "waitlist",
 ] }

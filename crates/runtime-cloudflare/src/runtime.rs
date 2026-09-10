@@ -61,6 +61,13 @@ pub struct Cloudflare {
     push: Option<Arc<dyn Push>>,
     payments: Option<Arc<dyn Payments>>,
     captcha: Option<Arc<dyn Captcha>>,
+    /// Whether to assemble the `Push` port from the environment
+    /// (issue #191). The `Env` only exists per event, so the assembly is
+    /// deferred to `ports()` and memoised for the isolate.
+    #[cfg(feature = "push")]
+    push_from_env: bool,
+    #[cfg(feature = "push")]
+    assembled_push: std::sync::OnceLock<(Arc<dyn Push>, cratefield_push_wiring::PushWiring)>,
 }
 
 impl Default for Cloudflare {
@@ -80,6 +87,10 @@ impl Cloudflare {
             push: None,
             payments: None,
             captcha: None,
+            #[cfg(feature = "push")]
+            push_from_env: false,
+            #[cfg(feature = "push")]
+            assembled_push: std::sync::OnceLock::new(),
         }
     }
 
@@ -133,6 +144,52 @@ impl Cloudflare {
     pub fn push_arc(mut self, push: Arc<dyn Push>) -> Self {
         self.push = Some(push);
         self
+    }
+
+    /// Assembles the `Push` port from the venture's environment instead of
+    /// taking an adapter (issue #191): one `RoutingPush` over whichever of
+    /// APNs, FCM and Web Push the deployment configured, built once per
+    /// isolate by `cratefield_push_wiring::build_push` — the same function
+    /// `fz push` and `fz doctor` call, so the three cannot drift apart on a
+    /// variable name.
+    ///
+    /// The port is then always provided, even with nothing configured: the
+    /// router answers `NotConfigured` for every recipient, exactly as an
+    /// unconfigured adapter does. `serve()` logs the resulting
+    /// [`PushWiring`](cratefield_push_wiring::PushWiring) report once at cold
+    /// start, and an explicit `.push(..)`/`.push_arc(..)` still wins.
+    #[cfg(feature = "push")]
+    #[must_use]
+    pub fn push_from_env(mut self) -> Self {
+        self.push_from_env = true;
+        self
+    }
+
+    /// The environment-assembled `Push` port and its report, built once per
+    /// isolate. `None` when the venture did not ask for it.
+    #[cfg(feature = "push")]
+    fn env_push(&self, env: &Env) -> Option<&(Arc<dyn Push>, cratefield_push_wiring::PushWiring)> {
+        if !self.push_from_env {
+            return None;
+        }
+        Some(self.assembled_push.get_or_init(|| {
+            let clock: Arc<dyn Clock> = Arc::new(WorkersClock);
+            let http: Arc<dyn cratefield_core::HttpClient> = Arc::new(BoundedHttpClient::new(
+                Arc::new(FetchClient),
+                Arc::clone(&clock),
+            ));
+            cratefield_push_wiring::build_push(&EnvConfig(env.clone()), &http, &clock)
+        }))
+    }
+
+    /// Which push transports this deployment configured, once `ports()` has
+    /// assembled them. `serve()` logs this at cold start; nothing else needs
+    /// it. `None` when the venture did not call
+    /// [`push_from_env`](Self::push_from_env).
+    #[cfg(feature = "push")]
+    #[must_use]
+    pub fn push_wiring(&self, env: &Env) -> Option<&cratefield_push_wiring::PushWiring> {
+        self.env_push(env).map(|(_, wiring)| wiring)
     }
 
     /// The `Payments` port. Like `mailer`, the adapter is built from the
@@ -262,6 +319,16 @@ impl Cloudflare {
         ports.push.clone_from(&self.push);
         ports.payments.clone_from(&self.payments);
         ports.captcha.clone_from(&self.captcha);
+
+        // An explicit adapter wins; otherwise assemble one from the
+        // environment when the venture asked for it (issue #191).
+        #[cfg(feature = "push")]
+        if ports.push.is_none()
+            && let Some((push, _)) = self.env_push(env)
+        {
+            ports.push = Some(Arc::clone(push));
+        }
+
         ports
     }
 }
@@ -292,7 +359,15 @@ impl Runtime for Cloudflare {
         if self.mailer.is_some() {
             provided.push(Port::Mailer);
         }
-        if self.push.is_some() {
+        // `push_from_env` provides the port whatever the environment holds:
+        // with nothing configured the router answers `NotConfigured` for
+        // every recipient, which is a provided port that sends nothing, not
+        // an absent one (issue #191).
+        #[cfg(feature = "push")]
+        let push_provided = self.push.is_some() || self.push_from_env;
+        #[cfg(not(feature = "push"))]
+        let push_provided = self.push.is_some();
+        if push_provided {
             provided.push(Port::Push);
         }
         if self.payments.is_some() {

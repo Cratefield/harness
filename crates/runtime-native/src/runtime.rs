@@ -58,6 +58,13 @@ pub struct Native {
     realtime: Option<Arc<dyn Realtime>>,
     mailer: Option<Arc<dyn Mailer>>,
     captcha: Option<Arc<dyn Captcha>>,
+    /// Whether to assemble the `Push` port from `std::env` (issue #191).
+    /// Built lazily in `ports()` and memoised for the process, so a venture
+    /// may call `push_from_env()` before a tokio runtime exists.
+    #[cfg(feature = "push")]
+    push_from_env: bool,
+    #[cfg(feature = "push")]
+    assembled_push: Arc<std::sync::OnceLock<(Arc<dyn Push>, cratefield_push_wiring::PushWiring)>>,
 }
 
 impl Native {
@@ -126,6 +133,51 @@ impl Native {
         self
     }
 
+    /// Assembles the `Push` port from the process environment instead of
+    /// taking an adapter (issue #191): one `RoutingPush` over whichever of
+    /// APNs, FCM and Web Push the deployment configured, built by the same
+    /// `cratefield_push_wiring::build_push` the Workers runtime, `fz push`
+    /// and `fz doctor` call, so the four cannot drift apart on a variable
+    /// name.
+    ///
+    /// The port is then always provided, even with nothing configured: the
+    /// router answers `NotConfigured` for every recipient, exactly as an
+    /// unconfigured adapter does. `serve_on` logs the resulting
+    /// [`PushWiring`](cratefield_push_wiring::PushWiring) report once at cold
+    /// start, and an explicit `.push_arc(..)` still wins.
+    #[cfg(feature = "push")]
+    #[must_use]
+    pub fn push_from_env(mut self) -> Self {
+        self.push_from_env = true;
+        self
+    }
+
+    /// The environment-assembled `Push` port and its report, built once per
+    /// process. `None` when the venture did not ask for it.
+    #[cfg(feature = "push")]
+    fn env_push(&self) -> Option<&(Arc<dyn Push>, cratefield_push_wiring::PushWiring)> {
+        if !self.push_from_env {
+            return None;
+        }
+        Some(self.assembled_push.get_or_init(|| {
+            let clock: Arc<dyn Clock> = Arc::new(TokioClock);
+            let http: Arc<dyn cratefield_core::HttpClient> = Arc::new(BoundedHttpClient::new(
+                Arc::new(ReqwestClient::new()),
+                Arc::clone(&clock),
+            ));
+            cratefield_push_wiring::build_push(&EnvConfig, &http, &clock)
+        }))
+    }
+
+    /// Which push transports this deployment configured, once `ports()` has
+    /// assembled them. `serve_on` logs this at cold start. `None` when the
+    /// venture did not call [`push_from_env`](Self::push_from_env).
+    #[cfg(feature = "push")]
+    #[must_use]
+    pub fn push_wiring(&self) -> Option<&cratefield_push_wiring::PushWiring> {
+        self.env_push().map(|(_, wiring)| wiring)
+    }
+
     /// The `Payments` port: a Stripe adapter (`cratefield-adapter-stripe`) or a
     /// test fake, over the runtime's `HttpClient`.
     #[must_use]
@@ -190,6 +242,15 @@ impl Native {
         ports.mailer.clone_from(&self.mailer);
         ports.captcha.clone_from(&self.captcha);
 
+        // An explicit adapter wins; otherwise assemble one from the
+        // environment when the venture asked for it (issue #191).
+        #[cfg(feature = "push")]
+        if ports.push.is_none()
+            && let Some((push, _)) = self.env_push()
+        {
+            ports.push = Some(Arc::clone(push));
+        }
+
         match HarnessConfig::from_config(&*config) {
             Ok(parsed) => {
                 // Pseudonymise logged emails with a key derived from the
@@ -239,7 +300,15 @@ impl Runtime for Native {
         if self.blob.is_some() {
             provided.push(Port::Blob);
         }
-        if self.push.is_some() {
+        // `push_from_env` provides the port whatever the environment holds:
+        // with nothing configured the router answers `NotConfigured` for
+        // every recipient, which is a provided port that sends nothing, not
+        // an absent one (issue #191).
+        #[cfg(feature = "push")]
+        let push_provided = self.push.is_some() || self.push_from_env;
+        #[cfg(not(feature = "push"))]
+        let push_provided = self.push.is_some();
+        if push_provided {
             provided.push(Port::Push);
         }
         if self.payments.is_some() {

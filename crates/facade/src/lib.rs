@@ -38,6 +38,9 @@ pub use cratefield_adapter_fcm as fcm;
 #[cfg(feature = "push-auth")]
 pub use cratefield_push_auth as push_auth;
 
+#[cfg(feature = "push-wiring")]
+pub use cratefield_push_wiring as push_wiring;
+
 #[cfg(feature = "stripe")]
 pub use cratefield_adapter_stripe as stripe;
 

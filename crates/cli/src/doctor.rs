@@ -12,6 +12,7 @@ use cratefield_core::{
     Config, HARNESS_API, HARNESS_SIDECARS, Harness, SIDECAR_GATEWAY_SECRET, VentureEnv,
     deployed_env, env_disagreement, harness_api_mismatch,
 };
+use cratefield_push_wiring::{PushWiring, WiringSeverity};
 use std::path::Path;
 
 /// The process environment as a [`Config`], so the doctor reads `ENV` the
@@ -63,6 +64,18 @@ pub fn doctor(
     if env == VentureEnv::Production {
         production_port_checks(harness, allow_no_captcha, &mut failures);
     }
+
+    // Push wiring (issue #191). The doctor does not read the push
+    // environment itself: it calls the same `build_push` `serve()` and
+    // `fz push` call, through `inspect_push`, so the three cannot check
+    // different variable names. A half-wired transport is a failure in
+    // production and a warning below it — nothing is reported at all when
+    // every transport is either configured or deliberately absent.
+    push_wiring_checks(
+        &cratefield_push_wiring::inspect_push(&EnvVars),
+        env,
+        &mut failures,
+    );
 
     // Lockfile consistency: every module migration locked, every locked
     // file present and byte-identical.
@@ -173,6 +186,21 @@ pub fn doctor(
     }
 }
 
+/// Turns a push wiring report into doctor output: failures in production,
+/// warnings below it (issue #191). Split out so the severity rule is unit
+/// tested without a process environment.
+fn push_wiring_checks(wiring: &PushWiring, env: VentureEnv, failures: &mut Vec<String>) {
+    match wiring.severity(env) {
+        WiringSeverity::Ok => {}
+        WiringSeverity::Warning => {
+            for problem in wiring.problems() {
+                eprintln!("fz: warning: {problem}");
+            }
+        }
+        WiringSeverity::Error => failures.extend(wiring.problems()),
+    }
+}
+
 /// The production-only port rules, gathered so `doctor` stays a flat list of
 /// checks: the captcha rule (with its override) and the payments webhook rule.
 fn production_port_checks(
@@ -262,8 +290,9 @@ fn payments_webhook_failure(
 
 #[cfg(test)]
 mod tests {
-    use super::{captcha_production_failure, payments_webhook_failure};
-    use cratefield_core::WriteGuards;
+    use super::{captcha_production_failure, payments_webhook_failure, push_wiring_checks};
+    use cratefield_core::{MapConfig, VentureEnv, WriteGuards};
+    use cratefield_push_wiring::{PUSH_ENV, PushWiring, inspect_push};
 
     fn guards(needs_captcha: bool) -> WriteGuards {
         WriteGuards {
@@ -293,5 +322,53 @@ mod tests {
         assert!(payments_webhook_failure(true, false).is_some());
         assert!(payments_webhook_failure(true, true).is_none());
         assert!(payments_webhook_failure(false, false).is_none());
+    }
+
+    /// A half-wired push environment, built through the real reader so this
+    /// test names no environment variable of its own — the property
+    /// `cli-acceptance`'s guard enforces across the workspace.
+    fn half_wired() -> PushWiring {
+        let var = PUSH_ENV
+            .iter()
+            .find(|var| var.required)
+            .expect("the table has a required variable");
+        let wiring = inspect_push(&MapConfig::from_pairs([(
+            var.name.to_owned(),
+            "set-but-alone".to_owned(),
+        )]));
+        assert!(
+            !wiring.problems().is_empty(),
+            "one variable of a transport is a half-wired transport: {}",
+            wiring.summary()
+        );
+        wiring
+    }
+
+    #[test]
+    fn a_half_wired_transport_fails_the_doctor_in_production_only() {
+        let wiring = half_wired();
+
+        let mut failures = Vec::new();
+        push_wiring_checks(&wiring, VentureEnv::Production, &mut failures);
+        assert_eq!(failures.len(), wiring.problems().len(), "{failures:?}");
+
+        // Below production it is a printed warning, not a failure: wiring a
+        // transport one variable at a time is what development looks like.
+        for env in [VentureEnv::Development, VentureEnv::Staging] {
+            let mut failures = Vec::new();
+            push_wiring_checks(&wiring, env, &mut failures);
+            assert!(failures.is_empty(), "{env:?}: {failures:?}");
+        }
+    }
+
+    #[test]
+    fn a_venture_that_wires_no_push_at_all_is_silent() {
+        // Absent is a choice, not a defect — the doctor must not nag a
+        // venture that sends no notifications, even in production.
+        let wiring = inspect_push(&MapConfig::from_pairs(Vec::<(String, String)>::new()));
+        let mut failures = Vec::new();
+        push_wiring_checks(&wiring, VentureEnv::Production, &mut failures);
+        assert!(failures.is_empty(), "{failures:?}");
+        assert!(wiring.problems().is_empty(), "{:?}", wiring.problems());
     }
 }

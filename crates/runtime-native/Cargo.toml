@@ -14,8 +14,17 @@ repository.workspace = true
 [lints]
 workspace = true
 
+[features]
+# `Native::push_from_env()` (issue #191): the twin of the Cloudflare
+# runtime's, assembling the `Push` port from the process environment through
+# the same `cratefield_push_wiring::build_push`. Off by default so a
+# self-hosted venture that sends no notifications does not compile three push
+# adapters.
+push = ["dep:cratefield-push-wiring"]
+
 [dependencies]
 cratefield-core = { workspace = true }
+cratefield-push-wiring = { workspace = true, optional = true }
 async-trait = { workspace = true }
 axum = { workspace = true, features = ["tokio", "http1"] }
 http = { workspace = true }

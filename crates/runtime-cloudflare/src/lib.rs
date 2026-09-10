@@ -64,6 +64,50 @@ fn check_module_config_once(harness: &Harness, config: &dyn cratefield_core::Con
     }
 }
 
+/// Logs the push wiring report once per isolate, next to
+/// [`check_module_config_once`] (issue #191). Names and verdicts only —
+/// [`PushWiring::summary`](cratefield_push_wiring::PushWiring::summary) never
+/// carries a value, so no secret can reach Workers Logs through it.
+///
+/// A half-wired transport is `console_error!` in production and
+/// `console_log!` below it: a venture that meant to enable FCM and mistyped
+/// one variable must not boot into a state where every Android send silently
+/// answers `NotConfigured`, while a developer wiring a transport one variable
+/// at a time must still be able to boot. Like the module-config check this
+/// only logs; refusing to serve is a decision for an ADR.
+#[cfg(feature = "push")]
+fn check_push_wiring_once(
+    harness: &Harness,
+    runtime: &Cloudflare,
+    env: &Env,
+    config: &dyn cratefield_core::Config,
+) {
+    use cratefield_push_wiring::WiringSeverity;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    static CHECKED: AtomicBool = AtomicBool::new(false);
+    if CHECKED.swap(true, Ordering::Relaxed) {
+        return;
+    }
+    let Some(wiring) = runtime.push_wiring(env) else {
+        return;
+    };
+    worker::console_log!("[push] {}", wiring.summary());
+    let deployed = cratefield_core::deployed_env(harness.venture().env, config);
+    match wiring.severity(deployed) {
+        WiringSeverity::Ok => {}
+        WiringSeverity::Warning => {
+            for problem in wiring.problems() {
+                worker::console_log!("[push] warning: {problem}");
+            }
+        }
+        WiringSeverity::Error => {
+            for problem in wiring.problems() {
+                worker::console_error!("[push] {problem}");
+            }
+        }
+    }
+}
+
 /// Serves one fetch event: resolves ports from the bindings, builds the
 /// router, hands a fully-buffered request over, and converts the response.
 ///
@@ -88,6 +132,8 @@ pub async fn serve(
     install_tracing();
     let ports = runtime.ports(&env, Arc::new(ContextDefer(ctx)));
     check_module_config_once(harness, ports.config.as_ref());
+    #[cfg(feature = "push")]
+    check_push_wiring_once(harness, runtime, &env, ports.config.as_ref());
     let router = harness.router(ports);
 
     let bytes = req.bytes().await?;
@@ -158,6 +204,8 @@ pub async fn serve_scheduled(
     let cron = event.cron();
     let ports = runtime.ports(&env, Arc::new(ScheduleDefer(ctx)));
     check_module_config_once(harness, ports.config.as_ref());
+    #[cfg(feature = "push")]
+    check_push_wiring_once(harness, runtime, &env, ports.config.as_ref());
     for module in harness.modules() {
         let module_ctx = harness.module_context(module.as_ref(), &ports);
         if let Err(err) = module.scheduled(&module_ctx, &cron).await {

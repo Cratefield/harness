@@ -14,8 +14,17 @@ repository.workspace = true
 [lints]
 workspace = true
 
+[features]
+# `Cloudflare::push_from_env()` (issue #191): assemble the `Push` port from
+# the venture's environment, and log which transports were configured once at
+# cold start. Off by default because `cratefield-push-wiring` pulls all three
+# push adapters and the crypto behind them, and a venture that sends no
+# notifications must not carry them in its wasm.
+push = ["dep:cratefield-push-wiring"]
+
 [dependencies]
 cratefield-core = { workspace = true }
+cratefield-push-wiring = { workspace = true, optional = true }
 worker = { workspace = true }
 axum = { workspace = true }
 http = { workspace = true }

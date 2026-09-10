@@ -22,6 +22,39 @@ use crate::ports::{
 use crate::runtime::{Native, clone_ports};
 use crate::tracing_setup::install_tracing;
 
+/// Logs the push wiring report once at cold start (issue #191), the twin of
+/// the Cloudflare runtime's `check_push_wiring_once`. Names and verdicts
+/// only: the report never carries a value, so no secret reaches the logs
+/// through it.
+///
+/// A half-wired transport is `error!` in production and `warn!` below it — a
+/// venture that meant to enable FCM and mistyped one variable must not boot
+/// into a state where every Android send silently answers `NotConfigured`,
+/// while a developer wiring a transport one variable at a time must still be
+/// able to boot.
+#[cfg(feature = "push")]
+fn log_push_wiring(harness: &Harness, runtime: &Native, config: &dyn Config) {
+    use cratefield_push_wiring::WiringSeverity;
+    let Some(wiring) = runtime.push_wiring() else {
+        return;
+    };
+    tracing::info!("{}", wiring.summary());
+    let deployed = cratefield_core::deployed_env(harness.venture().env, config);
+    match wiring.severity(deployed) {
+        WiringSeverity::Ok => {}
+        WiringSeverity::Warning => {
+            for problem in wiring.problems() {
+                tracing::warn!("{problem}");
+            }
+        }
+        WiringSeverity::Error => {
+            for problem in wiring.problems() {
+                tracing::error!("{problem}");
+            }
+        }
+    }
+}
+
 /// `LISTEN_ADDR` default: loopback only. A deployment open to the world
 /// must say so explicitly (`LISTEN_ADDR=0.0.0.0:8080`, as the compose
 /// example does) — the same fail-closed instinct as the empty
@@ -99,6 +132,8 @@ pub async fn serve_on(
 
     let config = Arc::new(EnvConfig);
     let ports = runtime.ports();
+    #[cfg(feature = "push")]
+    log_push_wiring(&harness, &runtime, &*config);
 
     // Scheduled work: every expression gets its own task, fanned out to
     // every module's `scheduled(ctx, cron)` — the same fan-out
