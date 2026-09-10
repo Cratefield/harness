@@ -19,6 +19,7 @@ cratefield-core = { workspace = true }
 cratefield-runtime-cloudflare = { workspace = true }
 cratefield-module-waitlist = { workspace = true }
 cratefield-adapter-resend = { workspace = true }
+cratefield-adapter-turnstile = { workspace = true }
 worker = { workspace = true }
 async-trait = { workspace = true }
 
