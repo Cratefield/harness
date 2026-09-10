@@ -294,6 +294,18 @@ pub fn rate_limited(retry_after: Option<Duration>) -> AxumResponse {
 /// CORS allowlist from the venture's origins; never a wildcard
 /// (architecture section 6). Tower-http echoes the matched origin rather
 /// than emitting `*`, and requests from other origins get no CORS headers.
+///
+/// `PUT` and `Authorization` are on the list because a browser client on
+/// the venture's own site is a cross-origin caller: `cf.js` is served
+/// from the API origin but runs on the site's, and registering for
+/// notifications is `PUT /v1/notifications/subscriptions` with a bearer
+/// token (issue #183). Left off, the preflight fails and the fetch never
+/// leaves the browser — with a console message and no server-side trace
+/// at all.
+///
+/// Credentials stay off, which is what keeps that safe: no cookie is ever
+/// attached to a cross-origin request, so allowing the header only lets a
+/// script send a token it already holds and had to be given deliberately.
 pub(crate) fn cors_layer(origins: &[String]) -> tower_http::cors::CorsLayer {
     use tower_http::cors::{AllowOrigin, CorsLayer};
     let allowed: Vec<HeaderValue> = origins
@@ -305,9 +317,10 @@ pub(crate) fn cors_layer(origins: &[String]) -> tower_http::cors::CorsLayer {
         .allow_methods([
             axum::http::Method::GET,
             axum::http::Method::POST,
+            axum::http::Method::PUT,
             axum::http::Method::DELETE,
             axum::http::Method::OPTIONS,
         ])
-        .allow_headers([header::CONTENT_TYPE])
+        .allow_headers([header::CONTENT_TYPE, header::AUTHORIZATION])
         .max_age(CORS_PREFLIGHT_MAX_AGE)
 }

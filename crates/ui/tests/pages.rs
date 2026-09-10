@@ -382,6 +382,55 @@ async fn assets_are_served_with_the_layer_contract() {
     assert_eq!(js.status, StatusCode::OK);
 }
 
+/// The reference push service worker (issue #183).
+///
+/// `Service-Worker-Allowed` is the whole difference between a file you
+/// can read and a file you can register: a worker's default scope is the
+/// directory it was served from, so this one is confined to `/ui/`
+/// without it, and `register(url, { scope: "/" })` is refused by the
+/// browser with a `SecurityError` that names neither side.
+#[pollster::test]
+async fn the_reference_service_worker_is_served_and_scopable() {
+    let kit = kit();
+    let sw = send(&kit, Method::GET, "/ui/sw-push.js", None).await;
+    assert_eq!(sw.status, StatusCode::OK);
+    assert!(
+        sw.headers
+            .get(header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|value| value.starts_with("text/javascript")),
+        "a worker served as anything but JavaScript is refused before it runs"
+    );
+    assert_eq!(
+        sw.headers
+            .get("service-worker-allowed")
+            .and_then(|value| value.to_str().ok()),
+        Some("/")
+    );
+
+    // The three listeners a subscription's life depends on. The last is
+    // the one whose absence is silent: the browser replaces the
+    // subscription, nothing re-registers it, and every send afterwards
+    // goes to an endpoint that is gone.
+    for listener in ["push", "notificationclick", "pushsubscriptionchange"] {
+        assert!(
+            sw.body
+                .contains(&format!("self.addEventListener(\"{listener}\"")),
+            "the reference worker handles {listener}"
+        );
+    }
+    // It reads the adapter's payload and nothing else. `badge` is
+    // deliberately absent — the port's badge is a count and the web's is
+    // an icon URL, so a worker that forwarded it would be silently wrong.
+    for field in ["title", "body", "icon", "tag", "silent", "data", "url"] {
+        assert!(
+            sw.body.contains(&format!("payload.{field}")),
+            "the reference worker reads the adapter's `{field}`"
+        );
+    }
+    assert!(!sw.body.contains("payload.badge"));
+}
+
 /// The markup contract. A class rename fails here first; update
 /// `docs/UI.md` and the snapshot together, never one without the other.
 #[pollster::test]

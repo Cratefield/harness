@@ -72,7 +72,8 @@ mod notify;
 mod store;
 
 pub use handlers::{
-    ChannelPatch, PreferencesBody, REHOME_LIMIT, RecipientBody, RegisterBody, UNKNOWN_CATEGORY,
+    ChannelPatch, NO_APPLICATION_SERVER_KEY, PreferencesBody, REHOME_LIMIT, RecipientBody,
+    RegisterBody, UNKNOWN_CATEGORY,
 };
 pub use notify::{
     DrainReport, EVENT_REQUESTED, EVENT_SUBSCRIPTION_PRUNED, EVENT_SUBSCRIPTION_REHOMED, Enqueued,
@@ -113,6 +114,10 @@ pub const MODULE_NAME: &str = "notifications";
 /// runs — which is why the builder documents it and `examples/venture`
 /// wires it.
 pub type TransportProbe = Arc<dyn Fn(&dyn Config) -> bool + Send + Sync>;
+
+/// How the venture answers "what `applicationServerKey` do browsers
+/// subscribe with?" — see [`Notifications::vapid_public_key`].
+pub type VapidKeyProbe = Arc<dyn Fn(&dyn Config) -> Option<String> + Send + Sync>;
 
 const MIGRATION_INIT: SqlMigration = SqlMigration {
     id: "0001",
@@ -268,6 +273,7 @@ pub(crate) struct Settings {
     pub email_max_per_window: u32,
     pub transport_probe: Option<TransportProbe>,
     pub mailer_probe: Option<TransportProbe>,
+    pub vapid_key_probe: Option<VapidKeyProbe>,
 }
 
 impl std::fmt::Debug for Settings {
@@ -283,6 +289,10 @@ impl std::fmt::Debug for Settings {
             .field("email_max_per_window", &self.email_max_per_window)
             .field("transport_probe", &self.transport_probe.is_some())
             .field("mailer_probe", &self.mailer_probe.is_some())
+            // Whether one is wired, never what it answers: the key is
+            // public, but a report that prints a probe's result is a
+            // habit that reaches a probe whose result is not.
+            .field("vapid_key_probe", &self.vapid_key_probe.is_some())
             .finish()
     }
 }
@@ -320,6 +330,10 @@ pub struct Notifications {
     /// equivalent `HttpClient` and `Clock`, which is what makes keeping
     /// the first one sound — the same reasoning as `ctx_cell`.
     auth_cell: Arc<OnceLock<Option<Arc<factory0_auth_client::AuthClient>>>>,
+    /// The venture's `applicationServerKey`, resolved once rather than
+    /// per request: the probe parses a private key to derive it, and
+    /// `router()` runs on every request on Workers.
+    vapid_key_cell: Arc<OnceLock<Option<String>>>,
 }
 
 impl Default for Notifications {
@@ -347,10 +361,12 @@ impl Notifications {
                 email_max_per_window: 5,
                 transport_probe: None,
                 mailer_probe: None,
+                vapid_key_probe: None,
             },
             ctx_cell: Arc::new(OnceLock::new()),
             settings_cell: Arc::new(OnceLock::new()),
             auth_cell: Arc::new(OnceLock::new()),
+            vapid_key_cell: Arc::new(OnceLock::new()),
         }
     }
 
@@ -533,6 +549,36 @@ impl Notifications {
         probe: impl Fn(&dyn Config) -> bool + Send + Sync + 'static,
     ) -> Self {
         self.settings.transport_probe = Some(Arc::new(probe));
+        self
+    }
+
+    /// How the venture answers "what `applicationServerKey` should a
+    /// browser subscribe with?", served at `GET
+    /// /v1/notifications/vapid-public-key` (issue #183).
+    ///
+    /// The module cannot answer it, for the same reason it cannot answer
+    /// [`Notifications::transport_probe`]: the push environment has
+    /// exactly one reader, `cratefield-push-wiring`, and depending on it
+    /// here would pull all three push adapters into a module that must
+    /// compile the same whether a venture wires zero or three. So the
+    /// venture, which already has the reader, passes the answer in:
+    ///
+    /// ```rust,ignore
+    /// Notifications::new()
+    ///     .vapid_public_key(cratefield::push_wiring::vapid_public_key)
+    /// ```
+    ///
+    /// Without a probe — or with one that answers `None`, which is what
+    /// an unconfigured venture gets — the route is a 404 and `cf.js`
+    /// reports that this site does not offer browser push. It is the
+    /// public half of the VAPID pair, handed to every browser that
+    /// subscribes; the private half never leaves the adapter.
+    #[must_use]
+    pub fn vapid_public_key(
+        mut self,
+        probe: impl Fn(&dyn Config) -> Option<String> + Send + Sync + 'static,
+    ) -> Self {
+        self.settings.vapid_key_probe = Some(Arc::new(probe));
         self
     }
 
@@ -739,10 +785,20 @@ impl Module for Notifications {
             .auth_cell
             .get_or_init(|| handlers::auth_client(&shared))
             .clone();
+        let vapid_public_key = self
+            .vapid_key_cell
+            .get_or_init(|| {
+                self.settings
+                    .vapid_key_probe
+                    .as_ref()
+                    .and_then(|probe| probe(&*shared.config))
+            })
+            .clone();
         handlers::router(Arc::new(handlers::ModuleState {
             ctx: shared,
             settings: self.settings.clone(),
             auth,
+            vapid_public_key,
         }))
     }
 

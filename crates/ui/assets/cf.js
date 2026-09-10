@@ -17,6 +17,9 @@
  * DOM, no inline styles; style the cf-* classes.
  *
  * Events on the element: cf:loaded, cf:submitted (detail.status), cf:error.
+ *
+ * Browser push (issue #183) is the second half: `cf.push.subscribe()` and
+ * <cf-push>. See the block below the elements.
  */
 const ORIGIN = new URL(import.meta.url).origin;
 const SKIP = new Set(["module", "action", "base", "class", "id", "style", "hidden", "slot"]);
@@ -168,7 +171,263 @@ class CfStatus extends CfForm {
   }
 }
 
+/* Browser push (issue #183) -------------------------------------------
+ *
+ *   <script>window.cf = { auth: () => session.accessToken };</script>
+ *   <script type="module" src="https://api.example.com/ui/cf.js"></script>
+ *   <cf-push></cf-push>            <!-- or call cf.push.* yourself -->
+ *
+ * The auth seam is `cf.auth`: an access token, or a function returning
+ * one (it may be async). It is read once per request and never stored —
+ * refresh and storage stay with the page, and this file keeps no
+ * credential of its own. The routes it calls take a bearer token and
+ * nothing else, so without `cf.auth` a subscribe throws here rather than
+ * sending a request that can only be a 401.
+ *
+ * The five things a push client gets wrong, and where each is handled:
+ * base64url → Uint8Array (`keyBytes`), permission only on a gesture
+ * (`subscribe` asks before its first `await`), re-registering after
+ * `pushsubscriptionchange` (the service worker pings, `sync` re-PUTs),
+ * iOS Safari needing an installed web app (`supported`, reported as its
+ * own reason), and deleting the server-side row (`unsubscribe`).
+ */
+const cf = (window.cf ||= {});
+const SUBS = "/v1/notifications/subscriptions";
+const ID_KEY = "cf.push.id";
+let serverKeyPromise = null;
+let listening = false;
+
+/** The API origin: the script's own, unless the page named another. */
+function apiBase() {
+  return cf.base || ORIGIN;
+}
+
+/** The one auth seam. Read per request, never cached, never stored. */
+async function authHeaders() {
+  const token = typeof cf.auth === "function" ? await cf.auth() : cf.auth;
+  if (!token) throw new Error("cf.auth is not set: the page must supply an access token");
+  return { authorization: `Bearer ${token}`, "content-type": "application/json" };
+}
+
+/** base64url → Uint8Array, the only form `applicationServerKey` takes. */
+function keyBytes(key) {
+  const padded = key.replace(/-/g, "+").replace(/_/g, "/") + "=".repeat((4 - (key.length % 4)) % 4);
+  return Uint8Array.from(atob(padded), (c) => c.charCodeAt(0));
+}
+
+function sameKey(a, b) {
+  const x = new Uint8Array(a);
+  const y = new Uint8Array(b);
+  return x.length === y.length && x.every((v, i) => v === y[i]);
+}
+
+/** iOS and iPadOS, including the iPad that reports itself as a Mac. */
+function isIos() {
+  return (
+    /iP(hone|ad|od)/.test(navigator.userAgent || "") ||
+    (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1)
+  );
+}
+
+function isInstalled() {
+  return navigator.standalone === true || window.matchMedia?.("(display-mode: standalone)").matches === true;
+}
+
+/** Why push is, or is not, available here.
+ *
+ * `ios-needs-homescreen` is deliberately not folded into the flat no:
+ * iOS and iPadOS 16.4+ do support this, only from a web app the user has
+ * added to the Home Screen, so the page can ask for that instead of
+ * telling somebody their phone cannot do it. */
+function supported() {
+  if (!window.isSecureContext) return { supported: false, reason: "insecure-context" };
+  if (isIos() && !isInstalled()) return { supported: false, reason: "ios-needs-homescreen" };
+  if (!("serviceWorker" in navigator)) return { supported: false, reason: "no-service-worker" };
+  if (!("PushManager" in window)) return { supported: false, reason: "no-push" };
+  if (!("Notification" in window)) return { supported: false, reason: "no-notifications" };
+  return { supported: true };
+}
+
+/** granted | denied | default | unsupported. */
+function state() {
+  return supported().supported ? Notification.permission : "unsupported";
+}
+
+/** The venture's `applicationServerKey`, fetched once per page. */
+function serverKey() {
+  serverKeyPromise ||= fetch(`${apiBase()}/v1/notifications/vapid-public-key`)
+    .then((res) => (res.ok ? res.json() : Promise.reject(new Error(`no application server key (${res.status})`))))
+    .then((body) => body.public_key)
+    .catch((err) => {
+      serverKeyPromise = null;
+      throw err;
+    });
+  return serverKeyPromise;
+}
+
+/** Registers the subscription with the venture. The route upserts, so
+ *  this is also the repair for a subscription the browser replaced. */
+async function put(subscription, options = {}) {
+  const json = subscription.toJSON();
+  const body = {
+    transport: "webpush",
+    recipient: { web_push: { endpoint: json.endpoint, p256dh: json.keys.p256dh, auth: json.keys.auth } },
+  };
+  if (options.appId) body.app_id = options.appId;
+  if (options.appVersion) body.app_version = options.appVersion;
+  const res = await fetch(apiBase() + SUBS, {
+    method: "PUT",
+    headers: await authHeaders(),
+    body: JSON.stringify(body),
+  });
+  // A subscription endpoint is a bearer capability: statuses, never URLs.
+  if (!res.ok) throw new Error(`registering for notifications failed (${res.status})`);
+  const { id } = await res.json();
+  try {
+    localStorage.setItem(ID_KEY, id);
+  } catch {}
+  return { id };
+}
+
+/** The service worker's re-subscribe ping. It never holds a token, so a
+ *  `pushsubscriptionchange` with a page open is re-registered from here. */
+function listen() {
+  if (listening || !("serviceWorker" in navigator)) return;
+  listening = true;
+  navigator.serviceWorker.addEventListener("message", (event) => {
+    if (event.data?.type === "cf-push-resubscribed" && cf.auth) sync().catch(() => {});
+  });
+}
+
+/** Ask, subscribe, register. Call it from a click handler: permission is
+ *  requested before the first `await`, because an `await` spends the user
+ *  activation the browsers require for it. */
+async function subscribe(options = {}) {
+  const check = supported();
+  if (!check.supported) throw new Error(`browser push is unavailable here: ${check.reason}`);
+  if (Notification.permission === "default") await Notification.requestPermission();
+  if (Notification.permission !== "granted") throw new Error(`notification permission is ${Notification.permission}`);
+
+  listen();
+  const registration = await navigator.serviceWorker.register(
+    options.swUrl || "/sw.js",
+    options.scope ? { scope: options.scope } : undefined,
+  );
+  await navigator.serviceWorker.ready;
+  const key = await serverKey();
+  const bytes = keyBytes(key);
+  let subscription = await registration.pushManager.getSubscription();
+  // A rotated VAPID key leaves a subscription nothing can push to and
+  // nothing about it looks wrong from here. Replace it rather than
+  // re-registering a recipient every send will fail against.
+  if (subscription && !sameKey(subscription.options?.applicationServerKey || bytes, bytes)) {
+    await subscription.unsubscribe();
+    subscription = null;
+  }
+  subscription ||= await registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: bytes });
+  // The worker keeps the key so it can re-subscribe on its own. Public by
+  // definition, and the only thing it is told.
+  registration.active?.postMessage({ type: "cf-push-key", key });
+  return put(subscription, options);
+}
+
+/** Both halves: the browser's subscription and the venture's row. */
+async function unsubscribe() {
+  const registration = await navigator.serviceWorker?.getRegistration();
+  const subscription = registration && (await registration.pushManager.getSubscription());
+  let id = null;
+  try {
+    id = localStorage.getItem(ID_KEY);
+  } catch {}
+  // No remembered id: the PUT upserts and answers with the row's own, so
+  // the delete works on a browser whose storage was cleared.
+  if (!id && subscription) id = (await put(subscription)).id;
+  if (subscription) await subscription.unsubscribe();
+  if (id) {
+    const res = await fetch(`${apiBase()}${SUBS}/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+      headers: await authHeaders(),
+    });
+    if (!res.ok && res.status !== 404) throw new Error(`turning notifications off failed (${res.status})`);
+  }
+  try {
+    localStorage.removeItem(ID_KEY);
+  } catch {}
+  return Boolean(subscription || id);
+}
+
+/** Re-registers the subscription this browser already holds. It never
+ *  prompts, so it is safe on load — and it is what repairs a
+ *  `pushsubscriptionchange` that happened with no page open. */
+async function sync() {
+  if (!supported().supported || Notification.permission !== "granted") return null;
+  listen();
+  const registration = await navigator.serviceWorker.getRegistration();
+  const subscription = registration && (await registration.pushManager.getSubscription());
+  return subscription ? put(subscription) : null;
+}
+
+/** One tag for the whole enable block: the button and the three states
+ *  around it. Every string is an attribute, so the copy is the page's. */
+class CfPush extends HTMLElement {
+  connectedCallback() {
+    listen();
+    this.render();
+  }
+
+  copy(name, fallback) {
+    return this.getAttribute(name) || fallback;
+  }
+
+  render(note) {
+    const check = supported();
+    const help = document.createElement("p");
+    help.className = "cf-help";
+    if (!check.supported) {
+      help.textContent =
+        check.reason === "ios-needs-homescreen"
+          ? this.copy("install", "Add this site to your Home Screen to turn notifications on.")
+          : this.copy("unsupported", "This browser cannot show notifications.");
+      this.replaceChildren(help);
+      return;
+    }
+    if (Notification.permission === "denied") {
+      help.textContent = this.copy("denied", "Notifications are blocked in your browser settings.");
+      this.replaceChildren(help);
+      return;
+    }
+    const on = Notification.permission === "granted";
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "cf-submit";
+    button.textContent = on ? this.copy("off-label", "Turn notifications off") : this.copy("label", "Turn notifications on");
+    button.addEventListener("click", () => this.toggle(on, button));
+    help.textContent = note || (on ? this.copy("on", "Notifications are on for this device.") : this.copy("intro", ""));
+    this.replaceChildren(button, help);
+  }
+
+  async toggle(on, button) {
+    button.disabled = true;
+    try {
+      // `subscribe` runs up to its permission prompt synchronously, so
+      // the click's user activation is still there when it asks.
+      await (on
+        ? unsubscribe()
+        : subscribe({ swUrl: this.getAttribute("sw") || undefined, appId: this.getAttribute("app-id") || undefined }));
+      this.render();
+      this.dispatchEvent(new CustomEvent("cf:push", { detail: { state: state() } }));
+    } catch (err) {
+      this.render(this.copy("error", "That did not work. Try again."));
+      this.dispatchEvent(new CustomEvent("cf:error", { detail: { error: err } }));
+    }
+  }
+}
+
+const push = { supported, state, subscribe, unsubscribe, sync };
+cf.push = push;
+
 if (!customElements.get("cf-form")) customElements.define("cf-form", CfForm);
 if (!customElements.get("cf-status")) customElements.define("cf-status", CfStatus);
+if (!customElements.get("cf-push")) customElements.define("cf-push", CfPush);
 
-export { CfForm, CfStatus };
+export { CfForm, CfStatus, CfPush, push };

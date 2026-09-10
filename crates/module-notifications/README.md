@@ -62,9 +62,9 @@ on this one emits `notifications.requested` on the event bus instead:
 
 ## Routes
 
-Every route is authenticated. The account comes from the token's `sub`,
-never from a body field, and a subscription that belongs to another
-account answers `404` — a `403` would confirm the id exists.
+Every route but one is authenticated. The account comes from the token's
+`sub`, never from a body field, and a subscription that belongs to
+another account answers `404` — a `403` would confirm the id exists.
 
 | Method | Path | What |
 |---|---|---|
@@ -73,6 +73,27 @@ account answers `404` — a `403` would confirm the id exists.
 | `DELETE` | `/v1/notifications/subscriptions/{id}` | Sign-out |
 | `GET` | `/v1/notifications/preferences` | Every declared category, with the values that apply |
 | `PUT` | `/v1/notifications/preferences` | Change some of them; an unknown category is `400` |
+| `GET` | `/v1/notifications/vapid-public-key` | **No token.** The application server key a browser subscribes with |
+
+The key route is the exception because the value is public by
+construction: it is the derived public half of the VAPID pair and is
+handed to every browser that subscribes, and a site has to be able to put
+"turn notifications on" in front of a visitor who has not signed in.
+It answers `404 webpush-not-configured` unless the venture wired
+`Notifications::vapid_public_key` — with the key derived by
+`cratefield-push-wiring`, which is the one crate that reads the push
+environment, so the served key cannot drift from the one sends are
+signed with:
+
+```rust,ignore
+Notifications::new()
+    .vapid_public_key(cratefield::push_wiring::vapid_public_key)
+```
+
+The browser half that consumes it — `cf.push.subscribe()` and the
+reference service worker — is `cratefield-ui` (issue #183); the client
+contract, the iOS matrix and the `pushsubscriptionchange` repair are in
+`docs/UI.md`.
 
 ```http
 PUT /v1/notifications/subscriptions

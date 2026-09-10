@@ -196,7 +196,11 @@ let runtime = cratefield_runtime_cloudflare::Cloudflare::new().push_arc(push);
 ```
 
 The browser side — `pushManager.subscribe({ applicationServerKey })` and the
-service worker that reads this payload — is issue #183.
+service worker that reads this payload — is `cf.push` and `/ui/sw-push.js`
+in `cratefield-ui` (issue #183); `docs/UI.md` has the client contract. The
+`applicationServerKey` it subscribes with is this adapter's
+`public_key()`, served by `cratefield-module-notifications` at
+`GET /v1/notifications/vapid-public-key`.
 
 ## Failure contract
 

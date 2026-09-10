@@ -40,6 +40,22 @@ pub const UNKNOWN_CATEGORY: ProblemDef = ProblemDef {
 /// the request rate is wrong, and the client that legitimately hits it —
 /// somebody signing into a shared tablet — needs to be told which limit it
 /// met.
+/// This venture serves no `applicationServerKey`, so a browser cannot
+/// subscribe here at all.
+///
+/// A 404 rather than a 501: from the client's side "this deployment does
+/// not offer browser push" and "this deployment has no such route" are
+/// the same fact, and `cf.js` reacts to both by telling the visitor the
+/// site does not do this — which is the truth in either case. Nothing
+/// about the environment is described, because a caller learning which
+/// half of a credential pair is missing learns about the deployment.
+pub const NO_APPLICATION_SERVER_KEY: ProblemDef = ProblemDef {
+    slug: "webpush-not-configured",
+    status: StatusCode::NOT_FOUND,
+    title: "Browser push is not configured",
+    description: "This venture serves no Web Push application server key.",
+};
+
 pub const REHOME_LIMIT: ProblemDef = ProblemDef {
     slug: "device-rehome-limit",
     status: StatusCode::TOO_MANY_REQUESTS,
@@ -58,10 +74,14 @@ pub(crate) struct ModuleState {
     /// module cannot establish who is calling, and guessing is the one
     /// thing it must not do.
     pub auth: Option<Arc<AuthClient>>,
+    /// The `applicationServerKey` browsers subscribe with, resolved by
+    /// the venture's probe when the router was built (issue #183).
+    pub vapid_public_key: Option<String>,
 }
 
 pub(crate) fn router(state: Arc<ModuleState>) -> axum::Router {
     axum::Router::new()
+        .route("/vapid-public-key", get(vapid_public_key))
         .route("/subscriptions", put(register).get(list_subscriptions))
         .route("/subscriptions/{id}", delete(unregister))
         .route("/preferences", get(read_preferences).put(write_preferences))
@@ -258,6 +278,32 @@ fn rehome_limit(state: &ModuleState) -> usize {
     let configured = ModuleConfig::new(crate::MODULE_NAME, &*state.ctx.config)
         .get_u32("REHOME_MAX_PER_HOUR", state.settings.rehome_max_per_hour);
     usize::try_from(configured).unwrap_or(usize::MAX)
+}
+
+/// The `applicationServerKey` a browser passes to
+/// `pushManager.subscribe()` (issue #183).
+///
+/// The one route here that takes no token, deliberately. The value is
+/// public by construction — it is handed to every browser that
+/// subscribes, and it is the *public* half of a pair whose private half
+/// never leaves the adapter — and requiring a token for it would mean a
+/// site could not put a "turn notifications on" button in front of a
+/// visitor who has not signed in yet. Nothing about the caller is read,
+/// so there is nothing here to authorise.
+async fn vapid_public_key(
+    scope: Scope,
+    State(state): State<Arc<ModuleState>>,
+) -> Result<Response, Problem> {
+    let Some(key) = state.vapid_public_key.clone() else {
+        return Err(Problem::new(&NO_APPLICATION_SERVER_KEY).instance(&scope.request_id));
+    };
+    // No `Cache-Control` of its own: everything under `/v1/` is
+    // `no-store` at the root (architecture section 6) and a header set
+    // here would be overwritten, which is worse than none — it would read
+    // as a cache policy this route does not have. `cf.js` holds the key
+    // for the life of the page instead, which is where the round trip
+    // actually mattered.
+    Ok(Json(json!({ "public_key": key })).into_response())
 }
 
 /// Registers a device, or re-registers one the account already has.

@@ -58,6 +58,24 @@ assert(forms[0].querySelector("form[data-cf-module='waitlist']"), "default card 
 assert(forms[1].querySelector("form[data-cf-module='email-signup']"), "themed card holds the signup form");
 assert(forms[1].closest(".card--themed"), "the restyled form sits in the themed card");
 
+// The push block (issue #183). jsdom has no service worker, so what this
+// proves is that the element is defined, upgrades, and reports the
+// browser it is actually running in rather than throwing — the browser
+// half itself is `push.mjs` and, live, issue #186.
+const block = document.querySelector("cf-push");
+assert(block && block.textContent.trim().length > 0, "the push block renders something in a browser without push");
+assert(!block.querySelector("button"), "and offers no button it could not honour");
+assert(typeof window.cf.push.subscribe === "function", "cf.push is on the page's own cf object");
+// jsdom's `outside-only` never runs the page's own inline script, so the
+// ordering is checked in the source instead — and it is the ordering that
+// matters: `cf.js` is a module and therefore deferred, so a `window.cf`
+// set after the tag still arrives first, and one set in another module
+// would not.
+const config = html.indexOf("window.cf =");
+const embed = html.indexOf("/ui/cf.js");
+assert(config > -1 && config < embed, "the page sets window.cf (base and auth) before the embed loads");
+assert(/auth:/.test(html.slice(config, embed)), "and the auth seam is what it sets");
+
 // CORS: the fragment came with the site's origin allowed.
 const probe = await fetch(`${BASE}/ui/waitlist/join?fragment=1`, { headers: { Origin: SITE } });
 assert(probe.headers.get("access-control-allow-origin") === SITE, "API allows the site origin");

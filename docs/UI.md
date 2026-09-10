@@ -230,6 +230,117 @@ The site's origin must be in the venture's `cors_origins`: fragments are
 fetched cross-origin, and that is the same allowlist the API already needs.
 `tools/cfjs/test.mjs` runs the embed in jsdom against `wrangler dev` in CI.
 
+## Browser push: `cf.push` and the reference service worker
+
+The second half of the embed (issue #183). It subscribes a browser to Web
+Push and registers the subscription with
+`cratefield-module-notifications`, which sends through
+`cratefield-adapter-webpush`. `docs/PUSH-ENV.md` is the server side;
+this is the page's.
+
+```html
+<script>window.cf = { auth: () => session.accessToken };</script>
+<script type="module" src="https://api.example.com/ui/cf.js"></script>
+
+<cf-push label="Turn notifications on"></cf-push>
+```
+
+`<cf-push>` renders the button and the three states around it — every
+string is an attribute (`label`, `off-label`, `on`, `intro`, `denied`,
+`install`, `unsupported`, `error`), so the copy belongs to the page. It
+emits `cf:push` (`detail.state`) and `cf:error`. The same thing by hand:
+
+| Call | Does |
+|---|---|
+| `cf.push.supported()` | `{ supported: true }`, or `{ supported: false, reason }` — `insecure-context`, `ios-needs-homescreen`, `no-service-worker`, `no-push`, `no-notifications` |
+| `cf.push.state()` | `granted` / `denied` / `default` / `unsupported` |
+| `cf.push.subscribe({ swUrl, scope, appId, appVersion })` | Asks, subscribes, registers. Answers `{ id }` |
+| `cf.push.unsubscribe()` | Both halves: the browser's subscription and the venture's row |
+| `cf.push.sync()` | Re-registers the subscription the browser already holds. Never prompts |
+
+### `cf.auth`, the one authenticated seam
+
+`PUT /v1/notifications/subscriptions` is authenticated: the account comes
+from a bearer token this venture's auth service signed, never from the
+body. So `cf.auth` is the seam — an access token, or a function returning
+one, which may be async. It is read once per request and never cached or
+stored: refresh, storage and sign-out stay with the page, and the embed
+holds no credential of its own. Without it, `subscribe()` throws rather
+than sending a request whose only possible answer is a 401.
+
+Cross-origin, that needs `PUT` and `Authorization` through CORS, which
+the harness allows for every venture origin — with credentials **off**,
+so no cookie ever rides along and the token is only ever one the page
+deliberately handed over.
+
+### The service worker
+
+Notifications are shown by a service worker, and a worker may only be
+registered from the origin of the page registering it — which is the
+site, not the API. So `/ui/sw-push.js` is served to be **copied**:
+
+```sh
+curl https://api.example.com/ui/sw-push.js > /var/www/sw.js
+```
+
+`cf.push.subscribe()` registers `/sw.js` by default; `swUrl` and `scope`
+override it. A venture that already has a worker pastes the listeners in
+instead — they are independent of everything else a worker does. Serving
+the copy from anywhere but the site root needs
+`Service-Worker-Allowed: /` on it, which is what the harness sends for
+its own copy.
+
+The worker reads exactly the JSON the adapter sends: `title`, `body`,
+`icon`, `url`, `tag`, `silent`, `data`. `notificationclick` focuses the
+tab already showing the target, failing that navigates an open one, and
+opens a window only when there is nothing to focus.
+
+### The four traps
+
+**Permission is asked on a gesture.** `subscribe()` calls
+`Notification.requestPermission()` before its first `await`, so the click
+that called it still counts as user activation. Calling `subscribe()` on
+load prompts nobody and, in Safari, throws.
+
+**`pushsubscriptionchange` must re-register.** A browser may replace a
+subscription at any time; ignoring the event leaves every send going to an
+endpoint that is gone, silently. The worker re-subscribes — the half only
+it can do — and wakes any open page, whose `cf.push.sync()` does the
+authenticated `PUT`. With no page open the next visit repairs it, and the
+dead endpoint answers `410 Gone`, the one status that prunes the row.
+Call `cf.push.sync()` on load for that reason.
+
+**Unsubscribing has two halves.** `cf.push.unsubscribe()` deletes the
+venture's row as well as the browser's subscription. It remembers the row
+id in `localStorage`, and re-learns it with a `PUT` when storage was
+cleared, so the row cannot be orphaned.
+
+**A rotated VAPID key invalidates every subscription.** `subscribe()`
+compares the key an existing subscription was made with against the one
+the venture now serves and replaces it if they differ. Nothing about a
+subscription made with a retired key looks wrong from the browser.
+
+### Support
+
+| Browser | Web Push | Notes |
+|---|---|---|
+| Chrome, Edge (desktop and Android) | yes | |
+| Firefox (desktop and Android) | yes | |
+| Safari, macOS 13+ | yes | An ordinary tab is enough |
+| Safari, iOS/iPadOS 16.4+ | **installed web app only** | Add to Home Screen first; `manifest.json` with `"display": "standalone"`. `supported()` reports this as `ios-needs-homescreen`, not as a flat no |
+| Any browser over plain `http` | no | Except `http://localhost`, which counts as a secure context |
+
+`GET /v1/notifications/vapid-public-key` serves the application server
+key, and is the one route in that module with no token — it is the public
+half of a pair, handed to every browser that subscribes. A venture that
+wired no VAPID key answers `404 webpush-not-configured`, and `<cf-push>`
+renders its `error` copy rather than a button that cannot work.
+
+Verification: `tools/cfjs/push.mjs` runs the client against stubbed push
+APIs and `tools/cfjs/sw.mjs` runs the worker in a fake
+`ServiceWorkerGlobalScope`, both in CI. Real browsers delivering real
+pushes are the vendor-live leg, issue #186.
+
 ## Cost
 
 Measured on the native router in release mode

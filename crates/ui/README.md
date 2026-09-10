@@ -35,3 +35,21 @@ On a static site, `cf.js` (under 4 KB) embeds those fragments:
 <script type="module" src="https://api.example.com/ui/cf.js"></script>
 <cf-form module="waitlist" action="join" product="kontinuum"></cf-form>
 ```
+
+It also carries the browser push client (issue #183): `cf.push.subscribe()`
+asks for permission on the click that called it, subscribes with the
+venture's application server key, and registers the subscription with
+`cratefield-module-notifications`.
+
+```html
+<script>window.cf = { auth: () => session.accessToken };</script>
+<script type="module" src="https://api.example.com/ui/cf.js"></script>
+<cf-push label="Turn notifications on"></cf-push>
+```
+
+`cf.auth` is the one authenticated seam: a token or a function returning
+one, read per request and never stored. `/ui/sw-push.js` is the reference
+service worker, served to be copied to the site's own origin — a worker may
+only be registered from the origin of the page registering it. The iOS case
+(a Home-Screen web app, not a tab), the `pushsubscriptionchange` repair and
+the rest of the contract are in `docs/UI.md`.

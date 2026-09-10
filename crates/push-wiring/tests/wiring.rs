@@ -597,3 +597,81 @@ fn the_checked_in_doc_has_no_drift() {
          cratefield-push-wiring --example push-env-doc`"
     );
 }
+
+// ---------------------------------------------------------------------------
+// The browser's application server key (issue #183)
+
+#[test]
+fn the_application_server_key_is_the_public_half_and_nothing_else() {
+    let key = cratefield_push_wiring::vapid_public_key(&owned(vec![
+        ("VAPID_PRIVATE_KEY", TEST_P8.to_owned()),
+        ("VAPID_SUBJECT", "mailto:ops@example.test".to_owned()),
+    ]))
+    .expect("a configured venture serves a key");
+
+    // A P-256 public point, uncompressed, base64url without padding: 65
+    // bytes, so 87 characters. The browser rejects anything else, and it
+    // does so inside `pushManager.subscribe` where the reason is a bare
+    // `InvalidAccessError`.
+    assert_eq!(key.len(), 87, "{key}");
+    assert!(
+        key.chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'),
+        "base64url only: {key}"
+    );
+
+    // The private half is what this must never become. Both forms it is
+    // accepted in — the PEM and the scalar inside it — are checked,
+    // because a public key that happened to contain the PEM's body would
+    // pass a substring test against the PEM alone.
+    assert!(!key.contains("PRIVATE KEY"), "the PEM leaked");
+    for line in TEST_P8.lines().filter(|line| !line.starts_with("---")) {
+        assert!(!key.contains(line), "a line of the private key leaked");
+    }
+}
+
+#[test]
+fn an_unconfigured_or_broken_venture_serves_no_application_server_key() {
+    // Absent: the ordinary case, and not a defect.
+    assert_eq!(cratefield_push_wiring::vapid_public_key(&config(&[])), None);
+    // Partial: the key without its subject. The adapter would refuse it,
+    // and serving a key for a transport that is not routed would put a
+    // "turn notifications on" button in front of a visitor whose
+    // subscription could never be pushed to.
+    assert_eq!(
+        cratefield_push_wiring::vapid_public_key(&config(&[("VAPID_PRIVATE_KEY", TEST_P8)])),
+        None
+    );
+    // Invalid: both set, and the pair swapped.
+    assert_eq!(
+        cratefield_push_wiring::vapid_public_key(&config(&[
+            ("VAPID_SUBJECT", TEST_P8),
+            ("VAPID_PRIVATE_KEY", "mailto:ops@example.test"),
+        ])),
+        None
+    );
+}
+
+#[test]
+fn the_application_server_key_matches_the_key_sends_are_signed_with() {
+    // The whole reason the browser's key comes from here rather than
+    // from a second variable: derived from the private key, it cannot
+    // drift from the one the adapter signs VAPID tokens with. A venture
+    // that configured them separately would find out only when every
+    // browser subscription stopped working at once.
+    let cfg = owned(vec![
+        ("VAPID_PRIVATE_KEY", TEST_P8.to_owned()),
+        ("VAPID_SUBJECT", "mailto:ops@example.test".to_owned()),
+    ]);
+    let served = cratefield_push_wiring::vapid_public_key(&cfg).expect("a key");
+    let adapter = cratefield_adapter_webpush::WebPush::new(
+        Arc::new(NoNetwork) as Arc<dyn HttpClient>,
+        Arc::new(SystemClock) as Arc<dyn Clock>,
+        cratefield_adapter_webpush::vapid::VapidKeys {
+            private_key: TEST_P8.to_owned(),
+            subject: "mailto:ops@example.test".to_owned(),
+        },
+    )
+    .expect("the adapter accepts the same pair");
+    assert_eq!(Some(served.as_str()), adapter.public_key());
+}

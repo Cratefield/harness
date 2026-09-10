@@ -85,7 +85,13 @@ fn instance() -> &'static (Harness, Cloudflare) {
                     // variables: in production a venture that wired no
                     // transport is a misconfiguration, because every send
                     // would dead-letter as `not_configured`.
-                    .transport_probe(|cfg| cratefield::push_wiring::inspect_push(cfg).any_routed()),
+                    .transport_probe(|cfg| cratefield::push_wiring::inspect_push(cfg).any_routed())
+                    // The browser half (issue #183): the key `cf.js`
+                    // subscribes with, from the same one reader. With no
+                    // VAPID key set it answers `None` and the route is a
+                    // 404, which is what `<cf-push>` on the example site
+                    // renders as "this site does not do this".
+                    .vapid_public_key(cratefield::push_wiring::vapid_public_key),
             )
             .templates(templates)
             // The UI renderer (ADR 0010): pages at /ui/<module>/<action>,
