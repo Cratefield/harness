@@ -13,17 +13,15 @@ use axum::http::request::Parts;
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, put};
-use cratefield_core::{
-    Clock, IdGen, Json, ModuleConfig, ModuleContext, Problem, ProblemDef, Recipient, Scope,
-    SystemClock, UlidIdGen,
-};
+use cratefield_core::{Json, ModuleConfig, ModuleContext, Problem, ProblemDef, Recipient, Scope};
 use factory0_auth_client::{AuthClient, AuthState, Authenticated, UNAUTHENTICATED};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use crate::Settings;
-use crate::store::{self, Channels, Transport};
+use crate::clock;
+use crate::store::{self, Channels, Transport, Upserted};
 
 /// A category the venture does not declare. Distinct from
 /// `validation-failed` because the fix is different: the caller is not
@@ -34,6 +32,23 @@ pub const UNKNOWN_CATEGORY: ProblemDef = ProblemDef {
     title: "Unknown notification category",
     description: "The named category is not declared by this venture.",
 };
+
+/// This caller has taken over too many devices from other accounts inside
+/// the window (`NOTIFICATIONS_REHOME_MAX_PER_HOUR`).
+///
+/// Its own `type` rather than the shared `rate-limited` one: nothing about
+/// the request rate is wrong, and the client that legitimately hits it —
+/// somebody signing into a shared tablet — needs to be told which limit it
+/// met.
+pub const REHOME_LIMIT: ProblemDef = ProblemDef {
+    slug: "device-rehome-limit",
+    status: StatusCode::TOO_MANY_REQUESTS,
+    title: "Too many devices taken over",
+    description: "This account has claimed too many devices that belonged to other accounts.",
+};
+
+/// How long the re-home budget counts over.
+const REHOME_WINDOW_SECS: i64 = 3_600;
 
 pub(crate) struct ModuleState {
     pub ctx: Arc<ModuleContext>,
@@ -195,22 +210,20 @@ fn internal(scope: &Scope) -> Problem {
 }
 
 fn now(state: &ModuleState) -> String {
-    use time::format_description::well_known::Rfc3339;
-    let at = match state.ctx.ports.clock.as_ref() {
-        Some(clock) => clock.now(),
-        None => SystemClock.now(),
-    };
-    at.replace_nanosecond(0)
-        .unwrap_or(at)
-        .format(&Rfc3339)
-        .unwrap_or_default()
+    clock::now_iso(state.ctx.ports.clock.as_ref())
 }
 
 fn new_id(state: &ModuleState) -> String {
-    match state.ctx.ports.id_gen.as_ref() {
-        Some(id_gen) => id_gen.ulid(),
-        None => UlidIdGen.ulid(),
-    }
+    clock::new_id(state.ctx.ports.id_gen.as_ref())
+}
+
+/// How many devices one account may take over from other accounts in an
+/// hour (`NOTIFICATIONS_REHOME_MAX_PER_HOUR`, default 3; `0` refuses every
+/// cross-account re-home).
+fn rehome_limit(state: &ModuleState) -> usize {
+    let configured = ModuleConfig::new(crate::MODULE_NAME, &*state.ctx.config)
+        .get_u32("REHOME_MAX_PER_HOUR", state.settings.rehome_max_per_hour);
+    usize::try_from(configured).unwrap_or(usize::MAX)
 }
 
 /// Registers a device, or re-registers one the account already has.
@@ -236,7 +249,8 @@ async fn register(
     let user_agent = headers
         .get(header::USER_AGENT)
         .and_then(|value| value.to_str().ok());
-    let id = store::upsert_subscription(
+    let at = now(&state);
+    let outcome = store::upsert_subscription(
         &*db,
         &store::NewSubscription {
             id: &new_id(&state),
@@ -245,7 +259,9 @@ async fn register(
             app_id: body.app_id.as_deref(),
             app_version: body.app_version.as_deref(),
             user_agent,
-            now: &now(&state),
+            now: &at,
+            rehome_cutoff: &clock::plus_secs(&at, -REHOME_WINDOW_SECS),
+            rehome_limit: rehome_limit(&state),
         },
     )
     .await
@@ -253,6 +269,49 @@ async fn register(
         tracing::error!(error = %err, "registering a subscription failed");
         internal(&scope)
     })?;
+
+    let id = match outcome {
+        Upserted::Created(id) | Upserted::Refreshed(id) => id,
+        Upserted::Rehomed {
+            id,
+            previous_account_id,
+        } => {
+            // A device token is not an authenticator, and this is the one
+            // write that acts on one alone. Nobody confirms it, so the
+            // venture is told: the previous owner has stopped receiving
+            // on a device it may well still be holding.
+            tracing::warn!(
+                subscription = %id,
+                transport = %actual,
+                "a subscription changed account"
+            );
+            state.ctx.events.emit_in(
+                &scope,
+                crate::EVENT_SUBSCRIPTION_REHOMED,
+                json!({
+                    "subscription_id": id,
+                    "account_id": account_id,
+                    "previous_account_id": previous_account_id,
+                    "transport": actual.as_str(),
+                    "at": at,
+                }),
+            );
+            id
+        }
+        Upserted::RehomeRefused => {
+            tracing::warn!(
+                account = %account_id,
+                transport = %actual,
+                "refused a device take-over: this account has spent its re-home budget"
+            );
+            return Err(Problem::new(&REHOME_LIMIT)
+                .with_detail(
+                    "this device is registered to another account, and this account has \
+                     claimed as many devices as it may in an hour",
+                )
+                .instance(&scope.request_id));
+        }
+    };
     Ok(Json(json!({ "id": id })).into_response())
 }
 
@@ -342,14 +401,61 @@ async fn write_preferences(
     let Some(db) = state.ctx.ports.db.clone() else {
         return Err(internal(&scope));
     };
-    let stored = store::preferences_for_account(&*db, &account_id)
+    let at = now(&state);
+
+    // Whether each category is an INSERT or an UPDATE is decided from a
+    // read, and the write that follows is not in the same unit of work as
+    // that read: two `PUT`s that arrive together — a double-tap, a client
+    // retry — both see no row and both INSERT, and the second one loses on
+    // the primary key. So the loser rebuilds against what is there now and
+    // writes once more. One retry is enough: the second attempt can only
+    // find a row (nothing here deletes one), and a row is an UPDATE, which
+    // no concurrent writer can turn into a conflict.
+    let mut stored = read_preferences_for(&db, &account_id, &scope).await?;
+    for attempt in 0..2 {
+        let statements = preference_writes(&state, &account_id, &body, &stored, &at);
+        if statements.is_empty() {
+            break;
+        }
+        match db.batch(&statements).await {
+            Ok(()) => break,
+            Err(err) if attempt == 0 => {
+                tracing::info!(error = %err, "a concurrent preference write won; retrying once");
+                stored = read_preferences_for(&db, &account_id, &scope).await?;
+            }
+            Err(err) => {
+                tracing::error!(error = %err, "writing preferences failed");
+                return Err(internal(&scope));
+            }
+        }
+    }
+
+    let stored = read_preferences_for(&db, &account_id, &scope).await?;
+    Ok(Json(effective(&state.settings, &stored)).into_response())
+}
+
+async fn read_preferences_for(
+    db: &Arc<dyn cratefield_core::Database>,
+    account_id: &str,
+    scope: &Scope,
+) -> Result<Vec<(String, Channels)>, Problem> {
+    store::preferences_for_account(&**db, account_id)
         .await
         .map_err(|err| {
             tracing::error!(error = %err, "reading preferences failed");
-            internal(&scope)
-        })?;
-    let at = now(&state);
+            internal(scope)
+        })
+}
 
+/// The patch applied over what is stored: an `UPDATE` for a category the
+/// account already has a row for, an `INSERT` for one it does not.
+fn preference_writes(
+    state: &ModuleState,
+    account_id: &str,
+    body: &PreferencesBody,
+    stored: &[(String, Channels)],
+    at: &str,
+) -> Vec<cratefield_core::Statement> {
     let mut statements = Vec::with_capacity(body.preferences.len());
     for (category, patch) in &body.preferences {
         let existing = stored.iter().find(|(name, _)| name == category);
@@ -370,27 +476,14 @@ async fn write_preferences(
             email: patch.email.unwrap_or(current.email),
         };
         statements.push(store::write_preference_statement(
-            &account_id,
+            account_id,
             category,
             next,
             existing.is_some(),
-            &at,
+            at,
         ));
     }
-    if !statements.is_empty() {
-        db.batch(&statements).await.map_err(|err| {
-            tracing::error!(error = %err, "writing preferences failed");
-            internal(&scope)
-        })?;
-    }
-
-    let stored = store::preferences_for_account(&*db, &account_id)
-        .await
-        .map_err(|err| {
-            tracing::error!(error = %err, "reading preferences back failed");
-            internal(&scope)
-        })?;
-    Ok(Json(effective(&state.settings, &stored)).into_response())
+    statements
 }
 
 /// Every declared category with the values that actually apply: the

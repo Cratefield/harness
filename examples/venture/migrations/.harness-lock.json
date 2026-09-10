@@ -13,7 +13,7 @@
   },
   "notifications/0001": {
     "file": "0009_notifications_0001_init.sql",
-    "sha256": "36a993d257e686d36b1e40dbaea76b9e4989b3b36ec50108598d55c93def00c7"
+    "sha256": "c94697bca629452be0f0c4afcb8397230e48c7748b612e67cb639683ab700e5a"
   },
   "sample/0001": {
     "file": "0001_sample_0001_init.sql",

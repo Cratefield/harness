@@ -901,7 +901,18 @@ Everything else a module can do, with the module that does it:
   venture with `.template("<module>/<id>", ..)`; the id's module part
   must name a registered module.
 - **Scheduled work** (cron): `Module::scheduled` — see waitlist's pending
-  purge in `crates/module-waitlist/src/lib.rs`.
+  purge in `crates/module-waitlist/src/lib.rs`. Use the `ModuleContext`
+  the runtime hands in and nothing else. A scheduled invocation never
+  calls `Module::router`, so a module that keeps a context from
+  router-build time has **none** on a cold isolate and a stale one on a
+  warm isolate — and a test fixture that hands `scheduled` a stripped-down
+  context cannot notice either.
+- **A token verifier** (`factory0_auth_client::AuthClient`): build it once
+  and park it, not inside `router()`. `router()` runs per request on
+  Workers, and a fresh `AuthClient` starts with an empty JWKS cache: one
+  extra outbound round-trip per authenticated request, drivable by anyone
+  with a junk bearer. `crates/module-notifications/src/lib.rs` parks it in
+  a `OnceLock` beside its context.
 - **Push notifications**: `crates/module-notifications/` — subscriptions,
   per-category preferences, fan-out in the caller's own batch, and a drain
   that prunes, retries and dead-letters (ADR
