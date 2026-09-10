@@ -21,7 +21,8 @@ jobs:
       - run: cargo fmt --all --check
 
   cfjs-size:
-    name: cf.js size gate (4 KB gzipped, issue #73)
+    # Truncated at the `#` the same way; issue #73.
+    name: cf.js size gate (4 KB gzipped)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -35,7 +36,10 @@ jobs:
           node size.mjs
 
   migration-guard:
-    name: migrations are never edited (issue #34)
+    # No `#` in the name: GitHub truncates a check-run name there, which
+    # registered this as `migrations are never edited (issue` — an awkward
+    # string to have to name in branch protection. Issue #34.
+    name: migrations are never edited
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -165,6 +169,11 @@ jobs:
       # long as an adapter in that venture uses it.
       - name: Build cratefield-push-auth to wasm
         run: cargo build --target wasm32-unknown-unknown -p cratefield-push-auth
+      # Same reason for the FCM adapter (issue #179): its headline is that it
+      # runs on an isolate, and no venture in this repo enables the `fcm`
+      # feature, so the venture build below never compiles it.
+      - name: Build cratefield-adapter-fcm to wasm
+        run: cargo build --target wasm32-unknown-unknown -p cratefield-adapter-fcm
       # Same reason for the Web Push adapter (issue #180): it is the crate
       # that pulls `aes-gcm`, `hkdf` and `p256/ecdh`, and no venture in this
       # repo wires it yet, so nothing else would notice a dependency that

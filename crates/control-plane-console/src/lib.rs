@@ -982,6 +982,7 @@ mod tests {
             events: EventBus::default(),
             templates: Arc::new(TemplateRegistry::default()),
             venture: Arc::new(Venture::new("cratefield-control-plane", "cratefield.com")),
+            unprotected_writes_accepted: false,
             ui_mounted: false,
         }
     }

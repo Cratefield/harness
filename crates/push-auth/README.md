@@ -63,6 +63,27 @@ let jwt = cache.get_or_mint(clock.as_ref(), &origin, |now| {
 let k = base64url(signer.public_key_uncompressed()); // the VAPID `k=` parameter
 ```
 
+Google's bearer token is not minted, it is **exchanged** over HTTP, and no
+lock may be held across an `await` — so the same cache splits into a read and
+a write:
+
+```rust,ignore
+if let Some(token) = cache.cached(clock.as_ref(), &()) { return Ok(token); }
+let (token, expires_in) = exchange_the_signed_assertion().await?;
+// Reused for what the provider stated less a safety margin, capped by the
+// cache's own TTL. `saturating_sub`, not `-`: `Duration` subtraction panics
+// on underflow, so a provider that states a lifetime shorter than the margin
+// (`expires_in: 60`) would take the send down instead of simply not caching.
+// Do the same arithmetic inside a `get_or_mint` closure and it is worse
+// still — that closure runs while the cache's mutex is held, so the panic
+// poisons it and every later call panics too.
+cache.store(clock.as_ref(), &(), &token, expires_in.saturating_sub(Duration::from_secs(300)));
+```
+
+Two sends racing a cold cache then cost one extra exchange, which Google is
+happy to serve — `get_or_mint` stays the right call wherever minting is local,
+because Apple is not.
+
 ## What it does not do
 
 Verification — that is the auth service's job — and key rotation UX, which

@@ -207,6 +207,18 @@ pub struct ModuleContext {
     pub events: EventBus,
     pub templates: Arc<TemplateRegistry>,
     pub venture: Arc<Venture>,
+    /// Whether an operator has recorded an explicit acceptance that this
+    /// deployment serves guarded routes it cannot fully protect
+    /// (`HARNESS_ALLOW_UNPROTECTED_WRITES`, issue #143).
+    ///
+    /// It exists because the acceptance has to mean the same thing at
+    /// both layers. The boot gate honours it and serves; if the
+    /// per-request gate did not, the deployment would refuse every write
+    /// anyway — the same outage, with a different status code. A module
+    /// enforcing an abuse control passes this to
+    /// [`verify_human_form`](crate::route_policy::verify_human_form)
+    /// rather than deciding from the environment alone.
+    pub unprotected_writes_accepted: bool,
     /// `true` when the venture mounted a UI renderer (ADR 0010). A module
     /// then defaults its landing redirects (confirmed, expired,
     /// unsubscribed, status) to `<api base>/ui/<module>/<action>/<page>`

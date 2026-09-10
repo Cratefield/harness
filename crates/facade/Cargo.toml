@@ -29,12 +29,14 @@ postgres = ["dep:cratefield-adapter-postgres"]
 resend = ["dep:cratefield-adapter-resend"]
 turnstile = ["dep:cratefield-adapter-turnstile"]
 apns = ["dep:cratefield-adapter-apns"]
+fcm = ["dep:cratefield-adapter-fcm"]
 stripe = ["dep:cratefield-adapter-stripe"]
 webpush = ["dep:cratefield-adapter-webpush"]
 
 # The push adapters' provider tokens (ES256 for APNs and VAPID, RS256 for
-# Google service accounts). Pulled in by `apns` already; a feature of its own
-# for a venture that mints a VAPID token without an APNs adapter.
+# Google service accounts). Pulled in by `apns` and by `fcm` already; a
+# feature of its own for a venture that mints a VAPID token without either
+# adapter.
 push-auth = ["dep:cratefield-push-auth"]
 
 # Everything else that is optional.
@@ -59,6 +61,10 @@ cratefield-adapter-postgres = { workspace = true, optional = true }
 cratefield-adapter-resend = { workspace = true, optional = true }
 cratefield-adapter-turnstile = { workspace = true, optional = true }
 cratefield-adapter-apns = { workspace = true, optional = true }
+# `publish = false` until its first manual publish (docs/RELEASING.md), so it
+# must be published before the facade's next release, the same way
+# `cratefield-push-auth` was.
+cratefield-adapter-fcm = { workspace = true, optional = true }
 # `publish = false` until its first manual publish (docs/RELEASING.md), so it
 # must be published before the facade's next release — it is a dependency of
 # `cratefield-adapter-apns` as well as of this crate.

@@ -640,6 +640,7 @@ name = "cratefield"
 version = "0.1.1"
 dependencies = [
  "cratefield-adapter-apns",
+ "cratefield-adapter-fcm",
  "cratefield-adapter-postgres",
  "cratefield-adapter-resend",
  "cratefield-adapter-sqlite",
@@ -696,6 +697,26 @@ dependencies = [
  "pollster",
  "serde",
  "serde_json",
+ "thiserror 2.0.20",
+ "time",
+ "tracing",
+]
+
+[[package]]
+name = "cratefield-adapter-fcm"
+version = "0.1.1"
+dependencies = [
+ "async-trait",
+ "base64 0.23.1",
+ "bytes",
+ "cratefield-core",
+ "cratefield-push-auth",
+ "cratefield-testing",
+ "http",
+ "pollster",
+ "serde",
+ "serde_json",
+ "serde_urlencoded",
  "thiserror 2.0.20",
  "time",
  "tracing",

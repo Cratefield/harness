@@ -7,6 +7,14 @@
 //! Chrome's and Firefox's are different tokens), and Google's exchanged
 //! bearer token needs it per service account. Hence the key.
 //!
+//! Two ways in, because not every token can be minted locally.
+//! [`CachedToken::get_or_mint`] mints under the lock, which is what makes a
+//! cold-cache race present Apple exactly one provider JWT. Google's bearer
+//! token is *exchanged* over HTTP instead, and no lock may be held across an
+//! `await`, so that path reads with [`CachedToken::cached`] and writes with
+//! [`CachedToken::store`] — the same map, the same invalidation, one extra
+//! exchange in a race.
+//!
 //! The cache holds a `Mutex` and is not request state: it is the adapter's
 //! own credential, shared across sends for its TTL (ADR 0007 allows a
 //! scoped, justified `Mutex`).
@@ -24,10 +32,22 @@ use cratefield_core::Clock;
 #[allow(clippy::disallowed_types)]
 type Guarded<T> = std::sync::Mutex<T>;
 
-/// A minted token and when it was minted.
-struct Minted {
+/// One cached token: the value, when it was minted or stored, and how long
+/// it may be reused from then.
+struct Entry {
     token: String,
     minted_unix: i64,
+    /// Seconds this entry may be reused for. The cache's own TTL for a
+    /// [`CachedToken::get_or_mint`]; the provider's stated lifetime, capped
+    /// by that TTL, for a [`CachedToken::store`].
+    ttl_secs: i64,
+}
+
+impl Entry {
+    /// Whether the entry is still inside its own lifetime at `now_unix`.
+    fn fresh_at(&self, now_unix: i64) -> bool {
+        now_unix.saturating_sub(self.minted_unix) < self.ttl_secs
+    }
 }
 
 /// Keyed mint-once-reuse with a [`Clock`]-driven TTL.
@@ -46,7 +66,7 @@ pub struct CachedToken<K = ()> {
     /// miss path mints under the lock, so writers must exclude each other
     /// anyway.
     #[allow(clippy::disallowed_types)]
-    entries: Guarded<HashMap<K, Minted>>,
+    entries: Guarded<HashMap<K, Entry>>,
 }
 
 impl<K: Eq + Hash + Clone> CachedToken<K> {
@@ -129,31 +149,99 @@ impl<K: Eq + Hash + Clone> CachedToken<K> {
         mint: impl FnOnce(i64) -> String,
     ) -> String {
         let now_unix = clock.now().unix_timestamp();
-        let ttl = i64::try_from(self.ttl.as_secs()).unwrap_or(i64::MAX);
+        let ttl = self.ttl_secs();
         let mut entries = self.entries.lock().expect("push-auth token cache");
         if let Some(cached) = entries.get(key)
-            && now_unix.saturating_sub(cached.minted_unix) < ttl
+            && cached.fresh_at(now_unix)
         {
             return cached.token.clone();
         }
         let token = mint(now_unix);
-        Self::make_room(&mut entries, now_unix, ttl);
+        Self::make_room(&mut entries, now_unix);
         entries.insert(
             key.clone(),
-            Minted {
+            Entry {
                 token: token.clone(),
                 minted_unix: now_unix,
+                ttl_secs: ttl,
             },
         );
         token
+    }
+
+    /// The cached token for `key`, or `None` when there is none or it has
+    /// aged past its lifetime. **Nothing is minted.**
+    ///
+    /// This is the read half of [`Self::get_or_mint`], for a token that
+    /// cannot be minted synchronously: Google's bearer token is *exchanged*
+    /// over HTTP, and `mint` is a plain `FnOnce` precisely so it can never
+    /// await while holding the lock. Pair it with [`Self::store`]:
+    ///
+    /// ```rust,ignore
+    /// if let Some(token) = cache.cached(clock, &key) { return Ok(token); }
+    /// let (token, lifetime) = exchange().await?;
+    /// cache.store(clock, &key, &token, lifetime);
+    /// ```
+    ///
+    /// The lock is therefore *not* held across the exchange, so two sends
+    /// racing a cold cache can each exchange one token. That costs a round
+    /// trip, never correctness: Google issues both and the second `store`
+    /// simply wins. It is the trade a synchronous `mint` does not have to
+    /// make — and the reason `get_or_mint` remains the right call wherever
+    /// minting is local.
+    ///
+    /// # Panics
+    ///
+    /// If the cache mutex was poisoned by a panic inside a previous mint.
+    #[must_use]
+    pub fn cached(&self, clock: &dyn Clock, key: &K) -> Option<String> {
+        let now_unix = clock.now().unix_timestamp();
+        let entries = self.entries.lock().expect("push-auth token cache");
+        entries
+            .get(key)
+            .filter(|cached| cached.fresh_at(now_unix))
+            .map(|cached| cached.token.clone())
+    }
+
+    /// Records `token` for `key`, minted now and reusable for `lifetime` —
+    /// or for the cache's own TTL where that is shorter, so the TTL stays a
+    /// ceiling however long a provider claims its token lives.
+    ///
+    /// A zero `lifetime` stores nothing that will ever be read back: the
+    /// entry is stale the instant it lands, which is the honest answer when
+    /// a provider hands over a token that expires inside the safety margin.
+    ///
+    /// # Panics
+    ///
+    /// If the cache mutex was poisoned by a panic inside a previous mint.
+    pub fn store(&self, clock: &dyn Clock, key: &K, token: impl Into<String>, lifetime: Duration) {
+        let now_unix = clock.now().unix_timestamp();
+        let ttl = self
+            .ttl_secs()
+            .min(i64::try_from(lifetime.as_secs()).unwrap_or(i64::MAX));
+        let mut entries = self.entries.lock().expect("push-auth token cache");
+        Self::make_room(&mut entries, now_unix);
+        entries.insert(
+            key.clone(),
+            Entry {
+                token: token.into(),
+                minted_unix: now_unix,
+                ttl_secs: ttl,
+            },
+        );
+    }
+
+    /// The cache's own TTL in whole seconds.
+    fn ttl_secs(&self) -> i64 {
+        i64::try_from(self.ttl.as_secs()).unwrap_or(i64::MAX)
     }
 
     /// Keeps the map inside [`Self::CAPACITY`] before one more entry goes in:
     /// every entry past its TTL is dropped (it would be re-minted on its next
     /// use regardless), and if that is not enough the oldest-minted entries
     /// go until there is room.
-    fn make_room(entries: &mut HashMap<K, Minted>, now_unix: i64, ttl: i64) {
-        entries.retain(|_, minted| now_unix.saturating_sub(minted.minted_unix) < ttl);
+    fn make_room(entries: &mut HashMap<K, Entry>, now_unix: i64) {
+        entries.retain(|_, minted| minted.fresh_at(now_unix));
         while entries.len() >= Self::CAPACITY {
             let Some(oldest) = entries
                 .iter()
@@ -379,6 +467,96 @@ mod tests {
         }
         assert_eq!(cache.len(), CachedToken::<String>::CAPACITY);
         assert!(!cache.is_empty());
+    }
+
+    /// The async half: a token that is *exchanged* over HTTP cannot be
+    /// minted under the lock, so it is read with `cached` and written with
+    /// `store`.
+    #[test]
+    fn cached_reads_without_minting_and_store_writes() {
+        let clock = StepClock::at(1_000);
+        let cache: CachedToken<()> = CachedToken::new(Duration::from_mins(55));
+
+        assert_eq!(cache.cached(&clock, &()), None, "nothing cached yet");
+        assert!(cache.is_empty(), "a miss must not insert anything");
+
+        cache.store(&clock, &(), "ya29.bearer", Duration::from_mins(55));
+        assert_eq!(cache.cached(&clock, &()), Some("ya29.bearer".to_owned()));
+
+        clock.advance(3_299);
+        assert_eq!(cache.cached(&clock, &()), Some("ya29.bearer".to_owned()));
+        clock.advance(1);
+        assert_eq!(cache.cached(&clock, &()), None, "past its lifetime");
+    }
+
+    #[test]
+    fn a_stored_lifetime_is_capped_by_the_caches_own_ttl() {
+        let clock = StepClock::at(0);
+        let cache: CachedToken<()> = CachedToken::new(Duration::from_secs(600));
+
+        // A provider claiming an hour does not get an hour: the TTL is the
+        // ceiling.
+        cache.store(&clock, &(), "long", Duration::from_secs(3_600));
+        clock.advance(600);
+        assert_eq!(cache.cached(&clock, &()), None, "capped at the cache TTL");
+
+        // ...and a shorter provider lifetime wins over the TTL.
+        cache.store(&clock, &(), "short", Duration::from_secs(30));
+        clock.advance(30);
+        assert_eq!(cache.cached(&clock, &()), None, "the provider said 30s");
+
+        // A zero lifetime is never read back.
+        cache.store(&clock, &(), "already-stale", Duration::ZERO);
+        assert_eq!(cache.cached(&clock, &()), None);
+    }
+
+    #[test]
+    fn invalidate_drops_a_stored_token_too() {
+        let clock = StepClock::at(0);
+        let cache: CachedToken<()> = CachedToken::new(Duration::from_mins(50));
+        cache.store(&clock, &(), "ya29.bearer", Duration::from_mins(55));
+        cache.invalidate(&());
+        assert_eq!(
+            cache.cached(&clock, &()),
+            None,
+            "a 401 drops the cache so the next send re-exchanges"
+        );
+    }
+
+    #[test]
+    fn stored_entries_are_pruned_and_bounded_like_minted_ones() {
+        let clock = StepClock::at(0);
+        let cache: CachedToken<String> = CachedToken::new(Duration::from_mins(50));
+        for n in 0..(CachedToken::<String>::CAPACITY * 2) {
+            cache.store(
+                &clock,
+                &format!("account-{n}"),
+                format!("token-{n}"),
+                Duration::from_mins(55),
+            );
+            assert!(
+                cache.len() <= CachedToken::<String>::CAPACITY,
+                "cache grew past its bound at {n}: {}",
+                cache.len()
+            );
+        }
+    }
+
+    /// The two halves share one map: a token stored by the async path is
+    /// returned by `get_or_mint` without re-minting, and vice versa.
+    #[test]
+    fn the_two_halves_share_one_entry() {
+        let clock = StepClock::at(0);
+        let minter = Minter::default();
+        let cache: CachedToken<()> = CachedToken::new(Duration::from_mins(50));
+
+        cache.store(&clock, &(), "exchanged", Duration::from_mins(55));
+        assert_eq!(cache.get_or_mint(&clock, &(), minter.mint()), "exchanged");
+        assert_eq!(minter.count(), 0, "nothing was minted over a live entry");
+
+        cache.invalidate(&());
+        let signed = cache.get_or_mint(&clock, &(), minter.mint());
+        assert_eq!(cache.cached(&clock, &()), Some(signed));
     }
 
     #[test]

@@ -30,12 +30,14 @@ compatibility-doc` and checked in CI for drift. Do not edit by hand.
 | `cratefield-access` | 0.1.1 | 1 | `^0.3` — `>=0.3.0, <0.4.0` |
 | `cratefield-accounts` | 0.1.1 | 1 | `^0.3` — `>=0.3.0, <0.4.0` |
 | `cratefield-adapter-apns` | 0.1.1 | 1 | `^0.3` — `>=0.3.0, <0.4.0` |
+| `cratefield-adapter-fcm` | 0.1.1 | 1 | `^0.3` — `>=0.3.0, <0.4.0` |
 | `cratefield-adapter-postgres` | 0.1.1 | 1 | `^0.3` — `>=0.3.0, <0.4.0` |
 | `cratefield-adapter-resend` | 0.1.1 | 1 | `^0.3` — `>=0.3.0, <0.4.0` |
 | `cratefield-adapter-sqlite` | 0.1.1 | 1 | `^0.3` — `>=0.3.0, <0.4.0` |
 | `cratefield-adapter-sqlite-wasm` | 0.1.1 | 1 | `^0.3` — `>=0.3.0, <0.4.0` |
 | `cratefield-adapter-stripe` | 0.1.1 | 1 | `^0.3` — `>=0.3.0, <0.4.0` |
 | `cratefield-adapter-turnstile` | 0.1.1 | 1 | `^0.3` — `>=0.3.0, <0.4.0` |
+| `cratefield-adapter-webpush` | 0.1.1 | 1 | `^0.3` — `>=0.3.0, <0.4.0` |
 | `cratefield-cli` | 0.1.1 | 1 | `^0.3` — `>=0.3.0, <0.4.0` |
 | `cratefield-connections` | 0.1.1 | 1 | `^0.3` — `>=0.3.0, <0.4.0` |
 | `cratefield-console` | 0.1.1 | 1 | `^0.3` — `>=0.3.0, <0.4.0` |

@@ -39,13 +39,13 @@ them, or their `cargo publish` fails resolving a crate that is not on
 crates.io. It is in the ordered list below in that position; drop its
 `publish = false` at the same time.
 
-`cratefield-adapter-webpush` (issue #180) is in exactly that position and
-inherits the same rule. It carries `publish = false`, and the `cratefield`
-facade depends on it behind an optional `webpush` feature — an **optional**
-dependency still has to resolve on crates.io when the facade is packaged, so
-it must be first-published before the facade's next release, in the list
-below alongside `cratefield-adapter-apns`, and its `publish = false` dropped
-at the same time.
+`cratefield-adapter-fcm` (issue #179) and `cratefield-adapter-webpush`
+(issue #180) inherit the same rule for the same reason. Each carries
+`publish = false`, and the `cratefield` facade depends on both behind optional
+`fcm` and `webpush` features — an **optional** dependency still has to resolve
+on crates.io when the facade is packaged, so `cargo publish -p cratefield`
+fails until each is first-published. Both are in the ordered list below, after
+`cratefield-adapter-apns`; drop each `publish = false` at the same time.
 
 Authentication is **trusted publishing**: the workflow exchanges the
 GitHub Actions OIDC token (`id-token: write`) for a short-lived
@@ -128,6 +128,8 @@ crate exists**, so the very first release of each crate is manual:
    cargo publish -p cratefield-adapter-turnstile
    cargo publish -p cratefield-push-auth      # before adapter-apns
    cargo publish -p cratefield-adapter-apns
+   cargo publish -p cratefield-adapter-fcm    # before the facade
+   cargo publish -p cratefield-adapter-webpush  # before the facade
    cargo publish -p cratefield-secrets
    cargo publish -p cratefield-runtime-cloudflare
    cargo publish -p cratefield-runtime-native
@@ -140,7 +142,7 @@ crate exists**, so the very first release of each crate is manual:
    cargo publish -p cratefield            # the facade: depends on all of them
    ```
 
-   Eighteen crates, and the order is the dependency order: `--dry-run` for
+   Twenty-one crates, and the order is the dependency order: `--dry-run` for
    a crate whose upstream `cratefield-*` dependencies are not on crates.io
    yet resolves against the registry and fails until those are published.
    Regenerate the list with the topological sort in
