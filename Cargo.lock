@@ -855,12 +855,18 @@ dependencies = [
 name = "cratefield-cli"
 version = "0.1.1"
 dependencies = [
+ "base64 0.23.1",
  "clap",
  "cratefield-adapter-postgres",
  "cratefield-adapter-sqlite",
+ "cratefield-adapter-webpush",
  "cratefield-core",
  "cratefield-manifest",
+ "cratefield-push-auth",
  "cratefield-push-wiring",
+ "cratefield-runtime-native",
+ "cratefield-testing",
+ "getrandom 0.4.3",
  "pollster",
  "sea-query",
  "serde",
@@ -869,6 +875,7 @@ dependencies = [
  "tokio",
  "toml 0.8.23",
  "tracing",
+ "zeroize",
 ]
 
 [[package]]
@@ -878,6 +885,7 @@ dependencies = [
  "axum",
  "cratefield-adapter-postgres",
  "cratefield-adapter-sqlite",
+ "cratefield-adapter-webpush",
  "cratefield-cli",
  "cratefield-core",
  "cratefield-push-wiring",

@@ -11,14 +11,15 @@
 //! each with its stable code from [`crate::codes`] — and nothing else,
 //! so an agent can parse the verdict without screen-scraping.
 
+use crate::EnvVars;
 use crate::codes::{CODES, DoctorCodeDef};
 use crate::collect::{LockedMigrationError, verify_locked};
 use crate::lint::banned_tokens;
 use crate::lock::{Lock, read_lock};
 use cratefield_core::lint_card_data;
 use cratefield_core::{
-    Config, HARNESS_API, HARNESS_SIDECARS, Harness, Port, SIDECAR_GATEWAY_SECRET, VentureEnv,
-    deployed_env, env_disagreement, harness_api_mismatch,
+    HARNESS_API, HARNESS_SIDECARS, Harness, Port, SIDECAR_GATEWAY_SECRET, VentureEnv, deployed_env,
+    env_disagreement, harness_api_mismatch,
 };
 use cratefield_push_wiring::PushWiring;
 use std::path::Path;
@@ -85,16 +86,6 @@ impl DoctorReport {
                 })
                 .collect(),
         })
-    }
-}
-
-/// The process environment as a [`Config`], so the doctor reads `ENV` the
-/// same way a deployed runtime does (issue #143).
-struct EnvVars;
-
-impl Config for EnvVars {
-    fn get(&self, key: &str) -> Option<String> {
-        std::env::var(key).ok().filter(|value| !value.is_empty())
     }
 }
 

@@ -57,6 +57,15 @@ it cannot be first-published before `cratefield-adapter-fcm` and
 `cratefield-adapter-webpush`. It is in the ordered list below in that
 position; drop its `publish = false` at the same time.
 
+`fz push` (issue #184) adds three more edges into `cratefield-cli`, and the
+ordered list below already satisfies all of them: it depends on
+`cratefield-push-auth` and `cratefield-adapter-webpush` **not** optionally
+(`fz push vapid keygen` mints the key with the same signer the adapters
+present, and `fz push inspect-subscription` validates with the Web Push
+adapter's own rules), and on `cratefield-runtime-native` behind the optional
+`push-send` feature — which still has to resolve on crates.io when the CLI is
+packaged, for the reason the facade's optional dependencies do.
+
 Authentication is **trusted publishing**: the workflow exchanges the
 GitHub Actions OIDC token (`id-token: write`) for a short-lived
 crates.io token. No `CARGO_REGISTRY_TOKEN` is stored anywhere.

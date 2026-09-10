@@ -297,7 +297,12 @@ fn backing(
 /// Without the `postgres` feature there is no Postgres fixture type; the
 /// second element of the pair is always `None` and asking for the
 /// Postgres dialect fails loudly instead of silently passing.
+// By value, like its `postgres` twin above, which moves the URL out of the
+// dialect. Taking a reference here to satisfy the lint would give the two
+// halves of one `cfg` pair different signatures — and the caller would then
+// compile only with the feature it is meant to be independent of.
 #[cfg(not(feature = "postgres"))]
+#[allow(clippy::needless_pass_by_value)]
 fn backing(
     dialect: Dialect,
     modules: &[Arc<dyn Module>],

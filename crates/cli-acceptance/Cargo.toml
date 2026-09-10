@@ -43,6 +43,12 @@ cratefield-cli = { workspace = true }
 # one reader's table rather than writing them out, so a new variable is
 # guarded the moment it joins the table.
 cratefield-push-wiring = { workspace = true }
+# `fz push vapid keygen`'s round trip (issue #184) is asserted **through the
+# adapter**: the printed public key has to be the one `Vapid` derives from
+# the stored private key, because that is the one presented as `k=` on every
+# send. Re-deriving it in the test would only prove the CLI agrees with
+# itself.
+cratefield-adapter-webpush = { workspace = true }
 sha2 = { workspace = true }
 venture-fixture = { path = "fixture" }
 cratefield-adapter-sqlite = { workspace = true }

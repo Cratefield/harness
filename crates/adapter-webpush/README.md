@@ -141,17 +141,23 @@ The private key is accepted in both forms that circulate: a PKCS#8 PEM, and
 the bare 32-byte P-256 scalar base64url-encoded (what the JavaScript tooling
 calls a VAPID private key).
 
-`fz push vapid keygen` is the intended way to generate one; it lands with the
-`fz push` CLI in **issue #184 and does not exist yet**. Until then:
+`fz push vapid keygen` is the way to generate one (issue #184):
 
 ```sh
-openssl ecparam -genkey -name prime256v1 -noout \
-  | openssl pkcs8 -topk8 -nocrypt          # -> VAPID_PRIVATE_KEY (PKCS#8 PEM)
+fz push vapid keygen --file vapid.key   # prints the public key; writes the private one
+wrangler secret put VAPID_PRIVATE_KEY < vapid.key
 ```
+
+It prints the public key in the form the browser wants and refuses to
+overwrite an existing key without `--force`, because rotating one
+invalidates every existing subscription. `openssl ecparam -genkey -name
+prime256v1 -noout | openssl pkcs8 -topk8 -nocrypt` produces the same thing
+in the PKCS#8 form, which this adapter also accepts.
 
 The matching `applicationServerKey` for the browser is
 `WebPush::public_key()` — serve it to the client rather than writing it down
-twice.
+twice. `fz push inspect-subscription` reports the `aud` this adapter will
+sign for a subscription, which is the first thing to check on a `401`.
 
 ## Usage
 
