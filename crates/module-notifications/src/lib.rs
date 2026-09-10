@@ -137,13 +137,22 @@ const MIGRATION_INBOX: SqlMigration = SqlMigration {
     sql: include_str!("../migrations/sqlite/0003_inbox.sql"),
 };
 
+/// Email as a third channel (#189): where a verified address lives, and
+/// the window the per-category cooldown counts over.
+const MIGRATION_EMAIL_TARGETS: SqlMigration = SqlMigration {
+    id: "0004",
+    name: "email_targets",
+    sql: include_str!("../migrations/sqlite/0004_email_targets.sql"),
+};
+
 /// Every migration this module ships, in order. One array, so a test that
 /// asserts something about the schema reads what actually ships rather
 /// than a second list that can drift from it.
-const SHIPPED_MIGRATIONS: [SqlMigration; 3] = [
+const SHIPPED_MIGRATIONS: [SqlMigration; 4] = [
     MIGRATION_INIT,
     MIGRATION_REHOME_AND_DUE_INDEX,
     MIGRATION_INBOX,
+    MIGRATION_EMAIL_TARGETS,
 ];
 
 /// One notification category the venture declares.
@@ -157,6 +166,8 @@ pub struct Category {
     pub(crate) default_enabled: bool,
     pub(crate) badge: bool,
     pub(crate) in_app: bool,
+    pub(crate) email: bool,
+    pub(crate) subject_template: Option<String>,
 }
 
 impl Category {
@@ -169,6 +180,11 @@ impl Category {
             default_enabled: true,
             badge: false,
             in_app: true,
+            // Off by default, unlike push and in-app. An email is the
+            // most intrusive of the three and the hardest to take back:
+            // a venture opts a category in deliberately.
+            email: false,
+            subject_template: None,
         }
     }
 
@@ -203,6 +219,28 @@ impl Category {
     #[must_use]
     pub fn in_app(mut self, keeps_a_row: bool) -> Self {
         self.in_app = keeps_a_row;
+        self
+    }
+
+    /// Whether this category is emailed to an account with a verified
+    /// address (default **`false`**).
+    ///
+    /// Off by default because email is the most intrusive of the three
+    /// channels and the hardest to take back — a venture opts a category
+    /// in deliberately. The account's own `email` switch is separate and
+    /// is checked as well, and a category that is on here still sends
+    /// nothing to an account with no verified address.
+    #[must_use]
+    pub fn email(mut self, sends_mail: bool) -> Self {
+        self.email = sends_mail;
+        self
+    }
+
+    /// The subject line for this category's mail. Defaults to the
+    /// notification's own title.
+    #[must_use]
+    pub fn subject_template(mut self, subject: impl Into<String>) -> Self {
+        self.subject_template = Some(subject.into());
         self
     }
 
