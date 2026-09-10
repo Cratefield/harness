@@ -31,6 +31,9 @@ serde_json = { workspace = true }
 serde_urlencoded = { workspace = true }
 tracing = { workspace = true }
 thiserror = { workspace = true }
+# `Retry-After` also comes in the HTTP-date form, which needs a parsed
+# calendar date to subtract the `Clock` port's `now` from.
+time = { workspace = true }
 
 [dev-dependencies]
 # Path-only on purpose: `cargo publish` resolves dev-dependencies against

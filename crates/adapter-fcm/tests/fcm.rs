@@ -339,6 +339,31 @@ fn rejects_a_service_account_that_is_missing_a_field() {
 }
 
 #[test]
+fn rejects_a_blank_client_email() {
+    // `client_email` is the assertion's `iss`; an empty one signs `"iss": ""`
+    // and Google refuses it forever. `from_service_account_json` already
+    // catches that, so hand-built credentials must not slip past the same
+    // check and fail on every send instead.
+    for client_email in ["", "   "] {
+        let http = ScriptedHttp::new([]);
+        let error = Fcm::new(
+            http.clone(),
+            StepClock::at(1),
+            FcmCredentials {
+                client_email: client_email.to_owned(),
+                ..creds()
+            },
+        )
+        .expect_err(client_email);
+        assert!(
+            matches!(&error, FcmConfigError::ServiceAccount(m) if m.contains("client_email")),
+            "{client_email:?}: {error}"
+        );
+        assert_eq!(http.count(), 0);
+    }
+}
+
+#[test]
 fn rejects_a_private_key_that_is_not_a_key() {
     let error = Fcm::new(
         ScriptedHttp::happy(),
@@ -580,21 +605,47 @@ fn reuses_the_bearer_token_and_re_exchanges_once_it_expires() {
 }
 
 #[test]
-fn a_failed_token_exchange_is_transient_and_sends_no_message() {
-    let http = ScriptedHttp::new([Reply::new(
-        400,
-        json!({ "error": "invalid_grant", "error_description": "Invalid JWT Signature." })
-            .to_string(),
-    )]);
-    let fcm = adapter(http.clone(), StepClock::at(1));
-    let error = pollster::block_on(fcm.send(&device(), &Notification::new("a", "b"))).unwrap_err();
-    assert!(matches!(error, PushError::Transient { .. }), "{error}");
-    assert!(error.to_string().contains("invalid_grant"), "{error}");
-    assert!(
-        error.to_string().contains("Invalid JWT Signature."),
-        "{error}"
-    );
-    assert_eq!(http.count(), 1, "the message was never attempted");
+fn a_permanently_bad_credential_is_rejected_rather_than_retried_forever() {
+    // A revoked or replaced service-account key answers `invalid_grant`; a
+    // service account without this grant answers `unauthorized_client`.
+    // Neither can ever succeed, so calling them retryable leaves the outbox
+    // retrying a configuration mistake until a human notices.
+    for code in ["invalid_grant", "unauthorized_client"] {
+        let http = ScriptedHttp::new([Reply::new(
+            400,
+            json!({ "error": code, "error_description": "Invalid JWT Signature." }).to_string(),
+        )]);
+        let fcm = adapter(http.clone(), StepClock::at(1));
+        let error =
+            pollster::block_on(fcm.send(&device(), &Notification::new("a", "b"))).unwrap_err();
+        assert!(
+            matches!(&error, PushError::Rejected(m) if m.contains(code)),
+            "{code}: {error:?}"
+        );
+        assert!(
+            error.to_string().contains("Invalid JWT Signature."),
+            "{code}: {error}"
+        );
+        assert_eq!(http.count(), 1, "{code}: the message was never attempted");
+    }
+}
+
+#[test]
+fn a_token_endpoint_that_is_merely_unwell_stays_transient_and_sends_no_message() {
+    for reply in [
+        Reply::new(
+            503,
+            json!({ "error": "temporarily_unavailable" }).to_string(),
+        ),
+        Reply::new(500, "upstream boom"),
+    ] {
+        let http = ScriptedHttp::new([reply]);
+        let fcm = adapter(http.clone(), StepClock::at(1));
+        let error =
+            pollster::block_on(fcm.send(&device(), &Notification::new("a", "b"))).unwrap_err();
+        assert!(matches!(error, PushError::Transient { .. }), "{error}");
+        assert_eq!(http.count(), 1, "the message was never attempted");
+    }
 }
 
 #[test]
@@ -611,6 +662,47 @@ fn a_token_response_without_an_expiry_is_used_but_not_cached() {
     pollster::block_on(fcm.send(&device(), &Notification::new("a", "b"))).unwrap();
     pollster::block_on(fcm.send(&device(), &Notification::new("a", "b"))).unwrap();
     assert_eq!(http.count(), 4);
+    assert_eq!(http.remaining(), 0);
+}
+
+#[test]
+fn an_expires_in_sent_as_a_string_is_still_a_lifetime() {
+    // RFC 6749 types `expires_in` as a number and Google sends one, but some
+    // proxies and OAuth servers quote every value. Refusing the reply would
+    // throw a working token away over its packaging.
+    let clock = StepClock::at(0);
+    let http = ScriptedHttp::new([
+        Reply::new(
+            200,
+            json!({ "access_token": "ya29.quoted", "expires_in": "3599" }).to_string(),
+        ),
+        send_reply(),
+        send_reply(),
+    ]);
+    let fcm = adapter(http.clone(), clock.clone());
+    pollster::block_on(fcm.send(&device(), &Notification::new("a", "b"))).unwrap();
+    clock.advance(3_298); // still inside the five-minute margin
+    pollster::block_on(fcm.send(&device(), &Notification::new("a", "b"))).unwrap();
+    assert_eq!(
+        http.count(),
+        3,
+        "one exchange and two sends: the quoted lifetime was honoured"
+    );
+    assert_eq!(http.remaining(), 0);
+
+    // ...and a string that is not a number at all reads as "no stated
+    // lifetime", the same as a reply with no `expires_in`: the token still
+    // works, it is just exchanged again next time.
+    let http = ScriptedHttp::new([
+        Reply::new(
+            200,
+            json!({ "access_token": "ya29.vague", "expires_in": "soon" }).to_string(),
+        ),
+        send_reply(),
+    ]);
+    let fcm = adapter(http.clone(), StepClock::at(1));
+    pollster::block_on(fcm.send(&device(), &Notification::new("a", "b"))).unwrap();
+    assert_eq!(http.count(), 2);
     assert_eq!(http.remaining(), 0);
 }
 
@@ -703,6 +795,40 @@ fn maps_unregistered_to_the_prune_signal() {
 }
 
 #[test]
+fn only_the_unregistered_code_prunes_a_token_never_a_bare_404() {
+    // `Unregistered` instructs the caller to delete the device token. A 404
+    // *without* the code is what FCM answers for a project that does not
+    // exist — a mistyped or deleted `FCM_SERVICE_ACCOUNT_JSON` — and every
+    // send gets one, so pruning on it would delete the venture's whole
+    // device registry from a configuration typo.
+    let not_found = json!({
+        "error": {
+            "code": 404,
+            "message": "Requested entity was not found.",
+            "status": "NOT_FOUND",
+        }
+    })
+    .to_string();
+    for body in [not_found.as_str(), "", "<html>Not Found</html>"] {
+        let http = ScriptedHttp::failing(Reply::new(404, body));
+        let fcm = adapter(http, StepClock::at(1));
+        let error =
+            pollster::block_on(fcm.send(&device(), &Notification::new("a", "b"))).unwrap_err();
+        assert!(
+            matches!(&error, PushError::Rejected(m) if m.contains("404")),
+            "{body:?}: a bare 404 must not prune: {error:?}"
+        );
+    }
+
+    // ...and the explicit code still does prune, which is the whole point of
+    // keying the mapping off the code rather than the status.
+    let http = ScriptedHttp::failing(fcm_error(404, "UNREGISTERED"));
+    let fcm = adapter(http, StepClock::at(1));
+    let error = pollster::block_on(fcm.send(&device(), &Notification::new("a", "b"))).unwrap_err();
+    assert!(matches!(error, PushError::Unregistered), "{error}");
+}
+
+#[test]
 fn maps_every_rejected_error_code() {
     // Status *and* code, because the status alone is ambiguous:
     // THIRD_PARTY_AUTH_ERROR arrives as a 401, which is otherwise the
@@ -746,19 +872,50 @@ fn maps_every_retryable_error_code_and_honours_retry_after() {
         );
     }
 
-    // No header, no delay — and an HTTP-date form is not parsed, which just
-    // means "retry on your own schedule".
-    for reply in [
-        fcm_error(503, "UNAVAILABLE"),
-        fcm_error(503, "UNAVAILABLE").after("Wed, 21 Oct 2026 07:28:00 GMT"),
-    ] {
-        let http = ScriptedHttp::failing(reply);
-        let fcm = adapter(http, StepClock::at(1));
-        let error =
-            pollster::block_on(fcm.send(&device(), &Notification::new("a", "b"))).unwrap_err();
-        assert!(matches!(error, PushError::Transient { .. }), "{error}");
-        assert_eq!(error.retry_after(), None);
-    }
+    // No header, no delay.
+    let http = ScriptedHttp::failing(fcm_error(503, "UNAVAILABLE"));
+    let fcm = adapter(http, StepClock::at(1));
+    let error = pollster::block_on(fcm.send(&device(), &Notification::new("a", "b"))).unwrap_err();
+    assert!(matches!(error, PushError::Transient { .. }), "{error}");
+    assert_eq!(error.retry_after(), None);
+}
+
+#[test]
+fn retry_after_is_read_in_both_the_seconds_and_the_http_date_forms() {
+    // RFC 9110 §10.2.3 allows both forms and CDNs in front of Google emit the
+    // date one. Ignoring it turns "come back in an hour" into an immediate
+    // retry — and the port hands the adapter a `Clock`, so there is nothing
+    // to stop it resolving a date.
+    let seconds_before = 784_111_747; // 1994-11-06T08:49:07Z, thirty seconds early
+    let date = "Sun, 06 Nov 1994 08:49:37 GMT";
+
+    let http = ScriptedHttp::failing(fcm_error(503, "UNAVAILABLE").after(date));
+    let fcm = adapter(http, StepClock::at(seconds_before));
+    let error = pollster::block_on(fcm.send(&device(), &Notification::new("a", "b"))).unwrap_err();
+    assert_eq!(error.retry_after(), Some(Duration::from_secs(30)));
+
+    // A date already past means "retry now", not "no delay stated".
+    let http = ScriptedHttp::failing(fcm_error(503, "UNAVAILABLE").after(date));
+    let fcm = adapter(http, StepClock::at(seconds_before + 600));
+    let error = pollster::block_on(fcm.send(&device(), &Notification::new("a", "b"))).unwrap_err();
+    assert_eq!(error.retry_after(), Some(Duration::ZERO));
+
+    // Something that is neither form is ignored rather than guessed at.
+    let http = ScriptedHttp::failing(fcm_error(503, "UNAVAILABLE").after("soon"));
+    let fcm = adapter(http, StepClock::at(seconds_before));
+    let error = pollster::block_on(fcm.send(&device(), &Notification::new("a", "b"))).unwrap_err();
+    assert!(matches!(error, PushError::Transient { .. }), "{error}");
+    assert_eq!(error.retry_after(), None);
+
+    // The token endpoint's own back-off is read the same way.
+    let http = ScriptedHttp::new([Reply::new(
+        503,
+        json!({ "error": "temporarily_unavailable" }).to_string(),
+    )
+    .after(date)]);
+    let fcm = adapter(http, StepClock::at(seconds_before));
+    let error = pollster::block_on(fcm.send(&device(), &Notification::new("a", "b"))).unwrap_err();
+    assert_eq!(error.retry_after(), Some(Duration::from_secs(30)));
 }
 
 #[test]
@@ -767,7 +924,9 @@ fn falls_back_to_the_http_status_when_the_body_carries_no_error_code() {
     // not an FCM error body at all.
     type Expectation = fn(&PushError) -> bool;
     let cases: [(u16, &str, Expectation); 4] = [
-        (404, "", |e| matches!(e, PushError::Unregistered)),
+        // A 404 with no `UNREGISTERED` code is a rejection, never a prune:
+        // see `only_the_unregistered_code_prunes_a_token_never_a_bare_404`.
+        (404, "", |e| matches!(e, PushError::Rejected(_))),
         (400, "<html>bad request</html>", |e| {
             matches!(e, PushError::Rejected(_))
         }),
@@ -795,6 +954,36 @@ fn an_unknown_error_code_still_maps_by_status_and_keeps_the_code() {
     assert!(
         matches!(&error, PushError::Transient { message, .. } if message.contains("SOMETHING_NEW")),
         "{error:?}"
+    );
+}
+
+#[test]
+fn the_error_message_reaches_the_log_alongside_the_code() {
+    // `errorCode` says *what* went wrong; `message` is the only field that
+    // says *which value* did. A log line carrying only INVALID_ARGUMENT
+    // cannot be acted on, so both travel.
+    let http = ScriptedHttp::failing(Reply::new(
+        400,
+        json!({
+            "error": {
+                "code": 400,
+                "message": "Invalid value at 'message.android.ttl' (TYPE_DURATION), \"3600\"",
+                "status": "INVALID_ARGUMENT",
+                "details": [{
+                    "@type": "type.googleapis.com/google.firebase.fcm.v1.FcmError",
+                    "errorCode": "INVALID_ARGUMENT",
+                }],
+            }
+        })
+        .to_string(),
+    ));
+    let fcm = adapter(http, StepClock::at(1));
+    let error = pollster::block_on(fcm.send(&device(), &Notification::new("a", "b"))).unwrap_err();
+    let message = error.to_string();
+    assert!(message.contains("INVALID_ARGUMENT"), "{message}");
+    assert!(
+        message.contains("message.android.ttl"),
+        "the field naming the bad value must reach the log: {message}"
     );
 }
 
@@ -840,7 +1029,10 @@ fn the_v1_message_is_this_exact_json() {
 
     let mut notification = Notification::new("Room starting", "Yoga in 10 min");
     notification.category = Some("sessions".to_owned());
-    notification.thread_id = Some("room-42".to_owned());
+    // Deliberately different from `collapse_id` below: with both set to the
+    // same string the golden could not show the two diverging, and they do —
+    // `collapse_id` becomes `collapse_key` and `thread_id` becomes nothing.
+    notification.thread_id = Some("thread-7".to_owned());
     notification.data = json!({
         "room_id": "42",
         "seats": 3,
@@ -880,7 +1072,6 @@ fn the_v1_message_is_this_exact_json() {
                     "collapse_key": "room-42",
                     "notification": {
                         "channel_id": "sessions",
-                        "tag": "room-42",
                         "click_action": "https://example.test/rooms/42",
                         "title_loc_key": "ROOM_STARTING",
                         "title_loc_args": ["Yoga"],
@@ -899,6 +1090,37 @@ fn the_v1_message_is_this_exact_json() {
                 }
             }
         })
+    );
+}
+
+#[test]
+fn a_thread_id_is_never_sent_as_a_replacing_tag() {
+    // `android.notification.tag` *replaces* whatever is already in the
+    // drawer. The port's `thread_id` means "group these in the UI", which is
+    // what APNs `thread-id` and the web Notification API's `tag` do — so
+    // mapping it to FCM's `tag` turned five notifications in one thread into
+    // one, four of them destroyed. FCM v1 has no grouping field, so
+    // `thread_id` travels nowhere; `collapse_id` is the field that does mean
+    // coalescing, and it still maps.
+    let http = ScriptedHttp::happy();
+    let fcm = adapter(http.clone(), StepClock::at(1));
+    let mut notification = Notification::new("a", "b");
+    notification.thread_id = Some("thread-7".to_owned());
+    notification.collapse_id = Some("collapse-9".to_owned());
+    pollster::block_on(fcm.send(&device(), &notification)).unwrap();
+
+    let body = http.nth(1, Recorded::json);
+    assert!(
+        body["message"]["android"]["notification"].is_null(),
+        "a thread id alone leaves Android nothing to say: {body}"
+    );
+    assert_eq!(
+        body["message"]["android"]["collapse_key"], "collapse-9",
+        "the field that does mean coalescing still maps"
+    );
+    assert!(
+        !body.to_string().contains("thread-7"),
+        "the thread id must not reach the wire in any field: {body}"
     );
 }
 
@@ -1130,4 +1352,17 @@ fn delivered_carries_the_message_name_and_a_nameless_success_still_delivers() {
     let fcm = adapter(http, StepClock::at(1));
     let outcome = pollster::block_on(fcm.send(&device(), &Notification::new("a", "b"))).unwrap();
     assert_eq!(outcome, PushOutcome::Delivered { id: None });
+}
+
+// ---------------------------------------------------------------------------
+// The wasm claim
+
+#[test]
+fn the_dependency_tree_stays_wasm_safe() {
+    // The crate's headline is that the same adapter runs on a Workers
+    // isolate. No venture in this repo enables the `fcm` feature, so the
+    // example-venture build in CI does not compile this crate at all and a
+    // dependency that cannot reach wasm32 would go unnoticed until a venture
+    // wired it up. The same guard nine other crates carry (ADR 0001).
+    cratefield_testing::assert_wasm_safe_deps(env!("CARGO_PKG_NAME"));
 }

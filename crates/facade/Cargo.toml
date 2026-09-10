@@ -33,8 +33,9 @@ fcm = ["dep:cratefield-adapter-fcm"]
 stripe = ["dep:cratefield-adapter-stripe"]
 
 # The push adapters' provider tokens (ES256 for APNs and VAPID, RS256 for
-# Google service accounts). Pulled in by `apns` already; a feature of its own
-# for a venture that mints a VAPID token without an APNs adapter.
+# Google service accounts). Pulled in by `apns` and by `fcm` already; a
+# feature of its own for a venture that mints a VAPID token without either
+# adapter.
 push-auth = ["dep:cratefield-push-auth"]
 
 # Everything else that is optional.

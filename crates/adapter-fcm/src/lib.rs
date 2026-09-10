@@ -50,10 +50,11 @@ use cratefield_core::{
     Clock, HttpClient, Notification, Priority, Push, PushError, PushOutcome, Recipient, ttl_secs,
 };
 use cratefield_push_auth::{CachedToken, Rs256Signer};
-use http::header::{AUTHORIZATION, CONTENT_TYPE};
+use http::header::{AUTHORIZATION, CONTENT_TYPE, RETRY_AFTER};
 use http::{HeaderMap, Request, StatusCode};
-use serde::Deserialize;
+use serde::{Deserialize, Deserializer};
 use serde_json::{Map, Value, json};
+use time::OffsetDateTime;
 
 /// The ceiling on how long an exchanged bearer token is reused. Google issues
 /// them for an hour; the adapter keeps `expires_in` less
@@ -101,6 +102,14 @@ const APNS_AUTH_ERROR: &str = "APNS_AUTH_ERROR";
 const QUOTA_EXCEEDED: &str = "QUOTA_EXCEEDED";
 const UNAVAILABLE: &str = "UNAVAILABLE";
 const INTERNAL: &str = "INTERNAL";
+
+// The RFC 6749 §5.2 `error` codes the token endpoint answers with that no
+// amount of retrying can fix: the assertion was signed with a key Google no
+// longer accepts, or the service account is not allowed this grant. Both are
+// configuration, and an outbox retrying them forever is worse than one
+// rejection in the log.
+const INVALID_GRANT: &str = "invalid_grant";
+const UNAUTHORIZED_CLIENT: &str = "unauthorized_client";
 
 /// The credentials a venture reads from its secrets to reach FCM.
 ///
@@ -180,8 +189,31 @@ impl std::fmt::Debug for FcmCredentials {
 #[derive(Deserialize)]
 struct TokenResponse {
     access_token: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "lenient_seconds")]
     expires_in: u64,
+}
+
+/// `expires_in` as either a JSON number or a JSON string.
+///
+/// RFC 6749 §5.1 types it as a number and Google sends one, but the string
+/// form is common enough in the wild — some proxies and some OAuth servers
+/// quote every value — that rejecting it would throw away a working token
+/// over its packaging. Anything that is neither reads as "no stated
+/// lifetime", which the struct already treats as a usable token that is
+/// simply not cached, rather than as a failed exchange.
+fn lenient_seconds<'de, D: Deserializer<'de>>(deserializer: D) -> Result<u64, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Seconds {
+        Number(u64),
+        Text(String),
+    }
+
+    Ok(match Option::<Seconds>::deserialize(deserializer)? {
+        Some(Seconds::Number(seconds)) => seconds,
+        Some(Seconds::Text(text)) => text.trim().parse().unwrap_or(0),
+        None => 0,
+    })
 }
 
 /// Building an [`Fcm`] adapter failed.
@@ -231,6 +263,10 @@ impl Fcm {
     ///
     /// # Errors
     ///
+    /// - [`FcmConfigError::ServiceAccount`] if `client_email` is blank. It is
+    ///   the assertion's `iss`, and an empty one signs `"iss": ""`, which
+    ///   Google refuses forever — a failure worth naming at construction
+    ///   rather than on every send.
     /// - [`FcmConfigError::Key`] if `private_key_pem` is not an RSA private
     ///   key (PKCS#8 or PKCS#1 PEM).
     /// - [`FcmConfigError::ProjectId`] if the project id is empty or carries
@@ -241,6 +277,13 @@ impl Fcm {
         clock: Arc<dyn Clock>,
         creds: FcmCredentials,
     ) -> Result<Self, FcmConfigError> {
+        if creds.client_email.trim().is_empty() {
+            // The same defect `from_service_account_json` reports, reported
+            // the same way: hand-built credentials get the check too.
+            return Err(FcmConfigError::ServiceAccount(
+                "missing \"client_email\"".to_owned(),
+            ));
+        }
         if !is_wellformed_project_id(&creds.project_id) {
             return Err(FcmConfigError::ProjectId(format!(
                 "{:?} is not a project id",
@@ -380,19 +423,29 @@ impl Live {
 
         let status = response.status();
         if !status.is_success() {
-            // Every failure here is the adapter's own credential, not the
-            // caller's notification, so it is retryable the way an expired
-            // APNs provider token is: clock skew and a briefly unavailable
-            // token endpoint both land here, and a permanently broken key
-            // shows up in the logs rather than by discarding the send.
-            return Err(PushError::transient_after(
-                format!(
-                    "fcm token exchange {}: {}",
-                    status.as_u16(),
-                    oauth_error(response.body())
+            let (code, detail) = oauth_error(response.body());
+            let message = format!("fcm token exchange {}: {detail}", status.as_u16());
+            // A failure here is the adapter's own credential rather than the
+            // caller's notification, but that does not make all of them
+            // retryable. `invalid_grant` and `unauthorized_client` are
+            // permanent — a revoked or replaced service-account key, or an
+            // account without the grant — and retrying them forever turns a
+            // configuration mistake into an outbox that never drains. A
+            // briefly unavailable token endpoint (5xx,
+            // `temporarily_unavailable`) is the retryable case and stays
+            // retryable, as does anything unrecognised.
+            //
+            // Clock skew also surfaces as `invalid_grant`, which is why the
+            // assertion's `iat` comes from the [`Clock`] port rather than a
+            // wall clock the isolate cannot trust: a runtime whose clock is
+            // right cannot land here by accident.
+            return Err(match code.as_deref() {
+                Some(INVALID_GRANT | UNAUTHORIZED_CLIENT) => PushError::Rejected(message),
+                _ => PushError::transient_after(
+                    message,
+                    retry_after(response.headers(), self.clock.as_ref()),
                 ),
-                retry_after(response.headers()),
-            ));
+            });
         }
 
         let token: TokenResponse = serde_json::from_slice(response.body())
@@ -482,15 +535,22 @@ fn build_data(notification: &Notification) -> Map<String, Value> {
 
 /// `message.android.notification`: the fields that describe how Android shows
 /// an alert. Absent entirely on a silent message.
+///
+/// `thread_id` is **not** mapped. The port defines it as "groups related
+/// notifications in the UI", which APNs (`thread-id`) and the web
+/// Notification API do; FCM's `android.notification.tag` is not that. A tag
+/// *replaces* the notification already in the drawer, so five messages
+/// sharing a `thread_id` would show as five grouped on iOS and as one on
+/// Android, with four silently destroyed. Android grouping is a client-side
+/// call (`NotificationCompat.Builder.setGroup`) with no field in the HTTP v1
+/// message, and `collapse_id` already carries the caller's coalescing intent
+/// to `android.collapse_key`.
 fn build_android_notification(notification: &Notification) -> Map<String, Value> {
     let mut block = Map::new();
     if let Some(category) = &notification.category {
         // FCM's channel_id is the Android notification channel, which is what
         // a category names on this platform.
         block.insert("channel_id".to_owned(), json!(category));
-    }
-    if let Some(thread_id) = &notification.thread_id {
-        block.insert("tag".to_owned(), json!(thread_id));
     }
     if let Some(url) = &notification.url {
         block.insert("click_action".to_owned(), json!(url));
@@ -568,67 +628,124 @@ fn build_message(registration_token: &str, notification: &Notification) -> Value
     json!({ "message": Value::Object(message) })
 }
 
-/// The `errorCode` of the `google.firebase.fcm.v1.FcmError` detail, which is
-/// the only field in an FCM error body that identifies the failure precisely.
-fn fcm_error_code(body: &[u8]) -> Option<String> {
-    let value: Value = serde_json::from_slice(body).ok()?;
-    value
-        .get("error")?
-        .get("details")?
-        .as_array()?
-        .iter()
-        .find_map(|detail| detail.get("errorCode")?.as_str().map(str::to_owned))
+/// What an FCM error body said, read **once** per failed send: the body is
+/// parsed a single time and both the code the mapping keys off and the text
+/// the log carries come out of that one parse.
+struct FcmFailure {
+    /// The `errorCode` of the `google.firebase.fcm.v1.FcmError` detail, which
+    /// is the only field in an FCM error body that identifies the failure
+    /// precisely.
+    code: Option<String>,
+    /// A human-readable detail: `errorCode: message` where there is a code,
+    /// else `error.status`, else `error.message`.
+    detail: String,
 }
 
-/// A human-readable detail for an FCM error body: the `errorCode` where there
-/// is one, else `error.status`, else `error.message`.
-fn fcm_detail(body: &[u8], code: Option<&str>) -> String {
-    if let Some(code) = code {
-        return code.to_owned();
+impl FcmFailure {
+    fn parse(body: &[u8]) -> Self {
+        let Ok(value) = serde_json::from_slice::<Value>(body) else {
+            return Self::opaque();
+        };
+        let Some(error) = value.get("error") else {
+            return Self::opaque();
+        };
+        let code = error
+            .get("details")
+            .and_then(Value::as_array)
+            .and_then(|details| {
+                details
+                    .iter()
+                    .find_map(|detail| detail.get("errorCode")?.as_str().map(str::to_owned))
+            });
+        let field = |name| error.get(name).and_then(Value::as_str);
+        // Both, where there are both: `errorCode` says *what* went wrong and
+        // `message` says *which value* did — "Invalid value at
+        // 'message.android.ttl'". Keeping only the code throws away the one
+        // part of the body that names the field, which is the part a reader
+        // of the log needs to fix it.
+        let detail = match (code.as_deref(), field("message")) {
+            (Some(code), Some(message)) => format!("{code}: {message}"),
+            (Some(code), None) => code.to_owned(),
+            (None, message) => field("status").or(message).unwrap_or(NO_DETAIL).to_owned(),
+        };
+        Self { code, detail }
     }
-    let Ok(value) = serde_json::from_slice::<Value>(body) else {
-        return "no error detail".to_owned();
-    };
-    let Some(error) = value.get("error") else {
-        return "no error detail".to_owned();
-    };
-    error
-        .get("status")
-        .and_then(Value::as_str)
-        .or_else(|| error.get("message").and_then(Value::as_str))
-        .unwrap_or("no error detail")
-        .to_owned()
+
+    /// A body that is not an FCM error at all — a proxy's HTML, an empty
+    /// 502, a load balancer's plain text.
+    fn opaque() -> Self {
+        Self {
+            code: None,
+            detail: NO_DETAIL.to_owned(),
+        }
+    }
 }
+
+/// What an error body that says nothing usable is reported as.
+const NO_DETAIL: &str = "no error detail";
 
 /// The `error`/`error_description` of an OAuth 2.0 error body (RFC 6749
 /// §5.2), which is what the token endpoint returns rather than an FCM error.
-fn oauth_error(body: &[u8]) -> String {
+/// The code is returned alongside the text because it, not the HTTP status,
+/// is what separates a permanently bad credential from a bad moment.
+fn oauth_error(body: &[u8]) -> (Option<String>, String) {
     let Ok(value) = serde_json::from_slice::<Value>(body) else {
-        return "no error detail".to_owned();
+        return (None, NO_DETAIL.to_owned());
     };
-    let code = value.get("error").and_then(Value::as_str);
+    let code = value
+        .get("error")
+        .and_then(Value::as_str)
+        .map(str::to_owned);
     let description = value.get("error_description").and_then(Value::as_str);
-    match (code, description) {
+    let detail = match (code.as_deref(), description) {
         (Some(code), Some(description)) => format!("{code}: {description}"),
         (Some(code), None) => code.to_owned(),
         (None, Some(description)) => description.to_owned(),
-        (None, None) => "no error detail".to_owned(),
-    }
+        (None, None) => NO_DETAIL.to_owned(),
+    };
+    (code, detail)
 }
 
-/// `Retry-After` as a duration, so the outbox can honour it. Only the
-/// delta-seconds form is read; the HTTP-date form needs a parsed clock the
-/// port does not promise, and its absence just means "retry on your own
-/// schedule".
-fn retry_after(headers: &HeaderMap) -> Option<Duration> {
-    headers
-        .get("retry-after")?
-        .to_str()
-        .ok()?
-        .trim()
-        .parse::<u64>()
+/// `Retry-After` (RFC 9110 §10.2.3) as a duration, so the outbox can honour
+/// it.
+///
+/// Both forms are read. The delta-seconds form is the common one; the
+/// HTTP-date form is legal, is what CDNs in front of Google's endpoints
+/// emit, and silently ignoring it would turn a "come back in an hour" into
+/// an immediate retry. The date is resolved against the [`Clock`] port —
+/// the only clock this workspace may read — and a date already in the past
+/// becomes [`Duration::ZERO`] ("retry now") rather than being discarded.
+fn retry_after(headers: &HeaderMap, clock: &dyn Clock) -> Option<Duration> {
+    let value = headers.get(RETRY_AFTER)?.to_str().ok()?.trim();
+    if let Ok(seconds) = value.parse::<u64>() {
+        return Some(Duration::from_secs(seconds));
+    }
+    let when = parse_http_date(value)?;
+    let delta = when - clock.now();
+    if delta.is_negative() {
+        return Some(Duration::ZERO);
+    }
+    Duration::try_from(delta).ok()
+}
+
+/// An IMF-fixdate, the one form RFC 9110 §5.6.7 allows a sender to generate:
+/// `Sun, 06 Nov 1994 08:49:37 GMT`.
+///
+/// The two obsolete forms (RFC 850 and asctime) are not parsed. A recipient
+/// is required to accept them, but nothing in front of FCM emits them, and
+/// mis-parsing a two-digit year is worse than falling back to "retry on your
+/// own schedule".
+fn parse_http_date(value: &str) -> Option<OffsetDateTime> {
+    // Version 2 of the format-description syntax, pinned explicitly:
+    // `parse` without a version is deprecated precisely because the
+    // unversioned form's meaning can shift under a `time` upgrade.
+    let format = time::format_description::parse_borrowed::<2>(
+        "[weekday repr:short], [day] [month repr:short] [year] [hour]:[minute]:[second] GMT",
+    )
+    .ok()?;
+    time::PrimitiveDateTime::parse(value, &format)
         .ok()
-        .map(Duration::from_secs)
+        .map(time::PrimitiveDateTime::assume_utc)
 }
 
 /// Maps an FCM failure to the port's error.
@@ -639,14 +756,9 @@ fn retry_after(headers: &HeaderMap) -> Option<Duration> {
 /// the missing-APNs-credential case, which is a rejection and not an auth
 /// failure of ours — arrives as a `401`. Status is the fallback for a body
 /// with no recognisable detail, which is what a proxy or an outage returns.
-fn map_error(
-    status: StatusCode,
-    code: Option<&str>,
-    detail: &str,
-    retry_after: Option<Duration>,
-) -> PushError {
-    let message = format!("fcm {}: {detail}", status.as_u16());
-    match code {
+fn map_error(status: StatusCode, failure: &FcmFailure, retry_after: Option<Duration>) -> PushError {
+    let message = format!("fcm {}: {}", status.as_u16(), failure.detail);
+    match failure.code.as_deref() {
         Some(UNREGISTERED) => PushError::Unregistered,
         Some(INVALID_ARGUMENT | SENDER_ID_MISMATCH | THIRD_PARTY_AUTH_ERROR | APNS_AUTH_ERROR) => {
             PushError::Rejected(message)
@@ -661,11 +773,16 @@ fn map_error(
 }
 
 /// The fallback mapping, on HTTP status alone.
+///
+/// A `404` is **not** a prune signal here. `PushError::Unregistered` tells
+/// the caller to delete the device token, and only the explicit
+/// `UNREGISTERED` code means that. A bare `404` is what FCM answers for a
+/// project that does not exist — point `FCM_SERVICE_ACCOUNT_JSON` at a
+/// deleted or mistyped project and *every* send gets one — so treating it as
+/// a prune would delete a venture's whole device registry, one send at a
+/// time, from a configuration typo. Rejected is the honest answer: nothing
+/// about the recipient is known to be wrong.
 fn map_by_status(status: StatusCode, message: &str, retry_after: Option<Duration>) -> PushError {
-    if status == StatusCode::NOT_FOUND {
-        // v1 answers a registration token it does not know with a plain 404.
-        return PushError::Unregistered;
-    }
     if status == StatusCode::TOO_MANY_REQUESTS || status.is_server_error() {
         return PushError::transient_after(message.to_owned(), retry_after);
     }
@@ -716,13 +833,15 @@ impl Push for Fcm {
                 return Ok(PushOutcome::Delivered { id });
             }
 
-            let code = fcm_error_code(response.body());
+            // The error body is read once, here: both the code the mapping
+            // keys off and the text the log carries come out of that parse.
+            let failure = FcmFailure::parse(response.body());
             // `THIRD_PARTY_AUTH_ERROR` is also a 401, and re-minting our own
             // token cannot fix a missing APNs key in the Firebase project —
             // so it is excluded here and rejected below.
             let ours = status == StatusCode::UNAUTHORIZED
                 && !matches!(
-                    code.as_deref(),
+                    failure.code.as_deref(),
                     Some(THIRD_PARTY_AUTH_ERROR | APNS_AUTH_ERROR)
                 );
             if ours && !reauthenticated {
@@ -732,8 +851,8 @@ impl Push for Fcm {
                 continue;
             }
 
-            let detail = fcm_detail(response.body(), code.as_deref());
-            let retry_after = retry_after(response.headers());
+            let detail = &failure.detail;
+            let retry_after = retry_after(response.headers(), live.clock.as_ref());
             if ours {
                 // A freshly exchanged token was refused too. Retryable, like
                 // the APNs expired-provider-token path: clock skew and a
@@ -744,7 +863,7 @@ impl Push for Fcm {
                     retry_after,
                 ));
             }
-            return Err(map_error(status, code.as_deref(), &detail, retry_after));
+            return Err(map_error(status, &failure, retry_after));
         }
     }
 }

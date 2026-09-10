@@ -70,8 +70,14 @@ a write:
 ```rust,ignore
 if let Some(token) = cache.cached(clock.as_ref(), &()) { return Ok(token); }
 let (token, expires_in) = exchange_the_signed_assertion().await?;
-// Reused for what the provider stated, capped by the cache's own TTL.
-cache.store(clock.as_ref(), &(), &token, expires_in - Duration::from_secs(300));
+// Reused for what the provider stated less a safety margin, capped by the
+// cache's own TTL. `saturating_sub`, not `-`: `Duration` subtraction panics
+// on underflow, so a provider that states a lifetime shorter than the margin
+// (`expires_in: 60`) would take the send down instead of simply not caching.
+// Do the same arithmetic inside a `get_or_mint` closure and it is worse
+// still — that closure runs while the cache's mutex is held, so the panic
+// poisons it and every later call panics too.
+cache.store(clock.as_ref(), &(), &token, expires_in.saturating_sub(Duration::from_secs(300)));
 ```
 
 Two sends racing a cold cache then cost one extra exchange, which Google is

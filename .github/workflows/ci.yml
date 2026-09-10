@@ -165,6 +165,11 @@ jobs:
       # long as an adapter in that venture uses it.
       - name: Build cratefield-push-auth to wasm
         run: cargo build --target wasm32-unknown-unknown -p cratefield-push-auth
+      # Same reason for the FCM adapter (issue #179): its headline is that it
+      # runs on an isolate, and no venture in this repo enables the `fcm`
+      # feature, so the venture build below never compiles it.
+      - name: Build cratefield-adapter-fcm to wasm
+        run: cargo build --target wasm32-unknown-unknown -p cratefield-adapter-fcm
       - name: Build example venture to wasm
         working-directory: examples/venture
         run: worker-build --release

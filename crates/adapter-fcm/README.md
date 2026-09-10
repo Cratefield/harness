@@ -36,7 +36,7 @@ in front, which dispatches by variant (ADR 0015), so venture code holds one
 
 Google-free Android is **not** this adapter. A handset without Play services
 reaches its app over UnifiedPush, which is Web Push (RFC 8030) and is served by
-`cratefield-adapter-web-push`.
+`cratefield-adapter-webpush`.
 
 `Notification` is transport-neutral, so some fields are mapped and some are
 dropped, deliberately:
@@ -50,7 +50,7 @@ dropped, deliberately:
 | `ttl` | `message.android.ttl` as a duration string (`"3600s"`), not the absolute epoch APNs takes. A sub-second TTL rounds **up** to `"1s"`, never down to `"0s"` ("deliver now or drop") |
 | `collapse_id` | `message.android.collapse_key` |
 | `category` | `message.android.notification.channel_id` — the Android notification channel is what a category names on this platform |
-| `thread_id` | `message.android.notification.tag` |
+| `thread_id` | **dropped** — the port means "group these in the UI", which APNs and the web Notification API both do. FCM HTTP v1 has no grouping field: `android.notification.tag` *replaces* the notification already in the drawer, so mapping `thread_id` to it would show five notifications in a thread as one, four destroyed. Android grouping is a client-side call (`NotificationCompat.Builder.setGroup`); use `collapse_id` if coalescing is what you meant |
 | `url` | `message.android.notification.click_action`, **and** a `"url"` key in `message.data`: a silent message has no notification block to hold `click_action`, and the data key is what the APNs and Web Push adapters use too. The typed field wins over a `"url"` in `data`; with no `url` set, `data`'s own `url` is left alone |
 | `icon` | a URL (`https://…`) is `message.notification.image`, which the device downloads; anything else is `message.android.notification.icon`, which names a drawable resource **inside the app**. Putting either in the other's place shows nothing at all |
 | `loc` | `message.android.notification.title_loc_key` / `title_loc_args` / `body_loc_key` / `body_loc_args`. Args are only emitted alongside their key — they are substitutions for it |
@@ -136,17 +136,23 @@ let runtime = cratefield_runtime_cloudflare::Cloudflare::new().push_arc(push);
 
 - `PushOutcome::Delivered { id }` on `200` — the `name` FCM assigned
   (`projects/*/messages/*`).
-- `PushError::Unregistered` on `UNREGISTERED` (`404`) — the registration token
-  is dead; **delete it**.
+- `PushError::Unregistered` **only** on the explicit `UNREGISTERED` code
+  (`404`) — the registration token is dead; **delete it**.
 - `PushError::Rejected(..)` on `INVALID_ARGUMENT` (`400`), `SENDER_ID_MISMATCH`
   (`403`) and `THIRD_PARTY_AUTH_ERROR` (`401` — the Firebase project's own APNs
-  credential is missing or bad, which re-minting our token cannot fix), for a
-  recipient this adapter does not serve, and for an empty registration token —
-  not retryable without a change.
+  credential is missing or bad, which re-minting our token cannot fix), on a
+  token exchange that answers `invalid_grant` or `unauthorized_client` (a
+  revoked key or a service account without the grant: no amount of retrying
+  fixes either), on any other `4xx` including a `404` with no `UNREGISTERED`
+  code, for a recipient this adapter does not serve, and for an empty
+  registration token — not retryable without a change.
 - `PushError::Transient { retry_after }` on `QUOTA_EXCEEDED` (`429`),
-  `UNAVAILABLE` (`503`), `INTERNAL` (`500`), a transport error, a failed token
-  exchange, and a `401` that survives one re-exchange — retry, and not before
-  `retry_after` where Google sent a delta-seconds `Retry-After`.
+  `UNAVAILABLE` (`503`), `INTERNAL` (`500`), a transport error, a token
+  exchange that failed for any other reason, and a `401` that survives one
+  re-exchange — retry, and not before `retry_after` where Google sent one.
+  `Retry-After` is read in **both** RFC 9110 forms: delta-seconds, and the
+  HTTP-date form some CDNs emit (resolved against the `Clock` port; a date
+  already past means "retry now").
 
 The mapping keys off `error.details[].errorCode` (the
 `google.firebase.fcm.v1.FcmError` detail) rather than the HTTP status, because
@@ -154,6 +160,13 @@ the status alone is ambiguous: a `404` is a dead token *or* a project that does
 not exist, and `THIRD_PARTY_AUTH_ERROR` arrives as a `401`, which is otherwise
 the adapter's own bearer token being refused. The status is the fallback for a
 body with no recognisable detail — a proxy, a load balancer, an outage.
+
+That ambiguity is resolved in the **non-destructive** direction: `Unregistered`
+instructs the caller to delete a device token, so only the explicit
+`UNREGISTERED` code produces it. Point `FCM_SERVICE_ACCOUNT_JSON` at a deleted
+or mistyped project and FCM answers a plain `404` to *every* send — pruning on
+that would delete a venture's whole device registry, one send at a time, from a
+configuration typo.
 
 ## Verification
 

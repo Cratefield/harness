@@ -39,6 +39,14 @@ them, or their `cargo publish` fails resolving a crate that is not on
 crates.io. It is in the ordered list below in that position; drop its
 `publish = false` at the same time.
 
+`cratefield-adapter-fcm` (issue #179) inherits the same rule for the same
+reason. It carries `publish = false`, and the `cratefield` facade depends on
+it behind an optional `fcm` feature — an **optional** dependency still has to
+resolve on crates.io when the facade is packaged, so `cargo publish -p
+cratefield` fails until it is first-published. It is in the ordered list
+below, after `cratefield-adapter-apns`; drop its `publish = false` at the
+same time.
+
 Authentication is **trusted publishing**: the workflow exchanges the
 GitHub Actions OIDC token (`id-token: write`) for a short-lived
 crates.io token. No `CARGO_REGISTRY_TOKEN` is stored anywhere.
@@ -120,6 +128,7 @@ crate exists**, so the very first release of each crate is manual:
    cargo publish -p cratefield-adapter-turnstile
    cargo publish -p cratefield-push-auth      # before adapter-apns
    cargo publish -p cratefield-adapter-apns
+   cargo publish -p cratefield-adapter-fcm    # before the facade
    cargo publish -p cratefield-secrets
    cargo publish -p cratefield-runtime-cloudflare
    cargo publish -p cratefield-runtime-native
@@ -132,7 +141,7 @@ crate exists**, so the very first release of each crate is manual:
    cargo publish -p cratefield            # the facade: depends on all of them
    ```
 
-   Eighteen crates, and the order is the dependency order: `--dry-run` for
+   Nineteen crates, and the order is the dependency order: `--dry-run` for
    a crate whose upstream `cratefield-*` dependencies are not on crates.io
    yet resolves against the registry and fails until those are published.
    Regenerate the list with the topological sort in
