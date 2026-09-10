@@ -525,11 +525,14 @@ fn random_scalar() -> Result<Zeroizing<[u8; 32]>, EceError> {
 mod tests {
     use super::*;
 
-    /// RFC 8291 Appendix A, the inputs.
-    const PLAINTEXT: &str = "When I grow up, I want to be a watermelon";
-    const UA_PUBLIC: &str =
-        "BCVxsr7N_eNgVRqvHtD0zTZsEc6-VV-JvLexhqUzORcxaOzi6-AYWXvTBHm4bjyPjs7Vd8pZGH6SRpkNtoIAiw4";
-    const AUTH_SECRET: &str = "BTBZMqHH6r4Tts7J_aSIgg";
+    /// RFC 8291 Appendix A, the inputs. The user agent's half comes from
+    /// `cratefield-testing`, which is where the workspace keeps these:
+    /// four crates used to hold their own copy of a key pair that only
+    /// works if every copy agrees to the character.
+    use cratefield_testing::vectors::{
+        RFC8291_AUTH_SECRET as AUTH_SECRET, RFC8291_PLAINTEXT as PLAINTEXT,
+        RFC8291_UA_PUBLIC as UA_PUBLIC,
+    };
     const SALT: &str = "DGv6ra1nlYgDCS1FRnbzlw";
     const AS_PRIVATE: &str = "yfWPiYE-n46HLnH0KqZOF1fJJU3MYrct3AELtAQ-oRw";
     const AS_PUBLIC: &str =

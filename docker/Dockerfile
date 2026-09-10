@@ -16,7 +16,17 @@ FROM rust:1.98-bookworm AS builder
 WORKDIR /src
 # Build context is the harness repo root.
 COPY . .
-RUN cargo build --release -p cratefield-cli --bin cratefield-cli \
+# `push-send` is what gives this image a working `fz push send` (issue
+# #184): without the feature the command refuses in one line, and this
+# image is the tool the `needs-human` live proofs (issue #186) are run
+# with — so a `fz` built without it would refuse in exactly the place the
+# README and the acceptance tests say it works. It costs reqwest and tokio
+# in a native binary that already links a compiler toolchain, and it is
+# never the feature a *venture* turns on (that would pull the native
+# runtime into its wasm build); the send-capable `fz` is this separately
+# built binary. `crates/cli-acceptance/tests/push_send_feature.rs` fails
+# the build if this line and that promise drift apart.
+RUN cargo build --release -p cratefield-cli --bin cratefield-cli --features push-send \
  && cp target/release/cratefield-cli /usr/local/bin/fz
 
 # ---- a working Rust toolchain that can compile a generated venture ----

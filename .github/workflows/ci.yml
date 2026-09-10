@@ -106,6 +106,12 @@ jobs:
           targets: wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@v2
       - run: cargo test --workspace
+      # The workspace run compiles `fz push send`'s network leg out (issue
+      # #184), and with it the tests that hold the wiring only that build
+      # has — the clock its deadline is enforced through, and the refusal
+      # the *other* build prints in its place.
+      - name: fz push send, with its optional transport (issue #184)
+        run: cargo test -p cratefield-cli --features push-send
       - name: fz migrations apply against the service container (issue #18)
         run: cargo test -p cratefield-cli-acceptance --features postgres
       - name: Error taxonomy drift check (issue #14)

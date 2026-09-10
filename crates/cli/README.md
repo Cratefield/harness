@@ -267,18 +267,25 @@ sending — it builds no HTTP client at all, so it cannot reach the network.
 
 The send itself needs the crate's `push-send` feature, which pulls the
 native runtime's HTTP client (reqwest behind the outbound policy) and the
-tokio runtime it needs — the same shape `fz migrations apply` needs
-`postgres`, and for the same reason:
+tokio runtime it needs. That is a **separately installed binary**, never a
+feature flipped on the venture's own dependency:
 
-```toml
-[dependencies]
-cratefield-cli = { version = "0.1", features = ["push-send"] }
+```sh
+cargo install cratefield-cli --features push-send   # a send-capable `fz`
 ```
 
-Without it every other `fz push` command still works, `--dry-run` included,
-and `send` says exactly that in one line. That outbound policy refuses
-loopback, private and link-local destinations, so a self-hosted push service
-on a private network is refused by the client, not by the protocol.
+`fz push` needs no compiled-in harness, so that binary — and the Docker
+image, which is built with the feature — sends against any venture's
+environment. Adding `features = ["push-send"]` to a venture's own
+`cratefield-cli` dependency would instead pull `cratefield-runtime-native`
+into the crate that also builds a wasm `cdylib`, and that crate
+`compile_error!`s on wasm32: the venture would stop building for the target
+it deploys to.
+
+Without the feature every other `fz push` command still works, `--dry-run`
+included, and `send` says exactly that in one line. That outbound policy
+refuses loopback, private and link-local destinations, so a self-hosted push
+service on a private network is refused by the client, not by the protocol.
 
 ### `fz push inspect-subscription <json>`
 

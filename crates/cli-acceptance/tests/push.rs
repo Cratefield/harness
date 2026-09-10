@@ -22,7 +22,6 @@
 //! `PushKey`/`PUSH_ENV`, the property `tests/push_env_guard.rs` enforces
 //! across the workspace.
 
-use std::path::PathBuf;
 use std::process::ExitCode;
 
 use cratefield_adapter_webpush::vapid::{Vapid, VapidKeys};
@@ -33,54 +32,20 @@ use cratefield_cli::push::{
 use cratefield_cli::{run, run_standalone};
 use cratefield_core::{MapConfig, Platform};
 use cratefield_push_wiring::{PUSH_ENV, PushKey, PushVar, inspect_push};
+use cratefield_testing::TempDir;
+use cratefield_testing::vectors::{
+    RFC8291_AUTH_SECRET as AUTH, RFC8291_UA_PUBLIC as P256DH, TEST_P256_PEM,
+    TEST_VAPID_SUBJECT as SUBJECT, WEB_PUSH_ENDPOINT as ENDPOINT, WEB_PUSH_ENDPOINT_CAPABILITY,
+    WEB_PUSH_ORIGIN, web_push_subscription_json,
+};
 use venture_fixture::harness_v1;
-
-/// RFC 8291 Appendix A's subscription keys: a real point on the curve and a
-/// real 16-byte auth secret.
-const P256DH: &str =
-    "BCVxsr7N_eNgVRqvHtD0zTZsEc6-VV-JvLexhqUzORcxaOzi6-AYWXvTBHm4bjyPjs7Vd8pZGH6SRpkNtoIAiw4";
-const AUTH: &str = "BTBZMqHH6r4Tts7J_aSIgg";
-/// A push endpoint with a long, subscription-specific path — the part that
-/// must never reach the `aud`.
-const ENDPOINT: &str =
-    "https://updates.push.services.mozilla.com/wpush/v2/gAAAAABmSubscriptionCapability";
-const SUBJECT: &str = "mailto:ops@example.test";
-
-struct TempDir(PathBuf);
-
-impl TempDir {
-    fn new(tag: &str) -> Self {
-        let dir = std::env::temp_dir().join(format!(
-            "fz-push-{tag}-{}",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .expect("clock")
-                .as_nanos()
-        ));
-        std::fs::create_dir_all(&dir).expect("temp dir");
-        Self(dir)
-    }
-
-    fn join(&self, name: &str) -> PathBuf {
-        self.0.join(name)
-    }
-}
-
-impl Drop for TempDir {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
-    }
-}
 
 fn args(parts: &[&str]) -> Vec<String> {
     parts.iter().map(ToString::to_string).collect()
 }
 
 fn subscription_json() -> String {
-    format!(
-        "{{\"endpoint\":\"{ENDPOINT}\",\"expirationTime\":null,\
-         \"keys\":{{\"p256dh\":\"{P256DH}\",\"auth\":\"{AUTH}\"}}}}"
-    )
+    web_push_subscription_json()
 }
 
 fn web_push_request() -> SendRequest {
@@ -103,7 +68,7 @@ fn web_push_request() -> SendRequest {
 /// checked *through the adapter*, not by re-deriving it in the CLI.
 #[test]
 fn the_printed_public_key_is_the_one_the_adapter_derives_from_the_stored_private_one() {
-    let tmp = TempDir::new("keygen-roundtrip");
+    let tmp = TempDir::new("fz-push-keygen-roundtrip");
     let path = tmp.join("vapid.key");
     let generated = vapid_keygen(&KeygenOptions {
         file: Some(&path),
@@ -134,7 +99,7 @@ fn the_printed_public_key_is_the_one_the_adapter_derives_from_the_stored_private
         wiring.summary()
     );
     assert!(
-        !generated.render().contains("rotated"),
+        generated.warning().is_none(),
         "a first keygen is not a rotation"
     );
 }
@@ -185,14 +150,11 @@ fn the_cli_reads_exactly_the_variables_the_runtime_wiring_reads() {
 
 /// Every variable in the table, set to something each adapter accepts.
 fn full_environment() -> Vec<(String, String)> {
-    // Throwaway keys, generated for the adapter tests only — not Apple's,
-    // not Google's. The same ones `crates/push-wiring/tests/wiring.rs` uses.
-    const TEST_P8: &str = "-----BEGIN PRIVATE KEY-----\nMIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgcXMgRpW+eLn7ZvCx\nIuTdd8csWMZ69azlRzS0dy2FN6GhRANCAATJ6GazR2lhWcC3JYsazLR0uWOyDKrC\nmeP4HPWghRmfoa4z3Ux7mG3Ylz+auRaBukKGicSdSvVG+jGeQwr3fNag\n-----END PRIVATE KEY-----";
     PUSH_ENV
         .iter()
         .map(|var| {
             let value = match var.key {
-                PushKey::VapidPrivateKey => TEST_P8.to_owned(),
+                PushKey::VapidPrivateKey => TEST_P256_PEM.to_owned(),
                 PushKey::VapidSubject => SUBJECT.to_owned(),
                 // Only the Web Push half has to be *valid*: this test moves
                 // one variable at a time and asserts the CLI and the wiring
@@ -211,14 +173,14 @@ fn full_environment() -> Vec<(String, String)> {
 #[test]
 fn inspect_subscription_catches_wrong_lengths_and_prints_a_path_free_aud() {
     let report = inspect_subscription(&subscription_json()).expect("a valid subscription");
-    assert_eq!(report.aud(), "https://updates.push.services.mozilla.com");
+    assert_eq!(report.aud(), WEB_PUSH_ORIGIN);
     assert!(
         !report.aud().contains("wpush"),
         "the aud is the origin, never the subscription path: {}",
         report.aud()
     );
     assert!(
-        !report.render().contains("gAAAAABmSubscriptionCapability"),
+        !report.render().contains(WEB_PUSH_ENDPOINT_CAPABILITY),
         "the endpoint's path is a bearer capability and is not printed: {}",
         report.render()
     );
@@ -243,7 +205,7 @@ fn inspect_subscription_catches_wrong_lengths_and_prints_a_path_free_aud() {
 /// need nothing from the venture, through `run_standalone` as well.
 #[test]
 fn push_exit_codes_mirror_the_verdict() {
-    let tmp = TempDir::new("exit");
+    let tmp = TempDir::new("fz-push-exit");
     let path = tmp.join("vapid.key");
     let path = path.to_str().expect("utf-8 path");
 

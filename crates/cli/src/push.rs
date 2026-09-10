@@ -37,6 +37,20 @@
 //! `auth` secret are all credential material, so a send prints the
 //! [`Recipient`]'s fingerprinting `Debug` and a subscription check prints
 //! the endpoint's origin without its path.
+//!
+//! **The failure path is where that promise was broken.** A `FAILED` report
+//! printed the [`PushError`] verbatim, and a transport failure carries the
+//! HTTP client's own message — which for `reqwest` ends
+//! ` for url (<the whole URL>)`, the APNs device path and the Web Push
+//! bearer endpoint included. The fix is in two places, and the first is the
+//! important one: `cratefield-runtime-native`'s HTTP port no longer
+//! stringifies a `reqwest::Error` whole, so the leak is closed for
+//! `tracing::error!` and every persisted error too, not just for this
+//! command. [`SendReport`] then redacts its own recipient out of whatever
+//! reaches it anyway — this process is the one place that knows exactly
+//! which string is the capability, so it can be precise where a general
+//! rule has to be blunt. `the_failure_path_never_prints_the_recipient`
+//! holds the `Sent(Err)` arm the `plan()`-only test could not see.
 
 use std::fmt;
 use std::fmt::Write as _;
@@ -166,13 +180,20 @@ impl VapidKeygen {
         self.rotated
     }
 
-    /// What `fz push vapid keygen` prints. **Never** the private key.
+    /// The warning a rotation earns, or `None` when nothing was replaced.
+    ///
+    /// Separate from [`render`](Self::render) because it belongs on
+    /// **stderr**: stdout is what the README's own recipe reads the public
+    /// key off, and a diagnostic in that stream is a diagnostic in
+    /// somebody's `applicationServerKey`.
+    pub fn warning(&self) -> Option<String> {
+        self.rotated.then(rotation_warning)
+    }
+
+    /// What `fz push vapid keygen` prints on stdout. **Never** the private
+    /// key, and never the rotation warning — see [`warning`](Self::warning).
     pub fn render(&self) -> String {
         let mut out = String::new();
-        if self.rotated {
-            out.push_str(&rotation_warning());
-            out.push('\n');
-        }
         out.push_str("VAPID key pair generated.\n\n");
         let _ = writeln!(
             out,
@@ -205,12 +226,16 @@ impl VapidKeygen {
 
     /// The private key, for `--print-private` only. A separate call so that
     /// no default path can print it.
-    pub fn private_key_disclosure(&self) -> String {
-        format!(
+    ///
+    /// Cleared on drop, like the field it copies from: a plain `String`
+    /// here would put the key back in an uncleared heap buffer and undo
+    /// the [`Zeroizing`] the field is deliberately stored in.
+    pub fn private_key_disclosure(&self) -> Zeroizing<String> {
+        Zeroizing::new(format!(
             "  private key (base64url, the 32-byte P-256 scalar) — this is a secret;\n  \
              it is on your screen and in this shell's scrollback:\n\n    {}\n",
             self.private_key.as_str()
-        )
+        ))
     }
 }
 
@@ -278,44 +303,113 @@ fn generate_key() -> Result<(Es256Signer, Zeroizing<[u8; 32]>), String> {
 
 /// Writes the private key, refusing to overwrite without `force`. Returns
 /// whether a key was actually replaced.
+///
+/// # The key is never truncated in place
+///
+/// A `--force` rotation replaces the only copy of a key whose loss, by this
+/// command's own warning, costs every existing browser subscription — and
+/// no server can recreate one. Opening the destination with
+/// `create(true).truncate(true)` destroys it the moment `open` returns, so
+/// a write that then fails (a full disk, an I/O error, a killed process)
+/// leaves an **empty file** where the venture's key used to be, and the
+/// operator's next `fz doctor` reports Web Push half-wired with nothing to
+/// restore.
+///
+/// So the new key is written to a temporary file beside the destination,
+/// `fsync`ed, and only then `rename`d over it. `rename` within a directory
+/// is atomic: every reader sees the old key or the new one, never a
+/// half-written one and never nothing. The temporary file is a sibling
+/// because a rename is only atomic within one filesystem.
+///
+/// The cost is that this needs to create a file in the destination's
+/// directory, so a rotation into a directory the process cannot write is
+/// now refused rather than done in place. That is the trade an atomic
+/// replacement always makes, and it fails loudly with the key intact.
 fn write_private_key(path: &Path, key: &str, force: bool) -> Result<bool, String> {
     let existed = path.exists();
     if existed && !force {
         return Err(rotation_refusal(path));
     }
-    let mut options = OpenOptions::new();
-    options.write(true);
-    if force {
-        options.create(true).truncate(true);
-    } else {
+    let temp = temp_sibling(path);
+    write_new_key_file(&temp, key).map_err(|err| {
+        let _ = std::fs::remove_file(&temp);
+        format!(
+            "cannot write the private key beside {}: {err}. The existing key, if any, is \
+             untouched.",
+            path.display()
+        )
+    })?;
+
+    if !existed {
         // Not `create(true)`: `create_new` is the same refusal as the check
         // above, taken atomically, so a file that appears between the two
-        // is still not overwritten.
-        options.create_new(true);
+        // is still not overwritten. It is claimed empty and replaced by the
+        // rename below, so this destroys nothing either way.
+        if let Err(err) = new_file_options().open(path) {
+            let _ = std::fs::remove_file(&temp);
+            return Err(if err.kind() == std::io::ErrorKind::AlreadyExists {
+                rotation_refusal(path)
+            } else {
+                format!("cannot write the private key to {}: {err}", path.display())
+            });
+        }
     }
+    std::fs::rename(&temp, path).map_err(|err| {
+        let _ = std::fs::remove_file(&temp);
+        format!(
+            "cannot move the new private key into {}: {err}. The existing key, if any, is \
+             untouched.",
+            path.display()
+        )
+    })?;
+    // The rename itself is only durable once the *directory* is synced —
+    // best effort, because a filesystem that will not open a directory
+    // (Windows) has still had the file's own contents synced above.
+    if let Some(parent) = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        && let Ok(dir) = std::fs::File::open(parent)
+    {
+        let _ = dir.sync_all();
+    }
+    Ok(existed)
+}
+
+/// A path beside `path` for the new key to be written to first. Same
+/// directory, because `rename` is only atomic within one filesystem, and
+/// dot-prefixed so a half-written key does not look like a key.
+fn temp_sibling(path: &Path) -> PathBuf {
+    let name = path.file_name().map_or_else(
+        || "vapid.key".to_owned(),
+        |name| name.to_string_lossy().into_owned(),
+    );
+    let unique = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |since| since.as_nanos());
+    path.with_file_name(format!(".{name}.{}.{unique}.tmp", std::process::id()))
+}
+
+/// How every file this command creates is opened: new, and owner-readable
+/// only from the moment it exists — never widened afterwards, which would
+/// leave a window in which the key is world-readable.
+fn new_file_options() -> OpenOptions {
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt as _;
         options.mode(0o600);
     }
-    let mut file = options.open(path).map_err(|err| {
-        if err.kind() == std::io::ErrorKind::AlreadyExists {
-            rotation_refusal(path)
-        } else {
-            format!("cannot write the private key to {}: {err}", path.display())
-        }
-    })?;
-    // `mode` above only applies to a file this call created, so a `--force`
-    // rotation into an existing world-readable file would keep its mode.
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt as _;
-        file.set_permissions(std::fs::Permissions::from_mode(0o600))
-            .map_err(|err| format!("cannot restrict {} to its owner: {err}", path.display()))?;
-    }
-    writeln!(file, "{key}")
-        .map_err(|err| format!("cannot write the private key to {}: {err}", path.display()))?;
-    Ok(existed)
+    options
+}
+
+/// Writes `key` to a file that must not already exist, and `fsync`s it:
+/// without the sync the rename can land while the contents are still in
+/// the page cache, which is the same empty-file outcome by another route.
+fn write_new_key_file(path: &Path, key: &str) -> std::io::Result<()> {
+    let mut file = new_file_options().open(path)?;
+    writeln!(file, "{key}")?;
+    file.sync_all()
 }
 
 /// Why an existing key file is not overwritten.
@@ -380,12 +474,32 @@ impl SendRequest {
     /// # Errors
     ///
     /// When the recipient does not parse for the named transport, or
-    /// `--data` is not JSON.
+    /// `--data` is not a JSON **object**.
     pub fn from_args(args: &SendArgs) -> Result<Self, String> {
         let recipient = parse_recipient(args.transport, &args.recipient)?;
         let data = match &args.data {
-            Some(raw) => serde_json::from_str(raw)
-                .map_err(|err| format!("--data is not JSON: {err}. Pass a JSON object."))?,
+            Some(raw) => {
+                let value: serde_json::Value = serde_json::from_str(raw)
+                    .map_err(|err| format!("--data is not JSON: {err}. Pass a JSON object."))?;
+                // An object, not merely JSON. `--data '["a"]'` parses, and
+                // then means three different things: APNs and FCM drop a
+                // non-object payload silently (each merges its members into
+                // a JSON object it is building), while Web Push forwards
+                // the array to the service worker. One flag cannot mean
+                // "delivered", "dropped" and "delivered differently"
+                // depending on the transport — and the message already
+                // promised an object.
+                if !value.is_object() {
+                    return Err(format!(
+                        "--data is {}, not a JSON object. Pass an object — \
+                         `--data '{{\"key\":\"value\"}}'` — because a payload that is not one is \
+                         silently dropped by APNs and FCM and forwarded by Web Push, so the same \
+                         flag would mean three things.",
+                        json_kind(&value)
+                    ));
+                }
+                value
+            }
             None => serde_json::Value::Null,
         };
         let notification = Notification {
@@ -464,18 +578,35 @@ pub fn plan(config: &dyn Config, request: &SendRequest) -> SendReport {
 /// the client needs cannot be started.
 #[cfg(feature = "push-send")]
 pub fn send_now(config: &dyn Config, request: &SendRequest) -> Result<SendReport, String> {
-    use cratefield_core::{BoundedHttpClient, SystemClock};
-
-    let clock: Arc<dyn Clock> = Arc::new(SystemClock);
-    let http: Arc<dyn HttpClient> = Arc::new(BoundedHttpClient::new(
-        Arc::new(cratefield_runtime_native::ReqwestClient::new()),
-        Arc::clone(&clock),
-    ));
+    let (http, clock) = send_stack();
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
         .map_err(|err| format!("cannot start the async runtime this send needs: {err}"))?;
     Ok(runtime.block_on(send(config, &http, &clock, request)))
+}
+
+/// The client and clock [`send_now`] sends through: the native runtime's
+/// own, wired the way `serve()` wires them.
+///
+/// The clock is [`cratefield_runtime_native::TokioClock`] and **not**
+/// core's `SystemClock`, which matters more than a name: the deadline the
+/// port advertises is enforced by [`BoundedHttpClient`] *through the
+/// clock*, and `SystemClock::timeout_any` is the documented test-only
+/// default that runs the future to completion. Passing it wraps the client
+/// in a bound that cannot fire — the send would still be bounded, but only
+/// by the timeout `ReqwestClient` happens to set on itself, which is not
+/// what the wrapper is there for.
+///
+/// [`BoundedHttpClient`]: cratefield_core::BoundedHttpClient
+#[cfg(feature = "push-send")]
+fn send_stack() -> (Arc<dyn HttpClient>, Arc<dyn Clock>) {
+    let clock: Arc<dyn Clock> = Arc::new(cratefield_runtime_native::TokioClock);
+    let http: Arc<dyn HttpClient> = Arc::new(cratefield_core::BoundedHttpClient::new(
+        Arc::new(cratefield_runtime_native::ReqwestClient::new()),
+        Arc::clone(&clock),
+    ));
+    (http, clock)
 }
 
 /// The same, in an `fz` built without the `push-send` feature: there is no
@@ -487,10 +618,19 @@ pub fn send_now(config: &dyn Config, request: &SendRequest) -> Result<SendReport
 #[cfg(not(feature = "push-send"))]
 pub fn send_now(_config: &dyn Config, _request: &SendRequest) -> Result<SendReport, String> {
     Err(
+        // Deliberately `cargo install`, and never "add the feature to your
+        // venture's dependency": `push-send` pulls
+        // `cratefield-runtime-native`, which `compile_error!`s on wasm32,
+        // and a generated venture depends on `cratefield-cli` beside a wasm
+        // `cdylib` — so flipping the feature there breaks the Worker build
+        // the venture actually deploys. The send-capable `fz` is a
+        // separately installed binary.
         "this `fz` was built without the `push-send` feature, so it has no HTTP client and \
-         cannot send. Rebuild it with `cratefield-cli = { version = \"0.1\", features = \
-         [\"push-send\"] }` (the same shape `fz migrations apply` needs `postgres`), or run \
-         `fz push send --dry-run`, which reports the transport's wiring without sending."
+         cannot send. Install one that has it — `cargo install cratefield-cli --features \
+         push-send` — and run that binary (it needs no compiled-in harness); do not add the \
+         feature to the venture's own `cratefield-cli` dependency, which would pull the native \
+         runtime into its wasm build. Or run `fz push send --dry-run`, which reports the \
+         transport's wiring without sending."
             .to_owned(),
     )
 }
@@ -512,6 +652,9 @@ pub struct SendReport {
     /// recipient itself: a device token addresses a device, and a Web Push
     /// `endpoint` is a bearer capability.
     recipient: String,
+    /// Exactly the strings that make up this send's recipient, longest
+    /// first — see [`credential_parts`] and [`SendReport::redacted`].
+    credentials: Vec<String>,
     wiring: TransportWiring,
     outcome: SendOutcome,
 }
@@ -521,9 +664,29 @@ impl SendReport {
         Self {
             transport: request.transport(),
             recipient: format!("{:?}", request.recipient),
+            credentials: credential_parts(&request.recipient),
             wiring,
             outcome,
         }
+    }
+
+    /// `text` with this send's own recipient taken out of it.
+    ///
+    /// The second line of defence behind the HTTP port's own redaction,
+    /// and a deliberately different kind: the port has to guess what is
+    /// credential material in an arbitrary URL, while this process
+    /// *knows* — the operator handed it the token or the subscription on
+    /// the command line. So the match here is exact, and it costs no
+    /// diagnostic detail at all: everything that is not the recipient
+    /// survives verbatim.
+    fn redacted(&self, text: &str) -> String {
+        let mut out = text.to_owned();
+        for part in &self.credentials {
+            if out.contains(part.as_str()) {
+                out = out.replace(part.as_str(), REDACTED);
+            }
+        }
+        out
     }
 
     /// Whether the command succeeded: a delivery, or a `--dry-run` whose
@@ -568,7 +731,18 @@ impl SendReport {
                 None => "result: DELIVERED\n  the push service accepted it (it named no id)\n"
                     .to_owned(),
             },
-            SendOutcome::Sent(Err(err)) => format!("result: FAILED\n  {err}\n  {}\n", advice(err)),
+            // Redacted, not printed: an adapter's error carries whatever
+            // the HTTP client said, and a client that names the URL it
+            // failed on names the device path or the subscription. The
+            // runtime's own client no longer does (see the module note),
+            // and this is the belt to that pair of braces — a `PushError`
+            // reaching here came from *somewhere*, and the report cannot
+            // know which client built it.
+            SendOutcome::Sent(Err(err)) => format!(
+                "result: FAILED\n  {}\n  {}\n",
+                self.redacted(&err.to_string()),
+                advice(err)
+            ),
             // Everything else is "nothing was sent", and the reason is the
             // transport's wiring verdict. `NotConfigured` belongs here too:
             // the router answers it for a transport it does not carry, and
@@ -614,6 +788,49 @@ impl SendReport {
     }
 }
 
+/// What a redacted credential is replaced by. The word the Web Push
+/// adapter and the native HTTP port both use, so one grep finds all three.
+const REDACTED: &str = "[redacted]";
+
+/// Below this length a "credential" is too short to redact by substring:
+/// replacing every occurrence of a two-character `auth` would scribble
+/// over the message instead of protecting anything. Every real one is far
+/// longer — a device token is 64 hex characters, a `p256dh` 87, an `auth`
+/// 22 — so this only ever skips a value that was never going to be
+/// accepted by the adapter anyway.
+const MIN_REDACTABLE: usize = 12;
+
+/// Every string that makes up `recipient`, longest first.
+///
+/// Longest first because the parts nest: a Web Push endpoint contains its
+/// own path, and redacting the path first would leave the origin and a
+/// `[redacted]` where the whole endpoint could have gone in one piece.
+fn credential_parts(recipient: &Recipient) -> Vec<String> {
+    let mut parts = match recipient {
+        Recipient::Apns { device_token } => vec![device_token.clone()],
+        Recipient::Fcm { registration_token } => vec![registration_token.clone()],
+        Recipient::WebPush {
+            endpoint,
+            p256dh,
+            auth,
+        } => {
+            let mut parts = vec![endpoint.clone(), p256dh.clone(), auth.clone()];
+            // The request target on its own: an intermediary that echoes
+            // what it was asked for quotes the path without the scheme
+            // and host, and that path is the whole capability.
+            if let Some(rest) = endpoint.split_once("://").map(|(_, rest)| rest)
+                && let Some(index) = rest.find('/')
+            {
+                parts.push(rest[index..].to_owned());
+            }
+            parts
+        }
+    };
+    parts.retain(|part| part.len() >= MIN_REDACTABLE);
+    parts.sort_by_key(|part| std::cmp::Reverse(part.len()));
+    parts
+}
+
 /// What the operator should do about a failed send. The error's own message
 /// says what happened; this says what it means.
 fn advice(err: &PushError) -> &'static str {
@@ -636,9 +853,31 @@ fn advice(err: &PushError) -> &'static str {
     }
 }
 
-/// The environment variables one transport reads, listed for a message.
+/// What a JSON value is, for the `--data` refusal. Never the value: a
+/// payload is the operator's, and this module prints no value it was given.
+fn json_kind(value: &serde_json::Value) -> &'static str {
+    match value {
+        serde_json::Value::Null => "null",
+        serde_json::Value::Bool(_) => "a boolean",
+        serde_json::Value::Number(_) => "a number",
+        serde_json::Value::String(_) => "a string",
+        serde_json::Value::Array(_) => "an array",
+        serde_json::Value::Object(_) => "an object",
+    }
+}
+
+/// The environment variables one transport **needs**, listed for the "set
+/// them" hint.
+///
+/// Required only. The hint is an instruction, and `APNS_HOST` is optional
+/// with a documented default (`sandbox`) whose only wrong value is a hard
+/// failure — telling an operator to set it invites them to guess
+/// `production` for a development build's token, which fails every send.
+/// An optional variable is described in `docs/PUSH-ENV.md`, not prescribed
+/// here.
 fn variable_names(transport: Platform) -> String {
     vars_for(transport)
+        .filter(|var| var.required)
         .map(PushVar::name)
         .collect::<Vec<_>>()
         .join(", ")
@@ -791,22 +1030,15 @@ mod tests {
     use super::*;
     use cratefield_core::MapConfig;
     use cratefield_core::SystemClock;
-    use cratefield_testing::FakeHttpClient;
-
-    /// A subscription whose keys are RFC 8291 Appendix A's — a real P-256
-    /// point on the curve and a real 16-byte auth secret, the pair
-    /// `cratefield_adapter_webpush::ece` reproduces the RFC's vectors with.
-    /// A made-up `p256dh` is refused, which is the whole point of the check
-    /// under test.
-    const P256DH: &str =
-        "BCVxsr7N_eNgVRqvHtD0zTZsEc6-VV-JvLexhqUzORcxaOzi6-AYWXvTBHm4bjyPjs7Vd8pZGH6SRpkNtoIAiw4";
-    const AUTH: &str = "BTBZMqHH6r4Tts7J_aSIgg";
-    const ENDPOINT: &str = "https://updates.push.services.mozilla.com/wpush/v2/gAAAAA_a_long_token";
+    use cratefield_testing::vectors::{
+        RFC8291_AUTH_SECRET as AUTH, RFC8291_UA_PUBLIC as P256DH, TEST_P256_PEM,
+        TEST_VAPID_SUBJECT, WEB_PUSH_ENDPOINT as ENDPOINT, WEB_PUSH_ENDPOINT_CAPABILITY,
+        web_push_subscription_json,
+    };
+    use cratefield_testing::{FakeHttpClient, TempDir};
 
     fn subscription_json() -> String {
-        format!(
-            "{{\"endpoint\":\"{ENDPOINT}\",\"keys\":{{\"p256dh\":\"{P256DH}\",\"auth\":\"{AUTH}\"}}}}"
-        )
+        web_push_subscription_json()
     }
 
     fn send_args(transport: Transport, recipient: &str) -> SendArgs {
@@ -825,7 +1057,10 @@ mod tests {
 
     #[test]
     fn a_generated_key_is_a_usable_p256_key_and_the_public_half_is_65_bytes() {
-        let dir = temp_dir("keygen-usable");
+        // `TempDir`, not a cleanup on the last line: an assertion that
+        // fires below would otherwise leave a `0600` private key in
+        // `/tmp` on exactly the runs somebody then has to go and read.
+        let dir = TempDir::new("fz-push-keygen-usable");
         let path = dir.join("vapid.key");
         let generated = vapid_keygen(&KeygenOptions {
             file: Some(&path),
@@ -849,7 +1084,6 @@ mod tests {
         })
         .expect("generates");
         assert_ne!(generated.public_key(), second.public_key());
-        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
@@ -870,8 +1104,12 @@ mod tests {
             !format!("{generated:?}").contains(&private),
             "nor must Debug"
         );
+        // The type is the assertion: a disclosure that came back as a
+        // plain `String` would drop uncleared and undo the `Zeroizing`
+        // the field is stored in. This line stops compiling if it does.
+        let disclosure: Zeroizing<String> = generated.private_key_disclosure();
         assert!(
-            generated.private_key_disclosure().contains(&private),
+            disclosure.contains(&private),
             "--print-private asks for it explicitly"
         );
     }
@@ -892,7 +1130,7 @@ mod tests {
 
     #[test]
     fn an_existing_key_is_not_overwritten_without_force_and_the_warning_says_why() {
-        let dir = temp_dir("keygen-force");
+        let dir = TempDir::new("fz-push-keygen-force");
         let path = dir.join("vapid.key");
         let first = vapid_keygen(&KeygenOptions {
             file: Some(&path),
@@ -926,14 +1164,86 @@ mod tests {
         })
         .expect("rotates with --force");
         assert!(rotated.rotated());
+        // The warning is a diagnostic and belongs on stderr, so it is not
+        // in what stdout gets: the README's own recipe reads the public
+        // key off that stream.
+        let warning = rotated.warning().expect("a rotation warns");
+        assert!(warning.contains("rotated"), "{warning}");
         assert!(
-            rotated.render().contains("rotated"),
-            "a rotation says so: {}",
+            warning.contains("invalidates every existing browser subscription"),
+            "{warning}"
+        );
+        assert!(
+            !rotated.render().contains("warning"),
+            "the warning is stderr's, not stdout's: {}",
             rotated.render()
         );
         assert_ne!(rotated.public_key(), first.public_key());
         assert_ne!(std::fs::read_to_string(&path).expect("rewritten"), kept);
-        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The cost of getting this wrong is stated by the command itself: a
+    /// rotation invalidates every existing browser subscription, and none
+    /// of them can be recreated server-side. A `--force` that truncated
+    /// the destination first would leave an **empty file** whenever the
+    /// write that follows fails — which is that same loss, unasked for.
+    ///
+    /// Staged with a directory the process cannot create a file in: the
+    /// write cannot complete, and the question is what is left behind.
+    #[test]
+    #[cfg(unix)]
+    fn a_force_rotation_that_cannot_complete_leaves_the_old_key_intact() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let dir = TempDir::new("fz-push-keygen-torn");
+        let path = dir.join("vapid.key");
+        vapid_keygen(&KeygenOptions {
+            file: Some(&path),
+            force: false,
+            print_private: false,
+        })
+        .expect("the venture's key");
+        let kept = std::fs::read_to_string(&path).expect("written");
+
+        // Read and execute, no write: the existing key file is still
+        // writable through its own mode, so this is precisely the shape
+        // where truncate-in-place succeeds at destroying it and an
+        // atomic replacement refuses.
+        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o500))
+            .expect("makes the directory read-only");
+        // Root ignores the mode, and then the scenario cannot be staged
+        // at all — skip rather than assert something else.
+        let staged = std::fs::write(dir.join("probe"), "x").is_err();
+        let outcome = if staged {
+            Some(vapid_keygen(&KeygenOptions {
+                file: Some(&path),
+                force: true,
+                print_private: false,
+            }))
+        } else {
+            None
+        };
+        // Restored before any assertion, so a failure here does not also
+        // defeat the directory's own removal on drop.
+        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700))
+            .expect("restores the directory");
+
+        let Some(outcome) = outcome else {
+            eprintln!("skipped: this process writes into a read-only directory (root?)");
+            return;
+        };
+        let Err(error) = outcome else {
+            panic!("the rotation could not be completed, so it must have refused");
+        };
+        assert!(
+            error.contains("untouched"),
+            "the refusal says the key survived: {error}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&path).expect("the old key is still there"),
+            kept,
+            "a rotation that could not be completed destroyed the venture's only key"
+        );
     }
 
     #[test]
@@ -948,7 +1258,7 @@ mod tests {
         // The path is the subscription's bearer capability: an `aud` that
         // carries it earns a 401 from the services that check it strictly.
         assert!(
-            !nested.render().contains("gAAAAA_a_long_token"),
+            !nested.render().contains(WEB_PUSH_ENDPOINT_CAPABILITY),
             "{}",
             nested.render()
         );
@@ -1084,37 +1394,224 @@ mod tests {
             "the auth secret leaked:\n{rendered}"
         );
         assert!(
-            !rendered.contains("gAAAAA_a_long_token"),
+            !rendered.contains(WEB_PUSH_ENDPOINT_CAPABILITY),
             "the endpoint leaked:\n{rendered}"
+        );
+    }
+
+    /// The arm the test above never reaches, and the one that leaked.
+    ///
+    /// `plan()` cannot fail a send, so a report of a *failed* send was
+    /// never exercised — while the failure is exactly where a transport's
+    /// error message arrives, and reqwest's message ends
+    /// ` for url (<the whole URL>)`. For Web Push that URL is the
+    /// subscription: a bearer capability anyone who reads the output can
+    /// push with, printed two lines under the fingerprint that was
+    /// supposed to withhold it.
+    ///
+    /// The client here says what the native runtime's used to say, so
+    /// this holds the CLI to its own promise even if a caller ever hands
+    /// it a client that has not been fixed.
+    #[test]
+    fn the_failure_path_never_prints_the_recipient() {
+        // APNs addresses a device by *path*, so the whole token is in the
+        // URL a client reports.
+        const DEVICE_TOKEN: &str =
+            "0a1b2c3d4e5f60718293a4b5c6d7e8f900112233445566778899aabbccddeeff";
+
+        let leaky = |target: &str| {
+            let http: Arc<dyn HttpClient> = Arc::new(FakeHttpClient::scripted(vec![Err(
+                cratefield_core::HttpError::Transport(format!(
+                    "error sending request for url ({target})"
+                )),
+            )]));
+            http
+        };
+        let clock: Arc<dyn Clock> = Arc::new(SystemClock);
+
+        let request = SendRequest::from_args(&send_args(Transport::WebPush, &subscription_json()))
+            .expect("parses");
+        let report =
+            pollster::block_on(send(&web_push_config(), &leaky(ENDPOINT), &clock, &request));
+        let rendered = report.render();
+        assert!(!report.ok(), "{rendered}");
+        assert!(rendered.contains("FAILED"), "{rendered}");
+        assert!(
+            !rendered.contains(WEB_PUSH_ENDPOINT_CAPABILITY),
+            "the subscription's bearer capability leaked through the failure:\n{rendered}"
+        );
+        assert!(
+            !rendered.contains(ENDPOINT),
+            "the endpoint leaked through the failure:\n{rendered}"
+        );
+        // Still diagnosable: what failed, and what to do about it.
+        assert!(rendered.contains("retryable"), "{rendered}");
+
+        let request = SendRequest::from_args(&send_args(Transport::Apns, DEVICE_TOKEN))
+            .expect("a device token");
+        let report = pollster::block_on(send(
+            &apns_config(),
+            &leaky(&format!(
+                "https://api.push.apple.com/3/device/{DEVICE_TOKEN}"
+            )),
+            &clock,
+            &request,
+        ));
+        let rendered = report.render();
+        assert!(rendered.contains("FAILED"), "{rendered}");
+        assert!(
+            !rendered.contains(DEVICE_TOKEN),
+            "the device token leaked through the failure:\n{rendered}"
+        );
+    }
+
+    #[test]
+    fn data_has_to_be_a_json_object() {
+        // Each of these parses as JSON and then means three different
+        // things: APNs and FCM merge only an object's members and drop
+        // the rest, Web Push forwards whatever it is.
+        for raw in ["[1,2]", "\"a string\"", "42", "null", "true"] {
+            let mut args = send_args(Transport::WebPush, &subscription_json());
+            args.data = Some(raw.to_owned());
+            let Err(error) = SendRequest::from_args(&args) else {
+                panic!("{raw} is not a JSON object");
+            };
+            assert!(error.contains("JSON object"), "{raw}: {error}");
+        }
+
+        let mut args = send_args(Transport::WebPush, &subscription_json());
+        args.data = Some("{\"order\":\"A-17\"}".to_owned());
+        SendRequest::from_args(&args).expect("an object is what the flag is for");
+
+        // Not JSON at all keeps its own message.
+        let mut args = send_args(Transport::WebPush, &subscription_json());
+        args.data = Some("{oops".to_owned());
+        let Err(error) = SendRequest::from_args(&args) else {
+            panic!("`{{oops` is not JSON");
+        };
+        assert!(error.contains("not JSON"), "{error}");
+    }
+
+    #[test]
+    fn the_set_them_hint_names_only_variables_that_have_to_be_set() {
+        // APNs is the transport with an optional variable: `APNS_HOST`
+        // has a documented default, and its only wrong value — a
+        // development token sent to `production` — fails every send. An
+        // instruction to "set them" must not include it.
+        let request = SendRequest::from_args(&send_args(Transport::Apns, "  DEVICE-TOKEN  "))
+            .expect("a device token");
+        let rendered = plan(
+            &MapConfig::from_pairs(Vec::<(String, String)>::new()),
+            &request,
+        )
+        .render();
+        assert!(rendered.contains("Set them"), "{rendered}");
+        for var in vars_for(Platform::Ios) {
+            assert_eq!(
+                rendered.contains(var.name()),
+                var.required,
+                "{} is required={} but {} in the hint:\n{rendered}",
+                var.name(),
+                var.required,
+                if var.required {
+                    "missing from"
+                } else {
+                    "named in"
+                }
+            );
+        }
+    }
+
+    /// The refusal is the only thing an `fz` without the feature says
+    /// about sending, so it is the only place an operator is told how to
+    /// get one that can — and telling them to add the feature to the
+    /// venture's own dependency breaks the venture's wasm build, because
+    /// `cratefield-runtime-native` `compile_error!`s on wasm32 and a
+    /// generated venture depends on this crate beside a `cdylib`.
+    #[test]
+    #[cfg(not(feature = "push-send"))]
+    fn the_refusal_points_at_an_installed_binary_not_at_a_venture_dependency() {
+        let request = SendRequest::from_args(&send_args(Transport::WebPush, &subscription_json()))
+            .expect("parses");
+        let Err(error) = send_now(&web_push_config(), &request) else {
+            panic!("no client, no send");
+        };
+        assert!(
+            error.contains("cargo install cratefield-cli --features push-send"),
+            "{error}"
+        );
+        assert!(
+            !error.contains("cratefield-cli = {"),
+            "the refusal must not hand out a dependency recipe: {error}"
+        );
+        assert!(error.contains("--dry-run"), "{error}");
+    }
+
+    /// The bound the port advertises has to be one that can fire. The
+    /// clock is how `BoundedHttpClient` enforces it, and core's
+    /// `SystemClock` has the documented test-only `timeout_any` that runs
+    /// the future to completion — so wiring that clock advertises a
+    /// deadline and enforces none.
+    #[test]
+    #[cfg(feature = "push-send")]
+    fn the_send_stack_is_built_on_a_clock_that_can_actually_time_out() {
+        let (_http, clock) = send_stack();
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("a runtime");
+        let outcome = runtime.block_on(async move {
+            cratefield_core::timeout(
+                &*clock,
+                async {
+                    tokio::time::sleep(Duration::from_secs(5)).await;
+                    "the upstream answered eventually"
+                },
+                Duration::from_millis(10),
+            )
+            .await
+        });
+        assert!(
+            outcome.is_none(),
+            "the deadline did not fire: this clock runs the future to completion, so every \
+             bound `BoundedHttpClient` puts on a send is decoration"
         );
     }
 
     /// A validly configured Web Push environment, named through the table.
     fn web_push_config() -> MapConfig {
-        // A throwaway P-256 key, generated for these tests only. The same
-        // one `crates/push-wiring` and `crates/adapter-apns` use.
-        const TEST_PEM: &str = "-----BEGIN PRIVATE KEY-----\nMIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgcXMgRpW+eLn7ZvCx\nIuTdd8csWMZ69azlRzS0dy2FN6GhRANCAATJ6GazR2lhWcC3JYsazLR0uWOyDKrC\nmeP4HPWghRmfoa4z3Ux7mG3Ylz+auRaBukKGicSdSvVG+jGeQwr3fNag\n-----END PRIVATE KEY-----";
         MapConfig::from_pairs([
             (
                 PushKey::VapidPrivateKey.name().to_owned(),
-                TEST_PEM.to_owned(),
+                TEST_P256_PEM.to_owned(),
             ),
             (
                 PushKey::VapidSubject.name().to_owned(),
-                "mailto:ops@example.test".to_owned(),
+                TEST_VAPID_SUBJECT.to_owned(),
             ),
         ])
     }
 
-    fn temp_dir(tag: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "fz-push-{tag}-{}",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .expect("clock")
-                .as_nanos()
-        ));
-        std::fs::create_dir_all(&dir).expect("temp dir");
-        dir
+    /// The same for APNs: the throwaway key, and values of the shape each
+    /// remaining variable is checked for.
+    fn apns_config() -> MapConfig {
+        MapConfig::from_pairs([
+            (
+                PushKey::ApnsKeyP8.name().to_owned(),
+                TEST_P256_PEM.to_owned(),
+            ),
+            (
+                PushKey::ApnsKeyId.name().to_owned(),
+                "ABCDE12345".to_owned(),
+            ),
+            (
+                PushKey::ApnsTeamId.name().to_owned(),
+                "TEAM123456".to_owned(),
+            ),
+            (
+                PushKey::ApnsTopic.name().to_owned(),
+                "ventures.factory0.example".to_owned(),
+            ),
+        ])
     }
 }

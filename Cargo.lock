@@ -889,6 +889,7 @@ dependencies = [
  "cratefield-cli",
  "cratefield-core",
  "cratefield-push-wiring",
+ "cratefield-testing",
  "insta",
  "pollster",
  "sea-query",
