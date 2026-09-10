@@ -47,6 +47,50 @@ use crate::surface::{
 use crate::template::{Template, TemplateRegistry};
 use crate::venture::{Venture, VentureEnv};
 
+/// The two checks about a module's tables: that nobody else claimed one, and
+/// that its personal-data declarations can mean something.
+///
+/// Extracted from `HarnessBuilder::build`, which sat one line under the
+/// workspace's function-length lint before this. Collecting one more category
+/// of problem should not be what makes that function too long to follow, and
+/// the two checks read better together anyway: both are about the tables the
+/// module just claimed, and the second is only meaningful against the first.
+fn check_tables(
+    module: &dyn Module,
+    tables: &mut HashMap<&'static str, &'static str>,
+    errors: &mut ConfigError,
+) {
+    let name = module.name();
+    for table in module.tables() {
+        match tables.get(table) {
+            Some(owner) => errors.push(format!(
+                "duplicate table `{table}` claimed by modules `{owner}` and `{name}`"
+            )),
+            None => {
+                tables.insert(table, name);
+            }
+        }
+    }
+
+    // Against the tables the module just claimed, so a rename that misses a
+    // declaration is a build error rather than a row that quietly stops being
+    // exported.
+    let owns = module.tables();
+    let mut declared: Vec<&'static str> = Vec::new();
+    for set in module.personal_data() {
+        for problem in set.validate(name, owns) {
+            errors.push(problem);
+        }
+        if declared.contains(&set.table) {
+            errors.push(format!(
+                "module `{name}` declares table `{}` twice in personal_data()",
+                set.table
+            ));
+        }
+        declared.push(set.table);
+    }
+}
+
 /// A runtime resolves environment bindings into [`Ports`] and declares
 /// statically which ports it can provide, so `Harness::build` can reject a
 /// module that requires something the runtime will never hand it
@@ -78,6 +122,9 @@ pub struct Harness {
     surface: Arc<SurfaceVariants>,
     /// The renderer mounted at `/ui`, if the venture chose one.
     ui: Option<Arc<dyn UiMount>>,
+    /// Every module's personal-data declarations, composed once at build so a
+    /// request does not walk the module list to answer an export.
+    personal_data: Arc<crate::PersonalDataCatalog>,
 }
 
 struct SurfaceVariants {
@@ -170,6 +217,7 @@ impl Harness {
                 ports.config.as_ref(),
             )
             .is_some(),
+            personal_data: Arc::clone(&self.personal_data),
             ui_mounted: self.ui.is_some(),
         }
     }
@@ -841,16 +889,7 @@ impl HarnessBuilder {
 
             module.surface().validate(name, &mut errors);
 
-            for table in module.tables() {
-                match tables.get(table) {
-                    Some(owner) => errors.push(format!(
-                        "duplicate table `{table}` claimed by modules `{owner}` and `{name}`"
-                    )),
-                    None => {
-                        tables.insert(table, name);
-                    }
-                }
-            }
+            check_tables(module.as_ref(), &mut tables, &mut errors);
         }
 
         let well_known = collect_well_known(&self.modules, &mut errors);
@@ -904,6 +943,12 @@ impl HarnessBuilder {
             venture: Arc::new(venture),
             // Dependency order, which is composition order until a module
             // declares something (RECONCILIATION.md §2).
+            // Composed from the resolved order, so the catalog reads the way
+            // the schema applies: a reader tracing an export down the list
+            // meets a table before the tables that point at it.
+            personal_data: Arc::new(crate::PersonalDataCatalog::compose(
+                ordered.iter().map(|m| (m.name(), m.personal_data())),
+            )),
             modules: ordered,
             templates: Arc::new(registry),
             events,

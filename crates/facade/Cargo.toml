@@ -46,6 +46,7 @@ kms = ["dep:cratefield-kms"]
 
 # Modules shipped with the harness.
 email-signup = ["dep:cratefield-module-email-signup"]
+privacy = ["dep:cratefield-module-privacy"]
 waitlist = ["dep:cratefield-module-waitlist"]
 cms = ["dep:cratefield-module-cms"]
 
@@ -76,6 +77,7 @@ cratefield-ui = { workspace = true, optional = true }
 cratefield-secrets = { workspace = true, optional = true }
 cratefield-kms = { workspace = true, optional = true }
 cratefield-module-email-signup = { workspace = true, optional = true }
+cratefield-module-privacy = { workspace = true, optional = true }
 cratefield-module-waitlist = { workspace = true, optional = true }
 cratefield-module-cms = { workspace = true, optional = true }
 cratefield-testing = { workspace = true, optional = true }

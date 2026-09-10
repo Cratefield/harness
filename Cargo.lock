@@ -651,6 +651,7 @@ dependencies = [
  "cratefield-kms",
  "cratefield-module-cms",
  "cratefield-module-email-signup",
+ "cratefield-module-privacy",
  "cratefield-module-waitlist",
  "cratefield-push-auth",
  "cratefield-runtime-cloudflare",
@@ -1057,6 +1058,22 @@ dependencies = [
  "sea-query",
  "serde",
  "serde_json",
+ "tower",
+ "tracing",
+]
+
+[[package]]
+name = "cratefield-module-privacy"
+version = "0.1.1"
+dependencies = [
+ "axum",
+ "cratefield-core",
+ "cratefield-testing",
+ "http",
+ "sea-query",
+ "serde",
+ "serde_json",
+ "tokio",
  "tower",
  "tracing",
 ]
