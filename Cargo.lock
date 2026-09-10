@@ -1081,6 +1081,7 @@ version = "0.1.1"
 dependencies = [
  "async-trait",
  "axum",
+ "base64 0.23.1",
  "base64ct",
  "bytes",
  "cratefield-adapter-sqlite",
@@ -1089,6 +1090,7 @@ dependencies = [
  "cratefield-testing",
  "factory0-auth-client",
  "futures-util",
+ "hmac 0.13.0",
  "http",
  "p256 0.14.0",
  "pollster",
@@ -1097,6 +1099,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.11.0",
+ "subtle",
  "time",
  "tower",
  "tracing",
