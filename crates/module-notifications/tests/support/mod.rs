@@ -86,6 +86,21 @@ pub fn token_for(sub: &str) -> String {
     }))
 }
 
+/// [`token_for`] plus a verified email claim, the way an issuer that has
+/// confirmed the address presents it.
+pub fn token_for_verified_email(sub: &str, email: &str) -> String {
+    token_with(&json!({
+        "sub": sub,
+        "aud": CLIENT,
+        "iss": ISSUER,
+        "sid": "session-1",
+        "exp": NOW + 3_600,
+        "iat": NOW - 10,
+        "email": email,
+        "email_verified": true,
+    }))
+}
+
 /// A token with arbitrary claims, for the refusals.
 pub fn token_with(claims: &Value) -> String {
     let (signing, _) = signing_key();
