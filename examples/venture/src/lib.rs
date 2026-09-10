@@ -20,6 +20,7 @@ pub mod sample;
 use cratefield::Harness;
 use cratefield::cloudflare::{Cloudflare, serve, serve_scheduled};
 use cratefield::email_signup::EmailSignup;
+use cratefield::notifications::{Category, Notifications};
 use cratefield::waitlist::Waitlist;
 use std::sync::OnceLock;
 use worker::{Context, Env, Request, Response, event};
@@ -67,6 +68,24 @@ fn instance() -> &'static (Harness, Cloudflare) {
                 Waitlist::new()
                     .products(["kontinuum", "undercover-rockstars"])
                     .confirm_ttl_days(7),
+            )
+            // Notifications (issue #182). It requires the `Push` port,
+            // which `push_from_env()` above provides whatever the
+            // environment holds: with no keys the router answers
+            // `NotConfigured` for every recipient and a send dead-letters
+            // with that reason, rather than looking delivered. The routes
+            // need `NOTIFICATIONS_AUTH_ISSUER` / `_CLIENT_ID` and answer
+            // 401 until a venture sets them.
+            .module(
+                Notifications::new()
+                    .category(Category::new("booking"))
+                    .category(Category::new("room_starting").badge(true))
+                    // The push environment has one reader (issue #191), so
+                    // the module takes the verdict rather than reading the
+                    // variables: in production a venture that wired no
+                    // transport is a misconfiguration, because every send
+                    // would dead-letter as `not_configured`.
+                    .transport_probe(|cfg| cratefield::push_wiring::inspect_push(cfg).any_routed()),
             )
             .templates(templates)
             // The UI renderer (ADR 0010): pages at /ui/<module>/<action>,

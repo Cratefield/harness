@@ -43,6 +43,7 @@ const VENTURES: &[(&str, &[ComposedModule])] = &[
             ("sample", None),
             ("email-signup", Some("module-email-signup")),
             ("waitlist", Some("module-waitlist")),
+            ("notifications", Some("module-notifications")),
         ],
     ),
 ];

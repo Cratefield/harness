@@ -36,6 +36,12 @@ cratefield = { path = "../../crates/facade", version = "0.1.0", features = [
     "push-wiring",
     "email-signup",
     "waitlist",
+    # The notifications module (issue #182). Nothing is configured here,
+    # so `/v1/notifications` answers 401 (no auth issuer) and any send
+    # would dead-letter as `not_configured` — which is what the wasm build
+    # and the `wrangler dev` smoke should cover: the module boots, its
+    # migrations apply, and it says so rather than pretending.
+    "notifications",
 ] }
 axum = { workspace = true }
 http = { workspace = true }

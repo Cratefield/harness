@@ -11,6 +11,10 @@
     "file": "0005_email-signup_0003_unsubscribe_token.sql",
     "sha256": "90d58acadfefed185f1685350db2f581294ec945f49edac3d464c9784c442d7e"
   },
+  "notifications/0001": {
+    "file": "0009_notifications_0001_init.sql",
+    "sha256": "36a993d257e686d36b1e40dbaea76b9e4989b3b36ec50108598d55c93def00c7"
+  },
   "sample/0001": {
     "file": "0001_sample_0001_init.sql",
     "sha256": "adbaf308f36585d92261aecefe4a06f65aa6d3408834a8f61babd87de0545945"

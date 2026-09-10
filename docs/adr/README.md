@@ -31,6 +31,11 @@ form.
 ADR 0015 extends ADR 0002 for the `Push` port: a recipient is an enum with
 one variant per transport, `platform()` is a transport fact rather than a
 device fact, and the routing combinator sits above the adapters in core.
+ADR 0016 records the two answers the notifications module (#182) needed and
+the harness did not have: a dead letter is a module-owned table rather than
+a new terminal state on core's `Outbox`, and a module learns the calling
+account from `factory0-auth-client`'s `Authenticated` extractor — the first
+module to depend on it.
 
 [0102](0102-crypto-crate.md) chose the crypto crate: RustCrypto's
 `chacha20poly1305`.
