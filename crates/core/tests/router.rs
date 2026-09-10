@@ -833,3 +833,23 @@ async fn a_module_sees_the_environment_the_deployment_declares() {
     );
     assert_eq!(ctx.venture.env, cratefield_core::VentureEnv::Development);
 }
+
+/// `/__health` reported the compiled environment, so
+/// `cratefield-waitlist` answered `"env":"development"` while serving
+/// production — the same lie #143 removed from the gates and left in the
+/// one place an operator actually looks.
+#[pollster::test]
+async fn health_reports_the_environment_the_deployment_declares() {
+    let harness = harness_with_sample();
+    let router = harness.router(Ports::with_config(Arc::new(MapConfig::from_pairs([(
+        "ENV",
+        "production",
+    )]))));
+    let body = body_json(request(&router, Method::GET, "/__health", &[], None).await).await;
+    assert_eq!(body["env"], "production");
+
+    // And it still tells the truth when they agree.
+    let router = harness.router(Ports::with_config(Arc::new(MapConfig::default())));
+    let body = body_json(request(&router, Method::GET, "/__health", &[], None).await).await;
+    assert_eq!(body["env"], "development");
+}
