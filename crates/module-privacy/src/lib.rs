@@ -38,6 +38,7 @@
 #![doc = include_str!("../README.md")]
 #![forbid(unsafe_code)]
 
+mod erase;
 mod handlers;
 
 use cratefield_core::{ConfigError, Migrations, Module, ModuleContext, Port};
@@ -68,8 +69,10 @@ impl Module for Privacy {
     }
 
     /// The database it reads is other modules' tables; it owns none itself.
+    /// `Signer` is required, not optional: without it there is no
+    /// confirmation token, and erasure would have to be a single call.
     fn requires(&self) -> &'static [Port] {
-        &[Port::Db]
+        &[Port::Db, Port::Signer]
     }
 
     /// No tables. A module that owned one would have to declare its own
