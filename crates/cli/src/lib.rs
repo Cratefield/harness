@@ -1,6 +1,8 @@
 //! `fz` — the Factory Zero venture CLI (issue #8): `fz migrations
 //! collect`, `fz migrations apply` (issue #18), `fz doctor`, `fz
-//! modules`, `fz push` (issue #184).
+//! modules`, `fz push` (issue #184), and the agent-safe workflow over
+//! the venture manifest (harness #140): `fz plan`, `fz deploy --plan`,
+//! `fz add`, `fz init`, `fz verify`.
 //!
 //! `fz` is linked into the venture as a bin target so it can see the
 //! compiled-in harness. The documented pattern (venture template):
@@ -31,6 +33,7 @@ pub mod lint;
 mod lock;
 pub mod push;
 pub mod sidecars;
+pub mod workflow;
 
 use clap::{Parser, Subcommand};
 use cratefield_core::{Config, Harness};
@@ -126,6 +129,114 @@ enum Command {
     Data {
         #[command(subcommand)]
         command: DataCommand,
+    },
+    /// Describes what the manifest would change — modules added or
+    /// removed, the capabilities they require, config changes and
+    /// migrations not yet collected — and prints a `digest` that
+    /// approves exactly that plan. Read-only (harness #140).
+    Plan {
+        /// The venture manifest (`.json` or `.toml`).
+        #[arg(long, default_value = "venture.json", value_name = "MANIFEST")]
+        manifest: PathBuf,
+        /// Migration directory holding `.harness-lock.json`.
+        #[arg(long, default_value = "migrations")]
+        migrations: PathBuf,
+        /// Prints exactly one JSON object to stdout — `schema`, `ok`,
+        /// `failures`, the plan `digest` and its content — instead of
+        /// prose. Nothing else reaches stdout or stderr.
+        #[arg(long)]
+        json: bool,
+        /// Never prompts (the workflow commands never do; anything
+        /// needing a human is a coded refusal) and suppresses the
+        /// human `next:` steps from the prose output.
+        #[arg(long)]
+        non_interactive: bool,
+    },
+    /// Applies exactly the approved plan: recomputes it from the
+    /// current inputs and refuses any other digest. Records the plan in
+    /// `.harness-deploy.json` beside the manifest — compiling,
+    /// standing up the Worker and applying migrations stay with the
+    /// needs-human steps it prints. A production venture, and any plan
+    /// that removes modules, needs `--i-am-deploying-to-production`
+    /// as a second, separate consent (harness #140).
+    Deploy {
+        /// The digest `fz plan --json` printed — the approval token.
+        #[arg(long, value_name = "DIGEST")]
+        plan: Option<String>,
+        /// The venture manifest (`.json` or `.toml`).
+        #[arg(long, default_value = "venture.json", value_name = "MANIFEST")]
+        manifest: PathBuf,
+        /// Migration directory holding `.harness-lock.json`.
+        #[arg(long, default_value = "migrations")]
+        migrations: PathBuf,
+        /// The second consent: required when the venture resolves to
+        /// production, or when the plan removes modules.
+        #[arg(long)]
+        i_am_deploying_to_production: bool,
+        /// Prints exactly one JSON object to stdout instead of prose.
+        #[arg(long)]
+        json: bool,
+        /// Never prompts; suppresses the human `next:` steps.
+        #[arg(long)]
+        non_interactive: bool,
+    },
+    /// Adds a module to the manifest's desired composition and nothing
+    /// else — never deploys, never touches a database (harness #140).
+    /// Adding a module already present is a no-op that succeeds.
+    Add {
+        /// The module slug, as the catalog names it.
+        #[arg(value_name = "MODULE")]
+        module: String,
+        /// The venture manifest (`.json` or `.toml`).
+        #[arg(long, default_value = "venture.json", value_name = "MANIFEST")]
+        manifest: PathBuf,
+        /// Prints exactly one JSON object to stdout instead of prose.
+        #[arg(long)]
+        json: bool,
+        /// Never prompts; suppresses the human `next:` steps.
+        #[arg(long)]
+        non_interactive: bool,
+    },
+    /// Writes a new venture manifest — name and host, no modules.
+    /// Refuses to overwrite an existing one unless `--force`
+    /// (harness #140).
+    Init {
+        /// The venture name (becomes the generated crate name).
+        #[arg(long, value_name = "NAME")]
+        name: String,
+        /// The primary host the backend answers on.
+        #[arg(long, value_name = "HOST")]
+        host: String,
+        /// Where to write the manifest.
+        #[arg(long, default_value = "venture.json", value_name = "MANIFEST")]
+        manifest: PathBuf,
+        /// Replace an existing manifest instead of refusing.
+        #[arg(long)]
+        force: bool,
+        /// Prints exactly one JSON object to stdout instead of prose.
+        #[arg(long)]
+        json: bool,
+        /// Never prompts; suppresses the human `next:` steps.
+        #[arg(long)]
+        non_interactive: bool,
+    },
+    /// Checks the recorded deployment still matches the manifest,
+    /// reporting drift as coded failures in the doctor's JSON shape
+    /// (harness #140).
+    Verify {
+        /// The venture manifest (`.json` or `.toml`).
+        #[arg(long, default_value = "venture.json", value_name = "MANIFEST")]
+        manifest: PathBuf,
+        /// Migration directory holding `.harness-lock.json`.
+        #[arg(long, default_value = "migrations")]
+        migrations: PathBuf,
+        /// Prints exactly one JSON object — the doctor's
+        /// `{schema, ok, failures}` — instead of prose.
+        #[arg(long)]
+        json: bool,
+        /// Never prompts; verify never does anyway.
+        #[arg(long)]
+        non_interactive: bool,
     },
     /// The push transports (issue #184): generate the VAPID key pair,
     /// send one notification through the adapters this venture's
@@ -294,8 +405,8 @@ pub fn run(build: impl Fn() -> Harness, args: impl IntoIterator<Item = String>) 
     let cli = Cli::parse_from(full_argv);
     // The harness-free commands run before (and without) the venture's
     // compiled-in harness.
-    if let Some(result) = harness_free(&cli.command) {
-        return finish(result);
+    if let Some(exit) = harness_free(&cli.command) {
+        return exit;
     }
     let harness = build();
     let sidecars = crate::sidecars::from_cli_or_env(cli.sidecars.as_deref());
@@ -355,21 +466,32 @@ pub fn run(build: impl Fn() -> Harness, args: impl IntoIterator<Item = String>) 
                     plan,
                 },
         } => data::import(&harness, &file, &url, append, plan),
-        // Handled before `build()` above; neither needs a harness.
-        Command::Build { .. } | Command::Push { .. } => {
-            unreachable!("dispatched before the harness is built")
-        }
+        // Handled by `harness_free` before `build()` above: build needs
+        // no harness, the workflow commands work on the manifest and its
+        // records, and push reads the venture's environment.
+        Command::Build { .. }
+        | Command::Plan { .. }
+        | Command::Deploy { .. }
+        | Command::Add { .. }
+        | Command::Init { .. }
+        | Command::Verify { .. }
+        | Command::Push { .. } => unreachable!("dispatched before the harness is built"),
     };
     finish(result)
 }
 
-/// The commands that need no compiled-in harness, run.
+/// The commands that need no compiled-in harness, run — the one seam
+/// both entry points dispatch through, before [`run`] builds the harness
+/// and instead of the harness [`run_standalone`] does not have.
 ///
-/// `fz build` **generates** a harness, so it cannot have one; `fz push`
-/// reads the venture's *environment* rather than its modules, so it does not
-/// need one. `None` for every other command, which is what sends
-/// [`run_standalone`] to its refusal and [`run`] on to `build()`.
-fn harness_free(command: &Command) -> Option<Result<(), String>> {
+/// `fz build` **generates** a harness, so it cannot have one; the manifest
+/// workflow — `fz plan` / `deploy` / `add` / `init` / `verify`, routed by
+/// [`workflow::dispatch`] — works on the manifest and its on-disk records
+/// rather than the compiled-in modules; and `fz push` reads the venture's
+/// *environment* rather than its modules. `None` for every other command,
+/// which is what sends [`run_standalone`] to its refusal and [`run`] on to
+/// `build()`.
+fn harness_free(command: &Command) -> Option<ExitCode> {
     match command {
         Command::Build {
             manifest,
@@ -378,16 +500,16 @@ fn harness_free(command: &Command) -> Option<Result<(), String>> {
             catalog,
             built_at,
             builder,
-        } => Some(build::run(
+        } => Some(finish(build::run(
             manifest,
             out,
             harness_path.as_deref(),
             catalog.as_deref(),
             built_at.as_deref(),
             builder.as_deref(),
-        )),
-        Command::Push { command } => Some(run_push(command)),
-        _ => None,
+        ))),
+        Command::Push { command } => Some(finish(run_push(command))),
+        _ => workflow::dispatch(command),
     }
 }
 
@@ -459,23 +581,27 @@ fn run_push(command: &PushCommand) -> Result<(), String> {
 }
 
 /// Runs the harness-free `fz` commands from a standalone binary (no
-/// compiled-in venture): `fz build <manifest>`, which generates a harness,
-/// and `fz push`, which reads the venture's environment. Every other command
-/// needs the venture's harness and says so.
+/// compiled-in venture): `fz build <manifest>`, which generates a harness;
+/// the manifest workflow — `fz plan` / `deploy` / `add` / `init` /
+/// `verify` — which works on the manifest and its records, not on
+/// compiled-in modules; and `fz push`, which reads the venture's
+/// environment. Every other command needs the venture's harness and says
+/// so.
 #[must_use = "call process::exit with the returned ExitCode"]
 pub fn run_standalone(args: impl IntoIterator<Item = String>) -> ExitCode {
     let mut full_argv: Vec<String> = Vec::with_capacity(8);
     full_argv.push("fz".to_string());
     full_argv.extend(args);
     let cli = Cli::parse_from(full_argv);
-    let Some(result) = harness_free(&cli.command) else {
+    let Some(exit) = harness_free(&cli.command) else {
         eprintln!(
             "fz: this command must run inside a venture (it needs the compiled-in harness — see \
-             the cratefield-cli README). Only `fz build <manifest>` and `fz push` run standalone."
+             the cratefield-cli README). Only `fz build <manifest>`, the manifest workflow (`fz \
+             plan` / `deploy` / `add` / `init` / `verify`) and `fz push` run standalone."
         );
         return ExitCode::FAILURE;
     };
-    finish(result)
+    exit
 }
 
 fn finish(result: Result<(), String>) -> ExitCode {

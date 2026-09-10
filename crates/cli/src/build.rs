@@ -225,7 +225,7 @@ fn parse_limits(raw: &str) -> ResourceLimits {
 /// Parse a manifest from JSON or TOML, chosen by file extension. The
 /// manifest crate itself is JSON/serde-only (so it compiles to wasm for the
 /// compose engine); TOML is decoded here into the same struct.
-fn parse(path: &Path, raw: &str) -> Result<VentureManifest, String> {
+pub(crate) fn parse(path: &Path, raw: &str) -> Result<VentureManifest, String> {
     match path.extension().and_then(|ext| ext.to_str()) {
         Some("toml") => toml::from_str(raw).map_err(|err| format!("invalid TOML manifest: {err}")),
         _ => VentureManifest::from_json_str(raw).map_err(|err| err.to_string()),
