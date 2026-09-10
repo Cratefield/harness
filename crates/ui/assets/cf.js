@@ -470,9 +470,18 @@ function watchUnread(onCount, every = 60000) {
     clearInterval(timer);
     timer = null;
   };
-  const start = () => {
+  // The first read has to succeed before anything is scheduled. A page
+  // that cannot authenticate — a static example, a signed-out visitor,
+  // `cf.auth` returning null — would otherwise poll into a wall forever,
+  // and one live `setInterval` is enough to keep a page (and a CI step
+  // that waits for the event loop to drain) alive indefinitely.
+  const start = async () => {
     if (timer) return;
-    tick();
+    try {
+      onCount(await notifications.unreadCount());
+    } catch {
+      return;
+    }
     timer = setInterval(tick, every);
   };
   document.addEventListener("visibilitychange", () =>

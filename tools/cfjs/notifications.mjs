@@ -237,4 +237,27 @@ async function mount(w, attrs = "") {
   assert(polled === 1, "a visible tab reads the count once on connect");
 }
 
+{
+  // A page with no `cf.auth` — a static example, or a signed-out visitor —
+  // must leave no timer running. This is not only about wasted wakeups:
+  // `site.mjs` ends without `process.exit`, so node exits when the event
+  // loop drains, and one `setInterval` in the page keeps the whole CI step
+  // alive until the job times out. That is how this was found.
+  const w = world({ unread: 1 });
+  // Exactly what `examples/venture/site/index.html` sets: a function,
+  // which is truthy, returning null. Checking `cf.auth` alone does not
+  // catch this — the first read has to actually succeed.
+  w.window.cf.auth = () => null;
+  const timers = [];
+  const realInterval = w.window.setInterval;
+  w.window.setInterval = (...args) => {
+    const id = realInterval(...args);
+    timers.push(id);
+    return id;
+  };
+  await mount(w);
+  assert(timers.length === 0, "with no way to authenticate, it starts no timer");
+  assert(w.requests.length === 0, "and makes no request it could not have signed");
+}
+
 process.exit(failures === 0 ? 0 : 1);
