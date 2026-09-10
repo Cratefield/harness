@@ -1,0 +1,29 @@
+[package]
+name = "cratefield-module-privacy"
+description = "Factory Zero module: subject access and erasure, from what each module declares it holds"
+readme = "README.md"
+keywords = ["cratefield", "privacy", "gdpr", "export", "erasure"]
+categories = ["web-programming"]
+include = ["src/**/*", "migrations/**/*", "tests/**/*", "README.md"]
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+cratefield-core = { workspace = true }
+axum = { workspace = true }
+http = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sea-query = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+cratefield-testing = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt"] }
+tower = { workspace = true }

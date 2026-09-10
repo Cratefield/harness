@@ -983,6 +983,7 @@ mod tests {
             templates: Arc::new(TemplateRegistry::default()),
             venture: Arc::new(Venture::new("cratefield-control-plane", "cratefield.com")),
             unprotected_writes_accepted: false,
+            personal_data: Arc::new(cratefield_core::PersonalDataCatalog::default()),
             ui_mounted: false,
         }
     }
