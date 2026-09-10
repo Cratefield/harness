@@ -620,6 +620,62 @@ Each owns a table the module declares — ship `create_table_sql()` as a
 migration (Step 3). Pair them: an outbox gives at-least-once delivery, an
 inbox key makes the consumer idempotent.
 
+### Send a notification
+
+Reaching a user's phone or browser is `cratefield-module-notifications`,
+not your module: it owns the device registry, the per-account per-category
+preferences, and the delivery policy that prunes a dead token and retries a
+throttled provider. Your module says *what* happened; it says *whether and
+where*.
+
+Take the handle when the venture composes the harness:
+
+```rust,ignore
+let notifications = Notifications::new()
+    .category(Category::new("booking"))
+    .category(Category::new("room_starting").badge(true));
+let notifier = notifications.notifier();
+
+Harness::builder()
+    .module(notifications)
+    .module(MyBookingModule::new(notifier))   // your module holds it
+```
+
+Then send from inside the write that caused it. `notify` **writes
+nothing**: it hands back outbox `INSERT`s for your own batch, so the
+notification is durable exactly when your state change is — the `Outbox`
+rule above, applied.
+
+```rust,ignore
+let enqueued = self.notifier
+    .notify(&*db, &account_id, "booking", Notification::new("Booked", "See you Tuesday"))
+    .await?;
+
+let mut statements = vec![booking_insert];
+statements.extend(enqueued.into_statements());
+db.batch(&statements).await?;        // both, or neither
+
+self.notifier.deliver_now(&scope);   // only now: a drain before the
+                                     // commit would find no row
+```
+
+The order is not interchangeable, and nothing is lost if the isolate dies
+between the two lines: the venture's scheduled entry point drains the rows
+on the next tick.
+
+A module that cannot take a crate dependency on it emits
+`notifications.requested` on the event bus instead, with `account_id`,
+`category` and a `Notification` — the same trade the `waitlist.confirmed`
+subscription makes above: no crate edge, no atomicity with your batch.
+
+Two rules to know before you read the code:
+
+- **`PushError::Unregistered` is a delete instruction** and the only error
+  that prunes a subscription (ADR
+  [0015](adr/0015-platform-neutral-push-recipients.md)).
+- **The preference is read in the drain**, immediately before the send, so
+  an opt-out that arrives after your commit still wins.
+
 ## Step 7 — Conformance
 
 `examples/module-hello/tests/conformance.rs` — the whole file:
@@ -846,6 +902,14 @@ Everything else a module can do, with the module that does it:
   must name a registered module.
 - **Scheduled work** (cron): `Module::scheduled` — see waitlist's pending
   purge in `crates/module-waitlist/src/lib.rs`.
+- **Push notifications**: `crates/module-notifications/` — subscriptions,
+  per-category preferences, fan-out in the caller's own batch, and a drain
+  that prunes, retries and dead-letters (ADR
+  [0016](adr/0016-notifications-module-dead-letters-and-the-account.md)).
+- **A route that acts for a signed-in account**: the same module's
+  `Account` extractor, which delegates to `factory0-auth-client`'s
+  `Authenticated`. `Scope` carries no principal (ADR 0007), so this is
+  where an account id comes from — never a body field.
 - **`/.well-known` discovery routes**: `Module::well_known` (root-level
   only; at most one module per venture may provide one).
 - **CSV admin export with formula-injection escaping**: `cratefield_core::csv_row`.
