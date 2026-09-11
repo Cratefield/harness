@@ -162,7 +162,13 @@ impl EventBus {
             _ => false,
         };
         if handled == 0 && !forwarded {
-            warn!(event = %name, "emitted event has no registered handler");
+            let detail = format!("emitted event `{name}` has no registered handler");
+            warn!(event = %name, "{detail}");
+            // Also to the forwarder, for the same reason the inbound half
+            // does it: on Workers the tracing output is dropped, so a
+            // report that exists only there is a report nobody reads —
+            // which is the failure this warning was added to prevent.
+            crate::logging::forward_internal_error(&detail);
         }
     }
 }
