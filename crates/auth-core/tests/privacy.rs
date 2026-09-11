@@ -31,7 +31,9 @@ const PASSWORD_HASH: &str = "$argon2id$v=19$m=19456,t=2,p=1$c2FsdHNhbHQ$hash-of-
 /// what an authorization code's payload carries.
 const CODE_PAYLOAD: &str = r#"{"redirect_uri":"https://app.example.test/callback","code_challenge":"pkce","sid":"sess-1"}"#;
 
-/// Every table the module owns that holds a person, in declaration order.
+/// Every table the module owns that holds a person **and loses the rows**, in
+/// declaration order. `deletion_jobs` holds a person too and is not here: it
+/// is [`RETAINED_TABLES`], because erasure keeps it.
 const SUBJECT_TABLES: &[&str] = &[
     "users",
     "identities",
@@ -39,6 +41,26 @@ const SUBJECT_TABLES: &[&str] = &[
     "sessions",
     "single_use_tokens",
 ];
+
+/// The tables that hold a person and survive an erasure, with the reason
+/// published beside them (issue #272).
+///
+/// `deletion_jobs` records that a provider asked us to delete somebody and
+/// what was done about it. Deleting that row would stop the status page the
+/// provider was promised from answering and destroy the evidence that the
+/// erasure happened, so it is `Disposition::Retain` — which is a declaration
+/// the manifest and the erasure preview both have to show, not a silence.
+const RETAINED_TABLES: &[&str] = &["deletion_jobs"];
+
+/// Every table the module declares as holding a person, in declaration order:
+/// what `GET /v1/privacy/manifest` publishes and what an erasure plans over.
+fn declared_tables() -> Vec<&'static str> {
+    SUBJECT_TABLES
+        .iter()
+        .chain(RETAINED_TABLES)
+        .copied()
+        .collect()
+}
 
 fn privacy_kit() -> TestHarness {
     let config: Arc<dyn Config> = Arc::new(MapConfig::from_pairs([
@@ -226,12 +248,30 @@ async fn an_erasure_reaches_the_account_its_logins_and_its_live_sessions() {
         assert_eq!(row["action"], "erase", "{table}: {row}");
         assert_eq!(row["rows"], 1, "{table}: {row}");
     }
+    // The deletion queue is planned too, and planned as kept: a preview that
+    // listed only what disappears would read as "nothing else is held here"
+    // (issue #272). Its reason is shown, because that is the part of the
+    // answer a person is least likely to expect.
+    for table in RETAINED_TABLES {
+        let row = plan
+            .iter()
+            .find(|entry| entry["table"] == *table)
+            .unwrap_or_else(|| panic!("{table} missing from the preview: {plan:?}"));
+        assert_eq!(row["action"], "retain", "{table}: {row}");
+        assert!(
+            row["reason"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("the record that the request was honoured"),
+            "{table} has to say why it is kept: {row}"
+        );
+    }
     // The two registration tables hold no person, so they are not planned.
     let planned: Vec<&str> = plan
         .iter()
         .filter_map(|row| row["table"].as_str())
         .collect();
-    assert_eq!(planned, SUBJECT_TABLES, "{plan:?}");
+    assert_eq!(planned, declared_tables(), "{plan:?}");
     // The preview writes nothing.
     assert_eq!(count_for(&kit, "sessions", ALICE).await, 1);
 
@@ -355,6 +395,6 @@ async fn the_manifest_says_the_two_client_tables_hold_software_not_people() {
         .iter()
         .filter_map(|entry| entry["table"].as_str())
         .collect();
-    assert_eq!(holds, SUBJECT_TABLES);
+    assert_eq!(holds, declared_tables());
     assert_eq!(body["holds_personal_data"], true);
 }

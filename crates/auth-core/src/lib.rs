@@ -234,6 +234,23 @@ impl Module for AuthCore {
         &[Port::Db, Port::Clock, Port::IdGen]
     }
 
+    /// The eight tables migrations `0001`–`0006` leave behind.
+    ///
+    /// `deletion_jobs` was missing from this list for as long as it has
+    /// existed (issue #272). Its migration created it, the module read and
+    /// wrote it, and no list anywhere said it was ours — so it was outside
+    /// `fz data export`, which walks this list; outside subject access and
+    /// erasure, which walk [`personal_data`](Module::personal_data); and
+    /// outside the rule that compares the two, which can only read the lists
+    /// it is handed. It holds `provider_subject`, a person's identifier at
+    /// their identity provider.
+    ///
+    /// Adding it changes what a whole-database `fz data export` carries and
+    /// what an `fz data import` expects to find: a move of a venture now
+    /// takes the deletion queue with it, which is the right answer — a
+    /// restore that lost it would lose the record that somebody's deletion
+    /// request was honoured — but it is a change to the shape of an export,
+    /// not only to a declaration.
     fn tables(&self) -> &'static [&'static str] {
         &[
             "users",
@@ -243,6 +260,7 @@ impl Module for AuthCore {
             "single_use_tokens",
             "clients",
             "client_redirect_uris",
+            "deletion_jobs",
         ]
     }
 
@@ -269,7 +287,24 @@ impl Module for AuthCore {
     /// `ip_hash` is deliberately **not** redacted. It is one-way and it is the
     /// subject's own — "we kept a fingerprint of where you signed in from" is
     /// part of the answer they asked for, and a hash nobody can present is not
-    /// a capability.
+    /// a capability. `deletion_jobs.confirmation_code` is not redacted for the
+    /// same reason its own migration gives: it identifies a request, the
+    /// status it reveals is the requester's own, and it is what the person
+    /// needs in order to check that request — printing it in their export
+    /// hands them nothing they did not already have.
+    ///
+    /// **`deletion_jobs` is keyed differently from the rest, and that is a
+    /// known gap.** Every other set here is matched on the account id, under
+    /// one column name or another; this one is matched on `provider_subject`,
+    /// because the row is created by a provider callback that names the person
+    /// only by the provider's own id for them and there is no account column
+    /// to put in its place. A subject access request made with an account id
+    /// therefore returns nothing from this table even when a row exists. The
+    /// declaration is still the honest one — the column that identifies a
+    /// person here *is* `provider_subject` — but joining it back to the
+    /// account through `identities` is a change to the catalogue type and to
+    /// both query builders, so it is filed as its own (issue #281) rather
+    /// than papered over with a column that would not be filled.
     fn personal_data(&self) -> &'static [PersonalDataSet] {
         const SETS: &[PersonalDataSet] = &[
             PersonalDataSet {
@@ -337,6 +372,29 @@ impl Module for AuthCore {
                 "The exact addresses each registered application may be sent back to once a \
                  sign-in finishes. It describes where software lives, not a person.",
             ),
+            // The deletion queue (issue #272). Last in the catalogue, which
+            // means first under erasure — it is `Retain`, so nothing is
+            // deleted from it either way, and the position simply keeps the
+            // four `users` children between it and the row they reference.
+            PersonalDataSet {
+                table: "deletion_jobs",
+                subject: "provider_subject",
+                kind: DataKind::Identifier,
+                disposition: Disposition::Retain(
+                    "A deletion request and what was done about it is the record that the \
+                     request was honoured. Meta's callback is answered with a confirmation \
+                     code and a status page that has to keep answering when the provider or \
+                     the person comes back to check, and erasing the row would both stop \
+                     that page working and destroy the only evidence the erasure happened.",
+                ),
+                description: "A request from Google, Apple or Meta to delete what we hold \
+                              about you, recorded when it arrived: which provider sent it, \
+                              that provider's own id for you, the code the status page is \
+                              looked up by, when it came in, and what was done — your \
+                              sign-in method unlinked, your whole account removed, or \
+                              nothing, because there was nothing left to remove.",
+                redacted: &[],
+            },
         ];
         SETS
     }
@@ -475,10 +533,37 @@ mod tests {
                 "sessions",
                 "single_use_tokens",
                 "clients",
-                "client_redirect_uris"
+                "client_redirect_uris",
+                // Issue #272: the table the migrations created and this list
+                // never mentioned, so nothing exported or erased it.
+                "deletion_jobs"
             ]
         );
         assert!(!module.public_writes());
+    }
+
+    /// Every table the migrations create is listed, and every table listed is
+    /// one the migrations create (issue #272).
+    ///
+    /// The conformance kit checks this for every module; asserted here as
+    /// well because `auth-core` is the module it was found in, and because
+    /// the second half is what keeps the first from passing vacuously: a scan
+    /// that stopped matching would report no unlisted table forever.
+    #[test]
+    fn tables_and_migrations_agree() {
+        let module = AuthCore::new();
+        let mut created = cratefield_core::migration_tables(&module);
+        created.sort();
+        let mut listed: Vec<String> = module.tables().iter().map(|t| (*t).to_owned()).collect();
+        listed.sort();
+        assert_eq!(created, listed);
+        // Named rather than only counted: the rebuild in `0003` creates
+        // `single_use_tokens_rebuild` and renames it over the original, so
+        // the scan has to end with the original and not with both.
+        assert!(created.contains(&"deletion_jobs".to_owned()));
+        assert!(created.contains(&"single_use_tokens".to_owned()));
+        assert!(!created.contains(&"single_use_tokens_rebuild".to_owned()));
+        assert!(cratefield_core::unlisted_tables(&module).is_empty());
     }
 
     #[test]

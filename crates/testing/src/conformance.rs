@@ -132,7 +132,11 @@ fn full_fake_ports() -> Ports {
 ///    `/.well-known` and never under `/v1` (issue #46);
 /// 7. every table the module owns has a personal-data declaration, so a
 ///    table cannot be added to `tables()` and left outside export and
-///    erasure (issue #244).
+///    erasure (issue #244);
+/// 8. every table the module's **migrations** create is in `tables()`, so a
+///    table cannot come into being outside all three lists at once — and,
+///    the other way round, every table `tables()` names is one the scan
+///    actually found, so check 8 cannot pass by seeing nothing (issue #272).
 ///
 /// # Panics
 ///
@@ -260,7 +264,96 @@ fn check_personal_data(module: &dyn Module) {
     }
 }
 
+/// The migrations-versus-`tables()` rule, as a value rather than a panic
+/// (issue #272). `Err` is the panic message.
+///
+/// **No exemption list.** The rule it completes has one, emptied in #271, and
+/// an entry in it is a debt with a number on it. This one starts empty and
+/// stays that way: a module that cannot pass it has a table outside export and
+/// outside erasure right now, and the entry would be the record of deciding
+/// not to mind. #265 is what a list that grows looks like.
+///
+/// `found` is every table the module's migrations leave behind and `listed` is
+/// what `tables()` says, and **both directions are checked**, deliberately:
+///
+/// - a table in `found` and not in `listed` is the hole this exists for;
+/// - a table in `listed` that the scan did not find is the failure mode that
+///   makes the first check pass for the wrong reason. "No unlisted table" is
+///   an absence assertion, and a scan that has quietly stopped matching —
+///   a dialect that stops embedding its SQL, a `CREATE TABLE` written a way
+///   the walk does not read — satisfies it perfectly while seeing nothing.
+///   A module with migrations and a table list must be able to show the scan
+///   found what it listed.
+fn unlisted_verdict(
+    name: &str,
+    migration_count: usize,
+    listed: &[&'static str],
+    found: &[String],
+) -> Result<(), String> {
+    if migration_count > 0 {
+        let missed: Vec<&str> = listed
+            .iter()
+            .copied()
+            .filter(|table| !found.iter().any(|seen| seen.eq_ignore_ascii_case(table)))
+            .collect();
+        if !missed.is_empty() {
+            return Err(format!(
+                "[{name}] lists {missed:?} in `Module::tables()`, but the `CREATE TABLE` scan \
+                 over its {migration_count} migrations did not find them — it found {found:?}. \
+                 Either the module does not create those tables, or the scan has stopped \
+                 matching; the second is why this is checked at all, because \"no unlisted \
+                 table\" is an absence assertion and a scan that sees nothing satisfies it \
+                 forever (issue #272)."
+            ));
+        }
+    }
+
+    let unlisted: Vec<&String> = found
+        .iter()
+        .filter(|table| !listed.iter().any(|name| name.eq_ignore_ascii_case(table)))
+        .collect();
+    if unlisted.is_empty() {
+        return Ok(());
+    }
+    Err(format!(
+        "[{name}] creates {unlisted:?} in its migrations and does not list them in \
+         `Module::tables()`. A table in neither list is outside three things at once: \
+         `fz data export` walks `tables()`, subject access and erasure walk \
+         `personal_data()`, and the rule that compares them can only read the two lists it \
+         is handed. `auth-core` held `deletion_jobs` — and a person's identifier at their \
+         identity provider with it — in exactly that position (issue #272). Add each table \
+         to `tables()` and give it a `PersonalDataSet`; note that `tables()` is also what a \
+         whole-database `fz data export`/`import` carries, so adding one changes what a \
+         move of this venture takes with it."
+    ))
+}
+
+/// Fails a module that creates a table its `tables()` never mentions
+/// (issue #272).
+///
+/// The converse of [`check_personal_data`], one step further back: that rule
+/// reads `tables()`, so it cannot see a table that never reached the list.
+/// The migrations can, because a `CREATE TABLE` is where a table comes into
+/// being and is the one statement its author cannot forget to write.
+///
+/// It reaches a module through the module's own `tests/conformance.rs`, which
+/// is the cost of being a kit check rather than a build error: a module
+/// without that file is not checked by anything. The control plane's two
+/// modules are in exactly that position and own six unlisted tables between
+/// them (issue #280).
+fn check_module_tables(module: &dyn Module) {
+    if let Err(message) = unlisted_verdict(
+        module.name(),
+        module.migrations().sqlite.len() + module.migrations().postgres.len(),
+        module.tables(),
+        &cratefield_core::migration_tables(module),
+    ) {
+        panic!("{message}");
+    }
+}
+
 fn conformance_inner(inner: &Arc<dyn Module>, parity: bool) {
+    check_module_tables(inner.as_ref());
     check_personal_data(inner.as_ref());
     let name = inner.name().to_owned();
     let version = inner.version().to_owned();
@@ -783,7 +876,7 @@ pub async fn push_recipient_conformance(
 
 #[cfg(test)]
 mod tests {
-    use super::{UNDECLARED_TABLES, Verdict, personal_data_verdict};
+    use super::{UNDECLARED_TABLES, Verdict, personal_data_verdict, unlisted_verdict};
 
     /// A fixture list, so these cover the mechanism rather than whatever
     /// happens to be exempt on the day.
@@ -863,5 +956,75 @@ mod tests {
             FIXTURE,
         ));
         assert!(message.contains("ledger_fx"), "{message}");
+    }
+
+    fn problem(verdict: Result<(), String>) -> String {
+        verdict.err().unwrap_or_default()
+    }
+
+    #[test]
+    fn a_module_that_lists_every_table_it_creates_passes() {
+        assert!(
+            unlisted_verdict(
+                "auth-core",
+                6,
+                &["users", "sessions"],
+                &["users".to_owned(), "sessions".to_owned()],
+            )
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn a_table_the_migrations_create_and_tables_omits_fails() {
+        // The live shape: `auth-core` creates `deletion_jobs` in migration
+        // 0005 and lists seven tables that do not include it (issue #272).
+        let message = problem(unlisted_verdict(
+            "auth-core",
+            6,
+            &["users"],
+            &["users".to_owned(), "deletion_jobs".to_owned()],
+        ));
+        assert!(message.contains("deletion_jobs"), "{message}");
+        assert!(message.contains("#272"), "{message}");
+        // It has to say what to write, and that the list is also the export's.
+        assert!(message.contains("PersonalDataSet"), "{message}");
+        assert!(message.contains("fz data export"), "{message}");
+    }
+
+    #[test]
+    fn a_scan_that_found_nothing_fails_rather_than_passing_vacuously() {
+        // The failure this epic has hit twice: "no unlisted table" is an
+        // absence assertion, and a scan that has stopped matching satisfies
+        // it forever. A module with migrations and a table list must be able
+        // to show the scan found what it listed.
+        let message = problem(unlisted_verdict("auth-core", 6, &["users"], &[]));
+        assert!(message.contains("stopped matching"), "{message}");
+        assert!(message.contains("users"), "{message}");
+    }
+
+    #[test]
+    fn a_scan_that_found_only_some_of_the_listed_tables_fails() {
+        // Not only the all-or-nothing case: a walk that stops reading after
+        // the first statement of a set would find one table and miss the rest.
+        let message = problem(unlisted_verdict(
+            "auth-core",
+            6,
+            &["users", "sessions"],
+            &["users".to_owned()],
+        ));
+        // The one it missed is named, and what it did find is shown beside
+        // it: a message that only said "something is missing" would send the
+        // reader back to the scan with nothing to go on.
+        assert!(message.contains(r#"lists ["sessions"]"#), "{message}");
+        assert!(message.contains(r#"it found ["users"]"#), "{message}");
+    }
+
+    #[test]
+    fn a_module_with_no_migrations_is_not_asked_to_have_found_anything() {
+        // `auth-passkeys` and its siblings write to `auth-core`'s schema and
+        // ship no migrations of their own; there is nothing for the scan to
+        // read and nothing it could have missed.
+        assert!(unlisted_verdict("auth-passkeys", 0, &[], &[]).is_ok());
     }
 }

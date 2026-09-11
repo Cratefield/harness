@@ -409,6 +409,100 @@ pub fn undeclared_tables(module: &dyn crate::Module) -> Vec<&'static str> {
         .collect()
 }
 
+/// Every table a module's migrations leave behind, on either dialect.
+///
+/// The union of the two sets rather than one of them: the `postgres` set is an
+/// override list (ADR 0004) that reuses most of the sqlite files unchanged, so
+/// a table is the module's if either dialect creates it. Each set is read in
+/// its own apply order, because that is what makes a drop or a rename mean
+/// anything — see [`created_tables`](crate::created_tables) for how a
+/// statement is read and which shapes are deliberately not counted.
+///
+/// The list is the input to [`unlisted_tables`], and it is public because the
+/// check that consumes it has to be able to say *what it found* and not only
+/// what was missing: an absence assertion over a scan that has silently
+/// stopped matching passes for the wrong reason, forever.
+#[must_use]
+pub fn migration_tables(module: &dyn crate::Module) -> Vec<String> {
+    let migrations = module.migrations();
+    let mut found: Vec<String> = Vec::new();
+    for set in [migrations.sqlite, migrations.postgres] {
+        // Joined with a newline, never bare: a migration whose last line is a
+        // `--` comment would otherwise swallow the first line of the next.
+        let sql = set
+            .iter()
+            .map(|migration| migration.sql)
+            .collect::<Vec<_>>()
+            .join("\n");
+        for table in crate::lint::created_tables(&sql) {
+            if !found.iter().any(|seen| seen.eq_ignore_ascii_case(&table)) {
+                found.push(table);
+            }
+        }
+    }
+    found
+}
+
+/// The tables a module's own migrations create and its
+/// [`Module::tables`](crate::Module::tables) never mentions: the hole the
+/// declaration rule cannot see (issue #272).
+///
+/// [`undeclared_tables`] asks whether every table in `tables()` has a
+/// declaration, which is the right question about a table that is in the
+/// list. It has nothing to say about a table that is in neither list, and
+/// that table is outside **three** things at once rather than one: `fz data
+/// export` walks `tables()`, subject access and erasure walk
+/// `personal_data()`, and the rule compares the two. `auth-core` grew
+/// `deletion_jobs` — a row holding `provider_subject`, a person's identifier
+/// at their identity provider — and the table was in none of them.
+///
+/// So the comparison is against the migrations, because a `CREATE TABLE` is
+/// where a table actually comes into being and is the one statement an author
+/// cannot forget to write. A non-empty result means the module owns a table
+/// nothing in the harness knows it owns.
+///
+/// Like [`undeclared_tables`] this is a **kit** check rather than a build
+/// error, for the same reason: a venture should not fail to boot because some
+/// other module's author has not got to this yet, and the place a module is
+/// supposed to be complete is its own test suite. `cratefield_testing::conformance`
+/// fails on a non-empty result.
+///
+/// ```
+/// # use cratefield_core::{
+/// #     Config, ConfigError, Migrations, Module, ModuleContext, PersonalDataSet, Port,
+/// #     SqlMigration, unlisted_tables,
+/// # };
+/// struct Notes;
+/// impl Module for Notes {
+///     fn name(&self) -> &'static str { "notes" }
+///     fn version(&self) -> &'static str { "0.1.0" }
+///     fn requires(&self) -> &'static [Port] { &[] }
+///     fn tables(&self) -> &'static [&'static str] { &["notes"] }
+///     fn migrations(&self) -> Migrations {
+///         const MIGRATIONS: [SqlMigration; 1] = [SqlMigration {
+///             id: "0001",
+///             name: "init",
+///             sql: "CREATE TABLE notes (id TEXT PRIMARY KEY);
+///                   CREATE TABLE note_tags (note_id TEXT NOT NULL);",
+///             transactional: true,
+///         }];
+///         Migrations::sqlite(&MIGRATIONS)
+///     }
+/// #   fn validate_config(&self, _cfg: &dyn Config) -> Result<(), ConfigError> { Ok(()) }
+/// #   fn router(&self, _ctx: ModuleContext) -> axum::Router { axum::Router::new() }
+/// }
+/// // The migration creates two tables; `tables()` names one. The other is
+/// // outside export, outside erasure, and outside the rule that checks them.
+/// assert_eq!(unlisted_tables(&Notes), ["note_tags"]);
+/// ```
+#[must_use]
+pub fn unlisted_tables(module: &dyn crate::Module) -> Vec<String> {
+    let listed = module.tables();
+    let mut found = migration_tables(module);
+    found.retain(|table| !listed.iter().any(|name| name.eq_ignore_ascii_case(table)));
+    found
+}
+
 /// An unquoted SQL identifier: ASCII letters, digits and underscore, starting
 /// with a letter or underscore, at most 63 bytes — the shortest limit among the
 /// dialects the harness targets (Postgres truncates there; SQLite does not
