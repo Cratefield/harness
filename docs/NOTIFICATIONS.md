@@ -94,6 +94,36 @@ variable at a time is what development looks like.
 It also refuses production when a module requires `Push` and no transport is
 routed at all, and when a category opts into email with no `Mailer` wired.
 
+## Preferences
+
+One switch per account, per category, per channel. The `Category` defaults
+above are only what applies until the account says otherwise; a stored row
+overrides them channel by channel.
+
+| Route | Does |
+|---|---|
+| `GET /v1/notifications/preferences` | The **effective** answer: every declared category with the value in force, the account's row where it has one and the category's default where it does not |
+| `PUT /v1/notifications/preferences` | A patch — `{"preferences": {"booking": {"push": false}}}`. An omitted channel keeps the value it had; a category this venture does not declare is refused `400 unknown-category` rather than stored |
+
+Both are behind the account's own token, and both answer that same effective
+view, so a client renders what the `PUT` returns without a second read.
+
+### A late opt-out wins
+
+The preference that decides a send is the one read **at delivery**, not the one
+in force when `notify()` wrote the row.
+
+| Channel | Where it is decided |
+|---|---|
+| In-app | At `notify()`, because that is when the row is written. An account with no stored row keeps the record even for a category whose push is off by default — switching push off silences the interruption, not the history |
+| Push | At `notify()` **and again in the drain**. Somebody who switches a category off while a notification is queued does not get it |
+| Email | At `notify()` and again in the drain, which re-reads the verified address and the unsubscribe state too. All three can change after the row is written, and the later answer is the one that counts |
+
+A preference row that will not decode fails the read with a `500` rather than
+falling back to the default. Treating an unreadable row as absent would turn an
+explicit opt-out into an opt-in, and mailing or pushing to somebody who
+switched a category off is the worse failure.
+
 ## The failure contract
 
 `Push::send` answers with `PushOutcome` or fails with `PushError`, and the
@@ -381,9 +411,17 @@ A device token, an FCM registration token and a Web Push endpoint are all
 - Inbox rows are retained for `notifications.inbox_retention_days` (default
   90) and only once **read or archived** — an unread row is still waiting to
   be seen, however old.
+- Provider error text is scrubbed twice: `MailError` and `PushError` scrub in
+  their own `Display`, and `notifications_dead_letters.last_error` is scrubbed
+  again at the one place the column is bound, whatever the caller passes. A
+  provider `422` quoting the recipient address used to sit in plain text in a
+  venture's own table while the log showed it correctly redacted (issue #235).
 - Every table the module owns is declared in `Module::tables()`, so
-  `fz data export` and the erasure path in `cratefield-module-privacy` see
-  them. See [`PRIVACY.md`](PRIVACY.md).
+  `fz data export` carries all seven. **Erasure does not reach them yet**:
+  `cratefield-module-privacy` works from `Module::personal_data()`, which this
+  module has never declared — so a subject-access or erasure request runs
+  straight past the stored addresses, device tokens and inbox rows. That is
+  issue #244, open. See [`PRIVACY.md`](PRIVACY.md).
 
 Put no more in a payload than the category needs. A lock screen is a public
 surface.

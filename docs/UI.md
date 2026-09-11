@@ -235,8 +235,9 @@ fetched cross-origin, and that is the same allowlist the API already needs.
 The second half of the embed (issue #183). It subscribes a browser to Web
 Push and registers the subscription with
 `cratefield-module-notifications`, which sends through
-`cratefield-adapter-webpush`. `docs/PUSH-ENV.md` is the server side;
-this is the page's.
+`cratefield-adapter-webpush`. [`NOTIFICATIONS.md`](NOTIFICATIONS.md) is the
+server side — the transports, the wiring and the failure contract, with
+[`PUSH-ENV.md`](PUSH-ENV.md) for the variables. This is the page's.
 
 ```html
 <script>window.cf = { auth: () => session.accessToken };</script>
