@@ -1,0 +1,53 @@
+[package]
+name = "sidecar-module-template"
+description = "One module served as its own Worker: copy this, edit src/module.rs, deploy (issue #63)"
+publish = false
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+# `cdylib` for worker-build's wasm output; `rlib` so `tests/` can build the
+# same module the Worker serves and run the conformance kit against it.
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[lints]
+workspace = true
+
+[dependencies]
+cratefield-core = { workspace = true }
+cratefield-runtime-cloudflare = { workspace = true }
+axum = { workspace = true }
+http = { workspace = true }
+serde = { workspace = true }
+schemars = { workspace = true }
+serde_json = { workspace = true }
+sea-query = { workspace = true }
+tracing = { workspace = true }
+time = { workspace = true }
+worker = { workspace = true }
+
+# Host-only: the `fz` bin (`src/fz_main.rs`) uses it for
+# `fz migrations collect` and `fz doctor`. Scoped to every non-wasm
+# target so the CLI and its native-only dependencies (rusqlite, sqlx)
+# never enter the wasm graph worker-build compiles; the bin target is
+# host-only anyway, so this loses nothing.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+cratefield-cli = { workspace = true }
+
+[[bin]]
+name = "fz"
+path = "src/fz_main.rs"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+getrandom = { workspace = true }
+
+[dev-dependencies]
+# The `postgres` feature unlocks the Postgres parity leg of the testing
+# kit (issue #20); the leg itself only runs when FZ_TEST_POSTGRES_URL
+# names a server. Dev-only, so it never reaches the Worker's wasm graph.
+cratefield-testing = { workspace = true, features = ["postgres"] }
+pollster = { workspace = true }
+tower = { workspace = true }

@@ -1,0 +1,43 @@
+# The sidecar Worker's deployment configuration. The database binding and
+# the name are the two values you must set before the first deploy; the
+# secrets are put with `wrangler secret put` (see `.dev.vars.example` for
+# local development).
+name = "my-sidecar"
+main = "build/worker/shim.mjs"
+compatibility_date = "2026-09-01"
+
+[build]
+command = "worker-build"
+
+[observability]
+enabled = true
+
+# **Not publicly routable, on purpose.** No `workers_dev`, no `routes`.
+#
+# The host's rate limiting, captcha checks and request-id trust all key
+# off the `cf-connecting-ip` *the host resolved and forwards*. This Worker
+# is directly reachable by the internet only if you give it a URL — and a
+# request that arrives directly can carry any `cf-connecting-ip` it likes,
+# bypassing every one of those controls without touching the host. The
+# service binding is the only door: the host is the public face, this
+# Worker answers it at `/v1/<module name>`, and `/__health` exists for
+# probes. Do not add `workers_dev` or `routes` back without an ADR.
+workers_dev = false
+
+# The customer's own database — **the same database the host Worker
+# binds**, because a sidecar is a module of that venture, not a separate
+# tenant. Copy `database_id` from the host's `wrangler.toml`, not from a
+# fresh `wrangler d1 create`: two databases here would deploy cleanly and
+# split the data silently.
+[[d1_databases]]
+binding = "DB"
+database_name = "my-venture-db"
+database_id = "<the host's database id>"
+migrations_dir = "migrations"
+
+# The sidecar's own cron. The host's `serve_scheduled` fans a cron out
+# over *its* modules; a trigger configured on the host never fires this
+# Worker's `scheduled()` handler, and a purge that silently never runs is
+# exactly the failure this template exists to prevent. Fire it here.
+[triggers]
+crons = ["17 3 * * *"]

@@ -1,0 +1,29 @@
+# Local development secrets (`wrangler dev` reads `.dev.vars`).
+#
+# **These are this Worker's own secrets — never the host's.** A sidecar
+# must not receive the host's `HARNESS_SECRET` (it signs the confirm and
+# unsubscribe links every module mints; a sidecar holding it could forge
+# them for the host's modules) and must not receive the host's
+# `ADMIN_TOKEN` (it would open the host's admin plane). Each Worker is
+# provisioned and rotated separately; this one's `Authorization` stops at
+# its own admin check. `SIDECAR_GATEWAY_SECRET` is the one value that is
+# *deliberately* shared with the host, because it is its own secret: an
+# HMAC over the fact that the host already checked what it needed to
+# check (ADR 0009 amendment).
+
+# Signs this module's own tokens and links (>= 32 bytes).
+HARNESS_SECRET=generate-with-openssl-rand-hex-32
+
+# This sidecar's own admin plane. Distinct from the host's.
+ADMIN_TOKEN=generate-a-separate-one
+
+# The gateway secret, on both this Worker and the host (>= 32 bytes).
+# With `SIDECAR_REQUIRE_GATEWAY=1` this Worker refuses every `/v1/*` and
+# `/__surface` request whose `x-harness-gateway` token it cannot verify,
+# so a directly-routable sidecar protects its API even if someone adds a
+# public route by mistake.
+SIDECAR_GATEWAY_SECRET=generate-yet-another-one
+SIDECAR_REQUIRE_GATEWAY=1
+
+# Optional: retention window for the notes purge, in days.
+# NOTES_RETENTION_DAYS=30
