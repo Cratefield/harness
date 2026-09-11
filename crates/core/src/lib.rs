@@ -37,6 +37,7 @@ mod signer;
 mod surface;
 mod template;
 mod tenant;
+mod tenant_conn;
 mod venture;
 
 pub use admin::{bearer_token, constant_time_eq, require_admin};
@@ -106,6 +107,8 @@ pub use surface::{
 };
 pub use template::{Rendered, Template, TemplateError, TemplateRegistry};
 pub use tenant::{
-    IMPLICIT_TENANT, ImplicitTenant, Resolution, ResolveTenant, Tenant, TenantId, TenantStatus,
+    IMPLICIT_TENANT, ImplicitTenant, Resolution, ResolveTenant, Tenant, TenantDatabases,
+    TenantDbError, TenantId, TenantRouting, TenantStatus,
 };
+pub use tenant_conn::TenantConn;
 pub use venture::{Brand, Venture, VentureEnv};
