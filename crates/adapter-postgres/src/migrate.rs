@@ -233,21 +233,16 @@ mod tests {
     use super::select_set;
     use cratefield_core::{Migrations, SqlMigration};
 
-    const PORTABLE: SqlMigration = SqlMigration {
-        id: "0001",
-        name: "init",
-        sql: "CREATE TABLE t (id TEXT PRIMARY KEY, n INTEGER NOT NULL DEFAULT 0);",
-        transactional: true,
-    };
+    const PORTABLE: SqlMigration = SqlMigration::new(
+        "0001",
+        "init",
+        "CREATE TABLE t (id TEXT PRIMARY KEY, n INTEGER NOT NULL DEFAULT 0);",
+    );
 
     #[test]
     fn prefers_the_postgres_set_when_shipped() {
-        const PG: SqlMigration = SqlMigration {
-            id: "0001",
-            name: "init",
-            sql: "CREATE TABLE t (id TEXT PRIMARY KEY);",
-            transactional: true,
-        };
+        const PG: SqlMigration =
+            SqlMigration::new("0001", "init", "CREATE TABLE t (id TEXT PRIMARY KEY);");
         let migrations = Migrations {
             sqlite: &[PORTABLE],
             postgres: &[PG],
@@ -267,12 +262,8 @@ mod tests {
 
     #[test]
     fn rejects_sqlite_that_fails_the_lint() {
-        const NOT_PORTABLE: SqlMigration = SqlMigration {
-            id: "0002",
-            name: "oops",
-            sql: "CREATE TABLE t (id SERIAL PRIMARY KEY);",
-            transactional: true,
-        };
+        const NOT_PORTABLE: SqlMigration =
+            SqlMigration::new("0002", "oops", "CREATE TABLE t (id SERIAL PRIMARY KEY);");
         let migrations = Migrations::sqlite(&[PORTABLE, NOT_PORTABLE]);
         let err = select_set(&migrations).expect_err("SERIAL is not portable");
         assert!(err.contains("0002/oops"), "names the file: {err}");

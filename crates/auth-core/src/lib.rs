@@ -88,78 +88,70 @@ pub const DEFAULT_SECRET_OVERLAP_SECS: u64 = 3600;
 
 /// The schema migration of issue #5: the seven-table schema in the
 /// harness's portable SQL subset, embedded per the module contract.
-const MIGRATION_INIT: SqlMigration = SqlMigration {
-    id: "0001",
-    name: "init",
-    sql: include_str!("../migrations/sqlite/0001_init.sql"),
-    transactional: true,
-};
+const MIGRATION_INIT: SqlMigration = SqlMigration::new(
+    "0001",
+    "init",
+    include_str!("../migrations/sqlite/0001_init.sql"),
+);
 
 /// The rotation migration of issue #6: the previous client secret's
 /// hash and the instant it stops verifying.
-const MIGRATION_ROTATION: SqlMigration = SqlMigration {
-    id: "0002",
-    name: "client_secret_rotation",
-    sql: include_str!("../migrations/sqlite/0002_client_secret_rotation.sql"),
-    transactional: true,
-};
+const MIGRATION_ROTATION: SqlMigration = SqlMigration::new(
+    "0002",
+    "client_secret_rotation",
+    include_str!("../migrations/sqlite/0002_client_secret_rotation.sql"),
+);
 
 /// The deletion-job table of issue #18: a provider's "delete this
 /// person's data" request, recorded before it is carried out.
-const MIGRATION_DELETION_JOBS: SqlMigration = SqlMigration {
-    id: "0005",
-    name: "deletion_jobs",
-    sql: include_str!("../migrations/sqlite/0005_deletion_jobs.sql"),
-    transactional: true,
-};
+const MIGRATION_DELETION_JOBS: SqlMigration = SqlMigration::new(
+    "0005",
+    "deletion_jobs",
+    include_str!("../migrations/sqlite/0005_deletion_jobs.sql"),
+);
 
 /// The password lockout of issue #12: the per-account failure counter
 /// the `RateLimiter` port cannot provide, because it is keyed on the
 /// account rather than on the request.
-const MIGRATION_PASSWORD_LOCKOUT: SqlMigration = SqlMigration {
-    id: "0006",
-    name: "password_lockout",
-    sql: include_str!("../migrations/sqlite/0006_password_lockout.sql"),
-    transactional: true,
-};
+const MIGRATION_PASSWORD_LOCKOUT: SqlMigration = SqlMigration::new(
+    "0006",
+    "password_lockout",
+    include_str!("../migrations/sqlite/0006_password_lockout.sql"),
+);
 
 /// The passkey clone signal of issue #14: `credentials.passkey_suspect_at`.
-const MIGRATION_SUSPECT: SqlMigration = SqlMigration {
-    id: "0004",
-    name: "passkey_suspect",
-    sql: include_str!("../migrations/sqlite/0004_passkey_suspect.sql"),
-    transactional: true,
-};
+const MIGRATION_SUSPECT: SqlMigration = SqlMigration::new(
+    "0004",
+    "passkey_suspect",
+    include_str!("../migrations/sqlite/0004_passkey_suspect.sql"),
+);
 
 /// The token-issuing migration of issue #9: the sessions `amr` column
 /// and the `refresh_token` single-use-token kind.
-const MIGRATION_TOKENS: SqlMigration = SqlMigration {
-    id: "0003",
-    name: "token_issuing",
-    sql: include_str!("../migrations/sqlite/0003_token_issuing.sql"),
-    transactional: true,
-};
+const MIGRATION_TOKENS: SqlMigration = SqlMigration::new(
+    "0003",
+    "token_issuing",
+    include_str!("../migrations/sqlite/0003_token_issuing.sql"),
+);
 
 /// The Postgres form of the init migration: the same DDL with `BYTEA`
 /// where SQLite has `BLOB` (harness issue #18, ADR 0004). The `id` is
 /// identical to the sqlite one so the tracking key `<module>/<id>` — and
 /// with it the id-stability contract in the migration runner — holds on
 /// both dialects.
-const MIGRATION_INIT_POSTGRES: SqlMigration = SqlMigration {
-    id: "0001",
-    name: "init",
-    sql: include_str!("../migrations/postgres/0001_init.sql"),
-    transactional: true,
-};
+const MIGRATION_INIT_POSTGRES: SqlMigration = SqlMigration::new(
+    "0001",
+    "init",
+    include_str!("../migrations/postgres/0001_init.sql"),
+);
 
 /// The Postgres form of the token-issuing migration: the rebuild
 /// applies as written; only the byte column type differs.
-const MIGRATION_TOKENS_POSTGRES: SqlMigration = SqlMigration {
-    id: "0003",
-    name: "token_issuing",
-    sql: include_str!("../migrations/postgres/0003_token_issuing.sql"),
-    transactional: true,
-};
+const MIGRATION_TOKENS_POSTGRES: SqlMigration = SqlMigration::new(
+    "0003",
+    "token_issuing",
+    include_str!("../migrations/postgres/0003_token_issuing.sql"),
+);
 
 /// Router state: the module context and the resolved rotation overlap.
 pub(crate) struct ModuleState {

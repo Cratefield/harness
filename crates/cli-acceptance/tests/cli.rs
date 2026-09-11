@@ -227,12 +227,11 @@ fn doctor_fails_on_banned_sql_tokens() {
             &[]
         }
         fn migrations(&self) -> Migrations {
-            const BAD: [SqlMigration; 1] = [SqlMigration {
-                id: "0001",
-                name: "bad",
-                sql: "CREATE TABLE t (id INTEGER PRIMARY KEY AUTOINCREMENT, created TEXT);",
-                transactional: true,
-            }];
+            const BAD: [SqlMigration; 1] = [SqlMigration::new(
+                "0001",
+                "bad",
+                "CREATE TABLE t (id INTEGER PRIMARY KEY AUTOINCREMENT, created TEXT);",
+            )];
             Migrations {
                 sqlite: &BAD,
                 postgres: &[],

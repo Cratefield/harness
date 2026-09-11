@@ -53,47 +53,42 @@ fn accept_any_answers() -> AnswersSchema {
 /// The module's migrations: the `waitlist_entries` table in the portable
 /// SQL subset (issue #11), plus the entry generation that confirm tokens
 /// bind to (issue #127).
-const MIGRATION_INIT: SqlMigration = SqlMigration {
-    id: "0001",
-    name: "init",
-    sql: include_str!("../migrations/sqlite/0001_init.sql"),
-    transactional: true,
-};
+const MIGRATION_INIT: SqlMigration = SqlMigration::new(
+    "0001",
+    "init",
+    include_str!("../migrations/sqlite/0001_init.sql"),
+);
 
-const MIGRATION_ENTRY_GENERATION: SqlMigration = SqlMigration {
-    id: "0002",
-    name: "entry_generation",
-    sql: include_str!("../migrations/sqlite/0002_entry_generation.sql"),
-    transactional: true,
-};
+const MIGRATION_ENTRY_GENERATION: SqlMigration = SqlMigration::new(
+    "0002",
+    "entry_generation",
+    include_str!("../migrations/sqlite/0002_entry_generation.sql"),
+);
 
 /// The durable send-cooldown table backing the one-mail-per-window claim
 /// (issue #133). Name must match `handlers::SEND_COOLDOWN_TABLE`.
-const MIGRATION_MAIL_COOLDOWN: SqlMigration = SqlMigration {
-    id: "0003",
-    name: "mail_cooldown",
-    sql: include_str!("../migrations/sqlite/0003_mail_cooldown.sql"),
-    transactional: true,
-};
+const MIGRATION_MAIL_COOLDOWN: SqlMigration = SqlMigration::new(
+    "0003",
+    "mail_cooldown",
+    include_str!("../migrations/sqlite/0003_mail_cooldown.sql"),
+);
 
 /// The single-row per-product position mutex used by `confirm_entry`
 /// (issue #173). Name must match the table in `store::confirm_entry`.
-const MIGRATION_POSITION_LOCK: SqlMigration = SqlMigration {
-    id: "0004",
-    name: "position_lock",
-    sql: include_str!("../migrations/sqlite/0004_position_lock.sql"),
-    transactional: true,
-};
+const MIGRATION_POSITION_LOCK: SqlMigration = SqlMigration::new(
+    "0004",
+    "position_lock",
+    include_str!("../migrations/sqlite/0004_position_lock.sql"),
+);
 
 /// The address columns made nullable so an entry can be anonymised rather
 /// than deleted (issue #265). See the migration for why deleting the row is
 /// the wrong answer here.
-const MIGRATION_ANONYMISABLE_ENTRY: SqlMigration = SqlMigration {
-    id: "0005",
-    name: "anonymisable_entry",
-    sql: include_str!("../migrations/sqlite/0005_anonymisable_entry.sql"),
-    transactional: true,
-};
+const MIGRATION_ANONYMISABLE_ENTRY: SqlMigration = SqlMigration::new(
+    "0005",
+    "anonymisable_entry",
+    include_str!("../migrations/sqlite/0005_anonymisable_entry.sql"),
+);
 
 /// A per-product waitlist.
 pub struct Waitlist {

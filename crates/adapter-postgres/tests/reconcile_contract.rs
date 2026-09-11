@@ -39,13 +39,13 @@ impl Module for Base {
         &[]
     }
     fn migrations(&self) -> Migrations {
+        const MIGRATIONS: [SqlMigration; 1] = [SqlMigration::new(
+            "0001",
+            "init",
+            "CREATE TABLE recon_base (id TEXT PRIMARY KEY);",
+        )];
         Migrations {
-            sqlite: &[SqlMigration {
-                id: "0001",
-                name: "init",
-                sql: "CREATE TABLE recon_base (id TEXT PRIMARY KEY);",
-                transactional: true,
-            }],
+            sqlite: &MIGRATIONS,
             postgres: &[],
         }
     }
@@ -76,13 +76,13 @@ impl Module for Dependant {
         &["recon-base"]
     }
     fn migrations(&self) -> Migrations {
+        const MIGRATIONS: [SqlMigration; 1] = [SqlMigration::new(
+            "0001",
+            "init",
+            "CREATE TABLE recon_dependant (base_id TEXT REFERENCES recon_base (id));",
+        )];
         Migrations {
-            sqlite: &[SqlMigration {
-                id: "0001",
-                name: "init",
-                sql: "CREATE TABLE recon_dependant (base_id TEXT REFERENCES recon_base (id));",
-                transactional: true,
-            }],
+            sqlite: &MIGRATIONS,
             postgres: &[],
         }
     }

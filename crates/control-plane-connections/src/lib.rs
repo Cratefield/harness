@@ -60,12 +60,11 @@ use serde::{Deserialize, Serialize};
 
 /// The schema migration for the connection-metadata table. The secret store's
 /// own migrations ([`cratefield_secrets::migrations`]) are applied separately.
-pub const MIGRATION: cratefield_core::SqlMigration = cratefield_core::SqlMigration {
-    id: "0001",
-    name: "init",
-    sql: include_str!("../migrations/sqlite/0001_init.sql"),
-    transactional: true,
-};
+pub const MIGRATION: cratefield_core::SqlMigration = cratefield_core::SqlMigration::new(
+    "0001",
+    "init",
+    include_str!("../migrations/sqlite/0001_init.sql"),
+);
 
 /// The secret name a venture's Google OAuth **client secret** is stored under.
 /// The client *id* is public and is not a secret; it is kept as the hint.

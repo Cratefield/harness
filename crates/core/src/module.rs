@@ -38,6 +38,12 @@ pub fn harness_api_mismatch(module: &dyn Module) -> String {
 
 /// One migration step, embedded with `include_str!` from
 /// `crates/<module>/migrations/<dialect>/NNNN_name.sql` (issue #8).
+///
+/// `#[non_exhaustive]` plus [`SqlMigration::new`] is the same fix `Message`
+/// got (issue #189): a module crate cannot build this by literal, so adding
+/// a field here stops being a breaking change across the 70+ migration sets
+/// in the workspace (issue #255).
+#[non_exhaustive]
 #[derive(Debug, Clone)]
 pub struct SqlMigration {
     /// Sortable id: `0001`, `0002`, ... — zero-padded so lexical order is
@@ -55,6 +61,30 @@ pub struct SqlMigration {
     pub transactional: bool,
 }
 
+impl SqlMigration {
+    /// The ordinary migration: the four-digit id, the slug from the file
+    /// name, the embedded SQL, transactional. `const` because every
+    /// migration set is a `const` array checked by
+    /// [`assert_migration_set`], itself a `const fn`.
+    #[must_use]
+    pub const fn new(id: &'static str, name: &'static str, sql: &'static str) -> Self {
+        Self {
+            id,
+            name,
+            sql,
+            transactional: true,
+        }
+    }
+
+    /// Marks the migration as running outside a transaction: for statements
+    /// Postgres refuses inside one (`CREATE INDEX CONCURRENTLY`).
+    #[must_use]
+    pub const fn non_transactional(mut self) -> Self {
+        self.transactional = false;
+        self
+    }
+}
+
 /// Rejects a malformed migration set **at compile time**.
 ///
 /// The array a module hands to [`Migrations`] is the apply order, and
@@ -70,8 +100,8 @@ pub struct SqlMigration {
 /// ```
 /// # use cratefield_core::{SqlMigration, assert_migration_set};
 /// const MIGRATIONS: [SqlMigration; 2] = [
-///     SqlMigration { id: "0001", name: "init", sql: "", transactional: true },
-///     SqlMigration { id: "0002", name: "next", sql: "", transactional: true },
+///     SqlMigration::new("0001", "init", ""),
+///     SqlMigration::new("0002", "next", ""),
 /// ];
 /// const _: () = assert_migration_set(&MIGRATIONS);
 /// ```
@@ -81,8 +111,8 @@ pub struct SqlMigration {
 /// ```compile_fail
 /// # use cratefield_core::{SqlMigration, assert_migration_set};
 /// const MIGRATIONS: [SqlMigration; 2] = [
-///     SqlMigration { id: "0001", name: "init", sql: "", transactional: true },
-///     SqlMigration { id: "0003", name: "skipped", sql: "", transactional: true },
+///     SqlMigration::new("0001", "init", ""),
+///     SqlMigration::new("0003", "skipped", ""),
 /// ];
 /// const _: () = assert_migration_set(&MIGRATIONS);
 /// ```
@@ -93,8 +123,8 @@ pub struct SqlMigration {
 /// ```compile_fail
 /// # use cratefield_core::{SqlMigration, assert_migration_set};
 /// const MIGRATIONS: [SqlMigration; 2] = [
-///     SqlMigration { id: "0002", name: "second", sql: "", transactional: true },
-///     SqlMigration { id: "0001", name: "first", sql: "", transactional: true },
+///     SqlMigration::new("0002", "second", ""),
+///     SqlMigration::new("0001", "first", ""),
 /// ];
 /// const _: () = assert_migration_set(&MIGRATIONS);
 /// ```
@@ -102,7 +132,7 @@ pub struct SqlMigration {
 /// ```compile_fail
 /// # use cratefield_core::{SqlMigration, assert_migration_set};
 /// const MIGRATIONS: [SqlMigration; 1] =
-///     [SqlMigration { id: "1", name: "unpadded", sql: "", transactional: true }];
+///     [SqlMigration::new("1", "unpadded", "")];
 /// const _: () = assert_migration_set(&MIGRATIONS);
 /// ```
 ///
@@ -482,20 +512,9 @@ mod reconciliation_guard_tests {
         // The flag exists so RECONCILIATION.md §4 has something to read;
         // every module that does not say a word keeps the atomic
         // behaviour both runners have always had.
-        let migration = SqlMigration {
-            id: "0001",
-            name: "init",
-            sql: "CREATE TABLE t (id TEXT PRIMARY KEY);",
-            transactional: true,
-        };
+        let migration = SqlMigration::new("0001", "init", "CREATE TABLE t (id TEXT PRIMARY KEY);");
         assert!(migration.transactional);
-        assert!(
-            !SqlMigration {
-                transactional: false,
-                ..migration.clone()
-            }
-            .transactional
-        );
+        assert!(!migration.clone().non_transactional().transactional);
     }
 
     #[test]

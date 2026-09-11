@@ -56,12 +56,11 @@ pub(crate) struct Settings {
 
 /// The one migration: the `cms_item` and `cms_revision` tables in the portable
 /// SQL subset.
-const MIGRATION_INIT: SqlMigration = SqlMigration {
-    id: "0001",
-    name: "init",
-    sql: include_str!("../migrations/sqlite/0001_init.sql"),
-    transactional: true,
-};
+const MIGRATION_INIT: SqlMigration = SqlMigration::new(
+    "0001",
+    "init",
+    include_str!("../migrations/sqlite/0001_init.sql"),
+);
 
 /// A small content store with an editor.
 pub struct Cms {

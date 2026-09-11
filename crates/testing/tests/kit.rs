@@ -10,15 +10,14 @@ use cratefield_testing::{
 use std::sync::Arc;
 use std::time::Duration;
 
-const DEMO_INIT: SqlMigration = SqlMigration {
-    id: "0001",
-    name: "init",
-    sql: "CREATE TABLE IF NOT EXISTS demo_notes (
+const DEMO_INIT: SqlMigration = SqlMigration::new(
+    "0001",
+    "init",
+    "CREATE TABLE IF NOT EXISTS demo_notes (
         id TEXT PRIMARY KEY,
         body TEXT NOT NULL
     );",
-    transactional: true,
-};
+);
 
 pub struct DemoModule;
 

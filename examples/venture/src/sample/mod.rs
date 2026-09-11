@@ -15,12 +15,11 @@ use std::sync::Arc;
 
 pub struct SampleRowModule;
 
-const MIGRATION: SqlMigration = SqlMigration {
-    id: "0001",
-    name: "init",
-    sql: include_str!("migrations/sqlite/0001_init.sql"),
-    transactional: true,
-};
+const MIGRATION: SqlMigration = SqlMigration::new(
+    "0001",
+    "init",
+    include_str!("migrations/sqlite/0001_init.sql"),
+);
 
 impl Module for SampleRowModule {
     fn name(&self) -> &'static str {

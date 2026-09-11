@@ -152,12 +152,8 @@ async fn runner_applies_a_module_directly_and_is_idempotent() {
 
 #[tokio::test]
 async fn non_portable_sqlite_set_is_refused_not_applied() {
-    const SERIAL: SqlMigration = SqlMigration {
-        id: "0001",
-        name: "oops",
-        sql: "CREATE TABLE t (id SERIAL PRIMARY KEY);",
-        transactional: true,
-    };
+    const SERIAL: SqlMigration =
+        SqlMigration::new("0001", "oops", "CREATE TABLE t (id SERIAL PRIMARY KEY);");
     let Some(base) = base_url() else {
         eprintln!("SKIPPED: {}", skip_reason());
         return;
@@ -227,12 +223,11 @@ async fn an_edited_migration_is_refused_and_pre_checksum_rows_are_tolerated() {
     };
     let db = Postgres::connect(&temp.url).await.expect("connect");
 
-    let first = [SqlMigration {
-        id: "0001",
-        name: "init",
-        sql: "CREATE TABLE IF NOT EXISTS widgets (id text PRIMARY KEY)",
-        transactional: true,
-    }];
+    let first = [SqlMigration::new(
+        "0001",
+        "init",
+        "CREATE TABLE IF NOT EXISTS widgets (id text PRIMARY KEY)",
+    )];
     db.apply_migrations("widgets", &first)
         .await
         .expect("applies");
@@ -240,12 +235,11 @@ async fn an_edited_migration_is_refused_and_pre_checksum_rows_are_tolerated() {
         .await
         .expect("second run is a no-op");
 
-    let edited = [SqlMigration {
-        id: "0001",
-        name: "init",
-        sql: "CREATE TABLE IF NOT EXISTS widgets (id text PRIMARY KEY, colour text)",
-        transactional: true,
-    }];
+    let edited = [SqlMigration::new(
+        "0001",
+        "init",
+        "CREATE TABLE IF NOT EXISTS widgets (id text PRIMARY KEY, colour text)",
+    )];
     let err = db
         .apply_migrations("widgets", &edited)
         .await

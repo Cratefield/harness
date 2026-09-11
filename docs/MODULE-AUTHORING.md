@@ -171,12 +171,8 @@ use std::sync::Arc;
 
 /// The module's only migration: the `hello_visits` table in the portable
 /// SQL subset (ADR 0004).
-const MIGRATION_INIT: SqlMigration = SqlMigration {
-    id: "0001",
-    name: "init",
-    sql: include_str!("../migrations/sqlite/0001_init.sql"),
-    transactional: true,
-};
+const MIGRATION_INIT: SqlMigration =
+    SqlMigration::new("0001", "init", include_str!("../migrations/sqlite/0001_init.sql"));
 
 /// Says hello, and counts how many times it was said.
 pub struct Hello {
@@ -405,8 +401,10 @@ catches the same edit inside the repository through
 `.harness-lock.json`; the hash in the database is what catches it on a
 deployment that already ran the old SQL. Write a new migration instead.
 
-**A `no-transaction` migration must be idempotent.** You mark one with
-`transactional: false` on its `SqlMigration`; `true` is the ordinary case,
+**A `no-transaction` migration must be idempotent.** You mark one by
+building it with `.non_transactional()`, like
+`SqlMigration::new(...).non_transactional()`; the plain `new` is the
+ordinary case,
 and what every migration above uses. The ones Postgres refuses to run
 inside a transaction — `CREATE INDEX CONCURRENTLY` is the one that comes
 up — cannot be atomic with their tracking row, so the sequence is: run

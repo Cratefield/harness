@@ -479,13 +479,12 @@ pub fn migration_tables(module: &dyn crate::Module) -> Vec<String> {
 ///     fn requires(&self) -> &'static [Port] { &[] }
 ///     fn tables(&self) -> &'static [&'static str] { &["notes"] }
 ///     fn migrations(&self) -> Migrations {
-///         const MIGRATIONS: [SqlMigration; 1] = [SqlMigration {
-///             id: "0001",
-///             name: "init",
-///             sql: "CREATE TABLE notes (id TEXT PRIMARY KEY);
+///         const MIGRATIONS: [SqlMigration; 1] = [SqlMigration::new(
+///             "0001",
+///             "init",
+///             "CREATE TABLE notes (id TEXT PRIMARY KEY);
 ///                   CREATE TABLE note_tags (note_id TEXT NOT NULL);",
-///             transactional: true,
-///         }];
+///         )];
 ///         Migrations::sqlite(&MIGRATIONS)
 ///     }
 /// #   fn validate_config(&self, _cfg: &dyn Config) -> Result<(), ConfigError> { Ok(()) }

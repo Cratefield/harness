@@ -53,12 +53,11 @@ pub use scheduled::{CRON_DAILY_HINT, CRON_PUBLISHER_HINT};
 
 /// The module's one migration: six tables in the portable SQL subset
 /// (ADR 0004).
-const MIGRATION_INIT: SqlMigration = SqlMigration {
-    id: "0001",
-    name: "init",
-    sql: include_str!("../migrations/sqlite/0001_init.sql"),
-    transactional: true,
-};
+const MIGRATION_INIT: SqlMigration = SqlMigration::new(
+    "0001",
+    "init",
+    include_str!("../migrations/sqlite/0001_init.sql"),
+);
 
 /// LinkedIn's newest Marketing version at the time of writing. Pinned, never
 /// floating: an unversioned call is an error and a sunset version is a hard

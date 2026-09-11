@@ -23,10 +23,10 @@ const ADMIN: &str = "test-admin-token-0123456789abcdef";
 #[derive(Clone, Default)]
 struct Practice;
 
-const MIGRATION: SqlMigration = SqlMigration {
-    id: "0001",
-    name: "init",
-    sql: "CREATE TABLE practice_sessions (
+const MIGRATION: SqlMigration = SqlMigration::new(
+    "0001",
+    "init",
+    "CREATE TABLE practice_sessions (
               id TEXT PRIMARY KEY,
               account_id TEXT NOT NULL,
               pose TEXT NOT NULL,
@@ -37,8 +37,7 @@ const MIGRATION: SqlMigration = SqlMigration {
               id TEXT PRIMARY KEY,
               name TEXT NOT NULL
           );",
-    transactional: true,
-};
+);
 
 const PERSONAL: &[PersonalDataSet] = &[
     PersonalDataSet {

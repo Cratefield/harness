@@ -136,69 +136,62 @@ pub type TransportProbe = Arc<dyn Fn(&dyn Config) -> bool + Send + Sync>;
 /// subscribe with?" — see [`Notifications::vapid_public_key`].
 pub type VapidKeyProbe = Arc<dyn Fn(&dyn Config) -> Option<String> + Send + Sync>;
 
-const MIGRATION_INIT: SqlMigration = SqlMigration {
-    id: "0001",
-    name: "init",
-    sql: include_str!("../migrations/sqlite/0001_init.sql"),
-    transactional: true,
-};
+const MIGRATION_INIT: SqlMigration = SqlMigration::new(
+    "0001",
+    "init",
+    include_str!("../migrations/sqlite/0001_init.sql"),
+);
 
 /// The #182 review's schema half: the re-home record the take-over budget
 /// counts, and the index `Outbox::claim_due` reads. Its own migration
 /// because `0001` is applied and an applied migration is never edited.
-const MIGRATION_REHOME_AND_DUE_INDEX: SqlMigration = SqlMigration {
-    id: "0002",
-    name: "rehome_and_due_index",
-    sql: include_str!("../migrations/sqlite/0002_rehome_and_due_index.sql"),
-    transactional: true,
-};
+const MIGRATION_REHOME_AND_DUE_INDEX: SqlMigration = SqlMigration::new(
+    "0002",
+    "rehome_and_due_index",
+    include_str!("../migrations/sqlite/0002_rehome_and_due_index.sql"),
+);
 
 /// The in-app inbox (#187): the row every `notify` writes for a category
 /// that declares `in_app`, and the channel that needs no permission.
-const MIGRATION_INBOX: SqlMigration = SqlMigration {
-    id: "0003",
-    name: "inbox",
-    sql: include_str!("../migrations/sqlite/0003_inbox.sql"),
-    transactional: true,
-};
+const MIGRATION_INBOX: SqlMigration = SqlMigration::new(
+    "0003",
+    "inbox",
+    include_str!("../migrations/sqlite/0003_inbox.sql"),
+);
 
 /// Email as a third channel (#189): where a verified address lives, and
 /// the window the per-category cooldown counts over.
-const MIGRATION_EMAIL_TARGETS: SqlMigration = SqlMigration {
-    id: "0004",
-    name: "email_targets",
-    sql: include_str!("../migrations/sqlite/0004_email_targets.sql"),
-    transactional: true,
-};
+const MIGRATION_EMAIL_TARGETS: SqlMigration = SqlMigration::new(
+    "0004",
+    "email_targets",
+    include_str!("../migrations/sqlite/0004_email_targets.sql"),
+);
 
 /// Bounce suppression (#233): the index the provider webhook's lookup by
 /// address reads. Its own migration because `0004` is applied.
-const MIGRATION_EMAIL_BOUNCE_INDEX: SqlMigration = SqlMigration {
-    id: "0005",
-    name: "email_bounce_index",
-    sql: include_str!("../migrations/sqlite/0005_email_bounce_index.sql"),
-    transactional: true,
-};
+const MIGRATION_EMAIL_BOUNCE_INDEX: SqlMigration = SqlMigration::new(
+    "0005",
+    "email_bounce_index",
+    include_str!("../migrations/sqlite/0005_email_bounce_index.sql"),
+);
 
 /// Per-recipient language (#190): the device's own locale, the account's,
 /// and what an inbox row was rendered in. Its own migration because
 /// `0001`-`0005` are applied.
-const MIGRATION_LOCALES: SqlMigration = SqlMigration {
-    id: "0006",
-    name: "locales",
-    sql: include_str!("../migrations/sqlite/0006_locales.sql"),
-    transactional: true,
-};
+const MIGRATION_LOCALES: SqlMigration = SqlMigration::new(
+    "0006",
+    "locales",
+    include_str!("../migrations/sqlite/0006_locales.sql"),
+);
 
 /// The account a dead letter was for (#244): already in the payload, made
 /// queryable so erasure can reach a notification that gave up. Its own
 /// migration because `0001`-`0006` are applied.
-const MIGRATION_DEAD_LETTER_ACCOUNT: SqlMigration = SqlMigration {
-    id: "0007",
-    name: "dead_letter_account",
-    sql: include_str!("../migrations/sqlite/0007_dead_letter_account.sql"),
-    transactional: true,
-};
+const MIGRATION_DEAD_LETTER_ACCOUNT: SqlMigration = SqlMigration::new(
+    "0007",
+    "dead_letter_account",
+    include_str!("../migrations/sqlite/0007_dead_letter_account.sql"),
+);
 
 /// Every migration this module ships, in order. One array, so a test that
 /// asserts something about the schema reads what actually ships rather
