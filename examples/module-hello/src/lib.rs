@@ -20,7 +20,8 @@
 mod handlers;
 
 use cratefield_core::{
-    Config, ConfigError, Migrations, Module, ModuleConfig, ModuleContext, Port, SqlMigration,
+    Config, ConfigError, DataKind, Disposition, Migrations, Module, ModuleConfig, ModuleContext,
+    PersonalDataSet, Port, SqlMigration,
 };
 use std::sync::Arc;
 
@@ -80,6 +81,23 @@ impl Module for Hello {
 
     fn tables(&self) -> &'static [&'static str] {
         &["hello_visits"]
+    }
+
+    fn personal_data(&self) -> &'static [PersonalDataSet] {
+        const SETS: &[PersonalDataSet] = &[PersonalDataSet {
+            table: "hello_visits",
+            // The only thing this module knows anybody by. A real module
+            // keys on an account id; the rule is the same either way — the
+            // column export and erasure match on.
+            subject: "name",
+            kind: DataKind::Contact,
+            disposition: Disposition::Erase,
+            // Published verbatim on the privacy page, so it is written for
+            // whoever reads that page.
+            description: "The name you said hello with, and nothing else.",
+            redacted: &[],
+        }];
+        SETS
     }
 
     fn emits(&self) -> &'static [&'static str] {

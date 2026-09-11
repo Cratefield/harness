@@ -1127,6 +1127,7 @@ dependencies = [
  "cratefield-adapter-sqlite",
  "cratefield-core",
  "cratefield-i18n",
+ "cratefield-module-privacy",
  "cratefield-push-wiring",
  "cratefield-testing",
  "factory0-auth-client",

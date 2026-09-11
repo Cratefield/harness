@@ -4,8 +4,9 @@
 use axum::extract::State;
 use axum::routing::{get, post};
 use cratefield::{
-    Action, Audience, Clock, Config, ConfigError, IdGen, Json, Migrations, Module, ModuleContext,
-    Outcome, Port, Problem, Scope, SqlMigration, Statement, Surface, SystemClock, UlidIdGen, View,
+    Action, Audience, Clock, Config, ConfigError, DataKind, Disposition, IdGen, Json, Migrations,
+    Module, ModuleContext, Outcome, PersonalDataSet, Port, Problem, Scope, SqlMigration, Statement,
+    Surface, SystemClock, UlidIdGen, View,
 };
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -36,6 +37,21 @@ impl Module for SampleRowModule {
 
     fn tables(&self) -> &'static [&'static str] {
         &["sample_rows"]
+    }
+
+    /// The sample table holds an address, so it says so. A module that owns
+    /// a table and declares nothing about it is outside export and erasure
+    /// however plainly the schema reads (issue #244).
+    fn personal_data(&self) -> &'static [PersonalDataSet] {
+        const SETS: &[PersonalDataSet] = &[PersonalDataSet {
+            table: "sample_rows",
+            subject: "email",
+            kind: DataKind::Contact,
+            disposition: Disposition::Erase,
+            description: "The address you typed into the sample form, with the date.",
+            redacted: &[],
+        }];
+        SETS
     }
 
     fn migrations(&self) -> Migrations {

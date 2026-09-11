@@ -30,7 +30,8 @@ const MIGRATION: SqlMigration = SqlMigration {
               id TEXT PRIMARY KEY,
               account_id TEXT NOT NULL,
               pose TEXT NOT NULL,
-              score INTEGER NOT NULL
+              score INTEGER NOT NULL,
+              device_token TEXT NOT NULL
           );
           CREATE TABLE pose_library (
               id TEXT PRIMARY KEY,
@@ -46,6 +47,10 @@ const PERSONAL: &[PersonalDataSet] = &[
         kind: DataKind::Fitness,
         disposition: Disposition::Erase,
         description: "Joint angles and scores for one practice, with its date.",
+        // The row is the member's and erasure must reach it, but this one
+        // column is a credential: whoever holds the token can reach the
+        // device, so an export names it and does not copy it.
+        redacted: &["device_token"],
     },
     PersonalDataSet::none(
         "pose_library",
@@ -90,6 +95,10 @@ fn kits() -> Vec<TestHarness> {
     )
 }
 
+/// The value the export must never print. A literal rather than a fixture
+/// constant so a grep for it finds both the seed and the assertion.
+const DEVICE_TOKEN: &str = "tok-live-device-0123456789";
+
 async fn seed(kit: &TestHarness) {
     for (id, account, pose, score) in [
         ("s1", "acct-1", "mountain", 91),
@@ -98,8 +107,15 @@ async fn seed(kit: &TestHarness) {
     ] {
         kit.db
             .execute(&Statement::with_values(
-                "INSERT INTO practice_sessions (id, account_id, pose, score) VALUES (?, ?, ?, ?)",
-                vec![id.into(), account.into(), pose.into(), score.into()],
+                "INSERT INTO practice_sessions (id, account_id, pose, score, device_token) \
+                 VALUES (?, ?, ?, ?, ?)",
+                vec![
+                    id.into(),
+                    account.into(),
+                    pose.into(),
+                    score.into(),
+                    DEVICE_TOKEN.into(),
+                ],
             ))
             .await
             .expect("seed");
@@ -177,6 +193,41 @@ async fn an_export_returns_only_that_subjects_rows() {
         // Values keep their types rather than all becoming strings.
         assert!(rows[0]["score"].is_number(), "{:?}", rows[0]);
         assert_eq!(tables[0]["truncated"], Value::Bool(false));
+    }
+}
+
+#[pollster::test]
+async fn an_export_names_a_credential_column_and_never_copies_it() {
+    // A push token or a Web Push endpoint is a bearer capability: an export
+    // file that carries one hands whoever reads it the ability to reach the
+    // device. The column is still listed, because "we hold nothing there" is
+    // the one answer a subject access request must not give untruthfully.
+    for kit in kits() {
+        seed(&kit).await;
+        let (status, raw) = admin_get(&kit, "/v1/privacy/export?subject=acct-1").await;
+        assert_eq!(status, StatusCode::OK, "{raw}");
+        assert!(
+            !raw.contains(DEVICE_TOKEN),
+            "the export copied the credential column"
+        );
+        let body: Value = serde_json::from_str(&raw).expect("json");
+        let rows = body["tables"][0]["rows"].as_array().expect("rows");
+        for row in rows {
+            assert_eq!(row["device_token"], "[redacted]", "{row:?}");
+            // Everything else is untouched: redaction is per declared column,
+            // not a blanket.
+            assert!(row["pose"].is_string(), "{row:?}");
+        }
+    }
+}
+
+#[pollster::test]
+async fn the_manifest_says_which_columns_it_will_not_hand_over() {
+    for kit in kits() {
+        let response = request(&kit.router, Method::GET, "/v1/privacy/manifest", None).await;
+        assert_eq!(response.status, StatusCode::OK);
+        let body: Value = response.json();
+        assert_eq!(body["holds"][0]["redacted"][0], "device_token");
     }
 }
 

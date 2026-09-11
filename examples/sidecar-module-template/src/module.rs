@@ -13,8 +13,8 @@ use axum::extract::State;
 use axum::routing::{get, post};
 use cratefield_core::{
     Action, Audience, Clock, Config, ConfigError, IdGen, Json, Migrations, Module, ModuleConfig,
-    ModuleContext, Outcome, Port, Problem, Scope, SqlMigration, Statement, Surface, SystemClock,
-    UlidIdGen, View,
+    ModuleContext, Outcome, PersonalDataSet, Port, Problem, Scope, SqlMigration, Statement,
+    Surface, SystemClock, UlidIdGen, View,
 };
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -96,6 +96,19 @@ impl Module for Notes {
 
     fn tables(&self) -> &'static [&'static str] {
         &[TABLE]
+    }
+
+    /// A table that holds nobody still has to say so. "No declaration" and
+    /// "nothing personal here" look identical in source, and only one of
+    /// them is a decision — `cratefield_testing::conformance` fails a module
+    /// that owns a table and says neither (issue #244).
+    fn personal_data(&self) -> &'static [PersonalDataSet] {
+        const SETS: &[PersonalDataSet] = &[PersonalDataSet::none(
+            TABLE,
+            "Notes are filed under nobody: the template stores the text and \
+             the date it was written, and nothing about who wrote it.",
+        )];
+        SETS
     }
 
     fn migrations(&self) -> Migrations {

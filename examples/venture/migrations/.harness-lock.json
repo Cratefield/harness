@@ -35,6 +35,10 @@
     "file": "0014_notifications_0006_locales.sql",
     "sha256": "0e27426d9ef4235f755dcbebe4debe7c5eaf5a6f1c61038aca8dc69582b61733"
   },
+  "notifications/0007": {
+    "file": "0015_notifications_0007_dead_letter_account.sql",
+    "sha256": "85360e1faa24faf35b837e5f7f4d4bcdacdc83631c17144579cf691b3b0550d7"
+  },
   "sample/0001": {
     "file": "0001_sample_0001_init.sql",
     "sha256": "adbaf308f36585d92261aecefe4a06f65aa6d3408834a8f61babd87de0545945"

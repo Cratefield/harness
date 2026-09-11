@@ -4,6 +4,16 @@ This document is the data map required by architecture section 11 and
 issue #13. It covers the two M1 modules: `cratefield-module-email-signup`
 and `cratefield-module-waitlist`.
 
+**A deployment's own map is a route, not this file.** Since
+`cratefield-module-privacy`, each module declares what it holds next to the
+table that holds it (`Module::personal_data()`), and
+`GET /v1/privacy/manifest` publishes that for the modules a venture actually
+composed — with what erasure does to each table, and which columns an export
+will not copy. A page generated from the declarations cannot drift from them;
+a page written beside them always eventually does, which is what happened to
+the notifications module's own privacy section (issues #244, #248). The two
+modules below predate the declaration and are tracked by #265.
+
 ## Principles
 
 - **PII minimalism.** The harness stores an email address, its

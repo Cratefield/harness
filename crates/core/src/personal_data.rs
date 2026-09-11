@@ -25,6 +25,7 @@
 //!     kind: DataKind::Fitness,
 //!     disposition: Disposition::Erase,
 //!     description: "Joint angles and scores for one practice, with its date.",
+//!     redacted: &[],
 //! }];
 //! ```
 
@@ -136,6 +137,23 @@ pub struct PersonalDataSet {
     /// One sentence, for a person deciding whether to trust this. It is
     /// published verbatim, so write it for them rather than for a colleague.
     pub description: &'static str,
+    /// Columns an export names but never copies: the row is the subject's,
+    /// and one of its columns is credential material.
+    ///
+    /// A push token and a Web Push endpoint are the case this exists for. They
+    /// are the subject's — the table has to be declared, or erasure never
+    /// reaches them — but an endpoint is a **bearer capability**: whoever holds
+    /// it can notify that device, so a copy in an export file is a copy of the
+    /// credential, and ADR 0015 keeps that material out of a response body.
+    /// Dropping the column silently would be worse than either: an export is
+    /// read by somebody checking whether anything is missing, so the column is
+    /// listed with its value replaced by `[redacted]`, which says "held, not
+    /// handed over" rather than "not held".
+    ///
+    /// It changes nothing about erasure. A row that is deleted takes its
+    /// columns with it, and a column named here is still counted, still
+    /// erased, and still described.
+    pub redacted: &'static [&'static str],
 }
 
 impl PersonalDataSet {
@@ -154,6 +172,7 @@ impl PersonalDataSet {
             kind: DataKind::Identifier,
             disposition: Disposition::Retain(reason),
             description: "",
+            redacted: &[],
         }
     }
 
@@ -199,6 +218,23 @@ impl PersonalDataSet {
                 }
             }
         }
+        for column in self.redacted {
+            if !is_plain_identifier(column) {
+                errors.push(format!(
+                    "module `{module}` redacts column `{column}` of `{}`, which is not a plain identifier",
+                    self.table
+                ));
+            }
+            // Redacting the key the export matched on protects nothing: the
+            // caller supplied that value. A list that reads as a protection
+            // and is not one is worse than no list.
+            if *column == self.subject && !self.subject.is_empty() {
+                errors.push(format!(
+                    "module `{module}` redacts the subject column `{}` of `{}`, which the caller already has",
+                    self.subject, self.table
+                ));
+            }
+        }
         if !owns.contains(&self.table) {
             errors.push(format!(
                 "module `{module}` declares personal data in table `{}`, which it does not own",
@@ -211,6 +247,12 @@ impl PersonalDataSet {
             {
                 errors.push(format!(
                     "module `{module}` declares table `{}` as holding no personal data without saying why",
+                    self.table
+                ));
+            }
+            if !self.redacted.is_empty() {
+                errors.push(format!(
+                    "module `{module}` redacts a column of `{}`, which it declares holds no personal data; nothing is exported from it to redact",
                     self.table
                 ));
             }
@@ -309,6 +351,62 @@ impl PersonalDataCatalog {
     pub fn is_empty(&self) -> bool {
         self.subject_sets().next().is_none()
     }
+}
+
+/// The tables a module owns and has said nothing about: the gap this type
+/// exists to close, named so a test can fail on it.
+///
+/// `HarnessBuilder::build` already rejects a declaration for a table the
+/// module does **not** own, so a rename that misses a declaration cannot ship.
+/// This is the converse — a table with no declaration at all — and it is the
+/// one that actually happens: a module grows a migration, the new table joins
+/// [`Module::tables`](crate::Module::tables) because `fz data export` reads
+/// that list, and nothing anywhere notices that erasure plans from a different
+/// list. `cratefield-module-notifications` gained six migrations in two days
+/// and declared none of them (issue #244).
+///
+/// It is a **kit** check rather than a build error on purpose. Silence is
+/// legitimate for a module with no tables, and a venture composing a module
+/// whose author has not got to this yet should not be unable to boot; the
+/// place a module is *supposed* to be complete is its own test suite, so
+/// `cratefield_testing::conformance` fails on a non-empty result here and a
+/// deployment keeps running.
+///
+/// ```
+/// # use cratefield_core::{
+/// #     Config, ConfigError, Migrations, Module, ModuleContext, PersonalDataSet, Port,
+/// #     undeclared_tables,
+/// # };
+/// struct Notes;
+/// impl Module for Notes {
+///     fn name(&self) -> &'static str { "notes" }
+///     fn version(&self) -> &'static str { "0.1.0" }
+///     fn requires(&self) -> &'static [Port] { &[] }
+///     fn tables(&self) -> &'static [&'static str] { &["notes", "note_tags"] }
+///     fn personal_data(&self) -> &'static [PersonalDataSet] {
+///         const SETS: &[PersonalDataSet] = &[PersonalDataSet::none(
+///             "notes",
+///             "Notes belong to a board, not to a person.",
+///         )];
+///         SETS
+///     }
+/// #   fn migrations(&self) -> Migrations { Migrations::EMPTY }
+/// #   fn validate_config(&self, _cfg: &dyn Config) -> Result<(), ConfigError> { Ok(()) }
+/// #   fn router(&self, _ctx: ModuleContext) -> axum::Router { axum::Router::new() }
+/// }
+/// // `notes` is declared — as holding nobody, which is a declaration. The
+/// // table nobody wrote a line for is the one that comes back.
+/// assert_eq!(undeclared_tables(&Notes), vec!["note_tags"]);
+/// ```
+#[must_use]
+pub fn undeclared_tables(module: &dyn crate::Module) -> Vec<&'static str> {
+    let declared: Vec<&'static str> = module.personal_data().iter().map(|set| set.table).collect();
+    module
+        .tables()
+        .iter()
+        .copied()
+        .filter(|table| !declared.contains(table))
+        .collect()
 }
 
 /// An unquoted SQL identifier: ASCII letters, digits and underscore, starting

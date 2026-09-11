@@ -838,11 +838,13 @@ pub(crate) fn dead_letter_statement(
     record: &cratefield_core::OutboxRecord,
     dead: &DeadLetter<'_>,
 ) -> Statement {
+    let account_id = payload_account(&record.payload);
     let mut insert = Query::insert();
     insert
         .into_table(iden(DEAD_LETTERS))
         .columns([
             "id",
+            "account_id",
             "topic",
             "payload",
             "attempts",
@@ -853,6 +855,7 @@ pub(crate) fn dead_letter_statement(
         ])
         .values_panic([
             record.id.as_str().into(),
+            account_id.as_deref().into(),
             record.topic.as_str().into(),
             record.payload.as_str().into(),
             dead.attempts.into(),
@@ -862,6 +865,31 @@ pub(crate) fn dead_letter_statement(
             dead.failed_at.into(),
         ]);
     Statement::render(&insert)
+}
+
+/// The account a queued job was for, read back out of the payload the
+/// outbox row already holds.
+///
+/// Read here rather than passed in, for the reason `last_error` is scrubbed
+/// here: it is the one place the column is bound, so every caller gets the
+/// same answer whatever it knows, including the path that dead-letters a
+/// payload it could not parse. Both job shapes carry `account_id` and serde
+/// ignores the rest, so one struct covers a push job and an email job — and
+/// a payload that is not a job at all yields `None`, which is what makes
+/// that row's `account_id` NULL instead of a guess.
+///
+/// The value goes into a column and nothing else. It is an opaque account
+/// id, never an address or an endpoint: those are not in a payload (ADR
+/// 0015) and must not reach a log or a report.
+fn payload_account(payload: &str) -> Option<String> {
+    #[derive(Deserialize)]
+    struct AccountOnly {
+        account_id: String,
+    }
+    serde_json::from_str::<AccountOnly>(payload)
+        .ok()
+        .map(|job| job.account_id)
+        .filter(|account| !account.is_empty())
 }
 
 // ---------------------------------------------------------------------------

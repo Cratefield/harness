@@ -11,6 +11,16 @@ with no per-venture wiring.
   what erasure would do, and the sentence the owning module wrote.
   Unauthenticated: it describes the deployment, not a person.
 - `GET /v1/privacy/export?subject=<id>` — every row every module holds for one
-  subject. Admin-guarded.
+  subject. Admin-guarded. A column the owning module declared as `redacted` is
+  named and printed as `[redacted]` rather than copied: a push token or a Web
+  Push endpoint is a bearer capability, and an export is a file somebody
+  forwards.
+- `POST /v1/privacy/erase` — what erasure would do, per table, with row counts
+  and a short-lived signed token. Writes nothing.
+- `POST /v1/privacy/erase/confirm` — carries it out, in one batch, and counts
+  the rows again afterwards rather than trusting the statements. The subject
+  comes from the token, never from the body.
 
-Erasure is not here yet: it is the destructive half and wants its own review.
+What it can reach is exactly what the composed modules declared. A module that
+owns a table and declares nothing about it is outside all four routes, which is
+why `cratefield_testing::conformance` fails one that does (issue #244).

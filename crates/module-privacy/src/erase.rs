@@ -245,6 +245,7 @@ mod tests {
         kind: DataKind::Identifier,
         disposition: Disposition::Erase,
         description: "The account.",
+        redacted: &[],
     };
     const CHILD: PersonalDataSet = PersonalDataSet {
         table: "practice_sessions",
@@ -252,6 +253,7 @@ mod tests {
         kind: DataKind::Fitness,
         disposition: Disposition::Erase,
         description: "Practices.",
+        redacted: &[],
     };
 
     /// The catalog is composed in dependency order, so a parent appears before
@@ -287,6 +289,7 @@ mod tests {
             kind: DataKind::Financial,
             disposition: Disposition::Retain("Tax law requires seven years."),
             description: "Invoices.",
+            redacted: &[],
         }];
         assert!(statements(&planned(SETS), "acct-1").is_empty());
     }
@@ -299,6 +302,7 @@ mod tests {
             kind: DataKind::Financial,
             disposition: Disposition::Anonymise(&["name", "email"]),
             description: "Commission entries.",
+            redacted: &[],
         }];
         let statements = statements(&planned(SETS), "acct-1");
         assert_eq!(statements.len(), 1);
@@ -323,6 +327,7 @@ mod verification_tests {
         kind: DataKind::Usage,
         disposition: Disposition::Erase,
         description: "Rows that should not survive an erasure.",
+        redacted: &[],
     };
 
     fn planned() -> Vec<Planned> {

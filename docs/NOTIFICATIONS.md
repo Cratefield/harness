@@ -548,12 +548,26 @@ A device token, an FCM registration token and a Web Push endpoint are all
   again at the one place the column is bound, whatever the caller passes. A
   provider `422` quoting the recipient address used to sit in plain text in a
   venture's own table while the log showed it correctly redacted (issue #235).
-- Every table the module owns is declared in `Module::tables()`, so
-  `fz data export` carries all seven. **Erasure does not reach them yet**:
-  `cratefield-module-privacy` works from `Module::personal_data()`, which this
-  module has never declared — so a subject-access or erasure request runs
-  straight past the stored addresses, device tokens and inbox rows. That is
-  issue #244, open. See [`PRIVACY.md`](PRIVACY.md).
+- **All eight tables are declared**, in `Module::tables()` for
+  `fz data export` and in `Module::personal_data()` for subject access and
+  erasure (issue #244). The two lists are read by different code, which is how
+  the second one stayed empty through six migrations while the first was
+  complete: a whole-database move carried everything and an erasure request
+  reached none of it. Seven are erased with the account; `notifications_outbox`
+  is declared as holding nothing exportable, with the reason published — a
+  queued row does hold the message, and it is filed under the send rather than
+  the account, so erasure cannot reach one in flight (issue #266). A row leaves
+  the outbox on delivery or on giving up, and a dead letter carries an
+  `account_id` since migration `0007` precisely so that erasure reaches it.
+- **A push token and a Web Push endpoint are never exported.**
+  `notifications_subscriptions` is declared with `recipient_json` redacted:
+  the row is the account's and must be erased with it, but the column is a
+  bearer capability and an export is a file somebody forwards (ADR 0015). The
+  export names the column and prints `[redacted]`, so a reader learns it is
+  held rather than learning nothing. `recipient_hash` is exported: it
+  identifies the device to its owner and cannot be sent to.
+- See [`PRIVACY.md`](PRIVACY.md) and `GET /v1/privacy/manifest`, which
+  publishes the sentence this module wrote for each table.
 
 Put no more in a payload than the category needs. A lock screen is a public
 surface.
