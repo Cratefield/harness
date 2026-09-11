@@ -855,6 +855,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "cratefield-chrome"
+version = "0.1.1"
+dependencies = [
+ "axum",
+ "cratefield-core",
+ "cratefield-testing",
+ "http",
+ "pollster",
+ "tower",
+]
+
+[[package]]
 name = "cratefield-cli"
 version = "0.1.1"
 dependencies = [
@@ -950,6 +962,7 @@ name = "cratefield-control-plane"
 version = "0.1.1"
 dependencies = [
  "axum",
+ "cratefield-chrome",
  "cratefield-console",
  "cratefield-core",
  "cratefield-dashboard",
@@ -1006,6 +1019,8 @@ dependencies = [
  "cratefield-access",
  "cratefield-accounts",
  "cratefield-adapter-sqlite",
+ "cratefield-catalog",
+ "cratefield-chrome",
  "cratefield-connections",
  "cratefield-console",
  "cratefield-core",

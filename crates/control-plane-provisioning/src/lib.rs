@@ -159,6 +159,63 @@ pub trait Deployer {
     async fn health_ok(&self, subdomain: &str) -> Result<bool, DeployError>;
 }
 
+/// The deployer the control plane has today: none.
+///
+/// There is no adapter that talks to Cloudflare yet (that is the live
+/// deploy pipeline's work), and a control-plane screen that offers to
+/// provision has to do *something* when the button is pressed. The choice
+/// this crate makes is to run the engine for real and let it stop where it
+/// stops: the first step fails, the failure is recorded against the
+/// venture with the reason, and every screen that reads
+/// `provision_progress` shows it.
+///
+/// That is deliberately not the same as refusing the button or pretending
+/// it worked. The venture's recorded state after a run through `Unwired`
+/// is exactly true — "provisioning stopped at `artifact`, because nothing
+/// is wired to build one" — and the day a real [`Deployer`] is passed
+/// instead, every one of these ventures resumes from the step it stopped
+/// at with no migration and no special case.
+pub struct Unwired;
+
+impl Unwired {
+    /// The one message, so the recorded error reads the same whichever
+    /// step a resume happens to reach first.
+    fn refuse<T>(what: &str) -> Result<T, DeployError> {
+        Err(DeployError::new(format!(
+            "no deployer is wired: {what} needs an adapter that talks to Cloudflare, \
+             and the control plane has none yet. Nothing was changed."
+        )))
+    }
+}
+
+// Every method answers without awaiting anything, which is the whole
+// point: there is nothing to talk to. The port is async because a real
+// deployer is.
+#[allow(clippy::unused_async_trait_impl)]
+impl Deployer for Unwired {
+    async fn build_artifact(&self, _module_set: &str) -> Result<(), DeployError> {
+        Self::refuse("building the composed artifact")
+    }
+    async fn ensure_database(&self, _tenant: &str) -> Result<(), DeployError> {
+        Self::refuse("creating the venture's database")
+    }
+    async fn ensure_worker(&self, _tenant: &str, _module_set: &str) -> Result<(), DeployError> {
+        Self::refuse("deploying the venture's Worker")
+    }
+    async fn apply_schema(&self, _tenant: &str, _module_set: &str) -> Result<(), DeployError> {
+        Self::refuse("applying the venture's migrations")
+    }
+    async fn seed_secrets(&self, _tenant: &str) -> Result<(), DeployError> {
+        Self::refuse("seeding the venture's secrets store")
+    }
+    async fn bind_route(&self, _tenant: &str, _subdomain: &str) -> Result<(), DeployError> {
+        Self::refuse("binding the venture's subdomain")
+    }
+    async fn health_ok(&self, _subdomain: &str) -> Result<bool, DeployError> {
+        Self::refuse("checking the venture's health")
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Errors
 // ---------------------------------------------------------------------------

@@ -118,16 +118,25 @@ impl VentureStatus {
         })
     }
 
-    /// Whether one status may follow another. Draft and Degraded lead
-    /// into Provisioning (a first run or a retry); Provisioning settles
-    /// to Live or Degraded; anything but Archived can be Archived;
-    /// Archived is terminal.
+    /// Whether one status may follow another. Draft, Degraded and Live
+    /// lead into Provisioning — a first run, a retry, and a **change**;
+    /// Provisioning settles to Live or Degraded; anything but Archived can
+    /// be Archived; Archived is terminal.
+    ///
+    /// `Live -> Provisioning` is the third reason, and it was missing.
+    /// Changing a live venture's module set has to re-provision it,
+    /// because the deployed artifact is a function of that set (ADR 0009)
+    /// — and with only "a first run or a retry" expressible, the engine
+    /// refused the move and the change could not be made at all. A
+    /// re-provisioning venture keeps serving from the artifact it already
+    /// has until the new one replaces it, so the state is honest about
+    /// what is happening without claiming the venture is down.
     #[must_use]
     pub fn can_transition_to(self, next: VentureStatus) -> bool {
         use VentureStatus::{Archived, Degraded, Draft, Live, Provisioning};
         matches!(
             (self, next),
-            (Draft | Degraded, Provisioning)
+            (Draft | Degraded | Live, Provisioning)
                 | (Provisioning, Live | Degraded)
                 | (Live, Degraded)
                 | (Degraded, Live)
@@ -339,6 +348,46 @@ impl Repository {
     /// lifecycle does not allow. Scoped to the account, so it cannot
     /// touch another customer's venture.
     ///
+    /// Records a venture's module set.
+    ///
+    /// The set is the identity of the artifact the venture runs (ADR
+    /// 0009), so this write is only ever half of a change: the caller is
+    /// responsible for re-provisioning, and for clearing the recorded
+    /// progress first so the run rebuilds rather than resuming past the
+    /// step that builds the artifact. The repository will not do that for
+    /// the caller, because it does not own the provisioning table.
+    ///
+    /// # Errors
+    ///
+    /// [`RepoError::NotFound`] if the venture is not this account's.
+    pub async fn set_venture_modules(
+        &self,
+        account_id: &str,
+        venture_id: &str,
+        module_set: &str,
+        now: &str,
+    ) -> Result<Venture, RepoError> {
+        let Some(venture) = self.venture_for(account_id, venture_id).await? else {
+            return Err(RepoError::NotFound(format!("venture {venture_id}")));
+        };
+        self.db
+            .execute(&Statement::with_values(
+                "UPDATE venture SET module_set = ?, updated_at = ? WHERE account_id = ? AND id = ?",
+                vec![
+                    text(module_set),
+                    text(now),
+                    text(account_id),
+                    text(venture_id),
+                ],
+            ))
+            .await?;
+        Ok(Venture {
+            module_set: module_set.to_owned(),
+            updated_at: now.to_owned(),
+            ..venture
+        })
+    }
+
     /// # Errors
     ///
     /// [`RepoError::NotFound`] if the venture is not this account's,
@@ -432,6 +481,11 @@ mod tests {
         assert!(Provisioning.can_transition_to(Live));
         assert!(Provisioning.can_transition_to(Degraded));
         assert!(Degraded.can_transition_to(Provisioning), "a retry");
+        assert!(
+            Live.can_transition_to(Provisioning),
+            "a change: the artifact is a function of the module set, so editing \
+             the set of a live venture re-provisions it"
+        );
         assert!(Live.can_transition_to(Archived));
         // nonsense moves
         assert!(!Live.can_transition_to(Draft));

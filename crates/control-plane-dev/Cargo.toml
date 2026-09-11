@@ -18,6 +18,7 @@ path = "src/main.rs"
 cratefield-core = { path = "../core" }
 cratefield-runtime-native = { path = "../runtime-native" }
 cratefield-adapter-sqlite = { path = "../adapter-sqlite" }
+cratefield-chrome = { path = "../control-plane-chrome" }
 cratefield-console = { path = "../control-plane-console" }
 cratefield-dashboard = { path = "../control-plane-dashboard" }
 cratefield-accounts = { path = "../control-plane-accounts" }

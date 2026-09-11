@@ -651,6 +651,23 @@ pub fn curated() -> Catalog {
                 Tier::Optional,
                 &[],
             ),
+            m(
+                "notifications",
+                "Notifications",
+                "Push to phones and browsers, an in-app inbox, and email — one API, \
+                 per-person categories, in the recipient's own language.",
+                Tier::Optional,
+                &[],
+            ),
+            m(
+                "privacy",
+                "Privacy requests",
+                "Answer a subject access or erasure request from what every other \
+                 module declares it holds. Optional, and the only honest default \
+                 for a deployment holding personal data.",
+                Tier::Optional,
+                &[],
+            ),
         ],
     }
 }

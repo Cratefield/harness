@@ -70,6 +70,8 @@ cratefield-module-notifications = { path = "crates/module-notifications", versio
 # so `module-waitlist`'s mail templates can take it next.
 cratefield-i18n = { path = "crates/i18n", version = "0.1.0" }
 cratefield-testing = { path = "crates/testing", version = "0.1.0" }
+# The control plane's shared page chrome (cratefield.com's look, one copy).
+cratefield-chrome = { path = "crates/control-plane-chrome", version = "0.1.0" }
 cratefield-cli = { path = "crates/cli", version = "0.1.0" }
 # The venture manifest + deterministic composition generator (issue #138).
 # Depends only on serde/serde_json so both engines can consume it: the
