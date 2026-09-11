@@ -20,7 +20,7 @@ cratefield-provisioning = { path = "../control-plane-provisioning" }
 axum = { workspace = true }
 http = { workspace = true }
 sea-query = { workspace = true }
-bytes = "1"
+bytes = { workspace = true }
 tracing = { workspace = true }
 time = { workspace = true }
 
@@ -28,5 +28,5 @@ time = { workspace = true }
 cratefield-access = { path = "../control-plane-access" }
 cratefield-adapter-sqlite = { path = "../adapter-sqlite" }
 cratefield-testing = { path = "../testing" }
-pollster = { version = "0.4", features = ["macro"] }
-tower = { version = "0.5", features = ["util"] }
+pollster = { workspace = true }
+tower = { workspace = true }
