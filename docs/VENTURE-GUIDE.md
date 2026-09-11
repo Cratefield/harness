@@ -200,6 +200,75 @@ wrangler d1 migrations apply <venture>-api-staging --remote --env staging
 wrangler d1 migrations apply <venture>-api      --remote --env production
 ```
 
+### 4b. If you mount a sidecar: two repositories, one database
+
+A sidecar module owns tables in the **same** database as its host but
+ships its migrations from its own repository, so two independent streams
+apply to one database. They coexist — wrangler records **file names** in
+`d1_migrations` and tolerates rows it did not write, so the sidecar
+repository's numbering restarting at `0001` is not a problem. The full
+measurement is in [MIGRATION-STREAMS.md](MIGRATION-STREAMS.md); this is
+the recipe.
+
+**Apply the host's stream first, then the sidecar's, and never in
+parallel.** Order between the two matters only if one depends on the
+other's tables (it should not — a module owns its own). Parallel is the
+part that actually breaks: run both at once and one of them dies, loudly.
+
+```
+# 1. host repo
+cargo run --bin fz -- migrations collect
+wrangler d1 migrations apply <venture>-api --remote --env production
+
+# 2. sidecar repo, same database, after the host finishes
+cargo run --bin fz -- migrations collect
+wrangler d1 migrations apply <venture>-api --remote --env production
+```
+
+`d1_migrations` then holds both streams, ordered by when they ran rather
+than by the numbers in their names:
+
+```
+id  name
+1   0001_email-signup_0001_init.sql    (host)
+2   0002_waitlist_0001_init.sql        (host)
+3   0001_acme-pricing_0001_init.sql    (sidecar)
+```
+
+Three things to know before you do this.
+
+**A name that already exists is skipped and reported as success.** If the
+sidecar ships a file whose name the host has already applied, wrangler
+says `✅ No migrations to apply!` and the SQL never runs. Nothing warns.
+Collected names embed the module, and a module lives in exactly one
+stream, so this needs two repositories claiming the same module name —
+which the host now catches at runtime: a mounted sidecar whose tables
+clash with a compiled-in module's shows up in `/__health` as
+`"probe": "table-collision"` naming both the table and the module to
+rename.
+
+**Moving a module between mounts re-applies its migrations.** The `NNNN`
+prefix is the *repository's* counter, so the same migration arrives under
+a new name in the adopting repository and wrangler has never seen that
+name:
+
+```
+sidecar:  0001_acme-pricing_0001_init.sql   (applied)
+host:     0003_acme-pricing_0001_init.sql   (looks new)
+```
+
+`CREATE TABLE IF NOT EXISTS` hides it; an `ALTER`, an index, or seed data
+does not — the re-run fails the deploy. The fix needs no code: before
+collecting in the adopting repository, hand-edit `.harness-lock.json` so
+the module's entry names the file the other stream already used. That one
+line is the whole difference between a clean move and a re-applied
+migration.
+
+**A failure stops the run and records nothing.** The migration that
+errored is not written to `d1_migrations` and no file after it runs, so
+re-running retries from the failed file. Forward-only, nothing
+half-recorded.
+
 ## 5. Turnstile (captcha) — if you have public writes
 
 **Human** (Cloudflare dashboard). The signup and waitlist modules have

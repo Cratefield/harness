@@ -74,8 +74,11 @@ Each of these is otherwise discovered the hard way.
   cannot check those modules, while `fz data export` **refuses** rather
   than write an artifact that looks complete. Acknowledge the gap with
   `--without-sidecar-tables` and the manifest records which modules were
-  left out. The cross-boundary collision check still needs the sidecar to
-  declare its tables (#61).
+  left out. The cross-boundary collision check is live: a mounted
+  sidecar whose tables clash with a compiled-in module's is reported in
+  `/__health` as `"probe": "table-collision"`, naming the table and the
+  module to rename (#66). It reports only what a reachable sidecar
+  declared — an unreachable one is `unreachable`, never "clean".
 
 What a sidecar **can** do, and is easy to assume it cannot: serve its UI.
 The host fetches each mounted sidecar's `/__surface` and merges the

@@ -91,8 +91,19 @@ never in parallel from CI.
 
 ## What this leaves open
 
-Everything in #66 that depends on the host *knowing* the sidecar's
-tables — the cross-boundary collision check, `fz doctor`, and including
-sidecar tables in `fz data export` — still needs the sidecar to declare
-them (#61). That is a separate question from whether the two streams can
-share a database, which they can.
+Nothing, now. When this was written the host could not know what a
+sidecar claimed. It can: a sidecar runs the same `health_handler` as its
+host, so its `/__health` body carries `modules[].tables`, and the host's
+probe reads them and reports a clash as `"probe": "table-collision"`.
+`fz doctor` warns about sidecars it cannot check and `fz data export`
+refuses rather than write an artifact that looks complete.
+
+What the collision check cannot do is see a sidecar that is unreachable,
+so it reports only what it observed — "declared nothing" is never
+recorded as "no clash". The apply-order recipe is
+[VENTURE-GUIDE.md](VENTURE-GUIDE.md) §4b.
+
+Reproduced on wrangler 4.131.0, 2026-09-11: every behaviour above still
+holds. The §3 re-run failed on `table acme_quotes_v2 already exists`
+rather than a unique-constraint violation — same cause, a different
+statement getting there first.

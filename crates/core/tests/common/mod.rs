@@ -237,6 +237,24 @@ pub fn builder_with_sample() -> HarnessBuilder {
         .runtime(FakeRuntime(all_ports()))
 }
 
+/// A harness whose one module claims `tables`, for the cross-boundary
+/// collision check: the host has to *have* a claim before a sidecar can
+/// clash with it (issue #66).
+pub fn builder_with_sample_claiming(tables: &'static [&'static str]) -> Harness {
+    Harness::builder()
+        .venture(
+            cratefield_core::Venture::new("test-venture", "test.example")
+                .cors_origins(["https://test.example"]),
+        )
+        .module(SampleModule {
+            tables,
+            ..SampleModule::default()
+        })
+        .runtime(FakeRuntime(all_ports()))
+        .build()
+        .expect("sample harness builds")
+}
+
 pub fn harness_with_sample() -> Harness {
     builder_with_sample()
         .build()
