@@ -41,6 +41,13 @@ that scale, and no issue, document or site copy may make it.
 | Logs | One trail | Two, tied together by one `x-request-id`: the host forwards the caller's id and answers with it, whatever the sidecar does |
 | Failure | A module cannot be missing | Missing binding, no dispatcher, or no answer degrades **that prefix only**: `503 sidecar-unavailable`. A contract mismatch is `503 sidecar-contract-mismatch`. Every other module keeps serving |
 
+The host's own `/__health` lists each mounted sidecar with the contract
+number, module name and version it last reported, and the verdict of the
+last probe: `ok`, `mismatch` or `unreachable` (issue #61). The probe is
+lazy and cached for a short window — it exists so an operator can see
+both contract numbers without reading logs, not as the check itself;
+that remains the stamp read on every forwarded response above.
+
 ## What a sidecar cannot do
 
 Each of these is otherwise discovered the hard way.

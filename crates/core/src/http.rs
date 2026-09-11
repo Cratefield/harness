@@ -11,9 +11,11 @@ use serde::de::DeserializeOwned;
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::module::HARNESS_API;
 use crate::ports::{Defer, IdGen};
 use crate::problem::Problem;
 use crate::scope::Scope;
+use crate::sidecar::{X_HARNESS_API, X_HARNESS_MODULE};
 use tracing::info_span;
 
 /// `x-request-id`: accepted from the client when it matches
@@ -43,6 +45,13 @@ pub fn request_id_is_valid(value: &str) -> bool {
 pub(crate) struct ScopeState {
     pub defer: Arc<dyn Defer>,
     pub id_gen: Arc<dyn IdGen>,
+    /// The one module this deployment serves, when it serves exactly one —
+    /// the sidecar shape (ADR 0009). Set, the response carries
+    /// `x-harness-module` next to [`crate::sidecar::X_HARNESS_API`]; the
+    /// host reads both on every forwarded response, which is how a sidecar
+    /// redeployed against a different contract is caught within one
+    /// request instead of at a cold start that isolates do not have.
+    pub module: Option<&'static str>,
 }
 
 /// Middleware: resolve the request id, build the [`Scope`] (request id,
@@ -117,6 +126,26 @@ pub(crate) async fn scope_layer(
 
     if let Ok(value) = HeaderValue::from_str(&request_id) {
         response.headers_mut().insert(X_REQUEST_ID, value);
+    }
+    // The identity stamp (issue #61): one insert, on every response, and
+    // never a cold-start subrequest. A sidecar is built and deployed
+    // separately, so the compile-time `Harness::build` contract check does
+    // not cover it; the host instead reads this header back on every
+    // forwarded response and refuses the prefix on a wrong number. That
+    // catches a sidecar redeployed under a warm host within one request —
+    // an isolate can outlive the sidecar for hours, so a cached cold-start
+    // verdict would keep serving a contract that no longer holds.
+    if let Ok(value) = HeaderValue::from_str(&HARNESS_API.to_string()) {
+        response.headers_mut().insert(X_HARNESS_API, value);
+    }
+    // The module name rides along so a host mounting several sidecars can
+    // tell whose answer it is looking at. It is only well-defined when the
+    // deployment serves exactly one module — the sidecar shape — so a
+    // multi-module host stays silent rather than stamping a guess.
+    if let Some(name) = state.module
+        && let Ok(value) = HeaderValue::from_str(name)
+    {
+        response.headers_mut().insert(X_HARNESS_MODULE, value);
     }
     span.record("route", route.as_str());
     span.record(

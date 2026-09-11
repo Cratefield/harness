@@ -17,6 +17,7 @@ use axum::http::{HeaderMap, StatusCode, header};
 use axum::middleware::{Next, from_fn_with_state};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
+use bytes::Bytes;
 use serde_json::json;
 use tracing::error;
 
@@ -404,6 +405,7 @@ impl Harness {
         let mounted = self.sidecar_mounts(&ports);
         api = Self::nest_sidecars(api, &mounted, &ports, gateway.as_ref());
         let gateway_state = Self::gateway_guard_state(&ports, gateway.as_ref());
+        let mounts_for_health = mounted.clone();
         let api = api
             .layer(axum::middleware::from_fn(security_headers_layer))
             .layer(DefaultBodyLimit::max(MAX_BODY_BYTES));
@@ -423,11 +425,26 @@ impl Harness {
             .layer(DefaultBodyLimit::max(MAX_BODY_BYTES))
         });
 
+        let health_state = HealthState {
+            // The deployment's environment, not the compiled default:
+            // `cratefield-waitlist` answered `"env":"development"` while
+            // serving production, which is the same lie #143 removed from
+            // the gates and left here.
+            venture: self.venture_as_deployed(ports.config.as_ref()),
+            modules: self.modules.clone(),
+            harness_build: ports.config.get("HARNESS_BUILD").filter(|b| !b.is_empty()),
+            mailer_configured: ports.mailer.is_some(),
+            captcha_configured: ports.captcha.is_some(),
+            sidecars: mounts_for_health,
+            dispatcher: ports.dispatcher.clone(),
+            clock: ports.clock.clone().unwrap_or_else(|| Arc::new(SystemClock)),
+            probe_cache: new_probe_cache(),
+        };
         let Ports {
             config,
             db,
-            mailer,
-            captcha,
+            mailer: _,
+            captcha: _,
             rate_limiter: _,
             signer: _,
             kv: _,
@@ -442,23 +459,12 @@ impl Harness {
             dispatcher: _,
         } = ports;
 
-        let health_state = HealthState {
-            // The deployment's environment, not the compiled default:
-            // `cratefield-waitlist` answered `"env":"development"` while
-            // serving production, which is the same lie #143 removed from
-            // the gates and left here.
-            venture: self.venture_as_deployed(config.as_ref()),
-            modules: self.modules.clone(),
-            harness_build: config
-                .get("HARNESS_BUILD")
-                .filter(|build| !build.is_empty()),
-            mailer_configured: mailer.is_some(),
-            captcha_configured: captcha.is_some(),
-        };
-
         let scope_state = ScopeState {
             defer: defer.unwrap_or_else(|| Arc::new(crate::ports::NoopDefer)),
             id_gen: id_gen.unwrap_or_else(|| Arc::new(crate::ports::UlidIdGen)),
+            // The identity stamp names a module only where there is exactly
+            // one to name: the sidecar role (issue #61).
+            module: (self.modules.len() == 1).then(|| self.modules[0].name()),
         };
         let ready_state = ReadyState {
             db,
@@ -511,6 +517,17 @@ impl Harness {
     }
 }
 
+/// What one `/__health` sidecar fan-out produced: when it ran (epoch ms)
+/// and one entry per mount.
+type ProbeCache = Option<(i64, Vec<serde_json::Value>)>;
+
+/// The fresh cache every router starts with. The shared mutex lives in one
+/// place so the scoped allow for it has one justification to point at.
+#[allow(clippy::disallowed_types)]
+fn new_probe_cache() -> Arc<std::sync::Mutex<ProbeCache>> {
+    Arc::new(std::sync::Mutex::new(None))
+}
+
 #[derive(Clone)]
 struct HealthState {
     venture: Arc<Venture>,
@@ -519,7 +536,27 @@ struct HealthState {
     harness_build: Option<String>,
     mailer_configured: bool,
     captcha_configured: bool,
+    sidecars: Vec<SidecarMount>,
+    dispatcher: Option<Arc<dyn Dispatcher>>,
+    clock: Arc<dyn Clock>,
+    /// The last sidecar probe, kept for one [`SIDECAR_PROBE_TTL_SECS`]
+    /// window. The stamp on each forwarded response is the real contract
+    /// check (issue #61); this probe exists only so `/__health` can show
+    /// each sidecar's state, and caching it keeps a polling dashboard from
+    /// turning every health check into a fan-out of subrequests.
+    /// Deployment-scoped, not request state: it outlives no request, so
+    /// ADR 0007's ban on ambient request state does not apply.
+    #[allow(clippy::disallowed_types)]
+    probe_cache: Arc<std::sync::Mutex<ProbeCache>>,
 }
+
+/// How long a `/__health` sidecar listing stays fresh (issue #61). Short on
+/// purpose: the point of the listing is to notice a redeploy.
+const SIDECAR_PROBE_TTL_SECS: i64 = 30;
+
+/// Per-sidecar probe budget, same generosity the readiness probe grants
+/// the database.
+const SIDECAR_PROBE_TIMEOUT: Duration = Duration::from_secs(2);
 
 async fn health_handler(State(state): State<HealthState>) -> impl IntoResponse {
     let modules: Vec<serde_json::Value> = state
@@ -529,10 +566,14 @@ async fn health_handler(State(state): State<HealthState>) -> impl IntoResponse {
             json!({
                 "name": module.name(),
                 "version": module.version(),
+                "requires": module.requires().iter().map(Port::name).collect::<Vec<_>>(),
+                "optional": module.optional().iter().map(Port::name).collect::<Vec<_>>(),
+                "tables": module.tables(),
                 "emits": module.emits(),
             })
         })
         .collect();
+    let sidecars = probe_sidecars(&state).await;
     Json(json!({
         "venture": state.venture.name,
         "env": state.venture.env.as_str(),
@@ -543,7 +584,105 @@ async fn health_handler(State(state): State<HealthState>) -> impl IntoResponse {
         "mailer": if state.mailer_configured { "configured" } else { "not_configured" },
         "captcha": if state.captcha_configured { "configured" } else { "absent" },
         "modules": modules,
+        "sidecars": sidecars,
     }))
+}
+
+/// One mount, probed. `probe` is the verdict (`ok`, `mismatch`,
+/// `unreachable`); `contract`, `module` and `version` are what the sidecar
+/// said about itself, `null` when it said nothing. A sidecar that answers
+/// a wrong contract still reports here — the operator reading `/__health`
+/// needs both numbers, and the per-request refusal is a separate story.
+async fn probe_sidecars(state: &HealthState) -> Vec<serde_json::Value> {
+    if state.sidecars.is_empty() {
+        return Vec::new();
+    }
+    let now_ms =
+        i64::try_from(state.clock.now().unix_timestamp_nanos() / 1_000_000).unwrap_or(i64::MAX);
+    if let Some((at_ms, entries)) = state.probe_cache.lock().unwrap().as_ref()
+        && now_ms - at_ms < SIDECAR_PROBE_TTL_SECS * 1000
+    {
+        return entries.clone();
+    }
+
+    let mut entries = Vec::new();
+    for mount in &state.sidecars {
+        entries.push(probe_one_sidecar(state, mount).await);
+    }
+    *state.probe_cache.lock().unwrap() = Some((now_ms, entries.clone()));
+    entries
+}
+
+async fn probe_one_sidecar(state: &HealthState, mount: &SidecarMount) -> serde_json::Value {
+    let mut missing = json!({
+        "name": mount.name,
+        "binding": mount.binding,
+        "probe": "unreachable",
+        "contract": serde_json::Value::Null,
+        "module": serde_json::Value::Null,
+        "version": serde_json::Value::Null,
+    });
+    let Some(dispatcher) = state.dispatcher.as_ref() else {
+        return missing;
+    };
+    let request = http::Request::builder()
+        .method(http::Method::GET)
+        .uri("/__health")
+        .body(Bytes::new());
+    let Ok(request) = request else {
+        return missing;
+    };
+    // `/__health` stays open on the sidecar side of the gateway (probes
+    // must probe), so no stamp is needed to reach it. The future is owned
+    // because the clock's timeout demands `'static`; the binding outlives
+    // the call only as a clone.
+    let dispatcher = Arc::clone(dispatcher);
+    let binding = mount.binding.clone();
+    let probe = async move { dispatcher.dispatch(&binding, request).await };
+    let Some(Ok(response)) =
+        crate::ports::timeout(&*state.clock, probe, SIDECAR_PROBE_TIMEOUT).await
+    else {
+        return missing;
+    };
+    let contract = response
+        .headers()
+        .get(crate::sidecar::X_HARNESS_API)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.parse::<u32>().ok());
+    let body = serde_json::from_slice::<serde_json::Value>(response.body()).ok();
+    let module = response
+        .headers()
+        .get(crate::sidecar::X_HARNESS_MODULE)
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_owned)
+        .or_else(|| first_module_string(body.as_ref(), "name"));
+    let version = first_module_string(body.as_ref(), "version");
+    let contract = contract.or_else(|| {
+        body.as_ref()
+            .and_then(|b| b.get("harness_api"))
+            .and_then(serde_json::Value::as_u64)
+            .and_then(|api| u32::try_from(api).ok())
+    });
+    missing["contract"] = contract.map_or(serde_json::Value::Null, |api| json!(api));
+    missing["module"] = module.map_or(serde_json::Value::Null, |name| json!(name));
+    missing["version"] = version.map_or(serde_json::Value::Null, |version| json!(version));
+    match contract {
+        Some(api) if api != HARNESS_API => missing["probe"] = json!("mismatch"),
+        Some(_) => missing["probe"] = json!("ok"),
+        None => missing["probe"] = json!("unreachable"),
+    }
+    missing
+}
+
+/// A sidecar's `/__health` body names its module and version at
+/// `modules[0]`; a stamp header takes precedence, so this is the fallback.
+fn first_module_string(body: Option<&serde_json::Value>, key: &str) -> Option<String> {
+    body?
+        .get("modules")?
+        .get(0)?
+        .get(key)?
+        .as_str()
+        .map(str::to_owned)
 }
 
 #[derive(Clone)]
