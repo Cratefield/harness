@@ -73,6 +73,80 @@ impl Module for DemoModule {
     }
 }
 
+/// A module that reaches its database the way #32 requires — through the
+/// `TenantConn` extractor rather than the captured `ctx.ports.db` handle.
+///
+/// §10 makes the kit "step zero for everything after it", on the grounds
+/// that the kit's router inserts no `Tenant` and the extractor would
+/// therefore 500 in every module suite. That was true of the sketch, in
+/// which resolution sat beside the host check; it is not true of what was
+/// built, because the layer lives *inside* `Harness::router` and a
+/// deployment with no tenant plane resolves to the implicit tenant. This
+/// test is the proof, and it fails loudly if that ever stops holding.
+pub struct TenantedModule;
+
+impl Module for TenantedModule {
+    fn name(&self) -> &'static str {
+        "tenanted"
+    }
+    fn version(&self) -> &'static str {
+        env!("CARGO_PKG_VERSION")
+    }
+    fn requires(&self) -> &'static [Port] {
+        &[Port::Db]
+    }
+    fn tables(&self) -> &'static [&'static str] {
+        &["demo_notes"]
+    }
+    fn migrations(&self) -> Migrations {
+        const SET: [SqlMigration; 1] = [DEMO_INIT];
+        Migrations::sqlite(&SET)
+    }
+    fn validate_config(&self, _cfg: &dyn Config) -> Result<(), ConfigError> {
+        Ok(())
+    }
+    fn router(&self, _ctx: ModuleContext) -> axum::Router {
+        axum::Router::new().route(
+            "/notes",
+            axum::routing::get(|db: cratefield_core::TenantConn| async move {
+                let rows = db
+                    .query(&cratefield_core::Statement::new(
+                        "SELECT id FROM demo_notes",
+                    ))
+                    .await
+                    .expect("select");
+                cratefield_core::Json(serde_json::json!({
+                    "count": rows.len(),
+                    "tenant": db.tenant().id().to_string(),
+                }))
+            }),
+        )
+    }
+}
+
+#[pollster::test]
+async fn a_module_using_tenant_conn_works_under_the_kit() {
+    let kit = TestHarness::new(vec![Box::new(TenantedModule)]);
+    let response = request(
+        &kit.router,
+        axum::http::Method::GET,
+        "/v1/tenanted/notes",
+        None,
+    )
+    .await;
+    assert_eq!(
+        response.status,
+        axum::http::StatusCode::OK,
+        "the extractor must resolve under the kit, not 500"
+    );
+    assert_eq!(response.json()["count"], 0);
+    assert_eq!(
+        response.json()["tenant"],
+        "default",
+        "a kit run has no registry, so it is the implicit tenant"
+    );
+}
+
 #[test]
 fn demo_module_passes_conformance() {
     conformance(Box::new(DemoModule));

@@ -414,17 +414,32 @@ published crates. Saying so is part of the design.
 2. **Types.** `Tenant`, `TenantId`, `TenantStatus`, `Resolution`,
    `ResolveTenant`, `PoolRegistry`, `TenantConn` in core. Still
    unconsumed.
-3. **The testing kit learns the implicit tenant.** This is step zero for
-   everything after it: the kit's router does not insert a `Tenant`, so
-   the extractor would 500 in every module suite the moment a module
-   adopts it.
+3. **The testing kit learns the implicit tenant.** **Done** (#32), and it
+   needed no change to the kit. This item assumed resolution would sit
+   beside the host check, outside `Harness::router` — in which case the
+   kit, which calls `router` and nothing else, would indeed insert no
+   `Tenant` and 500 on the first module to adopt the extractor. §3 moved
+   resolution *inside* `router` for three unrelated reasons (visibility,
+   request id, probes), and the kit gets the implicit tenant for free as
+   a consequence. `a_module_using_tenant_conn_works_under_the_kit` pins
+   it, and fails if the no-registry path ever stops inserting.
 4. **All three runtimes insert a tenant** — the implicit one on
    Cloudflare and browser, and on native too when there is no control
    database, which is every development and test deployment. §6's
    "Cloudflare only" was wrong; native without a registry gets the
    implicit tenant or `cargo test` cannot run.
+
+   **Partly done** (#32). Core's layer inserts the implicit tenant
+   whenever a deployment supplies no tenant plane, which covers
+   Cloudflare, the browser and native-without-a-registry in one place
+   rather than in three runtimes. What remains is native *with* a control
+   database, wiring a `PoolRegistry` into `Ports.tenants`.
 5. **Modules move one at a time**, each with its suite passing, request
    handlers before scheduled work.
+
+   **Not started.** `TenantConn` exists and is proven end to end by
+   `crates/core/tests/tenant_routing.rs`, but no shipped module uses it
+   yet: they still capture `ctx.ports.db`.
 6. **`scheduled`, events and `defer` gain a tenant** (§8), in the same
    API bump.
 7. **Hide `db` from what a `ModuleContext` exposes** — `view_for` stops
