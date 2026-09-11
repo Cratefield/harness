@@ -232,8 +232,9 @@ impl PoolRegistry {
 impl TenantDatabases for PoolRegistry {
     /// The tenant half, and all of it: a tenant's key is its id.
     ///
-    /// Every [`PoolError`] is one answer to the caller — the tenant's
-    /// database is unreachable — because the distinction between "no DSN
+    /// Every way the lookup can miss is one answer to the caller — the
+    /// tenant's database is unreachable — because the distinction between
+    /// "no DSN
     /// recorded" and "the server refused" is an operator's question, not
     /// the caller's, and answering it in a response body would describe
     /// the deployment to a stranger.
