@@ -29,6 +29,8 @@ bytes = { workspace = true }
 # The venture health checks are polled together rather than queued, so the
 # page costs the slowest check and not the sum of all of them.
 futures-util = { workspace = true }
+# The venture's own UI contract, fetched from its /__surface and rendered.
+serde_json = { workspace = true }
 tracing = { workspace = true }
 time = { workspace = true }
 
