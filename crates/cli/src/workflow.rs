@@ -805,6 +805,29 @@ pub fn deploy(
              the approved digest",
         ));
     }
+    // Every locked migration still has to be the file that was locked.
+    //
+    // `fz doctor` checks this against a compiled harness; deploy does not
+    // have one, so it checks the lockfile directly — which is the stronger
+    // read for this purpose, because it covers entries whose module the
+    // resolved set no longer carries. Without it an edited migration
+    // deploys silently: the recorded plan claims a schema the files no
+    // longer produce, and the next environment to apply them gets
+    // something different from the one already running.
+    for (key, entry) in &inputs.lock {
+        if let Err(err) = crate::collect::verify_locked(migrations_dir, key, entry) {
+            let code = match &err {
+                crate::collect::LockedMigrationError::Missing { .. } => {
+                    &CODES.locked_migration_missing
+                }
+                crate::collect::LockedMigrationError::Edited { .. } => {
+                    &CODES.locked_migration_edited
+                }
+            };
+            failures.push(failure(code, err.to_string()));
+        }
+    }
+
     if !planned.modules_removed.is_empty() && !consent.removal {
         // Deliberately precise about what a removal does and does not do.
         // `fz deploy` never touches a database, so nothing is deleted: the

@@ -333,15 +333,7 @@ fn production_needs_the_second_consent_flag() {
 fn a_destructive_plan_needs_the_second_consent_flag() {
     let tmp = TempDir::new("destructive");
     write_manifest(&tmp.manifest(), &["waitlist"], &[]);
-    fs::create_dir_all(tmp.migrations()).expect("migrations dir");
-    // A lockfile from a composition that carried `ghost`: the manifest
-    // no longer does, so the plan removes it.
-    fs::write(
-        tmp.migrations().join(".harness-lock.json"),
-        "{\n  \"ghost/0001\": {\"file\": \"0001_ghost_0001_init.sql\", \
-         \"sha256\": \"a\"}\n}\n",
-    )
-    .expect("write lockfile");
+    write_locked_ghost(&tmp.migrations());
 
     let plan = workflow::plan(&tmp.manifest(), &tmp.migrations()).expect("plans");
     assert_eq!(plan.content.modules_removed, vec!["ghost".to_owned()]);
@@ -531,13 +523,7 @@ fn verify_reports_drift_as_coded_failures() {
 fn the_production_flag_does_not_authorise_a_removal() {
     let tmp = TempDir::new("consent-split");
     write_manifest(&tmp.manifest(), &["waitlist"], &[]);
-    fs::create_dir_all(tmp.migrations()).expect("migrations dir");
-    fs::write(
-        tmp.migrations().join(".harness-lock.json"),
-        "{\n  \"ghost/0001\": {\"file\": \"0001_ghost_0001_init.sql\", \
-         \"sha256\": \"a\"}\n}\n",
-    )
-    .expect("write lockfile");
+    write_locked_ghost(&tmp.migrations());
     let plan = workflow::plan(&tmp.manifest(), &tmp.migrations()).expect("plans");
 
     let err = workflow::deploy(
@@ -570,13 +556,7 @@ fn the_production_flag_does_not_authorise_a_removal() {
 fn a_removal_says_what_it_actually_does_to_the_data() {
     let tmp = TempDir::new("removal-truth");
     write_manifest(&tmp.manifest(), &["waitlist"], &[]);
-    fs::create_dir_all(tmp.migrations()).expect("migrations dir");
-    fs::write(
-        tmp.migrations().join(".harness-lock.json"),
-        "{\n  \"ghost/0001\": {\"file\": \"0001_ghost_0001_init.sql\", \
-         \"sha256\": \"a\"}\n}\n",
-    )
-    .expect("write lockfile");
+    write_locked_ghost(&tmp.migrations());
     let plan = workflow::plan(&tmp.manifest(), &tmp.migrations()).expect("plans");
 
     let err = workflow::deploy(
@@ -605,4 +585,79 @@ fn a_removal_says_what_it_actually_does_to_the_data() {
         !message.contains("data leaves the venture"),
         "the old claim was false — deploy never touches a database: {message}"
     );
+}
+
+/// A lockfile whose entry names a file that exists and hashes to what is
+/// recorded — which is what a real `fz migrations collect` leaves behind.
+///
+/// Deploy verifies the lock, so a fixture with a dangling entry tests the
+/// integrity check rather than the thing it meant to test.
+fn write_locked_ghost(migrations: &std::path::Path) {
+    fs::create_dir_all(migrations).expect("migrations dir");
+    fs::write(migrations.join("0001_ghost_0001_init.sql"), "-- ghost\n").expect("migration");
+    fs::write(
+        migrations.join(".harness-lock.json"),
+        format!(
+            "{{\n  \"ghost/0001\": {{\"file\": \"0001_ghost_0001_init.sql\", \
+             \"sha256\": \"5aed107e176cb0b90a7f11a30f68480312f656db2aec1b0ed7768cf676f1704f\"}}\n}}\n"
+        ),
+    )
+    .expect("write lockfile");
+}
+
+/// An edited migration must not deploy.
+///
+/// `fz doctor` already checks this against a compiled harness, but deploy
+/// does not require doctor to have been run. Without its own check, an
+/// edited migration records a plan claiming a schema the files no longer
+/// produce, and the next environment to apply them gets something
+/// different from the one already running.
+#[test]
+fn deploy_refuses_a_migration_that_was_edited_after_it_was_locked() {
+    let tmp = TempDir::new("edited-migration");
+    write_manifest(&tmp.manifest(), &["waitlist"], &[]);
+    write_locked_ghost(&tmp.migrations());
+    let plan = workflow::plan(&tmp.manifest(), &tmp.migrations()).expect("plans");
+
+    // The file changes after the lock recorded it.
+    fs::write(
+        tmp.migrations().join("0001_ghost_0001_init.sql"),
+        "-- ghost, but different\n",
+    )
+    .expect("edit");
+
+    let err = workflow::deploy(
+        Some(&plan.digest),
+        &tmp.manifest(),
+        &tmp.migrations(),
+        workflow::Consent {
+            production: false,
+            removal: true,
+        },
+    )
+    .expect_err("an edited migration is not deployable");
+    assert_eq!(code_of(&err), "locked-migration-edited");
+}
+
+/// A locked migration whose file is gone is the same class of problem.
+#[test]
+fn deploy_refuses_a_locked_migration_whose_file_is_missing() {
+    let tmp = TempDir::new("missing-migration");
+    write_manifest(&tmp.manifest(), &["waitlist"], &[]);
+    write_locked_ghost(&tmp.migrations());
+    let plan = workflow::plan(&tmp.manifest(), &tmp.migrations()).expect("plans");
+
+    fs::remove_file(tmp.migrations().join("0001_ghost_0001_init.sql")).expect("remove");
+
+    let err = workflow::deploy(
+        Some(&plan.digest),
+        &tmp.manifest(),
+        &tmp.migrations(),
+        workflow::Consent {
+            production: false,
+            removal: true,
+        },
+    )
+    .expect_err("a dangling lock entry is not deployable");
+    assert_eq!(code_of(&err), "locked-migration-missing");
 }
