@@ -839,7 +839,12 @@ fn effective_theme_css(state: &UiState) -> Option<String> {
 
 fn content_security_policy(theme_css: Option<&str>, turnstile: bool) -> String {
     let mut style = String::from("'self'");
-    if let Some(origin) = theme_css.and_then(origin_of) {
+    // `cratefield_core::origin_of`, not a local split on "://" (issue
+    // #215). This decides which origins a page may load stylesheets from,
+    // so a scheme this harness would not fetch, a userinfo prefix or an
+    // unnormalised port must not reach `style-src`. A `theme_css` that is
+    // not an origin contributes nothing rather than something wrong.
+    if let Some(origin) = theme_css.and_then(|url| cratefield_core::origin_of(url).ok()) {
         style.push(' ');
         style.push_str(&origin);
     }
@@ -855,12 +860,6 @@ fn content_security_policy(theme_css: Option<&str>, turnstile: bool) -> String {
         "default-src 'none'; style-src {style}; script-src {script}; frame-src {frame}; \
          img-src 'self' data:; form-action 'self'; base-uri 'none'; frame-ancestors 'none'"
     )
-}
-
-fn origin_of(url: &str) -> Option<String> {
-    let (scheme, rest) = url.split_once("://")?;
-    let host = rest.split('/').next()?;
-    (!host.is_empty()).then(|| format!("{scheme}://{host}"))
 }
 
 fn serde_urlencoded_encode(values: &BTreeMap<String, String>) -> String {

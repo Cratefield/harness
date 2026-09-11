@@ -36,7 +36,6 @@ time = { workspace = true }
 # The VAPID `aud` is the push service's **origin** (RFC 6454): scheme, host
 # and a non-default port, never the path. `Url::origin` is that rule already
 # written down, including "drop :443 on https".
-url = { workspace = true }
 # RFC 8291: ECDH with the subscription's `p256dh`.
 p256 = { workspace = true }
 # RFC 8188/8291 key schedule and record encryption. See the workspace
