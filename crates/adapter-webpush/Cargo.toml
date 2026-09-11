@@ -59,7 +59,7 @@ getrandom = { workspace = true }
 # Path-only on purpose: `cargo publish` resolves dev-dependencies against
 # crates.io, and a path-only one is stripped from the packaged manifest
 # (see the note in the workspace manifest).
-cratefield-testing = { path = "../testing" }
+cratefield-testing = { path = "../testing", default-features = false, features = ["port-conformance"] }
 # The ntfy conformance leg (issue #181) sends over the runtime's real
 # `HttpClient` — reqwest behind the outbound policy — because a live proof
 # against a third-party server that goes through a client of our own
