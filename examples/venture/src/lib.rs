@@ -49,6 +49,7 @@ fn instance() -> &'static (Harness, Cloudflare) {
             // ever sent, which is what an example wants.
             .mailer(cratefield::resend::Resend::new(
                 std::sync::Arc::new(cratefield::cloudflare::FetchClient),
+                std::sync::Arc::new(cratefield::cloudflare::WorkersClock),
                 None,
                 "example@factory0.dev",
                 None,

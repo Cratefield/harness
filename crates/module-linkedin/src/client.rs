@@ -16,10 +16,11 @@
 //! next cron pass is the timer.
 
 use bytes::Bytes;
-use cratefield_core::{HttpClient, HttpError};
+use cratefield_core::{Clock, HttpClient, HttpError, retry_after};
 use http::{Method, Request, Response, StatusCode, header};
 use serde_json::Value;
 use std::sync::atomic::{AtomicU32, Ordering};
+use std::time::Duration;
 
 pub(crate) const API_HOST: &str = "https://api.linkedin.com";
 pub(crate) const OAUTH_TOKEN_URL: &str = "https://www.linkedin.com/oauth/v2/accessToken";
@@ -44,9 +45,10 @@ pub(crate) enum ApiError {
         message: String,
     },
     NotFound,
-    /// Rate limited (HTTP 429), with `Retry-After` when LinkedIn sent one.
+    /// Rate limited (HTTP 429), with `Retry-After` when LinkedIn (or a CDN
+    /// in front of it) sent one — in either form (issue #278).
     RateLimited {
-        retry_after_secs: Option<i64>,
+        retry_after: Option<Duration>,
     },
     /// LinkedIn's own failure (HTTP 5xx). Retryable.
     Server {
@@ -100,8 +102,8 @@ impl std::fmt::Display for ApiError {
             ApiError::TokenRejected => write!(f, "access token rejected"),
             ApiError::Forbidden { code, message } => write!(f, "forbidden ({code}): {message}"),
             ApiError::NotFound => write!(f, "not found"),
-            ApiError::RateLimited { retry_after_secs } => {
-                write!(f, "rate limited (retry after {retry_after_secs:?}s)")
+            ApiError::RateLimited { retry_after } => {
+                write!(f, "rate limited (retry after {retry_after:?})")
             }
             ApiError::Server { status, message } => write!(f, "server {status}: {message}"),
             ApiError::Client {
@@ -162,6 +164,9 @@ pub(crate) struct PostView {
 
 pub(crate) struct Client<'a> {
     http: &'a dyn HttpClient,
+    /// Read for the HTTP-date form of `Retry-After` (issue #278); the same
+    /// clock every other part of the module already holds.
+    clock: &'a dyn Clock,
     api_version: &'a str,
     access_token: Option<&'a str>,
     spent: AtomicU32,
@@ -169,9 +174,10 @@ pub(crate) struct Client<'a> {
 
 impl<'a> Client<'a> {
     /// A client for the OAuth endpoints, which take no bearer and no version.
-    pub(crate) fn anonymous(http: &'a dyn HttpClient) -> Self {
+    pub(crate) fn anonymous(http: &'a dyn HttpClient, clock: &'a dyn Clock) -> Self {
         Self {
             http,
+            clock,
             api_version: "",
             access_token: None,
             spent: AtomicU32::new(0),
@@ -180,11 +186,13 @@ impl<'a> Client<'a> {
 
     pub(crate) fn new(
         http: &'a dyn HttpClient,
+        clock: &'a dyn Clock,
         api_version: &'a str,
         access_token: &'a str,
     ) -> Self {
         Self {
             http,
+            clock,
             api_version,
             access_token: Some(access_token),
             spent: AtomicU32::new(0),
@@ -240,7 +248,7 @@ impl<'a> Client<'a> {
     /// Maps a response onto [`ApiError`]. Everything LinkedIn tells us about
     /// a failure is logged (`x-li-uuid`, its `serviceErrorCode`); the access
     /// token never is.
-    fn check(response: Response<Bytes>) -> Result<(Response<Bytes>, Value), ApiError> {
+    fn check(&self, response: Response<Bytes>) -> Result<(Response<Bytes>, Value), ApiError> {
         let status = response.status();
         let trace = response
             .headers()
@@ -276,11 +284,9 @@ impl<'a> Client<'a> {
             StatusCode::FORBIDDEN => ApiError::Forbidden { code, message },
             StatusCode::NOT_FOUND => ApiError::NotFound,
             StatusCode::TOO_MANY_REQUESTS => ApiError::RateLimited {
-                retry_after_secs: response
-                    .headers()
-                    .get(header::RETRY_AFTER)
-                    .and_then(|value| value.to_str().ok())
-                    .and_then(|value| value.parse::<i64>().ok()),
+                // One parser for both header forms (issue #214/#278); the
+                // date form needs the clock the client is built with.
+                retry_after: retry_after(response.headers(), self.clock),
             },
             other if other.is_server_error() => ApiError::Server {
                 status: other.as_u16(),
@@ -304,7 +310,7 @@ impl<'a> Client<'a> {
         let encoded = body.map(|value| serde_json::to_vec(&value).unwrap_or_default());
         let request = self.rest_request(method, path_and_query, encoded, restli_method)?;
         let response = self.send(request).await?;
-        Self::check(response)
+        self.check(response)
     }
 
     // -----------------------------------------------------------------------
@@ -339,7 +345,7 @@ impl<'a> Client<'a> {
                 .to_owned();
             return Err(match status {
                 StatusCode::TOO_MANY_REQUESTS => ApiError::RateLimited {
-                    retry_after_secs: None,
+                    retry_after: retry_after(response.headers(), self.clock),
                 },
                 other if other.is_server_error() => ApiError::Server {
                     status: other.as_u16(),
@@ -560,7 +566,7 @@ impl<'a> Client<'a> {
             .body(bytes)
             .map_err(|err| ApiError::Transport(err.to_string()))?;
         let response = self.send(request).await?;
-        Self::check(response)?;
+        self.check(response)?;
         Ok(())
     }
 
@@ -788,7 +794,7 @@ mod tests {
         assert!(ApiError::Transport("dns".into()).is_retryable());
         assert!(
             ApiError::RateLimited {
-                retry_after_secs: Some(30)
+                retry_after: Some(Duration::from_secs(30))
             }
             .is_retryable()
         );
@@ -828,5 +834,52 @@ mod tests {
             organization.logo_urn.as_deref(),
             Some("urn:li:digitalmediaAsset:C4D0")
         );
+    }
+
+    /// A frozen clock, so the HTTP-date form of `Retry-After` has a
+    /// deterministic delta.
+    struct FixedClock(time::OffsetDateTime);
+
+    impl Clock for FixedClock {
+        fn now(&self) -> time::OffsetDateTime {
+            self.0
+        }
+    }
+
+    /// Never called: `check` is exercised on a response built in the test.
+    struct NoHttp;
+
+    #[async_trait::async_trait]
+    impl HttpClient for NoHttp {
+        async fn send(&self, _request: Request<Bytes>) -> Result<Response<Bytes>, HttpError> {
+            unreachable!("no network in this test")
+        }
+    }
+
+    #[test]
+    fn rate_limited_reads_the_http_date_form() {
+        // A CDN in front of LinkedIn answers with a date (issue #278): one
+        // hour from the client's clock, not `None`.
+        let at = time::OffsetDateTime::from_unix_timestamp(1_800_000_000).expect("valid");
+        let format = time::format_description::parse_borrowed::<2>(
+            "[weekday repr:short], [day] [month repr:short] [year] [hour]:[minute]:[second] GMT",
+        )
+        .expect("valid format");
+        let date = (at + time::Duration::seconds(3600))
+            .format(&format)
+            .expect("formats");
+        let response = Response::builder()
+            .status(StatusCode::TOO_MANY_REQUESTS)
+            .header(header::RETRY_AFTER, date)
+            .body(Bytes::new())
+            .expect("builds");
+        let clock = FixedClock(at);
+        let client = Client::anonymous(&NoHttp, &clock);
+        match client.check(response) {
+            Err(ApiError::RateLimited { retry_after }) => {
+                assert_eq!(retry_after, Some(Duration::from_secs(3600)));
+            }
+            other => panic!("wrong result: {other:?}"),
+        }
     }
 }

@@ -22,18 +22,27 @@ natively.
 ```rust,ignore
 use std::sync::Arc;
 use cratefield_adapter_resend::Resend;
-use cratefield_runtime_cloudflare::FetchClient;
+use cratefield_runtime_cloudflare::{FetchClient, WorkersClock};
 
 // With a key:
-let mailer = Resend::new(Arc::new(FetchClient), Some(key), "Factory Zero <no-reply@send.example.com>", None);
+let mailer = Resend::new(
+    Arc::new(FetchClient),
+    Arc::new(WorkersClock),
+    Some(key),
+    "Factory Zero <no-reply@send.example.com>",
+    None,
+);
 // Without a key (degraded mode): send() -> Ok(SendOutcome::NotConfigured),
 // no network call. Wire it into the runtime:
 let runtime = Cloudflare::new().db("DB").mailer(mailer);
 ```
 
-`Resend::from_env(http)` reads `RESEND_API_KEY`, `MAIL_FROM`,
+`Resend::from_env(http, clock)` reads `RESEND_API_KEY`, `MAIL_FROM`,
 `MAIL_REPLY_TO` from the process environment (native/self-hosted). On
 Workers, read the secrets from the venture's `Env` and call `Resend::new`.
+The `Clock` is what lets the adapter read the HTTP-date form of
+`Retry-After` (issue #278); without it a date-form 429 would read as
+"retry now".
 
 Error mapping (to `cratefield_core::MailError`): 401/403 →
 `Unauthorized`/`DomainNotVerified { domain }` (domain parsed from Resend's

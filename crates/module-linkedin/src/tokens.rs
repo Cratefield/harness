@@ -169,7 +169,7 @@ async fn refresh(
     };
     let refresh_token = open_token(ctx, account, "refresh_token", sealed_refresh)?;
 
-    let client = Client::anonymous(http);
+    let client = Client::anonymous(http, clock);
     let result = client
         .refresh(&refresh_token, &client_id, &client_secret)
         .await;

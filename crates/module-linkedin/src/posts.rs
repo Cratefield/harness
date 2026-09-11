@@ -465,7 +465,7 @@ pub(crate) async fn edit(
     let session = tokens::session(ctx, &settings, &scope)
         .await
         .map_err(|trouble| trouble.problem(&scope))?;
-    let client = Client::new(http, &settings.api_version, &session.access_token);
+    let client = Client::new(http, clock, &settings.api_version, &session.access_token);
     let result = client
         .partial_update_post(post_urn, Value::Object(set))
         .await;
@@ -538,7 +538,7 @@ pub(crate) async fn remove(
         let session = tokens::session(ctx, &settings, &scope)
             .await
             .map_err(|trouble| trouble.problem(&scope))?;
-        let client = Client::new(http, &settings.api_version, &session.access_token);
+        let client = Client::new(http, clock, &settings.api_version, &session.access_token);
         // Deletion is idempotent on LinkedIn's side: an already-deleted post
         // answers 204 too, so a lost response costs nothing.
         let result = client.delete_post(post_urn).await;
@@ -644,7 +644,7 @@ pub(crate) async fn publish_one(
         }
     };
 
-    let client = Client::new(http, &settings.api_version, &session.access_token);
+    let client = Client::new(http, clock, &settings.api_version, &session.access_token);
     publish_with(ctx, settings, scope, db, clock, &client, &row, reclaimed).await;
     handlers::flush_budget(ctx, client.spent()).await;
 }
@@ -724,7 +724,7 @@ async fn publish_with(
     }
 
     let body = build_body(row, &page.urn, media_urn.as_deref(), alt_text.as_deref());
-    match create_with_one_retry(ctx, settings, scope, client, body).await {
+    match create_with_one_retry(ctx, settings, scope, clock, client, body).await {
         Ok(urn) => {
             let now = store::now_iso(clock);
             if let Err(error) = store::set_post_urn(db, &row.id, &urn, &now).await {
@@ -746,8 +746,8 @@ async fn publish_with(
         Err(error) if error.is_retryable() => {
             let wait = match &error {
                 ApiError::RateLimited {
-                    retry_after_secs: Some(seconds),
-                } => *seconds,
+                    retry_after: Some(wait),
+                } => i64::try_from(wait.as_secs()).unwrap_or(i64::MAX),
                 _ => backoff_secs(row.attempts),
             };
             tracing::warn!(error = %error, "deferring a post after a retryable failure");
@@ -814,6 +814,7 @@ async fn create_with_one_retry(
     ctx: &ModuleContext,
     settings: &Settings,
     scope: &Scope,
+    clock: &dyn Clock,
     client: &Client<'_>,
     body: Value,
 ) -> Result<String, ApiError> {
@@ -831,7 +832,7 @@ async fn create_with_one_retry(
         // needs_reconnect and emitted the event. Nothing more to try.
         return Err(ApiError::TokenRejected);
     };
-    let retry = Client::new(http, &settings.api_version, &fresh.access_token);
+    let retry = Client::new(http, clock, &settings.api_version, &fresh.access_token);
     let result = retry.create_post(body).await;
     handlers::flush_budget(ctx, retry.spent()).await;
     result
@@ -1025,7 +1026,7 @@ pub(crate) async fn confirm_pending(
     let Ok(session) = tokens::session(ctx, settings, scope).await else {
         return 0;
     };
-    let client = Client::new(http, &settings.api_version, &session.access_token);
+    let client = Client::new(http, clock, &settings.api_version, &session.access_token);
     let mut checked = 0;
     for row in pending {
         if let Some(urn) = row.post_urn.clone() {

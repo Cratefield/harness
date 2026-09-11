@@ -19,7 +19,9 @@ use std::sync::{Arc, OnceLock};
 use async_trait::async_trait;
 use cratefield_adapter_resend::Resend;
 use cratefield_core::{Harness, MailError, Mailer, Message, SendOutcome, Venture};
-use cratefield_runtime_cloudflare::{Cloudflare, FetchClient, serve, serve_scheduled};
+use cratefield_runtime_cloudflare::{
+    Cloudflare, FetchClient, WorkersClock, serve, serve_scheduled,
+};
 use worker::{Context, Env, Request, Response, event};
 
 /// The verified sending address (a `send.` subdomain verified in Resend).
@@ -50,6 +52,7 @@ fn build_mailer(env: &Env) -> Arc<dyn Mailer> {
     match key {
         Some(key) => Arc::new(Resend::new(
             Arc::new(FetchClient),
+            Arc::new(WorkersClock),
             Some(key),
             MAIL_FROM,
             None,

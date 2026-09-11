@@ -87,6 +87,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let clock: Arc<dyn Clock> = Arc::new(TokioClock);
     runtime = runtime.mailer(cratefield_adapter_resend::Resend::new(
         Arc::clone(&http),
+        Arc::clone(&clock),
         None,
         "example@factory0.dev",
         None,

@@ -212,10 +212,10 @@ pub(crate) fn upstream_problem(error: &crate::client::ApiError) -> Problem {
         ApiError::TokenRejected => Problem::new(&RECONNECT_REQUIRED),
         ApiError::Forbidden { code, message } => Problem::new(&PAGE_ROLE_MISSING)
             .with_detail(format!("LinkedIn refused this call ({code}): {message}")),
-        ApiError::RateLimited { retry_after_secs } => {
+        ApiError::RateLimited { retry_after } => {
+            let secs = retry_after.map_or(60, |wait| wait.as_secs());
             Problem::new(&cratefield_core::SLUGS.rate_limited).with_detail(format!(
-                "LinkedIn rate limited this call; retry after {}s",
-                retry_after_secs.unwrap_or(60)
+                "LinkedIn rate limited this call; retry after {secs}s"
             ))
         }
         other => Problem::new(&UPSTREAM).with_detail(other.to_string()),
