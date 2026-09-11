@@ -66,8 +66,8 @@ pub use module::{
 pub use origin::{OriginError, origin_of};
 pub use outbox::{Outbox, OutboxRecord};
 pub use personal_data::{
-    CatalogEntry, DataKind, Disposition, PersonalDataCatalog, PersonalDataSet, is_plain_identifier,
-    migration_tables, undeclared_tables, unlisted_tables,
+    CatalogEntry, DataKind, Disposition, PersonalDataCatalog, PersonalDataSet, SubjectVia,
+    is_plain_identifier, migration_tables, undeclared_tables, unlisted_tables,
 };
 pub use ports::{
     Blob, BlobError, BlobObject, BoundedHttpClient, Captcha, CaptchaBinding, CaptchaError, Charge,

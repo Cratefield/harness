@@ -4,8 +4,8 @@ use crate::erase;
 use axum::extract::{Query, State};
 use axum::routing::{get, post};
 use cratefield_core::{
-    CatalogEntry, Disposition, Json, ModuleContext, Problem, Scope, Statement, is_plain_identifier,
-    require_admin,
+    CatalogEntry, Disposition, Json, ModuleContext, PersonalDataSet, Problem, Scope, Statement,
+    is_plain_identifier, require_admin,
 };
 use cratefield_core::{Clock, SystemClock};
 use http::HeaderMap;
@@ -192,6 +192,33 @@ async fn export(
     })))
 }
 
+/// `Some(…)` when a declaration reaches its subject through another table:
+/// the rows are found by `IN (SELECT …)` over the named join rather than by
+/// matching the subject value directly. Built once and used by every builder
+/// — export, preview, delete, verify — because a table export finds and an
+/// erasure cannot reach would be the same gap this exists to close, one room
+/// over (issue #281).
+pub(crate) fn subject_predicate(set: &PersonalDataSet) -> Option<String> {
+    match set.subject_via {
+        Some(via) => {
+            if !is_plain_identifier(via.table)
+                || !is_plain_identifier(via.subject)
+                || !is_plain_identifier(via.key)
+            {
+                return None;
+            }
+            Some(format!(
+                "{subject} IN (SELECT {key} FROM {table} WHERE {via_subject} = ?)",
+                subject = set.subject,
+                key = via.key,
+                table = via.table,
+                via_subject = via.subject,
+            ))
+        }
+        None => Some(format!("{} = ?", set.subject)),
+    }
+}
+
 /// `SELECT * FROM <table> WHERE <subject> = ?`, or `None` when either name is
 /// not a plain identifier.
 ///
@@ -202,11 +229,11 @@ fn select_for(entry: &CatalogEntry, subject: &str) -> Option<Statement> {
     if !is_plain_identifier(entry.set.table) || !is_plain_identifier(entry.set.subject) {
         return None;
     }
+    let predicate = subject_predicate(&entry.set)?;
     Some(Statement::with_values(
         format!(
-            "SELECT * FROM {} WHERE {} = ? LIMIT {}",
+            "SELECT * FROM {} WHERE {predicate} LIMIT {}",
             entry.set.table,
-            entry.set.subject,
             MAX_ROWS_PER_TABLE + 1
         ),
         vec![subject.into()],

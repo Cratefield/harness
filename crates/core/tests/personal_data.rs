@@ -19,6 +19,7 @@ fn valid() -> PersonalDataSet {
         disposition: Disposition::Erase,
         description: "Joint angles and scores for one practice, with its date.",
         redacted: &[],
+        subject_via: None,
     }
 }
 
@@ -174,6 +175,7 @@ fn a_declaration_with_a_quoted_column_is_refused_at_build() {
         disposition: Disposition::Erase,
         description: "Angles.",
         redacted: &[],
+        subject_via: None,
     };
     let errors = set.validate("practice", OWNED);
     assert!(
@@ -191,6 +193,7 @@ fn an_anonymise_column_that_is_not_an_identifier_is_refused() {
         disposition: Disposition::Anonymise(&["name = 'x' --"]),
         description: "Angles.",
         redacted: &[],
+        subject_via: None,
     };
     let errors = set.validate("practice", OWNED);
     assert!(
@@ -206,6 +209,7 @@ fn a_credential_column_can_be_declared_and_still_be_kept_out_of_an_export() {
     // somebody forwards.
     let set = PersonalDataSet {
         redacted: &["recipient_json"],
+        subject_via: None,
         ..valid()
     };
     assert!(set.validate("practice", OWNED).is_empty());
@@ -215,6 +219,7 @@ fn a_credential_column_can_be_declared_and_still_be_kept_out_of_an_export() {
 fn a_redacted_column_that_is_not_an_identifier_is_refused() {
     let set = PersonalDataSet {
         redacted: &["recipient_json, account_id"],
+        subject_via: None,
         ..valid()
     };
     let errors = set.validate("practice", OWNED);
@@ -231,6 +236,7 @@ fn redacting_the_subject_column_is_refused() {
     // list at all.
     let set = PersonalDataSet {
         redacted: &["account_id"],
+        subject_via: None,
         ..valid()
     };
     let errors = set.validate("practice", OWNED);
@@ -247,6 +253,7 @@ fn redacting_a_column_of_a_table_declared_as_holding_nothing_is_refused() {
     // `none` when it should not be.
     let set = PersonalDataSet {
         redacted: &["token"],
+        subject_via: None,
         ..PersonalDataSet::none(
             "pose_library",
             "Reference poses, identical for every member.",
@@ -257,4 +264,61 @@ fn redacting_a_column_of_a_table_declared_as_holding_nothing_is_refused() {
         errors.iter().any(|e| e.contains("nothing is exported")),
         "{errors:?}"
     );
+}
+
+#[test]
+fn a_subject_via_with_a_name_that_is_not_an_identifier_is_refused() {
+    // The privacy module interpolates all three names into SQL. A bad one
+    // must die at build, where the declaration is written, not at the first
+    // subject access request, where being wrong costs the most.
+    let set = PersonalDataSet {
+        subject_via: Some(cratefield_core::SubjectVia {
+            table: "identities; DROP TABLE users",
+            subject: "user_id",
+            key: "provider_subject",
+        }),
+        ..valid()
+    };
+    let errors = set.validate("practice", OWNED);
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.contains("via table") && e.contains("not a plain identifier")),
+        "{errors:?}"
+    );
+}
+
+#[test]
+fn a_subject_via_on_a_table_declared_as_holding_nothing_is_refused() {
+    // The two halves contradict each other: `none` says nobody can be
+    // reached here, `subject_via` names the road to them.
+    let set = PersonalDataSet {
+        subject_via: Some(cratefield_core::SubjectVia {
+            table: "users",
+            subject: "id",
+            key: "email",
+        }),
+        ..PersonalDataSet::none(
+            "pose_library",
+            "Reference poses, identical for every member.",
+        )
+    };
+    let errors = set.validate("practice", OWNED);
+    assert!(
+        errors.iter().any(|e| e.contains("one or the other")),
+        "{errors:?}"
+    );
+}
+
+#[test]
+fn a_well_formed_subject_via_passes() {
+    let set = PersonalDataSet {
+        subject_via: Some(cratefield_core::SubjectVia {
+            table: "users",
+            subject: "id",
+            key: "email",
+        }),
+        ..valid()
+    };
+    assert!(set.validate("practice", OWNED).is_empty());
 }

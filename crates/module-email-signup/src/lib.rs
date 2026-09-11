@@ -215,6 +215,7 @@ impl Module for EmailSignup {
                           where you signed up from, the language you asked to be written to \
                           in, and when you signed up, confirmed and unsubscribed.",
             redacted: &["unsubscribe_token"],
+            subject_via: None,
         }];
         SETS
     }

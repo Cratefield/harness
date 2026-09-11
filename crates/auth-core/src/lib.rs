@@ -78,7 +78,7 @@ pub use tokens::{
 
 use cratefield_core::{
     AnyError, BoxFuture, Config, ConfigError, DataKind, Disposition, Module, ModuleConfig,
-    ModuleContext, PersonalDataSet, Port, SqlMigration,
+    ModuleContext, PersonalDataSet, Port, SqlMigration, SubjectVia,
 };
 use std::sync::Arc;
 
@@ -285,18 +285,17 @@ impl Module for AuthCore {
     /// needs in order to check that request — printing it in their export
     /// hands them nothing they did not already have.
     ///
-    /// **`deletion_jobs` is keyed differently from the rest, and that is a
-    /// known gap.** Every other set here is matched on the account id, under
-    /// one column name or another; this one is matched on `provider_subject`,
-    /// because the row is created by a provider callback that names the person
-    /// only by the provider's own id for them and there is no account column
-    /// to put in its place. A subject access request made with an account id
-    /// therefore returns nothing from this table even when a row exists. The
-    /// declaration is still the honest one — the column that identifies a
-    /// person here *is* `provider_subject` — but joining it back to the
-    /// account through `identities` is a change to the catalogue type and to
-    /// both query builders, so it is filed as its own (issue #281) rather
-    /// than papered over with a column that would not be filled.
+    /// **`deletion_jobs` is keyed differently from the rest, and says so.**
+    /// Every other set here is matched on the account id, under one column
+    /// name or another; this one is matched on `provider_subject`, because the
+    /// row is created by a provider callback that names the person only by
+    /// the provider's own id for them — it can exist before there is an
+    /// account to point at, so a `user_id` column would have nothing to put
+    /// in it. `subject_via` names the one hop that links the two: a row here
+    /// belongs to whoever holds an `identities` row with the same
+    /// `provider_subject`, and that row carries the account id requests are
+    /// made with. Export, preview, delete and verify all run the same join
+    /// (issue #281).
     fn personal_data(&self) -> &'static [PersonalDataSet] {
         const SETS: &[PersonalDataSet] = &[
             PersonalDataSet {
@@ -308,6 +307,7 @@ impl Module for AuthCore {
                               at, whether that address has been confirmed, and when the account \
                               was created and last changed.",
                 redacted: &[],
+                subject_via: None,
             },
             PersonalDataSet {
                 table: "identities",
@@ -318,6 +318,7 @@ impl Module for AuthCore {
                               for you, the email address and name it gave us when you linked it, \
                               and when you last used it.",
                 redacted: &[],
+                subject_via: None,
             },
             PersonalDataSet {
                 table: "credentials",
@@ -328,6 +329,7 @@ impl Module for AuthCore {
                               device it was registered from, when it was added and last used, and \
                               whether it is currently locked.",
                 redacted: &["password_hash"],
+                subject_via: None,
             },
             PersonalDataSet {
                 table: "sessions",
@@ -338,6 +340,7 @@ impl Module for AuthCore {
                               last seen, when it expires, how you proved who you were, and a \
                               one-way fingerprint of the address and browser family it came from.",
                 redacted: &["token_hash"],
+                subject_via: None,
             },
             PersonalDataSet {
                 table: "single_use_tokens",
@@ -348,6 +351,7 @@ impl Module for AuthCore {
                               link, a passkey challenge, an authorization code, a refresh token — \
                               until they are used or run out.",
                 redacted: &["token_hash", "payload"],
+                subject_via: None,
             },
             // The two registration tables. They are the one place in this
             // module that holds a secret and no person: an application's
@@ -386,6 +390,14 @@ impl Module for AuthCore {
                               sign-in method unlinked, your whole account removed, or \
                               nothing, because there was nothing left to remove.",
                 redacted: &[],
+                // One hop to the account: identities holds the
+                // (provider, provider_subject, user_id) triple, and user_id
+                // is the value a subject access request is made with.
+                subject_via: Some(SubjectVia {
+                    table: "identities",
+                    subject: "user_id",
+                    key: "provider_subject",
+                }),
             },
         ];
         SETS

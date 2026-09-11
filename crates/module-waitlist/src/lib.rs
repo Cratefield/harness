@@ -250,6 +250,7 @@ impl Module for Waitlist {
                               your referral code and how many people joined through it, and any \
                               answers you gave on the way in.",
                 redacted: &[],
+                subject_via: None,
             },
             PersonalDataSet::none(
                 "waitlist_send_cooldown",

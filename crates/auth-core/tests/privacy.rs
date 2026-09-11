@@ -398,3 +398,107 @@ async fn the_manifest_says_the_two_client_tables_hold_software_not_people() {
     assert_eq!(holds, declared_tables());
     assert_eq!(body["holds_personal_data"], true);
 }
+
+/// A deletion job is written by the provider callback, which names the person
+/// only by the provider's own id for them — so the declaration is keyed on
+/// `provider_subject` while every request is made with an account id (issue
+/// #281). The export has to find the row through `identities`, and the erasure
+/// preview has to count it, or a subject access request reports the one table
+/// that proves a deletion was asked for as if it did not exist.
+#[pollster::test]
+async fn the_deletion_queue_answers_a_request_made_with_the_account_id() {
+    let kit = privacy_kit();
+    seed(&kit, ALICE, "alice@example.test").await;
+    seed(&kit, BOB, "bob@example.test").await;
+
+    // The row the provider callback writes: Alice by her provider id, which
+    // is exactly what the seeded `identities` row carries as
+    // `provider_subject`.
+    let at = "2026-01-01T00:00:00Z";
+    kit.db
+        .execute(&Statement::with_values(
+            "INSERT INTO deletion_jobs (id, provider, provider_subject, confirmation_code, \
+             status, outcome, created_at) VALUES (?, 'google', ?, 'code-alice', 'done', \
+             'unlinked', ?)"
+                .to_owned(),
+            vec![
+                "job-alice".into(),
+                format!("google-{ALICE}").into(),
+                at.into(),
+            ],
+        ))
+        .await
+        .expect("seeding deletion_jobs failed");
+
+    let export = send(
+        &kit,
+        Method::GET,
+        &format!("/v1/privacy/export?subject={ALICE}"),
+        Some(ADMIN),
+        None,
+    )
+    .await;
+    assert_eq!(export.status, StatusCode::OK, "{}", export.text());
+    let job = export
+        .json()
+        .clone()
+        .pointer("/tables")
+        .and_then(|tables| tables.as_array())
+        .and_then(|tables| {
+            tables
+                .iter()
+                .find(|table| table["table"] == "deletion_jobs")
+                .and_then(|table| table["rows"].as_array())
+        })
+        .and_then(|rows| rows.first())
+        .cloned();
+    let job = job.unwrap_or_else(|| {
+        panic!(
+            "the export found no deletion_jobs row for the account id: {}",
+            export.text()
+        )
+    });
+    assert_eq!(job["confirmation_code"], "code-alice", "{job}");
+    // And not by somebody else's provider id.
+    let bob_export = send(
+        &kit,
+        Method::GET,
+        &format!("/v1/privacy/export?subject={BOB}"),
+        Some(ADMIN),
+        None,
+    )
+    .await;
+    let bob_rows = bob_export
+        .json()
+        .pointer("/tables")
+        .and_then(|tables| tables.as_array())
+        .and_then(|tables| {
+            tables
+                .iter()
+                .find(|table| table["table"] == "deletion_jobs")
+                .and_then(|table| table["rows"].as_array())
+        })
+        .map_or(0, std::vec::Vec::len);
+    assert_eq!(bob_rows, 0, "Bob's export picked up Alice's deletion job");
+
+    // The preview tells the truth too: one row, kept, for the account id the
+    // operator typed.
+    let preview = send(
+        &kit,
+        Method::POST,
+        "/v1/privacy/erase",
+        Some(ADMIN),
+        Some(&format!(r#"{{"subject":"{ALICE}"}}"#)),
+    )
+    .await;
+    assert_eq!(preview.status, StatusCode::OK, "{}", preview.text());
+    let row = preview
+        .json()
+        .pointer("/plan")
+        .and_then(|plan| plan.as_array())
+        .and_then(|plan| plan.iter().find(|entry| entry["table"] == "deletion_jobs"))
+        .cloned()
+        .unwrap_or_else(|| panic!("deletion_jobs missing from the preview"));
+    assert_eq!(row["action"], "retain", "{row}");
+    assert_eq!(row["rows"], 1, "{row}");
+}

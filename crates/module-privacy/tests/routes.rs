@@ -50,6 +50,7 @@ const PERSONAL: &[PersonalDataSet] = &[
         // column is a credential: whoever holds the token can reach the
         // device, so an export names it and does not copy it.
         redacted: &["device_token"],
+        subject_via: None,
     },
     PersonalDataSet::none(
         "pose_library",

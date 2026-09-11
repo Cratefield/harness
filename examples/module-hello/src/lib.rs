@@ -95,6 +95,7 @@ impl Module for Hello {
             // whoever reads that page.
             description: "The name you said hello with, and nothing else.",
             redacted: &[],
+            subject_via: None,
         }];
         SETS
     }
