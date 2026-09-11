@@ -32,7 +32,7 @@ impl Module for SampleRowModule {
     }
 
     fn requires(&self) -> &'static [Port] {
-        &[Port::Db]
+        &[Port::Db, Port::HttpClient]
     }
 
     fn tables(&self) -> &'static [&'static str] {
@@ -73,6 +73,10 @@ impl Module for SampleRowModule {
             .route(
                 "/rows/latest",
                 get(latest_row).with_state(Arc::clone(&state)),
+            )
+            .route(
+                "/transport-probe",
+                get(transport_probe).with_state(Arc::clone(&state)),
             )
     }
 
@@ -145,6 +149,71 @@ async fn insert_row(
             internal(&scope)
         })?;
     Ok(Json(json!({ "id": id })))
+}
+
+/// Two deliberately unreachable destinations, both carrying the same
+/// credential-shaped path: APNs addresses a device *by* its request path,
+/// so `/3/device/<token>` **is** the token.
+///
+/// Two, because workerd's failure messages are not one shape, and this
+/// probe exists to prove the port does not depend on which it gets:
+///
+/// - `.invalid` is reserved by RFC 2606 and resolves nowhere. Under
+///   `wrangler dev --local` that comes back as an opaque `internal error;
+///   reference = …`, with no URL in it at all.
+/// - The same target under a scheme `fetch` does not implement is refused
+///   with `TypeError: Fetch API cannot load: <the whole URL>` — path and
+///   query included. That is the message that actually carries the
+///   credential, and so the one the CI assertion is written against.
+const PROBE_TARGETS: [&str; 2] = [
+    "https://unreachable.invalid/3/device/PROBEDEVICETOKEN0a1b2c3d4e5f",
+    "ftp://unreachable.invalid/3/device/PROBEDEVICETOKEN0a1b2c3d4e5f",
+];
+
+/// The one place CI can watch a **real** `worker::Error` (issue #229).
+///
+/// The Cloudflare `HttpClient` port has to report a transport failure
+/// without quoting the request URL, because on this harness that URL is
+/// often the recipient's credential — and workerd is the only thing that
+/// produces the error it has to do that to. A unit test can construct the
+/// error type; it cannot produce workerd's own message. So the `wrangler
+/// dev` smoke drives this route and asserts the answer names the origin
+/// and never the path, which is the assertion that would have failed
+/// before the port stopped stringifying `worker::Error` whole.
+///
+/// It takes no input at all: the destinations are constants, so this is
+/// not a fetch anybody can point anywhere.
+///
+/// On the native runtime the same route answers with that runtime's own
+/// refusal (it vets the destination before opening a socket), which is a
+/// different sentence about the same rule.
+async fn transport_probe(
+    scope: Scope,
+    State(ctx): State<Arc<ModuleContext>>,
+) -> Result<Json<serde_json::Value>, Problem> {
+    let Some(client) = ctx.ports.http.clone() else {
+        return Err(internal(&scope));
+    };
+    let mut errors = Vec::with_capacity(PROBE_TARGETS.len());
+    for target in PROBE_TARGETS {
+        let Ok(request) = http::Request::get(target).body(bytes::Bytes::new()) else {
+            return Err(internal(&scope));
+        };
+        errors.push(match client.send(request).await {
+            // Nothing answers at `.invalid`. If something ever does, say
+            // so rather than let a success read as the redaction working.
+            Ok(response) => format!("unexpectedly answered: {}", response.status()),
+            Err(err) => {
+                // Logged for the native runtime, and answered for the
+                // Worker one: a module's `tracing::error!` is dropped on
+                // wasm32 (issue #107), so the response body is where CI
+                // reads the message the port produced.
+                tracing::error!(error = %err, "transport probe failed, as designed");
+                err.to_string()
+            }
+        });
+    }
+    Ok(Json(json!({ "errors": errors })))
 }
 
 async fn latest_row(

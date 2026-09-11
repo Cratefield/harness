@@ -220,6 +220,80 @@ pub fn scrub_text(value: &str) -> String {
     scrub_emails(&bearer)
 }
 
+/// Cuts one **known** request URL back to its origin everywhere it appears
+/// in `message`, and redacts that request's bare target as well (issues
+/// #228, #229).
+///
+/// [`scrub_text`] cannot express this, and no general rule could. It
+/// redacts what is recognisably a secret — a query string, userinfo, a
+/// signed token, an address — and a URL *path* is none of those. On this
+/// harness some paths are the entire credential:
+/// `https://api.push.apple.com/3/device/<device token>` addresses a device
+/// *by* its token, and a Web Push endpoint's path is a bearer capability —
+/// whoever holds it can push to that browser indefinitely. Only the caller
+/// knows which URL it just sent to, so only the caller can say "this path
+/// is a secret"; this function is that knowledge applied to a message.
+///
+/// What survives is the origin — scheme, host and port, never userinfo —
+/// which is what keeps a transport failure diagnosable at all ("could not
+/// reach api.push.apple.com" answers most of them) and is the line `fz push
+/// inspect-subscription` already draws when it prints the `aud` and
+/// withholds the path.
+///
+/// It is a pass, not a replacement: an error message is free to quote
+/// things this call knows nothing about, so callers run [`scrub_text`] over
+/// the result too — this pass knows one URL, that one knows every shape of
+/// secret.
+///
+/// A `url` that is not absolute (`scheme://host…`) leaves `message`
+/// untouched, so an empty or unparsed value can never become a degenerate
+/// replacement. Never panics.
+///
+/// ```
+/// # use cratefield_core::scrub_request_url;
+/// let url = "https://api.push.apple.com/3/device/DEVICETOKEN";
+/// let safe = scrub_request_url(&format!("Fetch API cannot load: {url}."), url);
+/// assert_eq!(safe, "Fetch API cannot load: https://api.push.apple.com.");
+/// ```
+#[must_use]
+pub fn scrub_request_url(message: &str, url: &str) -> String {
+    let Some((origin, target)) = origin_and_target(url) else {
+        return message.to_owned();
+    };
+    let reduced = message.replace(url, &origin);
+    // `/` alone carries nothing and is in half the prose there is.
+    if target.len() > 1 {
+        reduced.replace(target, REDACTED)
+    } else {
+        reduced
+    }
+}
+
+/// Splits an absolute URL into the origin that may be logged and the
+/// request target that may not. `None` when `url` is not absolute, which
+/// is what makes [`scrub_request_url`] a no-op rather than a hazard.
+fn origin_and_target(url: &str) -> Option<(String, &str)> {
+    let colon = url.find("://")?;
+    let scheme = &url[..colon];
+    if scheme.is_empty()
+        || !scheme
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'+' | b'-' | b'.'))
+    {
+        return None;
+    }
+    let rest = &url[colon + 3..];
+    let end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+    let (authority, target) = rest.split_at(end);
+    // Userinfo is a credential in its own right, so it never reaches the
+    // origin: `scheme://user:pass@host` is logged as `scheme://host`.
+    let host = authority.rsplit('@').next().unwrap_or(authority);
+    if host.is_empty() {
+        return None;
+    }
+    Some((format!("{scheme}://{host}"), target))
+}
+
 /// The URL pass of [`scrub_text`]: query and userinfo redaction for every
 /// absolute URL (`scheme://…`) in the value.
 fn scrub_urls(value: &str) -> String {
@@ -735,6 +809,57 @@ mod tests {
              https://x.example/v1/confirm?token=eyJ and postgres://u:p@h/db";
         let once = scrub_text(nasty);
         assert_eq!(scrub_text(&once), once, "{once}");
+    }
+
+    /// The disclosure [`scrub_request_url`] exists for, and the one
+    /// [`scrub_text`] provably cannot stop on its own: APNs addresses a
+    /// device by *path*, and a path is not a shape any general rule can
+    /// call a secret.
+    #[test]
+    fn scrub_request_url_removes_a_credential_path_scrub_text_cannot_see() {
+        const TOKEN: &str = "0a1b2c3d4e5f60718293a4b5c6d7e8f9";
+        let url = &format!("https://api.push.apple.com/3/device/{TOKEN}");
+
+        assert!(
+            scrub_text(url).contains(TOKEN),
+            "if scrub_text ever learns to do this, this pass can go"
+        );
+
+        // Both shapes a layer below is free to quote: the whole URL, and
+        // the bare request target on its own.
+        let message = format!("Fetch API cannot load: {url}. sending POST /3/device/{TOKEN}");
+        let safe = scrub_request_url(&message, url);
+        assert!(!safe.contains(TOKEN), "{safe}");
+        assert!(!safe.contains("/3/device"), "{safe}");
+        assert!(safe.contains("https://api.push.apple.com"), "{safe}");
+        // Still an error somebody can act on.
+        assert!(safe.contains("Fetch API cannot load"), "{safe}");
+        assert!(safe.contains(REDACTED), "{safe}");
+    }
+
+    #[test]
+    fn scrub_request_url_keeps_the_port_and_never_the_userinfo() {
+        let url = "http://user:pw@127.0.0.1:8787/3/device/tok";
+        let safe = scrub_request_url(&format!("connect failed: {url}"), url);
+        assert_eq!(safe, "connect failed: http://127.0.0.1:8787");
+    }
+
+    #[test]
+    fn scrub_request_url_ignores_anything_that_is_not_an_absolute_url() {
+        // An empty needle would otherwise splice the marker between every
+        // character of the message, and a bare path has no origin to keep.
+        for url in ["", "/3/device/tok", "api.push.apple.com", "://no-scheme/x"] {
+            let message = "the message is not the place to find out";
+            assert_eq!(scrub_request_url(message, url), message, "{url:?}");
+        }
+    }
+
+    #[test]
+    fn scrub_request_url_leaves_a_root_target_alone() {
+        // "/" is in half the prose there is; redacting it would make every
+        // message worse and hide nothing.
+        let safe = scrub_request_url("GET / failed at https://x.example/", "https://x.example/");
+        assert_eq!(safe, "GET / failed at https://x.example");
     }
 }
 

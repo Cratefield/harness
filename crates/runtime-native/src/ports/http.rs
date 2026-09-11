@@ -36,6 +36,7 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use cratefield_core::{
     HttpClient, HttpError, HttpPolicy, MAX_CONCURRENT_REQUESTS, declared_content_length,
+    scrub_request_url,
 };
 use http::header::{
     AUTHORIZATION, CONTENT_LENGTH, CONTENT_TYPE, COOKIE, LOCATION, PROXY_AUTHORIZATION,
@@ -315,27 +316,6 @@ async fn read_capped(mut response: reqwest::Response, limit: usize) -> Result<By
     Ok(Bytes::from(buffer))
 }
 
-/// What a redacted request target is replaced by. The same word the Web
-/// Push adapter's body redaction uses, so one grep finds both.
-const REDACTED: &str = "[redacted]";
-
-/// The part of a destination that is safe to put in a message: scheme,
-/// host and port.
-///
-/// Never the path or the query. `https://api.push.apple.com/3/device/<t>`
-/// *is* the device token; a Web Push endpoint's path is the subscription's
-/// bearer capability. The origin is the line `fz push
-/// inspect-subscription` already draws (it prints the `aud` and withholds
-/// the path), and it is what makes a transport failure diagnosable at all:
-/// "could not reach api.push.apple.com" is the answer to most of them.
-fn destination(url: &Url) -> String {
-    let mut safe = format!("{}://{}", url.scheme(), url.host_str().unwrap_or("?"));
-    if let Some(port) = url.port() {
-        let _ = write!(safe, ":{port}");
-    }
-    safe
-}
-
 /// A `reqwest::Error` as a message this crate may hand on — to
 /// `HttpError`, and from there to a log, a dead-letter row or an
 /// operator's terminal.
@@ -362,24 +342,19 @@ fn safe_message(err: &reqwest::Error) -> String {
     scrub_url(message, err.url())
 }
 
-/// Cuts `url` back to its [`destination`] everywhere it appears in
-/// `message`: as the whole URL reqwest appends, and as the bare request
-/// target (`/3/device/<token>`) a cause is free to quote on its own.
+/// Cuts `url` back to its origin everywhere it appears in `message`: as
+/// the whole URL reqwest appends, and as the bare request target
+/// (`/3/device/<token>`) a cause is free to quote on its own.
+///
+/// The rule itself is [`cratefield_core::scrub_request_url`], shared with
+/// the Cloudflare port, which leaked the same value through a different
+/// error type (issue #229). One place decides what a URL may say in a
+/// message, or the two runtimes drift — and this is the runtime whose
+/// version of the answer was written first.
 fn scrub_url(message: String, url: Option<&Url>) -> String {
-    let Some(url) = url else {
-        return message;
-    };
-    let message = message.replace(url.as_str(), &destination(url));
-    let mut target = url.path().to_owned();
-    if let Some(query) = url.query() {
-        target.push('?');
-        target.push_str(query);
-    }
-    // `/` alone carries nothing and is in half the prose there is.
-    if target.len() > 1 {
-        message.replace(&target, REDACTED)
-    } else {
-        message
+    match url {
+        Some(url) => scrub_request_url(&message, url.as_str()),
+        None => message,
     }
 }
 
