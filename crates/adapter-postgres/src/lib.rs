@@ -82,6 +82,38 @@ use sqlx::postgres::PgArguments;
 /// One pool per tenant database: ADR 0008 keeps tenants isolated at the
 /// database boundary, and the native runtime (#19) holds one adapter per
 /// tenant.
+/// What one tenant's pool may take (TENANT-ROUTING.md §4).
+///
+/// The per-tenant cap is what stops one busy tenant taking every
+/// connection on a shared cluster; the idle timeout is what stops a
+/// replica's cost scaling with the tenant count rather than with its
+/// traffic, since a pool that no request has touched should not hold
+/// connections open.
+///
+/// `acquire_timeout` is the fail-closed half: a checkout that cannot be
+/// served refuses with a deadline rather than queueing unboundedly, which
+/// is the same instinct as the outbound budget in #136.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PoolLimits {
+    /// Connections one tenant's pool may hold. Default 8.
+    pub max_connections: u32,
+    /// A pool with no checkout for this long closes its connections.
+    /// Default 5 minutes.
+    pub idle_timeout: Option<std::time::Duration>,
+    /// How long a checkout waits before refusing. Default 5 seconds.
+    pub acquire_timeout: std::time::Duration,
+}
+
+impl Default for PoolLimits {
+    fn default() -> Self {
+        Self {
+            max_connections: 8,
+            idle_timeout: Some(std::time::Duration::from_secs(300)),
+            acquire_timeout: std::time::Duration::from_secs(5),
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct Postgres {
     pool: sqlx::PgPool,
@@ -91,11 +123,36 @@ impl Postgres {
     /// Opens a pool and establishes at least one connection, failing fast
     /// on an unreachable server or bad credentials.
     ///
+    /// Uses [`PoolLimits::default`]. A multi-tenant deployment wants
+    /// [`Postgres::connect_with`] instead: one pool per tenant with no cap
+    /// is how one busy tenant takes every connection on a shared cluster.
+    ///
     /// # Errors
     ///
     /// [`DbError::Execute`] when the pool cannot connect.
     pub async fn connect(url: &str) -> Result<Self, DbError> {
-        let pool = sqlx::PgPool::connect(url)
+        Self::connect_with(url, PoolLimits::default()).await
+    }
+
+    /// Opens a pool with explicit limits (TENANT-ROUTING.md §4).
+    ///
+    /// `sqlx` caps and times out *per pool*, which is exactly the
+    /// per-tenant boundary: a pool belongs to one tenant. The **total**
+    /// across pools is not something `sqlx` can express, so it is not
+    /// pretended to here — it needs a semaphore held by whatever owns the
+    /// pools, acquired around every `execute`, `query` and `batch`. A
+    /// config key that silently did nothing would be worse than its
+    /// absence.
+    ///
+    /// # Errors
+    ///
+    /// [`DbError::Execute`] when the pool cannot connect.
+    pub async fn connect_with(url: &str, limits: PoolLimits) -> Result<Self, DbError> {
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(limits.max_connections)
+            .idle_timeout(limits.idle_timeout)
+            .acquire_timeout(limits.acquire_timeout)
+            .connect(url)
             .await
             .map_err(|err| DbError::Execute(err.to_string()))?;
         Ok(Self { pool })

@@ -23,5 +23,7 @@ request id.
 | `sidecar-contract-mismatch` | 503 | Sidecar contract mismatch | A sidecar answers a different HARNESS_API than this harness speaks. |
 | `sidecar-unauthorized` | 401 | Unauthorized sidecar caller | A request to a sidecar-guarded route could not be established as coming from the trusted gateway. |
 | `sidecar-unavailable` | 503 | Sidecar module unavailable | A sidecar-mounted module could not be reached; other modules are unaffected. |
+| `tenant-degraded` | 503 | Tenant is degraded | The tenant's schema is behind or its database is unreachable; its neighbours are unaffected. |
 | `unknown-product` | 400 | Unknown product | The named product is not on this waitlist. |
+| `unknown-tenant` | 404 | Unknown tenant | The request's host resolves to no tenant in the registry. |
 | `validation-failed` | 400 | Request validation failed | The request body or query did not deserialize into a valid request. |
