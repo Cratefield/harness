@@ -30,8 +30,8 @@ mod tracing_setup;
 
 pub use config::EnvConfig;
 pub use ports::{
-    ContextDefer, D1Database, FetchClient, KvStorePort, RateLimitPort, ScheduleDefer, WorkersClock,
-    client_ip,
+    ContextDefer, D1Database, FetchClient, KvStorePort, RateLimitPort, RoomDriver, ScheduleDefer,
+    WorkersClock, client_ip,
 };
 pub use runtime::Cloudflare;
 pub use tracing_setup::install_tracing;
