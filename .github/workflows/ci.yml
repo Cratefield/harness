@@ -237,7 +237,7 @@ jobs:
     name: conformance (module kit)
     uses: ./.github/workflows/conformance.yml
     with:
-      module-glob: "crates/module-* examples/module-hello"
+      module-glob: "crates/module-* examples/module-hello examples/sidecar-module-template"
 
   workflows:
     name: actionlint
@@ -312,6 +312,17 @@ jobs:
         run: worker-build --release
       - name: Assert shim exists
         run: test -f examples/venture/build/worker/shim.mjs
+      # The sidecar template (issue #63) is the Worker a customer builds
+      # and deploys themselves; if it cannot reach wasm32 from a fresh
+      # clone, the template's whole promise fails at the first `wrangler
+      # deploy`. Its own workflow (examples/sidecar-module-template) runs
+      # the same gates when the template is extracted; this leg keeps the
+      # in-tree copy honest.
+      - name: Build sidecar template to wasm
+        working-directory: examples/sidecar-module-template
+        run: worker-build --release
+      - name: Assert sidecar template shim exists
+        run: test -f examples/sidecar-module-template/build/worker/shim.mjs
 
   wrangler-dev:
     name: wrangler dev (examples/venture, local D1)

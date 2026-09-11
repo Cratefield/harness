@@ -4262,6 +4262,28 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8fadd59c855ef2080decdef8ff161eb6661b86933c9d82e5ba29dc602a55aba"
 
 [[package]]
+name = "sidecar-module-template"
+version = "0.1.1"
+dependencies = [
+ "axum",
+ "cratefield-cli",
+ "cratefield-core",
+ "cratefield-runtime-cloudflare",
+ "cratefield-testing",
+ "getrandom 0.4.3",
+ "http",
+ "pollster",
+ "schemars 1.2.2",
+ "sea-query",
+ "serde",
+ "serde_json",
+ "time",
+ "tower",
+ "tracing",
+ "worker",
+]
+
+[[package]]
 name = "signal-hook-registry"
 version = "1.4.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"

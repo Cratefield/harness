@@ -170,7 +170,12 @@ module is ignored and logged; shipped code always keeps its prefix.
 
 Then deploy the sidecar itself: a one-module Worker built from the same
 crate, with its own `HARNESS_SECRET`, its own `ADMIN_TOKEN` and the same
-database binding. Its migrations are applied by whoever owns it, from
+database binding.
+[`examples/sidecar-module-template`](../examples/sidecar-module-template/)
+is that Worker, ready to copy — its README walks the five things that
+are silent if left to the reader (no public route, its own secrets, its
+own cron, its own migration stream, the duplicated `Venture`). Its
+migrations are applied by whoever owns it, from
 its own stream: two streams share one database cleanly, provided they
 are applied one after the other and never in parallel
 ([MIGRATION-STREAMS.md](MIGRATION-STREAMS.md)).

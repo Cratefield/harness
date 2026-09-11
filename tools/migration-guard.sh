@@ -47,7 +47,18 @@ done < <(git diff --name-status --find-renames "$(git merge-base "$BASE" HEAD)".
 # each override answers to a real migration — an override whose id or
 # name has no SQLite counterpart is a file nothing loads.
 for dir in "${dirs[@]}"; do
-  mapfile -t names < <(git ls-files "$dir/*.sql" | xargs -r -n1 basename | sort)
+  # Only the files *directly* in this directory. Git's `*` spans `/`, so
+  # `$dir/*.sql` also matches `$dir/sqlite/0001_init.sql` — which made a
+  # directory holding both a collected stream and a `sqlite/` source dir
+  # report its own child's files as duplicates. No module crate has both
+  # (they have only subdirectories) and no venture has both (only loose
+  # files), so nothing hit it until a sidecar template, which is its own
+  # module *and* its own venture.
+  mapfile -t names < <(
+    git ls-files "$dir/*.sql" \
+      | awk -v d="$dir/" 'index($0, d) == 1 && index(substr($0, length(d) + 1), "/") == 0' \
+      | xargs -r -n1 basename | sort
+  )
   [ "${#names[@]}" -eq 0 ] && continue
 
   case "$dir" in
