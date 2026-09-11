@@ -839,7 +839,12 @@ fn effective_theme_css(state: &UiState) -> Option<String> {
 
 fn content_security_policy(theme_css: Option<&str>, turnstile: bool) -> String {
     let mut style = String::from("'self'");
-    if let Some(origin) = theme_css.and_then(origin_of) {
+    // `cratefield_core::origin_of`, not a local split on "://" (issue
+    // #215). This decides which origins a page may load stylesheets from,
+    // so a scheme this harness would not fetch, a userinfo prefix or an
+    // unnormalised port must not reach `style-src`. A `theme_css` that is
+    // not an origin contributes nothing rather than something wrong.
+    if let Some(origin) = theme_css.and_then(|url| cratefield_core::origin_of(url).ok()) {
         style.push(' ');
         style.push_str(&origin);
     }
@@ -855,12 +860,6 @@ fn content_security_policy(theme_css: Option<&str>, turnstile: bool) -> String {
         "default-src 'none'; style-src {style}; script-src {script}; frame-src {frame}; \
          img-src 'self' data:; form-action 'self'; base-uri 'none'; frame-ancestors 'none'"
     )
-}
-
-fn origin_of(url: &str) -> Option<String> {
-    let (scheme, rest) = url.split_once("://")?;
-    let host = rest.split('/').next()?;
-    (!host.is_empty()).then(|| format!("{scheme}://{host}"))
 }
 
 fn serde_urlencoded_encode(values: &BTreeMap<String, String>) -> String {
@@ -907,6 +906,54 @@ mod tests {
         assert!(themed.contains("frame-src https://challenges.cloudflare.com;"));
         let local = content_security_policy(Some("/theme.css"), false);
         assert!(local.contains("style-src 'self';"));
+    }
+
+    /// What the loose `origin_of` let into `style-src`, and no longer does
+    /// (issue #215). Each of these produced an entry a browser would not
+    /// match, or would match too widely.
+    #[test]
+    fn a_theme_css_that_is_not_an_origin_contributes_nothing() {
+        for bad in [
+            // Any scheme before `://` was accepted and spliced in.
+            "javascript://x/",
+            "data://x/",
+            // Not absolute at all.
+            "/theme.css",
+            "theme.css",
+            "",
+        ] {
+            let csp = content_security_policy(Some(bad), false);
+            assert!(
+                csp.contains("style-src 'self';"),
+                "`{bad}` must add nothing to style-src: {csp}"
+            );
+        }
+    }
+
+    /// The two that are the *same* origin and used to be two entries.
+    #[test]
+    fn an_origin_is_normalised_before_it_reaches_style_src() {
+        let default_port = content_security_policy(Some("https://CDN.Example:443/a.css"), false);
+        assert!(
+            default_port.contains("style-src 'self' https://cdn.example;"),
+            "host lowercased and the default port dropped: {default_port}"
+        );
+        let other_port = content_security_policy(Some("https://cdn.example:8443/a.css"), false);
+        assert!(
+            other_port.contains("style-src 'self' https://cdn.example:8443;"),
+            "a non-default port is part of the origin and stays: {other_port}"
+        );
+
+        // Userinfo is stripped rather than carried through. The loose
+        // version emitted `https://a@evil.test`, which is not an origin
+        // and which a browser therefore never matches — so the stylesheet
+        // was blocked, and for the wrong reason. The origin here is
+        // `evil.test`, and saying so is the honest answer.
+        let userinfo = content_security_policy(Some("https://a:b@evil.test/x.css"), false);
+        assert!(
+            userinfo.contains("style-src 'self' https://evil.test;"),
+            "the origin is the host, without the credentials: {userinfo}"
+        );
     }
 
     #[test]

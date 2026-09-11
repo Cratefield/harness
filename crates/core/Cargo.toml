@@ -37,6 +37,9 @@ sha2 = { workspace = true }
 base64 = { workspace = true }
 subtle = { workspace = true }
 unicode-normalization = { workspace = true }
+# One `origin_of` for the CSP builder and the VAPID `aud` (issue #215):
+# RFC 6454 is not something to re-derive by splitting on "://".
+url = { workspace = true }
 
 [dev-dependencies]
 schemars = { workspace = true }

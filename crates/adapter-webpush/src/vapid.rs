@@ -29,7 +29,6 @@ use base64::engine::general_purpose::{URL_SAFE, URL_SAFE_NO_PAD};
 use cratefield_core::Clock;
 use cratefield_push_auth::{CachedToken, Es256Signer};
 use serde_json::json;
-use url::Url;
 
 /// How far ahead a minted token's `exp` is set.
 ///
@@ -133,50 +132,25 @@ fn parse_private_key(private_key: &str) -> Result<Es256Signer, VapidError> {
 /// (Mozilla autopush does), earns a `401 UnauthorizedRegistration` on every
 /// send. It is the classic VAPID bug, so it has a test of its own.
 ///
-/// `crates/ui` has a second `origin_of` that splits strings, feeding a
-/// Content-Security-Policy where its looseness matters more than it does
-/// here. Consolidating the two onto this one is issue #215; it is not done
-/// here because the sibling FCM adapter (#210) is open alongside.
+/// There is one implementation, in `cratefield-core`, and this is a thin
+/// wrapper over it (issue #215). It used to be the strict of two: the
+/// other split strings and fed a Content-Security-Policy, where its
+/// looseness mattered more than it does here.
 ///
 /// # Errors
 ///
 /// [`VapidError::Endpoint`] if the endpoint is not an absolute `http`/`https`
 /// URL with a host.
 pub fn origin_of(endpoint: &str) -> Result<String, VapidError> {
-    let url = Url::parse(endpoint).map_err(|err| VapidError::Endpoint(err.to_string()))?;
-    // `http` is allowed alongside `https` on purpose: a self-hosted
-    // UnifiedPush distributor is routinely reached over plain HTTP on a
-    // private network (the ntfy container in issue #181 listens on port 80),
-    // and refusing the scheme would make this adapter unusable for the
-    // Google-free half of what it exists to serve.
+    // One implementation, in core (issue #215). It was the strict one and
+    // this is where it came from; the argument for allowing `http` is
+    // above and is unchanged.
     //
-    // It is an allowance, not an endorsement, and the payload's end-to-end
-    // encryption is **not** the whole reason it is safe. Two things travel
-    // in cleartext over `http` that the RFC 8291 envelope does not cover:
-    //
-    // - the **endpoint** itself, which is a bearer capability — anyone who
-    //   reads it off the wire can push to that browser for as long as the
-    //   subscription lives, and
-    // - the **VAPID token**, valid for 12 hours against this origin, which
-    //   is the application server's identity.
-    //
-    // Neither lets an eavesdropper read a notification, but together they
-    // are a durable spoofing capability: an attacker can send notifications
-    // that arrive as the venture's own. That is a real cost, borne
-    // knowingly, on the private networks a self-hosted distributor lives on.
-    // A venture on the public internet wants `https` and gets it from every
-    // browser push service, none of which offers anything else.
-    if !matches!(url.scheme(), "http" | "https") {
-        return Err(VapidError::Endpoint(format!(
-            "scheme {:?} is not http or https",
-            url.scheme()
-        )));
-    }
-    let origin = url.origin();
-    if !origin.is_tuple() {
-        return Err(VapidError::Endpoint("opaque origin".to_owned()));
-    }
-    Ok(origin.ascii_serialization())
+    // The error text is rebuilt here rather than delegated, because
+    // `VapidError::Endpoint` is what a venture reads when a push fails to
+    // authorise, and "scheme \"ftp\" is not http or https" is the sentence
+    // that tells them which end is wrong.
+    cratefield_core::origin_of(endpoint).map_err(|err| VapidError::Endpoint(err.to_string()))
 }
 
 /// Mints and reuses the `Authorization` header, one token per push-service

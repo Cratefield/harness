@@ -24,6 +24,7 @@ mod idempotency;
 mod lint;
 mod logging;
 mod module;
+mod origin;
 mod outbox;
 mod personal_data;
 mod ports;
@@ -62,6 +63,7 @@ pub use module::{
     harness_api_mismatch, is_idempotent_sql, migration_checksum, migration_edited,
     migration_missing_guard,
 };
+pub use origin::{OriginError, origin_of};
 pub use outbox::{Outbox, OutboxRecord};
 pub use personal_data::{
     CatalogEntry, DataKind, Disposition, PersonalDataCatalog, PersonalDataSet, is_plain_identifier,
