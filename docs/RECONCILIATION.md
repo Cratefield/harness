@@ -163,9 +163,19 @@ Requests for a `degraded` tenant answer `503` with problem type
 `docs/ERRORS.md` regenerates.
 
 The registry write is the only thing reconciliation writes to the
-control database, and it is best-effort: a tenant that cannot be marked
-`degraded` because the control database went away mid-boot is still
-refused at request time, because the pool for it was never registered.
+control database, and it is best-effort. A tenant that cannot be marked
+`degraded` — because the control database went away mid-boot — is still
+refused at request time by **this** replica, which holds the set of
+tenants its own reconciliation could not complete and consults it
+alongside the registry row.
+
+That mechanism is deliberate, and replaced an earlier sentence here that
+said such a tenant is refused "because the pool for it was never
+registered". Pools are lazy (TENANT-ROUTING.md §4 and §12): they open on
+a tenant's first request, so pool presence says only whether a tenant has
+had traffic recently, and an evicted idle pool would be indistinguishable
+from a tenant that must not be served. Refusal is a decision about
+status, and it has to be carried by something that means status.
 
 ```mermaid
 %%{init: {"theme":"base","themeVariables":{
