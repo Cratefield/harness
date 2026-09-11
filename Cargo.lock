@@ -948,6 +948,7 @@ dependencies = [
  "cratefield-catalog",
  "cratefield-chrome",
  "cratefield-core",
+ "cratefield-module-privacy",
  "cratefield-provisioning",
  "cratefield-testing",
  "http",
