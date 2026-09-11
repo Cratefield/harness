@@ -416,6 +416,59 @@ impl Harness {
             ))
     }
 
+    /// The venture's UI plane, if it declared one. Lifted out of
+    /// [`Harness::router`] only because adding `/__events` to that function
+    /// put it over the line limit, and a mechanical extraction is a better
+    /// answer than an `allow` on the lint that noticed.
+    fn ui_router(
+        &self,
+        api: &Router,
+        ports: &Ports,
+        surface: &Arc<dyn SurfaceSource>,
+    ) -> Option<Router> {
+        self.ui.as_ref().map(|ui| {
+            ui.router(UiContext {
+                surface: Arc::clone(surface),
+                api: api.clone(),
+                config: Arc::clone(&ports.config),
+                venture: Arc::clone(&self.venture),
+                captcha_configured: ports.captcha.is_some(),
+                signer: ports.signer.clone(),
+                rate_limiter: ports.rate_limiter.clone(),
+            })
+            .layer(DefaultBodyLimit::max(MAX_BODY_BYTES))
+        })
+    }
+
+    /// The sidecar half of event forwarding (issue #62, ADR 0017):
+    /// `POST /__events`, delivering into this deployment's **own** bus.
+    ///
+    /// Deliberately not the forwarding bus from [`Harness::events_for`]. A
+    /// deployment can be both a host and, to someone above it, a sidecar;
+    /// delivering an inbound event through a bus that forwards would re-post
+    /// it to this deployment's own mounts, and two deployments that mount
+    /// each other would loop with nothing able to detect it.
+    ///
+    /// `None` without a gateway secret: absent is safer than open. Without
+    /// the shared secret there is no way to tell the host's forward from
+    /// anyone else's `POST`, and an unauthenticated event trigger would let
+    /// a stranger forge the payloads in-process handlers act on.
+    fn inbound_events_route(&self, gateway: Option<Arc<HmacSigner>>) -> Option<Router> {
+        gateway.as_ref()?;
+        Some(
+            Router::new()
+                .route(
+                    "/__events",
+                    post(crate::sidecar::events_inbound)
+                        .layer(DefaultBodyLimit::max(MAX_BODY_BYTES)),
+                )
+                .with_state(Arc::new(crate::sidecar::InboundEvents {
+                    bus: self.events.clone(),
+                    gateway,
+                })),
+        )
+    }
+
     /// The runtime this harness was validated against, if one was supplied.
     pub fn runtime(&self) -> Option<&Arc<dyn Runtime>> {
         self.runtime.as_ref()
@@ -459,18 +512,7 @@ impl Harness {
 
         let surface_source = self.merged_surface(mounted, &ports, gateway.clone(), env);
 
-        let ui = self.ui.as_ref().map(|ui| {
-            ui.router(UiContext {
-                surface: Arc::clone(&surface_source),
-                api: api.clone(),
-                config: Arc::clone(&ports.config),
-                venture: Arc::clone(&self.venture),
-                captcha_configured: ports.captcha.is_some(),
-                signer: ports.signer.clone(),
-                rate_limiter: ports.rate_limiter.clone(),
-            })
-            .layer(DefaultBodyLimit::max(MAX_BODY_BYTES))
-        });
+        let ui = self.ui_router(&api, &ports, &surface_source);
 
         let health_state = HealthState {
             // The deployment's environment, not the compiled default:
@@ -523,32 +565,20 @@ impl Harness {
             source: surface_source,
         };
 
-        let mut root = Router::new()
+        let root = Router::new()
             .route("/__health", get(health_handler))
             .with_state(health_state)
             .route("/__ready", get(ready_handler))
             .with_state(ready_state)
             .route("/__surface", get(surface_handler))
-            .with_state(surface_state);
-        // The sidecar half of event forwarding (issue #62, ADR 0017).
-        // Mounted only when a gateway secret exists: without the shared
-        // secret there is no way to tell the host's forward from anyone
-        // else's `POST`, and an unauthenticated event trigger would let a
-        // stranger forge the payloads in-process handlers act on.
-        if gateway.is_some() {
-            let events_router = Router::new()
-                .route(
-                    "/__events",
-                    post(crate::sidecar::events_inbound)
-                        .layer(DefaultBodyLimit::max(MAX_BODY_BYTES)),
-                )
-                .with_state(Arc::new(crate::sidecar::InboundEvents {
-                    bus: self.events.clone(),
-                    gateway: gateway.clone(),
-                }));
-            root = root.merge(events_router);
-        }
-        let root = root.merge(api);
+            .with_state(surface_state)
+            // Empty without a gateway secret, and merging an empty router
+            // adds no route — see `inbound_events_route` for why absent.
+            .merge(
+                self.inbound_events_route(gateway.clone())
+                    .unwrap_or_default(),
+            )
+            .merge(api);
         let root = match &self.well_known {
             Some(well_known) => root.nest(
                 "/.well-known",

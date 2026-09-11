@@ -108,7 +108,7 @@ impl EventBus {
     /// defer. Returns how many ran. The sidecar's `POST /__events` uses the
     /// same path, so an inbound delivery carries the same "handler errors
     /// are logged, never surfaced" rule as an in-process emission.
-    fn run_local(&self, scope: &Scope, name: &str, payload: Value) -> usize {
+    fn run_local(&self, scope: &Scope, name: &str, payload: &Value) -> usize {
         let matched: Vec<&(EventName, EventHandler)> = self
             .handlers
             .iter()
@@ -134,7 +134,7 @@ impl EventBus {
     /// handlers and this request's defer. Returns the number of handlers
     /// that subscribed, so the route can refuse to be silent about an
     /// event nobody hears.
-    pub fn deliver_inbound(&self, scope: &Scope, name: &str, payload: Value) -> usize {
+    pub fn deliver_inbound(&self, scope: &Scope, name: &str, payload: &Value) -> usize {
         self.run_local(scope, name, payload)
     }
 
@@ -148,7 +148,7 @@ impl EventBus {
     // a clone.
     #[allow(clippy::needless_pass_by_value)]
     pub fn emit_in(&self, scope: &Scope, name: &str, payload: Value) {
-        let handled = self.run_local(scope, name, payload.clone());
+        let handled = self.run_local(scope, name, &payload);
         let forwarded = match self.forwarder.as_ref() {
             Some(forwarder) if !forwarder.is_empty() => {
                 let forwarder = Arc::clone(forwarder);

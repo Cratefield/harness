@@ -656,7 +656,7 @@ pub(crate) async fn events_inbound(
     };
     let handled = state
         .bus
-        .deliver_inbound(&scope, &envelope.event, envelope.payload);
+        .deliver_inbound(&scope, &envelope.event, &envelope.payload);
     if handled == 0 {
         // The amendment to #62: an event nobody hears is exactly the
         // silent failure this issue exists to prevent, so the inbound
