@@ -42,7 +42,7 @@ use cratefield_core::{
 };
 use cratefield_push_auth::{CachedToken, Es256Signer};
 use http::header::AUTHORIZATION;
-use http::{HeaderMap, Request, StatusCode};
+use http::{Request, StatusCode};
 use serde_json::{Map, Value, json};
 
 use bytes::Bytes;
@@ -314,21 +314,6 @@ fn reason(body: &[u8]) -> Option<String> {
         .map(str::to_owned)
 }
 
-/// `Retry-After` as a duration, so the outbox can honour it. Only the
-/// delta-seconds form is read; the HTTP-date form needs a parsed clock the
-/// port does not promise, and its absence just means "retry on your own
-/// schedule".
-fn retry_after(headers: &HeaderMap) -> Option<Duration> {
-    headers
-        .get("retry-after")?
-        .to_str()
-        .ok()?
-        .trim()
-        .parse::<u64>()
-        .ok()
-        .map(Duration::from_secs)
-}
-
 #[async_trait]
 impl Push for Apns {
     async fn send(
@@ -423,7 +408,7 @@ impl Push for Apns {
                 if status == StatusCode::TOO_MANY_REQUESTS || status.is_server_error() {
                     Err(PushError::transient_after(
                         format!("apns {}: {detail}", status.as_u16()),
-                        retry_after(response.headers()),
+                        cratefield_core::retry_after(response.headers(), live.clock.as_ref()),
                     ))
                 } else {
                     Err(PushError::Rejected(format!(

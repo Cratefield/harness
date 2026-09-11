@@ -296,6 +296,78 @@ pub fn ttl_secs(ttl: Duration) -> u64 {
     }
 }
 
+/// The header name, so no caller spells it.
+const RETRY_AFTER: &str = "retry-after";
+
+/// The IMF-fixdate description, parsed once.
+///
+/// Version 2 of the format-description syntax, pinned explicitly: `parse`
+/// without a version is deprecated precisely because the unversioned
+/// form's meaning can shift under a `time` upgrade.
+///
+/// Built once rather than per call. `Retry-After` is read on the
+/// throttling path, which by definition fires in bursts, so re-parsing a
+/// fixed description on every throttled send is work done once per process
+/// here instead.
+static IMF_FIXDATE: std::sync::LazyLock<
+    Vec<time::format_description::BorrowedFormatItem<'static>>,
+> = std::sync::LazyLock::new(|| {
+    time::format_description::parse_borrowed::<2>(
+        "[weekday repr:short], [day] [month repr:short] [year] [hour]:[minute]:[second] GMT",
+    )
+    .expect("a format description that is a literal in this file")
+});
+
+/// An IMF-fixdate, the one form RFC 9110 §5.6.7 allows a sender to
+/// generate: `Sun, 06 Nov 1994 08:49:37 GMT`.
+///
+/// The two obsolete forms (RFC 850 and asctime) are deliberately not
+/// parsed. A recipient is required to accept them, but nothing in front of
+/// a push service or a mail API emits them, and mis-reading a two-digit
+/// year is worse than falling back to the caller's own schedule.
+fn parse_http_date(value: &str) -> Option<time::OffsetDateTime> {
+    time::PrimitiveDateTime::parse(value, IMF_FIXDATE.as_slice())
+        .ok()
+        .map(time::PrimitiveDateTime::assume_utc)
+}
+
+/// `Retry-After` (RFC 9110 §10.2.3) as a duration, so a caller can honour
+/// what a provider asked for.
+///
+/// **Both forms are read**, which is the point of it living here. The
+/// delta-seconds form is the common one; the HTTP-date form is equally
+/// legal and is what CDNs in front of a provider emit. Ignoring the date
+/// form turns "come back in an hour" into an immediate retry, straight
+/// back into the rate limiter that sent it.
+///
+/// This replaces four independent parsers — APNs, Resend, the LinkedIn
+/// client and Web Push — of which only the last read the date form, so the
+/// bug was live in three (issue #214). The APNs copy's own comment said
+/// the date form "needs a parsed clock the port does not promise"; [`Clock`]
+/// is a port every one of those callers already holds, which is what makes
+/// one parser possible.
+///
+/// A date already in the past is [`Duration::ZERO`] — "retry now" — and
+/// not `None`. The two mean different things to a caller: `None` is "no
+/// delay was stated", and falling back to a default schedule for a header
+/// that said "now" would be slower than the provider asked for.
+///
+/// Returns `None` when the header is absent, unreadable, or in neither
+/// form.
+#[must_use]
+pub fn retry_after(headers: &http::HeaderMap, clock: &dyn crate::Clock) -> Option<Duration> {
+    let value = headers.get(RETRY_AFTER)?.to_str().ok()?.trim();
+    if let Ok(seconds) = value.parse::<u64>() {
+        return Some(Duration::from_secs(seconds));
+    }
+    let when = parse_http_date(value)?;
+    let delta = when - clock.now();
+    if delta.is_negative() {
+        return Some(Duration::ZERO);
+    }
+    Duration::try_from(delta).ok()
+}
+
 /// `Option<Duration>` on the wire as whole seconds, so a notification
 /// round-trips as `{"ttl": 3600}` and not serde's `{"secs":…,"nanos":…}`.
 mod duration_secs {
@@ -844,5 +916,95 @@ mod tests {
 
         // `Debug` still shows the raw string for a failing test to read.
         assert!(format!("{error:?}").contains("alice@example.test"));
+    }
+}
+
+#[cfg(test)]
+mod retry_after_tests {
+    use super::{parse_http_date, retry_after};
+    use crate::Clock;
+    use std::time::Duration;
+
+    /// Fixed at `Sun, 06 Nov 1994 08:49:37 GMT`, so a date in the header
+    /// is a known distance away rather than a race against the wall clock.
+    struct FixedClock(time::OffsetDateTime);
+
+    #[async_trait::async_trait]
+    impl Clock for FixedClock {
+        fn now(&self) -> time::OffsetDateTime {
+            self.0
+        }
+    }
+
+    fn at(unix: i64) -> FixedClock {
+        FixedClock(time::OffsetDateTime::from_unix_timestamp(unix).expect("a valid instant"))
+    }
+
+    fn headers(value: &str) -> http::HeaderMap {
+        let mut headers = http::HeaderMap::new();
+        headers.insert("retry-after", value.parse().expect("a header value"));
+        headers
+    }
+
+    #[test]
+    fn an_http_date_parses_and_a_nonsense_one_does_not() {
+        // Moved here with the parser it tests (issue #214); the two
+        // obsolete forms stay unparsed on purpose.
+        let parsed = parse_http_date("Sun, 06 Nov 1994 08:49:37 GMT").expect("IMF-fixdate");
+        assert_eq!(parsed.unix_timestamp(), 784_111_777);
+        assert!(parse_http_date("Sunday, 06-Nov-94 08:49:37 GMT").is_none());
+        assert!(parse_http_date("tomorrow").is_none());
+    }
+
+    #[test]
+    fn the_delta_seconds_form_is_read() {
+        assert_eq!(
+            retry_after(&headers("120"), &at(0)),
+            Some(Duration::from_secs(120))
+        );
+        assert_eq!(
+            retry_after(&headers("  30  "), &at(0)),
+            Some(Duration::from_secs(30)),
+            "surrounding space is not a parse failure"
+        );
+    }
+
+    #[test]
+    fn the_http_date_form_is_read_too() {
+        // The whole point of consolidating: three of the four copies read
+        // only the delta-seconds form, so a CDN's date turned an hour's
+        // wait into an immediate retry.
+        let an_hour_before = 784_111_777 - 3_600;
+        assert_eq!(
+            retry_after(
+                &headers("Sun, 06 Nov 1994 08:49:37 GMT"),
+                &at(an_hour_before)
+            ),
+            Some(Duration::from_secs(3_600))
+        );
+    }
+
+    #[test]
+    fn a_date_already_past_means_retry_now_not_no_delay() {
+        // `Duration::ZERO` and `None` say different things to a caller:
+        // "now" versus "nothing was stated, use your own schedule".
+        assert_eq!(
+            retry_after(
+                &headers("Sun, 06 Nov 1994 08:49:37 GMT"),
+                &at(784_111_777 + 60)
+            ),
+            Some(Duration::ZERO)
+        );
+    }
+
+    #[test]
+    fn an_absent_or_unparseable_header_states_no_delay() {
+        assert_eq!(retry_after(&http::HeaderMap::new(), &at(0)), None);
+        assert_eq!(retry_after(&headers("soon"), &at(0)), None);
+        assert_eq!(
+            retry_after(&headers("-5"), &at(0)),
+            None,
+            "a negative delta is not a duration"
+        );
     }
 }

@@ -608,13 +608,29 @@ fn a_429_carries_the_providers_retry_after() {
     let err = pollster::block_on(apns.send(&device(), &Notification::new("a", "b"))).unwrap_err();
     assert_eq!(err.retry_after(), Some(Duration::from_secs(5)));
 
-    // An HTTP-date Retry-After is not parsed; the error stays retryable.
+    // The HTTP-date form is read now (issue #214). This assertion used to
+    // be `None` — APNs carried its own delta-seconds-only parser, so a
+    // CDN's "come back on Wednesday" became an immediate retry, straight
+    // back into the rate limiter that sent it.
+    let deadline = 1_792_567_680; // Wed, 21 Oct 2026 07:28:00 GMT
     let http = ScriptedHttp::replying_after(503, "", "Wed, 21 Oct 2026 07:28:00 GMT");
-    let clock = Arc::new(StepClock::at(1));
+    let clock = Arc::new(StepClock::at(deadline - 900));
     let apns = Apns::new(http, clock, creds()).unwrap();
     let err = pollster::block_on(apns.send(&device(), &Notification::new("a", "b"))).unwrap_err();
     assert!(matches!(err, PushError::Transient { .. }));
-    assert_eq!(err.retry_after(), None);
+    assert_eq!(
+        err.retry_after(),
+        Some(Duration::from_secs(900)),
+        "the date is resolved against the clock the adapter already holds"
+    );
+
+    // And once that moment has passed it means "retry now", which is not
+    // the same answer as "no delay was stated".
+    let http = ScriptedHttp::replying_after(503, "", "Wed, 21 Oct 2026 07:28:00 GMT");
+    let clock = Arc::new(StepClock::at(deadline + 60));
+    let apns = Apns::new(http, clock, creds()).unwrap();
+    let err = pollster::block_on(apns.send(&device(), &Notification::new("a", "b"))).unwrap_err();
+    assert_eq!(err.retry_after(), Some(Duration::ZERO));
 }
 
 // ScriptedHttp needs Clone for `http.clone()` on an Arc; Arc gives it.
