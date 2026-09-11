@@ -38,6 +38,7 @@ sqlx = { version = "0.8.6", default-features = false, features = [
 ] }
 
 [dev-dependencies]
+cratefield-core = { workspace = true, features = ["test-support"] }
 cratefield-module-email-signup = { path = "../module-email-signup" }
 cratefield-module-waitlist = { path = "../module-waitlist" }
 axum = { workspace = true }
