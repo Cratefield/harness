@@ -29,8 +29,8 @@ use cratefield_catalog::{Catalog, CatalogModule, Tier};
 use cratefield_chrome::{NavItem, Page, escape, nav, render};
 use cratefield_console::{LOGIN_PATH, current_session};
 use cratefield_core::{
-    Database, HttpPolicy, Migrations, Module, ModuleContext, Port, SqlMigration, Statement,
-    Surface, SurfaceDocument, View,
+    Database, HttpPolicy, Migrations, Module, ModuleContext, PersonalDataSet, Port, SqlMigration,
+    Statement, Surface, SurfaceDocument, View,
 };
 use http::{HeaderMap, StatusCode, header};
 use time::format_description::well_known::Rfc3339;
@@ -90,6 +90,30 @@ impl Module for Dashboard {
             Port::Clock,
             Port::IdGen,
         ]
+    }
+
+    /// The one table this module's `migrations()` create (issue #280). The
+    /// comment on `migrations` below is why it is one and not five: the
+    /// dashboard reads the console's tables but owns only `connection`.
+    fn tables(&self) -> &'static [&'static str] {
+        &["connection"]
+    }
+
+    /// The `connection` table holds connection *metadata* by design — kind,
+    /// state, an invalid-reason, and a non-secret hint (a public OAuth client
+    /// id, never a key). Its key is a venture's tenant id, which identifies
+    /// infrastructure, not a person; no column in the row names a human
+    /// being. The credential material it deliberately does not hold lives in
+    /// the tenant secrets store, which makes its own declarations.
+    fn personal_data(&self) -> &'static [PersonalDataSet] {
+        const SETS: &[PersonalDataSet] = &[PersonalDataSet::none(
+            "connection",
+            "What a backend has connected, and whether each connection is healthy: the \
+             connection kind, its state, why it is invalid if it is, a non-secret label \
+             such as a public OAuth client id, and when it last changed. It is keyed to \
+             the backend's tenant, holds no credential, and names nobody.",
+        )];
+        SETS
     }
 
     fn migrations(&self) -> Migrations {

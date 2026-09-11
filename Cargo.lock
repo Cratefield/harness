@@ -948,6 +948,7 @@ dependencies = [
  "cratefield-chrome",
  "cratefield-core",
  "cratefield-provisioning",
+ "cratefield-testing",
  "http",
  "pollster",
  "serde",

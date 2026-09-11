@@ -37,7 +37,7 @@ time = { workspace = true }
 [dev-dependencies]
 cratefield-access = { path = "../control-plane-access" }
 cratefield-adapter-sqlite = { path = "../adapter-sqlite" }
-cratefield-testing = { path = "../testing" }
+cratefield-testing = { path = "../testing", features = ["postgres"] }
 async-trait = { workspace = true }
 pollster = { workspace = true }
 tower = { workspace = true }
