@@ -66,11 +66,13 @@ compile_error!(
 mod convert;
 mod migrate;
 mod reconcile;
+mod registry;
 pub mod testing;
 
 pub use cratefield_core::TenantStatus;
 pub use migrate::select_set;
 pub use reconcile::{ModulePlan, TenantPlan, TenantRecord, TenantReport, tenant_lock_key};
+pub use registry::{PoolRegistry, TENANT_POOL_IDLE, TENANT_POOL_TOTAL, TenantDsns};
 
 use async_trait::async_trait;
 use cratefield_core::{Database, DbError, Rows, Statement};
