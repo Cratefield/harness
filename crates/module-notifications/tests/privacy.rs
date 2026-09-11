@@ -41,6 +41,7 @@ const TABLES: &[&str] = &[
     "notifications_email_targets",
     "notifications_email_sends",
     "notifications_dead_letters",
+    "notifications_email_suppressed",
 ];
 
 /// The two modules a venture composes to answer a data-subject request, over
@@ -144,17 +145,14 @@ async fn seed(kit: &TestHarness, account: &str, endpoint: &str) {
             ],
         ),
         (
-            "notifications_dead_letters",
-            "INSERT INTO notifications_dead_letters (id, account_id, topic, payload, attempts, \
-             reason, last_error, created_at, failed_at) VALUES (?, ?, 'notifications.send', ?, 3, \
-             'rejected', 'provider said no', ?, ?)",
+            "notifications_email_suppressed",
+            "INSERT INTO notifications_email_suppressed (id, account_id, category, \
+             notification_id, suppressed_at) VALUES (?, ?, ?, ?, ?)",
             vec![
-                format!("dead-{account}").into(),
+                format!("suppressed-{account}").into(),
                 account.into(),
-                json!({ "account_id": account, "notification": { "title": "Booked" } })
-                    .to_string()
-                    .into(),
-                "2026-01-01T00:00:00Z".into(),
+                BOOKING.into(),
+                format!("notif-suppressed-{account}").into(),
                 "2026-01-01T00:00:00Z".into(),
             ],
         ),
@@ -165,6 +163,30 @@ async fn seed(kit: &TestHarness, account: &str, endpoint: &str) {
             .await
             .unwrap_or_else(|err| panic!("seeding {table} failed: {err}"));
     }
+    seed_dead_letter(kit, account).await;
+}
+
+/// The dead letter is seeded apart because its `payload` alone needs the
+/// JSON literal, and inlining it pushed `seed` over the line-count lint.
+async fn seed_dead_letter(kit: &TestHarness, account: &str) {
+    kit.db
+        .execute(&Statement::with_values(
+            "INSERT INTO notifications_dead_letters (id, account_id, topic, payload, attempts, \
+             reason, last_error, created_at, failed_at) VALUES (?, ?, 'notifications.send', ?, 3, \
+             'rejected', 'provider said no', ?, ?)"
+                .to_owned(),
+            vec![
+                format!("dead-{account}").into(),
+                account.into(),
+                json!({ "account_id": account, "notification": { "title": "Booked" } })
+                    .to_string()
+                    .into(),
+                "2026-01-01T00:00:00Z".into(),
+                "2026-01-01T00:00:00Z".into(),
+            ],
+        ))
+        .await
+        .unwrap_or_else(|err| panic!("seeding notifications_dead_letters failed: {err}"));
 }
 
 /// Rows in one table for one account.

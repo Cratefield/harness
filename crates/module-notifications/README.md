@@ -207,6 +207,11 @@ look at (issue #235).
 The preference is read in the drain, immediately before the send, so an
 opt-out that arrives after the row was written still wins.
 
+Mail the cooldown suppressed is not lost silently: each drop leaves a row,
+and once the window has rolled the scheduled drain sends one summary —
+"N new … notifications" — with the same re-checks and a once-per-window
+idempotency key (issue #232).
+
 A row whose own database call fails is counted in `DrainReport::failed` and
 keeps its lease: the pass carries on, and that row is due again when the
 lease expires. Rows go out `NOTIFICATIONS_DRAIN_CONCURRENCY` at a time —
@@ -252,7 +257,8 @@ Notifications::new()
 `notifications_subscriptions`, `notifications_preferences`,
 `notifications_outbox` (the core `Outbox`), `notifications_dead_letters`,
 `notifications_inbox`, `notifications_email_targets`,
-`notifications_email_sends` and `notifications_locales`. All eight are
+`notifications_email_sends`, `notifications_locales` and
+`notifications_email_suppressed` (#232). All nine are
 declared, so `fz data export` sees them.
 
 ## Languages

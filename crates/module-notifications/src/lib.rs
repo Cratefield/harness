@@ -193,10 +193,20 @@ const MIGRATION_DEAD_LETTER_ACCOUNT: SqlMigration = SqlMigration::new(
     include_str!("../migrations/sqlite/0007_dead_letter_account.sql"),
 );
 
+/// Coalesced summaries (#232): the trace a cooldown-suppressed email
+/// leaves, so the scheduled drain can send one summary for the burst once
+/// the window has rolled. Its own migration because `0001`-`0007` are
+/// applied.
+const MIGRATION_EMAIL_SUPPRESSED: SqlMigration = SqlMigration::new(
+    "0008",
+    "email_suppressed",
+    include_str!("../migrations/sqlite/0008_email_suppressed.sql"),
+);
+
 /// Every migration this module ships, in order. One array, so a test that
 /// asserts something about the schema reads what actually ships rather
 /// than a second list that can drift from it.
-const SHIPPED_MIGRATIONS: [SqlMigration; 7] = [
+const SHIPPED_MIGRATIONS: [SqlMigration; 8] = [
     MIGRATION_INIT,
     MIGRATION_REHOME_AND_DUE_INDEX,
     MIGRATION_INBOX,
@@ -204,6 +214,7 @@ const SHIPPED_MIGRATIONS: [SqlMigration; 7] = [
     MIGRATION_EMAIL_BOUNCE_INDEX,
     MIGRATION_LOCALES,
     MIGRATION_DEAD_LETTER_ACCOUNT,
+    MIGRATION_EMAIL_SUPPRESSED,
 ];
 
 /// One notification category the venture declares.
@@ -872,6 +883,7 @@ impl Module for Notifications {
             store::EMAIL_TARGETS,
             store::EMAIL_SENDS,
             store::LOCALES,
+            store::EMAIL_SUPPRESSED,
         ]
     }
 
@@ -977,6 +989,16 @@ impl Module for Notifications {
                 disposition: Disposition::Erase,
                 description: "A notification we gave up trying to deliver, kept with what it said \
                               so somebody can find out why it failed.",
+                redacted: &[],
+            },
+            PersonalDataSet {
+                table: store::EMAIL_SUPPRESSED,
+                subject: "account_id",
+                kind: DataKind::Usage,
+                disposition: Disposition::Erase,
+                description: "Which notifications we held back from your inbox because too many \
+                              arrived at once, kept only until they are gathered into one \
+                              summary email.",
                 redacted: &[],
             },
             PersonalDataSet::none(
@@ -1255,6 +1277,14 @@ impl Module for Notifications {
                 if let Err(err) = store::prune_email_sends(&**db, &cutoff).await {
                     tracing::error!(error = %err, "pruning the email send window failed");
                 }
+                // A suppression row is normally cleared when its summary is
+                // sent; this catches the ones a burst that never rolled
+                // (cap later set to 0) or a mailer that kept failing left
+                // behind. They are only ever worth one summary, so keeping
+                // them past retention would summarise stale news.
+                if let Err(err) = store::prune_email_suppressed(&**db, &cutoff).await {
+                    tracing::error!(error = %err, "pruning suppressed email rows failed");
+                }
                 match store::prune_inbox(&**db, &cutoff).await {
                     Ok(pruned) if pruned > 0 => {
                         tracing::info!(pruned, cron, "pruned read notifications past retention");
@@ -1355,6 +1385,7 @@ mod tests {
                 "notifications_email_targets",
                 "notifications_email_sends",
                 "notifications_locales",
+                "notifications_email_suppressed",
             ]
         );
         assert_eq!(

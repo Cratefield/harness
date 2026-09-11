@@ -39,6 +39,10 @@
     "file": "0015_notifications_0007_dead_letter_account.sql",
     "sha256": "85360e1faa24faf35b837e5f7f4d4bcdacdc83631c17144579cf691b3b0550d7"
   },
+  "notifications/0008": {
+    "file": "0017_notifications_0008_email_suppressed.sql",
+    "sha256": "9a9028ee4c15484ff0c78e2fbc0b41d356eaceb09ecaebaf427f1fa846d05be4"
+  },
   "sample/0001": {
     "file": "0001_sample_0001_init.sql",
     "sha256": "adbaf308f36585d92261aecefe4a06f65aa6d3408834a8f61babd87de0545945"

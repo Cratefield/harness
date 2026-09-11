@@ -26,6 +26,9 @@ pub(crate) const INBOX: &str = "notifications_inbox";
 pub(crate) const EMAIL_TARGETS: &str = "notifications_email_targets";
 /// One row per mail actually sent, for the per-category cooldown (#189).
 pub(crate) const EMAIL_SENDS: &str = "notifications_email_sends";
+/// One row per notification the cooldown suppressed, for the summary mail
+/// that coalesces the burst once the window has rolled (#232).
+pub(crate) const EMAIL_SUPPRESSED: &str = "notifications_email_suppressed";
 /// One account's own language, for the inbox and the mailbox (#190).
 pub(crate) const LOCALES: &str = "notifications_locales";
 
@@ -1456,5 +1459,172 @@ pub(crate) async fn prune_email_sends(db: &dyn Database, older_than: &str) -> Re
     delete
         .from_table(iden(EMAIL_SENDS))
         .and_where(Expr::col(iden("sent_at")).lt(older_than));
+    db.execute(&Statement::render(&delete)).await
+}
+
+// ---------------------------------------------------------------------------
+// Coalesced summaries (#232)
+
+/// One `(account, category)` burst of suppressed mail, as the summary pass
+/// reads it.
+pub(crate) struct SuppressedBurst {
+    pub account_id: String,
+    pub category: String,
+    /// How many notifications the window suppressed.
+    pub count: usize,
+    /// The ids of exactly the rows the count covers. The clear is over
+    /// these, not over a timestamp: `suppressed_at` is stored to the
+    /// second, so a suppression written in the newest counted row's own
+    /// second — after the read, before the delete — is indistinguishable
+    /// from the counted ones by time, and only identity closes that.
+    pub ids: Vec<String>,
+    /// When the first one was held back — the burst window's own start,
+    /// and what the summary's idempotency key is derived from.
+    pub first_suppressed_at: String,
+}
+
+/// Whether this exact notification is already on the suppressed list.
+///
+/// Checked before the insert rather than relied on the `UNIQUE` constraint,
+/// because the constraint failing surfaces as a query error to a drain row
+/// that would otherwise just be dropped.
+///
+/// # Errors
+///
+/// [`DbError`] when the read fails.
+pub(crate) async fn email_suppression_exists(
+    db: &dyn Database,
+    notification_id: &str,
+) -> Result<bool, DbError> {
+    let mut select = Query::select();
+    select
+        .column(iden("id"))
+        .from(iden(EMAIL_SUPPRESSED))
+        .and_where(Expr::col(iden("notification_id")).eq(notification_id));
+    Ok(!db.query(&Statement::render(&select)).await?.rows.is_empty())
+}
+
+/// Records one suppressed notification.
+///
+/// # Errors
+///
+/// [`DbError`] when the write fails.
+pub(crate) async fn record_email_suppression(
+    db: &dyn Database,
+    id: &str,
+    account_id: &str,
+    category: &str,
+    notification_id: &str,
+    now: &str,
+) -> Result<(), DbError> {
+    let mut insert = Query::insert();
+    insert
+        .into_table(iden(EMAIL_SUPPRESSED))
+        .columns([
+            "id",
+            "account_id",
+            "category",
+            "notification_id",
+            "suppressed_at",
+        ])
+        .values_panic([
+            id.into(),
+            account_id.into(),
+            category.into(),
+            notification_id.into(),
+            now.into(),
+        ]);
+    db.execute(&Statement::render(&insert)).await?;
+    Ok(())
+}
+
+/// Every burst still waiting for its summary, oldest suppression first,
+/// up to `limit` rows — the same bound one drain pass claims, because a
+/// flood across many accounts is exactly when this read runs and its
+/// rows are only ever bounded by retention, not by the window. Whatever
+/// does not fit is still on the table for the next tick.
+///
+/// Grouped in Rust rather than `GROUP BY` — the per-pair volume is small
+/// (a cap of rows per window) and grouping stays inside the portable
+/// subset (ADR 0004).
+///
+/// # Errors
+///
+/// [`DbError`] when the read fails or a row will not decode.
+pub(crate) async fn suppressed_email_bursts(
+    db: &dyn Database,
+    limit: u64,
+) -> Result<Vec<SuppressedBurst>, DbError> {
+    let mut select = Query::select();
+    select
+        .columns([
+            iden("id"),
+            iden("account_id"),
+            iden("category"),
+            iden("suppressed_at"),
+        ])
+        .from(iden(EMAIL_SUPPRESSED))
+        .order_by(iden("suppressed_at"), Order::Asc)
+        .limit(limit);
+    let mut bursts: Vec<SuppressedBurst> = Vec::new();
+    for row in db.query(&Statement::render(&select)).await?.rows {
+        let row_id = row
+            .get::<String>("id")
+            .ok_or_else(|| corrupt(EMAIL_SUPPRESSED, "?", "id"))?;
+        let account_id = row
+            .get::<String>("account_id")
+            .ok_or_else(|| corrupt(EMAIL_SUPPRESSED, "?", "account_id"))?;
+        let category = row
+            .get::<String>("category")
+            .ok_or_else(|| corrupt(EMAIL_SUPPRESSED, "?", "category"))?;
+        let suppressed_at = row
+            .get::<String>("suppressed_at")
+            .ok_or_else(|| corrupt(EMAIL_SUPPRESSED, "?", "suppressed_at"))?;
+        match bursts
+            .iter_mut()
+            .find(|burst| burst.account_id == account_id && burst.category == category)
+        {
+            Some(burst) => {
+                burst.count += 1;
+                burst.ids.push(row_id);
+            }
+            None => bursts.push(SuppressedBurst {
+                account_id,
+                category,
+                count: 1,
+                ids: vec![row_id],
+                first_suppressed_at: suppressed_at,
+            }),
+        }
+    }
+    Ok(bursts)
+}
+
+/// Deletes exactly the suppressed rows a burst's count covered, by id.
+/// The delete and the count are the same set by construction — a
+/// timestamp bound could not say that, because `suppressed_at` is stored
+/// to the second and a flood puts several suppressions in one second.
+#[must_use]
+pub(crate) fn clear_email_suppression_statement(ids: &[String]) -> Statement {
+    let mut delete = Query::delete();
+    delete
+        .from_table(iden(EMAIL_SUPPRESSED))
+        .and_where(Expr::col(iden("id")).is_in(ids.to_vec()));
+    Statement::render(&delete)
+}
+
+/// Drops suppression rows that fell out of every retention window.
+///
+/// # Errors
+///
+/// [`DbError`] when the write fails.
+pub(crate) async fn prune_email_suppressed(
+    db: &dyn Database,
+    older_than: &str,
+) -> Result<u64, DbError> {
+    let mut delete = Query::delete();
+    delete
+        .from_table(iden(EMAIL_SUPPRESSED))
+        .and_where(Expr::col(iden("suppressed_at")).lt(older_than));
     db.execute(&Statement::render(&delete)).await
 }
