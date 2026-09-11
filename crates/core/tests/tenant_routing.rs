@@ -251,7 +251,7 @@ async fn interleaved_requests_touch_only_their_own_database() {
 
 #[pollster::test]
 async fn the_handler_is_given_the_tenant_the_host_resolved_to() {
-    let (router, _, _, registry) = routed();
+    let (router, _, _, _registry) = routed();
     for (host, expected) in [("a.example", "tenant-a"), ("b.example", "tenant-b")] {
         let response = request(
             &router,
@@ -330,7 +330,7 @@ async fn an_unreachable_tenant_database_is_503_and_names_no_dsn() {
     );
     let rendered = body.to_string();
     assert!(
-        !rendered.contains("postgres://") && !rendered.contains("@"),
+        !rendered.contains("postgres://") && !rendered.contains('@'),
         "a connection string must never reach a response body: {rendered}"
     );
     // The mirror of the two tests above: this tenant *was* admitted, so
@@ -349,7 +349,7 @@ async fn probes_are_not_resolved_and_keep_answering() {
     // Resolution outside the module routes would 404 every liveness probe
     // in production: they arrive by loopback with a host the registry has
     // never heard of.
-    let (router, _, _, registry) = routed();
+    let (router, _, _, _registry) = routed();
     for path in ["/__health", "/__ready"] {
         let response = request(
             &router,
