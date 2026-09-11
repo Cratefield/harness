@@ -243,6 +243,31 @@ a:hover { color: var(--accent-hi); text-decoration: underline; }
 .mod--on { border-color: #2b3d7a; }
 .mod--core input { pointer-events: none; }
 
+/* --- The sign-in gate -------------------------------------------------- */
+
+/* The pages that stand in front of a session: sign in, invite-only, and
+   "sign-in is not configured". One narrow card, centred. */
+.gate { max-width: 420px; margin: 48px auto 0; }
+.gate .dash__card { padding: 24px 26px; }
+
+/* --- Forms ------------------------------------------------------------- */
+
+.field { display: grid; gap: 6px; margin: 0 0 4px; }
+.field label {
+  font-family: var(--mono); font-size: 11px; letter-spacing: .1em;
+  text-transform: uppercase; color: var(--muted);
+}
+.field input {
+  font-family: var(--mono); font-size: 13px; color: var(--ink);
+  background: var(--ground); border: 1px solid var(--edge);
+  padding: 9px 11px; max-width: 320px;
+}
+.field input:focus { border-color: var(--accent); outline: none; }
+.field input::placeholder { color: var(--dim); }
+
+/* A three-column list row, for screens that have no health column. */
+.dash__lrow--three { grid-template-columns: 1.2fr 2fr .8fr; }
+
 /* --- Definition rows --------------------------------------------------- */
 
 .kv { margin: 0; font-family: var(--mono); font-size: 12px; }
