@@ -134,6 +134,17 @@ pub struct Ports {
     /// Set by the runtime when the venture mounts sidecar modules. Not a
     /// [`Port`], so `view_for` never copies it and no module can reach it.
     pub dispatcher: Option<Arc<dyn Dispatcher>>,
+    /// How this deployment turns a host into a tenant, and a tenant into
+    /// its database (TENANT-ROUTING.md §3-§5). `None` is the *no registry*
+    /// deployment — Cloudflare, the browser, and native in development and
+    /// test — which resolves every host to the implicit tenant and hands
+    /// back [`Ports::db`].
+    ///
+    /// Not a [`Port`] for the same reason `dispatcher` is not: `view_for`
+    /// must never copy it into a module's view. A module reaches a
+    /// database through the `TenantConn` extractor, which can only give it
+    /// the one the request resolved.
+    pub tenants: Option<Arc<dyn crate::tenant::TenantRouting>>,
 }
 
 impl Ports {
@@ -161,6 +172,7 @@ impl Ports {
             id_gen: None,
             defer: None,
             dispatcher: None,
+            tenants: None,
         }
     }
 

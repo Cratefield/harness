@@ -506,7 +506,20 @@ impl Harness {
         api = Self::nest_sidecars(api, &mounted, &ports, gateway.as_ref());
         let gateway_state = Self::gateway_guard_state(&ports, gateway.as_ref());
         let mounts_for_health = mounted.clone();
+        // Captured before `ports` is destructured below.
+        let tenant_layer = Arc::new(TenantLayer {
+            routing: ports.tenants.clone(),
+            fallback: ports.db.clone(),
+        });
+        // Resolution last before the module routes, and on them only
+        // (TENANT-ROUTING.md §3): `/__health`, `/__ready`, `/.well-known`
+        // and `/ui` have no tenant, and resolving there would 404 every
+        // liveness probe in production.
         let api = api
+            .layer(axum::middleware::from_fn_with_state(
+                tenant_layer,
+                resolve_tenant_layer,
+            ))
             .layer(axum::middleware::from_fn(security_headers_layer))
             .layer(DefaultBodyLimit::max(MAX_BODY_BYTES));
 
@@ -546,6 +559,7 @@ impl Harness {
             id_gen,
             defer,
             dispatcher: _,
+            tenants: _,
         } = ports;
 
         let scope_state = ScopeState {
@@ -843,6 +857,82 @@ fn first_module_string(body: Option<&serde_json::Value>, key: &str) -> Option<St
         .get(key)?
         .as_str()
         .map(str::to_owned)
+}
+
+/// What the resolution layer needs: the deployment's tenant plane, and
+/// the handle to fall back to when it has none.
+struct TenantLayer {
+    routing: Option<Arc<dyn crate::tenant::TenantRouting>>,
+    /// The single database of a deployment without a registry. `None`
+    /// when no database port is configured at all, which is a legitimate
+    /// harness (a venture of pure-HTTP modules) — the tenant still
+    /// resolves, and a handler that asks for a `TenantConn` is the thing
+    /// that fails.
+    fallback: Option<Arc<dyn Database>>,
+}
+
+/// Resolves the request's tenant and puts it, with its database handle,
+/// into the extensions for the `TenantConn` extractor (issue #32).
+///
+/// Refusals carry the request id because this runs inside `scope_layer` —
+/// a refusal from outside the harness carries no `instance`, which is why
+/// #143's readiness guard was pushed inside rather than left at the edge.
+async fn resolve_tenant_layer(
+    State(layer): State<Arc<TenantLayer>>,
+    scope: Scope,
+    mut request: axum::extract::Request,
+    next: Next,
+) -> Response {
+    let host = request
+        .headers()
+        .get(header::HOST)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default()
+        .to_owned();
+
+    // No tenant plane: the *no registry* deployment. Every host is the one
+    // venture (TENANT-ROUTING.md §6), so a module is written once against
+    // the stricter shape and the path most ventures run in production is
+    // not the one without the isolation.
+    let resolution = match layer.routing.as_ref() {
+        Some(routing) => routing.resolve(&host),
+        None => <crate::tenant::ImplicitTenant as crate::tenant::ResolveTenant>::resolve(
+            &crate::tenant::ImplicitTenant,
+            &host,
+        ),
+    };
+
+    let tenant = match resolution.admit() {
+        Ok(tenant) => tenant,
+        Err(problem) => {
+            return Problem::new(problem)
+                .instance(&scope.request_id)
+                .into_response();
+        }
+    };
+
+    let db = match layer.routing.as_ref() {
+        Some(routing) => match routing.database(&tenant).await {
+            Ok(db) => Some(db),
+            Err(err) => {
+                // The registry is the only thing that knows a DSN, and
+                // this error carries the tenant id and nothing else.
+                tracing::error!(tenant = %tenant.id(), "{err}");
+                crate::logging::forward_internal_error(&err.to_string());
+                return Problem::new(&SLUGS.tenant_degraded)
+                    .instance(&scope.request_id)
+                    .into_response();
+            }
+        },
+        None => layer.fallback.clone(),
+    };
+
+    if let Some(db) = db {
+        request
+            .extensions_mut()
+            .insert(crate::tenant_conn::ResolvedTenant { tenant, db });
+    }
+    next.run(request).await
 }
 
 #[derive(Clone)]

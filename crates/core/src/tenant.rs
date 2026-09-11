@@ -80,14 +80,6 @@ pub struct TenantId(String);
 impl TenantId {
     /// Minted from a registry row. `pub(crate)` on purpose — see the
     /// module docs.
-    // `expect`, not `allow`: the resolution layer (TENANT-ROUTING.md §10
-    // work item 4) is what consumes this, and `expect` turns into an
-    // error the moment it does, so the attribute cannot outlive its
-    // reason.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "consumed by the resolution layer, §10 item 4")
-    )]
     pub(crate) fn new(id: impl Into<String>) -> Self {
         Self(id.into())
     }
@@ -125,10 +117,6 @@ pub struct Tenant {
 }
 
 impl Tenant {
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "consumed by the resolution layer, §10 item 4")
-    )]
     pub(crate) fn new(id: impl Into<String>, status: TenantStatus) -> Self {
         Self {
             id: TenantId::new(id),
@@ -181,10 +169,6 @@ impl Resolution {
     /// slug rather than two because the caller's situation is identical —
     /// come back later — and the operator learns which from the registry,
     /// not from the response.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "consumed by the resolution layer, §10 item 4")
-    )]
     pub(crate) fn admit(self) -> Result<Tenant, &'static crate::problems::ProblemDef> {
         match self {
             Self::Found { id, status } if status == TenantStatus::Active => {
@@ -212,6 +196,71 @@ pub trait ResolveTenant: Send + Sync {
     /// open question on cache lifetime.
     fn resolve(&self, host: &str) -> Resolution;
 }
+
+/// How a deployment turns a resolved tenant into a database handle.
+///
+/// Separate from [`ResolveTenant`] because the two answers come from
+/// different places and fail differently: resolution reads a registry row
+/// (cheap, cacheable, and a miss means `404`), while this opens or reuses
+/// a connection pool (lazy, evictable, and a failure means the tenant is
+/// unreachable rather than unknown).
+///
+/// Implemented by the runtime, never by a module. The registry that backs
+/// it is the only thing in the process that knows a DSN
+/// (TENANT-ROUTING.md §4): it maps a connect failure to
+/// [`TenantDbError::Unreachable`] **before** the URL can reach a log line
+/// or a response body. `Display for DbError` already scrubs, so that is
+/// not the only defence — but `Debug` derives raw, and a DSN formatted
+/// before it ever becomes a `DbError` is scrubbed by nothing. Not
+/// producing the string is the first line; the sink is the second.
+#[async_trait::async_trait]
+pub trait TenantDatabases: Send + Sync {
+    /// The handle for `tenant`, opening its pool on first use.
+    ///
+    /// # Errors
+    ///
+    /// [`TenantDbError::Unreachable`] when the tenant's database cannot be
+    /// reached. The DSN is never part of the error.
+    async fn database(
+        &self,
+        tenant: &Tenant,
+    ) -> Result<std::sync::Arc<dyn crate::ports::Database>, TenantDbError>;
+}
+
+/// Why a tenant's database could not be handed over. Deliberately carries
+/// the tenant id and nothing else — no DSN, no driver message.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TenantDbError {
+    /// The pool could not be opened or the server did not answer.
+    Unreachable {
+        /// Which tenant. Safe to log.
+        tenant: String,
+    },
+}
+
+impl std::fmt::Display for TenantDbError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Unreachable { tenant } => {
+                write!(f, "tenant `{tenant}`'s database is unreachable")
+            }
+        }
+    }
+}
+
+impl std::error::Error for TenantDbError {}
+
+/// A deployment's tenant plane: a host becomes a tenant, and a tenant
+/// becomes a database handle.
+///
+/// One slot on [`Ports`](crate::Ports) rather than two, because the
+/// resolution layer needs both halves of the same request and a
+/// deployment that supplied only one would be misconfigured in a way no
+/// type could catch. The blanket impl means a runtime writes the two
+/// traits and gets this for free.
+pub trait TenantRouting: ResolveTenant + TenantDatabases {}
+
+impl<T: ResolveTenant + TenantDatabases> TenantRouting for T {}
 
 /// The registry id a deployment without a registry resolves to.
 ///
