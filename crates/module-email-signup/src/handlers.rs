@@ -4,7 +4,7 @@
 //! the no-enumeration rule: the same `202 {"ok":true}` bytes whether the
 //! address is new, pending, confirmed or unsubscribed.
 
-use axum::extract::{Path, Query, State};
+use axum::extract::{FromRequest, Path, Query, State};
 use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, post};
@@ -251,6 +251,14 @@ struct SignupBody {
 struct TokenQuery {
     #[schemars(extend("x-cf-hidden" = true))]
     token: String,
+}
+
+/// The `POST`'s query string, where the confirmation form puts the token and
+/// an API client puts nothing (issue #243).
+#[derive(Deserialize, Default)]
+struct MaybeTokenQuery {
+    #[serde(default)]
+    token: Option<String>,
 }
 
 /// The module's UI surface (ADR 0010, issue #71): the signup form, the two
@@ -675,24 +683,135 @@ async fn send_welcome(
         .wait_until(mail::spawn_deferred(Arc::clone(&state.ctx), mail));
 }
 
+/// `GET /v1/email-signup/unsubscribe?token=` — the confirmation.
+///
+/// It **confirms**; it does not act (issue #243). Microsoft Defender Safe
+/// Links, Proofpoint URL Defense and most scanning mail gateways fetch every
+/// link in a message before the recipient ever sees it, so a `GET` that
+/// applied the unsubscribe opted out every subscriber at any such company
+/// without a click — and neither they nor the venture had a signal that it
+/// had happened, because it is indistinguishable from a genuine opt-out.
+/// `module-notifications` fixed the same defect in issue #237; this is that
+/// shape, in the module that predates it.
+///
+/// The token is still resolved here, so a dead or retired link says so
+/// instead of offering a button that will fail. Nothing is written.
 async fn unsubscribe_get(
     scope: Scope,
     State(state): State<Arc<ModuleState>>,
     headers: HeaderMap,
     Query(query): Query<TokenQuery>,
 ) -> Result<Response, Problem> {
-    let target = unsubscribe(&state, &scope, &headers, &query.token).await?;
-    Ok(see_other(target))
+    if rate_limit(&state, &headers, None).await.is_some() {
+        return Err(Problem::new(&SLUGS.rate_limited).instance(&scope.request_id));
+    }
+    resolve_unsubscribe_token(&state, &scope, &query.token).await?;
+    Ok(confirm_page(&state.ctx.venture.name))
 }
 
+/// `POST /v1/email-signup/unsubscribe` — the acting verb.
+///
+/// It applies immediately, which is what RFC 8058 one-click needs: a mailbox
+/// provider posts on the recipient's behalf and never submits a form. A
+/// scanner fetches; it does not post.
+///
+/// Two callers, and the token is in a different place for each. The
+/// confirmation page's form carries no `action`, so it posts back to the URL
+/// it was fetched from — token and all, in the query string, never written
+/// into the markup where a screenshot or a "view source" could reach it. An
+/// API client posts `{"token":…}` as a body, which is the shape this route
+/// has always had and which keeps working. Query first, body only when there
+/// is no query token, so the body's rejections stay exactly as they were.
 async fn unsubscribe_post(
     scope: Scope,
     State(state): State<Arc<ModuleState>>,
     headers: HeaderMap,
-    Json(body): Json<TokenQuery>,
+    Query(query): Query<MaybeTokenQuery>,
+    request: axum::extract::Request,
 ) -> Result<Response, Problem> {
+    if let Some(token) = query.token {
+        let target = unsubscribe(&state, &scope, &headers, &token).await?;
+        return Ok(see_other(target));
+    }
+    let Json(body) = Json::<TokenQuery>::from_request(request, &()).await?;
     unsubscribe(&state, &scope, &headers, &body.token).await?;
     Ok(Json(json!({ "ok": true })).into_response())
+}
+
+/// The subscription a token names, without acting on it.
+///
+/// Two unsubscribe link formats coexist by design (issue #137). The dotless
+/// token is the current opaque one, revocable per subscription without
+/// touching the signing key ring. The dotted token is the pre-#137 signed
+/// link: it keeps working while its signing key is in the ring, and
+/// `unsubscribe_tokens_do_not_expire` explains what that costs.
+/// Discriminator is the dot: signed payloads are exactly `part.part`, opaque
+/// tokens are dot-free by construction.
+async fn resolve_unsubscribe_token(
+    state: &ModuleState,
+    scope: &Scope,
+    token: &str,
+) -> Result<(String, Option<SubscriberRow>), Problem> {
+    let Some(signer): Option<Arc<dyn Signer>> = state.ctx.ports.signer.clone() else {
+        return Err(internal(scope));
+    };
+    let Some(db) = state.ctx.ports.db.clone() else {
+        return Err(internal(scope));
+    };
+    if token.contains('.') {
+        let Some(payload) = signer.verify(token, PURPOSE_UNSUBSCRIBE) else {
+            return Err(Problem::new(&SLUGS.invalid_token).instance(&scope.request_id));
+        };
+        let row = store::find_by_id(&*db, &payload.subject).await?;
+        Ok((payload.subject, row))
+    } else {
+        let Some(row) = store::find_by_unsubscribe_token(&*db, token).await? else {
+            return Err(Problem::new(&SLUGS.invalid_token).instance(&scope.request_id));
+        };
+        Ok((row.id.clone(), Some(row)))
+    }
+}
+
+/// The page a person gets when they click the link in the mail.
+///
+/// The form has no `action`, so it submits to the URL this page was fetched
+/// from — token and all. Writing the token into the markup would put it
+/// somewhere a shoulder, a screenshot or a "view source" can reach, and it is
+/// already in the address bar.
+fn confirm_page(venture: &str) -> Response {
+    html(format!(
+        "<!doctype html><meta charset=utf-8><title>Unsubscribe</title>\
+         <p>Stop sending you emails from {}?</p>\
+         <form method=\"post\"><button type=\"submit\">Unsubscribe</button></form>\
+         <p>Nothing changes until you press it.</p>",
+        escape_html(venture)
+    ))
+}
+
+/// A `200 text/html` body.
+fn html(body: String) -> Response {
+    (
+        StatusCode::OK,
+        [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
+        body,
+    )
+        .into_response()
+}
+
+/// The five characters that can end a piece of text early in HTML.
+fn escape_html(raw: &str) -> String {
+    let mut out = String::with_capacity(raw.len());
+    for ch in raw.chars() {
+        match ch {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            '\'' => out.push_str("&#39;"),
+            other => out.push(other),
+        }
+    }
+    out
 }
 
 async fn unsubscribe(
@@ -704,9 +823,6 @@ async fn unsubscribe(
     if rate_limit(state, headers, None).await.is_some() {
         return Err(Problem::new(&SLUGS.rate_limited).instance(&scope.request_id));
     }
-    let Some(signer): Option<Arc<dyn Signer>> = state.ctx.ports.signer.clone() else {
-        return Err(internal(scope));
-    };
     let Some(db) = state.ctx.ports.db.clone() else {
         return Err(internal(scope));
     };
@@ -726,25 +842,7 @@ async fn unsubscribe(
         unsubscribed_default,
     );
 
-    // Two unsubscribe link formats coexist by design (issue #137). The
-    // dotless token is the current opaque one, revocable per subscription
-    // without touching the signing key ring. The dotted token is the
-    // pre-#137 signed link: it keeps working while its signing key is in
-    // the ring, and `unsubscribe_tokens_do_not_expire` explains what that
-    // costs. Discriminator is the dot: signed payloads are exactly
-    // `part.part`, opaque tokens are dot-free by construction.
-    let (subject, row) = if token.contains('.') {
-        let Some(payload) = signer.verify(token, PURPOSE_UNSUBSCRIBE) else {
-            return Err(Problem::new(&SLUGS.invalid_token).instance(&scope.request_id));
-        };
-        let row = store::find_by_id(&*db, &payload.subject).await?;
-        (payload.subject, row)
-    } else {
-        let Some(row) = store::find_by_unsubscribe_token(&*db, token).await? else {
-            return Err(Problem::new(&SLUGS.invalid_token).instance(&scope.request_id));
-        };
-        (row.id.clone(), Some(row))
-    };
+    let (subject, row) = resolve_unsubscribe_token(state, scope, token).await?;
     let now = now_iso();
     let affected = store::unsubscribe(&*db, &subject, &now).await?;
     if affected > 0

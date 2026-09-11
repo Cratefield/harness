@@ -39,8 +39,8 @@ mod tokens;
 mod urn;
 
 use cratefield_core::{
-    AnyError, BoxFuture, Config, ConfigError, EventHandler, EventName, Migrations, Module,
-    ModuleConfig, ModuleContext, Port, SqlMigration,
+    AnyError, BoxFuture, Config, ConfigError, DataKind, Disposition, EventHandler, EventName,
+    Migrations, Module, ModuleConfig, ModuleContext, PersonalDataSet, Port, SqlMigration,
 };
 use std::sync::{Arc, OnceLock};
 
@@ -192,6 +192,77 @@ impl Module for Linkedin {
             "linkedin_oauth_states",
             "linkedin_request_budget",
         ]
+    }
+
+    /// One person in six tables, and two columns an export must never copy
+    /// (issue #265).
+    ///
+    /// The person is the LinkedIn member who connected the venture — one
+    /// row of `linkedin_accounts`, keyed on `person_urn`, LinkedIn's own
+    /// identifier for them. Everything else this module stores is
+    /// organisational: pages belong to companies, posts and the images
+    /// attached to them are the venture's own publications on those pages,
+    /// and the last two tables are a connect attempt in flight and a counter
+    /// of API calls. Those five are declared `none` **with** their reason,
+    /// because a reader cannot tell an omission from an oversight, and four
+    /// of them would otherwise look exactly like the omission this rule
+    /// exists to catch.
+    ///
+    /// `access_token` and `refresh_token` are redacted. They are LinkedIn
+    /// bearer credentials in the clear — whoever holds one can post as the
+    /// venture until it expires — and `GET /v1/privacy/export` is a
+    /// `SELECT *` written to a file people forward, so a token in the row
+    /// would be a token in that file (ADR 0015). Naming them with
+    /// `[redacted]` rather than dropping them keeps the answer honest: they
+    /// are held, they are not handed over, and erasing the row still takes
+    /// them with it.
+    ///
+    /// `person_urn` is `NULL` until the first page sync learns it, so a
+    /// connection that never synced is not reachable by subject. That is
+    /// the truth about the row rather than a reason to invent a key for it.
+    fn personal_data(&self) -> &'static [PersonalDataSet] {
+        const SETS: &[PersonalDataSet] = &[
+            PersonalDataSet {
+                table: "linkedin_accounts",
+                subject: "person_urn",
+                kind: DataKind::Identifier,
+                disposition: Disposition::Erase,
+                description: "The LinkedIn member who connected this venture's account: \
+                              LinkedIn's own identifier for you, what you gave us permission to \
+                              do, when that permission runs out, and whether the connection is \
+                              still live.",
+                redacted: &["access_token", "refresh_token"],
+            },
+            PersonalDataSet::none(
+                "linkedin_pages",
+                "The company and showcase pages the connected account administers: each page's \
+                 name, its LinkedIn identifier and what may be posted to it. It describes \
+                 organisations, not people.",
+            ),
+            PersonalDataSet::none(
+                "linkedin_posts",
+                "The posts this venture has published, or is about to publish, on its own \
+                 company pages: the wording, when it went out and whether LinkedIn accepted it. \
+                 It is the venture's publication record, filed under a page.",
+            ),
+            PersonalDataSet::none(
+                "linkedin_assets",
+                "Images uploaded to LinkedIn for those posts, with their size and alt text. \
+                 Filed under the page they were uploaded for; no column in it names a person.",
+            ),
+            PersonalDataSet::none(
+                "linkedin_oauth_states",
+                "One row per connect attempt still in progress: an opaque identifier and the \
+                 minute it stops being valid. It is created before anybody has signed in and \
+                 deleted the moment it is used, and it names nobody at any point.",
+            ),
+            PersonalDataSet::none(
+                "linkedin_request_budget",
+                "How many requests this deployment has spent against LinkedIn's daily cap, one \
+                 row per day. A count of what we did, not of who anybody is.",
+            ),
+        ];
+        SETS
     }
 
     fn emits(&self) -> &'static [&'static str] {

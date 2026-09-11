@@ -77,8 +77,8 @@ pub use tokens::{
 };
 
 use cratefield_core::{
-    AnyError, BoxFuture, Config, ConfigError, Module, ModuleConfig, ModuleContext, Port,
-    SqlMigration,
+    AnyError, BoxFuture, Config, ConfigError, DataKind, Disposition, Module, ModuleConfig,
+    ModuleContext, PersonalDataSet, Port, SqlMigration,
 };
 use std::sync::Arc;
 
@@ -244,6 +244,101 @@ impl Module for AuthCore {
             "clients",
             "client_redirect_uris",
         ]
+    }
+
+    /// What an account is, table by table (issue #265).
+    ///
+    /// Every venture composes this module, so an erasure that does not reach
+    /// here reaches nothing: a session left behind is a way back in, and a
+    /// credential left behind is the way in. Both are [`Disposition::Erase`],
+    /// and erasure runs the catalogue in reverse, so `users` is declared
+    /// **first** and its four child tables after it — the rows that reference
+    /// `users(id)` go before the row they reference, and no foreign key ever
+    /// has to be deferred.
+    ///
+    /// Four columns are named in `redacted`. They are exactly the four this
+    /// module already wraps in [`Redacted`] so a logged row cannot leak
+    /// a value that can log a user in, plus `single_use_tokens.payload`, and
+    /// `GET /v1/privacy/export` is a `SELECT *` written to a file people
+    /// forward — the same argument, one hop further out. `payload` earns its
+    /// place twice over: an authorization code's payload holds the
+    /// `redirect_uri`, the PKCE challenge and a live session id, and a magic
+    /// link's holds the `return_to`, so exporting it would copy two URLs and a
+    /// session identifier into that file.
+    ///
+    /// `ip_hash` is deliberately **not** redacted. It is one-way and it is the
+    /// subject's own — "we kept a fingerprint of where you signed in from" is
+    /// part of the answer they asked for, and a hash nobody can present is not
+    /// a capability.
+    fn personal_data(&self) -> &'static [PersonalDataSet] {
+        const SETS: &[PersonalDataSet] = &[
+            PersonalDataSet {
+                table: "users",
+                subject: "id",
+                kind: DataKind::Contact,
+                disposition: Disposition::Erase,
+                description: "Your account: the name you go by, the email address it is reached \
+                              at, whether that address has been confirmed, and when the account \
+                              was created and last changed.",
+                redacted: &[],
+            },
+            PersonalDataSet {
+                table: "identities",
+                subject: "user_id",
+                kind: DataKind::Identifier,
+                disposition: Disposition::Erase,
+                description: "Every way you can sign in: which provider, that provider's own id \
+                              for you, the email address and name it gave us when you linked it, \
+                              and when you last used it.",
+                redacted: &[],
+            },
+            PersonalDataSet {
+                table: "credentials",
+                subject: "user_id",
+                kind: DataKind::Identifier,
+                disposition: Disposition::Erase,
+                description: "Your passkeys and your password: what each one is, the label and \
+                              device it was registered from, when it was added and last used, and \
+                              whether it is currently locked.",
+                redacted: &["password_hash"],
+            },
+            PersonalDataSet {
+                table: "sessions",
+                subject: "user_id",
+                kind: DataKind::Identifier,
+                disposition: Disposition::Erase,
+                description: "Every sign-in still valid right now: when it began, when it was \
+                              last seen, when it expires, how you proved who you were, and a \
+                              one-way fingerprint of the address and browser family it came from.",
+                redacted: &["token_hash"],
+            },
+            PersonalDataSet {
+                table: "single_use_tokens",
+                subject: "user_id",
+                kind: DataKind::Identifier,
+                disposition: Disposition::Erase,
+                description: "Links and codes issued to you that work exactly once — a sign-in \
+                              link, a passkey challenge, an authorization code, a refresh token — \
+                              until they are used or run out.",
+                redacted: &["token_hash", "payload"],
+            },
+            // The two registration tables. They are the one place in this
+            // module that holds a secret and no person: an application's
+            // secret is not somebody's credential, and no column here names a
+            // human being, so neither row belongs in anybody's export.
+            PersonalDataSet::none(
+                "clients",
+                "The applications allowed to sign people in to this venture: each one's name, \
+                 whether it is switched on, and a hash of its own secret. It describes software \
+                 somebody registered, not a person, and no column in it names one.",
+            ),
+            PersonalDataSet::none(
+                "client_redirect_uris",
+                "The exact addresses each registered application may be sent back to once a \
+                 sign-in finishes. It describes where software lives, not a person.",
+            ),
+        ];
+        SETS
     }
 
     fn migrations(&self) -> cratefield_core::Migrations {

@@ -236,7 +236,8 @@ ergonomic for trait objects.
 |---|---|
 | `POST /v1/email-signup` `{ email, source?, locale?, captchaToken? }` | Always `202` with an identical body. Creates or refreshes a `subscribers` row in `pending`; sends the confirmation mail with a signed link. Does not reveal whether the email already existed. |
 | `GET /v1/email-signup/confirm?token=` | Verifies signature and TTL, flips to `confirmed`, `303` to the configured confirmed URL. |
-| `POST /v1/email-signup/unsubscribe` `{ token }` and `GET .../unsubscribe?token=` | Flips to `unsubscribed`. Link is in every mail. |
+| `GET /v1/email-signup/unsubscribe?token=` | **Confirms; does not act** (issue #243). Renders a one-button form with no `action`, so it posts back to the same URL and the token stays out of the markup. A mail gateway that fetches every link — Safe Links, URL Defense — changes nothing. |
+| `POST /v1/email-signup/unsubscribe` (`?token=` from that form, or `{ token }` as a body) | Flips to `unsubscribed` immediately, which is what RFC 8058 one-click needs. Link is in every mail. |
 | `GET /v1/email-signup/admin/export.csv` | Admin. |
 | `DELETE /v1/email-signup/admin/subscribers/:id` | Admin. Hard delete for deletion requests, keyed on the opaque row id — an email never travels in a path (issue #135). |
 

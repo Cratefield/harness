@@ -34,8 +34,8 @@ mod store;
 pub use mail::{ConfirmMailData, ConfirmedMailData, default_templates};
 
 use cratefield_core::{
-    AnyError, BoxFuture, Config, ConfigError, Migrations, Module, ModuleConfig, ModuleContext,
-    Port, SqlMigration,
+    AnyError, BoxFuture, Config, ConfigError, DataKind, Disposition, Migrations, Module,
+    ModuleConfig, ModuleContext, PersonalDataSet, Port, SqlMigration,
 };
 use serde_json::Value;
 use std::sync::Arc;
@@ -82,6 +82,16 @@ const MIGRATION_POSITION_LOCK: SqlMigration = SqlMigration {
     id: "0004",
     name: "position_lock",
     sql: include_str!("../migrations/sqlite/0004_position_lock.sql"),
+    transactional: true,
+};
+
+/// The address columns made nullable so an entry can be anonymised rather
+/// than deleted (issue #265). See the migration for why deleting the row is
+/// the wrong answer here.
+const MIGRATION_ANONYMISABLE_ENTRY: SqlMigration = SqlMigration {
+    id: "0005",
+    name: "anonymisable_entry",
+    sql: include_str!("../migrations/sqlite/0005_anonymisable_entry.sql"),
     transactional: true,
 };
 
@@ -196,6 +206,73 @@ impl Module for Waitlist {
         ]
     }
 
+    /// The entry is anonymised, not deleted; the other two tables have no
+    /// subject column at all (issue #265).
+    ///
+    /// **Why `Anonymise` and not `Erase`.** A confirmed entry carries two
+    /// numbers that belong to other people as much as to its owner:
+    /// `position` is a dense per-product join order that is deliberately
+    /// never recomputed, and `referrals` is a credit already granted. Delete
+    /// the row and the queue acquires a hole nobody can explain and every
+    /// `referred_by` pointing at its code orphans; keep it and null the
+    /// person out of it, and the request is answered without rewriting
+    /// anybody else's place in the line. Migration `0005` exists for exactly
+    /// this: `email` and `email_normalized` were `NOT NULL`, so the `SET … =
+    /// NULL` this declaration promises could not have run.
+    ///
+    /// `referral_code` is deliberately **kept**. It is a random 8-character
+    /// string that names nobody once the address is gone, and it is what the
+    /// referrals other people were credited for still resolve against.
+    ///
+    /// **Why `id` and not the address.** `GET /v1/privacy/export?subject=…`
+    /// puts the subject value in a URL, and URLs outlive their request in
+    /// access logs, proxies and browser history — which is why this module's
+    /// own links carry the opaque row id and never the address (issue #135).
+    /// Declaring `email_normalized` as the subject would have made a subject
+    /// access request the one operation that writes an address into those
+    /// logs.
+    ///
+    /// **Why the other two are `none`.** `waitlist_position_lock` is one row
+    /// per product and genuinely names nobody. `waitlist_send_cooldown` is
+    /// the harder case and its reason says so plainly: its primary key is the
+    /// address and product the mail throttle counts against, so the address
+    /// is inside a key rather than in a column of its own, and
+    /// `… WHERE <column> = ?` cannot reach it. That is the same shape issue
+    /// #266 describes for `Outbox`, and the table is core's
+    /// [`SendCooldown`](cratefield_core::SendCooldown) shape rather than this
+    /// module's, so giving it a column of its own is a change to every module
+    /// that has one. Saying so is the honest answer available here; inventing
+    /// a subject column that matched nothing would not be.
+    fn personal_data(&self) -> &'static [PersonalDataSet] {
+        const SETS: &[PersonalDataSet] = &[
+            PersonalDataSet {
+                table: "waitlist_entries",
+                subject: "id",
+                kind: DataKind::Contact,
+                disposition: Disposition::Anonymise(&["email", "email_normalized", "answers"]),
+                description: "Your place on a waitlist: the address you joined with, which \
+                              product, when you joined and confirmed, your number in the queue, \
+                              your referral code and how many people joined through it, and any \
+                              answers you gave on the way in.",
+                redacted: &[],
+            },
+            PersonalDataSet::none(
+                "waitlist_send_cooldown",
+                "One row per address and product, holding the moment the last mail went out so \
+                 the same address cannot be mailed again within the hour. The address is part \
+                 of the row's key rather than a column of its own, so an erasure request does \
+                 not reach it; nothing else about you is in the row.",
+            ),
+            PersonalDataSet::none(
+                "waitlist_position_lock",
+                "One row per product, holding the lock that stops two people confirming in the \
+                 same instant from being given the same number in the queue. A product name and \
+                 a timestamp; nobody is named in it.",
+            ),
+        ];
+        SETS
+    }
+
     fn emits(&self) -> &'static [&'static str] {
         &[handlers::EVENT_JOINED, handlers::EVENT_CONFIRMED]
     }
@@ -205,11 +282,12 @@ impl Module for Waitlist {
     }
 
     fn migrations(&self) -> Migrations {
-        const MIGRATIONS: [SqlMigration; 4] = [
+        const MIGRATIONS: [SqlMigration; 5] = [
             MIGRATION_INIT,
             MIGRATION_ENTRY_GENERATION,
             MIGRATION_MAIL_COOLDOWN,
             MIGRATION_POSITION_LOCK,
+            MIGRATION_ANONYMISABLE_ENTRY,
         ];
         // The array is the apply order; this refuses a gap, a duplicate
         // or an entry out of order at build time (issue #27).

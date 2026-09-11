@@ -163,56 +163,83 @@ pub fn conformance_in_process_only(module: Box<dyn Module>, reason: &str) {
 }
 
 /// The modules that own tables and have not said what is personal about
-/// them, with the tables still missing, tracked by issue #265.
+/// them, with the tables still missing.
 ///
-/// An exemption rather than a silence. `HarnessBuilder::build` has always
-/// refused a declaration for a table a module does **not** own; the converse —
-/// a table with no declaration at all — is what actually happens, and what
-/// left `cratefield-module-notifications` holding addresses, device tokens and
-/// inbox rows outside the erasure catalogue through six migrations in two days
-/// (issue #244). Turning that into a conformance failure is the point; these
-/// five modules fail it today, and declaring them is real work per table
-/// rather than a mechanical fill-in.
+/// **Empty, and that is the deliverable** (issue #265). `auth-core`, `cms`,
+/// `email-signup`, `linkedin` and `waitlist` each sat here while they were
+/// being worked through, and each left as it was declared. The mechanism
+/// stays because the next module to grow a table before its declaration will
+/// want it — but an entry is a debt with a number on it, not a place to park
+/// one, and the list is checked empty by
+/// `no_module_is_exempt_from_the_personal_data_rule`.
 ///
-/// The entry names the tables, not just the module, so it cannot rot: a module
+/// An exemption is a loud silence rather than a quiet one. `HarnessBuilder::build`
+/// has always refused a declaration for a table a module does **not** own; the
+/// converse — a table with no declaration at all — is what actually happens,
+/// and what left `cratefield-module-notifications` holding addresses, device
+/// tokens and inbox rows outside the erasure catalogue through six migrations
+/// in two days (issue #244).
+///
+/// An entry names the tables, not just the module, so it cannot rot: a module
 /// that declares one of them fails until its entry is corrected or removed,
 /// and a module that grows a **new** undeclared table fails even while it is
 /// listed. Every exemption prints on the run that uses it.
-const UNDECLARED_TABLES: &[(&str, &[&str])] = &[
-    (
-        "auth-core",
-        &[
-            "users",
-            "identities",
-            "credentials",
-            "sessions",
-            "single_use_tokens",
-            "clients",
-            "client_redirect_uris",
-        ],
-    ),
-    ("cms", &["cms_item", "cms_revision"]),
-    ("email-signup", &["subscribers"]),
-    (
-        "linkedin",
-        &[
-            "linkedin_accounts",
-            "linkedin_pages",
-            "linkedin_posts",
-            "linkedin_assets",
-            "linkedin_oauth_states",
-            "linkedin_request_budget",
-        ],
-    ),
-    (
-        "waitlist",
-        &[
-            "waitlist_entries",
-            "waitlist_send_cooldown",
-            "waitlist_position_lock",
-        ],
-    ),
-];
+const UNDECLARED_TABLES: &[(&str, &[&str])] = &[];
+
+/// What [`personal_data_verdict`] found.
+enum Verdict {
+    /// Every table the module owns has a declaration.
+    Declared,
+    /// Listed in `UNDECLARED_TABLES`, and the entry still describes the
+    /// module exactly. Printed on the run rather than failing it.
+    Exempt(String),
+    /// The panic message.
+    Failed(String),
+}
+
+/// The personal-data rule, as a value rather than a panic (issue #244).
+///
+/// Split out from [`check_personal_data`] so the exemption's anti-rot half
+/// keeps a test after the list went empty: with nothing listed there is no
+/// module left to reach that branch through `conformance` itself, and a
+/// mechanism that only runs when somebody needs it is exactly the one that
+/// must not be allowed to quietly stop working in between.
+fn personal_data_verdict(
+    name: &str,
+    undeclared: &[&'static str],
+    exemptions: &[(&str, &[&str])],
+) -> Verdict {
+    let exempt = exemptions
+        .iter()
+        .find(|(listed, _)| *listed == name)
+        .map(|(_, tables)| *tables);
+
+    if let Some(tables) = exempt {
+        if undeclared != tables {
+            return Verdict::Failed(format!(
+                "[{name}] is exempt from the personal-data rule for {tables:?} (issue #265), but \
+                 its undeclared tables are now {undeclared:?}. Correct the entry in \
+                 UNDECLARED_TABLES in cratefield-testing, or remove it: an exemption that no \
+                 longer describes the module is how the next omission hides."
+            ));
+        }
+        return Verdict::Exempt(format!(
+            "[{name}] personal-data declarations missing for {tables:?}; exempt under issue #265"
+        ));
+    }
+
+    if undeclared.is_empty() {
+        return Verdict::Declared;
+    }
+    Verdict::Failed(format!(
+        "[{name}] owns {undeclared:?} and declares nothing personal about them. \
+         `cratefield-module-privacy` plans an export and an erasure from \
+         `Module::personal_data()`, so a table missing from it is never exported and never \
+         erased. Declare each one with a `PersonalDataSet`, or with `PersonalDataSet::none(table, \
+         reason)` if it holds nobody — \"no declaration\" and \"nothing here\" must not look the \
+         same."
+    ))
+}
 
 /// Fails a module that owns a table it declares nothing about (issue #244).
 ///
@@ -222,36 +249,15 @@ const UNDECLARED_TABLES: &[(&str, &[&str])] = &[
 /// the erasure reports success, and the rows are never in either. Nothing
 /// catches it but this.
 fn check_personal_data(module: &dyn Module) {
-    let name = module.name();
-    let undeclared = cratefield_core::undeclared_tables(module);
-    let exempt = UNDECLARED_TABLES
-        .iter()
-        .find(|(listed, _)| *listed == name)
-        .map(|(_, tables)| *tables);
-
-    if let Some(tables) = exempt {
-        assert_eq!(
-            undeclared, tables,
-            "[{name}] is exempt from the personal-data rule for {tables:?} (issue #265), but its \
-             undeclared tables are now {undeclared:?}. Correct the entry in UNDECLARED_TABLES in \
-             cratefield-testing, or remove it: an exemption that no longer describes the module \
-             is how the next omission hides."
-        );
-        eprintln!(
-            "[{name}] personal-data declarations missing for {tables:?}; exempt under issue #265"
-        );
-        return;
+    match personal_data_verdict(
+        module.name(),
+        &cratefield_core::undeclared_tables(module),
+        UNDECLARED_TABLES,
+    ) {
+        Verdict::Declared => {}
+        Verdict::Exempt(note) => eprintln!("{note}"),
+        Verdict::Failed(message) => panic!("{message}"),
     }
-
-    assert!(
-        undeclared.is_empty(),
-        "[{name}] owns {undeclared:?} and declares nothing personal about them. \
-         `cratefield-module-privacy` plans an export and an erasure from \
-         `Module::personal_data()`, so a table missing from it is never exported and never \
-         erased. Declare each one with a `PersonalDataSet`, or with `PersonalDataSet::none(table, \
-         reason)` if it holds nobody — \"no declaration\" and \"nothing here\" must not look the \
-         same."
-    );
 }
 
 fn conformance_inner(inner: &Arc<dyn Module>, parity: bool) {
@@ -772,5 +778,90 @@ pub async fn push_recipient_conformance(
                  PushError::Rejected(\"unsupported recipient…\"), got {result:?}"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{UNDECLARED_TABLES, Verdict, personal_data_verdict};
+
+    /// A fixture list, so these cover the mechanism rather than whatever
+    /// happens to be exempt on the day.
+    const FIXTURE: &[(&str, &[&str])] = &[("ledger", &["ledger_entries", "ledger_lines"])];
+
+    fn message(verdict: Verdict) -> String {
+        match verdict {
+            Verdict::Failed(message) | Verdict::Exempt(message) => message,
+            Verdict::Declared => String::new(),
+        }
+    }
+
+    #[test]
+    fn no_module_is_exempt_from_the_personal_data_rule() {
+        // Issue #265: the five modules that could not pass the rule when it
+        // landed are declared, and the list they sat in is empty. The
+        // mechanism stays for the next module that needs it; an entry in it
+        // is a debt, and this is the test that notices one being taken on.
+        assert!(
+            UNDECLARED_TABLES.is_empty(),
+            "a module is exempt from the personal-data rule again: {UNDECLARED_TABLES:?}. \
+             An exemption means a venture composing that module answers an erasure request \
+             without the rows it lists — declare them instead, and open the issue the entry \
+             would have tracked."
+        );
+    }
+
+    #[test]
+    fn a_declared_module_passes() {
+        assert!(matches!(
+            personal_data_verdict("notes", &[], FIXTURE),
+            Verdict::Declared
+        ));
+    }
+
+    #[test]
+    fn an_exempt_module_that_declared_everything_is_told_to_remove_its_entry() {
+        // The other end of the anti-rot rule, and the one this change ran
+        // into: a module that has done the work still fails while its
+        // exemption stands, because an entry left behind is how the next
+        // omission hides behind the last one.
+        let message = message(personal_data_verdict("ledger", &[], FIXTURE));
+        assert!(message.contains("or remove it"), "{message}");
+        assert!(message.contains("#265"), "{message}");
+    }
+
+    #[test]
+    fn an_undeclared_table_fails_and_says_what_to_write() {
+        let message = message(personal_data_verdict("notes", &["note_tags"], FIXTURE));
+        assert!(message.contains("note_tags"), "{message}");
+        assert!(message.contains("PersonalDataSet::none"), "{message}");
+    }
+
+    #[test]
+    fn an_exemption_that_still_describes_its_module_is_printed_not_failed() {
+        let verdict = personal_data_verdict("ledger", &["ledger_entries", "ledger_lines"], FIXTURE);
+        assert!(matches!(verdict, Verdict::Exempt(_)));
+        assert!(message(verdict).contains("exempt under issue #265"));
+    }
+
+    #[test]
+    fn an_exemption_that_no_longer_describes_its_module_fails() {
+        // The anti-rot half. A module that declared one of its listed tables
+        // is a different module from the one that was exempted, and letting
+        // the entry keep covering it is how the next omission hides behind
+        // the last one.
+        let message = message(personal_data_verdict("ledger", &["ledger_lines"], FIXTURE));
+        assert!(message.contains("#265"), "{message}");
+        assert!(message.contains("ledger_entries"), "{message}");
+    }
+
+    #[test]
+    fn an_exempt_module_that_grows_a_new_undeclared_table_fails() {
+        let message = message(personal_data_verdict(
+            "ledger",
+            &["ledger_entries", "ledger_lines", "ledger_fx"],
+            FIXTURE,
+        ));
+        assert!(message.contains("ledger_fx"), "{message}");
     }
 }

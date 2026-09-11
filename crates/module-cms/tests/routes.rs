@@ -234,3 +234,35 @@ async fn save_rejects_a_non_object_data_and_an_empty_slug() {
         assert_eq!(status, StatusCode::BAD_REQUEST, "slug must not be empty");
     }
 }
+
+/// Issue #265: both tables are declared as holding nobody, **with** the
+/// reason, and the reason is published verbatim by `GET /v1/privacy/manifest`.
+///
+/// There is no export or erasure behaviour to drive here, because that is the
+/// declaration: neither table has a column that names a person. What a test
+/// can hold is the part that would otherwise rot — a `none` whose reason
+/// quietly went empty reads, on the published page, exactly like the omission
+/// the rule exists to catch.
+#[test]
+fn both_tables_say_they_hold_nobody_and_say_why() {
+    use cratefield_core::{Disposition, Module};
+
+    let module = Cms::new();
+    assert!(
+        cratefield_core::undeclared_tables(&module).is_empty(),
+        "cms owns a table it says nothing about"
+    );
+    let sets = module.personal_data();
+    assert_eq!(sets.len(), 2);
+    for set in sets {
+        assert!(set.is_none(), "{} claims a subject column", set.table);
+        let Disposition::Retain(reason) = set.disposition else {
+            panic!("{} is not a `none` declaration", set.table);
+        };
+        assert!(
+            reason.contains("no column in it names a person"),
+            "{}'s reason has to say so in words a reader can check: {reason:?}",
+            set.table
+        );
+    }
+}

@@ -414,15 +414,22 @@ fn conformance_refuses_a_module_that_declares_nothing_about_its_tables() {
 }
 
 #[test]
-fn an_exemption_that_no_longer_describes_its_module_fails() {
-    // The anti-rot half. `cms` is exempt for two tables under issue #265; a
-    // `cms` that owns one of them is a different module from the one that
-    // was exempted, and letting the entry cover it is how the next omission
-    // would hide behind the last one.
+fn a_module_that_used_to_be_exempt_is_not_shielded_any_more() {
+    // `cms` was one of the five modules exempted while issue #265 was open,
+    // and it is declared now, so the entry is gone. A `cms` that owns
+    // `cms_item` and says nothing about it must therefore fail like any other
+    // module — an exemption left behind after the work is done is how the
+    // next omission hides behind the last one.
+    //
+    // The exemption mechanism itself is still exercised, against a fixture
+    // list, by `personal_data_verdict`'s own tests in `conformance.rs`.
     let message = conformance_panic(Undeclared {
         name: "cms",
         tables: &["cms_item"],
     });
-    assert!(message.contains("#265"), "{message}");
     assert!(message.contains("cms_item"), "{message}");
+    assert!(
+        !message.contains("exempt"),
+        "cms is exempt from the personal-data rule again: {message}"
+    );
 }
