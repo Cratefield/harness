@@ -12,7 +12,7 @@ its failure behaviour) and ADR
 single-database operation).
 
 > **Status: proposed.** Not drilled. Runbook C has never been executed
-> against a real database — see [§6](#6-what-has-not-been-drilled). Every
+> against a real database — see [§7](#7-what-has-not-been-drilled). Every
 > command below is verified to exist and take the flags shown; none has
 > been run in anger. Treat the timings as unknown, not as fast.
 
@@ -28,13 +28,14 @@ uses either a forward migration — ordinary code, reviewed and applied the
 way everything else is — or a restore, which is the database vendor's
 problem and is exercised by their customers constantly.
 
-The three questions an operator actually asks, in the order they arrive:
+The four questions an operator actually asks, in the order they arrive:
 
 | Question | Runbook |
 |---|---|
 | It failed halfway. What state am I in? | [A](#2-runbook-a-a-migration-failed-part-way) |
 | It applied, and it was wrong. | [B](#3-runbook-b-a-migration-applied-and-is-wrong) |
 | Put it back the way it was. | [C](#4-runbook-c-rewind-one-tenant-entirely) |
+| The schema is fine; put the *old build* back. | [D](#5-runbook-d-rolling-the-code-back) |
 
 ## 2. Runbook A: a migration failed part-way
 
@@ -166,7 +167,69 @@ On Postgres the shape is identical with the provider's PITR in place of
 steps 1 and 3, and `fz migrations apply --dialect postgres --url "$DSN"`
 in place of step 4.
 
-## 5. Backup and retention requirements
+## 5. Runbook D: rolling the *code* back
+
+Every runbook above is about the database. This one is the other
+direction: the schema is fine and the new Worker is not, so you want the
+previous build back.
+
+**The harness cannot tell you whether that is safe, and does not pretend
+to.** Reverting the Worker does not revert the database. The old code
+meets whatever schema is applied now, and whether it copes depends
+entirely on what the migrations since it did:
+
+| What the migrations since that build did | Old code against the new schema |
+|---|---|
+| Added tables, added nullable columns | Fine. It ignores what it does not know about |
+| Added a `NOT NULL` column with no default | **Breaks.** Its inserts omit a column the database now demands |
+| Renamed or dropped anything | **Breaks.** It reads a name that is gone |
+| Backfilled or reinterpreted an existing column | **Silently wrong.** It reads the column and means something else by it |
+
+The additive rule (§1) is what makes the first row the usual case, which
+is why rolling the code back usually works. It is not a guarantee, and a
+count of migrations cannot become one: "three migrations have applied
+since" says nothing about whether any of them was the second or fourth
+row of that table.
+
+**So the check is a reading, not a command.** Before reverting a build,
+read the migrations applied since it and decide which row you are in.
+`fz plan --json` reports `migrations.collected` per module, and the
+deploy record beside the manifest holds the same map as it was at the
+deployment you are going back to; the difference is the list to read.
+
+### Why `fz` will not do this for you
+
+`fz deploy` recomputes the plan from the current inputs and refuses any
+digest that does not match (`stale-plan`), so an old plan cannot be
+deployed through it at all. That is deliberate: an approval is of a
+destination, and the destination moved.
+
+Reverting the build is therefore a `wrangler` operation, outside `fz`,
+and it stays outside on purpose. A `fz rollback` that answered "safe"
+from migration counts would be giving an assurance the data does not
+support — and an operator who trusts a false "safe" is worse off than one
+who was told to read the migrations.
+
+### Expand and contract
+
+The way to make a rollback safe *in advance* is to never be in rows two
+to four when it matters:
+
+1. **Expand.** Add the new column or table, nullable, defaulted. Deploy
+   code that writes both old and new.
+2. **Backfill.** A forward migration, separately, reviewed.
+3. **Switch.** Deploy code that reads the new shape. **This is the last
+   point at which a rollback is free**, and it stays free for as long as
+   the old column is still written.
+4. **Contract.** Drop the old column, in its own migration, once no
+   deployed build reads it. After this a rollback past step 3 is not
+   available, and that is the trade you are accepting by contracting.
+
+Schema and Worker activation are not atomic and cannot be made so: D1
+applies migrations through `wrangler d1 migrations apply` and the Worker
+goes live separately. Expand/contract is how that gap stops mattering.
+
+## 6. Backup and retention requirements
 
 Handed to whoever owns the databases; this document specifies, it does
 not implement (#35 is explicit that implementing backups is out of
@@ -180,7 +243,7 @@ scope). Filed as **issue #203** so it has an owner and a ticket.
 | A **quarterly restore drill** on one tenant, timed and recorded | An untested backup is a hypothesis. #43's SOC 2 mapping cites the record |
 | Export before any migration containing a backfill | §3: on D1 it is the only pre-image that will exist |
 
-## 6. What has not been drilled
+## 7. What has not been drilled
 
 #35 asks for a restore drill executed on a staging tenant with its timing
 recorded. **It has not been done**, and this document does not pretend

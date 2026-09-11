@@ -170,9 +170,16 @@ enum Command {
         #[arg(long, default_value = "migrations")]
         migrations: PathBuf,
         /// The second consent: required when the venture resolves to
-        /// production, or when the plan removes modules.
+        /// production.
         #[arg(long)]
         i_am_deploying_to_production: bool,
+        /// Required when the plan drops modules from the served
+        /// composition. Separate from the production flag on purpose: a
+        /// removal in development is not a production deploy, and one
+        /// flag for both would teach an operator to pass the production
+        /// one by habit.
+        #[arg(long)]
+        i_am_removing_modules: bool,
         /// Prints exactly one JSON object to stdout instead of prose.
         #[arg(long)]
         json: bool,
