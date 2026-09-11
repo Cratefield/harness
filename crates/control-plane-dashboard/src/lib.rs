@@ -21,10 +21,12 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use axum::extract::{Path, State};
+use axum::extract::{Form, Path, State};
 use axum::response::{Html, IntoResponse, Redirect, Response};
 use axum::routing::{get, post};
 use cratefield_accounts::{Repository, Venture, VentureStatus};
+use cratefield_catalog::{Catalog, CatalogModule, Tier};
+use cratefield_chrome::{NavItem, Page, escape, nav, render};
 use cratefield_console::{LOGIN_PATH, current_session};
 use cratefield_core::{
     Database, HttpPolicy, Migrations, Module, ModuleContext, Port, SqlMigration, Statement,
@@ -123,6 +125,8 @@ impl Module for Dashboard {
             .route("/", get(ventures))
             .route("/ventures/{id}", get(venture_detail))
             .route("/ventures/{id}/archive", post(archive))
+            .route("/ventures/{id}/modules", post(set_modules))
+            .route("/ventures/{id}/reprovision", post(reprovision))
             .with_state(state)
     }
 }
@@ -259,6 +263,7 @@ async fn check_health(ctx: &ModuleContext, venture: &Venture) -> HealthVerdict {
 /// The venture's provisioning progress: the last step that completed, and
 /// the recorded failure, if the run stopped. Read straight from
 /// `provision_progress`, which the provisioning engine owns.
+#[derive(Debug)]
 struct Progress {
     last_step: String,
     error: String,
@@ -336,18 +341,32 @@ fn status_label(status: VentureStatus) -> &'static str {
 
 fn render_progress(progress: &Progress) -> String {
     if !progress.error.is_empty() {
+        // `last_step` is the last step that *completed*, so it is empty
+        // when the very first step failed — which is the common case with
+        // no deployer wired. "failed after step `` " is not a sentence.
+        let after = if progress.last_step.is_empty() {
+            String::from("on its first step")
+        } else {
+            format!("after <code>{}</code>", escape(&progress.last_step))
+        };
         return format!(
-            "<p class=\"status-degraded\"><strong>Provisioning failed</strong> after step \
-             <code>{}</code>: {}</p>",
-            escape(&progress.last_step),
-            escape(&progress.error)
+            "<p class=\"dash__row\"><span class=\"dash__dot dash__dot--bad\"></span>\
+             <strong>Provisioning stopped</strong> {after}</p>\
+             <p class=\"dash__note\">{error}</p>\
+             <p class=\"dash__note\">Recorded {when}. The run is resumable: it will \
+             continue from the step after the last one that completed.</p>",
+            error = escape(&progress.error),
+            when = escape(&progress.updated_at),
         );
     }
     if progress.last_step.is_empty() {
-        return String::from("<p>No provisioning has run yet.</p>");
+        return String::from(
+            "<p class=\"dash__note\">No provisioning has run for this venture yet.</p>",
+        );
     }
     format!(
-        "<p>Last completed step: <code>{}</code> ({}).</p>",
+        "<p class=\"dash__row\"><span class=\"dash__dot dash__dot--live\"></span>\
+         Last completed step <code>{}</code><span class=\"dash__meta\">{}</span></p>",
         escape(&progress.last_step),
         escape(&progress.updated_at)
     )
@@ -414,34 +433,88 @@ async fn ventures(State(state): State<Arc<DashboardState>>, headers: HeaderMap) 
         futures_util::future::join_all(ventures.iter().map(|venture| check_health(ctx, venture)))
             .await;
 
-    let mut list = String::new();
+    let mut rows = String::from(
+        "<div class=\"dash__lrow dash__lrow--head\"><span>Venture</span>\
+         <span>Subdomain</span><span>Status</span><span>Health</span></div>",
+    );
     if ventures.is_empty() {
-        list.push_str("<p>No ventures yet. Create one in the console.</p>");
+        rows.push_str(
+            "<p class=\"dash__empty\">No ventures yet. \
+             <a href=\"/v1/console/new\">Create one in the console.</a></p>",
+        );
     } else {
         for (venture, health) in ventures.iter().zip(verdicts) {
-            list.push_str(&format!(
-                "<li><a href=\"{BASE}/ventures/{id}\">{slug}</a> — \
-                 <strong>{status}</strong> · {subdomain} · {health}</li>",
+            rows.push_str(&format!(
+                "<div class=\"dash__lrow\">\
+                 <span><a href=\"{BASE}/ventures/{id}\">{slug}</a></span>\
+                 <span><em>{subdomain}</em></span>\
+                 <span>{status}</span>\
+                 <span>{dot}{health}</span></div>",
                 id = escape(&venture.id),
                 slug = escape(&venture.slug),
-                status = status_label(venture.status),
                 subdomain = escape(&venture.subdomain),
+                status = status_chip(venture.status),
+                dot = health_dot(&health),
                 health = escape(&health.label()),
             ));
         }
     }
 
-    Html(page(
-        "Your ventures · Cratefield",
-        &format!(
-            "<h1>Your ventures</h1>\
-             <p>Signed in as <strong>{email}</strong>.</p>\
-             <ul>{list}</ul>\
-             <p><a href=\"/v1/console\">Console</a></p>",
-            email = escape(&session.account_id),
-            list = list,
+    let live = ventures
+        .iter()
+        .filter(|v| v.status == VentureStatus::Live)
+        .count();
+    let degraded = ventures
+        .iter()
+        .filter(|v| v.status == VentureStatus::Degraded)
+        .count();
+    let alert = if degraded > 0 {
+        format!(
+            "<p class=\"dash__banner dash__banner--bad\">\
+             <strong>{degraded}</strong> of your ventures {is} degraded: provisioned once, \
+             now failing. Open {it} to see the step that stopped and the message it \
+             recorded.</p>",
+            is = if degraded == 1 { "is" } else { "are" },
+            it = if degraded == 1 { "it" } else { "them" },
+        )
+    } else {
+        String::new()
+    };
+
+    let body = format!(
+        "{alert}<div class=\"dash__list\">{rows}</div>\
+         <p class=\"dash__note\">Every health verdict on this page is a real request to \
+         the venture's <code>/__health</code>, made while the page rendered, with a three \
+         second budget. There is no \u{201c}checking\u{201d} state: a venture that is not \
+         answering says so.</p>",
+    );
+
+    let nav_html = nav(&[
+        NavItem::here("Ventures", BASE),
+        NavItem::to("New venture", "/v1/console/new"),
+        NavItem::unbuilt("Deploys"),
+        NavItem::unbuilt("Logs"),
+        NavItem::unbuilt("Domains"),
+        NavItem::unbuilt("Backups"),
+        NavItem::unbuilt("Billing"),
+    ]);
+
+    let crumb = format!(
+        "{total} venture{s} · {live} live · {degraded} degraded",
+        total = ventures.len(),
+        s = if ventures.len() == 1 { "" } else { "s" },
+    );
+
+    Html(render(&Page {
+        title: "Ventures",
+        signed_in_as: Some(&session.account_id),
+        body: &format!(
+            "<div class=\"page-h\"><h1>Your ventures</h1></div>\
+             <p class=\"lede\">Every backend this account owns, what it is doing, and \
+             whether it is answering.</p>{}",
+            frame(&nav_html, &crumb, &body)
         ),
-    ))
+    }))
     .into_response()
 }
 
@@ -492,65 +565,274 @@ async fn venture_detail(
     };
     let health = check_health(ctx, &venture).await;
 
-    let status_line = if venture.status == VentureStatus::Degraded {
-        String::from(
-            "<p class=\"status-degraded\"><strong>DEGRADED</strong> — provisioned once, now \
-             failing.</p>",
-        )
-    } else {
-        format!(
-            "<p>Status: <strong>{}</strong></p>",
-            status_label(venture.status)
-        )
-    };
-
-    let progress_html = render_progress(&progress);
-    let connections_html = render_connections(&connections);
-
-    let archive_html = if venture.status == VentureStatus::Archived {
-        String::from("<p>This venture is archived. Its record is kept.</p>")
-    } else {
-        format!(
-            "<form method=\"post\" action=\"{BASE}/ventures/{id}/archive\">\
-             <button type=\"submit\">Archive</button></form>",
-            id = escape(&venture.id),
-        )
-    };
-
-    Html(page(
-        &format!("{} · Cratefield", venture.slug),
-        &format!(
-            "<h1>{slug}</h1>{status_line}\
-             <p>Subdomain: <strong>{subdomain}</strong> · Health: <strong>{health}</strong></p>\
-             <h2>Modules</h2><p><code>{modules}</code></p>\
-             <h2>Provisioning</h2>{progress_html}\
-             <h2>Connections</h2>{connections_html}\
-             <h2>Secrets</h2>\
-             <p>Secrets are shown as names and versions only, never values. \
-             No secret names are listed here yet: the control plane has no KMS wired \
-             (the live deploy pipeline owns that wiring), so this screen would have \
-             nothing truthful to list. It will not invent one.</p>\
-             <h2>Audit trail</h2>\
-             <p>Who touched what is not recorded per venture yet — the only audit \
-             table today is the console's allowlist audit, which is account-level, \
-             and the secrets log is tracing-only. This screen shows no audit rows \
-             rather than made-up ones.</p>\
-             {archive_html}\
-             <p><a href=\"{BASE}\">Back</a></p>",
-            slug = escape(&venture.slug),
-            subdomain = escape(&venture.subdomain),
-            health = escape(&health.label()),
-            modules = escape(&venture.module_set),
-            progress_html = progress_html,
-            connections_html = connections_html,
-            archive_html = archive_html,
-        ),
+    Html(render_detail(
+        &venture,
+        &session.account_id,
+        &progress,
+        &connections,
+        &health,
     ))
     .into_response()
 }
 
-/// Archives a venture (issue #11 §3): stop it, keep the record. The move
-/// goes through the accounts repository, so the lifecycle state machine
+/// The venture page itself. Separated from the handler so the reads and
+/// the rendering can be read one at a time.
+#[allow(clippy::too_many_lines)]
+fn render_detail(
+    venture: &Venture,
+    identity: &str,
+    progress: &Progress,
+    connections: &[ConnectionRow],
+    health: &HealthVerdict,
+) -> String {
+    let catalog = cratefield_catalog::curated();
+    let on_count = venture
+        .module_set
+        .split('+')
+        .filter(|slug| !slug.is_empty())
+        .count();
+    // A venture sitting in `Provisioning` with a recorded failure is not a
+    // run in flight — it is a run that stopped. Treating the two the same
+    // locks the module set behind the very failure the operator came here
+    // to fix.
+    let stopped = !progress.error.is_empty();
+    let editable = match venture.status {
+        VentureStatus::Archived => false,
+        VentureStatus::Provisioning => stopped,
+        _ => true,
+    };
+
+    let overview = card(
+        "Overview",
+        None,
+        &format!(
+            "<dl class=\"kv\">\
+             <div><dt>Status</dt><dd>{status}</dd></div>\
+             <div><dt>Subdomain</dt><dd><em>{subdomain}</em></dd></div>\
+             <div><dt>Health</dt><dd>{dot}{health}</dd></div>\
+             <div><dt>Tenant</dt><dd><code>{tenant}</code></dd></div>\
+             </dl>",
+            status = status_chip(venture.status),
+            subdomain = escape(&venture.subdomain),
+            dot = health_dot(health),
+            health = escape(&health.label()),
+            tenant = escape(&venture.tenant_id),
+        ),
+        false,
+    );
+
+    let degraded_banner = if venture.status == VentureStatus::Degraded {
+        "<p class=\"dash__banner dash__banner--bad\"><strong>DEGRADED</strong> — this venture \
+         provisioned once and is now failing. The step that stopped and the message it \
+         recorded are below; nothing here is a guess.</p>"
+    } else {
+        ""
+    };
+
+    let module_tag = format!("{} of {}", on_count, catalog.modules.len());
+    let modules_card = card(
+        "Modules",
+        Some(&module_tag),
+        &render_modules(&catalog, venture, editable),
+        true,
+    );
+    let connections_card = card(
+        "Connections",
+        Some(&connections.len().to_string()),
+        &render_connections(connections),
+        true,
+    );
+    let actions = actions_row(venture, stopped);
+
+    let body = format!(
+        "{degraded_banner}\
+         <div class=\"dash__grid\">{overview}{provisioning}{modules}{connections}\
+         {secrets}{audit}</div>{actions}",
+        overview = overview,
+        provisioning = card("Provisioning", None, &render_progress(progress), false),
+        modules = modules_card,
+        connections = connections_card,
+        secrets = card(
+            "Secrets",
+            None,
+            "<p class=\"dash__note\">Secrets are shown as names and versions only, never \
+             values. No secret names are listed here yet: the control plane has no KMS \
+             wired — that wiring belongs to the live deploy pipeline — so this screen \
+             would have nothing truthful to list. It will not invent one.</p>",
+            false,
+        ),
+        audit = card(
+            "Audit trail",
+            None,
+            "<p class=\"dash__note\">Who touched what is not recorded per venture yet. The \
+             only audit table today is the console's allowlist audit, which is \
+             account-level, and the secrets log is tracing-only. This screen shows no \
+             audit rows rather than made-up ones.</p>",
+            false,
+        ),
+        actions = actions,
+    );
+
+    let nav_html = nav(&[
+        NavItem::to("Ventures", BASE),
+        NavItem::here("Overview", &format!("{BASE}/ventures/{}", venture.id)),
+        NavItem::unbuilt("Data browser"),
+        NavItem::unbuilt("Deploys"),
+        NavItem::unbuilt("Logs"),
+    ]);
+
+    let shell = format!(
+        "<p class=\"crumb\"><a href=\"{BASE}\">Ventures</a> / {slug}</p>\
+         <div class=\"page-h\"><h1>{slug}</h1>{status}</div>\
+         <p class=\"lede\">One backend: what it carries, how it got there, and what \
+         this screen does not know.</p>{frame}",
+        slug = escape(&venture.slug),
+        status = status_chip(venture.status),
+        frame = frame(&nav_html, "Overview", &body),
+    );
+
+    render(&Page {
+        title: &venture.slug,
+        signed_in_as: Some(identity),
+        body: &shell,
+    })
+}
+
+/// The row of things this screen can actually do to a venture: retry a
+/// stopped provisioning run, and archive it. One row, so they read as the
+/// two choices they are rather than as two unrelated widgets.
+fn actions_row(venture: &Venture, stopped: bool) -> String {
+    if venture.status == VentureStatus::Archived {
+        return String::from(
+            "<p class=\"dash__note\">This venture is archived and its record is kept. \
+             Archived is terminal: there is no route back to live.</p>",
+        );
+    }
+    let retry = if stopped {
+        format!(
+            "<form method=\"post\" action=\"{BASE}/ventures/{id}/reprovision\">\
+             <button class=\"btn\" type=\"submit\">Retry provisioning</button></form>",
+            id = escape(&venture.id),
+        )
+    } else {
+        String::new()
+    };
+    format!(
+        "<div class=\"dash__act\">{retry}\
+         <form method=\"post\" action=\"{BASE}/ventures/{id}/archive\">\
+         <button class=\"btn\" type=\"submit\">Archive</button></form></div>\
+         <p class=\"dash__note\">Archiving stops the venture and keeps the record. It does \
+         not yet shred the venture's keys before dropping its database — that is the \
+         offboarding path, and it is not wired.</p>",
+        id = escape(&venture.id),
+    )
+}
+
+/// The module set, as the catalogue rather than as the stored string.
+///
+/// The venture carries a `module_set` — `"cms+waitlist"` — which is a
+/// content key, not a list a person can act on. This renders the whole
+/// catalogue with the venture's own set ticked, so what is *available* is
+/// as visible as what is on, which is the difference between a screen that
+/// reports and a screen you can use.
+#[allow(clippy::format_push_string)] // the house idiom for HTML building
+fn render_modules(catalog: &Catalog, venture: &Venture, editable: bool) -> String {
+    let on: Vec<&str> = venture
+        .module_set
+        .split('+')
+        .filter(|s| !s.is_empty())
+        .collect();
+
+    let mut items = String::from("<div class=\"mods\">");
+    for module in &catalog.modules {
+        items.push_str(&render_module(
+            module,
+            on.contains(&module.slug.as_str()),
+            editable,
+        ));
+    }
+    // A venture can carry a module the catalogue no longer offers — a
+    // private module, or one withdrawn since. Saying so beats quietly
+    // dropping it from a list the operator is about to submit.
+    for slug in &on {
+        if !catalog.modules.iter().any(|m| m.slug == **slug) {
+            items.push_str(&format!(
+                "<label class=\"mod mod--on\"><input type=\"checkbox\" name=\"module\" \
+                 value=\"{slug}\" checked{disabled}><span>\
+                 <span class=\"mod__name\"><code>{slug}</code> \
+                 <span class=\"chip\">not in the catalogue</span></span>\
+                 <span class=\"mod__sum\">This venture carries it, and the curated \
+                 catalogue does not offer it. Unticking it removes it.</span></span></label>",
+                slug = escape(slug),
+                disabled = if editable { "" } else { " disabled" },
+            ));
+        }
+    }
+    items.push_str("</div>");
+
+    if !editable {
+        let why = if venture.status == VentureStatus::Archived {
+            "This venture is archived, so its module set is fixed."
+        } else {
+            "A provisioning run is in flight. The set cannot change under a run that is \
+             already building an artifact from it."
+        };
+        return format!("{items}<p class=\"dash__note\">{why}</p>");
+    }
+
+    format!(
+        "<form method=\"post\" action=\"{BASE}/ventures/{id}/modules\">{items}\
+         <div class=\"dash__act\">\
+         <button class=\"btn btn--primary\" type=\"submit\">Save and re-provision</button>\
+         <span class=\"dash__note\">The deployed artifact is a function of this set, so \
+         changing it re-provisions through the engine rather than editing a column. The \
+         run starts again at the first step, because a cached artifact built from the old \
+         set is the wrong artifact.</span></div></form>",
+        id = escape(&venture.id),
+    )
+}
+
+fn render_module(module: &CatalogModule, on: bool, editable: bool) -> String {
+    let core = module.tier == Tier::Core;
+    // A disabled checkbox submits nothing, so a core module needs a hidden
+    // field or saving would silently remove it.
+    let keep = if core && on {
+        format!(
+            "<input type=\"hidden\" name=\"module\" value=\"{}\">",
+            escape(&module.slug)
+        )
+    } else {
+        String::new()
+    };
+    let deps = if module.depends_on.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "<span class=\"chip\">needs {}</span>",
+            escape(&module.depends_on.join(", "))
+        )
+    };
+    format!(
+        "<label class=\"mod{on_class}{core_class}\">{keep}\
+         <input type=\"checkbox\" name=\"module\" value=\"{slug}\"{checked}{disabled}>\
+         <span><span class=\"mod__name\">{name} <code>{slug}</code>{core_chip}{deps}</span>\
+         <span class=\"mod__sum\">{summary}</span></span></label>",
+        on_class = if on { " mod--on" } else { "" },
+        core_class = if core { " mod--core" } else { "" },
+        slug = escape(&module.slug),
+        name = escape(&module.name),
+        summary = escape(&module.summary),
+        checked = if on { " checked" } else { "" },
+        disabled = if core || !editable { " disabled" } else { "" },
+        core_chip = if core {
+            "<span class=\"chip\">always on</span>"
+        } else {
+            ""
+        },
+        deps = deps,
+    )
+}
+
 /// refuses what it refuses, and the row stays.
 #[allow(clippy::result_large_err)]
 async fn archive(
@@ -595,6 +877,222 @@ async fn archive(
 // Small helpers (shared shape with the console)
 // ---------------------------------------------------------------------------
 
+/// Changes a venture's module set, and re-provisions it (issue #11 §2).
+///
+/// The deployed artifact is a **function of the module set** (ADR 0009), so
+/// writing a new set into the column and stopping there would leave the
+/// database claiming a venture carries a module its running Worker has
+/// never heard of. The set is therefore resolved through the catalogue,
+/// recorded, and then the provisioning engine is run.
+///
+/// Two things that are easy to get wrong and are not:
+///
+/// 1. **The recorded progress is cleared first.** `Engine::provision`
+///    resumes from the step after the last one that completed, so a `Live`
+///    venture — every step done — would be marked live again without
+///    rebuilding anything. A module change invalidates the artifact, so the
+///    run has to start at the first step.
+/// 2. **The engine runs for real.** There is no [`Unwired`] deployer's
+///    worth of pretending: the first step fails, the failure is recorded
+///    against the venture with its reason, and the screen shows it. The day
+///    a real deployer is passed here instead, nothing else changes.
+///
+/// [`Unwired`]: cratefield_provisioning::Unwired
+async fn set_modules(
+    State(state): State<Arc<DashboardState>>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Form(form): Form<Vec<(String, String)>>,
+) -> Response {
+    let ctx = &state.ctx;
+    if let Err(redirect) = guard(ctx, &headers) {
+        return redirect;
+    }
+    let session = current_session(ctx, &headers).expect("guard proved a session");
+    let (account, repo) = match account_of(ctx, &session.account_id).await {
+        Ok(pair) => pair,
+        Err(response) => return response,
+    };
+    let Some(db) = ctx.ports.db.clone() else {
+        return internal("db port unavailable");
+    };
+    let venture = match repo.venture_for(&account.id, &id).await {
+        Ok(Some(venture)) => venture,
+        Ok(None) => return (StatusCode::NOT_FOUND, "no such venture").into_response(),
+        Err(err) => {
+            tracing::error!(error = %err, "venture lookup failed");
+            return internal("could not load the venture");
+        }
+    };
+    let stopped = match progress_of(db.as_ref(), &venture.id).await {
+        Ok(progress) => !progress.error.is_empty(),
+        Err(err) => {
+            tracing::error!(error = %err, "progress read failed");
+            return internal("could not read the provisioning progress");
+        }
+    };
+    let editable = match venture.status {
+        VentureStatus::Archived => false,
+        // A stopped run is not a run in flight; see `venture_detail`.
+        VentureStatus::Provisioning => stopped,
+        _ => true,
+    };
+    if !editable {
+        return (
+            StatusCode::CONFLICT,
+            "the module set cannot change while the venture is archived or a provisioning \
+             run is in flight",
+        )
+            .into_response();
+    }
+
+    let chosen: Vec<String> = form
+        .into_iter()
+        .filter(|(field, _)| field == "module")
+        .map(|(_, slug)| slug)
+        .collect();
+
+    // The catalogue resolves: it orders dependencies before dependants and
+    // refuses a slug it does not offer, so a hand-made POST cannot put an
+    // unknown module into a venture's set.
+    let catalog = cratefield_catalog::curated();
+    let chosen: Vec<&str> = chosen.iter().map(String::as_str).collect();
+    let resolved = match catalog.resolve(&chosen) {
+        Ok(set) => set,
+        Err(err) => return (StatusCode::BAD_REQUEST, err.to_string()).into_response(),
+    };
+    let module_set = resolved.slugs().join("+");
+
+    // Compare the *sets*, not the strings. `resolve` orders dependencies
+    // before dependants and is otherwise order-preserving, so ticking the
+    // same modules in a different order yields a different content key for
+    // the same selection — and comparing strings would tear down a working
+    // venture to rebuild the artifact it already has.
+    if same_set(&module_set, &venture.module_set) {
+        return Redirect::to(&format!("{BASE}/ventures/{}", venture.id)).into_response();
+    }
+
+    let now = now_rfc3339(ctx);
+    if let Err(err) = repo
+        .set_venture_modules(&account.id, &venture.id, &module_set, &now)
+        .await
+    {
+        tracing::error!(error = %err, "module set write failed");
+        return internal("could not record the module set");
+    }
+
+    // See (1) above: the artifact is a function of the set, so a cached one
+    // built from the old set is the wrong artifact and the run must not
+    // resume past the step that builds it.
+    if let Err(err) = db
+        .execute(&Statement::with_values(
+            "DELETE FROM provision_progress WHERE venture_id = ?",
+            vec![text(&venture.id)],
+        ))
+        .await
+    {
+        tracing::error!(error = %err, "could not clear the provisioning progress");
+        return internal("could not reset the provisioning progress");
+    }
+
+    let venture = Venture {
+        module_set: module_set.clone(),
+        ..venture
+    };
+    let engine = cratefield_provisioning::Engine::new(db);
+    match engine
+        .provision(&venture, &cratefield_provisioning::Unwired, &now)
+        .await
+    {
+        Ok(_) | Err(cratefield_provisioning::ProvisionError::Step { .. }) => {
+            // A step failure is a recorded, visible outcome, not a 500: the
+            // engine wrote the step and the message against the venture and
+            // the detail page renders them. Sending the operator to that
+            // page is the answer.
+            Redirect::to(&format!("{BASE}/ventures/{}", venture.id)).into_response()
+        }
+        Err(err) => {
+            tracing::error!(error = %err, "re-provisioning failed before it could run");
+            internal("could not start re-provisioning")
+        }
+    }
+}
+
+/// Resumes a stopped provisioning run (issue #11 §2).
+///
+/// Unlike [`set_modules`] this changes nothing about the venture: the
+/// engine picks up from the step after the last one that completed, which
+/// is exactly what its own documentation promises a retry does. With no
+/// deployer wired it stops again in the same place, and the recorded reason
+/// is refreshed rather than duplicated.
+async fn reprovision(
+    State(state): State<Arc<DashboardState>>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Response {
+    let ctx = &state.ctx;
+    if let Err(redirect) = guard(ctx, &headers) {
+        return redirect;
+    }
+    let session = current_session(ctx, &headers).expect("guard proved a session");
+    let (account, repo) = match account_of(ctx, &session.account_id).await {
+        Ok(pair) => pair,
+        Err(response) => return response,
+    };
+    let Some(db) = ctx.ports.db.clone() else {
+        return internal("db port unavailable");
+    };
+    let venture = match repo.venture_for(&account.id, &id).await {
+        Ok(Some(venture)) => venture,
+        Ok(None) => return (StatusCode::NOT_FOUND, "no such venture").into_response(),
+        Err(err) => {
+            tracing::error!(error = %err, "venture lookup failed");
+            return internal("could not load the venture");
+        }
+    };
+    if venture.status == VentureStatus::Archived {
+        return (
+            StatusCode::CONFLICT,
+            "an archived venture is not provisioned again",
+        )
+            .into_response();
+    }
+
+    let now = now_rfc3339(ctx);
+    let engine = cratefield_provisioning::Engine::new(db);
+    match engine
+        .provision(&venture, &cratefield_provisioning::Unwired, &now)
+        .await
+    {
+        Ok(_) | Err(cratefield_provisioning::ProvisionError::Step { .. }) => {
+            Redirect::to(&format!("{BASE}/ventures/{}", venture.id)).into_response()
+        }
+        Err(err) => {
+            tracing::error!(error = %err, "re-provisioning failed before it could run");
+            internal("could not start re-provisioning")
+        }
+    }
+}
+
+/// Whether two module-set content keys name the same selection.
+///
+/// A key is `"a+b+c"`, ordered so a module's dependencies precede it. Two
+/// keys with the same members in a different order describe the same
+/// venture, and the artifact built from either carries the same modules.
+fn same_set(left: &str, right: &str) -> bool {
+    let members = |key: &str| {
+        let mut parts: Vec<String> = key
+            .split('+')
+            .filter(|slug| !slug.is_empty())
+            .map(str::to_owned)
+            .collect();
+        parts.sort_unstable();
+        parts.dedup();
+        parts
+    };
+    members(left) == members(right)
+}
+
 fn ulid(ctx: &ModuleContext) -> String {
     ctx.ports
         .id_gen
@@ -618,21 +1116,60 @@ fn internal(detail: &str) -> Response {
     (StatusCode::INTERNAL_SERVER_ERROR, detail.to_owned()).into_response()
 }
 
-/// Escapes text for inclusion in HTML. Every dynamic value on the page —
-/// venture slugs, subdomains, transport messages — goes through this.
-fn escape(text: &str) -> String {
-    text.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
+// ---------------------------------------------------------------------------
+// Chrome: the frame every screen renders inside
+// ---------------------------------------------------------------------------
+
+/// The status chip: the one place a lifecycle status becomes a colour.
+/// `Degraded` is the only one that shouts, because it is the only one the
+/// operator has to do something about.
+///
+/// It shouts **in the markup**, not only in the stylesheet. The chips are
+/// uppercased by CSS, so every other label can be written in lower case and
+/// still read as small caps — but a rule in a stylesheet is not something a
+/// test, a screen reader, or a page saved to disk can see. The word this
+/// screen exists to make unmissable is spelled out.
+fn status_chip(status: VentureStatus) -> String {
+    let (class, label) = match status {
+        VentureStatus::Draft => ("chip--archived", "draft"),
+        VentureStatus::Provisioning => ("chip--working", "provisioning"),
+        VentureStatus::Live => ("chip--live", "live"),
+        VentureStatus::Degraded => ("chip--degraded", "DEGRADED"),
+        VentureStatus::Archived => ("chip--archived", "archived"),
+    };
+    format!("<span class=\"chip {class}\">{label}</span>")
 }
 
-fn page(title: &str, body_html: &str) -> String {
+/// The dot beside a health verdict. Answering is the accent, a failure is
+/// red, and a venture nothing should be answering for is the inert grey —
+/// never the same as "we have not looked yet", because the dashboard has
+/// no such state.
+fn health_dot(health: &HealthVerdict) -> &'static str {
+    match health {
+        HealthVerdict::Answering => "<span class=\"dash__dot dash__dot--live\"></span>",
+        HealthVerdict::Failing(_) | HealthVerdict::Unreachable(_) => {
+            "<span class=\"dash__dot dash__dot--bad\"></span>"
+        }
+        HealthVerdict::NotRunning => "<span class=\"dash__dot\"></span>",
+    }
+}
+
+/// The dashboard frame: the left navigation and the screen beside it.
+fn frame(nav_html: &str, crumb: &str, body: &str) -> String {
     format!(
-        "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">\
-         <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\
-         <title>{}</title></head><body><main>{body_html}</main></body></html>",
-        escape(title)
+        "<div class=\"dash\"><div class=\"dash__body\">{nav_html}         <div class=\"dash__main\"><p class=\"dash__crumb\">{crumb}</p>{body}</div>         </div></div>"
+    )
+}
+
+/// A panel.
+fn card(title: &str, tag: Option<&str>, body: &str, wide: bool) -> String {
+    let tag = tag.map_or_else(String::new, |t| {
+        format!(" <span class=\"dash__tag\">{}</span>", escape(t))
+    });
+    format!(
+        "<div class=\"dash__card{wide}\"><p class=\"dash__card-h\">{title}{tag}</p>{body}</div>",
+        wide = if wide { " dash__card--wide" } else { "" },
+        title = escape(title),
     )
 }
 
@@ -878,6 +1415,327 @@ mod tests {
                 .expect("live");
         }
         kit
+    }
+
+    /// Posts a module selection as the form does: one `module` field per
+    /// ticked box.
+    async fn post_modules(kit: &TestHarness, venture: &str, modules: &[&str]) -> Reply {
+        let body = modules
+            .iter()
+            .map(|slug| format!("module={slug}"))
+            .collect::<Vec<_>>()
+            .join("&");
+        let request = HttpRequest::builder()
+            .method(Method::POST)
+            .uri(format!("{BASE}/ventures/{venture}/modules"))
+            .header(header::COOKIE, cookie(kit))
+            .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+            .body(axum::body::Body::from(body))
+            .expect("request");
+        let response = kit
+            .router
+            .clone()
+            .oneshot(request)
+            .await
+            .expect("router answers");
+        let (parts, body) = response.into_parts();
+        let bytes = axum::body::to_bytes(body, 1024 * 1024).await.expect("body");
+        Reply {
+            status: parts.status,
+            location: parts
+                .headers
+                .get(header::LOCATION)
+                .map(|value| value.to_str().unwrap().to_owned())
+                .unwrap_or_default(),
+            body: String::from_utf8(bytes.to_vec()).expect("utf-8"),
+        }
+    }
+
+    /// Marks every provisioning step done, which is what a `Live` venture
+    /// looks like to the engine.
+    async fn record_fully_provisioned(kit: &TestHarness) {
+        kit.db
+            .execute(&Statement::with_values(
+                "INSERT INTO provision_progress (venture_id, last_step, error, updated_at) \
+                 VALUES (?, ?, ?, ?)",
+                vec![text("v1"), text("health"), text(""), text("t3")],
+            ))
+            .await
+            .expect("progress row");
+    }
+
+    async fn module_set_of(kit: &TestHarness) -> String {
+        Repository::new(kit.db.clone())
+            .venture_for("acc_1", "v1")
+            .await
+            .expect("read")
+            .expect("venture")
+            .module_set
+    }
+
+    #[pollster::test]
+    async fn the_detail_page_offers_the_catalogue_not_just_what_is_installed() {
+        let kit = seeded(VentureStatus::Live).await;
+        let reply = send(
+            &kit,
+            Method::GET,
+            &format!("{BASE}/ventures/v1"),
+            Some(&cookie(&kit)),
+        )
+        .await;
+        assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
+
+        // The seeded venture carries cms+waitlist. Every other module the
+        // catalogue offers has to be on the page too, or the screen is a
+        // report rather than something you can act on.
+        let catalog = cratefield_catalog::curated();
+        assert!(catalog.modules.len() > 2, "the catalogue is the point");
+        for module in &catalog.modules {
+            assert!(
+                reply.body.contains(&format!("value=\"{}\"", module.slug)),
+                "{} is in the catalogue and not on the page: {}",
+                module.slug,
+                reply.body
+            );
+        }
+        // And the two it has are the ticked ones.
+        assert!(
+            reply.body.contains("value=\"cms\" checked"),
+            "{}",
+            reply.body
+        );
+        assert!(
+            reply.body.contains("value=\"waitlist\" checked"),
+            "{}",
+            reply.body
+        );
+        assert!(
+            !reply.body.contains("value=\"privacy\" checked"),
+            "privacy is not installed and must not read as installed: {}",
+            reply.body
+        );
+    }
+
+    #[pollster::test]
+    async fn changing_the_module_set_re_provisions_from_the_first_step() {
+        let kit = seeded(VentureStatus::Live).await;
+        record_fully_provisioned(&kit).await;
+
+        let reply = post_modules(&kit, "v1", &["cms", "waitlist", "privacy"]).await;
+        assert_eq!(reply.status, StatusCode::SEE_OTHER, "{}", reply.body);
+
+        // `resolve` orders dependencies before dependants and is otherwise
+        // order-preserving, so the key follows the order ticked.
+        assert!(
+            same_set(&module_set_of(&kit).await, "cms+waitlist+privacy"),
+            "got {}",
+            module_set_of(&kit).await
+        );
+
+        // The engine must NOT have seen a fully-provisioned venture and
+        // waved it through: the artifact is a function of the module set,
+        // so the run restarts at the first step. With no deployer wired
+        // that step fails, and the failure is what is recorded.
+        let progress = progress_of(kit.db.as_ref(), "v1").await.expect("progress");
+        assert_eq!(
+            progress.last_step, "",
+            "a module change must not resume past the artifact step: {progress:?}"
+        );
+        assert!(
+            progress.error.contains("no deployer is wired"),
+            "the engine should have run and stopped: {progress:?}"
+        );
+
+        // And the venture is no longer claiming to be live with an
+        // artifact that does not carry the module just added.
+        let venture = Repository::new(kit.db.clone())
+            .venture_for("acc_1", "v1")
+            .await
+            .expect("read")
+            .expect("venture");
+        assert_ne!(
+            venture.status,
+            VentureStatus::Live,
+            "live would mean the running worker carries privacy, and it does not"
+        );
+    }
+
+    #[pollster::test]
+    async fn the_failed_run_is_shown_on_the_page_rather_than_being_a_500() {
+        let kit = seeded(VentureStatus::Live).await;
+        post_modules(&kit, "v1", &["cms"]).await;
+
+        let reply = send(
+            &kit,
+            Method::GET,
+            &format!("{BASE}/ventures/v1"),
+            Some(&cookie(&kit)),
+        )
+        .await;
+        assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
+        assert!(
+            reply.body.contains("no deployer is wired"),
+            "the recorded reason belongs on the screen: {}",
+            reply.body
+        );
+    }
+
+    #[pollster::test]
+    async fn an_unchanged_selection_does_not_tear_down_a_working_venture() {
+        let kit = seeded(VentureStatus::Live).await;
+        record_fully_provisioned(&kit).await;
+
+        // Ticked in the opposite order to the stored key. Same selection.
+        let reply = post_modules(&kit, "v1", &["waitlist", "cms"]).await;
+        assert_eq!(reply.status, StatusCode::SEE_OTHER, "{}", reply.body);
+
+        // Nothing was re-provisioned: a live venture is not torn down to
+        // rebuild the artifact it already has.
+        let progress = progress_of(kit.db.as_ref(), "v1").await.expect("progress");
+        assert_eq!(progress.last_step, "health", "{progress:?}");
+        assert_eq!(progress.error, "", "{progress:?}");
+    }
+
+    #[pollster::test]
+    async fn a_module_the_catalogue_does_not_offer_is_refused() {
+        let kit = seeded(VentureStatus::Live).await;
+        let reply = post_modules(&kit, "v1", &["cms", "mining-rig"]).await;
+        assert_eq!(reply.status, StatusCode::BAD_REQUEST, "{}", reply.body);
+        assert_eq!(
+            module_set_of(&kit).await,
+            "cms+waitlist",
+            "a refused post must change nothing"
+        );
+    }
+
+    #[pollster::test]
+    async fn an_archived_venture_module_set_is_fixed() {
+        let kit = seeded(VentureStatus::Archived).await;
+
+        let page = send(
+            &kit,
+            Method::GET,
+            &format!("{BASE}/ventures/v1"),
+            Some(&cookie(&kit)),
+        )
+        .await;
+        assert!(
+            !page.body.contains("Save and re-provision"),
+            "an archived venture offers no editor: {}",
+            page.body
+        );
+
+        let reply = post_modules(&kit, "v1", &["cms"]).await;
+        assert_eq!(reply.status, StatusCode::CONFLICT, "{}", reply.body);
+        assert_eq!(module_set_of(&kit).await, "cms+waitlist");
+    }
+
+    #[pollster::test]
+    async fn one_account_cannot_change_anothers_module_set() {
+        let kit = seeded(VentureStatus::Live).await;
+        let repo = Repository::new(kit.db.clone());
+        repo.account_for_login("b@x.co", "B", "acc_2", "t0")
+            .await
+            .expect("account");
+        let token = issue_session(kit.signer.as_ref(), "b@x.co", NOW, DEFAULT_TTL_SECS);
+
+        let request = HttpRequest::builder()
+            .method(Method::POST)
+            .uri(format!("{BASE}/ventures/v1/modules"))
+            .header(header::COOKIE, format!("cf_session={token}"))
+            .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+            .body(axum::body::Body::from("module=cms"))
+            .expect("request");
+        let response = kit
+            .router
+            .clone()
+            .oneshot(request)
+            .await
+            .expect("router answers");
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        assert_eq!(module_set_of(&kit).await, "cms+waitlist");
+    }
+
+    #[pollster::test]
+    async fn a_stopped_run_does_not_lock_the_module_set_behind_its_own_failure() {
+        // The trap this exists for: the engine leaves a failed run in
+        // `Provisioning`, and treating that as "a run is in flight" would
+        // mean one failed save locks a venture's module set forever — with
+        // no deployer wired, that is *every* save.
+        let kit = seeded(VentureStatus::Live).await;
+        post_modules(&kit, "v1", &["cms"]).await;
+
+        let venture = Repository::new(kit.db.clone())
+            .venture_for("acc_1", "v1")
+            .await
+            .expect("read")
+            .expect("venture");
+        assert_eq!(
+            venture.status,
+            VentureStatus::Provisioning,
+            "the run stopped"
+        );
+
+        let page = send(
+            &kit,
+            Method::GET,
+            &format!("{BASE}/ventures/v1"),
+            Some(&cookie(&kit)),
+        )
+        .await;
+        assert!(
+            page.body.contains("Save and re-provision"),
+            "the set must still be editable: {}",
+            page.body
+        );
+        assert!(
+            page.body.contains("Retry provisioning"),
+            "a stopped run offers a retry: {}",
+            page.body
+        );
+        // The sentence, not the empty <code></code> a first-step failure
+        // used to render.
+        assert!(
+            page.body.contains("stopped</strong> on its first step"),
+            "{}",
+            page.body
+        );
+
+        // And a second change really does go through.
+        let reply = post_modules(&kit, "v1", &["cms", "waitlist", "notifications"]).await;
+        assert_eq!(reply.status, StatusCode::SEE_OTHER, "{}", reply.body);
+        assert!(same_set(
+            &module_set_of(&kit).await,
+            "cms+waitlist+notifications"
+        ));
+    }
+
+    #[pollster::test]
+    async fn a_retry_resumes_the_run_without_changing_the_venture() {
+        let kit = seeded(VentureStatus::Live).await;
+        post_modules(&kit, "v1", &["cms"]).await;
+        let before = module_set_of(&kit).await;
+
+        let request = HttpRequest::builder()
+            .method(Method::POST)
+            .uri(format!("{BASE}/ventures/v1/reprovision"))
+            .header(header::COOKIE, cookie(&kit))
+            .body(axum::body::Body::empty())
+            .expect("request");
+        let response = kit
+            .router
+            .clone()
+            .oneshot(request)
+            .await
+            .expect("router answers");
+        assert_eq!(response.status(), StatusCode::SEE_OTHER);
+
+        assert_eq!(module_set_of(&kit).await, before, "a retry changes nothing");
+        let progress = progress_of(kit.db.as_ref(), "v1").await.expect("progress");
+        assert!(
+            progress.error.contains("no deployer is wired"),
+            "{progress:?}"
+        );
     }
 
     #[pollster::test]

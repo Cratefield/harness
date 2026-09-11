@@ -17,6 +17,11 @@ cratefield-accounts = { path = "../control-plane-accounts" }
 cratefield-connections = { path = "../control-plane-connections" }
 cratefield-console = { path = "../control-plane-console" }
 cratefield-provisioning = { path = "../control-plane-provisioning" }
+# The module set the screen offers is the catalogue's, not a free-text box.
+cratefield-catalog = { path = "../control-plane-catalog" }
+# The page shell, the stylesheet and the escaping every control-plane
+# screen shares.
+cratefield-chrome = { workspace = true }
 axum = { workspace = true }
 http = { workspace = true }
 sea-query = { workspace = true }

@@ -1,0 +1,267 @@
+/* The control plane's own chrome.
+ *
+ * The tokens and the component vocabulary are cratefield.com's, so the
+ * product a customer signs in to looks like the site they signed up from:
+ * the same ground, the same one accent, the same mono-uppercase labels,
+ * the same `.dash__*` names as the preview at /dashboard/. Ported, not
+ * imported — the site is a separate repository and a static build, and a
+ * Worker cannot link its stylesheet.
+ *
+ * This is NOT `cratefield-ui`'s `cf.css`. That one is venture-facing and
+ * deliberately neutral: it renders a customer's own signup form inside a
+ * customer's own site, and must not drag Cratefield's colours in with it.
+ * This one is Cratefield's own surface and is branded on purpose.
+ */
+
+:root {
+  /* Ground and panels */
+  --ground: #0a0a0b;
+  --panel: #0e0e10;
+  --panel-hi: #141416;
+
+  /* Hairlines. --rule is the page divider, --edge the component border. */
+  --rule: #1c1c1f;
+  --edge: #2a2a2e;
+  --edge-hi: #3a3a3f;
+
+  /* Ink */
+  --ink: #edebe6;
+  --body: #a9a8a5;
+  --muted: #8a8a8e;
+  --dim: #55555a;
+
+  /* One accent. Cold signal blue; deliberately not green. */
+  --accent: #4c6fff;
+  --accent-hi: #8fa3ff;
+  --amber: #ffb020;
+  --red: #ff6b5a;
+
+  --shell: 1180px;
+  --gutter: 24px;
+
+  --sans: Archivo, "Helvetica Neue", Helvetica, Arial, system-ui, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; color-scheme: dark; }
+
+body {
+  margin: 0;
+  background: var(--ground);
+  color: var(--body);
+  font-family: var(--sans);
+  font-size: 16px;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+}
+
+a { color: var(--accent); text-decoration: none; }
+a:hover { color: var(--accent-hi); text-decoration: underline; }
+
+.skip {
+  position: absolute; left: -9999px;
+  background: var(--panel); color: var(--ink); padding: 10px 14px; border: 1px solid var(--edge);
+}
+.skip:focus { left: 12px; top: 12px; z-index: 10; }
+
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* --- Masthead ---------------------------------------------------------- */
+
+.masthead { border-bottom: 1px solid var(--rule); background: var(--panel); }
+
+.masthead__inner {
+  max-width: var(--shell); margin: 0 auto; padding: 0 var(--gutter);
+  height: 56px; display: flex; align-items: center; gap: 20px;
+}
+
+.wordmark { display: flex; align-items: center; gap: 10px; color: var(--ink); }
+.wordmark:hover { text-decoration: none; color: var(--ink); }
+
+.wordmark__grid {
+  display: grid; grid-template-columns: repeat(3, 4px); gap: 2px;
+}
+.wordmark__grid i { display: block; width: 4px; height: 4px; background: var(--edge-hi); }
+.wordmark__grid i:nth-child(1),
+.wordmark__grid i:nth-child(5),
+.wordmark__grid i:nth-child(9) { background: var(--accent); }
+
+.wordmark__text {
+  font-family: var(--mono); font-size: 12px; letter-spacing: .18em; color: var(--ink);
+}
+
+.masthead__who {
+  margin-left: auto; display: flex; align-items: center; gap: 16px;
+  font-family: var(--mono); font-size: 11px; color: var(--dim);
+}
+.masthead__who strong { color: var(--muted); font-weight: 400; }
+
+/* --- Shell ------------------------------------------------------------- */
+
+.shell { max-width: var(--shell); margin: 0 auto; padding: 28px var(--gutter) 64px; }
+
+.page-h {
+  display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap;
+  margin: 0 0 4px;
+}
+.page-h h1 {
+  font-size: 26px; line-height: 1.2; color: var(--ink); font-weight: 600; margin: 0;
+  letter-spacing: -.01em;
+}
+.lede { color: var(--muted); font-size: 14px; margin: 0 0 24px; max-width: 68ch; }
+
+.crumb {
+  font-family: var(--mono); font-size: 11px; letter-spacing: .12em; text-transform: uppercase;
+  color: var(--muted); margin: 0 0 14px;
+}
+.crumb a { color: var(--muted); }
+.crumb a:hover { color: var(--ink); }
+
+/* --- The dashboard frame ----------------------------------------------- */
+
+.dash { border: 1px solid var(--edge); background: var(--panel); }
+
+.dash__body { display: grid; grid-template-columns: 190px 1fr; }
+
+.dash__nav {
+  list-style: none; margin: 0; padding: 16px 0; border-right: 1px solid var(--edge);
+  font-family: var(--mono); font-size: 12px;
+}
+
+/* Direct children only. `.dash__nav span` also matches the status dot
+   *inside* each item, which turned a 5px circle into a padded flex box
+   the width of the row. */
+.dash__nav > li > a, .dash__nav > li > span {
+  display: flex; align-items: center; gap: 10px;
+  padding: 9px 18px; color: var(--body);
+}
+.dash__nav a:hover { color: var(--ink); text-decoration: none; background: var(--panel-hi); }
+.dash__nav > li > .is-on { color: var(--ink); background: var(--panel-hi); box-shadow: inset 2px 0 0 var(--accent); }
+.dash__nav > li > .is-off { opacity: .38; cursor: default; }
+
+.dash__dot { width: 5px; height: 5px; flex: none; border-radius: 50%; background: currentColor; opacity: .45; }
+.dash__dot--live { background: var(--accent); opacity: 1; }
+.dash__dot--warn { background: var(--amber); opacity: 1; }
+.dash__dot--bad { background: var(--red); opacity: 1; }
+
+.dash__main { padding: 20px 22px 26px; min-width: 0; }
+
+/* --- Cards and rows ---------------------------------------------------- */
+
+.dash__grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+
+.dash__card { border: 1px solid var(--edge); background: var(--ground); padding: 16px 18px; }
+.dash__card--wide { grid-column: 1 / -1; }
+
+.dash__card-h {
+  font-family: var(--mono); font-size: 11px; letter-spacing: .1em; text-transform: uppercase;
+  color: var(--ink); margin: 0 0 12px; display: flex; align-items: center; gap: 8px;
+}
+
+.dash__tag { border: 1px solid var(--edge); padding: 1px 6px; color: var(--muted); letter-spacing: 0; }
+
+.dash__row {
+  display: flex; align-items: center; gap: 9px;
+  font-family: var(--mono); font-size: 12px; color: var(--body); margin: 0 0 8px;
+}
+.dash__row:last-child { margin-bottom: 0; }
+.dash__meta { margin-left: auto; color: var(--dim); }
+
+.dash__note { font-size: 12.5px; line-height: 1.55; color: var(--muted); margin: 12px 0 0; }
+.dash__note:first-child { margin-top: 0; }
+
+.dash__banner {
+  font-size: 12.5px; line-height: 1.55; color: var(--body);
+  border: 1px solid var(--edge); background: var(--ground); padding: 11px 14px; margin: 0 0 16px;
+}
+.dash__banner .chip { margin-right: 8px; vertical-align: 1px; }
+.dash__banner--bad { border-color: #4a2420; background: #17100f; color: var(--ink); }
+
+/* --- The venture list -------------------------------------------------- */
+
+.dash__list { border: 1px solid var(--edge); background: var(--ground); }
+
+.dash__lrow {
+  display: grid; grid-template-columns: 1.2fr 1.5fr .8fr 2fr; gap: 12px; align-items: center;
+  padding: 11px 14px; border-top: 1px solid var(--rule);
+  font-family: var(--mono); font-size: 12px; color: var(--body);
+}
+.dash__lrow:first-child { border-top: 0; }
+.dash__lrow--head {
+  color: var(--muted); background: var(--panel-hi); font-size: 11px;
+  letter-spacing: .06em; text-transform: uppercase;
+}
+.dash__lrow .dash__dot { margin-right: 8px; vertical-align: 1px; display: inline-block; }
+.dash__lrow em { font-style: normal; color: var(--dim); }
+
+.dash__empty { padding: 28px 14px; text-align: center; color: var(--muted); font-size: 13px; }
+
+/* --- Status ------------------------------------------------------------ */
+
+.chip {
+  display: inline-block; font-family: var(--mono); font-size: 10px;
+  letter-spacing: .1em; text-transform: uppercase;
+  border: 1px solid var(--edge); padding: 2px 7px; color: var(--muted);
+}
+.chip--live { border-color: #2b3d7a; color: var(--accent-hi); }
+.chip--degraded { border-color: #6a4a12; color: var(--amber); }
+.chip--working { border-color: var(--edge-hi); color: var(--body); }
+.chip--archived { color: var(--dim); }
+
+/* --- Actions ----------------------------------------------------------- */
+
+.dash__act { display: flex; gap: 8px; flex-wrap: wrap; margin: 16px 0 0; align-items: center; }
+
+.btn {
+  display: inline-block; font-family: var(--mono); font-size: 11px;
+  letter-spacing: .06em; text-transform: uppercase;
+  border: 1px solid var(--edge); background: none; color: var(--body);
+  padding: 8px 14px; cursor: pointer; white-space: nowrap;
+}
+.btn:hover { color: var(--ink); border-color: var(--edge-hi); text-decoration: none; }
+.btn--primary { border-color: var(--accent); color: var(--accent-hi); }
+.btn--primary:hover { background: var(--accent); color: #fff; border-color: var(--accent); }
+.btn[disabled], .btn[aria-disabled="true"] { opacity: .4; cursor: not-allowed; }
+.btn[disabled]:hover, .btn[aria-disabled="true"]:hover { color: var(--body); border-color: var(--edge); background: none; }
+
+/* --- The module picker ------------------------------------------------- */
+
+.mods { display: grid; gap: 8px; margin: 0; }
+
+.mod {
+  display: grid; grid-template-columns: auto 1fr; gap: 12px; align-items: start;
+  border: 1px solid var(--edge); background: var(--panel); padding: 12px 14px;
+}
+.mod:hover { border-color: var(--edge-hi); }
+.mod input { margin: 3px 0 0; accent-color: var(--accent); width: 14px; height: 14px; }
+.mod__name {
+  font-family: var(--mono); font-size: 12px; color: var(--ink);
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+}
+.mod__sum { font-size: 12.5px; color: var(--muted); margin: 4px 0 0; line-height: 1.5; }
+.mod--on { border-color: #2b3d7a; }
+.mod--core input { pointer-events: none; }
+
+/* --- Definition rows --------------------------------------------------- */
+
+.kv { margin: 0; font-family: var(--mono); font-size: 12px; }
+.kv div { display: grid; grid-template-columns: 130px 1fr; gap: 12px; padding: 6px 0; border-top: 1px solid var(--rule); }
+.kv div:first-child { border-top: 0; }
+.kv dt { color: var(--dim); }
+.kv dd { margin: 0; color: var(--body); word-break: break-word; }
+
+code { font-family: var(--mono); font-size: .92em; color: var(--ink); }
+
+/* --- Narrow ------------------------------------------------------------ */
+
+@media (max-width: 860px) {
+  .dash__body { grid-template-columns: 1fr; }
+  .dash__nav { border-right: 0; border-bottom: 1px solid var(--edge); display: flex; flex-wrap: wrap; padding: 8px; }
+  .dash__nav > li > a, .dash__nav > li > span { padding: 7px 12px; }
+  .dash__nav > li > .is-on { box-shadow: inset 0 -2px 0 var(--accent); }
+  .dash__grid { grid-template-columns: 1fr; }
+  .dash__lrow { grid-template-columns: 1fr; gap: 4px; }
+  .dash__lrow--head { display: none; }
+  .kv div { grid-template-columns: 1fr; gap: 2px; }
+}

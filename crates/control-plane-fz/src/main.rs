@@ -25,6 +25,7 @@ fn harness() -> Harness {
                 .public_url("https://app.cratefield.com")
                 .cors_origins(["https://app.cratefield.com"]),
         )
+        .module(cratefield_chrome::Chrome)
         .module(cratefield_console::Console)
         .module(cratefield_dashboard::Dashboard)
         .runtime(AllPorts)

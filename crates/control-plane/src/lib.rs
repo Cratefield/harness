@@ -34,6 +34,10 @@ fn instance() -> &'static (Harness, Cloudflare) {
             // The console (#3): session guard, login skeleton, operator
             // allowlist. More modules land with the wizard (#8) and dashboard
             // (#11).
+            // The shared page chrome (the stylesheet every screen links).
+            // Mounted first so it is obvious that it is the frame, not a
+            // feature.
+            .module(cratefield_chrome::Chrome)
             .module(cratefield_console::Console)
             // The account dashboard (#11): ventures, health verdicts,
             // connections, archiving. Read-only except archiving; see

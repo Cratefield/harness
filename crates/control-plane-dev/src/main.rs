@@ -63,6 +63,7 @@ async fn main() {
                     .public_url("http://127.0.0.1:8787")
                     .cors_origins(["http://127.0.0.1:8787"]),
             )
+            .module(cratefield_chrome::Chrome)
             .module(cratefield_console::Console)
             .module(cratefield_dashboard::Dashboard)
             .runtime(Native::new().db_arc(Arc::clone(&db)))
