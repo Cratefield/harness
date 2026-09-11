@@ -12,6 +12,8 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
+# The page shell and stylesheet every control-plane screen shares.
+cratefield-chrome = { workspace = true }
 cratefield-core = { workspace = true }
 cratefield-access = { path = "../control-plane-access" }
 cratefield-accounts = { path = "../control-plane-accounts" }

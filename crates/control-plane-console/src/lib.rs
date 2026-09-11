@@ -219,31 +219,67 @@ async fn home(State(state): State<Arc<ConsoleState>>, headers: HeaderMap) -> Res
 
     let mut list = String::new();
     if ventures.is_empty() {
-        list.push_str("<p>No backends yet.</p>");
+        list.push_str(
+            "<p class=\"dash__empty\">No backends yet. The wizard takes a name and a \
+             set of modules.</p>",
+        );
     } else {
-        list.push_str("<ul>");
+        list.push_str(
+            "<div class=\"dash__lrow dash__lrow--head\"><span>Backend</span>\
+             <span>Modules</span><span>Status</span></div>",
+        );
         for venture in &ventures {
             list.push_str(&format!(
-                "<li><a href=\"{BASE}/ventures/{id}\">{slug}</a> — {status}</li>",
+                "<div class=\"dash__lrow dash__lrow--three\">\
+                 <span><a href=\"{BASE}/ventures/{id}\">{slug}</a></span>\
+                 <span><em>{modules}</em></span>\
+                 <span>{status}</span></div>",
                 id = escape(&venture.id),
                 slug = escape(&venture.slug),
+                modules = escape(&venture.module_set),
                 status = escape(status_label(venture.status)),
             ));
         }
-        list.push_str("</ul>");
     }
 
-    Html(page(
-        "Cratefield console",
+    let nav = cratefield_chrome::nav(&[
+        cratefield_chrome::NavItem::here("Backends", BASE),
+        cratefield_chrome::NavItem::to("New backend", &format!("{BASE}/new")),
+        cratefield_chrome::NavItem::to("Dashboard", "/v1/dashboard"),
+    ]);
+    let crumb = format!(
+        "{n} backend{s}",
+        n = ventures.len(),
+        s = if ventures.len() == 1 { "" } else { "s" },
+    );
+    let body = format!(
+        "<div class=\"dash__list\">{list}</div>\
+         <div class=\"dash__act\">\
+         <a class=\"btn btn--primary\" href=\"{BASE}/new\">New backend</a></div>\
+         <p class=\"dash__note\">The console creates and names a backend. What it is \
+         doing once it exists — health, provisioning progress, connections — is the \
+         <a href=\"/v1/dashboard\">dashboard</a>.</p>"
+    );
+
+    Html(page_for(
+        "Console",
+        Some(&session.account_id),
         &format!(
-            "<p>Signed in as <strong>{email}</strong>.</p>\
-             <h2>Your backends</h2>{list}\
-             <p><a class=\"btn\" href=\"{BASE}/new\">New backend</a></p>\
-             <p><a href=\"{BASE}/logout\">Sign out</a></p>",
-            email = escape(&session.account_id),
+            "<div class=\"page-h\"><h1>Your backends</h1></div>\
+             <p class=\"lede\">Every backend this account has created.</p>{}",
+            chrome_frame(&nav, &crumb, &body)
         ),
     ))
     .into_response()
+}
+
+/// The dashboard frame, so the console's screens sit in the same furniture.
+fn chrome_frame(nav: &str, crumb: &str, body: &str) -> String {
+    format!(
+        "<div class=\"dash\"><div class=\"dash__body\">{nav}\
+         <div class=\"dash__main\"><p class=\"dash__crumb\">{crumb}</p>{body}</div>\
+         </div></div>"
+    )
 }
 
 /// The new-backend wizard (#8): pick modules from the catalog and name it.
@@ -254,25 +290,53 @@ async fn new_wizard(State(state): State<Arc<ConsoleState>>, headers: HeaderMap) 
     if let Err(redirect) = guard(ctx, &headers) {
         return redirect;
     }
+    let session = current_session(ctx, &headers).expect("guard proved a session");
     let catalog = cratefield_catalog::curated();
-    let mut modules = String::new();
+    let mut modules = String::from("<div class=\"mods\">");
     for module in &catalog.modules {
         modules.push_str(&format!(
-            "<label><input type=\"checkbox\" name=\"module\" value=\"{slug}\"> \
-             <strong>{name}</strong> — {summary}</label><br>",
+            "<label class=\"mod\">\
+             <input type=\"checkbox\" name=\"module\" value=\"{slug}\">\
+             <span><span class=\"mod__name\">{name} <code>{slug}</code></span>\
+             <span class=\"mod__sum\">{summary}</span></span></label>",
             slug = escape(&module.slug),
             name = escape(&module.name),
             summary = escape(&module.summary),
         ));
     }
-    Html(page(
-        "New backend · Cratefield",
+    modules.push_str("</div>");
+
+    let nav = cratefield_chrome::nav(&[
+        cratefield_chrome::NavItem::to("Backends", BASE),
+        cratefield_chrome::NavItem::here("New backend", &format!("{BASE}/new")),
+        cratefield_chrome::NavItem::to("Dashboard", "/v1/dashboard"),
+    ]);
+    let body = format!(
+        "<form method=\"post\" action=\"{BASE}/new\">\
+         <p class=\"dash__card-h\">Pick what it does</p>{modules}\
+         <p class=\"dash__card-h\" style=\"margin-top:20px\">Name it</p>\
+         <p class=\"field\"><label for=\"slug\">Slug</label>\
+         <input id=\"slug\" name=\"slug\" required autocomplete=\"off\" \
+         placeholder=\"acme-waitlist\"></p>\
+         <p class=\"dash__note\">The slug becomes the subdomain, so it is \
+         lower-case letters, digits and hyphens.</p>\
+         <div class=\"dash__act\">\
+         <button class=\"btn btn--primary\" type=\"submit\">Create</button></div>\
+         </form>\
+         <p class=\"dash__note\">Creating records the backend and its module set. \
+         Standing it up on Cloudflare is a separate step: there is no live deployer \
+         yet, and the backend's page says so rather than implying it is running.</p>"
+    );
+
+    Html(page_for(
+        "New backend",
+        Some(&session.account_id),
         &format!(
-            "<h1>New backend</h1>\
-             <form method=\"post\" action=\"{BASE}/new\">\
-             <p>Pick what your backend does:</p>{modules}\
-             <p><label>Name (slug): <input name=\"slug\" required></label></p>\
-             <p><button type=\"submit\">Create</button></p></form>",
+            "<p class=\"crumb\"><a href=\"{BASE}\">Backends</a> / New</p>\
+             <div class=\"page-h\"><h1>New backend</h1></div>\
+             <p class=\"lede\">Choose the modules it carries. Dependencies are \
+             resolved on submit.</p>{}",
+            chrome_frame(&nav, "New backend", &body)
         ),
     ))
     .into_response()
@@ -369,28 +433,56 @@ async fn venture_detail(
 
     let engine = cratefield_provisioning::Engine::new(db);
     let plan = engine.plan(&venture).await.unwrap_or_default();
-    let mut steps = String::from("<ol>");
+    let mut steps = String::new();
     for step in &plan {
         steps.push_str(&format!(
-            "<li>{desc}{mark}</li>",
+            "<p class=\"dash__row\"><span class=\"dash__dot{done}\"></span>{desc}\
+             <span class=\"dash__meta\">{mark}</span></p>",
+            done = if step.done { " dash__dot--live" } else { "" },
             desc = escape(&step.description),
-            mark = if step.done { " ✓" } else { "" },
+            mark = if step.done { "done" } else { "waiting" },
         ));
     }
-    steps.push_str("</ol>");
 
-    Html(page(
-        &format!("{} · Cratefield", venture.slug),
+    let nav = cratefield_chrome::nav(&[
+        cratefield_chrome::NavItem::to("Backends", BASE),
+        cratefield_chrome::NavItem::here(
+            "Plan",
+            &format!("{BASE}/ventures/{}", escape(&venture.id)),
+        ),
+        cratefield_chrome::NavItem::to("Dashboard", "/v1/dashboard"),
+    ]);
+    let body = format!(
+        "<div class=\"dash__grid\">\
+         <div class=\"dash__card\"><p class=\"dash__card-h\">Backend</p>\
+         <dl class=\"kv\">\
+         <div><dt>Modules</dt><dd><code>{modules}</code></dd></div>\
+         <div><dt>Status</dt><dd>{status}</dd></div>\
+         <div><dt>Subdomain</dt><dd><em>{subdomain}</em></dd></div></dl></div>\
+         <div class=\"dash__card\"><p class=\"dash__card-h\">Provisioning plan \
+         <span class=\"dash__tag\">{n} steps</span></p>{steps}</div></div>\
+         <p class=\"dash__note\">This is the plan, produced without touching \
+         Cloudflare — it is what <em>would</em> run. Standing the backend up needs the \
+         account's Cloudflare credentials and a deploy pipeline, and neither is wired, \
+         so nothing here has happened yet. What the backend is actually doing lives on \
+         its <a href=\"/v1/dashboard/ventures/{id}\">dashboard page</a>.</p>",
+        modules = escape(&venture.module_set),
+        status = escape(status_label(venture.status)),
+        subdomain = escape(&venture.subdomain),
+        n = plan.len(),
+        id = escape(&venture.id),
+    );
+
+    Html(page_for(
+        &venture.slug,
+        Some(&session.account_id),
         &format!(
-            "<h1>{slug}</h1><p>Modules: <code>{modules}</code> — status {status}.</p>\
-             <h2>Provisioning plan</h2>{steps}\
-             <p class=\"muted\">Deploying onto Cratefield's Cloudflare is a live step \
-             (needs-human): it needs the account's Cloudflare credentials and the deploy \
-             pipeline. The plan above is what will run.</p>\
-             <p><a href=\"{BASE}\">Back</a></p>",
+            "<p class=\"crumb\"><a href=\"{BASE}\">Backends</a> / {slug}</p>\
+             <div class=\"page-h\"><h1>{slug}</h1></div>\
+             <p class=\"lede\">What provisioning this backend would do, step by \
+             step.</p>{}",
+            chrome_frame(&nav, "Plan", &body),
             slug = escape(&venture.slug),
-            modules = escape(&venture.module_set),
-            status = escape(status_label(venture.status)),
         ),
     ))
     .into_response()
@@ -498,10 +590,15 @@ fn urldecode(input: &str) -> String {
 
 async fn login_page() -> Response {
     Html(page(
-        "Sign in · Cratefield",
+        "Sign in",
         &format!(
-            "<p>Cratefield is invite-only. Sign in with the Google account on the allowlist.</p>\
-             <p><a class=\"btn\" href=\"{BASE}/auth/start\">Sign in with Google</a></p>",
+            "<div class=\"gate\"><div class=\"dash__card\">\
+             <p class=\"dash__card-h\">Sign in</p>\
+             <p class=\"dash__note\">Cratefield is invite-only. Sign in with the \
+             Google account on the allowlist.</p>\
+             <div class=\"dash__act\">\
+             <a class=\"btn btn--primary\" href=\"{BASE}/auth/start\">\
+             Sign in with Google</a></div></div></div>",
         ),
     ))
     .into_response()
@@ -586,10 +683,12 @@ async fn callback(
         Ok(LoginOutcome::Refused) => (
             StatusCode::FORBIDDEN,
             Html(page(
-                "Invite-only · Cratefield",
+                "Invite-only",
                 &format!(
-                    "<p><strong>{}</strong> is not on the Cratefield allowlist.</p>\
-                     <p>Cratefield is invite-only. No account was created.</p>",
+                    "<div class=\"gate\"><div class=\"dash__card\">\
+                     <p class=\"dash__card-h\">Invite only</p>\
+                     <p class=\"dash__note\"><strong>{}</strong> is not on the \
+                     Cratefield allowlist. No account was created.</p></div></div>",
                     escape(&identity.email)
                 ),
             )),
@@ -724,8 +823,12 @@ fn not_configured() -> Response {
     (
         StatusCode::SERVICE_UNAVAILABLE,
         Html(page(
-            "Sign-in unavailable · Cratefield",
-            "<p>Google sign-in is not configured on this console              (<code>CONSOLE_GOOGLE_CLIENT_ID</code>/<code>_SECRET</code>/<code>BASE_URL</code>).</p>",
+            "Sign-in unavailable",
+            "<div class=\"gate\"><div class=\"dash__card\">\
+             <p class=\"dash__card-h\">Sign-in unavailable</p>\
+             <p class=\"dash__note\">Google sign-in is not configured on this console: \
+             <code>CONSOLE_GOOGLE_CLIENT_ID</code>, <code>_SECRET</code> and \
+             <code>_BASE_URL</code> are what it needs.</p></div></div>",
         )),
     )
         .into_response()
@@ -782,13 +885,22 @@ fn internal(detail: &str) -> Response {
 // Minimal HTML (no template engine; escape all dynamic text)
 // ---------------------------------------------------------------------------
 
+/// A signed-out page: the sign-in gate and the two pages that replace it
+/// when the console cannot let someone in.
 fn page(title: &str, body_html: &str) -> String {
-    format!(
-        "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">\
-         <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\
-         <title>{}</title></head><body><main>{body_html}</main></body></html>",
-        escape(title)
-    )
+    page_for(title, None, body_html)
+}
+
+/// A page rendered inside the shared control-plane chrome
+/// ([`cratefield_chrome`]), so the console, the wizard and the dashboard
+/// are one product rather than three. `identity` puts the operator in the
+/// masthead; `None` leaves it anonymous.
+fn page_for(title: &str, identity: Option<&str>, body_html: &str) -> String {
+    cratefield_chrome::render(&cratefield_chrome::Page {
+        title,
+        signed_in_as: identity,
+        body: body_html,
+    })
 }
 
 /// Escapes text for inclusion in HTML (the account email on the home page, an
@@ -912,6 +1024,32 @@ mod tests {
         );
         let session = current_session(&ctx, &sent).expect("valid session");
         assert_eq!(session.account_id, "op@cratefield.com");
+    }
+
+    #[test]
+    fn every_console_page_wears_the_shared_chrome() {
+        // The console's pages used to build their own bare <html>. The
+        // whole point of `cratefield-chrome` is that they stop: a screen
+        // that quietly reintroduces a local shell is how the console and
+        // the dashboard drifted into looking like two products.
+        let signed_out = page("Sign in", "<p>hello</p>");
+        let signed_in = page_for("Console", Some("op@cratefield.com"), "<p>hello</p>");
+
+        for rendered in [&signed_out, &signed_in] {
+            assert!(
+                rendered.contains(cratefield_chrome::STYLESHEET_PATH),
+                "a console page must link the shared stylesheet: {rendered}"
+            );
+            assert!(
+                !rendered.contains("<style"),
+                "one shared sheet, not per-page CSS: {rendered}"
+            );
+            assert!(rendered.contains("<p>hello</p>"));
+        }
+
+        // And only the signed-in one names anybody.
+        assert!(signed_in.contains("op@cratefield.com"));
+        assert!(!signed_out.contains("signed in as"));
     }
 
     #[test]

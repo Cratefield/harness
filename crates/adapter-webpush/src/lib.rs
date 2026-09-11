@@ -73,7 +73,7 @@
 pub mod ece;
 pub mod vapid;
 
-use std::sync::{Arc, LazyLock};
+use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -83,11 +83,10 @@ use bytes::Bytes;
 use cratefield_core::{
     Clock, HttpClient, Notification, Priority, Push, PushError, PushOutcome, Recipient, ttl_secs,
 };
-use http::header::{AUTHORIZATION, CONTENT_ENCODING, CONTENT_TYPE, LOCATION, RETRY_AFTER};
-use http::{HeaderMap, Request, StatusCode};
+use http::header::{AUTHORIZATION, CONTENT_ENCODING, CONTENT_TYPE, LOCATION};
+use http::{Request, StatusCode};
 use serde_json::{Map, Value};
 use sha2::{Digest as _, Sha256};
-use time::OffsetDateTime;
 
 use crate::ece::{Ece, EceError, SubscriptionKeys};
 use crate::vapid::{Vapid, VapidError, VapidKeys};
@@ -330,64 +329,6 @@ fn build_payload(notification: &Notification) -> Vec<u8> {
     Value::Object(root).to_string().into_bytes()
 }
 
-/// `Retry-After` (RFC 9110 §10.2.3) as a duration, so the outbox can honour
-/// it.
-///
-/// Both forms are read. The delta-seconds form is the common one; the
-/// HTTP-date form is legal, is what some CDNs in front of a push service
-/// emit, and silently ignoring it would turn a "come back in an hour" into
-/// an immediate retry. The date is resolved against the [`Clock`] port —
-/// the only clock this workspace may read — and a date already in the past
-/// becomes [`Duration::ZERO`] ("retry now") rather than being discarded.
-///
-/// This is the workspace's **fourth** `Retry-After` parser and the only one
-/// that reads the date form, so the bug it fixes is still live in the other
-/// three. Consolidating them into one `cratefield-core` helper beside
-/// `ttl_secs` is issue #214; it is not done here because the sibling FCM
-/// adapter (#210) is open over the same files.
-fn retry_after(headers: &HeaderMap, clock: &dyn Clock) -> Option<Duration> {
-    let value = headers.get(RETRY_AFTER)?.to_str().ok()?.trim();
-    if let Ok(seconds) = value.parse::<u64>() {
-        return Some(Duration::from_secs(seconds));
-    }
-    let when = parse_http_date(value)?;
-    let delta = when - clock.now();
-    if delta.is_negative() {
-        return Some(Duration::ZERO);
-    }
-    Duration::try_from(delta).ok()
-}
-
-/// The IMF-fixdate description, parsed once.
-///
-/// Version 2 of the format-description syntax, pinned explicitly: `parse`
-/// without a version is deprecated precisely because the unversioned form's
-/// meaning can shift under a `time` upgrade.
-///
-/// Built once rather than per call: `Retry-After` is read on the throttling
-/// path, which by definition fires in bursts, and re-parsing a fixed
-/// description on every throttled send is work done once per process here.
-static IMF_FIXDATE: LazyLock<Vec<time::format_description::BorrowedFormatItem<'static>>> =
-    LazyLock::new(|| {
-        time::format_description::parse_borrowed::<2>(
-            "[weekday repr:short], [day] [month repr:short] [year] [hour]:[minute]:[second] GMT",
-        )
-        .expect("a format description that is a literal in this file")
-    });
-
-/// An IMF-fixdate, the one form RFC 9110 §5.6.7 allows a sender to generate:
-/// `Sun, 06 Nov 1994 08:49:37 GMT`.
-///
-/// The two obsolete forms (RFC 850 and asctime) are not parsed. A recipient
-/// is required to accept them, but nothing in front of a push service emits
-/// them, and mis-parsing a two-digit year is worse than falling back to
-/// "retry on your own schedule".
-fn parse_http_date(value: &str) -> Option<OffsetDateTime> {
-    time::PrimitiveDateTime::parse(value, IMF_FIXDATE.as_slice())
-        .ok()
-        .map(time::PrimitiveDateTime::assume_utc)
-}
-
 /// What a redacted URL or path is replaced by in an error message.
 const REDACTED: &str = "[redacted]";
 
@@ -537,7 +478,7 @@ impl Push for WebPush {
                 detail(response.body(), status)
             )
         };
-        let retry_after = || retry_after(response.headers(), live.clock.as_ref());
+        let retry_after = || cratefield_core::retry_after(response.headers(), live.clock.as_ref());
 
         match status {
             // RFC 8030 §5 answers `201 Created` with a `Location` naming the
@@ -695,14 +636,6 @@ mod tests {
     fn urgency_maps_the_two_priorities_the_port_carries() {
         assert_eq!(urgency_header(Priority::Immediate), "high");
         assert_eq!(urgency_header(Priority::Conserve), "normal");
-    }
-
-    #[test]
-    fn an_http_date_parses_and_a_nonsense_one_does_not() {
-        let parsed = parse_http_date("Sun, 06 Nov 1994 08:49:37 GMT").expect("IMF-fixdate");
-        assert_eq!(parsed.unix_timestamp(), 784_111_777);
-        assert!(parse_http_date("Sunday, 06-Nov-94 08:49:37 GMT").is_none());
-        assert!(parse_http_date("tomorrow").is_none());
     }
 
     #[test]

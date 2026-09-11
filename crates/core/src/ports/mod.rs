@@ -41,7 +41,7 @@ pub use payments::{
 };
 pub use push::{
     LocKeys, Notification, Platform, Priority, Push, PushError, PushOutcome, Recipient,
-    RoutingPush, ttl_secs,
+    RoutingPush, retry_after, ttl_secs,
 };
 pub use rate_limiter::{Decision, RateLimitError, RateLimiter};
 pub use realtime::{Member, Realtime, RealtimeError, RoomContext, RoomHandler};

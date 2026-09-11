@@ -32,8 +32,16 @@
 //! **The manifest is the point.** A privacy page written beside the schema
 //! drifts from it the first time a migration lands and nobody remembers the
 //! page. A page rendered from this endpoint cannot: the sentence a member reads
-//! is the sentence the module that owns the table wrote, and a table with no
-//! declaration is a build error rather than an omission.
+//! is the sentence the module that owns the table wrote.
+//!
+//! What catches a table nobody declared is `cratefield_core::undeclared_tables`,
+//! through `cratefield_testing::conformance` — a **kit check, not a build
+//! error** (issue #268). This comment said "build error" until #268 made the
+//! opposite choice deliberately: silence is legitimate for a module with no
+//! tables, and a venture should not be unable to boot because some module's
+//! author has not got to this yet. The place a module is supposed to be
+//! complete is its own test suite. Declaring a table the module does *not*
+//! own is still a build error, which is the rule this one was confused with.
 
 #![doc = include_str!("../README.md")]
 #![forbid(unsafe_code)]

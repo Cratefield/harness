@@ -79,7 +79,7 @@ pub use ports::{
     RefundRequest, RoomContext, RoomHandler, RoutingPush, Row, Rows, ScopedBlob, SendOutcome,
     SignatureError, Signer, Statement, SubscriptionCheckoutRequest, SystemClock, TransferCharge,
     TryFromValue, UlidIdGen, Verdict, WebhookEvent, check_blob_size, declared_content_length,
-    timeout, ttl_secs,
+    retry_after, timeout, ttl_secs,
 };
 pub use problem::Problem;
 pub use problems::{ProblemDef, SLUGS, registry as problem_registry};

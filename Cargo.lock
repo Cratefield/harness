@@ -946,6 +946,7 @@ dependencies = [
  "cratefield-accounts",
  "cratefield-adapter-sqlite",
  "cratefield-catalog",
+ "cratefield-chrome",
  "cratefield-core",
  "cratefield-provisioning",
  "http",
