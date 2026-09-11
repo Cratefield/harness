@@ -328,7 +328,11 @@ jobs:
           # Throwaway secrets so the signer and the admin UI are on; the
           # example's mailer stays NotConfigured, nothing is ever sent.
           printf 'HARNESS_SECRET=ci-only-secret-0123456789abcdef-xyz\nADMIN_TOKEN=ci-only-admin-token\n' > .dev.vars
-          nohup bunx wrangler dev --local > /tmp/wrangler.log 2>&1 &
+          # `--test-scheduled` exposes /__scheduled, the only way to run the
+          # cron entry point against a live isolate. Without it the
+          # scheduled half ships untested: it is a different entry point
+          # with different ports, and Cloudflare builds no router for it.
+          nohup bunx wrangler dev --local --test-scheduled > /tmp/wrangler.log 2>&1 &
           for _ in $(seq 1 60); do
             code=$(curl -s -o /dev/null -w "%{http_code}" -m 3 http://127.0.0.1:8787/__health || true)
             if [ "$code" = "200" ]; then echo "worker ready"; exit 0; fi
@@ -395,4 +399,27 @@ jobs:
             -d '{"email":"ci@example.com"}' | grep -q '"id"'
           echo "-- latest"
           curl -sf -m 10 http://127.0.0.1:8787/v1/sample/rows/latest | grep -q 'ci@example.com'
+          echo "-- scheduled: the cron entry point runs on a live isolate (issues 132, 144)"
+          # A different entry point with different ports, and Cloudflare
+          # builds no router for it — so nothing the fetch assertions above
+          # touch proves this half works at all. A module whose scheduled
+          # hook reaches for a port the cron path never wired fails only
+          # here.
+          # A GET: wrangler's own help calls it "visiting /__scheduled".
+          curl -sf -m 20 'http://127.0.0.1:8787/__scheduled?cron=*/5+*+*+*+*' \
+            -o /tmp/scheduled.body
+          echo "-- and it did not fail once inside"
+          # A 200 only says the isolate answered. `serve_scheduled` catches a
+          # module's error and logs it, so a silent failure looks identical
+          # to success from out here — the log is the only place it shows.
+          if grep -q 'scheduled module work failed' /tmp/wrangler.log; then
+            echo "a module's scheduled hook failed:"
+            grep -n 'scheduled module work failed' /tmp/wrangler.log
+            exit 1
+          fi
+          if grep -qiE 'panicked|unreachable executed' /tmp/wrangler.log; then
+            echo "the worker panicked:"
+            grep -niE 'panicked|unreachable executed' /tmp/wrangler.log
+            exit 1
+          fi
           echo "all assertions passed"
