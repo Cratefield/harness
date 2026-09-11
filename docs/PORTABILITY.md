@@ -1,13 +1,19 @@
-# Portability — the phase-3 move off Cloudflare
+# Portability — the move off Cloudflare
 
-Status: **designed, not built.** Everything in this document is the
-plan recorded in [ARCHITECTURE.md](ARCHITECTURE.md) section 10 and
-[ADR 0008](adr/0008-native-runtime-is-multi-tenant-database-per-tenant.md),
-specified in issues #18–#21 (native runtime, Postgres adapter, parity
-suite, data move) and #23–#44 (multi-tenant specifics). None of the
-phase-3 crates exist yet. When they land, this document becomes the
-venture runbook; until then it is the contract the current code must not
-break.
+Status: **the single-venture move is built; the multi-tenant layer is
+not.** The phase-3 crates exist and are published — `cratefield-runtime-native`
+(axum on tokio, Redis `RateLimiter`, in-process cron; `crates/runtime-native/`),
+`cratefield-adapter-postgres` (sqlx; `crates/adapter-postgres/`), and
+`fz data export` / `fz data import` (`crates/cli/src/data.rs`, issue #21).
+So the sections below — stand up Postgres, copy the data, switch the
+runtime line, cut DNS — are a venture runbook you can run today.
+
+What is genuinely still unbuilt is the multi-tenant layer of
+[ADR 0008](adr/0008-native-runtime-is-multi-tenant-database-per-tenant.md):
+`crates/runtime-native/` has no tenant identity today (one process serves
+one venture — see [SECURITY.md](SECURITY.md), "Native runtime"), and the
+control database with the tenant registry and global secret store does
+not exist (issues #23–#44). Nothing below promises it.
 
 ## Why the move is supposed to be cheap
 
@@ -29,11 +35,12 @@ Three decisions made on day one exist so that this page stays short:
 
 What exists today toward this: the `cratefield-adapter-sqlite` `Database`
 (native rusqlite), sea-query's dual-builder rendering behind
-`Statement::render`, the portable-SQL lint, and the conformance suite
-that applies every module's migrations to a fresh SQLite database twice.
-What does not exist yet: `cratefield-adapter-postgres` (sqlx),
-`cratefield-runtime-native` (axum on tokio), `fz data export` /
-`fz data import`, a Redis `RateLimiter`, and the control database.
+`Statement::render`, the portable-SQL lint, the conformance suite
+that applies every module's migrations to a fresh SQLite database twice,
+`cratefield-adapter-postgres` (sqlx), `cratefield-runtime-native` (axum on
+tokio, Redis `RateLimiter`, in-process cron), and `fz data export` /
+`fz data import`. Still unbuilt: the control database and the rest of the
+multi-tenant layer (issues #23–#44).
 
 ## The move, in order
 
@@ -70,9 +77,9 @@ Architecture section 10, expanded. Per venture:
    cutover is a DNS revert, not a restore.
 
 No module code changes. That claim is what the parity suite protects:
-from phase 3 on, `cratefield-testing` runs every module's tests against
-SQLite **and** Postgres in CI, so "works on D1" and "works on Postgres"
-cannot drift apart between releases.
+`cratefield-testing` runs every module's tests against SQLite **and**
+Postgres in CI (`.github/workflows/parity.yml`), so "works on D1" and
+"works on Postgres" cannot drift apart between releases.
 
 ## The native runtime is multi-tenant — one database per tenant
 
@@ -111,7 +118,7 @@ Nothing extra — the guardrails are already the rules:
 - keep module queries on sea-query and migrations in the portable subset
   (`fz doctor` fails anything else);
 - keep ventures on published, pinned `cratefield-*` versions so the
-  phase-3 crates arrive as ordinary dependency bumps;
+  native-runtime crates arrive as ordinary dependency bumps;
 - treat `HARNESS_API` / core major bumps as the compatibility contract
   (see [COMPATIBILITY.md](COMPATIBILITY.md)) — a module that compiles
   against the contract today must compile against the native runtime

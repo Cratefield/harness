@@ -104,7 +104,7 @@ flowchart LR
     KV[("KV")]:::vendor
     RS["Resend"]:::vendor
     TS["Turnstile"]:::vendor
-    PG[("Postgres<br/>phase 3")]:::future
+    PG[("Postgres<br/>native runtime")]:::vendor
   end
 
   P --> DB & KV & RS & TS
@@ -155,8 +155,8 @@ convenience, not a layer.
 | `cratefield-ui` | Renders the module surface as HTML at `/ui`: pages, fragments, in-process form dispatch, the `cf-*` styling contract (ADR 0010) |
 | `cratefield-cli` | Binary `fz`: `migrations collect`, `doctor`, `modules` |
 | `cratefield-testing` | Conformance kit every module, public or private, must pass |
-| `cratefield-adapter-postgres` | Phase 3. `Database` over sqlx for the native runtime |
-| `cratefield-runtime-native` | Phase 3. The same harness as a single binary on tokio |
+| `cratefield-adapter-postgres` | `Database` over sqlx for the native runtime (`.github/workflows/parity.yml` runs module suites against both SQLite and Postgres) |
+| `cratefield-runtime-native` | The same harness as a single binary on tokio: axum on a TCP listener, Redis `RateLimiter`, in-process cron |
 
 Everything else in the workspace is unpublished — `publish = false` is what
 makes a crate private now, not a separate repository (ADR
@@ -191,8 +191,13 @@ in** is the default this README describes: the crate is linked into the Worker.
 **Sidecar** gives one module its own Worker, built and deployed separately and
 mounted at the same `/v1/<name>` over a Cloudflare service binding, binding the
 same database and secrets. It exists so a module whose source should not enter
-the shared artifact can still run as a real module with real ports. Designed,
-not built: [epic #56](https://github.com/Cratefield/harness/issues/56).
+the shared artifact can still run as a real module with real ports. Built:
+[`examples/sidecar-module-template`](examples/sidecar-module-template) is the
+Worker a customer deploys, host→sidecar event delivery crosses inside
+`wait_until` ([ADR 0017](docs/adr/0017-events-cross-the-sidecar-boundary-inbound-only.md)),
+and CI proves a slow sidecar forward live
+(`wrangler dev sidecar event forward` in `.github/workflows/ci.yml`, issue #258).
+[docs/MOUNTING.md](docs/MOUNTING.md) is the runbook.
 
 Migrations are plain SQL in a subset SQLite and Postgres both accept. Queries go
 through sea-query, which renders for either. Confirmation and unsubscribe
@@ -207,12 +212,15 @@ conformance kit includes the concurrent-request test that proves it.
 | **M0 Foundation** | workspace tooling, `core`, Cloudflare runtime, Resend and Turnstile adapters, SQLite adapter, `fz`, testing kit | #1–#9 |
 | **M1 First modules** | `email-signup`, `waitlist`, templates, security baseline, observability | #10–#14 |
 | **M2 First venture live** | crates.io publishing, docs, contract versioning, `api.factory0.ventures` | #15–#17 |
-| **M3 Self-hosted portability** | Postgres adapter, native runtime, parity suite, data move | #18–#21 |
+| **M3 Self-hosted portability** ✅ | Postgres adapter (`cratefield-adapter-postgres`), native runtime (`cratefield-runtime-native`, `examples/venture-native`), parity suite (`.github/workflows/parity.yml`), data move (`fz data export` / `fz data import`) | #18–#21 |
 
-Three epics sit outside the milestones because they are specified but not
-scheduled: [#23](https://github.com/Cratefield/harness/issues/23) multi-tenant schema, [#24](https://github.com/Cratefield/harness/issues/24)
-embedded secrets, and [#56](https://github.com/Cratefield/harness/issues/56) custom modules without rebuilding
-the shared bundle.
+One epic is still specified but not scheduled: [#23](https://github.com/Cratefield/harness/issues/23)
+multi-tenant schema — the native runtime serves one venture per process today
+([SECURITY.md](docs/SECURITY.md)). The other two former epics shipped:
+[#24](https://github.com/Cratefield/harness/issues/24) embedded secrets is
+`cratefield-secrets` (envelope-encrypted over the `Database` port, [docs/SECRETS-DESIGN.md](docs/SECRETS-DESIGN.md)),
+and [#56](https://github.com/Cratefield/harness/issues/56) custom modules is the
+sidecar path ([docs/MOUNTING.md](docs/MOUNTING.md)).
 
 Progress is visible in the [milestones](https://github.com/Cratefield/harness/milestones).
 
@@ -223,7 +231,8 @@ One structured span per request carries `request_id`, `method`, `route`
 `ua_family` — never an email address. Workers Logs is enabled in the
 template `wrangler.toml` (`[observability] enabled = true`); every
 response also echoes `x-request-id`. To pull one request's trail out of
-the logs, filter on the id the API returned:
+the logs, filter on the id the API returned (needs a deployed Worker and
+wrangler auth against your Cloudflare account, so CI cannot run it):
 
 ```sh
 wrangler tail --format pretty --search <request-id>

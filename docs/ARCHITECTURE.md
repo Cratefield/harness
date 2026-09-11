@@ -86,8 +86,8 @@ what actually keeps a crate off crates.io.
 | `cratefield-module-waitlist` | Join a per-product waitlist, confirm, position, referral codes, admin export. |
 | `cratefield-cli` | Binary `fz`: `fz migrations collect`, `fz doctor`, `fz modules`. Run from the venture repo with `cargo run -p` or installed. |
 | `cratefield-testing` | Conformance kit for modules: fake mailer, fake captcha, fake rate limiter, fixed clock, in-memory `Database`, request helpers over the axum router (no network). Used by public and private modules alike. |
-| `cratefield-adapter-postgres` | (phase 3) `Database` over `sqlx` Postgres, for the native runtime. |
-| `cratefield-runtime-native` | (phase 3) The same harness served by axum on tokio as a single binary, for the self-hosted move. |
+| `cratefield-adapter-postgres` | `Database` over `sqlx` Postgres, for the native runtime. The parity suite runs every module's suite against SQLite and Postgres (`.github/workflows/parity.yml`). |
+| `cratefield-runtime-native` | The same harness served by axum on tokio as a single binary, for the self-hosted move (one venture per process; the multi-tenant layer of ADR 0008 is still unbuilt). |
 
 ### The unpublished crates
 

@@ -92,8 +92,12 @@ mechanism is deferred to #67** and is not decided here.
   on the paid plan. The sidecar's own D1 queries count against the sidecar's
   invocation budget, not the host's.
 - The in-process event bus does not cross the boundary; #62 decides what
-  replaces it. Until then a sidecar can neither emit events the host hears nor
-  subscribe to the host's.
+  replaces it. ~~Until then a sidecar can neither emit events the host hears nor
+  subscribe to the host's.~~ Decided and built since: [ADR 0017](0017-events-cross-the-sidecar-boundary-inbound-only.md)
+  keeps the crossing inbound-only — a sidecar still cannot emit events the host
+  hears, but the host now forwards its own emissions to each sidecar's
+  `POST /__events` inside `wait_until`, proven live by the
+  `wrangler dev sidecar event forward` CI job (issue #258).
 - Every schema tool walks `harness.modules()` and so cannot see a sidecar. Its
   migrations, the duplicate-table check and `fz data export` all need explicit
   work before a sidecar may own tables; #66.
