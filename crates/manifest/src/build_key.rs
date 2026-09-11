@@ -263,6 +263,63 @@ mod tests {
         assert_eq!(key, build_key(&i).unwrap());
     }
 
+    /// The one test the other six cannot replace: they compare keys this
+    /// build computed against each other, so renaming a field, reordering
+    /// `ModuleSetInputs`, or switching to a different JSON writer changes
+    /// every key in the world and leaves all of them green.
+    ///
+    /// A build key is a *content address*. Its whole value is that the
+    /// same module set names the same artifact next month, from a later
+    /// `fz`. So the wire form is pinned literally, and the key with it.
+    ///
+    /// **If this test fails, the cache is invalidated fleet-wide** —
+    /// every stored artifact is orphaned and every deploy is a cold
+    /// build. That is sometimes the right call (a real input was
+    /// missing), but it is never an incidental one: change the golden
+    /// deliberately, in a commit that says why, and treat it as a
+    /// breaking change to the artifact store.
+    ///
+    /// The canonical JSON is asserted before the digest so a failure
+    /// says *what* moved rather than only that something did.
+    #[test]
+    fn the_wire_form_and_the_key_it_hashes_to_are_pinned() {
+        // The operator-facing form, pinned field by field and in order:
+        // `ModuleSetInputs`'s declaration order *is* the hashed order, so
+        // this is the shape the digest below is taken over. (Not a
+        // round-trip through `serde_json::Value` — its map sorts keys,
+        // which would hide exactly the reordering this guards.)
+        const GOLDEN_JSON: &str = concat!(
+            "{\n",
+            "  \"harness-api\": 1,\n",
+            "  \"rustc-version\": \"rustc 1.98.1 (aabbccdde 2026-01-01)\",\n",
+            "  \"profile\": \"release\",\n",
+            "  \"modules\": [\n",
+            "    {\n",
+            "      \"slug\": \"cms\",\n",
+            "      \"version\": \"0.1.0\",\n",
+            "      \"digest\": \"sha256:",
+            "0000000000000000000000000000000000000000000000000000000000000000",
+            "\"\n",
+            "    }\n",
+            "  ]\n",
+            "}"
+        );
+        const GOLDEN_KEY: &str =
+            "sha256:d1ea42d0c2773f14d69f38cf6e0015997c95225d4bf1c777830e26c1166657d9";
+
+        let i = inputs(vec![release("cms", "0.1.0")], 1);
+        assert_eq!(
+            canonical_inputs(&i),
+            GOLDEN_JSON,
+            "the hashed wire form moved; see this test's doc comment before updating it"
+        );
+        assert_eq!(
+            build_key(&i).unwrap(),
+            GOLDEN_KEY,
+            "the content address moved; see this test's doc comment before updating it"
+        );
+    }
+
     #[test]
     fn the_canonical_inputs_are_slug_sorted_and_carry_every_field() {
         let i = inputs(
