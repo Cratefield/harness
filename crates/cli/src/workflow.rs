@@ -172,6 +172,22 @@ pub struct Baseline {
     pub modules: Vec<String>,
 }
 
+/// The two consents `fz deploy` can require, kept apart on purpose.
+///
+/// One flag for both would mean removing a module from a *development*
+/// venture required asserting "I am deploying to production" — which is
+/// untrue, and which teaches an operator to pass the production flag by
+/// habit. A gate that is passed habitually is not a gate.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Consent {
+    /// `--i-am-deploying-to-production`: this venture resolves to
+    /// production.
+    pub production: bool,
+    /// `--i-am-removing-modules`: the plan drops modules from the served
+    /// composition.
+    pub removal: bool,
+}
+
 /// The outcome of `fz plan`: the normalised content and its digest.
 #[derive(Debug, Clone)]
 pub struct PlanOutcome {
@@ -755,7 +771,7 @@ pub fn deploy(
     approved: Option<&str>,
     manifest_path: &Path,
     migrations_dir: &Path,
-    consent: bool,
+    consent: Consent,
 ) -> Result<DeployOutcome, Vec<DoctorFailure>> {
     let Some(approved) = approved else {
         return Err(vec![failure(
@@ -781,7 +797,7 @@ pub fn deploy(
             stale_plan_message(&planned, inputs.record.as_ref(), approved, &digest),
         ));
     }
-    if resolved_env(&inputs.manifest) == VentureEnv::Production && !consent {
+    if resolved_env(&inputs.manifest) == VentureEnv::Production && !consent.production {
         failures.push(failure(
             &CODES.production_deploy_unauthorized,
             "this venture resolves to production (manifest config ENV=production) — deploying \
@@ -789,12 +805,30 @@ pub fn deploy(
              the approved digest",
         ));
     }
-    if !planned.modules_removed.is_empty() && !consent {
+    if !planned.modules_removed.is_empty() && !consent.removal {
+        // Deliberately precise about what a removal does and does not do.
+        // `fz deploy` never touches a database, so nothing is deleted: the
+        // modules stop being compiled in and stop serving, and their
+        // tables stay exactly as they are, holding what they held. That
+        // matters in both directions — an operator who reads "its data
+        // leaves the venture" reaches for a backup nobody needs, and one
+        // who *wanted* those rows gone walks away believing they are.
+        let orphans = &planned.state.migrations.orphaned;
+        let leftovers = if orphans.is_empty() {
+            String::new()
+        } else {
+            format!(
+                " The migrations {} stay applied and the tables they created keep their rows; \
+                 dropping them is a separate, manual step (docs/ROLLBACK.md).",
+                orphans.join(", ")
+            )
+        };
         failures.push(failure(
             &CODES.destructive_change_unauthorized,
             format!(
-                "this plan removes {} from the served composition — its data leaves the \
-                 venture; pass --i-am-deploying-to-production to accept that",
+                "this plan removes {} from the served composition: those modules stop being \
+                 served, and no data is deleted.{leftovers} Pass --i-am-removing-modules to \
+                 accept that",
                 planned.modules_removed.join(", ")
             ),
         ));
@@ -1282,7 +1316,7 @@ pub fn deploy_cli(
     approved: Option<&str>,
     manifest_path: &Path,
     migrations_dir: &Path,
-    consent: bool,
+    consent: Consent,
     json: bool,
     non_interactive: bool,
 ) -> ExitCode {
@@ -1468,13 +1502,17 @@ pub(crate) fn dispatch(command: &crate::Command) -> Option<ExitCode> {
             manifest,
             migrations,
             i_am_deploying_to_production,
+            i_am_removing_modules,
             json,
             non_interactive,
         } => Some(deploy_cli(
             plan.as_deref(),
             manifest,
             migrations,
-            *i_am_deploying_to_production,
+            Consent {
+                production: *i_am_deploying_to_production,
+                removal: *i_am_removing_modules,
+            },
             *json,
             *non_interactive,
         )),

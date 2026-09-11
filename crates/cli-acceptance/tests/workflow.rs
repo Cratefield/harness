@@ -168,8 +168,13 @@ fn deploy_without_a_plan_is_refused() {
     let tmp = TempDir::new("no-plan");
     write_manifest(&tmp.manifest(), &["waitlist"], &[]);
 
-    let err =
-        workflow::deploy(None, &tmp.manifest(), &tmp.migrations(), false).expect_err("refused");
+    let err = workflow::deploy(
+        None,
+        &tmp.manifest(),
+        &tmp.migrations(),
+        workflow::Consent::default(),
+    )
+    .expect_err("refused");
     assert_eq!(code_of(&err), "deploy-plan-required");
     assert!(!tmp.record().exists(), "a refused deploy records nothing");
 
@@ -203,7 +208,7 @@ fn a_stale_digest_is_refused_and_names_what_moved() {
         Some(&stale.digest),
         &tmp.manifest(),
         &tmp.migrations(),
-        false,
+        workflow::Consent::default(),
     )
     .expect_err("refused");
     assert_eq!(code_of(&err), "stale-plan");
@@ -240,7 +245,7 @@ fn deploy_records_the_approved_plan_and_is_idempotent() {
         Some(&plan.digest),
         &tmp.manifest(),
         &tmp.migrations(),
-        false,
+        workflow::Consent::default(),
     )
     .expect("applied");
     assert!(first.changed);
@@ -253,7 +258,7 @@ fn deploy_records_the_approved_plan_and_is_idempotent() {
         Some(&plan.digest),
         &tmp.manifest(),
         &tmp.migrations(),
-        false,
+        workflow::Consent::default(),
     )
     .expect("idempotent");
     assert!(!second.changed, "the second run says it changed nothing");
@@ -290,7 +295,7 @@ fn production_needs_the_second_consent_flag() {
         Some(&plan.digest),
         &tmp.manifest(),
         &tmp.migrations(),
-        false,
+        workflow::Consent::default(),
     )
     .expect_err("refused");
     assert_eq!(code_of(&err), "production-deploy-unauthorized");
@@ -309,8 +314,16 @@ fn production_needs_the_second_consent_flag() {
     );
     assert_eq!(exit, ExitCode::FAILURE);
 
-    let consented = workflow::deploy(Some(&plan.digest), &tmp.manifest(), &tmp.migrations(), true)
-        .expect("applied with the flag");
+    let consented = workflow::deploy(
+        Some(&plan.digest),
+        &tmp.manifest(),
+        &tmp.migrations(),
+        workflow::Consent {
+            production: true,
+            removal: true,
+        },
+    )
+    .expect("applied with the flag");
     assert!(consented.changed);
 }
 
@@ -337,13 +350,21 @@ fn a_destructive_plan_needs_the_second_consent_flag() {
         Some(&plan.digest),
         &tmp.manifest(),
         &tmp.migrations(),
-        false,
+        workflow::Consent::default(),
     )
     .expect_err("refused");
     assert_eq!(code_of(&err), "destructive-change-unauthorized");
 
-    let consented = workflow::deploy(Some(&plan.digest), &tmp.manifest(), &tmp.migrations(), true)
-        .expect("applied with the flag");
+    let consented = workflow::deploy(
+        Some(&plan.digest),
+        &tmp.manifest(),
+        &tmp.migrations(),
+        workflow::Consent {
+            production: true,
+            removal: true,
+        },
+    )
+    .expect("applied with the flag");
     assert!(consented.changed);
 }
 
@@ -453,7 +474,7 @@ fn verify_reports_drift_as_coded_failures() {
         Some(&plan.digest),
         &tmp.manifest(),
         &tmp.migrations(),
-        false,
+        workflow::Consent::default(),
     )
     .expect("applied");
 
@@ -497,5 +518,91 @@ fn verify_reports_drift_as_coded_failures() {
     assert!(
         codes.contains(&"config-drift") && !codes.contains(&"composition-drift"),
         "config drift alone is named: {codes:?}"
+    );
+}
+
+/// A removal in development is not a production deploy, and the two
+/// flags must not stand in for one another.
+///
+/// One flag for both is how a production gate stops meaning anything: an
+/// operator who has to pass `--i-am-deploying-to-production` to drop a
+/// module from a dev venture learns to pass it everywhere.
+#[test]
+fn the_production_flag_does_not_authorise_a_removal() {
+    let tmp = TempDir::new("consent-split");
+    write_manifest(&tmp.manifest(), &["waitlist"], &[]);
+    fs::create_dir_all(tmp.migrations()).expect("migrations dir");
+    fs::write(
+        tmp.migrations().join(".harness-lock.json"),
+        "{\n  \"ghost/0001\": {\"file\": \"0001_ghost_0001_init.sql\", \
+         \"sha256\": \"a\"}\n}\n",
+    )
+    .expect("write lockfile");
+    let plan = workflow::plan(&tmp.manifest(), &tmp.migrations()).expect("plans");
+
+    let err = workflow::deploy(
+        Some(&plan.digest),
+        &tmp.manifest(),
+        &tmp.migrations(),
+        workflow::Consent {
+            production: true,
+            removal: false,
+        },
+    )
+    .expect_err("the production flag is not a removal consent");
+    assert_eq!(code_of(&err), "destructive-change-unauthorized");
+
+    let applied = workflow::deploy(
+        Some(&plan.digest),
+        &tmp.manifest(),
+        &tmp.migrations(),
+        workflow::Consent {
+            production: false,
+            removal: true,
+        },
+    )
+    .expect("the removal flag alone is enough in development");
+    assert!(applied.changed);
+}
+
+/// The refusal must not claim data is deleted, because none is.
+#[test]
+fn a_removal_says_what_it_actually_does_to_the_data() {
+    let tmp = TempDir::new("removal-truth");
+    write_manifest(&tmp.manifest(), &["waitlist"], &[]);
+    fs::create_dir_all(tmp.migrations()).expect("migrations dir");
+    fs::write(
+        tmp.migrations().join(".harness-lock.json"),
+        "{\n  \"ghost/0001\": {\"file\": \"0001_ghost_0001_init.sql\", \
+         \"sha256\": \"a\"}\n}\n",
+    )
+    .expect("write lockfile");
+    let plan = workflow::plan(&tmp.manifest(), &tmp.migrations()).expect("plans");
+
+    let err = workflow::deploy(
+        Some(&plan.digest),
+        &tmp.manifest(),
+        &tmp.migrations(),
+        workflow::Consent::default(),
+    )
+    .expect_err("refused");
+    let message = err
+        .iter()
+        .map(|failure| failure.message.clone())
+        .collect::<Vec<_>>()
+        .join(" ");
+
+    assert!(
+        message.contains("no data is deleted"),
+        "an operator who reads that data left reaches for a backup nobody \
+         needs: {message}"
+    );
+    assert!(
+        message.contains("ghost/0001"),
+        "and it names the migration left applied: {message}"
+    );
+    assert!(
+        !message.contains("data leaves the venture"),
+        "the old claim was false — deploy never touches a database: {message}"
     );
 }
