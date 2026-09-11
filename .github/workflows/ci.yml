@@ -408,6 +408,33 @@ jobs:
           COOKIE=$(grep -i '^set-cookie:' /tmp/login.headers | sed 's/^[^:]*: *//' | cut -d';' -f1)
           curl -sf -m 10 -H "cookie: $COOKIE" http://127.0.0.1:8787/ui/admin/waitlist/export \
             | grep -q '<table class="cf-table"'
+      - name: A transport failure never quotes the request URL (issue #229)
+        # The one thing a unit test cannot finish. It can build a
+        # `worker::Error`, but only workerd produces the message a real
+        # fetch failure carries — and that message is
+        # "Fetch API cannot load: <the whole URL>", which for APNs and Web
+        # Push *is* the recipient's credential (the path is the token).
+        #
+        # The sample module's probe fetches two deliberately unreachable
+        # destinations whose path is shaped like that credential. The
+        # "cannot load" assertion is not decoration: without it this step
+        # would still pass on a day workerd stopped naming the URL, and
+        # would then be proving nothing.
+        run: |
+          set -e
+          # Generous: the unresolvable destination may sit out the port's
+          # own deadline before it answers, and both fetches are sequential.
+          curl -sf -m 40 http://127.0.0.1:8787/v1/sample/transport-probe > /tmp/probe.json
+          cat /tmp/probe.json
+          echo "-- the failure that carries the URL is the one being asserted on"
+          grep -q 'Fetch API cannot load' /tmp/probe.json
+          echo "-- the origin survives, so the failure is still diagnosable"
+          grep -q 'ftp://unreachable.invalid' /tmp/probe.json
+          echo "-- and the request target does not"
+          if grep -qE 'PROBEDEVICETOKEN|3/device' /tmp/probe.json; then
+            echo "the request path reached the error message"
+            exit 1
+          fi
       - name: Two sockets against the room Durable Object (issue #103)
         working-directory: examples/venture
         # Not curl: a WebSocket upgrade is the one thing it cannot do, and the

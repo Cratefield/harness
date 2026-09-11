@@ -49,6 +49,9 @@ async-trait = { workspace = true }
 wasm-bindgen = { workspace = true }
 axum = { workspace = true }
 http = { workspace = true }
+# The `HttpClient` port's request body type: the sample module's transport
+# probe (issue #229) is the only thing here that builds one.
+bytes = { workspace = true }
 tower = { workspace = true }
 serde = { workspace = true }
 schemars = { workspace = true }

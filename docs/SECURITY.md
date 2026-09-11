@@ -101,6 +101,17 @@
   that persists error text scrubs it where it **binds** the column, not
   at each call site — `module-notifications`' `dead_letter_statement`
   is the reference (issue #235).
+- **A failure never names the URL it was sent to.** Both `HttpClient`
+  ports cut a request URL back to its origin before the error goes
+  anywhere — `cratefield_core::scrub_request_url`, applied over the
+  error's whole `source()` chain, and then `scrub_text` on top. The path
+  is not a detail here: an APNs request addresses a device *by* its path
+  (`/3/device/<token>`) and a Web Push endpoint is a bearer capability,
+  so a message that quotes the destination publishes the recipient's
+  credential to every log and dead-letter row it reaches. No general
+  rule can recognise that — a path has no secret-looking shape — which
+  is why this pass takes the URL from the caller, the only thing that
+  knows which one it just sent to (issues #228, #229).
 - **Token-bearing URLs.** Signed links carry their credential in the
   query (`?token=`). Every response to a request whose query has a
   `token` parameter — on any path, including `/ui/*` — carries

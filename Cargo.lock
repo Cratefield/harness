@@ -5096,6 +5096,7 @@ version = "0.1.1"
 dependencies = [
  "async-trait",
  "axum",
+ "bytes",
  "cratefield",
  "getrandom 0.4.3",
  "http",
