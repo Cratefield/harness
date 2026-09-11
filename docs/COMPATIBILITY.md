@@ -42,6 +42,7 @@ compatibility-doc` and checked in CI for drift. Do not edit by hand.
 | `cratefield-connections` | 0.1.1 | 1 | `^0.3` — `>=0.3.0, <0.4.0` |
 | `cratefield-console` | 0.1.1 | 1 | `^0.3` — `>=0.3.0, <0.4.0` |
 | `cratefield-control-plane` | 0.1.1 | 1 | `^0.3` — `>=0.3.0, <0.4.0` |
+| `cratefield-dashboard` | 0.1.1 | 1 | `^0.3` — `>=0.3.0, <0.4.0` |
 | `cratefield-module-cms` | 0.1.1 | 1 | `^0.3` — `>=0.3.0, <0.4.0` |
 | `cratefield-module-email-signup` | 0.1.1 | 1 | `^0.3` — `>=0.3.0, <0.4.0` |
 | `cratefield-module-hello` | 0.1.1 | 1 | `^0.3` — `>=0.3.0, <0.4.0` |
