@@ -272,10 +272,13 @@ half-recorded.
 ## 5. Turnstile (captcha) — if you have public writes
 
 **Human** (Cloudflare dashboard). The signup and waitlist modules have
-public write endpoints, so production needs captcha (`fz doctor` fails a
-production venture without it). Create a Turnstile widget for the
-venture's domains; the sitekey goes to the frontend, the secret key
-becomes `TURNSTILE_SECRET`.
+public write endpoints declared as human-form writes, so production needs
+captcha (`fz doctor` fails a production venture without it). A venture
+whose public writes are *signed-link* writes instead needs a `Signer` —
+`HARNESS_SECRET` — and no Turnstile; the full rule including both escape
+hatches is [ARCHITECTURE.md](ARCHITECTURE.md) section 6. Create a Turnstile
+widget for the venture's domains; the sitekey goes to the frontend, the
+secret key becomes `TURNSTILE_SECRET`.
 
 ## 6. Secrets, per environment
 
@@ -313,10 +316,16 @@ Each transport's secrets are all-or-none and are listed in
 caller reads. `fz doctor` reports which transports this deployment routes
 and fails a production deploy that half-wires one (issue #191).
 
-Web Push needs a P-256 key pair the venture generates **once** and keeps:
+Web Push needs a P-256 key pair the venture generates **once** and keeps.
+Key generation is local — it runs in CI — but putting it into Workers is
+a human step (wrangler auth):
 
 ```sh
 fz push vapid keygen --file vapid.key   # prints the public applicationServerKey
+```
+
+```sh
+# human: needs wrangler auth against your Cloudflare account
 wrangler secret put VAPID_PRIVATE_KEY --env production < vapid.key
 wrangler secret put VAPID_SUBJECT --env production   # mailto: or https: contact URI
 ```
@@ -423,7 +432,7 @@ its version, so a stale deploy is visible immediately.
 
 ## When the venture outgrows Workers
 
-Compute and storage stay swappable by design: the phase-3 move to a
-self-hosted native binary changes one runtime crate and zero module
-code. That path — Postgres, data copy, DNS cutover — is
-[PORTABILITY.md](PORTABILITY.md).
+Compute and storage stay swappable by design: the move to a self-hosted
+native binary changes one runtime crate and zero module code, and the
+crates for it (`cratefield-runtime-native`, `cratefield-adapter-postgres`)
+are published — [PORTABILITY.md](PORTABILITY.md) is the runbook.

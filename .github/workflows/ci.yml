@@ -144,6 +144,30 @@ jobs:
       - name: Push environment table drift check (issue #191)
         run: cargo run -q -p cratefield-push-wiring --example push-env-doc -- --check
 
+  doc-commands:
+    # No `#` in the name: GitHub truncates a check-run name there (issue #34).
+    #
+    # Every shell command the README and the getting-started guide tell a
+    # reader to run (issue #146). The commands are extracted from the
+    # markdown mechanically — tools/doc-commands.sh evals the fence content,
+    # so the prose and the tested thing cannot drift — and every fence must
+    # be classified: run here, covered by another job, or recorded as a
+    # human step. A documented command that stops working fails this job.
+    name: documented commands
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.98.1"
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - uses: oven-sh/setup-bun@v2
+      - run: tools/doc-commands.sh
+
   webpush-ntfy:
     # No `#` in the name: GitHub truncates a check-run name there (issue #34).
     name: web push conformance against a real ntfy server
