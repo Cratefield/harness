@@ -28,12 +28,11 @@ use cratefield_core::{Database, DbError, Statement};
 use sea_query::Value as SeaValue;
 
 /// The schema migration: the `provision_progress` table.
-pub const MIGRATION: cratefield_core::SqlMigration = cratefield_core::SqlMigration {
-    id: "0001",
-    name: "init",
-    sql: include_str!("../migrations/sqlite/0001_init.sql"),
-    transactional: true,
-};
+pub const MIGRATION: cratefield_core::SqlMigration = cratefield_core::SqlMigration::new(
+    "0001",
+    "init",
+    include_str!("../migrations/sqlite/0001_init.sql"),
+);
 
 // ---------------------------------------------------------------------------
 // Steps

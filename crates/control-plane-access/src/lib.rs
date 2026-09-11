@@ -36,12 +36,11 @@ use sea_query::Value as SeaValue;
 use serde::{Deserialize, Serialize};
 
 /// The schema migration, applied the way a harness module's is.
-pub const MIGRATION: cratefield_core::SqlMigration = cratefield_core::SqlMigration {
-    id: "0001",
-    name: "init",
-    sql: include_str!("../migrations/sqlite/0001_init.sql"),
-    transactional: true,
-};
+pub const MIGRATION: cratefield_core::SqlMigration = cratefield_core::SqlMigration::new(
+    "0001",
+    "init",
+    include_str!("../migrations/sqlite/0001_init.sql"),
+);
 
 // ---------------------------------------------------------------------------
 // Session cookie

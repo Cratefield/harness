@@ -83,23 +83,31 @@ impl Module for Console {
         // needs to run outside a transaction must not silently run inside
         // one here), distinct ids.
         const MIGRATIONS: [SqlMigration; 3] = [
-            SqlMigration {
-                id: "0001",
-                name: "access",
-                sql: cratefield_access::MIGRATION.sql,
-                transactional: cratefield_access::MIGRATION.transactional,
+            if cratefield_access::MIGRATION.transactional {
+                SqlMigration::new("0001", "access", cratefield_access::MIGRATION.sql)
+            } else {
+                SqlMigration::new("0001", "access", cratefield_access::MIGRATION.sql)
+                    .non_transactional()
             },
-            SqlMigration {
-                id: "0002",
-                name: "accounts",
-                sql: cratefield_accounts::MIGRATION.sql,
-                transactional: cratefield_accounts::MIGRATION.transactional,
+            if cratefield_accounts::MIGRATION.transactional {
+                SqlMigration::new("0002", "accounts", cratefield_accounts::MIGRATION.sql)
+            } else {
+                SqlMigration::new("0002", "accounts", cratefield_accounts::MIGRATION.sql)
+                    .non_transactional()
             },
-            SqlMigration {
-                id: "0003",
-                name: "provisioning",
-                sql: cratefield_provisioning::MIGRATION.sql,
-                transactional: cratefield_provisioning::MIGRATION.transactional,
+            if cratefield_provisioning::MIGRATION.transactional {
+                SqlMigration::new(
+                    "0003",
+                    "provisioning",
+                    cratefield_provisioning::MIGRATION.sql,
+                )
+            } else {
+                SqlMigration::new(
+                    "0003",
+                    "provisioning",
+                    cratefield_provisioning::MIGRATION.sql,
+                )
+                .non_transactional()
             },
         ];
         // The array is the apply order; this refuses a gap, a duplicate

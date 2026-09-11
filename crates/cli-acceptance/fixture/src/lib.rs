@@ -10,10 +10,10 @@ use cratefield_core::{
     Venture,
 };
 
-pub const EMAIL_SIGNUP_INIT: SqlMigration = SqlMigration {
-    id: "0001",
-    name: "init",
-    sql: "CREATE TABLE IF NOT EXISTS subscribers (
+pub const EMAIL_SIGNUP_INIT: SqlMigration = SqlMigration::new(
+    "0001",
+    "init",
+    "CREATE TABLE IF NOT EXISTS subscribers (
     id TEXT PRIMARY KEY,
     email TEXT NOT NULL,
     email_normalized TEXT NOT NULL UNIQUE,
@@ -25,20 +25,18 @@ pub const EMAIL_SIGNUP_INIT: SqlMigration = SqlMigration {
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );",
-    transactional: true,
-};
+);
 
-pub const EMAIL_SIGNUP_ADD_SOURCE: SqlMigration = SqlMigration {
-    id: "0002",
-    name: "add_source_index",
-    sql: "CREATE INDEX IF NOT EXISTS subscribers_source_idx ON subscribers (source);",
-    transactional: true,
-};
+pub const EMAIL_SIGNUP_ADD_SOURCE: SqlMigration = SqlMigration::new(
+    "0002",
+    "add_source_index",
+    "CREATE INDEX IF NOT EXISTS subscribers_source_idx ON subscribers (source);",
+);
 
-pub const WAITLIST_INIT: SqlMigration = SqlMigration {
-    id: "0001",
-    name: "init",
-    sql: "CREATE TABLE IF NOT EXISTS waitlist_entries (
+pub const WAITLIST_INIT: SqlMigration = SqlMigration::new(
+    "0001",
+    "init",
+    "CREATE TABLE IF NOT EXISTS waitlist_entries (
     id TEXT PRIMARY KEY,
     email TEXT NOT NULL,
     email_normalized TEXT NOT NULL,
@@ -52,20 +50,18 @@ pub const WAITLIST_INIT: SqlMigration = SqlMigration {
     created_at TEXT NOT NULL,
     confirmed_at TEXT
 );",
-    transactional: true,
-};
+);
 
-pub const AUDIT_INIT: SqlMigration = SqlMigration {
-    id: "0001",
-    name: "init",
-    sql: "CREATE TABLE IF NOT EXISTS audit_events (
+pub const AUDIT_INIT: SqlMigration = SqlMigration::new(
+    "0001",
+    "init",
+    "CREATE TABLE IF NOT EXISTS audit_events (
     id TEXT PRIMARY KEY,
     kind TEXT NOT NULL,
     payload TEXT NOT NULL,
     created_at TEXT NOT NULL
 );",
-    transactional: true,
-};
+);
 
 pub struct EmailSignupFixture {
     pub with_add_source: bool,

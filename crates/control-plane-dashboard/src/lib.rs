@@ -98,12 +98,13 @@ impl Module for Dashboard {
         // fresh database. No test caught it because no test mounted two
         // modules together. Declaring only what this module owns is what
         // makes the composition apply.
-        const MIGRATIONS: [SqlMigration; 1] = [SqlMigration {
-            id: "0001",
-            name: "connections",
-            sql: cratefield_connections::MIGRATION.sql,
-            transactional: cratefield_connections::MIGRATION.transactional,
-        }];
+        const MIGRATIONS: [SqlMigration; 1] =
+            [if cratefield_connections::MIGRATION.transactional {
+                SqlMigration::new("0001", "connections", cratefield_connections::MIGRATION.sql)
+            } else {
+                SqlMigration::new("0001", "connections", cratefield_connections::MIGRATION.sql)
+                    .non_transactional()
+            }];
         // The array is the apply order; this refuses a gap, a duplicate
         // or an entry out of order at build time (issue #27).
         const _: () = cratefield_core::assert_migration_set(&MIGRATIONS);

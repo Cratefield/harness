@@ -39,47 +39,41 @@ pub use store::{HarnessOnly, SecretStore, Secrets};
 #[must_use]
 pub fn migrations() -> cratefield_core::Migrations {
     const SQLITE: [cratefield_core::SqlMigration; 3] = [
-        cratefield_core::SqlMigration {
-            id: "0001",
-            name: "init",
-            sql: include_str!("../migrations/sqlite/0001_init.sql"),
-            transactional: true,
-        },
-        cratefield_core::SqlMigration {
-            id: "0002",
-            name: "audit",
-            sql: include_str!("../migrations/sqlite/0002_audit.sql"),
-            transactional: true,
-        },
-        cratefield_core::SqlMigration {
-            id: "0003",
-            name: "audit-store",
-            sql: include_str!("../migrations/sqlite/0003_audit_store.sql"),
-            transactional: true,
-        },
+        cratefield_core::SqlMigration::new(
+            "0001",
+            "init",
+            include_str!("../migrations/sqlite/0001_init.sql"),
+        ),
+        cratefield_core::SqlMigration::new(
+            "0002",
+            "audit",
+            include_str!("../migrations/sqlite/0002_audit.sql"),
+        ),
+        cratefield_core::SqlMigration::new(
+            "0003",
+            "audit-store",
+            include_str!("../migrations/sqlite/0003_audit_store.sql"),
+        ),
     ];
     // The array is the apply order; this refuses a gap, a duplicate
     // or an entry out of order at build time (issue #27).
     const _: () = cratefield_core::assert_migration_set(&SQLITE);
     const POSTGRES: [cratefield_core::SqlMigration; 3] = [
-        cratefield_core::SqlMigration {
-            id: "0001",
-            name: "init",
-            sql: include_str!("../migrations/postgres/0001_init.sql"),
-            transactional: true,
-        },
-        cratefield_core::SqlMigration {
-            id: "0002",
-            name: "audit",
-            sql: include_str!("../migrations/postgres/0002_audit.sql"),
-            transactional: true,
-        },
-        cratefield_core::SqlMigration {
-            id: "0003",
-            name: "audit-store",
-            sql: include_str!("../migrations/postgres/0003_audit_store.sql"),
-            transactional: true,
-        },
+        cratefield_core::SqlMigration::new(
+            "0001",
+            "init",
+            include_str!("../migrations/postgres/0001_init.sql"),
+        ),
+        cratefield_core::SqlMigration::new(
+            "0002",
+            "audit",
+            include_str!("../migrations/postgres/0002_audit.sql"),
+        ),
+        cratefield_core::SqlMigration::new(
+            "0003",
+            "audit-store",
+            include_str!("../migrations/postgres/0003_audit_store.sql"),
+        ),
     ];
     // The array is the apply order; this refuses a gap, a duplicate
     // or an entry out of order at build time (issue #27).

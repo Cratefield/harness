@@ -47,12 +47,11 @@ const RETENTION_DAYS: u32 = 30;
 /// did not run. Set it to `false` only for the statements Postgres refuses
 /// inside a transaction block, such as `CREATE INDEX CONCURRENTLY` —
 /// RECONCILIATION.md §4.
-const MIGRATION_INIT: SqlMigration = SqlMigration {
-    id: "0001",
-    name: "init",
-    sql: include_str!("../migrations/sqlite/0001_init.sql"),
-    transactional: true,
-};
+const MIGRATION_INIT: SqlMigration = SqlMigration::new(
+    "0001",
+    "init",
+    include_str!("../migrations/sqlite/0001_init.sql"),
+);
 
 /// The notes module: one table, one public write, one public read, and a
 /// retention purge on the cron.

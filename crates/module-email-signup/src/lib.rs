@@ -42,27 +42,24 @@ use handlers::Settings;
 /// The module's migrations: the `subscribers` table in the portable SQL
 /// subset (issue #10, architecture section 7), plus the subscription
 /// generation that confirmation tokens bind to (issue #127).
-const MIGRATION_INIT: SqlMigration = SqlMigration {
-    id: "0001",
-    name: "init",
-    sql: include_str!("../migrations/sqlite/0001_init.sql"),
-    transactional: true,
-};
+const MIGRATION_INIT: SqlMigration = SqlMigration::new(
+    "0001",
+    "init",
+    include_str!("../migrations/sqlite/0001_init.sql"),
+);
 
-const MIGRATION_SUBSCRIPTION_GENERATION: SqlMigration = SqlMigration {
-    id: "0002",
-    name: "subscription_generation",
-    sql: include_str!("../migrations/sqlite/0002_subscription_generation.sql"),
-    transactional: true,
-};
+const MIGRATION_SUBSCRIPTION_GENERATION: SqlMigration = SqlMigration::new(
+    "0002",
+    "subscription_generation",
+    include_str!("../migrations/sqlite/0002_subscription_generation.sql"),
+);
 
 /// The revocable per-subscription unsubscribe token (issue #137).
-const MIGRATION_UNSUBSCRIBE_TOKEN: SqlMigration = SqlMigration {
-    id: "0003",
-    name: "unsubscribe_token",
-    sql: include_str!("../migrations/sqlite/0003_unsubscribe_token.sql"),
-    transactional: true,
-};
+const MIGRATION_UNSUBSCRIBE_TOKEN: SqlMigration = SqlMigration::new(
+    "0003",
+    "unsubscribe_token",
+    include_str!("../migrations/sqlite/0003_unsubscribe_token.sql"),
+);
 
 /// Email signup with double opt-in.
 ///

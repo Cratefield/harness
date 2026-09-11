@@ -27,12 +27,11 @@ use std::sync::Arc;
 
 /// The module's only migration: the `hello_visits` table in the portable
 /// SQL subset (ADR 0004).
-const MIGRATION_INIT: SqlMigration = SqlMigration {
-    id: "0001",
-    name: "init",
-    sql: include_str!("../migrations/sqlite/0001_init.sql"),
-    transactional: true,
-};
+const MIGRATION_INIT: SqlMigration = SqlMigration::new(
+    "0001",
+    "init",
+    include_str!("../migrations/sqlite/0001_init.sql"),
+);
 
 /// Says hello, and counts how many times it was said.
 pub struct Hello {

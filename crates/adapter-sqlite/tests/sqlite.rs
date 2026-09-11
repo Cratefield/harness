@@ -5,27 +5,25 @@
 use cratefield_adapter_sqlite::SqliteDatabase;
 use cratefield_core::{Database, Row, Rows, SqlMigration, Statement};
 
-const SUBSCRIBERS_INIT: SqlMigration = SqlMigration {
-    id: "0001",
-    name: "init",
-    sql: "CREATE TABLE IF NOT EXISTS subscribers (
+const SUBSCRIBERS_INIT: SqlMigration = SqlMigration::new(
+    "0001",
+    "init",
+    "CREATE TABLE IF NOT EXISTS subscribers (
         id TEXT PRIMARY KEY,
         email TEXT NOT NULL,
         status TEXT NOT NULL
     );",
-    transactional: true,
-};
+);
 
-const WAITLIST_INIT: SqlMigration = SqlMigration {
-    id: "0001",
-    name: "init",
-    sql: "CREATE TABLE IF NOT EXISTS waitlist_entries (
+const WAITLIST_INIT: SqlMigration = SqlMigration::new(
+    "0001",
+    "init",
+    "CREATE TABLE IF NOT EXISTS waitlist_entries (
         id TEXT PRIMARY KEY,
         email TEXT NOT NULL,
         product TEXT NOT NULL
     );",
-    transactional: true,
-};
+);
 
 #[pollster::test]
 async fn applies_fixture_migrations_and_round_trips_a_row() {
@@ -123,22 +121,20 @@ async fn sea_query_limit_binds_as_integer() {
 #[pollster::test]
 async fn an_edited_migration_is_refused_by_the_database() {
     let db = SqliteDatabase::in_memory().expect("in-memory db");
-    let first = [SqlMigration {
-        id: "0001",
-        name: "init",
-        sql: "CREATE TABLE IF NOT EXISTS widgets (id TEXT PRIMARY KEY);",
-        transactional: true,
-    }];
+    let first = [SqlMigration::new(
+        "0001",
+        "init",
+        "CREATE TABLE IF NOT EXISTS widgets (id TEXT PRIMARY KEY);",
+    )];
     db.apply_migrations("widgets", &first).expect("first apply");
     // Re-applying the same SQL is a no-op, not an error.
     db.apply_migrations("widgets", &first).expect("idempotent");
 
-    let edited = [SqlMigration {
-        id: "0001",
-        name: "init",
-        sql: "CREATE TABLE IF NOT EXISTS widgets (id TEXT PRIMARY KEY, colour TEXT);",
-        transactional: true,
-    }];
+    let edited = [SqlMigration::new(
+        "0001",
+        "init",
+        "CREATE TABLE IF NOT EXISTS widgets (id TEXT PRIMARY KEY, colour TEXT);",
+    )];
     let err = db
         .apply_migrations("widgets", &edited)
         .expect_err("an edited migration must be refused");
@@ -168,29 +164,26 @@ async fn a_pre_checksum_database_still_applies_and_does_not_cry_mismatch() {
     // 0001 is recorded with no checksum: applied, unverifiable, skipped
     // even though the SQL here differs. 0002 is new and applies.
     let migrations = [
-        SqlMigration {
-            id: "0001",
-            name: "init",
-            sql: "CREATE TABLE IF NOT EXISTS widgets (id TEXT PRIMARY KEY, colour TEXT);",
-            transactional: true,
-        },
-        SqlMigration {
-            id: "0002",
-            name: "add_gadgets",
-            sql: "CREATE TABLE IF NOT EXISTS gadgets (id TEXT PRIMARY KEY);",
-            transactional: true,
-        },
+        SqlMigration::new(
+            "0001",
+            "init",
+            "CREATE TABLE IF NOT EXISTS widgets (id TEXT PRIMARY KEY, colour TEXT);",
+        ),
+        SqlMigration::new(
+            "0002",
+            "add_gadgets",
+            "CREATE TABLE IF NOT EXISTS gadgets (id TEXT PRIMARY KEY);",
+        ),
     ];
     db.apply_migrations("widgets", &migrations)
         .expect("an old database keeps working");
 
     // And the new row carries a checksum, so the next edit is caught.
-    let edited = [SqlMigration {
-        id: "0002",
-        name: "add_gadgets",
-        sql: "CREATE TABLE IF NOT EXISTS gadgets (id TEXT PRIMARY KEY, size INTEGER);",
-        transactional: true,
-    }];
+    let edited = [SqlMigration::new(
+        "0002",
+        "add_gadgets",
+        "CREATE TABLE IF NOT EXISTS gadgets (id TEXT PRIMARY KEY, size INTEGER);",
+    )];
     assert!(
         db.apply_migrations("widgets", &edited).is_err(),
         "rows written from now on are verifiable"
@@ -205,12 +198,12 @@ async fn non_transactional_migration_applies_and_re_applies_idempotently() {
     use cratefield_core::SqlMigration;
 
     let db = SqliteDatabase::in_memory().expect("in-memory database");
-    let migrations = [SqlMigration {
-        id: "0001",
-        name: "guarded",
-        sql: "CREATE TABLE IF NOT EXISTS nt_guard (id TEXT PRIMARY KEY);",
-        transactional: false,
-    }];
+    let migrations = [SqlMigration::new(
+        "0001",
+        "guarded",
+        "CREATE TABLE IF NOT EXISTS nt_guard (id TEXT PRIMARY KEY);",
+    )
+    .non_transactional()];
     db.apply_migrations("probe", &migrations)
         .expect("first apply");
     db.apply_migrations("probe", &migrations)
@@ -237,12 +230,12 @@ async fn non_transactional_migration_without_a_guard_is_refused() {
     use cratefield_core::SqlMigration;
 
     let db = SqliteDatabase::in_memory().expect("in-memory database");
-    let migrations = [SqlMigration {
-        id: "0001",
-        name: "unguarded",
-        sql: "CREATE TABLE nt_unguarded (id TEXT PRIMARY KEY);",
-        transactional: false,
-    }];
+    let migrations = [SqlMigration::new(
+        "0001",
+        "unguarded",
+        "CREATE TABLE nt_unguarded (id TEXT PRIMARY KEY);",
+    )
+    .non_transactional()];
     let err = db
         .apply_migrations("probe", &migrations)
         .expect_err("unguarded SQL is refused");
