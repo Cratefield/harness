@@ -343,7 +343,8 @@ fn parse_http_date(value: &str) -> Option<time::OffsetDateTime> {
 /// This replaces four independent parsers — APNs, Resend, the LinkedIn
 /// client and Web Push — of which only the last read the date form, so the
 /// bug was live in three (issue #214). The APNs copy's own comment said
-/// the date form "needs a parsed clock the port does not promise"; [`Clock`]
+/// the date form "needs a parsed clock the port does not promise";
+/// [`Clock`](crate::Clock)
 /// is a port every one of those callers already holds, which is what makes
 /// one parser possible.
 ///

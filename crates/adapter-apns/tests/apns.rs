@@ -614,13 +614,13 @@ fn a_429_carries_the_providers_retry_after() {
     // back into the rate limiter that sent it.
     let deadline = 1_792_567_680; // Wed, 21 Oct 2026 07:28:00 GMT
     let http = ScriptedHttp::replying_after(503, "", "Wed, 21 Oct 2026 07:28:00 GMT");
-    let clock = Arc::new(StepClock::at(deadline - 900));
+    let clock = Arc::new(StepClock::at(deadline - 15 * 60));
     let apns = Apns::new(http, clock, creds()).unwrap();
     let err = pollster::block_on(apns.send(&device(), &Notification::new("a", "b"))).unwrap_err();
     assert!(matches!(err, PushError::Transient { .. }));
     assert_eq!(
         err.retry_after(),
-        Some(Duration::from_secs(900)),
+        Some(Duration::from_mins(15)),
         "the date is resolved against the clock the adapter already holds"
     );
 
