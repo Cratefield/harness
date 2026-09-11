@@ -383,6 +383,12 @@ jobs:
           COOKIE=$(grep -i '^set-cookie:' /tmp/login.headers | sed 's/^[^:]*: *//' | cut -d';' -f1)
           curl -sf -m 10 -H "cookie: $COOKIE" http://127.0.0.1:8787/ui/admin/waitlist/export \
             | grep -q '<table class="cf-table"'
+      - name: Two sockets against the room Durable Object (issue #103)
+        working-directory: examples/venture
+        # Not curl: a WebSocket upgrade is the one thing it cannot do, and the
+        # issue asks for two sockets because everything that matters here is
+        # what one sees when the other acts.
+        run: node rooms-smoke.mjs
       - name: cf.js embed against the running worker (issue #73)
         working-directory: tools/cfjs
         run: |
