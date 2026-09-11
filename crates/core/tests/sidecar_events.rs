@@ -160,7 +160,26 @@ impl Dispatcher for EventDispatcher {
 
 /// Emits `waitlist.confirmed` from `POST /v1/waitlist/emit` and answers its
 /// own normal response regardless of what the bus did with it.
-struct EmitRouteModule;
+struct EmitRouteModule {
+    /// The event this module emits. Configurable so a test that asserts
+    /// on the process-global report sink can name something only it
+    /// produces.
+    event: &'static str,
+}
+
+impl Default for EmitRouteModule {
+    fn default() -> Self {
+        Self {
+            event: "waitlist.confirmed",
+        }
+    }
+}
+
+impl EmitRouteModule {
+    fn named(event: &'static str) -> Self {
+        Self { event }
+    }
+}
 
 impl Module for EmitRouteModule {
     fn name(&self) -> &'static str {
@@ -180,6 +199,7 @@ impl Module for EmitRouteModule {
     }
     fn router(&self, ctx: ModuleContext) -> axum::Router {
         let events = ctx.events.clone();
+        let name = self.event;
         axum::Router::new().route(
             "/emit",
             axum::routing::post(move |scope: Scope| {
@@ -187,7 +207,7 @@ impl Module for EmitRouteModule {
                 async move {
                     events.emit_in(
                         &scope,
-                        "waitlist.confirmed",
+                        name,
                         serde_json::json!({ "email": "a@example.test" }),
                     );
                     axum::Json(serde_json::json!({ "ok": true }))
@@ -317,78 +337,37 @@ fn envelope(body: &http::Request<Bytes>) -> serde_json::Value {
     serde_json::from_slice(body.body()).expect("the forward carries JSON")
 }
 
-/// Collects the `tracing` events emitted while it is installed. The
-/// "nobody heard this" reports are *only* observable here: the JSON body
-/// says `handlers: 0`, but whether anyone was told is a separate question,
-/// and it is the one #62 was amended over.
-#[derive(Default)]
-struct LogCapture {
-    lines: std::sync::Mutex<Vec<String>>,
+/// Collects the reports the harness forwards to its internal-error sink.
+///
+/// **Process-global on purpose.** The first version of this captured
+/// `tracing` through `with_default`, which is *thread-local*: it held
+/// locally and failed on CI, because a report emitted on any thread but
+/// the one running the closure is simply not seen. The sink
+/// `set_error_forwarder` installs is global and `Mutex`-guarded, so it
+/// cannot miss a line for scheduling reasons.
+///
+/// Being global means every test writes into one buffer, so an assertion
+/// has to name something only its own test produces — hence the unique
+/// event name per test below, rather than counting a shared phrase.
+static REPORTS: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+static INSTALL: std::sync::Once = std::sync::Once::new();
+
+fn record(line: &str) {
+    REPORTS.lock().expect("report lock").push(line.to_owned());
 }
 
-impl LogCapture {
-    fn contains(&self, needle: &str) -> bool {
-        self.lines
+/// Installs the sink once per test binary — `set_error_forwarder` keeps
+/// the first installation and ignores later ones, so this must not race.
+fn reports() -> impl Fn(&str) -> usize {
+    INSTALL.call_once(|| cratefield_core::set_error_forwarder(record));
+    |needle: &str| {
+        REPORTS
             .lock()
-            .expect("log lock")
-            .iter()
-            .any(|line| line.contains(needle))
-    }
-
-    fn count(&self, needle: &str) -> usize {
-        self.lines
-            .lock()
-            .expect("log lock")
+            .expect("report lock")
             .iter()
             .filter(|line| line.contains(needle))
             .count()
     }
-}
-
-#[derive(Clone)]
-struct SharedCapture(Arc<LogCapture>);
-
-impl tracing::Subscriber for SharedCapture {
-    fn enabled(&self, _metadata: &tracing::Metadata<'_>) -> bool {
-        true
-    }
-    fn new_span(&self, _attributes: &tracing::span::Attributes<'_>) -> tracing::Id {
-        tracing::Id::from_u64(1)
-    }
-    fn record(&self, _id: &tracing::Id, _values: &tracing::span::Record<'_>) {}
-    fn record_follows_from(&self, _follows: &tracing::Id, _to: &tracing::Id) {}
-    fn event(&self, event: &tracing::Event<'_>) {
-        #[derive(Default)]
-        struct Fields(Vec<String>);
-        impl tracing::field::Visit for Fields {
-            fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
-                self.0.push(format!("{}={value}", field.name()));
-            }
-            fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
-                self.0.push(format!("{}={value:?}", field.name()));
-            }
-        }
-        let mut fields = Fields::default();
-        event.record(&mut fields);
-        self.0
-            .lines
-            .lock()
-            .expect("log lock")
-            .push(fields.0.join(" "));
-    }
-    fn enter(&self, _id: &tracing::Id) {}
-    fn exit(&self, _id: &tracing::Id) {}
-}
-
-/// Runs `f` to completion with the capture installed, and returns it.
-fn with_capture<F>(f: F) -> Arc<LogCapture>
-where
-    F: std::future::Future<Output = ()>,
-{
-    let capture = Arc::new(LogCapture::default());
-    let dispatch = tracing::dispatcher::Dispatch::new(SharedCapture(Arc::clone(&capture)));
-    tracing::dispatcher::with_default(&dispatch, || pollster::block_on(f));
-    capture
 }
 
 // ------------------------------------------------------- the host's forward
@@ -397,7 +376,7 @@ where
 async fn an_emission_is_forwarded_to_every_mounted_sidecar() {
     let dispatcher = Arc::new(EventDispatcher::with_bindings(&["ACME", "BETA"]));
     let defer = Arc::new(ParkingDefer::default());
-    let router = harness_of(vec![Arc::new(EmitRouteModule)]).router(ports_for(
+    let router = harness_of(vec![Arc::new(EmitRouteModule::default())]).router(ports_for(
         Some(r#"{"acme-pricing":"ACME","beta-billing":"BETA"}"#),
         Some(dispatcher.clone()),
         Some(Arc::clone(&defer)),
@@ -439,7 +418,7 @@ async fn a_mount_the_dispatcher_cannot_reach_is_skipped_not_dialled() {
     // no binding for. Forwarding to it would be a dial into nothing.
     let dispatcher = Arc::new(EventDispatcher::with_bindings(&["ACME"]));
     let defer = Arc::new(ParkingDefer::default());
-    let router = harness_of(vec![Arc::new(EmitRouteModule)]).router(ports_for(
+    let router = harness_of(vec![Arc::new(EmitRouteModule::default())]).router(ports_for(
         Some(r#"{"acme-pricing":"ACME","ghost":"MISSING"}"#),
         Some(dispatcher.clone()),
         Some(Arc::clone(&defer)),
@@ -459,7 +438,7 @@ async fn the_response_is_produced_before_the_forward_runs() {
     // dialled. An inline defer could not tell these apart.
     let dispatcher = Arc::new(EventDispatcher::answering(StatusCode::ACCEPTED));
     let defer = Arc::new(ParkingDefer::default());
-    let router = harness_of(vec![Arc::new(EmitRouteModule)]).router(ports_for(
+    let router = harness_of(vec![Arc::new(EmitRouteModule::default())]).router(ports_for(
         Some(r#"{"acme-pricing":"ACME"}"#),
         Some(dispatcher.clone()),
         Some(Arc::clone(&defer)),
@@ -488,7 +467,7 @@ async fn a_sidecar_that_answers_500_does_not_fail_the_originating_request() {
         StatusCode::INTERNAL_SERVER_ERROR,
     ));
     let defer = Arc::new(ParkingDefer::default());
-    let router = harness_of(vec![Arc::new(EmitRouteModule)]).router(ports_for(
+    let router = harness_of(vec![Arc::new(EmitRouteModule::default())]).router(ports_for(
         Some(r#"{"acme-pricing":"ACME"}"#),
         Some(dispatcher.clone()),
         Some(Arc::clone(&defer)),
@@ -515,7 +494,7 @@ async fn a_sidecar_that_answers_500_does_not_fail_the_originating_request() {
 async fn a_sidecar_that_cannot_be_reached_does_not_fail_the_originating_request() {
     let dispatcher = Arc::new(EventDispatcher::unreachable());
     let defer = Arc::new(ParkingDefer::default());
-    let router = harness_of(vec![Arc::new(EmitRouteModule)]).router(ports_for(
+    let router = harness_of(vec![Arc::new(EmitRouteModule::default())]).router(ports_for(
         Some(r#"{"acme-pricing":"ACME"}"#),
         Some(dispatcher.clone()),
         Some(Arc::clone(&defer)),
@@ -578,7 +557,7 @@ async fn an_inbound_event_with_no_subscriber_says_so_rather_than_accepting_silen
     // The silent delivery this issue exists to prevent: an event arrives
     // over the boundary, nothing is listening, and nobody is told.
     let defer = Arc::new(ParkingDefer::default());
-    let router = harness_of(vec![Arc::new(EmitRouteModule)]).router(ports_for(
+    let router = harness_of(vec![Arc::new(EmitRouteModule::default())]).router(ports_for(
         None,
         None,
         Some(Arc::clone(&defer)),
@@ -671,7 +650,7 @@ async fn an_unstamped_post_to_events_is_refused() {
 #[pollster::test]
 async fn a_malformed_envelope_is_a_validation_problem_not_a_panic() {
     let defer = Arc::new(ParkingDefer::default());
-    let router = harness_of(vec![Arc::new(EmitRouteModule)]).router(ports_for(
+    let router = harness_of(vec![Arc::new(EmitRouteModule::default())]).router(ports_for(
         None,
         None,
         Some(Arc::clone(&defer)),
@@ -714,105 +693,111 @@ async fn a_deployment_with_no_gateway_secret_does_not_mount_the_route_at_all() {
 }
 
 // ------------------------------------------------- nobody heard it (reports)
+//
+// Each test uses an event name only it emits, because the sink is
+// process-global and the suite runs in parallel. Counting a shared phrase
+// would make these tests depend on each other's scheduling, which is the
+// bug the previous version of this file had.
 
-#[test]
-fn an_emission_nothing_hears_is_reported() {
-    // No subscriber in process and no mount to forward to. Before #62 this
-    // was silent, which is how a module author learns the hard way that a
-    // handler never ran.
-    let capture = with_capture(async {
-        let defer = Arc::new(ParkingDefer::default());
-        let router = harness_of(vec![Arc::new(EmitRouteModule)]).router(ports_for(
-            None,
-            None,
-            Some(Arc::clone(&defer)),
-        ));
-        let response = request(&router, Method::POST, "/v1/waitlist/emit", &[], None).await;
-        assert_eq!(response.status(), StatusCode::OK);
-        defer.drain().await;
-    });
-    assert!(
-        capture.contains("emitted event has no registered handler"),
-        "an emission nothing heard must be reported: {:?}",
-        capture.lines.lock().expect("log lock")
+#[pollster::test]
+async fn an_emission_nothing_hears_is_reported() {
+    // No subscriber in process and no mount to forward to. Before #62
+    // this was silent, which is how a module author learns the hard way
+    // that a handler never ran.
+    let reports = reports();
+    let defer = Arc::new(ParkingDefer::default());
+    let router = harness_of(vec![Arc::new(EmitRouteModule::named("unheard.emission"))])
+        .router(ports_for(None, None, Some(Arc::clone(&defer))));
+    let response = request(&router, Method::POST, "/v1/waitlist/emit", &[], None).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    defer.drain().await;
+
+    assert_eq!(
+        reports("emitted event `unheard.emission` has no registered handler"),
+        1,
+        "an emission nothing heard must be reported, exactly once"
     );
 }
 
-#[test]
-fn an_emission_that_is_forwarded_is_not_reported_as_unheard() {
-    // The other half: a host with no local subscriber but a mount has been
-    // heard by something, and warning there would train operators to ignore
-    // the warning that matters.
-    let capture = with_capture(async {
-        let dispatcher = Arc::new(EventDispatcher::answering(StatusCode::ACCEPTED));
-        let defer = Arc::new(ParkingDefer::default());
-        let router = harness_of(vec![Arc::new(EmitRouteModule)]).router(ports_for(
+#[pollster::test]
+async fn an_emission_that_is_forwarded_is_not_reported_as_unheard() {
+    // The other half: a host with no local subscriber but a mount *has*
+    // been heard by something, and warning there would train operators to
+    // ignore the warning that matters.
+    let reports = reports();
+    let dispatcher = Arc::new(EventDispatcher::answering(StatusCode::ACCEPTED));
+    let defer = Arc::new(ParkingDefer::default());
+    let router =
+        harness_of(vec![Arc::new(EmitRouteModule::named("forwarded.emission"))]).router(ports_for(
             Some(r#"{"acme-pricing":"ACME"}"#),
             Some(dispatcher.clone()),
             Some(Arc::clone(&defer)),
         ));
-        let response = request(&router, Method::POST, "/v1/waitlist/emit", &[], None).await;
-        assert_eq!(response.status(), StatusCode::OK);
-        defer.drain().await;
-        assert_eq!(dispatcher.events_posts().len(), 1);
-    });
-    assert!(
-        !capture.contains("emitted event has no registered handler"),
-        "a forwarded emission was heard: {:?}",
-        capture.lines.lock().expect("log lock")
-    );
-}
+    let response = request(&router, Method::POST, "/v1/waitlist/emit", &[], None).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    defer.drain().await;
+    assert_eq!(dispatcher.events_posts().len(), 1, "it was forwarded");
 
-#[test]
-fn an_inbound_event_with_no_subscriber_is_reported_once() {
-    let capture = with_capture(async {
-        let defer = Arc::new(ParkingDefer::default());
-        let router = harness_of(vec![Arc::new(EmitRouteModule)]).router(ports_for(
-            None,
-            None,
-            Some(Arc::clone(&defer)),
-        ));
-        let response = request(
-            &router,
-            Method::POST,
-            "/__events",
-            &[(X_HARNESS_GATEWAY, &gateway_stamp("waitlist"))],
-            Some(br#"{"event":"nobody.listens","payload":{}}"#.to_vec()),
-        )
-        .await;
-        assert_eq!(response.status(), StatusCode::ACCEPTED);
-        defer.drain().await;
-    });
     assert_eq!(
-        capture.count("arrived over the boundary with no subscriber"),
-        1,
-        "reported, and exactly once: {:?}",
-        capture.lines.lock().expect("log lock")
+        reports("emitted event `forwarded.emission` has no registered handler"),
+        0,
+        "a forwarded emission was heard, so reporting it would be noise"
     );
 }
 
-#[test]
-fn a_sidecar_that_answers_500_is_reported_exactly_once() {
+#[pollster::test]
+async fn an_inbound_event_with_no_subscriber_is_reported_once() {
+    let reports = reports();
+    let defer = Arc::new(ParkingDefer::default());
+    let router = harness_of(vec![Arc::new(EmitRouteModule::default())]).router(ports_for(
+        None,
+        None,
+        Some(Arc::clone(&defer)),
+    ));
+    let response = request(
+        &router,
+        Method::POST,
+        "/__events",
+        &[(X_HARNESS_GATEWAY, &gateway_stamp("waitlist"))],
+        Some(br#"{"event":"inbound.unheard","payload":{}}"#.to_vec()),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::ACCEPTED);
+    defer.drain().await;
+
+    assert_eq!(
+        reports("event `inbound.unheard` arrived over the boundary with no subscriber"),
+        1,
+        "reported, and exactly once"
+    );
+}
+
+#[pollster::test]
+async fn a_sidecar_that_answers_500_is_reported_exactly_once() {
     // The issue's verification: the failure appears exactly once in logs,
     // and never in the response.
-    let capture = with_capture(async {
-        let dispatcher = Arc::new(EventDispatcher::answering(
-            StatusCode::INTERNAL_SERVER_ERROR,
-        ));
-        let defer = Arc::new(ParkingDefer::default());
-        let router = harness_of(vec![Arc::new(EmitRouteModule)]).router(ports_for(
-            Some(r#"{"acme-pricing":"ACME"}"#),
-            Some(dispatcher.clone()),
-            Some(Arc::clone(&defer)),
-        ));
-        let response = request(&router, Method::POST, "/v1/waitlist/emit", &[], None).await;
-        assert_eq!(response.status(), StatusCode::OK);
-        defer.drain().await;
-    });
+    let reports = reports();
+    let dispatcher = Arc::new(EventDispatcher::answering(
+        StatusCode::INTERNAL_SERVER_ERROR,
+    ));
+    let defer = Arc::new(ParkingDefer::default());
+    // Its own mount name, not just its own event name: the report line
+    // names the *mount*, and `a_sidecar_that_answers_500_does_not_fail_
+    // the_originating_request` emits the identical line for
+    // `acme-pricing`. One shared buffer means uniqueness has to cover
+    // every part of the string being counted.
+    let router = harness_of(vec![Arc::new(EmitRouteModule::default())]).router(ports_for(
+        Some(r#"{"five-hundred-report":"ACME"}"#),
+        Some(dispatcher.clone()),
+        Some(Arc::clone(&defer)),
+    ));
+    let response = request(&router, Method::POST, "/v1/waitlist/emit", &[], None).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    defer.drain().await;
+
     assert_eq!(
-        capture.count("event forward was not accepted"),
+        reports("event forward to `five-hundred-report` answered 500"),
         1,
-        "once, not once per retry: {:?}",
-        capture.lines.lock().expect("log lock")
+        "once, not once per retry"
     );
 }
