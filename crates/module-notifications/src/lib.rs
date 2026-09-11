@@ -1007,6 +1007,7 @@ impl Module for Notifications {
                               arrived at once, kept only until they are gathered into one \
                               summary email.",
                 redacted: &[],
+                subject_via: None,
             },
             PersonalDataSet::none(
                 store::OUTBOX,

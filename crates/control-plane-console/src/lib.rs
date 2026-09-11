@@ -153,6 +153,7 @@ impl Module for Console {
                               with, whether it was an address or a domain, the note the \
                               operator wrote when inviting you, who invited you, and when.",
                 redacted: &[],
+                subject_via: None,
             },
             PersonalDataSet {
                 table: "allowlist_audit",
@@ -170,6 +171,7 @@ impl Module for Console {
                               and when. Append-only; a removal removes the invite but not \
                               the record of it.",
                 redacted: &[],
+                subject_via: None,
             },
             PersonalDataSet {
                 table: "account",
@@ -180,6 +182,7 @@ impl Module for Console {
                               sign in with, the name it gave us, whether the account is \
                               active, and when it was created.",
                 redacted: &[],
+                subject_via: None,
             },
             // Declared after `account` so that, under reversal, these rows
             // would be deleted before the account row they reference. The
@@ -195,6 +198,7 @@ impl Module for Console {
                               modules it carries, where it is in its lifecycle, and when it \
                               was created and last changed.",
                 redacted: &[],
+                subject_via: None,
             },
             // Keyed to a venture, not a person: the last provisioning step
             // that completed, the error message if the run stopped, and when.
