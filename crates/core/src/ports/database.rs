@@ -228,14 +228,22 @@ impl std::error::Error for DbError {}
 /// Execute statements against the venture database. Implementations: D1
 /// (Workers), rusqlite (tests, self-hosted), Postgres (phase 3).
 ///
-/// `batch` runs all statements in one unit of work where the engine supports
-/// it (a transaction on SQLite and D1's atomic batch); documented per
-/// adapter.
+/// `batch_atomic` is **all-or-nothing, on every adapter, without
+/// exception** (issue #126). Either every statement commits or none does:
+/// a failure part-way through leaves the database exactly as it was, as
+/// if the batch never ran. This is a port contract, not an adapter
+/// nicety — confirmation, position assignment and referral credit each
+/// span several statements and are correct only if they commit together —
+/// so an adapter that cannot honour it must not implement this trait,
+/// and the testing kit's `assert_batch_is_atomic` enforces the
+/// contract per engine in CI. Per-statement row counts are not reported;
+/// a caller that needs to know whether a statement changed anything reads
+/// the row back (see `module-waitlist`'s `confirm_entry`).
 #[async_trait]
 pub trait Database: Send + Sync {
     async fn execute(&self, stmt: &Statement) -> Result<u64, DbError>;
     async fn query(&self, stmt: &Statement) -> Result<Rows, DbError>;
-    async fn batch(&self, stmts: &[Statement]) -> Result<(), DbError>;
+    async fn batch_atomic(&self, stmts: &[Statement]) -> Result<(), DbError>;
 }
 
 #[cfg(test)]

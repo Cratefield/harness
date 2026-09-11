@@ -139,7 +139,7 @@ impl Database for FakeDb {
     async fn query(&self, _stmt: &Statement) -> Result<cratefield_core::Rows, DbError> {
         Ok(cratefield_core::Rows::new(vec![]))
     }
-    async fn batch(&self, _stmts: &[Statement]) -> Result<(), DbError> {
+    async fn batch_atomic(&self, _stmts: &[Statement]) -> Result<(), DbError> {
         Ok(())
     }
 }

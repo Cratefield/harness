@@ -408,7 +408,7 @@ async fn erase_confirm(
 
     let statements = erase::statements(&planned, &subject);
     if !statements.is_empty() {
-        db.batch(&statements).await.map_err(|err| {
+        db.batch_atomic(&statements).await.map_err(|err| {
             tracing::error!(error = %err, "erasure batch failed");
             Problem::internal().instance(&scope.request_id)
         })?;

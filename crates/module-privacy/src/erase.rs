@@ -13,8 +13,8 @@
 //! because tax law requires them, and can tell before acting whether the id
 //! they typed is the person they meant.
 //!
-//! **Why one batch.** Every statement goes through [`Database::batch`], which
-//! is one unit of work where the engine supports it. A half-erased subject —
+//! **Why one batch.** Every statement goes through [`Database::batch_atomic`], which
+//! is all-or-nothing on every engine. A half-erased subject —
 //! sessions gone, account row left — is worse than a failed erasure, because
 //! the failure can be retried and the half cannot be found again.
 //!

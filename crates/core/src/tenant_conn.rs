@@ -92,8 +92,11 @@ impl Database for TenantConn {
         self.db.query(stmt).await
     }
 
-    async fn batch(&self, stmts: &[crate::ports::Statement]) -> Result<(), crate::ports::DbError> {
-        self.db.batch(stmts).await
+    async fn batch_atomic(
+        &self,
+        stmts: &[crate::ports::Statement],
+    ) -> Result<(), crate::ports::DbError> {
+        self.db.batch_atomic(stmts).await
     }
 }
 

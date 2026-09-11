@@ -46,7 +46,7 @@ impl Database for RecordingDb {
         self.seen.lock().expect("seen lock").push(stmt.sql.clone());
         Ok(Rows::new(Vec::new()))
     }
-    async fn batch(&self, stmts: &[Statement]) -> Result<(), DbError> {
+    async fn batch_atomic(&self, stmts: &[Statement]) -> Result<(), DbError> {
         for stmt in stmts {
             self.seen.lock().expect("seen lock").push(stmt.sql.clone());
         }

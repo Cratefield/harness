@@ -411,7 +411,7 @@ impl Database for EmptyDatabase {
         }
     }
 
-    async fn batch(&self, _stmts: &[Statement]) -> Result<(), DbError> {
+    async fn batch_atomic(&self, _stmts: &[Statement]) -> Result<(), DbError> {
         Err(DbError::Batch("empty database".to_string()))
     }
 }

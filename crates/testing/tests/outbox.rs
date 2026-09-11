@@ -18,7 +18,7 @@ fn enqueue_lease_and_complete() {
     let db = db_with_outbox(&outbox);
     pollster::block_on(async {
         // Enqueue two units of work (as a module would, inside its own batch).
-        db.batch(&[
+        db.batch_atomic(&[
             outbox.enqueue_statement(
                 "a",
                 "confirmation",

@@ -27,7 +27,7 @@ export async function __cf_db_query(sql, params) {
     return JSON.stringify(rows);
 }
 export async function __cf_db_batch(items) {
-    await bridge().batch(JSON.parse(items));
+    await bridge().batch_atomic(JSON.parse(items));
 }
 "#)]
 extern "C" {
@@ -93,7 +93,7 @@ impl SqliteWasmDatabase {
                 continue;
             }
             // Each migration + its bookkeeping row in one atomic batch.
-            self.batch(&[
+            self.batch_atomic(&[
                 Statement::new(migration.sql),
                 Statement::with_values(
                     "INSERT INTO harness_migrations (id, applied_at, checksum) VALUES (?, ?, ?)",
@@ -179,7 +179,7 @@ impl Database for SqliteWasmDatabase {
         Ok(Rows::new(rows))
     }
 
-    async fn batch(&self, stmts: &[Statement]) -> Result<(), DbError> {
+    async fn batch_atomic(&self, stmts: &[Statement]) -> Result<(), DbError> {
         let items: Vec<Json> = stmts
             .iter()
             .map(|stmt| {

@@ -185,7 +185,10 @@ async fn batch_is_atomic_and_rolls_back_on_failure() {
                         VALUES ('b2', 'ghost', 2, 0), ('b1', 'dup pk', 3, 0)",
         ),
     ];
-    let err = db.batch(&failing).await.expect_err("duplicate pk fails");
+    let err = db
+        .batch_atomic(&failing)
+        .await
+        .expect_err("duplicate pk fails");
     assert!(matches!(err, DbError::Batch(_)), "got {err:?}");
 
     let rows = db
@@ -197,7 +200,7 @@ async fn batch_is_atomic_and_rolls_back_on_failure() {
         "the first statement rolled back with the failed one"
     );
 
-    db.batch(&[insert("b1", "ok", 1), insert("b2", "ok", 2)])
+    db.batch_atomic(&[insert("b1", "ok", 1), insert("b2", "ok", 2)])
         .await
         .expect("a clean batch commits");
     let rows = db

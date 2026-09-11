@@ -486,5 +486,5 @@ async fn notify_and_commit(notifier: &Notifier, kit: &support::Kit) {
         )
         .await
         .expect("notify");
-    db.batch(enqueued.statements()).await.expect("batch");
+    db.batch_atomic(enqueued.statements()).await.expect("batch");
 }

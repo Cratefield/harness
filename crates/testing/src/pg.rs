@@ -150,10 +150,10 @@ impl Database for MarshalledDatabase {
         self.marshal(async move { inner.query(&stmt).await })
     }
 
-    async fn batch(&self, stmts: &[Statement]) -> Result<(), DbError> {
+    async fn batch_atomic(&self, stmts: &[Statement]) -> Result<(), DbError> {
         let inner = self.inner.clone();
         let stmts = stmts.to_vec();
-        self.marshal(async move { inner.batch(&stmts).await })
+        self.marshal(async move { inner.batch_atomic(&stmts).await })
     }
 }
 

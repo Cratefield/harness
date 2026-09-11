@@ -274,7 +274,7 @@ impl Allowlist {
         // of work on SQLite and D1), so the whitelist can never change without
         // a matching audit record, and vice versa.
         self.db
-            .batch(&[
+            .batch_atomic(&[
                 Statement::with_values(
                     "INSERT INTO allowlist (value, kind, note, added_by, added_at) \
                      VALUES (?, ?, ?, ?, ?) \
@@ -320,7 +320,7 @@ impl Allowlist {
             return Ok(false);
         };
         self.db
-            .batch(&[
+            .batch_atomic(&[
                 Statement::with_values(
                     "DELETE FROM allowlist WHERE value = ?",
                     vec![text(&entry.value)],

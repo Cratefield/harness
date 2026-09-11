@@ -563,7 +563,7 @@ async fn write_preferences(
         if statements.is_empty() {
             break;
         }
-        match db.batch(&statements).await {
+        match db.batch_atomic(&statements).await {
             Ok(()) => break,
             Err(err) if attempt == 0 => {
                 tracing::info!(error = %err, "a concurrent preference write won; retrying once");

@@ -94,7 +94,7 @@ impl SecretStore {
         // provision a third).
         let (new_key_id, new_dek, insert) = self.prepare_key("active").await?;
         self.db()
-            .batch(&[
+            .batch_atomic(&[
                 Statement::with_values(
                     "UPDATE harness_secret_keys SET state = 'retiring' WHERE key_id = ?",
                     vec![text(&old_key_id)],

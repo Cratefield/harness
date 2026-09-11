@@ -22,6 +22,10 @@
 #![doc = include_str!("../README.md")]
 #![forbid(unsafe_code)]
 
+// Needs only `cratefield-core`, so it is ungated like `vectors` and
+// `tmp`: a light consumer can assert the batch contract without the
+// harness graph (issues #126, #201).
+mod batch;
 #[cfg(feature = "harness")]
 mod conformance;
 #[cfg(feature = "harness")]
@@ -41,6 +45,7 @@ mod sidecar;
 mod tmp;
 pub mod vectors;
 
+pub use batch::assert_batch_is_atomic;
 #[cfg(feature = "harness")]
 pub use conformance::{conformance, conformance_in_process_only, sidecar_parity};
 #[cfg(feature = "harness")]

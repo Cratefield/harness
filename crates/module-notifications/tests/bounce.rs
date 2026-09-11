@@ -167,7 +167,7 @@ async fn a_suppressed_address_is_never_mailed_again() {
         .await
         .expect("notify");
     if !enqueued.statements().is_empty() {
-        db.batch(enqueued.statements()).await.expect("batch");
+        db.batch_atomic(enqueued.statements()).await.expect("batch");
     }
     kit.notifier.drain(&kit.scope()).await.expect("drain");
 
