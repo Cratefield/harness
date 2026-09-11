@@ -205,6 +205,9 @@ thiserror = "2.0.20"
 # Runtime and adapters.
 # NOTE: the `http` feature stays OFF deliberately — with it enabled, D1
 # writes hang under workerd/miniflare (worker 0.8.5, verified empirically).
+# The `#[durable_object]` macro expands to a `wasm_bindgen` export, so a
+# crate declaring a Durable Object class needs this directly (issue #103).
+wasm-bindgen = "0.2"
 worker = { version = "0.8.5", default-features = false, features = ["d1"] }
 rusqlite = { version = "0.40.2", features = ["bundled"] }
 clap = { version = "4.6.6", features = ["derive"] }

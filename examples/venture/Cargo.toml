@@ -43,6 +43,10 @@ cratefield = { path = "../../crates/facade", version = "0.1.0", features = [
     # migrations apply, and it says so rather than pretending.
     "notifications",
 ] }
+async-trait = { workspace = true }
+# The `#[durable_object]` macro expands to a `wasm_bindgen` export, so the
+# crate declaring the class needs it in scope (issue #103).
+wasm-bindgen = { workspace = true }
 axum = { workspace = true }
 http = { workspace = true }
 tower = { workspace = true }

@@ -15,6 +15,7 @@
 // `pub` + the `rlib` crate type in `Cargo.toml` so the native example
 // (`examples/venture-native`) reuses this exact module — one source of
 // truth for the wasm and native canaries.
+pub mod rooms;
 pub mod sample;
 
 use cratefield::Harness;
@@ -149,6 +150,21 @@ mod tests {
 ///
 /// Propagates `worker::Error` from the harness router.
 pub async fn fetch(req: Request, env: Env, ctx: Context) -> worker::Result<Response> {
+    // **The upgrade goes to the object, not to the router** (issue #103). A
+    // Durable Object is the only thing on Workers that can hold a socket, and
+    // the room id is the name that picks which object — so two people asking
+    // for `/rooms/sunrise` land in the same one, on the same edge location,
+    // which is the whole reason the room exists.
+    //
+    // The original request is forwarded whole: the `Upgrade` header has to
+    // survive, and so does the query the venture reads the member from.
+    // The prefix comes from the handler, not from this line: `RoomHandler`
+    // declares where it mounts, and a venture that hardcoded it a second time
+    // is a venture where the two can disagree in silence.
+    let prefix = format!("{}/", rooms::route());
+    if let Some(room) = req.path().strip_prefix(&prefix).map(str::to_owned) {
+        return rooms::route_upgrade(&room, req, &env).await;
+    }
     let (harness, runtime) = instance();
     serve(harness, runtime, req, env, ctx).await
 }

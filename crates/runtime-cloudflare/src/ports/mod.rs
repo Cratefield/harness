@@ -8,6 +8,7 @@ mod dispatcher;
 mod http;
 mod kv;
 mod rate_limit;
+mod realtime;
 
 pub use blob::R2Blob;
 pub use clock::WorkersClock;
@@ -17,6 +18,7 @@ pub use dispatcher::ServiceDispatcher;
 pub use http::FetchClient;
 pub use kv::KvStorePort;
 pub use rate_limit::RateLimitPort;
+pub use realtime::RoomDriver;
 
 use axum::http::HeaderMap;
 

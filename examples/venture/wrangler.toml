@@ -13,3 +13,15 @@ binding = "DB"
 database_name = "venture-example"
 database_id = "local-venture-example"
 migrations_dir = "migrations"
+
+# The Realtime port (issue #103). One class per venture; `RoomDriver` in
+# `cratefield-runtime-cloudflare` is what it forwards to.
+[[durable_objects.bindings]]
+name = "ROOMS"
+class_name = "Rooms"
+
+# A class using the WebSocket hibernation API has to be declared in a
+# migration, or the runtime will not accept a socket on its behalf.
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["Rooms"]
