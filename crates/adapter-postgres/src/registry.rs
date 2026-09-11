@@ -478,10 +478,32 @@ mod tests {
         let b = registry.pool_for("b").await.expect("b opens");
 
         let hold = tokio::spawn(async move {
-            let _ = a.query(&Statement::new("SELECT pg_sleep(2)")).await;
+            let _ = a.query(&Statement::new("SELECT pg_sleep(5)")).await;
         });
-        tokio::time::sleep(Duration::from_millis(200)).await;
 
+        // Wait until the permit is *observably* taken rather than sleeping
+        // a guessed interval and hoping.
+        //
+        // The first version slept 200ms and assumed A had won the single
+        // permit by then. Under load it had not, B took the permit first,
+        // and the refusal this test exists to see never happened — it
+        // failed on a machine running two builds at once, which is exactly
+        // when a timing assumption is worth least.
+        let contended = async {
+            loop {
+                if b.query(&Statement::new("SELECT 1")).await.is_err() {
+                    return;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        };
+        tokio::time::timeout(Duration::from_secs(4), contended)
+            .await
+            .expect("A holds the only permit within four seconds");
+
+        // Now that contention is established, the deadline is the claim:
+        // B refuses on its own 400ms rather than waiting out A's five
+        // seconds.
         let started = std::time::Instant::now();
         let refused = b.query(&Statement::new("SELECT 1")).await;
         let waited = started.elapsed();
@@ -491,9 +513,10 @@ mod tests {
             "B must be refused rather than queued behind A: {refused:?}"
         );
         assert!(
-            waited < Duration::from_millis(1_500),
+            waited < Duration::from_secs(2),
             "and refused on its own deadline, not after A finished: {waited:?}"
         );
+        hold.abort();
         let _ = hold.await;
 
         // A refusal is backpressure, not a broken pool.
