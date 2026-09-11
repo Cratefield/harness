@@ -424,10 +424,162 @@ class CfPush extends HTMLElement {
 }
 
 const push = { supported, state, subscribe, unsubscribe, sync };
+const NOTES = "/v1/notifications";
+
+/** Every call here goes through `cf.auth`, like the push half. */
+async function notesFetch(path, init) {
+  const response = await fetch(`${apiBase()}${NOTES}${path}`, {
+    ...init,
+    headers: await authHeaders(),
+  });
+  if (!response.ok) throw new Error(`notifications: ${response.status}`);
+  return response.status === 204 ? null : response.json();
+}
+
+/** One page, newest first. `cursor` comes from the previous page. */
+function list({ cursor, unread, limit } = {}) {
+  const query = new URLSearchParams();
+  if (cursor) query.set("cursor", cursor);
+  if (unread) query.set("unread", "true");
+  if (limit) query.set("limit", String(limit));
+  return notesFetch(query.size ? `?${query}` : "");
+}
+
+const notifications = {
+  list,
+  unreadCount: () => notesFetch("/unread-count").then((body) => body.unread),
+  markRead: (id) => notesFetch(`/${encodeURIComponent(id)}/read`, { method: "POST" }),
+  markAllRead: () => notesFetch("/read-all", { method: "POST" }),
+  archive: (id) => notesFetch(`/${encodeURIComponent(id)}`, { method: "DELETE" }),
+};
+
+/** The unread count, polled only while the tab is visible.
+ *
+ * A hidden tab polling every minute is a background request the person
+ * cannot see and did not ask for; the count is re-read on the way back,
+ * so nothing is stale by the time it is looked at.
+ */
+function watchUnread(onCount, every = 60000) {
+  let timer = null;
+  const tick = () =>
+    notifications
+      .unreadCount()
+      .then(onCount)
+      .catch(() => {});
+  const stop = () => {
+    clearInterval(timer);
+    timer = null;
+  };
+  // The first read has to succeed before anything is scheduled. A page
+  // that cannot authenticate — a static example, a signed-out visitor,
+  // `cf.auth` returning null — would otherwise poll into a wall forever,
+  // and one live `setInterval` is enough to keep a page (and a CI step
+  // that waits for the event loop to drain) alive indefinitely.
+  const start = async () => {
+    if (timer) return;
+    try {
+      onCount(await notifications.unreadCount());
+    } catch {
+      return;
+    }
+    timer = setInterval(tick, every);
+  };
+  document.addEventListener("visibilitychange", () =>
+    document.visibilityState === "hidden" ? stop() : start(),
+  );
+  if (document.visibilityState !== "hidden") start();
+  return stop;
+}
+notifications.watch = watchUnread;
+
+/** The bell and its panel.
+ *
+ * The panel is a `<dialog>` opened with `show()`, and nothing here sets
+ * `display` on it: an author rule beats the UA's own hiding, so a
+ * `display` of our own would leave a closed dialog painted.
+ */
+class CfNotifications extends HTMLElement {
+  connectedCallback() {
+    if (this.dataset.ready) return;
+    this.dataset.ready = "1";
+    this.innerHTML =
+      '<button type="button" aria-haspopup="dialog"><span class="cf-bell">\u{1F514}</span>' +
+      '<span class="cf-count" aria-live="polite" hidden></span></button>' +
+      '<dialog class="cf-panel"><ul></ul>' +
+      '<footer><button type="button" class="cf-all">Mark all read</button></footer></dialog>';
+    this.bell = this.querySelector("button");
+    this.count = this.querySelector(".cf-count");
+    this.panel = this.querySelector("dialog");
+    this.items = this.querySelector("ul");
+
+    this.bell.addEventListener("click", () => this.open());
+    this.querySelector(".cf-all").addEventListener("click", async () => {
+      await notifications.markAllRead();
+      this.show(0);
+      await this.load();
+    });
+    // Focus goes back to the bell however the dialog closed — Escape, the
+    // backdrop, or our own code — so a keyboard user is never dropped at
+    // the top of the document.
+    this.panel.addEventListener("close", () => this.bell.focus());
+
+    this.stop = watchUnread((n) => this.show(n));
+    if (cf.realtime?.subscribe) {
+      cf.realtime.subscribe(`notifications:${this.getAttribute("account") || ""}`, () =>
+        notifications.unreadCount().then((n) => this.show(n)),
+      );
+    }
+  }
+
+  disconnectedCallback() {
+    this.stop?.();
+  }
+
+  /** `99+` because a bell is not a place to read a four-digit number. */
+  show(n) {
+    this.count.textContent = n > 99 ? "99+" : String(n);
+    this.count.hidden = n === 0;
+    this.bell.setAttribute("aria-label", `Notifications, ${n} unread`);
+  }
+
+  async open() {
+    this.panel.showModal();
+    await this.load();
+  }
+
+  async load() {
+    const { notifications: rows = [] } = await notifications.list({
+      limit: Number(this.getAttribute("page-size")) || 20,
+    });
+    this.items.replaceChildren(
+      ...rows.map((row) => {
+        const li = document.createElement("li");
+        if (!row.read_at) li.className = "cf-unread";
+        const link = document.createElement("button");
+        link.type = "button";
+        link.textContent = `${row.title} — ${row.body}`;
+        link.addEventListener("click", async () => {
+          await notifications.markRead(row.id);
+          this.show(await notifications.unreadCount());
+          if (row.url) location.assign(row.url);
+        });
+        li.append(link);
+        return li;
+      }),
+    );
+    if (!rows.length) {
+      this.items.innerHTML = `<li class="cf-empty">${this.getAttribute("empty") || "Nothing yet."}</li>`;
+    }
+  }
+}
+
+cf.notifications = notifications;
 cf.push = push;
 
 if (!customElements.get("cf-form")) customElements.define("cf-form", CfForm);
 if (!customElements.get("cf-status")) customElements.define("cf-status", CfStatus);
 if (!customElements.get("cf-push")) customElements.define("cf-push", CfPush);
+if (!customElements.get("cf-notifications"))
+  customElements.define("cf-notifications", CfNotifications);
 
 export { CfForm, CfStatus, CfPush, push };

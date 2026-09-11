@@ -349,3 +349,57 @@ Measured on the native router in release mode
 **6.7 µs**, a fragment **5.8 µs**, through the whole router including the
 request-id and CORS layers. Under `wrangler dev` the round trip is about
 3 ms, which is the process boundary, not the render.
+
+## `<cf-notifications>` — the in-app notification centre
+
+A bell with an unread count, and a panel listing this account's inbox
+newest first (issue #188). It reads the routes `cratefield-module-notifications`
+serves, so a venture that mounts that module gets the widget by adding one
+element.
+
+```html
+<cf-notifications page-size="10" empty="Nothing here yet."></cf-notifications>
+```
+
+| Attribute | Meaning |
+|---|---|
+| `page-size` | Rows per page (default 20; the API caps at 100) |
+| `empty` | What an empty inbox says |
+| `account` | The account id, for the Realtime room. Optional |
+
+### Auth
+
+Every route behind this widget takes a bearer token, so the page must set
+`cf.auth` — a token, or a function returning one:
+
+```js
+cf.auth = () => myApp.accessToken();
+```
+
+It is read per request and never cached or stored, so a page that rotates
+its token needs to do nothing here. With no token the widget refuses
+rather than fetching a 401.
+
+### What it does on its own
+
+- Reads the unread count on connect, then every 60 s **while the tab is
+  visible**. A hidden tab polls nothing: a background request nobody can
+  see is one nobody asked for. The count is re-read on the way back.
+- Subscribes to `notifications:<account>` when the page exposes a Realtime
+  client, so the count moves without waiting for a poll.
+- Marks an item read when it is clicked, then follows its `url`.
+
+### Accessibility
+
+The bell is a `<button aria-haspopup="dialog">` whose accessible name
+carries the count, the count itself is `aria-live="polite"`, and the panel
+is a `<dialog>`: Escape closes it and focus returns to the bell however it
+closed. Nothing sets `display` on the panel — an author rule beats the
+UA's own hiding, and a closed dialog would stay painted.
+
+### The same contract, for native apps
+
+A native app does not use this widget but should behave the same way. The
+five routes, the cursor rule and the Realtime room name are in
+`docs/NOTIFICATIONS.md`; the sequence a push tap follows is: `POST
+/v1/notifications/{id}/read`, then open the notification's `url`.

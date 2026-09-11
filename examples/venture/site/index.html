@@ -60,6 +60,17 @@
           VAPID key, so the block reports that this site does not offer
           them — which is what it should say.
         </p>
+        <cf-notifications
+          page-size="10"
+          empty="Nothing here yet."
+        ></cf-notifications>
+        <p>
+          The bell above reads <code>/v1/notifications</code>, which needs
+          an access token: set <code>cf.auth</code> to one, or to a
+          function returning one. This example wires no auth issuer, so it
+          reports nothing rather than pretending to be empty.
+        </p>
+
         <cf-push
           label="Turn notifications on"
           off-label="Turn notifications off"

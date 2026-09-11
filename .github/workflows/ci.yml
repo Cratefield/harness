@@ -36,12 +36,14 @@ jobs:
           node size.mjs
 
   cfjs-push:
-    # The browser client (issue 183): cf.js's push half against stubbed
-    # push APIs, and the reference service worker in a fake
-    # ServiceWorkerGlobalScope. Neither needs a server, so this does not
-    # wait for the wrangler job. What it cannot prove is a real browser
-    # delivering a real push — that is the vendor-live leg, issue 186.
-    name: cf.js push and the reference service worker
+    # The browser halves of cf.js: push against stubbed push APIs (issue
+    # 183), the reference service worker in a fake
+    # ServiceWorkerGlobalScope, and the notification centre against a
+    # stubbed /v1/notifications (issue 188). None needs a server, so this
+    # does not wait for the wrangler job. What it cannot prove is a real
+    # browser delivering a real push — that is the vendor-live leg, issue
+    # 186.
+    name: cf.js browser halves
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -54,6 +56,7 @@ jobs:
           bun install --frozen-lockfile
           node push.mjs
           node sw.mjs
+          node notifications.mjs
 
   migration-guard:
     # No `#` in the name: GitHub truncates a check-run name there, which
