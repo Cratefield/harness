@@ -411,6 +411,7 @@ dependencies = [
  "futures-util",
  "http",
  "sea-query",
+ "serde_json",
  "time",
  "tracing",
 ]

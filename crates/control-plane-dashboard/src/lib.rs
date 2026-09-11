@@ -30,6 +30,7 @@ use cratefield_chrome::{NavItem, Page, escape, nav, render};
 use cratefield_console::{LOGIN_PATH, current_session};
 use cratefield_core::{
     Database, HttpPolicy, Migrations, Module, ModuleContext, Port, SqlMigration, Statement,
+    Surface, SurfaceDocument, View,
 };
 use http::{HeaderMap, StatusCode, header};
 use time::format_description::well_known::Rfc3339;
@@ -54,6 +55,14 @@ const BASE: &str = "/v1/dashboard";
 /// [`DEFAULT_RESPONSE_TIMEOUT`]: cratefield_core::DEFAULT_RESPONSE_TIMEOUT
 const HEALTH_POLICY: HttpPolicy = HttpPolicy {
     max_response_bytes: 4 * 1024,
+    timeout: Duration::from_secs(3),
+};
+
+/// The same budget for the venture's UI contract, with room for the
+/// document itself — a surface with a JSON Schema per action is bigger than
+/// a health probe and still nothing like a megabyte.
+const SURFACE_POLICY: HttpPolicy = HttpPolicy {
+    max_response_bytes: 256 * 1024,
     timeout: Duration::from_secs(3),
 };
 
@@ -127,6 +136,9 @@ impl Module for Dashboard {
             .route("/ventures/{id}/archive", post(archive))
             .route("/ventures/{id}/modules", post(set_modules))
             .route("/ventures/{id}/reprovision", post(reprovision))
+            // The screens the design has and the product does not. One
+            // handler, one table; a new screen is a row.
+            .route("/{slug}", get(planned_screen))
             .with_state(state)
     }
 }
@@ -254,6 +266,145 @@ async fn check_health(ctx: &ModuleContext, venture: &Venture) -> HealthVerdict {
         Ok(response) => HealthVerdict::Failing(response.status().as_u16()),
         Err(err) => HealthVerdict::Unreachable(err.to_string()),
     }
+}
+
+// ---------------------------------------------------------------------------
+// The venture's own screens, read from the contract it publishes
+// ---------------------------------------------------------------------------
+
+/// Fetches a venture's `/__surface`.
+///
+/// The screens a venture has are **not** something this dashboard should
+/// know: they are whatever its module set declares, and the harness already
+/// publishes that as a contract — `GET /__surface`, whose own documentation
+/// names the control plane as a consumer. Reading it means adding a module
+/// to a venture makes its screens appear here with no change to this crate,
+/// which is the difference between a list that is generated and a list that
+/// is maintained (and therefore, eventually, wrong).
+///
+/// What comes back is the **public subset**: the admin variant needs
+/// `Authorization: Bearer <ADMIN_TOKEN>`, and the control plane has no way
+/// to hold a venture's admin token until the secrets store is wired. The
+/// screen says that rather than implying it has seen everything.
+async fn surface_of(ctx: &ModuleContext, venture: &Venture) -> Result<SurfaceDocument, String> {
+    if !matches!(
+        venture.status,
+        VentureStatus::Live | VentureStatus::Degraded
+    ) {
+        return Err(String::from("not running — nothing is serving a contract"));
+    }
+    let http = ctx
+        .ports
+        .http
+        .as_deref()
+        .ok_or_else(|| String::from("http port unavailable"))?;
+    let request = http::Request::builder()
+        .method(http::Method::GET)
+        .uri(format!("https://{}/__surface", venture.subdomain))
+        .header(header::USER_AGENT, "cratefield-dashboard")
+        .header(header::ACCEPT, "application/json")
+        .extension(SURFACE_POLICY)
+        .body(bytes::Bytes::new())
+        .map_err(|err| err.to_string())?;
+    let response = http.send(request).await.map_err(|err| err.to_string())?;
+    if !response.status().is_success() {
+        return Err(format!("HTTP {}", response.status().as_u16()));
+    }
+    serde_json::from_slice(response.body()).map_err(|err| format!("unreadable contract: {err}"))
+}
+
+/// Renders the screens a venture's modules bring.
+///
+/// Every row here is generated from the contract. Nothing about `cms` or
+/// `waitlist` is written down in this file.
+#[allow(clippy::format_push_string)] // the house idiom for HTML building
+fn render_screens(doc: &SurfaceDocument, venture: &Venture) -> String {
+    if doc.modules.is_empty() {
+        return String::from(
+            "<p class=\"dash__note\">The venture answered, and its contract declares no \
+             screens at all. Every module it carries is API-only.</p>",
+        );
+    }
+    let base = if doc.venture.public_url.is_empty() {
+        format!("https://{}", venture.subdomain)
+    } else {
+        doc.venture.public_url.trim_end_matches('/').to_owned()
+    };
+
+    let mut out = String::new();
+    for module in &doc.modules {
+        let rows = render_module_screens(&base, &module.name, &module.surface);
+        out.push_str(&format!(
+            "<p class=\"dash__card-h\" style=\"margin-top:18px\">{name} \
+             <span class=\"dash__tag\">{n} screen{s}</span></p>{rows}",
+            name = escape(&module.name),
+            n = module.surface.views.len(),
+            s = if module.surface.views.len() == 1 {
+                ""
+            } else {
+                "s"
+            },
+        ));
+    }
+    out.push_str(
+        "<p class=\"dash__note\">These are the screens the venture's own contract \
+         declares, fetched from its <code>/__surface</code> while this page rendered — \
+         not a list kept in the dashboard. Adding a module to the set above makes its \
+         screens appear here.</p>\
+         <p class=\"dash__note\">This is the <strong>public</strong> subset. A module's \
+         admin screens are served only against its admin token, and the control plane has \
+         nowhere to hold one until the secrets store is wired, so it cannot ask for them \
+         and does not pretend to have.</p>",
+    );
+    out
+}
+
+#[allow(clippy::format_push_string)] // the house idiom for HTML building
+fn render_module_screens(base: &str, module: &str, surface: &Surface) -> String {
+    if surface.views.is_empty() {
+        return String::from("<p class=\"dash__note\">No screens: this module is API-only.</p>");
+    }
+    let mut rows = String::from("<div class=\"dash__list\">");
+    for view in &surface.views {
+        let (kind, action, detail) = match view {
+            View::Form { action } => ("form", action.as_str(), String::new()),
+            View::Status { action } => ("status", action.as_str(), String::new()),
+            View::Table { source, columns } => (
+                "table",
+                source.as_str(),
+                columns
+                    .iter()
+                    .map(|column| column.label.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", "),
+            ),
+        };
+        // What the action actually is, from the same document: the method
+        // it answers and who it is for.
+        let declared = surface
+            .actions
+            .iter()
+            .find(|candidate| candidate.name == action);
+        let audience = declared.map_or("—", |declared| match declared.audience {
+            cratefield_core::Audience::Public => "public",
+            cratefield_core::Audience::Admin => "admin",
+            cratefield_core::Audience::Link => "signed link",
+        });
+        rows.push_str(&format!(
+            "<div class=\"dash__lrow dash__lrow--screens\">\
+             <span><a href=\"{base}/ui/{module}/{action}\" rel=\"noopener\">{action}</a></span>\
+             <span><em>{kind}</em></span>\
+             <span>{audience}</span>\
+             <span>{detail}</span></div>",
+            base = escape(base),
+            module = escape(module),
+            action = escape(action),
+            audience = escape(audience),
+            detail = escape(&detail),
+        ));
+    }
+    rows.push_str("</div>");
+    rows
 }
 
 // ---------------------------------------------------------------------------
@@ -489,15 +640,7 @@ async fn ventures(State(state): State<Arc<DashboardState>>, headers: HeaderMap) 
          answering says so.</p>",
     );
 
-    let nav_html = nav(&[
-        NavItem::here("Ventures", BASE),
-        NavItem::to("New venture", "/v1/console/new"),
-        NavItem::unbuilt("Deploys"),
-        NavItem::unbuilt("Logs"),
-        NavItem::unbuilt("Domains"),
-        NavItem::unbuilt("Backups"),
-        NavItem::unbuilt("Billing"),
-    ]);
+    let nav_html = account_nav("ventures");
 
     let crumb = format!(
         "{total} venture{s} · {live} live · {degraded} degraded",
@@ -563,7 +706,10 @@ async fn venture_detail(
             return internal("could not load the connections");
         }
     };
-    let health = check_health(ctx, &venture).await;
+    // Both are real requests to the venture; polled together, so the page
+    // costs the slower one rather than their sum.
+    let (health, surface) =
+        futures_util::future::join(check_health(ctx, &venture), surface_of(ctx, &venture)).await;
 
     Html(render_detail(
         &venture,
@@ -571,6 +717,7 @@ async fn venture_detail(
         &progress,
         &connections,
         &health,
+        surface.as_ref(),
     ))
     .into_response()
 }
@@ -584,6 +731,7 @@ fn render_detail(
     progress: &Progress,
     connections: &[ConnectionRow],
     health: &HealthVerdict,
+    surface: Result<&SurfaceDocument, &String>,
 ) -> String {
     let catalog = cratefield_catalog::curated();
     let on_count = venture
@@ -636,6 +784,29 @@ fn render_detail(
         &render_modules(&catalog, venture, editable),
         true,
     );
+    let screens_card = card(
+        "Screens",
+        surface
+            .ok()
+            .map(|doc| {
+                let n: usize = doc.modules.iter().map(|m| m.surface.views.len()).sum();
+                format!("{n}")
+            })
+            .as_deref(),
+        &match surface {
+            Ok(doc) => render_screens(doc, venture),
+            Err(why) => format!(
+                "<p class=\"dash__note\">The venture's contract could not be read: \
+                 {why}.</p>\
+                 <p class=\"dash__note\">Its screens are whatever its modules declare at \
+                 <code>/__surface</code>, and that is read from the venture itself rather \
+                 than kept here — so until it answers, this screen has nothing truthful \
+                 to list and will not guess from the module names.</p>",
+                why = escape(why),
+            ),
+        },
+        true,
+    );
     let connections_card = card(
         "Connections",
         Some(&connections.len().to_string()),
@@ -646,11 +817,12 @@ fn render_detail(
 
     let body = format!(
         "{degraded_banner}\
-         <div class=\"dash__grid\">{overview}{provisioning}{modules}{connections}\
-         {secrets}{audit}</div>{actions}",
+         <div class=\"dash__grid\">{overview}{provisioning}{modules}{screens}\
+         {connections}{secrets}{audit}</div>{actions}",
         overview = overview,
         provisioning = card("Provisioning", None, &render_progress(progress), false),
         modules = modules_card,
+        screens = screens_card,
         connections = connections_card,
         secrets = card(
             "Secrets",
@@ -673,13 +845,21 @@ fn render_detail(
         actions = actions,
     );
 
-    let nav_html = nav(&[
+    // The planned screens are real pages now, so they are links rather
+    // than dim words: each says what it will do and what to do today.
+    let here = format!("{BASE}/ventures/{}", venture.id);
+    let paths: Vec<String> = PLANNED
+        .iter()
+        .map(|screen| format!("{BASE}/{}", screen.slug))
+        .collect();
+    let mut items = vec![
         NavItem::to("Ventures", BASE),
-        NavItem::here("Overview", &format!("{BASE}/ventures/{}", venture.id)),
-        NavItem::unbuilt("Data browser"),
-        NavItem::unbuilt("Deploys"),
-        NavItem::unbuilt("Logs"),
-    ]);
+        NavItem::here("Overview", &here),
+    ];
+    for (screen, path) in PLANNED.iter().zip(&paths) {
+        items.push(NavItem::to(screen.title, path));
+    }
+    let nav_html = nav(&items);
 
     let shell = format!(
         "<p class=\"crumb\"><a href=\"{BASE}\">Ventures</a> / {slug}</p>\
@@ -1072,6 +1252,162 @@ async fn reprovision(
             internal("could not start re-provisioning")
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// The screens the design has and the product does not
+// ---------------------------------------------------------------------------
+
+/// One screen the dashboard will have and does not yet.
+///
+/// These were dim, inert words in the navigation. A label that cannot be
+/// clicked tells an operator nothing; a page that says what the screen will
+/// do, **what to do instead today**, and which issue specifies it tells
+/// them everything they can act on. The copy is the site's own — the
+/// preview at cratefield.com/dashboard/ already makes these promises, and
+/// product and marketing disagreeing about what is built is its own kind
+/// of lie.
+struct Planned {
+    /// The path segment under `/v1/dashboard`.
+    slug: &'static str,
+    title: &'static str,
+    /// What the screen is for, in a sentence.
+    purpose: &'static str,
+    /// What an operator does today instead. Usually a command.
+    instead: &'static str,
+    /// The issue that specifies it, in `Cratefield/control-plane`.
+    issue: Option<u32>,
+}
+
+const PLANNED: [Planned; 7] = [
+    Planned {
+        slug: "data",
+        title: "Data browser",
+        purpose: "List and edit rows, filter and sort, follow relations, and export a                   table or a query result as CSV — generated from the Tables contract a                   venture publishes at /__surface, so it stays correct without being                   maintained separately. The SQL console is read-only on purpose: a write                   console against a customer's live database is a support incident                   waiting to happen.",
+        instead: "You write the SQL, against the venture's own database.",
+        issue: Some(28),
+    },
+    Planned {
+        slug: "deploys",
+        title: "Deploys",
+        purpose: "Every deploy of a venture, what module set it carried, and which one is                   serving now. Waiting on the same thing everything else here waits on:                   no Deployer talks to Cloudflare yet, so there are no deploys to list.",
+        instead: "You run the build on your own machine and deploy with `wrangler`.",
+        issue: Some(26),
+    },
+    Planned {
+        slug: "logs",
+        title: "Logs",
+        purpose: "A venture's request and error logs, kept long enough to look at after                   the fact. Nothing retains them today, which is the part that needs                   building — not the screen.",
+        instead: "You use `wrangler tail`, which shows the live stream and keeps nothing.",
+        issue: None,
+    },
+    Planned {
+        slug: "domains",
+        title: "Domains",
+        purpose: "Put a venture on a customer's own domain through Cloudflare for SaaS:                   add the hostname, show the DNS record to create, verify it, issue the                   certificate, and show the status while it settles.",
+        instead: "You add the custom domain in Cloudflare yourself.",
+        issue: Some(30),
+    },
+    Planned {
+        slug: "backups",
+        title: "Backups",
+        purpose: "Point-in-time recovery inside D1's Time Travel window, a scheduled                   export to R2 for anything older, and the last successful backup shown                   here. A backup that has never been restored is not a backup, so the                   restore path is part of the work.",
+        instead: "You export with `fz data export` and keep the file.",
+        issue: Some(29),
+    },
+    Planned {
+        slug: "environments",
+        title: "Environments",
+        purpose: "A staging venture alongside production with its own database and                   secrets, and a promotion that moves a module set and its migrations                   from one to the other. Without it every schema change is tested in                   production.",
+        instead: "You deploy a second backend and wire it up yourself.",
+        issue: Some(31),
+    },
+    Planned {
+        slug: "billing",
+        title: "Billing",
+        purpose: "What a venture costs and what it is being charged: a Stripe                   subscription per venture, per-venture counters for requests, storage                   and email, and a free tier enforced by throttling rather than by a                   bill. The free tier stays on — the throttle must never become a pause.",
+        instead: "Nothing: there is nothing to pay for yet.",
+        issue: Some(27),
+    },
+];
+
+/// The navigation shared by every account-level screen, so the same list is
+/// in the same order wherever you are.
+fn account_nav(current: &str) -> String {
+    let mut items = vec![
+        if current == "ventures" {
+            NavItem::here("Ventures", BASE)
+        } else {
+            NavItem::to("Ventures", BASE)
+        },
+        NavItem::to("New venture", "/v1/console/new"),
+    ];
+    // Leaked into a `String` would be a leak per request; these paths are
+    // built once per render and borrowed for the life of the call.
+    let paths: Vec<String> = PLANNED
+        .iter()
+        .map(|screen| format!("{BASE}/{}", screen.slug))
+        .collect();
+    for (screen, path) in PLANNED.iter().zip(&paths) {
+        items.push(if current == screen.slug {
+            NavItem::here(screen.title, path)
+        } else {
+            NavItem::to(screen.title, path)
+        });
+    }
+    nav(&items)
+}
+
+/// Renders one planned screen.
+async fn planned_screen(
+    State(state): State<Arc<DashboardState>>,
+    headers: HeaderMap,
+    Path(slug): Path<String>,
+) -> Response {
+    let ctx = &state.ctx;
+    if let Err(redirect) = guard(ctx, &headers) {
+        return redirect;
+    }
+    let session = current_session(ctx, &headers).expect("guard proved a session");
+    let Some(screen) = PLANNED.iter().find(|screen| screen.slug == slug) else {
+        return (StatusCode::NOT_FOUND, "no such screen").into_response();
+    };
+
+    let issue = match screen.issue {
+        Some(number) => format!(
+            " <a href=\"https://github.com/Cratefield/control-plane/issues/{number}\" \
+             rel=\"noopener\">The issue that specifies it.</a>"
+        ),
+        // Two of these have no issue yet, and saying so is better than
+        // linking one that does not exist.
+        None => String::from(" No issue specifies it yet."),
+    };
+
+    let body = format!(
+        "<p class=\"dash__banner\"><span class=\"chip\">Planned</span>\
+         <strong>Not built.</strong> Today you do this instead: {instead}{issue}</p>\
+         <div class=\"dash__card dash__card--wide\">\
+         <p class=\"dash__card-h\">What it will do</p>\
+         <p class=\"dash__note\">{purpose}</p></div>\
+         <p class=\"dash__note\">This page exists so the navigation does not lie in \
+         either direction: the screen is in the design, it is not in the product, and \
+         the thing you can do today is written down rather than left for you to find.</p>",
+        instead = escape(screen.instead),
+        purpose = escape(screen.purpose),
+    );
+
+    Html(render(&Page {
+        title: screen.title,
+        signed_in_as: Some(&session.account_id),
+        body: &format!(
+            "<div class=\"page-h\"><h1>{title}</h1><span class=\"chip\">Planned</span></div>\
+             <p class=\"lede\">Not built yet. What it will do, and what to do \
+             meanwhile.</p>{frame}",
+            title = escape(screen.title),
+            frame = frame(&account_nav(screen.slug), screen.title, &body),
+        ),
+    }))
+    .into_response()
 }
 
 /// Whether two module-set content keys name the same selection.
@@ -1736,6 +2072,222 @@ mod tests {
             progress.error.contains("no deployer is wired"),
             "{progress:?}"
         );
+    }
+
+    /// An http port that answers `/__surface` with `document` and every
+    /// other path with 200. Enough to drive the venture page with a
+    /// contract of the test's choosing.
+    #[derive(Clone)]
+    struct SurfaceServer {
+        document: Arc<String>,
+    }
+
+    #[async_trait::async_trait]
+    impl cratefield_core::HttpClient for SurfaceServer {
+        async fn send(
+            &self,
+            request: http::Request<bytes::Bytes>,
+        ) -> Result<http::Response<bytes::Bytes>, cratefield_core::HttpError> {
+            let body = if request.uri().path() == "/__surface" {
+                bytes::Bytes::from(self.document.as_str().to_owned())
+            } else {
+                bytes::Bytes::new()
+            };
+            http::Response::builder()
+                .status(200)
+                .body(body)
+                .map_err(|err| cratefield_core::HttpError::Transport(err.to_string()))
+        }
+    }
+
+    async fn seeded_serving(document: &str) -> TestHarness {
+        let server = SurfaceServer {
+            document: Arc::new(document.to_owned()),
+        };
+        let kit = TestHarness::with_ports(modules(), move |ports| {
+            ports.http = Some(Arc::new(server));
+        });
+        let repo = Repository::new(kit.db.clone());
+        repo.account_for_login(EMAIL, "Op", "acc_1", "t0")
+            .await
+            .expect("account");
+        repo.create_venture(
+            "v1",
+            "acc_1",
+            "my-app",
+            "my-app.cratefield.app",
+            "cms+waitlist",
+            "ten_1",
+            "t0",
+        )
+        .await
+        .expect("venture");
+        repo.set_venture_status("acc_1", "v1", VentureStatus::Provisioning, "t1")
+            .await
+            .expect("provisioning");
+        repo.set_venture_status("acc_1", "v1", VentureStatus::Live, "t2")
+            .await
+            .expect("live");
+        kit
+    }
+
+    #[pollster::test]
+    async fn the_screens_come_from_the_ventures_contract_not_from_this_crate() {
+        // The document names a module this crate has never heard of and
+        // which is in no catalogue. If the screen list were written down
+        // here, or derived from the venture's module_set, none of this
+        // could appear.
+        // Built from the core types and serialised, rather than
+        // hand-written JSON: the contract's wire shape is the harness's to
+        // decide, and a test that spells it out by hand tests the test.
+        let surface = Surface::new()
+            .action(cratefield_core::Action::post("enrol", "/enrol"))
+            .action(
+                cratefield_core::Action::get("roster", "/admin/roster")
+                    .audience(cratefield_core::Audience::Admin),
+            )
+            .view(View::form("enrol"))
+            .view(View::table(
+                "roster",
+                vec![
+                    cratefield_core::Column::new("who", "Who"),
+                    cratefield_core::Column::new("when", "When"),
+                ],
+            ));
+        let document = serde_json::to_string(&SurfaceDocument {
+            surface_api: 1,
+            harness_api: 1,
+            venture: cratefield_core::VentureSurface {
+                name: "my-app".to_owned(),
+                public_url: "https://my-app.example".to_owned(),
+            },
+            modules: vec![cratefield_core::ModuleSurface {
+                name: "nobody-has-heard-of-this".to_owned(),
+                version: "9.9.9".to_owned(),
+                surface,
+            }],
+            ui: None,
+        })
+        .expect("serialise the contract");
+
+        let kit = seeded_serving(&document).await;
+        let reply = send(
+            &kit,
+            Method::GET,
+            &format!("{BASE}/ventures/v1"),
+            Some(&cookie(&kit)),
+        )
+        .await;
+        assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
+
+        assert!(
+            reply.body.contains("nobody-has-heard-of-this"),
+            "the module the contract declared is missing: {}",
+            reply.body
+        );
+        // The links point at the venture's own renderer, at the public URL
+        // the contract gave — not at a URL rebuilt from the subdomain.
+        assert!(
+            reply
+                .body
+                .contains("https://my-app.example/ui/nobody-has-heard-of-this/enrol"),
+            "{}",
+            reply.body
+        );
+        // Both views, their kinds, and the table's columns.
+        assert!(reply.body.contains("roster"), "{}", reply.body);
+        assert!(reply.body.contains("Who, When"), "{}", reply.body);
+        assert!(reply.body.contains("admin"), "{}", reply.body);
+    }
+
+    #[pollster::test]
+    async fn an_unreachable_venture_lists_no_screens_rather_than_guessing_them() {
+        // The venture carries cms+waitlist, both of which really do declare
+        // screens. The temptation is to render them from the module names.
+        // The dashboard has not fetched a contract, so it does not know
+        // this venture's screens, and says so.
+        let kit = seeded(VentureStatus::Live).await; // the exhausted fake http
+        let reply = send(
+            &kit,
+            Method::GET,
+            &format!("{BASE}/ventures/v1"),
+            Some(&cookie(&kit)),
+        )
+        .await;
+        assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
+        assert!(
+            reply.body.contains("contract could not be read"),
+            "{}",
+            reply.body
+        );
+        assert!(
+            !reply.body.contains("/ui/cms/"),
+            "a screen link for a contract never read: {}",
+            reply.body
+        );
+    }
+
+    #[pollster::test]
+    async fn a_draft_venture_is_not_asked_for_a_contract_either() {
+        let kit = seeded(VentureStatus::Draft).await;
+        let reply = send(
+            &kit,
+            Method::GET,
+            &format!("{BASE}/ventures/v1"),
+            Some(&cookie(&kit)),
+        )
+        .await;
+        assert!(
+            reply
+                .body
+                .contains("not running — nothing is serving a contract"),
+            "{}",
+            reply.body
+        );
+    }
+
+    #[pollster::test]
+    async fn every_planned_screen_says_what_to_do_instead() {
+        let kit = seeded(VentureStatus::Live).await;
+        for screen in &PLANNED {
+            let reply = send(
+                &kit,
+                Method::GET,
+                &format!("{BASE}/{}", screen.slug),
+                Some(&cookie(&kit)),
+            )
+            .await;
+            assert_eq!(
+                reply.status,
+                StatusCode::OK,
+                "{}: {}",
+                screen.slug,
+                reply.body
+            );
+            assert!(
+                reply.body.contains("Not built."),
+                "{} must not imply it works: {}",
+                screen.slug,
+                reply.body
+            );
+            // The point of the page: the thing you can do right now.
+            assert!(
+                reply.body.contains(&escape(screen.instead)),
+                "{} must say what to do instead: {}",
+                screen.slug,
+                reply.body
+            );
+        }
+
+        // And a screen that is not in the table is a 404, not a blank page.
+        let reply = send(
+            &kit,
+            Method::GET,
+            &format!("{BASE}/teleportation"),
+            Some(&cookie(&kit)),
+        )
+        .await;
+        assert_eq!(reply.status, StatusCode::NOT_FOUND);
     }
 
     #[pollster::test]

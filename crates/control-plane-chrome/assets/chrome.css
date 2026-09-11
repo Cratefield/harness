@@ -195,6 +195,9 @@ a:hover { color: var(--accent-hi); text-decoration: underline; }
 .dash__lrow .dash__dot { margin-right: 8px; vertical-align: 1px; display: inline-block; }
 .dash__lrow em { font-style: normal; color: var(--dim); }
 
+/* The screens a venture's modules declare: name, kind, audience, detail. */
+.dash__lrow--screens { grid-template-columns: 1.2fr .6fr .8fr 1.6fr; }
+
 .dash__empty { padding: 28px 14px; text-align: center; color: var(--muted); font-size: 13px; }
 
 /* --- Status ------------------------------------------------------------ */
