@@ -47,14 +47,14 @@ use std::time::Duration;
 use async_trait::async_trait;
 use bytes::Bytes;
 use cratefield_core::{
-    Clock, HttpClient, Notification, Priority, Push, PushError, PushOutcome, Recipient, ttl_secs,
+    Clock, HttpClient, Notification, Priority, Push, PushError, PushOutcome, Recipient,
+    retry_after, ttl_secs,
 };
 use cratefield_push_auth::{CachedToken, Rs256Signer};
-use http::header::{AUTHORIZATION, CONTENT_TYPE, RETRY_AFTER};
-use http::{HeaderMap, Request, StatusCode};
+use http::header::{AUTHORIZATION, CONTENT_TYPE};
+use http::{Request, StatusCode};
 use serde::{Deserialize, Deserializer};
 use serde_json::{Map, Value, json};
-use time::OffsetDateTime;
 
 /// The ceiling on how long an exchanged bearer token is reused. Google issues
 /// them for an hour; the adapter keeps `expires_in` less
@@ -704,48 +704,6 @@ fn oauth_error(body: &[u8]) -> (Option<String>, String) {
         (None, None) => NO_DETAIL.to_owned(),
     };
     (code, detail)
-}
-
-/// `Retry-After` (RFC 9110 §10.2.3) as a duration, so the outbox can honour
-/// it.
-///
-/// Both forms are read. The delta-seconds form is the common one; the
-/// HTTP-date form is legal, is what CDNs in front of Google's endpoints
-/// emit, and silently ignoring it would turn a "come back in an hour" into
-/// an immediate retry. The date is resolved against the [`Clock`] port —
-/// the only clock this workspace may read — and a date already in the past
-/// becomes [`Duration::ZERO`] ("retry now") rather than being discarded.
-fn retry_after(headers: &HeaderMap, clock: &dyn Clock) -> Option<Duration> {
-    let value = headers.get(RETRY_AFTER)?.to_str().ok()?.trim();
-    if let Ok(seconds) = value.parse::<u64>() {
-        return Some(Duration::from_secs(seconds));
-    }
-    let when = parse_http_date(value)?;
-    let delta = when - clock.now();
-    if delta.is_negative() {
-        return Some(Duration::ZERO);
-    }
-    Duration::try_from(delta).ok()
-}
-
-/// An IMF-fixdate, the one form RFC 9110 §5.6.7 allows a sender to generate:
-/// `Sun, 06 Nov 1994 08:49:37 GMT`.
-///
-/// The two obsolete forms (RFC 850 and asctime) are not parsed. A recipient
-/// is required to accept them, but nothing in front of FCM emits them, and
-/// mis-parsing a two-digit year is worse than falling back to "retry on your
-/// own schedule".
-fn parse_http_date(value: &str) -> Option<OffsetDateTime> {
-    // Version 2 of the format-description syntax, pinned explicitly:
-    // `parse` without a version is deprecated precisely because the
-    // unversioned form's meaning can shift under a `time` upgrade.
-    let format = time::format_description::parse_borrowed::<2>(
-        "[weekday repr:short], [day] [month repr:short] [year] [hour]:[minute]:[second] GMT",
-    )
-    .ok()?;
-    time::PrimitiveDateTime::parse(value, &format)
-        .ok()
-        .map(time::PrimitiveDateTime::assume_utc)
 }
 
 /// Maps an FCM failure to the port's error.
