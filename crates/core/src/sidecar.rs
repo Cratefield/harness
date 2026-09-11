@@ -20,7 +20,7 @@ use bytes::Bytes;
 use crate::admin::require_admin;
 use crate::config::Config;
 use crate::events::EventBus;
-use crate::http::{MAX_BODY_BYTES, X_REQUEST_ID, Json};
+use crate::http::{Json, MAX_BODY_BYTES, X_REQUEST_ID};
 use crate::module::HARNESS_API;
 use crate::ports::{Clock, Dispatcher, Kid, Payload, RateLimiter, Signer};
 use crate::problem::Problem;
@@ -590,13 +590,19 @@ impl EventForwarder {
             match self.dispatcher.dispatch(&mount.binding, request).await {
                 Ok(response) if response.status().is_success() => {}
                 Ok(response) => {
-                    let detail =
-                        format!("event forward to `{}` answered {}", mount.name, response.status());
+                    let detail = format!(
+                        "event forward to `{}` answered {}",
+                        mount.name,
+                        response.status()
+                    );
                     tracing::warn!(event = %name, module = %mount.name, detail, "event forward was not accepted");
                     crate::logging::forward_internal_error(&detail);
                 }
                 Err(err) => {
-                    let detail = format!("event forward to `{mount}` failed: {err}", mount = mount.name);
+                    let detail = format!(
+                        "event forward to `{mount}` failed: {err}",
+                        mount = mount.name
+                    );
                     tracing::warn!(event = %name, module = %mount.name, error = %err, "event forward failed");
                     crate::logging::forward_internal_error(&detail);
                 }
@@ -655,7 +661,10 @@ pub(crate) async fn events_inbound(
         // The amendment to #62: an event nobody hears is exactly the
         // silent failure this issue exists to prevent, so the inbound
         // half refuses to be silent too.
-        let detail = format!("event `{}` arrived over the boundary with no subscriber", envelope.event);
+        let detail = format!(
+            "event `{}` arrived over the boundary with no subscriber",
+            envelope.event
+        );
         tracing::warn!(event = %envelope.event, "{detail}");
         crate::logging::forward_internal_error(&detail);
     }

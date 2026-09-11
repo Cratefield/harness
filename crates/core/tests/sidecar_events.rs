@@ -204,7 +204,11 @@ struct SubscriberModule {
 }
 
 impl SubscriberModule {
-    fn new() -> (Self, Arc<AtomicUsize>, Arc<std::sync::Mutex<Vec<serde_json::Value>>>) {
+    fn new() -> (
+        Self,
+        Arc<AtomicUsize>,
+        Arc<std::sync::Mutex<Vec<serde_json::Value>>>,
+    ) {
         let runs = Arc::new(AtomicUsize::new(0));
         let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
         (
@@ -243,10 +247,9 @@ impl Module for SubscriberModule {
         vec![(
             "waitlist.confirmed".to_owned(),
             Arc::new(
-                move |_scope: &Scope, value: serde_json::Value| -> BoxFuture<
-                    'static,
-                    Result<(), AnyError>,
-                > {
+                move |_scope: &Scope,
+                      value: serde_json::Value|
+                      -> BoxFuture<'static, Result<(), AnyError>> {
                     let runs = Arc::clone(&runs);
                     let seen = Arc::clone(&seen);
                     Box::pin(async move {
@@ -286,10 +289,8 @@ fn ports_for(
     dispatcher: Option<Arc<dyn Dispatcher>>,
     defer: Option<Arc<ParkingDefer>>,
 ) -> Ports {
-    let mut pairs: Vec<(String, String)> = vec![(
-        SIDECAR_GATEWAY_SECRET.to_owned(),
-        GATEWAY_SECRET.to_owned(),
-    )];
+    let mut pairs: Vec<(String, String)> =
+        vec![(SIDECAR_GATEWAY_SECRET.to_owned(), GATEWAY_SECRET.to_owned())];
     if let Some(table) = table {
         pairs.push((HARNESS_SIDECARS.to_owned(), table.to_owned()));
     }
@@ -314,6 +315,80 @@ fn gateway_stamp(mount: &str) -> String {
 
 fn envelope(body: &http::Request<Bytes>) -> serde_json::Value {
     serde_json::from_slice(body.body()).expect("the forward carries JSON")
+}
+
+/// Collects the `tracing` events emitted while it is installed. The
+/// "nobody heard this" reports are *only* observable here: the JSON body
+/// says `handlers: 0`, but whether anyone was told is a separate question,
+/// and it is the one #62 was amended over.
+#[derive(Default)]
+struct LogCapture {
+    lines: std::sync::Mutex<Vec<String>>,
+}
+
+impl LogCapture {
+    fn contains(&self, needle: &str) -> bool {
+        self.lines
+            .lock()
+            .expect("log lock")
+            .iter()
+            .any(|line| line.contains(needle))
+    }
+
+    fn count(&self, needle: &str) -> usize {
+        self.lines
+            .lock()
+            .expect("log lock")
+            .iter()
+            .filter(|line| line.contains(needle))
+            .count()
+    }
+}
+
+#[derive(Clone)]
+struct SharedCapture(Arc<LogCapture>);
+
+impl tracing::Subscriber for SharedCapture {
+    fn enabled(&self, _metadata: &tracing::Metadata<'_>) -> bool {
+        true
+    }
+    fn new_span(&self, _attributes: &tracing::span::Attributes<'_>) -> tracing::Id {
+        tracing::Id::from_u64(1)
+    }
+    fn record(&self, _id: &tracing::Id, _values: &tracing::span::Record<'_>) {}
+    fn record_follows_from(&self, _follows: &tracing::Id, _to: &tracing::Id) {}
+    fn event(&self, event: &tracing::Event<'_>) {
+        #[derive(Default)]
+        struct Fields(Vec<String>);
+        impl tracing::field::Visit for Fields {
+            fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
+                self.0.push(format!("{}={value}", field.name()));
+            }
+            fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+                self.0.push(format!("{}={value:?}", field.name()));
+            }
+        }
+        let mut fields = Fields::default();
+        event.record(&mut fields);
+        self.0
+            .lines
+            .lock()
+            .expect("log lock")
+            .push(fields.0.join(" "));
+    }
+    fn enter(&self, _id: &tracing::Id) {}
+    fn exit(&self, _id: &tracing::Id) {}
+}
+
+/// Runs `f` to completion with the capture installed, and returns it.
+fn with_capture<F>(f: F) -> Arc<LogCapture>
+where
+    F: std::future::Future<Output = ()>,
+{
+    let capture = Arc::new(LogCapture::default());
+    let dispatch = tracing::dispatcher::Dispatch::new(SharedCapture(Arc::clone(&capture)));
+    tracing::dispatcher::with_default(&dispatch, || pollster::block_on(f));
+    capture
 }
 
 // ------------------------------------------------------- the host's forward
@@ -398,7 +473,10 @@ async fn the_response_is_produced_before_the_forward_runs() {
         0,
         "the caller was answered without waiting on the sidecar"
     );
-    assert!(defer.pending() > 0, "and the forward is pending, not skipped");
+    assert!(
+        defer.pending() > 0,
+        "and the forward is pending, not skipped"
+    );
 
     defer.drain().await;
     assert_eq!(dispatcher.events_posts().len(), 1);
@@ -426,7 +504,11 @@ async fn a_sidecar_that_answers_500_does_not_fail_the_originating_request() {
 
     // And the failure surfaces where failures go, not into the response.
     defer.drain().await;
-    assert_eq!(dispatcher.events_posts().len(), 1, "tried once, never retried");
+    assert_eq!(
+        dispatcher.events_posts().len(),
+        1,
+        "tried once, never retried"
+    );
 }
 
 #[pollster::test]
@@ -442,7 +524,11 @@ async fn a_sidecar_that_cannot_be_reached_does_not_fail_the_originating_request(
     let response = request(&router, Method::POST, "/v1/waitlist/emit", &[], None).await;
     assert_eq!(response.status(), StatusCode::OK);
     defer.drain().await;
-    assert_eq!(dispatcher.events_posts().len(), 1, "tried once, never retried");
+    assert_eq!(
+        dispatcher.events_posts().len(),
+        1,
+        "tried once, never retried"
+    );
 }
 
 // ------------------------------------------------------ the sidecar's half
@@ -460,9 +546,7 @@ async fn an_inbound_event_is_accepted_with_202_before_its_handlers_run() {
         Method::POST,
         "/__events",
         &[(X_HARNESS_GATEWAY, &gateway_stamp("email-signup"))],
-        Some(
-            br#"{"event":"waitlist.confirmed","payload":{"email":"a@example.test"}}"#.to_vec(),
-        ),
+        Some(br#"{"event":"waitlist.confirmed","payload":{"email":"a@example.test"}}"#.to_vec()),
     )
     .await;
 
@@ -494,8 +578,11 @@ async fn an_inbound_event_with_no_subscriber_says_so_rather_than_accepting_silen
     // The silent delivery this issue exists to prevent: an event arrives
     // over the boundary, nothing is listening, and nobody is told.
     let defer = Arc::new(ParkingDefer::default());
-    let router = harness_of(vec![Arc::new(EmitRouteModule)])
-        .router(ports_for(None, None, Some(Arc::clone(&defer))));
+    let router = harness_of(vec![Arc::new(EmitRouteModule)]).router(ports_for(
+        None,
+        None,
+        Some(Arc::clone(&defer)),
+    ));
 
     let response = request(
         &router,
@@ -584,8 +671,11 @@ async fn an_unstamped_post_to_events_is_refused() {
 #[pollster::test]
 async fn a_malformed_envelope_is_a_validation_problem_not_a_panic() {
     let defer = Arc::new(ParkingDefer::default());
-    let router = harness_of(vec![Arc::new(EmitRouteModule)])
-        .router(ports_for(None, None, Some(Arc::clone(&defer))));
+    let router = harness_of(vec![Arc::new(EmitRouteModule)]).router(ports_for(
+        None,
+        None,
+        Some(Arc::clone(&defer)),
+    ));
 
     let response = request(
         &router,
@@ -604,7 +694,9 @@ async fn a_deployment_with_no_gateway_secret_does_not_mount_the_route_at_all() {
     // from anyone else's POST, so the route is absent rather than open.
     let (module, runs, _) = SubscriberModule::new();
     let defer = Arc::new(ParkingDefer::default());
-    let mut ports = Ports::with_config(Arc::new(MapConfig::from_pairs(Vec::<(String, String)>::new())));
+    let mut ports = Ports::with_config(Arc::new(MapConfig::from_pairs(
+        Vec::<(String, String)>::new(),
+    )));
     ports.defer = Some(Arc::clone(&defer) as Arc<dyn cratefield_core::Defer>);
     let router = harness_of(vec![Arc::new(module)]).router(ports);
 
@@ -619,4 +711,108 @@ async fn a_deployment_with_no_gateway_secret_does_not_mount_the_route_at_all() {
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
     defer.drain().await;
     assert_eq!(runs.load(Ordering::SeqCst), 0);
+}
+
+// ------------------------------------------------- nobody heard it (reports)
+
+#[test]
+fn an_emission_nothing_hears_is_reported() {
+    // No subscriber in process and no mount to forward to. Before #62 this
+    // was silent, which is how a module author learns the hard way that a
+    // handler never ran.
+    let capture = with_capture(async {
+        let defer = Arc::new(ParkingDefer::default());
+        let router = harness_of(vec![Arc::new(EmitRouteModule)]).router(ports_for(
+            None,
+            None,
+            Some(Arc::clone(&defer)),
+        ));
+        let response = request(&router, Method::POST, "/v1/waitlist/emit", &[], None).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        defer.drain().await;
+    });
+    assert!(
+        capture.contains("emitted event has no registered handler"),
+        "an emission nothing heard must be reported: {:?}",
+        capture.lines.lock().expect("log lock")
+    );
+}
+
+#[test]
+fn an_emission_that_is_forwarded_is_not_reported_as_unheard() {
+    // The other half: a host with no local subscriber but a mount has been
+    // heard by something, and warning there would train operators to ignore
+    // the warning that matters.
+    let capture = with_capture(async {
+        let dispatcher = Arc::new(EventDispatcher::answering(StatusCode::ACCEPTED));
+        let defer = Arc::new(ParkingDefer::default());
+        let router = harness_of(vec![Arc::new(EmitRouteModule)]).router(ports_for(
+            Some(r#"{"acme-pricing":"ACME"}"#),
+            Some(dispatcher.clone()),
+            Some(Arc::clone(&defer)),
+        ));
+        let response = request(&router, Method::POST, "/v1/waitlist/emit", &[], None).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        defer.drain().await;
+        assert_eq!(dispatcher.events_posts().len(), 1);
+    });
+    assert!(
+        !capture.contains("emitted event has no registered handler"),
+        "a forwarded emission was heard: {:?}",
+        capture.lines.lock().expect("log lock")
+    );
+}
+
+#[test]
+fn an_inbound_event_with_no_subscriber_is_reported_once() {
+    let capture = with_capture(async {
+        let defer = Arc::new(ParkingDefer::default());
+        let router = harness_of(vec![Arc::new(EmitRouteModule)]).router(ports_for(
+            None,
+            None,
+            Some(Arc::clone(&defer)),
+        ));
+        let response = request(
+            &router,
+            Method::POST,
+            "/__events",
+            &[(X_HARNESS_GATEWAY, &gateway_stamp("waitlist"))],
+            Some(br#"{"event":"nobody.listens","payload":{}}"#.to_vec()),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+        defer.drain().await;
+    });
+    assert_eq!(
+        capture.count("arrived over the boundary with no subscriber"),
+        1,
+        "reported, and exactly once: {:?}",
+        capture.lines.lock().expect("log lock")
+    );
+}
+
+#[test]
+fn a_sidecar_that_answers_500_is_reported_exactly_once() {
+    // The issue's verification: the failure appears exactly once in logs,
+    // and never in the response.
+    let capture = with_capture(async {
+        let dispatcher = Arc::new(EventDispatcher::answering(
+            StatusCode::INTERNAL_SERVER_ERROR,
+        ));
+        let defer = Arc::new(ParkingDefer::default());
+        let router = harness_of(vec![Arc::new(EmitRouteModule)]).router(ports_for(
+            Some(r#"{"acme-pricing":"ACME"}"#),
+            Some(dispatcher.clone()),
+            Some(Arc::clone(&defer)),
+        ));
+        let response = request(&router, Method::POST, "/v1/waitlist/emit", &[], None).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        defer.drain().await;
+    });
+    assert_eq!(
+        capture.count("event forward was not accepted"),
+        1,
+        "once, not once per retry: {:?}",
+        capture.lines.lock().expect("log lock")
+    );
 }

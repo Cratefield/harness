@@ -380,8 +380,8 @@ impl Harness {
     /// per module per router, and re-logging the same malformed table once
     /// per module would turn one operator error into a page of noise.
     fn resolved_mounts(&self, ports: &Ports) -> Vec<SidecarMount> {
-        let mounts = crate::sidecar::SidecarMounts::from_config(ports.config.as_ref())
-            .unwrap_or_default();
+        let mounts =
+            crate::sidecar::SidecarMounts::from_config(ports.config.as_ref()).unwrap_or_default();
         let module_names: Vec<&str> = self.modules.iter().map(|m| m.name()).collect();
         mounts
             .iter()
@@ -539,7 +539,8 @@ impl Harness {
             let events_router = Router::new()
                 .route(
                     "/__events",
-                    post(crate::sidecar::events_inbound).layer(DefaultBodyLimit::max(MAX_BODY_BYTES)),
+                    post(crate::sidecar::events_inbound)
+                        .layer(DefaultBodyLimit::max(MAX_BODY_BYTES)),
                 )
                 .with_state(Arc::new(crate::sidecar::InboundEvents {
                     bus: self.events.clone(),
