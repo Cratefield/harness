@@ -16,13 +16,6 @@ repository.workspace = true
 [lints]
 workspace = true
 
-[features]
-# Exposes `Tenant::for_test`, so a crate outside core can construct the
-# `&Tenant` a `TenantDatabases` impl is handed (issue #32). Opt-in and
-# named, so enabling it is visible in review; belongs in
-# `dev-dependencies`, which keeps it out of the published graph.
-test-support = []
-
 [dependencies]
 axum = { workspace = true }
 http = { workspace = true }

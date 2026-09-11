@@ -133,26 +133,6 @@ impl Tenant {
     pub fn status(&self) -> TenantStatus {
         self.status
     }
-
-    /// Mints a tenant **for tests only**, behind the `test-support`
-    /// feature.
-    ///
-    /// The private constructor is what stops a module naming a
-    /// neighbour, and it also stops any crate outside core from
-    /// constructing the `&Tenant` a [`TenantDatabases`] impl is handed —
-    /// so a pool registry written in an adapter could not be tested
-    /// against a real one at all. That is a worse outcome than an
-    /// opt-in escape hatch.
-    ///
-    /// Opt-in is the point: a crate that wants this must name
-    /// `features = ["test-support"]` in its `Cargo.toml`, which is
-    /// visible in review, and a `dev-dependencies` entry keeps it out of
-    /// the published graph entirely.
-    #[cfg(feature = "test-support")]
-    #[must_use]
-    pub fn for_test(id: impl Into<String>, status: TenantStatus) -> Self {
-        Self::new(id, status)
-    }
 }
 
 /// What a deployment's registry says about a host.
