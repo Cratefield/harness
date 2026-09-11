@@ -208,10 +208,16 @@ redaction rules in `cratefield_core::logging` already apply.
 
 ## 8. Dry run
 
-`harness migrate --plan [--tenant <id>]` prints what would be applied,
-per tenant and per module, and exits without applying. It takes the same
-locks so its answer is not a guess about a moving target, and it is the
-thing to run before a deploy that carries migrations.
+`fz migrations apply --plan [--tenant <id>] --url <control>` prints what
+would be applied, per tenant and per module, and exits without applying.
+It takes the same locks so its answer is not a guess about a moving
+target, and it is the thing to run before a deploy that carries
+migrations.
+
+`--fleet` is the same walk, applied. Neither is the default: without
+either flag `--url` names one ordinary database and that database's
+migrations are applied to it (issue #18), which is what ROLLBACK.md §2's
+recovery step relies on.
 
 ## 9. Review questions
 
