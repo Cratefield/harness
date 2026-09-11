@@ -52,10 +52,28 @@ function world(options = {}) {
     this.dispatchEvent(new window.Event("close"));
   };
 
+  let hidden = options.hidden ?? false;
   Object.defineProperty(window.document, "visibilityState", {
-    get: () => options.hidden ? "hidden" : "visible",
+    get: () => (hidden ? "hidden" : "visible"),
     configurable: true,
   });
+
+  // The poll is a minute apart, so the tests watch it being scheduled and
+  // cleared rather than waiting for it. Real timers underneath: the file
+  // ends in `process.exit`, so a pending 60 s interval cannot hang the run.
+  const started = [];
+  const cleared = [];
+  const realInterval = window.setInterval;
+  const realClear = window.clearInterval;
+  window.setInterval = (...args) => {
+    const id = realInterval(...args);
+    started.push(id);
+    return id;
+  };
+  window.clearInterval = (id) => {
+    cleared.push(id);
+    return realClear(id);
+  };
 
   window.fetch = async (url, init = {}) => {
     const text = String(url);
@@ -79,12 +97,21 @@ function world(options = {}) {
   return {
     window,
     requests,
+    started,
+    cleared,
     setUnread: (n) => {
       unread = n;
     },
     setRows: (r) => {
       rows = r;
     },
+    /** Flip the tab between `visible` and `hidden`, as a browser would. */
+    visibility: async (state) => {
+      hidden = state === "hidden";
+      window.document.dispatchEvent(new window.Event("visibilitychange"));
+      await settle();
+    },
+    polls: () => requests.filter((r) => r.url.includes("/unread-count")).length,
   };
 }
 
@@ -175,7 +202,10 @@ async function mount(w, attrs = "") {
   const el = await mount(w);
   const bell = el.querySelector("button");
   assert(bell.getAttribute("aria-haspopup") === "dialog", "the bell says what it opens");
-  await el.open();
+  // Through the bell itself, not `el.open()`: a native <button> turns
+  // Enter and Space into this click, so this is the keyboard path too.
+  bell.click();
+  await settle();
   assert(el.querySelector("dialog").open, "the panel is open");
 
   el.querySelector("dialog").close();
@@ -248,16 +278,74 @@ async function mount(w, attrs = "") {
   // which is truthy, returning null. Checking `cf.auth` alone does not
   // catch this — the first read has to actually succeed.
   w.window.cf.auth = () => null;
-  const timers = [];
-  const realInterval = w.window.setInterval;
-  w.window.setInterval = (...args) => {
-    const id = realInterval(...args);
-    timers.push(id);
-    return id;
-  };
   await mount(w);
-  assert(timers.length === 0, "with no way to authenticate, it starts no timer");
+  assert(w.started.length === 0, "with no way to authenticate, it starts no timer");
   assert(w.requests.length === 0, "and makes no request it could not have signed");
+}
+
+{
+  // Pausing and resuming, which is the half the mount-time case above
+  // cannot reach: a tab that goes hidden *after* the poll is running.
+  const w = world({ unread: 1 });
+  await mount(w);
+  assert(w.started.length === 1, "a visible tab schedules the poll");
+  const atMount = w.requests.length;
+
+  await w.visibility("hidden");
+  assert(w.cleared.includes(w.started[0]), "going hidden clears the poll");
+  assert(w.requests.length === atMount, "and a hidden tab asks for nothing");
+
+  await w.visibility("visible");
+  assert(w.polls() === 2, "coming back re-reads the count at once, so nothing read is stale");
+  assert(w.started.length === 2, "and schedules the poll again");
+}
+
+{
+  // The watcher listens on the *document*, which outlives the element.
+  // Stopping has to take the listener with it: otherwise a bell that has
+  // been removed from the page starts polling again on the next visibility
+  // change — forever, writing counts into a node nobody can see.
+  const w = world({ unread: 1 });
+  const el = await mount(w);
+  el.remove();
+  await settle();
+  const timers = w.started.length;
+  const calls = w.requests.length;
+  await w.visibility("hidden");
+  await w.visibility("visible");
+  assert(w.started.length === timers, "a removed bell schedules no new poll");
+  assert(w.requests.length === calls, "and makes no request once it is gone");
+}
+
+// --- realtime --------------------------------------------------------
+
+{
+  // Where the page exposes a Realtime client, an event moves the count
+  // without waiting for the poll — which is a minute away and, here,
+  // never fires.
+  const w = world({ unread: 1 });
+  const rooms = [];
+  let deliver = null;
+  w.window.cf.realtime = {
+    subscribe: (room, handler) => {
+      rooms.push(room);
+      deliver = handler;
+    },
+  };
+  const el = await mount(w, 'account="acct-7"');
+  assert(rooms[0] === "notifications:acct-7", "it joins this account's room");
+
+  w.setUnread(4);
+  // Optional call: with the subscription gone this stays null, and the
+  // assertions below report that rather than dying on a TypeError.
+  deliver?.();
+  await settle();
+  assert(el.querySelector(".cf-count").textContent === "4", "an incoming event moves the count");
+  assert(
+    el.querySelector("button").getAttribute("aria-label") === "Notifications, 4 unread",
+    "and the bell's accessible name with it",
+  );
+  assert(w.started.length === 1, "the event did that, not a poll: no second timer ran");
 }
 
 process.exit(failures === 0 ? 0 : 1);

@@ -388,6 +388,8 @@ rather than fetching a 401.
 - Subscribes to `notifications:<account>` when the page exposes a Realtime
   client, so the count moves without waiting for a poll.
 - Marks an item read when it is clicked, then follows its `url`.
+- Leaves nothing behind when the element is removed: the poll and the
+  `visibilitychange` listener that drives it both go with it.
 
 ### Accessibility
 

@@ -466,7 +466,7 @@ function watchUnread(onCount, every = 60000) {
       .unreadCount()
       .then(onCount)
       .catch(() => {});
-  const stop = () => {
+  const pause = () => {
     clearInterval(timer);
     timer = null;
   };
@@ -484,11 +484,17 @@ function watchUnread(onCount, every = 60000) {
     }
     timer = setInterval(tick, every);
   };
-  document.addEventListener("visibilitychange", () =>
-    document.visibilityState === "hidden" ? stop() : start(),
-  );
+  // Stopping has to take the listener with it. Clearing the interval alone
+  // leaves this attached to the *document*, which outlives the element: a
+  // removed bell would start polling again on the next visibility change,
+  // forever, writing counts into a node nobody can see.
+  const onVisibility = () => (document.visibilityState === "hidden" ? pause() : start());
+  document.addEventListener("visibilitychange", onVisibility);
   if (document.visibilityState !== "hidden") start();
-  return stop;
+  return () => {
+    pause();
+    document.removeEventListener("visibilitychange", onVisibility);
+  };
 }
 notifications.watch = watchUnread;
 
