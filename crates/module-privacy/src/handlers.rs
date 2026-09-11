@@ -76,6 +76,10 @@ async fn manifest(State(state): State<PrivacyState>) -> Json<Value> {
             "kind": entry.set.kind.as_str(),
             "description": entry.set.description,
             "on_erasure": erasure_json(entry.set.disposition),
+            // Named, not hidden. A column an export refuses to copy is still
+            // something the deployment holds, and a privacy page that said
+            // nothing about it would be describing less than the export does.
+            "redacted": entry.set.redacted,
         }));
     }
 
@@ -169,7 +173,7 @@ async fn export(
             .rows
             .iter()
             .take(MAX_ROWS_PER_TABLE)
-            .map(row_to_json)
+            .map(|row| row_to_json(row, entry.set.redacted))
             .collect();
 
         tables.push(json!({
@@ -209,13 +213,28 @@ fn select_for(entry: &CatalogEntry, subject: &str) -> Option<Statement> {
     ))
 }
 
-fn row_to_json(row: &cratefield_core::Row) -> Value {
+/// One row as JSON, with the declared credential columns named but not copied.
+///
+/// The column stays in the object with `[redacted]` for a value. Dropping it
+/// would read as "we hold nothing there", which is the one thing a subject
+/// access request must not say untruthfully; printing it would copy a bearer
+/// capability into a file somebody forwards (ADR 0015).
+fn row_to_json(row: &cratefield_core::Row, redacted: &[&'static str]) -> Value {
     let mut object = Map::new();
     for (column, value) in row.columns() {
-        object.insert(column.to_owned(), value_to_json(value));
+        let rendered = if redacted.contains(&column) {
+            json!(REDACTED)
+        } else {
+            value_to_json(value)
+        };
+        object.insert(column.to_owned(), rendered);
     }
     Value::Object(object)
 }
+
+/// What an export prints in place of a declared credential column. The same
+/// marker the log redaction leaves, so one grep finds both.
+const REDACTED: &str = "[redacted]";
 
 /// A sea-query value as JSON.
 ///

@@ -99,8 +99,9 @@ pub use store::{DeadLetterReason, Transport};
 use std::sync::{Arc, OnceLock};
 
 use cratefield_core::{
-    AnyError, BoxFuture, Config, ConfigError, Migrations, Module, ModuleConfig, ModuleContext,
-    NoopDefer, Notification, Port, RoutePolicy, Scope, SqlMigration, VentureEnv,
+    AnyError, BoxFuture, Config, ConfigError, DataKind, Disposition, Migrations, Module,
+    ModuleConfig, ModuleContext, NoopDefer, Notification, PersonalDataSet, Port, RoutePolicy,
+    Scope, SqlMigration, VentureEnv,
 };
 use cratefield_i18n::{BODY, Catalog, LanguageIdentifier, TITLE};
 
@@ -189,16 +190,27 @@ const MIGRATION_LOCALES: SqlMigration = SqlMigration {
     transactional: true,
 };
 
+/// The account a dead letter was for (#244): already in the payload, made
+/// queryable so erasure can reach a notification that gave up. Its own
+/// migration because `0001`-`0006` are applied.
+const MIGRATION_DEAD_LETTER_ACCOUNT: SqlMigration = SqlMigration {
+    id: "0007",
+    name: "dead_letter_account",
+    sql: include_str!("../migrations/sqlite/0007_dead_letter_account.sql"),
+    transactional: true,
+};
+
 /// Every migration this module ships, in order. One array, so a test that
 /// asserts something about the schema reads what actually ships rather
 /// than a second list that can drift from it.
-const SHIPPED_MIGRATIONS: [SqlMigration; 6] = [
+const SHIPPED_MIGRATIONS: [SqlMigration; 7] = [
     MIGRATION_INIT,
     MIGRATION_REHOME_AND_DUE_INDEX,
     MIGRATION_INBOX,
     MIGRATION_EMAIL_TARGETS,
     MIGRATION_EMAIL_BOUNCE_INDEX,
     MIGRATION_LOCALES,
+    MIGRATION_DEAD_LETTER_ACCOUNT,
 ];
 
 /// One notification category the venture declares.
@@ -868,6 +880,121 @@ impl Module for Notifications {
             store::EMAIL_SENDS,
             store::LOCALES,
         ]
+    }
+
+    /// What this module holds about a person, per table (issue #244).
+    ///
+    /// It held all of this before it said any of it. Erasure plans from this
+    /// list and not from [`tables`](Module::tables), so until these eight
+    /// declarations existed a subject access request answered without the
+    /// stored address, the device tokens and the inbox, and an erasure
+    /// request reported success having deleted none of them.
+    ///
+    /// The descriptions are published verbatim by
+    /// `GET /v1/privacy/manifest` and written for the person reading that
+    /// page, not for whoever maintains this file.
+    ///
+    /// Three of the eight are judgements rather than the obvious answer:
+    ///
+    /// - **`notifications_subscriptions`** is erased like the rest, and
+    ///   `recipient_json` is [redacted](PersonalDataSet::redacted) from the
+    ///   export. The row is the account's and must go, but the column is a
+    ///   push token or a Web Push endpoint — a **bearer capability**, which
+    ///   whoever holds the export could notify the device with (ADR 0015).
+    ///   `recipient_hash` is exported: it identifies the device to somebody
+    ///   reading their own export and cannot be sent to.
+    /// - **`notifications_email_targets`** is erased, including the
+    ///   unsubscribe record, which is the one case where erasing loses a
+    ///   protection. It is still right here: the address is only ever mailed
+    ///   because a `notify()` names this account, and the account's rows are
+    ///   going in the same batch — so nothing remains that could reach the
+    ///   address, and keeping it would be keeping an address somebody asked
+    ///   us to forget. A venture that suppresses a **bounced** address is
+    ///   keeping that in the provider, not here.
+    /// - **`notifications_outbox`** is the one table declared as holding
+    ///   nothing to export, and it is the honest half-answer. A queued row
+    ///   does hold the message, and it is unreachable: the payload carries
+    ///   the account inside JSON, and export and erasure key on a column.
+    ///   The reason published for it says so, and issue #266 tracks the fix,
+    ///   which is core's `Outbox` and not this module's. What bounds it is
+    ///   that a row is deleted on delivery and moved to
+    ///   `notifications_dead_letters` when it gives up — and dead letters,
+    ///   which used to be permanent, carry an `account_id` since migration
+    ///   `0007` precisely so an erasure reaches them.
+    fn personal_data(&self) -> &'static [PersonalDataSet] {
+        const SETS: &[PersonalDataSet] = &[
+            PersonalDataSet {
+                table: store::SUBSCRIPTIONS,
+                subject: "account_id",
+                kind: DataKind::Identifier,
+                disposition: Disposition::Erase,
+                description: "Each phone or browser you turned notifications on for, with the \
+                              address the notification is delivered to, the language that device \
+                              is set to, and when it last checked in.",
+                redacted: &["recipient_json"],
+            },
+            PersonalDataSet {
+                table: store::PREFERENCES,
+                subject: "account_id",
+                kind: DataKind::Usage,
+                disposition: Disposition::Erase,
+                description: "Which kinds of notification you have switched on or off, for each \
+                              of the three ways we can reach you.",
+                redacted: &[],
+            },
+            PersonalDataSet {
+                table: store::LOCALES,
+                subject: "account_id",
+                kind: DataKind::Usage,
+                disposition: Disposition::Erase,
+                description: "The language you asked to be written to in.",
+                redacted: &[],
+            },
+            PersonalDataSet {
+                table: store::INBOX,
+                subject: "account_id",
+                kind: DataKind::Content,
+                disposition: Disposition::Erase,
+                description: "The notifications you can read back in the app: what each one said, \
+                              when it arrived, and when you opened or archived it.",
+                redacted: &[],
+            },
+            PersonalDataSet {
+                table: store::EMAIL_TARGETS,
+                subject: "account_id",
+                kind: DataKind::Contact,
+                disposition: Disposition::Erase,
+                description: "The email address notifications are sent to, whether it has been \
+                              confirmed, and whether you have unsubscribed from them.",
+                redacted: &[],
+            },
+            PersonalDataSet {
+                table: store::EMAIL_SENDS,
+                subject: "account_id",
+                kind: DataKind::Usage,
+                disposition: Disposition::Erase,
+                description: "When we last emailed you about each kind of notification, which is \
+                              what stops us emailing you about it again too soon.",
+                redacted: &[],
+            },
+            PersonalDataSet {
+                table: store::DEAD_LETTERS,
+                subject: "account_id",
+                kind: DataKind::Content,
+                disposition: Disposition::Erase,
+                description: "A notification we gave up trying to deliver, kept with what it said \
+                              so somebody can find out why it failed.",
+                redacted: &[],
+            },
+            PersonalDataSet::none(
+                store::OUTBOX,
+                "Notifications waiting to be sent. A row holds the message until it is delivered \
+                 or given up on, minutes later, and is then deleted; it is filed under the send \
+                 rather than under you, so an erasure request does not reach one that happens to \
+                 be in flight.",
+            ),
+        ];
+        SETS
     }
 
     fn emits(&self) -> &'static [&'static str] {

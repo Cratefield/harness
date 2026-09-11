@@ -35,6 +35,17 @@ impl Module for DemoModule {
     fn tables(&self) -> &'static [&'static str] {
         &["demo_notes"]
     }
+    fn personal_data(&self) -> &'static [cratefield_core::PersonalDataSet] {
+        // The demo's notes belong to nobody: there is no account column and
+        // the body is whatever a test wrote. Said out loud rather than left
+        // silent, which is the rule conformance now enforces (issue #244).
+        const SETS: &[cratefield_core::PersonalDataSet] =
+            &[cratefield_core::PersonalDataSet::none(
+                "demo_notes",
+                "Demo notes, written by the kit's own tests and attached to no account.",
+            )];
+        SETS
+    }
     fn migrations(&self) -> Migrations {
         const MIGRATIONS: [SqlMigration; 1] = [DEMO_INIT];
         Migrations {
@@ -334,4 +345,84 @@ fn empty_database_answers_readiness_probe() {
     let rows = pollster::block_on(db.query(&cratefield_core::Statement::new("SELECT 1")))
         .expect("select 1");
     assert_eq!(rows.len(), 1);
+}
+
+// ------------------------------------------------------------------ #244
+
+/// A module that owns a table and says nothing about it — the omission
+/// `check_personal_data` exists to catch, and the shape every module has one
+/// migration away from.
+struct Undeclared {
+    name: &'static str,
+    tables: &'static [&'static str],
+}
+
+impl Module for Undeclared {
+    fn name(&self) -> &'static str {
+        self.name
+    }
+    fn version(&self) -> &'static str {
+        "0.0.0"
+    }
+    fn requires(&self) -> &'static [Port] {
+        &[]
+    }
+    fn tables(&self) -> &'static [&'static str] {
+        self.tables
+    }
+    fn migrations(&self) -> Migrations {
+        Migrations::EMPTY
+    }
+    fn validate_config(&self, _cfg: &dyn Config) -> Result<(), ConfigError> {
+        Ok(())
+    }
+    fn router(&self, _ctx: ModuleContext) -> axum::Router {
+        axum::Router::new()
+    }
+}
+
+/// Runs `conformance` with the panic message swallowed, and returns it.
+///
+/// The check runs before anything else in the suite, so a module that fails
+/// it never reaches a database — which is what makes these two cases cheap
+/// enough to assert on directly.
+fn conformance_panic(module: Undeclared) -> String {
+    let previous = std::panic::take_hook();
+    std::panic::set_hook(Box::new(|_| {}));
+    let result = std::panic::catch_unwind(|| conformance(Box::new(module)));
+    std::panic::set_hook(previous);
+    let payload = result.expect_err("conformance accepted an undeclared table");
+    payload
+        .downcast_ref::<String>()
+        .cloned()
+        .or_else(|| payload.downcast_ref::<&str>().map(|s| (*s).to_owned()))
+        .unwrap_or_default()
+}
+
+#[test]
+fn conformance_refuses_a_module_that_declares_nothing_about_its_tables() {
+    // The whole point of issue #244: export walks `tables()` and erasure
+    // plans from `personal_data()`, so a table in the first and missing from
+    // the second is invisible from both ends — the venture boots, the export
+    // runs, the erasure reports success, and the rows are in neither.
+    let message = conformance_panic(Undeclared {
+        name: "ledger",
+        tables: &["ledger_entries"],
+    });
+    assert!(message.contains("ledger_entries"), "{message}");
+    assert!(message.contains("PersonalDataSet::none"), "{message}");
+}
+
+#[test]
+fn an_exemption_that_no_longer_describes_its_module_fails() {
+    // The anti-rot half. `cms` is exempt for two tables under issue #265; a
+    // `cms` that owns one of them is a different module from the one that
+    // was exempted, and letting the entry cover it is how the next omission
+    // would hide behind the last one.
+    let message = conformance_panic(Undeclared {
+        name: "cms",
+        tables: &["cms_item"],
+    });
+    assert!(message.contains("#265"), "{message}");
+    assert!(message.contains("cms_item"), "{message}");
 }

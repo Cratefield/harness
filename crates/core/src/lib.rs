@@ -65,6 +65,7 @@ pub use module::{
 pub use outbox::{Outbox, OutboxRecord};
 pub use personal_data::{
     CatalogEntry, DataKind, Disposition, PersonalDataCatalog, PersonalDataSet, is_plain_identifier,
+    undeclared_tables,
 };
 pub use ports::{
     Blob, BlobError, BlobObject, BoundedHttpClient, Captcha, CaptchaBinding, CaptchaError, Charge,

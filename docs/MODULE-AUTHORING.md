@@ -164,7 +164,8 @@ The whole `Module` impl for `hello` (this is
 
 ```rust
 use cratefield_core::{
-    Config, ConfigError, Migrations, Module, ModuleConfig, ModuleContext, Port, SqlMigration,
+    Config, ConfigError, DataKind, Disposition, Migrations, Module, ModuleConfig, ModuleContext,
+    PersonalDataSet, Port, SqlMigration,
 };
 use std::sync::Arc;
 
@@ -218,6 +219,18 @@ impl Module for Hello {
 
     fn tables(&self) -> &'static [&'static str] {
         &["hello_visits"]
+    }
+
+    fn personal_data(&self) -> &'static [PersonalDataSet] {
+        const SETS: &[PersonalDataSet] = &[PersonalDataSet {
+            table: "hello_visits",
+            subject: "name",
+            kind: DataKind::Contact,
+            disposition: Disposition::Erase,
+            description: "The name you said hello with, and nothing else.",
+            redacted: &[],
+        }];
+        SETS
     }
 
     fn emits(&self) -> &'static [&'static str] {
@@ -276,6 +289,25 @@ Decisions, one per method:
 - **`tables()`** — every table the migrations create. Two modules claiming
   one table is a build error; this is how the harness prevents silent
   collisions.
+- **`personal_data()`** — what each of those tables holds about a person.
+  `cratefield-module-privacy` plans a subject access export and an erasure
+  from this list and never from `tables()`, so a table missing here is
+  never exported and never erased, and the erasure still reports success.
+  **Every table you own needs an entry**: conformance fails otherwise
+  (issue #244), and a table that holds nobody says so with
+  `PersonalDataSet::none(table, reason)` — "no declaration" and "nothing
+  personal here" must not look the same. Three fields are worth stopping
+  on. `subject` is the *column* export and erasure match on, so a table
+  whose only account id is inside a JSON payload cannot be declared with
+  one. `disposition` is a decision per table, not a reflex: `Erase` for
+  most, `Anonymise(&[..])` when deleting rows would break an aggregate
+  somebody else can see, `Retain("why")` when the law says keep it — and
+  the reason is published. `redacted` names columns an export must not
+  copy, which is how a credential (a push token, a Web Push endpoint) can
+  be declared for erasure without the export handing it out; the column is
+  still listed, with `[redacted]` for a value. The sentence in
+  `description` is published verbatim by `GET /v1/privacy/manifest`, so
+  write it for the person reading that page.
 - **`emits()`** — event names this module puts on the bus,
   `"<module>.<event>"`. Listed by `/__health` so operators can see what
   fires.
@@ -709,7 +741,10 @@ fn hello_deps_are_wasm_safe() {
    regression test);
 6. a `well_known()` router, when provided, serves at the root
    `/.well-known` and never under `/v1`;
-7. **sidecar parity** (issue #64): the module answers identically
+7. every table in `tables()` has a `personal_data()` declaration (issue
+   #244) — the converse of the rule the harness build already enforces,
+   which refuses a declaration for a table the module does not own;
+8. **sidecar parity** (issue #64): the module answers identically
    whether it is linked in or reached over a service binding (ADR 0009).
 
 The parity axis builds the module twice — once in-process, once behind a
@@ -941,6 +976,9 @@ Before opening a PR that adds or changes a module:
 - [ ] migrations portable (subset above), idempotent, `include_str!`'d
 - [ ] `surface()` declares every route a visitor or admin should see, and
       `JsonSchema` is derived on the same types the handlers deserialize
+- [ ] `personal_data()` covers every table in `tables()`, with the
+      disposition decided per table and the description written for the
+      person it is published to
 - [ ] `name()`, `tables()`, `emits()` complete and honest; every public
       write declares `.captcha()` and every provider webhook
       `.policy(RoutePolicy::Signature)` (issue #133); `public_writes()`

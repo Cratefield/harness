@@ -34,6 +34,14 @@ impl Module for WellKnownProbe {
     fn tables(&self) -> &'static [&'static str] {
         self.inner.tables()
     }
+    /// Delegated, like `tables`, and for the same reason: the kit builds a
+    /// harness out of this wrapper, and `HarnessBuilder::build` validates a
+    /// module's personal-data declarations against the tables it claims. A
+    /// wrapper that answered core's empty default would hand every module a
+    /// build that checked declarations it could not see.
+    fn personal_data(&self) -> &'static [cratefield_core::PersonalDataSet] {
+        self.inner.personal_data()
+    }
     fn emits(&self) -> &'static [&'static str] {
         self.inner.emits()
     }
@@ -121,7 +129,10 @@ fn full_fake_ports() -> Ports {
 ///    module did not declare;
 /// 5. two concurrent requests keep their own request ids (ADR 0007);
 /// 6. a well-known router, when provided, serves at the root under
-///    `/.well-known` and never under `/v1` (issue #46).
+///    `/.well-known` and never under `/v1` (issue #46);
+/// 7. every table the module owns has a personal-data declaration, so a
+///    table cannot be added to `tables()` and left outside export and
+///    erasure (issue #244).
 ///
 /// # Panics
 ///
@@ -151,7 +162,100 @@ pub fn conformance_in_process_only(module: Box<dyn Module>, reason: &str) {
     conformance_inner(&inner, false);
 }
 
+/// The modules that own tables and have not said what is personal about
+/// them, with the tables still missing, tracked by issue #265.
+///
+/// An exemption rather than a silence. `HarnessBuilder::build` has always
+/// refused a declaration for a table a module does **not** own; the converse —
+/// a table with no declaration at all — is what actually happens, and what
+/// left `cratefield-module-notifications` holding addresses, device tokens and
+/// inbox rows outside the erasure catalogue through six migrations in two days
+/// (issue #244). Turning that into a conformance failure is the point; these
+/// five modules fail it today, and declaring them is real work per table
+/// rather than a mechanical fill-in.
+///
+/// The entry names the tables, not just the module, so it cannot rot: a module
+/// that declares one of them fails until its entry is corrected or removed,
+/// and a module that grows a **new** undeclared table fails even while it is
+/// listed. Every exemption prints on the run that uses it.
+const UNDECLARED_TABLES: &[(&str, &[&str])] = &[
+    (
+        "auth-core",
+        &[
+            "users",
+            "identities",
+            "credentials",
+            "sessions",
+            "single_use_tokens",
+            "clients",
+            "client_redirect_uris",
+        ],
+    ),
+    ("cms", &["cms_item", "cms_revision"]),
+    ("email-signup", &["subscribers"]),
+    (
+        "linkedin",
+        &[
+            "linkedin_accounts",
+            "linkedin_pages",
+            "linkedin_posts",
+            "linkedin_assets",
+            "linkedin_oauth_states",
+            "linkedin_request_budget",
+        ],
+    ),
+    (
+        "waitlist",
+        &[
+            "waitlist_entries",
+            "waitlist_send_cooldown",
+            "waitlist_position_lock",
+        ],
+    ),
+];
+
+/// Fails a module that owns a table it declares nothing about (issue #244).
+///
+/// Export walks [`Module::tables`] and erasure plans from
+/// [`Module::personal_data`], so a table added to the first and forgotten in
+/// the second is invisible from both ends: the venture boots, the export runs,
+/// the erasure reports success, and the rows are never in either. Nothing
+/// catches it but this.
+fn check_personal_data(module: &dyn Module) {
+    let name = module.name();
+    let undeclared = cratefield_core::undeclared_tables(module);
+    let exempt = UNDECLARED_TABLES
+        .iter()
+        .find(|(listed, _)| *listed == name)
+        .map(|(_, tables)| *tables);
+
+    if let Some(tables) = exempt {
+        assert_eq!(
+            undeclared, tables,
+            "[{name}] is exempt from the personal-data rule for {tables:?} (issue #265), but its \
+             undeclared tables are now {undeclared:?}. Correct the entry in UNDECLARED_TABLES in \
+             cratefield-testing, or remove it: an exemption that no longer describes the module \
+             is how the next omission hides."
+        );
+        eprintln!(
+            "[{name}] personal-data declarations missing for {tables:?}; exempt under issue #265"
+        );
+        return;
+    }
+
+    assert!(
+        undeclared.is_empty(),
+        "[{name}] owns {undeclared:?} and declares nothing personal about them. \
+         `cratefield-module-privacy` plans an export and an erasure from \
+         `Module::personal_data()`, so a table missing from it is never exported and never \
+         erased. Declare each one with a `PersonalDataSet`, or with `PersonalDataSet::none(table, \
+         reason)` if it holds nobody — \"no declaration\" and \"nothing here\" must not look the \
+         same."
+    );
+}
+
 fn conformance_inner(inner: &Arc<dyn Module>, parity: bool) {
+    check_personal_data(inner.as_ref());
     let name = inner.name().to_owned();
     let version = inner.version().to_owned();
     let has_well_known = inner.well_known().is_some();

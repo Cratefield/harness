@@ -337,10 +337,14 @@ pub trait Module: Send + Sync + 'static {
     /// table that legitimately holds nothing personal, which says so rather
     /// than staying silent.
     ///
-    /// Defaulting to empty keeps every existing module compiling unchanged.
-    /// It is deliberately **not** a build error to declare nothing: a module
-    /// with no tables has nothing to say, and forcing a ceremonial opt-out on
-    /// all of them would teach people to write one without reading it.
+    /// Defaulting to empty keeps every existing module compiling unchanged,
+    /// and a module with no tables has nothing to say. A module that **owns**
+    /// tables and declares nothing is a different thing, and since issue #244
+    /// it fails [`cratefield_testing::conformance`] rather than the build:
+    /// see [`undeclared_tables`](crate::undeclared_tables) for why the kit is
+    /// the place that refuses it and a running deployment is not.
+    ///
+    /// [`cratefield_testing::conformance`]: https://docs.rs/cratefield-testing
     ///
     /// [`HarnessBuilder::build`]: crate::HarnessBuilder::build
     /// [`PersonalDataSet::none`]: crate::PersonalDataSet::none

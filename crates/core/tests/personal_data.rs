@@ -18,6 +18,7 @@ fn valid() -> PersonalDataSet {
         kind: DataKind::Fitness,
         disposition: Disposition::Erase,
         description: "Joint angles and scores for one practice, with its date.",
+        redacted: &[],
     }
 }
 
@@ -172,6 +173,7 @@ fn a_declaration_with_a_quoted_column_is_refused_at_build() {
         kind: DataKind::Fitness,
         disposition: Disposition::Erase,
         description: "Angles.",
+        redacted: &[],
     };
     let errors = set.validate("practice", OWNED);
     assert!(
@@ -188,10 +190,71 @@ fn an_anonymise_column_that_is_not_an_identifier_is_refused() {
         kind: DataKind::Fitness,
         disposition: Disposition::Anonymise(&["name = 'x' --"]),
         description: "Angles.",
+        redacted: &[],
     };
     let errors = set.validate("practice", OWNED);
     assert!(
         errors.iter().any(|e| e.contains("not a plain identifier")),
+        "{errors:?}"
+    );
+}
+
+#[test]
+fn a_credential_column_can_be_declared_and_still_be_kept_out_of_an_export() {
+    // The case this exists for: the row is the subject's and erasure must
+    // reach it, but one column is a bearer capability and an export is a file
+    // somebody forwards.
+    let set = PersonalDataSet {
+        redacted: &["recipient_json"],
+        ..valid()
+    };
+    assert!(set.validate("practice", OWNED).is_empty());
+}
+
+#[test]
+fn a_redacted_column_that_is_not_an_identifier_is_refused() {
+    let set = PersonalDataSet {
+        redacted: &["recipient_json, account_id"],
+        ..valid()
+    };
+    let errors = set.validate("practice", OWNED);
+    assert!(
+        errors.iter().any(|e| e.contains("not a plain identifier")),
+        "{errors:?}"
+    );
+}
+
+#[test]
+fn redacting_the_subject_column_is_refused() {
+    // It protects nothing — the caller supplied that value to get the row —
+    // and a list that reads as a protection and is not one is worse than no
+    // list at all.
+    let set = PersonalDataSet {
+        redacted: &["account_id"],
+        ..valid()
+    };
+    let errors = set.validate("practice", OWNED);
+    assert!(
+        errors.iter().any(|e| e.contains("already has")),
+        "{errors:?}"
+    );
+}
+
+#[test]
+fn redacting_a_column_of_a_table_declared_as_holding_nothing_is_refused() {
+    // Nothing is exported from a `none` table, so the list would protect a
+    // value that is never read: the mistake it hides is the declaration being
+    // `none` when it should not be.
+    let set = PersonalDataSet {
+        redacted: &["token"],
+        ..PersonalDataSet::none(
+            "pose_library",
+            "Reference poses, identical for every member.",
+        )
+    };
+    let errors = set.validate("practice", OWNED);
+    assert!(
+        errors.iter().any(|e| e.contains("nothing is exported")),
         "{errors:?}"
     );
 }
