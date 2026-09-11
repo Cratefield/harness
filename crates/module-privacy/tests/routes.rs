@@ -438,3 +438,108 @@ async fn erasure_without_admin_credentials_is_refused() {
         assert_eq!(count(&kit, "acct-1").await, 2);
     }
 }
+
+// ------------------------------------------------------------- unreachable
+
+/// A module whose ONLY declaration is one erasure cannot reach — the exact
+/// composition where `holds_personal_data` used to read `false`, because
+/// `subject_sets` skipped the table and nothing else counted it (issue #274).
+struct OutboxOnly;
+
+const OUTBOX_MIGRATION: SqlMigration = SqlMigration::new(
+    "0001",
+    "init",
+    "CREATE TABLE send_outbox (
+              id TEXT PRIMARY KEY,
+              payload TEXT NOT NULL
+          );",
+);
+
+const OUTBOX_SETS: &[PersonalDataSet] = &[PersonalDataSet::unreachable(
+    "send_outbox",
+    DataKind::Content,
+    "A message waiting to be sent, holding the text it was queued with.",
+    "The message is filed under the send, not under a subject column, so an \
+     erasure request cannot match the row.",
+)];
+
+impl Module for OutboxOnly {
+    fn name(&self) -> &'static str {
+        "outbox-only"
+    }
+    fn version(&self) -> &'static str {
+        "0.0.0"
+    }
+    fn requires(&self) -> &'static [Port] {
+        &[Port::Db]
+    }
+    fn tables(&self) -> &'static [&'static str] {
+        &["send_outbox"]
+    }
+    fn personal_data(&self) -> &'static [PersonalDataSet] {
+        OUTBOX_SETS
+    }
+    fn migrations(&self) -> Migrations {
+        const MIGRATIONS: [SqlMigration; 1] = [OUTBOX_MIGRATION];
+        Migrations::sqlite(&MIGRATIONS)
+    }
+    fn validate_config(&self, _cfg: &dyn cratefield_core::Config) -> Result<(), ConfigError> {
+        Ok(())
+    }
+    fn router(&self, _ctx: ModuleContext) -> axum::Router {
+        axum::Router::new()
+    }
+}
+
+fn outbox_only_kits() -> Vec<TestHarness> {
+    TestHarness::all_dialects_with_ports(
+        || vec![Box::new(OutboxOnly), Box::new(Privacy::new())],
+        |ports| {
+            ports.config = Arc::new(MapConfig::from_pairs([("ADMIN_TOKEN", ADMIN)]));
+        },
+    )
+}
+
+#[pollster::test]
+async fn a_deployment_holding_only_unreachable_data_says_it_holds_data() {
+    for kit in outbox_only_kits() {
+        let response = request(&kit.router, Method::GET, "/v1/privacy/manifest", None).await;
+        assert_eq!(response.status, StatusCode::OK);
+        let body: Value = response.json();
+
+        // The export over this catalog is empty — `subject_sets` skips the
+        // table, and that is correct: there is no predicate to build. The
+        // deployment still holds data, and must say so.
+        assert_eq!(body["holds_personal_data"], Value::Bool(true));
+
+        let not_personal = body["not_personal"].as_array().expect("not_personal");
+        assert!(
+            not_personal.is_empty(),
+            "a table holding a message was published as not personal: {not_personal:?}"
+        );
+        let unreachable = body["unreachable"].as_array().expect("unreachable");
+        assert_eq!(unreachable.len(), 1, "{unreachable:?}");
+        assert_eq!(unreachable[0]["table"], "send_outbox");
+        assert_eq!(unreachable[0]["kind"], "content");
+        assert!(
+            unreachable[0]["reason"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("cannot match"),
+            "{unreachable:?}"
+        );
+    }
+}
+
+#[pollster::test]
+async fn an_export_over_unreachable_data_is_empty_not_an_error() {
+    // The table is skipped, not queried: there is no predicate. The export
+    // route must answer with an empty set of tables rather than failing or,
+    // worse, reporting the table as erased.
+    for kit in outbox_only_kits() {
+        let (status, raw) = admin_get(&kit, "/v1/privacy/export?subject=acct-1").await;
+        assert_eq!(status, StatusCode::OK, "{raw}");
+        let body: Value = serde_json::from_str(&raw).expect("json");
+        assert_eq!(body["tables"].as_array().expect("tables").len(), 0, "{raw}");
+    }
+}

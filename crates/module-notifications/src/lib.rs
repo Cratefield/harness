@@ -917,15 +917,17 @@ impl Module for Notifications {
     ///   us to forget. A venture that suppresses a **bounced** address is
     ///   keeping that in the provider, not here.
     /// - **`notifications_outbox`** is the one table declared as holding
-    ///   nothing to export, and it is the honest half-answer. A queued row
-    ///   does hold the message, and it is unreachable: the payload carries
-    ///   the account inside JSON, and export and erasure key on a column.
-    ///   The reason published for it says so, and issue #266 tracks the fix,
-    ///   which is core's `Outbox` and not this module's. What bounds it is
-    ///   that a row is deleted on delivery and moved to
-    ///   `notifications_dead_letters` when it gives up — and dead letters,
-    ///   which used to be permanent, carry an `account_id` since migration
-    ///   `0007` precisely so an erasure reaches them.
+    ///   data erasure cannot reach (`unreachable`, not `none` — a queued row
+    ///   does hold the message, and "not personal" was never an honest
+    ///   bucket for it: issue #274). The payload carries the account inside
+    ///   JSON, and export and erasure key on a column. The reason published
+    ///   for it says so, and issue #266 tracks the fix, which is core's
+    ///   `Outbox` and not this module's. What bounds it is that a row is
+    ///   deleted on delivery and moved to `notifications_dead_letters` when
+    ///   it gives up — and dead letters, which used to be permanent, carry
+    ///   an `account_id` since migration `0007` precisely so an erasure
+    ///   reaches them. They stay a plain `Erase` set: reachable and
+    ///   scrubbed, so `unreachable` would describe them wrongly.
     fn personal_data(&self) -> &'static [PersonalDataSet] {
         const SETS: &[PersonalDataSet] = &[
             PersonalDataSet {
@@ -1009,12 +1011,22 @@ impl Module for Notifications {
                 redacted: &[],
                 subject_via: None,
             },
-            PersonalDataSet::none(
+            // Not `PersonalDataSet::none`: the queued row *does* hold the
+            // person's message, and bucketing this declaration under
+            // "not personal" would tell the subject the opposite of the
+            // truth (issue #274). There is no subject column to declare —
+            // the account is inside the payload JSON, and core's `Outbox`
+            // shape is #266's to fix — so the honest interim answer is
+            // `unreachable`: the manifest publishes it in its own bucket,
+            // and it counts towards `holds_personal_data`.
+            PersonalDataSet::unreachable(
                 store::OUTBOX,
-                "Notifications waiting to be sent. A row holds the message until it is delivered \
-                 or given up on, minutes later, and is then deleted; it is filed under the send \
-                 rather than under you, so an erasure request does not reach one that happens to \
-                 be in flight.",
+                DataKind::Content,
+                "A notification waiting to be sent, holding the message it was queued with.",
+                "The row is filed under the send rather than under a subject column, so an \
+                 erasure request cannot match it. It is deleted on delivery, or given up on \
+                 and moved to the dead letters within minutes; only one in flight at the \
+                 moment of a request can survive it.",
             ),
         ];
         SETS

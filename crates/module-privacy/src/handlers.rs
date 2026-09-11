@@ -56,8 +56,28 @@ async fn manifest(State(state): State<PrivacyState>) -> Json<Value> {
     let catalog = &state.ctx.personal_data;
     let mut holds = Vec::new();
     let mut not_personal = Vec::new();
+    let mut unreachable = Vec::new();
 
     for entry in catalog.entries() {
+        // Before the blank-subject bucket: an unreachable declaration also
+        // has a blank subject, and a blank subject on its own means "nothing
+        // to query". Bucketing one of these under `not_personal` would tell
+        // the subject that a table holding their message holds nothing about
+        // anybody (issue #274).
+        if entry.set.is_unreachable() {
+            let reason = match entry.set.disposition {
+                Disposition::Unreachable(reason) => reason,
+                _ => "",
+            };
+            unreachable.push(json!({
+                "module": entry.module,
+                "table": entry.set.table,
+                "kind": entry.set.kind.as_str(),
+                "description": entry.set.description,
+                "reason": reason,
+            }));
+            continue;
+        }
         if entry.set.is_none() {
             let reason = match entry.set.disposition {
                 Disposition::Retain(reason) => reason,
@@ -86,9 +106,12 @@ async fn manifest(State(state): State<PrivacyState>) -> Json<Value> {
     Json(json!({
         "holds": holds,
         "not_personal": not_personal,
-        // A deployment that holds nothing says so in one field, rather than
-        // leaving a reader to infer it from an empty list that might equally
-        // mean nobody declared anything.
+        // Data the deployment holds and cannot erase. Its own bucket, not
+        // folded into either neighbour: it is not exportable like `holds`
+        // and it is not "nothing personal" like `not_personal`.
+        "unreachable": unreachable,
+        // Counts the unreachable bucket: a deployment holding data it cannot
+        // erase does hold data, whatever an export over it returns.
         "holds_personal_data": !catalog.is_empty(),
     }))
 }

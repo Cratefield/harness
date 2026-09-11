@@ -297,10 +297,10 @@ async fn an_export_carries_the_entry() {
 
 #[pollster::test]
 async fn the_manifest_says_what_the_two_keyless_tables_hold() {
-    // "No declaration" and "nothing reachable here" must not look the same.
-    // The cooldown is the honest one: the address is inside its primary key,
-    // so `… WHERE <column> = ?` cannot reach it, and the reason says so
-    // rather than leaving a reader to guess (the shape of issue #266).
+    // "No declaration", "nothing reachable here" and "holds data erasure
+    // cannot reach" are three different claims, and the manifest must not
+    // merge the last two (issue #274): the cooldown holds the address, the
+    // lock names nobody.
     let kit = privacy_kit();
     let response = send(&kit, Method::GET, "/v1/privacy/manifest", None, None).await;
     assert_eq!(response.status, StatusCode::OK);
@@ -317,11 +317,30 @@ async fn the_manifest_says_what_the_two_keyless_tables_hold() {
             .to_owned()
     };
 
-    let cooldown = reason("waitlist_send_cooldown");
+    // The cooldown holds an address, so it must never sit in this bucket —
+    // that would tell the subject a table keyed on their address holds
+    // nothing about anybody (issue #274). It is published as unreachable.
     assert!(
-        cooldown.contains("key") && cooldown.contains("does not reach"),
-        "the cooldown reason has to say the address is in the key and out of reach: {cooldown}"
+        not_personal
+            .iter()
+            .all(|entry| entry["table"] != "waitlist_send_cooldown"),
+        "the cooldown holds the address; it cannot be published as not personal: {not_personal:?}"
     );
+    let unreachable = body["unreachable"].as_array().expect("unreachable");
+    let cooldown = unreachable
+        .iter()
+        .find(|entry| entry["table"] == "waitlist_send_cooldown")
+        .unwrap_or_else(|| panic!("cooldown not published as unreachable: {unreachable:?}"))
+        .clone();
+    assert_eq!(cooldown["kind"], "contact");
+    assert!(
+        cooldown["reason"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("cannot match"),
+        "the cooldown reason has to say why erasure cannot reach it: {cooldown}"
+    );
+
     let lock = reason("waitlist_position_lock");
     assert!(
         lock.contains("nobody is named"),

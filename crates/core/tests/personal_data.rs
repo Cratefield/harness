@@ -122,7 +122,104 @@ fn declaring_nothing_personal_without_a_reason_is_refused() {
 fn a_retained_row_keeps_its_row_and_an_erased_one_does_not() {
     assert!(Disposition::Retain("tax").keeps_row());
     assert!(Disposition::Anonymise(&["name"]).keeps_row());
+    assert!(Disposition::Unreachable("no subject column").keeps_row());
     assert!(!Disposition::Erase.keeps_row());
+}
+
+// ------------------------------------------------------------- unreachable
+
+const UNREACHABLE: PersonalDataSet = PersonalDataSet::unreachable(
+    "notifications_outbox",
+    DataKind::Content,
+    "A notification waiting to be sent, holding the message.",
+    "The message is filed under the send, not under a subject column, so an \
+     erasure request cannot match the row.",
+);
+
+#[test]
+fn an_unreachable_declaration_counts_as_holding_personal_data() {
+    // The case issue #274 gets wrong when declared `none`: a catalog whose
+    // ONLY declaration is this one must not answer "holds nothing". An
+    // export over it is empty, but the deployment is not.
+    let catalog = cratefield_core::PersonalDataCatalog::compose([(
+        "fixture",
+        std::slice::from_ref(&UNREACHABLE),
+    )]);
+    assert!(!catalog.is_empty());
+    assert!(catalog.subject_sets().next().is_none());
+}
+
+#[test]
+fn an_unreachable_declaration_with_a_reason_and_description_passes() {
+    let set = UNREACHABLE;
+    assert!(set.is_none());
+    assert!(set.is_unreachable());
+    assert!(
+        set.validate("fixture", &["notifications_outbox"])
+            .is_empty()
+    );
+}
+
+#[test]
+fn an_unreachable_declaration_without_a_reason_is_refused() {
+    let set = PersonalDataSet {
+        disposition: Disposition::Unreachable("   "),
+        ..UNREACHABLE
+    };
+    let errors = set.validate("fixture", &["notifications_outbox"]);
+    assert!(
+        errors.iter().any(|e| e.contains("without saying why")),
+        "{errors:?}"
+    );
+}
+
+#[test]
+fn an_unreachable_declaration_without_a_description_is_refused() {
+    // The description is published in the manifest's unreachable bucket, so
+    // a blank one names a table and says nothing about it.
+    let set = PersonalDataSet {
+        description: "",
+        ..UNREACHABLE
+    };
+    let errors = set.validate("fixture", &["notifications_outbox"]);
+    assert!(
+        errors.iter().any(|e| e.contains("published verbatim")),
+        "{errors:?}"
+    );
+}
+
+#[test]
+fn a_subject_via_on_an_unreachable_table_is_refused() {
+    // The two halves contradict each other: unreachable says no predicate
+    // can reach the row, `subject_via` names the road to it.
+    let set = PersonalDataSet {
+        subject_via: Some(cratefield_core::SubjectVia {
+            table: "accounts",
+            subject: "id",
+            key: "account_id",
+        }),
+        ..UNREACHABLE
+    };
+    let errors = set.validate("fixture", &["notifications_outbox"]);
+    assert!(
+        errors.iter().any(|e| e.contains("one or the other")),
+        "{errors:?}"
+    );
+}
+
+#[test]
+fn redacting_a_column_of_an_unreachable_table_is_refused() {
+    // Nothing is exported from a table with no queryable subject, so the
+    // list would protect a value that is never read.
+    let set = PersonalDataSet {
+        redacted: &["payload"],
+        ..UNREACHABLE
+    };
+    let errors = set.validate("fixture", &["notifications_outbox"]);
+    assert!(
+        errors.iter().any(|e| e.contains("nothing is exported")),
+        "{errors:?}"
+    );
 }
 
 #[test]
