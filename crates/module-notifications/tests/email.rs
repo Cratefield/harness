@@ -406,7 +406,7 @@ async fn the_cooldown_caps_one_category_per_account() {
     assert_eq!(sent.len(), 4, "two capped-out drops become one summary");
     assert!(
         sent.iter()
-            .any(|mail| mail.subject == "2 new booking notifications"),
+            .any(|mail| mail.subject == "You have 2 new notifications"),
         "the summary names the burst: {:?}",
         sent.iter().map(|mail| &mail.subject).collect::<Vec<_>>()
     );

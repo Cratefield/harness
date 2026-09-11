@@ -1475,6 +1475,11 @@ pub(crate) struct SuppressedBurst {
     /// When the first one was held back — the burst window's own start,
     /// and what the summary's idempotency key is derived from.
     pub first_suppressed_at: String,
+    /// When the last one the count covers was held back. The clear is
+    /// bounded by this, not by the pair: a suppression written between the
+    /// read and the delete belongs to a summary not yet counted, and the
+    /// outbox row behind it is already gone.
+    pub last_suppressed_at: String,
 }
 
 /// Whether this exact notification is already on the suppressed list.
@@ -1532,15 +1537,22 @@ pub(crate) async fn record_email_suppression(
     Ok(())
 }
 
-/// Every burst still waiting for its summary, grouped in Rust rather than
-/// `GROUP BY` — the table is small (its rows live exactly one window) and
-/// grouping stays inside the portable subset (ADR 0004).
+/// Every burst still waiting for its summary, oldest suppression first,
+/// up to `limit` rows — the same bound one drain pass claims, because a
+/// flood across many accounts is exactly when this read runs and its
+/// rows are only ever bounded by retention, not by the window. Whatever
+/// does not fit is still on the table for the next tick.
+///
+/// Grouped in Rust rather than `GROUP BY` — the per-pair volume is small
+/// (a cap of rows per window) and grouping stays inside the portable
+/// subset (ADR 0004).
 ///
 /// # Errors
 ///
 /// [`DbError`] when the read fails or a row will not decode.
 pub(crate) async fn suppressed_email_bursts(
     db: &dyn Database,
+    limit: u64,
 ) -> Result<Vec<SuppressedBurst>, DbError> {
     let mut select = Query::select();
     select
@@ -1551,7 +1563,8 @@ pub(crate) async fn suppressed_email_bursts(
             iden("suppressed_at"),
         ])
         .from(iden(EMAIL_SUPPRESSED))
-        .order_by(iden("suppressed_at"), Order::Asc);
+        .order_by(iden("suppressed_at"), Order::Asc)
+        .limit(limit);
     let mut bursts: Vec<SuppressedBurst> = Vec::new();
     for row in db.query(&Statement::render(&select)).await?.rows {
         let account_id = row
@@ -1567,28 +1580,41 @@ pub(crate) async fn suppressed_email_bursts(
             .iter_mut()
             .find(|burst| burst.account_id == account_id && burst.category == category)
         {
-            Some(burst) => burst.count += 1,
+            // Rows arrive `suppressed_at` ascending, so the last one
+            // folded in for a pair is that burst's newest suppression.
+            Some(burst) => {
+                burst.count += 1;
+                burst.last_suppressed_at = suppressed_at;
+            }
             None => bursts.push(SuppressedBurst {
                 account_id,
                 category,
                 count: 1,
-                first_suppressed_at: suppressed_at,
+                first_suppressed_at: suppressed_at.clone(),
+                last_suppressed_at: suppressed_at,
             }),
         }
     }
     Ok(bursts)
 }
 
-/// Deletes every suppressed row of one burst, in the same batch as the
-/// send record: a summary that was sent and a burst that is still on the
-/// books must never both be true.
+/// Deletes the suppressed rows a burst's count covered — up to and
+/// including `last_suppressed_at`, and no further. A row written after
+/// the read is a notification the outbox has already dropped and no
+/// summary has counted; deleting it with this batch would lose it
+/// forever, which is the failure #232 exists to close.
 #[must_use]
-pub(crate) fn clear_email_suppression_statement(account_id: &str, category: &str) -> Statement {
+pub(crate) fn clear_email_suppression_statement(
+    account_id: &str,
+    category: &str,
+    last_suppressed_at: &str,
+) -> Statement {
     let mut delete = Query::delete();
     delete
         .from_table(iden(EMAIL_SUPPRESSED))
         .and_where(Expr::col(iden("account_id")).eq(account_id))
-        .and_where(Expr::col(iden("category")).eq(category));
+        .and_where(Expr::col(iden("category")).eq(category))
+        .and_where(Expr::col(iden("suppressed_at")).lte(last_suppressed_at));
     Statement::render(&delete)
 }
 

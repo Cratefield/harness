@@ -9,7 +9,7 @@
 
 mod support;
 
-use cratefield_core::Notification;
+use cratefield_core::{Notification, Statement};
 use cratefield_module_notifications::Category;
 use serde_json::json;
 use support::{ALICE, BOOKING, Kit, kit_with};
@@ -88,7 +88,7 @@ async fn eight_notifies_in_one_window_become_five_mails_plus_one_summary() {
     );
     let summary = kit.harness.mailer.last_message().expect("the summary");
     assert_eq!(summary.to, "alice@example.test");
-    assert_eq!(summary.subject, "3 new booking notifications");
+    assert_eq!(summary.subject, "You have 3 new notifications");
     assert_eq!(
         kit.count("notifications_email_suppressed").await,
         0,
@@ -194,4 +194,66 @@ async fn the_summary_counts_against_the_next_window() {
         1,
         "and the overflow of the second burst is traced like the first"
     );
+}
+
+#[pollster::test]
+async fn a_suppression_that_lands_while_the_summary_is_in_flight_is_not_lost() {
+    // Two overlapping drain passes are ordinary: the lease is 300s and
+    // nothing stops a second scheduled tick claiming rows while the first
+    // is inside mailer.send. A 9th suppression written between the burst
+    // read and the clear must survive that clear — the summary counted
+    // eight, and the delete may take exactly those eight.
+    let (kit, racing) = support::kit_racing(
+        std::sync::Arc::new(cratefield_testing::FakePush::new(
+            cratefield_testing::PushMode::DeliverOk,
+        )),
+        vec![Category::new(BOOKING).email(true)],
+        &[("NOTIFICATIONS_EMAIL_MAX_PER_WINDOW", CAP)],
+    );
+    set_email(&kit, "alice@example.test").await;
+    burst(&kit, 8).await;
+    assert_eq!(kit.harness.mailer.sent().len(), 5);
+    assert_eq!(kit.count("notifications_email_suppressed").await, 3);
+
+    // The window has rolled; the summary is due. The interloper stands in
+    // for the concurrent pass: one more suppression commits immediately
+    // before the clear runs, after the burst was read as eight.
+    kit.clock.advance(WINDOW);
+    let late_at = support::NOW + WINDOW + 8;
+    racing.interleave(
+        "notifications_email_suppressed",
+        Statement::with_values(
+            "INSERT INTO notifications_email_suppressed (id, account_id, category, \
+             notification_id, suppressed_at) VALUES (?, ?, ?, ?, ?)"
+                .to_owned(),
+            vec![
+                "suppressed-late".into(),
+                ALICE.into(),
+                BOOKING.into(),
+                "notif-late".into(),
+                time::OffsetDateTime::from_unix_timestamp(late_at)
+                    .expect("in range")
+                    .format(&time::format_description::well_known::Rfc3339)
+                    .expect("formatted")
+                    .into(),
+            ],
+        ),
+    );
+    kit.notifier.drain(&kit.scope()).await.expect("drain");
+
+    assert_eq!(
+        kit.harness.mailer.sent().len(),
+        6,
+        "one summary for the eight counted"
+    );
+    assert_eq!(
+        kit.count("notifications_email_suppressed").await,
+        1,
+        "the clear took the eight it counted, not the pair's whole history"
+    );
+
+    // And the late one is summarised on a later tick rather than dropped.
+    kit.clock.advance(60);
+    kit.notifier.drain(&kit.scope()).await.expect("drain");
+    assert_eq!(kit.harness.mailer.sent().len(), 7, "it was never lost");
 }

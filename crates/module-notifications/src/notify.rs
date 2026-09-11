@@ -1025,14 +1025,26 @@ impl Notifier {
             return Ok(());
         }
         let since = plus_secs(now, -self.email_window(ctx));
-        for burst in store::suppressed_email_bursts(db).await? {
+        let limit = self.drain_batch(ctx);
+        for burst in store::suppressed_email_bursts(db, limit).await? {
             if store::emails_since(db, &burst.account_id, &burst.category, &since).await?
                 >= i64::from(cap)
             {
                 continue;
             }
-            let clear =
-                || store::clear_email_suppression_statement(&burst.account_id, &burst.category);
+            // Bounded by what was counted, not by the pair: a suppression
+            // that lands mid-send belongs to a summary not yet written.
+            // The next pass sees it — its read of the trailing window
+            // holds the summary this pass just recorded, so the burst
+            // waits for the window to roll again rather than mailing
+            // twice.
+            let clear = || {
+                store::clear_email_suppression_statement(
+                    &burst.account_id,
+                    &burst.category,
+                    &burst.last_suppressed_at,
+                )
+            };
             let (Some(category), Some(target)) = (
                 self.category(&burst.category).cloned().ok(),
                 store::email_target(db, &burst.account_id)
@@ -1106,13 +1118,17 @@ impl Notifier {
         to: &str,
     ) -> Result<Mail, NotifyError> {
         let locale = self.account_locale(db, &burst.account_id).await?;
-        let title = format!("{} new {} notifications", burst.count, burst.category);
+        // No category in the subject: it only has its slug, and
+        // "3 new coach_notes notifications" is not a subject line a
+        // person should read. The count carries the news; the in-app
+        // inbox, which labels by category properly, carries the rest.
+        let title = format!("You have {} new notifications", burst.count);
         let notification = Notification::new(
             title,
             format!(
-                "{} notifications arrived while your email limit for {} was full. They are in \
-                 your in-app notifications.",
-                burst.count, category.name
+                "{} notifications arrived while your email limit was full. They are in your \
+                 in-app notifications.",
+                burst.count
             ),
         );
         let job = EmailJob {
