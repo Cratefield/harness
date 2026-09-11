@@ -23,6 +23,15 @@ default = ["harness"]
 # `cratefield-adapter-sqlite` — a consumer that needs none of those
 # should use `default-features = false` with `port-conformance`.
 harness = [
+    # The full kit includes the port helpers. `assert_wasm_safe_deps` is
+    # called by ten module and auth conformance tests that take the
+    # default feature, and `port` needs nothing beyond `cratefield-core`
+    # — so gating it on `port-conformance` alone left those crates
+    # without it. A workspace test run hid that, because the three push
+    # adapters enable `port-conformance` and unification handed it to
+    # everyone; CI's per-module matrix job, which builds a narrower
+    # selection, did not.
+    "port-conformance",
     "dep:async-trait",
     "dep:axum",
     "dep:bytes",
