@@ -216,7 +216,7 @@ async fn interleaved_requests_touch_only_their_own_database() {
     // #32's required check. Interleaved on purpose: a layer that resolved
     // once and cached the handle in module state would pass a test that
     // ran A's requests and then B's, and fail this one.
-    let (router, a, b, registry) = routed();
+    let (router, a, b, _registry) = routed();
 
     for _ in 0..3 {
         assert_eq!(
