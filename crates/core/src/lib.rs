@@ -105,5 +105,5 @@ pub use surface::{
     schema_for,
 };
 pub use template::{Rendered, Template, TemplateError, TemplateRegistry};
-pub use tenant::TenantStatus;
+pub use tenant::{Resolution, ResolveTenant, Tenant, TenantId, TenantStatus};
 pub use venture::{Brand, Venture, VentureEnv};
