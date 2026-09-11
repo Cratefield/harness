@@ -70,6 +70,7 @@ compatibility-doc` and checked in CI for drift. Do not edit by hand.
 | `factory0-auth-password` | 0.1.1 | 1 | `^0.3` — `>=0.3.0, <0.4.0` |
 | `factory0-auth-worker` | 0.1.1 | 1 | `^0.3` — `>=0.3.0, <0.4.0` |
 | `fz-module-linkedin` | 0.1.1 | 1 | `^0.3` — `>=0.3.0, <0.4.0` |
+| `sidecar-module-template` | 0.1.1 | 1 | `^0.3` — `>=0.3.0, <0.4.0` |
 | `venture-native` | 0.1.1 | 1 | `^0.3` — `>=0.3.0, <0.4.0` |
 
 A module row means: that module version was built and conformance-tested
