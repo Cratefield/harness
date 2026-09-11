@@ -28,8 +28,8 @@ use cratefield_access::{
     session_token_from_cookie_header,
 };
 use cratefield_core::{
-    Config, ConfigError, Migrations, Module, ModuleConfig, ModuleContext, Port, Signer,
-    SqlMigration, require_admin,
+    Config, ConfigError, DataKind, Disposition, Migrations, Module, ModuleConfig, ModuleContext,
+    PersonalDataSet, Port, Signer, SqlMigration, require_admin,
 };
 use http::{HeaderMap, StatusCode, header};
 use time::format_description::well_known::Rfc3339;
@@ -71,6 +71,143 @@ impl Module for Console {
             Port::Clock,
             Port::IdGen,
         ]
+    }
+
+    /// The five tables this module's `migrations()` create (issue #280). This
+    /// list is also what a whole-database `fz data export`/`import` carries,
+    /// so declaring it means the control plane's own database — its allowlist
+    /// and its accounts — moves with the venture on a move. That is the right
+    /// answer: a move that left the login gate behind would not boot.
+    fn tables(&self) -> &'static [&'static str] {
+        &[
+            "allowlist",
+            "allowlist_audit",
+            "account",
+            "venture",
+            "provision_progress",
+        ]
+    }
+
+    /// What the control plane holds about a person, table by table (issues
+    /// #244, #280). The control plane is itself a harness venture, so "what
+    /// do you hold about me" is a question an operator's subject can ask it,
+    /// and until this existed the answer was: everything, undeclared.
+    ///
+    /// **Ordering, and why it is currently inert.** The catalogue is ordered
+    /// so that, under reversal, `venture` is deleted before the `account`
+    /// row it references — the same rule `auth-core` follows with `users`
+    /// declared first. But that ordering protects nothing today, because
+    /// erasure binds **one** subject value across every declaration and no
+    /// single value matches both: `allowlist.value` and `account.identity`
+    /// hold the operator's Google-verified email, while `venture.account_id`
+    /// holds the account's ULID. With subject = the address, the `venture`
+    /// delete removes nothing, the `account` delete then removes the parent,
+    /// and `verify` re-counts `venture` with the address, finds zero, and
+    /// writes a receipt saying the erasure completed — while the venture rows
+    /// remain, pointing at an account id that no longer exists. The export
+    /// has the same hole: a declaration promising "the backends you created"
+    /// returns an empty set. Tracked as issue #288; the mechanism that fixes
+    /// it is the declared join (#281's `subject_via`), which is deliberately
+    /// not invented here.
+    ///
+    /// **Why `account` is `Erase` and not `Anonymise`.** Anonymising would
+    /// need the identifying columns nullable, and the schema refuses that on
+    /// purpose: `account.identity` is `NOT NULL UNIQUE` with no default, and
+    /// `name` is `NOT NULL`. `identity` is the Google-verified email the
+    /// control plane signs the person in with — the one identifier this
+    /// database cannot keep once the person is gone, because a row that can
+    /// still be signed into is not erased. So the account goes, and with it
+    /// — by the ordering above — the venture rows that hang off it. That is
+    /// a real consequence, not a side effect: a person leaving takes their
+    /// backends' records with them, and offboarding the running Workers
+    /// themselves is the deploy pipeline's job, not the erasure plan's.
+    ///
+    /// **Why `allowlist_audit` is `Retain`.** It is append-only by design:
+    /// every add and every remove of an allowlist entry is kept, so the
+    /// answer to "who let this address in, and who took it out" always
+    /// exists. The reason is written for the subject to read, because it is
+    /// published verbatim on the privacy page.
+    ///
+    /// **Two known gaps, both the same family: this catalogue type has no
+    /// join, and both failures are what happens without one.**
+    ///
+    /// `allowlist.value` holds either an exact lowercased email or a
+    /// `@domain`. A subject access request made with a person's address can
+    /// never match a `@domain` row that admits them, because the row does
+    /// not contain their address. And `venture` references its owner by the
+    /// account's ULID rather than the address every other set here matches
+    /// on, so the erasure and the export in the ordering note above never
+    /// reach it at all. The declarations are still the honest ones — each
+    /// names the column a person is identified by, when they are identified
+    /// at all — but both need the declared join (#281's `subject_via`) to
+    /// become complete, and both are tracked under issue #288 rather than
+    /// papered over here with a mechanism this branch does not build.
+    fn personal_data(&self) -> &'static [PersonalDataSet] {
+        const SETS: &[PersonalDataSet] = &[
+            PersonalDataSet {
+                table: "allowlist",
+                subject: "value",
+                kind: DataKind::Contact,
+                disposition: Disposition::Erase,
+                description: "The invite list: the address (or whole domain) you were let in \
+                              with, whether it was an address or a domain, the note the \
+                              operator wrote when inviting you, who invited you, and when.",
+                redacted: &[],
+            },
+            PersonalDataSet {
+                table: "allowlist_audit",
+                subject: "value",
+                kind: DataKind::Contact,
+                disposition: Disposition::Retain(
+                    "This is the record of every change to the invite list: when your \
+                     address was added, by whom, and when it was removed, by whom. It is \
+                     kept on purpose and never rewritten, so the answer to who changed \
+                     your access — including any removal you asked for — always exists. \
+                     Erasing it would leave an access change nobody can account for.",
+                ),
+                description: "The audit trail of the invite list itself: every add and every \
+                              remove, the address it concerned, and which operator did it \
+                              and when. Append-only; a removal removes the invite but not \
+                              the record of it.",
+                redacted: &[],
+            },
+            PersonalDataSet {
+                table: "account",
+                subject: "identity",
+                kind: DataKind::Contact,
+                disposition: Disposition::Erase,
+                description: "Your account with us: the Google-verified email address you \
+                              sign in with, the name it gave us, whether the account is \
+                              active, and when it was created.",
+                redacted: &[],
+            },
+            // Declared after `account` so that, under reversal, these rows
+            // would be deleted before the account row they reference. The
+            // ordering is currently inert — no single subject value matches
+            // both tables — which is the gap tracked in #288. See the doc
+            // comment above.
+            PersonalDataSet {
+                table: "venture",
+                subject: "account_id",
+                kind: DataKind::Identifier,
+                disposition: Disposition::Erase,
+                description: "The backends you created: each one's name and subdomain, the \
+                              modules it carries, where it is in its lifecycle, and when it \
+                              was created and last changed.",
+                redacted: &[],
+            },
+            // Keyed to a venture, not a person: the last provisioning step
+            // that completed, the error message if the run stopped, and when.
+            // No column in it names a human being, and the venture it belongs
+            // to is erased with its account above.
+            PersonalDataSet::none(
+                "provision_progress",
+                "One row per backend, holding where provisioning got to: the last step that \
+                 completed and any error message a stopped run recorded. It is keyed to the \
+                 backend's id and names nobody.",
+            ),
+        ];
+        SETS
     }
 
     fn migrations(&self) -> Migrations {

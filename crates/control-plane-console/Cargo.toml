@@ -29,6 +29,7 @@ time = { workspace = true }
 
 [dev-dependencies]
 cratefield-adapter-sqlite = { path = "../adapter-sqlite" }
+cratefield-testing = { path = "../testing", features = ["postgres"] }
 pollster = { version = "0.4", features = ["macro"] }
 tower = { version = "0.5", features = ["util"] }
 async-trait = "0.1"
