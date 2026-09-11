@@ -106,7 +106,10 @@ overrides them channel by channel.
 | `PUT /v1/notifications/preferences` | A patch — `{"preferences": {"booking": {"push": false}}}`. An omitted channel keeps the value it had; a category this venture does not declare is refused `400 unknown-category` rather than stored |
 
 Both are behind the account's own token, and both answer that same effective
-view, so a client renders what the `PUT` returns without a second read.
+view, so a client renders what the `PUT` returns without a second read. Both
+also carry the account's `locale` and its `dir` — see
+[Languages](#languages) — and the `PUT` takes a `locale` alongside
+`preferences` to change it.
 
 ### A late opt-out wins
 
@@ -352,30 +355,159 @@ A bounce or complaint from the provider suppresses the address (issue #233).
 
 ## Languages
 
-**Server-rendered localisation is not built.** There is no `cratefield-i18n`
-crate; a `Localizable` message, Fluent catalogs and the locale resolution
-chain are issue #190, which is open and unblocked. A venture with one language
-passes a rendered `Notification` and needs none of it.
+**The language cannot be chosen when the caller queues a notification.** One
+account can have an English browser and a Bahasa phone, and the module that
+confirms a booking knows about neither. So a caller names a message instead of
+writing one, and it is rendered **per recipient at delivery** (issue #190).
 
-What *does* work today is the **native passthrough**, which is the path an app
-that ships its own strings uses:
+A venture with one language needs none of this and pays for none of it: pass a
+rendered `Notification` and everything below is skipped — no catalog is built,
+no locale is read, and the notification reaches the device exactly as written.
 
-```rust,ignore
-notification.loc = Some(LocKeys {
-    title_loc_key: Some("ROOM_STARTING".into()),
-    title_loc_args: vec![coach.name.clone()],
-    ..Default::default()
-});
+### The chain
+
+The **subscription's** locale, then the **account's**, then the venture's
+default.
+
+| Channel | Uses | Why |
+|---|---|---|
+| Push | the subscription's locale | A device's own setting is the best signal there is: it is what the person holding the phone chose |
+| In-app inbox | the account's | One inbox |
+| Email | the account's | One mailbox |
+
+A subscription's locale comes from the `locale` field of `PUT
+/v1/notifications/subscriptions`, or from `Accept-Language` when the client
+sends none — which is all a browser has. An account's comes from `locale` on
+`PUT /v1/notifications/preferences`, and an account that has never had one is
+seeded from `Accept-Language` on its first such call. The venture's default is
+`NOTIFICATIONS_DEFAULT_LOCALE`, or the catalog's own.
+
+Every one of those is parsed into a BCP 47 language identifier before it is
+stored, and a value that is not one is dropped rather than kept. Only a
+canonical tag ever reaches a column — and so a log, an export or a `lang`
+attribute.
+
+### The catalog
+
+[Project Fluent](https://projectfluent.org), in `cratefield-i18n`. Pure Rust,
+no I/O, reaches wasm32, and `.ftl` is what translators already know.
+
+```ftl
+# locales/en.ftl
+booking-confirmed =
+    .title = Booking confirmed
+    .body = { $places ->
+        [one] One place with { $coach }, on { $day }
+       *[other] { $places } places with { $coach }, on { $day }
+    }
+    .subject = Your booking with { $coach }
 ```
 
-The APNs adapter maps this to `alert.title-loc-key` / `title-loc-args`, and
-the FCM adapter to `android.notification.title_loc_key` / `title_loc_args`, so
-iOS and Android render the app's own translated strings in the device's
-language without the server knowing any of them.
+```ftl
+# locales/id.ftl — Indonesian has one plural form, so `[one]` never appears
+booking-confirmed =
+    .title = Pesanan dikonfirmasi
+    .body = { $places } tempat bersama { $coach }, pada { $day }
+```
 
-Web Push has no loc-key mechanism, so a browser is always server-rendered —
-which is why #190 exists and why it matters most for email and the in-app
-inbox.
+`.title` and `.body` are required; `.subject` is read by mail only. The plural
+selector is CLDR's, per locale, which is the reason to use Fluent rather than
+a format string.
+
+```rust,ignore
+Notifications::new()
+    .category(Category::new("booking"))
+    .catalog(
+        FluentCatalog::builder()
+            .default_locale("en")
+            .locale("en", include_str!("../locales/en.ftl"))
+            .locale("id", include_str!("../locales/id.ftl"))
+            .build()?,
+    )
+    .messages(["booking-confirmed"])
+```
+
+`include_str!`, not a file read: a Worker isolate has no filesystem, and the
+bundles are built once per isolate at cold start.
+
+Then the caller names the message:
+
+```rust,ignore
+notifier.notify_now(db, scope, account, "booking",
+    Localizable::new("booking-confirmed")
+        .arg("places", 2)          // a number, so the plural selector works
+        .arg("coach", coach.name)
+        .url(format!("/bookings/{id}")),
+).await?;
+```
+
+**Money and dates are passed pre-formatted**, in `args`. Only the venture
+knows the currency, the scale and how it rounds; Fluent's own number
+formatting is not told any of that.
+
+### Server, native, or both
+
+An app that ships its own translations does not need the server's. Per
+category:
+
+| `render:` | APNs / FCM get | Web Push gets |
+|---|---|---|
+| `server` (default) | the recipient's language, no loc keys | the recipient's language |
+| `native` | the app's loc keys, with the **venture default** text beside them as a fallback | the recipient's language |
+| `both` | the app's loc keys **and** the recipient's language | the recipient's language |
+
+The keys are the app's own (`Localizable::loc`), not catalog ids: only the app
+knows what is in its `.strings` and its `strings.xml`. **Web Push has no
+loc-key mechanism at all**, so a browser is always server-rendered — the
+module never attaches keys for it, whatever the category says.
+
+Pick `native` when the app owns every string and the server's text is only
+there for an old build; `both` when the app is newer than its translations and
+should fall back to ours; `server` for everything else, and for any venture
+whose clients are browsers.
+
+### When a translation is missing
+
+It is **visible from both ends**, never silent. The notification is delivered
+with the message id as its text — `booking-confirmed.title`, which is a bug
+report from whoever receives it — and `notifications.missing_translation` is
+emitted with the key, the attribute and the locale. That event carries no
+rendered string and no argument: those are the caller's values about a person.
+
+Before that: `.messages(..)` lists the ids a venture promises are translated
+into every locale its catalog declares. Any gap fails `validate_config` — so
+the module refuses to start — and `fz doctor` lists them, one per locale, under
+the `module-self-check` code.
+
+Fallback is per **message**, not per catalog: an `id` catalog that has
+`booking-confirmed` and not `coach-notes` renders the first in Indonesian and
+the second in the default locale. A half-translated locale stays useful.
+
+### Direction
+
+`unic-langid` parses language tags and carries no directionality data — there
+is no `is_rtl()` to call, and no browser API answers it either. So
+`cratefield-i18n` holds an explicit list: scripts `Arab`, `Hebr`, `Thaa`,
+`Nkoo`, `Adlm`, and languages `ar`, `he`, `fa`, `ur`, `ps`, `sd`, `yi`, `dv`,
+`ckb`, script first so `az-Arab` is right-to-left and `ku-Latn` is not.
+
+Mail carries `Content-Language` and wraps its body in `lang`/`dir`. The inbox
+API returns `locale` and `dir` per item, and `<cf-notifications>` sets both on
+the item it renders — per item, because one list can hold an Indonesian
+booking and an Arabic one. Relative times stay the browser's job
+(`Intl.RelativeTimeFormat` against the page locale).
+
+The locale reported is always the one the text was **actually** rendered in. A
+request for `ar` that fell back to English is an English mail, and labelling it
+`ar` would right-align it in every client that obeys.
+
+### What this does not do
+
+**Changing an account's locale does not rewrite its old inbox rows.** They
+were rendered when they were written and they stay as they are. The row keeps
+its `loc_key` and `loc_args` beside the rendered text, so a client that wants
+to re-render can; the module never does it. Re-rendering stored rows is out of
+scope, and so are machine translation and a translation-management UI.
 
 ## Testing
 

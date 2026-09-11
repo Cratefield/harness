@@ -52,6 +52,11 @@ push-wiring = [
 
 # Everything else that is optional.
 ui = ["dep:cratefield-ui"]
+# Server-side localisation (issue #190): Fluent catalogs, BCP 47
+# negotiation and text direction. Pulled in by `notifications` already —
+# a feature of its own for a venture that localises its own mail without
+# mounting that module.
+i18n = ["dep:cratefield-i18n"]
 secrets = ["dep:cratefield-secrets"]
 kms = ["dep:cratefield-kms"]
 
@@ -60,7 +65,7 @@ email-signup = ["dep:cratefield-module-email-signup"]
 privacy = ["dep:cratefield-module-privacy"]
 waitlist = ["dep:cratefield-module-waitlist"]
 cms = ["dep:cratefield-module-cms"]
-notifications = ["dep:cratefield-module-notifications"]
+notifications = ["dep:cratefield-module-notifications", "i18n"]
 
 # The conformance kit. Belongs under [dev-dependencies] in a venture.
 testing = ["dep:cratefield-testing"]
@@ -89,6 +94,8 @@ cratefield-push-wiring = { workspace = true, optional = true }
 # `publish = false` until its first manual publish (docs/RELEASING.md).
 cratefield-adapter-webpush = { workspace = true, optional = true }
 cratefield-ui = { workspace = true, optional = true }
+# `publish = false` until its first manual publish (docs/RELEASING.md).
+cratefield-i18n = { workspace = true, optional = true }
 cratefield-secrets = { workspace = true, optional = true }
 cratefield-kms = { workspace = true, optional = true }
 cratefield-module-email-signup = { workspace = true, optional = true }

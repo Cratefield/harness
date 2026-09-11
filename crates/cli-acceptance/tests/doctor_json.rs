@@ -10,7 +10,7 @@ use cratefield_cli::run;
 use std::fs;
 use std::path::PathBuf;
 use std::process::ExitCode;
-use venture_fixture::harness_v1;
+use venture_fixture::{harness_v1, harness_with_self_check};
 
 struct TempDir(PathBuf);
 
@@ -71,6 +71,49 @@ fn clean_run_is_ok_with_an_empty_failure_list() {
         parsed["failures"],
         serde_json::json!([]),
         "clean run: empty failure list"
+    );
+}
+
+/// A module's own report about its embedded data reaches the doctor
+/// (issue #190): the notifications module answers `self_check` with every
+/// translation its catalog is missing for a message the venture declared,
+/// and a translation gap must be a pull request rather than a person
+/// reading `booking-confirmed.title` on a lock screen.
+///
+/// Unconditional, and with no environment at all: the doctor cannot run a
+/// module's `validate_config` — those values live on the runtime `Env` —
+/// but this half has the same answer everywhere.
+#[test]
+fn a_modules_own_report_reaches_the_doctor_with_its_stable_code() {
+    const PROBLEMS: [&str; 2] = [
+        "notifications: no translation for id: booking-confirmed.title",
+        "notifications: no translation for ar: booking-confirmed.body",
+    ];
+
+    let tmp = TempDir::new("self-check");
+    let out = tmp.migrations();
+    collect_into(&out);
+    let report = doctor_report_json(&harness_with_self_check(&PROBLEMS), &out, None, None);
+    assert!(!report.ok());
+    let parsed: serde_json::Value =
+        serde_json::from_str(&report.render_json().expect("serializes")).expect("parses");
+    let failures = parsed["failures"].as_array().expect("failure list");
+    assert_eq!(failures.len(), 2, "one failure per gap: {failures:?}");
+    for failure in failures {
+        assert_eq!(failure["code"], serde_json::json!("module-self-check"));
+    }
+    assert_eq!(failures[0]["message"], serde_json::json!(PROBLEMS[0]));
+    assert_eq!(
+        failures[1]["message"],
+        serde_json::json!(PROBLEMS[1]),
+        "the doctor lists the missing ids per locale, in the module's order"
+    );
+
+    // And a module with nothing to report says nothing, so this check
+    // cannot fail a venture that has no catalog at all.
+    assert!(
+        doctor_report_json(&harness_with_self_check(&[]), &out, None, None).ok(),
+        "a module with no problems adds no failures"
     );
 }
 

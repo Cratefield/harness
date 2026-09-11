@@ -45,6 +45,10 @@ pub struct Codes {
     pub sidecar_shadows_module: DoctorCodeDef,
     /// The sidecar mount table could not be parsed.
     pub sidecar_mount_invalid: DoctorCodeDef,
+    /// A module found a problem in its own embedded data — a catalog
+    /// missing a translation it declared, and anything else a module
+    /// reports from `Module::self_check`.
+    pub module_self_check: DoctorCodeDef,
     /// A migration contains SQL outside the portable subset.
     pub non_portable_sql: DoctorCodeDef,
     /// A migration contains card data (number, verification code or
@@ -147,6 +151,12 @@ pub const CODES: Codes = Codes {
         code: "sidecar-mount-invalid",
         title: "Sidecar mount invalid",
         description: "The sidecar mount table could not be parsed.",
+    },
+    module_self_check: DoctorCodeDef {
+        code: "module-self-check",
+        title: "Module self-check failed",
+        description: "A module reported a problem in its own embedded data, such as a \
+                      localisation catalog missing a message it declared.",
     },
     non_portable_sql: DoctorCodeDef {
         code: "non-portable-sql",
@@ -267,6 +277,7 @@ pub fn registry() -> Vec<&'static DoctorCodeDef> {
         &CODES.manifest_unreadable,
         &CODES.manifest_write_failed,
         &CODES.migration_not_collected,
+        &CODES.module_self_check,
         &CODES.module_unknown,
         &CODES.non_portable_sql,
         &CODES.not_deployed,
@@ -337,6 +348,7 @@ mod tests {
             CODES.card_data_in_migration.code,
             CODES.push_transport_misconfigured.code,
             CODES.push_required_but_unrouted.code,
+            CODES.module_self_check.code,
             CODES.module_unknown.code,
             CODES.not_deployed.code,
             CODES.production_deploy_unauthorized.code,

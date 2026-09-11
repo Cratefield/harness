@@ -65,6 +65,10 @@ cratefield-module-cms = { path = "crates/module-cms", version = "0.1.0" }
 # notifications module is the first to depend on it, because the account a
 # route acts for comes from the auth extractor (ADR 0016).
 cratefield-module-notifications = { path = "crates/module-notifications", version = "0.1.0" }
+# Server-side localisation (issue #190): Fluent catalogs, BCP 47
+# negotiation and text direction. Nothing in it is notification-specific,
+# so `module-waitlist`'s mail templates can take it next.
+cratefield-i18n = { path = "crates/i18n", version = "0.1.0" }
 cratefield-testing = { path = "crates/testing", version = "0.1.0" }
 cratefield-cli = { path = "crates/cli", version = "0.1.0" }
 # The venture manifest + deterministic composition generator (issue #138).
@@ -178,6 +182,23 @@ aes-gcm = { version = "0.11.1", default-features = false, features = [
 ] }
 # Email NFC normalisation (core `email` module) — pure Rust, wasm-safe.
 unicode-normalization = "0.1.24"
+
+# Project Fluent, for `cratefield-i18n` (issue #190). Pure Rust, no I/O,
+# builds to wasm32, and `intl_pluralrules` ships the CLDR plural rules that
+# make `{ $count ->  [one] … *[other] … }` correct per locale.
+#
+# `fluent-langneg` stays on the **0.13** line: 0.14 replaced `unic-langid`
+# with `icu_locid` as its identifier type, which would put two
+# `LanguageIdentifier` types and two locale databases in one dependency
+# graph — `fluent-bundle` 0.16 is built on `unic-langid`.
+fluent-bundle = "0.16.0"
+fluent-langneg = "0.13.1"
+unic-langid = "0.9.6"
+# The **concurrent** memoizer (`Arc`/`RwLock`). The default `FluentBundle`
+# is built on `Rc`/`RefCell` and is neither `Send` nor `Sync`, so it cannot
+# live behind a `Push` or `Mailer` port; `SendWrapper` cannot fix that,
+# because it grants `Send` alone and panics when dropped off-thread.
+intl-memoizer = "0.5.3"
 
 # Identifiers and time.
 ulid = "3.0.0"

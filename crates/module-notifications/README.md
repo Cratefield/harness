@@ -72,7 +72,7 @@ would confirm the id exists.
 | `GET` | `/v1/notifications/subscriptions` | The account's own, recipients redacted to a prefix |
 | `DELETE` | `/v1/notifications/subscriptions/{id}` | Sign-out |
 | `GET` | `/v1/notifications/preferences` | Every declared category, with the values that apply |
-| `PUT` | `/v1/notifications/preferences` | Change some of them; an unknown category is `400` |
+| `PUT` | `/v1/notifications/preferences` | Change some of them, and the account's `locale`; an unknown category is `400` |
 | `PUT` | `/v1/notifications/email` | The address this account is mailed at; verified only when the token's own `email_verified` claim covers it |
 
 Two routes are **not** authenticated, because neither caller can hold a
@@ -228,6 +228,7 @@ one parked at router-build time recovered nothing at all on a cold isolate.
 | `NOTIFICATIONS_DRAIN_CONCURRENCY` | `8` | Rows in flight at a time inside one pass |
 | `NOTIFICATIONS_REHOME_MAX_PER_HOUR` | `3` | Devices one account may take over from other accounts in an hour; `0` refuses every take-over |
 | `NOTIFICATIONS_RESEND_WEBHOOK_SECRET` | — | The endpoint secret (`whsec_…`) the provider's bounce webhook is signed with. Unset, that route refuses every delivery rather than trusting one |
+| `NOTIFICATIONS_DEFAULT_LOCALE` | the catalog's own | The language a recipient who has expressed none is written to. A value that is not a BCP 47 tag is refused by `validate_config`, which names the variable and not the value |
 
 Every one is read as a `u32`, and `validate_config` refuses a value the
 runtime could not read — including one above `u32::MAX`, which used to
@@ -250,6 +251,41 @@ Notifications::new()
 
 `notifications_subscriptions`, `notifications_preferences`,
 `notifications_outbox` (the core `Outbox`), `notifications_dead_letters`,
-`notifications_inbox`, `notifications_email_targets` and
-`notifications_email_sends`. All seven are declared, so `fz data export`
-sees them.
+`notifications_inbox`, `notifications_email_targets`,
+`notifications_email_sends` and `notifications_locales`. All eight are
+declared, so `fz data export` sees them.
+
+## Languages
+
+A caller that passes a `Notification` gets exactly what it wrote, in every
+channel, on every device — which is what a venture with one language wants
+and costs it nothing.
+
+A venture with more than one names a message instead, and the module
+renders it **per recipient at delivery**: the subscription's locale, then
+the account's, then the venture's default. The caller cannot choose,
+because one account can have an English browser and a Bahasa phone.
+
+```rust,ignore
+notifier.notify_now(db, scope, account, "booking",
+    Localizable::new("booking-confirmed")
+        .arg("places", 2)          // a number, so the plural selector works
+        .arg("coach", coach.name),
+).await?;
+```
+
+The catalog is `cratefield-i18n` (Project Fluent), built once at cold
+start from `.ftl` sources the venture embeds. A missing translation is
+never silent: the notification carries the message id as its text and
+`notifications.missing_translation` names the key, the attribute and the
+locale — and nothing else, because a rendered string is built from the
+caller's values about a person.
+
+`Category::render` chooses who renders for a **token** transport:
+`server` (the default), `native` (the app's own loc keys, with the
+venture default text beside them) or `both`. Web Push has no loc-key
+mechanism, so a browser is always server-rendered.
+
+The whole chain, the `.ftl` example with plurals, and the honest note that
+changing an account's locale does **not** rewrite its old inbox rows are in
+[`docs/NOTIFICATIONS.md`](../../docs/NOTIFICATIONS.md).

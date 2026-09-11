@@ -21,7 +21,8 @@ pub mod sample;
 use cratefield::Harness;
 use cratefield::cloudflare::{Cloudflare, serve, serve_scheduled};
 use cratefield::email_signup::EmailSignup;
-use cratefield::notifications::{Category, Notifications};
+use cratefield::i18n::FluentCatalog;
+use cratefield::notifications::{Category, Notifications, RenderMode};
 use cratefield::waitlist::Waitlist;
 use std::sync::OnceLock;
 use worker::{Context, Env, Request, Response, event};
@@ -80,7 +81,34 @@ fn instance() -> &'static (Harness, Cloudflare) {
             .module(
                 Notifications::new()
                     .category(Category::new("booking"))
-                    .category(Category::new("room_starting").badge(true))
+                    .category(
+                        Category::new("room_starting")
+                            .badge(true)
+                            // The app ships its own strings for this one
+                            // (issue #190), so APNs and FCM get the loc
+                            // keys *and* our rendered text: the OS uses
+                            // the app's where the key exists and falls
+                            // back to ours where it does not. A browser
+                            // has no such mechanism and is always sent the
+                            // rendered text.
+                            .render(RenderMode::Both),
+                    )
+                    // The venture's own strings, parsed once at cold start
+                    // from data embedded in the binary — a Worker isolate
+                    // has no filesystem to read them from.
+                    .catalog(
+                        FluentCatalog::builder()
+                            .default_locale("en")
+                            .locale("en", include_str!("../locales/en.ftl"))
+                            .locale("id", include_str!("../locales/id.ftl"))
+                            .build()
+                            .expect("the example catalog parses"),
+                    )
+                    // What every locale must have. `fz doctor` lists any
+                    // gap and the module refuses to start with one, so a
+                    // missing translation is a pull request rather than a
+                    // person reading a message id on a lock screen.
+                    .messages(["booking-confirmed", "room-starting"])
                     // The push environment has one reader (issue #191), so
                     // the module takes the verdict rather than reading the
                     // variables: in production a venture that wired no

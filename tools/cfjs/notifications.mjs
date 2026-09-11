@@ -188,6 +188,38 @@ async function mount(w, attrs = "") {
   assert(el.querySelector(".cf-count").hidden, "and the count goes to nothing");
 }
 
+// --- languages (issue #190) ------------------------------------------
+
+{
+  // One list, two languages: the item carries its own `lang` and `dir`,
+  // because an account with an Indonesian phone and an Arabic mail reads
+  // both in the same panel.
+  const w = world({
+    unread: 2,
+    rows: [
+      { id: "01A", title: "Pesanan dikonfirmasi", body: "Selasa", locale: "id", dir: "ltr", created_at: "2026-09-11T10:00:00Z" },
+      { id: "01B", title: "تم تأكيد الحجز", body: "الثلاثاء", locale: "ar", dir: "rtl", created_at: "2026-09-11T09:00:00Z" },
+    ],
+  });
+  const el = await mount(w);
+  await el.open();
+  const items = el.querySelectorAll("li");
+  assert(items[0].lang === "id" && items[0].dir === "ltr", "an item carries its own language");
+  assert(items[1].dir === "rtl", "and an Arabic item is laid out right to left");
+}
+
+{
+  // A venture that renders its own strings sends no locale, and the item
+  // must inherit the page's — not be stamped `ltr` on a right-to-left
+  // page.
+  const w = world({ unread: 1, rows: ROWS });
+  const el = await mount(w);
+  await el.open();
+  const item = el.querySelector("li");
+  assert(item.getAttribute("lang") === null, "a row with no locale sets no lang");
+  assert(item.getAttribute("dir") === null, "and no dir, so the page's own wins");
+}
+
 {
   const w = world({ unread: 0, rows: [] });
   const el = await mount(w, 'empty="All quiet."');

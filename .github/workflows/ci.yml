@@ -300,6 +300,13 @@ jobs:
       # cannot reach wasm32.
       - name: Build cratefield-adapter-webpush to wasm
         run: cargo build --target wasm32-unknown-unknown -p cratefield-adapter-webpush
+      # The localisation catalog (issue #190) reaches wasm32 on its own.
+      # The venture build below does compile it — it mounts a catalog — but
+      # only for as long as that stays true, and this crate's whole claim
+      # is that Fluent runs on an isolate: pure Rust, no I/O, and the
+      # concurrent memoizer rather than the `Rc`/`RefCell` default.
+      - name: Build cratefield-i18n to wasm
+        run: cargo build --target wasm32-unknown-unknown -p cratefield-i18n
       - name: Build example venture to wasm
         working-directory: examples/venture
         run: worker-build --release

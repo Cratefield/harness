@@ -193,6 +193,7 @@ fn run_checks(
     let mut failures: Vec<DoctorFailure> = Vec::new();
 
     contract_failures(harness, &mut failures);
+    self_check_failures(harness, &mut failures);
 
     // Harness::build already succeeded by construction; the production-only
     // port rules (captcha, payments webhook) are checked against the runtime's
@@ -229,6 +230,30 @@ fn contract_failures(harness: &Harness, failures: &mut Vec<DoctorFailure>) {
             failures.push(DoctorFailure {
                 code: &CODES.harness_api_mismatch,
                 message: harness_api_mismatch(module.as_ref()),
+            });
+        }
+    }
+}
+
+/// What each module says about its own embedded data
+/// ([`Module::self_check`](cratefield_core::Module::self_check)).
+///
+/// The doctor has no deploy config, so it cannot run a module's
+/// `validate_config` — those values live on the runtime `Env` and exist
+/// only per request. It *can* ask whether what the module compiled in is
+/// coherent, and that question has the same answer everywhere: the
+/// notifications module answers it with every translation its catalog is
+/// missing for a message the venture declared (issue #190).
+///
+/// Unconditional, not production-only. A missing translation is a person
+/// reading `booking-confirmed.title` on a lock screen in every
+/// environment, and finding it on staging is the point.
+fn self_check_failures(harness: &Harness, failures: &mut Vec<DoctorFailure>) {
+    for module in harness.modules() {
+        for message in module.self_check() {
+            failures.push(DoctorFailure {
+                code: &CODES.module_self_check,
+                message,
             });
         }
     }

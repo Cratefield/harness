@@ -1,0 +1,37 @@
+[package]
+name = "cratefield-i18n"
+description = "Server-side localisation for a Factory Zero venture: Fluent catalogs, BCP 47 negotiation and text direction, with no I/O and no notification-specific types"
+readme = "README.md"
+keywords = ["cratefield", "i18n", "fluent", "localization", "bcp47"]
+categories = ["internationalization", "localization"]
+include = ["src/**/*", "README.md"]
+# `publish = false` until the first manual publish (docs/RELEASING.md), the
+# same rule every new crate in this workspace starts under.
+publish = false
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+# Project Fluent (Mozilla, Apache-2.0/MIT): pure Rust, no I/O, reaches
+# wasm32, and its `.ftl` files are what translators already know.
+#
+# `fluent-langneg` is pinned to the **0.13** line deliberately. 0.14 swapped
+# its language-identifier type from `unic-langid` to `icu_locid`, so a
+# catalog would carry two incompatible `LanguageIdentifier` types and two
+# locale databases: `fluent-bundle` 0.16 is built on `unic-langid`, which is
+# also what this crate re-exports.
+fluent-bundle = { workspace = true }
+fluent-langneg = { workspace = true }
+unic-langid = { workspace = true }
+# The concurrent memoizer. Named as a direct dependency because the whole
+# thread-safety guarantee of this crate is which one is in use — see the
+# static assertion in `fluent.rs`.
+intl-memoizer = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
