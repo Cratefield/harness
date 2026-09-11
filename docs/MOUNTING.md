@@ -58,8 +58,11 @@ Each of these is otherwise discovered the hard way.
   (issue #46) — cannot be a sidecar.
 - **Take a venture template override.** `.template("<module>/<id>", ..)`
   names a registered module; a sidecar is not one.
-- **Emit an event the host hears, or hear one the host emits.** The bus
-  is in-process. Crossing it is issue #62 and undecided.
+- **Emit an event the host hears.** Forwarding is inbound only (ADR
+  0017): the host posts its emissions to each sidecar, and a sidecar does
+  not emit back. A sidecar's own `emit_in` reaches its own handlers and
+  stops there — and warns when nothing heard it, rather than dropping it
+  in silence. *Hearing* a host event does work; see below.
 - **Use a token another module minted.** Separate signing keys, by
   design. Anything relying on the host's `Signer` is out.
 - **Be seen by the schema tooling.** `fz migrations collect`, the
@@ -79,6 +82,34 @@ The host fetches each mounted sidecar's `/__surface` and merges the
 public part, so a sidecar module's forms render at `/ui/<module>/<action>`
 like any other (issue #76, [UI.md](UI.md)). The merge is capped and
 validated — see the boundary below (issue #131).
+
+## Hearing the host's events
+
+A subscription written against the bus works the same compiled in or
+mounted out (issue #62, [ADR 0017](adr/0017-events-cross-the-sidecar-boundary-inbound-only.md)).
+The host forwards every emission to each mounted sidecar's
+`POST /__events`, inside the emitting request's `wait_until`; the sidecar
+answers `202` and runs its own handlers in its **own** `wait_until`, so a
+slow subscriber holds nothing open on the host.
+
+What you get is what the in-process bus already promised, and no more:
+
+| | |
+| :--- | :--- |
+| Delivery | at most once, per mount |
+| Retry | none — a retry would be the durable queue #62 rules out |
+| Ordering | none |
+| A sidecar that errors, 500s or never answers | logged; the emitting request keeps its own response |
+| A mount the deployment has no binding for | skipped, not dialled |
+| Direction | host → sidecar only |
+
+Two consequences worth stating plainly. `202` means *accepted*, never
+*handled* — when it is written the handlers have not run, and no status
+could tell the host otherwise, because the work outlives the response on
+the far side. And the route exists only where a gateway secret does: it
+is inside the guarded set, and a deployment without the shared secret
+does not mount it at all, because an unauthenticated event trigger would
+let a stranger forge the payloads handlers act on.
 
 ## The trust boundary
 
