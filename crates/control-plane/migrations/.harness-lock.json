@@ -10,5 +10,9 @@
   "console/0003": {
     "file": "0003_console_0003_provisioning.sql",
     "sha256": "b4c1de9b14da20522a99e5c359f7d5dab2d1d4a88877a0b87ff2b780f31b1bcb"
+  },
+  "dashboard/0001": {
+    "file": "0004_dashboard_0001_connections.sql",
+    "sha256": "80242864af2516b759fcb13eab76f4adebc7ddf4c1e49bd4c6e6cec94cfac73a"
   }
 }
