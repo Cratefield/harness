@@ -17,11 +17,13 @@
 
 #![forbid(unsafe_code)]
 
+pub mod build_key;
 pub mod catalog;
 pub mod generate;
 pub mod manifest;
 pub mod provenance;
 
+pub use build_key::{BUILD_PROFILE, BuildKeyError, BuildKeyInputs, build_key, canonical_inputs};
 pub use catalog::{
     Catalog, CatalogError, CatalogModule, ModuleRelease, ModuleSet, PinnedRelease, ReleaseReview,
     ResolveError, Tier, builtin, is_exact_version, is_sha256_digest,

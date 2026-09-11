@@ -316,6 +316,19 @@ a VAPID `401`. Catches an endpoint that is not an absolute http(s) URL, a
 `p256dh` that is not a 65-byte uncompressed P-256 point on the curve, and an
 `auth` that is not 16 bytes.
 
+## `fz build-key <manifest> [--catalog PATH]` (issue #59)
+
+Computes the artifact's content address — sha256 over the pinned module
+releases (slug, exact version, digest), the harness API, the rustc version and
+the build profile — and prints it with the canonical inputs that produced it.
+Runs no cargo, writes nothing. Module order in the manifest does not affect
+the key; any module version, `harness_api`, rustc or profile change does. The
+venture name, host, config and the sidecar mount table are deployment
+configuration, not artifact content: two customers on the same module set
+share the key and the artifact while keeping separate Workers, databases and
+secrets, and one wasm serves customers whose `HARNESS_SIDECARS` differ. See
+[docs/ARTIFACT-CACHE.md](../../docs/ARTIFACT-CACHE.md) for the guarantee.
+
 ## `fz modules`
 
 Prints `name version /v1/<name> emits=[…] tables=[…]` per module.

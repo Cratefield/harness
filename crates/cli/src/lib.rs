@@ -25,6 +25,7 @@
 
 pub mod apply;
 pub mod build;
+pub mod build_key;
 pub mod codes;
 mod collect;
 pub mod data;
@@ -123,6 +124,23 @@ enum Command {
         /// `FZ_BUILDER` is the fallback, then `"local"`.
         #[arg(long, value_name = "WHO")]
         builder: Option<String>,
+    },
+    /// Computes the artifact's content address (issue #59): sha256 over
+    /// the pinned module releases, the harness API, the rustc version
+    /// and the build profile. Prints the key and the inputs that
+    /// produced it; runs no cargo, writes nothing. The venture name,
+    /// host, config and the sidecar mount table are deployment
+    /// configuration, not artifact content, so they are not inputs —
+    /// two customers on the same module set share the artifact and the
+    /// same key. Standalone, like `fz build`.
+    BuildKey {
+        /// The venture manifest (`.json` or `.toml`).
+        #[arg(value_name = "MANIFEST")]
+        manifest: PathBuf,
+        /// A stamped catalog JSON instead of the built-in one — the
+        /// same catalog the matching `fz build --catalog` would use.
+        #[arg(long, value_name = "PATH")]
+        catalog: Option<PathBuf>,
     },
     /// Moves venture data between engines (issue #21): export D1/SQLite
     /// data to JSONL with a manifest, import into Postgres.
@@ -513,6 +531,7 @@ pub fn run(build: impl Fn() -> Harness, args: impl IntoIterator<Item = String>) 
         // no harness, the workflow commands work on the manifest and its
         // records, and push reads the venture's environment.
         Command::Build { .. }
+        | Command::BuildKey { .. }
         | Command::Plan { .. }
         | Command::Deploy { .. }
         | Command::Add { .. }
@@ -551,6 +570,9 @@ fn harness_free(command: &Command) -> Option<ExitCode> {
             built_at.as_deref(),
             builder.as_deref(),
         ))),
+        Command::BuildKey { manifest, catalog } => {
+            Some(finish(crate::build_key::run(manifest, catalog.as_deref())))
+        }
         Command::Push { command } => Some(finish(run_push(command))),
         _ => workflow::dispatch(command),
     }

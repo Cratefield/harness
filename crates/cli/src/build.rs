@@ -159,7 +159,7 @@ pub fn run(
 /// the built-in catalog serves development. A supplied catalog must be
 /// coherent — resolution would validate anyway, and failing here gives
 /// the operator the data bug before the compile.
-fn load_catalog(path: Option<&Path>) -> Result<Catalog, String> {
+pub(crate) fn load_catalog(path: Option<&Path>) -> Result<Catalog, String> {
     let Some(path) = path else {
         return Ok(builtin());
     };
