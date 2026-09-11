@@ -18,7 +18,8 @@ use common::*;
 use cratefield_core::{
     DispatchError, Dispatcher, GATEWAY_ADMIN_PURPOSE, GATEWAY_PURPOSE, HARNESS_ONE_WORKER,
     HARNESS_SIDECARS, HmacSigner, KeyRing, Kid, MapConfig, Payload, Ports, SIDECAR_GATEWAY_SECRET,
-    SIDECAR_REQUIRE_GATEWAY, SidecarMounts, Signer, X_HARNESS_API, X_HARNESS_GATEWAY, X_REQUEST_ID,
+    SIDECAR_REQUIRE_GATEWAY, SidecarMounts, Signer, X_HARNESS_API, X_HARNESS_GATEWAY,
+    X_HARNESS_MODULE, X_REQUEST_ID,
 };
 
 /// Records what it was asked to forward, and answers with whatever it was
@@ -701,4 +702,144 @@ async fn a_plain_gateway_stamp_does_not_open_the_sidecars_admin_plane() {
         true,
         "the host's admin verdict is what re-materializes the token"
     );
+}
+
+// ---------------------------------------------- the identity stamp (issue #61)
+
+/// Every response this deployment produces carries the contract stamp, and a
+/// one-module deployment — the sidecar shape — also names its module. The
+/// host reads both back on every forwarded response, which is how a sidecar
+/// redeployed against a different contract is caught within one request
+/// instead of at a cold start an isolate does not have.
+#[pollster::test]
+async fn a_sidecar_stamps_its_identity_on_every_response() {
+    let router = harness_with_sample().router(ports_with_sidecars(
+        r#"{"acme-pricing":"ACME"}"#,
+        Some(Arc::new(RecordingDispatcher::new("ACME"))),
+    ));
+
+    let forwarded = request(&router, Method::GET, "/v1/acme-pricing/quote", &[], None).await;
+    assert_eq!(
+        forwarded.headers().get(X_HARNESS_API).unwrap(),
+        cratefield_core::HARNESS_API.to_string().as_str()
+    );
+    assert_eq!(forwarded.headers().get(X_HARNESS_MODULE).unwrap(), "sample");
+
+    let own = request(&router, Method::GET, "/__health", &[], None).await;
+    assert_eq!(
+        own.headers().get(X_HARNESS_API).unwrap(),
+        cratefield_core::HARNESS_API.to_string().as_str()
+    );
+    assert_eq!(own.headers().get(X_HARNESS_MODULE).unwrap(), "sample");
+}
+
+/// A multi-module host serves no single module, so it stamps the contract
+/// and stays silent about the name: a wrong name would be worse than none.
+#[pollster::test]
+async fn a_host_serving_two_modules_stamps_no_module_name() {
+    let harness = builder_with_sample()
+        .module(SampleModule::named("second"))
+        .build()
+        .expect("two-module harness builds");
+    let router = harness.router(ports_with_sidecars("{}", None));
+
+    let response = request(&router, Method::GET, "/__health", &[], None).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response.headers().get(X_HARNESS_API).unwrap(),
+        cratefield_core::HARNESS_API.to_string().as_str()
+    );
+    assert!(response.headers().get(X_HARNESS_MODULE).is_none());
+}
+
+/// `/__health` reports each mounted sidecar's contract, name and version,
+/// and the listing is probed lazily and cached for a short window: a
+/// polling dashboard must not turn every health check into a fan-out of
+/// subrequests.
+#[pollster::test]
+async fn health_lists_each_sidecar_and_caches_the_probe() {
+    let dispatcher =
+        Arc::new(RecordingDispatcher::new("ACME").answering_contract(cratefield_core::HARNESS_API));
+    let router = harness_with_sample().router(ports_with_sidecars(
+        r#"{"acme-pricing":"ACME"}"#,
+        Some(dispatcher.clone()),
+    ));
+
+    let response = request(&router, Method::GET, "/__health", &[], None).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let sidecar = &body_json(response).await["sidecars"][0];
+    assert_eq!(sidecar["name"], "acme-pricing");
+    assert_eq!(sidecar["binding"], "ACME");
+    assert_eq!(sidecar["probe"], "ok");
+    assert_eq!(sidecar["contract"], cratefield_core::HARNESS_API);
+
+    let _ = request(&router, Method::GET, "/__health", &[], None).await;
+    assert_eq!(
+        dispatcher.calls.load(Ordering::SeqCst),
+        1,
+        "the second health call within the TTL window must reuse the probe"
+    );
+}
+
+/// A sidecar answering the wrong contract shows up in `/__health` as a
+/// mismatch with both numbers visible — the per-request refusal tells the
+/// caller, the health listing tells the operator.
+#[pollster::test]
+async fn health_reports_a_contract_mismatched_sidecar() {
+    let dispatcher = Arc::new(
+        RecordingDispatcher::new("ACME").answering_contract(cratefield_core::HARNESS_API - 1),
+    );
+    let router = harness_with_sample().router(ports_with_sidecars(
+        r#"{"acme-pricing":"ACME"}"#,
+        Some(dispatcher),
+    ));
+
+    let health = body_json(request(&router, Method::GET, "/__health", &[], None).await).await;
+    let sidecar = &health["sidecars"][0];
+    assert_eq!(sidecar["probe"], "mismatch");
+    assert_eq!(sidecar["contract"], cratefield_core::HARNESS_API - 1);
+}
+
+/// A sidecar that does not answer at all is `unreachable`, with nothing
+/// claimed on its behalf.
+#[pollster::test]
+async fn health_reports_an_unreachable_sidecar() {
+    let router = harness_with_sample().router(ports_with_sidecars(
+        r#"{"acme-pricing":"ACME"}"#,
+        Some(Arc::new(NeverBound)),
+    ));
+
+    let health = body_json(request(&router, Method::GET, "/__health", &[], None).await).await;
+    let sidecar = &health["sidecars"][0];
+    assert_eq!(sidecar["probe"], "unreachable");
+    assert_eq!(sidecar["contract"], serde_json::Value::Null);
+}
+
+/// The issue's own verification: a fake sidecar one contract behind
+/// degrades its prefix to `503 sidecar-contract-mismatch` while every other
+/// route keeps answering.
+#[pollster::test]
+async fn a_sidecar_one_contract_behind_degrades_only_its_prefix() {
+    let dispatcher = Arc::new(
+        RecordingDispatcher::new("ACME").answering_contract(cratefield_core::HARNESS_API - 1),
+    );
+    let router = harness_with_sample().router(ports_with_sidecars(
+        r#"{"acme-pricing":"ACME"}"#,
+        Some(dispatcher),
+    ));
+
+    let prefix = request(&router, Method::GET, "/v1/acme-pricing/quote", &[], None).await;
+    assert_eq!(prefix.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(
+        body_json(prefix).await["type"]
+            .as_str()
+            .unwrap()
+            .rsplit('/')
+            .next()
+            .unwrap(),
+        "sidecar-contract-mismatch"
+    );
+
+    let elsewhere = request(&router, Method::GET, "/v1/sample/hello", &[], None).await;
+    assert_eq!(elsewhere.status(), StatusCode::OK);
 }

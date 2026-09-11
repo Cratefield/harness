@@ -10,11 +10,24 @@ use axum::Router;
 use axum::http::{Method, StatusCode, header};
 use common::*;
 use cratefield_core::{Config, Harness, MapConfig, Module, Port, Ports};
+use serde_json::json;
 
-/// `GET /__health` lists modules and versions without touching the db.
+/// `GET /__health` lists modules and versions without touching the db
+/// (issue #61): what a module cannot run without, what it uses when
+/// present, and the tables it owns.
 #[pollster::test]
 async fn health_lists_modules_and_versions() {
-    let harness = harness_with_sample();
+    let harness = Harness::builder()
+        .venture(base_venture())
+        .module(SampleModule {
+            requires: &[Port::Db, Port::Clock],
+            optional: &[Port::Mailer],
+            tables: &["sample_table"],
+            ..SampleModule::default()
+        })
+        .runtime(FakeRuntime(all_ports()))
+        .build()
+        .expect("sample harness builds");
     let router = harness.router(Ports::empty());
     let response = request(&router, Method::GET, "/__health", &[], None).await;
     assert_eq!(response.status(), StatusCode::OK);
@@ -23,6 +36,9 @@ async fn health_lists_modules_and_versions() {
     assert_eq!(body["env"], "development");
     assert_eq!(body["modules"][0]["name"], "sample");
     assert_eq!(body["modules"][0]["version"], env!("CARGO_PKG_VERSION"));
+    assert_eq!(body["modules"][0]["requires"], json!(["Database", "Clock"]));
+    assert_eq!(body["modules"][0]["optional"], json!(["Mailer"]));
+    assert_eq!(body["modules"][0]["tables"], json!(["sample_table"]));
 }
 
 /// `GET /__ready` runs `SELECT 1` through the Database port.
