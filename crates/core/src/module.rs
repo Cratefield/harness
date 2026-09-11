@@ -166,8 +166,33 @@ pub fn migration_checksum(sql: &str) -> String {
 /// `transactional: false` (RECONCILIATION.md §4).
 #[must_use]
 pub fn is_idempotent_sql(sql: &str) -> bool {
-    let sql = sql.to_ascii_lowercase();
+    // Comments are stripped first. A guard that reads the whole file
+    // accepts `-- we could use IF NOT EXISTS here but did not` above SQL
+    // that has no guard at all — which is precisely the migration this
+    // check exists to refuse, waved through by a sentence about it.
+    let sql = strip_sql_comments(sql).to_ascii_lowercase();
     sql.contains("if not exists") || sql.contains("if exists") || sql.contains("or replace")
+}
+
+/// SQL with `--` line comments and `/* */` blocks removed.
+///
+/// Not a parser: it does not know that a `--` inside a string literal is
+/// not a comment. That direction is safe here — it can only remove text
+/// the guard would have read, so the guard refuses rather than accepts.
+fn strip_sql_comments(sql: &str) -> String {
+    let mut out = String::with_capacity(sql.len());
+    let mut rest = sql;
+    while let Some(at) = rest.find("--").into_iter().chain(rest.find("/*")).min() {
+        out.push_str(&rest[..at]);
+        let tail = &rest[at..];
+        if tail.starts_with("--") {
+            rest = tail.find('\n').map_or("", |end| &tail[end..]);
+        } else {
+            rest = tail.find("*/").map_or("", |end| &tail[end + 2..]);
+        }
+    }
+    out.push_str(rest);
+    out
 }
 
 /// The message a non-transactional migration without an idempotence
@@ -481,6 +506,20 @@ mod reconciliation_guard_tests {
         assert!(!is_idempotent_sql("CREATE INDEX CONCURRENTLY i ON t (c)"));
         // Case-insensitive: SQL is written in any case.
         assert!(is_idempotent_sql("create index if not exists i on t (c)"));
+
+        // A sentence about the guard is not the guard. Reading the whole
+        // file waves through exactly the migration this refuses: one that
+        // runs outside a transaction, is re-run after a crash, and fails.
+        assert!(!is_idempotent_sql(
+            "-- we could use IF NOT EXISTS here but did not\nCREATE INDEX CONCURRENTLY i ON t (c)"
+        ));
+        assert!(!is_idempotent_sql(
+            "/* IF NOT EXISTS is unavailable on this engine */ CREATE INDEX i ON t (c)"
+        ));
+        // And a real guard after a comment is still found.
+        assert!(is_idempotent_sql(
+            "-- concurrently, so it must be idempotent\nCREATE INDEX CONCURRENTLY IF NOT EXISTS i ON t (c)"
+        ));
     }
 
     #[test]
