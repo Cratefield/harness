@@ -481,3 +481,110 @@ jobs:
             exit 1
           fi
           echo "all assertions passed"
+
+  wrangler-dev-sidecar-forward:
+    # No `#` in the name — branch protection names the check-run string, and
+    # GitHub truncates at `#` (issue #34).
+    #
+    # The live half of the sidecar event-forward contract (issue #258,
+    # ADR 0017). `crates/core/tests/sidecar_events.rs` pins the contract
+    # against a parking `Defer`, which is a test double: no unit test can
+    # answer whether the Workers runtime honours `wait_until` across a real
+    # service binding. This job can, and it asserts both halves — because a
+    # forward that is never delivered *also* returns promptly, a timing-only
+    # check would pass on a completely broken forward.
+    name: wrangler dev sidecar event forward (issue 258)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.98.1"
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - uses: oven-sh/setup-bun@v2
+      - name: Install worker-build
+        run: cargo install -q --locked worker-build
+      - name: Apply local D1 migrations
+        working-directory: examples/venture
+        run: bunx wrangler d1 migrations apply venture-example --local
+      - name: Start the sidecar
+        working-directory: examples/sidecar-slow-events
+        run: |
+          # The sidecar carries its own secrets, never the host's; the one
+          # shared value is the gateway secret both ends sign with.
+          printf 'HARNESS_SECRET=ci-only-sidecar-secret-0123456789abcdef\nSIDECAR_GATEWAY_SECRET=ci-only-gateway-secret-0123456789abcdef\n' > .dev.vars
+          nohup bunx wrangler dev --local --port 8799 > /tmp/sidecar.log 2>&1 &
+          for _ in $(seq 1 60); do
+            code=$(curl -s -o /dev/null -w "%{http_code}" -m 3 http://127.0.0.1:8799/__health || true)
+            if [ "$code" = "200" ]; then echo "sidecar ready"; exit 0; fi
+            sleep 5
+          done
+          echo "sidecar never became ready"; cat /tmp/sidecar.log; exit 1
+      - name: Start the host with the sidecar bound
+        working-directory: examples/venture
+        run: |
+          # The `-e sidecar` environment adds the mount table and the SLOW
+          # service binding; everything else is the default example. The
+          # gateway secret must match the sidecar's or the forward arrives
+          # unstamped and the mount is dead.
+          printf 'HARNESS_SECRET=ci-only-secret-0123456789abcdef-xyz\nADMIN_TOKEN=ci-only-admin-token\nSIDECAR_GATEWAY_SECRET=ci-only-gateway-secret-0123456789abcdef\n' > .dev.vars
+          nohup bunx wrangler dev --local --env sidecar > /tmp/host.log 2>&1 &
+          for _ in $(seq 1 60); do
+            code=$(curl -s -o /dev/null -w "%{http_code}" -m 3 http://127.0.0.1:8787/__health || true)
+            if [ "$code" = "200" ]; then echo "host ready"; exit 0; fi
+            sleep 5
+          done
+          echo "host never became ready"; cat /tmp/host.log; exit 1
+      - name: A slow sidecar subscriber never holds the host response open
+        # Half one of the check. The sidecar stalls every `/__events` eight
+        # seconds before answering, so the forward inside the host's
+        # `wait_until` genuinely takes eight seconds to complete. If the
+        # forward ever leaked out of `wait_until` into the request path,
+        # this response would take at least as long — that is the failure
+        # the four-second ceiling exists to catch.
+        run: |
+          set -e
+          # `-w %{time_total}` is the assertion; the ceiling is a third of
+          # the sidecar's stall. Compared numerically, not with a float
+          # literal trick: awk owns the comparison so `0.01` and `9.99` are
+          # both judged as numbers.
+          RESULT=$(curl -sf -m 20 -D /tmp/probe.headers -o /tmp/probe.body \
+            -w '%{http_code} %{time_total}' \
+            http://127.0.0.1:8787/v1/sample/sidecar-probe)
+          echo "$RESULT"
+          echo "$RESULT" | awk '{ if ($1 != 200) { print "probe answered " $1; exit 1 }
+                                 if ($2 + 0 >= 4) { print "host response took " $2 "s — the forward is not inside wait_until"; exit 1 } }'
+          grep -q '"emitted":"sample.probe"' /tmp/probe.body
+          grep -qi '^x-request-id:' /tmp/probe.headers
+          RID=$(tr -d '\r' < /tmp/probe.headers | awk 'tolower($1)=="x-request-id:"{print $2}')
+          echo "emitted under request id $RID"
+      - name: And the forward was in fact delivered
+        # Half two, the one a timing-only check lacks: poll the sidecar's
+        # evidence endpoint until *this* request's delivery shows up. A
+        # broken forward (no binding, wrong name, dead sidecar) leaves the
+        # host fast and green above while this goes red — which is the
+        # vacuousness that got #62's original acceptance test amended.
+        run: |
+          RID=$(tr -d '\r' < /tmp/probe.headers | awk 'tolower($1)=="x-request-id:"{print $2}')
+          found=""
+          for _ in $(seq 1 30); do
+            if curl -sf -m 5 http://127.0.0.1:8799/v1/probe/delivered \
+                | grep -q "\"last_request_id\":\"$RID\""; then
+              found=yes
+              break
+            fi
+            sleep 3
+          done
+          if [ -z "$found" ]; then
+            echo "the sidecar never recorded the delivery (request id $RID)"
+            echo "-- sidecar log"; cat /tmp/sidecar.log
+            echo "-- host log"; cat /tmp/host.log
+            exit 1
+          fi
+          curl -sf -m 5 http://127.0.0.1:8799/v1/probe/delivered
+          echo ""
+          echo "forward delivered and heard"

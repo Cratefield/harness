@@ -25,3 +25,41 @@ class_name = "Rooms"
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["Rooms"]
+
+# The sidecar-mount shape of the same example (issue #258). The default
+# deployment above binds nothing, which is the honest default: mounting a
+# sidecar is deployment configuration (ADR 0009), not composition. Run the
+# mounted shape locally with:
+#
+#   (cd ../sidecar-slow-events && bunx wrangler dev --local --port 8799 &)
+#   bunx wrangler dev --local --env sidecar
+#
+# `port` is a local-dev-only key: it points this session's binding at the
+# sidecar's own `wrangler dev` (the cross-session dev registry does the
+# dialling). It never reaches a production deploy, where `service` is the
+# deployed Worker's name.
+#
+# d1, the DO class and the DO migration are repeated rather than inherited:
+# wrangler treats them as non-inheritable into named environments, and a
+# missing D1 binding here would silently boot the host without its database.
+[env.sidecar.vars]
+HARNESS_SIDECARS = '{"probe":"SLOW"}'
+
+[[env.sidecar.services]]
+binding = "SLOW"
+service = "sidecar-slow-events"
+port = 8799
+
+[[env.sidecar.d1_databases]]
+binding = "DB"
+database_name = "venture-example"
+database_id = "local-venture-example"
+migrations_dir = "migrations"
+
+[[env.sidecar.durable_objects.bindings]]
+name = "ROOMS"
+class_name = "Rooms"
+
+[[env.sidecar.migrations]]
+tag = "v1"
+new_sqlite_classes = ["Rooms"]

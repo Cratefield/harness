@@ -66,6 +66,14 @@ impl Module for SampleRowModule {
         Ok(())
     }
 
+    /// `sample.probe` is the emission the CI sidecar-forward check drives
+    /// (issue #258). Declared here so `/__surface` and `fz doctor` can name
+    /// it; nothing inside this venture subscribes to it, which is the
+    /// point — its only audience is a sidecar mounted in configuration.
+    fn emits(&self) -> &'static [&'static str] {
+        &["sample.probe"]
+    }
+
     fn router(&self, ctx: ModuleContext) -> axum::Router {
         let state = Arc::new(ctx);
         axum::Router::new()
@@ -77,6 +85,10 @@ impl Module for SampleRowModule {
             .route(
                 "/transport-probe",
                 get(transport_probe).with_state(Arc::clone(&state)),
+            )
+            .route(
+                "/sidecar-probe",
+                get(sidecar_probe).with_state(Arc::clone(&state)),
             )
     }
 
@@ -214,6 +226,24 @@ async fn transport_probe(
         });
     }
     Ok(Json(json!({ "errors": errors })))
+}
+
+/// Emits `sample.probe` for the sidecar-forward check (issue #258). The
+/// emission must answer immediately: the forward happens in this request's
+/// `wait_until`, and the CI job asserts on the wall clock that a slow
+/// subscriber behind the service binding does not drag this answer with it.
+/// The request id rides in the payload so the sidecar's evidence endpoint
+/// can prove *this* delivery arrived, not just any.
+async fn sidecar_probe(
+    scope: Scope,
+    State(ctx): State<Arc<ModuleContext>>,
+) -> Json<serde_json::Value> {
+    ctx.events.emit_in(
+        &scope,
+        "sample.probe",
+        json!({ "request_id": scope.request_id.clone(), "at": now_iso() }),
+    );
+    Json(json!({ "emitted": "sample.probe", "request_id": scope.request_id }))
 }
 
 async fn latest_row(

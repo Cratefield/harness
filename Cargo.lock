@@ -4313,6 +4313,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "sidecar-slow-events"
+version = "0.1.1"
+dependencies = [
+ "axum",
+ "cratefield-core",
+ "cratefield-runtime-cloudflare",
+ "getrandom 0.4.3",
+ "serde_json",
+ "worker",
+]
+
+[[package]]
 name = "signal-hook-registry"
 version = "1.4.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"

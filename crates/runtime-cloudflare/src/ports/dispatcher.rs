@@ -59,8 +59,22 @@ impl Dispatcher for ServiceDispatcher {
             init.with_body(Some(Uint8Array::from(body.as_ref()).into()));
         }
 
-        let worker_request =
-            WorkerRequest::new_with_init(&parts.uri.to_string(), &init).map_err(unavailable)?;
+        // workerd refuses a relative URL in `new Request` — and the unit
+        // tests, which dispatch through fakes, cannot see that — so the
+        // path-only requests the event forwarder builds (`/__events`) died
+        // here with "invalid URL for Request" on every real runtime while
+        // every test stayed green (issue #258). A service binding's fetch
+        // ignores the authority entirely, so a stand-in origin costs
+        // nothing and makes the request fetchable; an absolute URL the
+        // caller supplied is forwarded as-is.
+        let target = match parts.uri.path_and_query() {
+            Some(path_and_query) if parts.uri.host().is_none() => {
+                format!("https://sidecar{path_and_query}")
+            }
+            _ => parts.uri.to_string(),
+        };
+
+        let worker_request = WorkerRequest::new_with_init(&target, &init).map_err(unavailable)?;
         let mut response = fetcher
             .fetch_request(worker_request)
             .into_send()

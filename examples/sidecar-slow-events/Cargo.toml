@@ -1,0 +1,27 @@
+[package]
+name = "sidecar-slow-events"
+description = "A bound sidecar whose event subscriber answers slowly: the live double behind the CI wrangler-dev forward check (issue #258)"
+publish = false
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+# `cdylib` for worker-build's wasm output; `rlib` so the crate also
+# compiles into the workspace's native clippy/test legs.
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[lints]
+workspace = true
+
+[dependencies]
+cratefield-core = { workspace = true }
+cratefield-runtime-cloudflare = { workspace = true }
+axum = { workspace = true }
+serde_json = { workspace = true }
+worker = { workspace = true }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+getrandom = { workspace = true }
