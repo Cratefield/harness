@@ -391,6 +391,13 @@ rather than fetching a 401.
 - Marks an item read when it is clicked, then follows its `url`.
 - Leaves nothing behind when the element is removed: the poll and the
   `visibilitychange` listener that drives it both go with it.
+- Sets `lang` and `dir` on **each item** from the row's own `locale` and
+  `dir` (issue #190). Per item, not per list: one inbox can hold an
+  Indonesian booking and an Arabic one. `dir` comes from the API because
+  no browser API answers it — `Intl` carries no directionality — and a
+  second right-to-left list in the client would drift from the one in
+  `cratefield-i18n`. A row with no `locale` is left alone, so it inherits
+  the page's.
 
 ### Accessibility
 

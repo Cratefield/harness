@@ -20,6 +20,11 @@ workspace = true
 
 [dependencies]
 cratefield-core = { workspace = true }
+# The catalog a `Localizable` message is rendered from, the BCP 47
+# negotiation chain, and the text direction an `ar` mail needs (issue
+# #190). A venture with one language never builds a catalog and pays
+# only for the parse of a crate it does not call.
+cratefield-i18n = { workspace = true }
 # The account comes from the auth extractor, never from a body field
 # (ADR 0016). Path-only: the crate is `publish = false`.
 factory0-auth-client = { path = "../auth-client" }

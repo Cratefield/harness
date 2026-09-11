@@ -31,6 +31,10 @@
     "file": "0013_notifications_0005_email_bounce_index.sql",
     "sha256": "3ddb8389d0d52326d6d7ccd04c17949687964cf7fd680a666d0061adbbe4769f"
   },
+  "notifications/0006": {
+    "file": "0014_notifications_0006_locales.sql",
+    "sha256": "0e27426d9ef4235f755dcbebe4debe7c5eaf5a6f1c61038aca8dc69582b61733"
+  },
   "sample/0001": {
     "file": "0001_sample_0001_init.sql",
     "sha256": "adbaf308f36585d92261aecefe4a06f65aa6d3408834a8f61babd87de0545945"

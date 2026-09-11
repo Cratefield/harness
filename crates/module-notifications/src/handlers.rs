@@ -232,6 +232,19 @@ pub struct RegisterBody {
     pub app_id: Option<String>,
     #[serde(default)]
     pub app_version: Option<String>,
+    /// The language **this device** is set to, as a BCP 47 tag (#190).
+    ///
+    /// The most accurate signal there is for a push: it is what the person
+    /// holding the phone chose, and one account can have an English
+    /// browser and a Bahasa phone. Omit it and the `Accept-Language`
+    /// header is read instead — which is all a browser can offer — and
+    /// omitting both leaves the device with no language of its own, so the
+    /// account's answer decides.
+    ///
+    /// Anything that is not a language tag is **dropped**, not stored: see
+    /// `device_locale`.
+    #[serde(default)]
+    pub locale: Option<String>,
 }
 
 /// `PUT /v1/notifications/preferences`. Omitted channels keep the value
@@ -250,7 +263,18 @@ pub struct ChannelPatch {
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct PreferencesBody {
+    #[serde(default)]
     pub preferences: BTreeMap<String, ChannelPatch>,
+    /// The language this **account** reads, as a BCP 47 tag (#190): one
+    /// inbox and one mailbox, so one answer.
+    ///
+    /// A device's own setting still wins for a push to that device. Omit
+    /// it and the account's stored answer is left alone — except for an
+    /// account that has never had one, which is seeded from
+    /// `Accept-Language` so a web client gets a sensible default without
+    /// asking anybody a question.
+    #[serde(default)]
+    pub locale: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -339,6 +363,7 @@ async fn register(
     let user_agent = headers
         .get(header::USER_AGENT)
         .and_then(|value| value.to_str().ok());
+    let locale = device_locale(body.locale.as_deref(), &headers).map(|tag| tag.to_string());
     let at = now(&state);
     let outcome = store::upsert_subscription(
         &*db,
@@ -349,6 +374,7 @@ async fn register(
             app_id: body.app_id.as_deref(),
             app_version: body.app_version.as_deref(),
             user_agent,
+            locale: locale.as_deref(),
             now: &at,
             rehome_cutoff: &clock::plus_secs(&at, -REHOME_WINDOW_SECS),
             rehome_limit: rehome_limit(&state),
@@ -472,12 +498,31 @@ async fn read_preferences(
             tracing::error!(error = %err, "reading preferences failed");
             internal(&scope)
         })?;
-    Ok(Json(effective(&state.settings, &stored)).into_response())
+    let locale = account_locale(&state, &db, &account_id, &scope).await?;
+    Ok(Json(effective(&state.settings, &stored, &locale)).into_response())
+}
+
+/// The language this account reads: its own answer, else the venture's
+/// default. Always answers, so the route never has to say "unknown".
+async fn account_locale(
+    state: &ModuleState,
+    db: &Arc<dyn cratefield_core::Database>,
+    account_id: &str,
+    scope: &Scope,
+) -> Result<cratefield_i18n::LanguageIdentifier, Problem> {
+    let stored = store::account_locale(&**db, account_id)
+        .await
+        .map_err(|err| {
+            tracing::error!(error = %err, "reading an account locale failed");
+            internal(scope)
+        })?;
+    Ok(stored.unwrap_or_else(|| state.settings.configured_locale(&state.ctx)))
 }
 
 async fn write_preferences(
     scope: Scope,
     State(state): State<Arc<ModuleState>>,
+    headers: HeaderMap,
     Account(account_id): Account,
     Json(body): Json<PreferencesBody>,
 ) -> Result<Response, Problem> {
@@ -488,6 +533,17 @@ async fn write_preferences(
                 .instance(&scope.request_id));
         }
     }
+    // Refused before anything is written, and without quoting what was
+    // sent: a validation message is a log line, an error body and a
+    // support ticket, and a field a client controls does not belong in
+    // any of the three.
+    let asked = match body.locale.as_deref() {
+        None => None,
+        Some(raw) => Some(cratefield_i18n::parse_locale(raw).ok_or_else(|| {
+            Problem::validation_failed("locale must be a BCP 47 language tag, such as \"id-ID\"")
+                .instance(&scope.request_id)
+        })?),
+    };
     let Some(db) = state.ctx.ports.db.clone() else {
         return Err(internal(&scope));
     };
@@ -520,8 +576,39 @@ async fn write_preferences(
         }
     }
 
+    // The account's language, after the channel switches so a failure
+    // there cannot half-apply this one.
+    //
+    // An explicit field wins. With none, an account that has never had a
+    // locale is seeded from `Accept-Language` — a web client that never
+    // asks anybody a question still gets its own language — and one that
+    // has is left alone, because a person who chose Indonesian on their
+    // phone did not un-choose it by opening the settings page in a
+    // borrowed browser.
+    let stored_locale = store::account_locale(&*db, &account_id)
+        .await
+        .map_err(|err| {
+            tracing::error!(error = %err, "reading an account locale failed");
+            internal(&scope)
+        })?;
+    let next = asked.or_else(|| {
+        stored_locale
+            .is_none()
+            .then(|| accept_locale(&headers))
+            .flatten()
+    });
+    if let Some(locale) = next {
+        store::set_account_locale(&*db, &account_id, &locale.to_string(), &at)
+            .await
+            .map_err(|err| {
+                tracing::error!(error = %err, "writing an account locale failed");
+                internal(&scope)
+            })?;
+    }
+
     let stored = read_preferences_for(&db, &account_id, &scope).await?;
-    Ok(Json(effective(&state.settings, &stored)).into_response())
+    let locale = account_locale(&state, &db, &account_id, &scope).await?;
+    Ok(Json(effective(&state.settings, &stored, &locale)).into_response())
 }
 
 async fn read_preferences_for(
@@ -579,7 +666,11 @@ fn preference_writes(
 /// Every declared category with the values that actually apply: the
 /// account's row where it has one, the category's default where it does
 /// not.
-fn effective(settings: &Settings, stored: &[(String, Channels)]) -> serde_json::Value {
+fn effective(
+    settings: &Settings,
+    stored: &[(String, Channels)],
+    locale: &cratefield_i18n::LanguageIdentifier,
+) -> serde_json::Value {
     let mut out = serde_json::Map::new();
     for category in settings.categories.iter() {
         let channels = stored
@@ -595,7 +686,42 @@ fn effective(settings: &Settings, stored: &[(String, Channels)]) -> serde_json::
             }),
         );
     }
-    json!({ "preferences": serde_json::Value::Object(out) })
+    json!({
+        "preferences": serde_json::Value::Object(out),
+        // The language this account is written to, and which way it runs
+        // (#190). `dir` is here rather than left to the client because
+        // `unic-langid` has no directionality data and neither does
+        // `Intl`: a settings page that had to ship its own right-to-left
+        // list would be a second copy of the one in `cratefield-i18n`.
+        "locale": locale.to_string(),
+        "dir": cratefield_i18n::direction(locale).as_str(),
+    })
+}
+
+/// The language a registering device says it is in: the body's field
+/// first, then the best thing `Accept-Language` offers.
+///
+/// **This is the boundary the locale columns depend on.** Both inputs are
+/// arbitrary text from the network — a header is 8 KB of anything a client
+/// likes — and a `LanguageIdentifier` is the only thing that comes out, so
+/// the column, and every log, export and rendered page downstream of it,
+/// can hold nothing else. A value that is not a language tag is dropped
+/// here rather than stored and explained later.
+pub(crate) fn device_locale(
+    body: Option<&str>,
+    headers: &HeaderMap,
+) -> Option<cratefield_i18n::LanguageIdentifier> {
+    body.and_then(cratefield_i18n::parse_locale)
+        .or_else(|| accept_locale(headers))
+}
+
+/// The best locale `Accept-Language` asks for, or `None` when it asks for
+/// nothing this can read.
+pub(crate) fn accept_locale(headers: &HeaderMap) -> Option<cratefield_i18n::LanguageIdentifier> {
+    headers
+        .get(header::ACCEPT_LANGUAGE)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|raw| cratefield_i18n::accept_language(raw).into_iter().next())
 }
 
 /// A recipient reduced to a prefix that identifies a device to its own

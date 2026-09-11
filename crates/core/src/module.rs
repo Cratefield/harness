@@ -356,6 +356,29 @@ pub trait Module: Send + Sync + 'static {
     ///
     /// `Err` listing every invalid or missing key for this module.
     fn validate_config(&self, cfg: &dyn Config) -> Result<(), ConfigError>;
+    /// Problems the module can find in **itself**, with no configuration
+    /// and no environment: its own embedded data, checked against its own
+    /// declarations.
+    ///
+    /// This is the half of [`Module::validate_config`] that `fz doctor`
+    /// can actually run. The doctor has no deploy config — those values
+    /// live on the runtime `Env` and exist only per request — so it cannot
+    /// ask a module whether its *deployment* is valid. It can ask whether
+    /// what the module compiled in is coherent, and that answer is the
+    /// same on a laptop, in CI and in production.
+    ///
+    /// The notifications module answers with every translation its catalog
+    /// is missing (issue #190), so a translation gap is a pull request
+    /// rather than a person reading a message id on a lock screen.
+    ///
+    /// Each string is one problem, already naming the module. Return
+    /// **identifiers**, never values: this is printed by a CLI and copied
+    /// into issues, so nothing read from the environment, a recipient or a
+    /// URL may appear in one. Default: nothing, so no existing module
+    /// changes.
+    fn self_check(&self) -> Vec<String> {
+        Vec::new()
+    }
     /// The module's router, nested under `/v1/<name>`.
     fn router(&self, ctx: ModuleContext) -> axum::Router;
     /// Routes this module serves at the root under `/.well-known`, for

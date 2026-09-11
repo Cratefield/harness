@@ -27,15 +27,18 @@ use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use cratefield_core::{
-    Database, DbError, Kid, MailError, Message, ModuleConfig, ModuleContext, Notification, Outbox,
-    OutboxRecord, Payload, Push, PushError, PushOutcome, Scope, SendOutcome, Statement,
+    Database, DbError, Kid, MailError, Message as Mail, ModuleConfig, ModuleContext, Notification,
+    Outbox, OutboxRecord, Payload, Push, PushError, PushOutcome, Scope, SendOutcome, Statement,
 };
+use cratefield_i18n::{Catalog, LanguageIdentifier, direction};
 use futures_util::StreamExt as _;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::clock::{now_iso, plus_secs};
-use crate::store::{self, Channels, DeadLetterReason, Subscription};
+use crate::locale::{self, Localised};
+use crate::message::{Localizable, Message};
+use crate::store::{self, Channels, DeadLetterReason, Subscription, Transport};
 use crate::{Category, Settings};
 
 /// The outbox topic a push row carries.
@@ -80,13 +83,24 @@ pub(crate) const LEASE_SECS: i64 = 300;
 /// gives the right behaviour for free: a device that signed out between
 /// the commit and the drain has no subscription, so its queued
 /// notification is dropped rather than sent to a stranger's phone.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub(crate) struct SendJob {
     pub notification_id: String,
     pub account_id: String,
     pub category: String,
     pub subscription_id: String,
+    /// The notification as it will be sent, unless `localizable` says
+    /// otherwise: for a rendered caller this is exactly what it wrote, and
+    /// for a localizable one it is the venture default locale's render,
+    /// which is what a device whose language resolves to nothing gets.
     pub notification: Notification,
+    /// The message id and arguments, for a fan-out the drain localises per
+    /// device (#190). Absent for a caller that passed rendered text, which
+    /// is what makes a single-language venture's payload byte-identical to
+    /// the one it had before this existed — and what lets a row queued
+    /// before this deployment drain unchanged afterwards.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub localizable: Option<Localizable>,
 }
 
 /// One queued email, the account-level sibling of [`SendJob`].
@@ -96,6 +110,25 @@ pub(crate) struct EmailJob {
     pub account_id: String,
     pub category: String,
     pub notification: Notification,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub localizable: Option<Localizable>,
+}
+
+/// The room one inbox row is announced in, and the bytes announced.
+type Room = (String, Vec<u8>);
+
+/// One in-app inbox row, as [`Notifier::notify`] has it at that point.
+#[derive(Clone, Copy)]
+struct InboxWrite<'a> {
+    account_id: &'a str,
+    notification_id: &'a str,
+    category: &'a Category,
+    notification: &'a Notification,
+    localizable: Option<&'a Localizable>,
+    /// The canonical tag the title and body above were rendered in, or
+    /// `None` for a venture that wrote them itself.
+    locale: Option<&'a str>,
+    now: &'a str,
 }
 
 /// Why [`Notifier::notify`] produced no statements.
@@ -125,6 +158,13 @@ pub struct Enqueued {
     /// [`Notifier::announce`] is a broadcast and nothing else.
     announcement: Option<(String, Vec<u8>)>,
     skipped: Option<Skipped>,
+    /// The category this fan-out is for, so [`Notifier::announce`] can
+    /// name it when it reports a missing translation.
+    category: String,
+    /// What the catalog could not render (#190). Reported by
+    /// [`Notifier::announce`], which is the first point at which there is
+    /// a [`Scope`] to emit an event in.
+    missing: Vec<crate::locale::MissingTranslation>,
 }
 
 impl Enqueued {
@@ -180,6 +220,16 @@ impl Enqueued {
     pub fn skipped(&self) -> Option<Skipped> {
         self.skipped
     }
+
+    /// Whether the catalog could not render part of this message (#190).
+    ///
+    /// The notification is still queued — with the message id as its text,
+    /// so it is visible from both ends — and
+    /// [`Notifier::announce`] says so on the bus.
+    #[must_use]
+    pub fn has_missing_translations(&self) -> bool {
+        !self.missing.is_empty()
+    }
 }
 
 /// Why a fan-out could not be prepared.
@@ -195,6 +245,11 @@ pub enum NotifyError {
     NotMounted,
     /// A port the module requires is absent from this deployment.
     MissingPort(&'static str),
+    /// A [`Message::Localizable`] was sent to a venture that configured no
+    /// catalog (#190). An error rather than an English fallback: the
+    /// venture named a message it has no strings for, and delivering the
+    /// id to a person is worse than telling the developer now.
+    NoCatalog(String),
     Database(DbError),
 }
 
@@ -215,6 +270,11 @@ impl std::fmt::Display for NotifyError {
             NotifyError::MissingPort(port) => {
                 write!(f, "notifications: this deployment provides no {port} port")
             }
+            NotifyError::NoCatalog(key) => write!(
+                f,
+                "notifications: message {key:?} is localizable, but this venture configured no \
+                 catalog — call `.catalog(..)` on the module, or send a rendered Notification"
+            ),
             NotifyError::Database(err) => write!(f, "notifications: {err}"),
         }
     }
@@ -403,12 +463,17 @@ impl Notifier {
     }
 
     /// The outbox insert for one device.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "one row's worth of columns, named rather than bundled"
+    )]
     fn push_row(
         &self,
         account_id: &str,
         notification_id: &str,
         category: &Category,
         notification: &Notification,
+        localizable: Option<&Localizable>,
         subscription_id: &str,
         now: &str,
     ) -> Result<Statement, NotifyError> {
@@ -418,6 +483,7 @@ impl Notifier {
             category: category.name.clone(),
             subscription_id: subscription_id.to_owned(),
             notification: notification.clone(),
+            localizable: localizable.cloned(),
         };
         let payload = serde_json::to_string(&job).map_err(|err| {
             NotifyError::Database(DbError::Execute(format!(
@@ -437,6 +503,7 @@ impl Notifier {
         notification_id: &str,
         category: &Category,
         notification: &Notification,
+        localizable: Option<&Localizable>,
         now: &str,
     ) -> Result<Statement, NotifyError> {
         let job = EmailJob {
@@ -444,6 +511,7 @@ impl Notifier {
             account_id: account_id.to_owned(),
             category: category.name.clone(),
             notification: notification.clone(),
+            localizable: localizable.cloned(),
         };
         let payload = serde_json::to_string(&job).map_err(|err| {
             NotifyError::Database(DbError::Execute(format!(
@@ -487,6 +555,69 @@ impl Notifier {
             .is_some_and(|target| target.mailable()))
     }
 
+    /// The in-app inbox insert and the live announcement that goes with
+    /// it: one row, written once, in the account's own language.
+    fn inbox_row(&self, write: &InboxWrite<'_>) -> Result<(Statement, Room), NotifyError> {
+        let InboxWrite {
+            account_id,
+            notification_id,
+            category,
+            notification,
+            localizable,
+            locale,
+            now,
+        } = *write;
+        let serialisation = |err: serde_json::Error| {
+            NotifyError::Database(DbError::Execute(format!(
+                "notification does not serialise: {err}"
+            )))
+        };
+        let inbox_id = self.new_id();
+        let announcement = (
+            format!("{INBOX_ROOM_PREFIX}{account_id}"),
+            serde_json::to_vec(&json!({
+                "type": "notification",
+                "id": inbox_id,
+                "notification_id": notification_id,
+                "category": category.name,
+                "title": notification.title,
+                "body": notification.body,
+                "url": notification.url,
+                // So a live-updating client can set `lang` and `dir` on the
+                // item it inserts, the same way it does for a row it read
+                // from the list.
+                "locale": locale,
+                "dir": locale
+                    .and_then(cratefield_i18n::parse_locale)
+                    .map(|locale| direction(&locale).as_str()),
+                "created_at": now,
+            }))
+            .map_err(serialisation)?,
+        );
+        // The message beside the rendered text, so a client that wants
+        // another language can re-render. The module never re-renders a
+        // stored row itself.
+        let loc_args = localizable
+            .filter(|message| !message.args.is_empty())
+            .map(|message| serde_json::Value::Object(message.args.clone()).to_string());
+        let statement = store::insert_inbox_statement(&store::NewInboxRow {
+            id: &inbox_id,
+            account_id,
+            notification_id,
+            category: &category.name,
+            title: &notification.title,
+            body: &notification.body,
+            url: notification.url.as_deref(),
+            icon: notification.icon.as_deref(),
+            data_json: &serde_json::to_string(&notification.data).map_err(serialisation)?,
+            locale,
+            loc_key: localizable.map(|message| message.key.as_str()),
+            loc_args_json: loc_args.as_deref(),
+            now,
+        });
+        Ok((statement, announcement))
+    }
+
     /// Whether `account_id` wants push for `category` **right now**.
     async fn push_allowed(
         &self,
@@ -499,31 +630,95 @@ impl Notifier {
             .map_or(category.defaults.push, |channels: Channels| channels.push))
     }
 
+    /// The venture's default locale: what a recipient who has never
+    /// expressed a language is written to.
+    ///
+    /// Read through the mounted context when there is one, so
+    /// `NOTIFICATIONS_DEFAULT_LOCALE` can move it per deployment; the
+    /// compiled-in answer otherwise.
+    fn venture_locale(&self) -> LanguageIdentifier {
+        self.cell.get().map_or_else(
+            || self.settings().venture_locale(),
+            |ctx| self.settings().configured_locale(ctx),
+        )
+    }
+
+    /// The language this **account** reads: its own answer, else the
+    /// venture's default. What the inbox and the mailbox use — there is
+    /// one of each, whatever the account's devices say.
+    async fn account_locale(
+        &self,
+        db: &dyn Database,
+        account_id: &str,
+    ) -> Result<LanguageIdentifier, DbError> {
+        Ok(locale::resolve(
+            None,
+            store::account_locale(db, account_id).await?,
+            &self.venture_locale(),
+        ))
+    }
+
+    /// The venture's catalog, or the error that names the message it could
+    /// not render.
+    fn catalog(&self, key: &str) -> Result<Arc<dyn Catalog>, NotifyError> {
+        self.settings()
+            .catalog
+            .clone()
+            .ok_or_else(|| NotifyError::NoCatalog(key.to_owned()))
+    }
+
     /// Prepares one notification for every device `account_id` has.
     ///
     /// Writes nothing: append [`Enqueued::statements`] to your own
     /// `db.batch(..)` so the notification is durable exactly when your
     /// state change is, then call [`Notifier::deliver_now`].
     ///
+    /// `message` is either a [`Notification`] the caller wrote — today's
+    /// path, unchanged, and the one a single-language venture uses — or a
+    /// [`Localizable`] naming a message in the venture's catalog, which
+    /// the drain renders **per recipient** (#190).
+    ///
     /// # Errors
     ///
     /// [`NotifyError::UnknownCategory`] for a category the venture did
     /// not declare, [`NotifyError::InvalidData`] for a non-object
-    /// `data`, and [`NotifyError::Database`] when a read fails.
+    /// `data`, [`NotifyError::NoCatalog`] for a localizable message in a
+    /// venture with no catalog, and [`NotifyError::Database`] when a read
+    /// fails.
     pub async fn notify(
         &self,
         db: &dyn Database,
         account_id: &str,
         category: &str,
-        notification: Notification,
+        message: impl Into<Message>,
     ) -> Result<Enqueued, NotifyError> {
         let category = self.category(category)?.clone();
         let notification_id = self.new_id();
+
+        // The account's own language, for the two channels there is one of
+        // per account: the inbox it scrolls and the mailbox it reads. A
+        // device's own language is resolved later, in the drain, because
+        // one account can have an English browser and a Bahasa phone.
+        let (notification, localizable, rendered, missing) = match message.into() {
+            Message::Rendered(notification) => (*notification, None, None, Vec::new()),
+            Message::Localizable(message) => {
+                let catalog = self.catalog(&message.key)?;
+                let asked = self.account_locale(db, account_id).await?;
+                let Localised {
+                    notification,
+                    locale,
+                    missing,
+                    ..
+                } = locale::render(&*catalog, &message, &asked, false);
+                (notification, Some(*message), Some(locale), missing)
+            }
+        };
 
         // Prepared before either channel decides anything, so the row the
         // inbox keeps and the payload a device receives are the same
         // notification, and an invalid `data` is one error either way.
         let notification = prepare(notification, &category, &notification_id)?;
+        let locale_tag = rendered.as_ref().map(ToString::to_string);
         let now = self.now();
         let mut statements = Vec::new();
 
@@ -533,41 +728,17 @@ impl Notifier {
         let inbox = self.in_app_allowed(db, account_id, &category).await?;
         let mut announcement = None;
         if inbox {
-            let inbox_id = self.new_id();
-            announcement = Some((
-                format!("{INBOX_ROOM_PREFIX}{account_id}"),
-                serde_json::to_vec(&json!({
-                    "type": "notification",
-                    "id": inbox_id,
-                    "notification_id": notification_id,
-                    "category": category.name,
-                    "title": notification.title,
-                    "body": notification.body,
-                    "url": notification.url,
-                    "created_at": now,
-                }))
-                .map_err(|err| {
-                    NotifyError::Database(DbError::Execute(format!(
-                        "notification does not serialise: {err}"
-                    )))
-                })?,
-            ));
-            statements.push(store::insert_inbox_statement(
-                &inbox_id,
+            let (statement, room) = self.inbox_row(&InboxWrite {
                 account_id,
-                &notification_id,
-                &category.name,
-                &notification.title,
-                &notification.body,
-                notification.url.as_deref(),
-                notification.icon.as_deref(),
-                &serde_json::to_string(&notification.data).map_err(|err| {
-                    NotifyError::Database(DbError::Execute(format!(
-                        "notification data does not serialise: {err}"
-                    )))
-                })?,
-                &now,
-            ));
+                notification_id: &notification_id,
+                category: &category,
+                notification: &notification,
+                localizable: localizable.as_ref(),
+                locale: locale_tag.as_deref(),
+                now: &now,
+            })?;
+            statements.push(statement);
+            announcement = Some(room);
         }
 
         // Email, also ahead of the push early returns and for the same
@@ -578,6 +749,7 @@ impl Notifier {
                 &notification_id,
                 &category,
                 &notification,
+                localizable.as_ref(),
                 &now,
             )?);
         }
@@ -593,6 +765,8 @@ impl Notifier {
                 inbox,
                 announcement,
                 skipped: Some(Skipped::PreferenceOff),
+                category: category.name,
+                missing,
             });
         }
 
@@ -605,6 +779,8 @@ impl Notifier {
                 inbox,
                 announcement,
                 skipped: Some(Skipped::NoSubscriptions),
+                category: category.name,
+                missing,
             });
         }
 
@@ -615,6 +791,7 @@ impl Notifier {
                 &notification_id,
                 &category,
                 &notification,
+                localizable.as_ref(),
                 &subscription.id,
                 &now,
             )?);
@@ -626,6 +803,8 @@ impl Notifier {
             inbox,
             announcement,
             skipped: None,
+            category: category.name,
+            missing,
         })
     }
 
@@ -643,16 +822,20 @@ impl Notifier {
         scope: &Scope,
         account_id: &str,
         category: &str,
-        notification: Notification,
+        message: impl Into<Message>,
     ) -> Result<Enqueued, NotifyError> {
-        let enqueued = self.notify(db, account_id, category, notification).await?;
+        let enqueued = self.notify(db, account_id, category, message).await?;
         // `is_empty()` is about devices, and an account with none can
         // still have an inbox row waiting in this batch. Commit on the
         // statements, not on the device count.
         if !enqueued.statements().is_empty() {
             db.batch(enqueued.statements()).await?;
-            self.announce(scope, &enqueued).await;
         }
+        // Outside that `if`, because it also reports a missing
+        // translation (#190) — and the fan-out that queued nothing at all
+        // is exactly the one whose broken message would otherwise be
+        // silent everywhere.
+        self.announce(scope, &enqueued).await;
         if !enqueued.is_empty() {
             self.deliver_now(scope);
         }
@@ -672,7 +855,22 @@ impl Notifier {
     /// push refused — has none. A failure is logged and swallowed: a live
     /// update is an optimisation over the client's own polling, and losing
     /// one must never fail the caller's write.
+    /// Announces a just-committed inbox row, **and** says on the bus that
+    /// the catalog could not render part of the message (#190).
+    ///
+    /// The two are here together because this is the first point in the
+    /// batch API at which there is a [`Scope`] to emit an event in:
+    /// [`Notifier::notify`] runs inside somebody else's transaction and
+    /// has none. A caller that batches its own statements and never calls
+    /// this still learns about a missing translation from the drain, which
+    /// reports one per delivery — but an account with no device and no
+    /// mailbox has no delivery, so call it.
     pub async fn announce(&self, scope: &Scope, enqueued: &Enqueued) {
+        if !enqueued.missing.is_empty()
+            && let Some(ctx) = self.cell.get()
+        {
+            locale::report_missing(ctx, scope, &enqueued.category, &enqueued.missing);
+        }
         let Some((room, payload)) = enqueued.announcement.as_ref() else {
             return;
         };
@@ -801,7 +999,7 @@ impl Notifier {
         now: &str,
     ) -> Result<Outcome, NotifyError> {
         if record.topic == TOPIC_EMAIL {
-            return self.deliver_email(ctx, db, record, now).await;
+            return self.deliver_email(ctx, db, scope, record, now).await;
         }
 
         let Ok(job) = serde_json::from_str::<SendJob>(&record.payload) else {
@@ -858,7 +1056,19 @@ impl Notifier {
             return Ok(Outcome::Dropped);
         }
 
-        match push.send(&subscription.recipient, &job.notification).await {
+        // The language, resolved here and not when the row was written:
+        // the subscription's own, then the account's, then the venture's
+        // default. A device that changed its language between the commit
+        // and the drain is written to in the one it has now.
+        let locale = locale::resolve(
+            subscription.locale.clone(),
+            store::account_locale(db, &job.account_id).await?,
+            &self.venture_locale(),
+        );
+        let notification =
+            self.localise_push(ctx, scope, &category, &job, subscription.transport, &locale)?;
+
+        match push.send(&subscription.recipient, &notification).await {
             Ok(PushOutcome::Delivered { .. }) => {
                 db.execute(&store::delete_outbox_statement(&record.id))
                     .await?;
@@ -898,6 +1108,101 @@ impl Notifier {
                     .await
             }
         }
+    }
+
+    /// The notification one device actually receives (#190).
+    ///
+    /// A caller that passed rendered text gets its own notification back
+    /// untouched — no catalog is consulted, nothing is re-prepared, and a
+    /// `loc` it set itself travels exactly as it did before this existed.
+    ///
+    /// For a localizable message the render mode decides two things, and
+    /// they are separate: whether the app's own loc keys are attached, and
+    /// which language the text beside them is in.
+    ///
+    /// **Web Push has no loc-key mechanism**, so a browser is always
+    /// served the rendered text in its own language whatever the category
+    /// says. That is not the adapter being lenient — the keys are never
+    /// attached for it here, so nothing downstream has to know the rule.
+    fn localise_push(
+        &self,
+        ctx: &ModuleContext,
+        scope: &Scope,
+        category: &Category,
+        job: &SendJob,
+        transport: Transport,
+        locale: &LanguageIdentifier,
+    ) -> Result<Notification, NotifyError> {
+        let Some(message) = job.localizable.as_ref() else {
+            return Ok(job.notification.clone());
+        };
+        let catalog = self.catalog(&message.key)?;
+        let native = category.render.sends_loc_keys() && transport != Transport::Webpush;
+        // `native` alone means the app owns the language, so the text
+        // beside the keys is only a fallback for a build too old to have
+        // them: the venture's default is the right thing to send, and
+        // rendering per recipient would be work nobody reads.
+        let asked = if native && !category.render.renders_for_recipient() {
+            self.venture_locale()
+        } else {
+            locale.clone()
+        };
+        let rendered = locale::render(&*catalog, message, &asked, false);
+        locale::report_missing(ctx, scope, &category.name, &rendered.missing);
+        let mut notification = prepare(rendered.notification, category, &job.notification_id)?;
+        if native {
+            notification.loc.clone_from(&message.loc);
+        }
+        Ok(notification)
+    }
+
+    /// The mail one queued notification becomes, in the account's own
+    /// language (#190).
+    ///
+    /// The language is read **now**, not when the row was written: one
+    /// inbox and one mailbox per account, and an account that changed its
+    /// answer in between gets the one it has.
+    ///
+    /// A caller that passed rendered text gets its own words, and the
+    /// account's locale is still what `Content-Language` and `dir` are set
+    /// from — the venture wrote its mail in some language, and saying
+    /// nothing about it is what leaves a client guessing.
+    async fn localise_mail(
+        &self,
+        ctx: &ModuleContext,
+        db: &dyn Database,
+        scope: &Scope,
+        job: &EmailJob,
+        category: &Category,
+        to: &str,
+    ) -> Result<Mail, NotifyError> {
+        let asked = self.account_locale(db, &job.account_id).await?;
+        let Some(message) = job.localizable.as_ref() else {
+            return Ok(Self::compose(
+                ctx,
+                job,
+                category,
+                to,
+                &job.notification,
+                &asked,
+                None,
+            ));
+        };
+        let catalog = self.catalog(&message.key)?;
+        // `want_subject`: mail is the one channel with a third line to
+        // write, and a venture that writes none is not missing anything.
+        let rendered = locale::render(&*catalog, message, &asked, true);
+        locale::report_missing(ctx, scope, &category.name, &rendered.missing);
+        let notification = prepare(rendered.notification, category, &job.notification_id)?;
+        Ok(Self::compose(
+            ctx,
+            job,
+            category,
+            to,
+            &notification,
+            &rendered.locale,
+            rendered.subject,
+        ))
     }
 
     /// One transient-failure policy, shared by both channels: back off to
@@ -944,6 +1249,7 @@ impl Notifier {
         &self,
         ctx: &ModuleContext,
         db: &dyn Database,
+        scope: &Scope,
         record: &OutboxRecord,
         now: &str,
     ) -> Result<Outcome, NotifyError> {
@@ -978,10 +1284,11 @@ impl Notifier {
             return Ok(Outcome::DeadLettered);
         };
 
-        match mailer
-            .send(Self::compose(ctx, &job, &category, &target.email))
-            .await
-        {
+        let mail = self
+            .localise_mail(ctx, db, scope, &job, &category, &target.email)
+            .await?;
+
+        match mailer.send(mail).await {
             Ok(SendOutcome::Sent { .. }) => {
                 db.batch(&[
                     store::record_email_statement(
@@ -1105,7 +1412,19 @@ impl Notifier {
     /// One whose header points somewhere that cannot honour it is not, and
     /// it fails silently at exactly the two providers the headers exist
     /// for. The footer link still tells a person where to go.
-    fn compose(ctx: &ModuleContext, job: &EmailJob, category: &Category, to: &str) -> Message {
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "one mail's worth of inputs, named rather than bundled"
+    )]
+    fn compose(
+        ctx: &ModuleContext,
+        job: &EmailJob,
+        category: &Category,
+        to: &str,
+        notification: &Notification,
+        locale: &LanguageIdentifier,
+        localised_subject: Option<String>,
+    ) -> Mail {
         let cfg = ModuleConfig::new(crate::MODULE_NAME, &*ctx.config);
         let from = cfg.get_str(
             "MAIL_FROM",
@@ -1125,37 +1444,50 @@ impl Notifier {
         let settings = format!("{base}/settings/notifications");
         let unsubscribe = one_click.clone().unwrap_or_else(|| settings.clone());
         let unsubscribe_all = one_click_all.unwrap_or(settings);
-        let subject = category
-            .subject_template
-            .clone()
-            .unwrap_or_else(|| job.notification.title.clone());
+        // The catalog's own `.subject` wins, because it is the only one of
+        // the three that is in the recipient's language. Then the
+        // category's template, then the title.
+        let subject = localised_subject
+            .or_else(|| category.subject_template.clone())
+            .unwrap_or_else(|| notification.title.clone());
 
-        let action = job
-            .notification
+        let action = notification
             .url
             .as_deref()
             .map_or_else(String::new, |url| format!("\n{url}\n"));
         let text = format!(
             "{}\n\n{}\n{}\nTo stop receiving these, open:\n{}\n\nTo stop every \
              notification email:\n{}\n",
-            job.notification.title, job.notification.body, action, unsubscribe, unsubscribe_all
+            notification.title, notification.body, action, unsubscribe, unsubscribe_all
         );
+        // `lang` and `dir` on a wrapper, not on a `<html>` element this
+        // fragment does not have. Both matter and they are different
+        // questions: `lang` is what a screen reader pronounces it as, and
+        // `dir` is what stops an Arabic paragraph being laid out left to
+        // right with its punctuation in the wrong place. Direction comes
+        // from `cratefield-i18n`'s explicit list — `unic-langid` carries
+        // no directionality data at all.
         let html = format!(
-            "<p><strong>{}</strong></p><p>{}</p>{}<hr><p><a href=\"{}\">Stop receiving \
-             these</a> &middot; <a href=\"{}\">stop all notification email</a></p>",
-            escape(&job.notification.title),
-            escape(&job.notification.body),
-            job.notification
-                .url
-                .as_deref()
-                .map_or_else(String::new, |url| {
-                    format!("<p><a href=\"{}\">Open</a></p>", escape(url))
-                }),
+            "<div lang=\"{}\" dir=\"{}\"><p><strong>{}</strong></p><p>{}</p>{}<hr><p><a \
+             href=\"{}\">Stop receiving these</a> &middot; <a href=\"{}\">stop all notification \
+             email</a></p></div>",
+            escape(&locale.to_string()),
+            direction(locale).as_str(),
+            escape(&notification.title),
+            escape(&notification.body),
+            notification.url.as_deref().map_or_else(String::new, |url| {
+                format!("<p><a href=\"{}\">Open</a></p>", escape(url))
+            }),
             escape(&unsubscribe),
             escape(&unsubscribe_all),
         );
 
-        let mut message = Message::new(to, from, subject, text, html)
+        let mut message = Mail::new(to, from, subject, text, html)
+            // RFC 3282: what language this mail is in. A filing rule, a
+            // screen reader and a translation prompt all read it, and a
+            // mail sent in Indonesian that claims nothing is a mail every
+            // one of them guesses about.
+            .header("Content-Language", locale.to_string())
             // One notification is one mail however often the row is
             // retried: the fan-out id is stable, the outbox row id is not.
             .idempotency_key(format!("{}-email", job.notification_id))
@@ -1389,10 +1721,55 @@ mod tests {
             category: "booking".to_owned(),
             subscription_id: "s".to_owned(),
             notification: Notification::new("a", "b"),
+            localizable: None,
         };
         let json = serde_json::to_string(&job).expect("serialises");
         assert!(!json.contains("device_token"), "{json}");
         assert!(!json.contains("endpoint"), "{json}");
         assert!(!json.contains("recipient"), "{json}");
+    }
+
+    #[test]
+    fn a_rendered_callers_payload_is_the_one_it_always_was() {
+        // "A single-language venture pays nothing" includes the wire: a
+        // row queued before this deployment must drain after it, and a row
+        // queued after it must be readable by a deployment that rolls
+        // back. Both hold exactly while the new field is absent.
+        let job = SendJob {
+            notification_id: "n".to_owned(),
+            account_id: "a".to_owned(),
+            category: "booking".to_owned(),
+            subscription_id: "s".to_owned(),
+            notification: Notification::new("Booked", "See you Tuesday"),
+            localizable: None,
+        };
+        let json = serde_json::to_string(&job).expect("serialises");
+        assert!(!json.contains("localizable"), "{json}");
+
+        // And the other direction: a payload written before #190 still
+        // deserialises, because the field defaults.
+        let old = r#"{"notification_id":"n","account_id":"a","category":"booking",
+            "subscription_id":"s","notification":{"title":"Booked","body":"Tuesday"}}"#;
+        let parsed: SendJob = serde_json::from_str(old).expect("an older payload still reads");
+        assert!(parsed.localizable.is_none());
+        assert_eq!(parsed.notification.title, "Booked");
+    }
+
+    #[test]
+    fn a_localizable_payload_carries_the_message_and_no_recipient() {
+        let job = SendJob {
+            notification_id: "n".to_owned(),
+            account_id: "a".to_owned(),
+            category: "booking".to_owned(),
+            subscription_id: "s".to_owned(),
+            notification: Notification::new("Booked", "Tuesday"),
+            localizable: Some(Localizable::new("booking-confirmed").arg("coach", "Sari")),
+        };
+        let json = serde_json::to_string(&job).expect("serialises");
+        assert!(json.contains("booking-confirmed"), "{json}");
+        assert!(!json.contains("device_token"), "{json}");
+        assert!(!json.contains("recipient"), "{json}");
+        let back: SendJob = serde_json::from_str(&json).expect("round trips");
+        assert_eq!(back, job);
     }
 }

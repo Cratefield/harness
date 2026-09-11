@@ -7,6 +7,7 @@
 //! is the adapter's business.
 
 use cratefield_core::{Database, DbError, Recipient, Row, Statement};
+use cratefield_i18n::LanguageIdentifier;
 use sea_query::{Alias, Expr, Order, Query};
 use serde::{Deserialize, Serialize};
 
@@ -25,6 +26,8 @@ pub(crate) const INBOX: &str = "notifications_inbox";
 pub(crate) const EMAIL_TARGETS: &str = "notifications_email_targets";
 /// One row per mail actually sent, for the per-category cooldown (#189).
 pub(crate) const EMAIL_SENDS: &str = "notifications_email_sends";
+/// One account's own language, for the inbox and the mailbox (#190).
+pub(crate) const LOCALES: &str = "notifications_locales";
 
 fn iden(name: &str) -> Alias {
     Alias::new(name)
@@ -128,17 +131,24 @@ pub(crate) struct Subscription {
     pub recipient: Recipient,
     pub app_id: Option<String>,
     pub app_version: Option<String>,
+    /// The device's own language, if it said (#190). Parsed on the way
+    /// out as well as on the way in: the column can only have been
+    /// written through [`cratefield_i18n::parse_locale`], and reading it
+    /// back through the same door means a hand-edited database cannot put
+    /// arbitrary text into a rendered page either.
+    pub locale: Option<LanguageIdentifier>,
     pub created_at: String,
     pub last_seen_at: String,
 }
 
-const SUBSCRIPTION_COLUMNS: [&str; 8] = [
+const SUBSCRIPTION_COLUMNS: [&str; 9] = [
     "id",
     "account_id",
     "transport",
     "recipient_json",
     "app_id",
     "app_version",
+    "locale",
     "created_at",
     "last_seen_at",
 ];
@@ -165,6 +175,10 @@ fn read_subscription(row: &Row) -> Result<Subscription, DbError> {
         recipient,
         app_id: row.get::<Option<String>>("app_id").flatten(),
         app_version: row.get::<Option<String>>("app_version").flatten(),
+        locale: row
+            .get::<String>("locale")
+            .as_deref()
+            .and_then(cratefield_i18n::parse_locale),
         created_at: row.get::<String>("created_at").unwrap_or_default(),
         last_seen_at: row.get::<String>("last_seen_at").unwrap_or_default(),
         id,
@@ -187,6 +201,11 @@ pub(crate) struct NewSubscription<'a> {
     pub app_id: Option<&'a str>,
     pub app_version: Option<&'a str>,
     pub user_agent: Option<&'a str>,
+    /// The device's language, already parsed and canonicalised — `None`
+    /// when the client said nothing usable. On a re-registration `None`
+    /// **keeps** whatever the row had: an app launch that omits the field
+    /// is not the device saying it has no language.
+    pub locale: Option<&'a str>,
     pub now: &'a str,
     /// The start of the window `rehome_limit` counts over.
     pub rehome_cutoff: &'a str,
@@ -288,6 +307,11 @@ fn refresh_statement(
         .value(iden("user_agent"), new.user_agent)
         .value(iden("last_seen_at"), new.now)
         .and_where(Expr::col(iden("id")).eq(id));
+    // Only when the client actually said. Writing `NULL` here would make
+    // every app launch that omits the field forget the device's language.
+    if let Some(locale) = new.locale {
+        update.value(iden("locale"), locale);
+    }
     if let Some(previous) = rehomed_from {
         update
             .value(iden("rehomed_at"), new.now)
@@ -340,6 +364,7 @@ pub(crate) async fn upsert_subscription(
             "app_id",
             "app_version",
             "user_agent",
+            "locale",
             "created_at",
             "last_seen_at",
         ])
@@ -352,6 +377,7 @@ pub(crate) async fn upsert_subscription(
             new.app_id.into(),
             new.app_version.into(),
             new.user_agent.into(),
+            new.locale.into(),
             new.now.into(),
             new.now.into(),
         ]);
@@ -637,6 +663,76 @@ pub(crate) fn write_preference_statement(
 }
 
 // ---------------------------------------------------------------------------
+// The account's own language (#190)
+
+/// The language this account reads, if it has said. `None` means the
+/// venture's default answers instead.
+///
+/// Read back through [`cratefield_i18n::parse_locale`], the same door the
+/// write goes through, so the only thing that can come out of this column
+/// is a canonical BCP 47 tag — including out of a database somebody edited
+/// by hand.
+///
+/// # Errors
+///
+/// [`DbError`] when the read fails.
+pub(crate) async fn account_locale(
+    db: &dyn Database,
+    account_id: &str,
+) -> Result<Option<LanguageIdentifier>, DbError> {
+    let mut select = Query::select();
+    select
+        .column(iden("locale"))
+        .from(iden(LOCALES))
+        .and_where(Expr::col(iden("account_id")).eq(account_id));
+    Ok(db
+        .query(&Statement::render(&select))
+        .await?
+        .first()
+        .and_then(|row| row.get::<String>("locale"))
+        .as_deref()
+        .and_then(cratefield_i18n::parse_locale))
+}
+
+/// Sets the language this account reads.
+///
+/// `locale` is already parsed and canonicalised — the route's job, so that
+/// arbitrary text from a body or a header never reaches the column.
+///
+/// Not `ON CONFLICT`, for the reason [`write_preference_statement`] gives:
+/// one more dialect difference than the portable subset wants (ADR 0004).
+///
+/// # Errors
+///
+/// [`DbError`] when the write fails.
+pub(crate) async fn set_account_locale(
+    db: &dyn Database,
+    account_id: &str,
+    locale: &str,
+    now: &str,
+) -> Result<(), DbError> {
+    let existing = account_locale(db, account_id).await?.is_some();
+    let statement = if existing {
+        let mut update = Query::update();
+        update
+            .table(iden(LOCALES))
+            .value(iden("locale"), locale)
+            .value(iden("updated_at"), now)
+            .and_where(Expr::col(iden("account_id")).eq(account_id));
+        Statement::render(&update)
+    } else {
+        let mut insert = Query::insert();
+        insert
+            .into_table(iden(LOCALES))
+            .columns(["account_id", "locale", "updated_at"])
+            .values_panic([account_id.into(), locale.into(), now.into()]);
+        Statement::render(&insert)
+    };
+    db.execute(&statement).await?;
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
 // Outbox and dead letters
 
 /// The batch-friendly form of [`cratefield_core::Outbox::complete`], which
@@ -784,9 +880,48 @@ pub(crate) struct InboxItem {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub icon: Option<String>,
     pub data: serde_json::Value,
+    /// What this row was rendered in (#190), so a client can set `lang`
+    /// on the item. Absent for a row a venture rendered itself.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub locale: Option<String>,
+    /// Which way that locale's text runs, `"ltr"` or `"rtl"`.
+    ///
+    /// Computed here rather than left to the client, because there is no
+    /// browser API that answers it: `Intl` has no directionality, and a
+    /// client that worked it out would be a second copy of the list in
+    /// `cratefield-i18n` — one that knows `ar` and not `az-Arab`, and
+    /// drifts the first time the other is extended.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dir: Option<&'static str>,
+    /// The catalog message this row came from, kept beside the rendered
+    /// text so a client that wants another language can re-render. The
+    /// module never re-renders a stored row itself.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub loc_key: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub loc_args: Option<serde_json::Value>,
     pub created_at: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub read_at: Option<String>,
+}
+
+/// One row of the in-app inbox, as `notify` writes it.
+pub(crate) struct NewInboxRow<'a> {
+    pub id: &'a str,
+    pub account_id: &'a str,
+    pub notification_id: &'a str,
+    pub category: &'a str,
+    pub title: &'a str,
+    pub body: &'a str,
+    pub url: Option<&'a str>,
+    pub icon: Option<&'a str>,
+    pub data_json: &'a str,
+    /// The locale the title and body above were rendered in — already a
+    /// canonical tag, never what a client sent.
+    pub locale: Option<&'a str>,
+    pub loc_key: Option<&'a str>,
+    pub loc_args_json: Option<&'a str>,
+    pub now: &'a str,
 }
 
 /// The insert `notify` appends to the caller's batch.
@@ -795,19 +930,7 @@ pub(crate) struct InboxItem {
 /// the same unit of work as the caller's own state change: a booking that
 /// rolls back must not leave "your booking is confirmed" in the list.
 #[must_use]
-#[allow(clippy::too_many_arguments, reason = "one row, one column each")]
-pub(crate) fn insert_inbox_statement(
-    id: &str,
-    account_id: &str,
-    notification_id: &str,
-    category: &str,
-    title: &str,
-    body: &str,
-    url: Option<&str>,
-    icon: Option<&str>,
-    data_json: &str,
-    now: &str,
-) -> Statement {
+pub(crate) fn insert_inbox_statement(row: &NewInboxRow<'_>) -> Statement {
     let mut insert = Query::insert();
     insert
         .into_table(iden(INBOX))
@@ -821,19 +944,25 @@ pub(crate) fn insert_inbox_statement(
             "url",
             "icon",
             "data_json",
+            "locale",
+            "loc_key",
+            "loc_args_json",
             "created_at",
         ])
         .values_panic([
-            id.into(),
-            account_id.into(),
-            notification_id.into(),
-            category.into(),
-            title.into(),
-            body.into(),
-            url.into(),
-            icon.into(),
-            data_json.into(),
-            now.into(),
+            row.id.into(),
+            row.account_id.into(),
+            row.notification_id.into(),
+            row.category.into(),
+            row.title.into(),
+            row.body.into(),
+            row.url.into(),
+            row.icon.into(),
+            row.data_json.into(),
+            row.locale.into(),
+            row.loc_key.into(),
+            row.loc_args_json.into(),
+            row.now.into(),
         ]);
     Statement::render(&insert)
 }
@@ -872,6 +1001,9 @@ pub(crate) async fn inbox_page(
             iden("url"),
             iden("icon"),
             iden("data_json"),
+            iden("locale"),
+            iden("loc_key"),
+            iden("loc_args_json"),
             iden("created_at"),
             iden("read_at"),
         ])
@@ -906,6 +1038,10 @@ pub(crate) async fn inbox_page(
 
 /// One row, or the query error a row that will not decode deserves.
 fn read_inbox_item(row: &Row) -> Result<InboxItem, DbError> {
+    let locale = row
+        .get::<String>("locale")
+        .as_deref()
+        .and_then(cratefield_i18n::parse_locale);
     let id = row
         .get::<String>("id")
         .ok_or_else(|| DbError::Query(format!("{INBOX} row has no id")))?;
@@ -930,6 +1066,18 @@ fn read_inbox_item(row: &Row) -> Result<InboxItem, DbError> {
         url: row.get::<String>("url"),
         icon: row.get::<String>("icon"),
         data,
+        // Through the parser on the way out as well: this value reaches a
+        // `lang` attribute in somebody's browser, and a column is not a
+        // place to trust.
+        dir: locale
+            .as_ref()
+            .map(|locale| cratefield_i18n::direction(locale).as_str()),
+        locale: locale.map(|locale| locale.to_string()),
+        loc_key: row.get::<String>("loc_key"),
+        loc_args: row
+            .get::<String>("loc_args_json")
+            .as_deref()
+            .and_then(|raw| serde_json::from_str(raw).ok()),
         created_at: row
             .get::<String>("created_at")
             .ok_or_else(|| corrupt(INBOX, &id, "created_at"))?,

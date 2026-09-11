@@ -46,6 +46,9 @@ impl Module for WellKnownProbe {
     fn validate_config(&self, cfg: &dyn Config) -> Result<(), ConfigError> {
         self.inner.validate_config(cfg)
     }
+    fn self_check(&self) -> Vec<String> {
+        self.inner.self_check()
+    }
     fn router(&self, ctx: ModuleContext) -> axum::Router {
         self.inner.router(ctx)
     }

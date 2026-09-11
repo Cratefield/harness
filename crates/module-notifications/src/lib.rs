@@ -28,8 +28,18 @@
 //!   that caused it.
 //! - `notifications_dead_letters` — the terminal state core's outbox does
 //!   not have (ADR 0016).
+//! - `notifications_locales` — one account's own language (#190). A table
+//!   of its own rather than a row in `notifications_preferences`: that one
+//!   is keyed `(account, category)` with three NOT NULL channel switches,
+//!   and a locale is not a preference about a category.
 //!
 //! # The rules that are easy to get wrong
+//!
+//! **The language is resolved per recipient at delivery**, never when the
+//! caller queues the message: one account can have an English browser and
+//! a Bahasa phone. The subscription's locale, then the account's, then the
+//! venture's default — and a caller that passes a rendered
+//! [`Notification`] gets exactly what it wrote, everywhere.
 //!
 //! **`PushError::Unregistered` is a delete instruction**, and the only
 //! error that ever prunes a subscription. Not `Rejected`, not `Transient`,
@@ -68,6 +78,8 @@
 
 mod clock;
 mod handlers;
+mod locale;
+mod message;
 mod notify;
 mod store;
 mod webhook;
@@ -76,6 +88,8 @@ pub use handlers::{
     ChannelPatch, NO_APPLICATION_SERVER_KEY, PreferencesBody, REHOME_LIMIT, RecipientBody,
     RegisterBody, UNKNOWN_CATEGORY, WEBHOOK_UNVERIFIED,
 };
+pub use locale::EVENT_MISSING_TRANSLATION;
+pub use message::{Localizable, Message, RenderMode};
 pub use notify::{
     DrainReport, EVENT_REQUESTED, EVENT_SUBSCRIPTION_PRUNED, EVENT_SUBSCRIPTION_REHOMED, Enqueued,
     Notifier, NotifyError, Skipped, TOPIC_SEND,
@@ -88,6 +102,7 @@ use cratefield_core::{
     AnyError, BoxFuture, Config, ConfigError, Migrations, Module, ModuleConfig, ModuleContext,
     NoopDefer, Notification, Port, RoutePolicy, Scope, SqlMigration, VentureEnv,
 };
+use cratefield_i18n::{BODY, Catalog, LanguageIdentifier, TITLE};
 
 /// The name the module mounts under: `/v1/notifications`.
 pub const MODULE_NAME: &str = "notifications";
@@ -159,15 +174,25 @@ const MIGRATION_EMAIL_BOUNCE_INDEX: SqlMigration = SqlMigration {
     sql: include_str!("../migrations/sqlite/0005_email_bounce_index.sql"),
 };
 
+/// Per-recipient language (#190): the device's own locale, the account's,
+/// and what an inbox row was rendered in. Its own migration because
+/// `0001`-`0005` are applied.
+const MIGRATION_LOCALES: SqlMigration = SqlMigration {
+    id: "0006",
+    name: "locales",
+    sql: include_str!("../migrations/sqlite/0006_locales.sql"),
+};
+
 /// Every migration this module ships, in order. One array, so a test that
 /// asserts something about the schema reads what actually ships rather
 /// than a second list that can drift from it.
-const SHIPPED_MIGRATIONS: [SqlMigration; 5] = [
+const SHIPPED_MIGRATIONS: [SqlMigration; 6] = [
     MIGRATION_INIT,
     MIGRATION_REHOME_AND_DUE_INDEX,
     MIGRATION_INBOX,
     MIGRATION_EMAIL_TARGETS,
     MIGRATION_EMAIL_BOUNCE_INDEX,
+    MIGRATION_LOCALES,
 ];
 
 /// One notification category the venture declares.
@@ -185,6 +210,8 @@ pub struct Category {
     /// `default_enabled` stops secretly meaning *push*.
     pub(crate) defaults: crate::store::Channels,
     pub(crate) subject_template: Option<String>,
+    /// Who renders the strings this category's pushes show (#190).
+    pub(crate) render: RenderMode,
 }
 
 impl Category {
@@ -204,6 +231,7 @@ impl Category {
                 email: false,
             },
             subject_template: None,
+            render: RenderMode::Server,
         }
     }
 
@@ -263,6 +291,24 @@ impl Category {
         self
     }
 
+    /// Who renders this category's strings for a device (default
+    /// [`RenderMode::Server`], issue #190).
+    ///
+    /// Only ever consulted for a [`Message::Localizable`]: a caller that
+    /// passes a rendered `Notification` gets exactly what it wrote,
+    /// whatever this says.
+    ///
+    /// [`RenderMode::Native`] and [`RenderMode::Both`] pass the caller's
+    /// [`Localizable::loc`] keys through to APNs and FCM, so an app that
+    /// ships its own translations renders in the device's language without
+    /// the server knowing any of them. **Web Push has no such mechanism**,
+    /// so a browser is always served the rendered text whatever the mode.
+    #[must_use]
+    pub fn render(mut self, mode: RenderMode) -> Self {
+        self.render = mode;
+        self
+    }
+
     /// The category's name.
     #[must_use]
     pub fn name(&self) -> &str {
@@ -284,6 +330,15 @@ pub(crate) struct Settings {
     pub transport_probe: Option<TransportProbe>,
     pub mailer_probe: Option<TransportProbe>,
     pub vapid_key_probe: Option<VapidKeyProbe>,
+    /// The venture's strings (#190). `None` is a single-language venture,
+    /// which pays for none of this: a `Localizable` is then a
+    /// misconfiguration rather than a silent English fallback.
+    pub catalog: Option<Arc<dyn Catalog>>,
+    /// The venture's default locale, when it is not the catalog's own.
+    pub default_locale: Option<LanguageIdentifier>,
+    /// The message ids this venture promises are translated into every
+    /// locale its catalog declares — what the completeness check reads.
+    pub messages: Arc<Vec<String>>,
 }
 
 impl std::fmt::Debug for Settings {
@@ -303,11 +358,57 @@ impl std::fmt::Debug for Settings {
             // public, but a report that prints a probe's result is a
             // habit that reaches a probe whose result is not.
             .field("vapid_key_probe", &self.vapid_key_probe.is_some())
-            .finish()
+            // The locales a catalog has, never the strings in it: a
+            // venture's copy is its own, and a `Debug` ends up in a log.
+            .field(
+                "locales",
+                &self.catalog.as_ref().map(|catalog| {
+                    catalog
+                        .locales()
+                        .iter()
+                        .map(ToString::to_string)
+                        .collect::<Vec<_>>()
+                }),
+            )
+            .field("messages", &self.messages.len())
+            // Non-exhaustive on purpose: `catalog` is the venture's own
+            // copy, and a `Debug` of a catalog ends up in a log.
+            .finish_non_exhaustive()
     }
 }
 
 impl Settings {
+    /// The venture's default locale: the one it set, else its catalog's,
+    /// else English.
+    ///
+    /// Always answers, which is what makes the resolution chain total: a
+    /// recipient who has never expressed a language still gets one.
+    pub(crate) fn venture_locale(&self) -> LanguageIdentifier {
+        if let Some(locale) = &self.default_locale {
+            return locale.clone();
+        }
+        if let Some(catalog) = &self.catalog {
+            return catalog.default_locale().clone();
+        }
+        crate::locale::FALLBACK_LOCALE
+            .parse()
+            .unwrap_or_else(|_| LanguageIdentifier::default())
+    }
+
+    /// The venture's default locale as the deployment configured it:
+    /// `NOTIFICATIONS_DEFAULT_LOCALE` when it names a language tag, else
+    /// [`Settings::venture_locale`].
+    ///
+    /// A value that is not a tag is ignored rather than stored or echoed —
+    /// the same door every other locale comes through.
+    pub(crate) fn configured_locale(&self, ctx: &ModuleContext) -> LanguageIdentifier {
+        ModuleConfig::new(MODULE_NAME, &*ctx.config)
+            .get_opt("DEFAULT_LOCALE")
+            .as_deref()
+            .and_then(cratefield_i18n::parse_locale)
+            .unwrap_or_else(|| self.venture_locale())
+    }
+
     pub(crate) fn category(&self, name: &str) -> Option<&Category> {
         self.categories
             .iter()
@@ -372,6 +473,9 @@ impl Notifications {
                 transport_probe: None,
                 mailer_probe: None,
                 vapid_key_probe: None,
+                catalog: None,
+                default_locale: None,
+                messages: Arc::new(Vec::new()),
             },
             ctx_cell: Arc::new(OnceLock::new()),
             settings_cell: Arc::new(OnceLock::new()),
@@ -480,6 +584,96 @@ impl Notifications {
     pub fn email_window_secs(mut self, seconds: u32) -> Self {
         self.settings.email_window_secs = seconds;
         self
+    }
+
+    /// The venture's own strings, for [`Message::Localizable`] callers
+    /// (issue #190).
+    ///
+    /// ```rust,ignore
+    /// use cratefield_i18n::FluentCatalog;
+    ///
+    /// let catalog = FluentCatalog::builder()
+    ///     .default_locale("en")
+    ///     .locale("en", include_str!("../locales/en.ftl"))
+    ///     .locale("id", include_str!("../locales/id.ftl"))
+    ///     .build()?;
+    /// Notifications::new().catalog(catalog).messages(["booking-confirmed"])
+    /// ```
+    ///
+    /// Built **once**, by the venture, and shared: the bundles are parsed
+    /// at cold start, not per request. A venture that never calls this
+    /// pays nothing at all — no catalog is built, no locale is read, and a
+    /// rendered `Notification` travels exactly as it did before this
+    /// existed.
+    #[must_use]
+    pub fn catalog(mut self, catalog: impl Catalog + 'static) -> Self {
+        self.settings.catalog = Some(Arc::new(catalog));
+        self
+    }
+
+    /// A catalog the venture already holds behind an `Arc` — because it
+    /// shares one with its own mail templates, say.
+    #[must_use]
+    pub fn shared_catalog(mut self, catalog: Arc<dyn Catalog>) -> Self {
+        self.settings.catalog = Some(catalog);
+        self
+    }
+
+    /// The locale a recipient who has expressed none is written to
+    /// (`NOTIFICATIONS_DEFAULT_LOCALE`).
+    ///
+    /// Defaults to the catalog's own default locale, which is usually the
+    /// right answer; set it only when they differ.
+    ///
+    /// # Panics
+    ///
+    /// If `tag` is not a BCP 47 language tag. A composition is code a
+    /// developer wrote and compiled, so a typo here should stop the
+    /// venture rather than quietly write everybody in English.
+    #[must_use]
+    pub fn default_locale(mut self, tag: &str) -> Self {
+        self.settings.default_locale = Some(
+            cratefield_i18n::parse_locale(tag)
+                .unwrap_or_else(|| panic!("notifications: {tag:?} is not a BCP 47 language tag")),
+        );
+        self
+    }
+
+    /// The message ids this venture promises are translated into every
+    /// locale its catalog declares.
+    ///
+    /// A catalog cannot know which messages a caller will name, so the
+    /// venture says. Every id listed here must have a `.title` and a
+    /// `.body` in **every** configured locale, or the module refuses to
+    /// start and `fz doctor` lists what is missing — which is the whole
+    /// point: a translation gap found at deploy time is a pull request,
+    /// and the same gap found at delivery time is a person reading
+    /// `booking-confirmed.title` on a lock screen.
+    #[must_use]
+    pub fn messages(mut self, ids: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        let messages = Arc::make_mut(&mut self.settings.messages);
+        for id in ids {
+            messages.push(id.into());
+        }
+        self
+    }
+
+    /// Every `locale: key.attribute` the catalog cannot render, for the
+    /// messages this venture declared with [`Notifications::messages`].
+    ///
+    /// Empty for a venture with no catalog and for one whose catalog is
+    /// complete. Identifiers only — never a rendered string, which is
+    /// built from a caller's arguments about a person.
+    #[must_use]
+    pub fn missing_translations(&self) -> Vec<String> {
+        let Some(catalog) = self.settings.catalog.as_ref() else {
+            return Vec::new();
+        };
+        let keys: Vec<&str> = self.settings.messages.iter().map(String::as_str).collect();
+        cratefield_i18n::missing_messages(&**catalog, &keys, &[TITLE, BODY])
+            .iter()
+            .map(ToString::to_string)
+            .collect()
     }
 
     /// What the venture's own probes say about the ports this module
@@ -666,6 +860,7 @@ impl Module for Notifications {
             store::INBOX,
             store::EMAIL_TARGETS,
             store::EMAIL_SENDS,
+            store::LOCALES,
         ]
     }
 
@@ -673,7 +868,27 @@ impl Module for Notifications {
         &[
             notify::EVENT_SUBSCRIPTION_PRUNED,
             notify::EVENT_SUBSCRIPTION_REHOMED,
+            locale::EVENT_MISSING_TRANSLATION,
         ]
+    }
+
+    /// The translation completeness check (#190).
+    ///
+    /// It reads only what the venture compiled in — its catalog and the
+    /// message ids it declared — so `fz doctor` can run it with no
+    /// environment at all, and it says the same thing on a laptop as in
+    /// CI. The same gaps also fail [`Module::validate_config`], so a
+    /// deployment that skipped the doctor still refuses to start.
+    fn self_check(&self) -> Vec<String> {
+        self.missing_translations()
+            .into_iter()
+            .map(|missing| {
+                format!(
+                    "notifications: no translation for {missing} — every message listed in \
+                     `.messages(..)` needs a `.title` and a `.body` in every configured locale"
+                )
+            })
+            .collect()
     }
 
     fn public_writes(&self) -> bool {
@@ -791,6 +1006,26 @@ impl Module for Notifications {
                 module.key("AUTH_ISSUER"),
                 module.key("AUTH_CLIENT_ID"),
             ));
+        }
+
+        if let Some(raw) = module.get_opt("DEFAULT_LOCALE")
+            && cratefield_i18n::parse_locale(&raw).is_none()
+        {
+            // Names the variable, never the value: a deployment that put
+            // something else in this field must not have it echoed into a
+            // boot log. What it was is on the machine that set it.
+            errors.push(format!(
+                "notifications: {} is not a BCP 47 language tag, so every recipient with no \
+                 language of their own would silently get the compiled-in default instead",
+                module.key("DEFAULT_LOCALE")
+            ));
+        }
+
+        // The catalog's own completeness. Not production-only: a venture
+        // that declared a message and did not translate it is broken
+        // everywhere, and the failure is a person reading a message id.
+        for problem in self.self_check() {
+            errors.push(problem);
         }
 
         let env = cfg
@@ -993,6 +1228,7 @@ mod tests {
                 "notifications_inbox",
                 "notifications_email_targets",
                 "notifications_email_sends",
+                "notifications_locales",
             ]
         );
         assert_eq!(
@@ -1000,6 +1236,7 @@ mod tests {
             [
                 "notifications.subscription_pruned",
                 "notifications.subscription_rehomed",
+                "notifications.missing_translation",
             ]
         );
         assert!(

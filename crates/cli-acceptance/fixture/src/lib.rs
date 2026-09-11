@@ -160,6 +160,42 @@ impl Module for AuditLogFixture {
     }
 }
 
+/// A module that reports a problem in its own embedded data (issue
+/// #190). The notifications module answers `self_check` with every
+/// translation its catalog is missing; this fixture stands in for it so
+/// the doctor's handling of that answer is testable without composing a
+/// venture with a Fluent catalog in it.
+pub struct SelfCheckFixture {
+    pub problems: &'static [&'static str],
+}
+
+impl Module for SelfCheckFixture {
+    fn name(&self) -> &'static str {
+        "self-check"
+    }
+    fn version(&self) -> &'static str {
+        "0.1.0"
+    }
+    fn requires(&self) -> &'static [Port] {
+        &[]
+    }
+    fn migrations(&self) -> Migrations {
+        Migrations::EMPTY
+    }
+    fn validate_config(&self, _cfg: &dyn Config) -> Result<(), ConfigError> {
+        Ok(())
+    }
+    fn self_check(&self) -> Vec<String> {
+        self.problems
+            .iter()
+            .map(|text| (*text).to_owned())
+            .collect()
+    }
+    fn router(&self, _ctx: ModuleContext) -> axum::Router {
+        axum::Router::new()
+    }
+}
+
 pub struct AllPorts;
 
 impl Runtime for AllPorts {
@@ -195,6 +231,21 @@ pub fn harness_v1() -> Harness {
         .runtime(AllPorts)
         .build()
         .expect("fixture harness v1 builds")
+}
+
+/// [`harness_v1`] plus a module that reports its own problems.
+#[must_use]
+pub fn harness_with_self_check(problems: &'static [&'static str]) -> Harness {
+    Harness::builder()
+        .venture(base_venture())
+        .module(EmailSignupFixture {
+            with_add_source: false,
+        })
+        .module(WaitlistFixture)
+        .module(SelfCheckFixture { problems })
+        .runtime(AllPorts)
+        .build()
+        .expect("fixture harness with a self-check builds")
 }
 
 /// The v2 harness: adds audit-log and a second email-signup migration.

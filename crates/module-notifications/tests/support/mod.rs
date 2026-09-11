@@ -210,6 +210,7 @@ impl Module for EventProbe {
         [
             cratefield_module_notifications::EVENT_SUBSCRIPTION_PRUNED,
             cratefield_module_notifications::EVENT_SUBSCRIPTION_REHOMED,
+            cratefield_module_notifications::EVENT_MISSING_TRANSLATION,
         ]
         .into_iter()
         .map(|event| {
@@ -505,7 +506,32 @@ pub fn kit() -> Kit {
 /// A kit over the caller's `Push`, with `categories` declared and `config`
 /// merged over the module's keys.
 pub fn kit_with(push: Arc<dyn Push>, categories: Vec<Category>, config: &[(&str, &str)]) -> Kit {
-    build_kit(push, categories, config, Wiring::default(), |db| db)
+    build_kit(
+        push,
+        categories,
+        config,
+        Wiring::default(),
+        |module| module,
+        |db| db,
+    )
+}
+
+/// [`kit_with`], with one more turn of the builder — a catalog, a default
+/// locale, the message ids a venture promises (issue #190).
+pub fn kit_customised(
+    push: Arc<dyn Push>,
+    categories: Vec<Category>,
+    config: &[(&str, &str)],
+    customise: impl FnOnce(Notifications) -> Notifications,
+) -> Kit {
+    build_kit(
+        push,
+        categories,
+        config,
+        Wiring::default(),
+        customise,
+        |db| db,
+    )
 }
 
 /// [`kit_with`] with **no `Signer` port**, the way a venture that never
@@ -527,6 +553,7 @@ pub fn kit_without_signer(
             no_signer: true,
             ..Wiring::default()
         },
+        |module| module,
         |db| db,
     )
 }
@@ -552,6 +579,7 @@ pub fn kit_serving_vapid(key: &str) -> Kit {
             vapid_key_probe: true,
             ..Wiring::default()
         },
+        |module| module,
         |db| db,
     )
 }
@@ -565,11 +593,18 @@ pub fn kit_racing(
 ) -> (Kit, RacingDb) {
     let racing: Arc<Mutex<Option<RacingDb>>> = Arc::new(Mutex::new(None));
     let captured = Arc::clone(&racing);
-    let kit = build_kit(push, categories, config, Wiring::default(), move |db| {
-        let wrapper = RacingDb::new(db);
-        *captured.lock().expect("racing db") = Some(wrapper.clone());
-        Arc::new(wrapper)
-    });
+    let kit = build_kit(
+        push,
+        categories,
+        config,
+        Wiring::default(),
+        |module| module,
+        move |db| {
+            let wrapper = RacingDb::new(db);
+            *captured.lock().expect("racing db") = Some(wrapper.clone());
+            Arc::new(wrapper)
+        },
+    );
     let wrapper = racing.lock().expect("racing db").clone().expect("wrapped");
     (kit, wrapper)
 }
@@ -588,6 +623,7 @@ fn build_kit(
     categories: Vec<Category>,
     config: &[(&str, &str)],
     wiring: Wiring,
+    customise: impl FnOnce(Notifications) -> Notifications,
     wrap_db: impl FnOnce(Arc<dyn cratefield_core::Database>) -> Arc<dyn cratefield_core::Database>,
 ) -> Kit {
     let jwks = StaticJwks::new();
@@ -606,6 +642,10 @@ fn build_kit(
     if wiring.vapid_key_probe {
         module = module.vapid_public_key(|cfg| cfg.get(VAPID_KEY_CONFIG));
     }
+    // After the categories, so a test can reach the finished set — and
+    // after the handle above was taken, which is the composition order
+    // that used to fork the settings.
+    let module = customise(module);
     let events = Arc::new(EventLog::default());
     let clock = TestClock::at(NOW);
     let scheduled_push = FakePush::new(PushMode::DeliverOk);
@@ -871,6 +911,44 @@ pub async fn send_raw(
                 .body(axum::body::Body::from(body.to_owned()))
                 .expect("request builds"),
         )
+        .await
+        .expect("router answers");
+    let status = response.status();
+    let body = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+        .await
+        .expect("body reads");
+    Answer { status, body }
+}
+
+/// [`send`] with extra request headers — `Accept-Language`, for the
+/// registration that has nothing else to go on (issue #190).
+pub async fn send_with_headers(
+    router: &axum::Router,
+    method: http::Method,
+    path: &str,
+    token: &str,
+    headers: &[(&str, &str)],
+    body: Option<Value>,
+) -> Answer {
+    use tower::ServiceExt as _;
+
+    let mut builder = http::Request::builder()
+        .method(method)
+        .uri(path)
+        .header(http::header::AUTHORIZATION, format!("Bearer {token}"));
+    for (name, value) in headers {
+        builder = builder.header(*name, *value);
+    }
+    let payload = match body {
+        Some(value) => {
+            builder = builder.header(http::header::CONTENT_TYPE, "application/json");
+            axum::body::Body::from(value.to_string())
+        }
+        None => axum::body::Body::empty(),
+    };
+    let response = router
+        .clone()
+        .oneshot(builder.body(payload).expect("request builds"))
         .await
         .expect("router answers");
     let status = response.status();

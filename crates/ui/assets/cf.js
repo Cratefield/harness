@@ -561,6 +561,13 @@ class CfNotifications extends HTMLElement {
       ...rows.map((row) => {
         const li = document.createElement("li");
         if (!row.read_at) li.className = "cf-unread";
+        // The item's own language, not the page's: one list can hold an
+        // Indonesian booking and an Arabic one. `dir` comes from the API
+        // because no browser API answers it.
+        if (row.locale) {
+          li.lang = row.locale;
+          li.dir = row.dir || "ltr";
+        }
         const link = document.createElement("button");
         link.type = "button";
         link.textContent = `${row.title} — ${row.body}`;

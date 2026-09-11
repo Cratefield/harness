@@ -56,6 +56,9 @@ pub use cratefield_secrets as secrets;
 #[cfg(feature = "kms")]
 pub use cratefield_kms as kms;
 
+#[cfg(feature = "i18n")]
+pub use cratefield_i18n as i18n;
+
 #[cfg(feature = "email-signup")]
 pub use cratefield_module_email_signup as email_signup;
 
