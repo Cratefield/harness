@@ -3,7 +3,7 @@
 //!
 //! The artifact is a pure function of the module set and their exact
 //! versions, the harness API, the rustc that will compile it and the
-//! profile it compiles under — [`cratefield_manifest::build_key`] is
+//! profile it compiles under — [`cratefield_manifest::build_key()`] is
 //! the identity, this command is its inspection surface. A cache (whose
 //! physical home is a control-plane decision) looks a compiled venture
 //! up by this key; `fz build-key` exists so CI, the control plane and
