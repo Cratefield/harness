@@ -30,6 +30,7 @@ const MIGRATION_INIT: SqlMigration = SqlMigration {
     id: "0001",
     name: "init",
     sql: include_str!("../migrations/sqlite/0001_init.sql"),
+    transactional: true,
 };
 
 /// Says hello, and counts how many times it was said.

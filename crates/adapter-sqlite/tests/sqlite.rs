@@ -13,6 +13,7 @@ const SUBSCRIBERS_INIT: SqlMigration = SqlMigration {
         email TEXT NOT NULL,
         status TEXT NOT NULL
     );",
+    transactional: true,
 };
 
 const WAITLIST_INIT: SqlMigration = SqlMigration {
@@ -23,6 +24,7 @@ const WAITLIST_INIT: SqlMigration = SqlMigration {
         email TEXT NOT NULL,
         product TEXT NOT NULL
     );",
+    transactional: true,
 };
 
 #[pollster::test]
@@ -125,6 +127,7 @@ async fn an_edited_migration_is_refused_by_the_database() {
         id: "0001",
         name: "init",
         sql: "CREATE TABLE IF NOT EXISTS widgets (id TEXT PRIMARY KEY);",
+        transactional: true,
     }];
     db.apply_migrations("widgets", &first).expect("first apply");
     // Re-applying the same SQL is a no-op, not an error.
@@ -134,6 +137,7 @@ async fn an_edited_migration_is_refused_by_the_database() {
         id: "0001",
         name: "init",
         sql: "CREATE TABLE IF NOT EXISTS widgets (id TEXT PRIMARY KEY, colour TEXT);",
+        transactional: true,
     }];
     let err = db
         .apply_migrations("widgets", &edited)
@@ -168,11 +172,13 @@ async fn a_pre_checksum_database_still_applies_and_does_not_cry_mismatch() {
             id: "0001",
             name: "init",
             sql: "CREATE TABLE IF NOT EXISTS widgets (id TEXT PRIMARY KEY, colour TEXT);",
+            transactional: true,
         },
         SqlMigration {
             id: "0002",
             name: "add_gadgets",
             sql: "CREATE TABLE IF NOT EXISTS gadgets (id TEXT PRIMARY KEY);",
+            transactional: true,
         },
     ];
     db.apply_migrations("widgets", &migrations)
@@ -183,9 +189,74 @@ async fn a_pre_checksum_database_still_applies_and_does_not_cry_mismatch() {
         id: "0002",
         name: "add_gadgets",
         sql: "CREATE TABLE IF NOT EXISTS gadgets (id TEXT PRIMARY KEY, size INTEGER);",
+        transactional: true,
     }];
     assert!(
         db.apply_migrations("widgets", &edited).is_err(),
         "rows written from now on are verifiable"
     );
+}
+
+/// A non-transactional migration (RECONCILIATION.md §4) runs outside the
+/// per-migration transaction, so its SQL must be idempotent: re-running
+/// after a crash between the DDL and the tracking row has to be safe.
+#[pollster::test]
+async fn non_transactional_migration_applies_and_re_applies_idempotently() {
+    use cratefield_core::SqlMigration;
+
+    let db = SqliteDatabase::in_memory().expect("in-memory database");
+    let migrations = [SqlMigration {
+        id: "0001",
+        name: "guarded",
+        sql: "CREATE TABLE IF NOT EXISTS nt_guard (id TEXT PRIMARY KEY);",
+        transactional: false,
+    }];
+    db.apply_migrations("probe", &migrations)
+        .expect("first apply");
+    db.apply_migrations("probe", &migrations)
+        .expect("re-apply is a no-op, not a duplicate-table error");
+
+    let applied: String = db
+        .query(&cratefield_core::Statement::with_values(
+            "SELECT id FROM harness_migrations WHERE id = ?".to_owned(),
+            vec!["probe/0001".to_owned().into()],
+        ))
+        .await
+        .expect("tracking row readable")
+        .rows
+        .iter()
+        .filter_map(|row| row.get::<String>("id"))
+        .collect();
+    assert_eq!(applied, "probe/0001");
+}
+
+/// The runner refuses a non-transactional migration with no idempotence
+/// guard: a crash mid-apply would leave it re-run against who knows what.
+#[pollster::test]
+async fn non_transactional_migration_without_a_guard_is_refused() {
+    use cratefield_core::SqlMigration;
+
+    let db = SqliteDatabase::in_memory().expect("in-memory database");
+    let migrations = [SqlMigration {
+        id: "0001",
+        name: "unguarded",
+        sql: "CREATE TABLE nt_unguarded (id TEXT PRIMARY KEY);",
+        transactional: false,
+    }];
+    let err = db
+        .apply_migrations("probe", &migrations)
+        .expect_err("unguarded SQL is refused");
+    let message = err.to_string();
+    assert!(
+        message.contains("IF NOT EXISTS"),
+        "the refusal names the rule: {message}"
+    );
+    // And nothing was applied, not even partially.
+    let rows = db
+        .query(&cratefield_core::Statement::new(
+            "SELECT COUNT(*) AS n FROM harness_migrations".to_owned(),
+        ))
+        .await
+        .expect("tracking readable");
+    assert_eq!(rows.rows[0].get::<i64>("n"), Some(0));
 }

@@ -57,12 +57,14 @@ const MIGRATION_INIT: SqlMigration = SqlMigration {
     id: "0001",
     name: "init",
     sql: include_str!("../migrations/sqlite/0001_init.sql"),
+    transactional: true,
 };
 
 const MIGRATION_ENTRY_GENERATION: SqlMigration = SqlMigration {
     id: "0002",
     name: "entry_generation",
     sql: include_str!("../migrations/sqlite/0002_entry_generation.sql"),
+    transactional: true,
 };
 
 /// The durable send-cooldown table backing the one-mail-per-window claim
@@ -71,6 +73,7 @@ const MIGRATION_MAIL_COOLDOWN: SqlMigration = SqlMigration {
     id: "0003",
     name: "mail_cooldown",
     sql: include_str!("../migrations/sqlite/0003_mail_cooldown.sql"),
+    transactional: true,
 };
 
 /// The single-row per-product position mutex used by `confirm_entry`
@@ -79,6 +82,7 @@ const MIGRATION_POSITION_LOCK: SqlMigration = SqlMigration {
     id: "0004",
     name: "position_lock",
     sql: include_str!("../migrations/sqlite/0004_position_lock.sql"),
+    transactional: true,
 };
 
 /// A per-product waitlist.

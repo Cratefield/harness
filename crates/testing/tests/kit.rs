@@ -17,6 +17,7 @@ const DEMO_INIT: SqlMigration = SqlMigration {
         id TEXT PRIMARY KEY,
         body TEXT NOT NULL
     );",
+    transactional: true,
 };
 
 pub struct DemoModule;

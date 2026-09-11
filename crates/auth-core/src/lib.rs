@@ -92,6 +92,7 @@ const MIGRATION_INIT: SqlMigration = SqlMigration {
     id: "0001",
     name: "init",
     sql: include_str!("../migrations/sqlite/0001_init.sql"),
+    transactional: true,
 };
 
 /// The rotation migration of issue #6: the previous client secret's
@@ -100,6 +101,7 @@ const MIGRATION_ROTATION: SqlMigration = SqlMigration {
     id: "0002",
     name: "client_secret_rotation",
     sql: include_str!("../migrations/sqlite/0002_client_secret_rotation.sql"),
+    transactional: true,
 };
 
 /// The deletion-job table of issue #18: a provider's "delete this
@@ -108,6 +110,7 @@ const MIGRATION_DELETION_JOBS: SqlMigration = SqlMigration {
     id: "0005",
     name: "deletion_jobs",
     sql: include_str!("../migrations/sqlite/0005_deletion_jobs.sql"),
+    transactional: true,
 };
 
 /// The password lockout of issue #12: the per-account failure counter
@@ -117,6 +120,7 @@ const MIGRATION_PASSWORD_LOCKOUT: SqlMigration = SqlMigration {
     id: "0006",
     name: "password_lockout",
     sql: include_str!("../migrations/sqlite/0006_password_lockout.sql"),
+    transactional: true,
 };
 
 /// The passkey clone signal of issue #14: `credentials.passkey_suspect_at`.
@@ -124,6 +128,7 @@ const MIGRATION_SUSPECT: SqlMigration = SqlMigration {
     id: "0004",
     name: "passkey_suspect",
     sql: include_str!("../migrations/sqlite/0004_passkey_suspect.sql"),
+    transactional: true,
 };
 
 /// The token-issuing migration of issue #9: the sessions `amr` column
@@ -132,6 +137,7 @@ const MIGRATION_TOKENS: SqlMigration = SqlMigration {
     id: "0003",
     name: "token_issuing",
     sql: include_str!("../migrations/sqlite/0003_token_issuing.sql"),
+    transactional: true,
 };
 
 /// The Postgres form of the init migration: the same DDL with `BYTEA`
@@ -143,6 +149,7 @@ const MIGRATION_INIT_POSTGRES: SqlMigration = SqlMigration {
     id: "0001",
     name: "init",
     sql: include_str!("../migrations/postgres/0001_init.sql"),
+    transactional: true,
 };
 
 /// The Postgres form of the token-issuing migration: the rebuild
@@ -151,6 +158,7 @@ const MIGRATION_TOKENS_POSTGRES: SqlMigration = SqlMigration {
     id: "0003",
     name: "token_issuing",
     sql: include_str!("../migrations/postgres/0003_token_issuing.sql"),
+    transactional: true,
 };
 
 /// Router state: the module context and the resolved rotation overlap.

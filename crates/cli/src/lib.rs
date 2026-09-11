@@ -388,14 +388,28 @@ enum MigrationsCommand {
     },
     /// Applies the harness's migrations directly to a database — the
     /// native counterpart of `wrangler d1 migrations apply` (issue #18).
+    /// With `--plan` the URL names the **control database** and nothing
+    /// is applied (RECONCILIATION.md §8).
     Apply {
         /// Target SQL dialect: postgres.
         #[arg(long, default_value = "postgres")]
         dialect: String,
-        /// Connection string of the target database, e.g.
+        /// Connection string of the target database (the control
+        /// database when `--plan` or `--tenant` is given), e.g.
         /// `postgres://user:pass@host:5432/venture`.
         #[arg(long, value_name = "URL")]
         url: String,
+        /// Print what would be applied, per tenant and per module,
+        /// without applying anything.
+        #[arg(long)]
+        plan: bool,
+        /// Reconcile one tenant only (registry id, not a DSN).
+        #[arg(long, value_name = "TENANT")]
+        tenant: Option<String>,
+        /// Abort with a non-zero exit when any tenant is degraded,
+        /// instead of letting the others serve.
+        #[arg(long)]
+        strict: bool,
     },
 }
 
@@ -422,8 +436,15 @@ pub fn run(build: impl Fn() -> Harness, args: impl IntoIterator<Item = String>) 
             command: MigrationsCommand::Collect { dialect, out },
         } => collect::collect(&harness, &dialect, &out),
         Command::Migrations {
-            command: MigrationsCommand::Apply { dialect, url },
-        } => apply::apply(&harness, &dialect, &url),
+            command:
+                MigrationsCommand::Apply {
+                    dialect,
+                    url,
+                    plan,
+                    tenant,
+                    strict,
+                },
+        } => apply::apply(&harness, &dialect, &url, plan, tenant.as_deref(), strict),
         Command::Doctor {
             out,
             allow_no_captcha,

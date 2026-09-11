@@ -45,12 +45,14 @@ const MIGRATION_INIT: SqlMigration = SqlMigration {
     id: "0001",
     name: "init",
     sql: include_str!("../migrations/sqlite/0001_init.sql"),
+    transactional: true,
 };
 
 const MIGRATION_SUBSCRIPTION_GENERATION: SqlMigration = SqlMigration {
     id: "0002",
     name: "subscription_generation",
     sql: include_str!("../migrations/sqlite/0002_subscription_generation.sql"),
+    transactional: true,
 };
 
 /// The revocable per-subscription unsubscribe token (issue #137).
@@ -58,6 +60,7 @@ const MIGRATION_UNSUBSCRIBE_TOKEN: SqlMigration = SqlMigration {
     id: "0003",
     name: "unsubscribe_token",
     sql: include_str!("../migrations/sqlite/0003_unsubscribe_token.sql"),
+    transactional: true,
 };
 
 /// Email signup with double opt-in.

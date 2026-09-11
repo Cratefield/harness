@@ -139,6 +139,7 @@ const MIGRATION_INIT: SqlMigration = SqlMigration {
     id: "0001",
     name: "init",
     sql: include_str!("../migrations/sqlite/0001_init.sql"),
+    transactional: true,
 };
 
 /// The #182 review's schema half: the re-home record the take-over budget
@@ -148,6 +149,7 @@ const MIGRATION_REHOME_AND_DUE_INDEX: SqlMigration = SqlMigration {
     id: "0002",
     name: "rehome_and_due_index",
     sql: include_str!("../migrations/sqlite/0002_rehome_and_due_index.sql"),
+    transactional: true,
 };
 
 /// The in-app inbox (#187): the row every `notify` writes for a category
@@ -156,6 +158,7 @@ const MIGRATION_INBOX: SqlMigration = SqlMigration {
     id: "0003",
     name: "inbox",
     sql: include_str!("../migrations/sqlite/0003_inbox.sql"),
+    transactional: true,
 };
 
 /// Email as a third channel (#189): where a verified address lives, and
@@ -164,6 +167,7 @@ const MIGRATION_EMAIL_TARGETS: SqlMigration = SqlMigration {
     id: "0004",
     name: "email_targets",
     sql: include_str!("../migrations/sqlite/0004_email_targets.sql"),
+    transactional: true,
 };
 
 /// Bounce suppression (#233): the index the provider webhook's lookup by
@@ -172,6 +176,7 @@ const MIGRATION_EMAIL_BOUNCE_INDEX: SqlMigration = SqlMigration {
     id: "0005",
     name: "email_bounce_index",
     sql: include_str!("../migrations/sqlite/0005_email_bounce_index.sql"),
+    transactional: true,
 };
 
 /// Per-recipient language (#190): the device's own locale, the account's,
@@ -181,6 +186,7 @@ const MIGRATION_LOCALES: SqlMigration = SqlMigration {
     id: "0006",
     name: "locales",
     sql: include_str!("../migrations/sqlite/0006_locales.sql"),
+    transactional: true,
 };
 
 /// Every migration this module ships, in order. One array, so a test that

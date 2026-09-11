@@ -36,6 +36,7 @@ const MIGRATION: SqlMigration = SqlMigration {
               id TEXT PRIMARY KEY,
               name TEXT NOT NULL
           );",
+    transactional: true,
 };
 
 const PERSONAL: &[PersonalDataSet] = &[

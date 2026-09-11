@@ -18,6 +18,7 @@ const MIGRATION: SqlMigration = SqlMigration {
     id: "0001",
     name: "init",
     sql: include_str!("migrations/sqlite/0001_init.sql"),
+    transactional: true,
 };
 
 impl Module for SampleRowModule {

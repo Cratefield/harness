@@ -158,6 +158,24 @@ impl SqliteDatabase {
                 }
                 continue;
             }
+            if !migration.transactional {
+                // Runs alone, then the tracking row (RECONCILIATION.md §4).
+                // The SQL must be idempotent: a crash between the two steps
+                // re-runs it on the next boot.
+                if !cratefield_core::is_idempotent_sql(migration.sql) {
+                    return Err(DbError::Batch(cratefield_core::migration_missing_guard(
+                        &key,
+                    )));
+                }
+                conn.execute_batch(migration.sql)
+                    .map_err(|err| DbError::Batch(err.to_string()))?;
+                conn.execute(
+                    "INSERT INTO harness_migrations (id, applied_at, checksum) VALUES (?1, ?2, ?3)",
+                    rusqlite::params![key, iso_now(), checksum],
+                )
+                .map_err(|err| DbError::Batch(err.to_string()))?;
+                continue;
+            }
             let tx = conn
                 .unchecked_transaction()
                 .map_err(|err| DbError::Batch(err.to_string()))?;

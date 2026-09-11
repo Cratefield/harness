@@ -8,15 +8,23 @@ use venture_fixture::harness_v1;
 
 #[test]
 fn apply_rejects_unsupported_dialects() {
-    let err = apply(&harness_v1(), "sqlite", "postgres://x").expect_err("sqlite apply is refused");
+    let err = apply(&harness_v1(), "sqlite", "postgres://x", false, None, false)
+        .expect_err("sqlite apply is refused");
     assert!(err.contains("not supported for apply"), "message: {err}");
 }
 
 #[cfg(not(feature = "postgres"))]
 #[test]
 fn apply_without_the_feature_fails_with_build_instructions() {
-    let err =
-        apply(&harness_v1(), "postgres", "postgres://x").expect_err("featureless build refuses");
+    let err = apply(
+        &harness_v1(),
+        "postgres",
+        "postgres://x",
+        false,
+        None,
+        false,
+    )
+    .expect_err("featureless build refuses");
     assert!(err.contains("`postgres` feature"), "message: {err}");
     assert!(err.contains("wrangler"), "points at the D1 flow: {err}");
 }
@@ -144,6 +152,9 @@ mod on_postgres {
             &harness_v1(),
             "postgres",
             "postgres://leak:supersecret@127.0.0.1:1/none",
+            false,
+            None,
+            false,
         )
         .expect_err("port 1 refuses connections");
         assert!(

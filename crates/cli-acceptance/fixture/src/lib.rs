@@ -25,12 +25,14 @@ pub const EMAIL_SIGNUP_INIT: SqlMigration = SqlMigration {
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );",
+    transactional: true,
 };
 
 pub const EMAIL_SIGNUP_ADD_SOURCE: SqlMigration = SqlMigration {
     id: "0002",
     name: "add_source_index",
     sql: "CREATE INDEX IF NOT EXISTS subscribers_source_idx ON subscribers (source);",
+    transactional: true,
 };
 
 pub const WAITLIST_INIT: SqlMigration = SqlMigration {
@@ -50,6 +52,7 @@ pub const WAITLIST_INIT: SqlMigration = SqlMigration {
     created_at TEXT NOT NULL,
     confirmed_at TEXT
 );",
+    transactional: true,
 };
 
 pub const AUDIT_INIT: SqlMigration = SqlMigration {
@@ -61,6 +64,7 @@ pub const AUDIT_INIT: SqlMigration = SqlMigration {
     payload TEXT NOT NULL,
     created_at TEXT NOT NULL
 );",
+    transactional: true,
 };
 
 pub struct EmailSignupFixture {

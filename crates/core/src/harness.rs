@@ -161,6 +161,13 @@ impl std::fmt::Debug for Harness {
 }
 
 impl Harness {
+    /// Cheap shared handle: composition is `Arc` fields, so the only
+    /// sensible clone is the `Arc` itself. The reconciler hands one
+    /// `Arc` to every tenant task it fans out.
+    #[must_use]
+    pub fn clone_arc(self: &std::sync::Arc<Self>) -> std::sync::Arc<Self> {
+        std::sync::Arc::clone(self)
+    }
     pub fn builder() -> HarnessBuilder {
         HarnessBuilder::default()
     }

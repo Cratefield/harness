@@ -57,6 +57,7 @@ const MIGRATION_INIT: SqlMigration = SqlMigration {
     id: "0001",
     name: "init",
     sql: include_str!("../migrations/sqlite/0001_init.sql"),
+    transactional: true,
 };
 
 /// LinkedIn's newest Marketing version at the time of writing. Pinned, never

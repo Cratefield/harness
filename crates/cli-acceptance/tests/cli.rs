@@ -231,6 +231,7 @@ fn doctor_fails_on_banned_sql_tokens() {
                 id: "0001",
                 name: "bad",
                 sql: "CREATE TABLE t (id INTEGER PRIMARY KEY AUTOINCREMENT, created TEXT);",
+                transactional: true,
             }];
             Migrations {
                 sqlite: &BAD,

@@ -64,6 +64,7 @@ pub const MIGRATION: cratefield_core::SqlMigration = cratefield_core::SqlMigrati
     id: "0001",
     name: "init",
     sql: include_str!("../migrations/sqlite/0001_init.sql"),
+    transactional: true,
 };
 
 /// The secret name a venture's Google OAuth **client secret** is stored under.

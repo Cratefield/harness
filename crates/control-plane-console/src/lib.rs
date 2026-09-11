@@ -84,16 +84,19 @@ impl Module for Console {
                 id: "0001",
                 name: "access",
                 sql: cratefield_access::MIGRATION.sql,
+                transactional: true,
             },
             SqlMigration {
                 id: "0002",
                 name: "accounts",
                 sql: cratefield_accounts::MIGRATION.sql,
+                transactional: true,
             },
             SqlMigration {
                 id: "0003",
                 name: "provisioning",
                 sql: cratefield_provisioning::MIGRATION.sql,
+                transactional: true,
             },
         ];
         // The array is the apply order; this refuses a gap, a duplicate
