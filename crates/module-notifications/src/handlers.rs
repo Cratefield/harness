@@ -242,7 +242,7 @@ pub struct RegisterBody {
     /// account's answer decides.
     ///
     /// Anything that is not a language tag is **dropped**, not stored: see
-    /// [`device_locale`].
+    /// `device_locale`.
     #[serde(default)]
     pub locale: Option<String>,
 }

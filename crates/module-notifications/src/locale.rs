@@ -38,7 +38,7 @@ use crate::message::Localizable;
 ///
 /// Carries the locale, the message id and the attribute. Never the
 /// rendered text and never the arguments: those are the caller's values
-/// about a person (see [`MissingTranslation`]).
+/// about a person (see the `MissingTranslation` payload in this module).
 pub const EVENT_MISSING_TRANSLATION: &str = "notifications.missing_translation";
 
 /// The venture's own fallback when nothing else is configured.

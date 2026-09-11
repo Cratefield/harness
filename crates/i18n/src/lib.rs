@@ -30,7 +30,7 @@
 //! port that is. `SendWrapper` does not fix it — that grants `Send` alone,
 //! and panics if the value is dropped on another thread. This crate uses
 //! the **concurrent** memoizer (`Arc`/`RwLock`) instead, and a static
-//! assertion in [`fluent`] pins it so the day somebody swaps the import
+//! assertion in the `fluent` module pins it so the day somebody swaps the import
 //! back is a compile error rather than a runtime one.
 //!
 //! **Direction.** `unic-langid` parses language identifiers and carries no
