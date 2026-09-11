@@ -158,14 +158,12 @@ pub async fn fetch(req: Request, env: Env, ctx: Context) -> worker::Result<Respo
     //
     // The original request is forwarded whole: the `Upgrade` header has to
     // survive, and so does the query the venture reads the member from.
-    if let Some(room) = req.path().strip_prefix("/rooms/").map(str::to_owned)
-        && !room.is_empty()
-    {
-        let stub = env
-            .durable_object("ROOMS")?
-            .id_from_name(&room)?
-            .get_stub()?;
-        return stub.fetch_with_request(req).await;
+    // The prefix comes from the handler, not from this line: `RoomHandler`
+    // declares where it mounts, and a venture that hardcoded it a second time
+    // is a venture where the two can disagree in silence.
+    let prefix = format!("{}/", rooms::route());
+    if let Some(room) = req.path().strip_prefix(&prefix).map(str::to_owned) {
+        return rooms::route_upgrade(&room, req, &env).await;
     }
     let (harness, runtime) = instance();
     serve(harness, runtime, req, env, ctx).await

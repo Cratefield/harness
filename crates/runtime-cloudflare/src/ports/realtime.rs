@@ -42,6 +42,7 @@
 //! the two this room trusts. A driver that accepted a raw token would be
 //! guessing at that on the venture's behalf.
 
+use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -61,6 +62,18 @@ impl RoomDriver {
     #[must_use]
     pub fn new(handler: Arc<dyn RoomHandler>) -> Self {
         Self { handler }
+    }
+
+    /// The path prefix this driver's handler declares, so a venture mounts the
+    /// upgrade where the module says rather than where the venture guessed.
+    ///
+    /// `RoomHandler::route()` documents itself as "the path prefix the runtime
+    /// mounts the upgrade endpoint under", and nothing read it: a module that
+    /// overrode it compiled, documented its own prefix, and never received an
+    /// upgrade. One place now decides.
+    #[must_use]
+    pub fn route(&self) -> &'static str {
+        self.handler.route()
     }
 
     /// Accept the upgrade and join `member` to the room.
@@ -125,10 +138,32 @@ impl RoomDriver {
             return Ok(());
         };
         let ctx = DurableRoomContext::new(state);
-        self.handler
-            .on_leave(&ctx, &member)
-            .await
-            .map_err(|error| into_worker(&error))
+        let outcome = self.handler.on_leave(&ctx, &member).await;
+
+        // **An empty room must stop waking up.** The native adapter drops the
+        // room and its pending alarm when the last member goes; without this the
+        // object is woken at the scheduled time to broadcast to nobody, against
+        // the "an idle room costs nothing" claim this module is built on. The
+        // closing socket is still in `get_websockets()` here, so one remaining
+        // socket means only this one.
+        if state.get_websockets().len() <= 1 {
+            let _ = state.storage().delete_alarm().into_send().await;
+        }
+        outcome.map_err(|error| into_worker(&error))
+    }
+
+    /// A socket failed, which is a leave by another name.
+    ///
+    /// **The class must forward this or the room dies.** `#[durable_object]`
+    /// binds every handler including `webSocketError`, and the trait's default
+    /// body is `unimplemented!()` — so one member's phone dropping off mid-
+    /// session panics the object and takes every other socket in the room with
+    /// it. It is also the path where `on_leave` would otherwise never run.
+    ///
+    /// # Errors
+    /// When the module's handler returns one.
+    pub async fn error(&self, state: &State, ws: &WebSocket) -> WorkerResult<()> {
+        self.close(state, ws).await
     }
 
     /// The shared clock ticked.
@@ -137,10 +172,14 @@ impl RoomDriver {
     /// When the module's handler returns one.
     pub async fn alarm(&self, state: &State) -> WorkerResult<Response> {
         let ctx = DurableRoomContext::new(state);
-        self.handler
-            .on_alarm(&ctx)
-            .await
-            .map_err(|error| into_worker(&error))?;
+        // **Logged, not returned.** Cloudflare retries an alarm handler that
+        // fails, with backoff, up to several times — so propagating a transient
+        // error turns one `set_alarm` into a handful of ticks, which is the one
+        // invariant this port documents about alarms and the one the smoke test
+        // asserts. A tick that failed is a tick that failed.
+        if let Err(error) = self.handler.on_alarm(&ctx).await {
+            tracing::warn!(%error, "room alarm handler failed");
+        }
         Response::empty()
     }
 }
@@ -161,11 +200,27 @@ fn into_worker(error: &RealtimeError) -> worker::Error {
 /// hibernated and any list this held would name sockets that no longer exist.
 struct DurableRoomContext<'a> {
     state: &'a State,
+    /// Captured once. `State::id().name()` allocates a fresh `String` per call,
+    /// and an earlier version returned `.leak()` of it — a permanent allocation
+    /// every time a handler asked which room it was in, which for a handler that
+    /// logs the room on each frame is a Durable Object that grows until the
+    /// isolate kills it.
+    room_id: String,
 }
 
 impl<'a> DurableRoomContext<'a> {
     fn new(state: &'a State) -> Self {
-        Self { state }
+        // **A Durable Object does not always know its own name.** `name()` is
+        // populated only when the runtime chose to carry it through, and under
+        // `wrangler dev` it comes back `None` — which the first version turned
+        // into an empty string, so `room_id()` answered "" and every handler
+        // that logged or keyed on it was keying on nothing. The hex id is always
+        // there and is just as unique per room; the name is nicer when it
+        // exists. Found by the smoke test, which is the only thing that can run
+        // this code at all.
+        let id = state.id();
+        let room_id = id.name().unwrap_or_else(|| id.to_string());
+        Self { state, room_id }
     }
 }
 
@@ -175,15 +230,22 @@ impl RoomContext for DurableRoomContext<'_> {
         // The object *is* the room: a Durable Object id is the room id, and the
         // venture routed the request to this object by name. The driver is
         // inside one room and has no second one to confuse it with.
-        self.state.id().name().unwrap_or_default().leak()
+        &self.room_id
     }
 
     async fn members(&self) -> Vec<Member> {
-        self.state
+        // **By member, not by socket.** One person with a phone and a tablet is
+        // one member; the native adapter keys its room by member id, so
+        // returning a multiset here would make the same port answer differently
+        // on the two runtimes — and a handler capping a room at twenty would
+        // turn away the eleventh person.
+        let ids: BTreeSet<String> = self
+            .state
             .get_websockets()
             .iter()
-            .filter_map(|ws| member_of(self.state, ws))
-            .collect()
+            .filter_map(|ws| member_of(self.state, ws).map(|member| member.id))
+            .collect();
+        ids.into_iter().map(Member::new).collect()
     }
 
     async fn broadcast(&self, message: &[u8]) -> Result<(), RealtimeError> {
@@ -197,13 +259,17 @@ impl RoomContext for DurableRoomContext<'_> {
     }
 
     async fn send(&self, member_id: &str, message: &[u8]) -> Result<(), RealtimeError> {
-        let sockets = self.state.get_websockets_with_tag(member_id);
-        if sockets.is_empty() {
-            return Err(RealtimeError::NotAMember);
-        }
-        for ws in sockets {
-            ws.send_with_bytes(message)
-                .map_err(|error| RealtimeError::Operation(error.to_string()))?;
+        // **The same contract as native, deliberately.** `InProcessRealtime`
+        // answers `Ok(())` for a member who is not there, and a port that
+        // returned an error on one runtime and success on the other would make
+        // every handler wrong on one of them — the divergence this port has no
+        // shared suite to catch.
+        //
+        // And one socket that will not take a frame does not stop the others,
+        // for the reason `broadcast` gives: a member whose phone is in a tunnel
+        // still has a tablet that is not.
+        for ws in self.state.get_websockets_with_tag(member_id) {
+            let _ = ws.send_with_bytes(message);
         }
         Ok(())
     }

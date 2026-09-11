@@ -44,14 +44,40 @@ impl DurableObject for Rooms {
 
 The venture routes the upgrade to the object rather than to the harness router,
 because the room id is the name that picks which object — two people asking for
-`/rooms/sunrise` have to land in the same one:
+`/rooms/sunrise` have to land in the same one.
+
+**That route is in front of the harness router, so nothing the router does
+applies to it**: not CORS, not the security headers, not the rate limiter, not
+the request id. Whatever the venture needs on that path, the venture puts there.
+At a minimum:
 
 ```rust
-if let Some(room) = req.path().strip_prefix("/rooms/") {
-    let stub = env.durable_object("ROOMS")?.id_from_name(room)?.get_stub()?;
-    return stub.fetch_with_request(req).await;
+let prefix = format!("{}/", rooms::route());     // the handler says where, not you
+if let Some(room) = req.path().strip_prefix(&prefix) {
+    // 1. An upgrade, or a curl is accepted as a socket and broadcasts a join
+    //    to the real members of a room it is not in.
+    if header(&req, "upgrade") != "websocket" {
+        return Response::error("this endpoint takes a websocket upgrade", 426);
+    }
+    // 2. A bounded name. `id_from_name` takes whatever it is given, so an
+    //    unbounded id from a URL is an unbounded number of billable objects.
+    if !is_a_room_name(room) {
+        return Response::error("not a room name", 400);
+    }
+    // 3. The member, verified. This is the venture's: it holds the signer and
+    //    the auth client and knows which issuer this room trusts. The driver
+    //    never sees a token, and the handler only ever sees the id that came
+    //    out of one.
+    let Ok(namespace) = env.durable_object("ROOMS") else {
+        return Response::error("realtime is not configured", 503);  // not a 500
+    };
+    return namespace.id_from_name(room)?.get_stub()?.fetch_with_request(req).await;
 }
 ```
+
+`examples/venture/src/rooms.rs` has all three. It reads the member from a query
+parameter because it is a canary with no accounts in it, and it says so where it
+does it — **do not copy that part.**
 
 `wrangler.toml` needs the binding and a migration declaring the class:
 
@@ -87,6 +113,17 @@ a credential it has no reason to see.
 Anything that must survive the room — a chat transcript — is the module's job to
 write to the database. Room state is ephemeral coordination, and a Durable
 Object's storage is not a backup of your data.
+
+### What is not built on Cloudflare
+
+`Realtime` — `broadcast` and `members` called from an ordinary HTTP handler
+rather than from inside a socket — has **no Workers adapter**. Reaching a room
+from outside means fetching the object's stub with an internal request, and
+that needs a protocol between the Worker and the object, and something to stop
+anything else speaking it. `Cloudflare::provides()` therefore does not list
+`Port::Realtime`, so a module that puts it in `optional()` — the notifications
+module does, to push inbox updates into a room — gets `None` on Workers and
+degrades, which is what `optional()` is for. The native runtime has both halves.
 
 ## On the native runtime
 

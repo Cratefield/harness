@@ -311,6 +311,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      # Pinned, because the room smoke test uses the global `WebSocket`, which
+      # does not exist before Node 22. Without this the job inherits whatever
+      # the runner image ships and the one step that proves issue #103's
+      # acceptance dies with `ReferenceError: WebSocket is not defined`.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: "1.98.1"
