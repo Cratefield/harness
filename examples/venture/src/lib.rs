@@ -158,11 +158,14 @@ pub async fn fetch(req: Request, env: Env, ctx: Context) -> worker::Result<Respo
     //
     // The original request is forwarded whole: the `Upgrade` header has to
     // survive, and so does the query the venture reads the member from.
-    if let Some(room) = req.path().strip_prefix("/rooms/").map(str::to_owned) {
-        if !room.is_empty() {
-            let stub = env.durable_object("ROOMS")?.id_from_name(&room)?.get_stub()?;
-            return stub.fetch_with_request(req).await;
-        }
+    if let Some(room) = req.path().strip_prefix("/rooms/").map(str::to_owned)
+        && !room.is_empty()
+    {
+        let stub = env
+            .durable_object("ROOMS")?
+            .id_from_name(&room)?
+            .get_stub()?;
+        return stub.fetch_with_request(req).await;
     }
     let (harness, runtime) = instance();
     serve(harness, runtime, req, env, ctx).await

@@ -35,19 +35,15 @@ impl RoomHandler for Echo {
         ctx.set_alarm(Duration::from_secs(1)).await
     }
 
-    async fn on_message(
-        &self,
-        ctx: &dyn RoomContext,
-        member: &Member,
-        message: &[u8],
-    ) -> Result2 {
+    async fn on_message(&self, ctx: &dyn RoomContext, member: &Member, message: &[u8]) -> Result2 {
         let said = String::from_utf8_lossy(message);
         ctx.broadcast(format!("{}:{said}", member.id).as_bytes())
             .await
     }
 
     async fn on_leave(&self, ctx: &dyn RoomContext, member: &Member) -> Result2 {
-        ctx.broadcast(format!("left:{}", member.id).as_bytes()).await
+        ctx.broadcast(format!("left:{}", member.id).as_bytes())
+            .await
     }
 
     async fn on_alarm(&self, ctx: &dyn RoomContext) -> Result2 {
@@ -86,7 +82,11 @@ impl DurableObject for Rooms {
         self.driver.upgrade(&self.state, &member).await
     }
 
-    async fn websocket_message(&self, ws: WebSocket, message: WebSocketIncomingMessage) -> Result<()> {
+    async fn websocket_message(
+        &self,
+        ws: WebSocket,
+        message: WebSocketIncomingMessage,
+    ) -> Result<()> {
         self.driver.message(&self.state, &ws, message).await
     }
 

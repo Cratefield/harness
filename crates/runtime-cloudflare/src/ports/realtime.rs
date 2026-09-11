@@ -137,7 +137,10 @@ impl RoomDriver {
     /// When the module's handler returns one.
     pub async fn alarm(&self, state: &State) -> WorkerResult<Response> {
         let ctx = DurableRoomContext::new(state);
-        self.handler.on_alarm(&ctx).await.map_err(|error| into_worker(&error))?;
+        self.handler
+            .on_alarm(&ctx)
+            .await
+            .map_err(|error| into_worker(&error))?;
         Response::empty()
     }
 }
