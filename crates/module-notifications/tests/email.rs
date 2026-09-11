@@ -397,10 +397,19 @@ async fn the_cooldown_caps_one_category_per_account() {
     }
     assert_eq!(kit.harness.mailer.sent().len(), 2, "capped, not queued");
 
-    // The window rolls and the account can be mailed again.
+    // The window rolls and the account can be mailed again — and the two
+    // notifications the cap suppressed (#232) arrive as one summary on the
+    // same tick, beside the fresh mail.
     kit.clock.advance(3_601);
     notify_and_drain(&kit, ALICE).await;
-    assert_eq!(kit.harness.mailer.sent().len(), 3);
+    let sent = kit.harness.mailer.sent();
+    assert_eq!(sent.len(), 4, "two capped-out drops become one summary");
+    assert!(
+        sent.iter()
+            .any(|mail| mail.subject == "2 new booking notifications"),
+        "the summary names the burst: {:?}",
+        sent.iter().map(|mail| &mail.subject).collect::<Vec<_>>()
+    );
 }
 
 #[pollster::test]

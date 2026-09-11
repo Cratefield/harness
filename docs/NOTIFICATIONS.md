@@ -348,8 +348,13 @@ category as they arrive.
 A per-category cooldown caps how much mail one account can get in a window
 (default 5 an hour). Over the cap the mail is **dropped, not deferred**:
 deferring would deliver the backlog the moment the window rolled, which is the
-flood the cap exists to prevent. Coalescing those into one summary mail is
-issue #232.
+flood the cap exists to prevent. Each dropped notification leaves a trace, and
+once the window has rolled the scheduled drain gathers the burst into one
+summary mail — "N new … notifications" — instead of losing it (issue #232).
+The summary re-checks the same things a normal send does, so an unsubscribe
+that lands during the window kills it, and it is sent once per window: the
+burst is cleared in the same batch as the send, and the mail carries an
+idempotency key derived from the window.
 
 A bounce or complaint from the provider suppresses the address (issue #233).
 
@@ -548,7 +553,7 @@ A device token, an FCM registration token and a Web Push endpoint are all
   again at the one place the column is bound, whatever the caller passes. A
   provider `422` quoting the recipient address used to sit in plain text in a
   venture's own table while the log showed it correctly redacted (issue #235).
-- **All eight tables are declared**, in `Module::tables()` for
+- **All nine tables are declared**, in `Module::tables()` for
   `fz data export` and in `Module::personal_data()` for subject access and
   erasure (issue #244). The two lists are read by different code, which is how
   the second one stayed empty through six migrations while the first was

@@ -986,7 +986,154 @@ impl Notifier {
                 }
             }
         }
+        // Coalesced summaries (#232), on the same tick: this is the only
+        // path the scheduled entry point is guaranteed to run, so it is
+        // the only place a summary is ever sent from.
+        if let Err(error) = self.summarise_suppressed(ctx, db, now).await {
+            tracing::error!(%error, "sending the suppressed-email summaries failed");
+        }
         Ok(report)
+    }
+
+    /// One summary mail per `(account, category)` burst the cooldown
+    /// suppressed, for every burst whose window has rolled.
+    ///
+    /// A burst is due once the trailing window holds fewer than `cap`
+    /// sends — the same comparison, the other way round, that suppressed
+    /// it. Everything else is the same re-check a normal send gets
+    /// (#232): category still declared, preference still on, address
+    /// still verified and not unsubscribed. An answer that turned
+    /// `false` during the window clears the burst silently — a summary
+    /// announcing mail the account has just opted out of is the flood in
+    /// miniature.
+    ///
+    /// The rows are cleared in the same batch as the send record, which
+    /// is what bounds the summary to one send: a second tick finds no
+    /// burst. The mail also carries an idempotency key derived from the
+    /// **window** — the burst's first suppression — so a provider retry
+    /// cannot turn into a second copy either.
+    async fn summarise_suppressed(
+        &self,
+        ctx: &ModuleContext,
+        db: &dyn Database,
+        now: &str,
+    ) -> Result<(), NotifyError> {
+        let cap = self.email_max_per_window(ctx);
+        // The channel is off, not full: nothing is waiting for a window
+        // that will never roll.
+        if cap == 0 {
+            return Ok(());
+        }
+        let since = plus_secs(now, -self.email_window(ctx));
+        for burst in store::suppressed_email_bursts(db).await? {
+            if store::emails_since(db, &burst.account_id, &burst.category, &since).await?
+                >= i64::from(cap)
+            {
+                continue;
+            }
+            let clear =
+                || store::clear_email_suppression_statement(&burst.account_id, &burst.category);
+            let (Some(category), Some(target)) = (
+                self.category(&burst.category).cloned().ok(),
+                store::email_target(db, &burst.account_id)
+                    .await?
+                    .filter(store::EmailTarget::mailable),
+            ) else {
+                db.execute(&clear()).await?;
+                continue;
+            };
+            if !self.email_allowed(db, &burst.account_id, &category).await? {
+                db.execute(&clear()).await?;
+                continue;
+            }
+            let Some(mailer) = ctx.ports.mailer.clone() else {
+                // Leave the burst for the next tick rather than losing it:
+                // unlike a normal send there is no dead letter here, and a
+                // mailer wired late should still earn its summary.
+                tracing::warn!(
+                    account = %burst.account_id,
+                    category = %burst.category,
+                    "a suppressed-email summary is due but no Mailer port is wired"
+                );
+                continue;
+            };
+            let mail = self
+                .compose_summary(ctx, db, &burst, &category, &target.email)
+                .await?;
+            match mailer.send(mail).await {
+                Ok(SendOutcome::Sent { .. }) => {
+                    db.batch(&[
+                        store::record_email_statement(
+                            &self.new_id(),
+                            &burst.account_id,
+                            &burst.category,
+                            now,
+                        ),
+                        clear(),
+                    ])
+                    .await?;
+                }
+                // NotConfigured dead-letters a normal send because the
+                // notification will not fix itself; a burst will, so it
+                // waits instead. Retries are bounded by retention.
+                outcome => {
+                    tracing::warn!(
+                        account = %burst.account_id,
+                        category = %burst.category,
+                        ?outcome,
+                        "the suppressed-email summary could not be sent; it stays queued"
+                    );
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// The mail one burst is coalesced into, through the same [`Self::compose`]
+    /// a normal send uses — the unsubscribe links, the RFC 8058 headers and
+    /// the `Content-Language` fall out of that, and cannot drift from it.
+    ///
+    /// The identity inside the job is the **window** (the burst's first
+    /// suppression), not any one notification: it is what the mailer's
+    /// idempotency key is built from, so a retried tick sends the same
+    /// mail, and a later, different burst sends a different one.
+    async fn compose_summary(
+        &self,
+        ctx: &ModuleContext,
+        db: &dyn Database,
+        burst: &store::SuppressedBurst,
+        category: &Category,
+        to: &str,
+    ) -> Result<Mail, NotifyError> {
+        let locale = self.account_locale(db, &burst.account_id).await?;
+        let title = format!("{} new {} notifications", burst.count, burst.category);
+        let notification = Notification::new(
+            title,
+            format!(
+                "{} notifications arrived while your email limit for {} was full. They are in \
+                 your in-app notifications.",
+                burst.count, category.name
+            ),
+        );
+        let job = EmailJob {
+            notification_id: format!(
+                "summary-{}-{}-{}",
+                burst.account_id, burst.category, burst.first_suppressed_at
+            ),
+            account_id: burst.account_id.clone(),
+            category: burst.category.clone(),
+            notification: notification.clone(),
+            localizable: None,
+        };
+        Ok(Self::compose(
+            ctx,
+            &job,
+            category,
+            to,
+            &notification,
+            &locale,
+            None,
+        ))
     }
 
     async fn deliver_one(
@@ -1375,6 +1522,20 @@ impl Notifier {
                 category = %category.name,
                 "email suppressed: the category is at its cooldown cap for this account"
             );
+            // The trace the summary pass later coalesces from (#232). A
+            // cap of 0 is the venture switching the channel off, not a
+            // window that will roll, so that drop leaves no trace.
+            if cap > 0 && !store::email_suppression_exists(db, &job.notification_id).await? {
+                store::record_email_suppression(
+                    db,
+                    &self.new_id(),
+                    &job.account_id,
+                    &category.name,
+                    &job.notification_id,
+                    now,
+                )
+                .await?;
+            }
             return Ok(None);
         }
         Ok(Some((category, target)))
