@@ -362,6 +362,93 @@ mod verification_tests {
     use cratefield_core::{DataKind, PersonalDataSet};
     use cratefield_testing::TestHarness;
 
+    /// The join reaches `verify` too, and a miss here is silently
+    /// permissive (issue #281).
+    ///
+    /// `verify` only re-counts `Erase` sets, and the one set in the
+    /// workspace that declares a join — `auth-core.deletion_jobs` — is
+    /// `Retain`. So nothing in the real catalogue exercises this path, and
+    /// a `verify` that matched the subject directly would find zero rows
+    /// through the join it ignored and write a receipt saying the erasure
+    /// completed. That is the same failure the issue is about, in the one
+    /// builder where it would not be noticed.
+    #[pollster::test]
+    async fn verification_follows_a_declared_join() {
+        const JOINED: PersonalDataSet = PersonalDataSet {
+            table: "jobs",
+            subject: "provider_subject",
+            kind: DataKind::Identifier,
+            disposition: Disposition::Erase,
+            description: "Rows keyed on the provider's id for a person.",
+            redacted: &[],
+            subject_via: Some(cratefield_core::SubjectVia {
+                table: "identities",
+                subject: "user_id",
+                key: "provider_subject",
+            }),
+        };
+
+        for kit in TestHarness::all_dialects(Vec::new) {
+            kit.db
+                .execute(&Statement::new(
+                    "CREATE TABLE identities (user_id TEXT NOT NULL, provider_subject TEXT NOT NULL)",
+                ))
+                .await
+                .expect("create identities");
+            kit.db
+                .execute(&Statement::new(
+                    "CREATE TABLE jobs (id TEXT PRIMARY KEY, provider_subject TEXT NOT NULL)",
+                ))
+                .await
+                .expect("create jobs");
+            kit.db
+                .execute(&Statement::with_values(
+                    "INSERT INTO identities (user_id, provider_subject) VALUES (?, ?)",
+                    vec!["acct-1".into(), "sub-9".into()],
+                ))
+                .await
+                .expect("insert identity");
+            kit.db
+                .execute(&Statement::with_values(
+                    "INSERT INTO jobs (id, provider_subject) VALUES (?, ?)",
+                    vec!["j1".into(), "sub-9".into()],
+                ))
+                .await
+                .expect("insert job");
+
+            let planned = vec![Planned {
+                entry: CatalogEntry {
+                    module: "fixture",
+                    set: JOINED,
+                },
+                rows: 1,
+            }];
+
+            // The subject is the account id. Nothing in `jobs` holds it —
+            // only `identities` does — so a verify that matched directly
+            // would count zero and call this erased.
+            let remaining = verify(&kit.db, &planned, "acct-1").await.expect("verify");
+            assert_eq!(
+                remaining,
+                vec!["jobs".to_owned()],
+                "verification did not follow the join, so a surviving row read as erased"
+            );
+
+            kit.db
+                .execute(&Statement::with_values(
+                    "DELETE FROM jobs WHERE provider_subject = ?",
+                    vec!["sub-9".into()],
+                ))
+                .await
+                .expect("delete");
+            let remaining = verify(&kit.db, &planned, "acct-1").await.expect("verify");
+            assert!(
+                remaining.is_empty(),
+                "verification named a table it no longer holds rows for: {remaining:?}"
+            );
+        }
+    }
+
     const SET: PersonalDataSet = PersonalDataSet {
         table: "leftovers",
         subject: "account_id",
