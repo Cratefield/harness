@@ -31,8 +31,9 @@ mod store;
 pub use mail::{ConfirmMailData, WelcomeMailData, default_templates};
 
 use cratefield_core::{
-    AnyError, BoxFuture, Config, ConfigError, IdGen, Migrations, Module, ModuleConfig,
-    ModuleContext, Port, SqlMigration, UlidIdGen, normalize_email, validation_error,
+    AnyError, BoxFuture, Config, ConfigError, DataKind, Disposition, IdGen, Migrations, Module,
+    ModuleConfig, ModuleContext, PersonalDataSet, Port, SqlMigration, UlidIdGen, normalize_email,
+    validation_error,
 };
 use std::sync::{Arc, OnceLock};
 
@@ -185,6 +186,40 @@ impl Module for EmailSignup {
 
     fn tables(&self) -> &'static [&'static str] {
         &["subscribers"]
+    }
+
+    /// The one table, and the one column an export must not copy (issue #265).
+    ///
+    /// **Why `id` and not the address.** Every other handle on a subscriber in
+    /// this module is the opaque row id, and deliberately: the admin delete
+    /// route takes `{id}` and never the address, because a URL outlives its
+    /// request in access logs, proxies and browser history (issue #135).
+    /// `GET /v1/privacy/export?subject=…` puts the subject value in exactly
+    /// such a URL, so declaring `email_normalized` here would have made a
+    /// subject access request the one operation that writes the address into
+    /// the logs the rest of the module is built to keep it out of.
+    ///
+    /// **Why `unsubscribe_token` is redacted.** It is a bearer capability
+    /// (issue #137, ADR 0014): whoever holds the value can unsubscribe that
+    /// subscription, which is why the row rotates it with each mail rather
+    /// than relying on a signing key. An export is a `SELECT *` written to a
+    /// file people forward, so copying it in would hand that capability to
+    /// everyone the file reaches. It is named with `[redacted]` for a value
+    /// rather than dropped, because "we hold nothing there" is the one thing
+    /// a subject access request must not say untruthfully — and it is still
+    /// erased, because the row it lives in goes.
+    fn personal_data(&self) -> &'static [PersonalDataSet] {
+        const SETS: &[PersonalDataSet] = &[PersonalDataSet {
+            table: "subscribers",
+            subject: "id",
+            kind: DataKind::Contact,
+            disposition: Disposition::Erase,
+            description: "The email address you gave us and the one we matched it against, \
+                          where you signed up from, the language you asked to be written to \
+                          in, and when you signed up, confirmed and unsubscribed.",
+            redacted: &["unsubscribe_token"],
+        }];
+        SETS
     }
 
     fn emits(&self) -> &'static [&'static str] {

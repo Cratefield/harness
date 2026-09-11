@@ -38,6 +38,13 @@ getrandom = "0.4"
 getrandom = { version = "0.4", default-features = false, features = ["wasm_js"] }
 
 [dev-dependencies]
+# Dev-only, and only so `tests/privacy.rs` can prove the personal-data
+# declarations against the module that actually reads them (issue #265). A
+# declaration is a promise about another crate's behaviour — what an export
+# hands over, what an erasure deletes — so asserting the list against itself
+# would prove none of it. Path-only, so it is stripped from the packaged
+# manifest rather than resolved from crates.io.
+cratefield-module-privacy = { path = "../module-privacy" }
 cratefield-testing = { workspace = true }
 cratefield-adapter-sqlite = { workspace = true }
 async-trait = { workspace = true }

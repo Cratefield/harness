@@ -58,5 +58,9 @@
   "waitlist/0004": {
     "file": "0008_waitlist_0004_position_lock.sql",
     "sha256": "44eeab454a0a322e77a6cc81640ab25fb4fb038af9eea8458224925579c83414"
+  },
+  "waitlist/0005": {
+    "file": "0016_waitlist_0005_anonymisable_entry.sql",
+    "sha256": "2b129c62bcacc0c0db77e9af1f07d1034057d8a3ce1d4eee51ada0dfafec3c63"
   }
 }

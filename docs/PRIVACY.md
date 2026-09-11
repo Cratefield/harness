@@ -12,7 +12,9 @@ composed — with what erasure does to each table, and which columns an export
 will not copy. A page generated from the declarations cannot drift from them;
 a page written beside them always eventually does, which is what happened to
 the notifications module's own privacy section (issues #244, #248). The two
-modules below predate the declaration and are tracked by #265.
+modules below predated the declaration and now carry one (issue #265), as do
+`auth-core`, `cms` and `linkedin`; what follows is the column-level detail
+behind what that route publishes, not a second source of truth.
 
 ## Principles
 
@@ -41,6 +43,7 @@ modules below predate the declaration and are tracked by #265.
 | `status` | state | `pending` \| `confirmed` \| `unsubscribed` |
 | `source` | label | Free-form signup source (`<launch>`, `waitlist:<product>`) |
 | `locale` | label | Mail template locale hint (`en`, …) |
+| `unsubscribe_token` | bearer capability | The revocable per-subscription unsubscribe token (issue #137). Whoever holds the value can unsubscribe that subscription, so `GET /v1/privacy/export` **names the column and does not copy it** — `[redacted]` for a value, which says "held, not handed over" rather than "not held" |
 | `confirmed_at`, `unsubscribed_at`, `created_at`, `updated_at` | timestamps | State transitions; `updated_at` also drives the one-mail-per-hour throttle and the retention purge |
 
 Retention: `pending` rows whose `updated_at` is older than
@@ -54,8 +57,8 @@ within the throttle window.
 
 | Column | Kind | Purpose |
 |---|---|---|
-| `id` | ULID, generated | Row identity; the subject of signed links |
-| `email`, `email_normalized` | PII (address) | As above; unique per `(email_normalized, product)` |
+| `id` | ULID, generated | Row identity; the subject of signed links, and of export and erasure |
+| `email`, `email_normalized` | PII (address) | As above; unique per `(email_normalized, product)`. Nullable since `0005`, because erasure **anonymises** this row rather than deleting it: `position` is a dense join order that is never recomputed and `referrals` is a credit already granted, so removing the row would change numbers other people can see |
 | `product` | label | Which waitlist |
 | `status` | state | `pending` \| `confirmed` |
 | `position` | counter | Dense per-product join order at confirm time; never recomputed |
@@ -68,6 +71,20 @@ Retention: `pending` entries untouched for `retention_days_pending`
 (default 30 days; `WAITLIST_RETENTION_DAYS_PENDING`) are purged by the
 scheduled handler. Confirmed entries are kept while the waitlist runs.
 
+### `waitlist_send_cooldown` (module-waitlist)
+
+One row per `(address, product)` pair and the moment the last mail went out,
+which is what enforces one mail per address per window. **The address is
+inside the primary key** rather than in a column of its own, so
+`… WHERE <column> = ?` cannot reach it and an erasure request does not: the
+table is declared `PersonalDataSet::none` with that stated as its published
+reason. It is the shape issue #266 describes for `Outbox`, with one
+difference worth knowing — a cooldown row is renewed rather than expired, so
+unlike a queued job it is not gone within the hour.
+
+Retention: none. The row is written on the first mail and updated on every
+later one; only a failed send releases it.
+
 ## Signed links
 
 Confirm and unsubscribe links are HMAC-SHA256 tokens (ADR 0006) carrying
@@ -75,6 +92,16 @@ Confirm and unsubscribe links are HMAC-SHA256 tokens (ADR 0006) carrying
 contain no PII beyond an opaque ULID; confirm tokens expire (7-day
 default); unsubscribe tokens do not. Tokens are single-use by row state,
 not by storage: nothing about links is stored server-side.
+
+**The unsubscribe link confirms; the POST behind it acts** (issue #243).
+Microsoft Defender Safe Links, Proofpoint URL Defense and most scanning mail
+gateways fetch every link in a message before the recipient sees it, so a
+`GET` that applied the unsubscribe opted out every subscriber at any such
+company without a click. The `GET` now renders a one-button form with no
+`action`, which posts back to the URL it was fetched from — so the token
+stays out of the markup and only a submitted form changes anything. The
+`POST` still acts immediately, which is what RFC 8058 one-click requires, and
+still accepts `{"token":…}` as a JSON body for API callers.
 
 ## Subject access and erasure
 

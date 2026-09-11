@@ -152,7 +152,7 @@ async fn new_signup_sends_one_mail_with_two_valid_links() {
             Some(unsub_token),
             "the mailed link is exactly the stored revocable token"
         );
-        let gone = request(&kit.router, Method::GET, &path_of(&urls[1]), None).await;
+        let gone = request(&kit.router, Method::POST, &path_of(&urls[1]), None).await;
         assert_eq!(gone.status, StatusCode::SEE_OTHER);
         assert_eq!(
             column(&kit, "nick@example.com", "status").as_deref(),
@@ -331,8 +331,10 @@ async fn unsubscribe_from_confirmed_and_from_pending() {
             Some("confirmed")
         );
 
+        // The POST is the acting verb (issue #243); the GET before it only
+        // offers the button.
         let unsub_path = path_of(&links(&kit)[1]);
-        let gone = request(&kit.router, Method::GET, &unsub_path, None).await;
+        let gone = request(&kit.router, Method::POST, &unsub_path, None).await;
         assert_eq!(gone.status, StatusCode::SEE_OTHER);
         assert_eq!(
             gone.headers.get(header::LOCATION).unwrap(),
@@ -347,11 +349,86 @@ async fn unsubscribe_from_confirmed_and_from_pending() {
         // pending rows unsubscribe the same way.
         signup(&kit, "soon@example.com").await;
         let pending_unsub = path_of(&links(&kit)[1]);
-        let response = request(&kit.router, Method::GET, &pending_unsub, None).await;
+        let response = request(&kit.router, Method::POST, &pending_unsub, None).await;
         assert_eq!(response.status, StatusCode::SEE_OTHER);
         assert_eq!(
             column(&kit, "soon@example.com", "status").as_deref(),
             Some("unsubscribed")
+        );
+    }
+}
+
+#[pollster::test]
+async fn a_link_scanner_fetching_the_unsubscribe_link_does_not_unsubscribe() {
+    // Issue #243. Microsoft Defender Safe Links, Proofpoint URL Defense and
+    // most scanning mail gateways fetch every link in a message before the
+    // recipient sees it. While the GET applied the unsubscribe, every
+    // subscriber at any such company was opted out without a click, and
+    // neither they nor the venture got a signal: it is indistinguishable
+    // from a genuine opt-out.
+    for kit in kits() {
+        signup(&kit, "nick@example.com").await;
+        request(&kit.router, Method::GET, &path_of(&links(&kit)[0]), None).await;
+        let unsub_path = path_of(&links(&kit)[1]);
+        let token = unsub_path
+            .split("token=")
+            .nth(1)
+            .expect("the link carries a token")
+            .to_owned();
+
+        let scanned = request(&kit.router, Method::GET, &unsub_path, None).await;
+
+        assert_eq!(scanned.status, StatusCode::OK, "the scanner gets a page");
+        assert_eq!(
+            column(&kit, "nick@example.com", "status").as_deref(),
+            Some("confirmed"),
+            "a fetch unsubscribed somebody who never clicked"
+        );
+        assert!(column(&kit, "nick@example.com", "unsubscribed_at").is_none());
+
+        let body = String::from_utf8_lossy(scanned.body()).into_owned();
+        assert!(
+            body.contains("<form method=\"post\">"),
+            "the page has to offer the POST that acts: {body}"
+        );
+        // The form carries no action, so it submits back to the URL the page
+        // was fetched from — token and all. Writing the token into the markup
+        // would put it where a screenshot or a "view source" can reach it.
+        assert!(
+            !body.contains(&token),
+            "the confirmation page wrote the token into its own markup"
+        );
+        assert_eq!(
+            scanned.headers.get(header::CONTENT_TYPE).unwrap(),
+            "text/html; charset=utf-8"
+        );
+
+        // And the button works.
+        let pressed = request(&kit.router, Method::POST, &unsub_path, None).await;
+        assert_eq!(pressed.status, StatusCode::SEE_OTHER);
+        assert_eq!(
+            column(&kit, "nick@example.com", "status").as_deref(),
+            Some("unsubscribed")
+        );
+    }
+}
+
+#[pollster::test]
+async fn the_confirmation_page_refuses_a_token_it_cannot_resolve() {
+    // A dead link says so instead of offering a button that will fail. The
+    // GET resolves the token; it just does not act on it.
+    for kit in kits() {
+        let bad = request(
+            &kit.router,
+            Method::GET,
+            "/v1/email-signup/unsubscribe?token=not-a-token",
+            None,
+        )
+        .await;
+        assert_eq!(bad.status, StatusCode::BAD_REQUEST);
+        assert_eq!(
+            bad.json()["type"],
+            "https://factory0.ventures/problems/invalid-token"
         );
     }
 }
@@ -371,7 +448,7 @@ async fn resubscribe_rotates_the_opaque_token_and_retires_the_old_link() {
 
         let stale = request(
             &kit.router,
-            Method::GET,
+            Method::POST,
             &format!("/v1/email-signup/unsubscribe?token={first}"),
             None,
         )
@@ -389,7 +466,7 @@ async fn resubscribe_rotates_the_opaque_token_and_retires_the_old_link() {
 
         let current = request(
             &kit.router,
-            Method::GET,
+            Method::POST,
             &format!("/v1/email-signup/unsubscribe?token={second}"),
             None,
         )
@@ -997,7 +1074,7 @@ async fn old_generation_tokens_die_after_unsubscribe_and_resubscribe() {
             column(&kit, "nick@example.com", "status").as_deref(),
             Some("confirmed")
         );
-        request(&kit.router, Method::GET, &unsub1, None).await;
+        request(&kit.router, Method::POST, &unsub1, None).await;
         assert_eq!(
             column(&kit, "nick@example.com", "status").as_deref(),
             Some("unsubscribed")

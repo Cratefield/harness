@@ -33,7 +33,8 @@ mod handlers;
 mod store;
 
 use cratefield_core::{
-    Config, ConfigError, Migrations, Module, ModuleConfig, ModuleContext, Port, SqlMigration,
+    Config, ConfigError, Migrations, Module, ModuleConfig, ModuleContext, PersonalDataSet, Port,
+    SqlMigration,
 };
 use std::sync::Arc;
 
@@ -128,6 +129,39 @@ impl Module for Cms {
 
     fn tables(&self) -> &'static [&'static str] {
         &["cms_item", "cms_revision"]
+    }
+
+    /// Both tables hold the venture's own published content and neither has a
+    /// column that names a person (issue #265).
+    ///
+    /// Declared rather than left silent: an export that skipped these tables
+    /// and an export that had never heard of them look identical from the
+    /// outside, and only one of them is a decision. The reason below is what
+    /// `GET /v1/privacy/manifest` publishes, so it is written for the person
+    /// reading it.
+    ///
+    /// A row is filed under a collection and a slug. What an editor *types*
+    /// into `body` or `data` is the venture's to govern — this module cannot
+    /// know that an article mentions somebody — but the shape of the table
+    /// offers erasure nothing to match on, and inventing a subject column
+    /// here would be inventing a promise. That gap is the one issue #266
+    /// describes for `Outbox`, and it is the same gap for the same reason.
+    fn personal_data(&self) -> &'static [PersonalDataSet] {
+        const SETS: &[PersonalDataSet] = &[
+            PersonalDataSet::none(
+                "cms_item",
+                "The pages and posts this venture publishes, one row each: the title, the body \
+                 and the structured fields an editor is working on. It is filed under a \
+                 collection and a slug, and no column in it names a person.",
+            ),
+            PersonalDataSet::none(
+                "cms_revision",
+                "What each page and post said at every publish, kept so the venture can always \
+                 show what was public on a given day. The same content as above, and the same \
+                 again: no column in it names a person.",
+            ),
+        ];
+        SETS
     }
 
     fn migrations(&self) -> Migrations {
