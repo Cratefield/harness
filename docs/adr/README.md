@@ -37,6 +37,12 @@ a new terminal state on core's `Outbox`, and a module learns the calling
 account from `factory0-auth-client`'s `Authenticated` extractor — the first
 module to depend on it.
 
+ADR 0017 decides how events cross a sidecar boundary (#62): inbound
+only, forwarded to `POST /__events` where ports are resolved rather than
+through a `Scope` change that would bump `HARNESS_API`, carrying exactly
+the guarantees the in-process bus already gave. Bidirectional was
+rejected for the cycle it admits and the delivery question it forces.
+
 [0102](0102-crypto-crate.md) chose the crypto crate: RustCrypto's
 `chacha20poly1305`.
 

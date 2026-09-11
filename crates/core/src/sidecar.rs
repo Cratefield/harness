@@ -12,7 +12,7 @@ use std::sync::Arc;
 
 use axum::Router;
 use axum::extract::{OriginalUri, State};
-use axum::http::{HeaderName, HeaderValue, Method};
+use axum::http::{HeaderName, HeaderValue, Method, StatusCode};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use bytes::Bytes;
@@ -659,7 +659,16 @@ pub(crate) async fn events_inbound(
         tracing::warn!(event = %envelope.event, "{detail}");
         crate::logging::forward_internal_error(&detail);
     }
-    Json(serde_json::json!({ "accepted": handled > 0, "handlers": handled })).into_response()
+    // 202, not 200: the handlers have *not* run when this answers. They
+    // run in this deployment's own `wait_until`, after the response, and
+    // a status that claimed the work was done would be the one lie this
+    // route cannot afford - the host reads it to decide whether the
+    // forward was accepted, never whether it succeeded (ADR 0017).
+    (
+        StatusCode::ACCEPTED,
+        Json(serde_json::json!({ "accepted": handled > 0, "handlers": handled })),
+    )
+        .into_response()
 }
 
 /// Admin paths as the host sees them: a sidecar's own `/admin` plane

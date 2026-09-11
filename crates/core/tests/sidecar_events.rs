@@ -1,8 +1,16 @@
-//! Events crossing the sidecar boundary (issue #62, ADR 0017): the host
-//! forwards every emission to `POST /__events` on each mounted sidecar,
-//! inside the emitting request's `wait_until`; the sidecar answers `202`
-//! immediately and runs its own handlers in its own `wait_until`. At-most-
-//! once, no retry, failures logged and never surfaced to the caller.
+//! Events crossing the sidecar boundary (issue #62, ADR 0017).
+//!
+//! The host forwards every emission to `POST /__events` on each mounted
+//! sidecar, inside the emitting request's `wait_until`. The sidecar answers
+//! `202` and runs its own handlers in its *own* `wait_until`. At-most-once,
+//! no retry, no ordering, failures logged and never surfaced to the caller.
+//!
+//! Two of these tests exist because the issue's own acceptance criterion was
+//! amended as vacuous: `wait_until` never delays a response, so "the slow
+//! handler did not delay the response" holds however the code is written.
+//! What is actually worth asserting is that the response is produced while
+//! the deferred work is still *unrun* — which a `Defer` that parks its
+//! futures can see and an inline one cannot.
 
 // Test fixtures recording what crossed the boundary are not request state
 // (ADR 0007); the scoped allow follows the workspace clippy.toml policy, as
@@ -12,55 +20,64 @@
 mod common;
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use async_trait::async_trait;
-use axum::body::Body;
-use axum::http::{Method, Request, StatusCode, header};
+use axum::http::{Method, StatusCode};
 use bytes::Bytes;
-use common::*;
-use futures_channel::oneshot;
-use futures_core::future::BoxFuture as CoreBoxFuture;
+use common::{body_json, request};
 use cratefield_core::{
-    AnyError, BoxFuture, Config, ConfigError, DispatchError, Dispatcher, EventBus, GATEWAY_PURPOSE,
-    HARNESS_SIDECARS, HmacSigner, KeyRing, Kid, MapConfig, Module, ModuleContext, Payload, Ports,
-    Runtime, SIDECAR_GATEWAY_SECRET, Scope, Signer, TokenPolicy, X_HARNESS_GATEWAY, X_REQUEST_ID,
-    slash as _unused_marker_do_not_use,
+    AnyError, BoxFuture, Config, ConfigError, DispatchError, Dispatcher, EventHandler, EventName,
+    GATEWAY_PURPOSE, HARNESS_SIDECARS, Harness, HmacSigner, KeyRing, Kid, MapConfig, Migrations,
+    Module, ModuleContext, Payload, Port, Ports, Runtime, SIDECAR_GATEWAY_SECRET, Scope, Signer,
+    X_HARNESS_GATEWAY, X_REQUEST_ID,
 };
+use futures_core::future::BoxFuture as CoreBoxFuture;
 
-const SECRET: &str = "sidecar-events-test-secret-0123456789abcdef";
+const GATEWAY_SECRET: &str = "a-gateway-secret-long-enough-for-the-ring";
 
 // ------------------------------------------------------------------ fixtures
 
-/// A defer that parks futures until the test releases them, so a test can
-/// observe that a response returns *before* the deferred work runs — the
-/// difference between "answered 202" and "ran the handler".
+/// A defer that **parks** the futures handed to it instead of running them.
+/// That is the whole point: with an inline defer every assertion about
+/// "before the deferred work ran" is unfalsifiable, because there is no
+/// moment at which the work is pending.
 #[derive(Default)]
-struct CollectDefer(std::sync::Mutex<Vec<CoreBoxFuture<'static, ()>>>);
+struct ParkingDefer(std::sync::Mutex<Vec<CoreBoxFuture<'static, ()>>>);
 
-impl cratefield_core::Defer for CollectDefer {
+impl cratefield_core::Defer for ParkingDefer {
     fn wait_until(&self, fut: CoreBoxFuture<'static, ()>) {
         self.0.lock().expect("defer lock").push(fut);
     }
 }
 
-impl CollectDefer {
-    fn len(&self) -> usize {
+impl ParkingDefer {
+    fn pending(&self) -> usize {
         self.0.lock().expect("defer lock").len()
     }
 
-    fn run_all(&self) {
-        for fut in self.0.lock().expect("defer lock").drain(..) {
-            pollster::block_on(fut);
+    /// Runs everything parked so far, including anything those futures park
+    /// in turn.
+    async fn drain(&self) {
+        loop {
+            let batch: Vec<CoreBoxFuture<'static, ()>> =
+                self.0.lock().expect("defer lock").drain(..).collect();
+            if batch.is_empty() {
+                return;
+            }
+            for fut in batch {
+                fut.await;
+            }
         }
     }
 }
 
-/// Answers `200` for everything except `POST /__events`, where the test
-/// chooses the outcome; records every request it was given.
+/// Records every request dispatched over a binding and answers `/__events`
+/// however the test asks.
 struct EventDispatcher {
     events_status: StatusCode,
-    events_fails: bool,
+    unreachable: bool,
+    bindings: Vec<String>,
     seen: std::sync::Mutex<Vec<http::Request<Bytes>>>,
 }
 
@@ -68,64 +85,81 @@ impl EventDispatcher {
     fn answering(status: StatusCode) -> Self {
         Self {
             events_status: status,
-            events_fails: false,
+            unreachable: false,
+            bindings: vec!["ACME".to_owned()],
             seen: std::sync::Mutex::new(Vec::new()),
         }
     }
 
-    fn broken() -> Self {
+    fn unreachable() -> Self {
         Self {
-            events_status: StatusCode::OK,
-            events_fails: true,
-            seen: std::sync::Mutex::new(Vec::new()),
+            unreachable: true,
+            ..Self::answering(StatusCode::ACCEPTED)
         }
     }
 
-    fn events_requests(&self) -> Vec<http::Request<Bytes>> {
+    fn with_bindings(bindings: &[&str]) -> Self {
+        Self {
+            bindings: bindings.iter().map(|b| (*b).to_owned()).collect(),
+            ..Self::answering(StatusCode::ACCEPTED)
+        }
+    }
+
+    fn events_posts(&self) -> Vec<http::Request<Bytes>> {
         self.seen
             .lock()
             .expect("seen lock")
             .iter()
-            .filter(|r| r.uri().path() == "/__events")
-            .cloned()
+            .filter(|request| request.uri().path() == "/__events")
+            .map(clone_request)
             .collect()
     }
 }
 
+/// `http::Request` is not `Clone`; the parts a test reads are.
+fn clone_request(request: &http::Request<Bytes>) -> http::Request<Bytes> {
+    let mut builder = http::Request::builder()
+        .method(request.method().clone())
+        .uri(request.uri().clone());
+    for (name, value) in request.headers() {
+        builder = builder.header(name, value);
+    }
+    builder
+        .body(request.body().clone())
+        .expect("a request rebuilds from its own parts")
+}
+
 #[async_trait]
 impl Dispatcher for EventDispatcher {
-    fn has(&self, _binding: &str) -> bool {
-        true
+    fn has(&self, binding: &str) -> bool {
+        self.bindings.iter().any(|known| known == binding)
     }
 
     async fn dispatch(
         &self,
-        _binding: &str,
+        binding: &str,
         request: http::Request<Bytes>,
     ) -> Result<http::Response<Bytes>, DispatchError> {
-        let is_events = request.uri().path() == "/__events";
         self.seen.lock().expect("seen lock").push(request);
-        if is_events && self.events_fails {
+        if self.unreachable {
             return Err(DispatchError::Unavailable {
-                binding: "ACME".to_owned(),
+                binding: binding.to_owned(),
                 reason: "sidecar unreachable".to_owned(),
             });
         }
-        let status = if is_events {
-            self.events_status
-        } else {
-            StatusCode::OK
-        };
-        Ok(http::Response::builder()
-            .status(status)
-            .header(header::CONTENT_TYPE, "application/json")
+        http::Response::builder()
+            .status(self.events_status)
+            .header(http::header::CONTENT_TYPE, "application/json")
             .body(Bytes::from_static(b"{}"))
-            .expect("static response"))
+            .map_err(|err| DispatchError::Unavailable {
+                binding: binding.to_owned(),
+                reason: err.to_string(),
+            })
     }
 }
 
-/// A module that emits `waitlist.confirmed` from `POST /emit` and answers
-/// its own normal response regardless of what the bus did.
+/// Emits `waitlist.confirmed` from `POST /v1/waitlist/emit` and answers its
+/// own normal response regardless of what the bus did with it.
 struct EmitRouteModule;
 
 impl Module for EmitRouteModule {
@@ -135,11 +169,11 @@ impl Module for EmitRouteModule {
     fn version(&self) -> &'static str {
         "0.0.0"
     }
-    fn requires(&self) -> &'static [cratefield_core::Port] {
+    fn requires(&self) -> &'static [Port] {
         &[]
     }
-    fn migrations(&self) -> cratefield_core::Migrations {
-        cratefield_core::Migrations::default()
+    fn migrations(&self) -> Migrations {
+        Migrations::default()
     }
     fn validate_config(&self, _cfg: &dyn Config) -> Result<(), ConfigError> {
         Ok(())
@@ -148,12 +182,14 @@ impl Module for EmitRouteModule {
         let events = ctx.events.clone();
         axum::Router::new().route(
             "/emit",
-            axum::routing::post(move |scope: Scope, body: String| {
+            axum::routing::post(move |scope: Scope| {
                 let events = events.clone();
                 async move {
-                    let payload: serde_json::Value = serde_json::from_str(&body)
-                        .unwrap_or(serde_json::json!({}));
-                    events.emit_in(&scope, "waitlist.confirmed", payload);
+                    events.emit_in(
+                        &scope,
+                        "waitlist.confirmed",
+                        serde_json::json!({ "email": "a@example.test" }),
+                    );
                     axum::Json(serde_json::json!({ "ok": true }))
                 }
             }),
@@ -161,26 +197,39 @@ impl Module for EmitRouteModule {
     }
 }
 
-/// A module whose subscriber parks on a channel, so a test can prove the
-/// `202` beats the handler.
-struct SlowSubscriberModule {
-    gate: oneshot::Sender<()>,
-    ran: Arc<AtomicBool>,
-    payload: Arc<std::sync::Mutex<Option<serde_json::Value>>>,
+/// Subscribes to `waitlist.confirmed` and records what it was handed.
+struct SubscriberModule {
+    runs: Arc<AtomicUsize>,
+    seen: Arc<std::sync::Mutex<Vec<serde_json::Value>>>,
 }
 
-impl Module for SlowSubscriberModule {
+impl SubscriberModule {
+    fn new() -> (Self, Arc<AtomicUsize>, Arc<std::sync::Mutex<Vec<serde_json::Value>>>) {
+        let runs = Arc::new(AtomicUsize::new(0));
+        let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+        (
+            Self {
+                runs: Arc::clone(&runs),
+                seen: Arc::clone(&seen),
+            },
+            runs,
+            seen,
+        )
+    }
+}
+
+impl Module for SubscriberModule {
     fn name(&self) -> &'static str {
         "email-signup"
     }
     fn version(&self) -> &'static str {
         "0.0.0"
     }
-    fn requires(&self) -> &'static [cratefield_core::Port] {
+    fn requires(&self) -> &'static [Port] {
         &[]
     }
-    fn migrations(&self) -> cratefield_core::Migrations {
-        cratefield_core::Migrations::default()
+    fn migrations(&self) -> Migrations {
+        Migrations::default()
     }
     fn validate_config(&self, _cfg: &dyn Config) -> Result<(), ConfigError> {
         Ok(())
@@ -188,32 +237,22 @@ impl Module for SlowSubscriberModule {
     fn router(&self, _ctx: ModuleContext) -> axum::Router {
         axum::Router::new()
     }
-    fn events(
-        &self,
-    ) -> Vec<(cratefield_core::EventName, cratefield_core::EventHandler)> {
-        let gate = self.gate.clone();
-        let ran = Arc::clone(&self.ran);
-        let payload = Arc::clone(&self.payload);
+    fn events(&self) -> Vec<(EventName, EventHandler)> {
+        let runs = Arc::clone(&self.runs);
+        let seen = Arc::clone(&self.seen);
         vec![(
             "waitlist.confirmed".to_owned(),
             Arc::new(
-                move |_scope: &Scope,
-                      value: serde_json::Value|
-                      -> BoxFuture<'static, Result<(), AnyError>> {
-                    let mut gate = Some(gate.clone());
-                    let ran = Arc::clone(&ran);
-                    let payload = Arc::clone(&payload);
+                move |_scope: &Scope, value: serde_json::Value| -> BoxFuture<
+                    'static,
+                    Result<(), AnyError>,
+                > {
+                    let runs = Arc::clone(&runs);
+                    let seen = Arc::clone(&seen);
                     Box::pin(async move {
-                        // The parked half lives in the test; awaiting it
-                        // here is what a slow handler does.
-                        if let Some(gate) = gate.take() {
-                            let _ = gate.send(());
-                        }
+                        seen.lock().expect("seen lock").push(value);
+                        runs.fetch_add(1, Ordering::SeqCst);
                         Ok(())
-                        .map(|_: ()| {
-                            payload.lock().expect("payload lock").replace(value);
-                            ran.store(true, Ordering::SeqCst);
-                        })
                     })
                 },
             ),
@@ -224,13 +263,13 @@ impl Module for SlowSubscriberModule {
 struct AllPorts;
 
 impl Runtime for AllPorts {
-    fn provides(&self) -> Vec<cratefield_core::Port> {
-        cratefield_core::Port::ALL.to_vec()
+    fn provides(&self) -> Vec<Port> {
+        Port::ALL.to_vec()
     }
 }
 
-fn harness(modules: Vec<Arc<dyn Module>>, config: &[(&str, &str)]) -> (cratefield_core::Harness, Ports) {
-    let mut builder = cratefield_core::Harness::builder()
+fn harness_of(modules: Vec<Arc<dyn Module>>) -> Harness {
+    let mut builder = Harness::builder()
         .venture(
             cratefield_core::Venture::new("test-venture", "test.example")
                 .cors_origins(["https://test.example"]),
@@ -239,96 +278,345 @@ fn harness(modules: Vec<Arc<dyn Module>>, config: &[(&str, &str)]) -> (cratefiel
     for module in modules {
         builder = builder.module_arc(module);
     }
-    (builder.build().expect("harness builds"), ports_with(config))
+    builder.build().expect("harness builds")
 }
 
-fn ports_with(config: &[(&str, &str)]) -> Ports {
-    Ports::with_config(Arc::new(MapConfig::from_pairs(
-        config.iter().map(|(k, v)| (*k, *v)),
-    )))
+fn ports_for(
+    table: Option<&str>,
+    dispatcher: Option<Arc<dyn Dispatcher>>,
+    defer: Option<Arc<ParkingDefer>>,
+) -> Ports {
+    let mut pairs: Vec<(String, String)> = vec![(
+        SIDECAR_GATEWAY_SECRET.to_owned(),
+        GATEWAY_SECRET.to_owned(),
+    )];
+    if let Some(table) = table {
+        pairs.push((HARNESS_SIDECARS.to_owned(), table.to_owned()));
+    }
+    let mut ports = Ports::with_config(Arc::new(MapConfig::from_pairs(pairs)));
+    ports.dispatcher = dispatcher;
+    ports.defer = defer.map(|d| d as Arc<dyn cratefield_core::Defer>);
+    ports
 }
 
-/// The same construction `gateway_signer` uses, for minting the stamp a
-/// test presents to `/__events` or asserts on a forwarded request.
-fn test_signer() -> Arc<HmacSigner> {
+/// The stamp `mint_gateway` produces for an ordinary (non-admin) forward.
+fn gateway_stamp(mount: &str) -> String {
     let mut ring = KeyRing::new();
-    ring.rotate_signing(Kid::Cur, SECRET.as_bytes().to_vec())
+    ring.rotate_signing(Kid::Cur, GATEWAY_SECRET.as_bytes().to_vec())
         .expect("test secret is long enough");
-    Arc::new(HmacSigner::from_ring(ring).with_policy(TokenPolicy::default()))
-}
-
-fn gateway_stamp() -> String {
-    test_signer().sign(&Payload {
+    HmacSigner::from_ring(ring).sign(&Payload {
         purpose: GATEWAY_PURPOSE.to_owned(),
-        subject: "email-signup".to_owned(),
+        subject: mount.to_owned(),
         exp: None,
         kid: Kid::Cur,
     })
 }
 
-async fn post_json(router: &axum::Router, uri: &str, headers: &[(&str, &str)], body: &str) -> axum::response::Response {
-    let mut builder = Request::builder().method(Method::POST).uri(uri);
-    for (name, value) in headers {
-        builder = builder.header(*name, *value);
-    }
-    let request = builder
-        .header(header::CONTENT_TYPE, "application/json")
-        .body(Body::from(body.to_owned()))
-        .expect("request builds");
-    use tower::ServiceExt;
-    router
-        .clone()
-        .oneshot(request)
-        .await
-        .expect("router answers")
+fn envelope(body: &http::Request<Bytes>) -> serde_json::Value {
+    serde_json::from_slice(body.body()).expect("the forward carries JSON")
 }
 
-// -------------------------------------------------- the capturing subscriber
+// ------------------------------------------------------- the host's forward
 
-struct CapturingSubscriber {
-    lines: std::sync::Mutex<Vec<String>>,
+#[pollster::test]
+async fn an_emission_is_forwarded_to_every_mounted_sidecar() {
+    let dispatcher = Arc::new(EventDispatcher::with_bindings(&["ACME", "BETA"]));
+    let defer = Arc::new(ParkingDefer::default());
+    let router = harness_of(vec![Arc::new(EmitRouteModule)]).router(ports_for(
+        Some(r#"{"acme-pricing":"ACME","beta-billing":"BETA"}"#),
+        Some(dispatcher.clone()),
+        Some(Arc::clone(&defer)),
+    ));
+
+    let response = request(
+        &router,
+        Method::POST,
+        "/v1/waitlist/emit",
+        &[(X_REQUEST_ID, "req-abcdefgh")],
+        Some(b"{}".to_vec()),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    defer.drain().await;
+
+    let posts = dispatcher.events_posts();
+    assert_eq!(posts.len(), 2, "one forward per mount, at most once each");
+    for post in &posts {
+        assert_eq!(post.method(), Method::POST);
+        let body = envelope(post);
+        assert_eq!(body["event"], "waitlist.confirmed");
+        assert_eq!(body["payload"]["email"], "a@example.test");
+        assert_eq!(
+            post.headers().get(X_REQUEST_ID).expect("stamped"),
+            "req-abcdefgh",
+            "one trail across both Workers"
+        );
+        assert!(
+            post.headers().contains_key(X_HARNESS_GATEWAY),
+            "the forward carries the host's stamp, as any forwarded request does"
+        );
+    }
 }
 
-impl tracing::Subscriber for CapturingSubscriber {
-    fn enabled(&self, _metadata: &tracing::Metadata<'_>) -> bool {
-        true
-    }
-    fn new_span(&self, _attributes: &tracing::span::Attributes<'_>) -> tracing::Id {
-        tracing::Id::from_u64(1)
-    }
-    fn record(&self, _id: &tracing::Id, _values: &tracing::span::Record<'_>) {}
-    fn record_follows_from(&self, _from: &tracing::Id, _to: &tracing::Id) {}
-    fn event(&self, event: &tracing::Event<'_>) {
-        struct Line(std::sync::Mutex<Vec<String>>);
-        impl tracing::field::Visit for Line {
-            fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
-                self.0
-                    .lock()
-                    .expect("line lock")
-                    .push(format!("{field}={value:?}"));
-            }
-        }
-        let visitor = Line(std::sync::Mutex::new(Vec::new()));
-        event.record(&mut visitor);
-        self.lines
-            .lock()
-            .expect("log lock")
-            .push(visitor.0.into_inner().expect("line lock").join(" "));
-    }
-    fn enter(&self, _id: &tracing::Id) {}
-    fn exit(&self, _id: &tracing::Id) {}
+#[pollster::test]
+async fn a_mount_the_dispatcher_cannot_reach_is_skipped_not_dialled() {
+    // Only ACME is bound; the table also names a mount the deployment has
+    // no binding for. Forwarding to it would be a dial into nothing.
+    let dispatcher = Arc::new(EventDispatcher::with_bindings(&["ACME"]));
+    let defer = Arc::new(ParkingDefer::default());
+    let router = harness_of(vec![Arc::new(EmitRouteModule)]).router(ports_for(
+        Some(r#"{"acme-pricing":"ACME","ghost":"MISSING"}"#),
+        Some(dispatcher.clone()),
+        Some(Arc::clone(&defer)),
+    ));
+
+    let response = request(&router, Method::POST, "/v1/waitlist/emit", &[], None).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    defer.drain().await;
+
+    assert_eq!(dispatcher.events_posts().len(), 1, "only the bound mount");
 }
 
-/// Runs `f` under the capturing subscriber and returns the collected lines.
-fn capture_logs<T>(f: impl FnOnce() -> T) -> Vec<String> {
-    let subscriber = Arc::new(CapturingSubscriber {
-        lines: std::sync::Mutex::new(Vec::new()),
-    });
-    let _guard = tracing::subscriber::with_default(
-        tracing::subscriber::Interest::new;
-        |_| (),
+#[pollster::test]
+async fn the_response_is_produced_before_the_forward_runs() {
+    // The amended criterion, made falsifiable: at the moment the caller has
+    // its response, the forward is still parked and the sidecar has not been
+    // dialled. An inline defer could not tell these apart.
+    let dispatcher = Arc::new(EventDispatcher::answering(StatusCode::ACCEPTED));
+    let defer = Arc::new(ParkingDefer::default());
+    let router = harness_of(vec![Arc::new(EmitRouteModule)]).router(ports_for(
+        Some(r#"{"acme-pricing":"ACME"}"#),
+        Some(dispatcher.clone()),
+        Some(Arc::clone(&defer)),
+    ));
+
+    let response = request(&router, Method::POST, "/v1/waitlist/emit", &[], None).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(body_json(response).await["ok"], true);
+    assert_eq!(
+        dispatcher.events_posts().len(),
+        0,
+        "the caller was answered without waiting on the sidecar"
     );
-    unreachable!()
+    assert!(defer.pending() > 0, "and the forward is pending, not skipped");
+
+    defer.drain().await;
+    assert_eq!(dispatcher.events_posts().len(), 1);
 }
 
-// ------------------------------------------------------------------- tests
+#[pollster::test]
+async fn a_sidecar_that_answers_500_does_not_fail_the_originating_request() {
+    let dispatcher = Arc::new(EventDispatcher::answering(
+        StatusCode::INTERNAL_SERVER_ERROR,
+    ));
+    let defer = Arc::new(ParkingDefer::default());
+    let router = harness_of(vec![Arc::new(EmitRouteModule)]).router(ports_for(
+        Some(r#"{"acme-pricing":"ACME"}"#),
+        Some(dispatcher.clone()),
+        Some(Arc::clone(&defer)),
+    ));
+
+    let response = request(&router, Method::POST, "/v1/waitlist/emit", &[], None).await;
+    assert_eq!(
+        response.status(),
+        StatusCode::OK,
+        "the emitting request keeps its own answer"
+    );
+    assert_eq!(body_json(response).await["ok"], true);
+
+    // And the failure surfaces where failures go, not into the response.
+    defer.drain().await;
+    assert_eq!(dispatcher.events_posts().len(), 1, "tried once, never retried");
+}
+
+#[pollster::test]
+async fn a_sidecar_that_cannot_be_reached_does_not_fail_the_originating_request() {
+    let dispatcher = Arc::new(EventDispatcher::unreachable());
+    let defer = Arc::new(ParkingDefer::default());
+    let router = harness_of(vec![Arc::new(EmitRouteModule)]).router(ports_for(
+        Some(r#"{"acme-pricing":"ACME"}"#),
+        Some(dispatcher.clone()),
+        Some(Arc::clone(&defer)),
+    ));
+
+    let response = request(&router, Method::POST, "/v1/waitlist/emit", &[], None).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    defer.drain().await;
+    assert_eq!(dispatcher.events_posts().len(), 1, "tried once, never retried");
+}
+
+// ------------------------------------------------------ the sidecar's half
+
+#[pollster::test]
+async fn an_inbound_event_is_accepted_with_202_before_its_handlers_run() {
+    let (module, runs, seen) = SubscriberModule::new();
+    let defer = Arc::new(ParkingDefer::default());
+    // No mount table: this harness *is* the sidecar.
+    let router =
+        harness_of(vec![Arc::new(module)]).router(ports_for(None, None, Some(Arc::clone(&defer))));
+
+    let response = request(
+        &router,
+        Method::POST,
+        "/__events",
+        &[(X_HARNESS_GATEWAY, &gateway_stamp("email-signup"))],
+        Some(
+            br#"{"event":"waitlist.confirmed","payload":{"email":"a@example.test"}}"#.to_vec(),
+        ),
+    )
+    .await;
+
+    assert_eq!(
+        response.status(),
+        StatusCode::ACCEPTED,
+        "202: accepted for processing, not processed"
+    );
+    let body = body_json(response).await;
+    assert_eq!(body["accepted"], true);
+    assert_eq!(body["handlers"], 1);
+    assert_eq!(
+        runs.load(Ordering::SeqCst),
+        0,
+        "the handler runs in the sidecar's own wait_until, after the answer"
+    );
+
+    defer.drain().await;
+    assert_eq!(runs.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        seen.lock().expect("seen lock")[0]["email"],
+        "a@example.test",
+        "and it receives the payload the host emitted, verbatim"
+    );
+}
+
+#[pollster::test]
+async fn an_inbound_event_with_no_subscriber_says_so_rather_than_accepting_silently() {
+    // The silent delivery this issue exists to prevent: an event arrives
+    // over the boundary, nothing is listening, and nobody is told.
+    let defer = Arc::new(ParkingDefer::default());
+    let router = harness_of(vec![Arc::new(EmitRouteModule)])
+        .router(ports_for(None, None, Some(Arc::clone(&defer))));
+
+    let response = request(
+        &router,
+        Method::POST,
+        "/__events",
+        &[(X_HARNESS_GATEWAY, &gateway_stamp("waitlist"))],
+        Some(br#"{"event":"nobody.listens","payload":{}}"#.to_vec()),
+    )
+    .await;
+
+    assert_eq!(response.status(), StatusCode::ACCEPTED);
+    let body = body_json(response).await;
+    assert_eq!(body["accepted"], false, "the host is told nothing heard it");
+    assert_eq!(body["handlers"], 0);
+}
+
+#[pollster::test]
+async fn an_inbound_event_is_not_forwarded_on() {
+    // A deployment can be both: a host with its own mounts and, to someone
+    // above it, a sidecar. If the inbound route delivered through the
+    // *forwarding* bus, an event would be re-posted to its own mounts, and
+    // two deployments that mount each other would loop with nothing in the
+    // bus able to detect it. The route delivers locally only.
+    let (module, runs, _) = SubscriberModule::new();
+    let dispatcher = Arc::new(EventDispatcher::answering(StatusCode::ACCEPTED));
+    let defer = Arc::new(ParkingDefer::default());
+    let router = harness_of(vec![Arc::new(module)]).router(ports_for(
+        Some(r#"{"acme-pricing":"ACME"}"#),
+        Some(dispatcher.clone()),
+        Some(Arc::clone(&defer)),
+    ));
+
+    let response = request(
+        &router,
+        Method::POST,
+        "/__events",
+        &[(X_HARNESS_GATEWAY, &gateway_stamp("email-signup"))],
+        Some(br#"{"event":"waitlist.confirmed","payload":{}}"#.to_vec()),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::ACCEPTED);
+
+    defer.drain().await;
+    assert_eq!(runs.load(Ordering::SeqCst), 1, "the local handler ran");
+    assert_eq!(
+        dispatcher.events_posts().len(),
+        0,
+        "and nothing was posted onward to this deployment's own mounts"
+    );
+}
+
+#[pollster::test]
+async fn an_unstamped_post_to_events_is_refused() {
+    let (module, runs, _) = SubscriberModule::new();
+    let defer = Arc::new(ParkingDefer::default());
+    let router =
+        harness_of(vec![Arc::new(module)]).router(ports_for(None, None, Some(Arc::clone(&defer))));
+
+    let body = br#"{"event":"waitlist.confirmed","payload":{}}"#.to_vec();
+
+    let response = request(&router, Method::POST, "/__events", &[], Some(body.clone())).await;
+    assert_eq!(
+        response.status(),
+        StatusCode::UNAUTHORIZED,
+        "an unauthenticated trigger could forge the payloads handlers act on"
+    );
+
+    let response = request(
+        &router,
+        Method::POST,
+        "/__events",
+        &[(X_HARNESS_GATEWAY, "not-a-token")],
+        Some(body),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+
+    defer.drain().await;
+    assert_eq!(
+        runs.load(Ordering::SeqCst),
+        0,
+        "and neither refusal ran a handler"
+    );
+}
+
+#[pollster::test]
+async fn a_malformed_envelope_is_a_validation_problem_not_a_panic() {
+    let defer = Arc::new(ParkingDefer::default());
+    let router = harness_of(vec![Arc::new(EmitRouteModule)])
+        .router(ports_for(None, None, Some(Arc::clone(&defer))));
+
+    let response = request(
+        &router,
+        Method::POST,
+        "/__events",
+        &[(X_HARNESS_GATEWAY, &gateway_stamp("waitlist"))],
+        Some(br#"{"not":"an envelope"}"#.to_vec()),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+#[pollster::test]
+async fn a_deployment_with_no_gateway_secret_does_not_mount_the_route_at_all() {
+    // Without the shared secret there is no way to tell the host's forward
+    // from anyone else's POST, so the route is absent rather than open.
+    let (module, runs, _) = SubscriberModule::new();
+    let defer = Arc::new(ParkingDefer::default());
+    let mut ports = Ports::with_config(Arc::new(MapConfig::from_pairs(Vec::<(String, String)>::new())));
+    ports.defer = Some(Arc::clone(&defer) as Arc<dyn cratefield_core::Defer>);
+    let router = harness_of(vec![Arc::new(module)]).router(ports);
+
+    let response = request(
+        &router,
+        Method::POST,
+        "/__events",
+        &[],
+        Some(br#"{"event":"waitlist.confirmed","payload":{}}"#.to_vec()),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    defer.drain().await;
+    assert_eq!(runs.load(Ordering::SeqCst), 0);
+}
