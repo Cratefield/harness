@@ -595,12 +595,15 @@ fn a_removal_says_what_it_actually_does_to_the_data() {
 fn write_locked_ghost(migrations: &std::path::Path) {
     fs::create_dir_all(migrations).expect("migrations dir");
     fs::write(migrations.join("0001_ghost_0001_init.sql"), "-- ghost\n").expect("migration");
+    // The hash of the body above. Not computed here — the lock module is
+    // private and this crate has no sha2 — but a stale one cannot go
+    // unnoticed: the sibling tests deploy successfully with this
+    // fixture, so a mismatch fails loudly as `locked-migration-edited`
+    // rather than quietly changing what they test.
     fs::write(
         migrations.join(".harness-lock.json"),
-        format!(
-            "{{\n  \"ghost/0001\": {{\"file\": \"0001_ghost_0001_init.sql\", \
-             \"sha256\": \"5aed107e176cb0b90a7f11a30f68480312f656db2aec1b0ed7768cf676f1704f\"}}\n}}\n"
-        ),
+            "{\n  \"ghost/0001\": {\"file\": \"0001_ghost_0001_init.sql\", \
+             \"sha256\": \"5aed107e176cb0b90a7f11a30f68480312f656db2aec1b0ed7768cf676f1704f\"}\n}\n"
     )
     .expect("write lockfile");
 }
