@@ -39,8 +39,11 @@ impl Module for Base {
         &[]
     }
     fn migrations(&self) -> Migrations {
-        const MIGRATIONS: [SqlMigration; 1] =
-            [SqlMigration::new("0001", "init", "CREATE TABLE recon_base (id TEXT PRIMARY KEY);")];
+        const MIGRATIONS: [SqlMigration; 1] = [SqlMigration::new(
+            "0001",
+            "init",
+            "CREATE TABLE recon_base (id TEXT PRIMARY KEY);",
+        )];
         Migrations {
             sqlite: &MIGRATIONS,
             postgres: &[],
