@@ -937,6 +937,7 @@ impl Module for Notifications {
                               address the notification is delivered to, the language that device \
                               is set to, and when it last checked in.",
                 redacted: &["recipient_json"],
+                subject_via: None,
             },
             PersonalDataSet {
                 table: store::PREFERENCES,
@@ -946,6 +947,7 @@ impl Module for Notifications {
                 description: "Which kinds of notification you have switched on or off, for each \
                               of the three ways we can reach you.",
                 redacted: &[],
+                subject_via: None,
             },
             PersonalDataSet {
                 table: store::LOCALES,
@@ -954,6 +956,7 @@ impl Module for Notifications {
                 disposition: Disposition::Erase,
                 description: "The language you asked to be written to in.",
                 redacted: &[],
+                subject_via: None,
             },
             PersonalDataSet {
                 table: store::INBOX,
@@ -963,6 +966,7 @@ impl Module for Notifications {
                 description: "The notifications you can read back in the app: what each one said, \
                               when it arrived, and when you opened or archived it.",
                 redacted: &[],
+                subject_via: None,
             },
             PersonalDataSet {
                 table: store::EMAIL_TARGETS,
@@ -972,6 +976,7 @@ impl Module for Notifications {
                 description: "The email address notifications are sent to, whether it has been \
                               confirmed, and whether you have unsubscribed from them.",
                 redacted: &[],
+                subject_via: None,
             },
             PersonalDataSet {
                 table: store::EMAIL_SENDS,
@@ -981,6 +986,7 @@ impl Module for Notifications {
                 description: "When we last emailed you about each kind of notification, which is \
                               what stops us emailing you about it again too soon.",
                 redacted: &[],
+                subject_via: None,
             },
             PersonalDataSet {
                 table: store::DEAD_LETTERS,
@@ -990,6 +996,7 @@ impl Module for Notifications {
                 description: "A notification we gave up trying to deliver, kept with what it said \
                               so somebody can find out why it failed.",
                 redacted: &[],
+                subject_via: None,
             },
             PersonalDataSet {
                 table: store::EMAIL_SUPPRESSED,

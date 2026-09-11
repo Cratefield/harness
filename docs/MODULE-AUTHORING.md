@@ -225,6 +225,7 @@ impl Module for Hello {
             disposition: Disposition::Erase,
             description: "The name you said hello with, and nothing else.",
             redacted: &[],
+            subject_via: None,
         }];
         SETS
     }
@@ -310,7 +311,14 @@ Decisions, one per method:
   be declared for erasure without the export handing it out; the column is
   still listed, with `[redacted]` for a value. The sentence in
   `description` is published verbatim by `GET /v1/privacy/manifest`, so
-  write it for the person reading that page.
+  write it for the person reading that page. One more, for the rare table
+  whose subject column is not what requests are made with:
+  `subject_via: Some(SubjectVia { .. })` names one hop through a table
+  that does hold the account id — export, preview, delete and verify then
+  match `subject IN (SELECT key FROM via.table WHERE via.subject = ?)`
+  instead of matching the subject value directly (`auth-core`'s
+  `deletion_jobs`, issue #281). A table this does not fit is a table to
+  declare `none` and explain, not one to force.
 - **`emits()`** — event names this module puts on the bus,
   `"<module>.<event>"`. Listed by `/__health` so operators can see what
   fires.

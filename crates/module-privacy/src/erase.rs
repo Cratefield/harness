@@ -24,6 +24,7 @@
 //! fails the request: an erasure that reports success it did not achieve is
 //! the one failure mode nobody would catch until it mattered.
 
+use crate::handlers::subject_predicate;
 use cratefield_core::{
     CatalogEntry, Database, Disposition, Kid, Payload, Problem, Signer, Statement,
     is_plain_identifier,
@@ -67,10 +68,12 @@ pub(crate) async fn plan(
                 entry.set.table
             ));
         }
+        let predicate = subject_predicate(&entry.set)
+            .ok_or_else(|| format!("declaration for `{}` is not queryable", entry.set.table))?;
         let statement = Statement::with_values(
             format!(
-                "SELECT COUNT(*) AS n FROM {} WHERE {} = ?",
-                entry.set.table, entry.set.subject
+                "SELECT COUNT(*) AS n FROM {} WHERE {predicate}",
+                entry.set.table
             ),
             vec![subject.into()],
         );
@@ -97,9 +100,18 @@ pub(crate) fn statements(planned: &[Planned], subject: &str) -> Vec<Statement> {
     let mut out = Vec::new();
     for step in planned.iter().rev() {
         let set = step.entry.set;
+        // The same predicate plan counted with: a declaration reached through
+        // a join is deleted through it too, so the receipt never promises a
+        // row the statements cannot find (issue #281).
+        let Some(predicate) = subject_predicate(&set) else {
+            // Unreachable through `HarnessBuilder::build`, which validates the
+            // names. Kept explicit so a skipped declaration is a smaller
+            // statement list, never a wrong one.
+            continue;
+        };
         match set.disposition {
             Disposition::Erase => out.push(Statement::with_values(
-                format!("DELETE FROM {} WHERE {} = ?", set.table, set.subject),
+                format!("DELETE FROM {} WHERE {predicate}", set.table),
                 vec![subject.into()],
             )),
             Disposition::Anonymise(columns) => {
@@ -110,10 +122,7 @@ pub(crate) fn statements(planned: &[Planned], subject: &str) -> Vec<Statement> {
                     .collect::<Vec<_>>()
                     .join(", ");
                 out.push(Statement::with_values(
-                    format!(
-                        "UPDATE {} SET {assignments} WHERE {} = ?",
-                        set.table, set.subject
-                    ),
+                    format!("UPDATE {} SET {assignments} WHERE {predicate}", set.table),
                     vec![subject.into()],
                 ));
             }
@@ -143,11 +152,10 @@ pub(crate) async fn verify(
             continue;
         }
         let set = step.entry.set;
+        let predicate = subject_predicate(&set)
+            .ok_or_else(|| format!("declaration for `{}` is not queryable", set.table))?;
         let statement = Statement::with_values(
-            format!(
-                "SELECT COUNT(*) AS n FROM {} WHERE {} = ?",
-                set.table, set.subject
-            ),
+            format!("SELECT COUNT(*) AS n FROM {} WHERE {predicate}", set.table),
             vec![subject.into()],
         );
         let rows = db
@@ -225,7 +233,7 @@ pub(crate) fn not_verified(tables: &[String]) -> Problem {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cratefield_core::{DataKind, PersonalDataSet};
+    use cratefield_core::{DataKind, PersonalDataSet, SubjectVia};
 
     fn planned(sets: &'static [PersonalDataSet]) -> Vec<Planned> {
         sets.iter()
@@ -246,6 +254,7 @@ mod tests {
         disposition: Disposition::Erase,
         description: "The account.",
         redacted: &[],
+        subject_via: None,
     };
     const CHILD: PersonalDataSet = PersonalDataSet {
         table: "practice_sessions",
@@ -254,6 +263,7 @@ mod tests {
         disposition: Disposition::Erase,
         description: "Practices.",
         redacted: &[],
+        subject_via: None,
     };
 
     /// The catalog is composed in dependency order, so a parent appears before
@@ -290,6 +300,7 @@ mod tests {
             disposition: Disposition::Retain("Tax law requires seven years."),
             description: "Invoices.",
             redacted: &[],
+            subject_via: None,
         }];
         assert!(statements(&planned(SETS), "acct-1").is_empty());
     }
@@ -303,6 +314,7 @@ mod tests {
             disposition: Disposition::Anonymise(&["name", "email"]),
             description: "Commission entries.",
             redacted: &[],
+            subject_via: None,
         }];
         let statements = statements(&planned(SETS), "acct-1");
         assert_eq!(statements.len(), 1);
@@ -312,6 +324,35 @@ mod tests {
         assert!(sql.contains("email = NULL"), "{sql}");
         // The row survives: an aggregate that loses rows loses its totals.
         assert!(!sql.contains("DELETE"), "{sql}");
+    }
+
+    #[test]
+    fn a_set_reached_through_a_join_is_deleted_through_it_too() {
+        // The same predicate plan counted with, or the receipt promises a
+        // row the DELETE cannot find (issue #281).
+        const SETS: &[PersonalDataSet] = &[PersonalDataSet {
+            table: "deletion_jobs",
+            subject: "provider_subject",
+            kind: DataKind::Identifier,
+            disposition: Disposition::Erase,
+            description: "Deletion requests.",
+            redacted: &[],
+            subject_via: Some(SubjectVia {
+                table: "identities",
+                subject: "user_id",
+                key: "provider_subject",
+            }),
+        }];
+        let statements = statements(&planned(SETS), "acct-1");
+        assert_eq!(statements.len(), 1);
+        let sql = &statements[0].sql;
+        assert!(
+            sql.contains(
+                "WHERE provider_subject IN (SELECT provider_subject FROM identities \
+                          WHERE user_id = ?)"
+            ),
+            "{sql}"
+        );
     }
 }
 
@@ -328,6 +369,7 @@ mod verification_tests {
         disposition: Disposition::Erase,
         description: "Rows that should not survive an erasure.",
         redacted: &[],
+        subject_via: None,
     };
 
     fn planned() -> Vec<Planned> {

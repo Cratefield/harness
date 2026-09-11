@@ -49,6 +49,7 @@ impl Module for SampleRowModule {
             disposition: Disposition::Erase,
             description: "The address you typed into the sample form, with the date.",
             redacted: &[],
+            subject_via: None,
         }];
         SETS
     }

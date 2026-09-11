@@ -26,6 +26,7 @@
 //!     disposition: Disposition::Erase,
 //!     description: "Joint angles and scores for one practice, with its date.",
 //!     redacted: &[],
+//!     subject_via: None,
 //! }];
 //! ```
 
@@ -154,6 +155,53 @@ pub struct PersonalDataSet {
     /// columns with it, and a column named here is still counted, still
     /// erased, and still described.
     pub redacted: &'static [&'static str],
+    /// How this table reaches its subject through another table, when the
+    /// column that identifies a person here is not the column the requests
+    /// are made with.
+    ///
+    /// The privacy query builders run **one** subject value across every
+    /// declaration, and by default match it against [`subject`](Self::subject)
+    /// directly. A table whose rows are written before an account is known —
+    /// a provider callback naming a person by their app-scoped id — has an
+    /// honest `subject` that no request value will ever match. Naming a route
+    /// through the table that does hold the account id makes the export find
+    /// the row and the erasure preview count it:
+    ///
+    /// ```text
+    /// WHERE <subject> IN (SELECT <via.key> FROM <via.table> WHERE <via.subject> = ?)
+    /// ```
+    ///
+    /// `Some` **replaces** direct matching rather than adding to it: the row
+    /// is found only through the join, so there is exactly one answer to
+    /// "which rows are this person's", the same one for export, preview,
+    /// delete and verify. The subject value is still bound, never
+    /// interpolated, and the three names are checked to be plain identifiers
+    /// exactly like the rest.
+    ///
+    /// The case that demanded this is `deletion_jobs` (issue #281): keyed on
+    /// `provider_subject`, reached through `identities(user_id →
+    /// provider_subject)`.
+    pub subject_via: Option<SubjectVia>,
+}
+
+/// One hop to the subject, through a table that holds the id requests are
+/// made with.
+///
+/// Read as a sentence: *rows of `table` belong to the person whose
+/// `subject` value the caller supplies, when that value appears in the join
+/// table's `subject` column; the join table's `key` column is the one the
+/// declaring table's own subject column matches against.* `None` means the
+/// declaring table is matched directly, which is the ordinary case.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SubjectVia {
+    /// The table one hop away that holds the account id.
+    pub table: &'static str,
+    /// The column on that table the request's subject value is matched
+    /// against — usually the account id.
+    pub subject: &'static str,
+    /// The column on that table whose values the declaring table's subject
+    /// column matches — for `deletion_jobs`, `identities.provider_subject`.
+    pub key: &'static str,
 }
 
 impl PersonalDataSet {
@@ -173,6 +221,7 @@ impl PersonalDataSet {
             disposition: Disposition::Retain(reason),
             description: "",
             redacted: &[],
+            subject_via: None,
         }
     }
 
@@ -218,6 +267,23 @@ impl PersonalDataSet {
                 }
             }
         }
+        // A join names three more things the privacy module interpolates into
+        // SQL, so it gets the same refusal a bad table or column name gets.
+        if let Some(via) = self.subject_via {
+            for (label, name) in [
+                ("via table", via.table),
+                ("via subject column", via.subject),
+                ("via key column", via.key),
+            ] {
+                check_identifier(
+                    &mut errors,
+                    module,
+                    label,
+                    name,
+                    &format!("for `{}`", self.table),
+                );
+            }
+        }
         for column in self.redacted {
             if !is_plain_identifier(column) {
                 errors.push(format!(
@@ -242,20 +308,7 @@ impl PersonalDataSet {
             ));
         }
         if self.is_none() {
-            if let Disposition::Retain(reason) = self.disposition
-                && reason.trim().is_empty()
-            {
-                errors.push(format!(
-                    "module `{module}` declares table `{}` as holding no personal data without saying why",
-                    self.table
-                ));
-            }
-            if !self.redacted.is_empty() {
-                errors.push(format!(
-                    "module `{module}` redacts a column of `{}`, which it declares holds no personal data; nothing is exported from it to redact",
-                    self.table
-                ));
-            }
+            errors.extend(self.none_errors(module));
             return errors;
         }
         if self.description.trim().is_empty() {
@@ -282,6 +335,45 @@ impl PersonalDataSet {
             _ => {}
         }
         errors
+    }
+
+    /// The contradictions only a `none` declaration can contain.
+    fn none_errors(&self, module: &str) -> Vec<String> {
+        let mut errors: Vec<String> = Vec::new();
+        if self.subject_via.is_some() {
+            errors.push(format!(
+        "module `{module}` declares table `{}` as holding no personal data and names a way to reach a subject; one or the other",
+        self.table
+    ));
+        }
+        if let Disposition::Retain(reason) = self.disposition
+            && reason.trim().is_empty()
+        {
+            errors.push(format!(
+        "module `{module}` declares table `{}` as holding no personal data without saying why",
+        self.table
+    ));
+        }
+        if !self.redacted.is_empty() {
+            errors.push(format!(
+        "module `{module}` redacts a column of `{}`, which it declares holds no personal data; nothing is exported from it to redact",
+        self.table
+    ));
+        }
+        errors
+    }
+}
+
+/// One refusal for a name the privacy module would interpolate into SQL.
+///
+/// The same rule as [`is_plain_identifier`], said once because `validate`
+/// applies it to five kinds of name and counting them in one function made
+/// that function outgrow any reader's patience.
+fn check_identifier(errors: &mut Vec<String>, module: &str, label: &str, name: &str, where_: &str) {
+    if !is_plain_identifier(name) {
+        errors.push(format!(
+            "module `{module}` declares {label} `{name}` {where_}, which is not a plain identifier"
+        ));
     }
 }
 

@@ -231,6 +231,7 @@ impl Module for Linkedin {
                               do, when that permission runs out, and whether the connection is \
                               still live.",
                 redacted: &["access_token", "refresh_token"],
+                subject_via: None,
             },
             PersonalDataSet::none(
                 "linkedin_pages",
