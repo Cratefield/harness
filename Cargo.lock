@@ -950,6 +950,7 @@ dependencies = [
  "axum",
  "cratefield-console",
  "cratefield-core",
+ "cratefield-dashboard",
  "cratefield-kms",
  "cratefield-runtime-cloudflare",
  "cratefield-secrets",
@@ -991,6 +992,28 @@ dependencies = [
  "tracing",
  "ulid",
  "unicode-normalization",
+]
+
+[[package]]
+name = "cratefield-dashboard"
+version = "0.1.1"
+dependencies = [
+ "axum",
+ "bytes",
+ "cratefield-access",
+ "cratefield-accounts",
+ "cratefield-adapter-sqlite",
+ "cratefield-connections",
+ "cratefield-console",
+ "cratefield-core",
+ "cratefield-provisioning",
+ "cratefield-testing",
+ "http",
+ "pollster",
+ "sea-query",
+ "time",
+ "tower",
+ "tracing",
 ]
 
 [[package]]

@@ -35,6 +35,10 @@ fn instance() -> &'static (Harness, Cloudflare) {
             // allowlist. More modules land with the wizard (#8) and dashboard
             // (#11).
             .module(cratefield_console::Console)
+            // The account dashboard (#11): ventures, health verdicts,
+            // connections, archiving. Read-only except archiving; see
+            // docs/DASHBOARD.md for the half that is not built.
+            .module(cratefield_dashboard::Dashboard)
             .runtime(Cloudflare::new().db("DB"))
             .build()
             .expect("the control-plane harness is valid");

@@ -21,6 +21,7 @@ cratefield-ui = { workspace = true }
 cratefield-secrets = { workspace = true }
 cratefield-kms = { workspace = true }
 cratefield-console = { path = "../control-plane-console" }
+cratefield-dashboard = { path = "../control-plane-dashboard" }
 axum = { workspace = true }
 http = { workspace = true }
 serde = { workspace = true }
