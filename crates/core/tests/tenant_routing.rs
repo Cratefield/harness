@@ -59,6 +59,24 @@ impl Database for RecordingDb {
 struct TwoTenants {
     a: Arc<RecordingDb>,
     b: Arc<RecordingDb>,
+    /// Every tenant whose handle was asked for. A refusal at *resolution*
+    /// and a refusal at *connect* are both `503 tenant-degraded`, so the
+    /// status code cannot tell them apart — this can.
+    asked: std::sync::Mutex<Vec<String>>,
+}
+
+impl TwoTenants {
+    fn new(a: Arc<RecordingDb>, b: Arc<RecordingDb>) -> Self {
+        Self {
+            a,
+            b,
+            asked: std::sync::Mutex::new(Vec::new()),
+        }
+    }
+
+    fn asked_for(&self) -> Vec<String> {
+        self.asked.lock().expect("asked lock").clone()
+    }
 }
 
 impl ResolveTenant for TwoTenants {
@@ -92,6 +110,10 @@ impl ResolveTenant for TwoTenants {
 #[async_trait]
 impl TenantDatabases for TwoTenants {
     async fn database(&self, tenant: &Tenant) -> Result<Arc<dyn Database>, TenantDbError> {
+        self.asked
+            .lock()
+            .expect("asked lock")
+            .push(tenant.id().to_string());
         match tenant.id().as_str() {
             "tenant-a" => Ok(Arc::clone(&self.a) as Arc<dyn Database>),
             "tenant-b" => Ok(Arc::clone(&self.b) as Arc<dyn Database>),
@@ -162,15 +184,18 @@ fn harness() -> Harness {
         .expect("harness builds")
 }
 
-fn routed() -> (axum::Router, Arc<RecordingDb>, Arc<RecordingDb>) {
+fn routed() -> (
+    axum::Router,
+    Arc<RecordingDb>,
+    Arc<RecordingDb>,
+    Arc<TwoTenants>,
+) {
     let a = Arc::new(RecordingDb::default());
     let b = Arc::new(RecordingDb::default());
+    let registry = Arc::new(TwoTenants::new(Arc::clone(&a), Arc::clone(&b)));
     let mut ports = Ports::empty();
-    ports.tenants = Some(Arc::new(TwoTenants {
-        a: Arc::clone(&a),
-        b: Arc::clone(&b),
-    }));
-    (harness().router(ports), a, b)
+    ports.tenants = Some(Arc::clone(&registry) as Arc<dyn cratefield_core::TenantRouting>);
+    (harness().router(ports), a, b, registry)
 }
 
 async fn post_as(router: &axum::Router, host: &str, path: &str) -> axum::response::Response {
@@ -191,7 +216,7 @@ async fn interleaved_requests_touch_only_their_own_database() {
     // #32's required check. Interleaved on purpose: a layer that resolved
     // once and cached the handle in module state would pass a test that
     // ran A's requests and then B's, and fail this one.
-    let (router, a, b) = routed();
+    let (router, a, b, registry) = routed();
 
     for _ in 0..3 {
         assert_eq!(
@@ -226,7 +251,7 @@ async fn interleaved_requests_touch_only_their_own_database() {
 
 #[pollster::test]
 async fn the_handler_is_given_the_tenant_the_host_resolved_to() {
-    let (router, _, _) = routed();
+    let (router, _, _, registry) = routed();
     for (host, expected) in [("a.example", "tenant-a"), ("b.example", "tenant-b")] {
         let response = request(
             &router,
@@ -245,7 +270,7 @@ async fn the_handler_is_given_the_tenant_the_host_resolved_to() {
 
 #[pollster::test]
 async fn an_unknown_host_is_404_and_a_degraded_tenant_is_503() {
-    let (router, a, b) = routed();
+    let (router, a, b, registry) = routed();
 
     let unknown = post_as(&router, "nobody.example", "/v1/writer/write").await;
     assert_eq!(unknown.status(), StatusCode::NOT_FOUND);
@@ -263,6 +288,15 @@ async fn an_unknown_host_is_404_and_a_degraded_tenant_is_503() {
 
     // Distinguishable on purpose, and neither touched a database.
     assert!(a.statements().is_empty() && b.statements().is_empty());
+    // And neither was even *looked up*: a status refusal happens before
+    // any pool is opened. Without this the test passes just as well when
+    // `admit` accepts everything, because an unreachable database is also
+    // `503 tenant-degraded`.
+    assert!(
+        registry.asked_for().is_empty(),
+        "resolution refused before asking for a handle: {:?}",
+        registry.asked_for()
+    );
 }
 
 #[pollster::test]
@@ -270,18 +304,23 @@ async fn a_provisioning_tenant_is_refused_before_its_database_is_opened() {
     // Registered but not yet reconciled: its schema is not known to match
     // the code. Refusing at resolution means the pool is never opened, so
     // a half-provisioned tenant costs nothing.
-    let (router, _, _) = routed();
+    let (router, _, _, registry) = routed();
     let response = post_as(&router, "new.example", "/v1/writer/write").await;
     assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
     assert_eq!(
         body_json(response).await["type"],
         "https://factory0.ventures/problems/tenant-degraded"
     );
+    assert!(
+        registry.asked_for().is_empty(),
+        "the pool is never opened for a tenant that must not serve: {:?}",
+        registry.asked_for()
+    );
 }
 
 #[pollster::test]
 async fn an_unreachable_tenant_database_is_503_and_names_no_dsn() {
-    let (router, _, _) = routed();
+    let (router, _, _, registry) = routed();
     let response = post_as(&router, "gone.example", "/v1/writer/write").await;
     assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
     let body = body_json(response).await;
@@ -294,6 +333,13 @@ async fn an_unreachable_tenant_database_is_503_and_names_no_dsn() {
         !rendered.contains("postgres://") && !rendered.contains("@"),
         "a connection string must never reach a response body: {rendered}"
     );
+    // The mirror of the two tests above: this tenant *was* admitted, so
+    // its handle was asked for and the refusal came from the connect.
+    assert_eq!(
+        registry.asked_for(),
+        vec!["tenant-gone".to_owned()],
+        "an active tenant is admitted, then fails at the pool"
+    );
 }
 
 // ------------------------------------------------- what resolution skips
@@ -303,7 +349,7 @@ async fn probes_are_not_resolved_and_keep_answering() {
     // Resolution outside the module routes would 404 every liveness probe
     // in production: they arrive by loopback with a host the registry has
     // never heard of.
-    let (router, _, _) = routed();
+    let (router, _, _, registry) = routed();
     for path in ["/__health", "/__ready"] {
         let response = request(
             &router,
