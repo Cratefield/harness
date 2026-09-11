@@ -908,6 +908,54 @@ mod tests {
         assert!(local.contains("style-src 'self';"));
     }
 
+    /// What the loose `origin_of` let into `style-src`, and no longer does
+    /// (issue #215). Each of these produced an entry a browser would not
+    /// match, or would match too widely.
+    #[test]
+    fn a_theme_css_that_is_not_an_origin_contributes_nothing() {
+        for bad in [
+            // Any scheme before `://` was accepted and spliced in.
+            "javascript://x/",
+            "data://x/",
+            // Not absolute at all.
+            "/theme.css",
+            "theme.css",
+            "",
+        ] {
+            let csp = content_security_policy(Some(bad), false);
+            assert!(
+                csp.contains("style-src 'self';"),
+                "`{bad}` must add nothing to style-src: {csp}"
+            );
+        }
+    }
+
+    /// The two that are the *same* origin and used to be two entries.
+    #[test]
+    fn an_origin_is_normalised_before_it_reaches_style_src() {
+        let default_port = content_security_policy(Some("https://CDN.Example:443/a.css"), false);
+        assert!(
+            default_port.contains("style-src 'self' https://cdn.example;"),
+            "host lowercased and the default port dropped: {default_port}"
+        );
+        let other_port = content_security_policy(Some("https://cdn.example:8443/a.css"), false);
+        assert!(
+            other_port.contains("style-src 'self' https://cdn.example:8443;"),
+            "a non-default port is part of the origin and stays: {other_port}"
+        );
+
+        // Userinfo is stripped rather than carried through. The loose
+        // version emitted `https://a@evil.test`, which is not an origin
+        // and which a browser therefore never matches — so the stylesheet
+        // was blocked, and for the wrong reason. The origin here is
+        // `evil.test`, and saying so is the honest answer.
+        let userinfo = content_security_policy(Some("https://a:b@evil.test/x.css"), false);
+        assert!(
+            userinfo.contains("style-src 'self' https://evil.test;"),
+            "the origin is the host, without the credentials: {userinfo}"
+        );
+    }
+
     #[test]
     fn detail_attribution_matches_name_or_label() {
         let fields = fields_of(&serde_json::json!({
