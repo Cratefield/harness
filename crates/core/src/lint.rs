@@ -117,6 +117,215 @@ pub fn lint_card_data(sql: &str) -> Vec<(&'static str, &'static str)> {
     }
 }
 
+/// Words a `CREATE` may carry before `TABLE`. Anything else after `CREATE`
+/// — `INDEX`, `UNIQUE`, `VIEW`, `TRIGGER` — ends the match, which is how
+/// `CREATE UNIQUE INDEX deletion_jobs_confirmation_code` stays out of the
+/// result.
+///
+/// `VIRTUAL` is here because a virtual table is a table: it holds rows, an
+/// export would read it, and leaving it out would be a hole shaped exactly
+/// like the one this scan exists to close.
+const CREATE_MODIFIERS: &[&str] = &[
+    "temp",
+    "temporary",
+    "unlogged",
+    "global",
+    "local",
+    "virtual",
+];
+
+/// Every table `sql` leaves behind, in the order it creates them.
+///
+/// This is the other half of the personal-data rule (issue #272).
+/// [`undeclared_tables`](crate::undeclared_tables) compares
+/// [`Module::tables`](crate::Module::tables) against
+/// [`Module::personal_data`](crate::Module::personal_data), so it can only see
+/// a table that is already in one of those two lists; a table the module never
+/// lists is invisible to it, to `fz data export` and to erasure at once. The
+/// migrations are where a table actually comes into being, so they are what
+/// [`unlisted_tables`](crate::unlisted_tables) compares against — and this is
+/// the scan it reads them with.
+///
+/// **Not a SQL parser, on purpose.** A parser is a dependency and a decision
+/// this workspace has not taken; what a `CREATE TABLE` names is recoverable
+/// from a token walk, and a narrow scan that is wrong loudly is worth more
+/// here than a general one nobody can audit. It reads the same stripped DDL
+/// [`lint_portable_sql`] does, so the four ways it could be wrong are handled
+/// the same way in both:
+///
+/// 1. **A `CREATE TABLE` in a comment or a string is not DDL.** Both are
+///    replaced with spaces before the walk, so a migration that explains its
+///    own schema in prose — as `deletion_jobs` and `cms_item` both do — does
+///    not report the tables it mentions.
+/// 2. **A temporary table is not the module's table.** `CREATE TEMP TABLE`
+///    and `CREATE TEMPORARY TABLE` are skipped: the table is gone with the
+///    connection, so no export could read it and no erasure could miss it.
+/// 3. **The rebuild pattern leaves one table, not two.** SQLite cannot relax
+///    a `NOT NULL`, so `auth-core 0003` and `waitlist 0005` both create
+///    `<table>_rebuild`, copy into it, drop the original and rename. Rather
+///    than special-casing the name, the walk tracks what each statement does:
+///    `CREATE` adds, `DROP TABLE` removes, `ALTER TABLE … RENAME TO` moves.
+///    The answer is therefore what exists when the last migration has run,
+///    which is the thing `tables()` is supposed to describe. `ALTER TABLE …
+///    RENAME COLUMN … TO …` is left alone — it renames a column, not a table.
+/// 4. **Case.** Names come back exactly as the SQL wrote them; duplicates are
+///    collapsed ASCII-case-insensitively, because an unquoted identifier is
+///    case-folded by both dialects.
+///
+/// A name that is not a plain identifier — schema-qualified, or quoted with
+/// something exotic inside — is returned verbatim rather than dropped. It will
+/// not match anything in `tables()` and the module will fail the check, which
+/// is the safe direction for a scan to be uncertain in: nothing in this
+/// workspace needs such a name, and silently ignoring one is how a table
+/// escapes.
+///
+/// Postgres dollar-quoted bodies (`$$ … $$`) are **not** stripped, because
+/// nothing in this workspace uses one; a `CREATE TABLE` inside a function body
+/// would be reported. That, too, fails loudly rather than quietly.
+///
+/// ```
+/// use cratefield_core::created_tables;
+///
+/// let sql = "\
+/// -- CREATE TABLE mentioned_in_prose (…)
+/// CREATE TABLE IF NOT EXISTS notes (id TEXT PRIMARY KEY);
+/// CREATE INDEX notes_by_id ON notes (id);
+/// CREATE TEMP TABLE scratch (id TEXT);
+/// CREATE TABLE notes_rebuild (id TEXT PRIMARY KEY, body TEXT);
+/// DROP TABLE notes;
+/// ALTER TABLE notes_rebuild RENAME TO notes;";
+/// assert_eq!(created_tables(sql), ["notes"]);
+/// ```
+#[must_use]
+pub fn created_tables(sql: &str) -> Vec<String> {
+    let ddl = strip_non_ddl(sql);
+    let words: Vec<&str> = ddl
+        .split(|c: char| !(c.is_ascii_alphanumeric() || c == '_' || c == '"' || c == '.'))
+        .filter(|word| !word.is_empty())
+        .collect();
+
+    let mut live: Vec<String> = Vec::new();
+    let mut i = 0;
+    while i < words.len() {
+        let word = words[i];
+        i += 1;
+        if word.eq_ignore_ascii_case("create") {
+            create_table(&words, &mut i, &mut live);
+        } else if word.eq_ignore_ascii_case("drop") {
+            drop_table(&words, &mut i, &mut live);
+        } else if word.eq_ignore_ascii_case("alter") {
+            rename_table(&words, &mut i, &mut live);
+        }
+    }
+    live
+}
+
+/// Whether the word at `at` is `keyword`, ignoring case. `false` past the end,
+/// so a statement cut off mid-way simply does not match.
+fn word_is(words: &[&str], at: usize, keyword: &str) -> bool {
+    words
+        .get(at)
+        .is_some_and(|word| word.eq_ignore_ascii_case(keyword))
+}
+
+/// `CREATE [TEMP|…] TABLE [IF NOT EXISTS] <name>`, from just after `CREATE`.
+fn create_table(words: &[&str], i: &mut usize, live: &mut Vec<String>) {
+    let mut temporary = false;
+    while CREATE_MODIFIERS
+        .iter()
+        .any(|modifier| word_is(words, *i, modifier))
+    {
+        temporary |= word_is(words, *i, "temp") || word_is(words, *i, "temporary");
+        *i += 1;
+    }
+    if !word_is(words, *i, "table") {
+        return;
+    }
+    *i += 1;
+    skip_keywords(words, i, &["if", "not", "exists"]);
+    let Some(name) = words.get(*i).copied() else {
+        return;
+    };
+    *i += 1;
+    if !temporary {
+        add(live, name);
+    }
+}
+
+/// `DROP TABLE [IF EXISTS] <name>`, from just after `DROP`.
+fn drop_table(words: &[&str], i: &mut usize, live: &mut Vec<String>) {
+    if !word_is(words, *i, "table") {
+        return;
+    }
+    *i += 1;
+    skip_keywords(words, i, &["if", "exists"]);
+    if let Some(name) = words.get(*i).copied() {
+        *i += 1;
+        remove(live, name);
+    }
+}
+
+/// `ALTER TABLE [IF EXISTS] <from> RENAME TO <to>`, from just after `ALTER`.
+/// Every other `ALTER TABLE` — including `RENAME COLUMN … TO …` — leaves the
+/// set alone.
+fn rename_table(words: &[&str], i: &mut usize, live: &mut Vec<String>) {
+    if !word_is(words, *i, "table") {
+        return;
+    }
+    *i += 1;
+    skip_keywords(words, i, &["if", "exists"]);
+    let Some(from) = words.get(*i).copied() else {
+        return;
+    };
+    *i += 1;
+    if !(word_is(words, *i, "rename") && word_is(words, *i + 1, "to")) {
+        return;
+    }
+    let Some(to) = words.get(*i + 2).copied() else {
+        return;
+    };
+    *i += 3;
+    remove(live, from);
+    add(live, to);
+}
+
+/// Steps over `keywords` when they all appear next, in order; leaves `i`
+/// alone otherwise, so a table actually called `if` is still read as a name.
+fn skip_keywords(words: &[&str], i: &mut usize, keywords: &[&str]) {
+    let matched = keywords
+        .iter()
+        .enumerate()
+        .all(|(offset, keyword)| word_is(words, *i + offset, keyword));
+    if matched {
+        *i += keywords.len();
+    }
+}
+
+/// Adds a table name, unquoted, unless an equal-ignoring-case one is there.
+fn add(live: &mut Vec<String>, name: &str) {
+    let name = unquote(name);
+    if !live.iter().any(|table| table.eq_ignore_ascii_case(&name)) {
+        live.push(name);
+    }
+}
+
+/// Removes a table name, ignoring case; a name that is not there is a drop of
+/// a table another module or an earlier deployment owns, and is not our
+/// business.
+fn remove(live: &mut Vec<String>, name: &str) {
+    let name = unquote(name);
+    live.retain(|table| !table.eq_ignore_ascii_case(&name));
+}
+
+/// `"users"` → `users`. Anything else is returned unchanged, including a
+/// half-quoted name, which will fail the comparison rather than be guessed at.
+fn unquote(name: &str) -> String {
+    name.strip_prefix('"')
+        .and_then(|rest| rest.strip_suffix('"'))
+        .unwrap_or(name)
+        .to_owned()
+}
+
 /// Replaces every SQL comment and single-quoted string literal with spaces,
 /// leaving the executable DDL and its byte positions alone.
 ///
@@ -298,6 +507,138 @@ mod tests {
         // `NOW()` is the dialect function; the word "now" in prose or a
         // column name is not.
         assert!(lint_portable_sql("SELECT now FROM t;").is_empty());
+    }
+}
+
+#[cfg(test)]
+mod created_tables_tests {
+    use super::created_tables;
+
+    #[test]
+    fn a_plain_create_is_found() {
+        assert_eq!(
+            created_tables("CREATE TABLE deletion_jobs (id TEXT PRIMARY KEY);"),
+            ["deletion_jobs"]
+        );
+        assert_eq!(
+            created_tables("create table if not exists users(id TEXT);"),
+            ["users"]
+        );
+        // No space before the column list, and a quoted name.
+        assert_eq!(
+            created_tables(r#"CREATE TABLE "users"(id TEXT);"#),
+            ["users"]
+        );
+    }
+
+    #[test]
+    fn every_create_in_one_set_is_found_in_order() {
+        // The anti-vacuity case at the scan's own level: a scan that stopped
+        // matching would return an empty vec and every absence assertion
+        // built on it would keep passing.
+        let sql = "CREATE TABLE a (id TEXT);\n\
+                   CREATE TABLE IF NOT EXISTS b (id TEXT);\n\
+                   CREATE UNLOGGED TABLE c (id TEXT);";
+        assert_eq!(created_tables(sql), ["a", "b", "c"]);
+    }
+
+    #[test]
+    fn an_index_view_or_trigger_is_not_a_table() {
+        // `CREATE UNIQUE INDEX deletion_jobs_confirmation_code ON deletion_jobs`
+        // is the real line this protects: a scan that read the word after
+        // `CREATE` would report the index name as a table.
+        let sql = "CREATE UNIQUE INDEX deletion_jobs_confirmation_code ON deletion_jobs (code);\n\
+                   CREATE INDEX by_status ON deletion_jobs (status);\n\
+                   CREATE VIEW live_jobs AS SELECT * FROM deletion_jobs;\n\
+                   CREATE TRIGGER t AFTER INSERT ON deletion_jobs BEGIN SELECT 1; END;";
+        assert_eq!(created_tables(sql), Vec::<String>::new());
+    }
+
+    #[test]
+    fn a_create_table_in_a_comment_or_a_string_is_not_ddl() {
+        // The regression `lint_portable_sql` already learned once: a migration
+        // that explains its own schema in prose must not report the tables the
+        // prose names. `deletion_jobs` opens with twelve lines of exactly that.
+        let sql = "-- CREATE TABLE ghost (id TEXT) is what this replaces.\n\
+                   /* CREATE TABLE also_a_ghost (id TEXT); */\n\
+                   INSERT INTO note (body) VALUES ('CREATE TABLE quoted_ghost (id TEXT)');\n\
+                   CREATE TABLE real_one (id TEXT);";
+        assert_eq!(created_tables(sql), ["real_one"]);
+    }
+
+    #[test]
+    fn a_temporary_table_is_not_the_modules_table() {
+        // It is gone with the connection, so no export could read it and no
+        // erasure could miss it. Requiring it in `tables()` would put a name
+        // in the export list that names nothing.
+        let sql = "CREATE TEMP TABLE scratch (id TEXT);\n\
+                   CREATE TEMPORARY TABLE also_scratch (id TEXT);\n\
+                   CREATE GLOBAL TEMPORARY TABLE still_scratch (id TEXT);\n\
+                   CREATE TABLE kept (id TEXT);";
+        assert_eq!(created_tables(sql), ["kept"]);
+    }
+
+    #[test]
+    fn the_rebuild_pattern_leaves_one_table() {
+        // `auth-core 0003` and `waitlist 0005`, both on main and both
+        // unchangeable: SQLite cannot relax a NOT NULL, so the table is
+        // rebuilt under another name and renamed over the original.
+        let sql = "CREATE TABLE IF NOT EXISTS single_use_tokens_rebuild (id TEXT);\n\
+                   INSERT INTO single_use_tokens_rebuild SELECT * FROM single_use_tokens;\n\
+                   DROP TABLE single_use_tokens;\n\
+                   ALTER TABLE single_use_tokens_rebuild RENAME TO single_use_tokens;";
+        assert_eq!(created_tables(sql), ["single_use_tokens"]);
+    }
+
+    #[test]
+    fn a_renamed_column_does_not_rename_the_table() {
+        let sql = "CREATE TABLE notes (id TEXT, body TEXT);\n\
+                   ALTER TABLE notes RENAME COLUMN body TO text;\n\
+                   ALTER TABLE notes ADD COLUMN amr TEXT;";
+        assert_eq!(created_tables(sql), ["notes"]);
+    }
+
+    #[test]
+    fn a_table_created_and_dropped_is_not_left_behind() {
+        let sql = "CREATE TABLE gone (id TEXT);\n\
+                   CREATE TABLE kept (id TEXT);\n\
+                   DROP TABLE IF EXISTS gone;\n\
+                   DROP INDEX kept_by_id;";
+        assert_eq!(created_tables(sql), ["kept"]);
+    }
+
+    #[test]
+    fn the_same_table_twice_is_reported_once() {
+        // Two migrations may both guard with IF NOT EXISTS.
+        let sql = "CREATE TABLE IF NOT EXISTS notes (id TEXT);\n\
+                   CREATE TABLE IF NOT EXISTS NOTES (id TEXT);";
+        assert_eq!(created_tables(sql), ["notes"]);
+    }
+
+    #[test]
+    fn a_name_the_scan_cannot_read_is_returned_rather_than_dropped() {
+        // The safe direction to be uncertain in: it fails the comparison
+        // loudly instead of escaping it silently.
+        assert_eq!(
+            created_tables("CREATE TABLE public.users (id TEXT);"),
+            ["public.users"]
+        );
+    }
+
+    #[test]
+    fn truncated_or_malformed_sql_does_not_panic() {
+        for sql in [
+            "CREATE",
+            "CREATE TABLE",
+            "CREATE TABLE IF NOT EXISTS",
+            "DROP TABLE",
+            "ALTER TABLE notes RENAME",
+            "ALTER TABLE notes RENAME TO",
+            "-- CREATE TABLE never_closed",
+            "CREATE TABLE t (id TEXT); -- naïve ünicode ✓",
+        ] {
+            let _ = created_tables(sql);
+        }
     }
 }
 

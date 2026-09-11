@@ -52,7 +52,7 @@ pub use events::{AnyError, EventBus, EventHandler, EventName};
 pub use harness::{Harness, HarnessBuilder, Runtime};
 pub use http::{Form, Json, MAX_BODY_BYTES, X_REQUEST_ID, rate_limited, request_id_is_valid};
 pub use idempotency::Inbox;
-pub use lint::{card_data_hit, lint_card_data, lint_portable_sql};
+pub use lint::{card_data_hit, created_tables, lint_card_data, lint_portable_sql};
 pub use logging::{
     RedactingVisitor, is_email_field, is_secret_field, redacted_value, scrub_request_url,
     scrub_text, set_error_forwarder, set_log_pseudonym_key, subject_hash,
@@ -65,7 +65,7 @@ pub use module::{
 pub use outbox::{Outbox, OutboxRecord};
 pub use personal_data::{
     CatalogEntry, DataKind, Disposition, PersonalDataCatalog, PersonalDataSet, is_plain_identifier,
-    undeclared_tables,
+    migration_tables, undeclared_tables, unlisted_tables,
 };
 pub use ports::{
     Blob, BlobError, BlobObject, BoundedHttpClient, Captcha, CaptchaBinding, CaptchaError, Charge,

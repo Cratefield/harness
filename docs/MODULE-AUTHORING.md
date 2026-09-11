@@ -288,7 +288,14 @@ Decisions, one per method:
   must always have a fallback path.
 - **`tables()`** — every table the migrations create. Two modules claiming
   one table is a build error; this is how the harness prevents silent
-  collisions.
+  collisions. It is also what a whole-database `fz data export`/`import`
+  carries, so adding a table here changes what a move of the venture takes
+  with it. **Leaving one out is not a smaller decision than that**: a table
+  in neither this list nor `personal_data()` is outside the export, outside
+  erasure and outside the rule that compares them, all at once, which is
+  where `auth-core` kept `deletion_jobs` and a person's identifier at their
+  identity provider with it. Conformance now scans your migrations for
+  `CREATE TABLE` and fails the module on anything missing here (issue #272).
 - **`personal_data()`** — what each of those tables holds about a person.
   `cratefield-module-privacy` plans a subject access export and an erasure
   from this list and never from `tables()`, so a table missing here is
@@ -744,7 +751,14 @@ fn hello_deps_are_wasm_safe() {
 7. every table in `tables()` has a `personal_data()` declaration (issue
    #244) — the converse of the rule the harness build already enforces,
    which refuses a declaration for a table the module does not own;
-8. **sidecar parity** (issue #64): the module answers identically
+8. every table your **migrations** create is in `tables()` (issue #272).
+   Check 7 can only compare the two lists it is handed, so a table that
+   never reached `tables()` is invisible to it, to `fz data export` and
+   to erasure at once — `auth-core` created `deletion_jobs` and listed it
+   nowhere. The kit scans your migration SQL for `CREATE TABLE`, and the
+   same check runs the other way round: every table `tables()` names has
+   to be one the scan found, so it cannot pass by matching nothing;
+9. **sidecar parity** (issue #64): the module answers identically
    whether it is linked in or reached over a service binding (ADR 0009).
 
 The parity axis builds the module twice — once in-process, once behind a
@@ -976,6 +990,8 @@ Before opening a PR that adds or changes a module:
 - [ ] migrations portable (subset above), idempotent, `include_str!`'d
 - [ ] `surface()` declares every route a visitor or admin should see, and
       `JsonSchema` is derived on the same types the handlers deserialize
+- [ ] `tables()` names every table your migrations `CREATE`, including one
+      a later migration adds (issue #272)
 - [ ] `personal_data()` covers every table in `tables()`, with the
       disposition decided per table and the description written for the
       person it is published to
