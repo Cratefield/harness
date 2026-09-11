@@ -154,7 +154,7 @@ pub(crate) async fn sync(
     let id_gen = handlers::id_gen(ctx).map_err(|_| TokenTrouble::Config("no id gen".to_owned()))?;
 
     let session = tokens::session(ctx, settings, scope).await?;
-    let client = Client::new(http, &settings.api_version, &session.access_token);
+    let client = Client::new(http, clock, &settings.api_version, &session.access_token);
     let outcome = sync_with(ctx, db, clock, id_gen, &client, &session.account_id, scope).await;
     handlers::flush_budget(ctx, client.spent()).await;
     outcome

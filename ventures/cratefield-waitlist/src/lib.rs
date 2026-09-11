@@ -80,6 +80,7 @@ fn build_mailer(env: &Env) -> Arc<dyn Mailer> {
     match key {
         Some(key) => Arc::new(Resend::new(
             Arc::new(FetchClient),
+            Arc::new(WorkersClock),
             Some(key),
             MAIL_FROM,
             None,

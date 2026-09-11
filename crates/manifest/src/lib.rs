@@ -152,6 +152,10 @@ mod tests {
         assert!(lib.contains(".module(Waitlist::new())"));
         assert!(lib.contains(".module(EmailSignup::new())"));
         assert!(lib.contains("default_templates()"));
+        // The mailer wiring must move with `Resend::new`'s signature; a
+        // generated venture that cannot compile is found here, not at deploy.
+        assert!(lib.contains("cratefield::resend::Resend::new("));
+        assert!(lib.contains("cratefield::cloudflare::WorkersClock"));
         assert!(lib.contains("cratefield::Venture::new(\"acme-signups\", \"acme.factory0.dev\")"));
 
         let fz = file("src/fz_main.rs");

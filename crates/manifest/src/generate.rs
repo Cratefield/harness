@@ -293,6 +293,7 @@ fn lib_rs(manifest: &VentureManifest, modules: &[&ModuleCodegen], needs_mailer: 
     let runtime_expr = if needs_mailer {
         "Cloudflare::new().db(\"DB\").mailer(cratefield::resend::Resend::new(\n\
          \x20           std::sync::Arc::new(cratefield::cloudflare::FetchClient),\n\
+         \x20           std::sync::Arc::new(cratefield::cloudflare::WorkersClock),\n\
          \x20           None,\n\
          \x20           \"no-reply@{host}\",\n\
          \x20           None,\n\

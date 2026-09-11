@@ -152,7 +152,7 @@ pub(crate) async fn upload(
     let session = tokens::session(ctx, &settings, &scope)
         .await
         .map_err(|trouble| trouble.problem(&scope))?;
-    let client = Client::new(http, &settings.api_version, &session.access_token);
+    let client = Client::new(http, clock, &settings.api_version, &session.access_token);
 
     let result = async {
         let initialized = client.initialize_image_upload(&page.urn).await?;
@@ -280,7 +280,7 @@ pub(crate) async fn refresh(
     let clock = handlers::clock(ctx).ok()?;
     let http = handlers::http(ctx).ok()?;
     let session = tokens::session(ctx, settings, scope).await.ok()?;
-    let client = Client::new(http, &settings.api_version, &session.access_token);
+    let client = Client::new(http, clock, &settings.api_version, &session.access_token);
     let status = client.image_status(&asset.image_urn).await;
     handlers::flush_budget(ctx, client.spent()).await;
 

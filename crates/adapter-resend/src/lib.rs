@@ -12,8 +12,10 @@
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use cratefield_core::{HttpClient, HttpError, MailError, Mailer, Message, SendOutcome};
-use http::header::{AUTHORIZATION, CONTENT_TYPE, RETRY_AFTER};
+use cratefield_core::{
+    Clock, HttpClient, HttpError, MailError, Mailer, Message, SendOutcome, retry_after,
+};
+use http::header::{AUTHORIZATION, CONTENT_TYPE};
 use http::{Request, StatusCode};
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -24,6 +26,11 @@ const RESEND_ENDPOINT: &str = "https://api.resend.com/emails";
 /// `Mailer` over `POST https://api.resend.com/emails`.
 pub struct Resend {
     http: Arc<dyn HttpClient>,
+    /// Needed only to read the HTTP-date form of `Retry-After` (issue #278).
+    /// A constructor argument rather than a builder default so a deployment
+    /// that forgets it fails to compile instead of silently retrying a
+    /// date-form 429 immediately.
+    clock: Arc<dyn Clock>,
     api_key: Option<String>,
     from: String,
     reply_to: Option<String>,
@@ -33,12 +40,14 @@ impl Resend {
     /// `api_key: None` => the adapter is `NotConfigured` (no network).
     pub fn new(
         http: Arc<dyn HttpClient>,
+        clock: Arc<dyn Clock>,
         api_key: Option<String>,
         from: impl Into<String>,
         reply_to: Option<String>,
     ) -> Self {
         Self {
             http,
+            clock,
             api_key,
             from: from.into(),
             reply_to,
@@ -48,9 +57,10 @@ impl Resend {
     /// Reads `RESEND_API_KEY`, `MAIL_FROM`, `MAIL_REPLY_TO` from the process
     /// environment. On Workers the venture should read the secrets from its
     /// `Env` and use [`Resend::new`] instead (`std::env` has no Workers vars).
-    pub fn from_env(http: Arc<dyn HttpClient>) -> Self {
+    pub fn from_env(http: Arc<dyn HttpClient>, clock: Arc<dyn Clock>) -> Self {
         Self::new(
             http,
+            clock,
             std::env::var("RESEND_API_KEY").ok(),
             std::env::var("MAIL_FROM").unwrap_or_else(|_| String::new()),
             std::env::var("MAIL_REPLY_TO").ok(),
@@ -125,10 +135,6 @@ struct SendResponse {
 struct ErrorResponse {
     #[serde(default)]
     message: String,
-}
-
-fn parse_retry_after(value: &str) -> Option<Duration> {
-    value.trim().parse::<u64>().ok().map(Duration::from_secs)
 }
 
 /// Pulls the sending domain out of a Resend error message like
@@ -227,11 +233,9 @@ impl Mailer for Resend {
             .map_err(|err: HttpError| MailError::Transport(err.to_string()))?;
 
         let status = response.status();
-        let retry_after = response
-            .headers()
-            .get(RETRY_AFTER)
-            .and_then(|value| value.to_str().ok())
-            .and_then(parse_retry_after);
+        // One parser for both `Retry-After` forms (issue #214/#278); the
+        // date form needs the clock this adapter is constructed with.
+        let retry_after = retry_after(response.headers(), self.clock.as_ref());
         let text = String::from_utf8_lossy(response.body()).to_string();
 
         if status.is_success() {

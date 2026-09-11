@@ -5,7 +5,7 @@
 use async_trait::async_trait;
 use bytes::Bytes;
 use cratefield_adapter_resend::Resend;
-use cratefield_core::{HttpClient, HttpError, MailError, Mailer, Message, SendOutcome};
+use cratefield_core::{Clock, HttpClient, HttpError, MailError, Mailer, Message, SendOutcome};
 use http::{HeaderMap, Request, Response, StatusCode};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -15,10 +15,35 @@ use std::time::Duration;
 // Obvious dummy key, never real.
 const DUMMY_KEY: &str = "re_dummy_key_000000000000";
 
+/// Frozen wall clock, so the HTTP-date form of `Retry-After` has a
+/// deterministic delta.
+struct FixedClock(time::OffsetDateTime);
+
+impl Clock for FixedClock {
+    fn now(&self) -> time::OffsetDateTime {
+        self.0
+    }
+}
+
+fn clock_at(secs_past_epoch: i64) -> Arc<dyn Clock> {
+    Arc::new(FixedClock(
+        time::OffsetDateTime::from_unix_timestamp(secs_past_epoch).expect("valid timestamp"),
+    ))
+}
+
+/// IMF-fixdate, the one date form RFC 9110 requires senders to emit.
+fn http_date(at: time::OffsetDateTime) -> String {
+    let format = time::format_description::parse_borrowed::<2>(
+        "[weekday repr:short], [day] [month repr:short] [year] [hour]:[minute]:[second] GMT",
+    )
+    .expect("valid format");
+    at.format(&format).expect("formats")
+}
+
 struct FakeHttp {
     status: u16,
     body: &'static str,
-    retry_after: Option<&'static str>,
+    retry_after: Option<String>,
     calls: AtomicUsize,
     tx: mpsc::Sender<CapturedRequest>,
 }
@@ -45,8 +70,8 @@ impl HttpClient for FakeHttp {
             .expect("test channel open");
         let mut builder =
             Response::builder().status(StatusCode::from_u16(self.status).expect("valid status"));
-        if let Some(retry) = self.retry_after {
-            builder = builder.header("retry-after", retry);
+        if let Some(retry) = &self.retry_after {
+            builder = builder.header("retry-after", retry.as_str());
         }
         builder
             .body(Bytes::from(self.body))
@@ -57,14 +82,14 @@ impl HttpClient for FakeHttp {
 fn fixture(
     status: u16,
     body: &'static str,
-    retry_after: Option<&'static str>,
+    retry_after: Option<&str>,
 ) -> (Arc<FakeHttp>, mpsc::Receiver<CapturedRequest>) {
     let (tx, rx) = mpsc::channel();
     (
         Arc::new(FakeHttp {
             status,
             body,
-            retry_after,
+            retry_after: retry_after.map(str::to_owned),
             calls: AtomicUsize::new(0),
             tx,
         }),
@@ -81,6 +106,7 @@ fn message() -> Message {
 fn adapter(http: Arc<FakeHttp>) -> Resend {
     Resend::new(
         http,
+        clock_at(0),
         Some(DUMMY_KEY.to_string()),
         "Factory Zero <no-reply@test.factory0.dev>",
         None,
@@ -225,6 +251,31 @@ async fn rate_limited_maps_with_retry_after() {
 }
 
 #[pollster::test]
+async fn rate_limited_reads_the_http_date_form() {
+    // A CDN in front of Resend answers with a date (issue #278): one hour
+    // from the adapter's clock, not an immediate retry.
+    let at = time::OffsetDateTime::from_unix_timestamp(1_800_000_000).expect("valid timestamp");
+    let date = http_date(at + time::Duration::seconds(3600));
+    let (http, _rx) = fixture(429, r#"{"message":"rate limit"}"#, Some(&date));
+    let err = Resend::new(
+        http,
+        clock_at(1_800_000_000),
+        Some(DUMMY_KEY.into()),
+        "from@x.dev",
+        None,
+    )
+    .send(message())
+    .await
+    .unwrap_err();
+    match err {
+        MailError::RateLimited { retry_after } => {
+            assert_eq!(retry_after, Some(Duration::from_secs(3600)));
+        }
+        other => panic!("wrong error: {other}"),
+    }
+}
+
+#[pollster::test]
 async fn rate_limited_without_header_has_none() {
     let (http, _rx) = fixture(429, r#"{"message":"rate limit"}"#, None);
     let err = adapter(http).send(message()).await.unwrap_err();
@@ -245,10 +296,16 @@ async fn server_error_maps_to_upstream() {
 async fn transport_error_maps_to_transport() {
     let (tx, _rx) = mpsc::channel();
     let http = Arc::new(FailingHttp { tx });
-    let err = Resend::new(http, Some(DUMMY_KEY.into()), "from@x.dev", None)
-        .send(message())
-        .await
-        .unwrap_err();
+    let err = Resend::new(
+        http,
+        clock_at(0),
+        Some(DUMMY_KEY.into()),
+        "from@x.dev",
+        None,
+    )
+    .send(message())
+    .await
+    .unwrap_err();
     match err {
         MailError::Transport(_) => {}
         other => panic!("wrong error: {other}"),
@@ -279,7 +336,7 @@ impl HttpClient for FailingHttp {
 #[pollster::test]
 async fn not_configured_short_circuits_without_network() {
     let (http, _rx) = fixture(200, "{}", None);
-    let resend = Resend::new(http.clone(), None, "from@x.dev", None);
+    let resend = Resend::new(http.clone(), clock_at(0), None, "from@x.dev", None);
     let outcome = resend.send(message()).await.expect("ok");
     assert_eq!(outcome, SendOutcome::NotConfigured);
     assert_eq!(

@@ -170,7 +170,7 @@ async fn complete(
 
     let (client_id, client_secret) =
         handlers::client_credentials(ctx).ok_or(CallbackError::Internal)?;
-    let linkedin = Client::anonymous(http);
+    let linkedin = Client::anonymous(http, clock);
     let exchanged = linkedin
         .exchange_code(
             code,
