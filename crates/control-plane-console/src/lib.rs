@@ -37,6 +37,11 @@ use time::format_description::well_known::Rfc3339;
 /// Where the console is mounted (`/v1/<name>`), so its own redirects resolve.
 const BASE: &str = "/v1/console";
 
+/// The one login gate in the control plane. The console serves it; every
+/// other screen redirects here rather than serving a gate of its own, so
+/// there is exactly one path a signed-out visitor can land on.
+pub const LOGIN_PATH: &str = "/v1/console/login";
+
 /// The short-lived CSRF cookie carrying the OAuth `state` across the Google
 /// round-trip. `SameSite=Lax` so it *is* sent on the top-level GET redirect
 /// back from Google (Strict would not be).
@@ -148,8 +153,7 @@ pub fn current_session(ctx: &ModuleContext, headers: &HeaderMap) -> Option<Sessi
 /// otherwise. A protected handler is one line — `let session = guard(..)?;`.
 #[allow(clippy::result_large_err)] // Err is an axum Response, returned by value on purpose
 fn guard(ctx: &ModuleContext, headers: &HeaderMap) -> Result<Session, Response> {
-    current_session(ctx, headers)
-        .ok_or_else(|| Redirect::to(&format!("{BASE}/login")).into_response())
+    current_session(ctx, headers).ok_or_else(|| Redirect::to(LOGIN_PATH).into_response())
 }
 
 // ---------------------------------------------------------------------------
@@ -595,7 +599,7 @@ async fn callback(
 async fn logout() -> Response {
     (
         [(header::SET_COOKIE, clear_session_cookie())],
-        Redirect::to(&format!("{BASE}/login")),
+        Redirect::to(LOGIN_PATH),
     )
         .into_response()
 }

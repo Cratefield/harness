@@ -24,7 +24,7 @@ use axum::extract::{Path, State};
 use axum::response::{Html, IntoResponse, Redirect, Response};
 use axum::routing::{get, post};
 use cratefield_accounts::{Repository, Venture, VentureStatus};
-use cratefield_console::current_session;
+use cratefield_console::{LOGIN_PATH, current_session};
 use cratefield_core::{Database, Migrations, Module, ModuleContext, Port, SqlMigration, Statement};
 use http::{HeaderMap, StatusCode, header};
 use time::format_description::well_known::Rfc3339;
@@ -115,16 +115,20 @@ struct DashboardState {
 // Session guard and account resolution
 // ---------------------------------------------------------------------------
 
-/// A guarded page: `Ok(())` when signed in, `Err(redirect to /login)`
-/// otherwise. The session proof itself is the console's
+/// A guarded page: `Ok(())` when signed in, `Err(redirect to the login
+/// gate)` otherwise. The session proof itself is the console's
 /// [`current_session`]: one signer, one cookie (`cf_session`), one gate —
 /// the wizard and dashboard reuse it, exactly as the console's docs say.
+///
+/// The redirect goes to the console's [`LOGIN_PATH`], not to a `/login`
+/// under this module: the dashboard serves no login route, so sending a
+/// signed-out visitor to `{BASE}/login` would 404 them.
 #[allow(clippy::result_large_err)]
 fn guard(ctx: &ModuleContext, headers: &HeaderMap) -> Result<(), Response> {
     if current_session(ctx, headers).is_some() {
         Ok(())
     } else {
-        Err(Redirect::to(&format!("{BASE}/login")).into_response())
+        Err(Redirect::to(LOGIN_PATH).into_response())
     }
 }
 
@@ -932,7 +936,9 @@ mod tests {
         let kit = seeded(VentureStatus::Live).await;
         let reply = send(&kit, Method::GET, BASE, None).await;
         assert_eq!(reply.status, StatusCode::SEE_OTHER, "{}", reply.body);
-        assert_eq!(reply.location, "/v1/dashboard/login");
+        // The console owns the one login gate; the dashboard serves no
+        // /login of its own, so redirecting under BASE would 404.
+        assert_eq!(reply.location, "/v1/console/login");
     }
 
     #[pollster::test]
