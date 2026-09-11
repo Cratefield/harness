@@ -19,7 +19,8 @@ use bytes::Bytes;
 
 use crate::admin::require_admin;
 use crate::config::Config;
-use crate::http::{MAX_BODY_BYTES, X_REQUEST_ID};
+use crate::events::EventBus;
+use crate::http::{MAX_BODY_BYTES, X_REQUEST_ID, Json};
 use crate::module::HARNESS_API;
 use crate::ports::{Clock, Dispatcher, Kid, Payload, RateLimiter, Signer};
 use crate::problem::Problem;
@@ -503,6 +504,164 @@ fn into_axum(response: http::Response<Bytes>) -> Response {
     out
 }
 
+// ------------------------------------------------------------- events (#62)
+
+/// The wire shape of the host's `POST /__events` body. One event, one
+/// payload — the same values `EventBus::emit_in` was given, serialized once
+/// and forwarded verbatim (issue #62).
+#[derive(serde::Deserialize)]
+pub(crate) struct EventEnvelope {
+    event: String,
+    payload: serde_json::Value,
+}
+
+/// Carries every event a harness emits to the sidecars it has mounted
+/// (ADR 0017). Built per router — per `Harness::router(ports)` — because
+/// only there are the `Dispatcher` and the mount table resolved; the bus
+/// itself is built in `Harness::build`, which has no `Env` (ADR 0009).
+pub struct EventForwarder {
+    mounts: Vec<SidecarMount>,
+    dispatcher: Arc<dyn Dispatcher>,
+    gateway: Option<Arc<HmacSigner>>,
+}
+
+impl EventForwarder {
+    pub(crate) fn new(
+        mounts: Vec<SidecarMount>,
+        dispatcher: Arc<dyn Dispatcher>,
+        gateway: Option<Arc<HmacSigner>>,
+    ) -> Self {
+        Self {
+            mounts,
+            dispatcher,
+            gateway,
+        }
+    }
+
+    /// Nothing to forward to: a harness with no mounted sidecars.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.mounts.is_empty()
+    }
+
+    /// Delivers one event to every mounted sidecar, at most once each
+    /// (ADR 0017). A sidecar that does not answer, answers with an error
+    /// or does not recognize the event is logged and otherwise forgotten:
+    /// the in-process bus never promised delivery, and forwarding must not
+    /// promise more than the bus it extends. Never retries — a retry would
+    /// be the durable-queue design this issue explicitly rules out.
+    pub(crate) async fn forward(&self, request_id: &str, name: &str, payload: &serde_json::Value) {
+        let body = match serde_json::to_vec(&serde_json::json!({
+            "event": name,
+            "payload": payload,
+        })) {
+            Ok(body) => body,
+            Err(err) => {
+                tracing::warn!(event = %name, error = %err, "event payload did not serialize");
+                return;
+            }
+        };
+        for mount in &self.mounts {
+            if !self.dispatcher.has(&mount.binding) {
+                continue;
+            }
+            let mut builder = http::Request::builder()
+                .method(Method::POST)
+                .uri("/__events")
+                .header(HeaderName::from_static("content-type"), "application/json");
+            // One trail across both Workers, as for a forwarded request.
+            if let Ok(value) = HeaderValue::from_str(request_id) {
+                builder = builder.header(HeaderName::from_static(X_REQUEST_ID), value);
+            }
+            if let Some(signer) = self.gateway.as_ref() {
+                // An event forward authorizes nothing: the plain purpose.
+                builder = builder.header(
+                    HeaderName::from_static(X_HARNESS_GATEWAY),
+                    mint_gateway(signer, &mount.name, false),
+                );
+            }
+            let request = match builder.body(Bytes::from(body.clone())) {
+                Ok(request) => request,
+                Err(err) => {
+                    tracing::warn!(event = %name, error = %err, "event forward could not be built");
+                    continue;
+                }
+            };
+            match self.dispatcher.dispatch(&mount.binding, request).await {
+                Ok(response) if response.status().is_success() => {}
+                Ok(response) => {
+                    let detail =
+                        format!("event forward to `{}` answered {}", mount.name, response.status());
+                    tracing::warn!(event = %name, module = %mount.name, detail, "event forward was not accepted");
+                    crate::logging::forward_internal_error(&detail);
+                }
+                Err(err) => {
+                    let detail = format!("event forward to `{mount}` failed: {err}", mount = mount.name);
+                    tracing::warn!(event = %name, module = %mount.name, error = %err, "event forward failed");
+                    crate::logging::forward_internal_error(&detail);
+                }
+            }
+        }
+    }
+}
+
+/// The `POST /__events` route's state: the bus to deliver into and the key
+/// that decides whether the caller may trigger it at all. The route is only
+/// mounted when a gateway signer exists — without the shared secret there
+/// is no way to tell the host's forward from anyone else's `POST`, and an
+/// unauthenticated event trigger would let a stranger forge the payloads
+/// in-process handlers act on.
+pub(crate) struct InboundEvents {
+    pub(crate) bus: EventBus,
+    pub(crate) gateway: Option<Arc<HmacSigner>>,
+}
+
+/// The sidecar half of event forwarding (ADR 0017): accept the host's
+/// delivery, answer `202` immediately, and run any local handlers in this
+/// deployment's **own** `wait_until`. Running them here — not before
+/// answering — is the whole point: a slow subscriber must not hold the
+/// host's deferred future open, only its own.
+pub(crate) async fn events_inbound(
+    State(state): State<Arc<InboundEvents>>,
+    scope: Scope,
+    headers: axum::http::HeaderMap,
+    body: bytes::Bytes,
+) -> Response {
+    // The host always stamps its forwards; anything unstamped is not the
+    // host, and a stamp that does not verify gets the same answer.
+    if let Some(signer) = state.gateway.as_ref() {
+        let presented = headers
+            .get(X_HARNESS_GATEWAY)
+            .and_then(|value| value.to_str().ok());
+        if presented
+            .and_then(|token| gateway_grant(signer, token))
+            .is_none()
+        {
+            return Problem::new(&SLUGS.sidecar_unauthorized)
+                .instance(&scope.request_id)
+                .into_response();
+        }
+    }
+    let Ok(envelope) = serde_json::from_slice::<EventEnvelope>(&body) else {
+        return Problem::new(&SLUGS.validation_failed)
+            .with_detail("body must be `{\"event\": \"<name>\", \"payload\": …}`")
+            .instance(&scope.request_id)
+            .into_response();
+    };
+    let handled = state
+        .bus
+        .deliver_inbound(&scope, &envelope.event, envelope.payload);
+    if handled == 0 {
+        // The amendment to #62: an event nobody hears is exactly the
+        // silent failure this issue exists to prevent, so the inbound
+        // half refuses to be silent too.
+        let detail = format!("event `{}` arrived over the boundary with no subscriber", envelope.event);
+        tracing::warn!(event = %envelope.event, "{detail}");
+        crate::logging::forward_internal_error(&detail);
+    }
+    Json(serde_json::json!({ "accepted": handled > 0, "handlers": handled })).into_response()
+}
+
 /// Admin paths as the host sees them: a sidecar's own `/admin` plane
 /// arrives under its mount, so both spellings are authorized here, before
 /// the header that proves the caller is an admin is dropped by the
@@ -526,9 +685,10 @@ pub(crate) struct GatewayGuard {
 }
 
 /// The boundary a sidecar enforces from its own side: with
-/// [`SIDECAR_REQUIRE_GATEWAY`] set, every `/v1/*` and `/__surface` request
-/// must carry a gateway token this deployment's secret minted and has not
-/// outlived (issue #131). `/__health`, `/ui` and well-known routes stay
+/// [`SIDECAR_REQUIRE_GATEWAY`] set, every `/v1/*`, `/__surface` and
+/// `/__events` request must carry a gateway token this deployment's secret
+/// minted and has not outlived (issues #131 and #62). `/__health`, `/ui`
+/// and well-known routes stay
 /// open — probes must probe, and the page is the deployment's own
 /// surface. A require without a usable secret is a broken deploy, and the
 /// answer is a loud 503 on every guarded request, never a quiet 200.
@@ -538,7 +698,11 @@ pub(crate) async fn gateway_guard(
     next: Next,
 ) -> Response {
     let path = request.uri().path().to_owned();
-    if !guard.require || !(path.starts_with("/v1/") || path == "/__surface") {
+    // `/__events` joins the guarded set with issue #62: the host's event
+    // forward carries a stamp like any other forwarded request, and an
+    // event trigger a stranger can reach is a payload a handler trusts.
+    if !guard.require || !(path.starts_with("/v1/") || path == "/__surface" || path == "/__events")
+    {
         return next.run(request).await;
     }
     let instance = request

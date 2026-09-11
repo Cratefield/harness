@@ -16,7 +16,7 @@ use axum::extract::{DefaultBodyLimit, State};
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::middleware::{Next, from_fn_with_state};
 use axum::response::{IntoResponse, Response};
-use axum::routing::get;
+use axum::routing::{get, post};
 use bytes::Bytes;
 use serde_json::json;
 use tracing::error;
@@ -211,7 +211,7 @@ impl Harness {
         ModuleContext {
             config: Arc::clone(&ports.config),
             ports: ports.view_for(module),
-            events: self.events.clone(),
+            events: self.events_for(ports),
             templates: Arc::clone(&self.templates),
             venture,
             unprotected_writes_accepted: crate::route_policy::unprotected_writes_override(
@@ -376,6 +376,46 @@ impl Harness {
             .collect()
     }
 
+    /// [`Harness::sidecar_mounts`] without the logging: `events_for` runs
+    /// per module per router, and re-logging the same malformed table once
+    /// per module would turn one operator error into a page of noise.
+    fn resolved_mounts(&self, ports: &Ports) -> Vec<SidecarMount> {
+        let mounts = crate::sidecar::SidecarMounts::from_config(ports.config.as_ref())
+            .unwrap_or_default();
+        let module_names: Vec<&str> = self.modules.iter().map(|m| m.name()).collect();
+        mounts
+            .iter()
+            .filter(|m| !module_names.contains(&m.name.as_str()))
+            .cloned()
+            .collect()
+    }
+
+    /// The bus a module sees: the handlers collected at `build`, plus —
+    /// when this deployment mounts sidecars — the forwarder that carries
+    /// every emission across the boundary (issue #62, ADR 0017). Built
+    /// here rather than in `build` because only `router(ports)` has the
+    /// resolved `Dispatcher` and mount table; that is also the choice that
+    /// keeps `Scope` and every handler signature untouched, so the
+    /// contract version does not move.
+    fn events_for(&self, ports: &Ports) -> EventBus {
+        let mounts = self.resolved_mounts(ports);
+        if mounts.is_empty() {
+            return self.events.clone();
+        }
+        let Some(dispatcher) = ports.dispatcher.clone() else {
+            return self.events.clone();
+        };
+        let gateway = gateway_signer(
+            ports.config.as_ref(),
+            ports.clock.clone().unwrap_or_else(|| Arc::new(SystemClock)),
+        );
+        self.events
+            .clone()
+            .forwarding_to(crate::sidecar::EventForwarder::new(
+                mounts, dispatcher, gateway,
+            ))
+    }
+
     /// The runtime this harness was validated against, if one was supplied.
     pub fn runtime(&self) -> Option<&Arc<dyn Runtime>> {
         self.runtime.as_ref()
@@ -483,14 +523,31 @@ impl Harness {
             source: surface_source,
         };
 
-        let root = Router::new()
+        let mut root = Router::new()
             .route("/__health", get(health_handler))
             .with_state(health_state)
             .route("/__ready", get(ready_handler))
             .with_state(ready_state)
             .route("/__surface", get(surface_handler))
-            .with_state(surface_state)
-            .merge(api);
+            .with_state(surface_state);
+        // The sidecar half of event forwarding (issue #62, ADR 0017).
+        // Mounted only when a gateway secret exists: without the shared
+        // secret there is no way to tell the host's forward from anyone
+        // else's `POST`, and an unauthenticated event trigger would let a
+        // stranger forge the payloads in-process handlers act on.
+        if gateway.is_some() {
+            let events_router = Router::new()
+                .route(
+                    "/__events",
+                    post(crate::sidecar::events_inbound).layer(DefaultBodyLimit::max(MAX_BODY_BYTES)),
+                )
+                .with_state(Arc::new(crate::sidecar::InboundEvents {
+                    bus: self.events.clone(),
+                    gateway: gateway.clone(),
+                }));
+            root = root.merge(events_router);
+        }
+        let root = root.merge(api);
         let root = match &self.well_known {
             Some(well_known) => root.nest(
                 "/.well-known",
