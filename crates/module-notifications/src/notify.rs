@@ -1095,6 +1095,16 @@ impl Notifier {
     /// 8058 headers beside it: Gmail and Yahoo have required one-click of
     /// bulk senders since 2024, and a "click here" line in a footer is not
     /// what they check for.
+    ///
+    /// **The headers go on only when there is a `Signer`** (issue #234).
+    /// RFC 8058 requires the advertised URI to accept the POST, and with
+    /// no signer the link degrades to a venture front-end path this module
+    /// does not serve — which either 404s or, worse, hits a single-page
+    /// app that answers the POST with `200 HTML` and looks like success
+    /// while doing nothing. A mail with no one-click header is compliant.
+    /// One whose header points somewhere that cannot honour it is not, and
+    /// it fails silently at exactly the two providers the headers exist
+    /// for. The footer link still tells a person where to go.
     fn compose(ctx: &ModuleContext, job: &EmailJob, category: &Category, to: &str) -> Message {
         let cfg = ModuleConfig::new(crate::MODULE_NAME, &*ctx.config);
         let from = cfg.get_str(
@@ -1102,13 +1112,19 @@ impl Notifier {
             &format!("no-reply@send.{}", ctx.venture.domain),
         );
         let base = cfg.get_str("PUBLIC_URL", &format!("https://{}", ctx.venture.domain));
-        let unsubscribe = Self::unsubscribe_url(ctx, &base, &job.account_id, &category.name);
+        let one_click = Self::unsubscribe_url(ctx, &base, &job.account_id, &category.name);
         // Two links, because they answer different questions. The header
         // one-click stops *this* category, which is what somebody who
         // clicked "unsubscribe" on one kind of mail means. The footer also
         // offers every category, so a reader who wants out entirely does
         // not have to unsubscribe once per category as they arrive.
-        let unsubscribe_all = Self::unsubscribe_url(ctx, &base, &job.account_id, UNSUBSCRIBE_ALL);
+        let one_click_all = Self::unsubscribe_url(ctx, &base, &job.account_id, UNSUBSCRIBE_ALL);
+        // With no signer both fall back to the account's own settings
+        // page: a person can still act on it, which is all the footer
+        // claims. The header, which claims more, is left off below.
+        let settings = format!("{base}/settings/notifications");
+        let unsubscribe = one_click.clone().unwrap_or_else(|| settings.clone());
+        let unsubscribe_all = one_click_all.unwrap_or(settings);
         let subject = category
             .subject_template
             .clone()
@@ -1143,38 +1159,47 @@ impl Notifier {
             // One notification is one mail however often the row is
             // retried: the fan-out id is stable, the outbox row id is not.
             .idempotency_key(format!("{}-email", job.notification_id))
-            .tags(["notifications"])
-            .header("List-Unsubscribe", format!("<{unsubscribe}>"))
-            .header("List-Unsubscribe-Post", "List-Unsubscribe=One-Click");
+            .tags(["notifications"]);
+        // Both headers, or neither: `List-Unsubscribe-Post` is what turns
+        // the other into a one-click promise, so advertising it beside a
+        // URI that cannot accept the POST is the lie.
+        if let Some(url) = one_click {
+            message = message
+                .header("List-Unsubscribe", format!("<{url}>"))
+                .header("List-Unsubscribe-Post", "List-Unsubscribe=One-Click");
+        }
         if let Some(reply_to) = cfg.get_opt("MAIL_REPLY_TO") {
             message = message.reply_to(reply_to);
         }
         message
     }
 
-    /// The signed one-click unsubscribe link for one account and category.
+    /// The signed one-click unsubscribe link for one account and category,
+    /// or `None` when this deployment has no `Signer`.
     ///
     /// Signed and purpose-bound, so a link for one account cannot switch
     /// another's preference off — the revocable-link pattern of ADR 0014.
+    ///
+    /// `None` rather than a front-end fallback: the caller decides what a
+    /// missing link means for it. A footer can say "open your settings";
+    /// a `List-Unsubscribe` header cannot, because the URI it names has to
+    /// accept a POST from a mailbox provider (issue #234).
     fn unsubscribe_url(
         ctx: &ModuleContext,
         base: &str,
         account_id: &str,
         category: &str,
-    ) -> String {
-        let Some(signer) = ctx.ports.signer.as_ref() else {
-            // No signer: the footer still says how to stop, through the
-            // account's own settings, rather than carrying a link that
-            // would not verify.
-            return format!("{base}/settings/notifications");
-        };
+    ) -> Option<String> {
+        let signer = ctx.ports.signer.as_ref()?;
         let token = signer.sign(&Payload {
             purpose: PURPOSE_UNSUBSCRIBE.to_owned(),
             subject: format!("{account_id}:{category}"),
             exp: None,
             kid: Kid::Cur,
         });
-        format!("{base}/v1/notifications/email/unsubscribe?token={token}")
+        Some(format!(
+            "{base}/v1/notifications/email/unsubscribe?token={token}"
+        ))
     }
 
     /// The provider says this recipient is gone: delete the subscription
@@ -1291,7 +1316,7 @@ pub const UNSUBSCRIBE_ALL: &str = "all";
 pub const PURPOSE_UNSUBSCRIBE: &str = "notifications.unsubscribe";
 
 /// The five characters that must not travel into HTML as themselves.
-fn escape(raw: &str) -> String {
+pub(crate) fn escape(raw: &str) -> String {
     raw.replace('&', "&amp;")
         .replace('<', "&lt;")
         .replace('>', "&gt;")

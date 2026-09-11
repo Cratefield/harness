@@ -19,7 +19,6 @@ use std::time::Duration;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use thiserror::Error;
 
 /// The transport a [`Recipient`] is reached over, which is **not** a
 /// statement about the device: a UnifiedPush endpoint is
@@ -362,7 +361,15 @@ pub enum PushOutcome {
 /// Push failures. `Unregistered` is separated because the caller must act on
 /// it — the recipient is dead and should be pruned — where the others are
 /// transient or a bad request.
-#[derive(Debug, Clone, Error)]
+///
+/// The two variants that carry provider text are sanitized in `Display`,
+/// the same way [`DbError`](crate::DbError)'s and
+/// [`MailError`](crate::MailError)'s are (issue #235). What an adapter
+/// wraps is the provider's own words, and a push endpoint or a device
+/// token is exactly the kind of value that rides in them. `Display`
+/// therefore runs it through [`crate::logging::scrub_text`]; `Debug`
+/// still shows the raw string for tests.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PushError {
     /// The provider says the recipient is no longer valid (APNs `410`, Web
     /// Push `410`, FCM `UNREGISTERED`): delete it.
@@ -375,23 +382,35 @@ pub enum PushError {
     /// some wasted sends, and a wrongly-pruned Web Push subscription cannot
     /// be recreated server-side at all, only by the browser subscribing
     /// again.
-    #[error("device token is no longer registered; delete it")]
     Unregistered,
     /// The provider rejected the request (a `4xx` that is not `410`), or the
     /// adapter does not serve this recipient's transport; not retryable
     /// without a change.
-    #[error("push rejected: {0}")]
     Rejected(String),
     /// A transient failure (a `5xx`, a `429`, a transport error): retry
     /// later, and not before `retry_after` when the provider named one
     /// (APNs `429`, FCM `RESOURCE_EXHAUSTED`/`UNAVAILABLE`, Web Push
     /// `429`/`503` — all carry `Retry-After`).
-    #[error("push failed, retryable: {message}")]
     Transient {
         message: String,
         retry_after: Option<Duration>,
     },
 }
+
+impl std::fmt::Display for PushError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let scrub = crate::logging::scrub_text;
+        match self {
+            Self::Unregistered => f.write_str("device token is no longer registered; delete it"),
+            Self::Rejected(message) => write!(f, "push rejected: {}", scrub(message)),
+            Self::Transient { message, .. } => {
+                write!(f, "push failed, retryable: {}", scrub(message))
+            }
+        }
+    }
+}
+
+impl std::error::Error for PushError {}
 
 impl PushError {
     /// A retryable failure with no provider-supplied delay.
@@ -795,5 +814,35 @@ mod tests {
             assert_eq!(outcome, PushOutcome::NotConfigured);
             assert!(router.route_for(&recipient).is_none());
         }
+    }
+
+    #[test]
+    fn display_sanitizes_the_provider_text() {
+        // Issue #235. The text an adapter wraps is the push service's own
+        // words, and a Web Push endpoint is a bearer capability URL: the
+        // token it carries in its query must not survive into a log line
+        // or a dead-letter row.
+        let error = PushError::Rejected(
+            "web push 400 for https://push.example.test/wp/alice?auth=cap-abcdef".to_owned(),
+        );
+        let text = error.to_string();
+        assert!(!text.contains("cap-abcdef"), "{text}");
+        assert!(text.contains("?[redacted]"), "{text}");
+
+        // A provider that quotes the account it bounced on quotes an
+        // address, and `Transient` carries provider text just as
+        // `Rejected` does.
+        let error = PushError::transient("fcm 503 for alice@example.test");
+        let text = error.to_string();
+        assert!(!text.contains('@'), "{text}");
+        assert!(text.contains("[subject_hash:"), "{text}");
+
+        assert_eq!(
+            PushError::Unregistered.to_string(),
+            "device token is no longer registered; delete it"
+        );
+
+        // `Debug` still shows the raw string for a failing test to read.
+        assert!(format!("{error:?}").contains("alice@example.test"));
     }
 }

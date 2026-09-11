@@ -32,11 +32,33 @@ use std::sync::Mutex;
 // ---------------------------------------------------------------------------
 // FakeMailer
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// How a [`FakeMailer`] answers.
+///
+/// [`Error`](Self::Error) is what makes the failure arms testable at all
+/// (issue #236): before it the fake could only ever produce
+/// `MailError::Upstream("fake mailer failure")`, so `Invalid { detail }`
+/// and `DomainNotVerified { domain }` — the two variants that carry the
+/// provider's own text, and therefore the two that can carry a recipient
+/// address — could not be driven from a test. Every arm of a caller's
+/// outcome mapping is now reachable, with the text the caller chooses:
+///
+/// ```
+/// # use cratefield_testing::{FakeMailer, MailerMode};
+/// # use cratefield_core::MailError;
+/// let mailer = FakeMailer::new(MailerMode::Error(MailError::Invalid {
+///     detail: "to: alice@example.test is suppressed".to_owned(),
+/// }));
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MailerMode {
+    /// Accept and record the message.
     SendOk,
+    /// Report that the adapter has no API key or no verified domain.
     NotConfigured,
+    /// A generic upstream failure, for a caller that does not care which.
     Fail,
+    /// Exactly this error, text and all.
+    Error(MailError),
 }
 
 #[derive(Clone)]
@@ -81,7 +103,7 @@ impl FakeMailer {
 #[async_trait]
 impl Mailer for FakeMailer {
     async fn send(&self, message: Message) -> Result<SendOutcome, MailError> {
-        let mode = *self.inner.mode.lock().expect("mailer lock");
+        let mode = self.inner.mode.lock().expect("mailer lock").clone();
         match mode {
             MailerMode::SendOk => {
                 let id = format!(
@@ -93,6 +115,7 @@ impl Mailer for FakeMailer {
             }
             MailerMode::NotConfigured => Ok(SendOutcome::NotConfigured),
             MailerMode::Fail => Err(MailError::Upstream("fake mailer failure".to_string())),
+            MailerMode::Error(error) => Err(error),
         }
     }
 }
@@ -570,7 +593,12 @@ impl cratefield_core::Blob for MemoryBlob {
 // FakePush
 
 /// How a [`FakePush`] responds, mirroring [`MailerMode`] for the push port.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// [`Error`](Self::Error) carries the provider text a real adapter would
+/// have wrapped (issue #236). The fixed modes only ever produce clean
+/// strings, so no test using them could show a device token or a push
+/// endpoint arriving somewhere it should not.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PushMode {
     /// Accept and record the notification.
     DeliverOk,
@@ -580,6 +608,8 @@ pub enum PushMode {
     Unregistered,
     /// A retryable failure.
     Transient,
+    /// Exactly this error, text and all.
+    Error(cratefield_core::PushError),
 }
 
 /// An in-memory [`cratefield_core::Push`] for module tests: records every
@@ -674,8 +704,8 @@ impl FakePush {
             .lock()
             .expect("push lock")
             .get(recipient)
-            .copied()
-            .unwrap_or_else(|| *self.inner.mode.lock().expect("push lock"))
+            .cloned()
+            .unwrap_or_else(|| self.inner.mode.lock().expect("push lock").clone())
     }
 }
 
@@ -708,6 +738,7 @@ impl cratefield_core::Push for FakePush {
             PushMode::NotConfigured => Ok(cratefield_core::PushOutcome::NotConfigured),
             PushMode::Unregistered => Err(cratefield_core::PushError::Unregistered),
             PushMode::Transient => Err(cratefield_core::PushError::transient("fake push failure")),
+            PushMode::Error(error) => Err(error),
         }
     }
 }

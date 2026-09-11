@@ -44,6 +44,22 @@ async fn set_email(kit: &Kit, account: &str, address: &str, verified: bool) -> h
     .status
 }
 
+/// The `List-Unsubscribe` link of the last mail, as a path this harness
+/// can be asked for.
+fn unsubscribe_path(kit: &Kit) -> String {
+    let link = kit
+        .harness
+        .mailer
+        .last_message()
+        .expect("one mail")
+        .headers
+        .iter()
+        .find(|(key, _)| key == "List-Unsubscribe")
+        .map(|(_, value)| value.trim_matches(['<', '>']).to_owned())
+        .expect("a link");
+    format!("/v1{}", link.split_once("/v1").expect("absolute").1)
+}
+
 async fn notify_and_drain(kit: &Kit, account: &str) {
     let db = kit.db();
     let enqueued = kit
@@ -164,6 +180,108 @@ async fn every_mail_carries_the_rfc_8058_headers() {
         mail.text.contains("unsubscribe?token="),
         "and a link a person can use, not only a machine"
     );
+}
+
+#[pollster::test]
+async fn with_no_signer_the_one_click_headers_are_left_off_rather_than_lying() {
+    // Issue #234. `Signer` is optional on this module, and without one
+    // the link degrades to a venture front-end path this module does not
+    // serve. RFC 8058 requires the advertised URI to accept the POST, so
+    // a header pointing there either 404s or hits a single-page app that
+    // answers `200 HTML` and looks like success while doing nothing —
+    // and Gmail and Yahoo bulk-sender compliance fails silently, which is
+    // the whole reason the headers were added.
+    let kit = support::kit_without_signer(
+        std::sync::Arc::new(cratefield_testing::FakePush::new(
+            cratefield_testing::PushMode::DeliverOk,
+        )),
+        vec![Category::new(BOOKING).email(true)],
+        &[],
+    );
+    set_email(&kit, ALICE, "alice@example.test", true).await;
+    notify_and_drain(&kit, ALICE).await;
+
+    let mail = kit.harness.mailer.last_message().expect("one mail");
+    assert!(
+        !mail
+            .headers
+            .iter()
+            .any(|(name, _)| name.starts_with("List-Unsubscribe")),
+        "a mail with no one-click header is compliant; one whose header \
+         lies is not: {:?}",
+        mail.headers
+    );
+    // The footer still tells a person where to go, which is all it ever
+    // claimed — it is the header that promises a machine can act.
+    assert!(
+        mail.text.contains("/settings/notifications"),
+        "{}",
+        mail.text
+    );
+    assert!(!mail.text.contains("unsubscribe?token="), "{}", mail.text);
+}
+
+#[pollster::test]
+async fn a_get_of_the_link_confirms_and_only_the_post_acts() {
+    // Issue #237. Microsoft Defender Safe Links, Proofpoint URL Defense
+    // and most scanning gateways fetch every link in a message before the
+    // recipient sees it. A GET that applied the unsubscribe opted out
+    // every member at any such company without a click, with no signal to
+    // them or the venture — indistinguishable from a delivery failure.
+    let kit = email_kit();
+    set_email(&kit, ALICE, "alice@example.test", true).await;
+    notify_and_drain(&kit, ALICE).await;
+    let path = unsubscribe_path(&kit);
+
+    let answer = support::send(&kit.harness.router, http::Method::GET, &path, None, None).await;
+    assert_eq!(answer.status, http::StatusCode::OK, "{}", answer.text());
+    let page = answer.text();
+    assert!(
+        page.contains("<form method=\"post\""),
+        "the choice is offered, not taken: {page}"
+    );
+    assert!(
+        !page.contains("token="),
+        "and the token stays in the address bar rather than the markup: {page}"
+    );
+
+    notify_and_drain(&kit, ALICE).await;
+    assert_eq!(
+        kit.harness.mailer.sent().len(),
+        2,
+        "a scanner's fetch is not a click"
+    );
+
+    // The button the page renders posts to the same URL, and that acts.
+    let answer = support::send(&kit.harness.router, http::Method::POST, &path, None, None).await;
+    assert_eq!(answer.status, http::StatusCode::OK, "{}", answer.text());
+    assert!(
+        answer.text().contains("will not get these emails again"),
+        "and a person who pressed it is told, not left on a blank page: {}",
+        answer.text()
+    );
+
+    notify_and_drain(&kit, ALICE).await;
+    assert_eq!(
+        kit.harness.mailer.sent().len(),
+        2,
+        "the unsubscribe holds after the POST"
+    );
+}
+
+#[pollster::test]
+async fn a_get_with_a_token_that_does_not_verify_renders_no_form() {
+    let kit = email_kit();
+    let answer = support::send(
+        &kit.harness.router,
+        http::Method::GET,
+        "/v1/notifications/email/unsubscribe?token=not-a-real-token",
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(answer.status, http::StatusCode::BAD_REQUEST);
+    assert!(!answer.text().contains("<form"), "{}", answer.text());
 }
 
 #[pollster::test]

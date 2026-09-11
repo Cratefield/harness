@@ -505,7 +505,30 @@ pub fn kit() -> Kit {
 /// A kit over the caller's `Push`, with `categories` declared and `config`
 /// merged over the module's keys.
 pub fn kit_with(push: Arc<dyn Push>, categories: Vec<Category>, config: &[(&str, &str)]) -> Kit {
-    build_kit(push, categories, config, false, |db| db)
+    build_kit(push, categories, config, Wiring::default(), |db| db)
+}
+
+/// [`kit_with`] with **no `Signer` port**, the way a venture that never
+/// set `HARNESS_SECRET` is wired.
+///
+/// `Signer` is optional on this module, so this is a real deployment
+/// shape rather than a hypothetical one — and the arm no test covered
+/// (issue #234).
+pub fn kit_without_signer(
+    push: Arc<dyn Push>,
+    categories: Vec<Category>,
+    config: &[(&str, &str)],
+) -> Kit {
+    build_kit(
+        push,
+        categories,
+        config,
+        Wiring {
+            no_signer: true,
+            ..Wiring::default()
+        },
+        |db| db,
+    )
 }
 
 /// The config key [`kit_serving_vapid`]'s probe reads.
@@ -525,7 +548,10 @@ pub fn kit_serving_vapid(key: &str) -> Kit {
         )),
         categories(),
         &[(VAPID_KEY_CONFIG, key)],
-        true,
+        Wiring {
+            vapid_key_probe: true,
+            ..Wiring::default()
+        },
         |db| db,
     )
 }
@@ -539,7 +565,7 @@ pub fn kit_racing(
 ) -> (Kit, RacingDb) {
     let racing: Arc<Mutex<Option<RacingDb>>> = Arc::new(Mutex::new(None));
     let captured = Arc::clone(&racing);
-    let kit = build_kit(push, categories, config, false, move |db| {
+    let kit = build_kit(push, categories, config, Wiring::default(), move |db| {
         let wrapper = RacingDb::new(db);
         *captured.lock().expect("racing db") = Some(wrapper.clone());
         Arc::new(wrapper)
@@ -548,11 +574,20 @@ pub fn kit_racing(
     (kit, wrapper)
 }
 
+/// The wirings a kit can ask for that the default does not have.
+#[derive(Default, Clone, Copy)]
+struct Wiring {
+    /// Serve `GET /vapid-public-key` through the venture's own probe.
+    vapid_key_probe: bool,
+    /// Leave `Ports::signer` unset.
+    no_signer: bool,
+}
+
 fn build_kit(
     push: Arc<dyn Push>,
     categories: Vec<Category>,
     config: &[(&str, &str)],
-    vapid_key_probe: bool,
+    wiring: Wiring,
     wrap_db: impl FnOnce(Arc<dyn cratefield_core::Database>) -> Arc<dyn cratefield_core::Database>,
 ) -> Kit {
     let jwks = StaticJwks::new();
@@ -568,7 +603,7 @@ fn build_kit(
     for category in categories {
         module = module.category(category);
     }
-    if vapid_key_probe {
+    if wiring.vapid_key_probe {
         module = module.vapid_public_key(|cfg| cfg.get(VAPID_KEY_CONFIG));
     }
     let events = Arc::new(EventLog::default());
@@ -595,6 +630,9 @@ fn build_kit(
         ports.http = Some(Arc::new(jwks));
         ports.clock = Some(Arc::new(ports_clock));
         ports.config = ports_config;
+        if wiring.no_signer {
+            ports.signer = None;
+        }
         if let Some(db) = ports.db.take() {
             ports.db = Some(wrap_db(db));
         }

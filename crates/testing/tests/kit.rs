@@ -174,6 +174,63 @@ async fn fake_mailer_records_and_switches_modes() {
 }
 
 #[pollster::test]
+async fn fake_mailer_emits_any_error_variant_with_the_callers_own_text() {
+    // Issue #236. With only `Fail` the fake could produce exactly one
+    // error — `Upstream("fake mailer failure")` — so the two variants
+    // that carry provider text, and therefore the two that can carry a
+    // recipient address, were unreachable from any test. Every arm of a
+    // caller's outcome mapping has to be drivable, with the text the
+    // caller chooses, or the mapping is only ever read.
+    use cratefield_core::{MailError, Mailer, Message};
+
+    for error in [
+        MailError::Unauthorized,
+        MailError::DomainNotVerified {
+            domain: "send.example.test".to_owned(),
+        },
+        MailError::Invalid {
+            detail: "to: nick@example.com is suppressed".to_owned(),
+        },
+        MailError::RateLimited {
+            retry_after: Some(std::time::Duration::from_mins(15)),
+        },
+        MailError::Upstream("resend 503".to_owned()),
+        MailError::Transport("connection reset".to_owned()),
+    ] {
+        let mailer = FakeMailer::new(MailerMode::Error(error.clone()));
+        let answer = mailer
+            .send(Message::new("x@y.dev", "", "", "", ""))
+            .await
+            .expect_err("the mode is an error");
+        assert_eq!(answer, error, "the fake emits exactly what it was given");
+        assert!(mailer.sent().is_empty(), "a failure records nothing");
+    }
+}
+
+#[pollster::test]
+async fn fake_push_emits_any_error_variant_with_the_callers_own_text() {
+    // The same hole on the push side (issue #236): the fixed modes only
+    // ever produce clean strings, so nothing could show a device token or
+    // a push endpoint arriving somewhere it should not.
+    use cratefield_core::{Notification, Push, PushError, Recipient};
+    use cratefield_testing::{FakePush, PushMode};
+
+    for error in [
+        PushError::Unregistered,
+        PushError::Rejected("web push 400 for https://push.example.test/wp/x?auth=cap".to_owned()),
+        PushError::transient_after("apns 429", Some(std::time::Duration::from_mins(15))),
+    ] {
+        let push = FakePush::new(PushMode::Error(error.clone()));
+        let answer = push
+            .send(&Recipient::apns("device-a"), &Notification::new("a", "b"))
+            .await
+            .expect_err("the mode is an error");
+        assert_eq!(answer, error);
+        assert!(push.sent().is_empty());
+    }
+}
+
+#[pollster::test]
 async fn fake_captcha_allow_all_and_token_lists() {
     use cratefield_core::Captcha;
     let allow_all = FakeCaptcha::allow_all();

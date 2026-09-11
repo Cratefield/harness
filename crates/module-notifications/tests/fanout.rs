@@ -215,7 +215,7 @@ async fn nothing_but_unregistered_ever_prunes() {
         PushMode::NotConfigured,
         PushMode::DeliverOk,
     ] {
-        let push = FakePush::new(mode);
+        let push = FakePush::new(mode.clone());
         let kit = kit_with(Arc::new(push.clone()), categories(), &[]);
         register(&kit, ALICE, &devices()[..1]).await;
         notify_and_commit(&kit, ALICE, BOOKING).await;

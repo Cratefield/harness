@@ -704,9 +704,12 @@ impl Module for Notifications {
         //
         // `SignedLink` says what is actually true: the proof is an
         // artifact this service issued, so production must have a usable
-        // `Signer`. Without one `unsubscribe_url` cannot mint a token,
-        // and every mail's `List-Unsubscribe` degrades to a page that
-        // does not accept the one-click POST it advertises.
+        // `Signer`. Without one `unsubscribe_url` cannot mint a token at
+        // all, so `compose` ships no `List-Unsubscribe` header rather
+        // than one naming a URI that cannot accept the POST (issue #234)
+        // — which keeps the mail compliant, and costs the venture the
+        // one-click standing Gmail and Yahoo want from a bulk sender.
+        // This check is how a deployment finds out before its mail does.
         RoutePolicy::SignedLink
     }
 
