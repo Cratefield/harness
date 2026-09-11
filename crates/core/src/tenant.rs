@@ -213,6 +213,36 @@ pub trait ResolveTenant: Send + Sync {
     fn resolve(&self, host: &str) -> Resolution;
 }
 
+/// The registry id a deployment without a registry resolves to.
+///
+/// Not a magic string scattered across three runtimes: one constant, so
+/// a log line from a Cloudflare Worker and one from a `cargo test` run
+/// say the same word.
+pub const IMPLICIT_TENANT: &str = "default";
+
+/// The resolver a deployment with **no control database** uses: every
+/// host is the one venture, always `active`.
+///
+/// This is not the Cloudflare path, it is the *no registry* path — which
+/// is also the browser runtime, and native in every development run and
+/// every test (TENANT-ROUTING.md §6). Scoping it to Cloudflare would mean
+/// `cargo test` cannot resolve a tenant and every module suite 500s.
+///
+/// A module is therefore written once, against the stricter shape, and
+/// the path most ventures actually run in production is not the one
+/// without the isolation.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ImplicitTenant;
+
+impl ResolveTenant for ImplicitTenant {
+    fn resolve(&self, _host: &str) -> Resolution {
+        Resolution::Found {
+            id: IMPLICIT_TENANT.to_owned(),
+            status: TenantStatus::Active,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{Resolution, TenantStatus};
@@ -221,6 +251,23 @@ mod tests {
         Resolution::Found {
             id: "acme".to_owned(),
             status,
+        }
+    }
+
+    #[test]
+    fn the_implicit_tenant_answers_for_every_host() {
+        use super::{IMPLICIT_TENANT, ImplicitTenant, ResolveTenant};
+        // A deployment with no registry has one tenant, and which host
+        // asked is not a question it can answer differently - including
+        // for a host it has never seen, which is what a test client and a
+        // loopback probe both look like.
+        for host in ["acme.example", "localhost:8787", ""] {
+            let tenant = ImplicitTenant
+                .resolve(host)
+                .admit()
+                .expect("the implicit tenant always serves");
+            assert_eq!(tenant.id().as_str(), IMPLICIT_TENANT);
+            assert_eq!(tenant.status(), TenantStatus::Active);
         }
     }
 
