@@ -1000,6 +1000,7 @@ dependencies = [
 name = "cratefield-dashboard"
 version = "0.1.1"
 dependencies = [
+ "async-trait",
  "axum",
  "bytes",
  "cratefield-access",
@@ -1010,6 +1011,7 @@ dependencies = [
  "cratefield-core",
  "cratefield-provisioning",
  "cratefield-testing",
+ "futures-util",
  "http",
  "pollster",
  "sea-query",

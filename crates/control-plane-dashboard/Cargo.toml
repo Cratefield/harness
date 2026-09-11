@@ -21,6 +21,9 @@ axum = { workspace = true }
 http = { workspace = true }
 sea-query = { workspace = true }
 bytes = { workspace = true }
+# The venture health checks are polled together rather than queued, so the
+# page costs the slowest check and not the sum of all of them.
+futures-util = { workspace = true }
 tracing = { workspace = true }
 time = { workspace = true }
 
@@ -28,5 +31,6 @@ time = { workspace = true }
 cratefield-access = { path = "../control-plane-access" }
 cratefield-adapter-sqlite = { path = "../adapter-sqlite" }
 cratefield-testing = { path = "../testing" }
+async-trait = { workspace = true }
 pollster = { workspace = true }
 tower = { workspace = true }
