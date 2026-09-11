@@ -295,12 +295,12 @@ impl Database for CappedDb {
         self.inner.query(stmt).await
     }
 
-    async fn batch(&self, stmts: &[Statement]) -> Result<(), DbError> {
+    async fn batch_atomic(&self, stmts: &[Statement]) -> Result<(), DbError> {
         // One permit for the whole batch: `batch` holds its connection
         // across `pool.begin()`, so a per-statement permit would let the
         // total be exceeded by exactly the number of open transactions.
         let _permit = self.permit().await?;
-        self.inner.batch(stmts).await
+        self.inner.batch_atomic(stmts).await
     }
 }
 

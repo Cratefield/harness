@@ -693,7 +693,7 @@ async fn insert_table(
         }
         statements.push(Statement::with_values(sql, values));
     }
-    db.batch(&statements)
+    db.batch_atomic(&statements)
         .await
         .map_err(|err| format!("table {}: {err}", entry.table))
 }

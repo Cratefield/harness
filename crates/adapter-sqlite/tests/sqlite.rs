@@ -75,14 +75,14 @@ async fn batch_is_atomic() {
             "INSERT INTO subscribers (id, email, status) VALUES ('b', 'b@x.dev', 'pending')",
         ),
     ];
-    db.batch(&ok).await.expect("batch commits");
+    db.batch_atomic(&ok).await.expect("batch commits");
     let bad = vec![
         Statement::new(
             "INSERT INTO subscribers (id, email, status) VALUES ('c', 'c@x.dev', 'pending')",
         ),
         Statement::new("THIS IS NOT SQL"),
     ];
-    assert!(db.batch(&bad).await.is_err(), "bad batch fails");
+    assert!(db.batch_atomic(&bad).await.is_err(), "bad batch fails");
     // 'c' rolled back with the failed batch.
     let count = db
         .query(&Statement::new("SELECT id FROM subscribers"))

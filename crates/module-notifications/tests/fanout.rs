@@ -80,7 +80,7 @@ async fn notify_and_commit(kit: &Kit, account: &str, category: &str) -> usize {
     // On the statements, not the device count: since #187 the batch can
     // carry an inbox row for an account with no device at all.
     if !enqueued.statements().is_empty() {
-        db.batch(enqueued.statements()).await.expect("batch");
+        db.batch_atomic(enqueued.statements()).await.expect("batch");
     }
     enqueued.len()
 }
@@ -612,7 +612,7 @@ async fn a_notifier_taken_before_the_last_category_can_still_send_it() {
         .notify(&*db, ALICE, ROOM_STARTING, notification)
         .await
         .expect("the handle sends what the module declared");
-    db.batch(enqueued.statements()).await.expect("batch");
+    db.batch_atomic(enqueued.statements()).await.expect("batch");
     kit.notifier.drain(&kit.scope()).await.expect("drain");
 
     let (_, sent) = push.last().expect("a send");
@@ -655,7 +655,7 @@ async fn a_notify_inside_another_modules_batch_is_atomic_with_its_write() {
     )];
     failing.extend(enqueued.statements().iter().cloned());
     assert!(
-        db.batch(&failing).await.is_err(),
+        db.batch_atomic(&failing).await.is_err(),
         "the caller's own statement must fail this batch"
     );
     assert_eq!(
@@ -670,7 +670,7 @@ async fn a_notify_inside_another_modules_batch_is_atomic_with_its_write() {
         "CREATE TABLE IF NOT EXISTS booking_probe (id TEXT PRIMARY KEY)",
     )];
     working.extend(enqueued.into_statements());
-    db.batch(&working).await.expect("batch commits");
+    db.batch_atomic(&working).await.expect("batch commits");
     assert_eq!(kit.count(OUTBOX).await, 2);
 }
 
@@ -739,7 +739,7 @@ async fn a_badge_travels_only_for_a_category_that_asked_for_one() {
             .notify(&*db, ALICE, category, notification)
             .await
             .expect("notify");
-        db.batch(enqueued.statements()).await.expect("batch");
+        db.batch_atomic(enqueued.statements()).await.expect("batch");
         kit.notifier.drain(&kit.scope()).await.expect("drain");
         let (_, sent) = push.last().expect("a send");
         assert_eq!(sent.badge, expected, "category {category}");

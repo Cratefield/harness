@@ -8,7 +8,7 @@
 //! Two functions here carry the module's correctness weight and both work by
 //! counting affected rows rather than by reading and then writing: `spend_state`
 //! (an OAuth state may be used exactly once) and `claim_post` (a post may be
-//! published exactly once). `Database::batch` returns `()` and cannot report
+//! published exactly once). `Database::batch_atomic` returns `()` and cannot report
 //! how many rows it touched, so neither may use it.
 
 use cratefield_core::{Clock, Database, DbError, Row, Rows, Statement};

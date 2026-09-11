@@ -152,7 +152,7 @@ impl Database for D1Database {
     }
 
     /// D1 batches are atomic (single implicit transaction).
-    async fn batch(&self, stmts: &[Statement]) -> Result<(), DbError> {
+    async fn batch_atomic(&self, stmts: &[Statement]) -> Result<(), DbError> {
         let mut prepared = Vec::with_capacity(stmts.len());
         for stmt in stmts {
             prepared.push(bind_statement(&self.0, stmt).map_err(|err| {

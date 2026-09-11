@@ -1267,7 +1267,7 @@ pub async fn replace_redirect_uris(
             .values_panic([client_id.to_owned().into(), uri.clone().into()]);
         stmts.push(Statement::render(&insert));
     }
-    db.batch(&stmts).await
+    db.batch_atomic(&stmts).await
 }
 
 /// Inserts one exact redirect URI for a client.

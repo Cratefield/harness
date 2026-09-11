@@ -11,13 +11,16 @@
 //!     .referrals(true);
 //! ```
 //!
-//! **Positions are atomic.** Confirmation runs `1 + MAX(position)` for
-//! the product *inside* the position UPDATE, and that UPDATE plus the
-//! referrer credit run in one [`cratefield_core::Database::batch`] —
-//! atomic on D1, a transaction on the sqlite adapter — behind a
-//! single-row per-product mutex on `waitlist_position_lock` that
-//! serializes concurrent confirms of one product on every engine
-//! (issues #20, #173). Positions are dense at assign time per product
+//! **Positions are atomic.** Confirmation reads the product's position
+//! from a per-product counter on `waitlist_position_lock` that the
+//! lock-taking UPDATE increments in the same statement, and that UPDATE
+//! plus the flip and the referrer credit run in one
+//! [`cratefield_core::Database::batch_atomic`] — atomic on D1, a
+//! transaction on the sqlite and Postgres adapters — so concurrent
+//! confirms of one product serialize on every engine and a UNIQUE
+//! (product, position) index means a duplicate position cannot survive
+//! even if the allocation raced (issues #20, #173, #126). Positions are
+//! dense at assign time per product
 //! and never recomputed on delete.
 //!
 //! **No enumeration** (section 11): `POST /v1/waitlist` answers the same
@@ -88,6 +91,13 @@ const MIGRATION_ANONYMISABLE_ENTRY: SqlMigration = SqlMigration::new(
     "0005",
     "anonymisable_entry",
     include_str!("../migrations/sqlite/0005_anonymisable_entry.sql"),
+);
+
+/// The per-product position counter and its UNIQUE backstop (issue #126).
+const MIGRATION_POSITION_COUNTER: SqlMigration = SqlMigration::new(
+    "0006",
+    "position_counter",
+    include_str!("../migrations/sqlite/0006_position_counter.sql"),
 );
 
 /// A per-product waitlist.
@@ -289,12 +299,13 @@ impl Module for Waitlist {
     }
 
     fn migrations(&self) -> Migrations {
-        const MIGRATIONS: [SqlMigration; 5] = [
+        const MIGRATIONS: [SqlMigration; 6] = [
             MIGRATION_INIT,
             MIGRATION_ENTRY_GENERATION,
             MIGRATION_MAIL_COOLDOWN,
             MIGRATION_POSITION_LOCK,
             MIGRATION_ANONYMISABLE_ENTRY,
+            MIGRATION_POSITION_COUNTER,
         ];
         // The array is the apply order; this refuses a gap, a duplicate
         // or an entry out of order at build time (issue #27).

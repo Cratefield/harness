@@ -23,7 +23,7 @@ async fn notify_and_commit(kit: &Kit, account: &str, category: &str, title: &str
         .await
         .expect("notify");
     if !enqueued.statements().is_empty() {
-        db.batch(enqueued.statements()).await.expect("batch");
+        db.batch_atomic(enqueued.statements()).await.expect("batch");
     }
 }
 
@@ -71,7 +71,7 @@ async fn a_push_opt_out_switches_off_push_and_not_the_record() {
     assert_eq!(enqueued.skipped(), Some(Skipped::PreferenceOff));
     assert!(enqueued.wrote_inbox(), "but the record is kept");
 
-    db.batch(enqueued.statements()).await.expect("batch");
+    db.batch_atomic(enqueued.statements()).await.expect("batch");
     assert_eq!(kit.count(INBOX).await, 1);
     assert_eq!(
         list(&kit, ALICE, "").await["notifications"][0]["title"],
@@ -320,7 +320,7 @@ async fn the_data_the_inbox_keeps_is_the_data_the_push_carries() {
         )
         .await
         .expect("notify");
-    db.batch(enqueued.statements()).await.expect("batch");
+    db.batch_atomic(enqueued.statements()).await.expect("batch");
 
     let item = &list(&kit, ALICE, "").await["notifications"][0];
     assert_eq!(item["notification_id"], enqueued.notification_id());

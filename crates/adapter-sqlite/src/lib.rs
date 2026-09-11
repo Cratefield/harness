@@ -236,7 +236,7 @@ impl Database for SqliteDatabase {
     }
 
     /// Runs all statements in one transaction (atomic on SQLite).
-    async fn batch(&self, stmts: &[Statement]) -> Result<(), DbError> {
+    async fn batch_atomic(&self, stmts: &[Statement]) -> Result<(), DbError> {
         let conn = self.conn.lock().expect("sqlite lock uncontended");
         let tx = conn
             .unchecked_transaction()

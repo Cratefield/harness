@@ -204,7 +204,7 @@ impl Database for Postgres {
     }
 
     /// Runs all statements in one transaction (atomic on Postgres).
-    async fn batch(&self, stmts: &[Statement]) -> Result<(), DbError> {
+    async fn batch_atomic(&self, stmts: &[Statement]) -> Result<(), DbError> {
         let mut tx = self
             .pool
             .begin()

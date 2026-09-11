@@ -1,10 +1,13 @@
 //! Sea-query data access for `waitlist_entries` (ADR 0004). Positions
 //! are assigned **inside** [`confirm_entry`]'s single
-//! [`cratefield_core::Database::batch`] call — the `1 + MAX(position)`
-//! subquery runs inside the UPDATE, under a single-row per-product
-//! mutex on `waitlist_position_lock` that serializes concurrent confirms
-//! of one product on every engine (atomic on D1, a locked transaction
-//! on the sqlite and Postgres adapters; issues #20, #173).
+//! [`cratefield_core::Database::batch_atomic`] call — the position comes
+//! from a per-product counter on `waitlist_position_lock`, incremented by
+//! the same single-row UPDATE that takes the lock, so concurrent confirms
+//! of one product serialize and never share a position on every engine
+//! (atomic on D1, a locked transaction on the sqlite and Postgres
+//! adapters; issues #20, #173, #126). A UNIQUE(product, position) index
+//! backstops the allocation: a duplicate cannot survive even if the
+//! counter ever raced.
 
 use cratefield_core::{Database, DbError, Row, Statement};
 use sea_query::{Alias, Expr, Func, Query, SimpleExpr};
@@ -202,41 +205,51 @@ pub(crate) async fn refresh_pending(
     db.execute(&Statement::render(&update)).await
 }
 
-/// The next position for `product`: `1 + MAX(position)`, computed inside
-/// the UPDATE statement so it is evaluated under the batch's atomicity.
-fn next_position_expr(product: &str) -> SimpleExpr {
-    let mut subquery = Query::select();
-    subquery
-        .expr(Func::max(Expr::col((
-            iden("waitlist_entries"),
-            iden("position"),
-        ))))
-        .from(iden("waitlist_entries"))
-        .and_where(Expr::col((iden("waitlist_entries"), iden("product"))).eq(product));
+/// The next position for `product`: read from the per-product counter on
+/// `waitlist_position_lock` that [`confirm_entry`]'s take-lock statement
+/// has already incremented *inside this batch's transaction* (issue
+/// #126). The old `1 + MAX(position)` was computed from the entries
+/// table, so its safety rested entirely on the mutex statement before it
+/// — and that read could not survive any future code path that read it
+/// outside the locked transaction. The counter makes allocation a plain
+/// read of a row this transaction holds a write lock on; a duplicate
+/// that slips through anyway is killed by the UNIQUE(product, position)
+/// index (migration 0006) rather than silently surviving the race.
+fn allocated_position_expr(product: &str) -> SimpleExpr {
+    let mut counter = Query::select();
+    counter
+        .expr(Expr::col(iden("next_position")))
+        .from(iden("waitlist_position_lock"))
+        .and_where(Expr::col(iden("product")).eq(product))
+        .limit(1);
     let coalesced = Func::coalesce([
-        SimpleExpr::SubQuery(None, Box::new(subquery.into_sub_query_statement())),
+        SimpleExpr::SubQuery(None, Box::new(counter.into_sub_query_statement())),
         0i64.into(),
     ]);
-    Expr::expr(coalesced).add(1)
+    Expr::expr(coalesced).into()
 }
 
 /// Flips a pending entry to confirmed, assigns its dense per-product
 /// position and referral code, and credits the referrer — all inside one
-/// atomic [`Database::batch`]. Returns `Ok(false)` when the entry was
+/// atomic [`Database::batch_atomic`]. Returns `Ok(false)` when the entry was
 /// already confirmed (a replayed link) or when `generation` is not the
 /// entry's current one (a token from an earlier lifecycle, issue #127).
 ///
-/// Positions are never recomputed: the `MAX` only looks forward, and
-/// deleting rows leaves gaps on purpose (issue #11).
+/// Positions are never recomputed: the counter only ever moves forward,
+/// and deleting rows leaves gaps on purpose (issue #11).
 ///
 /// The batch opens with a single-row per-product mutex on
 /// `waitlist_position_lock`: an `INSERT … ON CONFLICT DO NOTHING` that
-/// materialises the product's lock row, then an `UPDATE … WHERE
-/// product = ?` of that one row. Concurrent confirms of the product
+/// materialises the product's counter row, then an `UPDATE … WHERE
+/// product = ?` of that one row that both takes the lock and increments
+/// the per-product position counter. Concurrent confirms of the product
 /// queue on that row (the conflict wait covers the cold-start race
-/// where the row does not exist yet), so each one's position `MAX`
-/// runs only after the previous confirm committed — positions stay
-/// distinct and dense (issues #20, #173). Locking exactly one row
+/// where the row does not exist yet), so each one allocates its position
+/// only after the previous confirm committed — positions stay distinct
+/// and dense, and the flip reads the counter the same transaction just
+/// advanced rather than a `MAX` over rows another writer could still
+/// touch (issues #20, #173, #126). A UNIQUE(product, position) index
+/// (migration 0006) backstops the allocation. Locking exactly one row
 /// removes the deadlock the old bulk `UPDATE … WHERE product = ?` over
 /// all of `waitlist_entries` caused on Postgres: a multi-row UPDATE
 /// takes row locks in executor order, so two confirms could grab the
@@ -266,6 +279,14 @@ pub(crate) async fn confirm_entry(
     take_lock
         .table(iden("waitlist_position_lock"))
         .value(iden("updated_at"), now)
+        // The lock claim and the position allocation are the same
+        // statement (issue #126): whoever wins the row lock has also
+        // taken the next counter value, so no confirm can observe a
+        // counter it did not itself advance.
+        .value(
+            iden("next_position"),
+            Expr::col(iden("next_position")).add(1),
+        )
         .and_where(Expr::col(iden("product")).eq(row.product.as_str()));
 
     let mut flip = Query::update();
@@ -273,7 +294,7 @@ pub(crate) async fn confirm_entry(
         .values([
             (iden("status"), STATUS_CONFIRMED.into()),
             (iden("confirmed_at"), now.into()),
-            (iden("position"), next_position_expr(&row.product)),
+            (iden("position"), allocated_position_expr(&row.product)),
             (iden("referral_code"), referral_code.into()),
         ])
         .and_where(Expr::col(iden("id")).eq(row.id.as_str()))
@@ -307,7 +328,7 @@ pub(crate) async fn confirm_entry(
         stmts.push(Statement::render(&credit));
     }
     stmts.push(Statement::render(&flip));
-    db.batch(&stmts).await?;
+    db.batch_atomic(&stmts).await?;
     // The batch reports no per-statement counts; the row's state is the
     // truth for whether this call flipped anything.
     Ok(find_by_id(db, &row.id)

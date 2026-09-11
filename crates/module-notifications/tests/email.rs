@@ -68,7 +68,7 @@ async fn notify_and_drain(kit: &Kit, account: &str) {
         .await
         .expect("notify");
     if !enqueued.statements().is_empty() {
-        db.batch(enqueued.statements()).await.expect("batch");
+        db.batch_atomic(enqueued.statements()).await.expect("batch");
     }
     kit.notifier.drain(&kit.scope()).await.expect("drain");
 }
@@ -502,7 +502,7 @@ async fn the_footer_offers_stopping_every_category_and_it_holds() {
             .await
             .expect("notify");
         if !enqueued.statements().is_empty() {
-            db.batch(enqueued.statements()).await.expect("batch");
+            db.batch_atomic(enqueued.statements()).await.expect("batch");
         }
     }
     kit.notifier.drain(&kit.scope()).await.expect("drain");

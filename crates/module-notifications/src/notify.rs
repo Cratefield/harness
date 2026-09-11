@@ -4,7 +4,7 @@
 //! # The shape of a send
 //!
 //! [`Notifier::notify`] does **not** write. It returns [`Enqueued`], whose
-//! statements the caller appends to its own `db.batch(..)`, so a booking's
+//! statements the caller appends to its own `db.batch_atomic(..)`, so a booking's
 //! confirmation row and the notification that announces it commit together
 //! or not at all — the core [`Outbox`] contract (#128). Then
 //! [`Notifier::deliver_now`] uses `Defer` to *attempt* immediate delivery,
@@ -142,7 +142,7 @@ pub enum Skipped {
 
 /// The outbox inserts one [`Notifier::notify`] produced.
 ///
-/// Append [`Enqueued::statements`] to the caller's own `db.batch(..)`.
+/// Append [`Enqueued::statements`] to the caller's own `db.batch_atomic(..)`.
 /// Nothing is written until that batch runs.
 #[derive(Debug, Clone)]
 pub struct Enqueued {
@@ -670,7 +670,7 @@ impl Notifier {
     /// Prepares one notification for every device `account_id` has.
     ///
     /// Writes nothing: append [`Enqueued::statements`] to your own
-    /// `db.batch(..)` so the notification is durable exactly when your
+    /// `db.batch_atomic(..)` so the notification is durable exactly when your
     /// state change is, then call [`Notifier::deliver_now`].
     ///
     /// `message` is either a [`Notification`] the caller wrote — today's
@@ -829,7 +829,7 @@ impl Notifier {
         // still have an inbox row waiting in this batch. Commit on the
         // statements, not on the device count.
         if !enqueued.statements().is_empty() {
-            db.batch(enqueued.statements()).await?;
+            db.batch_atomic(enqueued.statements()).await?;
         }
         // Outside that `if`, because it also reports a missing
         // translation (#190) — and the fan-out that queued nothing at all
@@ -1070,7 +1070,7 @@ impl Notifier {
                 .await?;
             match mailer.send(mail).await {
                 Ok(SendOutcome::Sent { .. }) => {
-                    db.batch(&[
+                    db.batch_atomic(&[
                         store::record_email_statement(
                             &self.new_id(),
                             &burst.account_id,
@@ -1449,7 +1449,7 @@ impl Notifier {
 
         match mailer.send(mail).await {
             Ok(SendOutcome::Sent { .. }) => {
-                db.batch(&[
+                db.batch_atomic(&[
                     store::record_email_statement(
                         &self.new_id(),
                         &job.account_id,
@@ -1717,7 +1717,7 @@ impl Notifier {
         record: &OutboxRecord,
         subscription: &Subscription,
     ) -> Result<(), NotifyError> {
-        db.batch(&[
+        db.batch_atomic(&[
             store::delete_subscription_statement(&subscription.id),
             store::delete_outbox_statement(&record.id),
         ])
@@ -1763,7 +1763,7 @@ impl Notifier {
         let created_at = store::outbox_created_at(db, &record.id)
             .await?
             .unwrap_or_else(|| now.to_owned());
-        db.batch(&[
+        db.batch_atomic(&[
             store::dead_letter_statement(
                 record,
                 &store::DeadLetter {

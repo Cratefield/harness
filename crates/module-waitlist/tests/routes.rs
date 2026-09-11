@@ -142,6 +142,16 @@ async fn join_then_confirm_assigns_positions_in_order() {
     }
 }
 
+/// Both confirm threads park here until every task is constructed and
+/// waiting, so the requests genuinely overlap instead of one finishing
+/// before the other starts (issue #126: a concurrency test that passes
+/// because the tasks never overlapped proves nothing). The same
+/// observe-contention-first discipline as adapter-postgres's pool
+/// starvation test.
+fn barrier(n: usize) -> Arc<std::sync::Barrier> {
+    Arc::new(std::sync::Barrier::new(n))
+}
+
 #[pollster::test]
 async fn five_concurrent_confirms_get_distinct_positions() {
     for kit in kits() {
@@ -151,11 +161,14 @@ async fn five_concurrent_confirms_get_distinct_positions() {
         }
         assert_eq!(kit.mailer.sent().len(), 5);
 
+        let gate = barrier(5);
         let mut handles = Vec::new();
         for index in 0..5 {
             let router = kit.router.clone();
             let path = confirm_path(&kit, index);
+            let gate = Arc::clone(&gate);
             handles.push(std::thread::spawn(move || {
+                gate.wait();
                 let request = Request::builder()
                     .method(Method::GET)
                     .uri(path)
@@ -900,10 +913,13 @@ async fn two_remailed_tokens_race_to_one_confirm_and_one_credit() {
         request(&kit.router, Method::POST, "/v1/waitlist", Some(&join_body)).await;
         let second_link = confirm_path(&kit, 2);
 
+        let gate = barrier(2);
         let mut handles = Vec::new();
         for path in [first_link, second_link] {
             let router = kit.router.clone();
+            let gate = Arc::clone(&gate);
             handles.push(std::thread::spawn(move || {
+                gate.wait();
                 let req = Request::builder()
                     .method(Method::GET)
                     .uri(path)
@@ -935,6 +951,54 @@ async fn two_remailed_tokens_race_to_one_confirm_and_one_credit() {
             .and_then(|row| row.get::<i64>("referrals"))
             .expect("referrals");
         assert_eq!(referrals, 1, "one referral, one credit under the race");
+    }
+}
+
+/// Issue #126: the same confirm link replayed — sequentially, so no
+/// concurrency involved — must flip once and credit once. The flip is
+/// conditional (`WHERE status = 'pending'`), and the credit exists only
+/// to pay for that flip; the parity loop runs this against Postgres too,
+/// where the batch is a real transaction rather than an in-process mutex.
+#[pollster::test]
+async fn a_duplicate_confirmation_request_never_credits_again() {
+    for kit in kits() {
+        join(&kit, "ref@example.com", "kontinuum").await;
+        request(&kit.router, Method::GET, &confirm_path(&kit, 0), None).await;
+        let code = column_text(&kit, "ref@example.com", "referral_code").expect("code");
+        let referrer_id = column_text(&kit, "ref@example.com", "id").expect("id");
+
+        let join_body = format!(
+            r#"{{"email":"friend@example.com","product":"kontinuum","ref":"{code}","captchaToken":"x"}}"#
+        );
+        request(&kit.router, Method::POST, "/v1/waitlist", Some(&join_body)).await;
+        let link = confirm_path(&kit, 1);
+
+        for _ in 0..3 {
+            let response = request(&kit.router, Method::GET, &link, None).await;
+            assert_eq!(response.status, StatusCode::SEE_OTHER);
+        }
+
+        assert_eq!(column_int(&kit, "friend@example.com", "position"), Some(2));
+        let stmt = Statement::with_values(
+            "SELECT referrals FROM waitlist_entries WHERE id = ?".to_string(),
+            vec![referrer_id.into()],
+        );
+        let rows = pollster::block_on(kit.db.query(&stmt)).expect("select");
+        let referrals = rows
+            .first()
+            .and_then(|row| row.get::<i64>("referrals"))
+            .expect("referrals");
+        assert_eq!(referrals, 1, "three replays, still one credit");
+    }
+}
+
+/// Issue #126: the port's all-or-nothing batch contract, asserted against
+/// the real adapter of every dialect instead of trusted from its docs. A
+/// batch that fails mid-way must leave nothing visible.
+#[pollster::test]
+async fn batch_atomic_is_all_or_nothing_on_every_dialect() {
+    for kit in kits() {
+        cratefield_testing::assert_batch_is_atomic(&*kit.db).await;
     }
 }
 

@@ -1,5 +1,5 @@
 //! HTTP handlers for `/v1/waitlist` (architecture section 6, issue
-//! #11). Positions are assigned atomically inside `Database::batch`
+//! #11). Positions are assigned atomically inside `Database::batch_atomic`
 //! (see [`crate::store::confirm_entry`]); the POST answers the same
 //! `202 {"ok":true}` bytes whatever the row state.
 
@@ -845,15 +845,15 @@ mod tests {
     use super::{retriable_transaction_failure, unique_code_violation};
     use cratefield_core::DbError;
 
-    fn batch(message: &str) -> DbError {
+    fn test_batch(message: &str) -> DbError {
         DbError::Batch(message.to_owned())
     }
 
     #[test]
     fn unique_code_violation_recognizes_sqlite_and_postgres_wordings() {
         // Given the two dialects' real messages for a referral_code clash…
-        let sqlite = batch("UNIQUE constraint failed: waitlist_entries.referral_code");
-        let postgres = batch(
+        let sqlite = test_batch("UNIQUE constraint failed: waitlist_entries.referral_code");
+        let postgres = test_batch(
             "duplicate key value violates unique constraint \
              \"waitlist_entries_referral_code_key\" DETAIL:  \
              Key (referral_code)=(abc12345) already exists.",
@@ -866,7 +866,7 @@ mod tests {
 
     #[test]
     fn unique_violations_on_other_columns_are_not_code_collisions() {
-        let other = batch(
+        let other = test_batch(
             "duplicate key value violates unique constraint \
              \"waitlist_entries_email_normalized_product_key\" \
              DETAIL:  Key (email_normalized, product)=(nick@example.com, kontinuum) already exists.",
@@ -888,7 +888,7 @@ mod tests {
             "database is locked",
             "database table is locked",
         ] {
-            let err = batch(message);
+            let err = test_batch(message);
             assert!(
                 retriable_transaction_failure(&err),
                 "{message} is retriable"
@@ -899,7 +899,7 @@ mod tests {
 
     #[test]
     fn non_transaction_errors_are_never_retried() {
-        let syntax = batch("error returned from database: syntax error at or near \"UPDAT\"");
+        let syntax = test_batch("error returned from database: syntax error at or near \"UPDAT\"");
         let query = DbError::Query("no such table: waitlist_entries".to_owned());
         assert!(!retriable_transaction_failure(&syntax));
         assert!(!unique_code_violation(&syntax));

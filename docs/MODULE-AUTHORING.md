@@ -950,7 +950,7 @@ Everything else a module can do, with the module that does it:
   `crates/module-email-signup/` — HMAC tokens with purpose and TTL
   through the `Signer` port (ADR
   [0006](adr/0006-signed-tokens-for-opt-in.md)).
-- **Atomic multi-statement writes** (`Database::batch`) and **positions**:
+- **Atomic multi-statement writes** (`Database::batch_atomic`) and **positions**:
   `crates/module-waitlist/src/store.rs`.
 - **Mail templates**: `crates/module-email-signup/src/mail.rs` — askama
   templates shipped as `pub fn default_templates()`, registered by the

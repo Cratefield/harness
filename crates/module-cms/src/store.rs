@@ -139,7 +139,7 @@ pub(crate) async fn publish_item(
     now: &str,
 ) -> Result<i64, DbError> {
     let next = item.version + 1;
-    db.batch(&[
+    db.batch_atomic(&[
         Statement::with_values(
             "INSERT INTO cms_revision \
              (id, collection, slug, version, title, body, data, created_at) \
@@ -198,7 +198,7 @@ pub(crate) async fn delete_item(
     collection: &str,
     slug: &str,
 ) -> Result<(), DbError> {
-    db.batch(&[
+    db.batch_atomic(&[
         Statement::with_values(
             "DELETE FROM cms_revision WHERE collection = ? AND slug = ?",
             vec![text(collection), text(slug)],

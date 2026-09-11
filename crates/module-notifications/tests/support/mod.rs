@@ -387,11 +387,11 @@ impl cratefield_core::Database for RacingDb {
         self.inner.query(stmt).await
     }
 
-    async fn batch(&self, stmts: &[Statement]) -> Result<(), cratefield_core::DbError> {
+    async fn batch_atomic(&self, stmts: &[Statement]) -> Result<(), cratefield_core::DbError> {
         for stmt in stmts {
             self.maybe_race(&stmt.sql).await;
         }
-        self.inner.batch(stmts).await
+        self.inner.batch_atomic(stmts).await
     }
 }
 

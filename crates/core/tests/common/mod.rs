@@ -281,7 +281,7 @@ impl Database for SelectOneDb {
         }
     }
 
-    async fn batch(&self, _stmts: &[Statement]) -> Result<(), DbError> {
+    async fn batch_atomic(&self, _stmts: &[Statement]) -> Result<(), DbError> {
         Err(DbError::Batch("unsupported".to_string()))
     }
 }
@@ -299,7 +299,7 @@ impl Database for FailingDb {
         Err(DbError::Query("db is down".to_string()))
     }
 
-    async fn batch(&self, _stmts: &[Statement]) -> Result<(), DbError> {
+    async fn batch_atomic(&self, _stmts: &[Statement]) -> Result<(), DbError> {
         Err(DbError::Batch("db is down".to_string()))
     }
 }

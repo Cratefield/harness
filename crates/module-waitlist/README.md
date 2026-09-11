@@ -27,12 +27,12 @@ let module = Waitlist::new()
 ```
 
 **Position semantics**: positions are per product, assigned densely at
-confirm time as `1 + max(position)` inside one atomic `Database::batch`
-that opens with a per-product lock statement (`UPDATE … SET referrals =
-referrals WHERE product = ?` — value-neutral), so concurrent confirms of
-the same product serialize on every engine (D1, SQLite, Postgres) and
-never share a position. Positions are never recomputed when rows are
-deleted.
+confirm time from a per-product counter on `waitlist_position_lock` that
+the lock-taking UPDATE increments, inside one all-or-nothing
+`Database::batch_atomic`, so concurrent confirms of the same product
+serialize on every engine (D1, SQLite, Postgres) and never share a
+position; a UNIQUE(product, position) index backstops the allocation.
+Positions are never recomputed when rows are deleted.
 
 Register the default mail templates in `harness.rs`:
 

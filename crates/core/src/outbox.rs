@@ -10,7 +10,7 @@
 //!
 //! 1. A module writes an outbox row **inside the same batch** as its state
 //!    change — [`enqueue_statement`](Outbox::enqueue_statement) returns a
-//!    [`Statement`] the module appends to its own `db.batch(..)`, so the row
+//!    [`Statement`] the module appends to its own `db.batch_atomic(..)`, so the row
 //!    commits atomically with the change or not at all.
 //! 2. It then uses `Defer` only to *attempt* immediate delivery: lease due rows
 //!    with [`claim_due`](Outbox::claim_due), deliver, and
@@ -77,7 +77,7 @@ impl Outbox {
     }
 
     /// The `INSERT` that enqueues one unit of work. Return it into the module's
-    /// **own** `db.batch(..)` alongside the state change, so the row is durable
+    /// **own** `db.batch_atomic(..)` alongside the state change, so the row is durable
     /// exactly when the change is. `id` is a caller-supplied ULID; `at` is an
     /// RFC 3339 timestamp used for both `created_at` and the initial
     /// `next_attempt_at` (deliver as soon as possible).
