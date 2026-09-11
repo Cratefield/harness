@@ -217,9 +217,13 @@ async fn a_suppression_that_lands_while_the_summary_is_in_flight_is_not_lost() {
 
     // The window has rolled; the summary is due. The interloper stands in
     // for the concurrent pass: one more suppression commits immediately
-    // before the clear runs, after the burst was read as eight.
+    // before the clear runs, after the burst was read as eight. It lands
+    // in the **same second** as the burst's newest counted row — a flood
+    // puts several suppressions in one second by definition, and the
+    // stored spelling has one-second resolution — so only an identity
+    // bound, not a timestamp bound, can tell it apart.
     kit.clock.advance(WINDOW);
-    let late_at = support::NOW + WINDOW + 8;
+    let late_at = support::NOW + 7;
     racing.interleave(
         "notifications_email_suppressed",
         Statement::with_values(

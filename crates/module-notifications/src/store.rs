@@ -1472,14 +1472,15 @@ pub(crate) struct SuppressedBurst {
     pub category: String,
     /// How many notifications the window suppressed.
     pub count: usize,
+    /// The ids of exactly the rows the count covers. The clear is over
+    /// these, not over a timestamp: `suppressed_at` is stored to the
+    /// second, so a suppression written in the newest counted row's own
+    /// second — after the read, before the delete — is indistinguishable
+    /// from the counted ones by time, and only identity closes that.
+    pub ids: Vec<String>,
     /// When the first one was held back — the burst window's own start,
     /// and what the summary's idempotency key is derived from.
     pub first_suppressed_at: String,
-    /// When the last one the count covers was held back. The clear is
-    /// bounded by this, not by the pair: a suppression written between the
-    /// read and the delete belongs to a summary not yet counted, and the
-    /// outbox row behind it is already gone.
-    pub last_suppressed_at: String,
 }
 
 /// Whether this exact notification is already on the suppressed list.
@@ -1567,6 +1568,9 @@ pub(crate) async fn suppressed_email_bursts(
         .limit(limit);
     let mut bursts: Vec<SuppressedBurst> = Vec::new();
     for row in db.query(&Statement::render(&select)).await?.rows {
+        let row_id = row
+            .get::<String>("id")
+            .ok_or_else(|| corrupt(EMAIL_SUPPRESSED, "?", "id"))?;
         let account_id = row
             .get::<String>("account_id")
             .ok_or_else(|| corrupt(EMAIL_SUPPRESSED, "?", "account_id"))?;
@@ -1580,41 +1584,32 @@ pub(crate) async fn suppressed_email_bursts(
             .iter_mut()
             .find(|burst| burst.account_id == account_id && burst.category == category)
         {
-            // Rows arrive `suppressed_at` ascending, so the last one
-            // folded in for a pair is that burst's newest suppression.
             Some(burst) => {
                 burst.count += 1;
-                burst.last_suppressed_at = suppressed_at;
+                burst.ids.push(row_id);
             }
             None => bursts.push(SuppressedBurst {
                 account_id,
                 category,
                 count: 1,
-                first_suppressed_at: suppressed_at.clone(),
-                last_suppressed_at: suppressed_at,
+                ids: vec![row_id],
+                first_suppressed_at: suppressed_at,
             }),
         }
     }
     Ok(bursts)
 }
 
-/// Deletes the suppressed rows a burst's count covered — up to and
-/// including `last_suppressed_at`, and no further. A row written after
-/// the read is a notification the outbox has already dropped and no
-/// summary has counted; deleting it with this batch would lose it
-/// forever, which is the failure #232 exists to close.
+/// Deletes exactly the suppressed rows a burst's count covered, by id.
+/// The delete and the count are the same set by construction — a
+/// timestamp bound could not say that, because `suppressed_at` is stored
+/// to the second and a flood puts several suppressions in one second.
 #[must_use]
-pub(crate) fn clear_email_suppression_statement(
-    account_id: &str,
-    category: &str,
-    last_suppressed_at: &str,
-) -> Statement {
+pub(crate) fn clear_email_suppression_statement(ids: &[String]) -> Statement {
     let mut delete = Query::delete();
     delete
         .from_table(iden(EMAIL_SUPPRESSED))
-        .and_where(Expr::col(iden("account_id")).eq(account_id))
-        .and_where(Expr::col(iden("category")).eq(category))
-        .and_where(Expr::col(iden("suppressed_at")).lte(last_suppressed_at));
+        .and_where(Expr::col(iden("id")).is_in(ids.to_vec()));
     Statement::render(&delete)
 }
 

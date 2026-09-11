@@ -1032,19 +1032,15 @@ impl Notifier {
             {
                 continue;
             }
-            // Bounded by what was counted, not by the pair: a suppression
-            // that lands mid-send belongs to a summary not yet written.
-            // The next pass sees it — its read of the trailing window
-            // holds the summary this pass just recorded, so the burst
-            // waits for the window to roll again rather than mailing
-            // twice.
-            let clear = || {
-                store::clear_email_suppression_statement(
-                    &burst.account_id,
-                    &burst.category,
-                    &burst.last_suppressed_at,
-                )
-            };
+            // The clear is over the ids the count covered, by identity.
+            // A suppression that lands mid-send is not in that set —
+            // `suppressed_at` has one-second resolution, so a timestamp
+            // bound could not separate it from the counted rows — and the
+            // next pass sees it: its read of the trailing window holds
+            // the summary this pass just recorded, so the burst waits for
+            // the window to roll again rather than mailing twice.
+            let burst_ids = burst.ids.clone();
+            let clear = || store::clear_email_suppression_statement(&burst_ids);
             let (Some(category), Some(target)) = (
                 self.category(&burst.category).cloned().ok(),
                 store::email_target(db, &burst.account_id)
