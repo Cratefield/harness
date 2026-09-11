@@ -19,18 +19,41 @@
 #![forbid(unsafe_code)]
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use axum::extract::{Path, State};
 use axum::response::{Html, IntoResponse, Redirect, Response};
 use axum::routing::{get, post};
 use cratefield_accounts::{Repository, Venture, VentureStatus};
 use cratefield_console::{LOGIN_PATH, current_session};
-use cratefield_core::{Database, Migrations, Module, ModuleContext, Port, SqlMigration, Statement};
+use cratefield_core::{
+    Database, HttpPolicy, Migrations, Module, ModuleContext, Port, SqlMigration, Statement,
+};
 use http::{HeaderMap, StatusCode, header};
 use time::format_description::well_known::Rfc3339;
 
 /// Where the dashboard is mounted (`/v1/<name>`), so its own links resolve.
 const BASE: &str = "/v1/dashboard";
+
+/// What the dashboard will spend on one venture's `/__health`.
+///
+/// The port's own default is [`DEFAULT_RESPONSE_TIMEOUT`] — ten seconds —
+/// which is a sensible default for an API call and an eternity inside a
+/// page render. A health endpoint that has not answered in three seconds
+/// is not healthy, and `FAILING /__health — unreachable` is the truthful
+/// thing to render about it. Four KiB is far more than `/__health`
+/// returns, and caps what a compromised venture can make the control
+/// plane buffer.
+///
+/// The bound is enforced by `BoundedHttpClient`, which both runtimes wrap
+/// `ports.http` in, through the `Clock` port. A caller may only tighten
+/// the port's bounds, never loosen them.
+///
+/// [`DEFAULT_RESPONSE_TIMEOUT`]: cratefield_core::DEFAULT_RESPONSE_TIMEOUT
+const HEALTH_POLICY: HttpPolicy = HttpPolicy {
+    max_response_bytes: 4 * 1024,
+    timeout: Duration::from_secs(3),
+};
 
 /// The control-plane account dashboard.
 pub struct Dashboard;
@@ -225,6 +248,7 @@ async fn check_health(ctx: &ModuleContext, venture: &Venture) -> HealthVerdict {
         .method(http::Method::GET)
         .uri(&url)
         .header(header::USER_AGENT, "cratefield-dashboard")
+        .extension(HEALTH_POLICY)
         .body(bytes::Bytes::new());
     let request = match request {
         Ok(request) => request,
@@ -386,12 +410,24 @@ async fn ventures(State(state): State<Arc<DashboardState>>, headers: HeaderMap) 
         }
     };
 
+    // One fan-out, not a queue. The verdicts are independent, so awaiting
+    // them one after another made the page cost the SUM of every
+    // venture's timeout: ten unreachable ventures at the port's old
+    // ten-second default was a hundred seconds of blank page. Polled
+    // together, the page costs the slowest single check.
+    //
+    // `join_all` is cooperative concurrency in this one task, not spawned
+    // work — which is the only kind available on the Workers runtime,
+    // where these futures are `!Send`.
+    let verdicts =
+        futures_util::future::join_all(ventures.iter().map(|venture| check_health(ctx, venture)))
+            .await;
+
     let mut list = String::new();
     if ventures.is_empty() {
         list.push_str("<p>No ventures yet. Create one in the console.</p>");
     } else {
-        for venture in &ventures {
-            let health = check_health(ctx, venture).await;
+        for (venture, health) in ventures.iter().zip(verdicts) {
             list.push_str(&format!(
                 "<li><a href=\"{BASE}/ventures/{id}\">{slug}</a> — \
                  <strong>{status}</strong> · {subdomain} · {health}</li>",
@@ -615,6 +651,10 @@ mod tests {
     use cratefield_access::{DEFAULT_TTL_SECS, issue_session};
     use cratefield_testing::{FakeHttpClient, TestHarness};
     use http::{Method, Request as HttpRequest};
+    use std::future::Future;
+    use std::pin::Pin;
+    use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+    use std::task::{Context, Poll};
     use tower::util::ServiceExt;
 
     const EMAIL: &str = "op@cratefield.com";
@@ -703,6 +743,189 @@ mod tests {
             ))
             .await
             .expect("progress row");
+    }
+
+    // -----------------------------------------------------------------------
+    // A probe that makes "concurrently" and "with a deadline" observable
+    //
+    // The kit's own `FakeHttpClient` can express neither: it answers
+    // without ever yielding, so every caller looks serial to it, and it
+    // drops the request's extensions, so the policy a caller attached is
+    // gone by the time the test could look. A fake bounds what can be
+    // tested, so this one records both.
+
+    /// Pending once, then ready. One yield point, no timer and no runtime
+    /// support, so the ordering a test observes is deterministic.
+    #[derive(Default)]
+    struct YieldOnce {
+        yielded: bool,
+    }
+
+    impl Future for YieldOnce {
+        type Output = ();
+
+        fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
+            if self.yielded {
+                Poll::Ready(())
+            } else {
+                self.yielded = true;
+                // Ask to be polled again rather than waiting for a wake
+                // that nothing would send.
+                cx.waker().wake_by_ref();
+                Poll::Pending
+            }
+        }
+    }
+
+    /// Counters only: `std::sync::Mutex` is a disallowed type here (ADR
+    /// 0007, shared mutable state), and the worst case across every probe
+    /// is a stronger thing to assert on than one recorded policy anyway.
+    #[derive(Default)]
+    struct ProbeInner {
+        in_flight: AtomicUsize,
+        peak: AtomicUsize,
+        probes: AtomicUsize,
+        /// The loosest deadline any probe asked for.
+        widest_timeout_ms: AtomicU64,
+        /// The largest body any probe agreed to buffer.
+        widest_max_bytes: AtomicUsize,
+    }
+
+    /// Records the high-water mark of sends in flight at once, and the
+    /// effective [`HttpPolicy`] of each. Every send registers itself,
+    /// yields so the executor *may* poll its siblings, then answers 200 —
+    /// so `peak()` is 1 when the caller awaits its sends one after
+    /// another, and N when it polls N of them together.
+    #[derive(Clone, Default)]
+    struct ConcurrencyProbe {
+        inner: Arc<ProbeInner>,
+    }
+
+    impl ConcurrencyProbe {
+        fn peak(&self) -> usize {
+            self.inner.peak.load(Ordering::SeqCst)
+        }
+
+        fn probes(&self) -> usize {
+            self.inner.probes.load(Ordering::SeqCst)
+        }
+
+        /// The loosest policy any probe asked for, so an assertion on it
+        /// holds for all of them.
+        fn widest_policy(&self) -> HttpPolicy {
+            HttpPolicy {
+                max_response_bytes: self.inner.widest_max_bytes.load(Ordering::SeqCst),
+                timeout: Duration::from_millis(self.inner.widest_timeout_ms.load(Ordering::SeqCst)),
+            }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl cratefield_core::HttpClient for ConcurrencyProbe {
+        async fn send(
+            &self,
+            request: http::Request<bytes::Bytes>,
+        ) -> Result<http::Response<bytes::Bytes>, cratefield_core::HttpError> {
+            let policy = HttpPolicy::of_request(&request);
+            self.inner.probes.fetch_add(1, Ordering::SeqCst);
+            self.inner.widest_timeout_ms.fetch_max(
+                u64::try_from(policy.timeout.as_millis()).unwrap_or(u64::MAX),
+                Ordering::SeqCst,
+            );
+            self.inner
+                .widest_max_bytes
+                .fetch_max(policy.max_response_bytes, Ordering::SeqCst);
+            let now = self.inner.in_flight.fetch_add(1, Ordering::SeqCst) + 1;
+            self.inner.peak.fetch_max(now, Ordering::SeqCst);
+            YieldOnce::default().await;
+            self.inner.in_flight.fetch_sub(1, Ordering::SeqCst);
+            http::Response::builder()
+                .status(200)
+                .body(bytes::Bytes::new())
+                .map_err(|err| cratefield_core::HttpError::Transport(err.to_string()))
+        }
+    }
+
+    /// A harness whose http port is `probe`, with `count` live ventures.
+    async fn seeded_live(probe: &ConcurrencyProbe, count: usize) -> TestHarness {
+        let probe = probe.clone();
+        let kit = TestHarness::with_ports(vec![Box::new(Dashboard)], move |ports| {
+            ports.http = Some(Arc::new(probe));
+        });
+        let repo = Repository::new(kit.db.clone());
+        repo.account_for_login(EMAIL, "Op", "acc_1", "t0")
+            .await
+            .expect("account");
+        for n in 0..count {
+            let id = format!("v{n}");
+            repo.create_venture(
+                &id,
+                "acc_1",
+                &format!("app-{n}"),
+                &format!("app-{n}.cratefield.app"),
+                "cms",
+                "ten_1",
+                "t0",
+            )
+            .await
+            .expect("venture");
+            repo.set_venture_status("acc_1", &id, VentureStatus::Provisioning, "t1")
+                .await
+                .expect("provisioning");
+            repo.set_venture_status("acc_1", &id, VentureStatus::Live, "t2")
+                .await
+                .expect("live");
+        }
+        kit
+    }
+
+    #[pollster::test]
+    async fn the_venture_health_checks_are_polled_together_not_one_after_another() {
+        let probe = ConcurrencyProbe::default();
+        let kit = seeded_live(&probe, 3).await;
+
+        let reply = send(&kit, Method::GET, BASE, Some(&cookie(&kit))).await;
+        assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
+        assert_eq!(probe.probes(), 3, "every live venture is checked");
+
+        // The whole point: awaiting the checks in a loop holds this at 1,
+        // and the page then costs the SUM of three timeouts instead of the
+        // longest one.
+        assert_eq!(
+            probe.peak(),
+            3,
+            "three checks should be in flight at once, not queued"
+        );
+    }
+
+    #[pollster::test]
+    async fn the_health_probe_carries_a_deadline_far_under_the_ports_default() {
+        let probe = ConcurrencyProbe::default();
+        let kit = seeded_live(&probe, 1).await;
+
+        let reply = send(&kit, Method::GET, BASE, Some(&cookie(&kit))).await;
+        assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
+
+        assert_eq!(probe.probes(), 1, "one live venture, one probe");
+        let policy = probe.widest_policy();
+        // A page render must not inherit the port's API-call default.
+        assert!(
+            policy.timeout < cratefield_core::DEFAULT_RESPONSE_TIMEOUT,
+            "the health probe must tighten the port default, got {:?}",
+            policy.timeout,
+        );
+        assert!(
+            policy.timeout <= Duration::from_secs(3),
+            "three seconds is the budget for one health check, got {:?}",
+            policy.timeout,
+        );
+        // And it should not agree to buffer a megabyte from a venture that
+        // answers /__health with something else entirely.
+        assert!(
+            policy.max_response_bytes <= 4 * 1024,
+            "got {}",
+            policy.max_response_bytes,
+        );
     }
 
     #[pollster::test]

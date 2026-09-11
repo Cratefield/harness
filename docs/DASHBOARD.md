@@ -18,6 +18,15 @@ port, made while the page renders:
 | `FAILING /__health — unreachable: …` | the fetch itself failed |
 | `not running — /__health not checked` | draft/provisioning/archived: nothing should answer, so nothing was fetched |
 
+The checks are **polled together, not queued**: the verdicts are
+independent, so awaiting them one after another would have made the page
+cost the sum of every venture's timeout. Each carries its own tightened
+`HttpPolicy` — **3 seconds** and 4 KiB, against the port's 10-second,
+4 MiB default — because a health endpoint that has not answered in three
+seconds is not healthy, and "unreachable" is the truthful verdict about
+it. The bound is enforced by `BoundedHttpClient`, which both runtimes
+wrap `ports.http` in, through the `Clock` port.
+
 There is deliberately no "checking" or "loading" state. This repository
 shipped a bug where a failing call looked like an empty state, and issue
 #11 calls it out by name: **a degraded venture reads as DEGRADED**, with

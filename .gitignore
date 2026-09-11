@@ -5,6 +5,14 @@ build/
 *.log
 .DS_Store
 PROGRESS.md
+
+# Agent scratch that belongs in the worktree, never in the repo. BRIEF.md
+# reached main once, in #250. The other guard is
+# `cargo package --list` (docs/RELEASING.md), and that one only catches a
+# root file that would ship inside a published crate.
+/BRIEF.md
+/BUILD-BRIEF.md
+/*-BRIEF.md
 node_modules/
 
 # Local worktrees. `git add -A` otherwise stages one as a gitlink.
