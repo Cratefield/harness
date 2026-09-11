@@ -1,0 +1,6 @@
+# This Worker's own secrets (CI: written to .dev.vars by the job, never
+# committed). HARNESS_SECRET stays venture-local; SIDECAR_GATEWAY_SECRET
+# must hold the same value the host Worker carries, or every forwarded
+# event arrives unstamped and the mount is dead on arrival.
+HARNESS_SECRET=replace-with-this-workers-own-secret
+SIDECAR_GATEWAY_SECRET=replace-with-the-value-shared-with-the-host

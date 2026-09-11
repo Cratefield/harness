@@ -1,0 +1,18 @@
+# The CI double's deployment configuration (issue #258). Like the
+# sidecar-module-template this Worker is not publicly routable: the host
+# reaches it over the service binding, and only `/__health` exists for
+# probes. Unlike the template it binds no database — a delivery check has
+# no rows to keep, and the evidence endpoint is in-memory on purpose: the
+# check reads it back within the same dev session that produced the
+# delivery, so nothing durable is being claimed.
+name = "sidecar-slow-events"
+main = "build/worker/shim.mjs"
+compatibility_date = "2026-09-01"
+
+[build]
+command = "worker-build"
+
+[observability]
+enabled = true
+
+workers_dev = false
