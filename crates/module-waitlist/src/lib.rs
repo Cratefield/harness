@@ -252,12 +252,23 @@ impl Module for Waitlist {
                 redacted: &[],
                 subject_via: None,
             },
-            PersonalDataSet::none(
+            // Not `PersonalDataSet::none`: the row does hold the address, and
+            // bucketing it under "not personal" would tell the subject a
+            // table with their address in it holds nothing about anybody
+            // (issue #274). Declaring the `subject` column is not an option
+            // either: it holds `<email>:<product>`, so `WHERE subject = ?`
+            // with a bare address never matches — the value's *format* is
+            // the problem, not a missing hop, and widening `subject_via` to
+            // a prefix match would be a different mechanism. Core's
+            // `SendCooldown` shape is the change that closes it properly.
+            PersonalDataSet::unreachable(
                 "waitlist_send_cooldown",
-                "One row per address and product, holding the moment the last mail went out so \
-                 the same address cannot be mailed again within the hour. The address is part \
-                 of the row's key rather than a column of its own, so an erasure request does \
-                 not reach it; nothing else about you is in the row.",
+                DataKind::Contact,
+                "When we last emailed you about a waitlist, so the same address is not \
+                 mailed again within the hour.",
+                "The row is keyed on your address and the product together, so an erasure \
+                 request cannot match it with an address alone. Nothing else about you is \
+                 in the row, and it stops mattering once the queue does.",
             ),
             PersonalDataSet::none(
                 "waitlist_position_lock",

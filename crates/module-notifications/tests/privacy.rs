@@ -309,10 +309,9 @@ async fn an_export_carries_the_notifications_and_never_the_endpoint() {
 
 #[pollster::test]
 async fn the_manifest_says_what_the_outbox_holds_rather_than_staying_silent() {
-    // The outbox is the one table declared as holding nothing exportable, and
-    // the reason is published: a queued row does hold the message, and it is
-    // filed under the send, not the account (issue #266). An omission and a
-    // decision must not look the same.
+    // The outbox holds the person's message, so it must not be published as
+    // "not personal" — but erasure cannot reach it either (issue #274). Its
+    // own bucket is the honest answer.
     let kit = privacy_kit();
     let response = support::send(
         &kit.router,
@@ -334,12 +333,26 @@ async fn the_manifest_says_what_the_outbox_holds_rather_than_staying_silent() {
     assert_eq!(listed, TABLES, "{body}");
 
     let not_personal = body["not_personal"].as_array().expect("not_personal");
-    assert_eq!(not_personal.len(), 1, "{not_personal:?}");
-    assert_eq!(not_personal[0]["table"], "notifications_outbox");
-    let reason = not_personal[0]["reason"].as_str().unwrap_or_default();
     assert!(
-        reason.contains("waiting to be sent") && reason.contains("deleted"),
-        "the outbox reason has to say what is in it: {reason}"
+        not_personal
+            .iter()
+            .all(|entry| entry["table"] != "notifications_outbox"),
+        "the outbox holds a message; it cannot be published as not personal: {not_personal:?}"
+    );
+
+    let unreachable = body["unreachable"].as_array().expect("unreachable");
+    assert_eq!(unreachable.len(), 1, "{unreachable:?}");
+    assert_eq!(unreachable[0]["table"], "notifications_outbox");
+    assert_eq!(unreachable[0]["kind"], "content");
+    let reason = unreachable[0]["reason"].as_str().unwrap_or_default();
+    assert!(
+        reason.contains("cannot match"),
+        "the outbox reason has to say why erasure cannot reach it: {reason}"
+    );
+    let description = unreachable[0]["description"].as_str().unwrap_or_default();
+    assert!(
+        description.contains("message"),
+        "the outbox description has to say what is in it: {description}"
     );
 
     // The device column is named on the page, so a reader learns it is held
@@ -352,6 +365,56 @@ async fn the_manifest_says_what_the_outbox_holds_rather_than_staying_silent() {
         .expect("subscriptions published");
     assert_eq!(subscriptions["redacted"][0], "recipient_json");
     assert_eq!(subscriptions["on_erasure"]["action"], "erase");
+}
+
+/// A table holding the person's message must never be described to them as
+/// both holding it and not personal (issue #274). Written against the whole
+/// published manifest, so a future bucket cannot reintroduce the split.
+#[pollster::test]
+async fn the_manifest_never_calls_a_table_both_personal_and_not() {
+    let kit = privacy_kit();
+    let response = support::send(
+        &kit.router,
+        http::Method::GET,
+        "/v1/privacy/manifest",
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(response.status, http::StatusCode::OK);
+    let body = response.json();
+
+    let names = |bucket: &str| -> Vec<String> {
+        body[bucket]
+            .as_array()
+            .unwrap_or_else(|| panic!("{bucket} missing: {body}"))
+            .iter()
+            .filter_map(|entry| entry["table"].as_str().map(str::to_owned))
+            .collect()
+    };
+    let holds = names("holds");
+    let not_personal = names("not_personal");
+    let unreachable = names("unreachable");
+
+    for table in &not_personal {
+        assert!(
+            !holds.contains(table) && !unreachable.contains(table),
+            "{table} is described as not personal and as holding data: {body}"
+        );
+    }
+    for table in holds.iter().chain(unreachable.iter()) {
+        assert!(
+            !not_personal.contains(table),
+            "{table} holds data and is also published as not personal: {body}"
+        );
+    }
+
+    // The outbox is the case that made the buckets necessary: whatever the
+    // manifest says about it, it must not be silence in `not_personal`.
+    assert!(
+        unreachable.iter().any(|t| t == "notifications_outbox"),
+        "the outbox is not published as unreachable: {body}"
+    );
 }
 
 #[pollster::test]

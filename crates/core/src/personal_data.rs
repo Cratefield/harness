@@ -103,13 +103,41 @@ pub enum Disposition {
     /// the table it applies to, in a reviewed diff, rather than being the
     /// silence left by a table nobody declared.
     Retain(&'static str),
+    /// The rows hold personal data and erasure **cannot reach them**, and this
+    /// says why in a sentence a regulator could read.
+    ///
+    /// This is a third thing, and the reason it exists is that the other two
+    /// are both wrong for it: [`Erase`] and [`Anonymise`] name a subject column
+    /// the query builder binds a request value to, and [`Retain`] says "the
+    /// rows stay on purpose", which reads as *your data, kept deliberately* —
+    /// not as *your data, kept because we have no way to find it*. The case
+    /// that demanded the variant is a table whose personal data is inside a
+    /// value no equality predicate can match — a rendered message filed under
+    /// the send, a composite `<email>:<product>` key — where declaring
+    /// `PersonalDataSet::none` would make a subject-facing manifest report a
+    /// table holding the person's message as **not personal data** (issue
+    /// #274).
+    ///
+    /// [`Erase`]: Disposition::Erase
+    /// [`Anonymise`]: Disposition::Anonymise
+    /// [`Retain`]: Disposition::Retain
+    Unreachable(&'static str),
 }
 
 impl Disposition {
     /// Whether erasure leaves the row in place.
+    ///
+    /// `Unreachable` is included: the row is not deleted, and anything reading
+    /// this answer as "the data is gone" is being lied to exactly as hard as
+    /// a `Retain` would lie. The difference is that a `Retain` row is counted,
+    /// exported and described, while an `Unreachable` row can be none of
+    /// those — which is the whole problem.
     #[must_use]
     pub const fn keeps_row(self) -> bool {
-        matches!(self, Self::Anonymise(_) | Self::Retain(_))
+        matches!(
+            self,
+            Self::Anonymise(_) | Self::Retain(_) | Self::Unreachable(_)
+        )
     }
 }
 
@@ -225,10 +253,69 @@ impl PersonalDataSet {
         }
     }
 
+    /// A table this module owns that holds personal data erasure cannot reach,
+    /// and the reason.
+    ///
+    /// The table *does* hold data about somebody — the sentence says what —
+    /// but no declaration can make it queryable, because the identifying
+    /// value is inside a rendered message or a composite key rather than in a
+    /// column an `… = ?` predicate can match. Declaring it
+    /// [`none`](Self::none) would be a lie in the other direction: a
+    /// subject-facing manifest would report a table holding the person's
+    /// message as **not personal data** (issue #274).
+    ///
+    /// Like [`none`](Self::none), this sets a blank subject, so export,
+    /// erasure and [`PersonalDataCatalog::subject_sets`] skip the table —
+    /// they cannot reach it, and pretending otherwise would mean building a
+    /// predicate that matches nothing. Unlike `none`, the declaration counts
+    /// towards [`PersonalDataCatalog::is_empty`]: a deployment holding data
+    /// it cannot erase does hold data.
+    #[must_use]
+    pub const fn unreachable(
+        table: &'static str,
+        kind: DataKind,
+        description: &'static str,
+        reason: &'static str,
+    ) -> Self {
+        Self {
+            table,
+            subject: "",
+            kind,
+            disposition: Disposition::Unreachable(reason),
+            description,
+            redacted: &[],
+            subject_via: None,
+        }
+    }
+
     /// Whether this declaration says the table holds no personal data.
+    ///
+    /// Read as "no subject column a request value can be bound to", not
+    /// literally "nothing personal": [`unreachable`](Self::unreachable)
+    /// declarations also have a blank subject, and a manifest must bucket
+    /// those with [`is_unreachable`](Self::is_unreachable) before treating
+    /// a blank subject as an answer about the table's contents.
     #[must_use]
     pub const fn is_none(&self) -> bool {
         self.subject.is_empty()
+    }
+
+    /// Whether this declaration describes personal data erasure cannot reach.
+    ///
+    /// A table answering `true` holds somebody's data and says so; the reason
+    /// is the [`Unreachable`] payload, published verbatim. It is not
+    /// queryable — there is no subject column a request value can be bound
+    /// to — so it never appears in an export, an erasure plan or
+    /// [`PersonalDataCatalog::subject_sets`], but it *is* counted by
+    /// [`PersonalDataCatalog::is_empty`] and bucketed on its own by a
+    /// subject-facing manifest.
+    ///
+    /// [`Unreachable`]: Disposition::Unreachable
+    /// [`PersonalDataCatalog::subject_sets`]: PersonalDataCatalog::subject_sets
+    /// [`PersonalDataCatalog::is_empty`]: PersonalDataCatalog::is_empty
+    #[must_use]
+    pub const fn is_unreachable(&self) -> bool {
+        matches!(self.disposition, Disposition::Unreachable(_))
     }
 
     /// Rejects a declaration that cannot mean anything, reporting against the
@@ -308,7 +395,11 @@ impl PersonalDataSet {
             ));
         }
         if self.is_none() {
-            errors.extend(self.none_errors(module));
+            if self.is_unreachable() {
+                errors.extend(self.unreachable_errors(module));
+            } else {
+                errors.extend(self.none_errors(module));
+            }
             return errors;
         }
         if self.description.trim().is_empty() {
@@ -333,6 +424,45 @@ impl PersonalDataSet {
                 self.table
             )),
             _ => {}
+        }
+        errors
+    }
+
+    /// The contradictions only an `Unreachable` declaration can contain.
+    ///
+    /// Mirror of [`none_errors`](Self::none_errors): the blank subject is not
+    /// carelessness here but the point, so the checks are about refusing the
+    /// escape hatches that would make the blank subject lie.
+    fn unreachable_errors(&self, module: &str) -> Vec<String> {
+        let mut errors: Vec<String> = Vec::new();
+        if let Disposition::Unreachable(reason) = self.disposition
+            && reason.trim().is_empty()
+        {
+            errors.push(format!(
+                "module `{module}` declares personal data in `{}` as unreachable without saying why",
+                self.table
+            ));
+        }
+        // The description is published beside the reason in the manifest's
+        // unreachable bucket, so an empty one publishes a bucket entry that
+        // names a table and says nothing about it.
+        if self.description.trim().is_empty() {
+            errors.push(format!(
+                "module `{module}` declares personal data in `{}` as unreachable with no description; it is published verbatim",
+                self.table
+            ));
+        }
+        if self.subject_via.is_some() {
+            errors.push(format!(
+                "module `{module}` declares table `{}` as unreachable and names a way to reach a subject; one or the other",
+                self.table
+            ));
+        }
+        if !self.redacted.is_empty() {
+            errors.push(format!(
+                "module `{module}` redacts a column of `{}`, which is declared unreachable; nothing is exported from it to redact",
+                self.table
+            ));
         }
         errors
     }
@@ -428,6 +558,13 @@ impl PersonalDataCatalog {
 
     /// The declarations that actually hold data about somebody: what export
     /// reads and erasure acts on.
+    ///
+    /// Unreachable declarations are skipped too. They hold personal data, but
+    /// there is no subject column to bind a request value to, so there is no
+    /// predicate to build — which is the point of the variant. They are not
+    /// forgotten: [`is_empty`](Self::is_empty) counts them, and the manifest
+    /// publishes them in their own bucket, because "cannot reach" and "holds
+    /// nobody" must never look the same to a subject.
     pub fn subject_sets(&self) -> impl Iterator<Item = &CatalogEntry> {
         self.entries.iter().filter(|e| !e.set.is_none())
     }
@@ -439,9 +576,18 @@ impl PersonalDataCatalog {
     /// the privacy module and forgot that its own modules declare nothing —
     /// an export that succeeds and returns nothing is the failure this
     /// distinguishes.
+    ///
+    /// Unreachable declarations count as holding. An export over a table
+    /// erasure cannot reach is empty, yes — but "we hold nothing about you"
+    /// over a table that holds the person's message is precisely the
+    /// mis-answer issue #274 is about, and `subject_sets` alone would
+    /// produce it.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.subject_sets().next().is_none()
+        !self
+            .entries
+            .iter()
+            .any(|e| !e.set.is_none() || e.set.is_unreachable())
     }
 }
 
