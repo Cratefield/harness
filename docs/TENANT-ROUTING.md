@@ -404,7 +404,10 @@ published crates. Saying so is part of the design.
 
 0. **Register the problems.** `unknown-tenant` and `tenant-degraded`
    into `problems.rs` and `docs/ERRORS.md`. Both documents currently
-   cite the other for these; neither has them.
+   cite the other for these; neither has them. **Done** (#32).
+0b. **Reword RECONCILIATION.md §6** so the registry row, not pool
+   presence, is what refuses a degraded tenant — see §12. **Done** (#32),
+   and it needed more than a reword: see the note below.
 1. **Adapter first.** `PgPoolOptions` on `Postgres::connect` (per-tenant
    cap, idle timeout) and the registry's total-cap semaphore. Nothing
    consumes them yet, and without them §4 is aspirational.
@@ -450,7 +453,55 @@ Answer without reading the rest, then compare:
 5. Tenant B's customer confirms an email address. What domain is in the
    link, and what address is it sent from?
 
-## 12. Open questions
+## 12. Decisions taken, and what is still open
+
+Three of these were settled on 2026-09-11 (issue #32). They are recorded
+here rather than in a commit message, because each was a real fork and
+the reasoning is the part that stops it being re-opened.
+
+**`Tenant` stays `{ id, status }`; `ctx.venture` becomes per-request.**
+The alternative — venture-shaped fields on `Tenant` — is harder to get
+wrong, because you cannot hold a `Tenant` and read a neighbour's mail
+domain. It was rejected on churn: it changes every module call site that
+touches `ctx.venture`, *on top of* the `ports.db` migration in §10, and
+two large mechanical migrations landing together is how a migration plan
+turns into the long red tree §10 already warns about. The isolation that
+matters is §5's, and that is unaffected either way.
+
+**Pools are lazy; the registry row is authoritative.** RECONCILIATION.md
+§6 refuses a degraded tenant "because the pool for it was never
+registered", which implies boot registers pools. That sentence is wrong
+on purpose now: refusal is decided by `TenantStatus` read from the
+registry, never by whether a pool happens to exist. A replica's idle cost
+should follow its traffic rather than the tenant count — and tying a 503
+to pool presence would make an evicted idle pool indistinguishable from a
+degraded tenant, which is the same silent conflation in a different
+place. The one-sentence reword is work item 0b in §10.
+
+*A consequence worth naming.* The old RECONCILIATION.md sentence was
+carrying a safety property, not just describing a mechanism: a tenant
+whose `degraded` write failed (control database gone mid-boot) was still
+refused, because its pool had never been registered. Lazy pools remove
+that guard — the registry row still reads `active`, and a lazy pool would
+open for it happily, against a schema that is behind.
+
+So the replica keeps the set of tenants **its own** reconciliation could
+not complete, and resolution consults it alongside the registry row. The
+replica that failed to reconcile a tenant is exactly the replica that
+must not serve it, so process-local is the right scope; it also survives
+the control database being unreachable, which is the case that produced
+the problem. This is a §10 work item, not free.
+
+**`TENANT_POOL_TOTAL` ships at 64, enforced, documented as unmeasured.**
+The number is still a guess pending a real cluster's `max_connections`
+and replica count. What is not optional is the semaphore behind it: sqlx
+caps per pool, so without a cross-pool permit held across `execute`,
+`query` and a whole `batch`, the key would be configuration that silently
+does nothing — the failure §4 already names. An enforced guess is
+re-tuned by changing a number; an unenforced one is discovered during an
+incident.
+
+## 13. Still open
 
 - **Registry cache lifetime.** Resolution reads the registry on every
   request or from a cache with a TTL. A cache makes a status change take
@@ -458,28 +509,11 @@ Answer without reading the rest, then compare:
   dependency, which §3 rejected for API keys and should probably reject
   here too. Leaning: cache with a short TTL plus an explicit invalidation
   on the reconciliation write, but this is not settled.
-- **Per-tenant Postgres roles.** #32 puts them out of scope, noted for
-  later hardening. Worth saying that without them, the isolation is the
-  harness's to enforce and a bug in §5 is not caught by the database.
-- **`TENANT_POOL_TOTAL` default.** 64 is a guess pending a measurement
-  against a real cluster's `max_connections` and the replica count. Note
-  that boot reconciliation runs 8 tenants concurrently and the control
-  database has its own pool; both draw on the same server limit and
-  neither is inside this cap.
-- **Lazy here, eager there.** §4 opens pools on first use;
-  RECONCILIATION.md §6 refuses a degraded tenant "because the pool for
-  it was never registered", which implies boot registers pools. Both
-  cannot be true. Leaning lazy — a replica's idle cost should follow its
-  traffic — which means RECONCILIATION's sentence needs rewording to
-  make the *registry status* authoritative, not pool presence. That is
-  an edit to a document that is also unsigned, so it is a conversation,
-  not a patch.
 - **Who owns `degraded`.** Following from the above: if the registry is
   authoritative and §3 caches it with a TTL, a tenant marked degraded
   mid-boot keeps serving for up to the TTL, and a recovered one stays
   refused just as long. The reconciliation write needs an explicit cache
   invalidation, which neither document has.
-- **`Tenant` or `ctx.venture`?** §8a needs the venture-shaped fields per
-  request. Putting them on `Tenant` keeps one type; making `ctx.venture`
-  per request keeps every module's existing call sites. The second is
-  less churn and the first is harder to get wrong. Unsettled.
+- **Per-tenant Postgres roles.** #32 puts them out of scope, noted for
+  later hardening. Worth saying that without them, the isolation is the
+  harness's to enforce and a bug in §5 is not caught by the database.

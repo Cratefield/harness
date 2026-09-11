@@ -54,12 +54,22 @@ pub struct Slugs {
     /// 503: readiness probe failed (`/__ready`): database missing, slow or
     /// erroring.
     pub not_ready: ProblemDef,
+    /// 404: the request's host resolves to no tenant in the registry. A
+    /// 404 and not a 403: which hosts are tenants is not a secret worth
+    /// a distinguishable answer, and "no such tenant" is the truth
+    /// (RECONCILIATION.md §6, TENANT-ROUTING.md §3).
+    pub unknown_tenant: ProblemDef,
     /// 503: a sidecar-mounted module could not be reached (ADR 0009). Only
     /// that prefix fails; every in-process module keeps serving.
     pub sidecar_unavailable: ProblemDef,
     /// 503: a sidecar answered with a different `HARNESS_API` than this
     /// harness speaks, so its responses cannot be trusted.
     pub sidecar_contract_mismatch: ProblemDef,
+    /// 503: the request's tenant is in the registry but `degraded` — its
+    /// schema is behind or its database is unreachable, so serving it
+    /// would read a shape the code no longer expects
+    /// (RECONCILIATION.md §6, TENANT-ROUTING.md §3).
+    pub tenant_degraded: ProblemDef,
 }
 
 pub const SLUGS: Slugs = Slugs {
@@ -129,6 +139,12 @@ pub const SLUGS: Slugs = Slugs {
         title: "Not found",
         description: "No route matched the request.",
     },
+    unknown_tenant: ProblemDef {
+        slug: "unknown-tenant",
+        status: StatusCode::NOT_FOUND,
+        title: "Unknown tenant",
+        description: "The request's host resolves to no tenant in the registry.",
+    },
     internal: ProblemDef {
         slug: "internal",
         status: StatusCode::INTERNAL_SERVER_ERROR,
@@ -159,6 +175,12 @@ pub const SLUGS: Slugs = Slugs {
         title: "Sidecar contract mismatch",
         description: "A sidecar answers a different HARNESS_API than this harness speaks.",
     },
+    tenant_degraded: ProblemDef {
+        slug: "tenant-degraded",
+        status: StatusCode::SERVICE_UNAVAILABLE,
+        title: "Tenant is degraded",
+        description: "The tenant's schema is behind or its database is unreachable; its neighbours are unaffected.",
+    },
 };
 
 /// Every core slug definition, for tests and docs.
@@ -175,10 +197,12 @@ pub fn registry() -> Vec<&'static ProblemDef> {
         &SLUGS.request_too_large,
         &SLUGS.rate_limited,
         &SLUGS.not_found,
+        &SLUGS.unknown_tenant,
         &SLUGS.internal,
         &SLUGS.mail_not_configured,
         &SLUGS.not_ready,
         &SLUGS.sidecar_unavailable,
         &SLUGS.sidecar_contract_mismatch,
+        &SLUGS.tenant_degraded,
     ]
 }
