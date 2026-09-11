@@ -82,35 +82,26 @@ impl Module for Dashboard {
     }
 
     fn migrations(&self) -> Migrations {
-        // The dashboard owns no tables of its own: it reads the schema its
-        // domain crates use (accounts + ventures, provisioning progress,
-        // connection metadata). Re-id the three sub-schemas so they are
-        // unique WITHIN this module — each crate's own MIGRATION is id
-        // "0001", which would collide under one module — exactly the way
-        // the console (issue #3) does it. Same SQL, same transaction rule
-        // (copied, not restated: a sub-schema that later needs to run
-        // outside a transaction must not silently run inside one here),
-        // distinct ids.
-        const MIGRATIONS: [SqlMigration; 3] = [
-            SqlMigration {
-                id: "0001",
-                name: "accounts",
-                sql: cratefield_accounts::MIGRATION.sql,
-                transactional: cratefield_accounts::MIGRATION.transactional,
-            },
-            SqlMigration {
-                id: "0002",
-                name: "provisioning",
-                sql: cratefield_provisioning::MIGRATION.sql,
-                transactional: cratefield_provisioning::MIGRATION.transactional,
-            },
-            SqlMigration {
-                id: "0003",
-                name: "connections",
-                sql: cratefield_connections::MIGRATION.sql,
-                transactional: cratefield_connections::MIGRATION.transactional,
-            },
-        ];
+        // The dashboard owns exactly one table: `connection`. Everything
+        // else it renders — accounts, ventures, provisioning progress —
+        // belongs to the console, which declares those sub-schemas and
+        // writes the rows; the dashboard only reads them.
+        //
+        // It declared them too, once, and that did not survive contact
+        // with a running control plane. Two modules in one harness each
+        // emitting the same DDL is two migration files, not one: `collect`
+        // keys on `<module>/<id>`, so the console's `provision_progress`
+        // and the dashboard's copy were both written out and both applied,
+        // and the second `CREATE TABLE provision_progress` failed on a
+        // fresh database. No test caught it because no test mounted two
+        // modules together. Declaring only what this module owns is what
+        // makes the composition apply.
+        const MIGRATIONS: [SqlMigration; 1] = [SqlMigration {
+            id: "0001",
+            name: "connections",
+            sql: cratefield_connections::MIGRATION.sql,
+            transactional: cratefield_connections::MIGRATION.transactional,
+        }];
         // The array is the apply order; this refuses a gap, a duplicate
         // or an entry out of order at build time (issue #27).
         const _: () = cratefield_core::assert_migration_set(&MIGRATIONS);
@@ -699,11 +690,21 @@ mod tests {
         format!("cf_session={token}")
     }
 
+    /// The control plane's own composition. The console owns the access,
+    /// accounts and provisioning schemas and writes their rows; the
+    /// dashboard owns `connection` and reads the rest. Mounting the
+    /// dashboard alone is a composition that does not exist in production,
+    /// and it is what hid a duplicate-DDL failure until a dev server
+    /// mounting both refused to boot.
+    fn modules() -> Vec<Box<dyn Module>> {
+        vec![Box::new(cratefield_console::Console), Box::new(Dashboard)]
+    }
+
     /// A harness with the dashboard module, an account, and one venture
     /// (`my-app`, module set `cms+waitlist`), already through provisioning
     /// to `status`.
     async fn seeded(status: VentureStatus) -> TestHarness {
-        let kit = TestHarness::new(vec![Box::new(Dashboard)]);
+        let kit = TestHarness::new(modules());
         let repo = Repository::new(kit.db.clone());
         repo.account_for_login(EMAIL, "Op", "acc_1", "t0")
             .await
@@ -849,7 +850,7 @@ mod tests {
     /// A harness whose http port is `probe`, with `count` live ventures.
     async fn seeded_live(probe: &ConcurrencyProbe, count: usize) -> TestHarness {
         let probe = probe.clone();
-        let kit = TestHarness::with_ports(vec![Box::new(Dashboard)], move |ports| {
+        let kit = TestHarness::with_ports(modules(), move |ports| {
             ports.http = Some(Arc::new(probe));
         });
         let repo = Repository::new(kit.db.clone());
@@ -877,6 +878,25 @@ mod tests {
                 .expect("live");
         }
         kit
+    }
+
+    #[pollster::test]
+    async fn the_control_plane_composition_migrates_a_fresh_database() {
+        // Mounting the console and the dashboard together applies both
+        // migration sets to one database, which is what the control plane
+        // does and what `fz migrations collect` writes out. The dashboard
+        // used to re-declare the console's provisioning sub-schema, so the
+        // second `CREATE TABLE provision_progress` failed right here — on
+        // every fresh database, including the first real deploy.
+        let kit = TestHarness::new(modules());
+
+        // Each table, from whichever module owns it.
+        for table in ["account", "venture", "provision_progress", "connection"] {
+            kit.db
+                .query(&Statement::new(format!("SELECT 1 FROM {table} LIMIT 1")))
+                .await
+                .unwrap_or_else(|err| panic!("{table} is missing after migration: {err}"));
+        }
     }
 
     #[pollster::test]
@@ -962,7 +982,7 @@ mod tests {
 
     #[pollster::test]
     async fn a_live_venture_whose_health_check_fails_reads_as_failing() {
-        let kit = TestHarness::with_ports(vec![Box::new(Dashboard)], |ports| {
+        let kit = TestHarness::with_ports(modules(), |ports| {
             ports.http = Some(Arc::new(FakeHttpClient::scripted(vec![Err(
                 cratefield_core::HttpError::Transport("connection refused".to_owned()),
             )])));
@@ -1006,7 +1026,7 @@ mod tests {
 
     #[pollster::test]
     async fn a_live_venture_answering_health_reads_as_answering() {
-        let kit = TestHarness::with_ports(vec![Box::new(Dashboard)], |ports| {
+        let kit = TestHarness::with_ports(modules(), |ports| {
             ports.http = Some(Arc::new(FakeHttpClient::ok_json("{\"ok\":true}")));
         });
         let repo = Repository::new(kit.db.clone());
@@ -1043,7 +1063,7 @@ mod tests {
 
     #[pollster::test]
     async fn a_draft_venture_is_reported_not_running_and_never_fetched() {
-        let kit = TestHarness::with_ports(vec![Box::new(Dashboard)], |ports| {
+        let kit = TestHarness::with_ports(modules(), |ports| {
             ports.http = Some(Arc::new(FakeHttpClient::scripted(vec![])));
         });
         let repo = Repository::new(kit.db.clone());
@@ -1131,7 +1151,7 @@ mod tests {
 
     #[pollster::test]
     async fn one_account_cannot_open_anothers_venture() {
-        let kit = TestHarness::new(vec![Box::new(Dashboard)]);
+        let kit = TestHarness::new(modules());
         let repo = Repository::new(kit.db.clone());
         repo.account_for_login("a@x.co", "A", "acc_a", "t0")
             .await

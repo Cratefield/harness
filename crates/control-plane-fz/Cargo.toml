@@ -19,3 +19,4 @@ path = "src/main.rs"
 cratefield-core = { path = "../core" }
 cratefield-cli = { path = "../cli" }
 cratefield-console = { path = "../control-plane-console" }
+cratefield-dashboard = { path = "../control-plane-dashboard" }

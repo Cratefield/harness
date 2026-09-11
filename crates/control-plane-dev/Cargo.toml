@@ -19,4 +19,13 @@ cratefield-core = { path = "../core" }
 cratefield-runtime-native = { path = "../runtime-native" }
 cratefield-adapter-sqlite = { path = "../adapter-sqlite" }
 cratefield-console = { path = "../control-plane-console" }
+cratefield-dashboard = { path = "../control-plane-dashboard" }
+cratefield-accounts = { path = "../control-plane-accounts" }
+# The seeded provisioning failure is written with a parameterised statement,
+# so this needs the same value type the port speaks. Kept in step with the
+# workspace pin.
+sea-query = { version = "0.32.7", default-features = false, features = [
+    "backend-sqlite",
+    "thread-safe",
+] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net"] }
