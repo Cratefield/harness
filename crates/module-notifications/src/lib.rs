@@ -197,12 +197,11 @@ const MIGRATION_DEAD_LETTER_ACCOUNT: SqlMigration = SqlMigration::new(
 /// leaves, so the scheduled drain can send one summary for the burst once
 /// the window has rolled. Its own migration because `0001`-`0007` are
 /// applied.
-const MIGRATION_EMAIL_SUPPRESSED: SqlMigration = SqlMigration {
-    id: "0008",
-    name: "email_suppressed",
-    sql: include_str!("../migrations/sqlite/0008_email_suppressed.sql"),
-    transactional: true,
-};
+const MIGRATION_EMAIL_SUPPRESSED: SqlMigration = SqlMigration::new(
+    "0008",
+    "email_suppressed",
+    include_str!("../migrations/sqlite/0008_email_suppressed.sql"),
+);
 
 /// Every migration this module ships, in order. One array, so a test that
 /// asserts something about the schema reads what actually ships rather
