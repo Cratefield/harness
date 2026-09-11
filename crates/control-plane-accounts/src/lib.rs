@@ -26,6 +26,7 @@ pub const MIGRATION: cratefield_core::SqlMigration = cratefield_core::SqlMigrati
     id: "0001",
     name: "init",
     sql: include_str!("../migrations/sqlite/0001_init.sql"),
+    transactional: true,
 };
 
 /// One invited customer.

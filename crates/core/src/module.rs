@@ -47,6 +47,12 @@ pub struct SqlMigration {
     /// the wrangler-facing collected file names.
     pub name: &'static str,
     pub sql: &'static str,
+    /// Whether the migration and its tracking row commit atomically
+    /// (the default). `false` marks the statements Postgres refuses inside
+    /// a transaction block (`CREATE INDEX CONCURRENTLY`): they run alone,
+    /// the tracking row follows, and the SQL must be idempotent —
+    /// RECONCILIATION.md §4.
+    pub transactional: bool,
 }
 
 /// Rejects a malformed migration set **at compile time**.
@@ -64,8 +70,8 @@ pub struct SqlMigration {
 /// ```
 /// # use cratefield_core::{SqlMigration, assert_migration_set};
 /// const MIGRATIONS: [SqlMigration; 2] = [
-///     SqlMigration { id: "0001", name: "init", sql: "" },
-///     SqlMigration { id: "0002", name: "next", sql: "" },
+///     SqlMigration { id: "0001", name: "init", sql: "", transactional: true },
+///     SqlMigration { id: "0002", name: "next", sql: "", transactional: true },
 /// ];
 /// const _: () = assert_migration_set(&MIGRATIONS);
 /// ```
@@ -75,8 +81,8 @@ pub struct SqlMigration {
 /// ```compile_fail
 /// # use cratefield_core::{SqlMigration, assert_migration_set};
 /// const MIGRATIONS: [SqlMigration; 2] = [
-///     SqlMigration { id: "0001", name: "init", sql: "" },
-///     SqlMigration { id: "0003", name: "skipped", sql: "" },
+///     SqlMigration { id: "0001", name: "init", sql: "", transactional: true },
+///     SqlMigration { id: "0003", name: "skipped", sql: "", transactional: true },
 /// ];
 /// const _: () = assert_migration_set(&MIGRATIONS);
 /// ```
@@ -87,8 +93,8 @@ pub struct SqlMigration {
 /// ```compile_fail
 /// # use cratefield_core::{SqlMigration, assert_migration_set};
 /// const MIGRATIONS: [SqlMigration; 2] = [
-///     SqlMigration { id: "0002", name: "second", sql: "" },
-///     SqlMigration { id: "0001", name: "first", sql: "" },
+///     SqlMigration { id: "0002", name: "second", sql: "", transactional: true },
+///     SqlMigration { id: "0001", name: "first", sql: "", transactional: true },
 /// ];
 /// const _: () = assert_migration_set(&MIGRATIONS);
 /// ```
@@ -96,7 +102,7 @@ pub struct SqlMigration {
 /// ```compile_fail
 /// # use cratefield_core::{SqlMigration, assert_migration_set};
 /// const MIGRATIONS: [SqlMigration; 1] =
-///     [SqlMigration { id: "1", name: "unpadded", sql: "" }];
+///     [SqlMigration { id: "1", name: "unpadded", sql: "", transactional: true }];
 /// const _: () = assert_migration_set(&MIGRATIONS);
 /// ```
 ///
@@ -153,6 +159,51 @@ pub fn migration_checksum(sql: &str) -> String {
         let _ = write!(hex, "{byte:02x}");
     }
     hex
+}
+
+/// True when the SQL carries an idempotence guard, so re-running it
+/// after a crash is safe. Required of every migration marked
+/// `transactional: false` (RECONCILIATION.md §4).
+#[must_use]
+pub fn is_idempotent_sql(sql: &str) -> bool {
+    // Comments are stripped first. A guard that reads the whole file
+    // accepts `-- we could use IF NOT EXISTS here but did not` above SQL
+    // that has no guard at all — which is precisely the migration this
+    // check exists to refuse, waved through by a sentence about it.
+    let sql = strip_sql_comments(sql).to_ascii_lowercase();
+    sql.contains("if not exists") || sql.contains("if exists") || sql.contains("or replace")
+}
+
+/// SQL with `--` line comments and `/* */` blocks removed.
+///
+/// Not a parser: it does not know that a `--` inside a string literal is
+/// not a comment. That direction is safe here — it can only remove text
+/// the guard would have read, so the guard refuses rather than accepts.
+fn strip_sql_comments(sql: &str) -> String {
+    let mut out = String::with_capacity(sql.len());
+    let mut rest = sql;
+    while let Some(at) = rest.find("--").into_iter().chain(rest.find("/*")).min() {
+        out.push_str(&rest[..at]);
+        let tail = &rest[at..];
+        if tail.starts_with("--") {
+            rest = tail.find('\n').map_or("", |end| &tail[end..]);
+        } else {
+            rest = tail.find("*/").map_or("", |end| &tail[end + 2..]);
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+/// The message a non-transactional migration without an idempotence
+/// guard gets. Shared so both engines say the same thing.
+#[must_use]
+pub fn migration_missing_guard(key: &str) -> String {
+    format!(
+        "migration `{key}` is marked transactional: false, so it runs outside a transaction and \
+         must be idempotent: give the SQL an `IF NOT EXISTS` or `OR REPLACE` guard \
+         (RECONCILIATION.md, section 4)"
+    )
 }
 
 /// The message a migration whose recorded checksum no longer matches
@@ -415,5 +466,66 @@ pub trait Module: Send + Sync + 'static {
     ) -> BoxFuture<'a, Result<(), AnyError>> {
         let _ = (ctx, cron);
         Box::pin(async { Ok(()) })
+    }
+}
+
+#[cfg(test)]
+mod reconciliation_guard_tests {
+    use super::{SqlMigration, is_idempotent_sql, migration_missing_guard};
+
+    #[test]
+    fn a_migration_is_transactional_unless_marked_otherwise() {
+        // The flag exists so RECONCILIATION.md §4 has something to read;
+        // every module that does not say a word keeps the atomic
+        // behaviour both runners have always had.
+        let migration = SqlMigration {
+            id: "0001",
+            name: "init",
+            sql: "CREATE TABLE t (id TEXT PRIMARY KEY);",
+            transactional: true,
+        };
+        assert!(migration.transactional);
+        assert!(
+            !SqlMigration {
+                transactional: false,
+                ..migration.clone()
+            }
+            .transactional
+        );
+    }
+
+    #[test]
+    fn guarded_ddl_is_idempotent_plain_ddl_is_not() {
+        assert!(is_idempotent_sql(
+            "CREATE INDEX CONCURRENTLY IF NOT EXISTS i ON t (c)"
+        ));
+        assert!(is_idempotent_sql(
+            "CREATE OR REPLACE FUNCTION f() RETURNS void AS $$ BEGIN END $$;"
+        ));
+        assert!(is_idempotent_sql("DROP INDEX CONCURRENTLY IF EXISTS i"));
+        assert!(!is_idempotent_sql("CREATE INDEX CONCURRENTLY i ON t (c)"));
+        // Case-insensitive: SQL is written in any case.
+        assert!(is_idempotent_sql("create index if not exists i on t (c)"));
+
+        // A sentence about the guard is not the guard. Reading the whole
+        // file waves through exactly the migration this refuses: one that
+        // runs outside a transaction, is re-run after a crash, and fails.
+        assert!(!is_idempotent_sql(
+            "-- we could use IF NOT EXISTS here but did not\nCREATE INDEX CONCURRENTLY i ON t (c)"
+        ));
+        assert!(!is_idempotent_sql(
+            "/* IF NOT EXISTS is unavailable on this engine */ CREATE INDEX i ON t (c)"
+        ));
+        // And a real guard after a comment is still found.
+        assert!(is_idempotent_sql(
+            "-- concurrently, so it must be idempotent\nCREATE INDEX CONCURRENTLY IF NOT EXISTS i ON t (c)"
+        ));
+    }
+
+    #[test]
+    fn the_missing_guard_message_names_the_migration_and_the_rule() {
+        let message = migration_missing_guard("waitlist/0005");
+        assert!(message.contains("waitlist/0005"), "{message}");
+        assert!(message.contains("IF NOT EXISTS"), "{message}");
     }
 }

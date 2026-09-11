@@ -78,22 +78,28 @@ impl Module for Console {
         // audit (access), accounts + ventures, and provisioning progress.
         // Re-id the three sub-schemas so they are unique WITHIN this module:
         // each crate's own MIGRATION is id "0001", which would collide under
-        // one module and apply only one table set. Same SQL, distinct ids.
+        // one module and apply only one table set. Same SQL, same
+        // transaction rule (copied, not restated: a sub-schema that later
+        // needs to run outside a transaction must not silently run inside
+        // one here), distinct ids.
         const MIGRATIONS: [SqlMigration; 3] = [
             SqlMigration {
                 id: "0001",
                 name: "access",
                 sql: cratefield_access::MIGRATION.sql,
+                transactional: cratefield_access::MIGRATION.transactional,
             },
             SqlMigration {
                 id: "0002",
                 name: "accounts",
                 sql: cratefield_accounts::MIGRATION.sql,
+                transactional: cratefield_accounts::MIGRATION.transactional,
             },
             SqlMigration {
                 id: "0003",
                 name: "provisioning",
                 sql: cratefield_provisioning::MIGRATION.sql,
+                transactional: cratefield_provisioning::MIGRATION.transactional,
             },
         ];
         // The array is the apply order; this refuses a gap, a duplicate

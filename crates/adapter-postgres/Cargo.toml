@@ -19,12 +19,18 @@ cratefield-core = { workspace = true }
 async-trait = { workspace = true }
 sea-query = { workspace = true, features = ["backend-postgres"] }
 time = { workspace = true }
+tracing = { workspace = true }
+futures-util = { version = "0.3.34", default-features = false, features = [
+    "std",
+    "async-await",
+] }
 
 # Native only (issue #18): the sqlx driver does not compile to wasm, so it
 # is gated to non-wasm targets and `src/lib.rs` fails the crate fast with a
 # clear message on any wasm target. `tls-rustls` pulls rustls with the
 # `ring` provider — no aws-lc, no cmake dependency.
 [target.'cfg(not(any(target_arch = "wasm32", target_arch = "wasm64")))'.dependencies]
+tokio = { workspace = true, features = ["sync"] }
 sqlx = { version = "0.8.6", default-features = false, features = [
     "postgres",
     "runtime-tokio",

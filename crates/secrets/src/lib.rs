@@ -43,16 +43,19 @@ pub fn migrations() -> cratefield_core::Migrations {
             id: "0001",
             name: "init",
             sql: include_str!("../migrations/sqlite/0001_init.sql"),
+            transactional: true,
         },
         cratefield_core::SqlMigration {
             id: "0002",
             name: "audit",
             sql: include_str!("../migrations/sqlite/0002_audit.sql"),
+            transactional: true,
         },
         cratefield_core::SqlMigration {
             id: "0003",
             name: "audit-store",
             sql: include_str!("../migrations/sqlite/0003_audit_store.sql"),
+            transactional: true,
         },
     ];
     // The array is the apply order; this refuses a gap, a duplicate
@@ -63,16 +66,19 @@ pub fn migrations() -> cratefield_core::Migrations {
             id: "0001",
             name: "init",
             sql: include_str!("../migrations/postgres/0001_init.sql"),
+            transactional: true,
         },
         cratefield_core::SqlMigration {
             id: "0002",
             name: "audit",
             sql: include_str!("../migrations/postgres/0002_audit.sql"),
+            transactional: true,
         },
         cratefield_core::SqlMigration {
             id: "0003",
             name: "audit-store",
             sql: include_str!("../migrations/postgres/0003_audit_store.sql"),
+            transactional: true,
         },
     ];
     // The array is the apply order; this refuses a gap, a duplicate

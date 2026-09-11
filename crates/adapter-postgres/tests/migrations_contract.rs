@@ -155,6 +155,7 @@ async fn non_portable_sqlite_set_is_refused_not_applied() {
         id: "0001",
         name: "oops",
         sql: "CREATE TABLE t (id SERIAL PRIMARY KEY);",
+        transactional: true,
     };
     let Some(base) = base_url() else {
         eprintln!("SKIPPED: {}", skip_reason());
@@ -229,6 +230,7 @@ async fn an_edited_migration_is_refused_and_pre_checksum_rows_are_tolerated() {
         id: "0001",
         name: "init",
         sql: "CREATE TABLE IF NOT EXISTS widgets (id text PRIMARY KEY)",
+        transactional: true,
     }];
     db.apply_migrations("widgets", &first)
         .await
@@ -241,6 +243,7 @@ async fn an_edited_migration_is_refused_and_pre_checksum_rows_are_tolerated() {
         id: "0001",
         name: "init",
         sql: "CREATE TABLE IF NOT EXISTS widgets (id text PRIMARY KEY, colour text)",
+        transactional: true,
     }];
     let err = db
         .apply_migrations("widgets", &edited)

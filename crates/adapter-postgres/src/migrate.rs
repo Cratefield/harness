@@ -39,7 +39,7 @@ pub fn select_set(migrations: &Migrations) -> Result<&'static [SqlMigration], St
     Ok(migrations.sqlite)
 }
 
-fn tracking_table_ddl() -> Statement {
+pub(crate) fn tracking_table_ddl() -> Statement {
     let sql = Table::create()
         .table(Alias::new("harness_migrations"))
         .if_not_exists()
@@ -53,7 +53,7 @@ fn tracking_table_ddl() -> Statement {
 /// Databases migrated before checksums were recorded have the
 /// two-column table. Their existing rows stay NULL, which reads as
 /// "applied, cannot verify" rather than as a mismatch.
-fn tracking_table_backfill_ddl() -> Statement {
+pub(crate) fn tracking_table_backfill_ddl() -> Statement {
     Statement::new(
         "ALTER TABLE harness_migrations ADD COLUMN IF NOT EXISTS checksum text".to_owned(),
     )
@@ -97,13 +97,13 @@ async fn exec_on(conn: &mut PgConnection, stmt: &Statement) -> Result<(), DbErro
     sqlx::query_with(sql.as_str(), args)
         .execute(conn)
         .await
-        .map_err(|err| DbError::Batch(first_line(&err.to_string()).to_owned()))?;
+        .map_err(|err| DbError::Batch(first_error_line(&err.to_string()).to_owned()))?;
     Ok(())
 }
 
 /// sqlx error strings can embed the whole offending statement; keep the
 /// first non-empty line for the error message.
-fn first_line(message: &str) -> &str {
+pub(crate) fn first_error_line(message: &str) -> &str {
     message
         .lines()
         .find(|line| !line.is_empty())
@@ -159,6 +159,29 @@ impl crate::Postgres {
                 }
                 continue;
             }
+            if !migration.transactional {
+                // Runs alone on the pool (autocommit), then the tracking
+                // row (RECONCILIATION.md §4). The SQL must be idempotent:
+                // a crash between the two steps re-runs it on the next
+                // boot.
+                if !cratefield_core::is_idempotent_sql(migration.sql) {
+                    return Err(DbError::Batch(cratefield_core::migration_missing_guard(
+                        &key,
+                    )));
+                }
+                sqlx::raw_sql(migration.sql)
+                    .execute(&self.pool)
+                    .await
+                    .map_err(|err| {
+                        DbError::Batch(format!(
+                            "migration {key} failed: {}",
+                            first_error_line(&err.to_string())
+                        ))
+                    })?;
+                let record = record_insert(&key, &iso_now(), &checksum)?;
+                self.execute(&record).await?;
+                continue;
+            }
             let mut tx = self
                 .pool
                 .begin()
@@ -172,7 +195,7 @@ impl crate::Postgres {
                 .map_err(|err| {
                     DbError::Batch(format!(
                         "migration {key} failed: {}",
-                        first_line(&err.to_string())
+                        first_error_line(&err.to_string())
                     ))
                 })?;
             let record = record_insert(&key, &iso_now(), &checksum)?;
@@ -214,6 +237,7 @@ mod tests {
         id: "0001",
         name: "init",
         sql: "CREATE TABLE t (id TEXT PRIMARY KEY, n INTEGER NOT NULL DEFAULT 0);",
+        transactional: true,
     };
 
     #[test]
@@ -222,6 +246,7 @@ mod tests {
             id: "0001",
             name: "init",
             sql: "CREATE TABLE t (id TEXT PRIMARY KEY);",
+            transactional: true,
         };
         let migrations = Migrations {
             sqlite: &[PORTABLE],
@@ -246,6 +271,7 @@ mod tests {
             id: "0002",
             name: "oops",
             sql: "CREATE TABLE t (id SERIAL PRIMARY KEY);",
+            transactional: true,
         };
         let migrations = Migrations::sqlite(&[PORTABLE, NOT_PORTABLE]);
         let err = select_set(&migrations).expect_err("SERIAL is not portable");

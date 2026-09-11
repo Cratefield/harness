@@ -386,16 +386,36 @@ enum MigrationsCommand {
         #[arg(long, default_value = "migrations")]
         out: PathBuf,
     },
-    /// Applies the harness's migrations directly to a database — the
-    /// native counterpart of `wrangler d1 migrations apply` (issue #18).
+    /// Applies the harness's migrations directly to the database
+    /// `--url` names — the native counterpart of
+    /// `wrangler d1 migrations apply` (issue #18). With `--fleet` or
+    /// `--plan` the URL names the **control database** instead and the
+    /// tenants in its registry are reconciled (RECONCILIATION.md).
     Apply {
         /// Target SQL dialect: postgres.
         #[arg(long, default_value = "postgres")]
         dialect: String,
-        /// Connection string of the target database, e.g.
-        /// `postgres://user:pass@host:5432/venture`.
+        /// Connection string of the target database (the control
+        /// database when `--fleet`, `--plan` or `--tenant` is given),
+        /// e.g. `postgres://user:pass@host:5432/venture`.
         #[arg(long, value_name = "URL")]
         url: String,
+        /// Reconcile every tenant in the control database's registry,
+        /// each against its own database, instead of applying to the
+        /// database `--url` names.
+        #[arg(long)]
+        fleet: bool,
+        /// Print what would be applied, per tenant and per module,
+        /// without applying anything.
+        #[arg(long)]
+        plan: bool,
+        /// Reconcile one tenant only (registry id, not a DSN).
+        #[arg(long, value_name = "TENANT")]
+        tenant: Option<String>,
+        /// Abort with a non-zero exit when any tenant is degraded,
+        /// instead of letting the others serve. Needs `--fleet`.
+        #[arg(long)]
+        strict: bool,
     },
 }
 
@@ -422,8 +442,24 @@ pub fn run(build: impl Fn() -> Harness, args: impl IntoIterator<Item = String>) 
             command: MigrationsCommand::Collect { dialect, out },
         } => collect::collect(&harness, &dialect, &out),
         Command::Migrations {
-            command: MigrationsCommand::Apply { dialect, url },
-        } => apply::apply(&harness, &dialect, &url),
+            command:
+                MigrationsCommand::Apply {
+                    dialect,
+                    url,
+                    fleet,
+                    plan,
+                    tenant,
+                    strict,
+                },
+        } => apply::apply(
+            &harness,
+            &dialect,
+            &url,
+            plan,
+            fleet,
+            tenant.as_deref(),
+            strict,
+        ),
         Command::Doctor {
             out,
             allow_no_captcha,

@@ -36,6 +36,7 @@ mod sidecar;
 mod signer;
 mod surface;
 mod template;
+mod tenant;
 mod venture;
 
 pub use admin::{bearer_token, constant_time_eq, require_admin};
@@ -57,7 +58,8 @@ pub use logging::{
 };
 pub use module::{
     BoxFuture, HARNESS_API, Migrations, Module, ModuleContext, SqlMigration, assert_migration_set,
-    harness_api_mismatch, migration_checksum, migration_edited,
+    harness_api_mismatch, is_idempotent_sql, migration_checksum, migration_edited,
+    migration_missing_guard,
 };
 pub use outbox::{Outbox, OutboxRecord};
 pub use personal_data::{
@@ -103,4 +105,5 @@ pub use surface::{
     schema_for,
 };
 pub use template::{Rendered, Template, TemplateError, TemplateRegistry};
+pub use tenant::TenantStatus;
 pub use venture::{Brand, Venture, VentureEnv};

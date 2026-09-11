@@ -65,9 +65,12 @@ compile_error!(
 
 mod convert;
 mod migrate;
+mod reconcile;
 pub mod testing;
 
+pub use cratefield_core::TenantStatus;
 pub use migrate::select_set;
+pub use reconcile::{ModulePlan, TenantPlan, TenantRecord, TenantReport, tenant_lock_key};
 
 use async_trait::async_trait;
 use cratefield_core::{Database, DbError, Rows, Statement};
@@ -79,6 +82,7 @@ use sqlx::postgres::PgArguments;
 /// One pool per tenant database: ADR 0008 keeps tenants isolated at the
 /// database boundary, and the native runtime (#19) holds one adapter per
 /// tenant.
+#[derive(Clone)]
 pub struct Postgres {
     pool: sqlx::PgPool,
 }

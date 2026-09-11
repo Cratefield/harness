@@ -735,10 +735,12 @@ dependencies = [
  "cratefield-core",
  "cratefield-module-email-signup",
  "cratefield-module-waitlist",
+ "futures-util",
  "sea-query",
  "sqlx",
  "time",
  "tokio",
+ "tracing",
 ]
 
 [[package]]

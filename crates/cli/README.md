@@ -61,7 +61,7 @@ global file name plus a sha256 of its content:
 wrangler/D1 (sqlite) flow. Postgres migrations apply directly — see
 `fz migrations apply` below.
 
-## `fz migrations apply [--dialect postgres] --url <URL>`
+## `fz migrations apply [--dialect postgres] [--fleet|--plan] --url <URL>`
 
 Applies the harness's module migrations directly to a Postgres database
 (issue #18): per module the `postgres` migration set when shipped, else
@@ -82,6 +82,26 @@ cratefield-cli = { version = "0.1", features = ["postgres"] }
 cargo run --bin fz -- migrations apply --dialect postgres \
   --url postgres://user:pass@host:5432/venture
 ```
+
+### The fleet: `--fleet`, `--plan`, `--tenant`, `--strict`
+
+Those flags point the same command at a **control** database — the one
+holding the tenant registry — instead of a venture database, and
+reconcile each registered tenant against its own database
+(`docs/RECONCILIATION.md`, issue #30). `--url` therefore names a
+different database with them than without, which is why nothing here is
+implicit:
+
+| Invocation | `--url` names | What it writes |
+|---|---|---|
+| `apply --url X` | the venture database | X's `harness_migrations` |
+| `apply --fleet --url C` | the control database | each registered tenant's own database |
+| `apply --plan [--tenant T] --url C` | the control database | nothing |
+
+`--strict` turns a degraded tenant into a non-zero exit instead of
+letting its neighbours serve, and needs `--fleet`. `--plan` with
+`--fleet`, or `--strict` without it, is refused rather than guessed at.
+`--fleet` against a registry with no tenants in it says so.
 
 ## `fz data export [--plan] --db <PATH> --out <FILE.jsonl>` / `fz data import [--append] [--plan] --url <URL> <FILE.jsonl>`
 

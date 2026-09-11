@@ -41,10 +41,17 @@ const RETENTION_DAYS: u32 = 30;
 /// TEXT ids and ISO-8601 TEXT timestamps, no `AUTOINCREMENT`, no
 /// `NOW()`. It is idempotent, because the conformance kit applies the
 /// set twice and wrangler can re-apply a stream after a partial run.
+///
+/// `transactional: true` is the ordinary case: the migration and its
+/// tracking row commit together, so a crash cannot record a migration that
+/// did not run. Set it to `false` only for the statements Postgres refuses
+/// inside a transaction block, such as `CREATE INDEX CONCURRENTLY` —
+/// RECONCILIATION.md §4.
 const MIGRATION_INIT: SqlMigration = SqlMigration {
     id: "0001",
     name: "init",
     sql: include_str!("../migrations/sqlite/0001_init.sql"),
+    transactional: true,
 };
 
 /// The notes module: one table, one public write, one public read, and a
