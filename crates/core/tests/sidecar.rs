@@ -30,6 +30,7 @@ struct RecordingDispatcher {
     status: StatusCode,
     contract: Option<String>,
     extra_header: Option<(&'static str, &'static str)>,
+    body: &'static str,
     calls: Arc<AtomicUsize>,
     seen: Arc<std::sync::Mutex<Vec<http::Request<Bytes>>>>,
 }
@@ -41,6 +42,7 @@ impl RecordingDispatcher {
             status: StatusCode::OK,
             contract: None,
             extra_header: None,
+            body: "{\"from\":\"sidecar\"}",
             calls: Arc::new(AtomicUsize::new(0)),
             seen: Arc::new(std::sync::Mutex::new(Vec::new())),
         }
@@ -53,6 +55,15 @@ impl RecordingDispatcher {
 
     fn answering_header(mut self, name: &'static str, value: &'static str) -> Self {
         self.extra_header = Some((name, value));
+        self
+    }
+
+    /// The body the sidecar answers `/__health` with. A real sidecar runs
+    /// the same `health_handler` as its host, so its body carries
+    /// `modules[].tables` — which is how the host learns what it claims
+    /// in the shared database (issue #66).
+    fn answering_body(mut self, body: &'static str) -> Self {
+        self.body = body;
         self
     }
 }
@@ -82,9 +93,7 @@ impl Dispatcher for RecordingDispatcher {
         if let Some((name, value)) = self.extra_header {
             builder = builder.header(name, value);
         }
-        Ok(builder
-            .body(Bytes::from_static(b"{\"from\":\"sidecar\"}"))
-            .unwrap())
+        Ok(builder.body(Bytes::from(self.body)).unwrap())
     }
 }
 
@@ -798,6 +807,96 @@ async fn health_reports_a_contract_mismatched_sidecar() {
     let sidecar = &health["sidecars"][0];
     assert_eq!(sidecar["probe"], "mismatch");
     assert_eq!(sidecar["contract"], cratefield_core::HARNESS_API - 1);
+}
+
+/// A sidecar owns tables in the **same** database as its host, and the
+/// build-time duplicate check cannot see it: `check_tables` walks
+/// `harness.modules()`, which a mount is not in. Left undetected, both
+/// modules run `CREATE TABLE IF NOT EXISTS subscribers` and quietly share
+/// one table — the silent failure issue #66 is about.
+#[pollster::test]
+async fn health_reports_a_table_a_sidecar_shares_with_a_compiled_in_module() {
+    let dispatcher = Arc::new(
+        RecordingDispatcher::new("ACME")
+            .answering_contract(cratefield_core::HARNESS_API)
+            .answering_body(
+                r#"{"modules":[{"name":"acme-pricing","version":"1.0.0","tables":["subscribers","acme_quotes"]}]}"#,
+            ),
+    );
+    let harness = builder_with_sample_claiming(&["subscribers"]);
+    let router = harness.router(ports_with_sidecars(
+        r#"{"acme-pricing":"ACME"}"#,
+        Some(dispatcher),
+    ));
+
+    let health = body_json(request(&router, Method::GET, "/__health", &[], None).await).await;
+    let sidecar = &health["sidecars"][0];
+    assert_eq!(sidecar["probe"], "table-collision");
+    let clashes = sidecar["table_collisions"]
+        .as_array()
+        .expect("the clashing tables are named");
+    assert_eq!(clashes.len(), 1, "only the shared one: {clashes:?}");
+    let clash = clashes[0].as_str().expect("a string");
+    assert!(clash.contains("subscribers"), "{clash}");
+    assert!(
+        clash.contains("sample"),
+        "and names the module to rename: {clash}"
+    );
+    assert_eq!(
+        sidecar["tables"],
+        serde_json::json!(["acme_quotes", "subscribers"]),
+        "what the sidecar claimed is shown, sorted, whether it clashes or not"
+    );
+}
+
+/// The other half, which the collision test alone does not prove: a
+/// sidecar whose tables are disjoint is plainly `ok`. Without this, a
+/// check that flagged *every* sidecar would pass the test above.
+#[pollster::test]
+async fn a_sidecar_with_its_own_tables_is_not_a_collision() {
+    let dispatcher = Arc::new(
+        RecordingDispatcher::new("ACME")
+            .answering_contract(cratefield_core::HARNESS_API)
+            .answering_body(
+                r#"{"modules":[{"name":"acme-pricing","version":"1.0.0","tables":["acme_quotes"]}]}"#,
+            ),
+    );
+    let router = builder_with_sample_claiming(&["subscribers"]).router(ports_with_sidecars(
+        r#"{"acme-pricing":"ACME"}"#,
+        Some(dispatcher),
+    ));
+
+    let health = body_json(request(&router, Method::GET, "/__health", &[], None).await).await;
+    let sidecar = &health["sidecars"][0];
+    assert_eq!(sidecar["probe"], "ok");
+    assert_eq!(sidecar["table_collisions"], serde_json::Value::Null);
+}
+
+/// A sidecar that declares nothing — unreachable, or an older build whose
+/// `/__health` has no `tables` — must not read as "no clash". Absence of
+/// evidence is the failure mode this check exists to remove, so it is
+/// pinned: the probe says what it saw, and claims nothing it did not.
+#[pollster::test]
+async fn a_sidecar_that_declares_no_tables_is_not_reported_as_clean() {
+    let dispatcher = Arc::new(
+        RecordingDispatcher::new("ACME")
+            .answering_contract(cratefield_core::HARNESS_API)
+            .answering_body(r#"{"modules":[{"name":"acme-pricing","version":"1.0.0"}]}"#),
+    );
+    let router = builder_with_sample_claiming(&["subscribers"]).router(ports_with_sidecars(
+        r#"{"acme-pricing":"ACME"}"#,
+        Some(dispatcher),
+    ));
+
+    let health = body_json(request(&router, Method::GET, "/__health", &[], None).await).await;
+    let sidecar = &health["sidecars"][0];
+    assert_eq!(
+        sidecar["tables"],
+        serde_json::json!([]),
+        "an empty declaration is shown as empty, not omitted"
+    );
+    assert_eq!(sidecar["probe"], "ok");
+    assert_eq!(sidecar["table_collisions"], serde_json::Value::Null);
 }
 
 /// A sidecar that does not answer at all is `unreachable`, with nothing

@@ -752,6 +752,7 @@ async fn probe_one_sidecar(state: &HealthState, mount: &SidecarMount) -> serde_j
         .map(str::to_owned)
         .or_else(|| first_module_string(body.as_ref(), "name"));
     let version = first_module_string(body.as_ref(), "version");
+    let tables = declared_tables(body.as_ref());
     let contract = contract.or_else(|| {
         body.as_ref()
             .and_then(|b| b.get("harness_api"))
@@ -761,12 +762,76 @@ async fn probe_one_sidecar(state: &HealthState, mount: &SidecarMount) -> serde_j
     missing["contract"] = contract.map_or(serde_json::Value::Null, |api| json!(api));
     missing["module"] = module.map_or(serde_json::Value::Null, |name| json!(name));
     missing["version"] = version.map_or(serde_json::Value::Null, |version| json!(version));
+    missing["tables"] = json!(tables);
     match contract {
         Some(api) if api != HARNESS_API => missing["probe"] = json!("mismatch"),
         Some(_) => missing["probe"] = json!("ok"),
         None => missing["probe"] = json!("unreachable"),
     }
+    // A sidecar owns tables in the *same* database as its host, and the
+    // build-time duplicate check (`check_tables`) cannot see it: it walks
+    // `harness.modules()`, which a mount is not in. So the clash is caught
+    // here, the first time the host hears what the sidecar claims, and it
+    // is reported rather than inferred - `CREATE TABLE IF NOT EXISTS`
+    // would otherwise have the two modules quietly sharing one table
+    // (issue #66).
+    //
+    // Only a *positive* observation sets this. An unreachable sidecar
+    // declares nothing, and "declared nothing" must never read as "clean":
+    // that is the difference between a check and a coin flip.
+    let clashes = collisions_with(&tables, state, &mount.name);
+    if !clashes.is_empty() {
+        let detail = format!(
+            "sidecar `{}` claims table(s) {} already claimed in this deployment",
+            mount.name,
+            clashes.join(", ")
+        );
+        tracing::error!(sidecar = %mount.name, tables = %clashes.join(","), "{detail}");
+        crate::logging::forward_internal_error(&detail);
+        missing["probe"] = json!("table-collision");
+        missing["table_collisions"] = json!(clashes);
+    }
     missing
+}
+
+/// Every table named by `modules[*].tables` in a sidecar's `/__health`
+/// body. Absent or malformed reads as an empty set, never as "no clash" -
+/// see the caller.
+fn declared_tables(body: Option<&serde_json::Value>) -> Vec<String> {
+    let Some(modules) = body
+        .and_then(|b| b.get("modules"))
+        .and_then(|m| m.as_array())
+    else {
+        return Vec::new();
+    };
+    let mut tables: Vec<String> = modules
+        .iter()
+        .filter_map(|module| module.get("tables")?.as_array())
+        .flatten()
+        .filter_map(|table| table.as_str().map(str::to_owned))
+        .collect();
+    tables.sort_unstable();
+    tables.dedup();
+    tables
+}
+
+/// The tables `claimed` shares with a compiled-in module, reported with the
+/// owner so the operator knows which side to rename.
+fn collisions_with(claimed: &[String], state: &HealthState, mount: &str) -> Vec<String> {
+    let mut clashes: Vec<String> = Vec::new();
+    for module in &state.modules {
+        if module.name() == mount {
+            continue;
+        }
+        for table in module.tables() {
+            if claimed.iter().any(|claimed| claimed == table)
+                && !clashes.iter().any(|seen| seen == table)
+            {
+                clashes.push(format!("`{table}` (also module `{}`)", module.name()));
+            }
+        }
+    }
+    clashes
 }
 
 /// A sidecar's `/__health` body names its module and version at
