@@ -22,29 +22,42 @@
 #![doc = include_str!("../README.md")]
 #![forbid(unsafe_code)]
 
+#[cfg(feature = "harness")]
 mod conformance;
+#[cfg(feature = "harness")]
 mod dialect;
+#[cfg(feature = "harness")]
 mod fakes;
+#[cfg(feature = "harness")]
 mod harness;
 #[cfg(feature = "postgres")]
 mod pg;
+#[cfg(feature = "port-conformance")]
+mod port;
+#[cfg(feature = "harness")]
 mod request;
+#[cfg(feature = "harness")]
 mod sidecar;
 mod tmp;
 pub mod vectors;
 
-pub use conformance::{
-    assert_wasm_safe_deps, conformance, conformance_in_process_only, push_recipient_conformance,
-    sidecar_parity,
-};
+#[cfg(feature = "harness")]
+pub use conformance::{conformance, conformance_in_process_only, sidecar_parity};
+#[cfg(feature = "harness")]
 pub use dialect::Dialect;
+#[cfg(feature = "harness")]
 pub use fakes::{
     EmptyDatabase, FakeCaptcha, FakeDefer, FakeDispatcher, FakeHttpClient, FakeMailer,
     FakePayments, FakePush, FakeRateLimiter, FakeRealtime, FixedClock, MailerMode, MemoryBlob,
     MemoryKeyValue, PaymentsCall, PaymentsMode, PushMode,
 };
+#[cfg(feature = "harness")]
 pub use harness::TestHarness;
+#[cfg(feature = "port-conformance")]
+pub use port::{assert_wasm_safe_deps, push_recipient_conformance};
+#[cfg(feature = "harness")]
 pub use request::{TestResponse, request};
+#[cfg(feature = "harness")]
 pub use sidecar::{FakeSidecar, Fault, shared as shared_sidecar};
 pub use tmp::TempDir;
 
@@ -52,6 +65,9 @@ pub use tmp::TempDir;
 pub const TEST_HARNESS_SECRET: &str = "cratefield-testing-dummy-secret-0123456789";
 
 // Mirrors cratefield-adapter-postgres's integration-test skip reason.
+// The dialect axis (behind `harness`) prints it when the Postgres leg is
+// unavailable, so it exists whenever that axis or the leg itself does.
+#[cfg(any(feature = "harness", feature = "postgres"))]
 const POSTGRES_SKIP_REASON: &str = "start a local postgres:16 \
      (docker run --rm -e POSTGRES_PASSWORD=postgres -p 5433:5432 postgres:16) \
      and set FZ_TEST_POSTGRES_URL=postgres://postgres:postgres@127.0.0.1:5433/postgres";
