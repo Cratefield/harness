@@ -165,7 +165,7 @@ makes a crate private now, not a separate repository (ADR
 | Crate | Role |
 |---|---|
 | `factory0-auth-*` | The auth service: `auth-core` plus one crate per login method (passkeys, OIDC/Google/Apple, password, magic link, Meta) and the deployable `auth-worker` |
-| `cratefield-module-notifications` | Push subscriptions, per-account per-category preferences, fan-out and delivery. Unpublished only because it depends on `factory0-auth-client` (ADR 0016) |
+| `cratefield-module-notifications` | Push, an in-app inbox and email from one `notify()`, with per-account per-category preferences ([NOTIFICATIONS.md](docs/NOTIFICATIONS.md)). Unpublished only because it depends on `factory0-auth-client` (ADR 0016) |
 | `fz-module-linkedin` | Private Factory Zero module: run a LinkedIn Company Page from the harness |
 | `cratefield-control-plane`, `cratefield-console`, `cratefield-accounts`, `cratefield-access`, `cratefield-catalog`, `cratefield-connections`, `cratefield-provisioning`, `cratefield-ui-generator` | The managed service: sign up, pick modules, connect Cloudflare and SSO, get a running venture |
 
