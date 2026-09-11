@@ -90,13 +90,12 @@ async fn seed(kit: &TestHarness, email: &str) {
 async fn scalar(kit: &TestHarness, sql: &str, value: &str) -> i64 {
     let rows = kit
         .db
-        .query(&Statement::with_values(
-            sql.to_owned(),
-            vec![value.into()],
-        ))
+        .query(&Statement::with_values(sql.to_owned(), vec![value.into()]))
         .await
         .unwrap_or_else(|err| panic!("counting failed: {err}"));
-    rows.first().and_then(|row| row.get::<i64>("n")).unwrap_or(-1)
+    rows.first()
+        .and_then(|row| row.get::<i64>("n"))
+        .unwrap_or(-1)
 }
 
 async fn venture_count(kit: &TestHarness, email: &str) -> i64 {
@@ -242,7 +241,11 @@ async fn an_erasure_with_the_operators_address_removes_the_ventures_before_the_a
             .find(|row| row["table"] == name)
             .unwrap_or_else(|| panic!("{name} missing from the preview: {body}"))
     };
-    assert_eq!(entry("venture")["rows"], 1, "the plan did not count the venture through the join");
+    assert_eq!(
+        entry("venture")["rows"],
+        1,
+        "the plan did not count the venture through the join"
+    );
     assert_eq!(entry("venture")["action"], "erase");
     assert_eq!(entry("account")["rows"], 1);
     // The preview writes nothing.
@@ -257,7 +260,11 @@ async fn an_erasure_with_the_operators_address_removes_the_ventures_before_the_a
     )
     .await;
     assert_eq!(confirm.status, StatusCode::OK, "{}", confirm.text());
-    assert_eq!(confirm.json()["verified"], true, "verify did not accept the erasure");
+    assert_eq!(
+        confirm.json()["verified"],
+        true,
+        "verify did not accept the erasure"
+    );
 
     // Order, not just end state. The statements run as one batch; both
     // dialects let a statement see its own transaction's writes, so if the
@@ -273,7 +280,12 @@ async fn an_erasure_with_the_operators_address_removes_the_ventures_before_the_a
          verify receipt above is lying"
     );
     assert_eq!(
-        count(&kit, "SELECT COUNT(*) AS n FROM account WHERE identity = ?", ALICE).await,
+        count(
+            &kit,
+            "SELECT COUNT(*) AS n FROM account WHERE identity = ?",
+            ALICE
+        )
+        .await,
         0,
         "the account row survived"
     );
@@ -286,14 +298,24 @@ async fn an_erasure_with_the_operators_address_removes_the_ventures_before_the_a
     // Another subject loses nothing.
     assert_eq!(venture_count(&kit, BOB).await, 1);
     assert_eq!(
-        count(&kit, "SELECT COUNT(*) AS n FROM account WHERE identity = ?", BOB).await,
+        count(
+            &kit,
+            "SELECT COUNT(*) AS n FROM account WHERE identity = ?",
+            BOB
+        )
+        .await,
         1
     );
 
     // The audit row is Retain, and retention is honest: the record of who
     // let Alice in outlives the erasure on purpose.
     assert_eq!(
-        count(&kit, "SELECT COUNT(*) AS n FROM allowlist_audit WHERE value = ?", ALICE).await,
+        count(
+            &kit,
+            "SELECT COUNT(*) AS n FROM allowlist_audit WHERE value = ?",
+            ALICE
+        )
+        .await,
         1
     );
 }
