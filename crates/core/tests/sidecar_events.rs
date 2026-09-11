@@ -781,8 +781,13 @@ async fn a_sidecar_that_answers_500_is_reported_exactly_once() {
         StatusCode::INTERNAL_SERVER_ERROR,
     ));
     let defer = Arc::new(ParkingDefer::default());
+    // Its own mount name, not just its own event name: the report line
+    // names the *mount*, and `a_sidecar_that_answers_500_does_not_fail_
+    // the_originating_request` emits the identical line for
+    // `acme-pricing`. One shared buffer means uniqueness has to cover
+    // every part of the string being counted.
     let router = harness_of(vec![Arc::new(EmitRouteModule::default())]).router(ports_for(
-        Some(r#"{"acme-pricing":"ACME"}"#),
+        Some(r#"{"five-hundred-report":"ACME"}"#),
         Some(dispatcher.clone()),
         Some(Arc::clone(&defer)),
     ));
@@ -791,7 +796,7 @@ async fn a_sidecar_that_answers_500_is_reported_exactly_once() {
     defer.drain().await;
 
     assert_eq!(
-        reports("event forward to `acme-pricing` answered 500"),
+        reports("event forward to `five-hundred-report` answered 500"),
         1,
         "once, not once per retry"
     );
