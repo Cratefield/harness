@@ -31,7 +31,9 @@ impl Module for SampleRowModule {
     }
 
     fn requires(&self) -> &'static [Port] {
-        &[Port::Db, Port::HttpClient]
+        // The harness hands a module only the ports it declares, so the
+        // blob-probe route is unreachable without `Port::Blob` here.
+        &[Port::Db, Port::HttpClient, Port::Blob]
     }
 
     fn tables(&self) -> &'static [&'static str] {
@@ -85,6 +87,14 @@ impl Module for SampleRowModule {
             .route(
                 "/transport-probe",
                 get(transport_probe).with_state(Arc::clone(&state)),
+            )
+            .route(
+                "/fetch-probe",
+                get(fetch_probe).with_state(Arc::clone(&state)),
+            )
+            .route(
+                "/blob-probe",
+                get(blob_probe).with_state(Arc::clone(&state)),
             )
             .route(
                 "/sidecar-probe",
@@ -226,6 +236,99 @@ async fn transport_probe(
         });
     }
     Ok(Json(json!({ "errors": errors })))
+}
+
+/// The outbound half of the `HttpClient` port that `transport-probe`'s
+/// failures deliberately leave unproven (issues #132, #229): a fetch that
+/// **succeeds**, against a public destination whose body is stable text —
+/// Cloudflare's `cdn-cgi/trace`, a few hundred bytes of `key=value` lines
+/// including `h=<host>` and `colo=<airport>`. The route parses those two
+/// lines out, so the wrangler smoke asserts the Worker actually received
+/// and read the upstream body, not merely that some status came back.
+///
+/// A constant, like the failing probe's targets: this is not a fetch
+/// anybody can point anywhere, and the answer is what the Worker observed.
+async fn fetch_probe(
+    scope: Scope,
+    State(ctx): State<Arc<ModuleContext>>,
+) -> Result<Json<serde_json::Value>, Problem> {
+    const TARGET: &str = "https://www.cloudflare.com/cdn-cgi/trace";
+    let Some(client) = ctx.ports.http.clone() else {
+        return Err(internal(&scope));
+    };
+    let Ok(request) = http::Request::get(TARGET).body(bytes::Bytes::new()) else {
+        return Err(internal(&scope));
+    };
+    let response = match client.send(request).await {
+        Ok(response) => response,
+        Err(err) => {
+            tracing::error!(error = %err, "fetch probe could not reach its target");
+            return Err(internal(&scope));
+        }
+    };
+    let status = response.status().as_u16();
+    let body = String::from_utf8_lossy(response.body());
+    let field = |name: &str| {
+        body.lines()
+            .find_map(|line| line.strip_prefix(name))
+            .unwrap_or_default()
+            .to_owned()
+    };
+    Ok(Json(json!({
+        "status": status,
+        "h": field("h="),
+        "colo": field("colo="),
+    })))
+}
+
+/// The Blob port against a real bucket: put, read back, verify, delete
+/// (issues #105 acceptance, #132). The `wrangler dev` smoke is the only
+/// place this adapter is exercised at all — `cargo test` never touches R2
+/// — so this route is the whole of the proof that the configured binding
+/// round-trips. The key carries the request id, so concurrent smoke runs
+/// cannot collide; the harness scopes it under `sample/` ([`ScopedBlob`]
+/// via the module port view), which is itself part of what this proves.
+///
+/// Like the other probes it requires nothing on the wire: the payload is
+/// the route's own.
+async fn blob_probe(
+    scope: Scope,
+    State(ctx): State<Arc<ModuleContext>>,
+) -> Result<Json<serde_json::Value>, Problem> {
+    const PAYLOAD: &[u8] = b"venture-example blob round trip";
+    const CONTENT_TYPE: &str = "text/plain; charset=utf-8";
+    let Some(blob) = ctx.ports.blob.clone() else {
+        return Err(internal(&scope));
+    };
+    let key = format!("probe/{}", scope.request_id);
+
+    blob.put(&key, PAYLOAD, CONTENT_TYPE).await.map_err(|err| {
+        tracing::error!(error = %err, "blob probe put failed");
+        internal(&scope)
+    })?;
+    let round_trip = async {
+        let object = blob.get(&key).await.map_err(|err| err.to_string())?;
+        let object = object.ok_or_else(|| "put then get found nothing".to_owned())?;
+        if object.bytes != PAYLOAD {
+            return Err("read-back bytes differ from what was put".to_owned());
+        }
+        if object.content_type != CONTENT_TYPE {
+            return Err("read-back content type differs from what was put".to_owned());
+        }
+        blob.delete(&key)
+            .await
+            .map_err(|err| format!("delete failed: {err}"))?;
+        Ok(())
+    };
+    if let Err(what) = round_trip.await {
+        tracing::error!(what, "blob probe round trip failed");
+        return Err(internal(&scope));
+    }
+    Ok(Json(json!({
+        "round_trip": "ok",
+        "key": key,
+        "bytes": PAYLOAD.len(),
+    })))
 }
 
 /// Emits `sample.probe` for the sidecar-forward check (issue #258). The

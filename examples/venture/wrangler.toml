@@ -14,6 +14,13 @@ database_name = "venture-example"
 database_id = "local-venture-example"
 migrations_dir = "migrations"
 
+# The Blob port (issues #105, #132). The wrangler dev smoke round-trips a
+# small object through it; under `--local` wrangler simulates the bucket,
+# so no real bucket or account is needed.
+[[r2_buckets]]
+binding = "R2"
+bucket_name = "venture-example"
+
 # The Realtime port (issue #103). One class per venture; `RoomDriver` in
 # `cratefield-runtime-cloudflare` is what it forwards to.
 [[durable_objects.bindings]]
@@ -59,6 +66,10 @@ migrations_dir = "migrations"
 [[env.sidecar.durable_objects.bindings]]
 name = "ROOMS"
 class_name = "Rooms"
+
+[[env.sidecar.r2_buckets]]
+binding = "R2"
+bucket_name = "venture-example"
 
 [[env.sidecar.migrations]]
 tag = "v1"

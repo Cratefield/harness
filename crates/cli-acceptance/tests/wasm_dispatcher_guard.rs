@@ -25,9 +25,26 @@ use common::repo_root;
 /// the native path does deliberately.
 const INSTALLERS: [&str; 2] = ["set_global_default", "set_default"];
 
-/// Crates whose code can end up in a Worker. `runtime-native` cannot, and
-/// the CLI is a host binary.
-const WASM_REACHABLE: [&str; 3] = ["crates/runtime-cloudflare/", "crates/core/", "crates/ui/"];
+/// Crates that cannot end up in a Worker: the native runtime, the `fz`
+/// host binary, and this crate's own tests (which quote the installer
+/// names by design).
+///
+/// Everything else under `crates/`, `examples/` and `ventures/` is
+/// scanned. The list used to be the opposite shape — an explicit
+/// wasm-reachable allowlist of three crates — and that was a guard that
+/// only looked like it covered the invariant: forty crates link into a
+/// Worker (every module and adapter, the facade), so a dispatcher
+/// installed in, say, `adapter-resend` would hang every production Worker
+/// while the scan shrugged. Scanning by default fails loud when a
+/// native-only crate legitimately needs an installer: it either gates the
+/// call behind `#[cfg(not(target_arch = "wasm32"))]` (which the detector
+/// already honours, see [`native_only_above`]) or this list has to name
+/// it, in the open.
+const NATIVE_ONLY: [&str; 3] = [
+    "crates/runtime-native/",
+    "crates/cli/",
+    "crates/cli-acceptance/",
+];
 
 /// Whether a line installing a dispatcher is inside a native-only region.
 ///
@@ -61,10 +78,18 @@ fn rust_sources(dir: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
-/// Every dispatcher install in a wasm-reachable source that is not gated
-/// to the native target.
+/// Whether the file is outside the native-only crates, i.e. scanned.
+fn scanned(relative: &str) -> bool {
+    let in_scope = relative.starts_with("crates/")
+        || relative.starts_with("examples/")
+        || relative.starts_with("ventures/");
+    in_scope && !NATIVE_ONLY.iter().any(|dir| relative.starts_with(dir))
+}
+
+/// Every dispatcher install in a scanned source that is not gated to the
+/// native target.
 fn offenders_in(relative: &str, source: &str) -> Vec<String> {
-    if !WASM_REACHABLE.iter().any(|dir| relative.starts_with(dir)) {
+    if !scanned(relative) {
         return Vec::new();
     }
     let mut found = Vec::new();
@@ -83,7 +108,7 @@ fn offenders_in(relative: &str, source: &str) -> Vec<String> {
 }
 
 #[test]
-fn no_wasm_reachable_crate_installs_a_tracing_dispatcher() {
+fn no_worker_reachable_source_installs_a_tracing_dispatcher() {
     let root = repo_root();
     let mut sources = Vec::new();
     rust_sources(&root, &mut sources);
@@ -138,4 +163,26 @@ fn the_guard_ignores_crates_that_cannot_reach_a_worker() {
     // `runtime-native` installs one on purpose; it is never in a Worker.
     let source = "fn boot() { tracing::subscriber::set_global_default(s); }\n";
     assert!(offenders_in("crates/runtime-native/src/tracing_setup.rs", source).is_empty());
+}
+
+#[test]
+fn the_guard_covers_every_crate_that_links_into_a_worker() {
+    // The reason the scan is deny-by-default: an installer in a module or
+    // adapter crate hangs every Worker exactly as hard as one in
+    // `runtime-cloudflare`, and the old three-crate allowlist would have
+    // let it through.
+    let source = "fn boot() { tracing::subscriber::set_global_default(s); }\n";
+    for relative in [
+        "crates/adapter-resend/src/lib.rs",
+        "crates/module-waitlist/src/lib.rs",
+        "crates/facade/src/lib.rs",
+        "examples/venture/src/lib.rs",
+        "ventures/cratefield-waitlist/src/lib.rs",
+    ] {
+        assert_eq!(
+            offenders_in(relative, source).len(),
+            1,
+            "{relative} is scanned"
+        );
+    }
 }

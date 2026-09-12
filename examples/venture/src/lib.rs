@@ -39,6 +39,11 @@ fn instance() -> &'static (Harness, Cloudflare) {
         // both modules require the Mailer port.
         let runtime = Cloudflare::new()
             .db("DB")
+            // The Blob port over the R2 binding (issues #105, #132): the
+            // wrangler smoke round-trips the sample module's blob-probe
+            // through it, which is the only place the R2 adapter runs at
+            // all — cargo tests never touch R2.
+            .blob("R2")
             // The `Push` port assembled from the environment (issue #191).
             // Nothing is configured here, so the router answers
             // NotConfigured for every recipient and `serve` logs that once

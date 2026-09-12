@@ -459,6 +459,33 @@ jobs:
             echo "the request path reached the error message"
             exit 1
           fi
+      - name: A successful outbound fetch through the Worker (issue #132)
+        # transport-probe above proves the failure half of the HttpClient
+        # port; this proves the success half, which nothing else did. The
+        # route fetches a fixed public destination and parses its body, so
+        # the assertions below are on what the *Worker* read back — a status
+        # from any source would not do. `grep -q` on curl's exit does the
+        # rest: a broken fetch port, a changed body shape, or a Worker that
+        # stops reaching the network all fail here.
+        run: |
+          set -e
+          curl -sf -m 30 http://127.0.0.1:8787/v1/sample/fetch-probe > /tmp/fetch-probe.json
+          cat /tmp/fetch-probe.json
+          grep -q '"status":200' /tmp/fetch-probe.json
+          grep -q '"h":"www.cloudflare.com"' /tmp/fetch-probe.json
+          grep -qE '"colo":"[A-Z]+"' /tmp/fetch-probe.json
+      - name: A configured R2 bucket round-trips through the Blob port (issues 105, 132)
+        # The R2 adapter's own acceptance note: cargo tests never touch R2,
+        # so wrangler dev is the only place `R2Blob` runs. The route puts,
+        # reads back, verifies bytes and content type, then deletes — and
+        # answers with the verdict, so a silently-broken binding fails
+        # here rather than at a customer's first upload.
+        run: |
+          set -e
+          curl -sf -m 30 http://127.0.0.1:8787/v1/sample/blob-probe > /tmp/blob-probe.json
+          cat /tmp/blob-probe.json
+          grep -q '"round_trip":"ok"' /tmp/blob-probe.json
+          grep -q '"key":"probe/' /tmp/blob-probe.json
       - name: Two sockets against the room Durable Object (issue #103)
         working-directory: examples/venture
         # Not curl: a WebSocket upgrade is the one thing it cannot do, and the

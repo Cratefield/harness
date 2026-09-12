@@ -27,7 +27,7 @@ use cratefield_core::{
 use cratefield_module_email_signup::EmailSignup;
 use cratefield_module_waitlist::Waitlist;
 use cratefield_runtime_native::{
-    EnvConfig, Native, ReqwestClient, TokioClock, install_tracing, serve,
+    DirBlob, EnvConfig, Native, ReqwestClient, TokioClock, install_tracing, serve,
 };
 use venture::sample::SampleRowModule;
 
@@ -73,7 +73,12 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     // The `Push` port assembled from the environment (issue #191): with
     // nothing configured every send answers `NotConfigured`, and `serve`
     // logs which transports were found once at cold start.
-    let mut runtime = Native::new().db_arc(db.port()).push_from_env();
+    let mut runtime = Native::new()
+        .db_arc(db.port())
+        .push_from_env()
+        // The sample module declares the Blob port, so the harness build
+        // refuses to start without a store behind it (issues #105, #132).
+        .blob_arc(DirBlob::arc("data/blobs"));
     if let Some(redis) = cratefield_runtime_native::redis_from_env(&config).await? {
         let rate_limiter: Arc<dyn RateLimiter> = redis.rate_limiter;
         let kv: Arc<dyn KeyValue> = redis.kv;
