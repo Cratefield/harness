@@ -46,7 +46,7 @@ validated before the issues were written, and what is deferred.
    `auth.factory0.ventures`, by any method.
 3. Exchange the code at `/token` for a short-lived ES256 access token and a
    single-use refresh token.
-4. Verify tokens locally with `factory0-auth-client`, which fetches and caches
+4. Verify tokens locally with `cratefield-auth-client`, which fetches and caches
    the published JWKS and checks the audience so nobody has to remember to.
 
 ## Modules

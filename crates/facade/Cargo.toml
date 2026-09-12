@@ -63,6 +63,10 @@ kms = ["dep:cratefield-kms"]
 # does not need it to run; `fz` reads it, and so does anything generating a
 # composition from a manifest.
 manifest = ["dep:cratefield-manifest"]
+# Verifies auth-service tokens in a venture that has one (ADR 0016). The
+# notifications module pulls it in already; a feature of its own for a venture
+# that authenticates its own routes without mounting that module.
+auth-client = ["dep:cratefield-auth-client"]
 
 # Modules shipped with the harness.
 email-signup = ["dep:cratefield-module-email-signup"]
@@ -101,14 +105,13 @@ cratefield-ui = { workspace = true, optional = true }
 # `publish = false` until its first manual publish (docs/RELEASING.md).
 cratefield-i18n = { workspace = true, optional = true }
 cratefield-manifest = { workspace = true, optional = true }
+cratefield-auth-client = { workspace = true, optional = true }
 cratefield-secrets = { workspace = true, optional = true }
 cratefield-kms = { workspace = true, optional = true }
 cratefield-module-email-signup = { workspace = true, optional = true }
 cratefield-module-privacy = { workspace = true, optional = true }
 cratefield-module-waitlist = { workspace = true, optional = true }
 cratefield-module-cms = { workspace = true, optional = true }
-# `publish = false` until `factory0-auth-client` is published (ADR 0016),
-# like the two push adapters and the wiring crate above.
 cratefield-module-notifications = { workspace = true, optional = true }
 cratefield-testing = { workspace = true, optional = true }
 

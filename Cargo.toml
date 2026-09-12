@@ -68,7 +68,7 @@ cratefield-module-notifications = { path = "crates/module-notifications", versio
 # path-only dependency has no version, and `cargo publish` refuses a
 # dependency without one. It was invisible while both crates were
 # `publish = false`.
-factory0-auth-client = { path = "crates/auth-client", version = "0.1.0" }
+cratefield-auth-client = { path = "crates/auth-client", version = "0.1.0" }
 # Server-side localisation (issue #190): Fluent catalogs, BCP 47
 # negotiation and text direction. Nothing in it is notification-specific,
 # so `module-waitlist`'s mail templates can take it next.

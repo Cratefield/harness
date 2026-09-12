@@ -23,7 +23,7 @@ cratefield-core = { workspace = true }
 cratefield-i18n = { workspace = true }
 # The account comes from the auth extractor, never from a body field
 # (ADR 0016). Path-only: the crate is `publish = false`.
-factory0-auth-client = { workspace = true }
+cratefield-auth-client = { workspace = true }
 axum = { workspace = true }
 http = { workspace = true }
 serde = { workspace = true }
@@ -74,7 +74,7 @@ async-trait = { workspace = true }
 bytes = { workspace = true }
 base64ct = { workspace = true }
 # Mints the ES256 access tokens the route tests present. Pinned to the
-# login stack's major (0.14), like `factory0-auth-client` itself, so the
+# login stack's major (0.14), like `cratefield-auth-client` itself, so the
 # test signs with the same curve implementation that verifies.
 p256 = { version = "0.14.0", default-features = false, features = [
     "ecdsa",

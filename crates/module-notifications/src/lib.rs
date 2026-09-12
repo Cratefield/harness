@@ -472,7 +472,7 @@ pub struct Notifications {
     /// built once per isolate, cache and all. Every rebuild is handed an
     /// equivalent `HttpClient` and `Clock`, which is what makes keeping
     /// the first one sound — the same reasoning as `ctx_cell`.
-    auth_cell: Arc<OnceLock<Option<Arc<factory0_auth_client::AuthClient>>>>,
+    auth_cell: Arc<OnceLock<Option<Arc<cratefield_auth_client::AuthClient>>>>,
     /// The venture's `applicationServerKey`, resolved once rather than
     /// per request: the probe parses a private key to derive it, and
     /// `router()` runs on every request on Workers.
@@ -866,7 +866,7 @@ impl Module for Notifications {
 
     fn optional(&self) -> &'static [Port] {
         // `HttpClient` is not in the issue's list: it is what
-        // `factory0-auth-client` fetches the issuer's JWKS through. A
+        // `cratefield-auth-client` fetches the issuer's JWKS through. A
         // venture that only fans out from its own modules never needs it,
         // and gets a module whose HTTP routes answer 401.
         // `Realtime` (#187) is what makes the inbox update while the app

@@ -34,6 +34,17 @@ every downstream `Cargo.toml` on any later day.
 - The `factory0-*` names stay unclaimed. Squatting them defensively would
   mean publishing crates we do not intend to maintain, which is worse than
   the name being free.
+
+> **Amended 2026-09-12.** One `factory0-*` crate did reach crates.io:
+> `factory0-auth-client`, published by mistake while releasing the
+> notifications module, which depends on it. The decision above draws the
+> line in the right place but named the wrong side of it for this crate —
+> the auth *service* is an unpublished Factory Zero backend, while the
+> *client library* is something a Cratefield venture compiles in, and so is
+> a Cratefield crate. It was renamed `cratefield-auth-client` the same day
+> and the `factory0-auth-client` versions were yanked. The name cannot be
+> released, which is the cost of the mistake; nothing depended on it, so
+> nothing broke. The rest of `factory0-auth-*` stays unpublished as decided.
 - Problem-type URIs (`https://factory0.ventures/problems/...`), the
   `factory0.ventures` domains and the example venture named `factory0` are
   untouched. They are Factory Zero's, they are a wire contract, and they
