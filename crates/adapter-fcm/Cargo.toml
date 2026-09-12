@@ -1,5 +1,4 @@
 [package]
-publish = false  # new crate: publish manually first, then wire into the facade
 name = "cratefield-adapter-fcm"
 description = "Push port over Firebase Cloud Messaging (FCM HTTP v1) for the Factory Zero harness"
 readme = "README.md"
