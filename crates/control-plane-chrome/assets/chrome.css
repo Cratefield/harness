@@ -480,3 +480,51 @@ code { font-family: var(--mono); font-size: .92em; color: var(--ink); }
 @media (max-width: 860px) {
   .dash__lrow--stores, .dash__lrow--secrets { grid-template-columns: 1fr; gap: 4px; }
 }
+
+
+/* --- Domains and Backups (added with the screens; one fenced block) ---
+ *
+ * One block for both screens, appended at the end of the sheet as the
+ * other screen blocks are: colour tokens only, no literals, so both
+ * themes hold.
+ */
+
+/* Hostname rows: the name (and its last error), the venture, the state,
+   the DNS record to create. */
+.dash__lrow--hostnames { grid-template-columns: 1.7fr 1fr .9fr 1.5fr; }
+
+/* The DNS record itself: three label/value pairs, mono, each value a
+   copyable <code> — the exact record, not an example. */
+.dash__dns { display: grid; gap: 4px; }
+.dash__dns span { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.dash__dns code { overflow-wrap: anywhere; }
+.dash__dns b {
+  color: var(--dim); font-weight: 400; font-size: 10px;
+  letter-spacing: .06em; text-transform: uppercase;
+  min-width: 46px; text-align: right; flex: none;
+}
+
+/* An error under the thing it belongs to: red, but on the markup's own
+   words — the recorded refusal, verbatim. */
+.dash__err { color: var(--red); font-size: 11.5px; line-height: 1.5; display: inline-block; margin-top: 4px; }
+
+/* Backup attempt rows: when, what, who asked, where it went, size,
+   verdict. */
+.dash__lrow--backups { grid-template-columns: 1.1fr .9fr 1.1fr 1.1fr .7fr 1.3fr; }
+
+/* The rehearsal procedure: a real ordered list of real steps. */
+.dash__steps { margin: 0; padding-left: 20px; }
+.dash__steps li { margin: 0 0 10px; font-size: 13px; color: var(--body); line-height: 1.6; }
+.dash__steps pre {
+  margin: 8px 0 0; padding: 12px 14px; overflow-x: auto;
+  background: var(--ground); border: 1px solid var(--edge);
+  font-family: var(--mono); font-size: 11.5px; line-height: 1.5;
+}
+
+/* The selects the two forms use, matching the .field input treatment. */
+.field select {
+  font-family: var(--mono); font-size: 13px; color: var(--ink);
+  background: var(--ground); border: 1px solid var(--edge);
+  padding: 9px 11px; max-width: 320px;
+}
+.field select:focus { border-color: var(--accent); outline: none; }

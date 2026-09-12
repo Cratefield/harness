@@ -49,6 +49,12 @@ bytes = { workspace = true }
 futures-util = { workspace = true }
 # The venture's own UI contract, fetched from its /__surface and rendered.
 serde_json = { workspace = true }
+# Hostname normalisation for the domains screen: IDNA/punycode, so a
+# customer's unicode hostname is stored as the ASCII name DNS uses.
+idna = { workspace = true }
+# The backups screen's export records a sha256 per table and for the
+# whole file, in the `fz data export` shape.
+sha2 = { workspace = true }
 tracing = { workspace = true }
 time = { workspace = true }
 
