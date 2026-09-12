@@ -781,10 +781,19 @@ fn cell(value: &SeaValue) -> String {
 }
 
 /// One value as CSV: NULL is an empty field (the format's own spelling of
-/// nothing), bytes are lossily decoded rather than dropped.
+/// nothing), and bytes are named exactly as [`cell`] names them.
+///
+/// The two paths agree on purpose. This screen reads the control plane's
+/// own database, and that database holds `harness_secrets.ciphertext`, its
+/// nonce, and the wrapped data key in `harness_secret_keys`. A page that
+/// says "48 bytes" beside a CSV of the same row that spells those bytes
+/// out would be the more dangerous of the two: a file somebody keeps,
+/// mails and backs up, holding key material ADR 0015 keeps out of a
+/// response body. A lossy decode of ciphertext is not readable data for
+/// anyone, so nothing is lost by counting it instead.
 fn csv_cell(value: &SeaValue) -> String {
     match value {
-        SeaValue::Bytes(Some(v)) => String::from_utf8_lossy(v).into_owned(),
+        SeaValue::Bytes(Some(v)) => format!("{} bytes", v.len()),
         SeaValue::String(None)
         | SeaValue::Char(None)
         | SeaValue::Bool(None)
@@ -1065,6 +1074,49 @@ mod tests {
             "{body}"
         );
         assert!(body.contains("'=cmd|' /C calc'"), "{body}");
+    }
+
+    #[pollster::test]
+    async fn the_csv_export_names_bytes_it_never_dumps_them() {
+        // The screen reads the control plane's own database, which holds
+        // sealed ciphertext, nonces and a wrapped data key once the
+        // secrets layer is wired. The page counts bytes; a CSV that
+        // spelled them out instead would be the more dangerous of the
+        // two, being a file somebody keeps.
+        let kit = kit();
+        seed_rows(
+            &kit,
+            "CREATE TABLE sealed (id TEXT PRIMARY KEY, ciphertext BLOB NOT NULL, \
+             note TEXT NOT NULL)",
+            vec![],
+        )
+        .await;
+        seed_rows(
+            &kit,
+            "INSERT INTO sealed (id, ciphertext, note) VALUES (?, ?, ?)",
+            vec![
+                text("row_1"),
+                sea_query::Value::Bytes(Some(Box::new(b"sk_live_do_not_export".to_vec()))),
+                text("keep me"),
+            ],
+        )
+        .await;
+
+        // Both halves, in both places: the row is there with its other
+        // columns — the thing that would have carried the bytes — and the
+        // bytes themselves are counted, never spelled.
+        let (status, csv, _) =
+            get(&kit, &format!("{PATH}/sealed/export"), Some(&cookie(&kit))).await;
+        assert_eq!(status, StatusCode::OK, "{csv}");
+        assert!(csv.contains("row_1"), "{csv}");
+        assert!(csv.contains("keep me"), "{csv}");
+        assert!(csv.contains("21 bytes"), "{csv}");
+        assert!(!csv.contains("sk_live_do_not_export"), "{csv}");
+
+        let (status, page, _) = get(&kit, &format!("{PATH}/sealed"), Some(&cookie(&kit))).await;
+        assert_eq!(status, StatusCode::OK, "{page}");
+        assert!(page.contains("21 bytes"), "{page}");
+        assert!(!page.contains("sk_live_do_not_export"), "{page}");
     }
 
     #[pollster::test]
