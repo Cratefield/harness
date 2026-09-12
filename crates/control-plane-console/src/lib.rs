@@ -2665,6 +2665,82 @@ mod tests {
     }
 
     #[pollster::test]
+    async fn chromes_prerender_does_not_spend_the_link_it_is_guessing_about() {
+        // The failure this exists for, seen in a real browser: Chrome
+        // prerenders a URL typed in the address bar, and a prerender *is*
+        // a navigation — same `Sec-Fetch-Mode: navigate`, same
+        // `Sec-Fetch-Dest: document` a click sends. Against fetch metadata
+        // alone it redeemed the token, and the person's own page load then
+        // showed "no longer valid" for a link they had never followed.
+        let kit = kit(cratefield_core::MapConfig::from_pairs([
+            ("CONSOLE_MAGIC_LINK_FROM", "noreply@cratefield.com"),
+            ("CONSOLE_BASE_URL", "https://console.cratefield.com"),
+        ]));
+        invite(&kit, "op@cratefield.com").await;
+        call(
+            &kit.router,
+            post_form(
+                "/v1/console/magic-link/request",
+                &[],
+                "email=op@cratefield.com",
+            ),
+        )
+        .await;
+        let token = token_from(&kit.mailer.last_message().expect("the mail"));
+        let link = format!("/v1/console/magic-link/consume?token={token}");
+
+        // Every spelling a browser uses to say "this is a guess", each
+        // alongside the navigation metadata that made them look like
+        // clicks.
+        for speculative in [
+            ("sec-purpose", "prefetch;prerender"),
+            ("sec-purpose", "prefetch"),
+            ("purpose", "prefetch"),
+            ("x-moz", "prefetch"),
+        ] {
+            let headers = [
+                ("sec-fetch-mode", "navigate"),
+                ("sec-fetch-dest", "document"),
+                speculative,
+            ];
+            let guessed = call(&kit.router, get(&link, &headers)).await;
+            assert_eq!(
+                guessed.status,
+                StatusCode::OK,
+                "{}: {}",
+                speculative.0,
+                guessed.body
+            );
+            assert!(
+                guessed.body.contains("Sign in to Cratefield?"),
+                "{} must get the confirm page: {}",
+                speculative.0,
+                guessed.body
+            );
+            assert!(
+                !guessed
+                    .set_cookies
+                    .iter()
+                    .any(|cookie| cookie.starts_with("cf_session=")),
+                "{} signed somebody in",
+                speculative.0
+            );
+        }
+
+        // The positive half, and the point: after all that guessing the
+        // link is still the person's to use, and their click works.
+        let clicked = call(&kit.router, get(&link, CLICK_HEADERS)).await;
+        assert_eq!(clicked.status, StatusCode::SEE_OTHER, "{}", clicked.body);
+        assert!(
+            clicked
+                .set_cookies
+                .iter()
+                .any(|cookie| cookie.starts_with("cf_session=")),
+            "the person's own click must still land a session"
+        );
+    }
+
+    #[pollster::test]
     async fn a_magic_link_for_an_address_revoked_since_it_was_mailed_is_refused() {
         // Admission is re-checked at redeem, so revoking the invite
         // between the mail and the click refuses the click — the link is
