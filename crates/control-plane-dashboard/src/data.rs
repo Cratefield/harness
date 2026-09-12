@@ -137,11 +137,17 @@ pub(super) async fn screen(state: State<Arc<DashboardState>>, headers: HeaderMap
         text_list = text_list(&schema),
     );
 
+    // One relation is one foreign key, counted once. `relation_count` is
+    // per table and counts both ends — the right answer for "how many
+    // relations does this table take part in", and double the right answer
+    // when summed over every table, which had the crumb claiming four
+    // relations above a diagram that drew two and said so in its own label.
     let edges: usize = schema
         .tables
         .iter()
-        .map(|table| relation_count(&schema, table))
-        .sum();
+        .flat_map(|table| &table.foreign_keys)
+        .filter(|key| schema.table(&key.references).is_some())
+        .count();
     let crumb = format!(
         "{tables} table{s} · {edges} relation{e}",
         tables = schema.tables.len(),
@@ -161,8 +167,8 @@ pub(super) async fn screen(state: State<Arc<DashboardState>>, headers: HeaderMap
 #[allow(clippy::format_push_string)]
 fn table_list_rows(schema: &Schema, counts: &[u64]) -> String {
     let mut list_rows = String::from(
-        "<div class=\"dash__lrow dash__lrow--head\"><span>Table</span><span>Columns</span>\
-         <span>Rows</span><span>Relations</span></div>",
+        "<div class=\"dash__lrow dash__lrow--data dash__lrow--head\"><span>Table</span>\
+         <span>Columns</span><span>Rows</span><span>Relations</span></div>",
     );
     for (index, table) in schema.tables.iter().enumerate() {
         list_rows.push_str(&format!(
@@ -360,8 +366,8 @@ pub(super) async fn detail(
 #[allow(clippy::format_push_string)]
 fn columns_list(table_def: &TableDef) -> String {
     let mut columns_html = String::from(
-        "<div class=\"dash__lrow dash__lrow--head\"><span>Column</span><span>Type</span>\
-         <span>Attributes</span></div>",
+        "<div class=\"dash__lrow dash__lrow--three dash__lrow--head\"><span>Column</span>\
+         <span>Type</span><span>Attributes</span></div>",
     );
     for field in &table_def.fields {
         let mut markers: Vec<&str> = Vec::new();
@@ -1076,6 +1082,35 @@ mod tests {
             "{body}"
         );
         assert!(body.contains("'=cmd|' /C calc'"), "{body}");
+    }
+
+    #[pollster::test]
+    async fn the_crumb_counts_the_relations_the_diagram_draws() {
+        // Two statements about one thing, and they disagreed on the live
+        // server: the crumb summed a per-table count that names both ends
+        // of a relation, so it said four above a diagram that drew two and
+        // labelled itself two.
+        let kit = kit();
+        let (status, body, _) = get(&kit, PATH, Some(&cookie(&kit))).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+
+        let label = body
+            .split("aria-label=\"Schema diagram: ")
+            .nth(1)
+            .and_then(|rest| rest.split('"').next())
+            .expect("the diagram labels itself");
+        // "9 tables, 2 relations" as a label is "9 tables · 2 relations"
+        // as a crumb, so the whole of one is the whole of the other.
+        assert!(
+            body.contains(&label.replace(", ", " · ")),
+            "crumb and diagram label must agree; the label says {label}: {body}"
+        );
+        // And not vacuously: the fixture schema really does have relations
+        // to count, so a diagram that drew none could not pass this.
+        assert!(
+            !label.contains("0 relation"),
+            "the fixture must have relations to count: {label}"
+        );
     }
 
     #[pollster::test]
