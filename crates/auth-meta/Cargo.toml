@@ -1,6 +1,6 @@
 [package]
 name = "factory0-auth-meta"
-description = "Facebook Login for the Factory Zero auth service: OAuth 2.0 plus a Graph profile call, with no OpenID Connect anywhere (issue #17)"
+description = "Facebook Login for the auth service: OAuth 2.0 plus a Graph profile call, with no OpenID Connect anywhere (issue #17)"
 readme = "README.md"
 publish = false
 version.workspace = true

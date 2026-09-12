@@ -1,6 +1,6 @@
 [package]
 name = "factory0-auth-oidc"
-description = "OpenID Connect login for the Factory Zero auth service: Google first, shaped so any compliant provider reuses the flow (issue #15)"
+description = "OpenID Connect login for the auth service: Google first, shaped so any compliant provider reuses the flow (issue #15)"
 readme = "README.md"
 publish = false
 version.workspace = true

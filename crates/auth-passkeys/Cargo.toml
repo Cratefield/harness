@@ -1,6 +1,6 @@
 [package]
 name = "factory0-auth-passkeys"
-description = "Passkey registration and login for the Factory Zero auth service: pure-Rust WebAuthn relying-party verification on wasm32"
+description = "Passkey registration and login for the auth service: pure-Rust WebAuthn relying-party verification on wasm32"
 readme = "README.md"
 publish = false
 version.workspace = true
