@@ -109,17 +109,31 @@ pub const CIPHER: &str = "xchacha20poly1305";
 
 /// The store-scoping predicate every row-level query filters through
 /// since store attribution (the row-level twin of the audit chain's
-/// #142): this store's rows, plus unstamped rows written before the
-/// attribution migration. Legacy rows stay visible to every store on
-/// their database — exactly the behaviour they had before attribution
-/// existed — so a migrated database reads no differently the day after
-/// than the day before, while new rows are this store's alone.
+/// #142): this store's rows, and only this store's.
+///
+/// It does **not** carry the chain's `OR store = ''` compatibility
+/// clause, and the difference is the difference between the two tables.
+/// `harness_secret_audit` is append-only, so its past cannot be
+/// rewritten and the clause can only ever let an old row still be read.
+/// Rows here are soft-deleted, re-encrypted and re-keyed, so the same
+/// clause would hand every store a *write* over every other store's
+/// unstamped rows: a tenant's `delete` landing on the global store's
+/// row, `active_key` serving another store's key, `rotate_dek` pulling
+/// in rows it cannot decrypt and failing closed on their AAD. That is
+/// precisely the store-blindness attribution exists to end.
+///
+/// Nothing is given up. No composition ever applied this schema before
+/// attribution — the secrets layer was built, merged and never wired —
+/// so no database holds a row written without a store. An unstamped row
+/// would be one nobody can account for, and it is treated as nobody's:
+/// invisible to every store until it is re-put under the one that owns
+/// it. `tests/shared_database.rs` pins that.
 ///
 /// Bind order matters: every query using it binds the predicate's `?`
 /// after that query's own parameters, and this is the one place that
 /// says so.
 pub(crate) fn scoped_store() -> &'static str {
-    "(store = ? OR store = '')"
+    "store = ?"
 }
 
 /// Which store a secret belongs to. Part of the AAD, so it is also what

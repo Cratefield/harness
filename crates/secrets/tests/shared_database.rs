@@ -288,38 +288,100 @@ async fn both_stores_chains_verify_on_the_shared_ledger() {
 }
 
 #[pollster::test]
-async fn legacy_unstamped_rows_stay_visible_to_the_store_that_reads_them() {
-    // A row as written before attribution: no store value (the
-    // migration's empty default). The compat rule — the same one the
-    // audit chain chose in #142 — is that unstamped rows stay visible
-    // wherever they were visible before, which for a single-store
-    // database is its one store. Sealed by hand under the global store's
-    // own key and AAD, exactly as the pre-attribution writer left it.
+async fn an_unstamped_row_belongs_to_no_store() {
+    // The audit chain's `store = ? OR store = ''` (#142) is a **read**
+    // rule about a table that cannot be written twice: an append-only
+    // chain's past keeps its v1 hash bytes, so the only thing the clause
+    // can do there is let an old row still be read. `harness_secrets` and
+    // `harness_secret_keys` are not append-only — rows are soft-deleted,
+    // re-encrypted and re-keyed — so the same clause on these tables
+    // hands every store a write over every other store's unstamped rows:
+    // a tenant's `delete` reaching the global store's row, `active_key`
+    // serving another store's key, `rotate_dek` failing closed on another
+    // store's AAD. That is the store-blindness attribution exists to end,
+    // so these tables scope strictly instead.
+    //
+    // Nothing is given up by that. No composition applied this schema
+    // before attribution landed — the secrets layer was built, merged and
+    // never wired, so no database anywhere holds a row written without a
+    // store. An unstamped row is therefore a row nobody can account for,
+    // and the honest handling of one is that it is nobody's: not read,
+    // not listed, not deleted. Re-put it under the store that should own
+    // it and it is a normal row again.
     let db = shared_db();
     let secrets = Secrets::new(kms());
     let global = secrets.control_plane_global(Arc::clone(&db));
+    let tenant = secrets.tenant("tenant-a", Arc::clone(&db));
     let actor = actor();
     global
-        .put("legacy/name", &SecretBytes::from("legacy value"), &actor)
+        .put("platform/key", &SecretBytes::from("legacy value"), &actor)
         .await
         .expect("put");
 
     db.execute(&cratefield_core::Statement::with_values(
         "UPDATE harness_secrets SET store = '' WHERE name = ?",
-        vec![sea_query_text("legacy/name")],
+        vec![sea_query_text("platform/key")],
     ))
     .await
     .expect("un-stamp the row");
 
+    // Neither store can reach it, and the tenant's delete — the write
+    // that used to cross — leaves it exactly as it was.
+    assert!(
+        global
+            .get("platform/key", &actor)
+            .await
+            .expect("read")
+            .is_none(),
+        "an unstamped row is not the global store's to read"
+    );
+    tenant
+        .delete("platform/key", &actor)
+        .await
+        .expect("the delete runs, matching nothing");
+    let rows = db
+        .query(&cratefield_core::Statement::with_values(
+            "SELECT deleted_at FROM harness_secrets WHERE name = ?",
+            vec![sea_query_text("platform/key")],
+        ))
+        .await
+        .expect("the row is still there");
+    assert_eq!(rows.len(), 1, "the row itself is never removed");
+    assert!(
+        rows.first()
+            .expect("one row")
+            .get::<String>("deleted_at")
+            .is_none(),
+        "no store may soft-delete a row it cannot account for"
+    );
+
+    // The positive half: a row the store does own is read, listed and
+    // deleted by exactly that store — so none of the above is passing
+    // because the API stopped working.
+    global
+        .put("platform/owned", &SecretBytes::from("owned"), &actor)
+        .await
+        .expect("put");
     assert_eq!(
         global
-            .get("legacy/name", &actor)
+            .get("platform/owned", &actor)
             .await
             .expect("read")
             .expect("present")
             .expose(),
-        b"legacy value",
-        "an unstamped row still reads in the store that owns its database"
+        b"owned"
+    );
+    let listed: Vec<String> = global
+        .list(&actor)
+        .await
+        .expect("list")
+        .into_iter()
+        .map(|meta| meta.name)
+        .collect();
+    assert_eq!(
+        listed,
+        vec!["platform/owned".to_owned()],
+        "the unstamped row is in nobody's list, the owned one is in its own"
     );
 }
 

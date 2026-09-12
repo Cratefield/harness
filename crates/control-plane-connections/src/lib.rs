@@ -1088,10 +1088,13 @@ mod tests {
             .expect("the real row's key");
         // Plant a row shaped like the store's own but carrying raw bytes
         // where the sealed envelope should be: writing to the table is
-        // not reading the credential (issue #142).
+        // not reading the credential (issue #142). Stamped with the
+        // tenant's own store, because whoever can write this row can
+        // write that column too — store attribution scopes honest
+        // queries, and the AAD is what refuses a dishonest row.
         db.execute(&Statement::with_values(
             "INSERT INTO harness_secrets (name, version, key_id, nonce, ciphertext, \
-             created_at, created_by) VALUES (?, ?, ?, ?, ?, ?, ?)",
+             created_at, created_by, store) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             vec![
                 text(GOOGLE_SECRET_NAME),
                 SeaValue::BigInt(Some(999)),
@@ -1100,6 +1103,7 @@ mod tests {
                 bytes(b"hunter2-plaintext-credential".to_vec()),
                 text("t9"),
                 text("hand-crafted"),
+                text("ten_a"),
             ],
         ))
         .await

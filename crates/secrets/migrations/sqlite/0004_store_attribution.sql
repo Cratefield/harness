@@ -13,10 +13,19 @@
 --
 -- `harness_secrets` is rebuilt rather than altered because its primary
 -- key must grow the store column, and neither engine alters a primary
--- key. Rows written before this migration carry the empty store and
--- stay visible to every store on their database, exactly as they were:
--- attribution is forward-effective and rewrites nothing but the table's
--- shape, which in a table holding ciphertext is the entire point.
+-- key. The copy rewrites nothing but the table's shape, which in a table
+-- holding ciphertext is the entire point.
+--
+-- A row written before this migration would carry the empty store, and
+-- an empty store is nobody's: every query here scopes to `store = ?`
+-- exactly, so such a row is invisible rather than visible to all. The
+-- audit chain's #142 chose the opposite (`OR store = ''`) because it is
+-- append-only -- its past cannot be rewritten, so the clause can only
+-- let an old row be read. These tables are deleted, re-encrypted and
+-- re-keyed from, where the same clause would instead hand every store a
+-- write over every other store's unstamped rows. Nothing is lost by the
+-- stricter rule: no composition ever applied this schema before
+-- attribution, so no such row exists to be rescued.
 CREATE TABLE harness_secrets_attributed (
     name       TEXT NOT NULL,
     version    INTEGER NOT NULL,
