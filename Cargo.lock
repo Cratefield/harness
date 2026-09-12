@@ -1028,9 +1028,11 @@ dependencies = [
  "cratefield-connections",
  "cratefield-console",
  "cratefield-core",
+ "cratefield-introspect",
  "cratefield-kms",
  "cratefield-provisioning",
  "cratefield-secrets",
+ "cratefield-tables",
  "cratefield-testing",
  "futures-util",
  "http",
@@ -1052,6 +1054,20 @@ dependencies = [
  "serde",
  "serde_json",
  "unic-langid",
+]
+
+[[package]]
+name = "cratefield-introspect"
+version = "0.1.1"
+dependencies = [
+ "async-trait",
+ "cratefield-adapter-postgres",
+ "cratefield-adapter-sqlite",
+ "cratefield-core",
+ "cratefield-tables",
+ "pollster",
+ "sea-query",
+ "tokio",
 ]
 
 [[package]]

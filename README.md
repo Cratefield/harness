@@ -168,6 +168,7 @@ makes a crate private now, not a separate repository (ADR
 | `cratefield-module-notifications` | Push, an in-app inbox and email from one `notify()`, with per-account per-category preferences ([NOTIFICATIONS.md](docs/NOTIFICATIONS.md)). Unpublished only because it depends on `factory0-auth-client` (ADR 0016) |
 | `fz-module-linkedin` | Private Factory Zero module: run a LinkedIn Company Page from the harness |
 | `cratefield-control-plane`, `cratefield-console`, `cratefield-accounts`, `cratefield-access`, `cratefield-catalog`, `cratefield-connections`, `cratefield-provisioning`, `cratefield-ui-generator` | The managed service: sign up, pick modules, connect Cloudflare and SSO, get a running venture |
+| `cratefield-introspect` | Reads a database's own catalog over the `Database` port (SQLite pragmas, Postgres `information_schema`) and answers in `cratefield-tables`' vocabulary — the source the dashboard's data screen renders
 
 Ventures live in [`ventures/`](ventures): `cratefield-waitlist` serves
 `api.cratefield.com`, and `_template` is the layout a new one copies.

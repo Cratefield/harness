@@ -88,8 +88,10 @@ async fn main() {
     );
     let runtime = Native::new().db_arc(db);
 
-    // 8787 by default like wrangler; `PORT` moves it, so two developers
-    // (or a wrangler session) can hold their own ports on one machine.
+    // 8787 by default (the port every doc names); `PORT` moves it, so a
+    // second dev server can run beside one that already holds it — this
+    // machine often has a wrangler `workerd` on 8787 from another
+    // worktree.
     let port = std::env::var("PORT")
         .ok()
         .and_then(|port| port.parse::<u16>().ok())
@@ -100,6 +102,7 @@ async fn main() {
     eprintln!("control-plane dev server on http://127.0.0.1:{port}");
     eprintln!("  sign in:   http://127.0.0.1:{port}/v1/console/dev-login");
     eprintln!("  dashboard: http://127.0.0.1:{port}/v1/dashboard");
+    eprintln!("  data:      http://127.0.0.1:{port}/v1/dashboard/data");
     eprintln!("  secrets:   http://127.0.0.1:{port}/v1/dashboard/secrets");
     eprintln!("  wizard:    http://127.0.0.1:{port}/v1/console/new");
     serve_on(harness, runtime, listener).await.expect("serve");
@@ -141,7 +144,12 @@ fn dev_kms() -> Result<Arc<dyn Kms>, cratefield_kms::KmsError> {
 async fn seed(db: &Arc<dyn Database>) {
     let repo = Repository::new(Arc::clone(db));
     let account = repo
-        .account_for_login(DEV_OPERATOR, "Dev Operator", "acc_dev", "2026-01-01T00:00:00Z")
+        .account_for_login(
+            DEV_OPERATOR,
+            "Dev Operator",
+            "acc_dev",
+            "2026-01-01T00:00:00Z",
+        )
         .await
         .expect("seed the dev account");
 
@@ -200,7 +208,9 @@ async fn seed(db: &Arc<dyn Database>) {
         vec![
             text("v_broken"),
             text("deploy-worker"),
-            text("the Cloudflare API refused the upload: script too large (1.2 MiB over the limit)"),
+            text(
+                "the Cloudflare API refused the upload: script too large (1.2 MiB over the limit)",
+            ),
             text("2026-01-01T00:02:00Z"),
         ],
     ))

@@ -1,0 +1,39 @@
+[package]
+name = "cratefield-introspect"
+description = "Reads a live database's own catalog over the Database port and speaks it in cratefield-tables' schema vocabulary — the one source the data screen renders today"
+publish = false
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+# The port (statements, rows, errors) and nothing else on the normal
+# dependency path: no driver, no clock, no I/O of our own — SQL strings
+# over `dyn Database`, so the crate stays wasm32-clean like the kernel.
+cratefield-core = { workspace = true }
+# The schema vocabulary this crate reads *into*. Not the other way round:
+# putting a database reader in cratefield-tables would break that crate's
+# own "no I/O, no driver" promise.
+cratefield-tables = { path = "../tables" }
+# The port's value type (`Statement::with_values` binds `sea_query::Value`s);
+# the same pin the kernel and the adapters use.
+sea-query = { workspace = true }
+
+[dev-dependencies]
+# Real engines for the test legs, path-only like every internal
+# dev-dependency: they never travel with a published crate, and they never
+# reach a wasm build through this crate's normal graph.
+cratefield-adapter-sqlite = { path = "../adapter-sqlite" }
+cratefield-adapter-postgres = { path = "../adapter-postgres" }
+async-trait = { workspace = true }
+pollster = { workspace = true }
+# The Postgres test leg only: sqlx needs a tokio reactor, so that one test
+# runs under `#[tokio::test]` (the same split `cratefield-adapter-webpush`
+# makes for its live leg). Never a normal dependency — the crate itself
+# stays runtime-free.
+tokio = { workspace = true }

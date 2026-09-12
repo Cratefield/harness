@@ -89,6 +89,59 @@ venture by moving it to `Archived` through the accounts repository's
 lifecycle state machine, keeping the record. Re-archiving is idempotent;
 illegal moves get `409`.
 
+**`/v1/dashboard/data` — the data browser (read-only half).** A schema
+visualiser, in the shape of Supabase's: tables as boxes with one row per
+column, foreign keys drawn as lines between them, arrowhead at the
+referenced table. Everything on the page comes from the database's own
+catalog, read live through the `Database` port by `cratefield-introspect`
+(SQLite's pragmas and Postgres's `information_schema`, probed in that
+order because the port exposes no dialect) and answered in
+`cratefield-tables`' schema vocabulary — so the day a venture publishes
+its declared tables at `/__surface` (harness #153), the same renderer
+takes that contract as a second source with no change.
+
+What is on the page:
+
+- **The diagram.** Server-rendered inline SVG — no JavaScript layout, no
+  library, no CDN — layered by foreign-key depth (a referenced table sits
+  left of the tables referencing it), name order within a layer, tables
+  with no relations last. The same schema renders byte-identical twice;
+  a test asserts it. `role="img"` with `<title>`/`<desc>`, a hover title
+  on every edge naming `child.column → parent.column`, a chip on each
+  node naming the module that owns the table (from the composition's
+  personal-data catalogue), and colour only from the chrome tokens. The
+  container scrolls horizontally so the page stays legible at 400px.
+- **The same schema as text**, below the diagram: the accessible path,
+  the no-SVG path, and what the page reads like in a terminal.
+- **A table list** with column, row and relation counts, linking each
+  table to a detail page: its columns with full attributes, foreign keys
+  out and in, the personal-data verdict already declared for it (and,
+  said plainly, when a table is declared as holding nothing personal and
+  when nothing is declared at all), and the first page of its rows —
+  read-only, ordered by primary key, paginated — with **CSV export**
+  through the shared `cratefield_core::csv` quoting (formula-injection
+  guarded, capped at the harness-wide export bound).
+
+The harness's own bookkeeping (the `harness_migrations` ledger, SQLite's
+`sqlite_*` internals) is excluded by name, in one commented list, so a
+future table that looks internal but is not cannot vanish silently.
+
+Which database it reads: the control plane's **own**, because the
+control plane is itself a harness venture and its database is the one it
+can reach — so the first thing an operator sees locally is a real diagram
+of the console's and dashboard's tables with real relations. A venture's
+database is deliberately not pretended to: no `Deployer` exists (#26), so
+every deployed venture is unreachable, and the screen says exactly that
+in the voice the planned screens use — never an invented schema, never a
+spinner, and never "unreachable" dressed up as "empty".
+
+**Not built here, on purpose** (the remaining halves of control-plane
+#28): row editing — this pass is read-only; and the SQL console, even a
+read-only one, because statement whitelisting, timeouts and result-size
+caps are a second screen's worth of decisions. Filters and sorting beyond
+ordering by primary key too. When any of these boundaries is wrong, the
+argument belongs in the commit that moves it.
+
 ## How it looks
 
 The screens render inside `cratefield-chrome`, which is the control

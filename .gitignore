@@ -17,3 +17,9 @@ node_modules/
 
 # Local worktrees. `git add -A` otherwise stages one as a gitlink.
 .worktrees/
+
+# The dev server's generated development KEK. `git add -A` otherwise stages
+# key material into the repository, which is the one mistake in this area
+# that cannot be walked back.
+/control-plane-dev.kek
+*.kek

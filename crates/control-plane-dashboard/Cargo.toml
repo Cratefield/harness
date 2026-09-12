@@ -19,6 +19,12 @@ cratefield-console = { path = "../control-plane-console" }
 cratefield-provisioning = { path = "../control-plane-provisioning" }
 # The module set the screen offers is the catalogue's, not a free-text box.
 cratefield-catalog = { path = "../control-plane-catalog" }
+# The data screen's schema source: the live catalog, read over the db port
+# and answered in the tables vocabulary.
+cratefield-introspect = { path = "../introspect" }
+# The schema vocabulary the diagram renders, shared with the tables
+# contract a venture will one day publish (harness #153).
+cratefield-tables = { path = "../tables" }
 # The page shell, the stylesheet and the escaping every control-plane
 # screen shares.
 cratefield-chrome = { workspace = true }

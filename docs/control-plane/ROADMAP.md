@@ -488,6 +488,10 @@ are carried by A1 and A6 alongside the labels listed below.
 - **Repo:** `Cratefield/control-plane`
 - **Issue:** [cp#28](https://github.com/Cratefield/control-plane/issues/28)
 - **Labels:** `gui`
+- **Status:** the read-only first half has shipped — a schema visualiser over the
+  database's live catalog (see [DASHBOARD.md](../DASHBOARD.md)), with table detail
+  pages and CSV export. What remains here is the contract-driven source (`/__surface`),
+  row editing, and the read-only console.
 - **Body:** Generate a data browser in the dashboard from the Tables contract published at
   `/__surface`, so it stays correct without being maintained separately: list and edit rows,
   filter and sort, follow relations. Add a read-only SQL console and CSV export of a table
