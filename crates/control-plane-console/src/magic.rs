@@ -242,9 +242,16 @@ pub(crate) async fn magic_request(
             tracing::error!(error = %err, "could not record the magic link");
             return request_received_page();
         }
+        // `CONSOLE_BASE_URL` is the deployment's **origin** — that is what
+        // the Google, Apple and Meta redirect URIs built from it mean, and
+        // one variable cannot mean two things. So the console's own mount
+        // path belongs here, in the link, exactly as it does in theirs.
+        // Without it every mailed link points at `/magic-link/consume`,
+        // which is not a route, and every magic link is dead on arrival.
         let link = format!(
-            "{base}/magic-link/consume?token={token}",
-            base = settings.base_url,
+            "{base}{console}/magic-link/consume?token={token}",
+            base = settings.base_url.trim_end_matches('/'),
+            console = crate::BASE,
         );
         match mailer
             .send(mail(settings.mail_from.as_str(), &email, &link))

@@ -2338,6 +2338,30 @@ mod tests {
             .to_owned()
     }
 
+    /// The path of the link **as the mail carries it**, origin stripped —
+    /// so a test follows what a person would click rather than a URL the
+    /// test rebuilt.
+    ///
+    /// The distinction is not academic: the first version of this flow
+    /// mailed `{origin}/magic-link/consume`, missing the console's own
+    /// mount path, and every test passed because every test asked the
+    /// router for `/v1/console/magic-link/consume?token={token}` with a
+    /// token it had lifted out of the mail. The route worked, the token
+    /// worked, and the link in the mail was dead.
+    fn link_path_from(message: &cratefield_core::Message) -> String {
+        let url = message
+            .text
+            .split_whitespace()
+            .find(|word| word.contains("/magic-link/consume?token="))
+            .expect("a link in the mailed text");
+        let without_scheme = url.split("://").nth(1).unwrap_or(url);
+        let path = without_scheme
+            .find('/')
+            .map(|at| &without_scheme[at..])
+            .expect("the link has a path");
+        path.trim_end_matches(['.', ',', ')']).to_owned()
+    }
+
     const CLICK_HEADERS: &[(&str, &str)] = &[
         ("sec-fetch-mode", "navigate"),
         ("sec-fetch-dest", "document"),
@@ -2459,16 +2483,18 @@ mod tests {
         assert_eq!(sent[0].to, "op@cratefield.com");
         assert!(sent[0].text.contains("/magic-link/consume?token="));
         let token = token_from(&sent[0]);
+        // The link the mail actually carries, not one rebuilt here: a
+        // mailed link that does not resolve is the only way this feature
+        // can fail completely while every other assertion passes.
+        let clicked = link_path_from(&sent[0]);
+        assert_eq!(
+            clicked,
+            format!("{BASE}/magic-link/consume?token={token}"),
+            "the mailed link must address the route this console mounts"
+        );
 
         // Following the link as a person clicking would lands a session.
-        let landed = call(
-            &kit.router,
-            get(
-                &format!("/v1/console/magic-link/consume?token={token}"),
-                CLICK_HEADERS,
-            ),
-        )
-        .await;
+        let landed = call(&kit.router, get(&clicked, CLICK_HEADERS)).await;
         assert_eq!(landed.status, StatusCode::SEE_OTHER);
         assert_eq!(landed.location, "/v1/console");
         let session_cookie = landed
