@@ -115,6 +115,12 @@ futures-util = { version = "0.3.34", default-features = false, features = [
 # Serialization and diagnostics.
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
+# IDNA/punycode for the dashboard's Domains screen: a customer's
+# hostname is normalised to the ASCII form DNS uses on the way in.
+# Already in the tree transitively via `url`; declared so the dashboard
+# names it instead of relying on someone else's dependency. Pure Rust
+# (icu4x), wasm-safe.
+idna = "1.1.0"
 # TOML manifest parsing for `fz build` (CLI-only; the manifest crate itself
 # stays JSON/serde-only so it can compile to wasm for the compose engine).
 toml = "0.8"

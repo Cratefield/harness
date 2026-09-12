@@ -18,21 +18,27 @@
 
 #![forbid(unsafe_code)]
 
-// One file per account-level screen, built or not, so that building one
-// is a change to one file: the route and the navigation entry below are
-// already there, and `planned.rs` is what a screen renders until somebody
-// replaces it. Six of these were being built at once from six worktrees,
-// which is what a shared table of screens would have turned into six-way
-// conflicts in the same twenty lines.
-mod backups;
+// One file per account-level screen: its route and its navigation entry
+// are here, everything else is there. The arrangement existed so six
+// screens could be built at once from six worktrees without all six
+// editing the same twenty lines — and `planned.rs`, the page a screen
+// showed until somebody built it, is gone with the last of them.
+//
+// The two built screens are `pub` because their ports are: a live
+// adapter that talks to Cloudflare or R2 will live in its own crate and
+// implement `domains::CustomHostnames` / `backups::BackupStore` there,
+// the same way the provisioning `Deployer` is pub for the adapter that
+// will one day implement it.
+/// The backups screen.
+pub mod backups;
 mod billing;
 mod data;
 mod deploys;
 mod diagram;
-mod domains;
+/// The domains screen.
+pub mod domains;
 mod environments;
 mod logs;
-mod planned;
 /// The secrets manager screen.
 pub(crate) mod secrets_screen;
 
@@ -135,9 +141,10 @@ impl Module for Dashboard {
     /// which this module applies on the control database and therefore
     /// declares — see `migrations` below for why they are here and not
     /// in the console's set — its own request log, which the Logs
-    /// screen's recorder writes, and the rotation-policy table the
-    /// scheduled pass reads (this module owns the composition, the KMS
-    /// and the schedule, so it owns the policy the schedule reads).
+    /// screen's recorder writes, the rotation-policy table the scheduled
+    /// pass reads (this module owns the composition, the KMS and the
+    /// schedule, so it owns the policy the schedule reads), and the
+    /// domains and backups screens' tables.
     fn tables(&self) -> &'static [&'static str] {
         &[
             "connection",
@@ -146,6 +153,9 @@ impl Module for Dashboard {
             "harness_secret_audit",
             "request_log",
             "secret_rotation_policy",
+            "hostname",
+            "backup_attempt",
+            "restore_rehearsal",
         ]
     }
 
@@ -157,6 +167,11 @@ impl Module for Dashboard {
     /// subject is honest about — the same call the dashboard already
     /// made for `connection`, restated where a person deciding whether
     /// to trust this product can read it.
+    // Nine declarations, each carrying the sentence a person deciding
+    // whether to trust this product reads. It is a data table, and
+    // splitting it to satisfy a line count would put those sentences
+    // somewhere other than beside the table they describe.
+    #[allow(clippy::too_many_lines)]
     fn personal_data(&self) -> &'static [PersonalDataSet] {
         const SETS: &[PersonalDataSet] = &[
             PersonalDataSet::none(
@@ -220,6 +235,32 @@ impl Module for Dashboard {
                     key: "id",
                 }),
             },
+            // The domains screen's table. A customer's hostname is the
+            // customer's: it names infrastructure they chose to point
+            // here, reachable through their account like their ventures
+            // are, and erased with it. Erasing a claim releases the
+            // name — the honest outcome of the owner being gone —
+            // rather than leaving a claim no one can answer for.
+            PersonalDataSet {
+                table: "hostname",
+                subject: "account_id",
+                kind: DataKind::Identifier,
+                disposition: Disposition::Erase,
+                description: "The customer hostnames claimed for your ventures: the \
+                              name itself (stored in its punycode form), which of your \
+                              ventures claims it, where verification got to, any error \
+                              recorded along the way, and when. A hostname is \
+                              infrastructure you pointed here, not a person — but it is \
+                              yours, it leaves with your account, and the claim dying \
+                              with it is what frees the name for you to claim again \
+                              wherever you next point it.",
+                redacted: &[],
+                subject_via: Some(SubjectVia {
+                    table: "account",
+                    subject: "identity",
+                    key: "id",
+                }),
+            },
             PersonalDataSet::none(
                 "secret_rotation_policy",
                 "How old this deployment lets one store's data key and secret values \
@@ -230,6 +271,40 @@ impl Module for Dashboard {
                  same call the audit chain's actor field already records — and the \
                  numbers name a cadence, not a person.",
             ),
+            // The backups screen's history. `requested_by` is the
+            // operator's own login address — the "who asked" the
+            // screen exists to record — so the rows are matched on it
+            // directly and erased with the person. A future scheduled
+            // job's rows will name the job instead and belong to
+            // nobody, which is the right owner for a machine's
+            // history.
+            PersonalDataSet {
+                table: "backup_attempt",
+                subject: "requested_by",
+                kind: DataKind::Contact,
+                disposition: Disposition::Erase,
+                description: "The history of every backup attempt you asked for — \
+                              successful and failed alike: when it ran, what it backed \
+                              up, where the copy went (an operator download today), how \
+                              big it was, and why it failed when it failed. It records \
+                              your address because \u{201c}who asked for this backup\u{201d} \
+                              is the question the table exists to answer.",
+                redacted: &[],
+                subject_via: None,
+            },
+            PersonalDataSet {
+                table: "restore_rehearsal",
+                subject: "rehearsed_by",
+                kind: DataKind::Contact,
+                disposition: Disposition::Erase,
+                description: "Your record that a backup was rehearsed: which attempt \
+                              it was proved against, when, and what you saw, in your own \
+                              words. A rehearsal record is only worth keeping while the \
+                              person who ran it can be asked what they did; it leaves \
+                              with the account that ran it.",
+                redacted: &[],
+                subject_via: None,
+            },
         ];
         SETS
     }
@@ -264,7 +339,7 @@ impl Module for Dashboard {
         // BLOB, no dialect functions), so one file serves both engines
         // and the postgres array carries the same bytes rather than a
         // copy that could drift.
-        const MIGRATIONS: [SqlMigration; 7] = [
+        const MIGRATIONS: [SqlMigration; 9] = [
             if cratefield_connections::MIGRATION.transactional {
                 SqlMigration::new("0001", "connections", cratefield_connections::MIGRATION.sql)
             } else {
@@ -285,6 +360,13 @@ impl Module for Dashboard {
                 include_str!("../migrations/sqlite/0001_request_log.sql"),
             ),
             POLICY_MIGRATION,
+            // The domains and backups screens' own tables — declared by
+            // the constants in those screens' files, wired here. Both
+            // are portable SQL (TEXT, INTEGER, no engine-specific
+            // defaults), so the postgres set carries the same bytes
+            // rather than a divergent copy.
+            domains::MIGRATION,
+            backups::MIGRATION,
         ];
         // The array is the apply order; this refuses a gap, a duplicate
         // or an entry out of order at build time (issue #27).
@@ -292,10 +374,10 @@ impl Module for Dashboard {
         // The secrets tables are not portable SQL (BLOB vs BYTEA, and
         // the append-only trigger differs per engine), so the postgres
         // set ships alongside the sqlite one exactly as the secrets
-        // crate ships both — re-id-ed the same way. `request_log` and
-        // `secret_rotation_policy` are portable, so their postgres
-        // entries are the same bytes.
-        const POSTGRES_SET: [SqlMigration; 7] = [
+        // crate ships both — re-id-ed the same way. `request_log`,
+        // `secret_rotation_policy`, `hostname` and the backups tables are
+        // portable, so their postgres entries are the same bytes.
+        const POSTGRES_SET: [SqlMigration; 9] = [
             if cratefield_connections::MIGRATION.transactional {
                 SqlMigration::new("0001", "connections", cratefield_connections::MIGRATION.sql)
             } else {
@@ -312,6 +394,8 @@ impl Module for Dashboard {
                 include_str!("../migrations/sqlite/0001_request_log.sql"),
             ),
             POLICY_MIGRATION,
+            domains::MIGRATION,
+            backups::MIGRATION,
         ];
         const _: () = cratefield_core::assert_migration_set(&POSTGRES_SET);
         Migrations {
@@ -398,7 +482,12 @@ impl Module for Dashboard {
             .route("/deploys/{id}", get(deploys::run))
             .route("/logs", get(logs::screen))
             .route("/domains", get(domains::screen))
+            .route("/domains/add", post(domains::add))
+            .route("/domains/{id}/check", post(domains::check))
             .route("/backups", get(backups::screen))
+            .route("/backups/take", post(backups::take))
+            .route("/backups/export", get(backups::export))
+            .route("/backups/rehearse", post(backups::rehearse))
             .route("/environments", get(environments::screen))
             // The environments screen's actions (#31): create a staging
             // environment, change a named environment's module set, and the

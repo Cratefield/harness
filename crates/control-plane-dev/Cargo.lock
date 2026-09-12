@@ -422,8 +422,10 @@ dependencies = [
  "cratefield-tables",
  "futures-util",
  "http",
+ "idna",
  "sea-query",
  "serde_json",
+ "sha2",
  "time",
  "tracing",
 ]
