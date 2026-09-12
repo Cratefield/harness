@@ -27,7 +27,7 @@ use cratefield_core::{
 use cratefield_module_email_signup::EmailSignup;
 use cratefield_module_waitlist::Waitlist;
 use cratefield_runtime_native::{
-    EnvConfig, Native, ReqwestClient, TokioClock, install_tracing, serve,
+    DirBlob, EnvConfig, Native, ReqwestClient, TokioClock, install_tracing, serve,
 };
 use venture::sample::SampleRowModule;
 
