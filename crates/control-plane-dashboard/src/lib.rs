@@ -400,6 +400,23 @@ impl Module for Dashboard {
             .route("/domains", get(domains::screen))
             .route("/backups", get(backups::screen))
             .route("/environments", get(environments::screen))
+            // The environments screen's actions (#31): create a staging
+            // environment, change a named environment's module set, and the
+            // plan-then-confirm promotion. Wired here because the router is
+            // the one table this module owns; the handlers and their tests
+            // live in the screen's own file.
+            .route(
+                "/environments/{venture}/staging",
+                post(environments::add_staging),
+            )
+            .route(
+                "/environments/{venture}/{environment}/modules",
+                post(environments::set_modules),
+            )
+            .route(
+                "/environments/{venture}/promotion",
+                get(environments::promotion_plan).post(environments::promotion_confirm),
+            )
             .route("/billing", get(billing::screen))
             .with_state(Arc::clone(&state))
             // The request recorder, wrapped around everything this
@@ -752,13 +769,13 @@ fn render_module_screens(base: &str, module: &str, surface: &Surface) -> String 
 /// the recorded failure, if the run stopped. Read straight from
 /// `provision_progress`, which the provisioning engine owns.
 #[derive(Debug)]
-struct Progress {
-    last_step: String,
-    error: String,
-    updated_at: String,
+pub(crate) struct Progress {
+    pub(crate) last_step: String,
+    pub(crate) error: String,
+    pub(crate) updated_at: String,
 }
 
-async fn progress_of(
+pub(crate) async fn progress_of(
     db: &dyn Database,
     venture_id: &str,
 ) -> Result<Progress, cratefield_core::DbError> {
@@ -827,7 +844,7 @@ fn status_label(status: VentureStatus) -> &'static str {
 // Handlers
 // ---------------------------------------------------------------------------
 
-fn render_progress(progress: &Progress) -> String {
+pub(crate) fn render_progress(progress: &Progress) -> String {
     if !progress.error.is_empty() {
         // `last_step` is the last step that *completed*, so it is empty
         // when the very first step failed — which is the common case with
@@ -1662,14 +1679,14 @@ fn same_set(left: &str, right: &str) -> bool {
     members(left) == members(right)
 }
 
-fn ulid(ctx: &ModuleContext) -> String {
+pub(crate) fn ulid(ctx: &ModuleContext) -> String {
     ctx.ports
         .id_gen
         .as_ref()
         .map_or_else(|| "id".to_owned(), |generator| generator.ulid())
 }
 
-fn now_rfc3339(ctx: &ModuleContext) -> String {
+pub(crate) fn now_rfc3339(ctx: &ModuleContext) -> String {
     ctx.ports
         .clock
         .as_ref()
@@ -1698,7 +1715,7 @@ pub(crate) fn internal(detail: &str) -> Response {
 /// still read as small caps — but a rule in a stylesheet is not something a
 /// test, a screen reader, or a page saved to disk can see. The word this
 /// screen exists to make unmissable is spelled out.
-fn status_chip(status: VentureStatus) -> String {
+pub(crate) fn status_chip(status: VentureStatus) -> String {
     let (class, label) = match status {
         VentureStatus::Draft => ("chip--archived", "draft"),
         VentureStatus::Provisioning => ("chip--working", "provisioning"),

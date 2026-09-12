@@ -19,6 +19,10 @@ cratefield-console = { path = "../control-plane-console" }
 cratefield-provisioning = { path = "../control-plane-provisioning" }
 # The module set the screen offers is the catalogue's, not a free-text box.
 cratefield-catalog = { path = "../control-plane-catalog" }
+# The billing screen's model and port: the pricing tables sourced from
+# docs/control-plane/PRICING.md, and the Unwired Billing port whose
+# refusal is the honest tier verdict.
+cratefield-billing = { path = "../control-plane-billing" }
 # The data screen's schema source: the live catalog, read over the db port
 # and answered in the tables vocabulary.
 cratefield-introspect = { path = "../introspect" }

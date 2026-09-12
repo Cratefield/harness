@@ -5,11 +5,25 @@
 > free-tier caps) is provisioning and dashboard work (#7, #11); this document
 > is the decision those build against.
 
+> The two data tables below are **generated** from
+> `crates/control-plane-billing`'s pricing data, so the document and the
+> billing screen cannot drift:
+>
+> ```sh
+> cargo run -p cratefield-billing --example pricing-doc          # write
+> cargo run -p cratefield-billing --example pricing-doc -- --check
+> ```
+>
+> Edit the crate, regenerate, commit. The prose stays hand-written. The
+> free-venture marginal cost named in the prose below is checked against
+> the crate's constant the same way: edit both together, or neither.
+
 ## What one venture consumes on Cloudflare
 
 Hosted mode (ADR): every venture is one Worker + one D1 in **Cratefield's own**
 Cloudflare account.
 
+<!-- pricing-doc: platform-costs begin (generated; edit crates/control-plane-billing and run the pricing-doc example) -->
 | Resource | Free-plan limit | Paid included (pooled across the account) | Overage |
 | :--- | :--- | :--- | :--- |
 | Workers requests | 100k/day | 10M/mo ($5) · 20M/mo (Workers for Platforms) | $0.30 / million |
@@ -20,6 +34,7 @@ Cloudflare account.
 | D1 storage | 5 GB total, 500 MB/db | 5 GB pooled, **10 GB/db** hard cap | $0.75 / GB-mo |
 | D1 databases | 10 | 50,000 (raise on request) | — |
 | Egress / bandwidth | none | **none** | **none** |
+<!-- pricing-doc: platform-costs end -->
 
 Account allotments are **pooled**, so thousands of small ventures draw from the
 same 20M requests / 60M CPU-ms / 50M writes / 25B reads before a cent of overage.
@@ -71,6 +86,7 @@ site can't generate a surprise bandwidth bill.
 
 ## Proposed free tier (competitive, near-zero cost to us)
 
+<!-- pricing-doc: tiers begin (generated; edit crates/control-plane-billing and run the pricing-doc example) -->
 | | Free | Paid (indicative, ~$19/mo) |
 | :--- | :--- | :--- |
 | Ventures | 1 | several |
@@ -81,6 +97,7 @@ site can't generate a surprise bandwidth bill.
 | Email | ~100/mo shared domain | bring-your-own key, higher cap |
 | Captcha + rate limiting | included (free on CF) | included |
 | Support / SLA | community, none | as offered |
+<!-- pricing-doc: tiers end -->
 
 This beats Supabase (500 MB but pauses when idle), Vercel Hobby
 (non-commercial only) and Netlify (credit-capped) on the axis that matters for a
