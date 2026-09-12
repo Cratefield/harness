@@ -847,6 +847,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "cratefield-billing"
+version = "0.1.1"
+dependencies = [
+ "pollster",
+]
+
+[[package]]
 name = "cratefield-catalog"
 version = "0.1.1"
 dependencies = [
@@ -1029,6 +1036,7 @@ dependencies = [
  "cratefield-access",
  "cratefield-accounts",
  "cratefield-adapter-sqlite",
+ "cratefield-billing",
  "cratefield-catalog",
  "cratefield-chrome",
  "cratefield-connections",

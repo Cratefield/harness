@@ -73,11 +73,15 @@ impl Module for Console {
         ]
     }
 
-    /// The five tables this module's `migrations()` create (issue #280). This
-    /// list is also what a whole-database `fz data export`/`import` carries,
-    /// so declaring it means the control plane's own database — its allowlist
-    /// and its accounts — moves with the venture on a move. That is the right
-    /// answer: a move that left the login gate behind would not boot.
+    /// The seven tables this module's `migrations()` create (issues
+    /// #280, #31). This list is also what a whole-database
+    /// `fz data export`/`import` carries, so declaring it means the
+    /// control plane's own database — its allowlist, its accounts and
+    /// the environments that hang off its ventures — moves with the
+    /// venture on a move. That is the right answer: a move that left
+    /// the login gate behind would not boot, and one that left the
+    /// environments behind would move a venture that had forgotten how
+    /// to rehearse a change.
     fn tables(&self) -> &'static [&'static str] {
         &[
             "allowlist",
@@ -85,6 +89,8 @@ impl Module for Console {
             "account",
             "venture",
             "provision_progress",
+            "environment",
+            "environment_progress",
         ]
     }
 
@@ -210,20 +216,47 @@ impl Module for Console {
                  completed and any error message a stopped run recorded. It is keyed to the \
                  backend's id and names nobody.",
             ),
+            // The environments that hang off a venture (#31): a name like
+            // `staging`, the tenant whose database and secrets the
+            // environment owns, its module set, its subdomain. Keyed to a
+            // venture and not to a person — the same call
+            // `provision_progress` makes one table over — and it is erased
+            // with the venture it belongs to rather than carrying a subject
+            // of its own, which is why it is `none` rather than a join: the
+            // one join it could declare (`venture`, on `account_id`) would
+            // reach the account's ULID, and a subject request arrives as the
+            // operator's address, a hop the declaration vocabulary does not
+            // express.
+            PersonalDataSet::none(
+                "environment",
+                "A backend's environments beside production: each one's name, the tenant whose \
+                 database and secret store it owns, the module set it rehearses, and where it \
+                 would answer. It is keyed to the backend's id and names nobody.",
+            ),
+            // An environment's provisioning progress: the same shape and the
+            // same verdict as `provision_progress`, one ledger over, because
+            // an environment's run is not the venture's run.
+            PersonalDataSet::none(
+                "environment_progress",
+                "One row per environment, holding where its provisioning got to: the last step \
+                 that completed and any error message a stopped run recorded. It is keyed to \
+                 the environment's id and names nobody.",
+            ),
         ];
         SETS
     }
 
     fn migrations(&self) -> Migrations {
         // The console owns the tables its domain crates use: the allowlist +
-        // audit (access), accounts + ventures, and provisioning progress.
-        // Re-id the three sub-schemas so they are unique WITHIN this module:
+        // audit (access), accounts + ventures, provisioning progress, and —
+        // since #31 — environments and their provisioning progress.
+        // Re-id the five sub-schemas so they are unique WITHIN this module:
         // each crate's own MIGRATION is id "0001", which would collide under
         // one module and apply only one table set. Same SQL, same
         // transaction rule (copied, not restated: a sub-schema that later
         // needs to run outside a transaction must not silently run inside
         // one here), distinct ids.
-        const MIGRATIONS: [SqlMigration; 3] = [
+        const MIGRATIONS: [SqlMigration; 5] = [
             if cratefield_access::MIGRATION.transactional {
                 SqlMigration::new("0001", "access", cratefield_access::MIGRATION.sql)
             } else {
@@ -247,6 +280,34 @@ impl Module for Console {
                     "0003",
                     "provisioning",
                     cratefield_provisioning::MIGRATION.sql,
+                )
+                .non_transactional()
+            },
+            if cratefield_accounts::ENVIRONMENTS_MIGRATION.transactional {
+                SqlMigration::new(
+                    "0004",
+                    "environments",
+                    cratefield_accounts::ENVIRONMENTS_MIGRATION.sql,
+                )
+            } else {
+                SqlMigration::new(
+                    "0004",
+                    "environments",
+                    cratefield_accounts::ENVIRONMENTS_MIGRATION.sql,
+                )
+                .non_transactional()
+            },
+            if cratefield_provisioning::ENVIRONMENT_PROGRESS_MIGRATION.transactional {
+                SqlMigration::new(
+                    "0005",
+                    "environment-progress",
+                    cratefield_provisioning::ENVIRONMENT_PROGRESS_MIGRATION.sql,
+                )
+            } else {
+                SqlMigration::new(
+                    "0005",
+                    "environment-progress",
+                    cratefield_provisioning::ENVIRONMENT_PROGRESS_MIGRATION.sql,
                 )
                 .non_transactional()
             },

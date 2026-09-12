@@ -23,7 +23,7 @@
 
 use std::sync::Arc;
 
-use cratefield_accounts::{RepoError, Repository, Venture, VentureStatus};
+use cratefield_accounts::{Environment, RepoError, Repository, Venture, VentureStatus};
 use cratefield_core::{Database, DbError, Statement};
 use sea_query::Value as SeaValue;
 
@@ -33,6 +33,16 @@ pub const MIGRATION: cratefield_core::SqlMigration = cratefield_core::SqlMigrati
     "init",
     include_str!("../migrations/sqlite/0001_init.sql"),
 );
+
+/// The environments migration (#31): `environment_progress`, an
+/// environment's own ledger. Portable SQL — the Postgres set reuses this
+/// file the way it reuses `0001`.
+pub const ENVIRONMENT_PROGRESS_MIGRATION: cratefield_core::SqlMigration =
+    cratefield_core::SqlMigration::new(
+        "0002",
+        "environment-progress",
+        include_str!("../migrations/sqlite/0002_environment_progress.sql"),
+    );
 
 // ---------------------------------------------------------------------------
 // Steps
@@ -86,6 +96,20 @@ impl Step {
 
     fn parse(s: &str) -> Option<Self> {
         STEPS.into_iter().find(|step| step.as_str() == s)
+    }
+
+    /// Whether a recorded `last_step` means its run got through
+    /// `through`. The question the environments screen's rehearsal rule
+    /// turns on — "did this run complete the schema step" — answered
+    /// against the ledger's own vocabulary rather than by comparing
+    /// step names at the call site, where nobody can see which name is
+    /// later in the sequence.
+    #[must_use]
+    pub fn completed_through(recorded: &str, through: Step) -> bool {
+        match Step::parse(recorded) {
+            Some(step) => step.index() >= through.index(),
+            None => false,
+        }
     }
 
     /// This step's position in [`STEPS`].
@@ -284,16 +308,22 @@ impl Engine {
     ///
     /// [`ProvisionError::Db`] if the progress cannot be read.
     pub async fn plan(&self, venture: &Venture) -> Result<Vec<PlannedStep>, ProvisionError> {
-        let last = self.last_completed(&venture.id).await?;
-        let done_through = last.map_or(-1, |s| i64::try_from(s.index()).unwrap_or(-1));
-        Ok(STEPS
-            .into_iter()
-            .map(|step| PlannedStep {
-                step,
-                done: i64::try_from(step.index()).unwrap_or(0) <= done_through,
-                description: describe(step, venture),
-            })
-            .collect())
+        self.plan_subject(Subject::venture(venture)).await
+    }
+
+    /// What provisioning `environment` would do, step by step, without
+    /// touching Cloudflare — the same steps a venture runs, described
+    /// against the environment's own tenant, module set and subdomain
+    /// and marked against its own ledger.
+    ///
+    /// # Errors
+    ///
+    /// [`ProvisionError::Db`] if the progress cannot be read.
+    pub async fn plan_environment(
+        &self,
+        environment: &Environment,
+    ) -> Result<Vec<PlannedStep>, ProvisionError> {
+        self.plan_subject(Subject::environment(environment)).await
     }
 
     /// Provisions `venture`, running each remaining step in order and
@@ -315,10 +345,8 @@ impl Engine {
         deployer: &D,
         now: &str,
     ) -> Result<VentureStatus, ProvisionError> {
-        let start = match self.last_completed(&venture.id).await? {
-            Some(last) => last.index() + 1,
-            None => 0,
-        };
+        let subject = Subject::venture(venture);
+        let start = self.start_index(subject).await?;
 
         // Already through every step: ensure Live and return, no work.
         if start >= STEPS.len() {
@@ -337,20 +365,83 @@ impl Engine {
                 .await?;
         }
 
+        self.run_from(subject, start, deployer, now).await?;
+        Ok(self.mark_live(venture, now).await?)
+    }
+
+    /// Provisions `environment` through the same engine, the same steps
+    /// and the same [`Deployer`] port, recording progress against the
+    /// environment in its own ledger. It stops where every run stops
+    /// today — at the [`Unwired`] deployer, honestly — and the venture
+    /// itself is untouched: an environment is not a venture, and a
+    /// staging run must never read as the venture itself provisioning,
+    /// so the venture's status is not moved and its own progress row is
+    /// not written.
+    ///
+    /// An environment has no lifecycle status to settle into when every
+    /// step is done; its record of completion is the ledger, and a
+    /// re-run of a completed environment is a no-op exactly like a
+    /// venture's.
+    ///
+    /// # Errors
+    ///
+    /// [`ProvisionError::Step`] on a step failure; [`ProvisionError::Db`]
+    /// on an infrastructure failure.
+    pub async fn provision_environment<D: Deployer>(
+        &self,
+        environment: &Environment,
+        deployer: &D,
+        now: &str,
+    ) -> Result<(), ProvisionError> {
+        let subject = Subject::environment(environment);
+        let start = self.start_index(subject).await?;
+        if start >= STEPS.len() {
+            return Ok(());
+        }
+        self.run_from(subject, start, deployer, now).await
+    }
+
+    async fn plan_subject(&self, subject: Subject<'_>) -> Result<Vec<PlannedStep>, ProvisionError> {
+        let last = self.last_completed(subject.ledger, subject.key).await?;
+        let done_through = last.map_or(-1, |s| i64::try_from(s.index()).unwrap_or(-1));
+        Ok(STEPS
+            .into_iter()
+            .map(|step| PlannedStep {
+                step,
+                done: i64::try_from(step.index()).unwrap_or(0) <= done_through,
+                description: describe(step, subject),
+            })
+            .collect())
+    }
+
+    async fn start_index(&self, subject: Subject<'_>) -> Result<usize, ProvisionError> {
+        Ok(
+            match self.last_completed(subject.ledger, subject.key).await? {
+                Some(last) => last.index() + 1,
+                None => 0,
+            },
+        )
+    }
+
+    async fn run_from<D: Deployer>(
+        &self,
+        subject: Subject<'_>,
+        start: usize,
+        deployer: &D,
+        now: &str,
+    ) -> Result<(), ProvisionError> {
         for step in &STEPS[start..] {
             let step = *step;
-            if let Err(err) = run_step(deployer, step, venture).await {
-                self.record_error(&venture.id, step, &err.message, now)
-                    .await?;
+            if let Err(err) = run_step(deployer, step, subject).await {
+                self.record_error(subject, step, &err.message, now).await?;
                 return Err(ProvisionError::Step {
                     step,
                     message: err.message,
                 });
             }
-            self.record_done(&venture.id, step, now).await?;
+            self.record_done(subject, step, now).await?;
         }
-
-        Ok(self.mark_live(venture, now).await?)
+        Ok(())
     }
 
     async fn mark_live(&self, venture: &Venture, now: &str) -> Result<VentureStatus, RepoError> {
@@ -363,13 +454,21 @@ impl Engine {
         Ok(VentureStatus::Live)
     }
 
-    /// The last step recorded complete for a venture, or `None`.
-    async fn last_completed(&self, venture_id: &str) -> Result<Option<Step>, ProvisionError> {
+    /// The last step recorded complete in `ledger` for `key`, or `None`.
+    async fn last_completed(
+        &self,
+        ledger: Ledger,
+        key: &str,
+    ) -> Result<Option<Step>, ProvisionError> {
         let rows = self
             .db
             .query(&Statement::with_values(
-                "SELECT last_step FROM provision_progress WHERE venture_id = ?",
-                vec![text(venture_id)],
+                format!(
+                    "SELECT last_step FROM {} WHERE {} = ?",
+                    ledger.table(),
+                    ledger.key_column()
+                ),
+                vec![text(key)],
             ))
             .await?;
         let Some(row) = rows.first() else {
@@ -381,26 +480,26 @@ impl Engine {
 
     async fn record_done(
         &self,
-        venture_id: &str,
+        subject: Subject<'_>,
         step: Step,
         now: &str,
     ) -> Result<(), ProvisionError> {
-        self.upsert(venture_id, step.as_str(), "", now).await
+        self.upsert(subject, step.as_str(), "", now).await
     }
 
     async fn record_error(
         &self,
-        venture_id: &str,
+        subject: Subject<'_>,
         step: Step,
         message: &str,
         now: &str,
     ) -> Result<(), ProvisionError> {
         // Keep the last completed step as-is; only record which step failed and
         // why, so a resume still starts after the last success.
-        let last = self.last_completed(venture_id).await?;
+        let last = self.last_completed(subject.ledger, subject.key).await?;
         let last_str = last.map_or("", Step::as_str);
         self.upsert(
-            venture_id,
+            subject,
             last_str,
             &format!("{}: {message}", step.as_str()),
             now,
@@ -410,40 +509,108 @@ impl Engine {
 
     async fn upsert(
         &self,
-        venture_id: &str,
+        subject: Subject<'_>,
         last_step: &str,
         error: &str,
         now: &str,
     ) -> Result<(), ProvisionError> {
         self.db
             .execute(&Statement::with_values(
-                "INSERT INTO provision_progress (venture_id, last_step, error, updated_at) \
-                 VALUES (?, ?, ?, ?) \
-                 ON CONFLICT(venture_id) DO UPDATE SET \
-                 last_step = excluded.last_step, error = excluded.error, \
-                 updated_at = excluded.updated_at",
-                vec![text(venture_id), text(last_step), text(error), text(now)],
+                format!(
+                    "INSERT INTO {} ({}, last_step, error, updated_at) \
+                     VALUES (?, ?, ?, ?) \
+                     ON CONFLICT({}) DO UPDATE SET \
+                     last_step = excluded.last_step, error = excluded.error, \
+                     updated_at = excluded.updated_at",
+                    subject.ledger.table(),
+                    subject.ledger.key_column(),
+                    subject.ledger.key_column()
+                ),
+                vec![text(subject.key), text(last_step), text(error), text(now)],
             ))
             .await?;
         Ok(())
     }
 }
 
+/// Which ledger a provisioning run's progress lives in: the venture's
+/// own, or an environment's. Same shape, different subject — an
+/// environment's run is not the venture's run, and recording one in the
+/// other's table would make a stopped staging run read as the venture
+/// itself failing.
+#[derive(Clone, Copy)]
+enum Ledger {
+    Venture,
+    Environment,
+}
+
+impl Ledger {
+    fn table(self) -> &'static str {
+        match self {
+            Ledger::Venture => "provision_progress",
+            Ledger::Environment => "environment_progress",
+        }
+    }
+
+    fn key_column(self) -> &'static str {
+        match self {
+            Ledger::Venture => "venture_id",
+            Ledger::Environment => "environment_id",
+        }
+    }
+}
+
+/// What one step needs from its subject: the tenant whose database and
+/// secrets the step touches, the module set whose artifact it builds,
+/// and the subdomain it routes and health-checks. A venture and one of
+/// its environments differ in exactly these three and in nothing else,
+/// which is why the same step sequence serves both.
+#[derive(Clone, Copy)]
+struct Subject<'a> {
+    key: &'a str,
+    ledger: Ledger,
+    tenant: &'a str,
+    module_set: &'a str,
+    subdomain: &'a str,
+}
+
+impl<'a> Subject<'a> {
+    fn venture(venture: &'a Venture) -> Self {
+        Self {
+            key: &venture.id,
+            ledger: Ledger::Venture,
+            tenant: &venture.tenant_id,
+            module_set: &venture.module_set,
+            subdomain: &venture.subdomain,
+        }
+    }
+
+    fn environment(environment: &'a Environment) -> Self {
+        Self {
+            key: &environment.id,
+            ledger: Ledger::Environment,
+            tenant: &environment.tenant_id,
+            module_set: &environment.module_set,
+            subdomain: &environment.subdomain,
+        }
+    }
+}
+
 async fn run_step<D: Deployer>(
     deployer: &D,
     step: Step,
-    venture: &Venture,
+    subject: Subject<'_>,
 ) -> Result<(), DeployError> {
-    let tenant = &venture.tenant_id;
+    let tenant = subject.tenant;
     match step {
-        Step::Artifact => deployer.build_artifact(&venture.module_set).await,
+        Step::Artifact => deployer.build_artifact(subject.module_set).await,
         Step::Database => deployer.ensure_database(tenant).await,
-        Step::Worker => deployer.ensure_worker(tenant, &venture.module_set).await,
-        Step::Schema => deployer.apply_schema(tenant, &venture.module_set).await,
+        Step::Worker => deployer.ensure_worker(tenant, subject.module_set).await,
+        Step::Schema => deployer.apply_schema(tenant, subject.module_set).await,
         Step::Secrets => deployer.seed_secrets(tenant).await,
-        Step::Route => deployer.bind_route(tenant, &venture.subdomain).await,
+        Step::Route => deployer.bind_route(tenant, subject.subdomain).await,
         Step::Health => {
-            if deployer.health_ok(&venture.subdomain).await? {
+            if deployer.health_ok(subject.subdomain).await? {
                 Ok(())
             } else {
                 Err(DeployError::new("the venture did not answer /__health yet"))
@@ -452,17 +619,17 @@ async fn run_step<D: Deployer>(
     }
 }
 
-fn describe(step: Step, venture: &Venture) -> String {
+fn describe(step: Step, subject: Subject<'_>) -> String {
     match step {
         Step::Artifact => format!(
             "build/reuse the artifact for module set `{}`",
-            venture.module_set
+            subject.module_set
         ),
-        Step::Database => format!("create the D1 database for tenant `{}`", venture.tenant_id),
-        Step::Worker => format!("deploy the Worker for tenant `{}`", venture.tenant_id),
+        Step::Database => format!("create the D1 database for tenant `{}`", subject.tenant),
+        Step::Worker => format!("deploy the Worker for tenant `{}`", subject.tenant),
         Step::Schema => "apply the venture's migrations".to_owned(),
         Step::Secrets => "seed the venture's secrets store".to_owned(),
-        Step::Route => format!("bind the subdomain `{}`", venture.subdomain),
+        Step::Route => format!("bind the subdomain `{}`", subject.subdomain),
         Step::Health => "wait for /__health to answer".to_owned(),
     }
 }
@@ -475,6 +642,7 @@ fn text(value: &str) -> SeaValue {
 mod tests {
     #![allow(clippy::unused_async_trait_impl)] // the sync test fakes implement an async port
     use super::*;
+    use cratefield_accounts::ENVIRONMENTS_MIGRATION;
     use cratefield_accounts::MIGRATION as ACCOUNTS_MIGRATION;
     use cratefield_adapter_sqlite::SqliteDatabase;
     use std::cell::{Cell, RefCell};
@@ -542,9 +710,9 @@ mod tests {
 
     fn setup() -> (Engine, Repository, Arc<dyn Database>) {
         let db = SqliteDatabase::in_memory().expect("db");
-        db.apply_migrations("accounts", &[ACCOUNTS_MIGRATION])
+        db.apply_migrations("accounts", &[ACCOUNTS_MIGRATION, ENVIRONMENTS_MIGRATION])
             .expect("accounts schema");
-        db.apply_migrations("provisioning", &[MIGRATION])
+        db.apply_migrations("provisioning", &[MIGRATION, ENVIRONMENT_PROGRESS_MIGRATION])
             .expect("provisioning schema");
         let db: Arc<dyn Database> = Arc::new(db);
         (
@@ -569,6 +737,22 @@ mod tests {
         )
         .await
         .expect("venture")
+    }
+
+    /// The environment progress row, read the way the screen reads it.
+    async fn env_progress(db: &Arc<dyn Database>, environment_id: &str) -> (String, String) {
+        let rows = db
+            .query(&Statement::with_values(
+                "SELECT last_step, error FROM environment_progress WHERE environment_id = ?",
+                vec![text(environment_id)],
+            ))
+            .await
+            .expect("environment progress");
+        let row = rows.rows.first().expect("a row exists");
+        (
+            row.get("last_step").unwrap_or_default(),
+            row.get("error").unwrap_or_default(),
+        )
     }
 
     #[pollster::test]
@@ -719,5 +903,128 @@ mod tests {
         let plan = engine.plan(&venture).await.unwrap();
         let done: Vec<Step> = plan.iter().filter(|p| p.done).map(|p| p.step).collect();
         assert_eq!(done, vec![Step::Artifact, Step::Database, Step::Worker]);
+    }
+
+    // -------------------------------------------------------------------
+    // Environments (#31): same engine, same port, its own ledger
+    // -------------------------------------------------------------------
+
+    async fn a_staging_environment(repo: &Repository) -> cratefield_accounts::Environment {
+        a_venture(repo).await;
+        repo.set_venture_status("acc_1", "v1", VentureStatus::Provisioning, "t1")
+            .await
+            .expect("provisioning");
+        repo.set_venture_status("acc_1", "v1", VentureStatus::Live, "t2")
+            .await
+            .expect("live");
+        repo.create_environment("env_1", "acc_1", "v1", "staging", "ten_stg", "t3")
+            .await
+            .expect("staging")
+    }
+
+    #[pollster::test]
+    async fn an_environment_provisions_through_the_engine_without_touching_the_venture() {
+        let (engine, repo, db) = setup();
+        let staging = a_staging_environment(&repo).await;
+        let deployer = FakeDeployer::new();
+
+        engine
+            .provision_environment(&staging, &deployer, "t4")
+            .await
+            .expect("provisions");
+
+        // Every step ran, against the environment's own triple: the
+        // deployer saw the staging tenant and set, and the ledger says
+        // health.
+        assert_eq!(deployer.order(), STEPS.to_vec());
+        let (last, error) = env_progress(&db, "env_1").await;
+        assert_eq!(last, "health");
+        assert_eq!(error, "");
+
+        // The venture is untouched: still Live, still its own set, and
+        // no row appeared in the venture's ledger. A staging run must
+        // never read as the venture itself provisioning.
+        let venture = repo.venture_for("acc_1", "v1").await.unwrap().unwrap();
+        assert_eq!(venture.status, VentureStatus::Live);
+        assert_eq!(venture.module_set, "cms+email-signup");
+        let rows = db
+            .query(&Statement::new(
+                "SELECT last_step FROM provision_progress WHERE venture_id = 'v1'".to_owned(),
+            ))
+            .await
+            .expect("venture ledger");
+        assert!(rows.is_empty(), "the venture's ledger stays empty");
+
+        // A completed environment re-runs as a no-op, like a venture's.
+        let again = FakeDeployer::new();
+        engine
+            .provision_environment(&staging, &again, "t5")
+            .await
+            .expect("no-op");
+        assert!(again.order().is_empty(), "nothing to do again");
+    }
+
+    #[pollster::test]
+    async fn a_stopped_environment_run_records_its_step_and_resumes() {
+        let (engine, repo, db) = setup();
+        let staging = a_staging_environment(&repo).await;
+
+        let failing = FakeDeployer::failing_at(Step::Artifact);
+        let err = engine
+            .provision_environment(&staging, &failing, "t4")
+            .await
+            .expect_err("stops at the first step");
+        match err {
+            ProvisionError::Step { step, .. } => assert_eq!(step, Step::Artifact),
+            other => panic!("wrong error: {other}"),
+        }
+        let (last, error) = env_progress(&db, "env_1").await;
+        assert_eq!(last, "", "nothing completed before the failure");
+        assert!(error.contains("boom at artifact"), "{error}");
+
+        // And the venture is still Live, not dragged into provisioning.
+        let venture = repo.venture_for("acc_1", "v1").await.unwrap().unwrap();
+        assert_eq!(venture.status, VentureStatus::Live);
+
+        // A resume continues from where it stopped.
+        let deployer = FakeDeployer::new();
+        engine
+            .provision_environment(&staging, &deployer, "t5")
+            .await
+            .expect("resumes");
+        assert_eq!(deployer.order(), STEPS.to_vec(), "resumed from the start");
+        let (last, error) = env_progress(&db, "env_1").await;
+        assert_eq!(last, "health");
+        assert_eq!(error, "");
+    }
+
+    #[pollster::test]
+    async fn an_environment_plan_names_its_own_tenant_and_set() {
+        let (engine, repo, _db) = setup();
+        let staging = a_staging_environment(&repo).await;
+
+        let plan = engine.plan_environment(&staging).await.unwrap();
+        assert_eq!(plan.len(), STEPS.len());
+        assert!(plan.iter().all(|p| !p.done), "nothing done yet");
+        assert!(
+            plan.iter()
+                .any(|p| p.description.contains("ten_stg") && p.step == Step::Database),
+            "the plan describes the environment's own tenant: {plan:?}"
+        );
+        assert!(
+            plan[0].description.contains("cms+email-signup"),
+            "and its own module set: {plan:?}"
+        );
+    }
+
+    #[test]
+    fn completed_through_reads_the_sequence_not_the_names() {
+        // "did this run complete the schema step" — the question
+        // promotion's rehearsal rule turns on, answered here once.
+        assert!(Step::completed_through("health", Step::Schema));
+        assert!(Step::completed_through("schema", Step::Schema));
+        assert!(!Step::completed_through("worker", Step::Schema));
+        assert!(!Step::completed_through("", Step::Schema));
+        assert!(!Step::completed_through("nonsense", Step::Schema));
     }
 }

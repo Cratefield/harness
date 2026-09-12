@@ -28,6 +28,15 @@ pub const MIGRATION: cratefield_core::SqlMigration = cratefield_core::SqlMigrati
     include_str!("../migrations/sqlite/0001_init.sql"),
 );
 
+/// The environments migration (control-plane #31). Portable SQL: the
+/// Postgres set reuses this file, the same way it reuses `0001`.
+pub const ENVIRONMENTS_MIGRATION: cratefield_core::SqlMigration =
+    cratefield_core::SqlMigration::new(
+        "0002",
+        "environments",
+        include_str!("../migrations/sqlite/0002_environments.sql"),
+    );
+
 /// One invited customer.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Account {
@@ -424,6 +433,251 @@ impl Repository {
             ..venture
         })
     }
+
+    // -------------------------------------------------------------------
+    // Environments (#31)
+    // -------------------------------------------------------------------
+
+    /// Records a new environment for a venture, starting as a copy of
+    /// production: the venture's own module set, on its own fresh tenant
+    /// (its own database and secret store) and its own sibling
+    /// subdomain. The name is validated — kebab-case, `production`
+    /// reserved for the derived environment.
+    ///
+    /// Copying the set rather than leaving it empty is the point of the
+    /// screen: staging starts where production is, and the operator
+    /// changes it from there, so the first promotion plan is an honest
+    /// "no difference" rather than "everything is new".
+    ///
+    /// # Errors
+    ///
+    /// [`RepoError::NotFound`] if the venture is not this account's,
+    /// [`RepoError::Invalid`] for a name that cannot be an environment.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn create_environment(
+        &self,
+        id: &str,
+        account_id: &str,
+        venture_id: &str,
+        name: &str,
+        tenant_id: &str,
+        now: &str,
+    ) -> Result<Environment, RepoError> {
+        if !valid_environment_name(name) {
+            return Err(RepoError::Invalid(format!(
+                "`{name}` cannot be an environment name: lower-case kebab, not `production`"
+            )));
+        }
+        let Some(venture) = self.venture_for(account_id, venture_id).await? else {
+            return Err(RepoError::NotFound(format!("venture {venture_id}")));
+        };
+        let environment = Environment {
+            id: id.to_owned(),
+            venture_id: venture.id.clone(),
+            name: name.to_owned(),
+            tenant_id: tenant_id.to_owned(),
+            module_set: venture.module_set.clone(),
+            subdomain: environment_subdomain(&venture, name)?,
+            created_at: now.to_owned(),
+            updated_at: now.to_owned(),
+        };
+        self.db
+            .execute(&Statement::with_values(
+                "INSERT INTO environment \
+                 (id, venture_id, name, tenant_id, module_set, subdomain, created_at, updated_at) \
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                vec![
+                    text(&environment.id),
+                    text(&environment.venture_id),
+                    text(&environment.name),
+                    text(&environment.tenant_id),
+                    text(&environment.module_set),
+                    text(&environment.subdomain),
+                    text(&environment.created_at),
+                    text(&environment.updated_at),
+                ],
+            ))
+            .await?;
+        Ok(environment)
+    }
+
+    /// The venture's named environments, oldest first. Production is not
+    /// among them: it is derived ([`Environment::production`]) and the
+    /// caller renders it ahead of these.
+    ///
+    /// # Errors
+    ///
+    /// [`RepoError::Db`].
+    pub async fn environments_for(
+        &self,
+        account_id: &str,
+        venture_id: &str,
+    ) -> Result<Vec<Environment>, RepoError> {
+        let rows = self
+            .db
+            .query(&Statement::with_values(
+                "SELECT e.id, e.venture_id, e.name, e.tenant_id, e.module_set, e.subdomain, \
+                 e.created_at, e.updated_at FROM environment e \
+                 JOIN venture v ON e.venture_id = v.id \
+                 WHERE v.account_id = ? AND e.venture_id = ? ORDER BY e.created_at, e.id",
+                vec![text(account_id), text(venture_id)],
+            ))
+            .await?;
+        rows.rows.iter().map(environment_from_row).collect()
+    }
+
+    /// One environment, but only if it belongs to a venture this account
+    /// owns. Another account's environment id reads as `NotFound`, the
+    /// same rule every venture read follows.
+    ///
+    /// # Errors
+    ///
+    /// [`RepoError::Db`].
+    pub async fn environment_for(
+        &self,
+        account_id: &str,
+        venture_id: &str,
+        environment_id: &str,
+    ) -> Result<Option<Environment>, RepoError> {
+        let rows = self
+            .db
+            .query(&Statement::with_values(
+                "SELECT e.id, e.venture_id, e.name, e.tenant_id, e.module_set, e.subdomain, \
+                 e.created_at, e.updated_at FROM environment e \
+                 JOIN venture v ON e.venture_id = v.id \
+                 WHERE v.account_id = ? AND e.venture_id = ? AND e.id = ?",
+                vec![text(account_id), text(venture_id), text(environment_id)],
+            ))
+            .await?;
+        rows.first().map(environment_from_row).transpose()
+    }
+
+    /// Records an environment's module set. The same half-a-change
+    /// contract as [`Repository::set_venture_modules`]: the caller is
+    /// responsible for re-provisioning the environment and for clearing
+    /// its recorded progress first, and this repository will not,
+    /// because it does not own the progress table.
+    ///
+    /// # Errors
+    ///
+    /// [`RepoError::NotFound`] if the environment is not this account's.
+    pub async fn set_environment_modules(
+        &self,
+        account_id: &str,
+        venture_id: &str,
+        environment_id: &str,
+        module_set: &str,
+        now: &str,
+    ) -> Result<Environment, RepoError> {
+        let Some(environment) = self
+            .environment_for(account_id, venture_id, environment_id)
+            .await?
+        else {
+            return Err(RepoError::NotFound(format!("environment {environment_id}")));
+        };
+        self.db
+            .execute(&Statement::with_values(
+                "UPDATE environment SET module_set = ?, updated_at = ? WHERE id = ?",
+                vec![text(module_set), text(now), text(environment_id)],
+            ))
+            .await?;
+        Ok(Environment {
+            module_set: module_set.to_owned(),
+            updated_at: now.to_owned(),
+            ..environment
+        })
+    }
+}
+
+/// One environment of a venture (control-plane #31): its own database,
+/// its own secret store and its own module set, so a schema change can
+/// be rehearsed somewhere that is not production.
+///
+/// **Production is not a row.** [`Environment::production`] derives it
+/// from the venture itself — the venture as it exists today, which is
+/// what must keep working exactly as it does. A mirrored "production"
+/// row was considered and rejected: it would be a second copy of the
+/// venture's tenant, module set and subdomain that every existing write
+/// path (the module-set editor, the engine's status moves) would have
+/// to keep in sync, and one missed path would leave the record lying
+/// about what production runs. Deriving it means the venture's screens
+/// and the environments screen read the same columns and cannot
+/// disagree.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Environment {
+    pub id: String,
+    pub venture_id: String,
+    /// `staging`, and whatever else is named alongside it. `production`
+    /// is reserved for the derived one and cannot be inserted.
+    pub name: String,
+    /// The tenant whose database and secret store this environment owns.
+    pub tenant_id: String,
+    /// The resolved module set's content key, `'+'`-joined — the
+    /// identity of the artifact this environment would run.
+    pub module_set: String,
+    /// Where this environment would answer, derived from the venture's
+    /// own subdomain at creation (`my-app-staging.cratefield.app`).
+    pub subdomain: String,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+impl Environment {
+    /// The venture's production environment: the venture itself. The id
+    /// is the venture's id on purpose, so the venture's own provisioning
+    /// progress — keyed by venture id — *is* production's progress, with
+    /// no second ledger to keep true.
+    #[must_use]
+    pub fn production(venture: &Venture) -> Self {
+        Self {
+            id: venture.id.clone(),
+            venture_id: venture.id.clone(),
+            name: "production".to_owned(),
+            tenant_id: venture.tenant_id.clone(),
+            module_set: venture.module_set.clone(),
+            subdomain: venture.subdomain.clone(),
+            created_at: venture.created_at.clone(),
+            updated_at: venture.updated_at.clone(),
+        }
+    }
+
+    /// Whether this row is the derived production environment.
+    #[must_use]
+    pub fn is_production(&self) -> bool {
+        self.name == "production"
+    }
+}
+
+/// The name a new environment may take: lower-case kebab, `production`
+/// reserved. A name is a URL segment and a label on a button that says
+/// what will move where, so both halves are strict.
+fn valid_environment_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 30
+        && name != "production"
+        && name
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+        && !name.starts_with('-')
+        && !name.ends_with('-')
+}
+
+/// The subdomain a new environment of `venture` gets: a sibling of the
+/// venture's own (`my-app` + `staging` → `my-app-staging.cratefield.app`),
+/// so the parent domain is inherited rather than restated. The venture's
+/// subdomain is `slug.domain`; everything after the first dot is the
+/// domain. A venture whose subdomain has no dot has no parent domain to
+/// sit beside, and that is the caller's configuration problem to name,
+/// not ours to paper over.
+fn environment_subdomain(venture: &Venture, name: &str) -> Result<String, RepoError> {
+    let Some((_, domain)) = venture.subdomain.split_once('.') else {
+        return Err(RepoError::Invalid(format!(
+            "the venture's subdomain `{}` has no parent domain to put an \
+             environment beside",
+            venture.subdomain
+        )));
+    };
+    Ok(format!("{}-{}.{}", venture.slug, name, domain))
 }
 
 fn account_from_row(row: &cratefield_core::Row) -> Result<Account, RepoError> {
@@ -447,6 +701,19 @@ fn venture_from_row(row: &cratefield_core::Row) -> Result<Venture, RepoError> {
         status: VentureStatus::parse(&field(row, "status")?)
             .ok_or_else(|| RepoError::Invalid("venture status".to_owned()))?,
         tenant_id: field(row, "tenant_id")?,
+        created_at: field(row, "created_at")?,
+        updated_at: field(row, "updated_at")?,
+    })
+}
+
+fn environment_from_row(row: &cratefield_core::Row) -> Result<Environment, RepoError> {
+    Ok(Environment {
+        id: field(row, "id")?,
+        venture_id: field(row, "venture_id")?,
+        name: field(row, "name")?,
+        tenant_id: field(row, "tenant_id")?,
+        module_set: field(row, "module_set")?,
+        subdomain: field(row, "subdomain")?,
         created_at: field(row, "created_at")?,
         updated_at: field(row, "updated_at")?,
     })
@@ -605,5 +872,161 @@ mod tests {
             .await
             .expect_err("same subdomain");
         assert!(matches!(err, RepoError::Db(_)), "{err}");
+    }
+
+    // -------------------------------------------------------------------
+    // Environments (#31)
+    // -------------------------------------------------------------------
+
+    /// A repository with both migrations applied, the way the console's
+    /// composition applies them, and one venture to hang environments
+    /// off.
+    async fn env_repo() -> (Repository, Venture) {
+        let db = SqliteDatabase::in_memory().expect("db");
+        db.apply_migrations("accounts", &[MIGRATION, ENVIRONMENTS_MIGRATION])
+            .expect("schema");
+        let repo = Repository::new(Arc::new(db));
+        repo.account_for_login("a@x.co", "A", "acc_a", "t0")
+            .await
+            .unwrap();
+        let venture = repo
+            .create_venture(
+                "v1",
+                "acc_a",
+                "my-app",
+                "my-app.cratefield.app",
+                "cms+waitlist",
+                "ten_1",
+                "t0",
+            )
+            .await
+            .expect("venture");
+        (repo, venture)
+    }
+
+    #[pollster::test]
+    async fn production_is_derived_from_the_venture_not_stored_beside_it() {
+        let (repo, venture) = env_repo().await;
+        let production = Environment::production(&venture);
+        assert_eq!(production.name, "production");
+        assert!(production.is_production());
+        // The id is the venture's, so the venture's provisioning progress
+        // is production's progress — one ledger, not two to keep true.
+        assert_eq!(production.id, venture.id);
+        assert_eq!(production.tenant_id, venture.tenant_id);
+        assert_eq!(production.module_set, venture.module_set);
+        assert_eq!(production.subdomain, venture.subdomain);
+
+        // And nothing was written: the environments table is empty, so
+        // the migration introduced the concept without inventing rows.
+        let named = repo.environments_for("acc_a", "v1").await.unwrap();
+        assert!(named.is_empty(), "production is derived, never stored");
+    }
+
+    #[pollster::test]
+    async fn a_staging_environment_starts_as_production_on_its_own_tenant() {
+        let (repo, venture) = env_repo().await;
+        let staging = repo
+            .create_environment("env_1", "acc_a", "v1", "staging", "ten_stg", "t1")
+            .await
+            .expect("create");
+        // The set is copied from the venture; the tenant is its own.
+        assert_eq!(staging.module_set, venture.module_set);
+        assert_eq!(staging.tenant_id, "ten_stg");
+        assert_eq!(staging.subdomain, "my-app-staging.cratefield.app");
+        assert_eq!(staging.venture_id, "v1");
+
+        let named = repo.environments_for("acc_a", "v1").await.unwrap();
+        assert_eq!(named, vec![staging.clone()]);
+
+        // A second environment of the same venture, differently named.
+        repo.create_environment("env_2", "acc_a", "v1", "qa", "ten_qa", "t2")
+            .await
+            .expect("second");
+        assert_eq!(repo.environments_for("acc_a", "v1").await.unwrap().len(), 2);
+    }
+
+    #[pollster::test]
+    async fn production_is_a_reserved_environment_name() {
+        let (repo, _) = env_repo().await;
+        let err = repo
+            .create_environment("env_1", "acc_a", "v1", "production", "ten_x", "t1")
+            .await
+            .expect_err("reserved");
+        assert!(matches!(err, RepoError::Invalid(_)), "{err}");
+        // The other names that cannot be environments.
+        for bad in ["", "Staging", "two words", "-lead", "trail-", "a_b"] {
+            let err = repo
+                .create_environment("env_x", "acc_a", "v1", bad, "ten_x", "t1")
+                .await
+                .expect_err("invalid name");
+            assert!(matches!(err, RepoError::Invalid(_)), "{bad}: {err}");
+        }
+    }
+
+    #[pollster::test]
+    async fn a_duplicate_name_for_one_venture_is_refused() {
+        let (repo, _) = env_repo().await;
+        repo.create_environment("env_1", "acc_a", "v1", "staging", "ten_s", "t1")
+            .await
+            .expect("first");
+        let err = repo
+            .create_environment("env_2", "acc_a", "v1", "staging", "ten_t", "t2")
+            .await
+            .expect_err("same venture, same name");
+        assert!(matches!(err, RepoError::Db(_)), "{err}");
+    }
+
+    #[pollster::test]
+    async fn one_account_cannot_see_or_edit_anothers_environment() {
+        let (repo, _) = env_repo().await;
+        repo.account_for_login("b@x.co", "B", "acc_b", "t0")
+            .await
+            .unwrap();
+        repo.create_environment("env_1", "acc_a", "v1", "staging", "ten_s", "t1")
+            .await
+            .expect("A's staging");
+
+        // Creating for a venture that is not B's: NotFound, not a row.
+        let err = repo
+            .create_environment("env_2", "acc_b", "v1", "staging", "ten_x", "t2")
+            .await
+            .expect_err("not B's venture");
+        assert!(matches!(err, RepoError::NotFound(_)), "{err}");
+
+        assert!(
+            repo.environments_for("acc_b", "v1")
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            repo.environment_for("acc_b", "v1", "env_1")
+                .await
+                .unwrap()
+                .is_none()
+        );
+        let err = repo
+            .set_environment_modules("acc_b", "v1", "env_1", "cms", "t3")
+            .await
+            .expect_err("not B's environment");
+        assert!(matches!(err, RepoError::NotFound(_)), "{err}");
+    }
+
+    #[pollster::test]
+    async fn an_environments_module_set_is_recorded_and_scoped() {
+        let (repo, _) = env_repo().await;
+        repo.create_environment("env_1", "acc_a", "v1", "staging", "ten_s", "t1")
+            .await
+            .expect("staging");
+        let updated = repo
+            .set_environment_modules("acc_a", "v1", "env_1", "cms+waitlist+notifications", "t2")
+            .await
+            .expect("record");
+        assert_eq!(updated.module_set, "cms+waitlist+notifications");
+        // The venture's own set is untouched: staging rehearsing a change
+        // is exactly not production making it.
+        let venture = repo.venture_for("acc_a", "v1").await.unwrap().unwrap();
+        assert_eq!(venture.module_set, "cms+waitlist");
     }
 }
