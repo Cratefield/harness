@@ -85,3 +85,7 @@ hands it to the notifications module, which serves it:
 ```rust,ignore
 Notifications::new().vapid_public_key(cratefield::push_wiring::vapid_public_key)
 ```
+
+---
+
+MIT. Built in the open for [Cratefield](https://cratefield.com), a [Factory Zero](https://factory0.ventures) venture.

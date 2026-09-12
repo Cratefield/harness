@@ -26,3 +26,7 @@ production**.
 Managed providers (AWS KMS, Google Cloud KMS) are not implemented yet: they
 need credentials and a nightly job against the real service, and an
 unexercised vendor integration in this position is worse than an absent one.
+
+---
+
+MIT. Built in the open for [Cratefield](https://cratefield.com), a [Factory Zero](https://factory0.ventures) venture.

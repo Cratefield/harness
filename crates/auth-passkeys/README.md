@@ -87,3 +87,7 @@ The tests mint ceremonies with a software authenticator, which covers all
 three algorithms and every negative case, but no test here has met real
 hardware. Issue #13's last acceptance box is a manual run in a browser
 against `wrangler dev` with a platform authenticator, and it stays open.
+
+---
+
+MIT. Built in the open for [Cratefield](https://cratefield.com), a [Factory Zero](https://factory0.ventures) venture.

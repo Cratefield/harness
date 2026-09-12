@@ -88,3 +88,7 @@ because Apple is not.
 
 Verification — that is the auth service's job — and key rotation UX, which
 belongs to the secrets layer.
+
+---
+
+MIT. Built in the open for [Cratefield](https://cratefield.com), a [Factory Zero](https://factory0.ventures) venture.

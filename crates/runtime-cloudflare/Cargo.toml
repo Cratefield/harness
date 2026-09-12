@@ -1,6 +1,6 @@
 [package]
 name = "cratefield-runtime-cloudflare"
-description = "Cloudflare Workers runtime for the Factory Zero harness (workers-rs)"
+description = "Cloudflare Workers runtime for the Cratefield harness (workers-rs)"
 readme = "README.md"
 keywords = ["cratefield", "cloudflare", "workers", "wasm", "serverless"]
 categories = ["web-programming"]

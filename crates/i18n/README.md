@@ -1,6 +1,6 @@
 # cratefield-i18n
 
-Server-side localisation for a Factory Zero venture: [Project
+Server-side localisation for a Cratefield venture: [Project
 Fluent](https://projectfluent.org) catalogs, BCP 47 negotiation, and the text
 direction `unic-langid` does not carry.
 
@@ -52,3 +52,7 @@ anything, and it lists identifiers only.
 Argument values are personal data — a name, a place, a booking reference — so a
 rendered string is too. Nothing here puts one in an error, and a caller must
 keep it out of logs, events and columns as well.
+
+---
+
+MIT. Built in the open for [Cratefield](https://cratefield.com), a [Factory Zero](https://factory0.ventures) venture.

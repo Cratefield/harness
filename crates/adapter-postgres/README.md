@@ -12,7 +12,7 @@
 
 # cratefield-adapter-postgres
 
-The [`Database`] port over `sqlx` Postgres 16 for the [Factory Zero
+The [`Database`] port over `sqlx` Postgres 16 for the [Cratefield
 harness](https://github.com/Cratefield/harness) native runtime (ADR 0004,
 issue #18). **Native only** — the crate fails compilation on any wasm
 target with a clear message, and the sqlx dependency is target-gated to
@@ -70,3 +70,7 @@ docker run --rm -e POSTGRES_PASSWORD=postgres -p 5433:5432 postgres:16
 export FZ_TEST_POSTGRES_URL=postgres://postgres:postgres@127.0.0.1:5433/postgres
 cargo test -p cratefield-adapter-postgres
 ```
+
+---
+
+MIT. Built in the open for [Cratefield](https://cratefield.com), a [Factory Zero](https://factory0.ventures) venture.

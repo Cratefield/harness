@@ -1,6 +1,6 @@
 [package]
 name = "cratefield-core"
-description = "Factory Zero harness kernel: Module trait, Harness builder, ports, errors"
+description = "Cratefield harness kernel: Module trait, Harness builder, ports, errors"
 readme = "../../README.md"
 keywords = ["cratefield", "harness", "backend", "axum", "modules"]
 categories = ["web-programming", "asynchronous"]

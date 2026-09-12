@@ -1,6 +1,6 @@
 [package]
 name = "cratefield-adapter-fcm"
-description = "Push port over Firebase Cloud Messaging (FCM HTTP v1) for the Factory Zero harness"
+description = "Push port over Firebase Cloud Messaging (FCM HTTP v1) for the Cratefield harness"
 readme = "README.md"
 keywords = ["cratefield", "fcm", "push", "notifications", "adapter"]
 categories = ["api-bindings"]

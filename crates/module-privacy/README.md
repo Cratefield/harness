@@ -24,3 +24,7 @@ with no per-venture wiring.
 What it can reach is exactly what the composed modules declared. A module that
 owns a table and declares nothing about it is outside all four routes, which is
 why `cratefield_testing::conformance` fails one that does (issue #244).
+
+---
+
+MIT. Built in the open for [Cratefield](https://cratefield.com), a [Factory Zero](https://factory0.ventures) venture.

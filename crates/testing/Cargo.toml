@@ -1,6 +1,6 @@
 [package]
 name = "cratefield-testing"
-description = "Conformance kit for Factory Zero modules: fake ports, in-memory Database, request helpers"
+description = "Conformance kit for Cratefield modules: fake ports, in-memory Database, request helpers"
 readme = "README.md"
 keywords = ["cratefield", "conformance", "testing", "fakes", "harness"]
 categories = ["development-tools::testing"]

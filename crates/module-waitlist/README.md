@@ -12,7 +12,7 @@
 
 # cratefield-module-waitlist
 
-Per-product waitlist for a Factory Zero venture: `POST /v1/waitlist`
+Per-product waitlist for a Cratefield venture: `POST /v1/waitlist`
 joins, a signed confirmation link assigns a dense per-product position,
 referral codes credit the referrer, and a status endpoint shows the
 entry's place and share link.
@@ -49,3 +49,7 @@ Emits `waitlist.joined` and `waitlist.confirmed`; pair with
 into the signup list — no crate dependency between the modules.
 
 See `docs/ARCHITECTURE.md` section 6 (Waitlist) and section 11.
+
+---
+
+MIT. Built in the open for [Cratefield](https://cratefield.com), a [Factory Zero](https://factory0.ventures) venture.

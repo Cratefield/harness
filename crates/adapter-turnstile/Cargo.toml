@@ -1,6 +1,6 @@
 [package]
 name = "cratefield-adapter-turnstile"
-description = "Captcha port over Cloudflare Turnstile siteverify for the Factory Zero harness"
+description = "Captcha port over Cloudflare Turnstile siteverify for the Cratefield harness"
 readme = "README.md"
 keywords = ["cratefield", "turnstile", "captcha", "cloudflare", "adapter"]
 categories = ["web-programming"]

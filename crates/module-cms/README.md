@@ -12,7 +12,7 @@
 
 # cratefield-module-cms
 
-A small content store with an editor, as a Factory Zero module. Content is a
+A small content store with an editor, as a Cratefield module. Content is a
 titled body plus a JSON `data` object addressed by `(collection, slug)`, kept
 in the venture's own database. Every publish appends an immutable revision, so
 items are versioned and the history of what was public is recoverable.
@@ -28,3 +28,7 @@ use cratefield_module_cms::Cms;
 
 let module = Cms::new().collections(["pages", "posts"]);
 ```
+
+---
+
+MIT. Built in the open for [Cratefield](https://cratefield.com), a [Factory Zero](https://factory0.ventures) venture.

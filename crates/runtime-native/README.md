@@ -121,3 +121,7 @@ curl -fsS http://127.0.0.1:8080/__ready
 The compose file uses `/__ready` (a `SELECT 1` through the `Database`
 port) as the app container's health check, executed by the binary itself
 (`venture-native --check-ready`) because distroless ships no curl.
+
+---
+
+MIT. Built in the open for [Cratefield](https://cratefield.com), a [Factory Zero](https://factory0.ventures) venture.

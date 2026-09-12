@@ -1,7 +1,7 @@
 # cratefield-adapter-stripe
 
 The [`Payments`](https://docs.rs/cratefield-core) port over the Stripe REST API,
-for the Factory Zero / Cratefield harness (issue #102).
+for the Cratefield harness (issue #102).
 
 It talks to `api.stripe.com` through the runtime's `HttpClient` port, so the one
 adapter runs unchanged on Cloudflare Workers and on the native runtime — no
@@ -58,3 +58,7 @@ Request shaping, error mapping, and webhook verification (a tampered signature
 and a stale timestamp are both refused) are unit-tested against a scripted
 `HttpClient`. The live path against Stripe is **needs-human**: it needs real
 test-mode keys, which do not live in the repo.
+
+---
+
+MIT. Built in the open for [Cratefield](https://cratefield.com), a [Factory Zero](https://factory0.ventures) venture.

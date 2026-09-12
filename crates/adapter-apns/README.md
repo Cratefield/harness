@@ -13,7 +13,7 @@
 # cratefield-adapter-apns
 
 The [`Push`](https://docs.rs/cratefield-core) port over Apple Push Notification
-service (APNs), for the Factory Zero / Cratefield harness (issue #104).
+service (APNs), for the Cratefield harness (issue #104).
 
 It talks HTTP/2 to `api.push.apple.com` (or the sandbox) through the runtime's
 `HttpClient` port, so the one adapter runs unchanged on Cloudflare Workers and
@@ -106,3 +106,7 @@ let runtime = cratefield_runtime_cloudflare::Cloudflare::new().push_arc(push);
 Signing and payload construction are unit-tested. The live path against Apple's
 sandbox is **needs-human**: it requires a real `.p8`, bundle id, and device
 token, which do not live in the repo.
+
+---
+
+MIT. Built in the open for [Cratefield](https://cratefield.com), a [Factory Zero](https://factory0.ventures) venture.

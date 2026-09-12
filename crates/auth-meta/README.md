@@ -91,3 +91,7 @@ discovered later.
   which covers this module's logic but not Meta's own behaviour: whether the
   dialog accepts these parameters, whether the redirect URI matches, the real
   shape of a Graph error, and whether `v21.0` is still served.
+
+---
+
+MIT. Built in the open for [Cratefield](https://cratefield.com), a [Factory Zero](https://factory0.ventures) venture.

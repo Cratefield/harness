@@ -1,6 +1,6 @@
 # cratefield-module-notifications
 
-Push notifications for a Factory Zero venture: device and browser
+Push notifications for a Cratefield venture: device and browser
 subscriptions, per-account per-category preferences, a fan-out API other
 modules call, and a drain that delivers through the `Push` port, prunes
 dead subscriptions, retries transient failures and dead-letters permanent
@@ -295,3 +295,7 @@ mechanism, so a browser is always server-rendered.
 The whole chain, the `.ftl` example with plurals, and the honest note that
 changing an account's locale does **not** rewrite its old inbox rows are in
 [`docs/NOTIFICATIONS.md`](../../docs/NOTIFICATIONS.md).
+
+---
+
+MIT. Built in the open for [Cratefield](https://cratefield.com), a [Factory Zero](https://factory0.ventures) venture.

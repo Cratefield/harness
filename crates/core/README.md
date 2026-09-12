@@ -12,7 +12,7 @@
 
 # cratefield-core
 
-The runtime-agnostic kernel of the Factory Zero harness: the [`Module`]
+The runtime-agnostic kernel of the Cratefield harness: the [`Module`]
 contract, the [`Harness`] builder, the port traits, RFC 9457
 problem+json errors, the request [`Scope`], an in-process [`EventBus`],
 and the template registry (ADRs 0001, 0002, 0007).
@@ -28,7 +28,7 @@ binary.
 
 ```text
 Harness::builder()
-    .venture(Venture::new("factory0", "factory0.ventures").cors_origins([..]))
+    .venture(Venture::new("acme", "acme.example.com").cors_origins([..]))
     .module(EmailSignup::new().double_opt_in(true))     // any Module impl
     .templates(EmailSignup::default_templates())        // + overrides
     .runtime(Cloudflare::new().db("DB"))                // any Runtime impl
@@ -69,3 +69,7 @@ it builds a complete module, `cratefield-module-hello`, step by step.
 [`cratefield-testing`](https://github.com/Cratefield/harness/tree/main/crates/testing) is the conformance kit: fake ports, an
 in-memory SQLite `Database`, and request helpers over the real axum
 router, no network. Every module — public or private — passes it.
+
+---
+
+MIT. Built in the open for [Cratefield](https://cratefield.com), a [Factory Zero](https://factory0.ventures) venture.

@@ -346,3 +346,7 @@ wrangler d1 migrations apply <database-name> --remote --env production
 ```
 
 Locally: `wrangler d1 migrations apply <database-name> --local`.
+
+---
+
+MIT. Built in the open for [Cratefield](https://cratefield.com), a [Factory Zero](https://factory0.ventures) venture.

@@ -32,3 +32,7 @@ db.apply_migrations("email-signup", &migrations)?; // tracked in harness_migrati
 - The `rusqlite` connection is `!Sync`, so it lives behind a mutex; this
   is connection guarding, not request state (see the workspace
   `clippy.toml` policy).
+
+---
+
+MIT. Built in the open for [Cratefield](https://cratefield.com), a [Factory Zero](https://factory0.ventures) venture.

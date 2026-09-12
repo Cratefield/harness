@@ -164,3 +164,7 @@ does not exist yet; the callback says so plainly rather than guessing.
   path but not the providers' own quirks. For Apple that specifically leaves
   untested: that it accepts a secret minted this way, that the registered
   return URL matches, and the real `user` field's shape.
+
+---
+
+MIT. Built in the open for [Cratefield](https://cratefield.com), a [Factory Zero](https://factory0.ventures) venture.

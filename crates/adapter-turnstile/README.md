@@ -13,7 +13,7 @@
 # cratefield-adapter-turnstile
 
 [`Captcha`] port over Cloudflare [Turnstile](https://developers.cloudflare.com/turnstile/)
-`siteverify` for the Factory Zero harness. Runs on the runtime's
+`siteverify` for the Cratefield harness. Runs on the runtime's
 `HttpClient` port; the 5 s timeout is supplied by the runtime's `Clock`.
 
 ## Usage
@@ -51,3 +51,7 @@ Behavior:
 - `Captcha::binding()` reports both checks (and the fail-open posture) so
   `Harness::build` can tell "port provided" from "verification actually
   configured" for `HumanForm` routes (issue #133).
+
+---
+
+MIT. Built in the open for [Cratefield](https://cratefield.com), a [Factory Zero](https://factory0.ventures) venture.

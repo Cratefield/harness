@@ -1,6 +1,6 @@
 [package]
 name = "cratefield-cli"
-description = "The fz CLI for Factory Zero ventures: migrations collect/apply, doctor, modules, push"
+description = "The fz CLI for Cratefield ventures: migrations collect/apply, doctor, modules, push"
 readme = "README.md"
 keywords = ["cratefield", "cli", "migrations", "wrangler", "d1"]
 categories = ["command-line-utilities", "development-tools"]

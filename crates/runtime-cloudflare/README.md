@@ -90,3 +90,7 @@ These are empirical facts recorded while building this crate; see
 - The `time` crate needs its `wasm-bindgen` feature for `now_utc()` on
   wasm (pinned in the workspace `Cargo.toml`); without it every clock read
   panics (`time not implemented on this platform`).
+
+---
+
+MIT. Built in the open for [Cratefield](https://cratefield.com), a [Factory Zero](https://factory0.ventures) venture.

@@ -1,6 +1,6 @@
 [package]
 name = "cratefield-ui"
-description = "Factory Zero harness UI renderer: pages and fragments from the module surface, in-process dispatch, the cf-* markup contract"
+description = "Cratefield harness UI renderer: pages and fragments from the module surface, in-process dispatch, the cf-* markup contract"
 readme = "README.md"
 keywords = ["cratefield", "harness", "ui", "forms", "maud"]
 categories = ["web-programming"]

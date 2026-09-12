@@ -1,6 +1,6 @@
 [package]
 name = "cratefield-module-privacy"
-description = "Factory Zero module: subject access and erasure, from what each module declares it holds"
+description = "Cratefield module: subject access and erasure, from what each module declares it holds"
 readme = "README.md"
 keywords = ["cratefield", "privacy", "gdpr", "export", "erasure"]
 categories = ["web-programming"]

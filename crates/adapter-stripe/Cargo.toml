@@ -1,6 +1,6 @@
 [package]
 name = "cratefield-adapter-stripe"
-description = "Payments port over the Stripe REST API for the Factory Zero harness"
+description = "Payments port over the Stripe REST API for the Cratefield harness"
 readme = "README.md"
 keywords = ["cratefield", "stripe", "payments", "billing", "adapter"]
 categories = ["api-bindings"]

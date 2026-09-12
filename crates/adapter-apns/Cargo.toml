@@ -1,6 +1,6 @@
 [package]
 name = "cratefield-adapter-apns"
-description = "Push port over Apple Push Notification service (APNs) for the Factory Zero harness"
+description = "Push port over Apple Push Notification service (APNs) for the Cratefield harness"
 readme = "README.md"
 keywords = ["cratefield", "apns", "push", "notifications", "adapter"]
 categories = ["api-bindings"]

@@ -103,3 +103,7 @@ clients that strip anchors.
 - **The link does not carry the client's `state`.** A magic link that
   resumes a pending `/authorize` carries it as `return_to`, which is enough
   today because `/authorize` re-reads its own query.
+
+---
+
+MIT. Built in the open for [Cratefield](https://cratefield.com), a [Factory Zero](https://factory0.ventures) venture.
