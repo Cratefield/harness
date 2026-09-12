@@ -104,6 +104,8 @@ async fn main() {
     eprintln!("  dashboard: http://127.0.0.1:{port}/v1/dashboard");
     eprintln!("  data:      http://127.0.0.1:{port}/v1/dashboard/data");
     eprintln!("  secrets:   http://127.0.0.1:{port}/v1/dashboard/secrets");
+    eprintln!("  deploys:   http://127.0.0.1:{port}/v1/dashboard/deploys");
+    eprintln!("  logs:      http://127.0.0.1:{port}/v1/dashboard/logs");
     eprintln!("  wizard:    http://127.0.0.1:{port}/v1/console/new");
     serve_on(harness, runtime, listener).await.expect("serve");
 }
@@ -200,22 +202,31 @@ async fn seed(db: &Arc<dyn Database>) {
         }
     }
 
-    // The degraded venture's recorded failure. This is the row the dashboard
-    // renders instead of a spinner, and the reason issue #11 exists.
-    db.execute(&Statement::with_values(
-        "INSERT INTO provision_progress (venture_id, last_step, error, updated_at) \
-         VALUES (?, ?, ?, ?)",
-        vec![
-            text("v_broken"),
-            text("deploy-worker"),
-            text(
-                "the Cloudflare API refused the upload: script too large (1.2 MiB over the limit)",
-            ),
-            text("2026-01-01T00:02:00Z"),
-        ],
-    ))
-    .await
-    .expect("seed the recorded failure");
+    // Every "Go" this dev server's ventures have pressed, recorded the
+    // way the engine records it: a real run against `Unwired`, stopping
+    // at the first step with the refusal. The deploys screen reads
+    // exactly these rows under a banner saying nothing has ever reached
+    // Cloudflare — which must not sit above a fabricated Cloudflare
+    // failure. The venture *statuses* above stay the health-verdict
+    // fiction they have always been (a Live venture here reads
+    // unreachable, and that is the truthful verdict from a laptop); the
+    // progress rows below are the real shape of a run today.
+    let refusal = "artifact: no deployer is wired: building the composed artifact needs an \
+                   adapter that talks to Cloudflare, and the control plane has none yet. \
+                   Nothing was changed.";
+    for (id, at) in [
+        ("v_live", "2026-01-01T00:02:30Z"),
+        ("v_broken", "2026-01-01T00:02:45Z"),
+        ("v_old", "2026-01-01T00:03:00Z"),
+    ] {
+        db.execute(&Statement::with_values(
+            "INSERT INTO provision_progress (venture_id, last_step, error, updated_at) \
+             VALUES (?, ?, ?, ?)",
+            vec![text(id), text(""), text(refusal), text(at)],
+        ))
+        .await
+        .expect("seed the recorded run");
+    }
 }
 
 /// Two plausible secrets, with obviously fake values: a platform key in
