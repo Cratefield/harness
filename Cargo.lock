@@ -647,6 +647,7 @@ dependencies = [
  "cratefield-adapter-stripe",
  "cratefield-adapter-turnstile",
  "cratefield-adapter-webpush",
+ "cratefield-auth-client",
  "cratefield-core",
  "cratefield-i18n",
  "cratefield-kms",
