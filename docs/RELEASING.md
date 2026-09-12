@@ -57,6 +57,41 @@ it cannot be first-published before `cratefield-adapter-fcm` and
 `cratefield-adapter-webpush`. It is in the ordered list below in that
 position; drop its `publish = false` at the same time.
 
+`cratefield-i18n` (issue #190), `cratefield-module-privacy` and
+`cratefield-module-notifications` (issue #182) were wired into the facade
+after this list was written, and the list was not updated. All three carry
+`publish = false`, all three are optional dependencies of the facade, and an
+optional dependency still has to resolve on crates.io when the facade is
+packaged — so today the last line of the list cannot run at all:
+
+```
+$ cargo publish --dry-run --no-verify -p cratefield
+error: failed to prepare local package for uploading
+
+Caused by:
+  no matching package named `cratefield-adapter-fcm` found
+  location searched: crates.io index
+```
+
+`adapter-fcm` is only the first name it reaches; `adapter-webpush`,
+`push-wiring`, `i18n`, `module-privacy` and `module-notifications` are behind
+it. Seven first publishes stand between the current state and a facade
+release, and crates.io rate-limits new crates, so it is not one sitting.
+
+**`cratefield-module-notifications` also depends on `factory0-auth-client`**,
+which is the edge easiest to miss: it leaves the `cratefield-*` namespace for
+the auth stack (ADR 0013), it is not optional, and `factory0-auth-client`
+carries `publish = false` like the rest of those crates. It depends on nothing
+but `cratefield-core`, so it can be first-published as soon as core is; it is
+in the ordered list below in that position.
+
+What does **not** constrain the order: `cratefield-module-privacy` is a
+dev-dependency of `module-email-signup`, `module-waitlist` and
+`module-notifications`, and those are path-only by the rule above, so they are
+stripped from the packaged manifests. Those three published while
+`module-privacy` did not exist on crates.io, which is the proof. Only the
+facade's real (optional) dependency on it constrains anything.
+
 `fz push` (issue #184) adds three more edges into `cratefield-cli`, and the
 ordered list below already satisfies all of them: it depends on
 `cratefield-push-auth` and `cratefield-adapter-webpush` **not** optionally
@@ -157,6 +192,10 @@ crate exists**, so the very first release of each crate is manual:
    cargo publish -p cratefield-module-email-signup
    cargo publish -p cratefield-module-waitlist
    cargo publish -p cratefield-module-cms
+   cargo publish -p cratefield-i18n           # before module-notifications
+   cargo publish -p factory0-auth-client      # before module-notifications
+   cargo publish -p cratefield-module-privacy # before the facade
+   cargo publish -p cratefield-module-notifications  # needs both of those
    cargo publish -p cratefield-ui
    cargo publish -p cratefield-cli
    cargo publish -p cratefield            # the facade: depends on all of them
