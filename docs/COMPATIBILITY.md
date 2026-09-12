@@ -29,7 +29,7 @@ compatibility-doc` and checked in CI for drift. Do not edit by hand.
 | `cratefield` | 0.1.1 | 1 | `^0.4` — `>=0.4.0, <0.5.0` |
 | `cratefield-access` | 0.1.1 | 1 | `^0.4` — `>=0.4.0, <0.5.0` |
 | `cratefield-accounts` | 0.1.1 | 1 | `^0.4` — `>=0.4.0, <0.5.0` |
-| `cratefield-adapter-apns` | 0.1.1 | 1 | `^0.4` — `>=0.4.0, <0.5.0` |
+| `cratefield-adapter-apns` | 0.1.2 | 1 | `^0.4` — `>=0.4.0, <0.5.0` |
 | `cratefield-adapter-fcm` | 0.1.1 | 1 | `^0.4` — `>=0.4.0, <0.5.0` |
 | `cratefield-adapter-postgres` | 0.1.1 | 1 | `^0.4` — `>=0.4.0, <0.5.0` |
 | `cratefield-adapter-resend` | 0.1.1 | 1 | `^0.4` — `>=0.4.0, <0.5.0` |
@@ -52,7 +52,7 @@ compatibility-doc` and checked in CI for drift. Do not edit by hand.
 | `cratefield-module-privacy` | 0.1.1 | 1 | `^0.4` — `>=0.4.0, <0.5.0` |
 | `cratefield-module-waitlist` | 0.1.1 | 1 | `^0.4` — `>=0.4.0, <0.5.0` |
 | `cratefield-provisioning` | 0.1.1 | 1 | `^0.4` — `>=0.4.0, <0.5.0` |
-| `cratefield-push-auth` | 0.1.1 | 1 | `^0.4` — `>=0.4.0, <0.5.0` |
+| `cratefield-push-auth` | 0.1.2 | 1 | `^0.4` — `>=0.4.0, <0.5.0` |
 | `cratefield-push-wiring` | 0.1.1 | 1 | `^0.4` — `>=0.4.0, <0.5.0` |
 | `cratefield-runtime-browser` | 0.1.1 | 1 | `^0.4` — `>=0.4.0, <0.5.0` |
 | `cratefield-runtime-browser-demo` | 0.1.1 | 1 | `^0.4` — `>=0.4.0, <0.5.0` |
