@@ -157,6 +157,17 @@ convenience, not a layer.
 | `cratefield-testing` | Conformance kit every module, public or private, must pass |
 | `cratefield-adapter-postgres` | `Database` over sqlx for the native runtime (`.github/workflows/parity.yml` runs module suites against both SQLite and Postgres) |
 | `cratefield-runtime-native` | The same harness as a single binary on tokio: axum on a TCP listener, Redis `RateLimiter`, in-process cron |
+| `cratefield-adapter-apns` | `Push` over Apple Push Notification service, HTTP/2 through the `HttpClient` port — no vendor SDK |
+| `cratefield-adapter-fcm` | `Push` over Firebase Cloud Messaging (HTTP v1), the same shape as APNs |
+| `cratefield-adapter-webpush` | `Push` over Web Push (RFC 8030/8188/8291): browsers and UnifiedPush |
+| `cratefield-push-auth` | The provider tokens the push adapters present: ES256 for APNs and VAPID, RS256 for Google service accounts |
+| `cratefield-push-wiring` | Assembles the `Push` port from the environment: one env-variable table shared by `serve()`, `fz push` and `fz doctor` |
+| `cratefield-adapter-stripe` | `Payments` over the Stripe REST API |
+| `cratefield-module-cms` | A small content store with an editor: typed collections, versioned, in the venture's own database |
+| `cratefield-module-privacy` | Subject access and erasure, assembled from what every other module declares it holds |
+| `cratefield-module-notifications` | Push, an in-app inbox and email from one `notify()`, with per-account per-category preferences ([NOTIFICATIONS.md](docs/NOTIFICATIONS.md)) |
+| `cratefield-i18n` | Server-side localisation: Fluent catalogs, BCP 47 negotiation, text direction |
+| `factory0-auth-client` | Verifies auth tokens in a consuming app: JWKS fetch and cache, ES256, an axum extractor |
 
 Everything else in the workspace is unpublished — `publish = false` is what
 makes a crate private now, not a separate repository (ADR
@@ -164,8 +175,7 @@ makes a crate private now, not a separate repository (ADR
 
 | Crate | Role |
 |---|---|
-| `factory0-auth-*` | The auth service: `auth-core` plus one crate per login method (passkeys, OIDC/Google/Apple, password, magic link, Meta) and the deployable `auth-worker` |
-| `cratefield-module-notifications` | Push, an in-app inbox and email from one `notify()`, with per-account per-category preferences ([NOTIFICATIONS.md](docs/NOTIFICATIONS.md)). Unpublished only because it depends on `factory0-auth-client` (ADR 0016) |
+| `factory0-auth-*` | The auth service: `auth-core` plus one crate per login method (passkeys, OIDC/Google/Apple, password, magic link, Meta) and the deployable `auth-worker`. `factory0-auth-client`, which verifies its tokens in a consuming app, is published; the service itself is not |
 | `fz-module-linkedin` | Private Factory Zero module: run a LinkedIn Company Page from the harness |
 | `cratefield-control-plane`, `cratefield-console`, `cratefield-accounts`, `cratefield-access`, `cratefield-catalog`, `cratefield-connections`, `cratefield-provisioning`, `cratefield-ui-generator` | The managed service: sign up, pick modules, connect Cloudflare and SSO, get a running venture |
 | `cratefield-introspect` | Reads a database's own catalog over the `Database` port (SQLite pragmas, Postgres `information_schema`) and answers in `cratefield-tables`' vocabulary — the source the dashboard's data screen renders

@@ -1,6 +1,6 @@
 # fz-module-linkedin
 
-Runs a LinkedIn Company Page from the Factory Zero harness: connect a page once
+Runs a LinkedIn Company Page from the Cratefield harness: connect a page once
 over OAuth, then create, schedule, edit and delete posts, upload media, and
 address showcase pages. Private (`fz-*`, never published, pinned git
 dependency, harness ADR 0005) because it holds long-lived credentials for our

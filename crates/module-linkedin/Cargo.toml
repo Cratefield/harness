@@ -1,6 +1,6 @@
 [package]
 name = "fz-module-linkedin"
-description = "Private Factory Zero module: run a LinkedIn Company Page from the harness (OAuth connect, posts, media, showcase pages)"
+description = "Private Cratefield module: run a LinkedIn Company Page from the harness (OAuth connect, posts, media, showcase pages)"
 readme = "README.md"
 publish = false
 version.workspace = true
