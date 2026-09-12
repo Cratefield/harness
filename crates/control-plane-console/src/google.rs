@@ -4,6 +4,23 @@
 //! (auth#41). A deliberate deviation from #3's "relying party, not a second
 //! `IdP`", recorded there; the auth-service path stays the long-term option.
 //!
+//! **That deviation now covers four providers, not one.** Apple
+//! ([`crate::apple`]), Facebook ([`crate::meta`]) and the emailed magic link
+//! ([`crate::magic`]) joined Google here rather than each re-opening the
+//! decision, because the reason has not changed: the deployable auth service
+//! is still blocked (auth#41; deploying it needs Cloudflare, #26). This file
+//! is where the decision is recorded so the next person meets one decision
+//! rather than four accidents. The shape each new provider follows: a flow
+//! the console runs, ending at a [`VerifiedIdentity`] that goes through the
+//! one [`crate::complete_login`] seam — the provider proves *who*, the
+//! allowlist decides *whether*, and nothing any provider adds may skip the
+//! invite.
+//!
+//! What the console refuses to duplicate it takes from the auth crates:
+//! Apple's ES256 secret minting and Meta's Graph profile call are used
+//! through `factory0-auth-oidc`/`factory0-auth-meta`, through APIs those
+//! crates made public for exactly this.
+//!
 //! Only the Google endpoints are hit, over the runtime's `HttpClient` port. The
 //! token exchange is a direct TLS call to Google carrying the client secret, so
 //! the `userinfo` it yields is trusted without separately verifying the
@@ -67,10 +84,10 @@ impl GoogleClient {
         format!(
             "{AUTH_ENDPOINT}?client_id={}&redirect_uri={}&response_type=code\
              &scope={}&state={}&access_type=online&prompt=select_account",
-            enc(&self.client_id),
-            enc(&self.redirect_uri),
-            enc(SCOPE),
-            enc(state),
+            crate::enc(&self.client_id),
+            crate::enc(&self.redirect_uri),
+            crate::enc(SCOPE),
+            crate::enc(state),
         )
     }
 
@@ -86,7 +103,7 @@ impl GoogleClient {
         http: &dyn HttpClient,
         code: &str,
     ) -> Result<VerifiedIdentity, GoogleError> {
-        let form = form_encode(&[
+        let form = crate::form_encode(&[
             ("code", code),
             ("client_id", &self.client_id),
             ("client_secret", &self.client_secret),
@@ -148,31 +165,6 @@ struct UserInfo {
     email_verified: bool,
     name: Option<String>,
     hd: Option<String>,
-}
-
-/// Percent-encodes one query/form component (unreserved bytes pass through).
-fn enc(input: &str) -> String {
-    let mut out = String::with_capacity(input.len());
-    for &byte in input.as_bytes() {
-        match byte {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
-                out.push(byte as char);
-            }
-            other => {
-                use std::fmt::Write as _;
-                let _ = write!(out, "%{other:02X}");
-            }
-        }
-    }
-    out
-}
-
-fn form_encode(pairs: &[(&str, &str)]) -> String {
-    pairs
-        .iter()
-        .map(|(k, v)| format!("{}={}", enc(k), enc(v)))
-        .collect::<Vec<_>>()
-        .join("&")
 }
 
 #[cfg(test)]

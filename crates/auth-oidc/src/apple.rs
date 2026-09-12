@@ -10,10 +10,22 @@
 //!    rotate: [`Minter`] mints one on demand and caches it well inside its
 //!    own lifetime. Rotating the key is a secret swap and a key-id change.
 //! 2. **The authorization response arrives as a cross-site `form_post`.**
-//!    Handled in [`crate::flow`] and [`crate::handlers`], not here.
+//!    Handled in this crate's `flow` and `handlers` modules, not here.
+//!    (Named rather than linked: this module is public and those two are
+//!    not, so a link would be a public doc pointing at a private item.)
 //! 3. **The person's name arrives exactly once**, as JSON in the first
 //!    authorization's form body and never again. [`name_from_user_field`]
 //!    reads it; the linking rules store it on the identity or lose it.
+//!
+//! **This module is public, and the reason is the console.** The
+//! control-plane console runs its own Apple flow (Cratefield issue #3)
+//! rather than relaying through this service, and it mints the same
+//! client secret from the same `.p8` settings through the same
+//! [`Minter`] and reads the same first-authorization `user` field through
+//! the same [`name_from_user_field`]. Before it was public, the only way
+//! for the console to get those was a second copy of ES256 secret
+//! minting — exactly the drift this repository keeps paying for — so the
+//! API change is deliberate: one minter, two flows.
 //!
 //! The private key never leaves this module: it is parsed inside
 //! [`Minter::mint`], used, and dropped. It is never logged, never written
@@ -58,14 +70,18 @@ const _: () = assert!(REFRESH_MARGIN_SECS < LIFETIME_SECS);
 /// PKCS#8 parse can fail are a description of the bytes it was given.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[error("the Apple signing key is not a usable PKCS#8 P-256 private key")]
-pub(crate) struct AppleKeyError;
+pub struct AppleKeyError;
 
 /// The configured Apple identifiers, resolved once per router build.
 ///
 /// `private_key` is the contents of the `.p8` file Apple issues. It is a
 /// Worker secret: never in the database, never in the repository.
+///
+/// Public because the control-plane console builds one of these from its
+/// own `CONSOLE_APPLE_*` settings and hands it to the same [`Minter`] this
+/// service uses — one minting implementation, two Apple flows.
 #[derive(Clone)]
-pub(crate) struct AppleConfig {
+pub struct AppleConfig {
     /// The ten-character Apple Developer Team ID. Becomes `iss`.
     pub team_id: String,
     /// The key's own id, from the Apple Developer console. Becomes `kid`.
@@ -109,13 +125,18 @@ struct Cached {
 ///
 /// One per module. The lock is held only to read or replace a small
 /// struct, never across the signing itself.
+///
+/// Public because the control-plane console holds one beside its own Apple
+/// flow: the cached-secret lifetime and the rotation rules live here, once,
+/// rather than being re-derived per caller.
 #[derive(Debug, Default)]
-pub(crate) struct Minter {
+pub struct Minter {
     cached: RwLock<Option<Cached>>,
 }
 
 impl Minter {
-    pub(crate) fn new() -> Self {
+    #[must_use]
+    pub fn new() -> Self {
         Self::default()
     }
 
@@ -127,7 +148,7 @@ impl Minter {
     /// [`AppleKeyError`] when the configured `.p8` is not a P-256 PKCS#8
     /// private key. Nothing else can fail: the claims are built from
     /// configuration and the clock.
-    pub(crate) fn mint(
+    pub fn mint(
         &self,
         config: &AppleConfig,
         client_id: &str,
@@ -192,10 +213,13 @@ fn sign_client_secret(
 /// config validation runs at cold start, and the wall clock is unreadable
 /// on wasm32 (ADR 0200).
 ///
+/// Public for the same reason [`AppleConfig`] is: the console validates
+/// its own `CONSOLE_APPLE_PRIVATE_KEY` at the same moment.
+///
 /// # Errors
 ///
 /// [`AppleKeyError`] when the key is not a PKCS#8 P-256 private key.
-pub(crate) fn check_key(config: &AppleConfig) -> Result<(), AppleKeyError> {
+pub fn check_key(config: &AppleConfig) -> Result<(), AppleKeyError> {
     signing_key(&config.private_key).map(|_| ())
 }
 
@@ -244,7 +268,10 @@ fn b64url(bytes: &[u8]) -> String {
 /// arrives without it, so this is the one chance to learn the name. A
 /// malformed value is not an error: the sign-in is still valid, and a
 /// missing name is the ordinary case.
-pub(crate) fn name_from_user_field(user: &str) -> Option<String> {
+///
+/// Public because the console's Apple callback receives the same form
+/// body and gets the same one chance.
+pub fn name_from_user_field(user: &str) -> Option<String> {
     let parsed: Value = serde_json::from_str(user).ok()?;
     let name = parsed.get("name")?;
     let first = name.get("firstName").and_then(Value::as_str).unwrap_or("");

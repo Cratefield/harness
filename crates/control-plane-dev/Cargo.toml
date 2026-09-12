@@ -36,4 +36,7 @@ sea-query = { version = "0.32.7", default-features = false, features = [
     "backend-sqlite",
     "thread-safe",
 ] }
+# The `Mailer` impl for the stderr dev mailer: the port trait is declared
+# under `#[async_trait]`, so the impl needs the same macro in scope.
+async-trait = "0.1"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net"] }

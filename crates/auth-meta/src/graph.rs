@@ -5,6 +5,14 @@
 //! constants, and the profile is a Graph call whose answer is trusted
 //! because the access token behind it came from our own back-channel
 //! exchange, authenticated with the app secret. See ADR 0204.
+//!
+//! The endpoints, [`crate::graph::Profile`] and [`crate::graph::profile_endpoint`] are public because the
+//! control-plane console runs its own Facebook Login (Cratefield issue #3)
+//! over the same `HttpClient` port: the version-pinned endpoint builders
+//! and the email-optional profile shape are facts about **Meta**, not
+//! about this service, so they live here once. The `oauth2` bridge below
+//! stays private — the console hand-rolls its token exchange the way its
+//! Google flow already does.
 
 use bytes::Bytes;
 use cratefield_core::HttpClient;
@@ -21,24 +29,24 @@ use std::sync::Arc;
 /// must be able to move it without waiting for a release. **Check it
 /// before a deployment**; the default is the version this was written
 /// against, not a promise about today.
-pub(crate) const DEFAULT_GRAPH_VERSION: &str = "v21.0";
+pub const DEFAULT_GRAPH_VERSION: &str = "v21.0";
 
-pub(crate) fn authorization_endpoint(version: &str) -> String {
+pub fn authorization_endpoint(version: &str) -> String {
     format!("https://www.facebook.com/{version}/dialog/oauth")
 }
 
-pub(crate) fn token_endpoint(version: &str) -> String {
+pub fn token_endpoint(version: &str) -> String {
     format!("https://graph.facebook.com/{version}/oauth/access_token")
 }
 
 /// The profile call. `email` is requested and may simply not come back.
-pub(crate) fn profile_endpoint(version: &str) -> String {
+pub fn profile_endpoint(version: &str) -> String {
     format!("https://graph.facebook.com/{version}/me?fields=id,name,email")
 }
 
 /// What `/me` gives us, with everything optional but the id.
 #[derive(Debug, Deserialize)]
-pub(crate) struct Profile {
+pub struct Profile {
     /// App-scoped: this id identifies the person **to this app** and is not
     /// portable to another Meta app. Stored as returned.
     pub id: String,
@@ -51,7 +59,7 @@ pub(crate) struct Profile {
 }
 
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum GraphError {
+pub enum GraphError {
     #[error("http port: {0}")]
     Port(#[from] cratefield_core::HttpError),
     #[error("the graph api answered {status}")]
@@ -65,8 +73,8 @@ pub(crate) enum GraphError {
 /// # Errors
 ///
 /// Any transport failure, a non-200, or a body that is not a profile.
-pub(crate) async fn profile(
-    http: &Arc<dyn HttpClient>,
+pub async fn profile(
+    http: &dyn HttpClient,
     version: &str,
     access_token: &str,
 ) -> Result<Profile, GraphError> {

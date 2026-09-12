@@ -19,13 +19,27 @@ cratefield-access = { path = "../control-plane-access" }
 cratefield-accounts = { path = "../control-plane-accounts" }
 cratefield-catalog = { path = "../control-plane-catalog" }
 cratefield-provisioning = { path = "../control-plane-provisioning" }
+# Apple's minted client secret and Meta's Graph profile call, made public
+# for exactly these two uses (issue #3): the console runs its own provider
+# flows and takes the one implementation of each from the auth crates
+# rather than growing a second copy beside them. Deliberate API changes,
+# recorded in those modules' docs.
+factory0-auth-oidc = { path = "../auth-oidc" }
+factory0-auth-meta = { path = "../auth-meta" }
 axum = { workspace = true }
 http = { workspace = true }
 bytes = "1"
 serde = { workspace = true }
 serde_json = { workspace = true }
+# The magic-link rows are written as raw statements with positional
+# values, the same shape the access crate's own repository uses.
+sea-query = { workspace = true }
 tracing = { workspace = true }
 time = { workspace = true }
+# The magic-link token: 32 random bytes, encoded URL-safe, stored hashed.
+base64ct = { workspace = true }
+getrandom = { workspace = true }
+sha2 = { workspace = true }
 
 [dev-dependencies]
 cratefield-adapter-sqlite = { path = "../adapter-sqlite" }
@@ -34,3 +48,7 @@ cratefield-testing = { path = "../testing", features = ["postgres"] }
 pollster = { version = "0.4", features = ["macro"] }
 tower = { version = "0.5", features = ["util"] }
 async-trait = "0.1"
+# A throwaway P-256 key for the Apple minting tests. The workspace pin
+# (0.13) is enough to *produce* a PKCS#8 PEM; auth-oidc's own 0.14 does
+# the parsing inside the minter.
+p256 = { workspace = true }
