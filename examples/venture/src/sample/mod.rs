@@ -296,14 +296,10 @@ async fn blob_probe(
     const CONTENT_TYPE: &str = "text/plain; charset=utf-8";
     let key = format!("probe/{}", scope.request_id);
 
-    let put_err = blob.put(&key, PAYLOAD, CONTENT_TYPE).await.err().map(|e| e.to_string());
-    if let Some(ref e) = put_err { tracing::error!(error = %e, "put failed"); }
-    let get_err = match put_err { Some(_) => None, None => match blob.get(&key).await { Err(e) => Some(format!("get: {e}")), Ok(None) => Some("get: none".into()), Ok(Some(_)) => None } };
-    if !put_err.is_some() && get_err.is_some() {
-        let _ = blob.delete(&key).await;
-    }
-    return Ok(Json(json!({ "round_trip": "dbg", "put_err": put_err, "get_err": get_err, "blob_present": true })));
-    #[allow(unreachable_code)]
+    blob.put(&key, PAYLOAD, CONTENT_TYPE).await.map_err(|err| {
+        tracing::error!(error = %err, "blob probe put failed");
+        internal(&scope)
+    })?;
     let round_trip = async {
         let object = blob.get(&key).await.map_err(|err| err.to_string())?;
         let object = object.ok_or_else(|| "put then get found nothing".to_owned())?;
