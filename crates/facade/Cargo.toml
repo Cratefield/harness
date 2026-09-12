@@ -59,6 +59,10 @@ ui = ["dep:cratefield-ui"]
 i18n = ["dep:cratefield-i18n"]
 secrets = ["dep:cratefield-secrets"]
 kms = ["dep:cratefield-kms"]
+# The venture manifest and its composition generator (issue #138). A venture
+# does not need it to run; `fz` reads it, and so does anything generating a
+# composition from a manifest.
+manifest = ["dep:cratefield-manifest"]
 
 # Modules shipped with the harness.
 email-signup = ["dep:cratefield-module-email-signup"]
@@ -96,6 +100,7 @@ cratefield-adapter-webpush = { workspace = true, optional = true }
 cratefield-ui = { workspace = true, optional = true }
 # `publish = false` until its first manual publish (docs/RELEASING.md).
 cratefield-i18n = { workspace = true, optional = true }
+cratefield-manifest = { workspace = true, optional = true }
 cratefield-secrets = { workspace = true, optional = true }
 cratefield-kms = { workspace = true, optional = true }
 cratefield-module-email-signup = { workspace = true, optional = true }

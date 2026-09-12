@@ -650,6 +650,7 @@ dependencies = [
  "cratefield-core",
  "cratefield-i18n",
  "cratefield-kms",
+ "cratefield-manifest",
  "cratefield-module-cms",
  "cratefield-module-email-signup",
  "cratefield-module-notifications",
