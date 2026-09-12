@@ -59,6 +59,9 @@ pub use cratefield_kms as kms;
 #[cfg(feature = "i18n")]
 pub use cratefield_i18n as i18n;
 
+#[cfg(feature = "manifest")]
+pub use cratefield_manifest as manifest;
+
 #[cfg(feature = "email-signup")]
 pub use cratefield_module_email_signup as email_signup;
 
