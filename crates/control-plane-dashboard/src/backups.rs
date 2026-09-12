@@ -923,6 +923,27 @@ pub(super) async fn export(state: State<Arc<DashboardState>>, headers: HeaderMap
     if let Err(redirect) = guard(ctx, &headers) {
         return redirect;
     }
+    // Admin-gated, unlike every other screen here, because this one is
+    // not account-scoped and cannot be: a backup of the control database
+    // is every account's ventures, every operator's identity and the
+    // whole request log, and scoping it to the asking account would
+    // produce a file that is not a backup. Every other read in this
+    // dashboard is narrowed to the operator's own account, so a
+    // signed-in session is the wrong key for the one operation that
+    // reaches past it — the same call the console's operator invite
+    // makes, for the same reason.
+    if let Err(problem) = cratefield_core::require_admin(&*ctx.config, &headers) {
+        return problem.into_response();
+    }
+    // Admin-gated, unlike every other screen here, because this one is
+    // not account-scoped and cannot be: a backup of the control database
+    // is every account's ventures, every operator's identity and the
+    // whole request log, and scoping it to the asking account would
+    // produce a file that is not a backup. Every other read in this
+    // dashboard is narrowed to the operator's own account, so a
+    // signed-in session is the wrong key for the one operation that
+    // reaches past it — the same call the console's operator invite
+    // makes, for the same reason.
     let session = current_session(ctx, &headers).expect("guard proved a session");
     let (account, _repo) = match account_of(ctx, &session.account_id).await {
         Ok(pair) => pair,
@@ -1049,11 +1070,36 @@ mod tests {
     const EMAIL: &str = "op@cratefield.com";
     const NOW: u64 = 1_800_000_000;
 
+    /// The admin token this crate's tests present for the export, which
+    /// is the one operation here that reaches past the asking account.
+    const ADMIN: &str = "test-admin-token";
+
     fn kit() -> TestHarness {
-        TestHarness::new(vec![
-            Box::new(cratefield_console::Console),
-            Box::new(Dashboard::new(None)),
-        ])
+        TestHarness::with_ports(
+            vec![
+                Box::new(cratefield_console::Console),
+                Box::new(Dashboard::new(None)),
+            ],
+            |ports| {
+                ports.config = std::sync::Arc::new(cratefield_core::MapConfig::from_pairs(vec![
+                    ("HARNESS_SECRET", cratefield_testing::TEST_HARNESS_SECRET),
+                    ("ADMIN_TOKEN", ADMIN),
+                ]));
+            },
+        )
+    }
+
+    /// The export, presented with the admin bearer `require_admin`
+    /// wants — the one route here a session alone does not open.
+    async fn export_as_admin(kit: &TestHarness, cookie: &str) -> Reply {
+        let request = HttpRequest::builder()
+            .method(Method::GET)
+            .uri(format!("{PATH}/export"))
+            .header(http::header::COOKIE, cookie)
+            .header(http::header::AUTHORIZATION, format!("Bearer {ADMIN}"))
+            .body(axum::body::Body::empty())
+            .expect("request");
+        reply_of(kit, request).await
     }
 
     fn cookie(kit: &TestHarness) -> String {
@@ -1109,10 +1155,15 @@ mod tests {
             }
             None => axum::body::Body::empty(),
         };
+        reply_of(kit, builder.body(body).expect("request")).await
+    }
+
+    /// Runs one request through the router and reads the whole reply.
+    async fn reply_of(kit: &TestHarness, request: HttpRequest<axum::body::Body>) -> Reply {
         let response = kit
             .router
             .clone()
-            .oneshot(builder.body(body).expect("request"))
+            .oneshot(request)
             .await
             .expect("router answers");
         let (parts, body) = response.into_parts();
@@ -1215,10 +1266,17 @@ mod tests {
     }
 
     #[pollster::test]
-    async fn the_export_is_real_and_records_itself() {
+    async fn a_signed_in_operator_alone_cannot_export_the_control_database() {
+        // Every other read in this dashboard is narrowed to the asking
+        // account. This one cannot be — a backup of the control database
+        // is every account's ventures, every operator's identity and the
+        // whole request log — so a session is the wrong key for it, and
+        // it takes the same admin token the console's operator invite
+        // takes.
         let kit = seeded().await;
         let cookie = cookie(&kit);
-        let reply = send(
+
+        let refused = send(
             &kit,
             Method::GET,
             &format!("{PATH}/export"),
@@ -1226,6 +1284,35 @@ mod tests {
             None,
         )
         .await;
+        assert_eq!(
+            refused.status,
+            StatusCode::UNAUTHORIZED,
+            "a session alone must not export the control database: {}",
+            refused.body
+        );
+        assert!(
+            !refused.body.contains("\"table\""),
+            "the refusal carries no export: {}",
+            refused.body
+        );
+
+        // The positive half, so the refusal above cannot be passing
+        // because the route is broken: the same request with the admin
+        // token returns the real file.
+        let allowed = export_as_admin(&kit, &cookie).await;
+        assert_eq!(allowed.status, StatusCode::OK, "{}", allowed.body);
+        assert!(
+            allowed.body.contains("\"table\":\"account\""),
+            "{}",
+            allowed.body
+        );
+    }
+
+    #[pollster::test]
+    async fn the_export_is_real_and_records_itself() {
+        let kit = seeded().await;
+        let cookie = cookie(&kit);
+        let reply = export_as_admin(&kit, &cookie).await;
         assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
         assert_eq!(
             reply.content_type.as_deref(),
@@ -1350,14 +1437,7 @@ mod tests {
                 .expect("seed");
             written += 250;
         }
-        let reply = send(
-            &kit,
-            Method::GET,
-            &format!("{PATH}/export"),
-            Some(&cookie(&kit)),
-            None,
-        )
-        .await;
+        let reply = export_as_admin(&kit, &cookie(&kit)).await;
         assert_eq!(reply.status, StatusCode::CONFLICT, "{}", reply.body);
         assert!(
             reply.body.contains("over the harness export cap"),
@@ -1470,14 +1550,7 @@ mod tests {
         let kit = seeded().await;
         let cookie = cookie(&kit);
         // Something to rehearse against: take the real export first.
-        send(
-            &kit,
-            Method::GET,
-            &format!("{PATH}/export"),
-            Some(&cookie),
-            None,
-        )
-        .await;
+        export_as_admin(&kit, &cookie).await;
         let attempts = attempts_for(kit.db.as_ref(), "acc_1").await.expect("rows");
         let attempt = attempts[0].id.clone();
 
