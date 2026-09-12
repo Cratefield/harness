@@ -834,9 +834,11 @@ mod tests {
     /// dashboard owns `connection`. The data screen reads all of them as
     /// one database, which is the point of the screen.
     fn kit() -> TestHarness {
+        // No KMS: the data screen never touches one, and the secrets
+        // screen's own tests cover both the wired and unwired cases.
         TestHarness::new(vec![
             Box::new(cratefield_console::Console),
-            Box::new(Dashboard),
+            Box::new(Dashboard::new(None)),
         ])
     }
 
