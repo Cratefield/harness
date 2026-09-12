@@ -1025,7 +1025,24 @@ fn promotion_page(identity: &str, context: &PromotionContext, banner: Option<&st
     // The confirm form exists only where confirming is allowed. A page
     // that offered the button and refused the press would be a lie with
     // better manners.
-    let confirm = if diff.added.is_empty() || is_rehearsed {
+    // Nothing to promote is its own answer. `diff.added.is_empty()` is
+    // true both when staging only *removes* a module — a real promotion
+    // with no migration to rehearse — and when the two sets are already
+    // the same, where the handler's no-op guard redirects without a word.
+    // Offering the button there sent an operator back to the list with no
+    // sign that the press had done nothing, which is the one outcome a
+    // refusal must never look like.
+    let nothing_to_promote = same_set(&environment.module_set, &venture.module_set);
+    let confirm = if nothing_to_promote {
+        format!(
+            "<p class=\"dash__note\"><strong>There is no confirm button, on \
+             purpose.</strong> {name} carries the module set production already \
+             runs, so promoting it would tear down a working venture to rebuild \
+             the artifact it already has. Change {name}'s set first; the plan \
+             above will then have something to move.</p>",
+            name = escape(&environment.name),
+        )
+    } else if diff.added.is_empty() || is_rehearsed {
         format!(
             "<form method=\"post\" action=\"{PATH}/{venture}/promotion\">\
              <input type=\"hidden\" name=\"environment\" value=\"{env}\">\
@@ -1515,6 +1532,42 @@ mod tests {
         assert_eq!(status, StatusCode::OK, "{body}");
         assert!(body.contains("Promote staging to production"), "{body}");
         assert_eq!(venture_of(&kit).await.module_set, "cms+waitlist");
+    }
+
+    #[pollster::test]
+    async fn a_promotion_with_nothing_to_move_offers_no_confirm() {
+        // The handler's no-op guard redirects to the list without a word,
+        // so a button here would send an operator back to the list with
+        // no sign that the press had done nothing. A refusal must never
+        // look like a success; the page says the reason instead.
+        let kit = kit();
+        seeded(&kit).await;
+        let env = add_staging(&kit).await.id;
+
+        let (status, body, _) = send(
+            &kit,
+            Method::GET,
+            &format!("{PATH}/v1/promotion?environment={env}"),
+            Some(&cookie(&kit)),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        // The positive half: this is the plan page for that environment,
+        // and it says why there is nothing to do — so the absence below
+        // cannot pass on an error page or an empty body.
+        assert!(body.contains("Promote staging"), "{body}");
+        assert!(
+            body.contains(
+                "production already
+             runs"
+            ) || body.contains("production already runs"),
+            "the page says why there is nothing to promote: {body}"
+        );
+        assert!(
+            !body.contains("Confirm the plan"),
+            "no confirm button where confirming does nothing: {body}"
+        );
     }
 
     #[pollster::test]
