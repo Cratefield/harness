@@ -73,3 +73,32 @@ pub async fn scheduled(event: worker::ScheduledEvent, env: Env, ctx: worker::Sch
     let (harness, runtime) = instance();
     serve_scheduled(harness, runtime, event, env, ctx).await;
 }
+
+#[cfg(test)]
+mod tests {
+    /// The secrets screen tells an operator the date of the next
+    /// automatic key rotation. `serve_scheduled` is the only thing that
+    /// runs that pass, and a cron trigger is the only thing that calls
+    /// `serve_scheduled` on a Worker — so if this Worker's config loses
+    /// its trigger, the screen keeps naming a date and nothing ever acts
+    /// on it. A promise a deployment cannot keep is worse than a screen
+    /// that admits it does nothing, so the trigger is pinned here rather
+    /// than left to a reviewer to notice.
+    #[test]
+    fn the_worker_registers_the_cron_its_scheduled_work_depends_on() {
+        let config = include_str!("../wrangler.toml");
+        assert!(
+            config.contains("[triggers]"),
+            "the control plane declares scheduled work and must register a trigger for it"
+        );
+        let crons = config
+            .split("crons = [")
+            .nth(1)
+            .and_then(|rest| rest.split(']').next())
+            .expect("a triggers section names its cron expressions");
+        assert!(
+            crons.contains('*'),
+            "a cron expression, not an empty list: {crons}"
+        );
+    }
+}

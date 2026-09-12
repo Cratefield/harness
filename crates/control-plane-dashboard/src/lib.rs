@@ -47,8 +47,9 @@ use cratefield_catalog::{Catalog, CatalogModule, Tier};
 use cratefield_chrome::{NavItem, Page, escape, nav, render};
 use cratefield_console::{LOGIN_PATH, current_session};
 use cratefield_core::{
-    DataKind, Database, Disposition, HttpPolicy, Migrations, Module, ModuleContext,
-    PersonalDataSet, Port, SqlMigration, Statement, SubjectVia, Surface, SurfaceDocument, View,
+    AnyError, BoxFuture, DataKind, Database, Disposition, HttpPolicy, Migrations, Module,
+    ModuleContext, PersonalDataSet, Port, SqlMigration, Statement, SubjectVia, Surface,
+    SurfaceDocument, View,
 };
 use http::{HeaderMap, StatusCode, header};
 use time::format_description::well_known::Rfc3339;
@@ -133,8 +134,10 @@ impl Module for Dashboard {
     /// connection metadata it owns, the secrets store's own tables,
     /// which this module applies on the control database and therefore
     /// declares — see `migrations` below for why they are here and not
-    /// in the console's set — and its own request log, which the
-    /// Logs screen's recorder writes.
+    /// in the console's set — its own request log, which the Logs
+    /// screen's recorder writes, and the rotation-policy table the
+    /// scheduled pass reads (this module owns the composition, the KMS
+    /// and the schedule, so it owns the policy the schedule reads).
     fn tables(&self) -> &'static [&'static str] {
         &[
             "connection",
@@ -142,6 +145,7 @@ impl Module for Dashboard {
             "harness_secret_keys",
             "harness_secret_audit",
             "request_log",
+            "secret_rotation_policy",
         ]
     }
 
@@ -216,6 +220,16 @@ impl Module for Dashboard {
                     key: "id",
                 }),
             },
+            PersonalDataSet::none(
+                "secret_rotation_policy",
+                "How old this deployment lets one store's data key and secret values \
+                 get before the schedule rotates the key or the page flags a value: \
+                 two day-counts per store, the operator who last set them, and when. \
+                 The operator identity is an email-shaped account id in a field no \
+                 \u{201c}… = ?\u{201d} predicate for a subject is honest about — the \
+                 same call the audit chain's actor field already records — and the \
+                 numbers name a cadence, not a person.",
+            ),
         ];
         SETS
     }
@@ -244,7 +258,13 @@ impl Module for Dashboard {
         // `cratefield_secrets`'s own sets (shared constants, not a second
         // copy of the SQL that could drift), applied here under ids that
         // cannot collide with anything else's.
-        const MIGRATIONS: [SqlMigration; 6] = [
+        // Two tables this module owns beyond `connection`: the request
+        // log the Logs screen reads and the rotation policy the
+        // scheduled pass reads. Both are portable SQL (TEXT/INTEGER, no
+        // BLOB, no dialect functions), so one file serves both engines
+        // and the postgres array carries the same bytes rather than a
+        // copy that could drift.
+        const MIGRATIONS: [SqlMigration; 7] = [
             if cratefield_connections::MIGRATION.transactional {
                 SqlMigration::new("0001", "connections", cratefield_connections::MIGRATION.sql)
             } else {
@@ -255,8 +275,8 @@ impl Module for Dashboard {
             secrets_sub_migration(1, "0003", "secrets-audit"),
             secrets_sub_migration(2, "0004", "secrets-audit-store"),
             secrets_sub_migration(3, "0005", "secrets-store-attribution"),
-            // This module's own request log (see above). The SQL is the
-            // portable subset, so both dialect sets carry the same file —
+            // This module's own two tables (see above). Both are the
+            // portable subset, so each dialect set carries the same file —
             // the postgres directory stays an overrides-only place (ADR
             // 0004) and gains no copy that could drift.
             SqlMigration::new(
@@ -264,6 +284,7 @@ impl Module for Dashboard {
                 "request-log",
                 include_str!("../migrations/sqlite/0001_request_log.sql"),
             ),
+            POLICY_MIGRATION,
         ];
         // The array is the apply order; this refuses a gap, a duplicate
         // or an entry out of order at build time (issue #27).
@@ -271,9 +292,10 @@ impl Module for Dashboard {
         // The secrets tables are not portable SQL (BLOB vs BYTEA, and
         // the append-only trigger differs per engine), so the postgres
         // set ships alongside the sqlite one exactly as the secrets
-        // crate ships both — re-id-ed the same way. `request_log` is
-        // portable, so its postgres entry is the same bytes.
-        const POSTGRES_SET: [SqlMigration; 6] = [
+        // crate ships both — re-id-ed the same way. `request_log` and
+        // `secret_rotation_policy` are portable, so their postgres
+        // entries are the same bytes.
+        const POSTGRES_SET: [SqlMigration; 7] = [
             if cratefield_connections::MIGRATION.transactional {
                 SqlMigration::new("0001", "connections", cratefield_connections::MIGRATION.sql)
             } else {
@@ -289,6 +311,7 @@ impl Module for Dashboard {
                 "request-log",
                 include_str!("../migrations/sqlite/0001_request_log.sql"),
             ),
+            POLICY_MIGRATION,
         ];
         const _: () = cratefield_core::assert_migration_set(&POSTGRES_SET);
         Migrations {
@@ -314,6 +337,22 @@ impl Module for Dashboard {
         let production = cfg.get("ENV").as_deref() == Some("production");
         if !dev_kek.is_empty() && production {
             errors.push("DASHBOARD_DEV_KEK must never be set in production");
+        }
+        // The rotation-policy defaults are read through `ModuleConfig`,
+        // which falls back to the default when a value does not parse —
+        // so a typo like `DASHBOARD_KEY_MAX_AGE_DAYS=ninety` would
+        // silently run 90. Refuse it here, naming the variable, the
+        // same posture the notifications module takes for its knobs.
+        for key in ["KEY_MAX_AGE_DAYS", "SECRET_MAX_AGE_DAYS"] {
+            if let Some(raw) = cfg.get(&format!("DASHBOARD_{key}")) {
+                let max = crate::secrets_screen::MAX_POLICY_DAYS;
+                match raw.parse::<u32>() {
+                    Ok(days) if (1..=max).contains(&days) => {}
+                    _ => errors.push(format!(
+                        "DASHBOARD_{key} must be a whole number of days between 1 and {max}"
+                    )),
+                }
+            }
         }
         errors.into_result()
     }
@@ -345,6 +384,9 @@ impl Module for Dashboard {
             )
             .route("/secrets/{store}/rotate", post(secrets_screen::rotate))
             .route("/secrets/{store}/rewrap", post(secrets_screen::rewrap))
+            // The rotation policy: a guarded POST like the store's
+            // other actions.
+            .route("/secrets/{store}/policy", post(secrets_screen::set_policy))
             // One route per screen, named. A catch-all over a table of
             // slugs was shorter, but it made "is this screen built yet"
             // a property of a table entry rather than of the file that
@@ -370,6 +412,19 @@ impl Module for Dashboard {
             // request logs, this is what moves there, not a copy.
             .layer(axum::middleware::from_fn_with_state(state, logs::record))
     }
+
+    /// Rotation on a schedule: for every store whose data key is older
+    /// than its policy, rotate it. See `secrets_screen::scheduled_pass`
+    /// for the frequency-agnostic, failure-isolated, value-free design;
+    /// the short version is that the age check decides, not the
+    /// trigger, so any firing cadence is safe.
+    fn scheduled<'a>(
+        &'a self,
+        ctx: &'a ModuleContext,
+        cron: &'a str,
+    ) -> BoxFuture<'a, Result<(), AnyError>> {
+        Box::pin(secrets_screen::scheduled_pass(self.kms.clone(), ctx, cron))
+    }
 }
 
 /// One of the secrets store's migrations, re-id-ed into this module's
@@ -379,6 +434,24 @@ impl Module for Dashboard {
 const fn secrets_sub_migration(index: usize, id: &'static str, name: &'static str) -> SqlMigration {
     sub_migration(&cratefield_secrets::SQLITE_MIGRATIONS, index, id, name)
 }
+
+/// The rotation-policy table, the second migration this module wrote
+/// itself. Portable SQL, so both engines apply the same bytes.
+///
+/// Applied under id 0007, after the request log's 0006: two branches
+/// both wrote "the next id in this module's set" against the same
+/// parent and both landed on 0006, which
+/// [`assert_migration_set`](cratefield_core::assert_migration_set)
+/// refuses at build time — the duplicate-id collision that once left a
+/// deployed control database missing whole table sets, caught this time
+/// by the guard rather than in production. The file is 0002 in this
+/// crate's own directory, which the migration guard checks contiguously
+/// from 0001.
+const POLICY_MIGRATION: SqlMigration = SqlMigration::new(
+    "0007",
+    "secrets-rotation-policy",
+    include_str!("../migrations/sqlite/0002_secrets_rotation_policy.sql"),
+);
 
 /// The postgres twin of [`secrets_sub_migration`].
 const fn secrets_sub_migration_pg(

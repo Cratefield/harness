@@ -8,6 +8,21 @@ command = "cargo install -q worker-build && worker-build --release"
 [observability]
 enabled = true
 
+# The control plane's own cron, which is what makes the secrets screen's
+# "next automatic rotation" a fact rather than a promise. `serve_scheduled`
+# fans a firing out over this Worker's modules, and the dashboard's pass
+# rotates every data key older than its store's policy. Nothing else
+# triggers that handler, so without this the screen would name a date that
+# nothing was ever going to act on — the failure the sidecar template's own
+# cron comment warns about.
+#
+# Daily, in a quiet hour. The policy is measured in days, so a pass more
+# often than daily would only re-read rows that are not due yet; the pass
+# is safe at any cadence (it is the age that decides, not the trigger), so
+# this is a cost choice rather than a correctness one.
+[triggers]
+crons = ["41 2 * * *"]
+
 [[d1_databases]]
 binding = "DB"
 database_name = "cratefield-control-plane"

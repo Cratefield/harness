@@ -13,6 +13,19 @@
 //! the set-a-secret POST, and dies in the same request. The audit trail
 //! holds no values by construction and this screen keeps it that way.
 //!
+//! # Scheduled rotation, and the asymmetry it is built on
+//!
+//! **A data key can rotate itself. A credential cannot.** `rotate_dek`
+//! re-encrypts this store's secrets under a fresh data key the system
+//! minted itself, so a schedule ([`scheduled_pass`]) runs it unattended
+//! and no value anybody outside depends on changes. A secret's *value*
+//! is a credential minted somewhere else — a Google client secret, an
+//! API key — and nothing here can produce the next one, so for secrets
+//! the schedule and this page only **report** age: a value past the
+//! policy reads OVERDUE and nothing rotates it, generates it, or
+//! deletes it for being old. The page says so where a reader would
+//! otherwise expect the product to have handled it.
+//!
 //! [`SecretStore::get`]: cratefield_secrets::SecretStore::get
 
 use std::sync::Arc;
@@ -22,14 +35,19 @@ use axum::response::{Html, IntoResponse, Response};
 use cratefield_accounts::Venture;
 use cratefield_chrome::{Page, escape, render};
 use cratefield_console::current_session;
-use cratefield_core::{Database, ModuleContext, Statement};
+use cratefield_core::{AnyError, Database, ModuleConfig, ModuleContext, Statement};
+use cratefield_kms::Kms;
 use cratefield_secrets::{
     Actor, RewrapReport, RotationReport, SecretBytes, SecretMeta, SecretStore, Secrets,
     SecretsError, StoreId, chain_sink, verify,
 };
 use http::{HeaderMap, StatusCode};
+use time::OffsetDateTime;
+use time::format_description::well_known::Rfc3339;
 
-use crate::{BASE, DashboardState, account_nav, account_of, card, frame, guard, internal};
+use crate::{
+    BASE, DashboardState, account_nav, account_of, card, frame, guard, internal, now_rfc3339,
+};
 
 /// The store the screen manages, as the URL names it: `global`, or a
 /// venture id resolved against the signed-in account's own ventures so
@@ -106,6 +124,493 @@ fn actor_of(account_id: &str) -> Result<Actor, SecretsError> {
     Actor::new(account_id.to_owned())
 }
 
+// ---------------------------------------------------------------------------
+// Rotation policy: what "too old" means, per store
+// ---------------------------------------------------------------------------
+
+/// Who runs the scheduled pass, on the audit chain. A name that is
+/// neither an operator nor a module: the chain has to show that nobody
+/// pressed anything, so it names the mechanism and the act.
+const SCHEDULE_ACTOR: &str = "schedule:secret-rotation";
+
+/// The default maximum age of a data key, in days. 90 is the number the
+/// owner's sketch used ("age 41d, policy: every 90 days") and the
+/// cadence `docs/KEY-ROTATION.md` already calls the routine one; it is
+/// a config default (`DASHBOARD_KEY_MAX_AGE_DAYS`), not a law.
+pub(crate) const DEFAULT_KEY_MAX_AGE_DAYS: u32 = 90;
+
+/// The default age at which a secret *value* reads OVERDUE, in days.
+/// 180, chosen against two constraints: a credential's replacement has
+/// to be minted by a person at the issuing provider, so it gets a
+/// longer fuse than the rotation the machine can do unattended (twice
+/// the key period, the common semi-annual credential review cadence);
+/// and it is the threshold under which the owner's own sketch reads
+/// correctly — 41d OK, 214d OVERDUE. Also config:
+/// `DASHBOARD_SECRET_MAX_AGE_DAYS`.
+pub(crate) const DEFAULT_SECRET_MAX_AGE_DAYS: u32 = 180;
+
+/// The ceiling for either policy number: a hundred years is not a
+/// policy, and a number a `u32` can hold but a person cannot reason
+/// about would smuggle "never" back in under a different spelling.
+/// The floor is 1 — a policy of zero days would mark everything due
+/// forever, which is the state this feature exists to end.
+pub(crate) const MAX_POLICY_DAYS: u32 = 36_500;
+
+/// One store's rotation policy: the data key's maximum age, the
+/// secret-age threshold that marks a value overdue, and — when a row
+/// exists — who last changed them and when. That attribution is the
+/// audit record for a policy edit: the secrets store's hash chain
+/// records accesses to secret material through the store's own API,
+/// and a policy row is not secret material. (Considered appending to
+/// that chain anyway; rejected — hand-building chain rows is exactly
+/// the tampering the chain exists to detect, and `Access` has no
+/// action for it.)
+struct Policy {
+    key_max_age_days: i64,
+    secret_max_age_days: i64,
+    /// `None` when no row exists and the deployment default applies.
+    edited: Option<(String, String)>,
+}
+
+impl Policy {
+    /// The deployment default, from config. Read per request (and per
+    /// scheduled pass) rather than cached at router build: the dev
+    /// server restarts on config change, and caching here would only
+    /// add a second place the default could be wrong.
+    fn from_config(config: &dyn cratefield_core::Config) -> Self {
+        let cfg = ModuleConfig::new("dashboard", config);
+        Self {
+            key_max_age_days: i64::from(cfg.get_u32("KEY_MAX_AGE_DAYS", DEFAULT_KEY_MAX_AGE_DAYS)),
+            secret_max_age_days: i64::from(
+                cfg.get_u32("SECRET_MAX_AGE_DAYS", DEFAULT_SECRET_MAX_AGE_DAYS),
+            ),
+            edited: None,
+        }
+    }
+}
+
+/// The policy that applies to one store: its own row, or the default.
+/// A missing row is the common case and not an error.
+async fn policy_for(
+    db: &dyn Database,
+    store: &StoreId,
+    config: &dyn cratefield_core::Config,
+) -> Result<Policy, cratefield_core::DbError> {
+    let rows = db
+        .query(&Statement::with_values(
+            "SELECT key_max_age_days, secret_max_age_days, updated_by, updated_at \
+             FROM secret_rotation_policy WHERE store = ?",
+            vec![text(store.as_str())],
+        ))
+        .await?;
+    let fallback = || Policy::from_config(config);
+    let Some(row) = rows.first() else {
+        return Ok(fallback());
+    };
+    // A row whose numbers fell outside what this build accepts is
+    // honoured anyway — the operator set it deliberately and the page
+    // says what it says — but a row that fails to parse entirely is a
+    // damaged row, and silently replacing it with the default would be
+    // the page deciding policy.
+    let (Some(key), Some(secret)) = (
+        row.get::<i64>("key_max_age_days"),
+        row.get::<i64>("secret_max_age_days"),
+    ) else {
+        return Ok(fallback());
+    };
+    Ok(Policy {
+        key_max_age_days: key,
+        secret_max_age_days: secret,
+        edited: Some((
+            row.get("updated_by").unwrap_or_default(),
+            row.get("updated_at").unwrap_or_default(),
+        )),
+    })
+}
+
+/// Writes one store's policy. `updated_by` is the signed-in operator —
+/// the row's own audit trail, the same attribution-to-a-person rule the
+/// chain's actors follow. An upsert, because "no row" means "the
+/// default", not a distinct policy that must be created before it can
+/// be changed.
+async fn put_policy(
+    db: &dyn Database,
+    store: &StoreId,
+    key_days: i64,
+    secret_days: i64,
+    updated_by: &str,
+    updated_at: &str,
+) -> Result<(), cratefield_core::DbError> {
+    db.execute(&Statement::with_values(
+        "INSERT INTO secret_rotation_policy \
+         (store, key_max_age_days, secret_max_age_days, updated_by, updated_at) \
+         VALUES (?, ?, ?, ?, ?) \
+         ON CONFLICT (store) DO UPDATE SET \
+         key_max_age_days = excluded.key_max_age_days, \
+         secret_max_age_days = excluded.secret_max_age_days, \
+         updated_by = excluded.updated_by, \
+         updated_at = excluded.updated_at",
+        vec![
+            text(store.as_str()),
+            sea_query::Value::BigInt(Some(key_days)),
+            sea_query::Value::BigInt(Some(secret_days)),
+            text(updated_by),
+            text(updated_at),
+        ],
+    ))
+    .await?;
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Age, from the clock port — never from the wall
+// ---------------------------------------------------------------------------
+
+/// Now, from the clock port. `SystemTime` is banned here on purpose:
+/// the console once took now from the wrong place and every session
+/// expired instantly, and the unit tests stayed green because they made
+/// the same mistake. Every age and due date on this screen comes
+/// through this, so a test clock moves the page.
+fn now_of(ctx: &ModuleContext) -> Option<OffsetDateTime> {
+    ctx.ports.clock.as_ref().map(|clock| clock.now())
+}
+
+/// Parses a timestamp the store wrote (`harness_secret_keys.created_at`,
+/// `harness_secrets.created_at`, both RFC 3339). `None` on a damaged
+/// stamp: the page then says "unknown" rather than inventing an age,
+/// and the schedule skips the store rather than guessing whether it is
+/// due — an unreadable age is a repair job, not a rotation.
+fn parse_stamp(stamp: &str) -> Option<OffsetDateTime> {
+    OffsetDateTime::parse(stamp, &Rfc3339).ok()
+}
+
+/// Whole days from `stamp` to `now`, rounded down. Negative ages (a row
+/// stamped after the clock says) are returned as-is: clamping them to
+/// zero would turn a future-dated row into a fresh one.
+fn age_days(stamp: &str, now: OffsetDateTime) -> Option<i64> {
+    parse_stamp(stamp).map(|at| (now - at).whole_days())
+}
+
+/// A date as the owner's sketch writes it (`2026-11-10`), for due
+/// dates: the first ten characters of the RFC 3339 both engines store,
+/// which is the zero-padded `YYYY-MM-DD` by construction.
+fn date_of(moment: OffsetDateTime) -> String {
+    moment
+        .format(&Rfc3339)
+        .map(|stamp| stamp[..10].to_owned())
+        .unwrap_or_default()
+}
+
+/// The policy-editing half of the rotation card, split out of
+/// [`rotation_html`] to keep both readable.
+fn policy_form_html(policy: &Policy, slug: &str) -> String {
+    format!(
+        "<form method=\"post\" action=\"{BASE}/secrets/{slug}/policy\" class=\"dash__policy\">\
+         <p class=\"field\"><label for=\"policy-key-days\">Rotate the data key at (days)</label>\
+         <input id=\"policy-key-days\" name=\"key_days\" type=\"number\" inputmode=\"numeric\" \
+         required min=\"1\" max=\"{MAX_POLICY_DAYS}\" value=\"{key_days}\"></p>\
+         <p class=\"field\"><label for=\"policy-secret-days\">Flag a value older than (days)</label>\
+         <input id=\"policy-secret-days\" name=\"secret_days\" type=\"number\" \
+         inputmode=\"numeric\" required min=\"1\" max=\"{MAX_POLICY_DAYS}\" \
+         value=\"{secret_days}\"></p>\
+         <div class=\"dash__act\">\
+         <button class=\"btn\" type=\"submit\">Save the policy</button></div></form>\
+         <p class=\"dash__note\">The policy is per store. Per-secret overrides are a \
+         deliberate non-goal: a threshold this screen cannot act on is a report, and one \
+         number per store is enough rope. Saving records you as the operator who set \
+         it.</p>",
+        slug = escape(slug),
+        key_days = policy.key_max_age_days,
+        secret_days = policy.secret_max_age_days,
+    )
+}
+
+/// The rotation card: where the key stands, the policy that decides,
+/// when the key is next due, whether the last automatic attempt
+/// failed, the form that edits the policy — and the sentence that
+/// stops an OVERDUE verdict from reading as "the product handles it".
+#[allow(clippy::format_push_string)] // the house idiom for HTML building
+fn rotation_html(detail: &StoreDetail, slug: &str) -> String {
+    let standing = &detail.standing;
+    let policy = &standing.policy;
+
+    let key_line = match (&standing.key_rotated_at, standing.key_age_days) {
+        (Some(stamp), Some(days)) => format!(
+            "Data key rotated <strong>{days} days ago</strong> \
+             (<span title=\"{stamp}\">{date}</span>).",
+            stamp = escape(stamp),
+            date = escape(&stamp[..stamp.len().min(10)]),
+        ),
+        (Some(_), None) => {
+            "The data key's age is <strong>unknown</strong>: its row carries a timestamp this \
+             page cannot read, and no verdict follows from one it invented."
+                .to_owned()
+        }
+        (None, _) => String::from(
+            "This store has <strong>no data key yet</strong> — the first write provisions one.",
+        ),
+    };
+
+    let policy_line = match &policy.edited {
+        Some((who, when)) => format!(
+            "Policy: rotate the key at <strong>{}</strong> days, flag a value at \
+             <strong>{}</strong> days — set by <strong>{}</strong> on {}.",
+            policy.key_max_age_days,
+            policy.secret_max_age_days,
+            escape(who),
+            escape(when),
+        ),
+        None => format!(
+            "Policy: rotate the key at <strong>{}</strong> days, flag a value at \
+             <strong>{}</strong> days — the deployment default \
+             (<code>DASHBOARD_KEY_MAX_AGE_DAYS</code> / \
+             <code>DASHBOARD_SECRET_MAX_AGE_DAYS</code>); no row here has overridden it.",
+            policy.key_max_age_days, policy.secret_max_age_days,
+        ),
+    };
+
+    let due_block = if standing.key_due {
+        format!(
+            "<div class=\"dash__chain dash__chain--bad\"><span class=\"dash__dot \
+             dash__dot--bad\"></span><strong>THE DATA KEY IS DUE FOR ROTATION NOW.</strong>\
+             <span class=\"dash__note\">At or past {} days. The next scheduled pass rotates \
+             it — or you can rehearse and run one above, right now, attributed to \
+             you.</span></div>",
+            policy.key_max_age_days,
+        )
+    } else if let Some(date) = standing.key_due_date() {
+        format!(
+            "<p class=\"dash__note\">Next automatic rotation: <strong>{date}</strong>, \
+             when the key reaches its policy age. The schedule may run at any frequency — \
+             the age check, not the trigger, decides.</p>",
+            date = escape(&date),
+        )
+    } else {
+        String::new()
+    };
+
+    // The last pass the schedule made on this store, straight off the
+    // chain below: a rotation attempt is audited whether it succeeds or
+    // fails, so a failed pass can never silently read "due" forever —
+    // it stays visible until some pass succeeds.
+    let attempt_line = match detail
+        .audit
+        .iter()
+        .find(|row| row.actor == SCHEDULE_ACTOR && row.action == "rotate_dek")
+    {
+        Some(row) if row.allowed => format!(
+            "<p class=\"dash__note\">Last automatic rotation: {} — attributed to \
+             <code>{}</code> on the chain below, because nobody pressed anything.</p>",
+            escape(&row.ts),
+            escape(SCHEDULE_ACTOR),
+        ),
+        Some(row) => format!(
+            "<p class=\"dash__due-note\"><strong>THE LAST AUTOMATIC ROTATION FAILED at \
+             {}.</strong> The key was left exactly as it was and the next pass will try \
+             again; the refused attempt is on the chain below.</p>",
+            escape(&row.ts),
+        ),
+        None => String::new(),
+    };
+
+    let form = policy_form_html(policy, slug);
+
+    format!(
+        "<p class=\"dash__note\">{key_line}</p>\
+         <p class=\"dash__note\">{policy_line}</p>\
+         {due_block}\
+         {attempt_line}\
+         <p class=\"dash__note\"><strong>A data key can rotate itself; a credential \
+         cannot.</strong> The schedule rotates this store's data key and only reports a \
+         value's age: an OVERDUE value needs whoever holds the next credential, and \
+         nothing here will rotate it, generate one, or delete it for being old.</p>\
+         {form}"
+    )
+}
+
+/// What the policy says about one thing's age. `Due` is the data key's
+/// word — the schedule will act, on this pass or the next. `Overdue` is
+/// a secret value's word — only a person holding the next credential
+/// can act, which is why the page explains itself wherever the word
+/// appears. The two share an enum because they share the "OK until the
+/// policy says otherwise" logic and the table's Standing column, and
+/// because giving each its own type would hide that they must never be
+/// swapped: a key that read OVERDUE would promise a rotation that
+/// cannot happen for a value, and a value that read DUE would imply a
+/// schedule that does not exist.
+enum Verdict {
+    Ok,
+    Due,
+    Overdue,
+}
+
+impl Verdict {
+    fn word(&self) -> &'static str {
+        match self {
+            Verdict::Ok => "OK",
+            Verdict::Due => "DUE",
+            Verdict::Overdue => "OVERDUE",
+        }
+    }
+
+    /// The red is the broken-chain badge's red: the one colour this
+    /// screen already uses for "act on this".
+    fn is_bad(&self) -> bool {
+        !matches!(self, Verdict::Ok)
+    }
+}
+
+/// Where one store stands against its policy: the data key's age and
+/// verdict, and how many live secret values are overdue. Everything the
+/// store list's Standing column and the store page's rotation card
+/// render, gathered in one read so the two cannot disagree.
+struct Standing {
+    policy: Policy,
+    /// `None` when the clock port is somehow absent: every age below
+    /// then renders "unknown" rather than being computed from the wall.
+    now: Option<OffsetDateTime>,
+    /// The active key's `created_at`, raw. `None` when the store has no
+    /// key yet — nothing has ever been written to it.
+    key_rotated_at: Option<String>,
+    key_age_days: Option<i64>,
+    key_due: bool,
+    /// Live (not soft-deleted) values at or past the threshold. A
+    /// deleted secret gets no verdict and no count: a value that no
+    /// longer exists cannot be replaced, and "overdue" would be noise.
+    overdue: usize,
+}
+
+impl Standing {
+    /// The key's verdict. `Ok` rather than `Due` when the age is
+    /// unknown — "due" starts a promise the schedule cannot keep
+    /// without knowing the age.
+    fn key_verdict(&self) -> Verdict {
+        if self.key_due {
+            Verdict::Due
+        } else {
+            Verdict::Ok
+        }
+    }
+
+    /// One secret's age and verdict under this standing. Deleted rows
+    /// carry no age and read `Ok`: there is nothing left to replace and
+    /// no schedule that owes them anything.
+    fn secret_verdict(&self, meta: &SecretMeta) -> (Option<i64>, Verdict) {
+        if meta.deleted {
+            return (None, Verdict::Ok);
+        }
+        let Some(now) = self.now else {
+            return (None, Verdict::Ok);
+        };
+        match age_days(&meta.created_at, now) {
+            Some(days) if days >= self.policy.secret_max_age_days => (Some(days), Verdict::Overdue),
+            Some(days) => (Some(days), Verdict::Ok),
+            None => (None, Verdict::Ok),
+        }
+    }
+
+    /// The date the data key is next due, if its age is known.
+    fn key_due_date(&self) -> Option<String> {
+        let rotated = parse_stamp(self.key_rotated_at.as_deref()?)?;
+        Some(date_of(
+            rotated + time::Duration::days(self.policy.key_max_age_days),
+        ))
+    }
+}
+
+/// Reads the active key's `created_at` for one store — the newest
+/// active row, the same rule `SecretStore::active_key` applies, so the
+/// page and the store can never disagree about which key is current.
+async fn key_rotated_at(
+    db: &dyn Database,
+    store: &StoreId,
+) -> Result<Option<String>, cratefield_core::DbError> {
+    let rows = db
+        .query(&Statement::with_values(
+            "SELECT created_at FROM harness_secret_keys \
+             WHERE store = ? AND state = 'active' ORDER BY created_at DESC LIMIT 1",
+            vec![text(store.as_str())],
+        ))
+        .await?;
+    Ok(rows.first().and_then(|row| row.get("created_at")))
+}
+
+/// Gathers one store's standing. `metas` is `None` when the store's own
+/// list failed — the key's standing is still computable (it is a direct
+/// read), and the secrets' is honestly unknown rather than guessed.
+async fn standing_of(
+    db: &dyn Database,
+    store: &StoreId,
+    metas: Option<&[SecretMeta]>,
+    config: &dyn cratefield_core::Config,
+    now: Option<OffsetDateTime>,
+) -> Result<Standing, cratefield_core::DbError> {
+    let policy = policy_for(db, store, config).await?;
+    let key_rotated_at = key_rotated_at(db, store).await?;
+    let key_age_days = match (&key_rotated_at, now) {
+        (Some(stamp), Some(now)) => age_days(stamp, now),
+        _ => None,
+    };
+    let key_due = key_age_days.is_some_and(|days| days >= policy.key_max_age_days);
+    let overdue = match (metas, now) {
+        (Some(metas), Some(now)) => metas
+            .iter()
+            .filter(|meta| !meta.deleted)
+            .filter(|meta| {
+                age_days(&meta.created_at, now)
+                    .is_some_and(|days| days >= policy.secret_max_age_days)
+            })
+            .count(),
+        _ => 0,
+    };
+    Ok(Standing {
+        policy,
+        now,
+        key_rotated_at,
+        key_age_days,
+        key_due,
+        overdue,
+    })
+}
+
+/// The store list's Rotation cell. One line, red when anything in the
+/// store needs a person: the key being due (the schedule will handle
+/// it), values being overdue (only a person can), or both. `None` is
+/// the store that could not be read — the neighbouring chain column
+/// already says why, and this cell says "unknown" rather than a
+/// verdict it cannot back.
+fn standing_cell(standing: Option<&Standing>) -> String {
+    let Some(standing) = standing else {
+        return "<span class=\"dash__dot dash__dot--warn\"></span> unknown".to_owned();
+    };
+    if !standing.key_verdict().is_bad() && standing.overdue == 0 {
+        let key_age = match standing.key_age_days {
+            Some(days) => format!("{days}d of {}d", standing.policy.key_max_age_days),
+            None => "an unknown age".to_owned(),
+        };
+        return format!(
+            "<span class=\"dash__dot dash__dot--live\"></span> within policy — key {key_age}, \
+             values flagged at {}d",
+            standing.policy.secret_max_age_days,
+        );
+    }
+    let mut parts: Vec<String> = Vec::new();
+    if standing.key_verdict().is_bad() {
+        parts.push("key due".to_owned());
+    }
+    if standing.overdue > 0 {
+        parts.push(format!(
+            "{} value{s} overdue",
+            standing.overdue,
+            s = if standing.overdue == 1 { "" } else { "s" }
+        ));
+    }
+    format!(
+        "<span class=\"dash__dot dash__dot--bad\"></span> <strong>{}</strong>",
+        escape(&parts.join(" · "))
+    )
+}
+
 /// Opens one store through the real API, with the durable audit chain
 /// wired the way `Connections` wires it: an access that survives only
 /// as a log line is the gap the chain exists to close. Built per
@@ -119,10 +624,17 @@ fn open_store(state: &DashboardState, db: &Arc<dyn Database>, store: &Store) -> 
         .kms
         .clone()
         .expect("kms checked before opening a store");
-    let secrets = Secrets::new(kms).with_audit(chain_sink(Arc::clone(db)));
-    match store {
-        Store::Global => secrets.control_plane_global(Arc::clone(db)),
-        Store::Tenant { venture } => secrets.tenant(&venture.tenant_id, Arc::clone(db)),
+    open_store_at(&kms, db, &store.id())
+}
+
+/// [`open_store`] without a `DashboardState`: the shape the scheduled
+/// pass needs, because a cron invocation builds no router and parks no
+/// state — it arrives with only the context the runtime hands it.
+fn open_store_at(kms: &Arc<dyn Kms>, db: &Arc<dyn Database>, id: &StoreId) -> SecretStore {
+    let secrets = Secrets::new(Arc::clone(kms)).with_audit(chain_sink(Arc::clone(db)));
+    match id {
+        StoreId::Global => secrets.control_plane_global(Arc::clone(db)),
+        StoreId::Tenant(tenant) => secrets.tenant(tenant, Arc::clone(db)),
     }
 }
 
@@ -281,12 +793,15 @@ fn no_kms_page() -> Response {
 // ---------------------------------------------------------------------------
 
 /// What one store's row on the list says: how many live secrets, the
-/// newest version's timestamp, and whether the chain verifies.
+/// newest version's timestamp, whether the chain verifies, and where
+/// the store stands against its rotation policy — so the page an
+/// operator lands on tells them where to go next.
 struct StoreSummary {
     store: Store,
     live: usize,
     newest: String,
     chain: ChainStatus,
+    standing: Option<Standing>,
 }
 
 /// The screen's front page: every store this control plane can see. The
@@ -333,6 +848,7 @@ pub(crate) async fn stores(
         all.push(Store::Tenant { venture });
     }
     let mut summaries: Vec<StoreSummary> = Vec::new();
+    let now = now_of(ctx);
     for store in all {
         let id = store.id();
         let handle = open_store(&state, &db, &store);
@@ -345,29 +861,39 @@ pub(crate) async fn stores(
                     .max()
                     .unwrap_or("")
                     .to_owned();
+                let standing =
+                    standing_of(db.as_ref(), &id, Some(&metas), ctx.config.as_ref(), now)
+                        .await
+                        .ok();
                 StoreSummary {
                     chain: chain_status(&id, db.as_ref()).await,
                     live,
                     newest,
                     store,
+                    standing,
                 }
             }
             // A store whose key row is gone or whose database refuses is
             // still a store this control plane can see; the row says
-            // what happened rather than disappearing.
+            // what happened rather than disappearing. Its standing is
+            // unknown for the same reason — the key read and the policy
+            // read may still work, but claiming a verdict from half the
+            // evidence is the page guessing.
             Err(err) => StoreSummary {
                 chain: ChainStatus::Unreadable(err.to_string()),
                 live: 0,
                 newest: String::new(),
                 store,
+                standing: None,
             },
         };
         summaries.push(summary);
     }
 
     let mut rows = String::from(
-        "<div class=\"dash__lrow dash__lrow--head\"><span>Store</span><span>Live \
-         secrets</span><span>Newest version</span><span>Audit chain</span></div>",
+        "<div class=\"dash__lrow dash__lrow--stores dash__lrow--head\"><span>Store</span>\
+         <span>Live secrets</span><span>Newest version</span><span>Rotation</span>\
+         <span>Audit chain</span></div>",
     );
     for summary in &summaries {
         let (label, why) = summary.store.label();
@@ -381,16 +907,18 @@ pub(crate) async fn stores(
             ChainStatus::Unreadable(_) => ("dash__dot dash__dot--warn", "unreadable".to_owned()),
         };
         rows.push_str(&format!(
-            "<div class=\"dash__lrow\">\
+            "<div class=\"dash__lrow dash__lrow--stores\">\
              <span><a href=\"{BASE}/secrets/{slug}\">{label}</a><br><em>{why}</em></span>\
              <span>{live}</span>\
              <span>{newest}</span>\
+             <span>{rotation}</span>\
              <span><span class=\"{dot_class}\"></span> {verdict}</span></div>",
             slug = escape(&summary.store.slug()),
             label = escape(&label),
             why = escape(why),
             live = summary.live,
             newest = escape(&summary.newest),
+            rotation = standing_cell(summary.standing.as_ref()),
             dot_class = dot,
             verdict = escape(&verdict),
         ));
@@ -400,8 +928,10 @@ pub(crate) async fn stores(
         "<div class=\"dash__list\">{rows}</div>\
          <p class=\"dash__note\">Every count and every verdict on this page came from \
          the store's own API just now — each row's visit is on that store's audit \
-         chain, attributed to you. Secret values are never on this or any other \
-         page: this screen shows names and versions only.</p>",
+         chain, attributed to you. The Rotation column adds two reads the store owns \
+         but its API does not surface: the active key's age, and the store's policy \
+         row. Secret values are never on this or any other page: this screen shows \
+         names and versions only.</p>",
     );
 
     Html(render(&Page {
@@ -429,6 +959,7 @@ struct StoreDetail {
     secrets: Vec<SecretMeta>,
     audit: Vec<AuditRow>,
     chain: ChainStatus,
+    standing: Standing,
 }
 
 #[allow(clippy::result_large_err)]
@@ -464,11 +995,35 @@ async fn load_detail(
             return Err(internal("could not load the audit trail"));
         }
     };
+    // The standing read failing is not the page failing: every verdict
+    // it carries would render "unknown", which is honest, so the page
+    // renders with a defaulted standing rather than 500ing over a
+    // policy table hiccup.
+    let standing = standing_of(
+        db.as_ref(),
+        &id,
+        Some(&secrets),
+        ctx.config.as_ref(),
+        now_of(ctx),
+    )
+    .await
+    .unwrap_or_else(|err| {
+        tracing::error!(error = %err, "rotation standing read failed");
+        Standing {
+            policy: Policy::from_config(ctx.config.as_ref()),
+            now: now_of(ctx),
+            key_rotated_at: None,
+            key_age_days: None,
+            key_due: false,
+            overdue: 0,
+        }
+    });
     Ok(StoreDetail {
         chain: chain_status(&id, db.as_ref()).await,
         store,
         secrets,
         audit,
+        standing,
     })
 }
 
@@ -519,7 +1074,8 @@ fn render_detail(identity: &str, detail: &StoreDetail, banner: &str) -> String {
 
     let mut secret_rows = String::from(
         "<div class=\"dash__lrow dash__lrow--secrets dash__lrow--head\"><span>Name</span>\
-         <span>Version</span><span>Created</span><span>By</span><span></span></div>",
+         <span>Version</span><span>Created</span><span>By</span><span>Age</span>\
+         <span>Standing</span><span></span></div>",
     );
     if detail.secrets.is_empty() {
         secret_rows
@@ -535,12 +1091,33 @@ fn render_detail(identity: &str, detail: &StoreDetail, banner: &str) -> String {
         } else {
             ""
         };
+        // A deleted value has no standing — nothing can replace it — so
+        // its row says so instead of inheriting a verdict.
+        let (age, verdict) = if meta.deleted {
+            (String::from("—"), String::new())
+        } else {
+            let (days, verdict) = detail.standing.secret_verdict(meta);
+            (
+                days.map_or_else(|| "unknown".to_owned(), |d| format!("{d}d")),
+                format!(
+                    "<span class=\"{}\">{}</span>",
+                    if verdict.is_bad() {
+                        "dash__due"
+                    } else {
+                        "dash__ok"
+                    },
+                    verdict.word(),
+                ),
+            )
+        };
         secret_rows.push_str(&format!(
             "<div class=\"dash__lrow dash__lrow--secrets\">\
              <span><code>{name}</code>{deleted}</span>\
              <span>v{version}</span>\
              <span>{created}</span>\
              <span>{creator}</span>\
+             <span>{age}</span>\
+             <span>{verdict}</span>\
              <span><form method=\"post\" action=\"{BASE}/secrets/{slug}/delete\">\
              <input type=\"hidden\" name=\"name\" value=\"{name_attr}\">\
              <button class=\"btn\" type=\"submit\">Delete</button></form></span></div>",
@@ -549,6 +1126,8 @@ fn render_detail(identity: &str, detail: &StoreDetail, banner: &str) -> String {
             version = meta.version,
             created = escape(&meta.created_at),
             creator = escape(&creator),
+            age = escape(&age),
+            verdict = verdict,
             slug = escape(&slug),
             name_attr = escape(&meta.name),
         ));
@@ -630,6 +1209,7 @@ fn render_detail(identity: &str, detail: &StoreDetail, banner: &str) -> String {
         "{banner}{chain}\
          <div class=\"dash__grid\">\
          {secrets_card}\
+         {rotation_card}\
          {audit_card}\
          </div>\
          {put_card}\
@@ -644,6 +1224,16 @@ fn render_detail(identity: &str, detail: &StoreDetail, banner: &str) -> String {
             "Secrets",
             Some(&detail.secrets.len().to_string()),
             &format!("<div class=\"dash__list\">{secret_rows}</div>"),
+            true,
+        ),
+        rotation_card = card(
+            "Key rotation",
+            Some(if detail.standing.key_due || detail.standing.overdue > 0 {
+                "action needed"
+            } else {
+                "scheduled"
+            }),
+            &rotation_html(detail, &slug),
             true,
         ),
         audit_card = card(
@@ -1125,6 +1715,230 @@ fn report_page(identity: &str, store: &Store, action: &KeyAction, report: &KeyRe
 
 fn planned_verb(planned: bool) -> &'static str {
     if planned { "would be" } else { "were" }
+}
+
+// ---------------------------------------------------------------------------
+// The rotation policy action
+// ---------------------------------------------------------------------------
+
+/// Sets this store's rotation policy. A guarded POST like every other
+/// action on this screen; its audit record is the row itself —
+/// `updated_by` names the signed-in operator, `updated_at` the moment
+/// from the clock port — because the secrets store's chain records
+/// accesses to secret material and a policy is not secret material
+/// (see [`Policy`] for the alternative that was rejected).
+pub(crate) async fn set_policy(
+    State(state): State<Arc<DashboardState>>,
+    headers: HeaderMap,
+    Path(slug): Path<String>,
+    RawForm(body): RawForm,
+) -> Response {
+    let ctx = &state.ctx;
+    if let Err(redirect) = guard(ctx, &headers) {
+        return redirect;
+    }
+    let session = current_session(ctx, &headers).expect("guard proved a session");
+    let (account, _repo) = match account_of(ctx, &session.account_id).await {
+        Ok(pair) => pair,
+        Err(response) => return response,
+    };
+    let store = match resolve_store(ctx, &account, &slug).await {
+        Ok(store) => store,
+        Err(response) => return response,
+    };
+    if state.kms.is_none() {
+        return no_kms_page();
+    }
+    let Some(db) = ctx.ports.db.clone() else {
+        return internal("db port unavailable");
+    };
+
+    // Two numbers and nothing else: this form's entire input is policy,
+    // and neither field can carry or echo a secret.
+    let fields = parse_form(&body);
+    let bounds =
+        || format!("both policy numbers must be whole days between 1 and {MAX_POLICY_DAYS}");
+    let Some(key_days) = number_field(&fields, "key_days") else {
+        return (StatusCode::BAD_REQUEST, bounds()).into_response();
+    };
+    let Some(secret_days) = number_field(&fields, "secret_days") else {
+        return (StatusCode::BAD_REQUEST, bounds()).into_response();
+    };
+    if !(1..=i64::from(MAX_POLICY_DAYS)).contains(&key_days)
+        || !(1..=i64::from(MAX_POLICY_DAYS)).contains(&secret_days)
+    {
+        return (StatusCode::BAD_REQUEST, bounds()).into_response();
+    }
+
+    let id = store.id();
+    if let Err(err) = put_policy(
+        db.as_ref(),
+        &id,
+        key_days,
+        secret_days,
+        &session.account_id,
+        &now_rfc3339(ctx),
+    )
+    .await
+    {
+        tracing::error!(error = %err, "policy write failed");
+        return internal("could not save the rotation policy");
+    }
+
+    let banner = format!(
+        "<p class=\"dash__banner\"><span class=\"chip chip--live\">Policy saved</span>\
+         <strong>The data key now rotates at {key_days} days; a value older than \
+         {secret_days} days reads OVERDUE.</strong> Nothing about a value changed: a \
+         policy reports age, and replacing a credential stays with whoever holds the \
+         next one.</p>",
+    );
+    match load_detail(&state, &account, &slug).await {
+        Ok(detail) => Html(render_detail(&session.account_id, &detail, &banner)).into_response(),
+        Err(_) => (
+            StatusCode::OK,
+            format!(
+                "Policy saved: key at {key_days} days, values flagged at {secret_days} \
+                 days. The page could not be re-read afterwards; reload it."
+            ),
+        )
+            .into_response(),
+    }
+}
+
+/// One policy field: a whole number the form's own `type="number"`
+/// already shapes client-side. `None` for anything this build would
+/// have to guess about.
+fn number_field(fields: &[FormField], name: &str) -> Option<i64> {
+    let raw = field_text(fields, name)?;
+    raw.trim().parse().ok()
+}
+
+// ---------------------------------------------------------------------------
+// The scheduled pass: rotation on a schedule, not only a button
+// ---------------------------------------------------------------------------
+
+/// What the schedule does when it fires, for every store this control
+/// plane hosts: rotate the data key of each store whose key is older
+/// than its policy.
+///
+/// **Frequency-agnostic by construction.** The trigger is deployment
+/// configuration — `[triggers] crons` in the control plane's
+/// `wrangler.toml` (daily), and the native runtime's `CRONS` config,
+/// which is what the dev server runs. Running every minute or once a
+/// quarter is equally safe because the age check, not the trigger,
+/// decides: a pass that finds nothing due writes nothing at all, so
+/// twice in a row rotates once.
+///
+/// That the cron exists at all is not incidental. This screen tells an
+/// operator the date of the next automatic rotation, and a handler
+/// nothing ever fires would make that date a promise the deployment
+/// could not keep — the failure the sidecar template's own cron comment
+/// warns about. The trigger was added with this feature for that reason.
+///
+/// **One store failing must not wedge the pass.** Each store is handled
+/// alone: a failure is logged, lands on that store's audit chain as a
+/// refused `rotate_dek` (the actor names the schedule, so the trail
+/// shows nobody pressed anything), and leaves its key exactly as it
+/// was — `rotate_dek` touches nothing before it has unwrapped the
+/// current key, and the other stores continue.
+///
+/// **No values.** This path never reads a secret's plaintext except
+/// inside `rotate_dek`'s own re-encryption, logs key ids and counts
+/// only, and would refuse to log a value even if it had one — the rule
+/// the screen is built on does not relax because a machine is calling.
+pub(crate) async fn scheduled_pass(
+    kms: Option<Arc<dyn Kms>>,
+    ctx: &ModuleContext,
+    cron: &str,
+) -> Result<(), AnyError> {
+    // The Worker composition carries no KMS and no cron trigger today;
+    // a schedule that arrives on such a deployment has nothing to open
+    // stores with, and erroring every tick would only be noise. Say it
+    // once per pass and succeed.
+    let Some(kms) = kms else {
+        tracing::info!(
+            cron,
+            "no KMS wired: no store can be rotated by the schedule"
+        );
+        return Ok(());
+    };
+    let Some(db) = ctx.ports.db.clone() else {
+        return Err("the scheduled rotation pass has no database port".into());
+    };
+    let Some(now) = now_of(ctx) else {
+        return Err("the scheduled rotation pass has no clock port".into());
+    };
+
+    // Every store that exists is a store with a key row: a store nobody
+    // has written to has no key, nothing to rotate, and first use will
+    // provision one. The newest active row per store is the key the
+    // store itself would use — the same rule `active_key` applies.
+    let rows = db
+        .query(&Statement::new(
+            "SELECT store, key_id, created_at FROM harness_secret_keys \
+             WHERE state = 'active' ORDER BY store ASC, created_at DESC",
+        ))
+        .await
+        .map_err(|err| format!("the scheduled pass could not list stores: {err}"))?;
+    let mut seen = std::collections::HashSet::new();
+    for row in &rows.rows {
+        let Some(store) = row.get::<String>("store") else {
+            continue;
+        };
+        if !seen.insert(store.clone()) {
+            continue;
+        }
+        let Some(created_at) = row.get::<String>("created_at") else {
+            continue;
+        };
+        let Some(age) = age_days(&created_at, now) else {
+            // An unreadable stamp is a repair job, not a rotation: skip
+            // loudly rather than guessing the store is or is not due.
+            tracing::error!(store = %store, "the active key's created_at is unreadable");
+            continue;
+        };
+        let id = match store.as_str() {
+            "global" => StoreId::Global,
+            tenant => StoreId::Tenant(tenant.to_owned()),
+        };
+        // The policy read failing is not a rotation failure, but
+        // rotating against a guessed policy would be worse than
+        // skipping: leave the store for the next pass and log it.
+        let policy = match policy_for(db.as_ref(), &id, ctx.config.as_ref()).await {
+            Ok(policy) => policy,
+            Err(err) => {
+                tracing::error!(store = %store, error = %err, "policy read failed; skipped");
+                continue;
+            }
+        };
+        if age < policy.key_max_age_days {
+            continue;
+        }
+        let Ok(actor) = Actor::new(SCHEDULE_ACTOR) else {
+            return Err("the schedule actor could not be named".into());
+        };
+        // The store's own API does the work — the same audited path the
+        // button uses, so the chain cannot tell a scheduled rotation
+        // from a pressed one except by who the actor names.
+        let handle = open_store_at(&kms, &db, &id);
+        match handle.rotate_dek(&actor, false).await {
+            Ok(report) => tracing::info!(
+                store = %store,
+                cron,
+                from = ?report.from_key,
+                to = ?report.to_key,
+                reencrypted = report.reencrypted,
+                "scheduled rotation ran"
+            ),
+            Err(err) => tracing::error!(
+                store = %store,
+                cron,
+                error = %err,
+                "scheduled rotation failed; the key is untouched and the next pass retries"
+            ),
+        }
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -2109,5 +2923,770 @@ mod tests {
             "{}",
             reply.body
         );
+    }
+
+    // -------------------------------------------------------------------
+    // Scheduled rotation: the policy, the ages, the pass
+    // -------------------------------------------------------------------
+
+    use cratefield_core::{
+        Config, MapConfig, ModuleContext, PersonalDataCatalog, Ports, TemplateRegistry, UlidIdGen,
+    };
+
+    /// The kit's fixed clock as a moment. Every age asserted on below is
+    /// an offset from this: rows are written at chosen distances from it
+    /// (never left at whatever the machine's wall clock says), which is
+    /// what keeps these tests deterministic on any date they run.
+    fn fixed_now() -> OffsetDateTime {
+        OffsetDateTime::from_unix_timestamp(i64::try_from(NOW).expect("in range"))
+            .expect("fixed epoch")
+    }
+
+    /// An RFC 3339 stamp `days_before` the fixed now.
+    fn stamp(days_before: i64) -> String {
+        (fixed_now() - time::Duration::days(days_before))
+            .format(&Rfc3339)
+            .expect("format")
+    }
+
+    /// Ages a store's active key by writing the row directly — the way
+    /// the acceptance check demands, because waiting is not a test.
+    async fn age_key(kit: &TestHarness, store: &str, days_before: i64) {
+        kit.db
+            .execute(&Statement::with_values(
+                "UPDATE harness_secret_keys SET created_at = ? \
+                 WHERE store = ? AND state = 'active'",
+                vec![text(&stamp(days_before)), text(store)],
+            ))
+            .await
+            .expect("age the active key");
+    }
+
+    /// Ages one secret's newest version the same way.
+    async fn age_secret(kit: &TestHarness, store: &str, name: &str, days_before: i64) {
+        kit.db
+            .execute(&Statement::with_values(
+                "UPDATE harness_secrets SET created_at = ? WHERE store = ? AND name = ?",
+                vec![text(&stamp(days_before)), text(store), text(name)],
+            ))
+            .await
+            .expect("age the secret");
+    }
+
+    /// The active key row, as the page and the pass both read it.
+    async fn active_key_row(kit: &TestHarness, store: &str) -> (String, String) {
+        kit.db
+            .query(&Statement::with_values(
+                "SELECT key_id, created_at FROM harness_secret_keys \
+                 WHERE store = ? AND state = 'active'",
+                vec![text(store)],
+            ))
+            .await
+            .expect("key row")
+            .first()
+            .map(|row| {
+                (
+                    row.get("key_id").unwrap_or_default(),
+                    row.get("created_at").unwrap_or_default(),
+                )
+            })
+            .expect("an active key")
+    }
+
+    /// How many rotations the schedule has performed on one store.
+    async fn schedule_rotations(kit: &TestHarness, store: &str) -> i64 {
+        kit.db
+            .query(&Statement::with_values(
+                "SELECT COUNT(*) AS n FROM harness_secret_audit \
+                 WHERE store = ? AND action = 'rotate_dek' AND actor = ?",
+                vec![text(store), text(SCHEDULE_ACTOR)],
+            ))
+            .await
+            .expect("count")
+            .first()
+            .and_then(|row| row.get::<i64>("n"))
+            .unwrap_or(0)
+    }
+
+    /// The newest `rotate_dek` row on one store's chain: who, and
+    /// whether it was allowed.
+    async fn last_rotation_attempt(kit: &TestHarness, store: &str) -> (String, bool) {
+        kit.db
+            .query(&Statement::with_values(
+                "SELECT actor, allowed FROM harness_secret_audit \
+                 WHERE store = ? AND action = 'rotate_dek' ORDER BY seq DESC LIMIT 1",
+                vec![text(store)],
+            ))
+            .await
+            .expect("audit row")
+            .first()
+            .map(|row| {
+                (
+                    row.get("actor").unwrap_or_default(),
+                    row.get::<i64>("allowed").unwrap_or_default() != 0,
+                )
+            })
+            .expect("a rotate_dek row")
+    }
+
+    /// Fires the scheduled pass the way a runtime does: a context built
+    /// per invocation over the kit's own database and clock, and the
+    /// module's `scheduled` — no router, no parked state, exactly what
+    /// a cron trigger reaches on a cold isolate.
+    async fn run_scheduled(kit: &TestHarness) {
+        let config: Arc<dyn Config> = Arc::new(MapConfig::default());
+        let mut ports = Ports::with_config(config.clone());
+        ports.db = Some(kit.db.clone());
+        ports.clock = Some(Arc::new(cratefield_testing::FixedClock(fixed_now())));
+        ports.id_gen = Some(Arc::new(UlidIdGen));
+        let ctx = ModuleContext {
+            ports,
+            config,
+            events: kit.harness.events().clone(),
+            templates: Arc::new(TemplateRegistry::default()),
+            venture: Arc::new(cratefield_core::Venture::new(
+                "test-venture",
+                "test.example",
+            )),
+            unprotected_writes_accepted: false,
+            ui_mounted: false,
+            personal_data: Arc::new(PersonalDataCatalog::default()),
+        };
+        let module = kit
+            .modules
+            .iter()
+            .find(|module| module.name() == "dashboard")
+            .expect("the dashboard is mounted");
+        module
+            .scheduled(&ctx, "17 3 * * *")
+            .await
+            .expect("the scheduled pass runs");
+    }
+
+    /// The seeded venture's tenant store, opened the way the screen's
+    /// `open_store_at` does — the read path the screen never gains.
+    fn open_tenant(kit: &TestHarness, kms: &Arc<dyn cratefield_kms::Kms>) -> SecretStore {
+        Secrets::new(kms.clone())
+            .with_audit(chain_sink(Arc::clone(&kit.db)))
+            .tenant("ten_1", Arc::clone(&kit.db))
+    }
+
+    /// Sets one store's policy through the real POST, because a test
+    /// that inserts the row directly would not be testing the route the
+    /// operator uses.
+    async fn post_policy(kit: &TestHarness, slug: &str, form: &str) -> Reply {
+        send(
+            kit,
+            Method::POST,
+            &format!("{BASE}/secrets/{slug}/policy"),
+            Some(&cookie(kit)),
+            Some(form),
+        )
+        .await
+    }
+
+    #[pollster::test]
+    async fn the_detail_page_shows_the_keys_age_the_policy_and_the_due_date() {
+        let kms = kms();
+        let kit = seeded(Some(kms.clone())).await;
+        let actor = Actor::new("seed").expect("named");
+        open(&kit, &kms)
+            .put("stripe/api_key", &SecretBytes::from("v"), &actor)
+            .await
+            .expect("seed put");
+        age_key(&kit, "global", 30).await;
+
+        let reply = send(
+            &kit,
+            Method::GET,
+            &format!("{BASE}/secrets/global"),
+            Some(&cookie(&kit)),
+            None,
+        )
+        .await;
+        assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
+        assert!(
+            reply.body.contains("rotated <strong>30 days ago</strong>"),
+            "the age is the number the policy is judged against: {}",
+            reply.body
+        );
+        assert!(
+            reply
+                .body
+                .contains("rotate the key at <strong>90</strong> days"),
+            "the default policy, with its number: {}",
+            reply.body
+        );
+        assert!(
+            reply
+                .body
+                .contains("flag a value at <strong>180</strong> days"),
+            "{}",
+            reply.body
+        );
+        assert!(
+            reply.body.contains("the deployment default"),
+            "a store with no row says which policy applies and why: {}",
+            reply.body
+        );
+        // rotated 30 days ago + a 90-day policy: due at the fixed now
+        // plus 60 days, written the way the owner's sketch writes it.
+        let expected = date_of(fixed_now() + time::Duration::days(60));
+        assert!(
+            reply.body.contains(&format!(
+                "Next automatic rotation: <strong>{expected}</strong>"
+            )),
+            "the due date is created_at + policy: {}",
+            reply.body
+        );
+
+        // A store nothing has been written to has no key, and the page
+        // says that rather than rendering a zero age.
+        let tenant = send(
+            &kit,
+            Method::GET,
+            &format!("{BASE}/secrets/v1"),
+            Some(&cookie(&kit)),
+            None,
+        )
+        .await;
+        assert!(tenant.body.contains("no data key yet"), "{}", tenant.body);
+    }
+
+    #[pollster::test]
+    async fn a_key_at_or_past_its_policy_reads_due_in_the_broken_chain_red() {
+        let kms = kms();
+        let kit = seeded(Some(kms.clone())).await;
+        let actor = Actor::new("seed").expect("named");
+        open(&kit, &kms)
+            .put("stripe/api_key", &SecretBytes::from("v"), &actor)
+            .await
+            .expect("seed put");
+
+        // The boundary is inclusive: day 90 of a 90-day policy is due.
+        age_key(&kit, "global", 90).await;
+        let due = send(
+            &kit,
+            Method::GET,
+            &format!("{BASE}/secrets/global"),
+            Some(&cookie(&kit)),
+            None,
+        )
+        .await;
+        assert!(
+            due.body.contains("THE DATA KEY IS DUE FOR ROTATION NOW."),
+            "{}",
+            due.body
+        );
+        assert!(
+            due.body.contains("dash__chain--bad"),
+            "due reads in the same red the broken-chain badge uses: {}",
+            due.body
+        );
+
+        // One day short of the policy is not due: the next date shows.
+        age_key(&kit, "global", 89).await;
+        let not_due = send(
+            &kit,
+            Method::GET,
+            &format!("{BASE}/secrets/global"),
+            Some(&cookie(&kit)),
+            None,
+        )
+        .await;
+        assert!(
+            not_due.body.contains("Next automatic rotation:"),
+            "{}",
+            not_due.body
+        );
+        assert!(
+            !not_due
+                .body
+                .contains("THE DATA KEY IS DUE FOR ROTATION NOW."),
+            "one day short of the policy must not read due: {}",
+            not_due.body
+        );
+
+        // And the store list carries the verdict, so the page an
+        // operator lands on tells them where to go.
+        age_key(&kit, "global", 91).await;
+        let list = send(
+            &kit,
+            Method::GET,
+            &format!("{BASE}/secrets"),
+            Some(&cookie(&kit)),
+            None,
+        )
+        .await;
+        assert!(list.body.contains(">Rotation<"), "{}", list.body);
+        assert!(
+            list.body.contains("key due"),
+            "the list must say which store needs attention: {}",
+            list.body
+        );
+    }
+
+    #[pollster::test]
+    async fn an_overdue_secret_is_reported_and_nothing_rotates_it() {
+        let kms = kms();
+        let kit = seeded(Some(kms.clone())).await;
+        // A long fuse keeps the key out of due, isolating the secret's
+        // verdict: what follows must be about the value only.
+        let policy = post_policy(&kit, "global", "key_days=400&secret_days=400").await;
+        assert_eq!(policy.status, StatusCode::OK, "{}", policy.body);
+
+        let actor = Actor::new("seed").expect("named");
+        open(&kit, &kms)
+            .put("live/api_key", &SecretBytes::from(SENTINEL), &actor)
+            .await
+            .expect("seed put");
+        age_secret(&kit, "global", "live/api_key", 600).await;
+
+        let page = send(
+            &kit,
+            Method::GET,
+            &format!("{BASE}/secrets/global"),
+            Some(&cookie(&kit)),
+            None,
+        )
+        .await;
+        assert_eq!(page.status, StatusCode::OK, "{}", page.body);
+        assert!(
+            page.body.contains(">OVERDUE<"),
+            "600 days against a 400-day threshold: {}",
+            page.body
+        );
+        assert!(
+            page.body.contains("dash__due"),
+            "OVERDUE is red in the markup, not only in the stylesheet: {}",
+            page.body
+        );
+        assert!(
+            page.body
+                .contains("A data key can rotate itself; a credential cannot."),
+            "the asymmetry is said where OVERDUE is read: {}",
+            page.body
+        );
+
+        // The schedule runs and rotates nothing: not the value (nothing
+        // can), and not the key (it is not due).
+        run_scheduled(&kit).await;
+        assert_eq!(
+            audit_count(&kit, "global", "rotate_dek").await,
+            0,
+            "nothing rotates a value, by any route"
+        );
+        let read = open(&kit, &kms)
+            .get("live/api_key", &Actor::new("test").expect("named"))
+            .await
+            .expect("read")
+            .expect("present");
+        assert_eq!(read.expose(), SENTINEL.as_bytes(), "the value is unchanged");
+        let rows = kit
+            .db
+            .query(&Statement::with_values(
+                "SELECT version FROM harness_secrets WHERE store = 'global' AND name = ?",
+                vec![text("live/api_key")],
+            ))
+            .await
+            .expect("versions");
+        assert_eq!(
+            rows.rows.len(),
+            1,
+            "the pass must not add, move or remove a version"
+        );
+        assert_eq!(
+            rows.first().and_then(|row| row.get::<i64>("version")),
+            Some(1),
+            "the version did not move"
+        );
+    }
+
+    #[pollster::test]
+    async fn the_scheduled_pass_rotates_a_due_key_once_attributed_to_the_schedule() {
+        let kms = kms();
+        let kit = seeded(Some(kms.clone())).await;
+        // A long fuse, so the key the pass creates is fresh under it and
+        // the second pass is provably a no-op rather than a rotation
+        // that happens to look like one.
+        let policy = post_policy(&kit, "global", "key_days=400&secret_days=400").await;
+        assert_eq!(policy.status, StatusCode::OK, "{}", policy.body);
+
+        let actor = Actor::new("seed").expect("named");
+        open(&kit, &kms)
+            .put("stripe/api_key", &SecretBytes::from("v1-value"), &actor)
+            .await
+            .expect("seed put");
+        let (old_key, _) = active_key_row(&kit, "global").await;
+        age_key(&kit, "global", 500).await;
+
+        let due = send(
+            &kit,
+            Method::GET,
+            &format!("{BASE}/secrets/global"),
+            Some(&cookie(&kit)),
+            None,
+        )
+        .await;
+        assert!(
+            due.body.contains("THE DATA KEY IS DUE FOR ROTATION NOW."),
+            "500 days against a 400-day policy: {}",
+            due.body
+        );
+
+        run_scheduled(&kit).await;
+        assert_eq!(
+            schedule_rotations(&kit, "global").await,
+            1,
+            "the pass rotated the due key"
+        );
+        let (who, allowed) = last_rotation_attempt(&kit, "global").await;
+        assert_eq!(who, SCHEDULE_ACTOR, "the audit chain names the schedule");
+        assert!(allowed, "the rotation was allowed");
+        let (new_key, new_stamp) = active_key_row(&kit, "global").await;
+        assert_ne!(new_key, old_key, "the active key moved");
+        let read = open(&kit, &kms)
+            .get("stripe/api_key", &Actor::new("test").expect("named"))
+            .await
+            .expect("read")
+            .expect("present");
+        assert_eq!(
+            read.expose(),
+            b"v1-value",
+            "rotation must not lose the value"
+        );
+        verify(&StoreId::Global, kit.db.as_ref())
+            .await
+            .expect("the chain still verifies with the scheduled rotation on it");
+
+        // Idempotent: the second pass sees a fresh key and does nothing.
+        run_scheduled(&kit).await;
+        assert_eq!(
+            schedule_rotations(&kit, "global").await,
+            1,
+            "running it twice in a row rotates once"
+        );
+        let (still_key, still_stamp) = active_key_row(&kit, "global").await;
+        assert_eq!(still_key, new_key, "no second rotation happened");
+        assert_eq!(still_stamp, new_stamp);
+    }
+
+    #[pollster::test]
+    async fn a_store_the_pass_cannot_rotate_wedges_neither_the_others_nor_itself() {
+        let kms = kms();
+        let kit = seeded(Some(kms.clone())).await;
+        let policy = post_policy(&kit, "global", "key_days=400&secret_days=400").await;
+        assert_eq!(policy.status, StatusCode::OK, "{}", policy.body);
+
+        let actor = Actor::new("seed").expect("named");
+        open(&kit, &kms)
+            .put(
+                "platform/db_url",
+                &SecretBytes::from("global-value"),
+                &actor,
+            )
+            .await
+            .expect("global put");
+        open_tenant(&kit, &kms)
+            .put("live/api_key", &SecretBytes::from("tenant-value"), &actor)
+            .await
+            .expect("tenant put");
+        let (tenant_key, _) = active_key_row(&kit, "ten_1").await;
+        age_key(&kit, "global", 500).await;
+        age_key(&kit, "ten_1", 500).await;
+        // The tenant's wrapped key becomes unopenable: the rotation must
+        // fail before writing anything, which is the failure mode a
+        // damaged key row (or a KMS that lost its material) produces.
+        kit.db
+            .execute(&Statement::with_values(
+                "UPDATE harness_secret_keys SET wrapped_dek = ? \
+                 WHERE store = 'ten_1' AND state = 'active'",
+                vec![sea_query::Value::Bytes(Some(Box::new(vec![0_u8; 48])))],
+            ))
+            .await
+            .expect("corrupt the wrapped key");
+
+        run_scheduled(&kit).await; // must not error: one store, one failure
+        assert_eq!(
+            schedule_rotations(&kit, "global").await,
+            1,
+            "the healthy store rotated despite the other failing"
+        );
+        let (who, allowed) = last_rotation_attempt(&kit, "ten_1").await;
+        assert_eq!(who, SCHEDULE_ACTOR);
+        assert!(
+            !allowed,
+            "the failed attempt is on the chain, refused — visible, not silent"
+        );
+        let (still_key, _) = active_key_row(&kit, "ten_1").await;
+        assert_eq!(
+            still_key, tenant_key,
+            "the failing store's key is exactly as it was"
+        );
+        let read = open(&kit, &kms)
+            .get("platform/db_url", &Actor::new("test").expect("named"))
+            .await
+            .expect("read")
+            .expect("present");
+        assert_eq!(read.expose(), b"global-value");
+
+        // And the tenant's page says the last automatic attempt failed,
+        // rather than silently reading "due" forever.
+        let page = send(
+            &kit,
+            Method::GET,
+            &format!("{BASE}/secrets/v1"),
+            Some(&cookie(&kit)),
+            None,
+        )
+        .await;
+        assert_eq!(page.status, StatusCode::OK, "{}", page.body);
+        assert!(
+            page.body.contains("THE LAST AUTOMATIC ROTATION FAILED"),
+            "the failure is on the page: {}",
+            page.body
+        );
+    }
+
+    #[pollster::test]
+    async fn a_pass_without_a_kms_does_nothing_and_does_not_error() {
+        let kit = seeded(None).await;
+        run_scheduled(&kit).await;
+        assert_eq!(
+            audit_count(&kit, "global", "rotate_dek").await,
+            0,
+            "there is no store to rotate and no error to raise"
+        );
+    }
+
+    #[pollster::test]
+    async fn editing_the_policy_is_a_guarded_post_recorded_against_the_operator() {
+        let kms = kms();
+        let kit = seeded(Some(kms.clone())).await;
+        let reply = post_policy(&kit, "global", "key_days=30&secret_days=60").await;
+        assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
+        assert!(
+            reply.body.contains("Policy saved"),
+            "the page answers with what it did: {}",
+            reply.body
+        );
+        assert!(
+            reply
+                .body
+                .contains("rotate the key at <strong>30</strong> days"),
+            "{}",
+            reply.body
+        );
+        assert!(
+            reply
+                .body
+                .contains("set by <strong>op@cratefield.com</strong>"),
+            "who changed the policy is on the page: {}",
+            reply.body
+        );
+        let row = kit
+            .db
+            .query(&Statement::new(
+                "SELECT key_max_age_days, secret_max_age_days, updated_by \
+                 FROM secret_rotation_policy WHERE store = 'global'",
+            ))
+            .await
+            .expect("policy row")
+            .first()
+            .cloned()
+            .expect("the row exists");
+        assert_eq!(row.get::<i64>("key_max_age_days"), Some(30));
+        assert_eq!(row.get::<i64>("secret_max_age_days"), Some(60));
+        assert_eq!(row.get::<String>("updated_by").as_deref(), Some(EMAIL));
+
+        // Nonsense is refused and changes nothing: zero, non-numbers, a
+        // missing field, and a number past the ceiling.
+        for form in [
+            "key_days=0&secret_days=60",
+            "key_days=abc&secret_days=60",
+            "key_days=30",
+            "key_days=30&secret_days=999999",
+        ] {
+            let bad = post_policy(&kit, "global", form).await;
+            assert_eq!(bad.status, StatusCode::BAD_REQUEST, "{form}: {}", bad.body);
+        }
+        let row = kit
+            .db
+            .query(&Statement::new(
+                "SELECT key_max_age_days, secret_max_age_days \
+                 FROM secret_rotation_policy WHERE store = 'global'",
+            ))
+            .await
+            .expect("policy row");
+        assert_eq!(
+            row.first()
+                .and_then(|row| row.get::<i64>("key_max_age_days")),
+            Some(30),
+            "a refused post must change nothing"
+        );
+
+        // Another account's slug is a 404 and writes nothing.
+        let repo = cratefield_accounts::Repository::new(kit.db.clone());
+        repo.account_for_login("b@x.co", "B", "acc_2", "t0")
+            .await
+            .expect("account");
+        let token = cratefield_access::issue_session(
+            kit.signer.as_ref(),
+            "b@x.co",
+            NOW,
+            cratefield_access::DEFAULT_TTL_SECS,
+        );
+        let stranger = send(
+            &kit,
+            Method::POST,
+            &format!("{BASE}/secrets/v1/policy"),
+            Some(&format!("cf_session={token}")),
+            Some("key_days=10&secret_days=10"),
+        )
+        .await;
+        assert_eq!(stranger.status, StatusCode::NOT_FOUND, "{}", stranger.body);
+        assert!(
+            kit.db
+                .query(&Statement::new(
+                    "SELECT store FROM secret_rotation_policy WHERE store <> 'global'"
+                ))
+                .await
+                .expect("stores")
+                .is_empty(),
+            "a refused policy post must write no row"
+        );
+
+        // Signed out, the gate — same as every other action.
+        let anonymous = send(
+            &kit,
+            Method::POST,
+            &format!("{BASE}/secrets/global/policy"),
+            None,
+            Some("key_days=30&secret_days=60"),
+        )
+        .await;
+        assert_eq!(anonymous.status, StatusCode::SEE_OTHER);
+        assert_eq!(anonymous.location, "/v1/console/login");
+    }
+
+    #[pollster::test]
+    async fn the_store_list_says_which_stores_need_attention() {
+        let kms = kms();
+        let kit = seeded(Some(kms.clone())).await;
+        for slug in ["global", "v1"] {
+            let reply = post_policy(&kit, slug, "key_days=400&secret_days=400").await;
+            assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
+        }
+        let actor = Actor::new("seed").expect("named");
+        open(&kit, &kms)
+            .put("live/api_key", &SecretBytes::from("v"), &actor)
+            .await
+            .expect("global put");
+        open_tenant(&kit, &kms)
+            .put("tenants/token", &SecretBytes::from("v"), &actor)
+            .await
+            .expect("tenant put");
+        // Global: the key is due and one value is overdue. Tenant:
+        // everything within policy.
+        age_key(&kit, "global", 500).await;
+        age_secret(&kit, "global", "live/api_key", 600).await;
+
+        let list = send(
+            &kit,
+            Method::GET,
+            &format!("{BASE}/secrets"),
+            Some(&cookie(&kit)),
+            None,
+        )
+        .await;
+        assert_eq!(list.status, StatusCode::OK, "{}", list.body);
+        assert!(list.body.contains(">Rotation<"), "{}", list.body);
+        assert!(
+            list.body.contains("key due"),
+            "the due key is on the list: {}",
+            list.body
+        );
+        assert!(
+            list.body.contains("1 value overdue"),
+            "the overdue value is on the list: {}",
+            list.body
+        );
+        assert!(
+            list.body.contains("within policy"),
+            "the healthy store reads as healthy: {}",
+            list.body
+        );
+    }
+
+    #[pollster::test]
+    async fn the_default_policy_comes_from_config() {
+        let kms = kms();
+        let kit = TestHarness::with_ports(modules(Some(kms.clone())), |ports| {
+            ports.config = Arc::new(MapConfig::from_pairs([
+                ("DASHBOARD_KEY_MAX_AGE_DAYS", "45"),
+                ("DASHBOARD_SECRET_MAX_AGE_DAYS", "200"),
+            ]));
+        });
+        let repo = cratefield_accounts::Repository::new(kit.db.clone());
+        repo.account_for_login(EMAIL, "Op", "acc_1", "t0")
+            .await
+            .expect("account");
+        let actor = Actor::new("seed").expect("named");
+        open(&kit, &kms)
+            .put("stripe/api_key", &SecretBytes::from("v"), &actor)
+            .await
+            .expect("seed put");
+        age_key(&kit, "global", 50).await;
+
+        let reply = send(
+            &kit,
+            Method::GET,
+            &format!("{BASE}/secrets/global"),
+            Some(&cookie(&kit)),
+            None,
+        )
+        .await;
+        assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
+        assert!(
+            reply
+                .body
+                .contains("rotate the key at <strong>45</strong> days"),
+            "the default is the config's, not the compiled constant's: {}",
+            reply.body
+        );
+        assert!(
+            reply
+                .body
+                .contains("flag a value at <strong>200</strong> days"),
+            "{}",
+            reply.body
+        );
+        assert!(
+            reply.body.contains("THE DATA KEY IS DUE FOR ROTATION NOW."),
+            "50 days against the configured 45: {}",
+            reply.body
+        );
+    }
+
+    #[test]
+    fn policy_config_must_be_readable_days_or_refused() {
+        let module = crate::Dashboard::default();
+        assert!(module.validate_config(&MapConfig::default()).is_ok());
+        for (key, value) in [
+            ("DASHBOARD_KEY_MAX_AGE_DAYS", "0"),
+            ("DASHBOARD_SECRET_MAX_AGE_DAYS", "ninety"),
+            ("DASHBOARD_KEY_MAX_AGE_DAYS", "999999"),
+        ] {
+            let cfg = MapConfig::from_pairs([(key, value)]);
+            assert!(
+                module.validate_config(&cfg).is_err(),
+                "{key}={value} must be refused, not silently defaulted"
+            );
+        }
+        let ok = MapConfig::from_pairs([
+            ("DASHBOARD_KEY_MAX_AGE_DAYS", "45"),
+            ("DASHBOARD_SECRET_MAX_AGE_DAYS", "200"),
+        ]);
+        assert!(module.validate_config(&ok).is_ok());
     }
 }

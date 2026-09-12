@@ -396,3 +396,36 @@ code { font-family: var(--mono); font-size: .92em; color: var(--ink); }
   border: 1px solid var(--edge); border-radius: 4px; padding: 6px 8px;
 }
 .dash__filter input { min-width: 260px; }
+
+
+/* --- Secrets rotation policy & ages (scheduled rotation feature) ---------
+ *
+ * One fenced block, appended at the end of the sheet like the diagram's:
+ * everything the rotation card and the age columns need lives here. The
+ * column templates override the secrets block's earlier rules (this
+ * block comes later, so it wins), and the narrow media query re-states
+ * the collapse the sheet's own 860px breakpoint gives plain rows — a
+ * later unconditional rule would otherwise un-stack them on phones.
+ * Colours are the tokens above only, no literals, so both themes hold.
+ */
+
+/* Store-list rows grew a Rotation column between Newest version and
+   Audit chain: five spans instead of the base row's four. */
+.dash__lrow--stores { grid-template-columns: 1.2fr .5fr .9fr 1.3fr 1.2fr; }
+
+/* Secret rows grew Age and Standing after Created/By. */
+.dash__lrow--secrets { grid-template-columns: 1.6fr .4fr 1fr 1fr .6fr .9fr auto; }
+
+/* The red an overdue value or a due key reads in — the same --red the
+   broken-chain badge uses, the one colour this screen spends on "act". */
+.dash__due { color: var(--red); font-weight: 600; }
+.dash__ok { color: var(--muted); }
+.dash__due-note { font-size: 12.5px; line-height: 1.55; color: var(--red); margin: 12px 0 0; }
+.dash__due-note:first-child { margin-top: 0; }
+
+/* The policy form: two number fields side by side on wide screens. */
+.dash__policy { display: grid; gap: 10px; margin-top: 14px; }
+
+@media (max-width: 860px) {
+  .dash__lrow--stores, .dash__lrow--secrets { grid-template-columns: 1fr; gap: 4px; }
+}
