@@ -366,3 +366,33 @@ code { font-family: var(--mono); font-size: .92em; color: var(--ink); }
 .dash__rows th, .dash__rows td { border: 1px solid var(--rule); padding: 6px 10px; text-align: left; white-space: nowrap; }
 .dash__rows th { color: var(--muted); background: var(--panel-hi); font-size: 11px; letter-spacing: .06em; text-transform: uppercase; font-weight: 400; }
 .dash__rows td { color: var(--body); }
+/* --- The deploys and logs screens ---------------------------------------
+ *
+ * One block, appended at the end of the sheet the way every screen's
+ * work lands here: everything these two need lives in this block, named
+ * after their own vocabularies (.dash__lrow--runs/--steps/--logs, the
+ * ladder dots reuse .dash__dot). Colours are the tokens above only, so
+ * both themes hold.
+ */
+
+/* The runs list: venture, module set, reached, outcome, when. */
+.dash__lrow--runs { grid-template-columns: 1.1fr 1fr .8fr 1.4fr .9fr; }
+
+/* The step ladder: the dot, the step, its state, what it does. */
+.dash__lrow--steps { grid-template-columns: auto auto .6fr 2fr; align-items: baseline; }
+.dash__lrow--steps .dash__dot { align-self: center; }
+
+/* The request log table's status classes: a 5xx is the red, a 4xx the
+   warning yellow, anything else unmarked — the same three meanings the
+   filter offers. */
+.dash__st { font-variant-numeric: tabular-nums; }
+.dash__st--bad { color: var(--red); font-weight: 600; }
+.dash__st--warn { color: var(--amber); }
+
+/* The filter row: one line, wraps on a narrow page, no layout tricks. */
+.dash__filter { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 0 0 14px; }
+.dash__filter select, .dash__filter input {
+  font: inherit; color: var(--body); background: var(--panel);
+  border: 1px solid var(--edge); border-radius: 4px; padding: 6px 8px;
+}
+.dash__filter input { min-width: 260px; }

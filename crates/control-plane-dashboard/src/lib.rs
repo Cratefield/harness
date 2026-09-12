@@ -47,8 +47,8 @@ use cratefield_catalog::{Catalog, CatalogModule, Tier};
 use cratefield_chrome::{NavItem, Page, escape, nav, render};
 use cratefield_console::{LOGIN_PATH, current_session};
 use cratefield_core::{
-    Database, HttpPolicy, Migrations, Module, ModuleContext, PersonalDataSet, Port, SqlMigration,
-    Statement, Surface, SurfaceDocument, View,
+    DataKind, Database, Disposition, HttpPolicy, Migrations, Module, ModuleContext,
+    PersonalDataSet, Port, SqlMigration, Statement, SubjectVia, Surface, SurfaceDocument, View,
 };
 use http::{HeaderMap, StatusCode, header};
 use time::format_description::well_known::Rfc3339;
@@ -130,16 +130,18 @@ impl Module for Dashboard {
     }
 
     /// The tables this module's `migrations()` create (issue #280): the
-    /// connection metadata it owns, and the secrets store's own tables,
+    /// connection metadata it owns, the secrets store's own tables,
     /// which this module applies on the control database and therefore
     /// declares — see `migrations` below for why they are here and not
-    /// in the console's set.
+    /// in the console's set — and its own request log, which the
+    /// Logs screen's recorder writes.
     fn tables(&self) -> &'static [&'static str] {
         &[
             "connection",
             "harness_secrets",
             "harness_secret_keys",
             "harness_secret_audit",
+            "request_log",
         ]
     }
 
@@ -184,6 +186,36 @@ impl Module for Dashboard {
                  \u{201c}right to be forgotten\u{201d} stops where the record of what \
                  this product did with their data begins.",
             ),
+            // Declared last so that, under reversal, these rows are deleted
+            // before the `account` row they reach through the join — the same
+            // ordering rule the console's `venture` follows. The account id is
+            // the one column here that is about a person, and the honest
+            // verdict is Erase: an operator's request history is theirs, not
+            // the product's, and nothing in it is needed for any ledger to
+            // stay correct. It is Usage rather than Identifier because the
+            // row's own subject is reached *through* the account — what the
+            // row records is what the person did and when.
+            PersonalDataSet {
+                table: "request_log",
+                subject: "account_id",
+                kind: DataKind::Usage,
+                disposition: Disposition::Erase,
+                description: "The control plane's own request log: when each request \
+                              arrived, its method and path, the status and duration it \
+                              answered with, and which account the session belonged to \
+                              when there was one. No query string, request body or \
+                              header is ever recorded — those are where credentials and \
+                              personal data live — so a row can name the request without \
+                              carrying anything about the person behind it. Rows older \
+                              than fourteen days are deleted and the table is capped, so \
+                              this is a window on recent traffic, not an archive.",
+                redacted: &[],
+                subject_via: Some(SubjectVia {
+                    table: "account",
+                    subject: "identity",
+                    key: "id",
+                }),
+            },
         ];
         SETS
     }
@@ -212,7 +244,7 @@ impl Module for Dashboard {
         // `cratefield_secrets`'s own sets (shared constants, not a second
         // copy of the SQL that could drift), applied here under ids that
         // cannot collide with anything else's.
-        const MIGRATIONS: [SqlMigration; 5] = [
+        const MIGRATIONS: [SqlMigration; 6] = [
             if cratefield_connections::MIGRATION.transactional {
                 SqlMigration::new("0001", "connections", cratefield_connections::MIGRATION.sql)
             } else {
@@ -223,6 +255,15 @@ impl Module for Dashboard {
             secrets_sub_migration(1, "0003", "secrets-audit"),
             secrets_sub_migration(2, "0004", "secrets-audit-store"),
             secrets_sub_migration(3, "0005", "secrets-store-attribution"),
+            // This module's own request log (see above). The SQL is the
+            // portable subset, so both dialect sets carry the same file —
+            // the postgres directory stays an overrides-only place (ADR
+            // 0004) and gains no copy that could drift.
+            SqlMigration::new(
+                "0006",
+                "request-log",
+                include_str!("../migrations/sqlite/0001_request_log.sql"),
+            ),
         ];
         // The array is the apply order; this refuses a gap, a duplicate
         // or an entry out of order at build time (issue #27).
@@ -230,8 +271,9 @@ impl Module for Dashboard {
         // The secrets tables are not portable SQL (BLOB vs BYTEA, and
         // the append-only trigger differs per engine), so the postgres
         // set ships alongside the sqlite one exactly as the secrets
-        // crate ships both — re-id-ed the same way.
-        const POSTGRES_SET: [SqlMigration; 5] = [
+        // crate ships both — re-id-ed the same way. `request_log` is
+        // portable, so its postgres entry is the same bytes.
+        const POSTGRES_SET: [SqlMigration; 6] = [
             if cratefield_connections::MIGRATION.transactional {
                 SqlMigration::new("0001", "connections", cratefield_connections::MIGRATION.sql)
             } else {
@@ -242,6 +284,11 @@ impl Module for Dashboard {
             secrets_sub_migration_pg(1, "0003", "secrets-audit"),
             secrets_sub_migration_pg(2, "0004", "secrets-audit-store"),
             secrets_sub_migration_pg(3, "0005", "secrets-store-attribution"),
+            SqlMigration::new(
+                "0006",
+                "request-log",
+                include_str!("../migrations/sqlite/0001_request_log.sql"),
+            ),
         ];
         const _: () = cratefield_core::assert_migration_set(&POSTGRES_SET);
         Migrations {
@@ -304,12 +351,24 @@ impl Module for Dashboard {
             // renders it, and every screen being built at once then
             // edits that one table.
             .route("/deploys", get(deploys::screen))
+            // A run's own page: the seven steps, where this one stopped,
+            // and the recorded failure scrubbed for the screen.
+            .route("/deploys/{id}", get(deploys::run))
             .route("/logs", get(logs::screen))
             .route("/domains", get(domains::screen))
             .route("/backups", get(backups::screen))
             .route("/environments", get(environments::screen))
             .route("/billing", get(billing::screen))
-            .with_state(state)
+            .with_state(Arc::clone(&state))
+            // The request recorder, wrapped around everything this
+            // module serves so the Logs screen has something truthful to
+            // show. It is a layer on this module's own router on
+            // purpose: request retention for the *control plane's own*
+            // traffic is a leaf feature, and the kernel
+            // (`crates/core/src/harness.rs`) composes one shared stack
+            // for every venture — the day every venture is to have
+            // request logs, this is what moves there, not a copy.
+            .layer(axum::middleware::from_fn_with_state(state, logs::record))
     }
 }
 
