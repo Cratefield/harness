@@ -17,18 +17,21 @@ fn enqueue_lease_and_complete() {
     let outbox = Outbox::new("mail_outbox");
     let db = db_with_outbox(&outbox);
     pollster::block_on(async {
-        // Enqueue two units of work (as a module would, inside its own batch).
+        // Enqueue two units of work (as a module would, inside its own batch):
+        // one naming its subject, one written like a pre-migration row.
         db.batch_atomic(&[
             outbox.enqueue_statement(
                 "a",
                 "confirmation",
                 "{\"to\":\"a\"}",
+                Some("acct-a"),
                 "2026-09-07T00:00:00Z",
             ),
             outbox.enqueue_statement(
                 "b",
                 "confirmation",
                 "{\"to\":\"b\"}",
+                None,
                 "2026-09-07T00:00:01Z",
             ),
         ])
@@ -82,7 +85,7 @@ fn a_not_yet_due_record_is_not_leased() {
     let outbox = Outbox::new("mail_outbox");
     let db = db_with_outbox(&outbox);
     pollster::block_on(async {
-        db.execute(&outbox.enqueue_statement("future", "x", "{}", "2026-09-07T10:00:00Z"))
+        db.execute(&outbox.enqueue_statement("future", "x", "{}", None, "2026-09-07T10:00:00Z"))
             .await
             .unwrap();
         let due = outbox
