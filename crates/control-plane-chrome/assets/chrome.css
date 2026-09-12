@@ -233,10 +233,15 @@ a:hover { color: var(--accent-hi); text-decoration: underline; }
 .mods { display: grid; gap: 8px; margin: 0; }
 
 .mod {
-  display: grid; grid-template-columns: auto 1fr; gap: 12px; align-items: start;
-  border: 1px solid var(--edge); background: var(--panel); padding: 12px 14px;
+  border: 1px solid var(--edge); background: var(--panel);
 }
 .mod:hover { border-color: var(--edge-hi); }
+/* The tickable half. A label, so the whole line selects the module —
+   which is why the detail below is its sibling and not inside it. */
+.mod__pick {
+  display: grid; grid-template-columns: auto 1fr; gap: 12px; align-items: start;
+  padding: 12px 14px; cursor: pointer;
+}
 .mod input { margin: 3px 0 0; accent-color: var(--accent); width: 14px; height: 14px; }
 .mod__name {
   font-family: var(--mono); font-size: 12px; color: var(--ink);
@@ -245,6 +250,52 @@ a:hover { color: var(--accent-hi); text-decoration: underline; }
 .mod__sum { font-size: 12.5px; color: var(--muted); margin: 4px 0 0; line-height: 1.5; }
 .mod--on { border-color: #2b3d7a; }
 .mod--core input { pointer-events: none; }
+
+/* The info pane: what the module is, folded away until asked for.
+   `<details>` does the hiding, so no author rule can fight the UA over
+   whether it is open. */
+.mod__more { border-top: 1px solid var(--edge); }
+.mod__more > summary {
+  padding: 8px 14px; cursor: pointer; font-size: 12px; color: var(--muted);
+  font-family: var(--mono); list-style: none;
+}
+.mod__more > summary::-webkit-details-marker { display: none; }
+.mod__more > summary::before { content: "+ "; color: var(--accent); }
+.mod__more[open] > summary::before { content: "\2212 "; }
+.mod__more > summary:hover { color: var(--ink); }
+.mod__detail { padding: 2px 14px 14px; }
+.mod__what { font-size: 12.5px; color: var(--ink); line-height: 1.6; margin: 0 0 12px; }
+.mod__facts {
+  display: grid; grid-template-columns: max-content 1fr; gap: 4px 14px;
+  margin: 0 0 12px; font-size: 12px;
+}
+.mod__facts dt { color: var(--muted); font-family: var(--mono); }
+.mod__facts dd { margin: 0; color: var(--ink); }
+/* Nine table names on one line is a wall. Chips wrap and stay countable. */
+.mod__tables { display: flex; flex-wrap: wrap; gap: 4px 6px; }
+.mod__tables code {
+  background: var(--panel-2, rgba(255, 255, 255, .04));
+  border: 1px solid var(--edge); padding: 1px 6px;
+}
+.mod__rh {
+  font-family: var(--mono); font-size: 11px; color: var(--muted);
+  text-transform: uppercase; letter-spacing: .06em; margin: 0 0 6px;
+}
+/* The one thing allowed to scroll sideways: a path plus its note is
+   wider than a phone and wrapping a method away from its path reads as
+   two rows. */
+.mod__routes { width: 100%; border-collapse: collapse; font-size: 12px; display: block; overflow-x: auto; }
+.mod__routes td { padding: 4px 10px 4px 0; vertical-align: top; color: var(--muted); }
+.mod__routes tr + tr td { border-top: 1px solid var(--edge); }
+.mod__m {
+  font-family: var(--mono); font-size: 11px; color: var(--accent);
+  white-space: nowrap;
+}
+
+@media (max-width: 560px) {
+  .mod__facts { grid-template-columns: 1fr; gap: 2px 0; }
+  .mod__facts dd { margin: 0 0 8px; }
+}
 
 /* --- The sign-in gate -------------------------------------------------- */
 

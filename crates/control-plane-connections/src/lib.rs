@@ -1179,6 +1179,9 @@ mod tests {
                     tier: Tier::Optional,
                     depends_on: vec![],
                     releases: pin(),
+                    // A fixture about resolution; the wizard's copy is
+                    // not what it is testing.
+                    detail: cratefield_catalog::ModuleDetail::default(),
                 },
                 CatalogModule {
                     slug: "waitlist".into(),
@@ -1187,6 +1190,9 @@ mod tests {
                     tier: Tier::Optional,
                     depends_on: vec![],
                     releases: pin(),
+                    // A fixture about resolution; the wizard's copy is
+                    // not what it is testing.
+                    detail: cratefield_catalog::ModuleDetail::default(),
                 },
             ],
         };

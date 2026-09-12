@@ -137,6 +137,65 @@ pub struct CatalogModule {
     /// with none selectable is refused, not warned about.
     #[serde(default)]
     pub releases: Vec<ModuleRelease>,
+    /// What the wizard shows when somebody opens this module. `default`
+    /// because a catalog deserialised from an older document predates the
+    /// field, and an entry without detail still resolves — the pane just
+    /// has nothing extra to say.
+    #[serde(default)]
+    pub detail: ModuleDetail,
+}
+
+/// One route a module serves, for the wizard's info pane.
+///
+/// `path` is what a caller types: the module's mount prefix
+/// (`/v1/{slug}`, `Harness::build`) already applied, so nobody reading
+/// the pane has to know the mounting rule.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CatalogRoute {
+    /// Upper-case, space-separated when a path answers more than one
+    /// (`"GET PUT"`), in the order the module declares them.
+    pub method: String,
+    pub path: String,
+    /// What calling it does, for a customer rather than a compiler.
+    pub note: String,
+}
+
+/// The fuller answer behind a module's one-line [`CatalogModule::summary`]:
+/// what the wizard shows when somebody opens a module rather than just
+/// ticking it.
+///
+/// Most of this is **pinned to the module crate by test**
+/// (`tests/detail_matches_the_modules.rs`): `crate_name`, `needs`,
+/// `optional` and `tables` are compared against the module's own
+/// `requires`, `optional` and `tables`, so a module that grows a port and
+/// forgets this file fails the suite instead of quietly telling a
+/// customer the wrong thing.
+///
+/// `what_it_is`, the route notes and `surface` are prose and cannot be
+/// pinned to anything — an axum `Router` exposes no list of its paths, so
+/// the route *set* is checked by eye. That is the one part of this file a
+/// reviewer has to read against the module.
+///
+/// When issue #5 folds this crate into `cratefield-manifest::catalog`,
+/// this moves with it. The manifest's copy carries no detail today
+/// because nothing renders from it, and a second copy of the same prose
+/// would drift from this one the first time either was edited.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct ModuleDetail {
+    /// A paragraph: what the module is, in the customer's terms.
+    pub what_it_is: String,
+    /// The crate it is, on crates.io where it is published.
+    pub crate_name: String,
+    /// Ports that must be configured or the venture refuses to build.
+    pub needs: Vec<String>,
+    /// Ports it uses when present and does without when absent.
+    pub optional: Vec<String>,
+    /// The tables it creates in the venture's own database.
+    pub tables: Vec<String>,
+    /// Its HTTP surface, mount prefix already applied.
+    pub routes: Vec<CatalogRoute>,
+    /// What it renders, if it renders anything.
+    pub surface: Option<String>,
 }
 
 /// The curated set of modules.
@@ -609,65 +668,367 @@ fn pin(module: &CatalogModule) -> Result<PinnedRelease, ResolveError> {
 /// honesty rule). Resolution gates on review state and pin *shape*; a
 /// sanctioned build refuses the placeholder until stamping lands — see
 /// the `provenance` module of the manifest crate.
-#[must_use]
-pub fn curated() -> Catalog {
-    fn m(slug: &str, name: &str, summary: &str, tier: Tier, deps: &[&str]) -> CatalogModule {
-        CatalogModule {
-            slug: slug.to_owned(),
-            name: name.to_owned(),
-            summary: summary.to_owned(),
-            tier,
-            depends_on: deps.iter().map(|s| (*s).to_owned()).collect(),
-            releases: vec![ModuleRelease {
-                version: "0.1.1".to_owned(),
-                digest: format!("sha256:{}", "0".repeat(64)),
-                review: ReleaseReview::Approved {
-                    reviewer: "release-review".to_owned(),
-                    reviewed_at: "2026-09-01T00:00:00Z".to_owned(),
-                },
-            }],
-        }
+fn route(method: &str, path: &str, note: &str) -> CatalogRoute {
+    CatalogRoute {
+        method: method.to_owned(),
+        path: path.to_owned(),
+        note: note.to_owned(),
     }
-    Catalog {
-        modules: vec![
-            m(
-                "email-signup",
-                "Email signup",
-                "Collect email addresses with double opt-in, confirmation and unsubscribe.",
-                Tier::Optional,
-                &[],
-            ),
-            m(
-                "waitlist",
-                "Waitlist",
-                "A per-product waitlist with confirmation, positions and referral codes.",
-                Tier::Optional,
-                &[],
-            ),
-            m(
-                "cms",
-                "Content",
-                "Typed, versioned content in your own database, edited through the admin.",
-                Tier::Optional,
-                &[],
-            ),
-            m(
-                "notifications",
-                "Notifications",
-                "Push to phones and browsers, an in-app inbox, and email — one API, \
+}
+fn entry(
+    slug: &str,
+    name: &str,
+    summary: &str,
+    tier: Tier,
+    deps: &[&str],
+    detail: ModuleDetail,
+) -> CatalogModule {
+    CatalogModule {
+        slug: slug.to_owned(),
+        name: name.to_owned(),
+        summary: summary.to_owned(),
+        tier,
+        depends_on: deps.iter().map(|s| (*s).to_owned()).collect(),
+        releases: vec![ModuleRelease {
+            version: "0.1.1".to_owned(),
+            digest: format!("sha256:{}", "0".repeat(64)),
+            review: ReleaseReview::Approved {
+                reviewer: "release-review".to_owned(),
+                reviewed_at: "2026-09-01T00:00:00Z".to_owned(),
+            },
+        }],
+        detail,
+    }
+}
+fn detail(
+    what_it_is: &str,
+    crate_name: &str,
+    needs: &[&str],
+    optional: &[&str],
+    tables: &[&str],
+    routes: Vec<CatalogRoute>,
+    surface: Option<&str>,
+) -> ModuleDetail {
+    let own = |v: &[&str]| v.iter().map(|s| (*s).to_owned()).collect();
+    ModuleDetail {
+        what_it_is: what_it_is.to_owned(),
+        crate_name: crate_name.to_owned(),
+        needs: own(needs),
+        optional: own(optional),
+        tables: own(tables),
+        routes,
+        surface: surface.map(str::to_owned),
+    }
+}
+/// The `email-signup` entry.
+fn email_signup() -> CatalogModule {
+    entry(
+        "email-signup",
+        "Email signup",
+        "Collect email addresses with double opt-in, confirmation and unsubscribe.",
+        Tier::Optional,
+        &[],
+        detail(
+            "A visitor gives you an address and confirms it by email before it \
+                     counts. Nothing is ever added to the list without that second step, \
+                     and unsubscribing is one link away in every message. The join \
+                     endpoint answers identically whatever the address's state, so \
+                     nobody can use it to find out who already signed up.",
+            "cratefield-module-email-signup",
+            &["Database", "Mailer", "Signer"],
+            &["Captcha", "RateLimiter"],
+            &["subscribers"],
+            vec![
+                route(
+                    "POST",
+                    "/v1/email-signup",
+                    "Join. The same answer for every address state.",
+                ),
+                route(
+                    "GET",
+                    "/v1/email-signup/confirm",
+                    "Confirm the address from the emailed link.",
+                ),
+                route(
+                    "GET POST",
+                    "/v1/email-signup/unsubscribe",
+                    "Leave the list, from a link or a form.",
+                ),
+                route(
+                    "GET",
+                    "/v1/email-signup/admin/export.csv",
+                    "Admin token: the full list as CSV.",
+                ),
+                route(
+                    "DELETE",
+                    "/v1/email-signup/admin/subscribers/{id}",
+                    "Admin token: remove one subscriber.",
+                ),
+            ],
+            Some("A join form and an admin table, rendered at /ui from the handler's own types."),
+        ),
+    )
+}
+
+/// The `waitlist` entry.
+fn waitlist() -> CatalogModule {
+    entry(
+        "waitlist",
+        "Waitlist",
+        "A per-product waitlist with confirmation, positions and referral codes.",
+        Tier::Optional,
+        &[],
+        detail(
+            "Somebody joins a named waitlist and confirms by email; on \
+                     confirmation they are given a dense queue position inside a single \
+                     atomic batch, so two people confirming at the same moment never \
+                     share a place. Referral codes credit a confirmed referrer on the \
+                     same product. Like the signup module it answers identically for \
+                     every row state, so the endpoint reveals nothing about who is on \
+                     the list.",
+            "cratefield-module-waitlist",
+            &["Database", "Mailer", "Signer"],
+            &["Captcha", "RateLimiter"],
+            &[
+                "waitlist_entries",
+                "waitlist_send_cooldown",
+                "waitlist_position_lock",
+            ],
+            vec![
+                route(
+                    "POST",
+                    "/v1/waitlist",
+                    "Join. Answers 202 whatever the state.",
+                ),
+                route(
+                    "GET",
+                    "/v1/waitlist/confirm",
+                    "Confirm and take a position.",
+                ),
+                route(
+                    "GET",
+                    "/v1/waitlist/status",
+                    "A signed status token: position, referrals, share link.",
+                ),
+                route(
+                    "GET",
+                    "/v1/waitlist/admin/export.csv",
+                    "Admin token: the full list as CSV.",
+                ),
+            ],
+            Some("A join form, a status page and an admin export table, rendered at /ui."),
+        ),
+    )
+}
+
+/// The `cms` entry.
+fn cms() -> CatalogModule {
+    entry(
+        "cms",
+        "Content",
+        "Typed, versioned content in your own database, edited through the admin.",
+        Tier::Optional,
+        &[],
+        detail(
+            "Content lives in collections you define, every save keeps a \
+                     revision, and publishing is a separate act from saving — so a \
+                     draft is never what the public reads. The public routes are reads \
+                     of published content only; every write goes through the admin. It \
+                     never leaves your database and never calls anybody else's service.",
+            "cratefield-module-cms",
+            &["Database"],
+            &[],
+            &["cms_item", "cms_revision"],
+            vec![
+                route(
+                    "GET",
+                    "/v1/cms/{collection}",
+                    "Published items in a collection.",
+                ),
+                route("GET", "/v1/cms/{collection}/{slug}", "One published item."),
+                route(
+                    "GET",
+                    "/v1/cms/admin/list",
+                    "Admin: everything, drafts included.",
+                ),
+                route(
+                    "POST",
+                    "/v1/cms/admin/save",
+                    "Admin: save a draft, keeping a revision.",
+                ),
+                route(
+                    "POST",
+                    "/v1/cms/admin/publish",
+                    "Admin: make a revision the public one.",
+                ),
+                route(
+                    "POST",
+                    "/v1/cms/admin/unpublish",
+                    "Admin: take an item off the public routes.",
+                ),
+                route(
+                    "POST",
+                    "/v1/cms/admin/delete",
+                    "Admin: remove an item and its revisions.",
+                ),
+            ],
+            Some("An editing admin, rendered at /ui from the handler's own types."),
+        ),
+    )
+}
+
+/// The `notifications` entry.
+fn notifications() -> CatalogModule {
+    entry(
+        "notifications",
+        "Notifications",
+        "Push to phones and browsers, an in-app inbox, and email — one API, \
                  per-person categories, in the recipient's own language.",
-                Tier::Optional,
-                &[],
-            ),
-            m(
-                "privacy",
-                "Privacy requests",
-                "Answer a subject access or erasure request from what every other \
+        Tier::Optional,
+        &[],
+        detail(
+            "One call reaches a person wherever they agreed to be reached: a \
+                     push notification on a phone or a browser, a message in the in-app \
+                     inbox, an email — chosen per person, per category, and written in \
+                     the language they picked. Undeliverable work is kept and retried \
+                     rather than dropped, and what cannot be delivered at all lands in \
+                     dead letters instead of vanishing.",
+            "cratefield-module-notifications",
+            &["Database", "Push", "Clock", "IdGen"],
+            &["Defer", "HttpClient", "Realtime", "Mailer", "Signer"],
+            &[
+                "notifications_subscriptions",
+                "notifications_preferences",
+                "notifications_outbox",
+                "notifications_dead_letters",
+                "notifications_inbox",
+                "notifications_email_targets",
+                "notifications_email_sends",
+                "notifications_locales",
+                "notifications_email_suppressed",
+            ],
+            vec![
+                route(
+                    "GET",
+                    "/v1/notifications",
+                    "The in-app inbox for the signed-in person.",
+                ),
+                route(
+                    "GET",
+                    "/v1/notifications/unread-count",
+                    "How many are unread.",
+                ),
+                route("POST", "/v1/notifications/{id}/read", "Mark one read."),
+                route(
+                    "POST",
+                    "/v1/notifications/read-all",
+                    "Mark everything read.",
+                ),
+                route(
+                    "DELETE",
+                    "/v1/notifications/{id}",
+                    "Remove one from the inbox.",
+                ),
+                route(
+                    "PUT GET",
+                    "/v1/notifications/subscriptions",
+                    "Register a device or browser; list the registered ones.",
+                ),
+                route(
+                    "DELETE",
+                    "/v1/notifications/subscriptions/{id}",
+                    "Unregister one.",
+                ),
+                route(
+                    "GET PUT",
+                    "/v1/notifications/preferences",
+                    "Which categories reach this person, and how.",
+                ),
+                route(
+                    "PUT",
+                    "/v1/notifications/email",
+                    "The address this person is emailed at.",
+                ),
+                route(
+                    "GET",
+                    "/v1/notifications/vapid-public-key",
+                    "The Web Push key a browser subscribes with.",
+                ),
+                route(
+                    "POST",
+                    "/v1/notifications/email/webhook",
+                    "The mail provider's delivery and bounce reports.",
+                ),
+            ],
+            None,
+        ),
+    )
+}
+
+/// The `privacy` entry.
+fn privacy() -> CatalogModule {
+    entry(
+        "privacy",
+        "Privacy requests",
+        "Answer a subject access or erasure request from what every other \
                  module declares it holds. Optional, and the only honest default \
                  for a deployment holding personal data.",
-                Tier::Optional,
-                &[],
-            ),
+        Tier::Optional,
+        &[],
+        detail(
+            "Every other module declares what it holds about a person, and \
+                     this module turns those declarations into the two answers the law \
+                     asks for: everything you hold about somebody, and its deletion. It \
+                     owns no tables of its own — it reads the composition — so a module \
+                     added later is covered the day it is mounted, and a table nobody \
+                     declared is reported as exactly that rather than passed over in \
+                     silence.",
+            "cratefield-module-privacy",
+            &["Database", "Signer"],
+            &[],
+            &[],
+            vec![
+                route(
+                    "GET",
+                    "/v1/privacy/manifest",
+                    "What this deployment holds, table by table, for a privacy page.",
+                ),
+                route(
+                    "GET",
+                    "/v1/privacy/export",
+                    "Every row every module holds for one subject.",
+                ),
+                route(
+                    "POST",
+                    "/v1/privacy/erase",
+                    "Preview an erasure and get a confirmation token.",
+                ),
+                route(
+                    "POST",
+                    "/v1/privacy/erase/confirm",
+                    "Carry it out, and report what was reached.",
+                ),
+            ],
+            None,
+        ),
+    )
+}
+
+/// The curated set, in the order the wizard shows it.
+///
+/// One function per module rather than one long list: each entry is a
+/// paragraph of customer-facing copy plus the facts
+/// `tests/detail_matches_the_modules.rs` pins, and five of those in a
+/// single function is a screenful nobody can review a change to.
+#[must_use]
+pub fn curated() -> Catalog {
+    Catalog {
+        modules: vec![
+            email_signup(),
+            waitlist(),
+            cms(),
+            notifications(),
+            privacy(),
         ],
     }
 }
@@ -695,6 +1056,9 @@ mod tests {
                 tier,
                 depends_on: deps.iter().map(|s| (*s).to_owned()).collect(),
                 releases: vec![approved("1.0.0")],
+                // Resolution never reads the detail; these entries are
+                // edges, not copy.
+                detail: ModuleDetail::default(),
             }
         }
         Catalog {
