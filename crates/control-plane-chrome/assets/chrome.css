@@ -322,11 +322,21 @@ code { font-family: var(--mono); font-size: .92em; color: var(--ink); }
 
 /* A horizontally scrolling home for the diagram and for wide row tables,
    the same treatment the site gives wide tables: the page stays 400px
-   legible and the drawing keeps its true size. */
+   legible. The diagram shrinks to fit (below) and only reaches this
+   scroll once it hits its width floor; wide row tables always keep
+   their true size. */
 .dash__scroll { overflow-x: auto; border: 1px solid var(--edge); background: var(--ground); }
 
 .dash__card--canvas { padding: 6px; border: 0; background: none; min-width: min-content; }
 
+/* The diagram renders at its true size and `.dash__scroll` above pans
+   it. Scaling it into the pane was tried and rejected: the pane the
+   1180px shell and side nav leave is about 900px, a nine-table canvas
+   is about 1500px, and fitting one into the other renders the 10-11px
+   node type at 6-7px. The column names and types are the content of a
+   schema browser, not decoration around the boxes, so a diagram that
+   fits and cannot be read fails at the thing it is for. Panning a large
+   schema is what every tool that draws one does. */
 .dash__erd { display: block; font-family: var(--mono); }
 
 .dash__erd-box { fill: var(--panel); stroke: var(--edge-hi); stroke-width: 1; }
