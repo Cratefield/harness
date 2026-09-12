@@ -1821,14 +1821,19 @@ fn number_field(fields: &[FormField], name: &str) -> Option<i64> {
 /// plane hosts: rotate the data key of each store whose key is older
 /// than its policy.
 ///
-/// **Frequency-agnostic by construction.** The control plane's
-/// `wrangler.toml` registers no cron at all today, so on the Worker
-/// nothing fires this; where a scheduler *is* wired — the native
-/// runtime's `CRONS` config, which is what the dev server runs — the
-/// expression is deployment configuration, not this code's concern.
-/// Running every minute or once a quarter is equally safe because the
-/// age check, not the trigger, decides: a pass that finds nothing due
-/// writes nothing at all, so twice in a row rotates once.
+/// **Frequency-agnostic by construction.** The trigger is deployment
+/// configuration — `[triggers] crons` in the control plane's
+/// `wrangler.toml` (daily), and the native runtime's `CRONS` config,
+/// which is what the dev server runs. Running every minute or once a
+/// quarter is equally safe because the age check, not the trigger,
+/// decides: a pass that finds nothing due writes nothing at all, so
+/// twice in a row rotates once.
+///
+/// That the cron exists at all is not incidental. This screen tells an
+/// operator the date of the next automatic rotation, and a handler
+/// nothing ever fires would make that date a promise the deployment
+/// could not keep — the failure the sidecar template's own cron comment
+/// warns about. The trigger was added with this feature for that reason.
 ///
 /// **One store failing must not wedge the pass.** Each store is handled
 /// alone: a failure is logged, lands on that store's audit chain as a
