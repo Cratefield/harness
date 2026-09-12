@@ -32,9 +32,11 @@
 //! venture into every access as the audit actor (`venture:<id>`), so "who
 //! read this credential" is never a free-text field the caller chose. Even
 //! a store collision fails closed: a scope reaches only the tenant store
-//! it was granted for, and the store seals its ciphertexts with that
-//! tenant in the AAD (issue #142's attribution), so another venture's
-//! bytes fail as `NotAuthentic` — as a recorded, denied access.
+//! it was granted for — store attribution scopes every row-level query,
+//! and the store seals its ciphertexts with that tenant in the AAD
+//! (issue #142) — so another venture's bytes are not even a candidate,
+//! and a row that crossed anyway would fail as `NotAuthentic`: a
+//! recorded, denied access.
 //!
 //! The audit sink is owned by [`Connections::new`], which wires the
 //! durable per-store chain router ([`cratefield_secrets::chain_sink`])
@@ -1014,24 +1016,20 @@ mod tests {
             .await
             .unwrap();
         // The bytes sit in the shared physical database; venture B's
-        // scope still cannot read them: the store seals its ciphertext
-        // with the tenant the scope was granted for (issue #142).
-        let err = conns
-            .google_client_secret(&sb)
-            .await
-            .expect_err("not venture b's credential");
+        // scope still cannot read them. Store attribution scopes the
+        // read to ten_b's rows, of which this name is not one — so B's
+        // answer is *nothing*, not a refusal to decrypt ten_a's bytes
+        // (which is what this returned before attribution, when every
+        // query was store-blind and only the AAD caught the crossing).
         assert!(
-            matches!(
-                &err,
-                ConnError::Secrets(SecretsError::NotAuthentic { store, .. }) if store == "ten_b"
-            ),
-            "{err}"
+            conns.google_client_secret(&sb).await.unwrap().is_none(),
+            "venture a's row must not even be a candidate for venture b"
         );
-        // The denial is itself an audited access — recorded as refused,
-        // attributed to the venture that attempted it, on its own chain.
+        // The access is still audited and attributed to the venture
+        // that made it, on its own chain.
         let rows = audit_rows(&db, "ten_b").await;
         assert!(
-            rows.contains(&("get".to_owned(), "venture:ven_b".to_owned(), 0)),
+            rows.contains(&("get".to_owned(), "venture:ven_b".to_owned(), 1)),
             "{rows:?}"
         );
         verify(&StoreId::Tenant("ten_b".to_owned()), &*db)

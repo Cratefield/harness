@@ -364,7 +364,9 @@ dependencies = [
  "cratefield-console",
  "cratefield-core",
  "cratefield-dashboard",
+ "cratefield-kms",
  "cratefield-runtime-native",
+ "cratefield-secrets",
  "sea-query",
  "tokio",
 ]
@@ -393,6 +395,7 @@ dependencies = [
  "tracing",
  "ulid",
  "unicode-normalization",
+ "url",
 ]
 
 [[package]]
@@ -407,7 +410,9 @@ dependencies = [
  "cratefield-connections",
  "cratefield-console",
  "cratefield-core",
+ "cratefield-kms",
  "cratefield-provisioning",
+ "cratefield-secrets",
  "futures-util",
  "http",
  "sea-query",

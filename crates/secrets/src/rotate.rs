@@ -172,8 +172,13 @@ impl SecretStore {
     async fn rewrap_inner(&self, plan: bool) -> Result<RewrapReport, SecretsError> {
         let rows = self
             .db()
-            .query(&Statement::new(
-                "SELECT key_id FROM harness_secret_keys WHERE state <> 'retired' ORDER BY key_id",
+            .query(&Statement::with_values(
+                format!(
+                    "SELECT key_id FROM harness_secret_keys \
+                     WHERE state <> 'retired' AND {} ORDER BY key_id",
+                    crate::scoped_store()
+                ),
+                vec![text(self.id().as_str())],
             ))
             .await?;
         let key_ids: Vec<String> = rows
@@ -223,9 +228,13 @@ impl SecretStore {
     async fn live_versions(&self) -> Result<Vec<(String, u32)>, SecretsError> {
         let rows = self
             .db()
-            .query(&Statement::new(
-                "SELECT name, version FROM harness_secrets WHERE deleted_at IS NULL \
-                 ORDER BY name ASC, version ASC",
+            .query(&Statement::with_values(
+                format!(
+                    "SELECT name, version FROM harness_secrets \
+                     WHERE deleted_at IS NULL AND {} ORDER BY name ASC, version ASC",
+                    crate::scoped_store()
+                ),
+                vec![text(self.id().as_str())],
             ))
             .await?;
         let mut out = Vec::with_capacity(rows.rows.len());
@@ -247,8 +256,11 @@ impl SecretStore {
         let rows = self
             .db()
             .query(&Statement::with_values(
-                "SELECT COUNT(*) AS n FROM harness_secrets WHERE key_id = ?",
-                vec![text(key_id)],
+                format!(
+                    "SELECT COUNT(*) AS n FROM harness_secrets WHERE key_id = ? AND {}",
+                    crate::scoped_store()
+                ),
+                vec![text(key_id), text(self.id().as_str())],
             ))
             .await?;
         Ok(rows

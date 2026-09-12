@@ -22,6 +22,13 @@ cratefield-chrome = { path = "../control-plane-chrome" }
 cratefield-console = { path = "../control-plane-console" }
 cratefield-dashboard = { path = "../control-plane-dashboard" }
 cratefield-accounts = { path = "../control-plane-accounts" }
+# The secrets manager's wiring: LocalFileKms under a development key
+# file, and the store API the seed writes through. The `control-plane`
+# feature is named here too rather than inherited from the dashboard's
+# dependency, so the dev server keeps opening the global store even if
+# the dashboard ever changes how it asks for the fence.
+cratefield-secrets = { path = "../secrets", features = ["control-plane"] }
+cratefield-kms = { path = "../kms" }
 # The seeded provisioning failure is written with a parameterised statement,
 # so this needs the same value type the port speaks. Kept in step with the
 # workspace pin.

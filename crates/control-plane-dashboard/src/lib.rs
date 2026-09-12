@@ -18,6 +18,11 @@
 
 #![forbid(unsafe_code)]
 
+/// The secrets manager screen: the routes, the rendering and the tests
+/// all live in this module, so the wiring in `lib.rs` stays the only
+/// thing that file carries for it.
+pub(crate) mod secrets_screen;
+
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -36,7 +41,7 @@ use http::{HeaderMap, StatusCode, header};
 use time::format_description::well_known::Rfc3339;
 
 /// Where the dashboard is mounted (`/v1/<name>`), so its own links resolve.
-const BASE: &str = "/v1/dashboard";
+pub(crate) const BASE: &str = "/v1/dashboard";
 
 /// What the dashboard will spend on one venture's `/__health`.
 ///
@@ -67,7 +72,26 @@ const SURFACE_POLICY: HttpPolicy = HttpPolicy {
 };
 
 /// The control-plane account dashboard.
-pub struct Dashboard;
+///
+/// Carries the key manager for the secrets screen, when the composition
+/// wired one: `Some(kms)` on the dev server (a `LocalFileKms` under a
+/// development key file), `None` on the Worker, where no KMS exists yet
+/// and the secrets screen says so rather than failing. The KMS travels
+/// here rather than through a port because it is not a port — a module
+/// must never see it, and `ModuleContext` never carries one.
+#[derive(Default)]
+pub struct Dashboard {
+    kms: Option<Arc<dyn cratefield_kms::Kms>>,
+}
+
+impl Dashboard {
+    /// The dashboard with the key manager the secrets screen should use,
+    /// or `None` where no KMS is wired and the screen degrades honestly.
+    #[must_use]
+    pub fn new(kms: Option<Arc<dyn cratefield_kms::Kms>>) -> Self {
+        Self { kms }
+    }
+}
 
 impl Module for Dashboard {
     fn name(&self) -> &'static str {
@@ -92,35 +116,71 @@ impl Module for Dashboard {
         ]
     }
 
-    /// The one table this module's `migrations()` create (issue #280). The
-    /// comment on `migrations` below is why it is one and not five: the
-    /// dashboard reads the console's tables but owns only `connection`.
+    /// The tables this module's `migrations()` create (issue #280): the
+    /// connection metadata it owns, and the secrets store's own tables,
+    /// which this module applies on the control database and therefore
+    /// declares — see `migrations` below for why they are here and not
+    /// in the console's set.
     fn tables(&self) -> &'static [&'static str] {
-        &["connection"]
+        &[
+            "connection",
+            "harness_secrets",
+            "harness_secret_keys",
+            "harness_secret_audit",
+        ]
     }
 
-    /// The `connection` table holds connection *metadata* by design — kind,
-    /// state, an invalid-reason, and a non-secret hint (a public OAuth client
-    /// id, never a key). Its key is a venture's tenant id, which identifies
-    /// infrastructure, not a person; no column in the row names a human
-    /// being. The credential material it deliberately does not hold lives in
-    /// the tenant secrets store, which makes its own declarations.
+    /// What this module holds about a person, per table. The secrets
+    /// tables are judged `none` explicitly rather than inherited: a
+    /// secret row is a venture's own credential keyed to a store and a
+    /// name, not to a person, and the audit chain records actors that
+    /// are operator identities in a field no `… = ?` predicate for a
+    /// subject is honest about — the same call the dashboard already
+    /// made for `connection`, restated where a person deciding whether
+    /// to trust this product can read it.
     fn personal_data(&self) -> &'static [PersonalDataSet] {
-        const SETS: &[PersonalDataSet] = &[PersonalDataSet::none(
-            "connection",
-            "What a backend has connected, and whether each connection is healthy: the \
-             connection kind, its state, why it is invalid if it is, a non-secret label \
-             such as a public OAuth client id, and when it last changed. It is keyed to \
-             the backend's tenant, holds no credential, and names nobody.",
-        )];
+        const SETS: &[PersonalDataSet] = &[
+            PersonalDataSet::none(
+                "connection",
+                "What a backend has connected, and whether each connection is healthy: the \
+                 connection kind, its state, why it is invalid if it is, a non-secret label \
+                 such as a public OAuth client id, and when it last changed. It is keyed to \
+                 the backend's tenant, holds no credential, and names nobody.",
+            ),
+            PersonalDataSet::none(
+                "harness_secrets",
+                "A venture's own credentials, envelope-encrypted: a name, a version, the \
+                 ciphertext and its nonce, and when it was written. The value is never \
+                 in the clear and the row is keyed to a store and a name, not to a \
+                 person; an export that handed over ciphertexts would be handing over \
+                 noise.",
+            ),
+            PersonalDataSet::none(
+                "harness_secret_keys",
+                "The wrapped data keys that protect each store's secrets, with the key \
+                 ids, states and the KMS reference that wrapped them. No key material is \
+                 in the clear and nothing in a row names a person.",
+            ),
+            PersonalDataSet::none(
+                "harness_secret_audit",
+                "The tamper-evident audit chain of every access to a store's secrets: \
+                 the action, the store, the secret's name and version, and the actor — \
+                 an operator identity or a venture's scope, recorded because an \
+                 unaccountable access to a credential is worse than none. It holds no \
+                 secret value by construction, and it is append-only, so a subject's \
+                 \u{201c}right to be forgotten\u{201d} stops where the record of what \
+                 this product did with their data begins.",
+            ),
+        ];
         SETS
     }
 
     fn migrations(&self) -> Migrations {
-        // The dashboard owns exactly one table: `connection`. Everything
-        // else it renders — accounts, ventures, provisioning progress —
-        // belongs to the console, which declares those sub-schemas and
-        // writes the rows; the dashboard only reads them.
+        // The dashboard owns exactly one table of its own: `connection`.
+        // Everything else it renders — accounts, ventures, provisioning
+        // progress — belongs to the console, which declares those
+        // sub-schemas and writes the rows; the dashboard only reads
+        // them.
         //
         // It declared them too, once, and that did not survive contact
         // with a running control plane. Two modules in one harness each
@@ -131,36 +191,97 @@ impl Module for Dashboard {
         // fresh database. No test caught it because no test mounted two
         // modules together. Declaring only what this module owns is what
         // makes the composition apply.
-        const MIGRATIONS: [SqlMigration; 1] =
-            [if cratefield_connections::MIGRATION.transactional {
+        //
+        // The secrets store's tables are the one exception to "only what
+        // it owns", and the reason is the same as the console's: no
+        // composition applies them anywhere, and the secrets screen is
+        // this module's. They are re-id-ed sub-schemas of
+        // `cratefield_secrets`'s own sets (shared constants, not a second
+        // copy of the SQL that could drift), applied here under ids that
+        // cannot collide with anything else's.
+        const MIGRATIONS: [SqlMigration; 5] = [
+            if cratefield_connections::MIGRATION.transactional {
                 SqlMigration::new("0001", "connections", cratefield_connections::MIGRATION.sql)
             } else {
                 SqlMigration::new("0001", "connections", cratefield_connections::MIGRATION.sql)
                     .non_transactional()
-            }];
+            },
+            secrets_sub_migration(0, "0002", "secrets-init"),
+            secrets_sub_migration(1, "0003", "secrets-audit"),
+            secrets_sub_migration(2, "0004", "secrets-audit-store"),
+            secrets_sub_migration(3, "0005", "secrets-store-attribution"),
+        ];
         // The array is the apply order; this refuses a gap, a duplicate
         // or an entry out of order at build time (issue #27).
         const _: () = cratefield_core::assert_migration_set(&MIGRATIONS);
-        Migrations::sqlite(&MIGRATIONS)
+        // The secrets tables are not portable SQL (BLOB vs BYTEA, and
+        // the append-only trigger differs per engine), so the postgres
+        // set ships alongside the sqlite one exactly as the secrets
+        // crate ships both — re-id-ed the same way.
+        const POSTGRES_SET: [SqlMigration; 5] = [
+            if cratefield_connections::MIGRATION.transactional {
+                SqlMigration::new("0001", "connections", cratefield_connections::MIGRATION.sql)
+            } else {
+                SqlMigration::new("0001", "connections", cratefield_connections::MIGRATION.sql)
+                    .non_transactional()
+            },
+            secrets_sub_migration_pg(0, "0002", "secrets-init"),
+            secrets_sub_migration_pg(1, "0003", "secrets-audit"),
+            secrets_sub_migration_pg(2, "0004", "secrets-audit-store"),
+            secrets_sub_migration_pg(3, "0005", "secrets-store-attribution"),
+        ];
+        const _: () = cratefield_core::assert_migration_set(&POSTGRES_SET);
+        Migrations {
+            sqlite: &MIGRATIONS,
+            postgres: &POSTGRES_SET,
+        }
     }
 
     fn validate_config(
         &self,
-        _cfg: &dyn cratefield_core::Config,
+        cfg: &dyn cratefield_core::Config,
     ) -> Result<(), cratefield_core::ConfigError> {
-        // The dashboard has no configuration of its own: it renders what
-        // the other modules recorded. Nothing to validate.
-        Ok(())
+        let mut errors = cratefield_core::ConfigError::new();
+        // The development KEK file (DASHBOARD_DEV_KEK, read by the dev
+        // server to wire `LocalFileKms`) may never be set in production,
+        // exactly as the console treats `CONSOLE_DEV_LOGIN`: a key file
+        // a stray environment variable can switch on would wrap every
+        // secret this deployment ever stores under a key nobody has to
+        // account for — the one mistake here that cannot be walked
+        // back. `LocalFileKms::open` refuses on its own too; this is
+        // the composition-level gate.
+        let dev_kek = cratefield_core::ModuleConfig::new("dashboard", cfg).get_str("DEV_KEK", "");
+        let production = cfg.get("ENV").as_deref() == Some("production");
+        if !dev_kek.is_empty() && production {
+            errors.push("DASHBOARD_DEV_KEK must never be set in production");
+        }
+        errors.into_result()
     }
 
     fn router(&self, ctx: ModuleContext) -> axum::Router {
-        let state = Arc::new(DashboardState { ctx: Arc::new(ctx) });
+        let state = Arc::new(DashboardState {
+            ctx: Arc::new(ctx),
+            kms: self.kms.clone(),
+        });
         axum::Router::new()
             .route("/", get(ventures))
             .route("/ventures/{id}", get(venture_detail))
             .route("/ventures/{id}/archive", post(archive))
             .route("/ventures/{id}/modules", post(set_modules))
             .route("/ventures/{id}/reprovision", post(reprovision))
+            // The secrets manager: account-level, so it sits beside the
+            // venture screens rather than under one. Static segments
+            // win over the `/{slug}` catch-all below, so these need no
+            // nesting to take precedence.
+            .route("/secrets", get(secrets_screen::stores))
+            .route("/secrets/{store}", get(secrets_screen::store_detail))
+            .route("/secrets/{store}/put", post(secrets_screen::put_secret))
+            .route(
+                "/secrets/{store}/delete",
+                post(secrets_screen::delete_secret),
+            )
+            .route("/secrets/{store}/rotate", post(secrets_screen::rotate))
+            .route("/secrets/{store}/rewrap", post(secrets_screen::rewrap))
             // The screens the design has and the product does not. One
             // handler, one table; a new screen is a row.
             .route("/{slug}", get(planned_screen))
@@ -168,8 +289,43 @@ impl Module for Dashboard {
     }
 }
 
-struct DashboardState {
-    ctx: Arc<ModuleContext>,
+/// One of the secrets store's migrations, re-id-ed into this module's
+/// set. A const fn over the shared constants so the array
+/// `assert_migration_set` checks is built from the same bytes the
+/// secrets crate ships, not a second copy that could drift.
+const fn secrets_sub_migration(index: usize, id: &'static str, name: &'static str) -> SqlMigration {
+    sub_migration(&cratefield_secrets::SQLITE_MIGRATIONS, index, id, name)
+}
+
+/// The postgres twin of [`secrets_sub_migration`].
+const fn secrets_sub_migration_pg(
+    index: usize,
+    id: &'static str,
+    name: &'static str,
+) -> SqlMigration {
+    sub_migration(&cratefield_secrets::POSTGRES_MIGRATIONS, index, id, name)
+}
+
+const fn sub_migration(
+    set: &'static [SqlMigration],
+    index: usize,
+    id: &'static str,
+    name: &'static str,
+) -> SqlMigration {
+    let source = &set[index];
+    if source.transactional {
+        SqlMigration::new(id, name, source.sql)
+    } else {
+        SqlMigration::new(id, name, source.sql).non_transactional()
+    }
+}
+
+pub(crate) struct DashboardState {
+    pub(crate) ctx: Arc<ModuleContext>,
+    /// The key manager the secrets screen opens stores through, when the
+    /// composition wired one. `None` is a representable state, not an
+    /// `expect`: the Worker composition carries it today.
+    pub(crate) kms: Option<Arc<dyn cratefield_kms::Kms>>,
 }
 
 // ---------------------------------------------------------------------------
@@ -185,7 +341,7 @@ struct DashboardState {
 /// under this module: the dashboard serves no login route, so sending a
 /// signed-out visitor to `{BASE}/login` would 404 them.
 #[allow(clippy::result_large_err)]
-fn guard(ctx: &ModuleContext, headers: &HeaderMap) -> Result<(), Response> {
+pub(crate) fn guard(ctx: &ModuleContext, headers: &HeaderMap) -> Result<(), Response> {
     if current_session(ctx, headers).is_some() {
         Ok(())
     } else {
@@ -198,7 +354,7 @@ fn guard(ctx: &ModuleContext, headers: &HeaderMap) -> Result<(), Response> {
 /// repository, so isolation stays by query: no handler can name a venture
 /// outside the account.
 #[allow(clippy::result_large_err)]
-async fn account_of(
+pub(crate) async fn account_of(
     ctx: &ModuleContext,
     account_id: &str,
 ) -> Result<(cratefield_accounts::Account, Repository), Response> {
@@ -1358,7 +1514,11 @@ const PLANNED: [Planned; 7] = [
 
 /// The navigation shared by every account-level screen, so the same list is
 /// in the same order wherever you are.
-fn account_nav(current: &str) -> String {
+pub(crate) fn account_nav(current: &str) -> String {
+    // Leaked into a `String` would be a leak per render; the path is
+    // built once and borrowed for the life of the call, like the
+    // planned-screen paths below.
+    let secrets_path = format!("{BASE}/secrets");
     let mut items = vec![
         if current == "ventures" {
             NavItem::here("Ventures", BASE)
@@ -1366,6 +1526,13 @@ fn account_nav(current: &str) -> String {
             NavItem::to("Ventures", BASE)
         },
         NavItem::to("New venture", "/v1/console/new"),
+        // The secrets manager is account-level, so it sits in this list
+        // rather than under one venture.
+        if current == "secrets" {
+            NavItem::here("Secrets", &secrets_path)
+        } else {
+            NavItem::to("Secrets", &secrets_path)
+        },
     ];
     // Leaked into a `String` would be a leak per request; these paths are
     // built once per render and borrowed for the life of the call.
@@ -1473,7 +1640,7 @@ fn text(value: &str) -> sea_query::Value {
     sea_query::Value::String(Some(Box::new(value.to_owned())))
 }
 
-fn internal(detail: &str) -> Response {
+pub(crate) fn internal(detail: &str) -> Response {
     (StatusCode::INTERNAL_SERVER_ERROR, detail.to_owned()).into_response()
 }
 
@@ -1516,14 +1683,14 @@ fn health_dot(health: &HealthVerdict) -> &'static str {
 }
 
 /// The dashboard frame: the left navigation and the screen beside it.
-fn frame(nav_html: &str, crumb: &str, body: &str) -> String {
+pub(crate) fn frame(nav_html: &str, crumb: &str, body: &str) -> String {
     format!(
         "<div class=\"dash\"><div class=\"dash__body\">{nav_html}         <div class=\"dash__main\"><p class=\"dash__crumb\">{crumb}</p>{body}</div>         </div></div>"
     )
 }
 
 /// A panel.
-fn card(title: &str, tag: Option<&str>, body: &str, wide: bool) -> String {
+pub(crate) fn card(title: &str, tag: Option<&str>, body: &str, wide: bool) -> String {
     let tag = tag.map_or_else(String::new, |t| {
         format!(" <span class=\"dash__tag\">{}</span>", escape(t))
     });
@@ -1595,7 +1762,10 @@ mod tests {
     /// and it is what hid a duplicate-DDL failure until a dev server
     /// mounting both refused to boot.
     fn modules() -> Vec<Box<dyn Module>> {
-        vec![Box::new(cratefield_console::Console), Box::new(Dashboard)]
+        vec![
+            Box::new(cratefield_console::Console),
+            Box::new(Dashboard::default()),
+        ]
     }
 
     /// A harness with the dashboard module, an account, and one venture
