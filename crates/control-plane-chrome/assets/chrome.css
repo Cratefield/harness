@@ -329,23 +329,15 @@ code { font-family: var(--mono); font-size: .92em; color: var(--ink); }
 
 .dash__card--canvas { padding: 6px; border: 0; background: none; min-width: min-content; }
 
-/* The diagram scales to its container: the SVG carries width="100%"
-   with its viewBox and no height of its own, so the rendered height
-   follows the viewBox ratio here. A wide schema shrinks to fit instead
-   of forcing a scrollbar.
-   The floor: 880px sits just under the ~900px pane the dashboard's
-   1180px shell and side nav leave for the diagram at any desktop
-   width, so the scrollbar appears only on narrower windows — past the
-   floor, the nine-table canvas has shrunk past 0.6× and it is the
-   structure, not only the type, that stops reading. Inside the floor
-   the 10–11px node type renders at 6–7px once the canvas outgrows the
-   pane; that was judged better than scrolling, because the boxes,
-   arrows and table names stay readable and browser zoom covers the
-   rest, whereas a scrollbar hides the tables that justify the canvas
-   size — the exact complaint this fixed. Small schemas upscale; a
-   zoomed drawing is honest, a small box floating in a wide card is
-   not. */
-.dash__erd { display: block; font-family: var(--mono); height: auto; min-width: 880px; }
+/* The diagram renders at its true size and `.dash__scroll` above pans
+   it. Scaling it into the pane was tried and rejected: the pane the
+   1180px shell and side nav leave is about 900px, a nine-table canvas
+   is about 1500px, and fitting one into the other renders the 10-11px
+   node type at 6-7px. The column names and types are the content of a
+   schema browser, not decoration around the boxes, so a diagram that
+   fits and cannot be read fails at the thing it is for. Panning a large
+   schema is what every tool that draws one does. */
+.dash__erd { display: block; font-family: var(--mono); }
 
 .dash__erd-box { fill: var(--panel); stroke: var(--edge-hi); stroke-width: 1; }
 .dash__erd-node:hover .dash__erd-box { stroke: var(--accent); }

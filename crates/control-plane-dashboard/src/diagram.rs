@@ -115,15 +115,19 @@ pub(crate) fn render(schema: &Schema, owners: &[(&str, &str)]) -> String {
 
     let (width, height) = canvas(schema, &placed);
     let table_count = schema.tables.len();
-    // The svg scales to its container: `width="100%"` with the viewBox
-    // and no height of its own, so the rendered height follows the
-    // viewBox ratio through the stylesheet's `height: auto`. A wide
-    // diagram shrinks to fit instead of forcing a scrollbar; the point
-    // where shrinking would blur the text is the stylesheet's width
-    // floor, past which the scroll container takes over.
+    // The svg renders at its true size and the container scrolls.
+    //
+    // Scaling it to the pane instead was tried and rejected: the pane the
+    // 1180px shell leaves is about 900px, a nine-table canvas is about
+    // 1500px, and fitting one into the other renders the 10-11px node
+    // type at 6-7px. A schema browser exists to be read — the column
+    // names and types are the content, not decoration around the boxes —
+    // so a diagram that fits and cannot be read fails at the thing it is
+    // for, while one that is read a screen at a time does not. Panning a
+    // large schema is what every tool that draws one does.
     format!(
         "<svg class=\"dash__erd\" xmlns=\"http://www.w3.org/2000/svg\" \
-         role=\"img\" width=\"100%\" \
+         role=\"img\" width=\"{width}\" height=\"{height}\" \
          viewBox=\"0 0 {width} {height}\" \
          aria-label=\"Schema diagram: {table_count} tables, {edge_count} relations\">\
          <title>Schema diagram: {table_count} tables, {edge_count} relations</title>\
@@ -737,11 +741,22 @@ mod tests {
             ),
             "{svg}"
         );
-        // The scaling contract the stylesheet leans on: the viewBox
-        // carries the intrinsic size, and the width is the container's
-        // business.
-        assert!(svg.contains("width=\"100%\""), "{svg}");
+        // The sizing contract the stylesheet leans on: the svg carries
+        // its true size, so the type renders at the size it was written
+        // at and `.dash__scroll` pans anything wider than the pane. A
+        // percentage width here would shrink a nine-table canvas past
+        // 0.6 and take the 11px type down to 6px with it.
+        assert!(!svg.contains("width=\"100%\""), "{svg}");
         assert!(svg.contains("viewBox=\"0 0 "), "{svg}");
+        let width = svg
+            .split("width=\"")
+            .nth(1)
+            .and_then(|rest| rest.split('"').next())
+            .expect("the svg states a width");
+        assert!(
+            width.parse::<i64>().is_ok_and(|px| px > 0),
+            "the width is a pixel count, not a percentage: {width}"
+        );
     }
 
     #[test]
