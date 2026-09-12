@@ -485,7 +485,7 @@ jobs:
           curl -sf -m 30 http://127.0.0.1:8787/v1/sample/blob-probe > /tmp/blob-probe.json
           cat /tmp/blob-probe.json
           grep -q '"round_trip":"ok"' /tmp/blob-probe.json
-          grep -q '"key":"sample/probe/' /tmp/blob-probe.json
+          grep -q '"key":"probe/' /tmp/blob-probe.json
       - name: Two sockets against the room Durable Object (issue #103)
         working-directory: examples/venture
         # Not curl: a WebSocket upgrade is the one thing it cannot do, and the
