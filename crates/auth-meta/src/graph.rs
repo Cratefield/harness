@@ -6,7 +6,7 @@
 //! because the access token behind it came from our own back-channel
 //! exchange, authenticated with the app secret. See ADR 0204.
 //!
-//! The endpoints, [`Profile`] and [`profile`] are public because the
+//! The endpoints, [`crate::graph::Profile`] and [`crate::graph::profile_endpoint`] are public because the
 //! control-plane console runs its own Facebook Login (Cratefield issue #3)
 //! over the same `HttpClient` port: the version-pinned endpoint builders
 //! and the email-optional profile shape are facts about **Meta**, not

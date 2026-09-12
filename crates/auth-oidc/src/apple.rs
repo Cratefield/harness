@@ -10,7 +10,9 @@
 //!    rotate: [`Minter`] mints one on demand and caches it well inside its
 //!    own lifetime. Rotating the key is a secret swap and a key-id change.
 //! 2. **The authorization response arrives as a cross-site `form_post`.**
-//!    Handled in [`crate::flow`] and [`crate::handlers`], not here.
+//!    Handled in this crate's `flow` and `handlers` modules, not here.
+//!    (Named rather than linked: this module is public and those two are
+//!    not, so a link would be a public doc pointing at a private item.)
 //! 3. **The person's name arrives exactly once**, as JSON in the first
 //!    authorization's form body and never again. [`name_from_user_field`]
 //!    reads it; the linking rules store it on the identity or lose it.
