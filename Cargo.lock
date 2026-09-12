@@ -850,6 +850,12 @@ dependencies = [
 name = "cratefield-catalog"
 version = "0.1.1"
 dependencies = [
+ "cratefield-core",
+ "cratefield-module-cms",
+ "cratefield-module-email-signup",
+ "cratefield-module-notifications",
+ "cratefield-module-privacy",
+ "cratefield-module-waitlist",
  "serde",
  "serde_json",
 ]

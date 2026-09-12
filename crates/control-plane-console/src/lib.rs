@@ -422,6 +422,107 @@ async fn home(State(state): State<Arc<ConsoleState>>, headers: HeaderMap) -> Res
     .into_response()
 }
 
+/// The checkbox half of a module row: what you tick.
+///
+/// The `<label>` wraps the checkbox and the summary line and **stops
+/// there**. The detail below it is a sibling, not a child: a `<summary>`
+/// inside a label toggles the checkbox when it is clicked, so opening
+/// "What it does" would have silently selected the module.
+fn module_pick(module: &cratefield_catalog::CatalogModule) -> String {
+    format!(
+        "<label class=\"mod__pick\">\
+         <input type=\"checkbox\" name=\"module\" value=\"{slug}\">\
+         <span><span class=\"mod__name\">{name} <code>{slug}</code></span>\
+         <span class=\"mod__sum\">{summary}</span></span></label>",
+        slug = escape(&module.slug),
+        name = escape(&module.name),
+        summary = escape(&module.summary),
+    )
+}
+
+/// The info pane: everything the catalog knows about a module, folded
+/// away until somebody asks for it.
+///
+/// A native `<details>`, so it works with scripting off and needs no
+/// stylesheet to hide anything — the one hiding mechanism an author rule
+/// cannot accidentally override. A module with no detail (a catalog
+/// deserialised from a document written before the field existed) renders
+/// nothing rather than an empty pane promising an answer.
+fn module_more(module: &cratefield_catalog::CatalogModule) -> String {
+    use std::fmt::Write as _;
+
+    let d = &module.detail;
+    if d.what_it_is.is_empty() {
+        return String::new();
+    }
+    let joined = |items: &[String]| {
+        items
+            .iter()
+            .map(|i| escape(i))
+            .collect::<Vec<_>>()
+            .join(" &middot; ")
+    };
+
+    let mut facts = String::new();
+    let version = module
+        .releases
+        .first()
+        .map_or_else(String::new, |r| format!(" &middot; {}", escape(&r.version)));
+    // `write!` into a String cannot fail; the results are discarded the
+    // way the rest of this file's rendering does.
+    let _ = write!(
+        facts,
+        "<dt>Crate</dt><dd><code>{}</code>{version}</dd>",
+        escape(&d.crate_name)
+    );
+    if !d.needs.is_empty() {
+        let _ = write!(facts, "<dt>Needs</dt><dd>{}</dd>", joined(&d.needs));
+    }
+    if !d.optional.is_empty() {
+        let _ = write!(
+            facts,
+            "<dt>Uses if present</dt><dd>{}</dd>",
+            joined(&d.optional)
+        );
+    }
+    if d.tables.is_empty() {
+        // Said out loud, because "no tables" is a fact a customer
+        // weighing a module wants — not an omission.
+        facts.push_str("<dt>Tables</dt><dd>None. It reads what other modules declare.</dd>");
+    } else {
+        facts.push_str("<dt>Tables</dt><dd><span class=\"mod__tables\">");
+        for table in &d.tables {
+            let _ = write!(facts, "<code>{}</code>", escape(table));
+        }
+        facts.push_str("</span></dd>");
+    }
+    if let Some(surface) = &d.surface {
+        let _ = write!(facts, "<dt>Screens</dt><dd>{}</dd>", escape(surface));
+    }
+
+    let mut routes = String::new();
+    for route in &d.routes {
+        let _ = write!(
+            routes,
+            "<tr><td class=\"mod__m\">{method}</td>\
+             <td><code>{path}</code></td><td>{note}</td></tr>",
+            method = escape(&route.method),
+            path = escape(&route.path),
+            note = escape(&route.note),
+        );
+    }
+
+    format!(
+        "<details class=\"mod__more\"><summary>What it does</summary>\
+         <div class=\"mod__detail\"><p class=\"mod__what\">{what}</p>\
+         <dl class=\"mod__facts\">{facts}</dl>\
+         <p class=\"mod__rh\">Endpoints</p>\
+         <table class=\"mod__routes\"><tbody>{routes}</tbody></table>\
+         </div></details>",
+        what = escape(&d.what_it_is),
+    )
+}
+
 /// The dashboard frame, so the console's screens sit in the same furniture.
 fn chrome_frame(nav: &str, crumb: &str, body: &str) -> String {
     format!(
@@ -444,13 +545,9 @@ async fn new_wizard(State(state): State<Arc<ConsoleState>>, headers: HeaderMap) 
     let mut modules = String::from("<div class=\"mods\">");
     for module in &catalog.modules {
         modules.push_str(&format!(
-            "<label class=\"mod\">\
-             <input type=\"checkbox\" name=\"module\" value=\"{slug}\">\
-             <span><span class=\"mod__name\">{name} <code>{slug}</code></span>\
-             <span class=\"mod__sum\">{summary}</span></span></label>",
-            slug = escape(&module.slug),
-            name = escape(&module.name),
-            summary = escape(&module.summary),
+            "<div class=\"mod\">{pick}{more}</div>",
+            pick = module_pick(module),
+            more = module_more(module),
         ));
     }
     modules.push_str("</div>");
@@ -1283,5 +1380,90 @@ mod tests {
             personal_data: Arc::new(cratefield_core::PersonalDataCatalog::default()),
             ui_mounted: false,
         }
+    }
+
+    #[test]
+    fn opening_the_detail_cannot_tick_the_checkbox() {
+        // A `<summary>` inside a `<label>` toggles that label's control,
+        // so a pane nested in the label would select the module the
+        // moment somebody read about it. The label has to close first.
+        for module in cratefield_catalog::curated().modules {
+            let row = format!("{}{}", module_pick(&module), module_more(&module));
+            let label_end = row.find("</label>").expect("the pick is a label");
+            let pane = row.find("<details").expect("the module has a pane");
+            assert!(
+                label_end < pane,
+                "`{}` renders its pane inside the label, so opening it selects the module",
+                module.slug
+            );
+        }
+    }
+
+    #[test]
+    fn the_pane_carries_every_fact_the_catalog_holds() {
+        for module in cratefield_catalog::curated().modules {
+            let pane = module_more(&module);
+            let d = &module.detail;
+            assert!(
+                pane.contains(&escape(&d.crate_name)),
+                "`{}` does not name its crate",
+                module.slug
+            );
+            for port in d.needs.iter().chain(d.optional.iter()) {
+                assert!(
+                    pane.contains(port.as_str()),
+                    "`{}` does not show the `{port}` port",
+                    module.slug
+                );
+            }
+            for table in &d.tables {
+                assert!(
+                    pane.contains(table.as_str()),
+                    "`{}` does not show the `{table}` table",
+                    module.slug
+                );
+            }
+            if d.tables.is_empty() {
+                assert!(
+                    pane.contains("None. It reads what other modules declare."),
+                    "`{}` owns no tables and says nothing about it",
+                    module.slug
+                );
+            }
+            for route in &d.routes {
+                assert!(
+                    pane.contains(&escape(&route.path)),
+                    "`{}` does not show `{}`",
+                    module.slug,
+                    route.path
+                );
+                assert!(
+                    pane.contains(&escape(&route.note)),
+                    "`{}` shows `{}` with no explanation",
+                    module.slug,
+                    route.path
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_module_with_no_detail_renders_no_pane() {
+        // A catalog deserialised from a document written before the field
+        // existed. An empty `<details>` would promise an answer it does
+        // not have.
+        let mut module = cratefield_catalog::curated().modules.remove(0);
+        module.detail = cratefield_catalog::ModuleDetail::default();
+        assert_eq!(module_more(&module), "");
+        assert!(module_pick(&module).contains("type=\"checkbox\""));
+    }
+
+    #[test]
+    fn prose_from_the_catalog_is_escaped_into_the_pane() {
+        let mut module = cratefield_catalog::curated().modules.remove(0);
+        module.detail.what_it_is = "<script>alert(1)</script>".to_owned();
+        let pane = module_more(&module);
+        assert!(!pane.contains("<script>"), "{pane}");
+        assert!(pane.contains("&lt;script&gt;"), "{pane}");
     }
 }

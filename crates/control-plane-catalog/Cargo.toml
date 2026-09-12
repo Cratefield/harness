@@ -16,3 +16,13 @@ serde = { workspace = true }
 
 [dev-dependencies]
 serde_json = { workspace = true }
+# The modules the curated detail describes, so the detail is checked
+# against them rather than trusted (`tests/detail_matches_the_modules.rs`).
+# Dev-only: nothing in the control plane links a venture's modules, and a
+# catalog entry is data about a module, not a dependency on one.
+cratefield-core = { workspace = true }
+cratefield-module-email-signup = { workspace = true }
+cratefield-module-waitlist = { workspace = true }
+cratefield-module-cms = { workspace = true }
+cratefield-module-notifications = { workspace = true }
+cratefield-module-privacy = { workspace = true }
