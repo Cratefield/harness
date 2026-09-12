@@ -42,6 +42,20 @@ pub const MIGRATION: cratefield_core::SqlMigration = cratefield_core::SqlMigrati
     include_str!("../migrations/sqlite/0001_init.sql"),
 );
 
+/// The pending magic-link tokens (issue #3): one row per mailed link,
+/// keyed by the SHA-256 of the token in the URL. Portable SQL (TEXT +
+/// BIGINT, no dialect functions), so one file serves both engines and the
+/// console's Postgres array embeds these same bytes rather than a copy.
+///
+/// Declared by the console module — the flow that writes it lives there —
+/// under its own id (`0004`), the same re-id'ed sub-schema pattern the
+/// console uses for this crate's first migration.
+pub const MIGRATION_MAGIC_LINK: cratefield_core::SqlMigration = cratefield_core::SqlMigration::new(
+    "0002",
+    "magic-link",
+    include_str!("../migrations/sqlite/0002_magic_link.sql"),
+);
+
 // ---------------------------------------------------------------------------
 // Session cookie
 // ---------------------------------------------------------------------------

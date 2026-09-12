@@ -33,7 +33,11 @@
 
 #![forbid(unsafe_code)]
 
-mod apple;
+// `apple` is the one public module: the control-plane console runs its own
+// Apple flow (issue #3) and mints the same client secret through the same
+// `Minter` rather than carrying a second copy of ES256 signing. Everything
+// else here is module-private.
+pub mod apple;
 mod discovery;
 mod flow;
 mod handlers;

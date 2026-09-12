@@ -30,7 +30,11 @@
 
 mod deletion;
 mod flow;
-mod graph;
+/// The Graph endpoints and the one profile call Facebook Login needs.
+/// Public because the control-plane console runs its own Meta flow
+/// (Cratefield issue #3) and reads the profile through the same call
+/// rather than a second copy of it.
+pub mod graph;
 mod handlers;
 mod session;
 mod signed_request;

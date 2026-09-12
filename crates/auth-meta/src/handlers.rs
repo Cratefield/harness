@@ -345,7 +345,7 @@ async fn callback(
     // exchange already answered, at the cost of a second round trip on
     // every sign-in (ADR 0204).
     let profile = match graph::profile(
-        &http,
+        http.as_ref(),
         &settings.graph_version,
         token.access_token().secret(),
     )

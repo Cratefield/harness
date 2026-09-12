@@ -24,12 +24,19 @@
 //! obviously-fake seeded secrets so the screen has something truthful to
 //! show. `DASHBOARD_DEV_KEK` in a production environment is refused twice —
 //! by the dashboard's `validate_config` and by `LocalFileKms` itself.
+//!
+//! The magic-link way in is wired through a development mailer that prints
+//! each mail to **stderr** instead of sending it: nothing leaves the
+//! machine, and the sign-in link is one scroll-back away. It needs
+//! `CONSOLE_MAGIC_LINK_FROM` and `CONSOLE_BASE_URL` (see the boot note) —
+//! without both, the login page honestly omits the option, exactly as in
+//! production.
 
 use std::sync::Arc;
 
 use cratefield_accounts::{Repository, VentureStatus};
 use cratefield_adapter_sqlite::SqliteDatabase;
-use cratefield_core::{Database, Harness, Module, Statement, Venture};
+use cratefield_core::{Database, Harness, Mailer, MailError, Message, Module, SendOutcome, Statement, Venture};
 use cratefield_kms::{Kms, LocalFileKms};
 use cratefield_secrets::{Actor, SecretBytes, Secrets, chain_sink};
 use cratefield_runtime_native::{Native, serve_on};
@@ -72,6 +79,8 @@ async fn main() {
     seed(&db).await;
     seed_secrets(&db, &Secrets::new(kms.clone()).with_audit(chain_sink(Arc::clone(&db)))).await;
 
+    let mailer: Arc<dyn Mailer> = Arc::new(DevMailer);
+
     let harness = Arc::new(
         Harness::builder()
             .venture(
@@ -86,7 +95,10 @@ async fn main() {
             .build()
             .expect("the control-plane harness is valid"),
     );
-    let runtime = Native::new().db_arc(db);
+    // The runtime `serve_on` builds the router from is the one whose ports
+    // reach the modules, so the mailer lands here (and on the builder's
+    // runtime above it would only ever have validated `provides()`).
+    let runtime = Native::new().db_arc(db).mailer_arc(Arc::clone(&mailer));
 
     // 8787 by default (the port every doc names); `PORT` moves it, so a
     // second dev server can run beside one that already holds it — this
@@ -101,6 +113,24 @@ async fn main() {
         .unwrap_or_else(|err| panic!("bind 127.0.0.1:{port}: {err}"));
     eprintln!("control-plane dev server on http://127.0.0.1:{port}");
     eprintln!("  sign in:   http://127.0.0.1:{port}/v1/console/dev-login");
+    // The magic-link option needs the mailer (always wired here) plus the
+    // two settings; saying which are missing at boot is the same honesty
+    // the login page renders with.
+    let magic_from = std::env::var("CONSOLE_MAGIC_LINK_FROM").unwrap_or_default();
+    let magic_base = std::env::var("CONSOLE_BASE_URL").unwrap_or_default();
+    if !magic_from.is_empty() && !magic_base.is_empty() {
+        eprintln!(
+            "  magic link: on — mail is printed to this stderr; set \
+               CONSOLE_BASE_URL=http://127.0.0.1:{port} if links point \
+               elsewhere"
+        );
+    } else {
+        eprintln!(
+            "  magic link: off — the login page will say so. To turn it on: \
+               CONSOLE_MAGIC_LINK_FROM=dev@cratefield.local \
+               CONSOLE_BASE_URL=http://127.0.0.1:{port}"
+        );
+    }
     eprintln!("  dashboard: http://127.0.0.1:{port}/v1/dashboard");
     eprintln!("  data:      http://127.0.0.1:{port}/v1/dashboard/data");
     eprintln!("  secrets:   http://127.0.0.1:{port}/v1/dashboard/secrets");
@@ -258,4 +288,22 @@ async fn seed_secrets(db: &Arc<dyn Database>, secrets: &Secrets) {
 
 fn text(value: &str) -> sea_query::Value {
     sea_query::Value::String(Some(Box::new(value.to_owned())))
+}
+
+/// The development mailer: every mail is printed to stderr, nothing is
+/// sent. A magic link lands in the terminal one scroll-back away, which
+/// is the whole point of wiring a mailer into a dev server at all — and
+/// because it always reports `Sent`, the login page's magic-link option
+/// depends only on the two settings, exactly as in production.
+struct DevMailer;
+
+#[async_trait::async_trait]
+impl Mailer for DevMailer {
+    async fn send(&self, message: Message) -> Result<SendOutcome, MailError> {
+        eprintln!(
+            "\n── dev mail ──\nfrom: {}\nto: {}\nsubject: {}\n{}\n───────────────\n",
+            message.from, message.to, message.subject, message.text
+        );
+        Ok(SendOutcome::Sent { id: "dev".to_owned() })
+    }
 }
