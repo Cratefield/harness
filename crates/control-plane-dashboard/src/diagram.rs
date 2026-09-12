@@ -22,9 +22,15 @@
 //! earlier column than the tables that reference it, so the arrows the
 //! diagram exists for mostly point one way. Order within a layer is name
 //! order (which is arrival order — the schema is sorted). Tables with no
-//! relations at all go in one final column after every layered one,
-//! because a box that connects to nothing has no place in the flow and
-//! still has a place on the page.
+//! relations at all flow into a grid that starts after the last layer
+//! and grows one column at a time until the whole canvas reaches 9:5
+//! ([`ASPECT_W`]): a box that connects to nothing has no place in the
+//! flow and still has a place on the page, and a crowd of them no longer
+//! stacks into one tall column with a band of empty canvas beside it.
+//! The grid's gutters are narrower than the layer gaps because no curve
+//! is ever routed through them, and its tables are dealt onto the
+//! currently shortest column so it comes out level; the canvas is then
+//! simply the extent of what was placed.
 
 #![allow(clippy::too_many_lines)] // one renderer, read top to bottom
 
@@ -43,6 +49,13 @@ const ROW_H: i64 = 18;
 const COL_GAP: i64 = 130;
 /// Vertical gap between nodes in a column.
 const ROW_GAP: i64 = 42;
+/// Horizontal gap inside the relation-less grid, and between the grid
+/// and the last layer column. No edge is ever routed through it — a
+/// table with no relations cannot send one — so it needs only the room
+/// a gutter takes, not the corridor the curves need. Reusing `COL_GAP`
+/// here was rejected: it would reserve 88px of curve corridor per grid
+/// column that nothing will ever cross.
+const GRID_GAP: i64 = 42;
 /// The page margin around the drawing.
 const MARGIN: i64 = 14;
 /// Text inset inside a node.
@@ -51,8 +64,19 @@ const INSET: i64 = 10;
 /// classic 0.6em approximation, used only to truncate long names, never
 /// to position text.
 const CHAR_W: i64 = 7;
+/// The canvas shape the layout steers into, as a cross-multiplied ratio
+/// (`width * ASPECT_H >= height * ASPECT_W`) so the comparison stays in
+/// integers. 9:5 is a touch wider than 16:10 — roughly the shape of the
+/// pane the dashboard draws the diagram into — and it is where the
+/// relation-less grid stops adding columns: reaching for a taller canvas
+/// wastes the pane's width on an empty band beside the grid (the waste
+/// this layout replaced), and a wider one spends that width on columns
+/// the reader has to scroll past.
+const ASPECT_W: i64 = 9;
+const ASPECT_H: i64 = 5;
 
 /// Where a node was placed, in SVG pixels.
+#[derive(Clone, Copy)]
 struct Placed {
     x: i64,
     y: i64,
@@ -91,9 +115,15 @@ pub(crate) fn render(schema: &Schema, owners: &[(&str, &str)]) -> String {
 
     let (width, height) = canvas(schema, &placed);
     let table_count = schema.tables.len();
+    // The svg scales to its container: `width="100%"` with the viewBox
+    // and no height of its own, so the rendered height follows the
+    // viewBox ratio through the stylesheet's `height: auto`. A wide
+    // diagram shrinks to fit instead of forcing a scrollbar; the point
+    // where shrinking would blur the text is the stylesheet's width
+    // floor, past which the scroll container takes over.
     format!(
         "<svg class=\"dash__erd\" xmlns=\"http://www.w3.org/2000/svg\" \
-         role=\"img\" width=\"{width}\" height=\"{height}\" \
+         role=\"img\" width=\"100%\" \
          viewBox=\"0 0 {width} {height}\" \
          aria-label=\"Schema diagram: {table_count} tables, {edge_count} relations\">\
          <title>Schema diagram: {table_count} tables, {edge_count} relations</title>\
@@ -164,9 +194,12 @@ fn layer_depths(schema: &Schema) -> Vec<usize> {
     depth
 }
 
-/// Assigns every table a column (its layer's rank, or one final column
-/// for tables with no relations) and a y offset, stacking each column by
-/// name order — which is the schema's arrival order.
+/// Assigns every table a position. The related tables stack down their
+/// layer's column in name order — that left-to-right flow is what keeps
+/// the arrows readable. The relation-less tables flow into a grid that
+/// starts after the last layer, wraps at [`grid_columns`]'s chosen
+/// width, and is dealt onto the currently shortest column so it comes
+/// out level.
 fn place(schema: &Schema, depths: &[usize]) -> Vec<Placed> {
     let has_relations = |index: usize| {
         let outgoing = !schema.tables[index].foreign_keys.is_empty();
@@ -191,27 +224,112 @@ fn place(schema: &Schema, depths: &[usize]) -> Vec<Placed> {
     ranks.dedup();
     let rank_of = |depth: usize| ranks.iter().position(|rank| *rank == depth);
 
-    let columns = ranks.len() + 1;
-    let mut cursors = vec![MARGIN; columns];
-    schema
-        .tables
-        .iter()
-        .enumerate()
-        .map(|(index, table)| {
-            let column = if has_relations(index) {
-                rank_of(depths[index]).unwrap_or(0)
-            } else {
-                // No relations: the final column, after every layer.
-                ranks.len()
-            };
-            let placed = Placed {
-                x: MARGIN + i64::try_from(column).unwrap_or(0) * (NODE_W + COL_GAP),
+    let layers = ranks.len();
+    let mut cursors = vec![MARGIN; layers];
+    let mut grid: Vec<usize> = Vec::new();
+    let mut placed = vec![
+        Placed {
+            x: MARGIN,
+            y: MARGIN
+        };
+        schema.tables.len()
+    ];
+    for (index, table) in schema.tables.iter().enumerate() {
+        if has_relations(index) {
+            let column = rank_of(depths[index]).unwrap_or(0);
+            placed[index] = Placed {
+                x: column_x(column),
                 y: cursors[column],
             };
             cursors[column] += node_height(table) + ROW_GAP;
-            placed
-        })
-        .collect()
+        } else {
+            grid.push(index);
+        }
+    }
+    if grid.is_empty() {
+        return placed;
+    }
+
+    // The grid starts one narrow gutter past the last layer column, or
+    // at the margin when the schema holds no relations at all and the
+    // grid is the whole layout.
+    let x0 = if layers == 0 {
+        MARGIN
+    } else {
+        column_x(layers - 1) + NODE_W + GRID_GAP
+    };
+    // The floor the grid is balanced against: the deepest layer column's
+    // bottom edge, which the canvas cannot be shorter than however the
+    // grid is dealt.
+    let layer_floor = cursors
+        .iter()
+        .map(|cursor| cursor - ROW_GAP)
+        .max()
+        .unwrap_or(MARGIN);
+    let heights: Vec<i64> = grid
+        .iter()
+        .map(|&index| node_height(&schema.tables[index]))
+        .collect();
+    let columns = grid_columns(&heights, x0, layer_floor);
+    let (stacks, _) = deal(&heights, columns);
+    let mut grid_cursors = vec![MARGIN; columns];
+    for ((&index, &column), height) in grid.iter().zip(&stacks).zip(&heights) {
+        placed[index] = Placed {
+            x: x0 + i64::try_from(column).unwrap_or(0) * (NODE_W + GRID_GAP),
+            y: grid_cursors[column],
+        };
+        grid_cursors[column] += height + ROW_GAP;
+    }
+    placed
+}
+
+/// The x of layer column `column`: the margin plus the layer stride,
+/// whose wide gap is where the foreign-key curves live.
+fn column_x(column: usize) -> i64 {
+    MARGIN + i64::try_from(column).unwrap_or(0) * (NODE_W + COL_GAP)
+}
+
+/// Deals `heights`, in order, onto `columns` stacks — each onto the
+/// stack that is currently shortest, the first stack on a tie — and
+/// returns each table's stack beside the stacks' cursors. The greedy
+/// keeps a grid level without any search or retry, and reading
+/// `heights` in schema order keeps it deterministic.
+fn deal(heights: &[i64], columns: usize) -> (Vec<usize>, Vec<i64>) {
+    let mut cursors = vec![MARGIN; columns];
+    let mut stacks = Vec::with_capacity(heights.len());
+    for &height in heights {
+        let column = (0..columns)
+            .min_by_key(|&column| cursors[column])
+            .expect("columns is at least one");
+        cursors[column] += height + ROW_GAP;
+        stacks.push(column);
+    }
+    (stacks, cursors)
+}
+
+/// The relation-less grid's column count: the smallest count, up to one
+/// per table, whose canvas — the grid stood beside the layers — reaches
+/// [`ASPECT_W`]:[`ASPECT_H`]. Each candidate is costed by actually
+/// dealing the tables through [`deal`], so the count stays a function of
+/// the schema alone; when even one column per table cannot reach the
+/// ratio (a schema whose layers are simply tall), that widest grid is
+/// what ships, because a scrollbar is honest and an empty band is not.
+fn grid_columns(heights: &[i64], x0: i64, layer_floor: i64) -> usize {
+    for columns in 1..=heights.len() {
+        let (_, cursors) = deal(heights, columns);
+        let bottom = cursors
+            .iter()
+            .map(|cursor| cursor - ROW_GAP)
+            .max()
+            .unwrap_or(MARGIN);
+        let width =
+            x0 + i64::try_from(columns - 1).unwrap_or(0) * (NODE_W + GRID_GAP) + NODE_W + MARGIN;
+        let height = layer_floor.max(bottom) + MARGIN;
+        if width * ASPECT_H >= height * ASPECT_W {
+            return columns;
+        }
+    }
+    heights.len()
 }
 
 /// The overall canvas size: as wide as the columns, as tall as the
@@ -435,6 +553,40 @@ mod tests {
         ])
     }
 
+    /// A relation-less table with `fields` text columns — furniture for
+    /// the grid tests, where only its height matters.
+    fn plain(name: &str, fields: usize) -> TableDef {
+        TableDef::new(
+            name,
+            "id",
+            (0..fields)
+                .map(|n| FieldDef::new(format!("col_{n}"), FieldKind::text()).required())
+                .collect(),
+        )
+    }
+
+    /// A node's x, read back out of its rendered box.
+    fn node_x(svg: &str, table: &str) -> i64 {
+        let at = svg
+            .find(&format!("data-table=\"{table}\""))
+            .unwrap_or_else(|| panic!("{table} missing: {svg}"));
+        let rect_at = svg[at..].find("class=\"dash__erd-box\"").expect("box") + at;
+        let x_at = svg[rect_at..].find("x=\"").expect("x") + 3 + rect_at;
+        svg[x_at..svg[x_at..].find('"').expect("end") + x_at]
+            .parse()
+            .expect("number")
+    }
+
+    /// The canvas size, read back out of the viewBox.
+    fn canvas_of(svg: &str) -> (i64, i64) {
+        let at = svg.find("viewBox=\"").expect("a viewBox") + "viewBox=\"".len();
+        let end = at + svg[at..].find('"').expect("closed");
+        let mut size = svg[at..end].split_whitespace().skip(2);
+        let width: i64 = size.next().expect("width").parse().expect("number");
+        let height: i64 = size.next().expect("height").parse().expect("number");
+        (width, height)
+    }
+
     #[test]
     fn the_same_schema_renders_byte_identical_twice() {
         let schema = control_plane();
@@ -477,21 +629,119 @@ mod tests {
         let svg = render(&control_plane(), &[]);
         // Column position is baked into the x coordinates; account is
         // layer 0, venture layer 1, and allowlist (no relations) last.
-        let x = |table: &str| -> i64 {
-            let at = svg
-                .find(&format!("data-table=\"{table}\""))
-                .unwrap_or_else(|| panic!("{table} missing: {svg}"));
-            let rect_at = svg[at..].find("class=\"dash__erd-box\"").expect("box") + at;
-            let x_at = svg[rect_at..].find("x=\"").expect("x") + 3 + rect_at;
-            svg[x_at..svg[x_at..].find('"').expect("end") + x_at]
-                .parse()
-                .expect("number")
-        };
-        assert!(x("account") < x("venture"), "parents sit left: {svg}");
         assert!(
-            x("venture") < x("allowlist"),
+            node_x(&svg, "account") < node_x(&svg, "venture"),
+            "parents sit left: {svg}"
+        );
+        assert!(
+            node_x(&svg, "venture") < node_x(&svg, "allowlist"),
             "tables with no relations sit last: {svg}"
         );
+    }
+
+    #[test]
+    fn relationless_tables_flow_into_a_grid_rather_than_one_tall_column() {
+        // The shape the owner photographed: two short layered columns
+        // and five tables that connect to nothing. Stacked into one
+        // final column those five made the canvas tall with a band of
+        // unused canvas beside it; flowed into a grid they balance
+        // against the layers instead.
+        let mut tables = vec![
+            control_plane().tables[0].clone(),
+            control_plane().tables[2].clone(),
+        ];
+        for (name, fields) in [
+            ("allowlist", 4),
+            ("allowlist_audit", 6),
+            ("connection", 6),
+            ("harness_secret_audit", 10),
+            ("provision_progress", 4),
+        ] {
+            tables.push(plain(name, fields));
+        }
+        let svg = render(&Schema::new(tables), &[]);
+
+        let mut columns: Vec<i64> = [
+            "allowlist",
+            "allowlist_audit",
+            "connection",
+            "harness_secret_audit",
+            "provision_progress",
+        ]
+        .iter()
+        .map(|table| node_x(&svg, table))
+        .collect();
+        columns.sort_unstable();
+        columns.dedup();
+        assert!(
+            columns.len() >= 2,
+            "five relation-less tables share {} column(s): {svg}",
+            columns.len()
+        );
+
+        // And the canvas is the extent of what was placed: nowhere near
+        // the 904px-tall single stack the old column layout drew for
+        // these heights.
+        let (_, height) = canvas_of(&svg);
+        assert!(height < 700, "the canvas is {height} tall: {svg}");
+        // The layers still sit left of the grid, so the arrows keep
+        // their direction.
+        assert!(
+            node_x(&svg, "venture") < columns[0],
+            "layers left, grid right: {svg}"
+        );
+    }
+
+    #[test]
+    fn a_schema_with_no_relations_at_all_flows_into_a_grid() {
+        // Nothing to layer, so the grid is the whole layout — and it
+        // wraps, rather than stacking every table into one tall column
+        // with nothing beside it.
+        let tables: Vec<TableDef> = ["alpha", "bravo", "charlie", "delta", "echo", "foxtrot"]
+            .iter()
+            .map(|name| plain(name, 5))
+            .collect();
+        let svg = render(&Schema::new(tables), &[]);
+
+        let mut columns: Vec<i64> = ["alpha", "bravo", "charlie", "delta", "echo", "foxtrot"]
+            .iter()
+            .map(|table| node_x(&svg, table))
+            .collect();
+        columns.sort_unstable();
+        columns.dedup();
+        assert!(
+            columns.len() >= 2,
+            "six tables share {} column(s): {svg}",
+            columns.len()
+        );
+        let (width, _) = canvas_of(&svg);
+        assert!(
+            width > NODE_W + 2 * MARGIN,
+            "one narrow column for six tables: {svg}"
+        );
+    }
+
+    #[test]
+    fn a_one_table_schema_renders_one_small_diagram() {
+        // The other end of the scale: nothing to balance against, and
+        // the canvas must still be the extent of the one node — no
+        // page-filling empty viewBox, no second column.
+        let schema = Schema::new(vec![plain("solo", 2)]);
+        let svg = render(&schema, &[]);
+        assert_eq!(svg.matches("data-table=").count(), 1, "{svg}");
+        assert_eq!(
+            canvas_of(&svg),
+            (
+                NODE_W + 2 * MARGIN,
+                2 * MARGIN + node_height(&schema.tables[0])
+            ),
+            "{svg}"
+        );
+        // The scaling contract the stylesheet leans on: the viewBox
+        // carries the intrinsic size, and the width is the container's
+        // business.
+        assert!(svg.contains("width=\"100%\""), "{svg}");
+        assert!(svg.contains("viewBox=\"0 0 "), "{svg}");
     }
 
     #[test]
