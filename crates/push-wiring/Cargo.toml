@@ -5,10 +5,6 @@ readme = "README.md"
 keywords = ["cratefield", "push", "apns", "fcm", "web-push"]
 categories = ["api-bindings", "config"]
 include = ["src/**/*", "examples/**/*", "README.md"]
-# `publish = false` until the first manual publish (docs/RELEASING.md). It
-# depends on `cratefield-adapter-fcm` and `cratefield-adapter-webpush`, which
-# are themselves unpublished, so it could not resolve on crates.io yet.
-publish = false
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

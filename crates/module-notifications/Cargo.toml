@@ -5,10 +5,6 @@ readme = "README.md"
 keywords = ["cratefield", "notifications", "push", "apns", "module"]
 categories = ["web-programming"]
 include = ["src/**/*", "migrations/**/*", "tests/**/*", "README.md"]
-# `publish = false` until `factory0-auth-client` is published: this is the
-# first module to depend on it (ADR 0016), and a published crate cannot
-# resolve an unpublished dependency on crates.io.
-publish = false
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

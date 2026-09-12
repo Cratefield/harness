@@ -5,9 +5,6 @@ readme = "README.md"
 keywords = ["cratefield", "i18n", "fluent", "localization", "bcp47"]
 categories = ["internationalization", "localization"]
 include = ["src/**/*", "README.md"]
-# `publish = false` until the first manual publish (docs/RELEASING.md), the
-# same rule every new crate in this workspace starts under.
-publish = false
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
