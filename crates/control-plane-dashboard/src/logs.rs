@@ -150,9 +150,14 @@ async fn enforce_retention(db: &dyn Database, now: OffsetDateTime) -> Result<(),
         vec![text(&cutoff)],
     ))
     .await?;
+    // Newest by `at` first, with the id breaking a tie. Ordering by the
+    // id alone was wrong: a ULID sorts by time only *across* milliseconds,
+    // and two rows written inside one share a timestamp prefix and differ
+    // by 80 random bits — so "the newest N" could drop a row written after
+    // one it kept.
     db.execute(&Statement::with_values(
         "DELETE FROM request_log WHERE id NOT IN \
-         (SELECT id FROM request_log ORDER BY id DESC LIMIT ?)",
+         (SELECT id FROM request_log ORDER BY at DESC, id DESC LIMIT ?)",
         vec![SeaValue::BigInt(Some(
             i64::try_from(MAX_ROWS).unwrap_or(i64::MAX),
         ))],
@@ -277,7 +282,8 @@ async fn read_page(
         .query(&Statement::with_values(
             format!(
                 "SELECT at, method, path, status, duration_ms, account_id \
-                 FROM request_log{where_clause} ORDER BY id DESC LIMIT ? OFFSET ?"
+                 FROM request_log{where_clause} \
+                 ORDER BY at DESC, id DESC LIMIT ? OFFSET ?"
             ),
             page_params,
         ))
@@ -606,13 +612,51 @@ mod tests {
         let (status, body) = get(&kit, PATH, Some(&cookie(&kit))).await;
         assert_eq!(status, StatusCode::OK, "{body}");
         assert!(body.contains("<td>/v1/dashboard/logs</td>"), "{body}");
-        // Newest first: the just-recorded /logs row sits above the
-        // earlier /dashboard row.
-        let newer = body.find("<td>/v1/dashboard/logs</td>").expect("newer row");
-        let older = body.find("<td>/v1/dashboard</td>").expect("older row");
-        assert!(newer < older, "rows must list newest first: {body}");
+        // Both requests are on the page. Their *relative* order is not
+        // asserted here and cannot be: the kit's clock is fixed, so every
+        // row this test writes shares one timestamp, and rows written
+        // inside a single millisecond have no order to read — see the
+        // ordering test below, which gives its rows distinct times.
+        assert!(body.contains("<td>/v1/dashboard</td>"), "{body}");
         // The planned page is gone.
         assert!(!body.contains("Not built."), "{body}");
+    }
+
+    #[pollster::test]
+    async fn the_page_lists_rows_newest_first_when_they_have_distinct_times() {
+        // The ordering the screen promises, tested where it can be: rows
+        // written a second apart. The recorder cannot produce those under
+        // a fixed clock, so they are written directly — and they are
+        // inserted oldest-id-last, so a read that ordered by id alone
+        // (which is what this fixed) would put them the wrong way round.
+        let kit = kit();
+        for (id, at, path) in [
+            ("01AAAA", "2026-09-12T04:00:00Z", "/v1/dashboard/first"),
+            ("01ZZZZ", "2026-09-12T03:00:00Z", "/v1/dashboard/second"),
+        ] {
+            kit.db
+                .execute(&Statement::with_values(
+                    "INSERT INTO request_log \
+                     (id, at, method, path, status, duration_ms, account_id) \
+                     VALUES (?, ?, 'GET', ?, 200, 1, '')",
+                    vec![text(id), text(at), text(path)],
+                ))
+                .await
+                .expect("seed a row");
+        }
+
+        let (status, body) = get(&kit, PATH, Some(&cookie(&kit))).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let first = body
+            .find("<td>/v1/dashboard/first</td>")
+            .expect("the 04:00 row is on the page");
+        let second = body
+            .find("<td>/v1/dashboard/second</td>")
+            .expect("the 03:00 row is on the page");
+        assert!(
+            first < second,
+            "04:00 must sit above 03:00 however their ids sort: {body}"
+        );
     }
 
     #[pollster::test]

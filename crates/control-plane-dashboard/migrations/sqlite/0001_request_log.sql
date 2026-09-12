@@ -8,7 +8,12 @@
 -- subset both engines accept, so the one file serves the SQLite and the
 -- Postgres migration sets (ADR 0004).
 CREATE TABLE request_log (
-    id          TEXT PRIMARY KEY,            -- ULID: lexicographic order is time order
+    -- ULID. Its first 48 bits are the millisecond, so it sorts by time
+    -- across milliseconds; inside one, the remaining 80 bits are random
+    -- and two rows sort arbitrarily. Reads order by `at` first and use
+    -- the id only to break a tie, which is as much order as a
+    -- millisecond-resolution clock can honestly give.
+    id          TEXT PRIMARY KEY,
     at          TEXT NOT NULL,               -- RFC 3339, when the request arrived
     method      TEXT NOT NULL,
     path        TEXT NOT NULL,               -- the path only; the query string never reaches here
