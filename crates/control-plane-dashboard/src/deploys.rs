@@ -147,7 +147,7 @@ pub(super) async fn screen(state: State<Arc<DashboardState>>, headers: HeaderMap
     let never_ran = ventures.len().saturating_sub(runs.len());
 
     let mut rows = String::from(
-        "<div class=\"dash__lrow dash__lrow--head\"><span>Venture</span>\
+        "<div class=\"dash__lrow dash__lrow--runs dash__lrow--head\"><span>Venture</span>\
          <span>Module set</span><span>Reached</span><span>Outcome</span><span>When</span></div>",
     );
     if runs.is_empty() {
