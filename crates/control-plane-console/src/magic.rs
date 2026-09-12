@@ -29,14 +29,21 @@
 //!    simultaneous clicks, not a read-then-write race). Default fifteen
 //!    minutes. A mail archive is not an authentication factor.
 //!
-//! **Mail clients prefetch links.** Outlook, corporate scanners and
-//! several mobile clients fetch every URL in a message, which against a
-//! naive single-use token would spend it before the person clicked. So a
-//! `GET` only completes the sign-in when the request looks like a person
-//! clicking (`Sec-Fetch-Mode: navigate` and `Sec-Fetch-Dest: document`,
-//! which current browsers send on top-level navigations); anything else
-//! gets a confirm button, including requests with no fetch metadata at
-//! all — an old browser must cost one click, never a refusal. What the
+//! **Machines follow links too, and browsers guess.** Outlook, corporate
+//! scanners and several mobile clients fetch every URL in a message, and
+//! Chrome *prerenders* a URL typed in the address bar — which against a
+//! naive single-use token spends it before the person ever sees a page.
+//! A `GET` therefore completes the sign-in only when the request looks
+//! like a person clicking: the fetch metadata a top-level navigation
+//! sends (`Sec-Fetch-Mode: navigate`, `Sec-Fetch-Dest: document`) **and**
+//! no header saying the browser is speculating. That second half is not
+//! optional — a prerender is a navigation and sends exactly the same
+//! metadata a click does, so fetch metadata alone let Chrome spend every
+//! link and show the person "no longer valid" for one they had never
+//! followed. `Sec-Purpose` (and the older `Purpose: prefetch`) is how a
+//! browser says it is guessing. Anything that is not a click gets a
+//! confirm button, including requests with no fetch metadata at all — an
+//! old browser must cost one click, never a refusal. What the
 //! heuristic cannot catch, said because it matters: a scanner that copies
 //! a browser's headers, or renders mail in a real engine. The confirm
 //! page is identical for a real and an invented token and reads nothing
@@ -366,10 +373,25 @@ async fn finish(state: Arc<ConsoleState>, token: String) -> Response {
 
 /// Whether a request looks like a person clicking a link in a mail client:
 /// the fetch metadata every current browser sends on a top-level
-/// navigation. Deliberately narrow: the cost of a false negative is one
-/// extra click on the confirm page, and the cost of a false positive is a
-/// prefetch spending a single-use token.
+/// navigation, and **no** header saying the browser is guessing.
+/// Deliberately narrow: the cost of a false negative is one extra click on
+/// the confirm page, and the cost of a false positive is a speculative
+/// load spending a single-use token.
+///
+/// The speculative half is not hypothetical. Chrome prerenders a URL typed
+/// in the address bar, and a prerender *is* a navigation — it sends
+/// `Sec-Fetch-Mode: navigate` and `Sec-Fetch-Dest: document` exactly as a
+/// click does. Against fetch metadata alone, Chrome spent every link
+/// before its own page load could use it, and the person saw "no longer
+/// valid" on a link they had never followed. `Sec-Purpose` is the header
+/// browsers send to say the request is speculative (`prefetch`,
+/// `prefetch;prerender`), and `Purpose: prefetch` is the older spelling
+/// several clients and scanners still use. A request carrying either is a
+/// machine whatever its fetch mode claims, and gets the confirm page.
 fn looks_like_a_click(headers: &HeaderMap) -> bool {
+    if is_speculative(headers) {
+        return false;
+    }
     let mode = headers
         .get("sec-fetch-mode")
         .and_then(|value| value.to_str().ok());
@@ -377,6 +399,22 @@ fn looks_like_a_click(headers: &HeaderMap) -> bool {
         .get("sec-fetch-dest")
         .and_then(|value| value.to_str().ok());
     mode == Some("navigate") && dest == Some("document")
+}
+
+/// Whether the browser is telling us this request is a guess rather than
+/// an act: a prefetch, a prerender, or whatever a future spelling of the
+/// same idea calls itself. Matched loosely on purpose — the values are a
+/// list that grows (`prefetch`, `prefetch;prerender`), and a header that
+/// mentions either at all is not a person.
+fn is_speculative(headers: &HeaderMap) -> bool {
+    ["sec-purpose", "purpose", "x-purpose", "x-moz"]
+        .iter()
+        .filter_map(|name| headers.get(*name))
+        .filter_map(|value| value.to_str().ok())
+        .any(|value| {
+            let value = value.to_ascii_lowercase();
+            value.contains("prefetch") || value.contains("prerender") || value.contains("preview")
+        })
 }
 
 /// The one page every dead link answers with — used, expired, or never
