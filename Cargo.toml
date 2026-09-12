@@ -61,10 +61,14 @@ cratefield-module-email-signup = { path = "crates/module-email-signup", version 
 cratefield-module-privacy = { path = "crates/module-privacy", version = "0.1.0" }
 cratefield-module-waitlist = { path = "crates/module-waitlist", version = "0.1.0" }
 cratefield-module-cms = { path = "crates/module-cms", version = "0.1.0" }
-# `publish = false` until `factory0-auth-client` is published: the
-# notifications module is the first to depend on it, because the account a
-# route acts for comes from the auth extractor (ADR 0016).
+# The notifications module is the first to depend on the auth client, because
+# the account a route acts for comes from the auth extractor (ADR 0016).
 cratefield-module-notifications = { path = "crates/module-notifications", version = "0.1.0" }
+# Declared here rather than by bare path in the one crate that uses it: a
+# path-only dependency has no version, and `cargo publish` refuses a
+# dependency without one. It was invisible while both crates were
+# `publish = false`.
+factory0-auth-client = { path = "crates/auth-client", version = "0.1.0" }
 # Server-side localisation (issue #190): Fluent catalogs, BCP 47
 # negotiation and text direction. Nothing in it is notification-specific,
 # so `module-waitlist`'s mail templates can take it next.
