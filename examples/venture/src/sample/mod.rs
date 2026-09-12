@@ -88,8 +88,14 @@ impl Module for SampleRowModule {
                 "/transport-probe",
                 get(transport_probe).with_state(Arc::clone(&state)),
             )
-            .route("/fetch-probe", get(fetch_probe).with_state(Arc::clone(&state)))
-            .route("/blob-probe", get(blob_probe).with_state(Arc::clone(&state)))
+            .route(
+                "/fetch-probe",
+                get(fetch_probe).with_state(Arc::clone(&state)),
+            )
+            .route(
+                "/blob-probe",
+                get(blob_probe).with_state(Arc::clone(&state)),
+            )
             .route(
                 "/sidecar-probe",
                 get(sidecar_probe).with_state(Arc::clone(&state)),
@@ -289,11 +295,11 @@ async fn blob_probe(
     scope: Scope,
     State(ctx): State<Arc<ModuleContext>>,
 ) -> Result<Json<serde_json::Value>, Problem> {
+    const PAYLOAD: &[u8] = b"venture-example blob round trip";
+    const CONTENT_TYPE: &str = "text/plain; charset=utf-8";
     let Some(blob) = ctx.ports.blob.clone() else {
         return Err(internal(&scope));
     };
-    const PAYLOAD: &[u8] = b"venture-example blob round trip";
-    const CONTENT_TYPE: &str = "text/plain; charset=utf-8";
     let key = format!("probe/{}", scope.request_id);
 
     blob.put(&key, PAYLOAD, CONTENT_TYPE).await.map_err(|err| {

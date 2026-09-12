@@ -40,7 +40,11 @@ const INSTALLERS: [&str; 2] = ["set_global_default", "set_default"];
 /// call behind `#[cfg(not(target_arch = "wasm32"))]` (which the detector
 /// already honours, see [`native_only_above`]) or this list has to name
 /// it, in the open.
-const NATIVE_ONLY: [&str; 3] = ["crates/runtime-native/", "crates/cli/", "crates/cli-acceptance/"];
+const NATIVE_ONLY: [&str; 3] = [
+    "crates/runtime-native/",
+    "crates/cli/",
+    "crates/cli-acceptance/",
+];
 
 /// Whether a line installing a dispatcher is inside a native-only region.
 ///
