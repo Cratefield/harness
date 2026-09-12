@@ -8,7 +8,10 @@ use cratefield_testing::{assert_wasm_safe_deps, conformance};
 
 #[test]
 fn dashboard_conforms() {
-    conformance(Box::new(Dashboard));
+    // No KMS wired: the secrets screen then takes its honest no-KMS
+    // state, which is also a composition the conformance kit must
+    // accept without a store ever being opened.
+    conformance(Box::new(Dashboard::default()));
 }
 
 #[test]

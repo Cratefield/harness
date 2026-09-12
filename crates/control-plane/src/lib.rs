@@ -42,7 +42,14 @@ fn instance() -> &'static (Harness, Cloudflare) {
             // The account dashboard (#11): ventures, health verdicts,
             // connections, archiving. Read-only except archiving; see
             // docs/DASHBOARD.md for the half that is not built.
-            .module(cratefield_dashboard::Dashboard)
+            //
+            // No KMS is wired here on purpose: the Workers runtime has no
+            // filesystem for `LocalFileKms` and no managed KMS adapter
+            // exists yet (its own issue, deliberately not invented in the
+            // pass that added the secrets screen). The dashboard carries
+            // `None` and the secrets screen renders that state honestly
+            // rather than failing — `Some(kms)` arrives with the adapter.
+            .module(cratefield_dashboard::Dashboard::default())
             .runtime(Cloudflare::new().db("DB"))
             .build()
             .expect("the control-plane harness is valid");

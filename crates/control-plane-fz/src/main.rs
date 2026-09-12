@@ -27,7 +27,9 @@ fn harness() -> Harness {
         )
         .module(cratefield_chrome::Chrome)
         .module(cratefield_console::Console)
-        .module(cratefield_dashboard::Dashboard)
+        // No KMS here: `fz` reads module metadata, not live bindings, so
+        // the secrets screen's no-KMS state is the honest one for it too.
+        .module(cratefield_dashboard::Dashboard::default())
         .runtime(AllPorts)
         .build()
         .expect("the control-plane venture is a valid harness")

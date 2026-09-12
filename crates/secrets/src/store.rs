@@ -14,7 +14,7 @@ use sea_query::Value as SeaValue;
 
 use crate::{
     Access, Actor, Audit, AuditEvent, CIPHER, SecretBytes, SecretMeta, SecretsError, StoreId,
-    TracingAudit, Version, aad,
+    TracingAudit, Version, aad, scoped_store,
 };
 
 const NONCE_LEN: usize = 24;
@@ -117,6 +117,26 @@ impl Secrets {
         self.store(StoreId::Tenant(tenant.to_owned()), db)
     }
 
+    /// The control database's global store, for the control plane's own
+    /// composition — the secrets-manager screen. Gated behind the
+    /// `control-plane` cargo feature, which no venture composition
+    /// enables: within this workspace that is the same fence
+    /// [`Secrets::global`](Self::global)'s [`HarnessOnly`] proof draws
+    /// (module code cannot construct the token), stated once more at the
+    /// dependency layer — a module crate cannot reach this method without
+    /// pulling in a feature named for exactly the power it grants.
+    ///
+    /// The honest limitation, recorded here rather than hidden: a caller
+    /// that enables the feature and holds a `Secrets` can open a
+    /// "global" store in any database it hands over, tiering be damned.
+    /// That caller has asked for control-plane powers by name; the
+    /// published crate's default build still cannot.
+    #[cfg(feature = "control-plane")]
+    #[must_use]
+    pub fn control_plane_global(&self, db: Arc<dyn Database>) -> SecretStore {
+        self.store(StoreId::Global, db)
+    }
+
     fn store(&self, id: StoreId, db: Arc<dyn Database>) -> SecretStore {
         SecretStore {
             id,
@@ -210,8 +230,16 @@ impl SecretStore {
         let rows = self
             .db
             .query(&Statement::with_values(
-                "SELECT nonce, ciphertext FROM harness_secrets WHERE name = ? AND version = ?",
-                vec![text(name), SeaValue::BigInt(Some(i64::from(version)))],
+                format!(
+                    "SELECT nonce, ciphertext FROM harness_secrets \
+                     WHERE name = ? AND version = ? AND {}",
+                    scoped_store()
+                ),
+                vec![
+                    text(name),
+                    SeaValue::BigInt(Some(i64::from(version))),
+                    text(self.id.as_str()),
+                ],
             ))
             .await?;
         let row = rows.first().ok_or_else(|| SecretsError::NotAuthentic {
@@ -256,8 +284,9 @@ impl SecretStore {
         let key_id = new_key_id()?;
         let insert = Statement::with_values(
             "INSERT INTO harness_secret_keys \
-             (key_id, kms_provider, kms_key_ref, wrapped_dek, cipher, state, created_at) \
-             VALUES (?, ?, ?, ?, ?, ?, ?)",
+             (key_id, kms_provider, kms_key_ref, wrapped_dek, cipher, state, created_at, \
+              store) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             vec![
                 text(&key_id),
                 text(self.kms.provider()),
@@ -266,6 +295,7 @@ impl SecretStore {
                 text(CIPHER),
                 text(state),
                 text(&now()),
+                text(self.id.as_str()),
             ],
         );
         Ok((key_id, dek, insert))
@@ -331,8 +361,8 @@ impl SecretStore {
         self.db
             .execute(&Statement::with_values(
                 "INSERT INTO harness_secrets \
-                 (name, version, key_id, nonce, ciphertext, created_at, created_by) \
-                 VALUES (?, ?, ?, ?, ?, ?, ?)",
+                 (name, version, key_id, nonce, ciphertext, created_at, created_by, store) \
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                 vec![
                     text(name),
                     SeaValue::BigInt(Some(i64::from(version))),
@@ -341,6 +371,7 @@ impl SecretStore {
                     bytes(ciphertext),
                     text(&now()),
                     text("pending"),
+                    text(self.id.as_str()),
                 ],
             ))
             .await?;
@@ -374,9 +405,13 @@ impl SecretStore {
         let rows = self
             .db
             .query(&Statement::with_values(
-                "SELECT version, key_id, nonce, ciphertext FROM harness_secrets \
-                 WHERE name = ? AND deleted_at IS NULL ORDER BY version DESC LIMIT 1",
-                vec![text(name)],
+                format!(
+                    "SELECT version, key_id, nonce, ciphertext FROM harness_secrets \
+                     WHERE name = ? AND deleted_at IS NULL AND {} \
+                     ORDER BY version DESC LIMIT 1",
+                    scoped_store()
+                ),
+                vec![text(name), text(self.id.as_str())],
             ))
             .await?;
         let Some(row) = rows.first() else {
@@ -435,9 +470,13 @@ impl SecretStore {
     async fn list_inner(&self) -> Result<Vec<SecretMeta>, SecretsError> {
         let rows = self
             .db
-            .query(&Statement::new(
-                "SELECT name, version, created_at, created_by, deleted_at FROM harness_secrets \
-                 ORDER BY name ASC, version DESC",
+            .query(&Statement::with_values(
+                format!(
+                    "SELECT name, version, created_at, created_by, deleted_at \
+                     FROM harness_secrets WHERE {} ORDER BY name ASC, version DESC",
+                    scoped_store()
+                ),
+                vec![text(self.id.as_str())],
             ))
             .await?;
         let mut out: Vec<SecretMeta> = Vec::new();
@@ -477,8 +516,12 @@ impl SecretStore {
         validate_name(name)?;
         self.db
             .execute(&Statement::with_values(
-                "UPDATE harness_secrets SET deleted_at = ? WHERE name = ? AND deleted_at IS NULL",
-                vec![text(&now()), text(name)],
+                format!(
+                    "UPDATE harness_secrets SET deleted_at = ? \
+                     WHERE name = ? AND deleted_at IS NULL AND {}",
+                    scoped_store()
+                ),
+                vec![text(&now()), text(name), text(self.id.as_str())],
             ))
             .await?;
         Ok(())
@@ -488,9 +531,13 @@ impl SecretStore {
     pub(crate) async fn active_key(&self) -> Result<(String, Dek), SecretsError> {
         let rows = self
             .db
-            .query(&Statement::new(
-                "SELECT key_id, wrapped_dek FROM harness_secret_keys \
-                 WHERE state = 'active' ORDER BY created_at DESC LIMIT 1",
+            .query(&Statement::with_values(
+                format!(
+                    "SELECT key_id, wrapped_dek FROM harness_secret_keys \
+                     WHERE state = 'active' AND {} ORDER BY created_at DESC LIMIT 1",
+                    scoped_store()
+                ),
+                vec![text(self.id.as_str())],
             ))
             .await?;
         if let Some(row) = rows.first() {
@@ -535,8 +582,12 @@ impl SecretStore {
         let rows = self
             .db
             .query(&Statement::with_values(
-                "SELECT version FROM harness_secrets WHERE name = ? ORDER BY version DESC LIMIT 1",
-                vec![text(name)],
+                format!(
+                    "SELECT version FROM harness_secrets \
+                     WHERE name = ? AND {} ORDER BY version DESC LIMIT 1",
+                    scoped_store()
+                ),
+                vec![text(name), text(self.id.as_str())],
             ))
             .await?;
         match rows.first() {

@@ -293,3 +293,22 @@ code { font-family: var(--mono); font-size: .92em; color: var(--ink); }
   .dash__lrow--head { display: none; }
   .kv div { grid-template-columns: 1fr; gap: 2px; }
 }
+
+/* --- Secrets manager (added with the screen; one fenced block) -------- */
+
+/* The chain badge at the top of a store page: verifies / empty / broken. */
+.dash__chain {
+  display: grid; gap: 4px;
+  border: 1px solid var(--edge); background: var(--ground);
+  padding: 12px 14px; margin: 0 0 12px;
+}
+.dash__chain > strong { font-family: var(--mono); font-size: 12px; }
+.dash__chain .dash__dot { display: inline-block; margin-right: 8px; vertical-align: 1px; }
+.dash__chain--bad { border-color: #4a2420; background: #17100f; }
+.dash__chain--bad > strong { color: var(--red); }
+
+/* Store rows: name, version, created, creator, delete. */
+.dash__lrow--secrets { grid-template-columns: 1.6fr .4fr 1fr 1fr auto; }
+
+/* Audit rows: seq, when, action, actor, secret, allowed. */
+.dash__lrow--audit { grid-template-columns: .4fr 1fr .7fr 1.1fr 1.4fr .6fr; }

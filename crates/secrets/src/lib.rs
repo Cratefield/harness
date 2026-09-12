@@ -36,57 +36,105 @@ pub use store::{HarnessOnly, SecretStore, Secrets};
 /// The store's schema, per dialect, applied the same way a module's is.
 /// The tables are portable; only the append-only trigger differs, which
 /// is what `Migrations`' two sets are for (ADR 0004).
+///
+/// The sets are `pub const` so a composition can embed them in its own
+/// migration array the way the console re-ids its sub-schemas: the
+/// control plane's dashboard module applies these tables under its own
+/// ids, and sharing the constants is what keeps it from embedding a
+/// second copy of the SQL that can drift.
+pub const SQLITE_MIGRATIONS: [cratefield_core::SqlMigration; 4] = [
+    cratefield_core::SqlMigration::new(
+        "0001",
+        "init",
+        include_str!("../migrations/sqlite/0001_init.sql"),
+    ),
+    cratefield_core::SqlMigration::new(
+        "0002",
+        "audit",
+        include_str!("../migrations/sqlite/0002_audit.sql"),
+    ),
+    cratefield_core::SqlMigration::new(
+        "0003",
+        "audit-store",
+        include_str!("../migrations/sqlite/0003_audit_store.sql"),
+    ),
+    cratefield_core::SqlMigration::new(
+        "0004",
+        "store-attribution",
+        include_str!("../migrations/sqlite/0004_store_attribution.sql"),
+    ),
+];
+// The array is the apply order; this refuses a gap, a duplicate
+// or an entry out of order at build time (issue #27).
+const _: () = cratefield_core::assert_migration_set(&SQLITE_MIGRATIONS);
+pub const POSTGRES_MIGRATIONS: [cratefield_core::SqlMigration; 4] = [
+    cratefield_core::SqlMigration::new(
+        "0001",
+        "init",
+        include_str!("../migrations/postgres/0001_init.sql"),
+    ),
+    cratefield_core::SqlMigration::new(
+        "0002",
+        "audit",
+        include_str!("../migrations/postgres/0002_audit.sql"),
+    ),
+    cratefield_core::SqlMigration::new(
+        "0003",
+        "audit-store",
+        include_str!("../migrations/postgres/0003_audit_store.sql"),
+    ),
+    cratefield_core::SqlMigration::new(
+        "0004",
+        "store-attribution",
+        include_str!("../migrations/postgres/0004_store_attribution.sql"),
+    ),
+];
+// The array is the apply order; this refuses a gap, a duplicate
+// or an entry out of order at build time (issue #27).
+const _: () = cratefield_core::assert_migration_set(&POSTGRES_MIGRATIONS);
+
+/// The store's schema, per dialect, applied the same way a module's is
+/// (see [`SQLITE_MIGRATIONS`] for why the sets are public).
 #[must_use]
 pub fn migrations() -> cratefield_core::Migrations {
-    const SQLITE: [cratefield_core::SqlMigration; 3] = [
-        cratefield_core::SqlMigration::new(
-            "0001",
-            "init",
-            include_str!("../migrations/sqlite/0001_init.sql"),
-        ),
-        cratefield_core::SqlMigration::new(
-            "0002",
-            "audit",
-            include_str!("../migrations/sqlite/0002_audit.sql"),
-        ),
-        cratefield_core::SqlMigration::new(
-            "0003",
-            "audit-store",
-            include_str!("../migrations/sqlite/0003_audit_store.sql"),
-        ),
-    ];
-    // The array is the apply order; this refuses a gap, a duplicate
-    // or an entry out of order at build time (issue #27).
-    const _: () = cratefield_core::assert_migration_set(&SQLITE);
-    const POSTGRES: [cratefield_core::SqlMigration; 3] = [
-        cratefield_core::SqlMigration::new(
-            "0001",
-            "init",
-            include_str!("../migrations/postgres/0001_init.sql"),
-        ),
-        cratefield_core::SqlMigration::new(
-            "0002",
-            "audit",
-            include_str!("../migrations/postgres/0002_audit.sql"),
-        ),
-        cratefield_core::SqlMigration::new(
-            "0003",
-            "audit-store",
-            include_str!("../migrations/postgres/0003_audit_store.sql"),
-        ),
-    ];
-    // The array is the apply order; this refuses a gap, a duplicate
-    // or an entry out of order at build time (issue #27).
-    const _: () = cratefield_core::assert_migration_set(&POSTGRES);
     cratefield_core::Migrations {
-        sqlite: &SQLITE,
-        postgres: &POSTGRES,
+        sqlite: &SQLITE_MIGRATIONS,
+        postgres: &POSTGRES_MIGRATIONS,
     }
 }
 
 /// The AEAD this crate seals with, recorded on every key row so a store
 /// can never mix ciphers within one key id (design §4).
 pub const CIPHER: &str = "xchacha20poly1305";
+
+/// The store-scoping predicate every row-level query filters through
+/// since store attribution (the row-level twin of the audit chain's
+/// #142): this store's rows, and only this store's.
+///
+/// It does **not** carry the chain's `OR store = ''` compatibility
+/// clause, and the difference is the difference between the two tables.
+/// `harness_secret_audit` is append-only, so its past cannot be
+/// rewritten and the clause can only ever let an old row still be read.
+/// Rows here are soft-deleted, re-encrypted and re-keyed, so the same
+/// clause would hand every store a *write* over every other store's
+/// unstamped rows: a tenant's `delete` landing on the global store's
+/// row, `active_key` serving another store's key, `rotate_dek` pulling
+/// in rows it cannot decrypt and failing closed on their AAD. That is
+/// precisely the store-blindness attribution exists to end.
+///
+/// Nothing is given up. No composition ever applied this schema before
+/// attribution — the secrets layer was built, merged and never wired —
+/// so no database holds a row written without a store. An unstamped row
+/// would be one nobody can account for, and it is treated as nobody's:
+/// invisible to every store until it is re-put under the one that owns
+/// it. `tests/shared_database.rs` pins that.
+///
+/// Bind order matters: every query using it binds the predicate's `?`
+/// after that query's own parameters, and this is the one place that
+/// says so.
+pub(crate) fn scoped_store() -> &'static str {
+    "store = ?"
+}
 
 /// Which store a secret belongs to. Part of the AAD, so it is also what
 /// stops a row being useful anywhere else.

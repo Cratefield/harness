@@ -429,7 +429,6 @@ dependencies = [
  "sha2 0.11.0",
  "thiserror",
  "time",
- "url",
  "zeroize",
 ]
 
@@ -498,6 +497,7 @@ dependencies = [
  "cratefield-access",
  "cratefield-accounts",
  "cratefield-catalog",
+ "cratefield-chrome",
  "cratefield-core",
  "cratefield-provisioning",
  "http",
@@ -542,6 +542,7 @@ dependencies = [
  "tracing",
  "ulid",
  "unicode-normalization",
+ "url",
 ]
 
 [[package]]
@@ -556,10 +557,13 @@ dependencies = [
  "cratefield-connections",
  "cratefield-console",
  "cratefield-core",
+ "cratefield-kms",
  "cratefield-provisioning",
+ "cratefield-secrets",
  "futures-util",
  "http",
  "sea-query",
+ "serde_json",
  "time",
  "tracing",
 ]

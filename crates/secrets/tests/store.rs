@@ -304,7 +304,11 @@ async fn a_row_copied_between_tenants_does_not_decrypt() {
         .expect("put");
 
     // Copy alpha's key row and its secret row into beta's database: the
-    // worst case, where the attacker also carries the wrapped DEK across.
+    // worst case, where the attacker also carries the wrapped DEK across
+    // and re-stamps both rows as beta's own, so store attribution is no
+    // help and the AAD is the only thing left standing. Whoever can write
+    // this row can write its store column too, which is exactly why the
+    // binding under encryption has to hold on its own.
     let key = alpha_db
         .query(&Statement::new(
             "SELECT key_id, kms_provider, kms_key_ref, wrapped_dek, cipher, state, created_at \
@@ -316,8 +320,8 @@ async fn a_row_copied_between_tenants_does_not_decrypt() {
     beta_db
         .execute(&Statement::with_values(
             "INSERT OR REPLACE INTO harness_secret_keys \
-             (key_id, kms_provider, kms_key_ref, wrapped_dek, cipher, state, created_at) \
-             VALUES (?, ?, ?, ?, ?, ?, ?)",
+             (key_id, kms_provider, kms_key_ref, wrapped_dek, cipher, state, created_at, store) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             vec![
                 text(&key.get::<String>("key_id").expect("key_id")),
                 text(&key.get::<String>("kms_provider").expect("provider")),
@@ -328,6 +332,7 @@ async fn a_row_copied_between_tenants_does_not_decrypt() {
                 text(&key.get::<String>("cipher").expect("cipher")),
                 text(&key.get::<String>("state").expect("state")),
                 text(&key.get::<String>("created_at").expect("created_at")),
+                text("tenant-beta"),
             ],
         ))
         .await
@@ -344,8 +349,8 @@ async fn a_row_copied_between_tenants_does_not_decrypt() {
     beta_db
         .execute(&Statement::with_values(
             "INSERT OR REPLACE INTO harness_secrets \
-             (name, version, key_id, nonce, ciphertext, created_at, created_by) \
-             VALUES (?, ?, ?, ?, ?, ?, ?)",
+             (name, version, key_id, nonce, ciphertext, created_at, created_by, store) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             vec![
                 text(&secret.get::<String>("name").expect("name")),
                 sea_query::Value::BigInt(Some(secret.get::<i64>("version").expect("version"))),
@@ -358,6 +363,7 @@ async fn a_row_copied_between_tenants_does_not_decrypt() {
                 ))),
                 text(&secret.get::<String>("created_at").expect("created_at")),
                 text(&secret.get::<String>("created_by").expect("created_by")),
+                text("tenant-beta"),
             ],
         ))
         .await

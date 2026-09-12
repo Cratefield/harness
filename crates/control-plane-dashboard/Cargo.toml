@@ -22,6 +22,14 @@ cratefield-catalog = { path = "../control-plane-catalog" }
 # The page shell, the stylesheet and the escaping every control-plane
 # screen shares.
 cratefield-chrome = { workspace = true }
+# The secrets manager screen. The `control-plane` feature is the fence:
+# it is what lets this crate open the control database's global store,
+# and no venture composition enables it.
+cratefield-secrets = { workspace = true, features = ["control-plane"] }
+# The KMS port, so the composition can hand the screen a key manager (or
+# honestly none). LocalFileKms itself is wired by the dev server, not
+# here: this crate only names the trait.
+cratefield-kms = { workspace = true }
 axum = { workspace = true }
 http = { workspace = true }
 sea-query = { workspace = true }
