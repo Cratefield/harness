@@ -4,7 +4,7 @@
 //! emits.
 //!
 //! The tokens are minted the way the auth service does, and verified by
-//! `factory0-auth-client` itself — no bypass, no test-only extractor. A
+//! `cratefield-auth-client` itself — no bypass, no test-only extractor. A
 //! route test that could not produce a valid token would not be testing
 //! the route this module ships.
 

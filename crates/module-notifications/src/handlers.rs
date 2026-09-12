@@ -22,8 +22,8 @@ use axum::http::request::Parts;
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, post, put};
+use cratefield_auth_client::{AuthClient, AuthState, Authenticated, UNAUTHENTICATED};
 use cratefield_core::{Json, ModuleConfig, ModuleContext, Problem, ProblemDef, Recipient, Scope};
-use factory0_auth_client::{AuthClient, AuthState, Authenticated, UNAUTHENTICATED};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -141,7 +141,7 @@ impl FromRequestParts<Arc<ModuleState>> for Account {
             );
             return Err(Problem::new(&UNAUTHENTICATED));
         };
-        // Delegated, not reimplemented: `factory0-auth-client` owns the
+        // Delegated, not reimplemented: `cratefield-auth-client` owns the
         // header parsing, the algorithm check, the JWKS cache and the one
         // refusal every failure collapses into.
         let Authenticated(claims) =
@@ -156,7 +156,7 @@ impl FromRequestParts<Arc<ModuleState>> for Account {
 /// is the only place the module can learn that an address is verified
 /// without inventing its own confirmation flow. Taking `Account` *and*
 /// `Authenticated` on one handler would verify the same token twice.
-pub(crate) struct AccountClaims(pub factory0_auth_client::Claims);
+pub(crate) struct AccountClaims(pub cratefield_auth_client::Claims);
 
 impl FromRequestParts<Arc<ModuleState>> for AccountClaims {
     type Rejection = Problem;

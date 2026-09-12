@@ -848,6 +848,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "cratefield-auth-client"
+version = "0.1.2"
+dependencies = [
+ "async-trait",
+ "axum",
+ "base64ct",
+ "bytes",
+ "cratefield-core",
+ "cratefield-testing",
+ "http",
+ "p256 0.14.0",
+ "pollster",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "thiserror 2.0.20",
+ "time",
+ "tower",
+ "tracing",
+]
+
+[[package]]
 name = "cratefield-billing"
 version = "0.1.1"
 dependencies = [
@@ -1188,12 +1210,12 @@ dependencies = [
  "base64ct",
  "bytes",
  "cratefield-adapter-sqlite",
+ "cratefield-auth-client",
  "cratefield-core",
  "cratefield-i18n",
  "cratefield-module-privacy",
  "cratefield-push-wiring",
  "cratefield-testing",
- "factory0-auth-client",
  "futures-util",
  "hmac 0.13.0",
  "http",
@@ -1987,28 +2009,6 @@ checksum = "8be9f3dfaaffdae2972880079a491a1a8bb7cbed0b8dd7a347f668b4150a3b93"
 dependencies = [
  "event-listener",
  "pin-project-lite",
-]
-
-[[package]]
-name = "factory0-auth-client"
-version = "0.1.2"
-dependencies = [
- "async-trait",
- "axum",
- "base64ct",
- "bytes",
- "cratefield-core",
- "cratefield-testing",
- "http",
- "p256 0.14.0",
- "pollster",
- "serde",
- "serde_json",
- "sha2 0.11.0",
- "thiserror 2.0.20",
- "time",
- "tower",
- "tracing",
 ]
 
 [[package]]

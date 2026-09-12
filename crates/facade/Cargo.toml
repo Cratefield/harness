@@ -107,8 +107,6 @@ cratefield-module-email-signup = { workspace = true, optional = true }
 cratefield-module-privacy = { workspace = true, optional = true }
 cratefield-module-waitlist = { workspace = true, optional = true }
 cratefield-module-cms = { workspace = true, optional = true }
-# `publish = false` until `factory0-auth-client` is published (ADR 0016),
-# like the two push adapters and the wiring crate above.
 cratefield-module-notifications = { workspace = true, optional = true }
 cratefield-testing = { workspace = true, optional = true }
 

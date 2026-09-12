@@ -967,7 +967,7 @@ Everything else a module can do, with the module that does it:
   router-build time has **none** on a cold isolate and a stale one on a
   warm isolate — and a test fixture that hands `scheduled` a stripped-down
   context cannot notice either.
-- **A token verifier** (`factory0_auth_client::AuthClient`): build it once
+- **A token verifier** (`cratefield_auth_client::AuthClient`): build it once
   and park it, not inside `router()`. `router()` runs per request on
   Workers, and a fresh `AuthClient` starts with an empty JWKS cache: one
   extra outbound round-trip per authenticated request, drivable by anyone
@@ -978,7 +978,7 @@ Everything else a module can do, with the module that does it:
   that prunes, retries and dead-letters (ADR
   [0016](adr/0016-notifications-module-dead-letters-and-the-account.md)).
 - **A route that acts for a signed-in account**: the same module's
-  `Account` extractor, which delegates to `factory0-auth-client`'s
+  `Account` extractor, which delegates to `cratefield-auth-client`'s
   `Authenticated`. `Scope` carries no principal (ADR 0007), so this is
   where an account id comes from — never a body field.
 - **`/.well-known` discovery routes**: `Module::well_known` (root-level

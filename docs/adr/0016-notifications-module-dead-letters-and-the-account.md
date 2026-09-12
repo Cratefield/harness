@@ -55,7 +55,7 @@ What this costs: a second module that needs dead-lettering would duplicate
 the table. That is the trigger to promote it to core — with two examples of
 what the shape has to be, rather than none.
 
-**The account comes from `factory0-auth-client`, and the module depends on
+**The account comes from `cratefield-auth-client`, and the module depends on
 it.** Every route takes an `Account` extractor that delegates to
 `Authenticated`: the module does not parse a header, does not look at
 `alg`, and does not decide what a failure looks like. Consequences,
@@ -65,9 +65,10 @@ recorded because they are load-bearing:
   port list does not mention: the JWKS fetch goes through it. A venture
   that only fans out from its own modules never needs it and gets a module
   whose HTTP routes answer 401.
-- `factory0-auth-client` is `publish = false`, so
-  `cratefield-module-notifications` is too. It cannot be published until
-  the auth client is.
+- `cratefield-auth-client` is published, and so is
+  `cratefield-module-notifications`. Both were `publish = false` when this
+  was written; the client went up on 2026-09-12 (first as
+  `factory0-auth-client`, renamed the same day — see ADR 0011).
 - Without `NOTIFICATIONS_AUTH_ISSUER` and `NOTIFICATIONS_AUTH_CLIENT_ID`
   there is no verifier, and every route answers 401 rather than guessing.
   `validate_config` refuses a production deployment that sets neither.

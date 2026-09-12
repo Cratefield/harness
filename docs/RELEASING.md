@@ -78,9 +78,9 @@ Caused by:
 it. Seven first publishes stand between the current state and a facade
 release, and crates.io rate-limits new crates, so it is not one sitting.
 
-**`cratefield-module-notifications` also depends on `factory0-auth-client`**,
+**`cratefield-module-notifications` also depends on `cratefield-auth-client`**,
 which is the edge easiest to miss: it leaves the `cratefield-*` namespace for
-the auth stack (ADR 0013), it is not optional, and `factory0-auth-client`
+the auth stack (ADR 0013), it is not optional, and `cratefield-auth-client`
 carries `publish = false` like the rest of those crates. It depends on nothing
 but `cratefield-core`, so it can be first-published as soon as core is; it is
 in the ordered list below in that position.
@@ -193,7 +193,7 @@ crate exists**, so the very first release of each crate is manual:
    cargo publish -p cratefield-module-waitlist
    cargo publish -p cratefield-module-cms
    cargo publish -p cratefield-i18n           # before module-notifications
-   cargo publish -p factory0-auth-client      # before module-notifications
+   cargo publish -p cratefield-auth-client      # before module-notifications
    cargo publish -p cratefield-module-privacy # before the facade
    cargo publish -p cratefield-module-notifications  # needs both of those
    cargo publish -p cratefield-ui

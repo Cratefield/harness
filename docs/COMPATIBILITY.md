@@ -38,6 +38,7 @@ compatibility-doc` and checked in CI for drift. Do not edit by hand.
 | `cratefield-adapter-stripe` | 0.1.3 | 1 | `^0.4` — `>=0.4.0, <0.5.0` |
 | `cratefield-adapter-turnstile` | 0.1.3 | 1 | `^0.4` — `>=0.4.0, <0.5.0` |
 | `cratefield-adapter-webpush` | 0.1.2 | 1 | `^0.4` — `>=0.4.0, <0.5.0` |
+| `cratefield-auth-client` | 0.1.2 | 1 | `^0.4` — `>=0.4.0, <0.5.0` |
 | `cratefield-chrome` | 0.1.1 | 1 | `^0.4` — `>=0.4.0, <0.5.0` |
 | `cratefield-cli` | 0.2.1 | 1 | `^0.4` — `>=0.4.0, <0.5.0` |
 | `cratefield-connections` | 0.1.1 | 1 | `^0.4` — `>=0.4.0, <0.5.0` |
@@ -64,7 +65,6 @@ compatibility-doc` and checked in CI for drift. Do not edit by hand.
 | `cratefield-ui` | 0.1.3 | 1 | `^0.4` — `>=0.4.0, <0.5.0` |
 | `cratefield-ui-generator` | 0.1.1 | 1 | `^0.4` — `>=0.4.0, <0.5.0` |
 | `cratefield-waitlist` | 0.1.1 | 1 | `^0.4` — `>=0.4.0, <0.5.0` |
-| `factory0-auth-client` | 0.1.2 | 1 | `^0.4` — `>=0.4.0, <0.5.0` |
 | `factory0-auth-core` | 0.1.1 | 1 | `^0.4` — `>=0.4.0, <0.5.0` |
 | `factory0-auth-magic-link` | 0.1.1 | 1 | `^0.4` — `>=0.4.0, <0.5.0` |
 | `factory0-auth-meta` | 0.1.1 | 1 | `^0.4` — `>=0.4.0, <0.5.0` |
