@@ -1,7 +1,7 @@
 [package]
 name = "factory0-auth-client"
-description = "Verify Factory Zero auth tokens in a consuming app: JWKS fetch and cache, ES256 verification, and an axum extractor (issue #11)"
-version.workspace = true
+description = "Verify auth-service tokens in a consuming app: JWKS fetch and cache, ES256 verification, and an axum extractor (issue #11)"
+version = "0.1.2"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true

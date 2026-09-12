@@ -1,6 +1,6 @@
 [package]
 name = "factory0-auth-magic-link"
-description = "Magic links for the Factory Zero auth service: a single-use bearer credential sent by mail, which is also how an address gets verified and how a locked or passwordless account gets back in (issue #21)"
+description = "Magic links for the auth service: a single-use bearer credential sent by mail, which is also how an address gets verified and how a locked or passwordless account gets back in (issue #21)"
 readme = "README.md"
 publish = false
 version.workspace = true

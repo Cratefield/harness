@@ -1,6 +1,6 @@
 [package]
 name = "factory0-auth-password"
-description = "Email and password login for the Factory Zero auth service: argon2id, an account lockout the rate limiter cannot provide, and answers that reveal nothing about who has an account (issues #12, #19, #20)"
+description = "Email and password login for the auth service: argon2id, an account lockout the rate limiter cannot provide, and answers that reveal nothing about who has an account (issues #12, #19, #20)"
 readme = "README.md"
 publish = false
 version.workspace = true
