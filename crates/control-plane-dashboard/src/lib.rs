@@ -18,11 +18,21 @@
 
 #![forbid(unsafe_code)]
 
-// Each screen keeps its routes, rendering and tests in its own file, so
-// the wiring below — modules, routes, the nav entry and the PLANNED row
-// that stops being planned — is all this file carries for either of them.
+// One file per account-level screen, built or not, so that building one
+// is a change to one file: the route and the navigation entry below are
+// already there, and `planned.rs` is what a screen renders until somebody
+// replaces it. Six of these were being built at once from six worktrees,
+// which is what a shared table of screens would have turned into six-way
+// conflicts in the same twenty lines.
+mod backups;
+mod billing;
 mod data;
+mod deploys;
 mod diagram;
+mod domains;
+mod environments;
+mod logs;
+mod planned;
 /// The secrets manager screen.
 pub(crate) mod secrets_screen;
 
@@ -273,10 +283,7 @@ impl Module for Dashboard {
             .route("/ventures/{id}/modules", post(set_modules))
             .route("/ventures/{id}/reprovision", post(reprovision))
             // The data browser (#28, read-only half): schema visualiser,
-            // table detail, CSV export. Static segments win over the
-            // `/{slug}` planned-screen catch-all below, so the real
-            // screen takes /data and the placeholder table keeps the
-            // rest — which holds for the secrets routes just as well.
+            // table detail, CSV export.
             .route("/data", get(data::screen))
             .route("/data/{table}", get(data::detail))
             .route("/data/{table}/export", get(data::export))
@@ -291,9 +298,17 @@ impl Module for Dashboard {
             )
             .route("/secrets/{store}/rotate", post(secrets_screen::rotate))
             .route("/secrets/{store}/rewrap", post(secrets_screen::rewrap))
-            // The screens the design has and the product does not. One
-            // handler, one table; a new screen is a row.
-            .route("/{slug}", get(planned_screen))
+            // One route per screen, named. A catch-all over a table of
+            // slugs was shorter, but it made "is this screen built yet"
+            // a property of a table entry rather than of the file that
+            // renders it, and every screen being built at once then
+            // edits that one table.
+            .route("/deploys", get(deploys::screen))
+            .route("/logs", get(logs::screen))
+            .route("/domains", get(domains::screen))
+            .route("/backups", get(backups::screen))
+            .route("/environments", get(environments::screen))
+            .route("/billing", get(billing::screen))
             .with_state(state)
     }
 }
@@ -1038,16 +1053,16 @@ fn render_detail(
     // The planned screens are real pages now, so they are links rather
     // than dim words: each says what it will do and what to do today.
     let here = format!("{BASE}/ventures/{}", venture.id);
-    let paths: Vec<String> = PLANNED
+    let paths: Vec<String> = SCREENS
         .iter()
-        .map(|screen| format!("{BASE}/{}", screen.slug))
+        .map(|(slug, _)| format!("{BASE}/{slug}"))
         .collect();
     let mut items = vec![
         NavItem::to("Ventures", BASE),
         NavItem::here("Overview", &here),
     ];
-    for (screen, path) in PLANNED.iter().zip(&paths) {
-        items.push(NavItem::to(screen.title, path));
+    for ((_, title), path) in SCREENS.iter().zip(&paths) {
+        items.push(NavItem::to(title, path));
     }
     let nav_html = nav(&items);
 
@@ -1450,68 +1465,20 @@ async fn reprovision(
 
 /// One screen the dashboard will have and does not yet.
 ///
-/// These were dim, inert words in the navigation. A label that cannot be
-/// clicked tells an operator nothing; a page that says what the screen will
-/// do, **what to do instead today**, and which issue specifies it tells
-/// them everything they can act on. The copy is the site's own — the
-/// preview at cratefield.com/dashboard/ already makes these promises, and
-/// product and marketing disagreeing about what is built is its own kind
-/// of lie.
-struct Planned {
-    /// The path segment under `/v1/dashboard`.
-    slug: &'static str,
-    title: &'static str,
-    /// What the screen is for, in a sentence.
-    purpose: &'static str,
-    /// What an operator does today instead. Usually a command.
-    instead: &'static str,
-    /// The issue that specifies it, in `Cratefield/control-plane`.
-    issue: Option<u32>,
-}
-
-const PLANNED: [Planned; 6] = [
-    Planned {
-        slug: "deploys",
-        title: "Deploys",
-        purpose: "Every deploy of a venture, what module set it carried, and which one is                   serving now. Waiting on the same thing everything else here waits on:                   no Deployer talks to Cloudflare yet, so there are no deploys to list.",
-        instead: "You run the build on your own machine and deploy with `wrangler`.",
-        issue: Some(26),
-    },
-    Planned {
-        slug: "logs",
-        title: "Logs",
-        purpose: "A venture's request and error logs, kept long enough to look at after                   the fact. Nothing retains them today, which is the part that needs                   building — not the screen.",
-        instead: "You use `wrangler tail`, which shows the live stream and keeps nothing.",
-        issue: None,
-    },
-    Planned {
-        slug: "domains",
-        title: "Domains",
-        purpose: "Put a venture on a customer's own domain through Cloudflare for SaaS:                   add the hostname, show the DNS record to create, verify it, issue the                   certificate, and show the status while it settles.",
-        instead: "You add the custom domain in Cloudflare yourself.",
-        issue: Some(30),
-    },
-    Planned {
-        slug: "backups",
-        title: "Backups",
-        purpose: "Point-in-time recovery inside D1's Time Travel window, a scheduled                   export to R2 for anything older, and the last successful backup shown                   here. A backup that has never been restored is not a backup, so the                   restore path is part of the work.",
-        instead: "You export with `fz data export` and keep the file.",
-        issue: Some(29),
-    },
-    Planned {
-        slug: "environments",
-        title: "Environments",
-        purpose: "A staging venture alongside production with its own database and                   secrets, and a promotion that moves a module set and its migrations                   from one to the other. Without it every schema change is tested in                   production.",
-        instead: "You deploy a second backend and wire it up yourself.",
-        issue: Some(31),
-    },
-    Planned {
-        slug: "billing",
-        title: "Billing",
-        purpose: "What a venture costs and what it is being charged: a Stripe                   subscription per venture, per-venture counters for requests, storage                   and email, and a free tier enforced by throttling rather than by a                   bill. The free tier stays on — the throttle must never become a pause.",
-        instead: "Nothing: there is nothing to pay for yet.",
-        issue: Some(27),
-    },
+/// Every account-level screen, in the order the navigation shows them.
+///
+/// The order is the only thing this table decides. What a screen renders,
+/// and whether it is built at all, belongs to that screen's own file —
+/// see [`planned`] for why.
+const SCREENS: [(&str, &str); 8] = [
+    ("data", "Data browser"),
+    ("secrets", "Secrets"),
+    ("deploys", "Deploys"),
+    ("logs", "Logs"),
+    ("domains", "Domains"),
+    ("backups", "Backups"),
+    ("environments", "Environments"),
+    ("billing", "Billing"),
 ];
 
 /// The navigation shared by every account-level screen, so the same list is
@@ -1520,8 +1487,6 @@ pub(crate) fn account_nav(current: &str) -> String {
     // Leaked into a `String` would be a leak per render; these paths are
     // built once and borrowed for the life of the call, like the
     // planned-screen paths below.
-    let data_path = format!("{BASE}/data");
-    let secrets_path = format!("{BASE}/secrets");
     let mut items = vec![
         if current == "ventures" {
             NavItem::here("Ventures", BASE)
@@ -1529,88 +1494,21 @@ pub(crate) fn account_nav(current: &str) -> String {
             NavItem::to("Ventures", BASE)
         },
         NavItem::to("New venture", "/v1/console/new"),
-        // The data browser is built (issue #28's read-only half), so it
-        // takes the slot its placeholder held — first after the ventures,
-        // before the screens that are still planned.
-        if current == "data" {
-            NavItem::here("Data browser", &data_path)
-        } else {
-            NavItem::to("Data browser", &data_path)
-        },
-        // The secrets manager is account-level too, so it sits in this
-        // list rather than under one venture.
-        if current == "secrets" {
-            NavItem::here("Secrets", &secrets_path)
-        } else {
-            NavItem::to("Secrets", &secrets_path)
-        },
     ];
     // Leaked into a `String` would be a leak per request; these paths are
     // built once per render and borrowed for the life of the call.
-    let paths: Vec<String> = PLANNED
+    let paths: Vec<String> = SCREENS
         .iter()
-        .map(|screen| format!("{BASE}/{}", screen.slug))
+        .map(|(slug, _)| format!("{BASE}/{slug}"))
         .collect();
-    for (screen, path) in PLANNED.iter().zip(&paths) {
-        items.push(if current == screen.slug {
-            NavItem::here(screen.title, path)
+    for ((slug, title), path) in SCREENS.iter().zip(&paths) {
+        items.push(if current == *slug {
+            NavItem::here(title, path)
         } else {
-            NavItem::to(screen.title, path)
+            NavItem::to(title, path)
         });
     }
     nav(&items)
-}
-
-/// Renders one planned screen.
-async fn planned_screen(
-    State(state): State<Arc<DashboardState>>,
-    headers: HeaderMap,
-    Path(slug): Path<String>,
-) -> Response {
-    let ctx = &state.ctx;
-    if let Err(redirect) = guard(ctx, &headers) {
-        return redirect;
-    }
-    let session = current_session(ctx, &headers).expect("guard proved a session");
-    let Some(screen) = PLANNED.iter().find(|screen| screen.slug == slug) else {
-        return (StatusCode::NOT_FOUND, "no such screen").into_response();
-    };
-
-    let issue = match screen.issue {
-        Some(number) => format!(
-            " <a href=\"https://github.com/Cratefield/control-plane/issues/{number}\" \
-             rel=\"noopener\">The issue that specifies it.</a>"
-        ),
-        // Two of these have no issue yet, and saying so is better than
-        // linking one that does not exist.
-        None => String::from(" No issue specifies it yet."),
-    };
-
-    let body = format!(
-        "<p class=\"dash__banner\"><span class=\"chip\">Planned</span>\
-         <strong>Not built.</strong> Today you do this instead: {instead}{issue}</p>\
-         <div class=\"dash__card dash__card--wide\">\
-         <p class=\"dash__card-h\">What it will do</p>\
-         <p class=\"dash__note\">{purpose}</p></div>\
-         <p class=\"dash__note\">This page exists so the navigation does not lie in \
-         either direction: the screen is in the design, it is not in the product, and \
-         the thing you can do today is written down rather than left for you to find.</p>",
-        instead = escape(screen.instead),
-        purpose = escape(screen.purpose),
-    );
-
-    Html(render(&Page {
-        title: screen.title,
-        signed_in_as: Some(&session.account_id),
-        body: &format!(
-            "<div class=\"page-h\"><h1>{title}</h1><span class=\"chip\">Planned</span></div>\
-             <p class=\"lede\">Not built yet. What it will do, and what to do \
-             meanwhile.</p>{frame}",
-            title = escape(screen.title),
-            frame = frame(&account_nav(screen.slug), screen.title, &body),
-        ),
-    }))
-    .into_response()
 }
 
 /// Whether two module-set content keys name the same selection.
@@ -2453,39 +2351,37 @@ mod tests {
     }
 
     #[pollster::test]
-    async fn every_planned_screen_says_what_to_do_instead() {
+    async fn every_screen_in_the_navigation_answers_and_none_of_them_bluffs() {
         let kit = seeded(VentureStatus::Live).await;
-        for screen in &PLANNED {
+        for (slug, title) in &SCREENS {
             let reply = send(
                 &kit,
                 Method::GET,
-                &format!("{BASE}/{}", screen.slug),
+                &format!("{BASE}/{slug}"),
                 Some(&cookie(&kit)),
             )
             .await;
-            assert_eq!(
-                reply.status,
-                StatusCode::OK,
-                "{}: {}",
-                screen.slug,
-                reply.body
-            );
+            assert_eq!(reply.status, StatusCode::OK, "{slug}: {}", reply.body);
             assert!(
-                reply.body.contains("Not built."),
-                "{} must not imply it works: {}",
-                screen.slug,
+                reply.body.contains(title),
+                "{slug} must name itself: {}",
                 reply.body
             );
-            // The point of the page: the thing you can do right now.
-            assert!(
-                reply.body.contains(&escape(screen.instead)),
-                "{} must say what to do instead: {}",
-                screen.slug,
-                reply.body
-            );
+            // The invariant that outlives these screens being built one
+            // at a time: a screen may say it is not built, but then it
+            // must say what to do today instead. It may not say only the
+            // first half, and a screen that has been built says neither.
+            if reply.body.contains("Not built.") {
+                assert!(
+                    reply.body.contains("Today you do this instead:"),
+                    "{slug} says it is not built without saying what to do: {}",
+                    reply.body
+                );
+            }
         }
 
-        // And a screen that is not in the table is a 404, not a blank page.
+        // And a screen that is not in the navigation is a 404, not a
+        // blank page.
         let reply = send(
             &kit,
             Method::GET,
