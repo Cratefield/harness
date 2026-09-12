@@ -559,11 +559,13 @@ A device token, an FCM registration token and a Web Push endpoint are all
   the second one stayed empty through six migrations while the first was
   complete: a whole-database move carried everything and an erasure request
   reached none of it. Seven are erased with the account; `notifications_outbox`
-  is declared as holding nothing exportable, with the reason published — a
-  queued row does hold the message, and it is filed under the send rather than
-  the account, so erasure cannot reach one in flight (issue #266). A row leaves
-  the outbox on delivery or on giving up, and a dead letter carries an
-  `account_id` since migration `0007` precisely so that erasure reaches it.
+  is too, since #266 gave the outbox shape a nullable `subject` column
+  (migration `0009`) and the module stopped publishing it as unreachable — a
+  queued row holds the message and is the account's until it is delivered or
+  given up on. A row written before `0009` keeps `subject` NULL: it drains as
+  before and names nobody. A row leaves the outbox on delivery or on giving
+  up, and a dead letter carries an `account_id` since migration `0007`
+  precisely so that erasure reaches it.
 - **A push token and a Web Push endpoint are never exported.**
   `notifications_subscriptions` is declared with `recipient_json` redacted:
   the row is the account's and must be erased with it, but the column is a

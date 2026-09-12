@@ -490,7 +490,13 @@ impl Notifier {
                 "notification does not serialise: {err}"
             )))
         })?;
-        Ok(Outbox::new(store::OUTBOX).enqueue_statement(&self.new_id(), TOPIC_SEND, &payload, now))
+        Ok(Outbox::new(store::OUTBOX).enqueue_statement(
+            &self.new_id(),
+            TOPIC_SEND,
+            &payload,
+            Some(account_id),
+            now,
+        ))
     }
 
     /// The outbox insert for one account's email.
@@ -518,14 +524,13 @@ impl Notifier {
                 "notification does not serialise: {err}"
             )))
         })?;
-        Ok(
-            Outbox::new(store::OUTBOX).enqueue_statement(
-                &self.new_id(),
-                TOPIC_EMAIL,
-                &payload,
-                now,
-            ),
-        )
+        Ok(Outbox::new(store::OUTBOX).enqueue_statement(
+            &self.new_id(),
+            TOPIC_EMAIL,
+            &payload,
+            Some(account_id),
+            now,
+        ))
     }
 
     /// Whether `account_id` should be emailed for `category`.

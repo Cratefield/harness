@@ -68,6 +68,7 @@ impl Outbox {
              id TEXT PRIMARY KEY,\n    \
              topic TEXT NOT NULL,\n    \
              payload TEXT NOT NULL,\n    \
+             subject TEXT,\n    \
              attempts INTEGER NOT NULL DEFAULT 0,\n    \
              next_attempt_at TEXT NOT NULL,\n    \
              locked_until TEXT,\n    \
@@ -81,8 +82,24 @@ impl Outbox {
     /// exactly when the change is. `id` is a caller-supplied ULID; `at` is an
     /// RFC 3339 timestamp used for both `created_at` and the initial
     /// `next_attempt_at` (deliver as soon as possible).
+    ///
+    /// `subject` is the person the work is for — an account id, a waitlist
+    /// entry id — or `None` for work that names nobody. Writing it is what
+    /// makes the queued row reachable for export and erasure (issue #266):
+    /// the payload JSON is the module's own dialect and no predicate can
+    /// match into it. Pass it for every per-person job even when it feels
+    /// redundant with the payload; `None` rows drain identically but are
+    /// returned for nobody's subject, so a forgotten `Some` is a silent
+    /// hole in the erasure catalogue rather than an error.
     #[must_use]
-    pub fn enqueue_statement(&self, id: &str, topic: &str, payload: &str, at: &str) -> Statement {
+    pub fn enqueue_statement(
+        &self,
+        id: &str,
+        topic: &str,
+        payload: &str,
+        subject: Option<&str>,
+        at: &str,
+    ) -> Statement {
         let mut insert = Query::insert();
         insert
             .into_table(iden(&self.table))
@@ -90,6 +107,7 @@ impl Outbox {
                 "id",
                 "topic",
                 "payload",
+                "subject",
                 "attempts",
                 "next_attempt_at",
                 "created_at",
@@ -98,6 +116,7 @@ impl Outbox {
                 id.to_owned().into(),
                 topic.to_owned().into(),
                 payload.to_owned().into(),
+                subject.map(str::to_owned).into(),
                 0i64.into(),
                 at.to_owned().into(),
                 at.to_owned().into(),
@@ -209,6 +228,10 @@ mod tests {
         assert!(sql.contains("CREATE TABLE IF NOT EXISTS mail_outbox"));
         assert!(sql.contains("next_attempt_at TEXT NOT NULL"));
         assert!(sql.contains("locked_until TEXT"));
+        // Nullable, not NOT NULL: the migration story is ADD COLUMN on a
+        // live table, and NOT NULL would force a backfill that cannot be
+        // honest about rows whose payload never parsed.
+        assert!(sql.contains("subject TEXT"));
     }
 
     #[test]
@@ -217,11 +240,32 @@ mod tests {
             "01J",
             "confirmation",
             "{\"to\":\"a@b\"}",
+            Some("acct-1"),
             "2026-09-07T00:00:00Z",
         );
         assert!(stmt.sql.contains("INSERT INTO"));
         assert!(stmt.sql.contains("mail_outbox"));
-        // id, topic, payload, attempts, next_attempt_at, created_at
-        assert_eq!(stmt.values.0.len(), 6);
+        assert!(stmt.sql.contains("subject"));
+        // id, topic, payload, subject, attempts, next_attempt_at, created_at
+        assert_eq!(stmt.values.0.len(), 7);
+        assert_eq!(stmt.values.0[3], "acct-1".into());
+    }
+
+    #[test]
+    fn enqueue_statement_without_a_subject_binds_null() {
+        // The shape a row written before the migration has: the column
+        // exists, the value does not. The drain treats both the same.
+        let stmt = Outbox::new("mail_outbox").enqueue_statement(
+            "01J",
+            "confirmation",
+            "{\"to\":\"a@b\"}",
+            None,
+            "2026-09-07T00:00:00Z",
+        );
+        assert!(stmt.sql.contains("subject"));
+        assert_eq!(
+            stmt.values.0[3],
+            sea_query::Value::from(Option::<String>::None)
+        );
     }
 }

@@ -658,7 +658,10 @@ reach for two core primitives:
   **same `db.batch`** as your state change so the work is durable exactly
   when the change is, then use `Defer` only to *attempt* immediate
   delivery (`claim_due` → deliver → `complete`/`retry_later`); drain the
-  rest from the venture's scheduled entry point. At-least-once.
+  rest from the venture's scheduled entry point. At-least-once. For
+  per-person work pass the subject's id — export and erasure match the
+  queued row on that column, and a row with `None` is returned for
+  nobody's subject (issue #266).
 - **`cratefield_core::Inbox`** — before applying an inbound effect (a
   Stripe webhook, a redelivered event), `claim(db, event_id, now)`; only
   the first caller gets `true`. Exactly-once for the consumer.

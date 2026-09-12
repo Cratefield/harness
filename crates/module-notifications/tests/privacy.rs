@@ -42,6 +42,7 @@ const TABLES: &[&str] = &[
     "notifications_email_sends",
     "notifications_dead_letters",
     "notifications_email_suppressed",
+    "notifications_outbox",
 ];
 
 /// The two modules a venture composes to answer a data-subject request, over
@@ -164,6 +165,46 @@ async fn seed(kit: &TestHarness, account: &str, endpoint: &str) {
             .unwrap_or_else(|err| panic!("seeding {table} failed: {err}"));
     }
     seed_dead_letter(kit, account).await;
+    seed_queued(kit, account).await;
+}
+
+/// The queued rows are seeded apart for the same reason the dead letter is:
+/// two rows per account (one naming the subject, one written like a
+/// pre-`0009` row) pushed `seed` over the line-count lint.
+async fn seed_queued(kit: &TestHarness, account: &str) {
+    let payload =
+        json!({ "account_id": account, "notification": { "title": "Booked" } }).to_string();
+    let rows: [(&str, &str, Vec<sea_query::Value>); 2] = [
+        (
+            "notifications_outbox",
+            "INSERT INTO notifications_outbox (id, topic, payload, subject, attempts, \
+             next_attempt_at, created_at) VALUES (?, 'notifications.send', ?, ?, 0, ?, ?)",
+            vec![
+                format!("queued-{account}").into(),
+                payload.clone().into(),
+                account.into(),
+                "2026-01-01T00:00:00Z".into(),
+                "2026-01-01T00:00:00Z".into(),
+            ],
+        ),
+        (
+            "notifications_outbox (pre-migration)",
+            "INSERT INTO notifications_outbox (id, topic, payload, attempts, next_attempt_at, \
+             created_at) VALUES (?, 'notifications.send', ?, 0, ?, ?)",
+            vec![
+                format!("queued-null-{account}").into(),
+                payload.into(),
+                "2026-01-01T00:00:00Z".into(),
+                "2026-01-01T00:00:00Z".into(),
+            ],
+        ),
+    ];
+    for (table, sql, values) in rows {
+        kit.db
+            .execute(&Statement::with_values(sql.to_owned(), values))
+            .await
+            .unwrap_or_else(|err| panic!("seeding {table} failed: {err}"));
+    }
 }
 
 /// The dead letter is seeded apart because its `payload` alone needs the
@@ -259,9 +300,48 @@ async fn an_erasure_reaches_every_table_the_module_owns() {
     assert_eq!(confirm.json()["verified"], true);
 
     for table in TABLES {
+        if *table == "notifications_outbox" {
+            continue;
+        }
         assert_eq!(count_for(&kit, table, ALICE).await, 0, "{table} survived");
         assert_eq!(count_for(&kit, table, BOB).await, 1, "{table} lost Bob");
     }
+    // The outbox keys on `subject`, not `account_id`, so it is counted here
+    // rather than in the loop above: Alice's queued row goes with her, Bob's
+    // stays, and the row written before migration `0009` — subject `NULL`,
+    // matching nobody — is still sitting there.
+    assert_eq!(queued_for(&kit, ALICE).await, 0, "queued row survived");
+    assert_eq!(queued_for(&kit, BOB).await, 1, "queued row lost Bob");
+    assert_eq!(unsubjected_queued(&kit).await, 2);
+}
+
+/// Queued outbox rows for one subject.
+async fn queued_for(kit: &TestHarness, subject: &str) -> i64 {
+    let rows = kit
+        .db
+        .query(&Statement::with_values(
+            "SELECT COUNT(*) AS n FROM notifications_outbox WHERE subject = ?".to_owned(),
+            vec![subject.into()],
+        ))
+        .await
+        .unwrap_or_else(|err| panic!("counting the outbox failed: {err}"));
+    rows.first()
+        .and_then(|row| row.get::<i64>("n"))
+        .unwrap_or(-1)
+}
+
+/// Outbox rows written before migration `0009`, with no subject at all.
+async fn unsubjected_queued(kit: &TestHarness) -> i64 {
+    let rows = kit
+        .db
+        .query(&Statement::new(
+            "SELECT COUNT(*) AS n FROM notifications_outbox WHERE subject IS NULL".to_owned(),
+        ))
+        .await
+        .unwrap_or_else(|err| panic!("counting unsubjected rows failed: {err}"));
+    rows.first()
+        .and_then(|row| row.get::<i64>("n"))
+        .unwrap_or(-1)
 }
 
 #[pollster::test]
@@ -305,13 +385,108 @@ async fn an_export_carries_the_notifications_and_never_the_endpoint() {
         .find(|t| t["table"] == "notifications_inbox")
         .expect("inbox exported");
     assert_eq!(inbox["rows"][0]["title"], "Booked");
+
+    // The message still *queued* is in their export too (issue #266): the
+    // row is theirs until it is delivered, and it now says what it was.
+    let outbox = tables
+        .iter()
+        .find(|t| t["table"] == "notifications_outbox")
+        .expect("outbox exported");
+    assert_eq!(
+        outbox["rows"].as_array().expect("rows").len(),
+        1,
+        "{outbox}"
+    );
+    assert_eq!(outbox["rows"][0]["subject"], ALICE, "{outbox}");
 }
 
 #[pollster::test]
-async fn the_manifest_says_what_the_outbox_holds_rather_than_staying_silent() {
-    // The outbox holds the person's message, so it must not be published as
-    // "not personal" — but erasure cannot reach it either (issue #274). Its
-    // own bucket is the honest answer.
+async fn a_row_queued_before_the_migration_names_nobody_and_still_drains() {
+    // Migration `0009` adds `subject` without backfilling. A row written
+    // before it has `subject` NULL: it must not surface in anybody's export
+    // or erasure — but it must not be stranded either, and the drain still
+    // picks it up and deletes it on delivery.
+    let kit = privacy_kit();
+    seed(&kit, ALICE, ENDPOINT).await;
+    seed(&kit, BOB, "https://push.example.test/send/bob").await;
+
+    let response = admin(
+        &kit,
+        http::Method::GET,
+        &format!("/v1/privacy/export?subject={ALICE}"),
+        None,
+    )
+    .await;
+    let body: Value = response.json();
+    let outbox = body["tables"]
+        .as_array()
+        .expect("tables")
+        .iter()
+        .find(|t| t["table"] == "notifications_outbox")
+        .expect("outbox exported");
+    let queued = outbox["rows"].as_array().expect("rows");
+    assert_eq!(
+        queued.len(),
+        1,
+        "the NULL row must not be exported: {outbox}"
+    );
+    assert_eq!(queued[0]["id"], "queued-acct-alice", "{queued:?}");
+
+    let preview = admin(
+        &kit,
+        http::Method::POST,
+        "/v1/privacy/erase",
+        Some(json!({ "subject": ALICE })),
+    )
+    .await;
+    let body = preview.json();
+    let confirm = admin(
+        &kit,
+        http::Method::POST,
+        "/v1/privacy/erase/confirm",
+        Some(json!({ "token": body["confirm_token"] })),
+    )
+    .await;
+    assert_eq!(confirm.status, http::StatusCode::OK, "{}", confirm.text());
+    // Alice's queued row went with her erasure; both pre-migration rows
+    // survive it — deleting what names nobody would be deleting data on a
+    // guess.
+    assert_eq!(queued_for(&kit, ALICE).await, 0);
+    assert_eq!(unsubjected_queued(&kit).await, 2);
+
+    // The pre-migration rows are still due work — and so is Bob's queued
+    // row, which this erasure never touched. The drain leases all three,
+    // delivery would complete them, and the NULL subjects change nothing.
+    let outbox = cratefield_core::Outbox::new("notifications_outbox");
+    let leased = outbox
+        .claim_due(&*kit.db, "2026-01-02T00:00:00Z", "2026-01-02T00:05:00Z", 10)
+        .await
+        .expect("claim_due");
+    let mut leased_ids: Vec<&str> = leased.iter().map(|r| r.id.as_str()).collect();
+    leased_ids.sort_unstable();
+    assert_eq!(
+        leased_ids,
+        [
+            "queued-acct-bob",
+            "queued-null-acct-alice",
+            "queued-null-acct-bob"
+        ]
+    );
+    for record in &leased {
+        outbox
+            .complete(&*kit.db, &record.id)
+            .await
+            .expect("complete");
+    }
+    assert_eq!(unsubjected_queued(&kit).await, 0);
+}
+
+#[pollster::test]
+async fn the_queued_row_is_declared_reachable_not_unreachable() {
+    // Until #266 the outbox could only be published as `unreachable`: the
+    // account lived inside the payload JSON and no column could match it.
+    // With `subject` on the shape it is an ordinary declaration — and a
+    // reason still claiming unreachability here would be a fresh lie.
     let kit = privacy_kit();
     let response = support::send(
         &kit.router,
@@ -332,39 +507,24 @@ async fn the_manifest_says_what_the_outbox_holds_rather_than_staying_silent() {
         .collect();
     assert_eq!(listed, TABLES, "{body}");
 
-    let not_personal = body["not_personal"].as_array().expect("not_personal");
+    let unreachable = body["unreachable"].as_array().expect("unreachable");
     assert!(
-        not_personal
-            .iter()
-            .all(|entry| entry["table"] != "notifications_outbox"),
-        "the outbox holds a message; it cannot be published as not personal: {not_personal:?}"
+        unreachable.is_empty(),
+        "every table in this module is reachable now: {unreachable:?}"
     );
 
-    let unreachable = body["unreachable"].as_array().expect("unreachable");
-    assert_eq!(unreachable.len(), 1, "{unreachable:?}");
-    assert_eq!(unreachable[0]["table"], "notifications_outbox");
-    assert_eq!(unreachable[0]["kind"], "content");
-    let reason = unreachable[0]["reason"].as_str().unwrap_or_default();
-    assert!(
-        reason.contains("cannot match"),
-        "the outbox reason has to say why erasure cannot reach it: {reason}"
-    );
-    let description = unreachable[0]["description"].as_str().unwrap_or_default();
+    let outbox = body["holds"]
+        .as_array()
+        .expect("holds")
+        .iter()
+        .find(|entry| entry["table"] == "notifications_outbox")
+        .expect("outbox published as holding data");
+    assert_eq!(outbox["on_erasure"]["action"], "erase", "{outbox:?}");
+    let description = outbox["description"].as_str().unwrap_or_default();
     assert!(
         description.contains("message"),
         "the outbox description has to say what is in it: {description}"
     );
-
-    // The device column is named on the page, so a reader learns it is held
-    // and withheld rather than learning nothing.
-    let subscriptions = body["holds"]
-        .as_array()
-        .expect("holds")
-        .iter()
-        .find(|entry| entry["table"] == "notifications_subscriptions")
-        .expect("subscriptions published");
-    assert_eq!(subscriptions["redacted"][0], "recipient_json");
-    assert_eq!(subscriptions["on_erasure"]["action"], "erase");
 }
 
 /// A table holding the person's message must never be described to them as
@@ -409,11 +569,15 @@ async fn the_manifest_never_calls_a_table_both_personal_and_not() {
         );
     }
 
-    // The outbox is the case that made the buckets necessary: whatever the
-    // manifest says about it, it must not be silence in `not_personal`.
+    // The outbox is the case that made the buckets necessary: it now sits
+    // in `holds`, and must never slide back into `unreachable` or silence.
     assert!(
-        unreachable.iter().any(|t| t == "notifications_outbox"),
-        "the outbox is not published as unreachable: {body}"
+        holds.iter().any(|t| t == "notifications_outbox"),
+        "the outbox is not published as a reachable table: {body}"
+    );
+    assert!(
+        !unreachable.iter().any(|t| t == "notifications_outbox"),
+        "the outbox is reachable since migration 0009: {body}"
     );
 }
 
@@ -487,4 +651,37 @@ async fn notify_and_commit(notifier: &Notifier, kit: &support::Kit) {
         .await
         .expect("notify");
     db.batch_atomic(enqueued.statements()).await.expect("batch");
+}
+
+#[pollster::test]
+async fn the_write_path_stamps_the_subject_it_enqueued_for() {
+    // The declaration is only as good as the write: if `notify` enqueued
+    // with a NULL subject, the manifest would promise an erasure the rows
+    // never named. Asserted through the real enqueue, not seeded SQL.
+    let kit = support::kit();
+    let db = kit.db();
+    db.execute(&Statement::with_values(
+        "INSERT INTO notifications_subscriptions (id, account_id, transport, recipient_json, \
+         recipient_hash, created_at, last_seen_at) VALUES ('sub', ?, 'apns', ?, 'hash', ?, ?)"
+            .to_owned(),
+        vec![
+            ALICE.into(),
+            serde_json::to_string(&cratefield_core::Recipient::apns("device-alice-ios"))
+                .expect("serialises")
+                .into(),
+            "2026-01-01T00:00:00Z".into(),
+            "2026-01-01T00:00:00Z".into(),
+        ],
+    ))
+    .await
+    .expect("seed subscription");
+    notify_and_commit(&kit.notifier, &kit).await;
+
+    let rows = kit.rows("notifications_outbox").await;
+    assert_eq!(rows.len(), 1);
+    assert_eq!(
+        rows[0].get::<String>("subject").as_deref(),
+        Some(ALICE),
+        "a queued row must name the account it was enqueued for"
+    );
 }

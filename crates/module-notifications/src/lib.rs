@@ -203,10 +203,19 @@ const MIGRATION_EMAIL_SUPPRESSED: SqlMigration = SqlMigration::new(
     include_str!("../migrations/sqlite/0008_email_suppressed.sql"),
 );
 
+/// The subject a queued notification is for (#266): already in the payload,
+/// made queryable so export and erasure reach the queued copy too. Its own
+/// migration because `0001`-`0008` are applied.
+const MIGRATION_OUTBOX_SUBJECT: SqlMigration = SqlMigration::new(
+    "0009",
+    "outbox_subject",
+    include_str!("../migrations/sqlite/0009_outbox_subject.sql"),
+);
+
 /// Every migration this module ships, in order. One array, so a test that
 /// asserts something about the schema reads what actually ships rather
 /// than a second list that can drift from it.
-const SHIPPED_MIGRATIONS: [SqlMigration; 8] = [
+const SHIPPED_MIGRATIONS: [SqlMigration; 9] = [
     MIGRATION_INIT,
     MIGRATION_REHOME_AND_DUE_INDEX,
     MIGRATION_INBOX,
@@ -215,6 +224,7 @@ const SHIPPED_MIGRATIONS: [SqlMigration; 8] = [
     MIGRATION_LOCALES,
     MIGRATION_DEAD_LETTER_ACCOUNT,
     MIGRATION_EMAIL_SUPPRESSED,
+    MIGRATION_OUTBOX_SUBJECT,
 ];
 
 /// One notification category the venture declares.
@@ -899,7 +909,7 @@ impl Module for Notifications {
     /// `GET /v1/privacy/manifest` and written for the person reading that
     /// page, not for whoever maintains this file.
     ///
-    /// Three of the eight are judgements rather than the obvious answer:
+    /// Two of the nine are judgements rather than the obvious answer:
     ///
     /// - **`notifications_subscriptions`** is erased like the rest, and
     ///   `recipient_json` is [redacted](PersonalDataSet::redacted) from the
@@ -916,18 +926,13 @@ impl Module for Notifications {
     ///   address, and keeping it would be keeping an address somebody asked
     ///   us to forget. A venture that suppresses a **bounced** address is
     ///   keeping that in the provider, not here.
-    /// - **`notifications_outbox`** is the one table declared as holding
-    ///   data erasure cannot reach (`unreachable`, not `none` — a queued row
-    ///   does hold the message, and "not personal" was never an honest
-    ///   bucket for it: issue #274). The payload carries the account inside
-    ///   JSON, and export and erasure key on a column. The reason published
-    ///   for it says so, and issue #266 tracks the fix, which is core's
-    ///   `Outbox` and not this module's. What bounds it is that a row is
-    ///   deleted on delivery and moved to `notifications_dead_letters` when
-    ///   it gives up — and dead letters, which used to be permanent, carry
-    ///   an `account_id` since migration `0007` precisely so an erasure
-    ///   reaches them. They stay a plain `Erase` set: reachable and
-    ///   scrubbed, so `unreachable` would describe them wrongly.
+    ///
+    /// The outbox was the third judgement until #266 gave the `Outbox`
+    /// shape a nullable `subject` column (migration `0009`): until then the
+    /// queued row held the person's message with no column a request could
+    /// match, and could only be published as `unreachable`. Now it is a
+    /// plain `Erase` set, and rows written before the migration keep
+    /// `subject` `NULL` — they drain as before and name nobody.
     fn personal_data(&self) -> &'static [PersonalDataSet] {
         const SETS: &[PersonalDataSet] = &[
             PersonalDataSet {
@@ -1011,23 +1016,16 @@ impl Module for Notifications {
                 redacted: &[],
                 subject_via: None,
             },
-            // Not `PersonalDataSet::none`: the queued row *does* hold the
-            // person's message, and bucketing this declaration under
-            // "not personal" would tell the subject the opposite of the
-            // truth (issue #274). There is no subject column to declare —
-            // the account is inside the payload JSON, and core's `Outbox`
-            // shape is #266's to fix — so the honest interim answer is
-            // `unreachable`: the manifest publishes it in its own bucket,
-            // and it counts towards `holds_personal_data`.
-            PersonalDataSet::unreachable(
-                store::OUTBOX,
-                DataKind::Content,
-                "A notification waiting to be sent, holding the message it was queued with.",
-                "The row is filed under the send rather than under a subject column, so an \
-                 erasure request cannot match it. It is deleted on delivery, or given up on \
-                 and moved to the dead letters within minutes; only one in flight at the \
-                 moment of a request can survive it.",
-            ),
+            PersonalDataSet {
+                table: store::OUTBOX,
+                subject: "subject",
+                kind: DataKind::Content,
+                disposition: Disposition::Erase,
+                description: "A notification waiting to be sent, holding the message it was \
+                              queued with.",
+                redacted: &[],
+                subject_via: None,
+            },
         ];
         SETS
     }
@@ -1558,10 +1556,22 @@ mod tests {
     fn the_migration_ships_the_cores_outbox_ddl_verbatim() {
         // The outbox table is core's, written out by hand in a migration
         // file. If core's DDL changes, this is where it is noticed.
+        // `0001` shipped the pre-#266 shape and an applied migration is
+        // never edited, so the subject line arrives in `0009` instead: the
+        // shipped schema is `0001` plus that `ADD COLUMN`, and the DDL
+        // without the line is what `0001` must match.
         let core = cratefield_core::Outbox::new(store::OUTBOX).create_table_sql();
+        let pre_266 = core.replace("    subject TEXT,\n", "");
         assert!(
-            MIGRATION_INIT.sql.contains(&core),
+            MIGRATION_INIT.sql.contains(&pre_266),
             "the migration no longer ships `Outbox::create_table_sql()` verbatim:\n{core}"
+        );
+        assert!(
+            MIGRATION_OUTBOX_SUBJECT
+                .sql
+                .contains("ALTER TABLE notifications_outbox ADD COLUMN subject TEXT;"),
+            "the subject column has to come from the shipped migration:\n{}",
+            MIGRATION_OUTBOX_SUBJECT.sql
         );
     }
 
