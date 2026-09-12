@@ -518,8 +518,8 @@ fn render_detail(identity: &str, detail: &StoreDetail, banner: &str) -> String {
         .collect();
 
     let mut secret_rows = String::from(
-        "<div class=\"dash__lrow dash__lrow--head\"><span>Name</span><span>Version</span>\
-         <span>Created</span><span>By</span><span></span></div>",
+        "<div class=\"dash__lrow dash__lrow--secrets dash__lrow--head\"><span>Name</span>\
+         <span>Version</span><span>Created</span><span>By</span><span></span></div>",
     );
     if detail.secrets.is_empty() {
         secret_rows
@@ -590,8 +590,9 @@ fn render_detail(identity: &str, detail: &StoreDetail, banner: &str) -> String {
     );
 
     let mut audit_rows = String::from(
-        "<div class=\"dash__lrow dash__lrow--head\"><span>#</span><span>When</span>\
-         <span>Action</span><span>Actor</span><span>Secret</span><span>Allowed</span></div>",
+        "<div class=\"dash__lrow dash__lrow--audit dash__lrow--head\"><span>#</span>\
+         <span>When</span><span>Action</span><span>Actor</span><span>Secret</span>\
+         <span>Allowed</span></div>",
     );
     if detail.audit.is_empty() {
         audit_rows.push_str("<p class=\"dash__empty\">No entries yet.</p>");
