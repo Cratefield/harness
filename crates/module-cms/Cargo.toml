@@ -1,6 +1,6 @@
 [package]
 name = "cratefield-module-cms"
-description = "Factory Zero module: a small content store with an editor — typed collections, versioned, in the venture's own database"
+description = "Cratefield module: a small content store with an editor — typed collections, versioned, in the venture's own database"
 readme = "README.md"
 keywords = ["cratefield", "cms", "content", "module"]
 categories = ["web-programming"]

@@ -58,9 +58,9 @@ drift-checked in CI. How crates reach crates.io:
 ```rust
 // src/harness.rs in a venture repo
 Harness::builder()
-    .venture(Venture::new("factory0", "factory0.ventures")
-        .public_url("https://factory0.ventures")
-        .cors_origins(["https://factory0.ventures"]))
+    .venture(Venture::new("acme", "acme.example.com")
+        .public_url("https://acme.example.com")
+        .cors_origins(["https://acme.example.com"]))
     .module(EmailSignup::new().double_opt_in(true))
     .module(Waitlist::new().products(["kontinuum", "undercover-rockstars"]))
     .runtime(Cloudflare::new()

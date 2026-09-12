@@ -1,6 +1,6 @@
 [package]
 name = "cratefield-push-wiring"
-description = "Assembles the Push port for a Factory Zero venture from its environment: one env-variable table shared by serve(), fz push and fz doctor"
+description = "Assembles the Push port for a Cratefield venture from its environment: one env-variable table shared by serve(), fz push and fz doctor"
 readme = "README.md"
 keywords = ["cratefield", "push", "apns", "fcm", "web-push"]
 categories = ["api-bindings", "config"]

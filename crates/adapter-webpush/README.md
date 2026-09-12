@@ -11,7 +11,7 @@
 # cratefield-adapter-webpush
 
 The [`Push`](https://docs.rs/cratefield-core) port over **Web Push**, for the
-Factory Zero / Cratefield harness (issue #180): RFC 8030 delivery, RFC 8188 /
+Cratefield harness (issue #180): RFC 8030 delivery, RFC 8188 /
 RFC 8291 `aes128gcm` payload encryption, RFC 8292 VAPID authentication.
 
 It POSTs to the subscription's endpoint through the runtime's `HttpClient`
@@ -318,3 +318,7 @@ test. And ntfy reads none of `TTL`, `Urgency` or `Topic` from the request
 its own `X-*` headers), so the leg proves a real distributor **accepts** the
 full RFC 8030 header set, not that it acts on it. A browser push service
 acts on all three.
+
+---
+
+MIT. Built in the open for [Cratefield](https://cratefield.com), a [Factory Zero](https://factory0.ventures) venture.

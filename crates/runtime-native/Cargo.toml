@@ -1,6 +1,6 @@
 [package]
 name = "cratefield-runtime-native"
-description = "Native (tokio) runtime for the Factory Zero harness: axum on a TcpListener, reqwest over rustls, Redis ports, in-process cron"
+description = "Native (tokio) runtime for the Cratefield harness: axum on a TcpListener, reqwest over rustls, Redis ports, in-process cron"
 readme = "README.md"
 keywords = ["cratefield", "tokio", "axum", "redis", "self-hosted"]
 categories = ["web-programming"]

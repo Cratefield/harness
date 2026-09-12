@@ -24,3 +24,7 @@ back or repointed fails to decrypt rather than quietly succeeding.
 
 `SecretBytes` zeroises on drop, prints as `[redacted]`, and implements
 neither `Display`, `Serialize` nor `Clone`.
+
+---
+
+MIT. Built in the open for [Cratefield](https://cratefield.com), a [Factory Zero](https://factory0.ventures) venture.

@@ -1,6 +1,6 @@
 [package]
 name = "cratefield-i18n"
-description = "Server-side localisation for a Factory Zero venture: Fluent catalogs, BCP 47 negotiation and text direction, with no I/O and no notification-specific types"
+description = "Server-side localisation for a Cratefield venture: Fluent catalogs, BCP 47 negotiation and text direction, with no I/O and no notification-specific types"
 readme = "README.md"
 keywords = ["cratefield", "i18n", "fluent", "localization", "bcp47"]
 categories = ["internationalization", "localization"]

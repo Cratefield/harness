@@ -1,6 +1,6 @@
 # cratefield-manifest
 
-The Factory Zero **venture manifest** and **deterministic composition
+The Cratefield **venture manifest** and **deterministic composition
 generator** (issue #138).
 
 A manifest is the small declarative document that says what a backend *is*:
@@ -40,3 +40,7 @@ browser and what you deploy are the same module set by construction.
 
 The crate depends only on `serde`/`serde_json`/`sha2`, so it compiles to
 wasm for the compose engine. TOML manifest parsing lives in the CLI.
+
+---
+
+MIT. Built in the open for [Cratefield](https://cratefield.com), a [Factory Zero](https://factory0.ventures) venture.

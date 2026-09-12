@@ -107,3 +107,7 @@ rehashing on the strength of an unreadable value would be guessing.
   back in through this module; that is the magic link's job.
 - The `auth-password.duplicate_registration` event says a mail should be
   sent. **Nothing sends it yet** — no mail module subscribes.
+
+---
+
+MIT. Built in the open for [Cratefield](https://cratefield.com), a [Factory Zero](https://factory0.ventures) venture.

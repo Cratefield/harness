@@ -1,6 +1,6 @@
 [package]
 name = "cratefield-module-waitlist"
-description = "Factory Zero module: per-product waitlist with confirm, position, referral codes"
+description = "Cratefield module: per-product waitlist with confirm, position, referral codes"
 readme = "README.md"
 keywords = ["cratefield", "waitlist", "referral", "email", "module"]
 categories = ["email", "web-programming"]

@@ -1,6 +1,6 @@
 [package]
 name = "cratefield-adapter-webpush"
-description = "Push port over Web Push (RFC 8030/8188/8291/8292) for the Factory Zero harness: browsers and UnifiedPush"
+description = "Push port over Web Push (RFC 8030/8188/8291/8292) for the Cratefield harness: browsers and UnifiedPush"
 readme = "README.md"
 keywords = ["cratefield", "web-push", "vapid", "unifiedpush", "adapter"]
 categories = ["api-bindings"]

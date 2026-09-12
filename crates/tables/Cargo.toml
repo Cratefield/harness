@@ -1,6 +1,6 @@
 [package]
 name = "cratefield-tables"
-description = "Declared tables for a Factory Zero venture: the schema type, SQLite and Postgres DDL, row validation and a derived JSON Schema view"
+description = "Declared tables for a Cratefield venture: the schema type, SQLite and Postgres DDL, row validation and a derived JSON Schema view"
 readme = "README.md"
 keywords = ["cratefield", "harness", "schema", "sql", "validation"]
 categories = ["database", "web-programming"]

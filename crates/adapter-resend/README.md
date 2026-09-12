@@ -13,7 +13,7 @@
 # cratefield-adapter-resend
 
 [`Mailer`] port over the [Resend](https://resend.com) REST API for the
-Factory Zero harness. Uses the runtime's `HttpClient` port — no `reqwest`,
+Cratefield harness. Uses the runtime's `HttpClient` port — no `reqwest`,
 no vendor SDK — so it runs unchanged on Workers (`worker::Fetch`) and
 natively.
 
@@ -29,7 +29,7 @@ let mailer = Resend::new(
     Arc::new(FetchClient),
     Arc::new(WorkersClock),
     Some(key),
-    "Factory Zero <no-reply@send.example.com>",
+    "Acme <no-reply@send.example.com>",
     None,
 );
 // Without a key (degraded mode): send() -> Ok(SendOutcome::NotConfigured),
@@ -64,7 +64,7 @@ When verifying:
    not the apex.
 2. Add the DKIM/SPF records Resend shows to the subdomain's DNS zone.
 3. Wait for "Verified", then set `MAIL_FROM` to an address on that
-   subdomain (e.g. `Factory Zero <no-reply@send.example.com>`).
+   subdomain (e.g. `Acme <no-reply@send.example.com>`).
 
 **Why not the apex?** The apex domain (e.g. `example.com`) carries the
 inbound Email Routing MX records. Adding Resend's outbound DKIM/SPF to the
@@ -88,3 +88,7 @@ curl -s -X POST https://api.resend.com/emails \
 
 A 401 means the key is bad; 403 with the domain message means the key
 works but the domain is unverified.
+
+---
+
+MIT. Built in the open for [Cratefield](https://cratefield.com), a [Factory Zero](https://factory0.ventures) venture.

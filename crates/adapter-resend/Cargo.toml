@@ -1,6 +1,6 @@
 [package]
 name = "cratefield-adapter-resend"
-description = "Mailer port over the Resend REST API for the Factory Zero harness"
+description = "Mailer port over the Resend REST API for the Cratefield harness"
 readme = "README.md"
 keywords = ["cratefield", "resend", "email", "mailer", "adapter"]
 categories = ["email"]

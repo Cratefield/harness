@@ -1,6 +1,6 @@
 [package]
 name = "cratefield-module-email-signup"
-description = "Factory Zero module: email signup with double opt-in, unsubscribe, admin export"
+description = "Cratefield module: email signup with double opt-in, unsubscribe, admin export"
 readme = "README.md"
 keywords = ["cratefield", "signup", "email", "newsletter", "opt-in"]
 categories = ["email"]

@@ -13,7 +13,7 @@
 # cratefield-adapter-fcm
 
 The [`Push`](https://docs.rs/cratefield-core) port over Firebase Cloud
-Messaging, for the Factory Zero / Cratefield harness (issue #179).
+Messaging, for the Cratefield harness (issue #179).
 
 It speaks the **HTTP v1** API —
 `POST https://fcm.googleapis.com/v1/projects/{project_id}/messages:send` — to
@@ -179,3 +179,7 @@ Android handset — is **needs-human** and tracked as issue #186. It is
 deliberately **not** a blocker for merging this crate: none of those three
 things live in the repo, and nothing in CI can stand in for a handset that
 actually rings.
+
+---
+
+MIT. Built in the open for [Cratefield](https://cratefield.com), a [Factory Zero](https://factory0.ventures) venture.

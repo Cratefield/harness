@@ -137,3 +137,7 @@ log line.
 `DELETE /v1/linkedin/admin/account` forgets our copy of the tokens. It does
 **not** revoke them on LinkedIn's side: that is a separate action by a human in
 LinkedIn's settings.
+
+---
+
+MIT. Built in the open for [Cratefield](https://cratefield.com), a [Factory Zero](https://factory0.ventures) venture.

@@ -1,6 +1,6 @@
 [package]
 name = "cratefield-module-notifications"
-description = "Factory Zero module: push subscriptions, per-account per-category preferences, fan-out, prune and retry"
+description = "Cratefield module: push subscriptions, per-account per-category preferences, fan-out, prune and retry"
 readme = "README.md"
 keywords = ["cratefield", "notifications", "push", "apns", "module"]
 categories = ["web-programming"]

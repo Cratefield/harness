@@ -1,6 +1,6 @@
 [package]
 name = "cratefield-kms"
-description = "Factory Zero harness KMS port: wrap and unwrap data keys, with a local-file provider for development"
+description = "Cratefield harness KMS port: wrap and unwrap data keys, with a local-file provider for development"
 readme = "README.md"
 keywords = ["cratefield", "harness", "kms", "encryption", "secrets"]
 categories = ["cryptography"]

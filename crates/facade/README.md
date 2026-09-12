@@ -89,3 +89,7 @@ The point of depending on this crate rather than the parts is that the set
 is chosen for you: one `cratefield` version pins a combination that is built
 and tested together. `docs/COMPATIBILITY.md` in the repository lists what
 each release resolves to.
+
+---
+
+MIT. Built in the open for [Cratefield](https://cratefield.com), a [Factory Zero](https://factory0.ventures) venture.

@@ -462,3 +462,7 @@ these is a follow-up:
   run of `corpus/rows.json` against its Zod schemas.
 - Publishing declared tables on `/__surface`, and any control plane or
   manifest generator wiring.
+
+---
+
+MIT. Built in the open for [Cratefield](https://cratefield.com), a [Factory Zero](https://factory0.ventures) venture.

@@ -1,6 +1,6 @@
 [package]
 name = "cratefield-adapter-postgres"
-description = "Database port over sqlx Postgres for the Factory Zero harness native runtime (ADR 0004, issue #18)"
+description = "Database port over sqlx Postgres for the Cratefield harness native runtime (ADR 0004, issue #18)"
 readme = "README.md"
 keywords = ["cratefield", "postgres", "database", "adapter", "sql"]
 categories = ["database"]

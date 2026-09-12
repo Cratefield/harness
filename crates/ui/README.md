@@ -53,3 +53,7 @@ service worker, served to be copied to the site's own origin — a worker may
 only be registered from the origin of the page registering it. The iOS case
 (a Home-Screen web app, not a tab), the `pushsubscriptionchange` repair and
 the rest of the contract are in `docs/UI.md`.
+
+---
+
+MIT. Built in the open for [Cratefield](https://cratefield.com), a [Factory Zero](https://factory0.ventures) venture.

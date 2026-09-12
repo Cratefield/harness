@@ -1,7 +1,7 @@
 [package]
 publish = false  # new crate: publish manually first, then wire into the facade
 name = "cratefield-runtime-browser"
-description = "In-browser runtime (wasm + sqlite-wasm/OPFS) for the Factory Zero harness"
+description = "In-browser runtime (wasm + sqlite-wasm/OPFS) for the Cratefield harness"
 readme = "README.md"
 keywords = ["cratefield", "wasm", "browser", "sqlite", "opfs"]
 categories = ["web-programming", "wasm"]

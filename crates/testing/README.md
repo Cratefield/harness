@@ -12,7 +12,7 @@
 
 # cratefield-testing
 
-The conformance kit every Factory Zero module runs against — public and
+The conformance kit every Cratefield module runs against — public and
 private modules alike. Fake ports, an in-memory SQLite `Database`, and
 request helpers over the axum router with **no network**.
 
@@ -77,3 +77,7 @@ The in-memory `Database` is `cratefield-adapter-sqlite`; assertions on
 is a pool on the kit's own tokio runtime marshalled per call, so
 pollster-driven tests, spawned threads and deferred handlers all reach
 it.
+
+---
+
+MIT. Built in the open for [Cratefield](https://cratefield.com), a [Factory Zero](https://factory0.ventures) venture.

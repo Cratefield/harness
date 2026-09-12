@@ -12,7 +12,7 @@
 
 # cratefield-module-email-signup
 
-Email signup for a Factory Zero venture: `POST /v1/email-signup` collects
+Email signup for a Cratefield venture: `POST /v1/email-signup` collects
 an address, double opt-in via a signed confirmation link, one-click
 unsubscribe, admin CSV export and hard delete.
 
@@ -48,3 +48,7 @@ let builder = Harness::builder().templates(default_templates());
 
 See `docs/ARCHITECTURE.md` section 6 (Email signup) and section 11
 (no enumeration, tokens, admin auth, retention).
+
+---
+
+MIT. Built in the open for [Cratefield](https://cratefield.com), a [Factory Zero](https://factory0.ventures) venture.

@@ -1,6 +1,6 @@
 [package]
 name = "cratefield-adapter-sqlite"
-description = "Database port over rusqlite for the Factory Zero harness (tests and single-node self-hosting)"
+description = "Database port over rusqlite for the Cratefield harness (tests and single-node self-hosting)"
 readme = "README.md"
 keywords = ["cratefield", "sqlite", "database", "adapter", "sql"]
 categories = ["database"]
