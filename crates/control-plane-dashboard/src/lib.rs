@@ -18,9 +18,12 @@
 
 #![forbid(unsafe_code)]
 
-/// The secrets manager screen: the routes, the rendering and the tests
-/// all live in this module, so the wiring in `lib.rs` stays the only
-/// thing that file carries for it.
+// Each screen keeps its routes, rendering and tests in its own file, so
+// the wiring below — modules, routes, the nav entry and the PLANNED row
+// that stops being planned — is all this file carries for either of them.
+mod data;
+mod diagram;
+/// The secrets manager screen.
 pub(crate) mod secrets_screen;
 
 use std::sync::Arc;
@@ -269,10 +272,16 @@ impl Module for Dashboard {
             .route("/ventures/{id}/archive", post(archive))
             .route("/ventures/{id}/modules", post(set_modules))
             .route("/ventures/{id}/reprovision", post(reprovision))
+            // The data browser (#28, read-only half): schema visualiser,
+            // table detail, CSV export. Static segments win over the
+            // `/{slug}` planned-screen catch-all below, so the real
+            // screen takes /data and the placeholder table keeps the
+            // rest — which holds for the secrets routes just as well.
+            .route("/data", get(data::screen))
+            .route("/data/{table}", get(data::detail))
+            .route("/data/{table}/export", get(data::export))
             // The secrets manager: account-level, so it sits beside the
-            // venture screens rather than under one. Static segments
-            // win over the `/{slug}` catch-all below, so these need no
-            // nesting to take precedence.
+            // venture screens rather than under one.
             .route("/secrets", get(secrets_screen::stores))
             .route("/secrets/{store}", get(secrets_screen::store_detail))
             .route("/secrets/{store}/put", post(secrets_screen::put_secret))
@@ -1460,14 +1469,7 @@ struct Planned {
     issue: Option<u32>,
 }
 
-const PLANNED: [Planned; 7] = [
-    Planned {
-        slug: "data",
-        title: "Data browser",
-        purpose: "List and edit rows, filter and sort, follow relations, and export a                   table or a query result as CSV — generated from the Tables contract a                   venture publishes at /__surface, so it stays correct without being                   maintained separately. The SQL console is read-only on purpose: a write                   console against a customer's live database is a support incident                   waiting to happen.",
-        instead: "You write the SQL, against the venture's own database.",
-        issue: Some(28),
-    },
+const PLANNED: [Planned; 6] = [
     Planned {
         slug: "deploys",
         title: "Deploys",
@@ -1515,9 +1517,10 @@ const PLANNED: [Planned; 7] = [
 /// The navigation shared by every account-level screen, so the same list is
 /// in the same order wherever you are.
 pub(crate) fn account_nav(current: &str) -> String {
-    // Leaked into a `String` would be a leak per render; the path is
+    // Leaked into a `String` would be a leak per render; these paths are
     // built once and borrowed for the life of the call, like the
     // planned-screen paths below.
+    let data_path = format!("{BASE}/data");
     let secrets_path = format!("{BASE}/secrets");
     let mut items = vec![
         if current == "ventures" {
@@ -1526,8 +1529,16 @@ pub(crate) fn account_nav(current: &str) -> String {
             NavItem::to("Ventures", BASE)
         },
         NavItem::to("New venture", "/v1/console/new"),
-        // The secrets manager is account-level, so it sits in this list
-        // rather than under one venture.
+        // The data browser is built (issue #28's read-only half), so it
+        // takes the slot its placeholder held — first after the ventures,
+        // before the screens that are still planned.
+        if current == "data" {
+            NavItem::here("Data browser", &data_path)
+        } else {
+            NavItem::to("Data browser", &data_path)
+        },
+        // The secrets manager is account-level too, so it sits in this
+        // list rather than under one venture.
         if current == "secrets" {
             NavItem::here("Secrets", &secrets_path)
         } else {

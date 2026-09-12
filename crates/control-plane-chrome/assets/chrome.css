@@ -312,3 +312,47 @@ code { font-family: var(--mono); font-size: .92em; color: var(--ink); }
 
 /* Audit rows: seq, when, action, actor, secret, allowed. */
 .dash__lrow--audit { grid-template-columns: .4fr 1fr .7fr 1.1fr 1.4fr .6fr; }
+/* --- The data screen (schema visualiser) --------------------------------
+ *
+ * One block, appended at the end of the sheet because another screen's
+ * work lands in this file too: everything the diagram needs lives here,
+ * named .dash__erd-* so it reads as this screen's own vocabulary.
+ * Colours are the tokens above only — no literal — so both themes hold.
+ */
+
+/* A horizontally scrolling home for the diagram and for wide row tables,
+   the same treatment the site gives wide tables: the page stays 400px
+   legible and the drawing keeps its true size. */
+.dash__scroll { overflow-x: auto; border: 1px solid var(--edge); background: var(--ground); }
+
+.dash__card--canvas { padding: 6px; border: 0; background: none; min-width: min-content; }
+
+.dash__erd { display: block; font-family: var(--mono); }
+
+.dash__erd-box { fill: var(--panel); stroke: var(--edge-hi); stroke-width: 1; }
+.dash__erd-node:hover .dash__erd-box { stroke: var(--accent); }
+.dash__erd-head { stroke: var(--edge-hi); stroke-width: 1; }
+
+.dash__erd-name { fill: var(--ink); font-size: 12px; font-weight: 600; }
+.dash__erd-owner { fill: var(--dim); font-size: 10px; }
+.dash__erd-col { fill: var(--body); font-size: 11px; }
+.dash__erd-type { fill: var(--dim); font-size: 10px; font-style: italic; }
+.dash__erd-mark { fill: var(--accent-hi); font-size: 10px; letter-spacing: .04em; }
+
+.dash__erd-edge { fill: none; stroke: var(--accent); stroke-width: 1.25; opacity: .75; }
+.dash__erd-edge:hover { stroke: var(--accent-hi); opacity: 1; }
+.dash__erd-arrow { fill: var(--accent); }
+
+/* The text twin of the diagram: the accessible path and the terminal's. */
+.dash__erd-text { margin: 0; padding: 0 0 0 18px; font-family: var(--mono); font-size: 12px; color: var(--body); }
+.dash__erd-text li { margin: 0 0 6px; line-height: 1.5; }
+.dash__erd-text strong { color: var(--ink); }
+
+/* The table list on the data screen: table, columns, rows, relations. */
+.dash__lrow--data { grid-template-columns: 1.6fr .8fr .8fr 1.2fr; }
+
+/* The read-only row preview: a real table, mono, dense but not crushed. */
+.dash__rows { border-collapse: collapse; font-family: var(--mono); font-size: 12px; color: var(--body); }
+.dash__rows th, .dash__rows td { border: 1px solid var(--rule); padding: 6px 10px; text-align: left; white-space: nowrap; }
+.dash__rows th { color: var(--muted); background: var(--panel-hi); font-size: 11px; letter-spacing: .06em; text-transform: uppercase; font-weight: 400; }
+.dash__rows td { color: var(--body); }

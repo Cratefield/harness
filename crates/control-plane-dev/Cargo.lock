@@ -410,15 +410,26 @@ dependencies = [
  "cratefield-connections",
  "cratefield-console",
  "cratefield-core",
+ "cratefield-introspect",
  "cratefield-kms",
  "cratefield-provisioning",
  "cratefield-secrets",
+ "cratefield-tables",
  "futures-util",
  "http",
  "sea-query",
  "serde_json",
  "time",
  "tracing",
+]
+
+[[package]]
+name = "cratefield-introspect"
+version = "0.1.1"
+dependencies = [
+ "cratefield-core",
+ "cratefield-tables",
+ "sea-query",
 ]
 
 [[package]]
@@ -481,6 +492,15 @@ dependencies = [
  "time",
  "tracing",
  "zeroize",
+]
+
+[[package]]
+name = "cratefield-tables"
+version = "0.1.1"
+dependencies = [
+ "cratefield-core",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
