@@ -54,6 +54,7 @@ pub(crate) const RESEND_AFTER_SECS: i64 = 60;
 pub(crate) fn router() -> axum::Router<Arc<ModuleState>> {
     axum::Router::new()
         .route("/request", post(request))
+        .route("/start", get(start).post(start_submit))
         .route("/consume", get(consume).post(confirm))
 }
 
@@ -90,6 +91,24 @@ fn hash(token: &str) -> Vec<u8> {
     Sha256::digest(token.as_bytes()).to_vec()
 }
 
+/// The document shell every page here renders inside.
+fn page_html(status: StatusCode, body: &str) -> Response {
+    let document = format!(
+        "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">\
+<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">\
+<meta name=\"robots\" content=\"noindex\">\
+<title>Sign in</title></head>\
+<body style=\"font:16px/1.5 system-ui,sans-serif;margin:3rem auto;max-width:32rem;\
+padding:0 1rem\">{body}</body></html>"
+    );
+    (
+        status,
+        [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
+        Html(document),
+    )
+        .into_response()
+}
+
 fn page(status: StatusCode, message: &str, confirm: Option<&str>) -> Response {
     let action = confirm.map_or_else(String::new, |token| {
         format!(
@@ -98,32 +117,23 @@ fn page(status: StatusCode, message: &str, confirm: Option<&str>) -> Response {
 border:0;background:#1a1a1a;color:#fff;font-weight:600;cursor:pointer\">Sign in</button></form>"
         )
     });
-    let body = format!(
-        "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">\
-<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">\
-<meta name=\"robots\" content=\"noindex\">\
-<title>Sign in</title></head>\
-<body style=\"font:16px/1.5 system-ui,sans-serif;margin:3rem auto;max-width:32rem;padding:0 1rem\">\
-<p>{message}</p>{action}</body></html>"
-    );
-    (
-        status,
-        [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
-        Html(body),
-    )
-        .into_response()
+    page_html(status, &format!("<p>{message}</p>{action}"))
 }
 
-async fn limit(state: &ModuleState, headers: &HeaderMap, email: Option<&str>) -> Option<Response> {
+/// The refusal, as a pause rather than a rendered response, so the JSON
+/// route and the page route can each render it in their own content type.
+async fn limit_pause(
+    state: &ModuleState,
+    headers: &HeaderMap,
+    email: Option<&str>,
+) -> Option<Option<std::time::Duration>> {
     let limiter = state.ctx.ports.rate_limiter.as_deref()?;
     let ip = cratefield_core::client_ip(headers);
     // Keyed on the address as well as the caller: an unlimited request
     // endpoint is a way to send somebody a hundred emails.
     for key in cratefield_core::rate_limit_keys(ip.as_deref(), email) {
         match limiter.limit(&format!("auth-magic-link:{key}")).await {
-            Ok(decision) if !decision.ok => {
-                return Some(cratefield_core::rate_limited(decision.retry_after).into_response());
-            }
+            Ok(decision) if !decision.ok => return Some(decision.retry_after),
             Ok(_) => {}
             Err(err) => {
                 tracing::warn!(error = %err, "the auth-magic-link rate limiter is unavailable");
@@ -153,6 +163,125 @@ async fn captcha_ok(state: &ModuleState, token: Option<&str>, headers: &HeaderMa
     }
 }
 
+/// The form a browser gets, and what it posts back.
+///
+/// A page rather than a link, because this is the one method the login
+/// chooser cannot hand off with either shape it has: a redirect needs
+/// somewhere to redirect *to*, and a passkey needs script. An address has
+/// to be typed, so something has to render a field for it.
+///
+/// Plain HTML, posting to itself. No script and no CSRF token: the action
+/// is "send a sign-in link to the address in this box", which is what
+/// `POST /request` already accepts unauthenticated from anywhere, and
+/// which the rate limiter and the send cooldown are what bound. A token
+/// would protect nothing and would stop the page working with script off,
+/// which is the property this shape has and the passkey button does not.
+#[derive(Debug, Default, Deserialize)]
+struct StartForm {
+    #[serde(default)]
+    email: String,
+    #[serde(default)]
+    return_to: Option<String>,
+}
+
+/// `GET /start?return_to=/path` — the form.
+async fn start(Query(query): Query<StartQuery>) -> Response {
+    form_page(safe_return_to(query.return_to.as_deref()).as_deref(), None)
+}
+
+#[derive(Debug, Deserialize)]
+struct StartQuery {
+    return_to: Option<String>,
+}
+
+/// `POST /start` — the same decision as `POST /request`, answered with a
+/// page instead of JSON.
+async fn start_submit(
+    State(state): State<Arc<ModuleState>>,
+    scope: Scope,
+    headers: HeaderMap,
+    axum::extract::Form(form): axum::extract::Form<StartForm>,
+) -> Result<Response, Problem> {
+    let return_to = safe_return_to(form.return_to.as_deref());
+    // An empty box is the one thing worth saying out loud: it is the
+    // person's own typing, not a fact about anybody's account.
+    if form.email.trim().is_empty() {
+        return Ok(form_page(
+            return_to.as_deref(),
+            Some("Enter your email address."),
+        ));
+    }
+    match decide(
+        &state,
+        &scope,
+        &headers,
+        &form.email,
+        return_to.as_deref(),
+        None,
+    )
+    .await?
+    {
+        // The same sentence the JSON route returns, for the same reason:
+        // it must not say whether the address has an account.
+        Verdict::Accepted => Ok(page(
+            StatusCode::ACCEPTED,
+            "If that address can sign in, a link is on its way. Check your inbox.",
+            None,
+        )),
+        Verdict::RateLimited(_) => Ok(form_page(
+            return_to.as_deref(),
+            Some("Too many attempts just now. Try again in a minute."),
+        )),
+    }
+}
+
+/// The form itself, with an optional message above it.
+fn form_page(return_to: Option<&str>, message: Option<&str>) -> Response {
+    let hidden = return_to.map_or_else(String::new, |value| {
+        format!(
+            "<input type=\"hidden\" name=\"return_to\" value=\"{}\">",
+            html_escape(value)
+        )
+    });
+    let note = message.map_or_else(String::new, |text| {
+        format!("<p style=\"color:#a33\">{}</p>", html_escape(text))
+    });
+    let body = format!(
+        "{note}<form method=\"post\">{hidden}\
+<label for=\"email\" style=\"display:block;margin-bottom:.4rem\">Email address</label>\
+<input id=\"email\" name=\"email\" type=\"email\" autocomplete=\"email\" required \
+autofocus style=\"font:inherit;padding:10px;width:100%;box-sizing:border-box;\
+border:1px solid #ccc;border-radius:6px\">\
+<button type=\"submit\" style=\"font:inherit;margin-top:.8rem;padding:12px 20px;\
+border-radius:6px;border:0;background:#1a1a1a;color:#fff;font-weight:600;\
+cursor:pointer\">Email me a link</button></form>"
+    );
+    page_html(StatusCode::OK, &body)
+}
+
+/// Escapes the five characters that can leave an HTML attribute or a text
+/// node. `return_to` is caller-supplied and lands in a `value=`.
+fn html_escape(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&#39;")
+}
+
+/// What the request path decided. Everything except a rate-limit refusal
+/// and an internal error is [`Verdict::Accepted`] — a known address, an
+/// unknown one, a disabled account, a string that is not an address and a
+/// second request inside the send window are one answer on purpose.
+enum Verdict {
+    Accepted,
+    /// The limiter refused, with the pause it asked for. The caller
+    /// renders it, because JSON and a page are different answers to the
+    /// same refusal.
+    RateLimited(Option<std::time::Duration>),
+}
+
 /// `POST /request`.
 ///
 /// Always `202`, always the same body. A known address gets a mail; an
@@ -165,20 +294,46 @@ async fn request(
 ) -> Result<Response, Problem> {
     let body: Value = serde_json::from_slice(&raw).unwrap_or(Value::Null);
     let parsed: RequestBody = serde_json::from_value(body.clone()).unwrap_or_default();
-    let email = cratefield_core::normalize_email(&parsed.email);
-
-    if let Some(limited) = limit(&state, &headers, Some(&email)).await {
-        return Ok(limited);
-    }
     let captcha_token = body
         .get("captchaToken")
         .and_then(Value::as_str)
         .or_else(|| body.get("captcha_token").and_then(Value::as_str));
-    if !captcha_ok(&state, captcha_token, &headers).await {
+    match decide(
+        &state,
+        &scope,
+        &headers,
+        &parsed.email,
+        parsed.return_to.as_deref(),
+        captcha_token,
+    )
+    .await?
+    {
+        Verdict::Accepted => Ok(accepted()),
+        Verdict::RateLimited(pause) => Ok(cratefield_core::rate_limited(pause).into_response()),
+    }
+}
+
+/// Everything both entry points do: limit, captcha, resolve the account,
+/// claim the send window, issue the link. Shared so the page cannot drift
+/// from the JSON route into a second set of rules about who gets a mail.
+async fn decide(
+    state: &ModuleState,
+    scope: &Scope,
+    headers: &HeaderMap,
+    raw_email: &str,
+    return_to: Option<&str>,
+    captcha_token: Option<&str>,
+) -> Result<Verdict, Problem> {
+    let email = cratefield_core::normalize_email(raw_email);
+
+    if let Some(pause) = limit_pause(state, headers, Some(&email)).await {
+        return Ok(Verdict::RateLimited(pause));
+    }
+    if !captcha_ok(state, captcha_token, headers).await {
         // Even this is the accepted answer: a caller who can tell a failed
         // captcha from a sent mail learns nothing useful, but a caller who
         // can tell it from an unknown address learns plenty.
-        return Ok(accepted());
+        return Ok(Verdict::Accepted);
     }
 
     let Some(settings) = state.settings.as_ref() else {
@@ -195,7 +350,7 @@ async fn request(
     };
 
     if !email.contains('@') {
-        return Ok(accepted());
+        return Ok(Verdict::Accepted);
     }
 
     let user = match user_by_primary_email(db, &email).await {
@@ -212,7 +367,7 @@ async fn request(
             // else, because "that account is switched off" is not a thing
             // an unauthenticated caller may learn.
             if user.status != STATUS_ACTIVE {
-                return Ok(accepted());
+                return Ok(Verdict::Accepted);
             }
             user.id
         }
@@ -224,7 +379,7 @@ async fn request(
             }
         },
         // No account, and this venture does not register by link.
-        (None, false) => return Ok(accepted()),
+        (None, false) => return Ok(Verdict::Accepted),
     };
 
     // The durable backstop (issue #133). The rate limiter above is a
@@ -242,7 +397,7 @@ async fn request(
         .await
     {
         Ok(true) => {}
-        Ok(false) => return Ok(accepted()),
+        Ok(false) => return Ok(Verdict::Accepted),
         Err(err) => {
             tracing::error!(error = %err, "could not claim a send window");
             return Err(Problem::internal().instance(&scope.request_id));
@@ -250,15 +405,7 @@ async fn request(
     }
 
     if let Err(err) = issue_link(
-        db,
-        clock,
-        id_gen,
-        mailer,
-        ctx,
-        settings,
-        &user_id,
-        &email,
-        parsed.return_to.as_deref(),
+        db, clock, id_gen, mailer, ctx, settings, &user_id, &email, return_to,
     )
     .await
     {
@@ -267,8 +414,8 @@ async fn request(
     }
 
     ctx.events
-        .emit_in(&scope, EVENT_REQUESTED, json!({ "user_id": user_id }));
-    Ok(accepted())
+        .emit_in(scope, EVENT_REQUESTED, json!({ "user_id": user_id }));
+    Ok(Verdict::Accepted)
 }
 
 /// Mints the token, stores its digest and sends the mail.

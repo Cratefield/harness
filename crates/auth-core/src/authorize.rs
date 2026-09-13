@@ -112,6 +112,19 @@ const CATALOGUE: &[(&str, &str, &str, MethodKind)] = &[
         "/v1/auth-meta/start",
         MethodKind::Redirect,
     ),
+    // A link, like the providers, even though the method needs a typed
+    // address: `auth-magic-link` serves the form itself at `/start`, so
+    // the chooser hands off the same way it does for Google. The
+    // alternative was a third `MethodKind` that renders a field on this
+    // page, which would put one module's input handling — its validation,
+    // its rate-limit refusal, its "check your inbox" — inside another
+    // module's template.
+    (
+        "magic-link",
+        "Email me a sign-in link",
+        "/v1/auth-magic-link/start",
+        MethodKind::Redirect,
+    ),
 ];
 
 /// The slugs `AUTH_CORE_LOGIN_METHODS` accepts.

@@ -684,3 +684,184 @@ fn retiring_a_link_leaves_another_accounts_link_alone() {
         );
     });
 }
+
+const START: &str = "/v1/auth-magic-link/start";
+
+async fn get_page(kit: &Kit, uri: &str) -> Res {
+    let request = Request::builder()
+        .method(Method::GET)
+        .uri(uri)
+        .body(axum::body::Body::empty())
+        .expect("request");
+    send(kit, request).await
+}
+
+async fn post_form(kit: &Kit, uri: &str, body: &str) -> Res {
+    let request = Request::builder()
+        .method(Method::POST)
+        .uri(uri)
+        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .body(axum::body::Body::from(body.to_owned()))
+        .expect("request");
+    send(kit, request).await
+}
+
+#[test]
+fn the_form_works_with_no_script_and_posts_to_itself() {
+    pollster::block_on(async {
+        // The reason this method is a page and not a button: an address
+        // has to be typed. The reason it is a plain form is that every
+        // redirect method on the chooser works with script off, and this
+        // one should not be the exception.
+        let kit = kit();
+        let form = get_page(&kit, START).await;
+        assert_eq!(form.status, StatusCode::OK);
+        let html = form.text();
+        assert!(html.contains("<form method=\"post\""), "{html}");
+        assert!(html.contains("name=\"email\""), "{html}");
+        assert!(
+            !html.contains("<script"),
+            "the form needs no script: {html}"
+        );
+        assert!(
+            form.headers
+                .get(header::CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok())
+                .is_some_and(|value| value.starts_with("text/html")),
+            "{:?}",
+            form.headers.get(header::CONTENT_TYPE)
+        );
+    });
+}
+
+#[test]
+fn submitting_the_form_sends_a_link_and_says_nothing_about_the_address() {
+    pollster::block_on(async {
+        let kit = kit();
+        seed(&kit, "ada@example.com", false).await;
+
+        let known = post_form(&kit, START, "email=ada%40example.com").await;
+        assert_eq!(known.status, StatusCode::ACCEPTED);
+        assert_eq!(kit.outbox.count(), 1);
+        assert!(
+            known.text().contains("Check your inbox"),
+            "{}",
+            known.text()
+        );
+
+        // The whole property of this endpoint, in the page form: an
+        // unknown address is answered identically, byte for byte.
+        kit.clock.0.fetch_add(61, Ordering::SeqCst);
+        let unknown = post_form(&kit, START, "email=nobody%40example.com").await;
+        assert_eq!(unknown.status, known.status);
+        assert_eq!(unknown.body, known.body, "the two pages differ");
+        assert_eq!(kit.outbox.count(), 1, "an unknown address got a mail");
+    });
+}
+
+#[test]
+fn the_page_and_the_json_route_reach_the_same_decisions() {
+    pollster::block_on(async {
+        // Two entry points to one rule. If the page grew its own idea of
+        // who gets a mail, this is what would say so.
+        let kit = kit();
+        seed(&kit, "ada@example.com", false).await;
+
+        // The send cooldown is one ledger, not one per entry point.
+        post_form(&kit, START, "email=ada%40example.com").await;
+        assert_eq!(kit.outbox.count(), 1);
+        let json = request_link(&kit, "ada@example.com").await;
+        assert_eq!(json.status, StatusCode::ACCEPTED);
+        assert_eq!(
+            kit.outbox.count(),
+            1,
+            "the JSON route sent a second mail inside the page's window"
+        );
+
+        // And the other way round.
+        kit.clock.0.fetch_add(61, Ordering::SeqCst);
+        request_link(&kit, "ada@example.com").await;
+        assert_eq!(kit.outbox.count(), 2);
+        post_form(&kit, START, "email=ada%40example.com").await;
+        assert_eq!(
+            kit.outbox.count(),
+            2,
+            "the page sent a second mail inside the JSON route's window"
+        );
+    });
+}
+
+#[test]
+fn a_return_to_survives_the_form_and_an_absolute_one_does_not() {
+    pollster::block_on(async {
+        let kit = kit();
+        seed(&kit, "ada@example.com", false).await;
+
+        let form = get_page(&kit, &format!("{START}?return_to=/somewhere")).await;
+        assert!(
+            form.text()
+                .contains("name=\"return_to\" value=\"/somewhere\""),
+            "{}",
+            form.text()
+        );
+
+        post_form(
+            &kit,
+            START,
+            "email=ada%40example.com&return_to=%2Fv1%2Fauth-core%2Fauthorize%3Fx%3D1",
+        )
+        .await;
+        let token = kit.outbox.last_token().expect("a token");
+        let response = click(&kit, &token).await;
+        assert_eq!(
+            response.location().as_deref(),
+            Some("/v1/auth-core/authorize?x=1")
+        );
+
+        // An absolute one is an open redirect and never reaches the form.
+        let hostile = get_page(&kit, &format!("{START}?return_to=https://evil.example")).await;
+        assert!(
+            !hostile.text().contains("evil.example"),
+            "an absolute return_to reached the page: {}",
+            hostile.text()
+        );
+    });
+}
+
+#[test]
+fn a_return_to_cannot_break_out_of_the_hidden_field() {
+    pollster::block_on(async {
+        // `return_to` is caller-supplied and lands in a `value="…"`.
+        // `safe_return_to` already requires a leading `/`, so the escape
+        // is the second guard rather than the first — which is the order
+        // that survives someone widening the first one.
+        let kit = kit();
+        let attack = "/ok\"><script>alert(1)</script>";
+        let encoded = "%2Fok%22%3E%3Cscript%3Ealert(1)%3C%2Fscript%3E";
+        let page = get_page(&kit, &format!("{START}?return_to={encoded}")).await;
+        let html = page.text();
+        assert!(!html.contains("<script>alert"), "{html}");
+        assert!(
+            !html.contains(attack),
+            "the raw value reached the document: {html}"
+        );
+    });
+}
+
+#[test]
+fn an_empty_box_is_the_one_thing_the_page_will_say() {
+    pollster::block_on(async {
+        // Everything about an account is withheld. What the person typed
+        // is theirs, and a form that silently does nothing is worse.
+        let kit = kit();
+        let answer = post_form(&kit, START, "email=").await;
+        assert_eq!(answer.status, StatusCode::OK);
+        assert!(
+            answer.text().contains("Enter your email"),
+            "{}",
+            answer.text()
+        );
+        assert!(answer.text().contains("<form"), "the form comes back");
+        assert_eq!(kit.outbox.count(), 0);
+    });
+}

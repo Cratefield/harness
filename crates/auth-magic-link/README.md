@@ -22,8 +22,43 @@ It is also the answer to three things other modules leave undone:
 | Route | What it does |
 |---|---|
 | `POST /request` | `{ email, return_to? }`. Always `202`, always the same body |
+| `GET /start?return_to=/path` | The form a person types their address into |
+| `POST /start` | The form's own target. Same decision as `/request`, answered with a page |
 | `GET /consume?token=…` | The URL in the mail. Signs in, or shows a confirm button |
 | `POST /consume` | The confirm button |
+
+### Why this method is a page
+
+The login chooser at `/v1/auth-core/authorize` can render two things: a
+link, which is how every provider method works, and a button that starts a
+WebAuthn ceremony in script, which is how passkeys work. A sign-in link
+needs neither and cannot use either — an address has to be typed, so
+something has to render a field for it.
+
+That something is this module, at `/start`, and the chooser links to it
+exactly as it links to `/v1/auth-oidc/google/start`. The alternative was a
+third method kind that renders a field on the chooser's own page, which
+would have put one module's input handling — its validation, its
+rate-limit refusal, its "check your inbox" — inside another module's
+template.
+
+It is a plain form, posting to itself, with **no script and no CSRF
+token**. No script because every other chooser method works with script
+off and this one should not be the exception. No token because the action
+is "send a sign-in link to the address in this box", which `POST /request`
+already accepts unauthenticated from anywhere; a token would protect
+nothing and would cost the no-script property. What bounds abuse is the
+rate limiter and the send cooldown, which the page shares with the JSON
+route rather than having its own.
+
+`return_to` is escaped before it reaches the hidden field.
+`safe_return_to` requires a leading `/` and refuses an absolute URL, but it
+does not refuse a quote — so the escape is what stops
+`/ok"><script>…</script>` from becoming a script tag, and
+`a_return_to_cannot_break_out_of_the_hidden_field` is what stops the escape
+from being removed.
+
+Enable it with `magic-link` in `AUTH_CORE_LOGIN_METHODS`.
 
 ## Configuration
 
