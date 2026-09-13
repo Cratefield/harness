@@ -42,6 +42,9 @@
 
 #![forbid(unsafe_code)]
 
+mod drift;
+pub use drift::{UNSEEN, compare, drift, unseen};
+
 use cratefield_core::{Database, DbError, Row, Rows, Statement};
 use cratefield_tables::{FieldDef, FieldKind, ForeignKey, Schema, TableDef};
 

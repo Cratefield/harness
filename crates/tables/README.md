@@ -472,6 +472,13 @@ this says what it costs. Refusing a contract would make the tool wrong
 for the case the expand/contract discipline exists to serve — dropping a
 column on purpose, in its own migration, once nothing reads it.
 
+`cratefield-introspect::drift` asks the same question of a **live
+database**: what does this database differ from the declaration by? That
+one has two traps a declaration-to-declaration diff does not — a database
+holds tables the declaration never named, and a catalog cannot see most of
+what a declaration says — and its module docs are where both are written
+down.
+
 Still not built: generating the `ALTER` statements. A generated migration
 is a guess about data this crate cannot see, and the report is what an
 author needs before the statements are worth writing.
