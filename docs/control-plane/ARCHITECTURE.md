@@ -8,28 +8,34 @@ Cloudflare. This document records the decisions taken 2026-09-07
 ## 1. The control plane is a harness venture
 
 Decided. "The same Rust backend as we do now" is literal: the control
-plane is one more Worker + D1 built on `Cratefield/harness`, and it
-dogfoods what it provisions.
+plane is one more Worker + D1 built on the harness, and it dogfoods what
+it provisions. It lived in `Cratefield/control-plane` when this was
+decided and was folded into the harness repository in #166; the decision
+is unchanged, the paths below are not.
 
 - **Auth and the whitelist** ride on the `auth-*` crates (Google SSO).
 - **Customer credentials** — the Google client secret, module keys — are
-  secrets in that account's tenant store (`factory0-secrets`): encrypted,
+  secrets in that account's tenant store (`cratefield-secrets`): encrypted,
   AAD-bound, audited, rotatable. This is why the secrets layer exists.
 - **Its own admin and wizard** are served through the harness UI surface
-  (`factory0-ui`): `maud` pages, cf.js, the `cf-*` styling contract.
+  (`cratefield-ui`): `maud` pages, cf.js, the `cf-*` styling contract.
 - **A provisioned venture is a function of its module set** (harness ADR
   0009): choosing modules chooses the artifact, the schema and the deploy.
 
 **The cost, stated plainly.** The control plane ships on the same runtime
 it provisions, so a control-plane bug can land on the platform that runs
-every customer. The harness pin is a deliberate `rev`, not a floating
-branch, and a bump is a real change.
+every customer. That was argued when the two were separate repositories
+and a pinned `rev` was the seam; since the consolidation there is no pin
+at all — the control plane builds against the harness in the same
+workspace, so the cost is larger than it was, not smaller.
 
-**Layout.** A Cargo workspace: `crates/venture` is the wasm entry and
-composition root; the logic lives in module crates (`accounts`, `catalog`,
-`connections`, `provisioning`, `cms`) added as the children land. The
-harness crates are git dependencies pinned to a revision — nothing is on
-crates.io yet.
+**Layout.** `crates/control-plane` is the wasm entry and composition
+root; the logic lives in `crates/control-plane-*` module crates
+(`-accounts`, `-catalog`, `-connections`, `-provisioning`, `-access`,
+`-billing`, `-chrome`, `-console`, `-dashboard`, `-linker`) as the
+children land. They are workspace path dependencies rather than the git
+ones this section first described, and the publishable harness crates
+they use are on crates.io — `docs/COMPATIBILITY.md` is the table.
 
 ## 2. The GUI is server-rendered Rust
 
@@ -104,5 +110,6 @@ the seam that stays out of the host-tested core.
 
 ## What answers today
 
-`crates/venture` builds to wasm and serves the harness's `/__health`,
-`/__ready` and `/__surface`. Everything else is a child of the epic.
+`crates/control-plane` builds to wasm and serves the harness's
+`/__health`, `/__ready` and `/__surface`, composing `-chrome`, `-console`
+and `-dashboard`. The rest is a child of the epic.

@@ -41,7 +41,7 @@ signature. Size: ~340 lines in `src/q2_webauthn.rs` — inside the "a few
 hundred lines" estimate.
 
 Proof: `fixtures/passkey.json`, recorded by a software authenticator
-(`examples/mint_passkey.rs`, fixed key, deterministic RFC 6979 signing —
+(`spikes/wasm-auth/examples/mint_passkey.rs`, fixed key, deterministic RFC 6979 signing —
 no hardware authenticator on the spike machine, so the fixture is
 machine-generated but the ES256 math, authenticator-data layout and
 Chrome-shaped clientDataJSON are real). The fixture verifies inside
@@ -114,7 +114,7 @@ verification run from recorded fixtures** — no Google client credential
 exists on the spike machine, so the adapter intercepts the token and
 JWKS endpoints and serves `fixtures/google-token-response.json` /
 `fixtures/google-jwks.json`, a Google-shaped RS256 ID token minted by
-`examples/mint_id_token.rs`. Verification checks signature, issuer,
+`spikes/wasm-auth/examples/mint_id_token.rs`. Verification checks signature, issuer,
 audience, expiry and nonce, and extracts `sub` + `email`. Native tests
 reject a wrong audience and a wrong nonce.
 

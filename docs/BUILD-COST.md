@@ -50,9 +50,11 @@ future effort to make builds faster belongs there, not in the compiler.
 Reproduce with a throwaway module crate, so the measurement is "one more
 module" and not "one more line":
 
-1. `crates/module-spike-probe/` — a crate implementing `Module` with `requires()`
-   empty, `Migrations::EMPTY`, and a router with one `GET /ping`. Nothing else;
-   the point is to measure linking a crate, not compiling a feature.
+1. Create a crate named `module-spike-probe` under `crates/` implementing
+   `Module` with `requires()` empty, `Migrations::EMPTY`, and a router with one
+   `GET /ping`. Nothing else; the point is to measure linking a crate, not
+   compiling a feature. It is deliberately not checked in — a crate that exists
+   is a crate the build pays for.
 2. `cargo clean`, then `worker-build --release` in `examples/venture` for the
    cold row.
 3. Re-run untouched for the warm row; `touch src/lib.rs` for the toggle row.
