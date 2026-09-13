@@ -8,7 +8,7 @@
 //! of the text.
 
 /// Every character `little` reserves.
-pub const RESERVED: [char; 15] = [
+pub(crate) const RESERVED: [char; 15] = [
     '\\', '|', '{', '}', '@', '[', ']', '(', ')', '<', '>', '#', '*', '_', '~',
 ];
 

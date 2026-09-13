@@ -17,7 +17,7 @@ use worker::send::IntoSendFuture;
 use worker::{Bucket, HttpMetadata};
 
 /// A [`Blob`] store over an R2 bucket binding.
-pub struct R2Blob(pub Bucket);
+pub(crate) struct R2Blob(pub Bucket);
 
 fn op_err(err: &worker::Error) -> BlobError {
     BlobError::Operation(err.to_string())

@@ -63,7 +63,7 @@ fn log_push_wiring(harness: &Harness, runtime: &Native, config: &dyn Config) {
 /// must say so explicitly (`LISTEN_ADDR=0.0.0.0:8080`, as the compose
 /// example does) — the same fail-closed instinct as the empty
 /// trusted-proxy list.
-pub const DEFAULT_LISTEN_ADDR: &str = "127.0.0.1:8080";
+pub(crate) const DEFAULT_LISTEN_ADDR: &str = "127.0.0.1:8080";
 
 #[derive(Debug, Error)]
 pub enum ServeError {

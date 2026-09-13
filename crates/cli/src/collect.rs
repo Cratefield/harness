@@ -15,7 +15,7 @@ use std::path::Path;
 ///
 /// A human-readable message when the lockfile is unreadable, a locked
 /// file is missing/edited, or files cannot be written.
-pub fn collect(harness: &Harness, dialect: &str, out: &Path) -> Result<(), String> {
+pub(crate) fn collect(harness: &Harness, dialect: &str, out: &Path) -> Result<(), String> {
     if dialect != "sqlite" {
         return Err(format!(
             "dialect {dialect:?} is not available for collect (collect writes the \
@@ -62,7 +62,7 @@ pub fn collect(harness: &Harness, dialect: &str, out: &Path) -> Result<(), Strin
 /// needs the distinction to attach its stable error code. The `Display`
 /// text is the exact prose `collect` and `doctor` have always printed.
 #[derive(Debug)]
-pub enum LockedMigrationError {
+pub(crate) enum LockedMigrationError {
     /// The pinned file is not on disk.
     Missing { key: String, file: String },
     /// The pinned file's content hash no longer matches the lock entry.
@@ -87,7 +87,7 @@ impl fmt::Display for LockedMigrationError {
     }
 }
 
-pub fn verify_locked(
+pub(crate) fn verify_locked(
     out: &Path,
     key: &str,
     entry: &crate::lock::LockEntry,

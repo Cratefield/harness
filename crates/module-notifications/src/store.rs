@@ -1262,7 +1262,7 @@ impl EmailTarget {
     /// the other: an unverified address is somebody else's mailbox until
     /// proven otherwise, and an unsubscribed one is this account's own
     /// answer.
-    pub fn mailable(&self) -> bool {
+    pub(crate) fn mailable(&self) -> bool {
         self.verified_at.is_some() && self.unsubscribed_at.is_none()
     }
 }

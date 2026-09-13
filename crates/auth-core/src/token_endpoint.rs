@@ -42,7 +42,7 @@ use crate::tokens::{
 
 /// The one answer every refused token request sees. The description
 /// says what it does not distinguish, on purpose.
-pub const TOKEN_REFUSED: cratefield_core::ProblemDef = cratefield_core::ProblemDef {
+pub(crate) const TOKEN_REFUSED: cratefield_core::ProblemDef = cratefield_core::ProblemDef {
     slug: "auth/token-request-refused",
     status: StatusCode::BAD_REQUEST,
     title: "Token request refused",

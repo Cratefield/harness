@@ -47,7 +47,7 @@ pub const TOPIC_SEND: &str = "notifications.send";
 ///
 /// One row per notification per **account**, not per device: a coach's
 /// notes are one email however many phones the account has.
-pub const TOPIC_EMAIL: &str = "notifications.email";
+pub(crate) const TOPIC_EMAIL: &str = "notifications.email";
 
 /// The event a venture can subscribe to instead of taking a crate
 /// dependency on this module.
@@ -1816,14 +1816,14 @@ fn prepare(
 ///
 /// Nothing is published here that the inbox row does not also hold, so a
 /// client that missed the event loses nothing by reading the list.
-pub const INBOX_ROOM_PREFIX: &str = "notifications:";
+pub(crate) const INBOX_ROOM_PREFIX: &str = "notifications:";
 
 /// The category name that means "every category" in an unsubscribe
 /// token's subject.
-pub const UNSUBSCRIBE_ALL: &str = "all";
+pub(crate) const UNSUBSCRIBE_ALL: &str = "all";
 
 /// The purpose a one-click unsubscribe token is bound to.
-pub const PURPOSE_UNSUBSCRIBE: &str = "notifications.unsubscribe";
+pub(crate) const PURPOSE_UNSUBSCRIBE: &str = "notifications.unsubscribe";
 
 /// The five characters that must not travel into HTML as themselves.
 pub(crate) fn escape(raw: &str) -> String {

@@ -98,7 +98,7 @@ mod native_subscriber {
         }
     }
 
-    pub struct ConsoleSubscriber {
+    pub(crate) struct ConsoleSubscriber {
         pub next_span: AtomicU64,
     }
 

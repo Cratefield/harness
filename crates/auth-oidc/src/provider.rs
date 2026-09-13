@@ -126,7 +126,7 @@ pub const PROVIDERS: &[Provider] = &[GOOGLE, APPLE];
 
 /// The provider a request names, or `None` when the path segment is not one
 /// we serve.
-pub fn by_slug(slug: &str) -> Option<&'static Provider> {
+pub(crate) fn by_slug(slug: &str) -> Option<&'static Provider> {
     PROVIDERS.iter().find(|provider| provider.slug == slug)
 }
 

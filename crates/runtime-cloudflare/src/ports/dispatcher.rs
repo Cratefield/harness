@@ -15,11 +15,11 @@ use worker::js_sys::Uint8Array;
 use worker::send::IntoSendFuture;
 use worker::{Fetcher, Headers, Method, Request as WorkerRequest, RequestInit};
 
-pub struct ServiceDispatcher(BTreeMap<String, Fetcher>);
+pub(crate) struct ServiceDispatcher(BTreeMap<String, Fetcher>);
 
 impl ServiceDispatcher {
     #[must_use]
-    pub fn new(bindings: BTreeMap<String, Fetcher>) -> Self {
+    pub(crate) fn new(bindings: BTreeMap<String, Fetcher>) -> Self {
         Self(bindings)
     }
 }

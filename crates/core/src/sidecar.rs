@@ -519,7 +519,7 @@ pub(crate) struct EventEnvelope {
 /// (ADR 0017). Built per router — per `Harness::router(ports)` — because
 /// only there are the `Dispatcher` and the mount table resolved; the bus
 /// itself is built in `Harness::build`, which has no `Env` (ADR 0009).
-pub struct EventForwarder {
+pub(crate) struct EventForwarder {
     mounts: Vec<SidecarMount>,
     dispatcher: Arc<dyn Dispatcher>,
     gateway: Option<Arc<HmacSigner>>,
@@ -540,7 +540,7 @@ impl EventForwarder {
 
     /// Nothing to forward to: a harness with no mounted sidecars.
     #[must_use]
-    pub fn is_empty(&self) -> bool {
+    pub(crate) fn is_empty(&self) -> bool {
         self.mounts.is_empty()
     }
 
