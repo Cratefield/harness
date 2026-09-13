@@ -5,16 +5,16 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct LockEntry {
+pub(crate) struct LockEntry {
     pub file: String,
     pub sha256: String,
 }
 
-pub type Lock = BTreeMap<String, LockEntry>;
+pub(crate) type Lock = BTreeMap<String, LockEntry>;
 
-pub const LOCK_FILE: &str = ".harness-lock.json";
+pub(crate) const LOCK_FILE: &str = ".harness-lock.json";
 
-pub fn sha256_hex(data: &[u8]) -> String {
+pub(crate) fn sha256_hex(data: &[u8]) -> String {
     use sha2::{Digest, Sha256};
     let digest = Sha256::digest(data);
     let mut hex = String::with_capacity(digest.len() * 2);
@@ -25,7 +25,7 @@ pub fn sha256_hex(data: &[u8]) -> String {
     hex
 }
 
-pub fn read_lock(dir: &Path) -> Result<Lock, String> {
+pub(crate) fn read_lock(dir: &Path) -> Result<Lock, String> {
     let path = dir.join(LOCK_FILE);
     if !path.exists() {
         return Ok(Lock::new());
@@ -35,7 +35,7 @@ pub fn read_lock(dir: &Path) -> Result<Lock, String> {
     serde_json::from_str(&raw).map_err(|err| format!("cannot parse {}: {err}", path.display()))
 }
 
-pub fn write_lock(dir: &Path, lock: &Lock) -> Result<(), String> {
+pub(crate) fn write_lock(dir: &Path, lock: &Lock) -> Result<(), String> {
     let path = dir.join(LOCK_FILE);
     let body = serde_json::to_string_pretty(lock)
         .map_err(|err| format!("cannot serialize lockfile: {err}"))?;

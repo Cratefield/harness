@@ -378,7 +378,7 @@ mod duration_secs {
     // serde's `with` module fixes this signature; `Option<&Duration>` does
     // not compile as a serializer here.
     #[allow(clippy::ref_option)]
-    pub fn serialize<S: Serializer>(
+    pub(crate) fn serialize<S: Serializer>(
         value: &Option<Duration>,
         serializer: S,
     ) -> Result<S::Ok, S::Error> {
@@ -390,7 +390,7 @@ mod duration_secs {
         }
     }
 
-    pub fn deserialize<'de, D: Deserializer<'de>>(
+    pub(crate) fn deserialize<'de, D: Deserializer<'de>>(
         deserializer: D,
     ) -> Result<Option<Duration>, D::Error> {
         Ok(Option::<u64>::deserialize(deserializer)?.map(Duration::from_secs))

@@ -48,7 +48,7 @@ use crate::sessions;
 use crate::store::{self, TOKEN_AUTHORIZATION_CODE};
 
 /// Authorization-code lifetime: 60 seconds, single-use.
-pub const CODE_LIFETIME_SECS: i64 = 60;
+pub(crate) const CODE_LIFETIME_SECS: i64 = 60;
 
 /// The generic `/authorize` failure page's one message: same words
 /// for unknown client, unregistered URI and disabled client, because
@@ -70,7 +70,7 @@ pub const LOGIN_METHODS_KEY: &str = "LOGIN_METHODS";
 
 /// How a method is started from the chooser.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum MethodKind {
+pub(crate) enum MethodKind {
     /// A plain link: the browser is redirected and comes back.
     Redirect,
     /// A WebAuthn ceremony, which is script on this origin and nowhere
@@ -143,7 +143,7 @@ pub fn known_method_slugs() -> Vec<&'static str> {
 }
 
 /// A button on the login chooser.
-pub struct LoginMethod {
+pub(crate) struct LoginMethod {
     /// The method's identifier, e.g. `passkey`.
     pub slug: String,
     pub label: String,
@@ -220,7 +220,7 @@ fn sha256(bytes: &[u8]) -> Vec<u8> {
 /// (ADR 0203); redirect-shaped methods stay plain links, which work with
 /// script switched off.
 #[must_use]
-pub fn enabled_login_methods(cfg: &dyn Config, return_to: &str) -> Vec<LoginMethod> {
+pub(crate) fn enabled_login_methods(cfg: &dyn Config, return_to: &str) -> Vec<LoginMethod> {
     let module = ModuleConfig::new("auth-core", cfg);
     let Some(raw) = module.get_opt(LOGIN_METHODS_KEY) else {
         return Vec::new();

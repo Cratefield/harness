@@ -326,6 +326,12 @@ base64ct = { version = "1.8.3", default-features = false, features = ["alloc"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
+# A `pub` item in a private module can be named by nobody: it reads as API
+# and is not one. `auth-core` had six, two of which a venture author
+# genuinely wanted — the login-methods config key and the slugs it accepts
+# — and four that were internal all along. CI denies warnings, so this is
+# enforced there.
+unreachable_pub = "warn"
 
 [workspace.lints.clippy]
 all = "warn"

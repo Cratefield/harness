@@ -55,7 +55,7 @@ const STRIPPED: [&str; 4] = [
 /// Entries are compared without their port, lowercased. Empty is not
 /// permissive: the venture's own domain still answers.
 #[must_use]
-pub fn trusted_hosts(config: &dyn Config) -> Vec<String> {
+pub(crate) fn trusted_hosts(config: &dyn Config) -> Vec<String> {
     config
         .get("TRUSTED_HOSTS")
         .map(|raw| {
@@ -71,7 +71,7 @@ pub fn trusted_hosts(config: &dyn Config) -> Vec<String> {
 /// `api.<domain>` the architecture says the API serves, and the host of
 /// its own public URL (issue #129).
 #[must_use]
-pub fn venture_hosts(venture: &cratefield_core::Venture) -> Vec<String> {
+pub(crate) fn venture_hosts(venture: &cratefield_core::Venture) -> Vec<String> {
     let domain = venture.domain.trim().to_ascii_lowercase();
     let mut hosts = Vec::new();
     if !domain.is_empty() {
@@ -97,7 +97,7 @@ pub fn venture_hosts(venture: &cratefield_core::Venture) -> Vec<String> {
 /// The host part of an authority, without its port. IPv6 literals keep
 /// their brackets, which is how a `Host` header spells them.
 #[must_use]
-pub fn host_without_port(authority: &str) -> String {
+pub(crate) fn host_without_port(authority: &str) -> String {
     let authority = authority.trim().to_ascii_lowercase();
     if let Some(rest) = authority.strip_prefix('[') {
         return match rest.split_once(']') {
@@ -114,7 +114,7 @@ pub fn host_without_port(authority: &str) -> String {
 /// Whether `host` is a loopback name or literal, with or without a port.
 /// Local development and every in-process test reach the server this way.
 #[must_use]
-pub fn is_loopback_host(host: &str) -> bool {
+pub(crate) fn is_loopback_host(host: &str) -> bool {
     let host = host_without_port(host);
     host == "localhost"
         || host.ends_with(".localhost")

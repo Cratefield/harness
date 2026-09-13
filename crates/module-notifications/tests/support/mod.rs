@@ -9,6 +9,12 @@
 //! the route this module ships.
 
 #![allow(dead_code)]
+// A test-support module, included with `mod support;` (or `mod common;`)
+// into each test binary in this crate. `pub` is how a helper reads here,
+// and the lint is right that nothing outside can reach it — the module is
+// private to every binary that includes it. Saying so once beats
+// `pub(crate)` on forty helpers.
+#![allow(unreachable_pub)]
 // Interior mutability here records test observations — a clock a test can
 // move, a scripted provider's queue, the events the bus delivered. It is
 // not request state (ADR 0007); the scoped allow follows the policy in the

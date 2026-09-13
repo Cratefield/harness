@@ -48,7 +48,7 @@ mod harness {
     /// The venture identity the host's contract checks read. These values
     /// match `examples/venture`'s harness for the same reason the template's
     /// must: a mismatch is never an error, only a silently different venture.
-    pub fn build(runtime: &Cloudflare) -> Harness {
+    pub(crate) fn build(runtime: &Cloudflare) -> Harness {
         Harness::builder()
             .venture(
                 Venture::new("venture-example", "example.factory0.dev")

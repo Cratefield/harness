@@ -7,7 +7,7 @@ use serde_json::json;
 
 /// Base URI for every problem `type`:
 /// `https://factory0.ventures/problems/<slug>`.
-pub const PROBLEM_TYPE_BASE: &str = "https://factory0.ventures/problems/";
+pub(crate) const PROBLEM_TYPE_BASE: &str = "https://factory0.ventures/problems/";
 
 /// An API error, serialized as `application/problem+json`.
 ///

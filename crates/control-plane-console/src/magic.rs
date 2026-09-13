@@ -75,7 +75,7 @@ use crate::{BASE, ConsoleState, complete_login, now_rfc3339, page, parse_form};
 /// within 60–86400 (validated at boot; a link that lasts a day is a
 /// password with a long tail, one that lasts a minute does not survive a
 /// slow mail queue).
-pub const DEFAULT_TTL_SECS: i64 = 900;
+pub(crate) const DEFAULT_TTL_SECS: i64 = 900;
 
 /// The entropy of a mailed token, in bytes.
 const TOKEN_BYTES: usize = 32;

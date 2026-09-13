@@ -767,11 +767,16 @@ mod method_serde {
     use http::Method;
     use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-    pub fn serialize<S: Serializer>(method: &Method, serializer: S) -> Result<S::Ok, S::Error> {
+    pub(crate) fn serialize<S: Serializer>(
+        method: &Method,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
         method.as_str().serialize(serializer)
     }
 
-    pub fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Method, D::Error> {
+    pub(crate) fn deserialize<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<Method, D::Error> {
         let text = String::deserialize(deserializer)?;
         Method::from_bytes(text.as_bytes()).map_err(serde::de::Error::custom)
     }

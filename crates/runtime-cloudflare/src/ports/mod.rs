@@ -10,11 +10,11 @@ mod kv;
 mod rate_limit;
 mod realtime;
 
-pub use blob::R2Blob;
+pub(crate) use blob::R2Blob;
 pub use clock::WorkersClock;
 pub use d1::D1Database;
 pub use defer::{ContextDefer, ScheduleDefer};
-pub use dispatcher::ServiceDispatcher;
+pub(crate) use dispatcher::ServiceDispatcher;
 pub use http::FetchClient;
 pub use kv::KvStorePort;
 pub use rate_limit::RateLimitPort;

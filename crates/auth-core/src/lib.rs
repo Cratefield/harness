@@ -23,6 +23,12 @@
 #![forbid(unsafe_code)]
 
 mod authorize;
+// The two items a venture author needs from the chooser: the config key
+// and the slugs it accepts. They were `pub` inside this private module,
+// which meant nothing outside the crate could name either — the README
+// documents `AUTH_CORE_LOGIN_METHODS` and its vocabulary, and no caller
+// could ask for it.
+pub use authorize::{LOGIN_METHODS_KEY, known_method_slugs};
 mod clients;
 pub mod federated;
 pub mod linking;
