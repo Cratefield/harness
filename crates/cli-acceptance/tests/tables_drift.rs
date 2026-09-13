@@ -42,12 +42,22 @@ impl Drop for TempDir {
 /// A manifest declaring one table, written to `dir`.
 fn manifest_at(dir: &Path, tables: &str) -> std::path::PathBuf {
     let path = dir.join("venture.json");
+    // Every declared table has to say what it holds (issue #153), so the
+    // fixture says it here too: this file is about drift, and a manifest
+    // that would not validate is not a fixture for anything.
+    let privacy = if tables.trim() == "{}" {
+        "{}".to_owned()
+    } else {
+        r#"{ "note": { "holds": "nothing", "reason": "A fixture table; nobody is in it." } }"#
+            .to_owned()
+    };
     let body = format!(
         r#"{{
             "name": "acme",
             "host": "acme.factory0.dev",
             "modules": [],
-            "tables": {tables}
+            "tables": {tables},
+            "table_privacy": {privacy}
         }}"#
     );
     std::fs::write(&path, body).expect("manifest writes");

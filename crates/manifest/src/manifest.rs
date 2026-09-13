@@ -16,6 +16,8 @@ use serde::{Deserialize, Serialize};
 
 use cratefield_tables::Schema;
 
+use crate::privacy::TablePrivacyMap;
+
 use crate::catalog::{Catalog, ModuleSet, ResolveError};
 
 /// A reference to a module in a manifest: either a bare slug string, or an
@@ -61,7 +63,12 @@ impl ModuleRef {
 /// bounds, and a float has no total equality. Nothing keyed a manifest by
 /// value, so the bound was never load-bearing — it was available because
 /// nothing in the struct had needed a float before.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+///
+/// `Default` so a caller building one in code can write the fields it
+/// means and `..Default::default()` for the rest. Two call sites in the
+/// CLI have now been broken twice by a new field, which is a cost the
+/// struct was imposing rather than one they were choosing.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct VentureManifest {
     /// The venture name. Becomes the generated crate name (kebab-case).
     pub name: String,
@@ -91,6 +98,21 @@ pub struct VentureManifest {
     /// — see `GenerateError::TablesNotGenerated`.
     #[serde(default, skip_serializing_if = "Schema::is_empty")]
     pub tables: Schema,
+    /// What each declared table holds, keyed by table name.
+    ///
+    /// Required for every declared table and checked by [`validate`]:
+    /// there is no default, because both available defaults are wrong.
+    /// See [`crate::privacy`].
+    ///
+    /// It lives here rather than on `TableDef` because a `TableDef` is
+    /// also what `cratefield-introspect` builds from a live catalog, and
+    /// a table read out of a database has no author to have declared
+    /// anything — requiring it there would force that crate to invent
+    /// one.
+    ///
+    /// [`validate`]: VentureManifest::validate
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub table_privacy: TablePrivacyMap,
 }
 
 /// Why a manifest is not usable.
@@ -181,6 +203,14 @@ impl VentureManifest {
         // something the author meets later from a different layer.
         if let Err(errors) = self.tables.validate() {
             return Err(ManifestError::Tables(errors.problems));
+        }
+        // A declared table that does not say what it holds is outside
+        // export, outside subject access and outside erasure — silently,
+        // which is the shape of the hole this refuses to leave open.
+        let mut problems = Vec::new();
+        crate::privacy::validate(&self.tables, &self.table_privacy, &mut problems);
+        if !problems.is_empty() {
+            return Err(ManifestError::Tables(problems));
         }
         Ok(())
     }
