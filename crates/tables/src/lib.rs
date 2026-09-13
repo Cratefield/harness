@@ -63,6 +63,7 @@
 #![forbid(unsafe_code)]
 
 mod ddl;
+mod diff;
 mod json_schema;
 mod manifest;
 mod schema;
@@ -70,6 +71,7 @@ mod validate;
 mod value;
 
 pub use ddl::{SqlDialect, index_name};
+pub use diff::{Change, Step, diff};
 pub use json_schema::{JSON_SCHEMA_DIALECT, json_schema};
 pub use schema::{
     FieldDef, FieldKind, ForeignKey, MAX_IDENTIFIER_CHARS, RESERVED_PREFIXES, RESERVED_WORDS,

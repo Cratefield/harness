@@ -441,6 +441,41 @@ assertion here; a validator that distinguishes null from a missing key
 will still disagree about a required field set to `null`; and
 uniqueness, foreign keys, indexes and defaults do not appear at all.
 
+## What a change costs
+
+`diff(previous, current)` reports every difference between two
+declarations and what each one costs, in `docs/ROLLBACK.md` §5's
+vocabulary rather than a new one:
+
+| Step | Meaning |
+|---|---|
+| `expand` | additive — the old build keeps working and a rollback stays free |
+| `contract` | something is removed; safe once nothing deployed reads it, and a rollback past the switch is gone afterwards |
+| `rewrite` | cannot be applied forward-only to rows that already exist |
+
+The rule behind every `rewrite` is the same one: **the rows already
+stored were written under the old declaration.** A new `NOT NULL` column
+with no default has nothing to put in them; a narrowed bound may already
+exclude them; a dropped enum member may be the value some of them hold; a
+new `unique` column gives every one of them the same value.
+
+Two are worth calling out because they read as harmless:
+
+- **Adding a bound where there was none is narrowing.** `None` admitted
+  everything, so the first `max_len` is stricter than no `max_len`.
+- **A changed default is additive and reports as such** — it is read when
+  a write omits the column, so rows already there keep what they have. An
+  author expecting a backfill needs to be told they are not getting one.
+
+**Nothing here refuses anything.** `Schema::validate` says what is legal;
+this says what it costs. Refusing a contract would make the tool wrong
+for the case the expand/contract discipline exists to serve — dropping a
+column on purpose, in its own migration, once nothing reads it.
+
+Still not built: generating the `ALTER` statements. A generated migration
+is a guess about data this crate cannot see, and the report is what an
+author needs before the statements are worth writing.
+
 ## Where the two engines are not the same
 
 The DDL renders the same shape for both dialects, but three guarantees are
@@ -475,8 +510,6 @@ these is a follow-up:
 
 - CRUD route handlers, the `public-read | owner | tenant-members | admin`
   access vocabulary, and the batched read endpoint.
-- The migration diff between two versions of a definition. Everything
-  here only creates.
 - The generated `@cratefield/client` TypeScript package, and the second
   run of `corpus/rows.json` against its Zod schemas.
 - Publishing declared tables on `/__surface`, and any control plane or
