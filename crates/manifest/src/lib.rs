@@ -21,6 +21,7 @@ pub mod build_key;
 pub mod catalog;
 pub mod generate;
 pub mod manifest;
+pub mod privacy;
 pub mod provenance;
 
 pub use build_key::{BUILD_PROFILE, BuildKeyError, BuildKeyInputs, build_key, canonical_inputs};
@@ -33,6 +34,7 @@ pub use manifest::{ManifestError, ModuleRef, VentureManifest};
 // Re-exported so a caller building a `VentureManifest` can name the type
 // of its `tables` field without adding a dependency of its own.
 pub use cratefield_tables::Schema;
+pub use privacy::{Disposition, KINDS, TablePrivacy, TablePrivacyMap};
 pub use provenance::{
     BuildEnvViolation, BuildEnvironmentAttestation, PROVENANCE_SCHEMA, Provenance, ProvenanceError,
     ProvenanceFile, ResourceLimits, file_digest, is_placeholder_digest,
@@ -64,8 +66,18 @@ mod tests {
                     "primary_key": "id",
                     "fields": [
                         { "name": "id", "kind": "uuid", "required": true },
+                        { "name": "author", "kind": "text" },
                         { "name": "body", "kind": "text", "max_len": 400 }
                     ]
+                }
+            },
+            "table_privacy": {
+                "note": {
+                    "holds": "personal",
+                    "subject": "author",
+                    "kind": "content",
+                    "disposition": "erase",
+                    "description": "The notes you wrote, and when."
                 }
             }
         }"#
@@ -121,6 +133,162 @@ mod tests {
         let text = error.to_string();
         assert!(text.contains("cannot create them"), "{text}");
         assert!(text.contains("#153"), "{text}");
+    }
+
+    /// The same manifest with the privacy block removed.
+    fn without_privacy() -> String {
+        let full: serde_json::Value =
+            serde_json::from_str(with_tables()).expect("the fixture is JSON");
+        let mut object = full.as_object().expect("an object").clone();
+        object.remove("table_privacy");
+        serde_json::Value::Object(object).to_string()
+    }
+
+    #[test]
+    fn a_declared_table_must_say_what_it_holds() {
+        // Both available defaults are wrong: "nothing personal unless you
+        // say" puts a venture's tables outside export and erasure
+        // silently, and "personal unless you say" deletes reference data
+        // the first time somebody asks. So there is no default.
+        let manifest = VentureManifest::from_json_str(&without_privacy()).expect("parses");
+        let error = manifest.validate().expect_err("must say");
+        let text = error.to_string();
+        assert!(text.contains("does not say what it holds"), "{text}");
+        assert!(text.contains("tables.note.privacy"), "{text}");
+    }
+
+    #[test]
+    fn saying_a_table_holds_nothing_is_one_line_and_needs_the_reason() {
+        let base: serde_json::Value =
+            serde_json::from_str(&without_privacy()).expect("the fixture is JSON");
+        let with = |privacy: serde_json::Value| {
+            let mut object = base.as_object().expect("an object").clone();
+            object.insert(
+                "table_privacy".to_owned(),
+                serde_json::json!({ "note": privacy }),
+            );
+            VentureManifest::from_json_str(&serde_json::Value::Object(object).to_string())
+                .expect("parses")
+        };
+
+        with(serde_json::json!({
+            "holds": "nothing",
+            "reason": "One row per plan tier; nobody is named in it."
+        }))
+        .validate()
+        .expect("a reason is all it takes");
+
+        // Without the reason it is a silence wearing a decision's
+        // clothes, which is the thing this refuses.
+        let error = with(serde_json::json!({ "holds": "nothing", "reason": "  " }))
+            .validate()
+            .expect_err("an empty reason is not a reason");
+        assert!(error.to_string().contains("needs a reason"), "{error}");
+    }
+
+    #[test]
+    fn a_declaration_must_describe_columns_the_table_actually_has() {
+        // Each rule is a promise about a column, and a promise about a
+        // column that does not exist is not checkable by anything later.
+        let base: serde_json::Value =
+            serde_json::from_str(&without_privacy()).expect("the fixture is JSON");
+        let check = |privacy: serde_json::Value| -> String {
+            let mut object = base.as_object().expect("an object").clone();
+            object.insert(
+                "table_privacy".to_owned(),
+                serde_json::json!({ "note": privacy }),
+            );
+            VentureManifest::from_json_str(&serde_json::Value::Object(object).to_string())
+                .expect("parses")
+                .validate()
+                .expect_err("not valid")
+                .to_string()
+        };
+
+        let text = check(serde_json::json!({
+            "holds": "personal", "subject": "nobody", "kind": "content",
+            "disposition": "erase", "description": "x"
+        }));
+        assert!(text.contains("`nobody` is not a field"), "{text}");
+
+        let text = check(serde_json::json!({
+            "holds": "personal", "subject": "author", "kind": "invented",
+            "disposition": "erase", "description": "x"
+        }));
+        assert!(text.contains("is not a data kind"), "{text}");
+
+        // An empty description is published to the person asking.
+        let text = check(serde_json::json!({
+            "holds": "personal", "subject": "author", "kind": "content",
+            "disposition": "erase", "description": " "
+        }));
+        assert!(text.contains("must not be empty"), "{text}");
+    }
+
+    #[test]
+    fn anonymise_names_columns_a_database_can_actually_overwrite() {
+        // The same check `cratefield-module-privacy` makes against the
+        // applied schema rather than trusting: a `NOT NULL` column with
+        // no default has nothing to be overwritten with, and a primary
+        // key cannot move.
+        let base: serde_json::Value =
+            serde_json::from_str(&without_privacy()).expect("the fixture is JSON");
+        let check = |columns: serde_json::Value| -> String {
+            let mut object = base.as_object().expect("an object").clone();
+            object.insert(
+                "table_privacy".to_owned(),
+                serde_json::json!({ "note": {
+                    "holds": "personal", "subject": "author", "kind": "content",
+                    "disposition": { "anonymise": columns },
+                    "description": "x"
+                }}),
+            );
+            VentureManifest::from_json_str(&serde_json::Value::Object(object).to_string())
+                .expect("parses")
+                .validate()
+                .map_or_else(|err| err.to_string(), |()| String::new())
+        };
+
+        assert!(
+            check(serde_json::json!(["body"])).is_empty(),
+            "an optional column is fine"
+        );
+        assert!(
+            check(serde_json::json!(["id"])).contains("required and has no default"),
+            "a required column with no default was accepted"
+        );
+        assert!(
+            check(serde_json::json!([])).contains("erases nothing"),
+            "an empty anonymise list was accepted"
+        );
+        assert!(
+            check(serde_json::json!(["ghost"])).contains("not a field"),
+            "a column that does not exist was accepted"
+        );
+    }
+
+    #[test]
+    fn privacy_for_a_table_that_is_not_declared_is_refused() {
+        let base: serde_json::Value =
+            serde_json::from_str(with_tables()).expect("the fixture is JSON");
+        let mut object = base.as_object().expect("an object").clone();
+        let mut privacy = object["table_privacy"].as_object().expect("map").clone();
+        privacy.insert(
+            "ghost".to_owned(),
+            serde_json::json!({ "holds": "nothing", "reason": "x" }),
+        );
+        object.insert(
+            "table_privacy".to_owned(),
+            serde_json::Value::Object(privacy),
+        );
+        let error = VentureManifest::from_json_str(&serde_json::Value::Object(object).to_string())
+            .expect("parses")
+            .validate()
+            .expect_err("not a declared table");
+        assert!(
+            error.to_string().contains("not a declared table"),
+            "{error}"
+        );
     }
 
     #[test]

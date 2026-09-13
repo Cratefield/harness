@@ -1026,7 +1026,7 @@ pub fn init(
         seed_sql: None,
         // `fz init` scaffolds a venture with no tables of its own; a
         // declaration is something an author adds (issue #153).
-        tables: cratefield_manifest::Schema::default(),
+        ..Default::default()
     };
     manifest
         .validate()
@@ -1596,7 +1596,7 @@ mod tests {
                 .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
                 .collect::<BTreeMap<_, _>>(),
             seed_sql: None,
-            tables: cratefield_manifest::Schema::default(),
+            ..Default::default()
         }
     }
 

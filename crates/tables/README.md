@@ -472,6 +472,20 @@ this says what it costs. Refusing a contract would make the tool wrong
 for the case the expand/contract discipline exists to serve — dropping a
 column on purpose, in its own migration, once nothing reads it.
 
+## A declared table has to say what it holds
+
+The declaration lives in the manifest rather than here, because a
+`TableDef` is also what `cratefield-introspect` builds from a live
+catalog and a table read out of a database has no author to have declared
+anything. See `cratefield_manifest::privacy`.
+
+It is **required, with no default**, because both available defaults are
+wrong: "nothing personal unless you say" puts a venture's own tables
+outside `fz data export`, outside subject access and outside erasure,
+silently — the exact hole `auth-core`'s `deletion_jobs` sat in (#272) —
+and "personal unless you say" deletes a venture's reference data the
+first time somebody asks.
+
 `cratefield-introspect::drift` asks the same question of a **live
 database**: what does this database differ from the declaration by? That
 one has two traps a declaration-to-declaration diff does not — a database
