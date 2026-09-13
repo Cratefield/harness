@@ -35,7 +35,9 @@ use cratefield_core::{
 use serde_json::Value;
 use tower::ServiceExt;
 
-pub use fields::{Field, JsonType, Values, Widget, fields_of, form_to_json, humanize};
+// `Option_` types `Widget::Select`'s choices, so a caller reading a
+// field's options had a value whose type it could not name.
+pub use fields::{Field, JsonType, Option_, Values, Widget, fields_of, form_to_json, humanize};
 pub use spec::{
     ActionSpec, FieldSpec, ModuleSpec, PageCopy, Theme, UI_SPEC_KEY, UI_SPEC_VERSION, UiSpec,
 };

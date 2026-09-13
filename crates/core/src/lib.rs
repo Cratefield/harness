@@ -84,7 +84,11 @@ pub use ports::{
     retry_after, timeout, ttl_secs,
 };
 pub use problem::Problem;
-pub use problems::{ProblemDef, SLUGS, registry as problem_registry};
+// `Slugs` is exported beside the `SLUGS` value it types. Without it a
+// caller can read `SLUGS.validation_failed` and cannot write a function
+// that takes the table — the value was reachable and its type was not
+// nameable, which `unnameable_types` is what noticed.
+pub use problems::{ProblemDef, SLUGS, Slugs, registry as problem_registry};
 pub use rate_limit::{RateLimit, RateLimitFailure, check_rate_limit, client_ip, rate_limit_keys};
 pub use route_policy::{
     ALLOW_UNPROTECTED_WRITES, RoutePolicy, WriteGuards, captcha_effective, deployed_env,
