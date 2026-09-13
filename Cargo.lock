@@ -1125,7 +1125,9 @@ dependencies = [
  "cratefield-tables",
  "pollster",
  "sea-query",
+ "serde",
  "tokio",
+ "toml 0.9.12+spec-1.1.0",
 ]
 
 [[package]]
@@ -1155,6 +1157,7 @@ dependencies = [
 name = "cratefield-manifest"
 version = "0.1.3"
 dependencies = [
+ "cratefield-tables",
  "serde",
  "serde_json",
  "sha2 0.11.0",

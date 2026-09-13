@@ -14,6 +14,8 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
+use cratefield_tables::Schema;
+
 use crate::catalog::{Catalog, ModuleSet, ResolveError};
 
 /// A reference to a module in a manifest: either a bare slug string, or an
@@ -54,7 +56,12 @@ impl ModuleRef {
 /// A venture, declared. Serialize/deserialize as JSON here; the CLI also
 /// accepts TOML and converts it into this struct before calling in, so the
 /// manifest crate itself stays serde-only and wasm-clean.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+///
+/// `PartialEq` but not `Eq`: a declared `real` field carries `f64`
+/// bounds, and a float has no total equality. Nothing keyed a manifest by
+/// value, so the bound was never load-bearing — it was available because
+/// nothing in the struct had needed a float before.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct VentureManifest {
     /// The venture name. Becomes the generated crate name (kebab-case).
     pub name: String,
@@ -75,6 +82,15 @@ pub struct VentureManifest {
     /// SQL run once after migrations, to seed rows.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub seed_sql: Option<String>,
+    /// Tables the venture declares itself (issue #153), rather than
+    /// getting from a module.
+    ///
+    /// Carried and checked here; **not yet generated from**. A manifest
+    /// that declares tables is refused by `generate`, with the reason,
+    /// rather than producing a venture whose tables quietly do not exist
+    /// — see `GenerateError::TablesNotGenerated`.
+    #[serde(default, skip_serializing_if = "Schema::is_empty")]
+    pub tables: Schema,
 }
 
 /// Why a manifest is not usable.
@@ -88,6 +104,9 @@ pub enum ManifestError {
     Resolve(ResolveError),
     /// The document did not parse as a manifest.
     Parse(String),
+    /// The `[tables]` declaration is not legal. Every problem at once,
+    /// the way `Schema::validate` reports them.
+    Tables(Vec<String>),
 }
 
 impl std::fmt::Display for ManifestError {
@@ -99,6 +118,13 @@ impl std::fmt::Display for ManifestError {
             }
             ManifestError::Resolve(err) => write!(f, "{err}"),
             ManifestError::Parse(msg) => write!(f, "could not parse manifest: {msg}"),
+            ManifestError::Tables(problems) => {
+                write!(f, "the [tables] declaration is not usable:")?;
+                for problem in problems {
+                    write!(f, "\n  - {problem}")?;
+                }
+                Ok(())
+            }
         }
     }
 }
@@ -149,6 +175,12 @@ impl VentureManifest {
             if !seen.insert(slug) {
                 return Err(ManifestError::DuplicateModule(slug.to_owned()));
             }
+        }
+        // Checked here so a malformed declaration is a manifest error,
+        // reported next to the rest of the manifest's own, rather than
+        // something the author meets later from a different layer.
+        if let Err(errors) = self.tables.validate() {
+            return Err(ManifestError::Tables(errors.problems));
         }
         Ok(())
     }

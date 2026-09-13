@@ -491,6 +491,13 @@ impl Schema {
         Self { tables }
     }
 
+    /// `true` when nothing is declared. A venture with no `[tables]`
+    /// section has one of these, and it is the common case.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.tables.is_empty()
+    }
+
     /// The declared table called `name`, if there is one.
     #[must_use]
     pub fn table(&self, name: &str) -> Option<&TableDef> {
