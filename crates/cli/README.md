@@ -133,6 +133,24 @@ apply`) loads that file into Postgres in lock order:
 The manifest must be exactly this venture's tables — another venture's
 export file is refused before anything touches the network.
 
+## `fz tables diff --from <MANIFEST> [--to venture.json]`
+
+What changed between two versions of a manifest's `[tables]` declaration,
+and what each change costs — the same expand/contract/rewrite vocabulary
+`fz tables drift` speaks.
+
+This is the question **before** a deploy: *"I edited the declaration; can
+I ship it?"* `drift` is the question after one. Neither answers the other,
+and no database is involved in this one.
+
+Both manifests are validated before they are compared, because
+differences against a declaration that could never be deployed are
+differences nobody can act on — and the reason it could not be deployed
+is the thing worth saying.
+
+**Exits non-zero when anything changed**, so a CI job comparing a
+branch's manifest against `main`'s has something to branch on.
+
 ## `fz tables drift [--manifest venture.json] --dialect postgres --url <URL>`
 
 What the database differs from the manifest's `[tables]` declaration by,

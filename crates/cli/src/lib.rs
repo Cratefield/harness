@@ -399,8 +399,34 @@ enum DataCommand {
     },
 }
 
+/// `fz tables`'s own dispatch, in its own function.
+///
+/// `run` is at clippy's line limit and a subcommand arm has now pushed it
+/// over twice; a group that grows belongs in a function that can grow.
+fn run_tables(command: TablesCommand) -> Result<(), String> {
+    match command {
+        TablesCommand::Diff { from, to } => tables::diff(&from, &to),
+        TablesCommand::Drift {
+            manifest,
+            dialect,
+            url,
+        } => tables::drift(&manifest, &dialect, &url),
+    }
+}
+
 #[derive(Subcommand)]
 enum TablesCommand {
+    /// Reports what changed between two versions of a manifest's
+    /// `[tables]` declaration, and what each change costs. Read-only,
+    /// and no database is involved.
+    Diff {
+        /// The manifest as it was — a checkout of `main`, say.
+        #[arg(long, value_name = "MANIFEST")]
+        from: PathBuf,
+        /// The manifest as it is now.
+        #[arg(long, default_value = "venture.json", value_name = "MANIFEST")]
+        to: PathBuf,
+    },
     /// Reports what a database differs from the manifest's `[tables]`
     /// declaration by, in expand/contract/rewrite terms. Read-only.
     Drift {
@@ -479,14 +505,7 @@ pub fn run(build: impl Fn() -> Harness, args: impl IntoIterator<Item = String>) 
     let harness = build();
     let sidecars = crate::sidecars::from_cli_or_env(cli.sidecars.as_deref());
     let result = match cli.command {
-        Command::Tables {
-            command:
-                TablesCommand::Drift {
-                    manifest,
-                    dialect,
-                    url,
-                },
-        } => tables::drift(&manifest, &dialect, &url),
+        Command::Tables { command } => run_tables(command),
         Command::Migrations {
             command: MigrationsCommand::Collect { dialect, out },
         } => collect::collect(&harness, &dialect, &out),

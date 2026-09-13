@@ -1,4 +1,5 @@
-//! `fz tables drift` — what a database differs from the manifest by.
+//! `fz tables diff` and `fz tables drift` — what a declaration change
+//! costs, and what a database differs from the declaration by.
 //!
 //! Both halves of this landed without a way to run one against the other:
 //! a manifest can declare `[tables]` (#354) and
@@ -14,8 +15,79 @@ use std::path::Path;
 
 #[cfg(feature = "postgres")]
 use cratefield_introspect::{drift as catalog_drift, unseen};
-#[cfg(feature = "postgres")]
 use cratefield_tables::Step;
+
+/// `fz tables diff`: what changed between two versions of a manifest's
+/// declaration, and what each change costs.
+///
+/// The counterpart of `drift`, and the reason both exist: this is the
+/// question before a deploy — *"I edited the declaration; can I ship
+/// it?"* — and drift is the question after one. Neither answers the
+/// other, and a database is only involved in the second.
+///
+/// Exits non-zero when anything changed, for the same reason `drift`
+/// does: the finding is the point, and a CI job comparing a branch's
+/// manifest against `main`'s needs something to branch on.
+///
+/// # Errors
+///
+/// A message when either manifest cannot be read or is not valid, and a
+/// summary line when the report was not empty.
+pub fn diff(previous: &Path, current: &Path) -> Result<(), String> {
+    match diff_report(previous, current)? {
+        0 => Ok(()),
+        count => Err(format!("{count} change(s) to the declaration (above)")),
+    }
+}
+
+/// Reports the differences and answers how many there were.
+///
+/// # Errors
+///
+/// A message when either manifest cannot be read or is not valid.
+pub fn diff_report(previous: &Path, current: &Path) -> Result<usize, String> {
+    let before = load(previous)?;
+    let after = load(current)?;
+    let changes = cratefield_tables::diff(&before.tables, &after.tables);
+
+    if changes.is_empty() {
+        println!(
+            "No change: both declare the same {} table(s).",
+            after.tables.tables.len()
+        );
+        return Ok(0);
+    }
+    println!("{} change(s) to the declaration:\n", changes.len());
+    for change in &changes {
+        println!("  [{}] {}", change.step, change.line());
+    }
+    println!();
+    for step in [Step::Expand, Step::Contract, Step::Rewrite] {
+        let count = changes.iter().filter(|change| change.step == step).count();
+        if count > 0 {
+            println!("  {count} {step}");
+        }
+    }
+    // The vocabulary is `docs/ROLLBACK.md` section 5's, and a reader who
+    // has not met it needs the line saying what the three words cost.
+    println!(
+        "\n  expand: additive, a rollback stays free\n           contract: safe once nothing deployed reads it\n           rewrite: cannot be applied forward-only to rows that already exist"
+    );
+    Ok(changes.len())
+}
+
+/// Reads and validates one manifest. Validated on purpose: comparing two
+/// declarations where one is not legal reports differences against
+/// something that could never be deployed.
+fn load(path: &Path) -> Result<cratefield_manifest::VentureManifest, String> {
+    let raw = std::fs::read_to_string(path)
+        .map_err(|err| format!("cannot read {}: {err}", path.display()))?;
+    let manifest = crate::build::parse(path, &raw)?;
+    manifest
+        .validate()
+        .map_err(|err| format!("{}: {err}", path.display()))?;
+    Ok(manifest)
+}
 
 /// `fz tables drift`: report, then fail when there was anything to
 /// report.
