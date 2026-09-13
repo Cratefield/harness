@@ -7,9 +7,9 @@
 //! address is still verified against a fixed dummy hash so the *timing*
 //! does not answer either.
 
-use axum::extract::State;
+use axum::extract::{Query, State};
 use axum::response::{IntoResponse, Response};
-use axum::routing::post;
+use axum::routing::{get, post};
 use cratefield_core::{Json, Problem, Scope};
 use factory0_auth_core::{
     CREDENTIAL_PASSWORD, CredentialRow, IssuedSession, Login, PROVIDER_PASSWORD, STATUS_ACTIVE,
@@ -53,6 +53,7 @@ pub(crate) fn router() -> axum::Router<Arc<ModuleState>> {
     axum::Router::new()
         .route("/register", post(register))
         .route("/login", post(login))
+        .route("/start", get(start).post(start_submit))
         .route("/change", post(change))
 }
 
@@ -88,7 +89,13 @@ fn accepted() -> Response {
         .into_response()
 }
 
-async fn limit(state: &ModuleState, headers: &HeaderMap, email: Option<&str>) -> Option<Response> {
+/// The refusal as a pause rather than a rendered response, so the JSON
+/// route and the page route each render it in their own content type.
+async fn limit_pause(
+    state: &ModuleState,
+    headers: &HeaderMap,
+    email: Option<&str>,
+) -> Option<Option<std::time::Duration>> {
     let limiter = state.ctx.ports.rate_limiter.as_deref()?;
     let ip = cratefield_core::client_ip(headers);
     // Keyed on the address as well as the caller: an attacker with a
@@ -96,9 +103,7 @@ async fn limit(state: &ModuleState, headers: &HeaderMap, email: Option<&str>) ->
     // protecting from a distributed guess even before the lockout bites.
     for key in cratefield_core::rate_limit_keys(ip.as_deref(), email) {
         match limiter.limit(&format!("auth-password:{key}")).await {
-            Ok(decision) if !decision.ok => {
-                return Some(cratefield_core::rate_limited(decision.retry_after).into_response());
-            }
+            Ok(decision) if !decision.ok => return Some(decision.retry_after),
             Ok(_) => {}
             Err(err) => {
                 tracing::warn!(error = %err, "the auth-password rate limiter is unavailable");
@@ -107,6 +112,12 @@ async fn limit(state: &ModuleState, headers: &HeaderMap, email: Option<&str>) ->
         }
     }
     None
+}
+
+async fn limit(state: &ModuleState, headers: &HeaderMap, email: Option<&str>) -> Option<Response> {
+    limit_pause(state, headers, email)
+        .await
+        .map(|pause| cratefield_core::rate_limited(pause).into_response())
 }
 
 /// Verifies the captcha when a deployment provides one.
@@ -320,6 +331,151 @@ async fn create_account(
     Ok(user_id)
 }
 
+/// The form a browser gets, and what it posts back.
+///
+/// The login chooser renders a link or a passkey button, and this method
+/// is neither: it needs two fields, and a wrong password has to be
+/// answerable on the page it was typed into. `auth-magic-link` solved the
+/// same problem the same way — the module serves its own form and the
+/// chooser links to it.
+#[derive(Debug, Default, Deserialize)]
+struct StartForm {
+    #[serde(default)]
+    email: String,
+    #[serde(default)]
+    password: String,
+    #[serde(default)]
+    return_to: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct StartQuery {
+    return_to: Option<String>,
+}
+
+/// `GET /start?return_to=/path` — the form.
+async fn start(Query(query): Query<StartQuery>) -> Response {
+    form_page(
+        safe_return_to(query.return_to.as_deref()).as_deref(),
+        None,
+        StatusCode::OK,
+    )
+}
+
+/// `POST /start` — the same decision as `POST /login`, answered with a
+/// page. A success is a redirect carrying the session cookie, because a
+/// browser that just posted a password should land somewhere, not read
+/// JSON.
+async fn start_submit(
+    State(state): State<Arc<ModuleState>>,
+    scope: Scope,
+    headers: HeaderMap,
+    axum::extract::Form(form): axum::extract::Form<StartForm>,
+) -> Result<Response, Problem> {
+    let return_to = safe_return_to(form.return_to.as_deref());
+    match sign_in(&state, &scope, &headers, &form.email, &form.password, None).await? {
+        Outcome::SignedIn(session) => Ok((
+            StatusCode::SEE_OTHER,
+            [
+                (header::SET_COOKIE, set_cookie(&session.value)),
+                (
+                    header::LOCATION,
+                    return_to.unwrap_or_else(|| "/".to_owned()),
+                ),
+            ],
+        )
+            .into_response()),
+        // The same sentence for a wrong password, an unknown address, a
+        // disabled account and a locked one — the property the JSON
+        // route's single `401` has, kept.
+        Outcome::Refused => Ok(form_page(
+            return_to.as_deref(),
+            Some("That email address and password do not match."),
+            StatusCode::UNAUTHORIZED,
+        )),
+        Outcome::RateLimited(_) => Ok(form_page(
+            return_to.as_deref(),
+            Some("Too many attempts just now. Try again shortly."),
+            StatusCode::TOO_MANY_REQUESTS,
+        )),
+    }
+}
+
+/// The form, with an optional message above it.
+fn form_page(return_to: Option<&str>, message: Option<&str>, status: StatusCode) -> Response {
+    let hidden = return_to.map_or_else(String::new, |value| {
+        format!(
+            "<input type=\"hidden\" name=\"return_to\" value=\"{}\">",
+            html_escape(value)
+        )
+    });
+    let note = message.map_or_else(String::new, |text| {
+        format!("<p style=\"color:#a33\">{}</p>", html_escape(text))
+    });
+    let field = "font:inherit;padding:10px;width:100%;box-sizing:border-box;\
+border:1px solid #ccc;border-radius:6px;margin-bottom:.8rem";
+    let body = format!(
+        "{note}<form method=\"post\">{hidden}\
+<label for=\"email\" style=\"display:block;margin-bottom:.4rem\">Email address</label>\
+<input id=\"email\" name=\"email\" type=\"email\" autocomplete=\"username\" required \
+autofocus style=\"{field}\">\
+<label for=\"password\" style=\"display:block;margin-bottom:.4rem\">Password</label>\
+<input id=\"password\" name=\"password\" type=\"password\" \
+autocomplete=\"current-password\" required style=\"{field}\">\
+<button type=\"submit\" style=\"font:inherit;padding:12px 20px;border-radius:6px;\
+border:0;background:#1a1a1a;color:#fff;font-weight:600;cursor:pointer\">Sign in</button></form>"
+    );
+    let document = format!(
+        "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">\
+<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">\
+<meta name=\"robots\" content=\"noindex\">\
+<title>Sign in</title></head>\
+<body style=\"font:16px/1.5 system-ui,sans-serif;margin:3rem auto;max-width:32rem;\
+padding:0 1rem\">{body}</body></html>"
+    );
+    (
+        status,
+        [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
+        axum::response::Html(document),
+    )
+        .into_response()
+}
+
+/// Only a path on this service: an absolute URL here is an open redirect,
+/// and this one is followed with a session cookie attached.
+fn safe_return_to(candidate: Option<&str>) -> Option<String> {
+    let value = candidate?.trim();
+    if value.is_empty() || value.len() > 4096 || !value.starts_with('/') {
+        return None;
+    }
+    // `//host` and `/\host` are both absolute to a browser.
+    if value.starts_with("//") || value.starts_with("/\\") {
+        return None;
+    }
+    Some(value.to_owned())
+}
+
+/// Escapes the five characters that can leave an HTML attribute or a text
+/// node. `return_to` is caller-supplied and lands in a `value=`.
+fn html_escape(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&#39;")
+}
+
+/// What an attempt decided. Everything the JSON route answers with
+/// `401 auth/password-login-refused` is one variant on purpose: a wrong
+/// password, an unknown address, a disabled account and a locked one are
+/// the same answer, and a page must not be the place that separates them.
+enum Outcome {
+    SignedIn(Box<IssuedSession>),
+    Refused,
+    RateLimited(Option<std::time::Duration>),
+}
+
 /// `POST /login`.
 async fn login(
     State(state): State<Arc<ModuleState>>,
@@ -329,17 +485,44 @@ async fn login(
 ) -> Result<Response, Problem> {
     let body = body_of(&raw);
     let credentials: Credentials = serde_json::from_value(body.clone()).unwrap_or_default();
-    let email = cratefield_core::normalize_email(&credentials.email);
-
-    if let Some(limited) = limit(&state, &headers, Some(&email)).await {
-        return Ok(limited);
-    }
     let captcha_token = body
         .get("captchaToken")
         .and_then(Value::as_str)
         .or_else(|| body.get("captcha_token").and_then(Value::as_str));
-    if !captcha_ok(&state, captcha_token, &headers).await {
-        return Err(refused(&scope));
+    match sign_in(
+        &state,
+        &scope,
+        &headers,
+        &credentials.email,
+        &credentials.password,
+        captcha_token,
+    )
+    .await?
+    {
+        Outcome::SignedIn(session) => Ok(signed_in(&session)),
+        Outcome::Refused => Err(refused(&scope)),
+        Outcome::RateLimited(pause) => Ok(cratefield_core::rate_limited(pause).into_response()),
+    }
+}
+
+/// Everything both entry points do: limit, captcha, the dummy-hash verify
+/// for an unknown address, the lockout, the session. Shared so a page
+/// cannot grow a second set of rules about who may sign in.
+async fn sign_in(
+    state: &ModuleState,
+    scope: &Scope,
+    headers: &HeaderMap,
+    raw_email: &str,
+    password: &str,
+    captcha_token: Option<&str>,
+) -> Result<Outcome, Problem> {
+    let email = cratefield_core::normalize_email(raw_email);
+
+    if let Some(pause) = limit_pause(state, headers, Some(&email)).await {
+        return Ok(Outcome::RateLimited(pause));
+    }
+    if !captcha_ok(state, captcha_token, headers).await {
+        return Ok(Outcome::Refused);
     }
 
     let ctx = state.ctx.as_ref();
@@ -352,7 +535,7 @@ async fn login(
     };
     let now = clock.now();
 
-    let attempt = attempt(db, &email, &credentials.password, now, &scope).await?;
+    let attempt = attempt(db, &email, password, now, scope).await?;
     let Attempt {
         user,
         credential,
@@ -370,14 +553,14 @@ async fn login(
             && !locked
             && !presented_ok
         {
-            record_failure(db, ctx, &scope, credential, &state.settings, now).await;
+            record_failure(db, ctx, scope, credential, &state.settings, now).await;
         }
-        return Err(refused(&scope));
+        return Ok(Outcome::Refused);
     }
 
     // Past here the password is right and the account can sign in.
     let Some(user) = user else {
-        return Err(refused(&scope));
+        return Ok(Outcome::Refused);
     };
     let credential = credential.expect("checked above");
 
@@ -385,7 +568,7 @@ async fn login(
     // Doing it on login is the only moment the plaintext is available.
     if let Some(stored) = stored.as_deref()
         && factory0_auth_core::password_needs_rehash(stored)
-        && let Ok(fresh) = hash_password(&credentials.password)
+        && let Ok(fresh) = hash_password(password)
         && let Err(err) = set_password_hash(db, &credential.id, &fresh).await
     {
         tracing::warn!(error = %err, "could not rehash a password");
@@ -398,8 +581,8 @@ async fn login(
         }
     }
 
-    let presented = session_cookie_value(&headers);
-    let ip = cratefield_core::client_ip(&headers);
+    let presented = session_cookie_value(headers);
+    let ip = cratefield_core::client_ip(headers);
     let user_agent = headers
         .get(header::USER_AGENT)
         .and_then(|value| value.to_str().ok());
@@ -420,7 +603,7 @@ async fn login(
     )
     .await
     .map_err(|err| match err {
-        SessionError::NotActive => refused(&scope),
+        SessionError::NotActive => refused(scope),
         err => {
             tracing::error!(error = %err, "could not issue a session");
             Problem::internal().instance(&scope.request_id)
@@ -428,11 +611,11 @@ async fn login(
     })?;
 
     ctx.events.emit_in(
-        &scope,
+        scope,
         EVENT_LOGGED_IN,
         json!({ "user_id": user.id, "session_id": session.session_id }),
     );
-    Ok(signed_in(&session))
+    Ok(Outcome::SignedIn(Box::new(session)))
 }
 
 /// Records a failed attempt, and announces a lock when this one caused it.
