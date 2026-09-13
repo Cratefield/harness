@@ -19,7 +19,7 @@ workspace = true
 # native-only Postgres adapter and a tokio runtime to drive it. Opt-in so
 # the default fz dependency graph stays free of sqlx and tokio — a
 # venture's wasm build must never see them.
-postgres = ["dep:cratefield-adapter-postgres", "dep:tokio", "dep:cratefield-introspect", "dep:cratefield-tables"]
+postgres = ["dep:cratefield-adapter-postgres", "dep:tokio", "dep:cratefield-introspect"]
 # `fz push send`'s network leg (issue #184): the runtime's own HTTP client —
 # reqwest behind the outbound policy — and the tokio runtime it needs. Opt-in
 # for the same reason `postgres` is, and the live-proof tool is documented as
@@ -115,8 +115,11 @@ cratefield-adapter-postgres = { workspace = true, optional = true }
 # Optional for the same reason the adapter is: it is only reachable on
 # the direct-connection flow.
 cratefield-introspect = { path = "../introspect", optional = true }
-# The `Step` the drift report prints.
-cratefield-tables = { path = "../tables", optional = true }
+# The declaration vocabulary both `fz tables` subcommands print, and the
+# diff one of them runs. Not optional and not behind `postgres`: comparing
+# two manifests needs no database, and the crate carries no I/O and no
+# driver of its own.
+cratefield-tables = { path = "../tables" }
 # `push-send` only: the native runtime's reqwest client and its outbound
 # policy. Native-only by construction (the crate refuses to compile on wasm),
 # which is why it is optional and off by default.

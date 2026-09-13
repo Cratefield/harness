@@ -39,9 +39,16 @@ impl Drop for TempDir {
     }
 }
 
-/// A manifest declaring one table, written to `dir`.
+/// A manifest declaring one table, written to `dir` as `venture.json`.
 fn manifest_at(dir: &Path, tables: &str) -> std::path::PathBuf {
-    let path = dir.join("venture.json");
+    named_manifest_at(dir, "venture.json", tables)
+}
+
+/// The same, under a name of the caller's choosing — two manifests in one
+/// directory is the whole shape of a diff, and one helper that always
+/// wrote `venture.json` silently made them the same file.
+fn named_manifest_at(dir: &Path, name: &str, tables: &str) -> std::path::PathBuf {
+    let path = dir.join(name);
     // Every declared table has to say what it holds (issue #153), so the
     // fixture says it here too: this file is about drift, and a manifest
     // that would not validate is not a fixture for anything.
@@ -189,4 +196,69 @@ mod on_postgres {
 
         temp.finish().await;
     }
+}
+
+// ---------------------------------------------------------------------------
+// `fz tables diff` — the question before a deploy
+// ---------------------------------------------------------------------------
+
+/// `ONE_TABLE` with `extra` appended to `note`.
+fn grown() -> String {
+    ONE_TABLE.replace(
+        r#"{ "name": "body", "kind": "text", "max_len": 400 }"#,
+        r#"{ "name": "body", "kind": "text", "max_len": 400 },
+            { "name": "extra", "kind": "text" }"#,
+    )
+}
+
+#[test]
+fn two_identical_declarations_have_no_changes() {
+    // The case every false report would break, and the one that makes
+    // the assertions below mean something: a diff that reported
+    // everything would satisfy several of them by accident.
+    let dir = TempDir::new("tables-diff-same");
+    let a = manifest_at(dir.path(), ONE_TABLE);
+    let b = dir.path().join("other.json");
+    std::fs::copy(&a, &b).expect("copy");
+    let count = cratefield_cli::tables::diff_report(&a, &b).expect("both read");
+    assert_eq!(count, 0);
+}
+
+#[test]
+fn a_new_optional_column_is_one_expand() {
+    let dir = TempDir::new("tables-diff-grown");
+    let before = named_manifest_at(dir.path(), "before.json", ONE_TABLE);
+    let after = named_manifest_at(dir.path(), "after.json", &grown());
+
+    let count = cratefield_cli::tables::diff_report(&before, &after).expect("both read");
+    assert_eq!(count, 1, "one added column is one change");
+
+    // And the command fails, because the finding is the point: a CI job
+    // comparing a branch against `main` needs something to branch on.
+    let error = cratefield_cli::tables::diff(&before, &after).expect_err("a change is a finding");
+    assert!(error.contains("1 change"), "{error}");
+}
+
+#[test]
+fn a_manifest_that_is_not_legal_is_refused_rather_than_compared() {
+    // Comparing against a declaration that could never be deployed
+    // reports differences nobody can act on, and the reason it cannot be
+    // deployed is the thing worth saying.
+    let dir = TempDir::new("tables-diff-illegal");
+    let good = manifest_at(dir.path(), ONE_TABLE);
+    let bad = dir.path().join("bad.json");
+    std::fs::write(
+        &bad,
+        std::fs::read_to_string(&good)
+            .expect("read")
+            .replace(r#""primary_key": "id""#, r#""primary_key": "nope""#),
+    )
+    .expect("write");
+
+    let error = cratefield_cli::tables::diff_report(&good, &bad).expect_err("not legal");
+    assert!(error.contains("nope"), "{error}");
+    assert!(
+        error.contains("bad.json"),
+        "the message names which one: {error}"
+    );
 }
