@@ -133,6 +133,33 @@ apply`) loads that file into Postgres in lock order:
 The manifest must be exactly this venture's tables — another venture's
 export file is refused before anything touches the network.
 
+## `fz tables drift [--manifest venture.json] --dialect postgres --url <URL>`
+
+What the database differs from the manifest's `[tables]` declaration by,
+in the expand/contract/rewrite vocabulary `docs/ROLLBACK.md` §5 sets out.
+Read-only: it opens the database, reads its catalog and prints. There is
+no `--fix`, because what a drift costs is the author's decision and three
+of the four answers are not "apply this".
+
+**Exits non-zero when there is drift**, so a CI job asking "does this
+database still match the manifest?" has an answer it can branch on rather
+than a paragraph it has to read.
+
+Two things it is careful about, both of which would otherwise produce
+false reports:
+
+- A database holds tables the declaration never named — the module
+  crates own tables too — and those are not the declaration's to remove.
+- A catalog cannot see most of a declaration. `text`, `uuid`, `json`,
+  `enum` and `timestamp` are all `TEXT`; bounds, formats, enum members
+  and defaults are not recorded at all. The report ends with a line
+  naming exactly what was not compared, because "no drift" is an answer
+  about the things that *were*.
+
+Needs an `fz` built with the `postgres` feature, like `fz migrations
+apply`; a D1 database is read through wrangler rather than a connection
+string.
+
 ## `fz doctor [--out migrations] [--json]`
 
 Fails when:
