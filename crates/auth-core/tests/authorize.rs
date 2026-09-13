@@ -84,6 +84,67 @@ fn kit_with_methods(methods: Option<&str>) -> TestHarness {
     })
 }
 
+/// The kit with every method the chooser can offer, and the modules that
+/// serve them composed alongside. The providers are deliberately left
+/// without credentials: an unconfigured provider still has to serve its
+/// route, and this is about the route existing.
+fn kit_with_every_module() -> TestHarness {
+    let pairs = vec![
+        (
+            "AUTH_CORE_SIGNING_KEYS".to_owned(),
+            serde_json::to_string(&vec![dummy_key("k1")]).expect("keys json"),
+        ),
+        ("AUTH_CORE_SIGNING_KEY_ACTIVE".to_owned(), "k1".to_owned()),
+        ("AUTH_CORE_ISSUER".to_owned(), ISSUER.to_owned()),
+        (
+            "AUTH_CORE_LOGIN_METHODS".to_owned(),
+            "passkey,google,apple,meta,magic-link,password".to_owned(),
+        ),
+        (
+            "AUTH_MAGIC_LINK_PUBLIC_BASE".to_owned(),
+            "https://auth.test.example".to_owned(),
+        ),
+        (
+            "AUTH_MAGIC_LINK_MAIL_FROM".to_owned(),
+            "sign-in@test.example".to_owned(),
+        ),
+        (
+            "AUTH_OIDC_REDIRECT_BASE".to_owned(),
+            "https://auth.test.example".to_owned(),
+        ),
+        (
+            "AUTH_META_REDIRECT_BASE".to_owned(),
+            "https://auth.test.example".to_owned(),
+        ),
+    ];
+    let config = Arc::new(MapConfig::from_pairs(pairs));
+    TestHarness::with_ports(
+        vec![
+            Box::new(AuthCore::new()),
+            Box::new(factory0_auth_magic_link::MagicLink::new()),
+            Box::new(factory0_auth_password::Password::new()),
+            Box::new(factory0_auth_oidc::Oidc::new()),
+            Box::new(factory0_auth_meta::Meta::new()),
+        ],
+        move |ports| {
+            ports.config = config;
+        },
+    )
+}
+
+/// Every `href="…"` in a rendered page, in order.
+fn hrefs(page: &str) -> Vec<String> {
+    let mut found = Vec::new();
+    let mut rest = page;
+    while let Some(at) = rest.find("href=\"") {
+        let after = &rest[at + 6..];
+        let Some(end) = after.find('"') else { break };
+        found.push(after[..end].to_owned());
+        rest = &after[end + 1..];
+    }
+    found
+}
+
 async fn body_of(response: axum::response::Response) -> String {
     let bytes = axum::body::to_bytes(response.into_body(), 1024 * 1024)
         .await
@@ -577,4 +638,71 @@ async fn dump_the_chooser() {
     seed_client(&kit).await;
     let page = body_of(get(&kit, &authorize_uri(""), None).await).await;
     std::fs::write("/tmp/cf-chooser.html", page).expect("writes");
+}
+
+#[pollster::test]
+async fn every_button_on_the_chooser_goes_somewhere() {
+    // `CATALOGUE` holds a path per method, and a path is a promise about
+    // another crate's router. An unknown slug is a build failure, but a
+    // catalogue entry pointing at a path no module serves renders a button
+    // that 404s, and the person who finds out is the one who clicked it.
+    //
+    // Two entries are newer than anything that could have held that
+    // promise: `magic-link` and `password` each point at a `/start` the
+    // module had just grown.
+    let kit = kit_with_every_module();
+    seed_client(&kit).await;
+
+    let page = body_of(get(&kit, &authorize_uri(""), None).await).await;
+    let links = hrefs(&page);
+    assert!(
+        links.len() >= 5,
+        "the chooser rendered {} links — this test is checking nothing:\n{page}",
+        links.len()
+    );
+
+    for href in &links {
+        let status = get(&kit, href, None).await.status();
+        assert_ne!(
+            status,
+            StatusCode::NOT_FOUND,
+            "the chooser offers `{href}`, which no module serves"
+        );
+    }
+
+    // A provider with no credentials answers `503 provider-unconfigured`
+    // rather than 404, which is the distinction this test rests on: the
+    // route exists, this deployment has not configured it.
+    for expected in [
+        "/v1/auth-oidc/google/start",
+        "/v1/auth-magic-link/start",
+        "/v1/auth-password/start",
+    ] {
+        assert!(
+            links.iter().any(|href| href.starts_with(expected)),
+            "the {expected} button is gone: {links:?}"
+        );
+    }
+}
+
+#[pollster::test]
+async fn the_chooser_probe_can_tell_a_missing_route_from_a_present_one() {
+    // The test above passes on a clean catalogue and would also pass if
+    // the router answered everything. This is the same probe against a
+    // path that is certainly not mounted.
+    let kit = kit_with_every_module();
+    seed_client(&kit).await;
+    assert_eq!(
+        get(&kit, "/v1/auth-not-a-module/start", None)
+            .await
+            .status(),
+        StatusCode::NOT_FOUND,
+        "an unmounted path did not answer 404, so the probe proves nothing"
+    );
+    // And the extractor reads a real page rather than returning nothing.
+    assert_eq!(
+        hrefs("<a href=\"/one\">x</a><a class=\"m\" href=\"/two?a=b\">y</a>"),
+        ["/one", "/two?a=b"]
+    );
+    assert!(hrefs("<p>no links here</p>").is_empty());
 }
