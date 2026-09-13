@@ -34,6 +34,7 @@ pub mod lint;
 mod lock;
 pub mod push;
 pub mod sidecars;
+pub mod tables;
 pub mod workflow;
 
 use clap::{Parser, Subcommand};
@@ -147,6 +148,11 @@ enum Command {
     Data {
         #[command(subcommand)]
         command: DataCommand,
+    },
+    /// Declared tables (issue #153).
+    Tables {
+        #[command(subcommand)]
+        command: TablesCommand,
     },
     /// Describes what the manifest would change — modules added or
     /// removed, the capabilities they require, config changes and
@@ -394,6 +400,23 @@ enum DataCommand {
 }
 
 #[derive(Subcommand)]
+enum TablesCommand {
+    /// Reports what a database differs from the manifest's `[tables]`
+    /// declaration by, in expand/contract/rewrite terms. Read-only.
+    Drift {
+        /// The venture manifest (`.json` or `.toml`).
+        #[arg(long, default_value = "venture.json", value_name = "MANIFEST")]
+        manifest: PathBuf,
+        /// Target SQL dialect: postgres.
+        #[arg(long, default_value = "postgres")]
+        dialect: String,
+        /// Connection string of the database to read.
+        #[arg(long, value_name = "URL")]
+        url: String,
+    },
+}
+
+#[derive(Subcommand)]
 enum MigrationsCommand {
     /// Collects module migrations into wrangler-ordered files.
     Collect {
@@ -456,6 +479,14 @@ pub fn run(build: impl Fn() -> Harness, args: impl IntoIterator<Item = String>) 
     let harness = build();
     let sidecars = crate::sidecars::from_cli_or_env(cli.sidecars.as_deref());
     let result = match cli.command {
+        Command::Tables {
+            command:
+                TablesCommand::Drift {
+                    manifest,
+                    dialect,
+                    url,
+                },
+        } => tables::drift(&manifest, &dialect, &url),
         Command::Migrations {
             command: MigrationsCommand::Collect { dialect, out },
         } => collect::collect(&harness, &dialect, &out),

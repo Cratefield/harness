@@ -57,6 +57,9 @@ sha2 = { workspace = true }
 venture-fixture = { path = "fixture" }
 cratefield-adapter-sqlite = { workspace = true }
 serde_json = { workspace = true }
+# `tests/tables_drift.rs` builds a database from a declaration's own DDL,
+# so the report of anything at all is a false one (issue #153).
+cratefield-tables = { path = "../tables" }
 insta = { workspace = true }
 sea-query = { workspace = true }
 axum = { workspace = true }
