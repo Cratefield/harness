@@ -137,6 +137,15 @@ jobs:
         run: cargo test -p cratefield-cli --features push-send
       - name: fz migrations apply against the service container (issue #18)
         run: cargo test -p cratefield-cli-acceptance --features postgres
+      # `push` is off by default, and `tests/push_wiring.rs` is gated on it
+      # at file level — so the workspace run compiled all three of its
+      # tests away and they had never run here at all.
+      - name: Native push wiring, with the optional feature (issue #191)
+        run: cargo test -p cratefield-runtime-native --features push
+      # The facade is nothing but feature-gated re-exports, so a run with
+      # no features enabled builds almost none of it.
+      - name: The facade with every feature on (issue #16)
+        run: cargo test -p cratefield --all-features
       - name: Error taxonomy drift check (issue #14)
         run: cargo run -q -p cratefield-core --example errors-doc -- --check
       - name: Compatibility matrix drift check (issue #17)

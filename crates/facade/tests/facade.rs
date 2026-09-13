@@ -23,26 +23,90 @@ fn the_root_reexport_is_the_core_itself() {
 
 /// Each feature alias must name the crate the feature enables. Wiring one
 /// to the wrong crate is a copy-paste away and would compile.
+///
+/// This used to be four `#[cfg(feature = "…")]` functions whose types only
+/// line up if the alias is right. That shape has two problems, and the
+/// second one is why it is gone: it covered four of the twenty-four
+/// aliases, and with `default = []` — which is what `cargo test
+/// --workspace` builds — every one of the four compiled to nothing. The
+/// test had never checked an alias.
+///
+/// Reading the source instead covers all of them, and covers them with no
+/// features enabled, which is the configuration the test actually runs in.
 #[test]
-fn every_enabled_feature_aliases_its_own_crate() {
-    #[cfg(feature = "cloudflare")]
-    fn _cloudflare(
-        c: cratefield::cloudflare::Cloudflare,
-    ) -> cratefield_runtime_cloudflare::Cloudflare {
-        c
+fn every_feature_aliases_the_crate_it_enables() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let lib = std::fs::read_to_string(root.join("src/lib.rs")).expect("the facade's own source");
+    let manifest = std::fs::read_to_string(root.join("Cargo.toml")).expect("the facade's manifest");
+
+    // `#[cfg(feature = "x")]` immediately above `pub use <crate> as <alias>;`
+    let mut aliases: Vec<(String, String, String)> = Vec::new();
+    let lines: Vec<&str> = lib.lines().collect();
+    for (index, line) in lines.iter().enumerate() {
+        let Some(feature) = line
+            .split_once("cfg(feature = \"")
+            .and_then(|(_, rest)| rest.split_once('"'))
+            .map(|(name, _)| name.to_owned())
+        else {
+            continue;
+        };
+        let Some(next) = lines.get(index + 1) else {
+            continue;
+        };
+        let Some(rest) = next.trim().strip_prefix("pub use ") else {
+            continue;
+        };
+        let Some((krate, alias)) = rest.trim_end_matches(';').split_once(" as ") else {
+            continue;
+        };
+        aliases.push((feature, krate.trim().to_owned(), alias.trim().to_owned()));
     }
-    #[cfg(feature = "sqlite")]
-    fn _sqlite(d: cratefield::sqlite::SqliteDatabase) -> cratefield_adapter_sqlite::SqliteDatabase {
-        d
+
+    // The absences below would all hold over an empty list, and an empty
+    // list is exactly what a changed re-export style would produce.
+    assert!(
+        aliases.len() >= 20,
+        "only {} aliases found in the facade — the scan is reading nothing: {aliases:?}",
+        aliases.len()
+    );
+
+    for (feature, krate, alias) in &aliases {
+        // The alias is named after the feature, with the hyphen a Rust
+        // module name cannot have.
+        assert_eq!(
+            alias,
+            &feature.replace('-', "_"),
+            "feature `{feature}` is exposed as `{alias}`"
+        );
+        // And the feature enables exactly that crate. `notifications`
+        // enables a second feature as well, so this is a containment
+        // check rather than an equality one.
+        let declared = feature_line(&manifest, feature)
+            .unwrap_or_else(|| panic!("`{feature}` is aliased but not declared in [features]"));
+        let wanted = format!("dep:{}", krate.replace('_', "-"));
+        assert!(
+            declared.contains(&wanted),
+            "feature `{feature}` aliases `{krate}` but enables {declared}"
+        );
     }
-    #[cfg(feature = "waitlist")]
-    fn _waitlist(w: cratefield::waitlist::Waitlist) -> cratefield_module_waitlist::Waitlist {
-        w
-    }
-    #[cfg(feature = "ui")]
-    fn _ui(u: cratefield::ui::Ui) -> cratefield_ui::Ui {
-        u
-    }
+}
+
+/// The `[features]` entry for `name`, flattened onto one line — the
+/// declaration may wrap, as `push-wiring` does.
+fn feature_line(manifest: &str, name: &str) -> Option<String> {
+    let features = manifest.find("\n[features]")?;
+    let rest = &manifest[features..];
+    let end = rest[1..].find("\n[").map_or(rest.len(), |at| at + 1);
+    let section = &rest[..end];
+    let at = section.find(&format!("\n{name} ="))?;
+    let from = &section[at + 1..];
+    let close = from.find(']')?;
+    Some(
+        from[..=close]
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" "),
+    )
 }
 
 /// The drift this crate exists to cause, and therefore has to guard: a new
