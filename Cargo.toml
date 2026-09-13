@@ -332,6 +332,13 @@ unsafe_code = "forbid"
 # — and four that were internal all along. CI denies warnings, so this is
 # enforced there.
 unreachable_pub = "warn"
+# A type reachable through a public API but not nameable by the caller:
+# they can hold the value and cannot write its type. `core`'s `Slugs` and
+# `ui`'s `Option_` were both that, and both are exported now.
+unnameable_types = "warn"
+# A cast that does nothing. Zero today; it is here so the first one is
+# caught rather than read past.
+trivial_numeric_casts = "warn"
 
 [workspace.lints.clippy]
 all = "warn"
