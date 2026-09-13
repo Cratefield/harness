@@ -53,8 +53,17 @@
 
 #![forbid(unsafe_code)]
 
-// The whole crate is native-only (issue #18): fail a wasm build of this
-// crate fast, with a clear message, before sqlx is even attempted.
+// The whole crate is native-only (issue #18).
+//
+// **This message has never been printed, and cannot be.** A wasm build of
+// this crate dies in getrandom — "the wasm32/64-unknown-unknown are not
+// supported by default" — before this line is evaluated, because cargo
+// builds dependencies before the crate that declares them. The guard
+// stays because it states the rule where the rule belongs, but the check
+// that runs is `no_wasm_package_can_reach_a_native_only_crate` in
+// `crates/cli-acceptance/tests/native_only_off_wasm.rs`, which reads the
+// dependency graph rather than compiling it — and which finds this crate
+// *by* the guard below, so deleting it turns that check off.
 #[cfg(any(target_arch = "wasm32", target_arch = "wasm64"))]
 compile_error!(
     "cratefield-adapter-postgres is native-only: the sqlx Postgres driver does not \

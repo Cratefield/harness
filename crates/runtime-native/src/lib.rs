@@ -60,11 +60,20 @@
 #![doc = include_str!("../README.md")]
 #![forbid(unsafe_code)]
 
-// The whole crate is native-only (issue #19): fail a wasm build of this
-// crate fast, with a clear message, before tokio/reqwest/redis are even
-// attempted. Modules see ports, never runtimes, so no wasm graph can
-// reach this crate through a module — the gate exists for the venture
-// that wires the wrong runtime into a Worker.
+// The whole crate is native-only (issue #19). Modules see ports, never
+// runtimes, so no wasm graph reaches this crate through a module; the
+// hazard is a venture that wires the wrong runtime into a Worker.
+//
+// **This message has never been printed, and cannot be.** Cargo builds a
+// crate's dependencies before the crate itself, so a wasm build of this
+// one dies in mio — "This wasm target is unsupported by mio" — long
+// before this line is evaluated. A `build.rs` does not rescue it either;
+// cargo aborts on the dependency failure first. The guard stays because
+// it documents the rule at the place the rule is about, but the check
+// that actually runs is `no_wasm_package_can_reach_a_native_only_crate`
+// in `crates/cli-acceptance/tests/native_only_off_wasm.rs`, which reads
+// the dependency graph instead of compiling it — and which finds this
+// crate *by* the guard below, so deleting it turns that check off.
 #[cfg(any(target_arch = "wasm32", target_arch = "wasm64"))]
 compile_error!(
     "cratefield-runtime-native is native-only: tokio, reqwest and redis do not \
