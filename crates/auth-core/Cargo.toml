@@ -45,6 +45,16 @@ thiserror = { workspace = true }
 # would prove none of it. Path-only, so it is stripped from the packaged
 # manifest rather than resolved from crates.io.
 cratefield-module-privacy = { path = "../module-privacy" }
+# Same reason, for `tests/chooser_links.rs`: the login chooser's catalogue
+# holds a path per method, and a path is a promise about another crate's
+# router. Asserting the catalogue against itself would prove none of it.
+# Path-only, so they are stripped from the packaged manifest. A dev-only
+# cycle back to this crate is fine — cargo resolves dev-dependencies
+# separately from the library graph.
+factory0-auth-magic-link = { path = "../auth-magic-link" }
+factory0-auth-password = { path = "../auth-password" }
+factory0-auth-oidc = { path = "../auth-oidc" }
+factory0-auth-meta = { path = "../auth-meta" }
 cratefield-testing = { workspace = true }
 cratefield-adapter-sqlite = { workspace = true }
 pollster = { workspace = true }
