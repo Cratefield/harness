@@ -26,7 +26,7 @@ consistently from here:
 So a venture is one database on day one and can become many. Pricing says the same thing:
 $19 per venture includes the primary database up to the D1 cap. How additional tenant
 databases are metered is an open decision for Nick, and no number is invented here. It sits
-under billing in H1 and under "Tenants as a product" in H3. Once settled, `docs/PRICING.md`
+under billing in H1 and under "Tenants as a product" in H3. Once settled, `docs/control-plane/PRICING.md`
 and the site's /pricing/ page change together.
 
 ## Positioning
@@ -519,7 +519,7 @@ are carried by A1 and A6 alongside the labels listed below.
 - **Body:** Let a paying customer put a venture on their own domain using Cloudflare for
   SaaS custom hostnames: add the hostname, show the DNS record to create, verify it, issue
   the certificate, and show the status while it settles. The free tier stays on a
-  `you.cratefield.app` subdomain, as `docs/PRICING.md` sets out, since custom hostnames
+  `you.cratefield.app` subdomain, as `docs/control-plane/PRICING.md` sets out, since custom hostnames
   carry a per-hostname cost. Deferring this blocks anyone who wants a branded backend, which
   is most of the agency audience.
 
@@ -556,7 +556,7 @@ are carried by A1 and A6 alongside the labels listed below.
   spam incident damages deliverability for every venture on the platform. Give a paying
   venture its own sending domain or a subdomain of ours, with the DNS records to create and
   verification surfaced the same way custom hostnames are. Keep a low shared-domain cap for
-  the free tier, as `docs/PRICING.md` already proposes, and add platform-level controls that
+  the free tier, as `docs/control-plane/PRICING.md` already proposes, and add platform-level controls that
   do not depend on the customer: per-venture send rate limits, a bounce and complaint
   threshold that suspends sending, and an alert when either moves. Deliverability is shared
   across all ventures on a shared domain, which is why this is platform work and not a
