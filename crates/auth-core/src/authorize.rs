@@ -125,6 +125,15 @@ const CATALOGUE: &[(&str, &str, &str, MethodKind)] = &[
         "/v1/auth-magic-link/start",
         MethodKind::Redirect,
     ),
+    // Same shape and the same reason: two fields have to be typed, and a
+    // wrong password has to be answerable on the page it was typed into,
+    // so `auth-password` serves its own form and the chooser links to it.
+    (
+        "password",
+        "Sign in with a password",
+        "/v1/auth-password/start",
+        MethodKind::Redirect,
+    ),
 ];
 
 /// The slugs `AUTH_CORE_LOGIN_METHODS` accepts.

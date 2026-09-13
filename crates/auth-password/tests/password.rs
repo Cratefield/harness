@@ -846,3 +846,197 @@ fn no_event_this_module_emits_carries_an_address() {
         }
     });
 }
+
+const START: &str = "/v1/auth-password/start";
+
+async fn drive(kit: &Kit, request: Request<axum::body::Body>) -> Res {
+    let response = kit
+        .harness
+        .router
+        .clone()
+        .oneshot(request)
+        .await
+        .expect("router answers");
+    let (parts, body) = response.into_parts();
+    let body = axum::body::to_bytes(body, 1024 * 1024)
+        .await
+        .expect("body reads");
+    Res {
+        status: parts.status,
+        headers: parts.headers,
+        body: body.to_vec(),
+    }
+}
+
+async fn get_page(kit: &Kit, uri: &str) -> Res {
+    let request = Request::builder()
+        .method(Method::GET)
+        .uri(uri)
+        .body(axum::body::Body::empty())
+        .expect("request");
+    drive(kit, request).await
+}
+
+async fn post_form(kit: &Kit, uri: &str, body: &str) -> Res {
+    let request = Request::builder()
+        .method(Method::POST)
+        .uri(uri)
+        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .body(axum::body::Body::from(body.to_owned()))
+        .expect("request");
+    drive(kit, request).await
+}
+
+#[test]
+fn the_form_needs_no_script_and_asks_for_both_fields() {
+    pollster::block_on(async {
+        let kit = kit();
+        let form = get_page(&kit, START).await;
+        assert_eq!(form.status, StatusCode::OK);
+        let html = form.text();
+        assert!(html.contains("<form method=\"post\""), "{html}");
+        assert!(html.contains("name=\"email\""), "{html}");
+        assert!(html.contains("type=\"password\""), "{html}");
+        assert!(
+            !html.contains("<script"),
+            "the form needs no script: {html}"
+        );
+        // A password manager fills a form it can read: the pair of
+        // autocomplete tokens is what tells it which field is which.
+        assert!(html.contains("autocomplete=\"username\""), "{html}");
+        assert!(html.contains("autocomplete=\"current-password\""), "{html}");
+    });
+}
+
+#[test]
+fn the_form_signs_in_and_lands_where_it_was_told() {
+    pollster::block_on(async {
+        let kit = kit();
+        register(&kit, "ada@example.com", GOOD).await;
+
+        let answer = post_form(
+            &kit,
+            START,
+            "email=ada%40example.com&password=a+long+enough+password&return_to=%2Fwelcome",
+        )
+        .await;
+        assert_eq!(answer.status, StatusCode::SEE_OTHER, "{}", answer.text());
+        assert_eq!(
+            answer
+                .headers
+                .get(header::LOCATION)
+                .and_then(|v| v.to_str().ok()),
+            Some("/welcome")
+        );
+        assert!(
+            answer.cookie("__Host-fz_session").is_some(),
+            "the redirect carries no session"
+        );
+    });
+}
+
+#[test]
+fn the_page_separates_none_of_the_things_the_json_route_refuses_alike() {
+    pollster::block_on(async {
+        // The whole security property of a password endpoint. If the page
+        // ever answered a wrong password differently from an unknown
+        // address, this is what would say so.
+        let kit = kit();
+        register(&kit, "ada@example.com", GOOD).await;
+
+        let wrong_password = post_form(
+            &kit,
+            START,
+            "email=ada%40example.com&password=not+the+right+password",
+        )
+        .await;
+        let unknown = post_form(
+            &kit,
+            START,
+            "email=nobody%40example.com&password=a+long+enough+password",
+        )
+        .await;
+        let not_an_address = post_form(&kit, START, "email=bananas&password=whatever+at+all").await;
+
+        assert_eq!(wrong_password.status, StatusCode::UNAUTHORIZED);
+        assert_eq!(unknown.status, wrong_password.status);
+        assert_eq!(not_an_address.status, wrong_password.status);
+        assert_eq!(unknown.body, wrong_password.body, "the pages differ");
+        assert_eq!(not_an_address.body, wrong_password.body, "the pages differ");
+        assert!(
+            wrong_password.text().contains("do not match"),
+            "{}",
+            wrong_password.text()
+        );
+        // And no refusal hands out a session.
+        for answer in [&wrong_password, &unknown, &not_an_address] {
+            assert!(answer.cookie("__Host-fz_session").is_none());
+        }
+    });
+}
+
+#[test]
+fn the_page_and_the_json_route_share_one_lockout() {
+    pollster::block_on(async {
+        // Two entry points, one credential row. Failures from the form
+        // have to count towards the same lock, or the form is a way round
+        // it.
+        let kit = kit();
+        register(&kit, "ada@example.com", GOOD).await;
+
+        // Ten is the default threshold, the number the JSON-route lockout
+        // test uses.
+        for _ in 0..10 {
+            post_form(
+                &kit,
+                START,
+                "email=ada%40example.com&password=wrong+wrong+wrong",
+            )
+            .await;
+        }
+        // The right password, through the JSON route, against a lock the
+        // form caused.
+        let after = post(
+            &kit,
+            LOGIN,
+            json!({ "email": "ada@example.com", "password": GOOD }),
+            None,
+        )
+        .await;
+        assert_eq!(
+            after.status,
+            StatusCode::UNAUTHORIZED,
+            "the form's failures did not reach the lockout: {}",
+            after.text()
+        );
+    });
+}
+
+#[test]
+fn a_return_to_cannot_break_out_of_the_hidden_field_or_leave_the_service() {
+    pollster::block_on(async {
+        let kit = kit();
+        let encoded = "%2Fok%22%3E%3Cscript%3Ealert(1)%3C%2Fscript%3E";
+        let page = get_page(&kit, &format!("{START}?return_to={encoded}")).await;
+        assert!(!page.text().contains("<script>alert"), "{}", page.text());
+
+        // And an absolute one never becomes a Location, which would be an
+        // open redirect carrying a fresh session cookie.
+        register(&kit, "ada@example.com", GOOD).await;
+        let answer = post_form(
+            &kit,
+            START,
+            "email=ada%40example.com&password=a+long+enough+password&return_to=https%3A%2F%2Fevil.example",
+        )
+        .await;
+        assert_eq!(answer.status, StatusCode::SEE_OTHER);
+        assert_eq!(
+            answer
+                .headers
+                .get(header::LOCATION)
+                .and_then(|v| v.to_str().ok()),
+            Some("/"),
+            "an absolute return_to was followed"
+        );
+    });
+}

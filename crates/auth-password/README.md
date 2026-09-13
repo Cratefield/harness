@@ -21,7 +21,36 @@ than not having them.
 |---|---|
 | `POST /register` | `{ email, password }`. Always `202`, always the same body |
 | `POST /login` | `{ email, password }`. A session cookie, or one refusal |
+| `GET /start?return_to=/path` | The form, for the login chooser |
+| `POST /start` | The form's own target. Same decision as `/login`, answered with a page |
 | `POST /change` | `{ current_password, new_password }`, for a signed-in person |
+
+### Why this method is a page
+
+The login chooser at `/v1/auth-core/authorize` renders a link, which is
+how every provider method works, or a button that starts a WebAuthn
+ceremony in script, which is how passkeys work. This method is neither:
+two fields have to be typed, and a wrong password has to be answerable on
+the page it was typed into. So the module serves its own form at `/start`
+and the chooser links to it, the same shape `auth-magic-link` uses.
+
+`POST /start` and `POST /login` both go through one `sign_in`, so the page
+cannot grow a second set of rules about who may sign in. In particular the
+failure counter is one credential row: ten wrong passwords typed into the
+form lock the account against the JSON route too, which
+`the_page_and_the_json_route_share_one_lockout` is there to hold.
+
+A success is `303` to `return_to` with the session cookie attached,
+because a browser that has just posted a password should land somewhere
+rather than read JSON. `return_to` is checked before it becomes a
+`Location` — an absolute URL there would be an open redirect handing a
+fresh session cookie to whoever asked — and escaped before it goes back
+into the form's hidden field.
+
+Plain HTML, no script. The `autocomplete` pair (`username` and
+`current-password`) is what lets a password manager fill it.
+
+Enable it with `password` in `AUTH_CORE_LOGIN_METHODS`.
 
 ## Configuration
 
@@ -123,7 +152,10 @@ rehashing on the strength of an unreadable value would be guessing.
   that. The linking rules only auto-link a verified address, so registering
   must not be a way to claim one.
 - **No account recovery.** Somebody who forgets their password has no way
-  back in through this module; that is the magic link's job.
+  back in through this module; that is the magic link's job. The form at
+  `/start` does not link to it either: this module cannot know whether
+  `auth-magic-link` is mounted, and a "forgot your password?" link to a
+  404 is worse than none.
 - The `auth-password.duplicate_registration` event says a mail should be
   sent. **Nothing sends it yet** — no mail module subscribes, so today the
   owner of an already-registered address is told nothing at all.
