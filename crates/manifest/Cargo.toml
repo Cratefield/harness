@@ -19,6 +19,10 @@ workspace = true
 # (`fz build`) and, later, the wasm compose engine both link it, so it must
 # stay wasm-clean. TOML parsing lives in the CLI, not here.
 [dependencies]
+# The [tables] declaration a manifest carries (issue #153). No I/O and
+# no driver in that crate either, so the manifest stays serde-only and
+# wasm-clean.
+cratefield-tables = { path = "../tables" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }

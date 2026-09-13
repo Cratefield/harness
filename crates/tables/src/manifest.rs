@@ -314,3 +314,135 @@ impl<'de> Deserialize<'de> for Schema {
         Ok(Schema { tables })
     }
 }
+
+// ---------------------------------------------------------------------------
+// Serialization: the same wire shape, the other way round
+// ---------------------------------------------------------------------------
+//
+// A declaration format that can only be read is half a format. The
+// manifest a control plane writes back out has to round-trip, and the two
+// directions drifting apart is the failure this crate exists to prevent
+// — so these mirror the deserializers above key for key, and
+// `every_shape_the_corpus_declares_round_trips` is what holds them
+// together rather than a promise that they match.
+//
+// Written by hand rather than derived for the same reason the readers
+// are: the wire shape is flat, a field's attributes belong to its kind,
+// and `serde`'s derive has no way to say that.
+
+use serde::Serialize;
+use serde::ser::SerializeMap as _;
+
+impl Serialize for TextFormat {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(match self {
+            TextFormat::Email => "email",
+            TextFormat::Url => "url",
+        })
+    }
+}
+
+impl Serialize for FieldDef {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let mut map = serializer.serialize_map(None)?;
+        map.serialize_entry("name", &self.name)?;
+        map.serialize_entry("kind", self.kind.as_str())?;
+        // Only the attributes the declared kind accepts, because the
+        // reader refuses any other — emitting one would produce a
+        // document this crate could not read back.
+        match &self.kind {
+            FieldKind::Text {
+                min_len,
+                max_len,
+                format,
+            } => {
+                if let Some(min) = min_len {
+                    map.serialize_entry("min_len", min)?;
+                }
+                if let Some(max) = max_len {
+                    map.serialize_entry("max_len", max)?;
+                }
+                if let Some(format) = format {
+                    map.serialize_entry("format", format)?;
+                }
+            }
+            FieldKind::Integer { min, max } => {
+                if let Some(min) = min {
+                    map.serialize_entry("min", min)?;
+                }
+                if let Some(max) = max {
+                    map.serialize_entry("max", max)?;
+                }
+            }
+            FieldKind::Real { min, max } => {
+                if let Some(min) = min {
+                    map.serialize_entry("min", min)?;
+                }
+                if let Some(max) = max {
+                    map.serialize_entry("max", max)?;
+                }
+            }
+            FieldKind::Enum { values } => map.serialize_entry("values", values)?,
+            FieldKind::Boolean | FieldKind::Timestamp | FieldKind::Uuid | FieldKind::Json => {}
+        }
+        // The three flags default to `false` on the way in, so writing
+        // them only when set keeps a round trip byte-identical for the
+        // common field rather than growing three keys per column.
+        if self.required {
+            map.serialize_entry("required", &true)?;
+        }
+        if self.unique {
+            map.serialize_entry("unique", &true)?;
+        }
+        if self.indexed {
+            map.serialize_entry("indexed", &true)?;
+        }
+        if let Some(default) = &self.default {
+            map.serialize_entry("default", default)?;
+        }
+        map.end()
+    }
+}
+
+impl Serialize for ForeignKey {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let mut map = serializer.serialize_map(Some(2))?;
+        map.serialize_entry("field", &self.field)?;
+        map.serialize_entry("references", &self.references)?;
+        map.end()
+    }
+}
+
+impl Serialize for TableDef {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let mut map = serializer.serialize_map(None)?;
+        // A table serialized on its own needs its name; under a `[tables]`
+        // map the key carries it and the reader accepts an inner one that
+        // agrees. Writing it always is the form that reads back both ways.
+        map.serialize_entry("name", &self.name)?;
+        // The reader accepts a string or a list and normalises to a list;
+        // a single-column key goes back out as a string, which is the
+        // form every declaration in the tree actually uses.
+        match self.primary_key.as_slice() {
+            [one] => map.serialize_entry("primary_key", one)?,
+            many => map.serialize_entry("primary_key", many)?,
+        }
+        map.serialize_entry("fields", &self.fields)?;
+        if !self.foreign_keys.is_empty() {
+            map.serialize_entry("foreign_keys", &self.foreign_keys)?;
+        }
+        map.end()
+    }
+}
+
+impl Serialize for Schema {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        // Keyed by table name, the shape the reader takes. `Schema::new`
+        // sorts by name, so this is already in order.
+        let mut map = serializer.serialize_map(Some(self.tables.len()))?;
+        for table in &self.tables {
+            map.serialize_entry(&table.name, table)?;
+        }
+        map.end()
+    }
+}

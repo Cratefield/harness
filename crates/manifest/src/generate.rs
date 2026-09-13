@@ -117,11 +117,27 @@ pub enum GenerateError {
     /// A resolved module has no codegen entry (in the catalog but the
     /// generator has not been taught to compose it).
     NotGeneratable(String),
+    /// The manifest declares its own tables (issue #153) and the
+    /// generator cannot yet produce them.
+    ///
+    /// A refusal rather than a warning, because the alternative is a
+    /// venture that builds, deploys and answers requests while the tables
+    /// its author declared do not exist — a failure that surfaces as a
+    /// missing-table error from a handler, a long way from the manifest
+    /// that caused it.
+    TablesNotGenerated(usize),
 }
 
 impl std::fmt::Display for GenerateError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            GenerateError::TablesNotGenerated(count) => write!(
+                f,
+                "the manifest declares {count} table(s) of its own, and the composition \
+                 generator cannot create them yet (harness #153: the CRUD layer and the \
+                 migration it would emit are not built). Remove the [tables] section, or \
+                 declare the tables in a module until it is."
+            ),
             GenerateError::NotGeneratable(slug) => write!(
                 f,
                 "module `{slug}` resolves but the composition generator does not know how to \
@@ -144,6 +160,13 @@ pub fn generate(
     module_set: &ModuleSet,
     source: &HarnessSource,
 ) -> Result<GeneratedVenture, GenerateError> {
+    // Before anything is rendered: a declaration the generator cannot
+    // honour must not produce a venture that looks complete.
+    if !manifest.tables.is_empty() {
+        return Err(GenerateError::TablesNotGenerated(
+            manifest.tables.tables.len(),
+        ));
+    }
     let modules: Vec<&'static ModuleCodegen> = module_set
         .slugs()
         .iter()

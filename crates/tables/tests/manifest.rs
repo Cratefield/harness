@@ -353,3 +353,96 @@ fn the_same_shape_parses_from_json_and_from_toml() {
     .expect("json parses");
     assert_eq!(from_toml, from_json);
 }
+
+#[test]
+fn every_shape_the_corpus_declares_round_trips() {
+    // The two directions drifting apart is the failure this crate exists
+    // to prevent, and a promise that the writers mirror the readers is
+    // not a check. The corpus's own `tables` section is the widest set of
+    // declarations in the repository — every kind, bounds, formats, enum
+    // members, defaults, flags — so it is what the round trip runs over.
+    const CORPUS: &str = include_str!("../corpus/rows.json");
+    let corpus: serde_json::Value = serde_json::from_str(CORPUS).expect("the corpus is JSON");
+    let declared = corpus.get("tables").expect("the corpus declares tables");
+
+    let schema: Schema = serde_json::from_value(declared.clone()).expect("reads");
+    assert!(
+        schema.tables.len() >= 4,
+        "only {} tables — the round trip is checking almost nothing",
+        schema.tables.len()
+    );
+
+    let written = serde_json::to_value(&schema).expect("writes");
+    let again: Schema = serde_json::from_value(written.clone()).expect("reads what it wrote");
+    assert_eq!(schema, again, "a schema changed by being written out");
+
+    // And again, to catch a writer that is merely *stable* rather than
+    // faithful — a second pass over its own output would still match.
+    let twice = serde_json::to_value(&again).expect("writes");
+    assert_eq!(written, twice);
+}
+
+#[test]
+fn a_written_declaration_is_one_the_reader_accepts() {
+    // The reader refuses an attribute that does not belong to the
+    // declared kind. A writer that emitted `max_len` on a `boolean` would
+    // produce a document this crate cannot read, so the round trip above
+    // is the guard — this is the case that would break it first.
+    let schema = parse(
+        r#"
+[tables.thing]
+primary_key = "id"
+
+[[tables.thing.fields]]
+name = "id"
+kind = "uuid"
+required = true
+
+[[tables.thing.fields]]
+name = "live"
+kind = "boolean"
+
+[[tables.thing.fields]]
+name = "ratio"
+kind = "real"
+min = 0.0
+max = 1.0
+
+[[tables.thing.fields]]
+name = "slug"
+kind = "text"
+unique = true
+max_len = 64
+
+[[tables.thing.fields]]
+name = "state"
+kind = "enum"
+values = ["on", "off"]
+default = "off"
+indexed = true
+"#,
+    )
+    .expect("parses");
+    let written = serde_json::to_string(&schema).expect("writes");
+    // The property, stated about the field it is about: a boolean accepts
+    // no attributes, so its entry is exactly `name` and `kind`. Asserting
+    // `max_len` appears nowhere in the document was the first version of
+    // this and was wrong the moment a text field carried one.
+    let document: serde_json::Value = serde_json::from_str(&written).expect("valid json");
+    let live = document["thing"]["fields"]
+        .as_array()
+        .expect("fields")
+        .iter()
+        .find(|field| field["name"] == "live")
+        .expect("the boolean field");
+    assert_eq!(
+        live.as_object()
+            .expect("an object")
+            .keys()
+            .collect::<Vec<_>>(),
+        ["name", "kind"],
+        "a boolean was written with attributes its reader refuses: {live}"
+    );
+    let again: Schema = serde_json::from_str(&written).expect("reads what it wrote");
+    assert_eq!(schema, again);
+}

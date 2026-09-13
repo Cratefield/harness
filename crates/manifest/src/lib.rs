@@ -30,6 +30,9 @@ pub use catalog::{
 };
 pub use generate::{GeneratedFile, GeneratedVenture, HarnessSource, generate};
 pub use manifest::{ManifestError, ModuleRef, VentureManifest};
+// Re-exported so a caller building a `VentureManifest` can name the type
+// of its `tables` field without adding a dependency of its own.
+pub use cratefield_tables::Schema;
 pub use provenance::{
     BuildEnvViolation, BuildEnvironmentAttestation, PROVENANCE_SCHEMA, Provenance, ProvenanceError,
     ProvenanceFile, ResourceLimits, file_digest, is_placeholder_digest,
@@ -48,6 +51,76 @@ mod tests {
             "config": { "brand": "Acme" },
             "seed_sql": "INSERT INTO waitlist_product (slug) VALUES ('launch');"
         }"#
+    }
+
+    /// A manifest declaring tables of its own (issue #153).
+    fn with_tables() -> &'static str {
+        r#"{
+            "name": "acme-signups",
+            "host": "acme.factory0.dev",
+            "modules": ["waitlist"],
+            "tables": {
+                "note": {
+                    "primary_key": "id",
+                    "fields": [
+                        { "name": "id", "kind": "uuid", "required": true },
+                        { "name": "body", "kind": "text", "max_len": 400 }
+                    ]
+                }
+            }
+        }"#
+    }
+
+    #[test]
+    fn a_manifest_without_tables_still_reads_and_writes_unchanged() {
+        // The common case, and the one a new field breaks first: nothing
+        // in the document mentions tables, and nothing in the output does
+        // either.
+        let manifest = VentureManifest::from_json_str(sample_json()).expect("parses");
+        assert!(manifest.tables.is_empty());
+        manifest.validate().expect("valid");
+        let written = serde_json::to_string(&manifest).expect("writes");
+        assert!(!written.contains("tables"), "{written}");
+    }
+
+    #[test]
+    fn a_declared_table_is_carried_and_checked() {
+        let manifest = VentureManifest::from_json_str(with_tables()).expect("parses");
+        manifest.validate().expect("valid");
+        assert_eq!(manifest.tables.tables.len(), 1);
+        assert_eq!(manifest.tables.tables[0].name, "note");
+        // And back out again: a manifest a control plane writes has to be
+        // one it can read.
+        let written = serde_json::to_string(&manifest).expect("writes");
+        let again = VentureManifest::from_json_str(&written).expect("reads what it wrote");
+        assert_eq!(manifest, again);
+    }
+
+    #[test]
+    fn a_declaration_that_is_not_legal_fails_the_manifest_not_something_later() {
+        // The primary key names no declared field. Reported here, beside
+        // the manifest's own problems, rather than by whatever layer
+        // would have met it next.
+        let broken = with_tables().replace(r#""primary_key": "id""#, r#""primary_key": "nope""#);
+        let manifest = VentureManifest::from_json_str(&broken).expect("parses");
+        let error = manifest.validate().expect_err("not legal");
+        let text = error.to_string();
+        assert!(text.contains("[tables]"), "{text}");
+        assert!(text.contains("nope"), "{text}");
+    }
+
+    #[test]
+    fn generation_refuses_a_declaration_it_cannot_honour() {
+        // The alternative is a venture that builds, deploys and answers
+        // requests while the tables its author declared do not exist.
+        let manifest = VentureManifest::from_json_str(with_tables()).expect("parses");
+        let catalog = catalog::builtin();
+        let set = manifest.resolve(&catalog).expect("resolves");
+        let error = generate::generate(&manifest, &set, &generate::HarnessSource::default())
+            .expect_err("must refuse");
+        let text = error.to_string();
+        assert!(text.contains("cannot create them"), "{text}");
+        assert!(text.contains("#153"), "{text}");
     }
 
     #[test]
