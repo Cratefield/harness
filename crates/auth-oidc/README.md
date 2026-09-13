@@ -157,11 +157,11 @@ does not exist yet; the callback says so plainly rather than guessing.
 
 - The chooser at `/v1/auth-core/authorize` offers Google and Apple —
   `AUTH_CORE_LOGIN_METHODS=google,apple` — so this module is reachable
-  from it. What is still unwired are the two methods that need a **form**
-  rather than a link or a script ceremony: `auth-magic-link` and
-  `auth-password` are in no catalogue entry, because the chooser can
-  render a redirect link and a passkey button and nothing else. That is a
-  decision about what the sign-in page looks like, not a missing wire.
+  from it. `auth-magic-link` joined them by serving its own form at
+  `/v1/auth-magic-link/start` and being linked to like a provider, so the
+  chooser needed no new method kind. `auth-password` is the one still
+  unwired: it needs two fields rather than one, and a wrong password has
+  to be answerable on the page it was typed into.
 - No manual run against real Google or real Apple yet. Everything here is
   exercised against a fake provider that mints real RS256 ID tokens and
   serves each provider's own discovery shape, which covers the verification
