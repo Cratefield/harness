@@ -42,7 +42,21 @@ pub enum Access {
     /// the caller against, which is why declaring `owner` on one is a
     /// manifest error rather than a runtime surprise.
     Owner,
-    /// Any signed-in member of the tenant reads and writes every row.
+    /// Any caller the deployment's verifier accepts reads and writes
+    /// every row.
+    ///
+    /// Named for what it is *for* and not for what it checks, and the
+    /// difference matters: the harness has no membership fact. A
+    /// `Subject` is an id, a session and an address, and `Ports::tenants`
+    /// is deliberately invisible to a module, so nothing in the decision
+    /// can ask which tenant a caller belongs to.
+    ///
+    /// On a deployment without a tenant registry — every venture `fz
+    /// build` generates — the two are the same set: there is one tenant,
+    /// so every subject the verifier accepts is a member of it. On a
+    /// deployment with a registry they are not, and a subject of one
+    /// tenant reaches another's rows by sending the same credential to
+    /// its host. Issue #385 carries the analysis and the options.
     TenantMembers,
     /// Only an admin token, the same one `require_admin` checks.
     Admin,
