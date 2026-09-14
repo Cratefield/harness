@@ -168,6 +168,10 @@ fn delivers_and_sends_the_rfc8030_request() {
     let http = ScriptedHttp::new();
     let push = adapter(&http, &StepClock::at(1_700_000_000));
 
+    // What the notification is before encryption, for the two assertions
+    // below: that it does not appear on the wire, and that the record is
+    // exactly its length plus the header and the tag.
+    const PLAINTEXT: &[u8] = b"{\"title\":\"Hi\",\"body\":\"there\",\"silent\":false}";
     let outcome = pollster::block_on(push.send(&subscriber(), &Notification::new("Hi", "there")))
         .expect("delivered");
     assert_eq!(
@@ -203,7 +207,6 @@ fn delivers_and_sends_the_rfc8030_request() {
         // Looking for the plaintext anywhere in the body is both
         // deterministic and the property actually wanted, which is that
         // nothing readable reaches the wire.
-        const PLAINTEXT: &[u8] = b"{\"title\":\"Hi\",\"body\":\"there\",\"silent\":false}";
         assert!(
             !seen
                 .body
