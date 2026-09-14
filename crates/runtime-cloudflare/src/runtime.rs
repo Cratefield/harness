@@ -5,8 +5,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use cratefield_core::{
-    BoundedHttpClient, Captcha, Clock, Defer, HarnessConfig, Mailer, Payments, Port, Ports, Push,
-    Runtime, SidecarMounts, UlidIdGen,
+    Auth, BoundedHttpClient, Captcha, Clock, Defer, HarnessConfig, Mailer, Payments, Port, Ports,
+    Push, Runtime, SidecarMounts, UlidIdGen,
 };
 use worker::Env;
 
@@ -69,6 +69,7 @@ pub struct Cloudflare {
     push: Option<Arc<dyn Push>>,
     payments: Option<Arc<dyn Payments>>,
     captcha: Option<Arc<dyn Captcha>>,
+    auth: Option<Arc<dyn Auth>>,
     /// Whether to assemble the `Push` port from the environment
     /// (issue #191). The `Env` only exists per event, so the assembly is
     /// deferred to `ports()` and memoised for the isolate.
@@ -98,6 +99,7 @@ impl Cloudflare {
             push: None,
             payments: None,
             captcha: None,
+            auth: None,
             #[cfg(feature = "push")]
             push_from_env: false,
             #[cfg(feature = "push")]
@@ -250,6 +252,23 @@ impl Cloudflare {
         self
     }
 
+    /// Wires who a request's credentials speak for (issue #153).
+    ///
+    /// Without one the deployment cannot identify a caller, and a module
+    /// that declares [`Port::Auth`] is refused composition rather than
+    /// mounted and left guessing.
+    #[must_use]
+    pub fn auth(mut self, auth: impl Auth + 'static) -> Self {
+        self.auth = Some(Arc::new(auth));
+        self
+    }
+
+    #[must_use]
+    pub fn auth_arc(mut self, auth: Arc<dyn Auth>) -> Self {
+        self.auth = Some(auth);
+        self
+    }
+
     #[must_use]
     pub fn captcha_arc(mut self, captcha: Arc<dyn Captcha>) -> Self {
         self.captcha = Some(captcha);
@@ -356,6 +375,7 @@ impl Cloudflare {
         ports.push.clone_from(&self.push);
         ports.payments.clone_from(&self.payments);
         ports.captcha.clone_from(&self.captcha);
+        ports.auth.clone_from(&self.auth);
 
         // An explicit adapter wins; otherwise assemble one from the
         // environment when the venture asked for it (issue #191).
@@ -417,6 +437,9 @@ impl Runtime for Cloudflare {
         }
         if self.payments.is_some() {
             provided.push(Port::Payments);
+        }
+        if self.auth.is_some() {
+            provided.push(Port::Auth);
         }
         if self.captcha.is_some() {
             provided.push(Port::Captcha);

@@ -971,3 +971,89 @@ impl cratefield_core::Realtime for FakeRealtime {
             .unwrap_or_default())
     }
 }
+
+/// What a [`FakeAuth`] answers.
+///
+/// Every outcome the port has, because a fake that cannot produce one
+/// makes the arm handling it unreachable from every test — which is how
+/// a five-arm mapping shipped with four of the arms never executed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AuthMode {
+    /// Every request is anonymous, header or not. The deployment where
+    /// nobody signs in.
+    Anonymous,
+    /// A bearer token is taken at face value as the subject's id, and a
+    /// request with no `Authorization` header is anonymous. The mode for
+    /// a test that wants both branches without minting a JWT.
+    TokenIsTheSubject,
+    /// Every presented credential is refused, and a request with no
+    /// header is still anonymous — the distinction the port exists to
+    /// keep.
+    NotVerified,
+    /// The verifier cannot answer, credential or not.
+    Unavailable,
+}
+
+/// A [`cratefield_core::Auth`] answering from a mode rather than from
+/// a key set.
+pub struct FakeAuth {
+    mode: AuthMode,
+    calls: std::sync::Mutex<Vec<String>>,
+}
+
+impl FakeAuth {
+    /// A fake in `mode`.
+    #[must_use]
+    pub fn new(mode: AuthMode) -> Self {
+        Self {
+            mode,
+            calls: std::sync::Mutex::new(Vec::new()),
+        }
+    }
+
+    /// A fake that reads the bearer token as the subject's id.
+    #[must_use]
+    pub fn subjects() -> Self {
+        Self::new(AuthMode::TokenIsTheSubject)
+    }
+
+    /// The bearer values it was asked about, in order. `""` records a
+    /// request that carried no `Authorization` header at all.
+    #[must_use]
+    pub fn calls(&self) -> Vec<String> {
+        self.calls.lock().expect("uncontended").clone()
+    }
+}
+
+#[async_trait::async_trait]
+impl cratefield_core::Auth for FakeAuth {
+    async fn identify(
+        &self,
+        headers: &http::HeaderMap,
+    ) -> Result<cratefield_core::Caller, cratefield_core::AuthError> {
+        let presented = headers
+            .get(http::header::AUTHORIZATION)
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.strip_prefix("Bearer "))
+            .map(str::to_owned);
+        self.calls
+            .lock()
+            .expect("uncontended")
+            .push(presented.clone().unwrap_or_default());
+        match self.mode {
+            AuthMode::Anonymous => Ok(cratefield_core::Caller::Anonymous),
+            AuthMode::Unavailable => Err(cratefield_core::AuthError::Unavailable(
+                "the fake is in Unavailable mode".to_owned(),
+            )),
+            AuthMode::NotVerified | AuthMode::TokenIsTheSubject => match presented {
+                None => Ok(cratefield_core::Caller::Anonymous),
+                Some(_) if self.mode == AuthMode::NotVerified => {
+                    Err(cratefield_core::AuthError::NotVerified)
+                }
+                Some(token) => Ok(cratefield_core::Caller::Subject(
+                    cratefield_core::Subject::new(token).session("fake-session"),
+                )),
+            },
+        }
+    }
+}

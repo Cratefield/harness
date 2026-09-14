@@ -21,8 +21,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use cratefield_core::{
-    Blob, BoundedHttpClient, Captcha, Clock, Database, HarnessConfig, KeyValue, Mailer, Payments,
-    Port, Ports, Push, RateLimiter, Realtime, Runtime, UlidIdGen,
+    Auth, Blob, BoundedHttpClient, Captcha, Clock, Database, HarnessConfig, KeyValue, Mailer,
+    Payments, Port, Ports, Push, RateLimiter, Realtime, Runtime, UlidIdGen,
 };
 
 use crate::config::EnvConfig;
@@ -58,6 +58,7 @@ pub struct Native {
     realtime: Option<Arc<dyn Realtime>>,
     mailer: Option<Arc<dyn Mailer>>,
     captcha: Option<Arc<dyn Captcha>>,
+    auth: Option<Arc<dyn Auth>>,
     /// Whether to assemble the `Push` port from `std::env` (issue #191).
     /// Built lazily in `ports()` and memoised for the process, so a venture
     /// may call `push_from_env()` before a tokio runtime exists.
@@ -245,6 +246,23 @@ impl Native {
         self
     }
 
+    /// Wires who a request's credentials speak for (issue #153).
+    ///
+    /// Without one the deployment cannot identify a caller, and a module
+    /// that declares [`Port::Auth`] is refused composition rather than
+    /// mounted and left guessing.
+    #[must_use]
+    pub fn auth(mut self, auth: impl Auth + 'static) -> Self {
+        self.auth = Some(Arc::new(auth));
+        self
+    }
+
+    #[must_use]
+    pub fn auth_arc(mut self, auth: Arc<dyn Auth>) -> Self {
+        self.auth = Some(auth);
+        self
+    }
+
     /// Resolves the port bundle once per process from the builder and
     /// `std::env`: config, `Signer` (from `HARNESS_SECRET` — warn once
     /// and leave unset when missing, exactly like the Cloudflare
@@ -268,6 +286,7 @@ impl Native {
         ports.realtime.clone_from(&self.realtime);
         ports.mailer.clone_from(&self.mailer);
         ports.captcha.clone_from(&self.captcha);
+        ports.auth.clone_from(&self.auth);
 
         // An explicit adapter wins; otherwise assemble one from the
         // environment when the venture asked for it (issue #191).
@@ -317,6 +336,9 @@ impl Runtime for Native {
         ];
         if self.db.is_some() {
             provided.push(Port::Db);
+        }
+        if self.auth.is_some() {
+            provided.push(Port::Auth);
         }
         if self.rate_limiter.is_some() {
             provided.push(Port::RateLimiter);

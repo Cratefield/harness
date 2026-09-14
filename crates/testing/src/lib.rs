@@ -52,9 +52,9 @@ pub use conformance::{conformance, conformance_in_process_only, sidecar_parity};
 pub use dialect::Dialect;
 #[cfg(feature = "harness")]
 pub use fakes::{
-    EmptyDatabase, FakeCaptcha, FakeDefer, FakeDispatcher, FakeHttpClient, FakeMailer,
-    FakePayments, FakePush, FakeRateLimiter, FakeRealtime, FixedClock, MailerMode, MemoryBlob,
-    MemoryKeyValue, PaymentsCall, PaymentsMode, PushMode,
+    AuthMode, EmptyDatabase, FakeAuth, FakeCaptcha, FakeDefer, FakeDispatcher, FakeHttpClient,
+    FakeMailer, FakePayments, FakePush, FakeRateLimiter, FakeRealtime, FixedClock, MailerMode,
+    MemoryBlob, MemoryKeyValue, PaymentsCall, PaymentsMode, PushMode,
 };
 #[cfg(feature = "harness")]
 pub use harness::TestHarness;
