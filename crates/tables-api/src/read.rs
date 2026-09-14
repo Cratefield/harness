@@ -106,7 +106,11 @@ impl Tables {
 /// table, which is the rule the `Auth` port exists to keep (#362): an
 /// expired token reading a public table must not succeed quietly and
 /// leave its holder believing they are signed in.
-async fn who(tables: &Tables, headers: &HeaderMap, api: &TableApi) -> Result<Caller, Problem> {
+pub(crate) async fn who(
+    tables: &Tables,
+    headers: &HeaderMap,
+    api: &TableApi,
+) -> Result<Caller, Problem> {
     let Some(auth) = tables.ctx.ports.auth.as_ref() else {
         // A deployment with no verifier can still serve a public table,
         // because nothing about it depends on who is asking. Anything

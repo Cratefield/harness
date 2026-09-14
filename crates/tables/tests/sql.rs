@@ -144,8 +144,8 @@ fn a_row_key_cannot_become_an_identifier() {
         insert(&table, &row).expect("insert").sql,
         select_one(&table, &key, None).expect("select one").sql,
         select_page(&table, 10, Some(&key), None).expect("page").sql,
-        update(&table, &key, &row).expect("update").sql,
-        delete(&table, &key).expect("delete").sql,
+        update(&table, &key, &row, None).expect("update").sql,
+        delete(&table, &key, None).expect("delete").sql,
     ];
     for sql in statements {
         let used = identifiers(&sql);
@@ -180,14 +180,14 @@ fn half_a_composite_key_is_refused_rather_than_matching_every_row_sharing_it() {
     let table = membership();
     let half = json!({ "tenant": "acme" });
 
-    let error = delete(&table, &half).expect_err("half a key");
+    let error = delete(&table, &half, None).expect_err("half a key");
     assert_eq!(error.column, "member", "{error}");
     assert!(error.to_string().contains("does not give it"), "{error}");
 
     assert!(select_one(&table, &half, None).is_err(), "select too");
 
     let whole = json!({ "tenant": "acme", "member": "ada" });
-    let statement = delete(&table, &whole).expect("a whole key");
+    let statement = delete(&table, &whole, None).expect("a whole key");
     assert_eq!(statement.values.0.len(), 2, "{}", statement.sql);
 }
 
@@ -198,6 +198,7 @@ fn a_null_key_column_is_not_a_key() {
     let error = delete(
         &membership(),
         &json!({ "tenant": "acme", "member": Value::Null }),
+        None,
     )
     .expect_err("a null is not a key");
     assert_eq!(error.column, "member", "{error}");
@@ -210,7 +211,7 @@ fn a_key_value_of_the_wrong_kind_is_refused_rather_than_bound_as_a_null() {
     // null would make `WHERE id = NULL` — never true — so the delete
     // would remove nothing and report success.
     let table = note();
-    let error = delete(&table, &json!({ "id": 42 })).expect_err("not a uuid");
+    let error = delete(&table, &json!({ "id": 42 }), None).expect_err("not a uuid");
     assert_eq!(error.column, "id", "{error}");
     assert!(error.to_string().contains("is not uuid"), "{error}");
 
@@ -226,7 +227,8 @@ fn a_key_value_of_the_wrong_kind_is_refused_rather_than_bound_as_a_null() {
         update(
             &table,
             &json!({ "id": 42 }),
-            &json!({ "id": ID, "body": "x" })
+            &json!({ "id": ID, "body": "x" }),
+            None
         )
         .is_err(),
         "and the update's key"
@@ -411,6 +413,7 @@ fn an_update_never_writes_the_primary_key() {
         &note(),
         &json!({ "id": ID }),
         &json!({ "id": "0f3f8a5e-9c4c-4a3e-8b2e-1d6f0c9a7b99", "body": "edited" }),
+        None,
     )
     .expect("a legal row");
     let set = statement
@@ -423,8 +426,13 @@ fn an_update_never_writes_the_primary_key() {
 
 #[test]
 fn an_update_to_an_illegal_row_is_refused_before_the_database_sees_it() {
-    let error = update(&note(), &json!({ "id": ID }), &json!({ "body": "no id" }))
-        .expect_err("no primary key in the row");
+    let error = update(
+        &note(),
+        &json!({ "id": ID }),
+        &json!({ "body": "no id" }),
+        None,
+    )
+    .expect_err("no primary key in the row");
     assert!(matches!(error, UpdateError::Row(_)), "{error:?}");
 }
 

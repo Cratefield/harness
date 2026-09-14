@@ -410,7 +410,11 @@ pub fn select_page(
 }
 
 /// `UPDATE` of one row by primary key, replacing every declared
-/// non-key field.
+/// non-key field, optionally scoped to one subject.
+///
+/// With `owned`, a row belonging to somebody else matches nothing, so the
+/// caller is told no row was changed rather than being refused — the same
+/// answer a read gives, for the same reason.
 ///
 /// A replacement rather than a merge: the caller sends the row it wants
 /// to exist. A merge would make "unset this field" unexpressible, because
@@ -419,10 +423,17 @@ pub fn select_page(
 /// # Errors
 ///
 /// The row's validation errors, or a key that is not complete.
-pub fn update(table: &TableDef, key: &Value, row: &Value) -> Result<Statement, UpdateError> {
+pub fn update(
+    table: &TableDef,
+    key: &Value,
+    row: &Value,
+    owned: Option<Owned<'_>>,
+) -> Result<Statement, UpdateError> {
     validate_row(table, row).map_err(UpdateError::Row)?;
     let object = row.as_object().cloned().unwrap_or_default();
-    let predicate = key_predicate(table, key).map_err(UpdateError::Key)?;
+    let predicate = key_predicate(table, key)
+        .map_err(UpdateError::Key)?
+        .add_option(owned_predicate(table, owned).map_err(UpdateError::Key)?);
 
     let mut update = Query::update();
     update.table(Alias::new(&table.name));
@@ -464,17 +475,24 @@ impl std::fmt::Display for UpdateError {
 
 impl std::error::Error for UpdateError {}
 
-/// `DELETE` of one row by primary key.
+/// `DELETE` of one row by primary key, optionally scoped to one subject.
+///
+/// The scope is the difference between a caller deleting their own row
+/// and a caller deleting any row whose key they can guess.
 ///
 /// # Errors
 ///
 /// When `key` does not carry every primary-key column — a partial key
 /// would delete every row that matches the half it names.
-pub fn delete(table: &TableDef, key: &Value) -> Result<Statement, DecodeError> {
+pub fn delete(
+    table: &TableDef,
+    key: &Value,
+    owned: Option<Owned<'_>>,
+) -> Result<Statement, DecodeError> {
     let mut delete = Query::delete();
     delete
         .from_table(Alias::new(&table.name))
-        .cond_where(key_predicate(table, key)?);
+        .cond_where(key_predicate(table, key)?.add_option(owned_predicate(table, owned)?));
     Ok(Statement::render(&delete))
 }
 
