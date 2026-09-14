@@ -125,6 +125,13 @@ declares them:
 | `DELETE /{table}/{key}` | `204` |
 | `POST /__batch` | several reads in one round trip |
 
+The three routes naming one row need a primary key of one column. A key
+of several is refused rather than joined with a separator that could
+occur inside one of the values, so a table declaring `primary_key =
+["tenant", "member"]` is paged and written and never addressed one row at
+a time — and `/__surface` publishes only the two routes it has. Issue
+#387 is whether that stays true.
+
 A row that is not the caller's is **not found**, never forbidden: a `403`
 is an answer about a row they were never in a position to learn exists.
 

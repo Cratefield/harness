@@ -48,6 +48,35 @@ fn for_access(access: Access) -> Surface {
     }])
 }
 
+const MEMBERSHIP: &str = r#"
+[tables.membership]
+primary_key = ["tenant", "member"]
+
+[[tables.membership.fields]]
+name = "tenant"
+kind = "text"
+required = true
+
+[[tables.membership.fields]]
+name = "member"
+kind = "text"
+required = true
+
+[[tables.membership.fields]]
+name = "role"
+kind = "text"
+required = true
+"#;
+
+fn membership() -> TableDef {
+    toml::from_str::<Fragment>(MEMBERSHIP)
+        .expect("parses")
+        .tables
+        .table("membership")
+        .expect("declared")
+        .clone()
+}
+
 fn names(surface: &Surface) -> Vec<String> {
     surface
         .actions
@@ -213,4 +242,42 @@ fn the_published_json_does_not_ask_a_reader_for_a_captcha_widget() {
             action["name"]
         );
     }
+}
+
+#[test]
+fn a_composite_key_table_publishes_only_the_routes_it_has() {
+    // `/{table}/{key}` refuses a key of several columns rather than
+    // joining them with a separator that could occur inside one, so those
+    // three routes do not exist for this table (#387). Publishing them
+    // would put three methods in every generated client that answer 400
+    // whatever they are called with — which is the argument `public-read`
+    // already wins by publishing its reads and not a create.
+    let published = surface(&[TableApi {
+        table: membership(),
+        access: Access::TenantMembers,
+        subject: None,
+    }]);
+    assert_eq!(
+        names(&published),
+        vec!["list-membership", "create-membership"],
+        "a composite-key table has a page and a create, and no route naming one row"
+    );
+}
+
+#[test]
+fn a_single_column_key_still_publishes_all_five() {
+    // The other half of the pair: the check above passes for a surface
+    // that had simply stopped publishing single-row actions for
+    // everything, and that is not what was asked for.
+    let published = for_access(Access::TenantMembers);
+    assert_eq!(
+        names(&published),
+        vec![
+            "list-note",
+            "read-note",
+            "create-note",
+            "replace-note",
+            "delete-note"
+        ]
+    );
 }
