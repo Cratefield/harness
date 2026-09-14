@@ -238,20 +238,38 @@ row once nothing references it — implemented as
 the database or independently — the ciphertexts become permanent noise.
 Crypto-shred is irreversible; a tenant returning starts with fresh keys.
 
-**Caching.** Unwrapped DEKs live in process memory in a small map keyed
-by `(store_id, key_id)` with a **TTL of 5 minutes** (configurable).
-Entries are zeroised on eviction and on drop. The KMS is called **on
-cache miss only** — once per store per process per TTL at worst, because
-a hit refreshes nothing: the entry simply expires. Cost profile
-(indicative AWS KMS pricing, to be confirmed in #40): a Decrypt call is
-~$0.03 per 10,000; at 25 stores across 4 processes with a 300 s TTL the
-worst case is ~29k calls/day ≈ $0.09/day. Restores and cold starts add
-one unwrap burst per store. This is noise, and the TTL exists to bound
-plaintext-key exposure, not to protect the KMS bill.
+**Caching — designed, not built.** The design below is what this section
+described in the present tense while `SecretStore` had no cache at all.
+It is written as a plan now, because a security document that describes
+an unbuilt control is worse than one that omits it: a reader planning
+capacity, or reading the threat model below, would believe a mitigation
+is in place.
 
-**KMS unreachable.** Cached DEKs keep serving; **a cold process cannot
-decrypt anything until the KMS answers** — no unwrap, no plaintext, no
-fallback. This is an **accepted availability dependency** on the KMS for
+*What happens today.* `SecretStore::active_key` and `SecretStore::key`
+call `Kms::unwrap` on **every** access. There is no map, no TTL and no
+eviction, so the KMS is called once per secret read rather than once per
+store per process per TTL — the calls scale with request volume, and the
+cost estimate that used to sit here was computed from a TTL that does
+not exist. Plaintext key material *is* wiped: `Dek` is a
+`Zeroizing<Vec<u8>>`, so a key is zeroised when it is dropped, which is
+at the end of the operation that unwrapped it.
+
+*What is planned.* Unwrapped DEKs in process memory in a small map keyed
+by `(store_id, key_id)` with a **TTL of 5 minutes** (configurable),
+entries zeroised on eviction as well as on drop, and the KMS called on
+cache miss only — once per store per process per TTL at worst, because a
+hit refreshes nothing: the entry simply expires. Indicative AWS KMS
+pricing for that shape: a Decrypt call is ~$0.03 per 10,000; at 25
+stores across 4 processes with a 300 s TTL the worst case is ~29k
+calls/day ≈ $0.09/day. The TTL exists to bound plaintext-key exposure,
+not to protect the KMS bill — which is also why the absence of a cache
+is not a security regression, only a cost and a latency one.
+
+**KMS unreachable.** **No process can decrypt anything until the KMS
+answers** — no unwrap, no plaintext, no fallback. With the cache above
+built, a warm process would keep serving from it; without it, every
+read needs the KMS, so the dependency is total rather than
+cold-start-only. This is an **accepted availability dependency** on the KMS for
 every store, and it is alarmed, not merely documented:
 
 - alarm on KMS error rate (unwrap failures) above threshold for 5 minutes;
@@ -275,7 +293,7 @@ rule).
 | **Database dump alone** (one tenant DB) | That tenant's rows: ciphertexts + the wrapped DEK + the AAD-visible metadata (names, versions, key ids) | Unwrapping the DEK requires the KEK, which never leaves the KMS; the dump contains no key material in the clear | None beyond metadata disclosure |
 | **Database dump alone** (control DB) | Tenant registry + global ciphertexts + the global wrapped DEK | Same — useless without the KMS | Registry/tenant-list disclosure |
 | **KMS credentials alone** | The ability to request wrap/unwrap on the environment's KEK | There is nothing to unwrap: every wrapped DEK and every ciphertext lives in a database they don't have | **Abuse potential**: they can wrap their own keys (harmless) and, critically, every call they make is written to the KMS audit log — an unwrap storm without a matching incident is detectable |
-| **Process memory** (native runtime) | Cached unwrapped DEKs for stores served since cold start (TTL-bounded), plaintext secrets in active use, plaintext in flight | Zeroisation on eviction/drop; short TTL; only stores actually touched are cached | Real and accepted: memory compromise is game over for cached stores. Blast radius = cached stores, not all stores |
+| **Process memory** (native runtime) | Plaintext secrets in active use and plaintext in flight. No DEK is held between operations: there is no cache yet, so a key exists only for the unwrap that produced it | Zeroisation on drop (`Dek` is a `Zeroizing<Vec<u8>>`); nothing retained between requests. The TTL cache in §2 would *widen* this row when it lands — it is the one place where not having built it helps | Real and accepted: memory compromise reads whatever is in flight. Blast radius = the operation in progress, not every store served since boot |
 | **Insider with both** (DB dump + KMS credentials) | Full decryption of every store whose wrapped DEK the dump contains | Nothing cryptographic stops them — this is detected, not prevented: every KMS unwrap is audit-logged with principal + key id; alerts fire on unwrap volume/pattern anomalies; the control DB has its own audit log | The honest row: insider-with-both reads a tenant's secrets. Per-store DEKs bound the blast radius (one tenant, or global — never both from one tenant's dump) |
 | **DB write access** (no read) | Ability to move/rename/repoint rows, swap ciphertexts | AAD binding: §5's table — every such edit produces rows that fail to decrypt; no plaintext forgery is possible without the DEK | Denial of service on edited secrets only (visible, fixable by restore) |
 | **KMS operator / cloud insider** (KEK use without credentials trail they control) | Attempted mass unwrap of every store's DEK | Per-environment KEK bounds scope; unwrap calls land in the same audit log the first row relies on; KEK rotation re-wraps all DEKs cheaply (§2) | Trusted-operator risk inherent to any KMS; rotatable within minutes |
