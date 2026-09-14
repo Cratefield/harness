@@ -687,6 +687,49 @@ fn a_filter_value_of_the_wrong_kind_is_refused() {
 }
 
 #[test]
+fn a_filter_for_a_null_asks_is_null_and_not_equals_null() {
+    // Nothing equals null in SQL, itself included. `WHERE body = ?` bound
+    // to a null is false for every row, so a caller asking for the rows
+    // whose `body` is unset was answered an empty page whatever the table
+    // held — a wrong answer that looks like a right one, and a `200`.
+    //
+    // The refusal above says the same thing about a *wrong-kinded* value
+    // and was written first. An explicit null is not wrong-kinded: every
+    // column that is not required can hold one.
+    let filters = [Filter {
+        column: "body".to_owned(),
+        value: Value::Null,
+    }];
+    let statement = select_page(
+        &note(),
+        Page {
+            limit: 10,
+            after: None,
+            owned: None,
+            filters: &filters,
+            sort: None,
+        },
+    )
+    .expect("a null is a question, not a malformed filter");
+    assert!(
+        statement.sql.contains("\"body\" IS NULL"),
+        "{}",
+        statement.sql
+    );
+    assert!(
+        !statement.sql.contains("\"body\" = ?"),
+        "still comparing against a bound null: {}",
+        statement.sql
+    );
+    assert_eq!(
+        statement.values.0.len(),
+        1,
+        "the bound LIMIT and nothing else: {}",
+        statement.sql
+    );
+}
+
+#[test]
 fn a_sorted_page_orders_by_the_column_then_the_key() {
     // The key is the tiebreaker, and it has to be there: two rows with
     // the same sort value in no fixed order make a page that repeats one

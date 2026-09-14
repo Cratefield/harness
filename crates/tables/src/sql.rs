@@ -489,11 +489,26 @@ pub fn select_page(table: &TableDef, page: Page<'_>) -> Result<Statement, Decode
     Ok(Statement::render(&select))
 }
 
-/// `column = ?`, for one caller-supplied filter.
+/// `column = ?`, for one caller-supplied filter — or `column IS NULL`,
+/// which is the same question asked about a value SQL will not compare.
 ///
 /// The column must be a declared field and the value must be its kind.
 /// Neither is ignored: a filter that is silently dropped answers a
 /// question the caller did not ask, with more rows than they asked for.
+///
+/// **A `null` is `IS NULL` and not `= NULL`.** Nothing equals null in
+/// SQL, itself included, so `WHERE body = ?` bound to a null is false for
+/// every row — a caller asking for the rows whose `body` is unset got a
+/// `200` and an empty page whatever the table held, which is a wrong
+/// answer that looks like a right one. The three-valued logic is SQL's,
+/// not this API's: the filter vocabulary is equality on a declared
+/// column, and "the rows where this column is unset" is a thing equality
+/// means everywhere outside SQL.
+///
+/// Only a batch read can ask it. A query string is text, so `?body=` is
+/// the empty string and there is no spelling of null in it — which is why
+/// this went unnoticed: the path that could express it is the one with no
+/// way to say it.
 fn filter_predicate(table: &TableDef, filter: &Filter) -> Result<SimpleExpr, DecodeError> {
     let field = table
         .fields
@@ -504,6 +519,9 @@ fn filter_predicate(table: &TableDef, filter: &Filter) -> Result<SimpleExpr, Dec
             column: filter.column.clone(),
             detail: "is not a field of this table".to_owned(),
         })?;
+    if filter.value.is_null() {
+        return Ok(Expr::col(Alias::new(&filter.column)).is_null());
+    }
     let value = to_sql(field, Some(&filter.value)).ok_or_else(|| DecodeError {
         table: table.name.clone(),
         column: filter.column.clone(),

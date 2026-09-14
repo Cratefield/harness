@@ -168,6 +168,14 @@ with more rows than they asked for — and a client that misspells a column
 would get a page that looks right. The value is checked against the
 column's kind for the same reason.
 
+**A `null` asks `IS NULL`.** Nothing equals null in SQL, itself included,
+so comparing against a bound null is false for every row: a caller asking
+for the rows whose `body` is unset was answered an empty page whatever
+the table held. Only a batch read can ask it — a query string is text, so
+`?body=` is the empty string and there is no spelling of null in one,
+which is why the path that could express the question is the one with no
+way to say it.
+
 **A filter cannot widen an `owner` scope.** The subject condition and the
 filters are all in the same `WHERE`, so filtering on the subject column
 narrows the caller's own rows and reaches nobody else's.
