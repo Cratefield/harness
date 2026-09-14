@@ -193,8 +193,9 @@ pub fn harness() -> Harness {
 `Harness::build()` fails when a module requires a port the runtime does not
 provide, when two modules claim the same route prefix or table, when a module's
 `harness_api` differs from core's, or when a template override names an unknown
-module. The template ships `tests/harness_builds.rs` asserting `build()` is
-`Ok`, so `cargo test` fails before `wrangler deploy` can run.
+module. The template is meant to ship `tests/harness_builds.rs` asserting
+`build()` is `Ok`, so that `cargo test` fails before `wrangler deploy` can
+run — it does not yet, and nor does the template (issue #408).
 
 ## 5. Ports
 

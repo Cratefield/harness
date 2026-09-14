@@ -32,6 +32,12 @@ Built on the [Factory Zero harness](https://github.com/Cratefield/harness)
 
 ## What you get
 
+> **This template currently contains only this README and its banner.**
+> It was a standalone GitHub template repository; when #166 folded the
+> repositories together, only the documentation came across. The tree
+> below is what it is meant to contain — issue #408 tracks restoring it
+> or retiring it in favour of `fz init`.
+
 ```
 Cargo.toml               depends on factory0-core, the runtime, and the modules you want
 src/harness.rs           Harness::builder() composition for this venture   ← edit this
