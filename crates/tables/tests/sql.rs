@@ -204,6 +204,59 @@ fn a_null_key_column_is_not_a_key() {
 }
 
 #[test]
+fn a_key_value_of_the_wrong_kind_is_refused_rather_than_bound_as_a_null() {
+    // The route that does not go through the row validator: a key comes
+    // from a URL, not from a body. Binding `42` for a `uuid` column as a
+    // null would make `WHERE id = NULL` — never true — so the delete
+    // would remove nothing and report success.
+    let table = note();
+    let error = delete(&table, &json!({ "id": 42 })).expect_err("not a uuid");
+    assert_eq!(error.column, "id", "{error}");
+    assert!(error.to_string().contains("is not uuid"), "{error}");
+
+    assert!(
+        select_one(&table, &json!({ "id": 42 })).is_err(),
+        "select too"
+    );
+    assert!(
+        select_page(&table, 10, Some(&json!({ "id": 42 }))).is_err(),
+        "and the cursor"
+    );
+    assert!(
+        update(
+            &table,
+            &json!({ "id": 42 }),
+            &json!({ "id": ID, "body": "x" })
+        )
+        .is_err(),
+        "and the update's key"
+    );
+}
+
+#[test]
+fn a_value_of_the_wrong_kind_never_becomes_a_null_column() {
+    // `to_sql` answers `None` rather than the typed null, so no caller
+    // can turn "the wrong kind" into "absent" by accident.
+    let table = note();
+    let views = table
+        .fields
+        .iter()
+        .find(|field| field.name == "views")
+        .expect("declared");
+    assert_eq!(to_sql(views, Some(&json!("seven"))), None);
+    assert_eq!(
+        to_sql(views, Some(&json!(7))),
+        Some(SeaValue::BigInt(Some(7)))
+    );
+    // An absent or explicitly null value is still the typed null.
+    assert_eq!(to_sql(views, None), Some(SeaValue::BigInt(None)));
+    assert_eq!(
+        to_sql(views, Some(&Value::Null)),
+        Some(SeaValue::BigInt(None))
+    );
+}
+
+#[test]
 fn a_row_survives_the_round_trip_to_the_database_and_back() {
     let table = note();
     let row = json!({
@@ -220,7 +273,12 @@ fn a_row_survives_the_round_trip_to_the_database_and_back() {
         table
             .fields
             .iter()
-            .map(|field| (field.name.clone(), to_sql(field, row.get(&field.name))))
+            .map(|field| {
+                (
+                    field.name.clone(),
+                    to_sql(field, row.get(&field.name)).expect("the row is legal"),
+                )
+            })
             .collect(),
     );
     assert_eq!(row_json(&table, &returned).expect("decodes"), row);

@@ -100,6 +100,15 @@ pub struct RowErrors {
 }
 
 impl RowErrors {
+    /// One rejection, for a caller that found a single problem outside
+    /// [`validate_row`] — a primary key whose value is not the kind its
+    /// column is declared as, for instance.
+    pub(crate) fn one(field: &str, code: ErrorCode, message: impl Into<String>) -> Self {
+        Self {
+            errors: vec![RowError::new(field, code, message)],
+        }
+    }
+
     /// The rejections, declared fields in declaration order and then
     /// unknown keys sorted by name.
     #[must_use]

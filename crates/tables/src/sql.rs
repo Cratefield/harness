@@ -36,6 +36,7 @@ use serde_json::{Map, Value};
 
 use crate::schema::{FieldDef, FieldKind, TableDef};
 use crate::validate::{RowErrors, validate_row};
+use crate::value::ErrorCode;
 
 /// A column that did not come back as the declaration says it is.
 ///
@@ -64,40 +65,59 @@ impl std::fmt::Display for DecodeError {
 
 impl std::error::Error for DecodeError {}
 
-/// A JSON value for one declared field, as a bound parameter.
+/// A JSON value for one declared field, as a bound parameter, or `None`
+/// when the value is not the kind the column is declared as.
 ///
 /// A `null` — or an absent field — becomes a **typed** null matching the
 /// column, not an untyped one. Postgres binds parameters by type and
 /// cannot infer one for a bare null, so an untyped null is an error there
 /// and a silent success on SQLite: exactly the asymmetry that passes
 /// every local test and fails in production.
+///
+/// A value of the wrong kind is `None` rather than that same typed null,
+/// which is the whole reason this answers an `Option`. A `42` for a
+/// `uuid` column silently becoming `NULL` makes `WHERE id = NULL` — never
+/// true — so a delete would remove nothing and report success.
 #[must_use]
-pub fn to_sql(field: &FieldDef, value: Option<&Value>) -> SeaValue {
+pub fn to_sql(field: &FieldDef, value: Option<&Value>) -> Option<SeaValue> {
     let Some(value) = value.filter(|value| !value.is_null()) else {
-        return null_for(&field.kind);
+        return Some(null_for(&field.kind));
     };
     match &field.kind {
-        FieldKind::Boolean => value
-            .as_bool()
-            .map_or_else(|| null_for(&field.kind), |flag| SeaValue::Bool(Some(flag))),
-        FieldKind::Integer { .. } => crate::value::integral(value)
-            .map_or_else(|| null_for(&field.kind), |n| SeaValue::BigInt(Some(n))),
-        FieldKind::Real { .. } => value
-            .as_f64()
-            .map_or_else(|| null_for(&field.kind), |n| SeaValue::Double(Some(n))),
+        FieldKind::Boolean => value.as_bool().map(|flag| SeaValue::Bool(Some(flag))),
+        FieldKind::Integer { .. } => {
+            crate::value::integral(value).map(|n| SeaValue::BigInt(Some(n)))
+        }
+        FieldKind::Real { .. } => value.as_f64().map(|n| SeaValue::Double(Some(n))),
         // Stored as TEXT, so what goes in is the serialization and what
         // comes back is parsed. `to_string` rather than the raw request
         // bytes: the value has been through `serde_json`, so the stored
         // text is canonical JSON rather than whatever spacing was sent.
-        FieldKind::Json => SeaValue::String(Some(Box::new(value.to_string()))),
+        // Any JSON value is a legal one, which is why this cannot fail.
+        FieldKind::Json => Some(SeaValue::String(Some(Box::new(value.to_string())))),
         FieldKind::Text { .. }
         | FieldKind::Timestamp
         | FieldKind::Uuid
-        | FieldKind::Enum { .. } => value.as_str().map_or_else(
-            || null_for(&field.kind),
-            |text| SeaValue::String(Some(Box::new(text.to_owned()))),
-        ),
+        | FieldKind::Enum { .. } => value
+            .as_str()
+            .map(|text| SeaValue::String(Some(Box::new(text.to_owned())))),
     }
+}
+
+/// [`to_sql`], with the mismatch turned into the row error it is.
+///
+/// Reachable only past [`validate_row`], which refuses a wrong-typed
+/// value first — so this is the second line rather than the first, and it
+/// exists because "the caller validated" is the assumption that stops
+/// being true the day somebody adds a second caller.
+fn bound(field: &FieldDef, value: Option<&Value>) -> Result<SeaValue, RowErrors> {
+    to_sql(field, value).ok_or_else(|| {
+        RowErrors::one(
+            &field.name,
+            ErrorCode::WrongType,
+            format!("must be {}", field.kind.as_str()),
+        )
+    })
 }
 
 /// The typed null for a column of this kind.
@@ -271,15 +291,16 @@ pub fn insert(table: &TableDef, row: &Value) -> Result<Statement, RowErrors> {
         .filter(|field| object.contains_key(&field.name))
         .collect();
 
+    let mut values = Vec::with_capacity(present.len());
+    for field in &present {
+        values.push(bound(field, object.get(&field.name))?.into());
+    }
+
     let mut insert = Query::insert();
     insert
         .into_table(Alias::new(&table.name))
         .columns(present.iter().map(|field| Alias::new(&field.name)))
-        .values_panic(
-            present
-                .iter()
-                .map(|field| to_sql(field, object.get(&field.name)).into()),
-        );
+        .values_panic(values);
     Ok(Statement::render(&insert))
 }
 
@@ -354,7 +375,7 @@ pub fn update(table: &TableDef, key: &Value, row: &Value) -> Result<Statement, U
         }
         update.value(
             Alias::new(&field.name),
-            to_sql(field, object.get(&field.name)),
+            bound(field, object.get(&field.name)).map_err(UpdateError::Row)?,
         );
     }
     update.cond_where(predicate);
@@ -400,8 +421,7 @@ pub fn delete(table: &TableDef, key: &Value) -> Result<Statement, DecodeError> {
 fn key_predicate(table: &TableDef, key: &Value) -> Result<Cond, DecodeError> {
     let mut all = Cond::all();
     for column in &table.primary_key {
-        let (field, value) = key_part(table, key, column)?;
-        all = all.add(Expr::col(Alias::new(column)).eq(to_sql(field, Some(value))));
+        all = all.add(Expr::col(Alias::new(column)).eq(key_part(table, key, column)?));
     }
     Ok(all)
 }
@@ -417,22 +437,22 @@ fn after_predicate(table: &TableDef, after: &Value) -> Result<Cond, DecodeError>
     for (at, column) in table.primary_key.iter().enumerate() {
         let mut branch = Cond::all();
         for earlier in &table.primary_key[..at] {
-            let (field, value) = key_part(table, after, earlier)?;
-            branch = branch.add(Expr::col(Alias::new(earlier)).eq(to_sql(field, Some(value))));
+            branch =
+                branch.add(Expr::col(Alias::new(earlier)).eq(key_part(table, after, earlier)?));
         }
-        let (field, value) = key_part(table, after, column)?;
-        branch = branch.add(Expr::col(Alias::new(column)).gt(to_sql(field, Some(value))));
+        branch = branch.add(Expr::col(Alias::new(column)).gt(key_part(table, after, column)?));
         any = any.add(branch);
     }
     Ok(any)
 }
 
-/// The declared field and the supplied value for one key column.
-fn key_part<'a>(
-    table: &'a TableDef,
-    key: &'a Value,
-    column: &str,
-) -> Result<(&'a FieldDef, &'a Value), DecodeError> {
+/// The bound value for one key column, refusing anything that would not
+/// actually identify a row.
+///
+/// A value of the wrong kind is refused rather than bound as a null: the
+/// null would make `WHERE id = NULL`, which is never true, so the
+/// statement would match nothing and report success.
+fn key_part(table: &TableDef, key: &Value, column: &str) -> Result<SeaValue, DecodeError> {
     let missing = |detail: &str| DecodeError {
         table: table.name.clone(),
         column: column.to_owned(),
@@ -447,5 +467,10 @@ fn key_part<'a>(
         .get(column)
         .filter(|value| !value.is_null())
         .ok_or_else(|| missing("part of the primary key, and the key does not give it"))?;
-    Ok((field, value))
+    to_sql(field, Some(value)).ok_or_else(|| {
+        missing(&format!(
+            "part of the primary key, and the value given is not {}",
+            field.kind.as_str()
+        ))
+    })
 }
