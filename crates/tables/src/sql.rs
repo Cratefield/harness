@@ -417,6 +417,22 @@ pub struct Page<'a> {
     pub owned: Option<Owned<'a>>,
     /// What the caller asked to narrow by.
     pub filters: &'a [Filter],
+    /// What the caller asked to order by, before the primary key.
+    pub sort: Option<Sort<'a>>,
+}
+
+/// An ordering on one declared column.
+///
+/// One column, because a second is a tiebreaker and the primary key is
+/// already that — and because every column a page is ordered by has to
+/// appear in the cursor, so the vocabulary that stays small is the one
+/// whose cursor stays readable.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Sort<'a> {
+    /// The declared column.
+    pub column: &'a str,
+    /// Whether the largest value comes first.
+    pub descending: bool,
 }
 
 /// `SELECT` of a page, ordered by primary key, optionally after a cursor.
@@ -434,8 +450,24 @@ pub fn select_page(table: &TableDef, page: Page<'_>) -> Result<Statement, Decode
         .columns(table.fields.iter().map(|field| Alias::new(&field.name)))
         .from(Alias::new(&table.name))
         .limit(page.limit);
+    // The sort column first, then the primary key. The key is the
+    // tiebreaker, and it has to be there: two rows with the same sort
+    // value in no fixed order make a page that repeats one and skips the
+    // other, and nothing in the answer says so.
+    //
+    // Both take the same direction, so the cursor comparison is one
+    // operator rather than one per column.
+    let direction = if page.sort.is_some_and(|sort| sort.descending) {
+        Order::Desc
+    } else {
+        Order::Asc
+    };
+    if let Some(sort) = page.sort {
+        sortable(table, sort)?;
+        select.order_by(Alias::new(sort.column), direction.clone());
+    }
     for column in &table.primary_key {
-        select.order_by(Alias::new(column), Order::Asc);
+        select.order_by(Alias::new(column), direction.clone());
     }
     // Every condition `AND`ed: the cursor is where the page starts, the
     // scope is which rows the caller may see, and the filters are which
@@ -448,7 +480,7 @@ pub fn select_page(table: &TableDef, page: Page<'_>) -> Result<Statement, Decode
     // cannot reach anybody else's, because both conditions stand.
     let mut all = Cond::all().add_option(owned_predicate(table, page.owned)?);
     if let Some(after) = page.after {
-        all = all.add(after_predicate(table, after)?);
+        all = all.add(after_predicate(table, after, page.sort)?);
     }
     for filter in page.filters {
         all = all.add(filter_predicate(table, filter)?);
@@ -582,18 +614,72 @@ fn key_predicate(table: &TableDef, key: &Value) -> Result<Cond, DecodeError> {
 /// `(a, b) > (x, y)` is standard SQL that SQLite does not have, and a
 /// cursor that worked on Postgres and not on D1 would be a difference
 /// between two deployments of the same declaration.
-fn after_predicate(table: &TableDef, after: &Value) -> Result<Cond, DecodeError> {
+fn after_predicate(
+    table: &TableDef,
+    after: &Value,
+    sort: Option<Sort<'_>>,
+) -> Result<Cond, DecodeError> {
+    // The ordering the page is in, which is what the cursor walks: the
+    // sort column, then every key column. A cursor that compared only the
+    // key would resume in the wrong place the moment the page was not in
+    // key order.
+    let mut columns: Vec<&str> = Vec::with_capacity(table.primary_key.len() + 1);
+    if let Some(sort) = sort {
+        columns.push(sort.column);
+    }
+    columns.extend(table.primary_key.iter().map(String::as_str));
+    let descending = sort.is_some_and(|sort| sort.descending);
+
     let mut any = Cond::any();
-    for (at, column) in table.primary_key.iter().enumerate() {
+    for (at, column) in columns.iter().enumerate() {
         let mut branch = Cond::all();
-        for earlier in &table.primary_key[..at] {
+        for earlier in &columns[..at] {
             branch =
-                branch.add(Expr::col(Alias::new(earlier)).eq(key_part(table, after, earlier)?));
+                branch.add(Expr::col(Alias::new(*earlier)).eq(cursor_part(table, after, earlier)?));
         }
-        branch = branch.add(Expr::col(Alias::new(column)).gt(key_part(table, after, column)?));
-        any = any.add(branch);
+        let value = cursor_part(table, after, column)?;
+        let beyond = if descending {
+            Expr::col(Alias::new(*column)).lt(value)
+        } else {
+            Expr::col(Alias::new(*column)).gt(value)
+        };
+        any = any.add(branch.add(beyond));
     }
     Ok(any)
+}
+
+/// Whether a column can be ordered by at all.
+///
+/// Not a nullable one. SQLite sorts `NULL` first and Postgres sorts it
+/// last, so a page ordered by a nullable column is a different page on
+/// each engine — the same declaration serving two answers, which is the
+/// failure the boolean and real decoding already guard against.
+fn sortable(table: &TableDef, sort: Sort<'_>) -> Result<(), DecodeError> {
+    let field = table
+        .fields
+        .iter()
+        .find(|field| field.name == sort.column)
+        .ok_or_else(|| DecodeError {
+            table: table.name.clone(),
+            column: sort.column.to_owned(),
+            detail: "is not a field of this table".to_owned(),
+        })?;
+    let keyed = table.primary_key.iter().any(|key| key == sort.column);
+    if field.required || keyed {
+        return Ok(());
+    }
+    Err(DecodeError {
+        table: table.name.clone(),
+        column: sort.column.to_owned(),
+        detail: "is optional, and the engines disagree about where nulls sort — a page ordered by \
+                 it would differ between two deployments of one declaration"
+            .to_owned(),
+    })
+}
+
+/// One value out of a cursor, for a column the page is ordered by.
+fn cursor_part(table: &TableDef, cursor: &Value, column: &str) -> Result<SeaValue, DecodeError> {
+    key_part(table, cursor, column)
 }
 
 /// The bound value for one key column, refusing anything that would not
