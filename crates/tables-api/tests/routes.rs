@@ -100,7 +100,7 @@ fn kits(access: Access) -> Vec<TestHarness> {
 }
 
 async fn seed(kit: &TestHarness) {
-    use cratefield_core::{Database, Statement};
+    use cratefield_core::Statement;
     let db = kit.db.as_ref();
     for (id, author, body) in [
         ("n1", "ada", "first"),
