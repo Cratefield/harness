@@ -216,7 +216,7 @@ fn cargo_toml(
     // A venture with declared tables carries the routes that serve them;
     // one without has no use for them and should not pull the crate.
     if crate::generate_tables::declares_tables(manifest) {
-        features.insert("tables");
+        features.insert("tables-api");
     }
     let mut feature_lines = String::new();
     for feature in &features {

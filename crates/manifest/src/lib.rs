@@ -204,7 +204,7 @@ mod tests {
         // The facade feature that carries the routes, or the generated
         // crate does not compile: `cratefield::tables_api` is behind it.
         let cargo = file("Cargo.toml");
-        assert!(cargo.contains("\"tables\","), "{cargo}");
+        assert!(cargo.contains("\"tables-api\","), "{cargo}");
 
         let lib = file("src/lib.rs");
         assert!(lib.contains("pub mod tables;"), "{lib}");

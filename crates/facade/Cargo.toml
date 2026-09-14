@@ -67,7 +67,11 @@ manifest = ["dep:cratefield-manifest"]
 # on for a venture whose manifest has a `[tables]` section, and leaves it
 # off for one that does not — a venture with no declared tables has no use
 # for the routes and should not carry them.
-tables = ["dep:cratefield-tables-api"]
+#
+# Named for the alias rather than for the section: `cratefield::tables`
+# would sit one word away from the generated venture's own
+# `crate::tables` module, which is a different thing.
+tables-api = ["dep:cratefield-tables-api"]
 # Verifies auth-service tokens in a venture that has one (ADR 0016). The
 # notifications module pulls it in already; a feature of its own for a venture
 # that authenticates its own routes without mounting that module.
