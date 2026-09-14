@@ -59,10 +59,33 @@ required = true
 [[tables.tier.fields]]
 name = "rank"
 kind = "integer"
+
+# A composite key. `select_page` builds a lexicographic cursor over every
+# key column; a route that parsed `after` as a path key refused one
+# outright, so the query layer could express the page and the HTTP layer
+# could not ask for it.
+[tables.membership]
+primary_key = ["tenant", "member"]
+
+[[tables.membership.fields]]
+name = "tenant"
+kind = "text"
+required = true
+
+[[tables.membership.fields]]
+name = "member"
+kind = "text"
+required = true
+
+[[tables.membership.fields]]
+name = "role"
+kind = "text"
+required = true
 "#;
 
 const DDL: &str = "CREATE TABLE IF NOT EXISTS note (id TEXT PRIMARY KEY NOT NULL, author TEXT NOT NULL, body TEXT); \
-     CREATE TABLE IF NOT EXISTS tier (slug TEXT PRIMARY KEY NOT NULL, label TEXT NOT NULL, rank INTEGER)";
+     CREATE TABLE IF NOT EXISTS tier (slug TEXT PRIMARY KEY NOT NULL, label TEXT NOT NULL, rank INTEGER); \
+     CREATE TABLE IF NOT EXISTS membership (tenant TEXT NOT NULL, member TEXT NOT NULL, role TEXT NOT NULL, PRIMARY KEY (tenant, member))";
 
 const MIGRATIONS: [SqlMigration; 1] = [SqlMigration::new("0001", "tables", DDL)];
 
@@ -97,7 +120,7 @@ impl Module for DeclaredTables {
         &[Port::Db, Port::Auth]
     }
     fn tables(&self) -> &'static [&'static str] {
-        &["note", "tier"]
+        &["note", "tier", "membership"]
     }
     fn migrations(&self) -> Migrations {
         Migrations::sqlite(&MIGRATIONS)
@@ -115,6 +138,11 @@ impl Module for DeclaredTables {
                 },
                 TableApi {
                     table: declared("tier"),
+                    access: self.access,
+                    subject: None,
+                },
+                TableApi {
+                    table: declared("membership"),
                     access: self.access,
                     subject: None,
                 },
@@ -290,7 +318,15 @@ async fn a_table_the_venture_does_not_declare_is_a_404() {
 async fn a_cursor_resumes_after_the_row_it_names() {
     for kit in kits(Access::PublicRead) {
         seed(&kit).await;
-        let response = get_as(&kit, "/v1/tables/note?after=n1", None).await;
+        let response = get_as(
+            &kit,
+            &format!(
+                "/v1/tables/note?after={}",
+                cursor_param(&serde_json::json!({ "id": "n1" }))
+            ),
+            None,
+        )
+        .await;
         assert_eq!(response.status, 200, "{}", response.body);
         assert_eq!(ids(&response.body), ["n2", "n3"]);
     }
@@ -689,8 +725,148 @@ async fn the_cursor_and_a_filter_hold_together() {
     // the filter the page widens, without the cursor it repeats.
     for kit in kits(Access::PublicRead) {
         seed(&kit).await;
-        let answer = get_as(&kit, "/v1/tables/note?author=ada&after=n1", None).await;
+        let answer = get_as(
+            &kit,
+            &format!(
+                "/v1/tables/note?author=ada&after={}",
+                cursor_param(&serde_json::json!({ "id": "n1" }))
+            ),
+            None,
+        )
+        .await;
         assert_eq!(answer.status, 200, "{}", answer.body);
         assert_eq!(ids(&answer.body), ["n3"]);
+    }
+}
+
+/// The `?after=` value for a cursor the server handed back.
+///
+/// Percent-encoded, because the cursor is JSON and a query string is not
+/// a place to put braces and quotes unescaped.
+fn cursor_param(next: &serde_json::Value) -> String {
+    next.to_string()
+        .bytes()
+        .map(|byte| match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                (byte as char).to_string()
+            }
+            other => format!("%{other:02X}"),
+        })
+        .collect()
+}
+
+#[pollster::test]
+async fn a_composite_key_table_is_served_and_says_when_there_is_no_more() {
+    for kit in kits(Access::TenantMembers) {
+        {
+            use cratefield_core::Statement;
+            for (tenant, member) in [("acme", "ada"), ("acme", "grace"), ("beta", "ada")] {
+                kit.db
+                    .execute(&Statement::with_values(
+                        "INSERT INTO membership (tenant, member, role) VALUES (?, ?, ?)".to_owned(),
+                        vec![tenant.into(), member.into(), "member".into()],
+                    ))
+                    .await
+                    .expect("seeded");
+            }
+        }
+        let first = get_as(&kit, "/v1/tables/membership", Some("ada")).await;
+        assert_eq!(first.status, 200, "{}", first.body);
+        let body = serde_json::from_str::<serde_json::Value>(&first.body).expect("json");
+        assert_eq!(body["rows"].as_array().expect("rows").len(), 3);
+        assert!(
+            body["next"].is_null(),
+            "a short page claimed more: {}",
+            first.body
+        );
+    }
+}
+
+#[pollster::test]
+async fn a_full_page_of_a_composite_key_table_round_trips_its_cursor() {
+    // The whole point: whatever `next` is, sending it back works. A
+    // composite key could not be expressed at all through the old path
+    // parser, so this page was unreachable over HTTP.
+    for kit in kits(Access::TenantMembers) {
+        {
+            use cratefield_core::Statement;
+            for n in 0..(cratefield_tables_api::PAGE + 2) {
+                kit.db
+                    .execute(&Statement::with_values(
+                        "INSERT INTO membership (tenant, member, role) VALUES (?, ?, ?)".to_owned(),
+                        vec!["acme".into(), format!("m{n:03}").into(), "member".into()],
+                    ))
+                    .await
+                    .expect("seeded");
+            }
+        }
+        let first = get_as(&kit, "/v1/tables/membership", Some("ada")).await;
+        let next =
+            serde_json::from_str::<serde_json::Value>(&first.body).expect("json")["next"].clone();
+        assert!(
+            !next.is_null(),
+            "a full page has more after it: {}",
+            first.body
+        );
+
+        let second = get_as(
+            &kit,
+            &format!("/v1/tables/membership?after={}", cursor_param(&next)),
+            Some("ada"),
+        )
+        .await;
+        assert_eq!(
+            second.status, 200,
+            "the cursor was refused: {}",
+            second.body
+        );
+        let rows = serde_json::from_str::<serde_json::Value>(&second.body).expect("json");
+        assert!(
+            !rows["rows"].as_array().expect("rows").is_empty(),
+            "the second page is empty: {}",
+            second.body
+        );
+    }
+}
+
+#[pollster::test]
+async fn a_cursor_that_is_not_this_tables_is_refused_with_a_reason() {
+    for kit in kits(Access::PublicRead) {
+        seed(&kit).await;
+        // Not JSON at all — the shape a client would send if it had
+        // guessed the old bare-value form.
+        let bare = get_as(&kit, "/v1/tables/note?after=n1", None).await;
+        assert_eq!(bare.status, 400, "{}", bare.body);
+        assert!(bare.body.contains("bad-cursor"), "{}", bare.body);
+
+        // An object naming the key, with a value that is not its kind.
+        let wrong_kind = get_as(
+            &kit,
+            &format!(
+                "/v1/tables/note?after={}",
+                cursor_param(&serde_json::json!({ "id": 42 }))
+            ),
+            None,
+        )
+        .await;
+        assert_eq!(wrong_kind.status, 400, "{}", wrong_kind.body);
+        assert!(
+            wrong_kind.body.contains("is text"),
+            "say what it should be: {}",
+            wrong_kind.body
+        );
+
+        // An object that does not name the key at all.
+        let missing = get_as(
+            &kit,
+            &format!(
+                "/v1/tables/note?after={}",
+                cursor_param(&serde_json::json!({ "slug": "x" }))
+            ),
+            None,
+        )
+        .await;
+        assert_eq!(missing.status, 400, "{}", missing.body);
+        assert!(missing.body.contains("`id`"), "say which: {}", missing.body);
     }
 }

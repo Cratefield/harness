@@ -31,6 +31,8 @@ pub use access::{
 };
 pub use declared::{Declared, parse};
 pub use read::{PAGE, Tables, one, page};
-pub use routes::{BAD_KEY, COMPOSITE_KEY, Key, key_from_path, router};
+pub use routes::{
+    BAD_CURSOR, BAD_KEY, COMPOSITE_KEY, Key, cursor_from_query, key_from_path, router,
+};
 pub use surface::surface;
 pub use write::{ALREADY_EXISTS, NOT_A_ROW, create, remove, replace};

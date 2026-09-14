@@ -36,6 +36,14 @@ use serde_json::{Value, json};
 
 use crate::read::{Tables, one, page};
 
+/// The cursor is not one this table hands out.
+pub const BAD_CURSOR: ProblemDef = ProblemDef {
+    slug: "bad-cursor",
+    status: StatusCode::BAD_REQUEST,
+    title: "Not a cursor for this table",
+    description: "The `after` parameter is not the `next` value from a previous page of this table.",
+};
+
 /// The key in the path is not one this table can be addressed by.
 pub const BAD_KEY: ProblemDef = ProblemDef {
     slug: "bad-key",
@@ -98,7 +106,7 @@ async fn page_route(
     // a `WHERE` comparing a string to an integer further down.
     let declared = tables.declared(&table);
     let after = match (&query.after, declared) {
-        (Some(raw), Some(api)) => Some(key_from_path(&api.table, raw)?),
+        (Some(raw), Some(api)) => Some(cursor_from_query(&api.table, raw)?),
         _ => None,
     };
     let filters = match declared {
@@ -301,4 +309,52 @@ fn value_from_text(field: &cratefield_tables::FieldDef, raw: &str) -> Result<Val
         // key order and spacing.
         FieldKind::Json => return Err(bad()),
     })
+}
+
+/// The `?after=` cursor, which is the `next` the server handed back.
+///
+/// JSON, not a bare value, and the same shape `next` is emitted in — a
+/// client pages by sending back what it was given, and two shapes would
+/// mean every client carries the translation between them. The only place
+/// that knowledge exists is here.
+///
+/// [`key_from_path`] is the wrong parser for this even for a
+/// single-column key: it exists for a **path segment**, which can carry
+/// one value, so it refuses a composite key. A query parameter has no
+/// such constraint, and refusing there made a composite-key table
+/// unpageable past its first page over HTTP while `select_page` could
+/// express the query perfectly well.
+///
+/// # Errors
+///
+/// [`BAD_CURSOR`] when the value is not JSON, is not an object, or does
+/// not carry every primary-key column as its declared kind.
+pub fn cursor_from_query(table: &TableDef, raw: &str) -> Result<Key, Problem> {
+    let value: Value = serde_json::from_str(raw).map_err(|_ignored| {
+        Problem::new(&BAD_CURSOR).with_detail(
+            "the cursor is the `next` value from a previous page, sent back as it was given",
+        )
+    })?;
+    let Some(object) = value.as_object() else {
+        return Err(Problem::new(&BAD_CURSOR)
+            .with_detail("the cursor names each primary-key column, so it is a JSON object"));
+    };
+    for column in &table.primary_key {
+        let Some(given) = object.get(column).filter(|value| !value.is_null()) else {
+            return Err(Problem::new(&BAD_CURSOR)
+                .with_detail(format!("the cursor does not name `{column}`")));
+        };
+        let field = table
+            .fields
+            .iter()
+            .find(|field| &field.name == column)
+            .ok_or_else(|| Problem::new(&crate::access::MISDECLARED))?;
+        if cratefield_tables::to_sql(field, Some(given)).is_none() {
+            return Err(Problem::new(&BAD_CURSOR).with_detail(format!(
+                "`{column}` is {} and the cursor's value is not",
+                field.kind.as_str()
+            )));
+        }
+    }
+    Ok(Key(value))
 }
