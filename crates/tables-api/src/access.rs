@@ -14,6 +14,21 @@
 //! that answer by construction rather than by remembering to: the
 //! subject filter is part of the same `WHERE` as the key, so the row
 //! simply does not match.
+//!
+//! # `tenant-members` checks that a caller is verified, not that they are
+//! a member
+//!
+//! There is no membership fact to check. A [`Caller`] is an id, a session
+//! and an address; `Ports::tenants` is not a [`Port`](cratefield_core::Port)
+//! and `view_for` never copies it, so a module cannot ask which tenant it
+//! is serving either. The level therefore admits every subject the
+//! deployment's one verifier accepts.
+//!
+//! Where declared tables run today that is the same set: a venture `fz
+//! build` generates has no tenant registry, so it has one tenant and every
+//! verified subject is a member of it. It stops being the same set on a
+//! deployment with a registry, where the tenant comes from the `Host`
+//! header and the verifier does not — issue #385.
 
 use cratefield_core::{Caller, Problem, ProblemDef};
 use cratefield_manifest::Access;

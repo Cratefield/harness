@@ -180,6 +180,14 @@ writable.
 | `owner` | a signed-in caller, their own rows |
 | `admin` | an admin token |
 
+**`tenant-members` means any verified caller, not a member of this
+tenant.** There is no membership fact to check: a `Caller` carries an id,
+a session and an address, and `Ports::tenants` is not a `Port`, so a
+module cannot ask which tenant it is serving either. On a deployment
+without a registry — every venture `fz build` generates — the two are the
+same set, because there is one tenant. On one with a registry they are
+not, and issue #385 carries the analysis.
+
 **A row a caller writes is a row they own.** Under `owner` the subject
 column is settled by the harness, not taken from the body: absent or null
 is filled in with the caller's id, already theirs is left alone, and

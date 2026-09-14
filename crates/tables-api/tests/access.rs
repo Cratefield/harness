@@ -80,9 +80,18 @@ fn a_tenant_table_tells_an_anonymous_caller_to_sign_in() {
 }
 
 #[test]
-fn a_tenant_table_serves_every_row_to_a_member() {
-    let reach =
-        may_read(&api(Access::TenantMembers, None), &ada(), Ok(())).expect("a member reaches it");
+fn a_tenant_table_serves_every_row_to_any_verified_caller() {
+    // Named for what it establishes. Nothing here makes Ada a member of
+    // anything, and nothing in `may_read` could check it if it did: there
+    // is no tenant in the decision and no tenant on a `Subject`. The
+    // level admits whoever the deployment's verifier accepts, which is
+    // the same set as "a member" only on a deployment with one tenant —
+    // issue #385.
+    //
+    // The name it had, `..._to_a_member`, asserted a fact the test never
+    // supplied, which is the way a test stops being able to fail.
+    let reach = may_read(&api(Access::TenantMembers, None), &ada(), Ok(()))
+        .expect("a verified caller reaches it");
     assert_eq!(reach, Reach::Everything);
 }
 

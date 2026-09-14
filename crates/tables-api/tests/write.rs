@@ -348,7 +348,12 @@ fn a_body_that_is_not_a_legal_row_is_refused_before_the_database_sees_it() {
 }
 
 #[test]
-fn a_tenant_member_writes_any_row() {
+fn any_verified_caller_writes_any_row_of_a_tenant_table() {
+    // Ada overwrites a row whose subject column says `grace`, which is
+    // the level: `tenant-members` is not scoped to the caller's own rows.
+    // It is not scoped to the caller's own *tenant* either — nothing here
+    // makes Ada a member of one and the decision has no tenant in it
+    // (issue #385).
     let db = seeded();
     let tables = tables(Access::TenantMembers);
     pollster::block_on(replace(
@@ -358,9 +363,9 @@ fn a_tenant_member_writes_any_row() {
         &scope(),
         "note",
         &json!({ "id": "n2" }),
-        json!({ "id": "n2", "author": "grace", "body": "edited by a member" }),
+        json!({ "id": "n2", "author": "grace", "body": "edited by another caller" }),
     ))
-    .expect("members reach every row");
+    .expect("a verified caller reaches every row");
 }
 
 #[test]
