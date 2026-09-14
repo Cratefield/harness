@@ -7,6 +7,49 @@ use axum::response::Response;
 use bytes::Bytes;
 use serde_json::Value;
 
+/// The same, carrying `Authorization: Bearer <token>`.
+///
+/// Every venture with a table whose access is not `public-read` needs
+/// this, and so does every admin-guarded route — and the kit did not have
+/// it, so three crates in this workspace each hand-rolled the same
+/// builder over `tower::ServiceExt`. A venture cannot: `tower` is not one
+/// of its dependencies, and telling an author to add one to test the
+/// routes the harness generated is telling them to work around the kit.
+///
+/// # Panics
+///
+/// Panics when the router itself fails (never for ordinary responses).
+pub async fn request_as(
+    router: &axum::Router,
+    method: Method,
+    path: &str,
+    bearer: &str,
+    json: Option<&str>,
+) -> TestResponse {
+    use tower::ServiceExt;
+    let mut builder = Request::builder()
+        .method(method)
+        .uri(path)
+        .header(header::AUTHORIZATION, format!("Bearer {bearer}"));
+    let body = match json {
+        Some(payload) => {
+            builder = builder.header(
+                header::CONTENT_TYPE,
+                HeaderValue::from_static("application/json"),
+            );
+            Body::from(payload.to_owned())
+        }
+        None => Body::empty(),
+    };
+    let request = builder.body(body).expect("request builds");
+    let response = router
+        .clone()
+        .oneshot(request)
+        .await
+        .expect("router answers");
+    TestResponse::from(response).await
+}
+
 /// Sends a request through the router without a network. `json` (when
 /// `Some`) becomes a JSON body with `content-type: application/json`.
 ///

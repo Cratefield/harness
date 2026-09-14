@@ -61,7 +61,7 @@ pub use harness::TestHarness;
 #[cfg(feature = "port-conformance")]
 pub use port::{assert_wasm_safe_deps, push_recipient_conformance};
 #[cfg(feature = "harness")]
-pub use request::{TestResponse, request};
+pub use request::{TestResponse, request, request_as};
 #[cfg(feature = "harness")]
 pub use sidecar::{FakeSidecar, Fault, shared as shared_sidecar};
 pub use tmp::TempDir;
