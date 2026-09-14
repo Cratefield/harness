@@ -49,7 +49,31 @@ the point of it.
 | `503 verifier-unavailable` | a credential was presented and could not be checked |
 | `500 table-misdeclared` | `owner` with no subject column to match against |
 
-The two 404s are the same answer on purpose. Writes are the next piece.
+The two 404s are the same answer on purpose.
+
+## The routes
+
+| route | answers |
+|---|---|
+| `GET /{table}` | a page of rows, and `next` when there is another |
+| `GET /{table}/{key}?after=` | one row by its primary key |
+
+Mounted under the generated module's name, so a venture's `note` table is
+at `/v1/tables/note`.
+
+This is the layer that insists on a `TenantConn`. `page` and `one` take
+the trait so they can be exercised without an HTTP stack; the extractor
+can only hand back the handle the resolution layer resolved for *this*
+request's tenant.
+
+A key in a path is one segment, so a table whose primary key is more than
+one column is refused (`400 composite-key`) rather than addressed through
+an invented separator — which would make a key containing that separator
+unaddressable, silently, and only for the rows that contain it. A `real`,
+`boolean` or `json` key is refused too: a float compared with `=` is a key
+that sometimes matches nothing, for reasons the caller cannot see.
+
+Writes are the next piece.
 
 ## The rules, and why each is that way
 

@@ -86,6 +86,12 @@ pub struct Tables {
 }
 
 impl Tables {
+    /// The declared table of that name, if the venture declares one.
+    #[must_use]
+    pub fn declared(&self, name: &str) -> Option<&TableApi> {
+        self.tables.iter().find(|api| api.table.name == name)
+    }
+
     fn find(&self, name: &str) -> Result<&TableApi, Problem> {
         self.tables
             .iter()
