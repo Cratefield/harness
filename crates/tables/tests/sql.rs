@@ -687,6 +687,64 @@ fn a_filter_value_of_the_wrong_kind_is_refused() {
 }
 
 #[test]
+fn a_filter_on_a_json_column_is_refused_in_every_path() {
+    // A JSON column is stored as its serialization, and `serde_json` runs
+    // with `preserve_order` here, so `= ?` compares text whose bytes
+    // depend on the order the keys were written in. The same value asked
+    // for two ways is two different questions, and neither answer looks
+    // wrong.
+    //
+    // The query-string parser refuses these and says exactly that. A
+    // batch read carries JSON values rather than text, so without this it
+    // could ask what the other path cannot — which is where the null
+    // filter hid too.
+    let filters = [Filter {
+        column: "meta".to_owned(),
+        value: json!({ "tier": "gold", "since": 2026 }),
+    }];
+    let error = select_page(
+        &note(),
+        Page {
+            limit: 10,
+            after: None,
+            owned: None,
+            filters: &filters,
+            sort: None,
+        },
+    )
+    .expect_err("json has no canonical text to compare");
+    assert_eq!(error.column, "meta", "{error}");
+}
+
+#[test]
+fn a_null_filter_on_a_json_column_still_asks_whether_it_is_unset() {
+    // "Is this column set at all" is a question about the column and not
+    // about what is inside it, so it survives the refusal above — and a
+    // refusal that swallowed it would take away the one thing a caller
+    // can usefully ask about a JSON column.
+    let filters = [Filter {
+        column: "meta".to_owned(),
+        value: Value::Null,
+    }];
+    let statement = select_page(
+        &note(),
+        Page {
+            limit: 10,
+            after: None,
+            owned: None,
+            filters: &filters,
+            sort: None,
+        },
+    )
+    .expect("unset is a question about the column");
+    assert!(
+        statement.sql.contains("\"meta\" IS NULL"),
+        "{}",
+        statement.sql
+    );
+}
+
+#[test]
 fn a_filter_for_a_null_asks_is_null_and_not_equals_null() {
     // Nothing equals null in SQL, itself included. `WHERE body = ?` bound
     // to a null is false for every row, so a caller asking for the rows
