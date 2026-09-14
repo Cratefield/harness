@@ -63,6 +63,11 @@ kms = ["dep:cratefield-kms"]
 # does not need it to run; `fz` reads it, and so does anything generating a
 # composition from a manifest.
 manifest = ["dep:cratefield-manifest"]
+# Serves the tables a venture declares (issue #153). `fz build` turns it
+# on for a venture whose manifest has a `[tables]` section, and leaves it
+# off for one that does not — a venture with no declared tables has no use
+# for the routes and should not carry them.
+tables = ["dep:cratefield-tables-api"]
 # Verifies auth-service tokens in a venture that has one (ADR 0016). The
 # notifications module pulls it in already; a feature of its own for a venture
 # that authenticates its own routes without mounting that module.
@@ -105,6 +110,7 @@ cratefield-ui = { workspace = true, optional = true }
 # `publish = false` until its first manual publish (docs/RELEASING.md).
 cratefield-i18n = { workspace = true, optional = true }
 cratefield-manifest = { workspace = true, optional = true }
+cratefield-tables-api = { path = "../tables-api", optional = true }
 cratefield-auth-client = { workspace = true, optional = true }
 cratefield-secrets = { workspace = true, optional = true }
 cratefield-kms = { workspace = true, optional = true }
