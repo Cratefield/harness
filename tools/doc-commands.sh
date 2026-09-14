@@ -38,6 +38,7 @@ cd "$root"
 DOC_FILES=(
   "README.md"
   "docs/VENTURE-GUIDE.md"
+  "docs/TABLES.md"
 )
 
 fail=0
@@ -89,6 +90,16 @@ dollar_commands() {
 registry() {
   case "$1" in
     # ---- README.md -------------------------------------------------------
+    docs/TABLES.md:1) echo "skip:manifest excerpt, not a command" ;;
+    docs/TABLES.md:2) echo "skip:manifest excerpt, not a command" ;;
+    docs/TABLES.md:3) echo "skip:manifest excerpt, not a command" ;;
+    # The two `fz tables` commands take an author's own manifests and a
+    # live database, so neither runs here. Both are covered by
+    # `crates/cli-acceptance/tests/tables_drift.rs`, which drives
+    # `diff_report` and `drift_report` over real fixtures and a real
+    # Postgres in the `test` job.
+    docs/TABLES.md:4) echo "skip:runs inside a venture against two of its manifests; the flags are covered by cli-acceptance tables_drift" ;;
+    docs/TABLES.md:5) echo "skip:runs inside a venture against a live database; covered by cli-acceptance tables_drift" ;;
     README.md:1) echo "skip:rust composition example, not a command" ;;
     README.md:2) echo "skip:mermaid diagram, not a command" ;;
     README.md:3) echo "skip:toml dependency example, not a command" ;;
