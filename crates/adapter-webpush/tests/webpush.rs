@@ -190,13 +190,32 @@ fn delivers_and_sends_the_rfc8030_request() {
         // The legacy pre-RFC header is deliberately not sent.
         assert_eq!(seen.maybe_header("crypto-key"), None);
         assert!(seen.header("authorization").starts_with("vapid t="));
-        // The body is the encrypted record, never the JSON.
-        assert!(!seen.body.starts_with(b"{"));
+        // The body is the encrypted record, never the JSON — checked by
+        // looking for the plaintext rather than at the first byte.
+        //
+        // `!body.starts_with(b"{")` was the check, and an aes128gcm
+        // record begins with a random 16-byte salt, so it failed
+        // whenever that first byte happened to be `{`. One run in 256,
+        // and it spent one on an unrelated pull request. A test that
+        // fails on a coin flip is worse than no test: the next red is
+        // read as the same coin.
+        //
+        // Looking for the plaintext anywhere in the body is both
+        // deterministic and the property actually wanted, which is that
+        // nothing readable reaches the wire.
+        const PLAINTEXT: &[u8] = b"{\"title\":\"Hi\",\"body\":\"there\",\"silent\":false}";
+        assert!(
+            !seen
+                .body
+                .windows(PLAINTEXT.len())
+                .any(|window| window == PLAINTEXT),
+            "the notification reached the wire in the clear"
+        );
+        // Paired with the length, so the absence above cannot pass by the
+        // body being empty or the request never carrying one.
         assert_eq!(
             seen.body.len(),
-            ece::WEB_PUSH_HEADER_LEN
-                + 17
-                + b"{\"title\":\"Hi\",\"body\":\"there\",\"silent\":false}".len()
+            ece::WEB_PUSH_HEADER_LEN + 17 + PLAINTEXT.len()
         );
     });
 }
