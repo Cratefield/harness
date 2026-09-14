@@ -41,6 +41,14 @@ mod tenant;
 mod tenant_conn;
 mod venture;
 
+// `Module::router` returns an `axum::Router` and `well_known` an
+// `Option<axum::Router>`, so a module author cannot implement the trait
+// without axum — and an out-of-tree one has no workspace to inherit the
+// version from. Picking a semver-incompatible one gives a type error
+// about two `Router`s that look identical, which is a bad afternoon.
+// Re-exported so there is one axum and it is this crate's.
+pub use axum;
+
 pub use admin::{bearer_token, constant_time_eq, require_admin};
 pub use config::{Config, ConfigError, EmptyConfig, HarnessConfig, MapConfig, ModuleConfig};
 pub use cooldown::SendCooldown;

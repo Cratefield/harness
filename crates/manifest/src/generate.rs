@@ -117,27 +117,11 @@ pub enum GenerateError {
     /// A resolved module has no codegen entry (in the catalog but the
     /// generator has not been taught to compose it).
     NotGeneratable(String),
-    /// The manifest declares its own tables (issue #153) and the
-    /// generator cannot yet produce them.
-    ///
-    /// A refusal rather than a warning, because the alternative is a
-    /// venture that builds, deploys and answers requests while the tables
-    /// its author declared do not exist — a failure that surfaces as a
-    /// missing-table error from a handler, a long way from the manifest
-    /// that caused it.
-    TablesNotGenerated(usize),
 }
 
 impl std::fmt::Display for GenerateError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            GenerateError::TablesNotGenerated(count) => write!(
-                f,
-                "the manifest declares {count} table(s) of its own, and the composition \
-                 generator cannot create them yet (harness #153: the CRUD layer and the \
-                 migration it would emit are not built). Remove the [tables] section, or \
-                 declare the tables in a module until it is."
-            ),
             GenerateError::NotGeneratable(slug) => write!(
                 f,
                 "module `{slug}` resolves but the composition generator does not know how to \
@@ -160,13 +144,6 @@ pub fn generate(
     module_set: &ModuleSet,
     source: &HarnessSource,
 ) -> Result<GeneratedVenture, GenerateError> {
-    // Before anything is rendered: a declaration the generator cannot
-    // honour must not produce a venture that looks complete.
-    if !manifest.tables.is_empty() {
-        return Err(GenerateError::TablesNotGenerated(
-            manifest.tables.tables.len(),
-        ));
-    }
     let modules: Vec<&'static ModuleCodegen> = module_set
         .slugs()
         .iter()
@@ -193,6 +170,12 @@ pub fn generate(
             contents: wrangler_toml(manifest),
         },
     ];
+    if crate::generate_tables::declares_tables(manifest) {
+        files.push(GeneratedFile {
+            path: crate::generate_tables::PATH.to_owned(),
+            contents: crate::generate_tables::tables_rs(manifest),
+        });
+    }
     if let Some(seed) = &manifest.seed_sql {
         files.push(GeneratedFile {
             path: "seed.sql".to_owned(),
@@ -310,6 +293,9 @@ fn lib_rs(manifest: &VentureManifest, modules: &[&ModuleCodegen], needs_mailer: 
          use worker::{Context, Env, Request, Response, event};\n\n\
          static INSTANCE: OnceLock<(Harness, Cloudflare)> = OnceLock::new();\n\n",
     );
+    if crate::generate_tables::declares_tables(manifest) {
+        out.push_str("pub mod tables;\n\n");
+    }
 
     // The runtime, built the same way in `harness()` (for validation and
     // `fz`) and in `instance()` (for serving).
@@ -374,19 +360,34 @@ fn lib_rs(manifest: &VentureManifest, modules: &[&ModuleCodegen], needs_mailer: 
         }
     }
 
+    // `.cors_origins([])` has no inferable element type, so a venture
+    // that lists no origins generated a crate that did not compile. The
+    // call is omitted instead of emitted empty — every fixture in the
+    // tests happened to list one, which is why nothing said so.
+    let tail = if manifest.cors_origins.is_empty() {
+        String::new()
+    } else {
+        format!("\n\x20               .cors_origins([{cors}]),")
+    };
     let _ = write!(
         out,
         "    let harness = Harness::builder()\n\
          \x20       .venture(\n\
          \x20           cratefield::Venture::new(\"{name}\", \"{host}\")\n\
-         \x20               .public_url(\"{public_url}\")\n\
-         \x20               .cors_origins([{cors}]),\n\
+         \x20               .public_url(\"{public_url}\"){tail}\n\
          \x20       )\n",
         name = manifest.name,
         host = manifest.host,
     );
     for m in modules {
         let _ = writeln!(out, "        .module({ty}::new())", ty = m.type_name);
+    }
+    if crate::generate_tables::declares_tables(manifest) {
+        let _ = writeln!(
+            out,
+            "        .module(crate::tables::{ty}::new())",
+            ty = crate::generate_tables::TYPE
+        );
     }
     if modules.iter().any(|m| m.has_templates) {
         out.push_str("        .templates(templates)\n");
