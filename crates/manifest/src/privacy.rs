@@ -163,10 +163,23 @@ fn check_one(
             description,
             redacted,
         } => {
-            if !has(subject) {
-                problems.push(format!(
+            match table.fields.iter().find(|field| &field.name == subject) {
+                None => problems.push(format!(
                     "table `{at}`: the subject column `{subject}` is not a field of it"
-                ));
+                )),
+                // A subject is a caller's id, which is a string out of a
+                // verified credential. A column that cannot hold one
+                // makes every scoped read fail while the statement is
+                // built — a 400 blaming the caller for a filter they did
+                // not send, and naming the table's subject column in the
+                // detail — rather than failing here, where the mistake
+                // is.
+                Some(field) if !field.kind.can_hold_a_subject() => problems.push(format!(
+                    "table `{at}`: the subject column `{subject}` is {}, which cannot hold a \
+                     caller's id — a subject column is `text` or `uuid`",
+                    field.kind.as_str()
+                )),
+                Some(_holds_a_subject) => {}
             }
             if !KINDS.contains(&kind.as_str()) {
                 problems.push(format!(

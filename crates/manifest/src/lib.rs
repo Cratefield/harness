@@ -609,6 +609,50 @@ mod tests {
     }
 
     #[test]
+    fn a_subject_column_must_be_able_to_hold_a_caller_id() {
+        // A subject is a caller's id: a string out of a verified
+        // credential. Declared on a column that cannot hold one, every
+        // scoped read failed while its statement was built, and answered
+        // `400 bad-filter` with the detail "`author` the subject this
+        // read is scoped to is not integer" — blaming the caller for a
+        // filter they never sent, and naming the table's subject column,
+        // which the refusal for exactly this case says must never reach
+        // one.
+        let declare = |kind: &str| -> Result<(), ManifestError> {
+            let json = format!(
+                r#"{{
+                    "name": "acme", "host": "acme.factory0.dev",
+                    "cors_origins": ["https://acme.example"], "modules": [],
+                    "tables": {{ "note": {{ "primary_key": "id", "fields": [
+                        {{ "name": "id", "kind": "uuid", "required": true }},
+                        {{ "name": "author", "kind": "{kind}" }}
+                    ] }} }},
+                    "table_privacy": {{ "note": {{
+                        "holds": "personal", "subject": "author", "kind": "content",
+                        "disposition": "erase", "description": "Notes."
+                    }} }},
+                    "table_access": {{ "note": "owner" }}
+                }}"#
+            );
+            VentureManifest::from_json_str(&json)
+                .expect("parses")
+                .validate()
+        };
+
+        let text = declare("integer")
+            .expect_err("cannot hold an id")
+            .to_string();
+        assert!(text.contains("cannot hold a caller's id"), "{text}");
+        assert!(text.contains("`text` or `uuid`"), "{text}");
+
+        // The other half: the rule refuses a kind, not every declaration.
+        // A check that only ever refused would satisfy the assertion
+        // above and take the feature away.
+        declare("uuid").expect("a uuid holds an id");
+        declare("text").expect("so does text");
+    }
+
+    #[test]
     fn anonymise_names_columns_a_database_can_actually_overwrite() {
         // The same check `cratefield-module-privacy` makes against the
         // applied schema rather than trusting: a `NOT NULL` column with

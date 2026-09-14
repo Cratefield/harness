@@ -78,6 +78,10 @@ subject access and outside erasure, silently. *Personal unless you say
 otherwise* deletes a venture's reference data the first time somebody
 asks for an erasure.
 
+`subject` names the column holding whose each row is, and it is `text`
+or `uuid`: what goes in it is a caller's id out of a verified credential,
+and a column of another kind cannot hold one.
+
 `description` is published verbatim to the person asking, so write it for
 them. `reason` is what makes "holds nothing" a decision rather than a
 silence.
