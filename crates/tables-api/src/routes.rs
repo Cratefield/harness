@@ -1,11 +1,16 @@
 //! The axum routes over a venture's declared tables (issue #153).
 //!
-//! Two, both reads:
-//!
 //! | route | answers |
 //! |---|---|
 //! | `GET /{table}` | a page of rows, and a cursor when there is another |
+//! | `POST /{table}` | the row it created |
 //! | `GET /{table}/{key}` | one row by its primary key |
+//! | `PUT /{table}/{key}` | the row it replaced |
+//! | `DELETE /{table}/{key}` | `204`, and nothing |
+//!
+//! These are the five the surface publishes. A published action whose
+//! route does not exist is worse than an unpublished one: a generated UI
+//! renders the form and the submission 404s.
 //!
 //! Mounted under the generated module's name, so a venture's `note`
 //! table is at `/v1/tables/note`.
@@ -54,8 +59,11 @@ pub const COMPOSITE_KEY: ProblemDef = ProblemDef {
 /// The routes, over the declared tables in `tables`.
 pub fn router(tables: Arc<Tables>) -> Router {
     Router::new()
-        .route("/{table}", get(page_route))
-        .route("/{table}/{key}", get(one_route))
+        .route("/{table}", get(page_route).post(create_route))
+        .route(
+            "/{table}/{key}",
+            get(one_route).put(replace_route).delete(remove_route),
+        )
         .with_state(tables)
 }
 
@@ -154,4 +162,52 @@ pub fn key_from_path(table: &TableDef, segment: &str) -> Result<Key, Problem> {
         }
     };
     Ok(Key(json!({ column.as_str(): value })))
+}
+
+async fn create_route(
+    scope: Scope,
+    conn: TenantConn,
+    State(tables): State<Arc<Tables>>,
+    Path(table): Path<String>,
+    headers: HeaderMap,
+    body: axum::Json<Value>,
+) -> Result<(StatusCode, axum::Json<Value>), Problem> {
+    let row = crate::write::create(&tables, &conn, &headers, &scope, &table, body.0).await?;
+    // 201, because a create that answers 200 is indistinguishable from an
+    // update to a client that is watching status codes.
+    Ok((StatusCode::CREATED, axum::Json(row)))
+}
+
+async fn replace_route(
+    scope: Scope,
+    conn: TenantConn,
+    State(tables): State<Arc<Tables>>,
+    Path((table, key)): Path<(String, String)>,
+    headers: HeaderMap,
+    body: axum::Json<Value>,
+) -> Result<axum::Json<Value>, Problem> {
+    let api = tables
+        .declared(&table)
+        .ok_or_else(|| Problem::new(&crate::read::NO_SUCH_TABLE))?;
+    let key = key_from_path(&api.table, &key)?;
+    let row =
+        crate::write::replace(&tables, &conn, &headers, &scope, &table, &key.0, body.0).await?;
+    Ok(axum::Json(row))
+}
+
+async fn remove_route(
+    scope: Scope,
+    conn: TenantConn,
+    State(tables): State<Arc<Tables>>,
+    Path((table, key)): Path<(String, String)>,
+    headers: HeaderMap,
+) -> Result<StatusCode, Problem> {
+    let api = tables
+        .declared(&table)
+        .ok_or_else(|| Problem::new(&crate::read::NO_SUCH_TABLE))?;
+    let key = key_from_path(&api.table, &key)?;
+    crate::write::remove(&tables, &conn, &headers, &scope, &table, &key.0).await?;
+    // No body: there is nothing left to describe, and inventing one
+    // ("deleted": true) is a second thing to keep true.
+    Ok(StatusCode::NO_CONTENT)
 }

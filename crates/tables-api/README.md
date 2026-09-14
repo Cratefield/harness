@@ -55,8 +55,23 @@ The two 404s are the same answer on purpose.
 
 | route | answers |
 |---|---|
-| `GET /{table}` | a page of rows, and `next` when there is another |
-| `GET /{table}/{key}?after=` | one row by its primary key |
+| `GET /{table}?after=` | a page of rows, and `next` when there is another |
+| `POST /{table}` | `201` and the row it created |
+| `GET /{table}/{key}` | one row by its primary key |
+| `PUT /{table}/{key}` | `200` and the row it replaced |
+| `DELETE /{table}/{key}` | `204`, and nothing |
+
+These are the five the surface publishes, and
+`every_published_action_is_a_route_that_exists` is what keeps the two
+lists the same. A published action whose route does not exist is worse
+than an unpublished one: a generated UI renders the form and the
+submission 405s.
+
+A create answers `201` rather than `200`, because a create that answers
+`200` is indistinguishable from an update to a client watching status
+codes. A delete answers `204` with no body: there is nothing left to
+describe, and inventing one (`"deleted": true`) is a second thing to keep
+true.
 
 Mounted under the generated module's name, so a venture's `note` table is
 at `/v1/tables/note`.
