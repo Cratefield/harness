@@ -69,7 +69,7 @@ pub fn lint_portable_sql(sql: &str) -> Vec<(&'static str, &'static str)> {
 /// *specific* forms and not bare `pan`, `track` or `expiry`, which collide with
 /// legitimate columns — an audio `pan`, a music `track`, a `session_expiry`
 /// (issue #44).
-const CARD_DATA: &[&str] = &[
+pub const CARD_DATA: &[&str] = &[
     "card_number",
     "cardnumber",
     "card_no",
@@ -88,8 +88,18 @@ const CARD_DATA: &[&str] = &[
     "expiry_date",
     "expiration_date",
     "track_data",
+    "track2",
     "magstripe",
     "magnetic_stripe",
+    // `tools/migration-guard.sh` carried these four and this list did
+    // not, so the same non-goal was two different rules: a `.sql`
+    // migration naming `expiry_month` failed the shell guard, and a
+    // declared table naming it passed everything, because a declared
+    // table's DDL is not a `.sql` file and only ever meets this list.
+    // `the_migration_guard_knows_the_same_card_data` keeps them one.
+    "cardholder",
+    "expiry_month",
+    "expiry_year",
 ];
 
 /// The first card-data fragment `text` contains (case-insensitive), or `None`.

@@ -125,19 +125,17 @@ fn a_migration_adding_card_number_fails_the_guard() {
 
 #[test]
 fn every_card_data_column_name_is_refused() {
-    // The whole pattern, so widening it later cannot silently narrow it.
-    for column in [
-        "pan",
-        "cardholder",
-        "card_number",
-        "cardnumber",
-        "cvv",
-        "cvc",
-        "card_cvv",
-        "expiry_month",
-        "expiry_year",
-        "track2",
-    ] {
+    // Read from `cratefield_core::CARD_DATA` rather than written out, so
+    // widening the rule later cannot silently narrow it and a fourth copy
+    // of the list cannot drift from the other three.
+    //
+    // It used to be written out, and it had drifted: it required a bare
+    // `pan` to be refused, which `docs/CARD-DATA.md` says the predicate
+    // "deliberately does not match ... (an audio pan, a music track, a
+    // `session_expiry`)". The shell guard agreed with the test and both
+    // disagreed with the document and with the Rust list that a declared
+    // table is checked against.
+    for column in cratefield_core::CARD_DATA {
         let fixture = Fixture::with_migration(
             "0001_init.sql",
             &format!("CREATE TABLE t (\n  {column} TEXT\n);\n"),

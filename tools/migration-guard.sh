@@ -90,7 +90,14 @@ done
 # --- 3. Card data never enters a schema (#44) --------------------------
 #
 # The non-goal is enforced where the column would be created, not after.
-card_pattern='\b(pan|cardholder|card_number|cardnumber|cvv|cvc|card_cvv|expiry_month|expiry_year|track2)\b'
+# The fragments are `cratefield_core::CARD_DATA`, which is the canonical
+# list and the one a declared table is checked against. They were two
+# different lists until they were compared: each caught things the other
+# missed, and this one also flagged a bare `pan` — an audio pan column,
+# which is why the canonical list deliberately leaves it out.
+#
+# `the_migration_guard_knows_the_same_card_data` fails if they drift.
+card_pattern='\b(card_cvc|card_cvv|card_expiry|card_no|card_number|cardholder|cardno|cardnumber|cvc|cvc2|cvv|cvv2|exp_month|exp_year|expiration_date|expiry_date|expiry_month|expiry_year|full_pan|magnetic_stripe|magstripe|primary_account_number|track2|track_data)\b'
 while IFS= read -r path; do
   if hits=$(grep -inE "$card_pattern" "$path" 2>/dev/null); then
     fail "$path names card data: ${hits%%$'\n'*}. Storing it is a non-goal (#44); the PSP holds the card and the harness holds its token."

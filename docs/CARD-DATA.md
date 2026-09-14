@@ -43,3 +43,17 @@ rotatable. They are named plainly (`stripe/webhook_signing_secret`,
   a `session_expiry`).
 - **Secrets.** `SecretStore::put` refuses a secret whose name looks like card
   data (`cratefield_core::card_data_hit`).
+- **Declared tables.** A `[tables]` column or table name meets the same
+  predicate while the manifest is validated, so a venture cannot declare one.
+  This is the path where it matters most and is easiest to miss: a declared
+  table's DDL is generated into Rust and never becomes a `.sql` file, so the
+  migration guard below never sees it.
+- **Pull requests.** `tools/migration-guard.sh` refuses a `.sql` migration
+  naming card data, before anything is applied anywhere.
+
+**One list, three consumers.** `cratefield_core::CARD_DATA` is the definition;
+the shell guard's pattern is written from it and
+`the_migration_guard_knows_the_same_card_data` fails if they drift. They were
+two lists until they were compared, and each caught fragments the other missed
+— `cardholder`, `expiry_month`, `expiry_year` and `track2` were only in the
+shell, which is the half a declared table never meets.
