@@ -156,6 +156,15 @@ impl Postgres {
         // lifecycle API all move a tenant, and a rule written into this
         // clause alone would be a rule the others did not have.
         let admits = status.admits();
+        if admits.is_empty() {
+            // Unreachable for every status there is today — each admits
+            // at least one. Here because `IN ()` is a syntax error rather
+            // than a match on nothing, so a future status that no move
+            // reaches would surface as a database fault instead of as the
+            // refusal it is, and whoever added it would be debugging the
+            // wrong thing.
+            return false;
+        }
         let placeholders = std::iter::repeat_n("?", admits.len())
             .collect::<Vec<_>>()
             .join(", ");
