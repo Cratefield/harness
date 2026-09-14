@@ -244,6 +244,24 @@ fn cargo_toml(
             "cratefield = {{ path = \"{base}/crates/facade\", features = [\n{feature_lines}] }}"
         ),
     };
+    // The conformance kit, so a generated venture can be tested at all.
+    // Without it an author's first `#[test]` needs a hand edit to a file
+    // whose first line says not to edit it by hand — and the facade's own
+    // `testing` feature is documented as belonging under a venture's
+    // `[dev-dependencies]`, which nothing put there.
+    //
+    // A second entry for the same crate with an extra feature, not a
+    // replacement: dev-dependency features are not unified into the
+    // normal build under resolver 2 and later, so the shipped wasm does
+    // not carry the kit.
+    let testing_dep = match source {
+        HarnessSource::Version(version) => {
+            format!("cratefield = {{ version = \"{version}\", features = [\"testing\"] }}")
+        }
+        HarnessSource::Path(base) => {
+            format!("cratefield = {{ path = \"{base}/crates/facade\", features = [\"testing\"] }}")
+        }
+    };
     // The fz bin links cratefield-cli natively; from a path source it is a
     // path dep, from a version source it is published alongside the facade.
     let cli_dep = match source {
@@ -279,6 +297,16 @@ fn cargo_toml(
          {cratefield_dep}\n\
          worker = {{ version = \"0.8.5\", default-features = false, features = [\"d1\"] }}\n\
          {cli_dep}\n\
+         \n\
+         [dev-dependencies]\n\
+         {testing_dep}\n\
+         # Somewhere to run an async test. A handler is async and so is\n\
+         # every kit helper that drives one, so without a runtime a\n\
+         # venture's first route test does not compile. `pollster` because\n\
+         # it is the smallest thing that blocks on a future and the\n\
+         # Workers runtime is single-threaded anyway; swap it for `tokio`\n\
+         # if a venture wants one.\n\
+         pollster = {{ version = \"0.4\", features = [\"macro\"] }}\n\
          \n\
          [target.'cfg(target_arch = \"wasm32\")'.dependencies]\n\
          getrandom = {{ version = \"0.4.3\", default-features = false, features = [\"wasm_js\"] }}\n",

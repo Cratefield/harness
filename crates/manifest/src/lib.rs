@@ -227,6 +227,38 @@ mod tests {
     }
 
     #[test]
+    fn a_generated_venture_can_be_tested() {
+        // Without this an author's first `#[test]` needs a hand edit to a
+        // file whose first line says not to edit it by hand — and the
+        // facade's own `testing` feature is documented as belonging under
+        // a venture's `[dev-dependencies]`, which nothing put there.
+        let manifest = VentureManifest::from_json_str(with_tables()).expect("parses");
+        let set = manifest.resolve(&catalog::builtin()).expect("resolves");
+        let venture = generate::generate(&manifest, &set, &generate::HarnessSource::default())
+            .expect("generates");
+        let cargo = venture
+            .files
+            .iter()
+            .find(|f| f.path == "Cargo.toml")
+            .map(|f| f.contents.as_str())
+            .unwrap_or_default();
+
+        let dev = cargo
+            .split_once("[dev-dependencies]")
+            .unwrap_or_else(|| {
+                panic!("a venture with no dev-dependencies cannot be tested: {cargo}")
+            })
+            .1;
+        assert!(
+            dev.contains("\"testing\""),
+            "the conformance kit is what a venture tests through: {dev}"
+        );
+        // And somewhere to run an async test: every handler is async, and
+        // so is every kit helper that drives one.
+        assert!(dev.contains("pollster"), "{dev}");
+    }
+
+    #[test]
     fn a_venture_with_a_non_public_table_wires_a_verifier() {
         // The module requires `Port::Auth`, so the runtime has to provide
         // one or the composition is refused at boot — correct, and

@@ -44,6 +44,19 @@ cargo run -p cratefield-manifest --example write-venture -- \
 
 `tests/` and this README are not generated and are left alone.
 
+## Testing a venture
+
+`tests/serves.rs` is written the way a venture author would write one —
+through `cratefield::testing`, the kit the generated `[dev-dependencies]`
+now carry. Before that a generated venture had no dev-dependencies at
+all, so an author's first `#[test]` needed a hand edit to a file whose
+first line says not to edit it by hand.
+
+It also drives an authenticated request, which the kit could not do: three
+crates in this workspace each hand-rolled the same builder over
+`tower::ServiceExt`, and a venture cannot — `tower` is not one of its
+dependencies. `cratefield::testing::request_as` is that builder, once.
+
 ## What it declares
 
 Two tables, on purpose one of each kind: `note` is `owner` — every row
