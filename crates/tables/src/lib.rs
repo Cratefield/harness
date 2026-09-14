@@ -67,6 +67,7 @@ mod diff;
 mod json_schema;
 mod manifest;
 mod schema;
+mod sql;
 mod validate;
 mod value;
 
@@ -76,6 +77,10 @@ pub use json_schema::{JSON_SCHEMA_DIALECT, json_schema};
 pub use schema::{
     FieldDef, FieldKind, ForeignKey, MAX_IDENTIFIER_CHARS, RESERVED_PREFIXES, RESERVED_WORDS,
     Schema, TableDef, TextFormat, is_identifier,
+};
+pub use sql::{
+    DecodeError, UpdateError, delete, from_sql, insert, row_json, select_one, select_page, to_sql,
+    update,
 };
 pub use validate::{
     MAX_DETAIL_ERRORS, MAX_UNKNOWN_KEY_CHARS, RowError, RowErrors, normalize_row, validate_row,

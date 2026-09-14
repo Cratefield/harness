@@ -16,6 +16,11 @@ workspace = true
 
 [dependencies]
 cratefield-core = { workspace = true }
+# The statements in `sql` are sea-query like every other module's SQL
+# (ADR 0004). Already in the graph through `cratefield-core`, whose
+# `Statement` carries a `sea_query::Values`; named here because this
+# crate builds queries rather than only passing them along.
+sea-query = { workspace = true }
 serde = { workspace = true }
 # `preserve_order` is required, not incidental: the JSON Schema view lists
 # a table's properties in declaration order, and a `serde_json::Map`
