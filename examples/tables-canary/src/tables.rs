@@ -7,7 +7,7 @@ use std::sync::Arc;
 use cratefield::axum::Router;
 use cratefield::{
     Config, ConfigError, DataKind, Disposition, Migrations, Module, ModuleContext, PersonalDataSet,
-    Port, SqlMigration,
+    Port, SqlMigration, Surface,
 };
 
 /// The tables this venture declares for itself.
@@ -118,6 +118,17 @@ impl Module for DeclaredTables {
             // Unreachable: `validate_config` ran first and the
             // composition was refused if it failed.
             Err(_unreadable) => Router::new(),
+        }
+    }
+
+    /// What the venture publishes about these tables. A table
+    /// that is served and absent from `/__surface` is a venture
+    /// whose published contract is smaller than the venture.
+    fn surface(&self) -> Surface {
+        match cratefield::tables_api::parse(DECLARED) {
+            Ok(tables) => cratefield::tables_api::surface(&tables),
+            // Unreachable: `validate_config` ran first.
+            Err(_unreadable) => Surface::none(),
         }
     }
 }
