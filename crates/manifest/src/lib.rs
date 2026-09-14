@@ -17,6 +17,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod access;
 pub mod build_key;
 pub mod catalog;
 pub mod generate;
@@ -34,6 +35,7 @@ pub use generate::{GeneratedFile, GeneratedVenture, HarnessSource, generate};
 pub use manifest::{ManifestError, ModuleRef, VentureManifest};
 // Re-exported so a caller building a `VentureManifest` can name the type
 // of its `tables` field without adding a dependency of its own.
+pub use access::{Access, AccessMap, LEVELS};
 pub use cratefield_tables::Schema;
 pub use privacy::{Disposition, KINDS, TablePrivacy, TablePrivacyMap};
 pub use provenance::{
@@ -80,7 +82,8 @@ mod tests {
                     "disposition": "erase",
                     "description": "The notes you wrote, and when."
                 }
-            }
+            },
+            "table_access": { "note": "owner" }
         }"#
     }
 
@@ -206,6 +209,84 @@ mod tests {
     }
 
     #[test]
+    fn a_declared_table_must_say_who_may_reach_it() {
+        // Same argument as the privacy block: `public-read` by default
+        // publishes a venture's tables the day the CRUD layer lands, and
+        // `admin` by default makes them useless until somebody notices.
+        let base: serde_json::Value =
+            serde_json::from_str(with_tables()).expect("the fixture is JSON");
+        let mut object = base.as_object().expect("an object").clone();
+        object.remove("table_access");
+        let error = VentureManifest::from_json_str(&serde_json::Value::Object(object).to_string())
+            .expect("parses")
+            .validate()
+            .expect_err("must say");
+        let text = error.to_string();
+        assert!(text.contains("does not say who may reach it"), "{text}");
+        assert!(text.contains("public-read"), "the four are listed: {text}");
+    }
+
+    #[test]
+    fn owner_needs_the_table_to_say_whose_each_row_is() {
+        // `owner` matches a caller against the column the privacy block
+        // names. On a table that holds nothing personal there is no such
+        // column, and a route falling back to "everyone" or "nobody"
+        // would be deciding that silently.
+        let base: serde_json::Value =
+            serde_json::from_str(with_tables()).expect("the fixture is JSON");
+        let mut object = base.as_object().expect("an object").clone();
+        object.insert(
+            "table_privacy".to_owned(),
+            serde_json::json!({ "note": { "holds": "nothing", "reason": "Reference data." } }),
+        );
+        let error = VentureManifest::from_json_str(&serde_json::Value::Object(object).to_string())
+            .expect("parses")
+            .validate()
+            .expect_err("nothing to match a caller against");
+        let text = error.to_string();
+        assert!(
+            text.contains("no column to match a caller against"),
+            "{text}"
+        );
+
+        // The other three do not need one.
+        for level in ["public-read", "tenant-members", "admin"] {
+            let mut object = base.as_object().expect("an object").clone();
+            object.insert(
+                "table_privacy".to_owned(),
+                serde_json::json!({ "note": { "holds": "nothing", "reason": "Reference data." } }),
+            );
+            object.insert(
+                "table_access".to_owned(),
+                serde_json::json!({ "note": level }),
+            );
+            VentureManifest::from_json_str(&serde_json::Value::Object(object).to_string())
+                .expect("parses")
+                .validate()
+                .unwrap_or_else(|err| panic!("{level} should be legal here: {err}"));
+        }
+    }
+
+    #[test]
+    fn access_for_a_table_that_is_not_declared_is_refused() {
+        let base: serde_json::Value =
+            serde_json::from_str(with_tables()).expect("the fixture is JSON");
+        let mut object = base.as_object().expect("an object").clone();
+        object.insert(
+            "table_access".to_owned(),
+            serde_json::json!({ "note": "owner", "ghost": "admin" }),
+        );
+        let error = VentureManifest::from_json_str(&serde_json::Value::Object(object).to_string())
+            .expect("parses")
+            .validate()
+            .expect_err("not a declared table");
+        assert!(
+            error.to_string().contains("not a declared table"),
+            "{error}"
+        );
+    }
+
+    #[test]
     fn a_venture_with_no_declared_tables_gets_no_tables_module() {
         let manifest = VentureManifest::from_json_str(sample_json()).expect("parses");
         let set = manifest.resolve(&catalog::builtin()).expect("resolves");
@@ -254,6 +335,13 @@ mod tests {
                 "table_privacy".to_owned(),
                 serde_json::json!({ "note": privacy }),
             );
+            // This test is about the privacy block, so the access level
+            // is one that asks nothing of it — `owner` would need a
+            // subject column, which is a different rule's business.
+            object.insert(
+                "table_access".to_owned(),
+                serde_json::json!({ "note": "public-read" }),
+            );
             VentureManifest::from_json_str(&serde_json::Value::Object(object).to_string())
                 .expect("parses")
         };
@@ -284,6 +372,10 @@ mod tests {
             object.insert(
                 "table_privacy".to_owned(),
                 serde_json::json!({ "note": privacy }),
+            );
+            object.insert(
+                "table_access".to_owned(),
+                serde_json::json!({ "note": "public-read" }),
             );
             VentureManifest::from_json_str(&serde_json::Value::Object(object).to_string())
                 .expect("parses")

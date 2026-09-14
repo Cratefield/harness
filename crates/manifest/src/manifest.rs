@@ -16,6 +16,7 @@ use serde::{Deserialize, Serialize};
 
 use cratefield_tables::Schema;
 
+use crate::access::AccessMap;
 use crate::privacy::TablePrivacyMap;
 
 use crate::catalog::{Catalog, ModuleSet, ResolveError};
@@ -113,6 +114,15 @@ pub struct VentureManifest {
     /// [`validate`]: VentureManifest::validate
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub table_privacy: TablePrivacyMap,
+    /// Who may reach each declared table, keyed by table name.
+    ///
+    /// Required for every declared table, with no default, for the
+    /// reason `table_privacy` has one: `public-read` by default
+    /// publishes a venture's tables the day the CRUD layer lands, and
+    /// `admin` by default makes them useless until somebody notices.
+    /// See [`crate::access`].
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub table_access: AccessMap,
 }
 
 /// Why a manifest is not usable.
@@ -209,6 +219,12 @@ impl VentureManifest {
         // which is the shape of the hole this refuses to leave open.
         let mut problems = Vec::new();
         crate::privacy::validate(&self.tables, &self.table_privacy, &mut problems);
+        crate::access::validate(
+            &self.tables,
+            &self.table_access,
+            &self.table_privacy,
+            &mut problems,
+        );
         if !problems.is_empty() {
             return Err(ManifestError::Tables(problems));
         }

@@ -52,11 +52,19 @@ fn named_manifest_at(dir: &Path, name: &str, tables: &str) -> std::path::PathBuf
     // Every declared table has to say what it holds (issue #153), so the
     // fixture says it here too: this file is about drift, and a manifest
     // that would not validate is not a fixture for anything.
-    let privacy = if tables.trim() == "{}" {
+    let empty = tables.trim() == "{}";
+    let privacy = if empty {
         "{}".to_owned()
     } else {
         r#"{ "note": { "holds": "nothing", "reason": "A fixture table; nobody is in it." } }"#
             .to_owned()
+    };
+    // And who may reach it, for the same reason: a declared table without
+    // an access level is not a manifest the harness will accept.
+    let access = if empty {
+        "{}".to_owned()
+    } else {
+        r#"{ "note": "public-read" }"#.to_owned()
     };
     let body = format!(
         r#"{{
@@ -64,7 +72,8 @@ fn named_manifest_at(dir: &Path, name: &str, tables: &str) -> std::path::PathBuf
             "host": "acme.factory0.dev",
             "modules": [],
             "tables": {tables},
-            "table_privacy": {privacy}
+            "table_privacy": {privacy},
+            "table_access": {access}
         }}"#
     );
     std::fs::write(&path, body).expect("manifest writes");
