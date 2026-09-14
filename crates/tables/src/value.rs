@@ -68,22 +68,46 @@ pub enum ErrorCode {
     NulByte,
 }
 
-impl ErrorCode {
-    /// Every code, for the corpus coverage check.
-    pub const ALL: &'static [ErrorCode] = &[
-        ErrorCode::NotAnObject,
-        ErrorCode::UnknownField,
-        ErrorCode::Required,
-        ErrorCode::WrongType,
-        ErrorCode::TooShort,
-        ErrorCode::TooLong,
-        ErrorCode::TooSmall,
-        ErrorCode::TooLarge,
-        ErrorCode::NotInEnum,
-        ErrorCode::BadFormat,
-        ErrorCode::NulByte,
-    ];
+/// Declares [`ErrorCode::ALL`] and, from the same list, a match that has
+/// to be exhaustive.
+///
+/// `ALL` is what `the_corpus_covers_every_error_code` checks the corpus
+/// against, so a code missing from it is a code the corpus need never
+/// exercise — the coverage test would pass while one verdict went
+/// untested. Written twice it can fall behind; written once it cannot.
+macro_rules! codes {
+    ($($variant:ident),+ $(,)?) => {
+        impl ErrorCode {
+            /// Every code, for the corpus coverage check.
+            pub const ALL: &'static [ErrorCode] = &[$(ErrorCode::$variant),+];
+        }
 
+        /// Never called. It exists so that a variant absent from the list
+        /// above is a compile error here.
+        #[expect(dead_code, reason = "its only job is to be exhaustive")]
+        fn every_code_is_in_all(code: ErrorCode) {
+            match code {
+                $(ErrorCode::$variant => {}),+
+            }
+        }
+    };
+}
+
+codes!(
+    NotAnObject,
+    UnknownField,
+    Required,
+    WrongType,
+    TooShort,
+    TooLong,
+    TooSmall,
+    TooLarge,
+    NotInEnum,
+    BadFormat,
+    NulByte,
+);
+
+impl ErrorCode {
     /// The wire name used in `corpus/rows.json`.
     #[must_use]
     pub fn as_str(self) -> &'static str {

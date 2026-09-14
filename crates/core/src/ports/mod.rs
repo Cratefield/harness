@@ -75,25 +75,55 @@ pub enum Port {
     Defer,
 }
 
-impl Port {
-    pub const ALL: &'static [Port] = &[
-        Port::Db,
-        Port::Auth,
-        Port::Mailer,
-        Port::Captcha,
-        Port::RateLimiter,
-        Port::Signer,
-        Port::KeyValue,
-        Port::Blob,
-        Port::Push,
-        Port::Payments,
-        Port::Realtime,
-        Port::HttpClient,
-        Port::Clock,
-        Port::IdGen,
-        Port::Defer,
-    ];
+/// Declares [`Port::ALL`] and, from the same list, a match that has to be
+/// exhaustive.
+///
+/// `ALL` is walked by [`Ports::provides`], so a variant missing from it
+/// is a port no bundle ever reports — which is exactly the bug that left
+/// `Port::Auth` out of `provides` when that was fifteen hand-written
+/// branches. Writing the list twice is what made it possible; writing it
+/// once is what stops it.
+///
+/// `#[non_exhaustive]` does not make an in-crate match non-exhaustive, so
+/// the check is real here even though a downstream `match` on `Port`
+/// needs a wildcard.
+macro_rules! ports {
+    ($($variant:ident),+ $(,)?) => {
+        impl Port {
+            /// Every port.
+            pub const ALL: &'static [Port] = &[$(Port::$variant),+];
+        }
 
+        /// Never called. It exists so that a variant absent from the list
+        /// above is a compile error here.
+        #[expect(dead_code, reason = "its only job is to be exhaustive")]
+        fn every_port_is_in_all(port: Port) {
+            match port {
+                $(Port::$variant => {}),+
+            }
+        }
+    };
+}
+
+ports!(
+    Db,
+    Auth,
+    Mailer,
+    Captcha,
+    RateLimiter,
+    Signer,
+    KeyValue,
+    Blob,
+    Push,
+    Payments,
+    Realtime,
+    HttpClient,
+    Clock,
+    IdGen,
+    Defer,
+);
+
+impl Port {
     pub fn name(&self) -> &'static str {
         match self {
             Port::Db => "Database",
