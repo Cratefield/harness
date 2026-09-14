@@ -197,7 +197,20 @@ fn owner_scope(api: &TableApi, caller: &Caller) -> Result<Reach, Problem> {
         .subject
         .clone()
         .ok_or_else(|| Problem::new(&MISDECLARED))?;
-    if !api.table.fields.iter().any(|field| field.name == column) {
+    // The column has to exist and it has to be able to hold a caller's
+    // id. Without the second, a subject column declared `integer` binds
+    // nothing and the read fails further down while its statement is
+    // built — which answered `400 bad-filter` naming the subject column,
+    // blaming the caller for a filter they never sent and telling them
+    // part of the table's shape. `fz build` refuses such a declaration;
+    // this is the same rule where the serving happens.
+    let holds_a_subject = api
+        .table
+        .fields
+        .iter()
+        .find(|field| field.name == column)
+        .is_some_and(|field| field.kind.can_hold_a_subject());
+    if !holds_a_subject {
         return Err(Problem::new(&MISDECLARED));
     }
     Ok(Reach::OwnedBy { column, subject })

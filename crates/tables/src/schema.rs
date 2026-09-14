@@ -295,6 +295,28 @@ pub enum FieldKind {
 }
 
 impl FieldKind {
+    /// Whether a column of this kind can hold whose a row is.
+    ///
+    /// A subject is a caller's id — `Caller::id()`, a string that came
+    /// out of a verified credential — so the column has to be one a
+    /// string binds to. An `integer` subject column cannot hold one, and
+    /// every scoped read of such a table fails while building its
+    /// statement rather than while being declared.
+    ///
+    /// `timestamp` and `enum` are strings on the wire and still not
+    /// subjects: a caller id is not a moment, and it is not one of a
+    /// fixed set the manifest wrote down. Admitting them because the
+    /// binding would happen to work is how a rule stops meaning what it
+    /// is named after.
+    ///
+    /// One definition, two callers: `cratefield-manifest` refuses a
+    /// declaration that breaks it, and `cratefield-tables-api` refuses to
+    /// serve one that reached a deployment anyway.
+    #[must_use]
+    pub fn can_hold_a_subject(&self) -> bool {
+        matches!(self, FieldKind::Text { .. } | FieldKind::Uuid)
+    }
+
     /// The wire name, as written in the manifest's `kind` key.
     #[must_use]
     pub fn as_str(&self) -> &'static str {

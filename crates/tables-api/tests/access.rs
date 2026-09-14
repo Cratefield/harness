@@ -96,6 +96,37 @@ fn a_tenant_table_serves_every_row_to_any_verified_caller() {
 }
 
 #[test]
+fn an_owner_table_whose_subject_column_cannot_hold_an_id_is_misdeclared() {
+    // Not a 400. The caller sent nothing wrong: the deployment declared a
+    // subject column a caller's id does not fit in, and `fz build`
+    // refuses that. Answered further down, it became `400 bad-filter`
+    // naming the subject column — blaming the caller for a filter they
+    // never sent, and telling them part of the table's shape.
+    let mut table = note();
+    for field in &mut table.fields {
+        if field.name == "author" {
+            field.kind = cratefield_tables::FieldKind::Integer {
+                min: None,
+                max: None,
+            };
+        }
+    }
+    let api = TableApi {
+        table,
+        access: Access::Owner,
+        subject: Some("author".to_owned()),
+    };
+    let refusal = may_read(&api, &ada(), Ok(())).expect_err("nothing can be scoped to an integer");
+    assert_eq!(refusal.status.as_u16(), 500);
+    assert_eq!(refusal.slug, "table-misdeclared");
+    assert!(
+        !format!("{:?}", refusal.detail).contains("author"),
+        "the subject column reached the caller: {:?}",
+        refusal.detail
+    );
+}
+
+#[test]
 fn an_owner_table_tells_an_anonymous_caller_to_sign_in() {
     let refusal = may_read(
         &api(Access::Owner, Some("author")),
