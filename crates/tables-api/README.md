@@ -1,7 +1,14 @@
-# cratefield-module-tables
+# cratefield-tables-api
 
-Serves the tables a venture declares in its manifest's `[tables]` section
-(issue #153), with the access level each one declares.
+The HTTP API over the tables a venture declares in its manifest's
+`[tables]` section (issue #153), with the access level each one declares.
+
+**Not a module crate**, which is why it is not named like one. A
+`crates/module-*` crate provides a `Module` and the conformance kit runs
+against every one of them. This crate provides what a venture's
+*generated* tables module calls — that module has to be generated source,
+because `personal_data()` is `&'static` all the way down and cannot be
+assembled from a manifest read at runtime.
 
 ## What is here today
 

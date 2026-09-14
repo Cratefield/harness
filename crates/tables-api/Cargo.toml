@@ -1,8 +1,8 @@
 [package]
-name = "cratefield-module-tables"
-description = "Cratefield module: serves the tables a venture declares in its manifest, with the access level each one declares"
+name = "cratefield-tables-api"
+description = "The HTTP API over a venture's declared tables: who may reach which rows, and the routes that serve them"
 readme = "README.md"
-keywords = ["cratefield", "tables", "crud", "module"]
+keywords = ["cratefield", "tables", "crud", "access"]
 categories = ["web-programming"]
 include = ["src/**/*", "README.md"]
 # Not published until the routes are built; the crate exists for the

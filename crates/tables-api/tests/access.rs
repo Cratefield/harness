@@ -5,8 +5,8 @@
 
 use cratefield_core::{Caller, Problem, Subject};
 use cratefield_manifest::Access;
-use cratefield_module_tables::{Reach, TableApi, may_read};
 use cratefield_tables::{Schema, TableDef};
+use cratefield_tables_api::{Reach, TableApi, may_read};
 
 #[derive(serde::Deserialize)]
 struct Manifest {

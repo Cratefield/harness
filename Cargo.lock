@@ -1278,20 +1278,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "cratefield-module-tables"
-version = "0.1.0"
-dependencies = [
- "cratefield-core",
- "cratefield-manifest",
- "cratefield-tables",
- "cratefield-testing",
- "http",
- "serde",
- "serde_json",
- "toml 0.8.23",
-]
-
-[[package]]
 name = "cratefield-module-waitlist"
 version = "0.1.4"
 dependencies = [
@@ -1478,6 +1464,20 @@ dependencies = [
  "serde",
  "serde_json",
  "toml 0.9.12+spec-1.1.0",
+]
+
+[[package]]
+name = "cratefield-tables-api"
+version = "0.1.0"
+dependencies = [
+ "cratefield-core",
+ "cratefield-manifest",
+ "cratefield-tables",
+ "cratefield-testing",
+ "http",
+ "serde",
+ "serde_json",
+ "toml 0.8.23",
 ]
 
 [[package]]
