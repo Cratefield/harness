@@ -22,6 +22,7 @@ pub mod access;
 pub mod declared;
 pub mod read;
 pub mod routes;
+pub mod surface;
 pub mod write;
 
 pub use access::{
@@ -31,4 +32,5 @@ pub use access::{
 pub use declared::{Declared, parse};
 pub use read::{PAGE, Tables, one, page};
 pub use routes::{BAD_KEY, COMPOSITE_KEY, Key, key_from_path, router};
+pub use surface::surface;
 pub use write::{ALREADY_EXISTS, NOT_A_ROW, create, remove, replace};

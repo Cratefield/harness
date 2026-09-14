@@ -72,6 +72,20 @@ pub enum Audience {
     /// `unsubscribe`, `status`); rendered as a landing page, never as a
     /// form.
     Link,
+    /// Needs a signed-in caller — any of them (issue #153).
+    ///
+    /// The vocabulary had `Public`, `Admin` and `Link` and no word for
+    /// "somebody, and the route decides which rows they see". A declared
+    /// table whose access is `owner` or `tenant-members` is exactly that,
+    /// and calling it `Public` would publish a form for rows the caller
+    /// cannot reach while calling it `Admin` would hide it from the
+    /// person whose rows they are.
+    ///
+    /// It says a credential is needed and nothing more. **Which** rows
+    /// the caller reaches is the table's access level, decided per
+    /// request against the caller's own id; a surface cannot say that and
+    /// should not pretend to.
+    Subject,
 }
 
 /// What the browser should do with a successful response.
@@ -372,10 +386,12 @@ impl Surface {
                      is not under /admin/",
                     action.path
                 )),
-                Audience::Public | Audience::Link if under_admin => errors.push(format!(
-                    "module `{module}` surface action `{name}` is under /admin/ but its \
-                     audience is not admin",
-                )),
+                Audience::Public | Audience::Link | Audience::Subject if under_admin => {
+                    errors.push(format!(
+                        "module `{module}` surface action `{name}` is under /admin/ but its \
+                         audience is not admin",
+                    ));
+                }
                 _ => {}
             }
             if let Some(schema) = &action.input

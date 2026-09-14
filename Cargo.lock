@@ -1481,6 +1481,7 @@ dependencies = [
  "cratefield-testing",
  "http",
  "pollster",
+ "schemars 1.2.2",
  "serde",
  "serde_json",
  "toml 0.8.23",

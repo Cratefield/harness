@@ -26,6 +26,9 @@ cratefield-tables = { path = "../tables" }
 cratefield-manifest = { workspace = true }
 axum = { workspace = true }
 http = { workspace = true }
+# A surface carries `schemars::Schema`; the table's own JSON Schema is a
+# `serde_json::Value`, and this rewraps it.
+schemars = { workspace = true }
 serde = { workspace = true }
 tracing = { workspace = true }
 serde_json = { workspace = true }

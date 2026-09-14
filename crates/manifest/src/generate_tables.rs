@@ -55,7 +55,7 @@ pub(crate) fn tables_rs(manifest: &VentureManifest) -> String {
          use cratefield::axum::Router;\n\
          use cratefield::{\n\
          \x20   Config, ConfigError, DataKind, Disposition, Migrations, Module, ModuleContext,\n\
-         \x20   PersonalDataSet, Port, SqlMigration,\n\
+         \x20   PersonalDataSet, Port, SqlMigration, Surface,\n\
          };\n\n",
     );
 
@@ -173,6 +173,16 @@ fn module_impl(manifest: &VentureManifest) -> String {
          \x20           // Unreachable: `validate_config` ran first and the\n\
          \x20           // composition was refused if it failed.\n\
          \x20           Err(_unreadable) => Router::new(),\n\
+         \x20       }}\n\
+         \x20   }}\n\n\
+         \x20   /// What the venture publishes about these tables. A table\n\
+         \x20   /// that is served and absent from `/__surface` is a venture\n\
+         \x20   /// whose published contract is smaller than the venture.\n\
+         \x20   fn surface(&self) -> Surface {{\n\
+         \x20       match cratefield::tables_api::parse(DECLARED) {{\n\
+         \x20           Ok(tables) => cratefield::tables_api::surface(&tables),\n\
+         \x20           // Unreachable: `validate_config` ran first.\n\
+         \x20           Err(_unreadable) => Surface::none(),\n\
          \x20       }}\n\
          \x20   }}\n\
          }}\n"

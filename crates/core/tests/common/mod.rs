@@ -43,6 +43,8 @@ pub struct SampleModule {
     pub park: Option<SharedParkGate>,
     pub well_known: bool,
     pub depends_on: &'static [&'static str],
+    /// A surface to publish, for the tests about what a surface may say.
+    pub surface: Option<fn() -> cratefield_core::Surface>,
 }
 
 impl Default for SampleModule {
@@ -56,6 +58,7 @@ impl Default for SampleModule {
             park: None,
             well_known: false,
             depends_on: &[],
+            surface: None,
         }
     }
 }
@@ -131,6 +134,11 @@ impl Module for SampleModule {
 
     fn migrations(&self) -> Migrations {
         Migrations::default()
+    }
+
+    fn surface(&self) -> cratefield_core::Surface {
+        self.surface
+            .map_or_else(cratefield_core::Surface::none, |build| build())
     }
 
     fn validate_config(&self, _cfg: &dyn Config) -> Result<(), ConfigError> {

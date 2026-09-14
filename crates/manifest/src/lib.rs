@@ -200,6 +200,17 @@ mod tests {
             "the declaration is never read while composing: {validate}"
         );
 
+        // And publishes what it serves, or `/__surface` describes a
+        // venture smaller than the one running.
+        assert!(
+            tables.contains("fn surface(&self) -> Surface"),
+            "the declared tables are served and unpublished: {tables}"
+        );
+        assert!(
+            tables.contains("cratefield::tables_api::surface(&tables)"),
+            "{tables}"
+        );
+
         // And the venture composes it, or it is a file nobody builds.
         // The facade feature that carries the routes, or the generated
         // crate does not compile: `cratefield::tables_api` is behind it.

@@ -105,6 +105,25 @@ zero rows changed is the refusal.
 this field" unexpressible: an absent key and a null one would both have
 to mean "leave it".
 
+## What the venture publishes
+
+`surface(&tables)` is what `/__surface` carries for the declared tables:
+two actions per readable table and three more for a writable one. A table
+that is served and absent from it is a venture whose published contract
+is smaller than the venture.
+
+A surface says a route exists, what it takes, and whether a credential is
+needed. It does **not** say which rows the caller gets — that is decided
+per request against their own id. So `owner` and `tenant-members` both
+publish as `Audience::Subject`, a variant added for them: calling `owner`
+public would render a form for rows the caller cannot reach, and calling
+it admin would hide it from the person whose rows they are.
+
+A `public-read` table publishes its reads and no writes, because there
+are none. The body schema on a write is the table's own JSON Schema — the
+same bytes the row validator enforces, so a generated form and the route
+it posts to cannot disagree about what a row is.
+
 ## The rules, and why each is that way
 
 | level | anonymous | signed in | reaches |
