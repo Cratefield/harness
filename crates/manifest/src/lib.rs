@@ -729,6 +729,69 @@ mod tests {
     }
 
     #[test]
+    fn published_prose_is_plain_text() {
+        // A description goes two places: verbatim to the person asking
+        // what a venture holds about them, and into generated Rust as a
+        // raw string literal. A lone CR makes that literal `error: bare
+        // CR not allowed in raw string`; a direction override makes it
+        // `error: unicode codepoint changing visible direction of text
+        // present in literal`, which rustc denies by default. Either way
+        // the author meets a compiler error inside a file whose first
+        // line tells them not to edit it.
+        //
+        // The direction override is worse after the build than during
+        // it: published text that reads as something other than what it
+        // says, in a privacy notice.
+        let base: serde_json::Value =
+            serde_json::from_str(&without_privacy()).expect("the fixture is JSON");
+        let check = |privacy: serde_json::Value| -> Result<(), ManifestError> {
+            let mut object = base.as_object().expect("an object").clone();
+            object.insert(
+                "table_privacy".to_owned(),
+                serde_json::json!({ "note": privacy }),
+            );
+            object.insert(
+                "table_access".to_owned(),
+                serde_json::json!({ "note": "public-read" }),
+            );
+            VentureManifest::from_json_str(&serde_json::Value::Object(object).to_string())
+                .expect("parses")
+                .validate()
+        };
+        let personal = |description: &str| {
+            serde_json::json!({
+                "holds": "personal", "subject": "author", "kind": "content",
+                "disposition": "erase", "description": description
+            })
+        };
+
+        let text = check(personal("Line one\rLine two."))
+            .expect_err("a bare CR")
+            .to_string();
+        assert!(text.contains("U+000D"), "{text}");
+
+        let text = check(personal("Your notes\u{202e}.txt"))
+            .expect_err("a direction override")
+            .to_string();
+        assert!(text.contains("U+202E"), "{text}");
+        assert!(text.contains("direction"), "{text}");
+
+        // A reason is prose too, and so is a retain reason.
+        let text = check(serde_json::json!({ "holds": "nothing", "reason": "Tiers\u{0}." }))
+            .expect_err("a NUL")
+            .to_string();
+        assert!(text.contains("U+0000"), "{text}");
+
+        // The other half, and the one a too-eager rule breaks: ordinary
+        // prose keeps working, punctuation and accents and line breaks
+        // included.
+        check(personal(
+            "The notes you wrote — “first” and ‘second’.\n\tWith a tab.",
+        ))
+        .expect("prose is allowed to have shape");
+    }
+
+    #[test]
     fn anonymise_names_columns_a_database_can_actually_overwrite() {
         // The same check `cratefield-module-privacy` makes against the
         // applied schema rather than trusting: a `NOT NULL` column with
