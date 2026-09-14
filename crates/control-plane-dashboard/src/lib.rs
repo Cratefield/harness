@@ -831,6 +831,7 @@ fn render_module_screens(base: &str, module: &str, surface: &Surface) -> String 
         let audience = declared.map_or("—", |declared| match declared.audience {
             cratefield_core::Audience::Public => "public",
             cratefield_core::Audience::Admin => "admin",
+            cratefield_core::Audience::Subject => "signed in",
             cratefield_core::Audience::Link => "signed link",
         });
         rows.push_str(&format!(

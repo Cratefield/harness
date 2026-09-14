@@ -189,6 +189,77 @@ fn a_module_that_must_know_who_is_calling_will_not_boot_without_the_auth_port() 
     );
 }
 
+/// A surface whose action sits under `/admin/` with `audience`.
+fn under_admin(audience: cratefield_core::Audience) -> cratefield_core::Surface {
+    cratefield_core::Surface::new().action(
+        cratefield_core::Action::new("peek", http::Method::GET, "/admin/peek")
+            .audience(audience)
+            .outcome(cratefield_core::Outcome::Json),
+    )
+}
+
+#[test]
+fn an_action_under_admin_whose_audience_is_not_admin_is_reported() {
+    // The rule had no test at all — not for `Public`, not for `Link`, and
+    // not for `Subject` when that was added. A published action under
+    // `/admin/` that the admin gate does not guard is a route the surface
+    // advertises as reachable and the router refuses, or worse.
+    for audience in [
+        cratefield_core::Audience::Public,
+        cratefield_core::Audience::Link,
+        cratefield_core::Audience::Subject,
+    ] {
+        let problems = failure_lines(
+            Harness::builder()
+                .venture(base_venture())
+                .module(SampleModule {
+                    surface: Some(match audience {
+                        cratefield_core::Audience::Public => {
+                            || under_admin(cratefield_core::Audience::Public)
+                        }
+                        cratefield_core::Audience::Link => {
+                            || under_admin(cratefield_core::Audience::Link)
+                        }
+                        _ => || under_admin(cratefield_core::Audience::Subject),
+                    }),
+                    ..SampleModule::default()
+                })
+                .runtime(FakeRuntime(all_ports())),
+        );
+        assert!(
+            problems
+                .iter()
+                .any(|p| p.contains("is under /admin/ but its audience is not admin")),
+            "{audience:?}: {problems:?}"
+        );
+    }
+}
+
+#[test]
+fn an_admin_action_that_is_not_under_admin_is_reported() {
+    let problems = failure_lines(
+        Harness::builder()
+            .venture(base_venture())
+            .module(SampleModule {
+                surface: Some(|| {
+                    cratefield_core::Surface::new().action(
+                        cratefield_core::Action::new("peek", http::Method::GET, "/peek")
+                            .audience(cratefield_core::Audience::Admin)
+                            .outcome(cratefield_core::Outcome::Json),
+                    )
+                }),
+                ..SampleModule::default()
+            })
+            .runtime(FakeRuntime(all_ports())),
+    );
+    assert!(
+        problems
+            .iter()
+            .any(|p| p.contains("is admin but its path") && p.contains("/peek")),
+        "{problems:?}"
+    );
+}
+
 #[test]
 fn template_override_naming_unknown_module_is_reported() {
     let problems = failure_lines(
