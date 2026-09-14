@@ -355,7 +355,10 @@ The rules, which are also the rules a generated client has to match:
   means a row that writes in development and answers `500` in production.
   Only U+0000 — every other control character stores on both engines, and
   a text column is allowed to hold a newline. In JavaScript the check is
-  `s.includes("\u0000")`, before any length or format rule.
+  `s.includes("\u0000")`, before any length or format rule. The published
+  JSON Schema says it too — `{"not": {"pattern": "\u0000"}}` on every text
+  property — so a client generated from the contract refuses what the
+  server would.
 - **Bounds are inclusive** at both ends.
 - **Uniqueness and foreign keys are not checked here.** They read other
   rows, which makes them the database's job and marks the line between a

@@ -94,9 +94,25 @@ fn a_table_renders_as_exactly_this_json_schema() {
                     "format": "uuid",
                     "description": "Primary key of `post`."
                 },
-                "title": { "type": "string", "minLength": 1, "maxLength": 200 },
-                "email": { "type": ["string", "null"], "format": "email" },
-                "site": { "type": ["string", "null"], "format": "uri" },
+                // Every `text` property carries the NUL rule, and only
+                // `text` does: a uuid, a timestamp and an enum are
+                // already constrained to shapes that cannot hold one.
+                "title": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 200,
+                    "not": { "pattern": "\u{0}" }
+                },
+                "email": {
+                    "type": ["string", "null"],
+                    "format": "email",
+                    "not": { "pattern": "\u{0}" }
+                },
+                "site": {
+                    "type": ["string", "null"],
+                    "format": "uri",
+                    "not": { "pattern": "\u{0}" }
+                },
                 "read_minutes": { "type": "integer", "minimum": 0, "maximum": 600 },
                 "score": { "type": ["number", "null"], "minimum": 0.0, "maximum": 1.0 },
                 // `featured` is required but has a default, so a write need
