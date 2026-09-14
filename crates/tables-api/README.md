@@ -127,6 +127,25 @@ with a lowercase letter and may not contain `__`. The route is registered
 first anyway — "cannot collide" is a fact about a validator somewhere
 else — and a test asserts the name is not a legal identifier.
 
+## Ordering a page
+
+`?sort=column` or `?sort=-column`, one column. A second is a tiebreaker
+and the primary key is already that — and every column a page is ordered
+by has to appear in the cursor, so the vocabulary that stays small is the
+one whose cursor stays readable.
+
+The key always follows the sort column in the same direction, so two rows
+with the same value cannot land in an order that changes between pages.
+The cursor names both, and a cursor short of either is `400 bad-cursor`;
+a column that is not declared, or is optional, is `400 bad-sort`.
+
+An optional column cannot be sorted by at all: SQLite sorts `NULL` first
+and Postgres sorts it last, so the page would differ between two
+deployments of one declaration.
+
+A batch read takes `"sort"` too, or the batch is a second-class way to
+ask the same question.
+
 ## Narrowing a page
 
 Every query parameter but `after` is a filter, named for the column it

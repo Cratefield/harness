@@ -69,6 +69,14 @@ pub const VERIFIER_UNAVAILABLE: ProblemDef = ProblemDef {
     description: "The service that verifies credentials could not answer. Try again shortly.",
 };
 
+/// The caller ordered by something this table cannot be ordered by.
+pub const BAD_SORT: ProblemDef = ProblemDef {
+    slug: "bad-sort",
+    status: StatusCode::BAD_REQUEST,
+    title: "Not a sort for this table",
+    description: "The `sort` parameter names a column the table does not declare, or one whose nulls the engines order differently.",
+};
+
 /// The caller narrowed by something this table cannot be narrowed by.
 pub const BAD_FILTER: ProblemDef = ProblemDef {
     slug: "bad-filter",
@@ -163,6 +171,24 @@ fn subject_value(reach: &Reach) -> Value {
     }
 }
 
+/// What a caller asked a page for.
+///
+/// A struct because the four of them are one thing — which rows, in what
+/// order, from where — and because `page` had grown to eight positional
+/// arguments, three of them optional and adjacent. A call site that
+/// swapped two would have compiled.
+#[derive(Debug, Clone, Copy)]
+pub struct Asked<'a> {
+    /// The declared table.
+    pub table: &'a str,
+    /// The cursor from a previous page.
+    pub after: Option<&'a Value>,
+    /// What to narrow by.
+    pub filters: &'a [cratefield_tables::Filter],
+    /// What to order by.
+    pub sort: Option<cratefield_tables::Sort<'a>>,
+}
+
 /// A page of one table.
 ///
 /// # Errors
@@ -173,10 +199,14 @@ pub async fn page(
     conn: &dyn Database,
     headers: &HeaderMap,
     scope: &Scope,
-    name: &str,
-    after: Option<&Value>,
-    filters: &[cratefield_tables::Filter],
+    asked: Asked<'_>,
 ) -> Result<Value, Problem> {
+    let Asked {
+        table: name,
+        after,
+        filters,
+        sort,
+    } = asked;
     let api = tables.find(name)?;
     let caller = who(tables, headers, api).await?;
     let reach = may_read(
@@ -196,15 +226,10 @@ pub async fn page(
             // rows and cannot reach anybody else's.
             owned: owned(&reach, &subject),
             filters,
-            // No `?sort=` yet. A sorted page's cursor has to carry the
-            // sort column as well as the key, and `?after=` currently
-            // takes a single key value — so a sorted first page would be
-            // right and its second page wrong. The route wiring lands
-            // with the JSON cursor (#379).
-            sort: None,
+            sort,
         },
     )
-    .map_err(|err| bad_filter(scope, &err, api))?;
+    .map_err(|err| bad_page(scope, &err, api, sort))?;
     let rows = conn
         .query(&statement)
         .await
@@ -218,7 +243,7 @@ pub async fn page(
     // "there is more" when there is not, and a client that believes it
     // makes a request whose whole result is learning that.
     let next = if out.len() as u64 == PAGE {
-        next_cursor(&api.table, out.last())
+        next_cursor(&api.table, out.last(), sort)
     } else {
         Value::Null
     };
@@ -262,11 +287,24 @@ pub async fn one(
 /// The key of the last row on the page, for the next request's cursor.
 ///
 /// The caller decides whether to ask; this only builds it.
-fn next_cursor(table: &TableDef, last: Option<&Value>) -> Value {
+fn next_cursor(
+    table: &TableDef,
+    last: Option<&Value>,
+    sort: Option<cratefield_tables::Sort<'_>>,
+) -> Value {
     let Some(last) = last else {
         return Value::Null;
     };
     let mut cursor = serde_json::Map::new();
+    // The sort column first, because the cursor walks the ordering the
+    // page is in. One carrying only the key resumes in key order, which
+    // silently reshuffles everything after the first page.
+    if let Some(sort) = sort {
+        let Some(value) = last.get(sort.column) else {
+            return Value::Null;
+        };
+        cursor.insert(sort.column.to_owned(), value.clone());
+    }
     for column in &table.primary_key {
         let Some(value) = last.get(column) else {
             return Value::Null;
@@ -282,7 +320,18 @@ fn next_cursor(table: &TableDef, last: Option<&Value>) -> Value {
 /// not that column's kind, is the caller's mistake and says so — with the
 /// column name, which they sent. A failure that names nothing else is a
 /// misdeclaration, and that is ours.
-fn bad_filter(scope: &Scope, err: &cratefield_tables::DecodeError, api: &TableApi) -> Problem {
+fn bad_page(
+    scope: &Scope,
+    err: &cratefield_tables::DecodeError,
+    api: &TableApi,
+    sort: Option<cratefield_tables::Sort<'_>>,
+) -> Problem {
+    // A refusal about the sort column is a sort problem, whatever else it
+    // resembles. Labelling it `bad-filter` would be a slug a client
+    // branches on saying the wrong thing about what they sent.
+    if sort.is_some_and(|sort| sort.column == err.column) {
+        return Problem::new(&BAD_SORT).with_detail(format!("`{}` {}", err.column, err.detail));
+    }
     if api
         .table
         .fields

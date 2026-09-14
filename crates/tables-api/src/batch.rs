@@ -71,6 +71,10 @@ pub struct Read {
     /// table, exactly as it was given.
     #[serde(default)]
     pub after: Option<Value>,
+    /// `sort=column` or `sort=-column`, the same shape the query string
+    /// takes.
+    #[serde(default)]
+    pub sort: Option<String>,
     /// Equality filters, keyed by column.
     ///
     /// JSON values rather than the query string's text, because a body
@@ -125,9 +129,12 @@ pub async fn run(
             conn,
             headers,
             scope,
-            &read.table,
-            read.after.as_ref(),
-            &filters,
+            crate::read::Asked {
+                table: &read.table,
+                after: read.after.as_ref(),
+                filters: &filters,
+                sort: crate::routes::sort_of(read.sort.as_deref()),
+            },
         )
         .await
         .map_err(|problem| {

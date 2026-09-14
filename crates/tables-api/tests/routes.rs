@@ -1002,3 +1002,156 @@ fn the_batch_path_can_never_be_a_table_name() {
         "`{name}` is a legal table name, so a venture could shadow the batch route"
     );
 }
+
+#[pollster::test]
+async fn a_page_can_be_sorted_and_reversed() {
+    for kit in kits(Access::PublicRead) {
+        seed(&kit).await;
+        let up = get_as(&kit, "/v1/tables/note?sort=id", None).await;
+        assert_eq!(up.status, 200, "{}", up.body);
+        assert_eq!(ids(&up.body), ["n1", "n2", "n3"]);
+
+        let down = get_as(&kit, "/v1/tables/note?sort=-id", None).await;
+        assert_eq!(down.status, 200, "{}", down.body);
+        assert_eq!(ids(&down.body), ["n3", "n2", "n1"]);
+    }
+}
+
+#[pollster::test]
+async fn sorting_by_an_optional_column_is_refused_rather_than_answered_differently() {
+    // SQLite sorts `NULL` first and Postgres sorts it last, so a page
+    // ordered by a nullable column is a different page on each engine.
+    // Refusing is the only answer that is the same on both.
+    for kit in kits(Access::PublicRead) {
+        seed(&kit).await;
+        let answer = get_as(&kit, "/v1/tables/note?sort=body", None).await;
+        assert_eq!(answer.status, 400, "{}", answer.body);
+        assert!(
+            answer.body.contains("bad-sort"),
+            "a sort problem labelled as something else: {}",
+            answer.body
+        );
+        assert!(answer.body.contains("body"), "say which: {}", answer.body);
+    }
+}
+
+#[pollster::test]
+async fn a_sorted_page_hands_back_a_cursor_that_resumes_the_same_order() {
+    // The cursor carries the sort column as well as the key. One with
+    // only the key resumes in key order, which silently reshuffles
+    // everything after the first page — and every row of page two would
+    // look plausible.
+    for kit in kits(Access::TenantMembers) {
+        {
+            use cratefield_core::Statement;
+            for n in 0..(cratefield_tables_api::PAGE + 2) {
+                kit.db
+                    .execute(&Statement::with_values(
+                        "INSERT INTO membership (tenant, member, role) VALUES (?, ?, ?)".to_owned(),
+                        vec![
+                            "acme".into(),
+                            format!("m{n:03}").into(),
+                            format!("r{:03}", 999 - n).into(),
+                        ],
+                    ))
+                    .await
+                    .expect("seeded");
+            }
+        }
+        let first = get_as(&kit, "/v1/tables/membership?sort=role", Some("ada")).await;
+        assert_eq!(first.status, 200, "{}", first.body);
+        let body = serde_json::from_str::<serde_json::Value>(&first.body).expect("json");
+        let next = body["next"].clone();
+        assert!(!next.is_null(), "a full page has more: {}", first.body);
+        assert!(
+            next.get("role").is_some(),
+            "the cursor has to carry the sort column: {next}"
+        );
+
+        let second = get_as(
+            &kit,
+            &format!(
+                "/v1/tables/membership?sort=role&after={}",
+                cursor_param(&next)
+            ),
+            Some("ada"),
+        )
+        .await;
+        assert_eq!(second.status, 200, "{}", second.body);
+        let rows = serde_json::from_str::<serde_json::Value>(&second.body).expect("json");
+        let roles: Vec<String> = rows["rows"]
+            .as_array()
+            .expect("rows")
+            .iter()
+            .map(|row| row["role"].as_str().expect("role").to_owned())
+            .collect();
+        assert!(
+            !roles.is_empty(),
+            "the second page is empty: {}",
+            second.body
+        );
+        let last_of_first = next["role"].as_str().expect("a role");
+        assert!(
+            roles.iter().all(|role| role.as_str() > last_of_first),
+            "page two went back over page one: {roles:?} after {last_of_first}"
+        );
+    }
+}
+
+#[pollster::test]
+async fn a_cursor_without_the_sort_column_is_refused() {
+    // A client that sorted and then sent back a key-only cursor is asking
+    // to resume an ordering it has not named a place in.
+    for kit in kits(Access::PublicRead) {
+        seed(&kit).await;
+        let answer = get_as(
+            &kit,
+            &format!(
+                "/v1/tables/note?sort=author&after={}",
+                cursor_param(&serde_json::json!({ "id": "n1" }))
+            ),
+            None,
+        )
+        .await;
+        assert_eq!(answer.status, 400, "{}", answer.body);
+        assert!(answer.body.contains("author"), "say which: {}", answer.body);
+        // A cursor short of a column the page is ordered by is a *cursor*
+        // problem, not a sort one — the sort is fine, the place to resume
+        // is not. Asserting the slug is what makes the route's own check
+        // worth having: without it the query layer refuses too, and calls
+        // it `bad-sort`.
+        assert!(
+            answer.body.contains("bad-cursor"),
+            "labelled as something else: {}",
+            answer.body
+        );
+    }
+}
+
+#[pollster::test]
+async fn a_batch_read_can_be_sorted_too() {
+    // Or the batch is a second-class way to ask the same question.
+    for kit in kits(Access::PublicRead) {
+        seed(&kit).await;
+        let answer = batch(&kit, None, r#"{"reads":[{"table":"note","sort":"-id"}]}"#).await;
+        assert_eq!(answer.status, 200, "{}", answer.body);
+        let results = serde_json::from_str::<serde_json::Value>(&answer.body).expect("json");
+        let ids: Vec<&str> = results["results"][0]["rows"]
+            .as_array()
+            .expect("rows")
+            .iter()
+            .map(|row| row["id"].as_str().expect("id"))
+            .collect();
+        assert_eq!(ids, ["n3", "n2", "n1"]);
+    }
+}
+
+#[pollster::test]
+async fn a_sort_column_the_table_does_not_have_is_refused_as_a_sort() {
+    for kit in kits(Access::PublicRead) {
+        seed(&kit).await;
+        let answer = get_as(&kit, "/v1/tables/note?sort=nope", None).await;
+        assert_eq!(answer.status, 400, "{}", answer.body);
+        assert!(answer.body.contains("bad-sort"), "{}", answer.body);
+    }
+}

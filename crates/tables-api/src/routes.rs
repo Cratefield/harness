@@ -96,6 +96,10 @@ pub fn router(tables: Arc<Tables>) -> Router {
 struct PageQuery {
     #[serde(default)]
     after: Option<String>,
+    /// `?sort=column` or `?sort=-column`. One column: a second is a
+    /// tiebreaker and the primary key is already that.
+    #[serde(default)]
+    sort: Option<String>,
     #[serde(flatten)]
     filters: std::collections::BTreeMap<String, String>,
 }
@@ -112,8 +116,12 @@ async fn page_route(
     // cursor for a different table's key shape is a 400 here rather than
     // a `WHERE` comparing a string to an integer further down.
     let declared = tables.declared(&table);
+    // The sort is read before the cursor, because a sorted page's cursor
+    // names the sort column as well as the key — so what counts as a
+    // well-formed cursor depends on it.
+    let sort = sort_of(query.sort.as_deref());
     let after = match (&query.after, declared) {
-        (Some(raw), Some(api)) => Some(cursor_from_query(&api.table, raw)?),
+        (Some(raw), Some(api)) => Some(cursor_from_query(&api.table, raw, sort)?),
         _ => None,
     };
     let filters = match declared {
@@ -128,9 +136,12 @@ async fn page_route(
         &conn,
         &headers,
         &scope,
-        &table,
-        after.as_ref().map(|value| &value.0),
-        &filters,
+        crate::read::Asked {
+            table: &table,
+            after: after.as_ref().map(|value| &value.0),
+            filters: &filters,
+            sort,
+        },
     )
     .await?;
     Ok(axum::Json(body))
@@ -336,7 +347,11 @@ fn value_from_text(field: &cratefield_tables::FieldDef, raw: &str) -> Result<Val
 ///
 /// [`BAD_CURSOR`] when the value is not JSON, is not an object, or does
 /// not carry every primary-key column as its declared kind.
-pub fn cursor_from_query(table: &TableDef, raw: &str) -> Result<Key, Problem> {
+pub fn cursor_from_query(
+    table: &TableDef,
+    raw: &str,
+    sort: Option<cratefield_tables::Sort<'_>>,
+) -> Result<Key, Problem> {
     let value: Value = serde_json::from_str(raw).map_err(|_ignored| {
         Problem::new(&BAD_CURSOR).with_detail(
             "the cursor is the `next` value from a previous page, sent back as it was given",
@@ -346,7 +361,14 @@ pub fn cursor_from_query(table: &TableDef, raw: &str) -> Result<Key, Problem> {
         return Err(Problem::new(&BAD_CURSOR)
             .with_detail("the cursor names each primary-key column, so it is a JSON object"));
     };
-    for column in &table.primary_key {
+    // Every column the page is ordered by: the sort column, then the
+    // key. A cursor short of any of them cannot say where to resume.
+    let ordered: Vec<&str> = sort
+        .map(|sort| sort.column)
+        .into_iter()
+        .chain(table.primary_key.iter().map(String::as_str))
+        .collect();
+    for column in ordered {
         let Some(given) = object.get(column).filter(|value| !value.is_null()) else {
             return Err(Problem::new(&BAD_CURSOR)
                 .with_detail(format!("the cursor does not name `{column}`")));
@@ -354,8 +376,11 @@ pub fn cursor_from_query(table: &TableDef, raw: &str) -> Result<Key, Problem> {
         let field = table
             .fields
             .iter()
-            .find(|field| &field.name == column)
-            .ok_or_else(|| Problem::new(&crate::access::MISDECLARED))?;
+            .find(|field| field.name == column)
+            .ok_or_else(|| {
+                Problem::new(&BAD_CURSOR)
+                    .with_detail(format!("`{column}` is not a field of this table"))
+            })?;
         if cratefield_tables::to_sql(field, Some(given)).is_none() {
             return Err(Problem::new(&BAD_CURSOR).with_detail(format!(
                 "`{column}` is {} and the cursor's value is not",
@@ -375,4 +400,25 @@ async fn batch_route(
 ) -> Result<axum::Json<Value>, Problem> {
     let answer = crate::batch::run(&tables, &conn, &headers, &scope, &body.0).await?;
     Ok(axum::Json(answer))
+}
+
+/// `?sort=column` or `?sort=-column`.
+///
+/// `-` for descending, the shape a query string can carry without a
+/// second parameter to keep in step with the first. Whether the column
+/// exists and can be ordered by is the query layer's answer, not this
+/// one's — there is one declaration and it should be read in one place.
+pub(crate) fn sort_of(raw: Option<&str>) -> Option<cratefield_tables::Sort<'_>> {
+    raw.map(|raw| {
+        raw.strip_prefix('-').map_or(
+            cratefield_tables::Sort {
+                column: raw,
+                descending: false,
+            },
+            |column| cratefield_tables::Sort {
+                column,
+                descending: true,
+            },
+        )
+    })
 }
