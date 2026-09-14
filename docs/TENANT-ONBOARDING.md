@@ -87,7 +87,7 @@ What *is* enforced, as of the `offboarding`/`archived` statuses landing:
   destroys the data keys, so a resurrected row would name a tenant nothing can
   reconstitute.
 
-Both are pinned by `an_archived_tenant_cannot_be_resurrected_or_re_flown` in
+Both are pinned by `a_retired_tenant_cannot_be_resurrected_or_re_flown` in
 `crates/adapter-postgres/tests/reconcile_contract.rs`, which was watched
 failing against each guard removed in turn.
 

@@ -157,6 +157,21 @@ jobs:
       - name: Module catalog drift check (issue #139)
         run: cargo run -q -p cratefield-catalog --example catalog-doc -- --check
 
+  doc-identifiers:
+    # The other half of keeping documents true. `doc-commands` runs what
+    # they tell a reader to type; this checks the names they point at —
+    # a test a document says pins a guarantee, a column it says is
+    # ordinary data. A rename leaves the pointer dangling and nothing
+    # notices, because prose compiles under every toolchain.
+    #
+    # Needs only git and grep, so it is its own job and answers in
+    # seconds rather than waiting behind a toolchain.
+    name: documented identifiers
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: tools/doc-identifiers.sh
+
   doc-commands:
     # No `#` in the name: GitHub truncates a check-run name there (issue #34).
     #
