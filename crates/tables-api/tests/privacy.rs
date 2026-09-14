@@ -45,6 +45,27 @@ required = true
 name = "body"
 kind = "text"
 
+[tables.session]
+primary_key = "id"
+
+[[tables.session.fields]]
+name = "id"
+kind = "text"
+required = true
+
+[[tables.session.fields]]
+name = "owner"
+kind = "text"
+required = true
+
+[[tables.session.fields]]
+name = "token"
+kind = "text"
+
+[[tables.session.fields]]
+name = "label"
+kind = "text"
+
 [tables.tier]
 primary_key = "slug"
 
@@ -60,7 +81,8 @@ required = true
 "#;
 
 const DDL: &str = "CREATE TABLE IF NOT EXISTS note (id TEXT PRIMARY KEY NOT NULL, author TEXT NOT NULL, body TEXT); \
-     CREATE TABLE IF NOT EXISTS tier (slug TEXT PRIMARY KEY NOT NULL, label TEXT NOT NULL)";
+     CREATE TABLE IF NOT EXISTS tier (slug TEXT PRIMARY KEY NOT NULL, label TEXT NOT NULL); \
+     CREATE TABLE IF NOT EXISTS session (id TEXT PRIMARY KEY NOT NULL, owner TEXT NOT NULL, token TEXT, label TEXT)";
 
 const MIGRATIONS: [SqlMigration; 1] = [SqlMigration::new("0001", "tables", DDL)];
 
@@ -74,6 +96,18 @@ const SETS: &[PersonalDataSet] = &[
         disposition: Disposition::Erase,
         description: "The notes you wrote, and who wrote them.",
         redacted: &[],
+        subject_via: None,
+    },
+    // The two halves of a declaration that were never checked against
+    // the thing they describe: a column an export names and never
+    // copies, and an erasure that overwrites rather than deletes.
+    PersonalDataSet {
+        table: "session",
+        subject: "owner",
+        kind: cratefield_core::DataKind::Identifier,
+        disposition: Disposition::Anonymise(&["token", "label"]),
+        description: "Your sessions. The token is never copied into an export.",
+        redacted: &["token"],
         subject_via: None,
     },
     PersonalDataSet::none("tier", "Plan tiers; nobody is in them."),
@@ -101,7 +135,7 @@ impl Module for DeclaredTables {
         &[Port::Db, Port::Auth]
     }
     fn tables(&self) -> &'static [&'static str] {
-        &["note", "tier"]
+        &["note", "tier", "session"]
     }
     fn personal_data(&self) -> &'static [PersonalDataSet] {
         SETS
@@ -124,6 +158,11 @@ impl Module for DeclaredTables {
                     table: declared("tier"),
                     access: Access::PublicRead,
                     subject: None,
+                },
+                TableApi {
+                    table: declared("session"),
+                    access: Access::Owner,
+                    subject: Some("owner".to_owned()),
                 },
             ],
             ctx: Arc::new(ctx),
@@ -206,7 +245,24 @@ async fn seed(kit: &TestHarness) {
         ))
         .await
         .expect("seeded");
+    for (id, owner, token, label) in [
+        ("s1", "ada", SECRET, "laptop"),
+        ("s2", "grace", "grace-token", "phone"),
+    ] {
+        kit.db
+            .execute(&Statement::with_values(
+                "INSERT INTO session (id, owner, token, label) VALUES (?, ?, ?, ?)".to_owned(),
+                vec![id.into(), owner.into(), token.into(), label.into()],
+            ))
+            .await
+            .expect("seeded");
+    }
 }
+
+/// Ada's session token. A literal the assertions can look for, because
+/// "the value is absent" is only worth asserting against a value that was
+/// definitely there.
+const SECRET: &str = "sk-ada-must-never-be-exported";
 
 fn export_of(body: &str) -> serde_json::Value {
     serde_json::from_str(body).expect("json")
@@ -409,6 +465,117 @@ async fn erasure_leaves_a_table_that_holds_nobody_alone() {
             tier.status, 200,
             "an erasure took reference data with it: {}",
             tier.body
+        );
+    }
+}
+
+#[pollster::test]
+async fn a_redacted_column_is_named_in_an_export_and_its_value_is_not() {
+    // `redacted` says: name the column, never copy the value. Both halves
+    // matter. Dropping the column would hide that the venture holds it;
+    // copying the value puts credential material into a file a subject
+    // downloads and forwards.
+    //
+    // The absence is asserted against a literal that was definitely in
+    // the database, and beside a presence assertion — an absence check
+    // passes for free the day the export stops carrying the table at all.
+    for kit in kits() {
+        seed(&kit).await;
+        let answer = send(
+            &kit,
+            Method::GET,
+            "/v1/privacy/export?subject=ada",
+            Some(ADMIN),
+            None,
+        )
+        .await;
+        assert_eq!(answer.status, 200, "{}", answer.body);
+
+        // Present: the table, the row, and the column's name.
+        assert!(
+            answer.body.contains("\"session\""),
+            "the export does not carry the table at all: {}",
+            answer.body
+        );
+        assert!(answer.body.contains("\"s1\""), "{}", answer.body);
+        assert!(answer.body.contains("\"token\""), "{}", answer.body);
+        assert!(answer.body.contains("\"laptop\""), "{}", answer.body);
+
+        // Absent: the value, anywhere in the document.
+        assert!(
+            !answer.body.contains(SECRET),
+            "a redacted column's value reached the export: {}",
+            answer.body
+        );
+
+        // And grace's token is not in ada's export either, which is the
+        // scope rather than the redaction.
+        assert!(!answer.body.contains("grace-token"), "{}", answer.body);
+    }
+}
+
+#[pollster::test]
+async fn an_anonymised_declaration_overwrites_the_named_columns_and_keeps_the_row() {
+    // `Anonymise` exists because `Erase` breaks aggregates: the row stays
+    // and the person leaves it. A declaration that said so and then
+    // deleted the row — or kept the value — would be the same decoration
+    // this file was written to rule out.
+    for kit in kits() {
+        seed(&kit).await;
+        let planned = send(
+            &kit,
+            Method::POST,
+            "/v1/privacy/erase",
+            Some(ADMIN),
+            Some(r#"{"subject":"ada"}"#),
+        )
+        .await;
+        assert_eq!(planned.status, 200, "{}", planned.body);
+        let token = export_of(&planned.body)["confirm_token"]
+            .as_str()
+            .expect("a confirm token")
+            .to_owned();
+        let done = send(
+            &kit,
+            Method::POST,
+            "/v1/privacy/erase/confirm",
+            Some(ADMIN),
+            Some(&format!(r#"{{"token":"{token}"}}"#)),
+        )
+        .await;
+        assert_eq!(done.status, 200, "{}", done.body);
+
+        let rows = kit
+            .db
+            .query(&cratefield_core::Statement::with_values(
+                "SELECT id, owner, token, label FROM session WHERE owner = ?".to_owned(),
+                vec!["ada".into()],
+            ))
+            .await
+            .expect("read back");
+        assert_eq!(rows.rows.len(), 1, "the row was deleted, not anonymised");
+
+        let body = format!("{:?}", rows.rows);
+        assert!(!body.contains(SECRET), "the token survived erasure: {body}");
+        assert!(
+            !body.contains("laptop"),
+            "the second named column was left alone: {body}"
+        );
+        // The subject column is not in the anonymise list and stays, which
+        // is what makes the row still countable in an aggregate.
+        assert!(body.contains("ada"), "{body}");
+
+        // Grace is not the subject of this erasure.
+        let hers = kit
+            .db
+            .query(&cratefield_core::Statement::new(
+                "SELECT token FROM session WHERE owner = 'grace'",
+            ))
+            .await
+            .expect("read back");
+        assert!(
+            format!("{:?}", hers.rows).contains("grace-token"),
+            "somebody else's row was anonymised"
         );
     }
 }
