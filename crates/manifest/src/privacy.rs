@@ -149,6 +149,7 @@ fn check_one(
     let at = &table.name;
     match declaration {
         TablePrivacy::Nothing { reason } => {
+            plain_prose(at, "reason", reason, problems);
             if reason.trim().is_empty() {
                 problems.push(format!(
                     "table `{at}`: `holds = \"nothing\"` needs a reason — the reason is what \
@@ -187,6 +188,7 @@ fn check_one(
                     KINDS.join(", ")
                 ));
             }
+            plain_prose(at, "description", description, problems);
             if description.trim().is_empty() {
                 problems.push(format!(
                     "table `{at}`: the description is published to the person asking and must \
@@ -205,6 +207,50 @@ fn check_one(
     }
 }
 
+/// Prose an author writes that is both published to a person and
+/// embedded in generated Rust source.
+///
+/// Two characters in it stop `fz build` working, and the failure lands
+/// as a rustc error inside a file whose first line says not to edit it
+/// by hand, with nothing pointing back at the manifest:
+///
+/// - a lone carriage return is `error: bare CR not allowed in raw
+///   string` (CRLF compiles; the rule that allows one and not the other
+///   is not one anybody can hold, so both are refused — a JSON string
+///   cannot hold a real newline, so every `\r` in one was typed on
+///   purpose and `\n` is what was meant);
+/// - a codepoint that changes text direction is `error: unicode
+///   codepoint changing visible direction of text present in literal`,
+///   which rustc denies by default.
+///
+/// The second matters after the build too. This sentence is published
+/// verbatim to the person asking what a venture holds about them, and a
+/// direction override makes published text read as something other than
+/// what it says — which is the whole of the Trojan Source class, pointed
+/// at a privacy notice.
+///
+/// `\n` and `\t` are left alone: prose is allowed to have shape.
+fn plain_prose(at: &str, field: &str, text: &str, problems: &mut Vec<String>) {
+    for character in text.chars() {
+        let why = match character {
+            '\n' | '\t' => continue,
+            '\r' => "a carriage return; write `\\n`",
+            // U+200E/U+200F and the two embedding/override families.
+            '\u{200e}' | '\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}' => {
+                "a codepoint that changes which direction text reads in"
+            }
+            other if other.is_control() => "a control character",
+            _printable => continue,
+        };
+        problems.push(format!(
+            "table `{at}`: the {field} contains U+{:04X}, {why} — it is published to the person \
+             asking and written into generated source, so it is plain text",
+            character as u32
+        ));
+        return;
+    }
+}
+
 fn check_disposition(
     table: &cratefield_tables::TableDef,
     disposition: &Disposition,
@@ -214,6 +260,7 @@ fn check_disposition(
     match disposition {
         Disposition::Erase => {}
         Disposition::Retain(reason) => {
+            plain_prose(at, "retain reason", reason, problems);
             if reason.trim().is_empty() {
                 problems.push(format!(
                     "table `{at}`: `retain` needs the reason the rows stay — it is the argument \

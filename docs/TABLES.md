@@ -83,7 +83,10 @@ or `uuid`: what goes in it is a caller's id out of a verified credential,
 and a column of another kind cannot hold one.
 
 `description` is published verbatim to the person asking, so write it for
-them. `reason` is what makes "holds nothing" a decision rather than a
+them. It is plain text: it also becomes a string literal in generated
+source, and a carriage return or a codepoint that changes reading
+direction is refused here rather than as a compiler error in a file you
+were told not to edit. Newlines and tabs are fine. `reason` is what makes "holds nothing" a decision rather than a
 silence.
 
 ## Saying who may reach each table
