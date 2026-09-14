@@ -328,9 +328,12 @@ fn a_cursor_names_the_last_row_on_the_page() {
         None,
     ))
     .expect("public");
-    assert_eq!(out["next"], json!({ "id": "n3" }));
+    // Three rows is short of a page, so there is nothing after them and
+    // the cursor says so rather than costing the client a request whose
+    // whole result is learning that.
+    assert_eq!(out["next"], Value::Null, "a short page claimed more");
 
-    // And handing it back resumes after it rather than repeating it.
+    // A cursor handed back resumes after it rather than repeating it.
     let after = pollster::block_on(page(
         &tables,
         &db,
@@ -341,4 +344,45 @@ fn a_cursor_names_the_last_row_on_the_page() {
     ))
     .expect("public");
     assert_eq!(ids(&after), ["n2", "n3"]);
+}
+
+#[test]
+fn a_full_page_hands_back_a_cursor_and_a_short_one_does_not() {
+    // `next` has to mean "there is more", or a client either loops one
+    // extra time for nothing or stops one page early.
+    let db = seeded();
+    for n in 4..=(cratefield_tables_api::PAGE + 1) {
+        pollster::block_on(db.execute(&Statement::with_values(
+            "INSERT INTO note (id, author, body) VALUES (?, ?, ?)".to_owned(),
+            vec![format!("n{n:03}").into(), "ada".into(), "filler".into()],
+        )))
+        .expect("the row is inserted");
+    }
+    let tables = tables(Access::PublicRead, AuthMode::TokenIsTheSubject);
+    let first = pollster::block_on(page(
+        &tables,
+        &db,
+        &HeaderMap::new(),
+        &scope(),
+        "note",
+        None,
+    ))
+    .expect("public");
+    assert_eq!(
+        first["rows"].as_array().expect("rows").len() as u64,
+        cratefield_tables_api::PAGE
+    );
+    assert!(!first["next"].is_null(), "a full page has more after it");
+
+    let second = pollster::block_on(page(
+        &tables,
+        &db,
+        &HeaderMap::new(),
+        &scope(),
+        "note",
+        Some(&first["next"]),
+    ))
+    .expect("public");
+    assert!((second["rows"].as_array().expect("rows").len() as u64) < cratefield_tables_api::PAGE);
+    assert_eq!(second["next"], Value::Null, "the last page claimed more");
 }

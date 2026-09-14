@@ -179,7 +179,14 @@ pub async fn page(
     for row in &rows.rows {
         out.push(cratefield_tables::row_json(&api.table, row).map_err(|err| drifted(scope, &err))?);
     }
-    let next = next_cursor(&api.table, out.last());
+    // Only on a full page. A cursor handed back with a short one says
+    // "there is more" when there is not, and a client that believes it
+    // makes a request whose whole result is learning that.
+    let next = if out.len() as u64 == PAGE {
+        next_cursor(&api.table, out.last())
+    } else {
+        Value::Null
+    };
     Ok(json!({ "rows": out, "next": next }))
 }
 
@@ -218,6 +225,8 @@ pub async fn one(
 }
 
 /// The key of the last row on the page, for the next request's cursor.
+///
+/// The caller decides whether to ask; this only builds it.
 fn next_cursor(table: &TableDef, last: Option<&Value>) -> Value {
     let Some(last) = last else {
         return Value::Null;
