@@ -5,6 +5,7 @@
 //! Async methods use `async_trait` until native `async fn` in traits is
 //! ergonomic for trait objects.
 
+mod auth;
 mod blob;
 mod captcha;
 mod clock;
@@ -21,6 +22,7 @@ mod rate_limiter;
 mod realtime;
 pub(crate) mod signer;
 
+pub use auth::{Auth, AuthError, Caller, Subject};
 pub use blob::{Blob, BlobError, BlobObject, MAX_BLOB_BYTES, ScopedBlob, check_blob_size};
 pub use captcha::{Captcha, CaptchaBinding, CaptchaError, Verdict};
 pub use clock::{Clock, SystemClock, timeout};
@@ -57,6 +59,7 @@ use tracing::warn;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Port {
     Db,
+    Auth,
     Mailer,
     Captcha,
     RateLimiter,
@@ -75,6 +78,7 @@ pub enum Port {
 impl Port {
     pub const ALL: &'static [Port] = &[
         Port::Db,
+        Port::Auth,
         Port::Mailer,
         Port::Captcha,
         Port::RateLimiter,
@@ -93,6 +97,7 @@ impl Port {
     pub fn name(&self) -> &'static str {
         match self {
             Port::Db => "Database",
+            Port::Auth => "Auth",
             Port::Mailer => "Mailer",
             Port::Captcha => "Captcha",
             Port::RateLimiter => "RateLimiter",
@@ -118,6 +123,10 @@ impl Port {
 pub struct Ports {
     pub config: Arc<dyn Config>,
     pub db: Option<Arc<dyn Database>>,
+    /// Who a request's credentials speak for (issue #153). `None` is a
+    /// deployment that cannot identify a caller at all; a module needing
+    /// one declares [`Port::Auth`] and is refused composition here.
+    pub auth: Option<Arc<dyn Auth>>,
     pub mailer: Option<Arc<dyn Mailer>>,
     pub captcha: Option<Arc<dyn Captcha>>,
     pub rate_limiter: Option<Arc<dyn RateLimiter>>,
@@ -158,6 +167,7 @@ impl Ports {
         Self {
             config,
             db: None,
+            auth: None,
             mailer: None,
             captcha: None,
             rate_limiter: None,
@@ -240,6 +250,9 @@ impl Ports {
         let mut view = Ports::with_config(self.config.clone());
         if allows(&declared, Port::Db) {
             view.db.clone_from(&self.db);
+        }
+        if allows(&declared, Port::Auth) {
+            view.auth.clone_from(&self.auth);
         }
         if allows(&declared, Port::Mailer) {
             view.mailer.clone_from(&self.mailer);

@@ -167,6 +167,29 @@ fn required_port_not_provided_is_reported() {
 }
 
 #[test]
+fn a_module_that_must_know_who_is_calling_will_not_boot_without_the_auth_port() {
+    // The guarantee the `Auth` port exists for (issue #153). A venture
+    // declaring a table whose access is `owner` composes a module that
+    // requires this port; a deployment with no verifier must refuse to
+    // start rather than mount that table and serve it to everyone.
+    let problems = failure_lines(
+        Harness::builder()
+            .venture(base_venture())
+            .module(SampleModule {
+                requires: &[cratefield_core::Port::Auth],
+                ..SampleModule::default()
+            })
+            .runtime(FakeRuntime(vec![cratefield_core::Port::Db])),
+    );
+    assert!(
+        problems.iter().any(|p| p
+            .contains("requires port Auth which the runtime does not provide")
+            && p.contains("sample")),
+        "problems: {problems:?}"
+    );
+}
+
+#[test]
 fn template_override_naming_unknown_module_is_reported() {
     let problems = failure_lines(
         Harness::builder()

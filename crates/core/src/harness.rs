@@ -490,6 +490,29 @@ impl Harness {
     /// security headers, no-store headers for any request carrying a
     /// `token` query parameter — issue #135). Nothing but `/.well-known`,
     /// `/ui` and the `/__*` probes is ever mounted at the root.
+    /// What `/__health` answers from.
+    ///
+    /// Extracted from [`Harness::router`] only because that function is
+    /// at the line limit; it is one expression and it belongs to the
+    /// router's assembly.
+    fn health_state(&self, ports: &Ports, sidecars: Vec<SidecarMount>) -> HealthState {
+        HealthState {
+            // The deployment's environment, not the compiled default:
+            // `cratefield-waitlist` answered `"env":"development"` while
+            // serving production, which is the same lie #143 removed from
+            // the gates and left here.
+            venture: self.venture_as_deployed(ports.config.as_ref()),
+            modules: self.modules.clone(),
+            harness_build: ports.config.get("HARNESS_BUILD").filter(|b| !b.is_empty()),
+            mailer_configured: ports.mailer.is_some(),
+            captcha_configured: ports.captcha.is_some(),
+            sidecars,
+            dispatcher: ports.dispatcher.clone(),
+            clock: ports.clock.clone().unwrap_or_else(|| Arc::new(SystemClock)),
+            probe_cache: new_probe_cache(),
+        }
+    }
+
     pub fn router(&self, ports: Ports) -> Router {
         // The environment the *deployment* declares, not only the one
         // compiled in (issue #143).
@@ -527,24 +550,11 @@ impl Harness {
 
         let ui = self.ui_router(&api, &ports, &surface_source);
 
-        let health_state = HealthState {
-            // The deployment's environment, not the compiled default:
-            // `cratefield-waitlist` answered `"env":"development"` while
-            // serving production, which is the same lie #143 removed from
-            // the gates and left here.
-            venture: self.venture_as_deployed(ports.config.as_ref()),
-            modules: self.modules.clone(),
-            harness_build: ports.config.get("HARNESS_BUILD").filter(|b| !b.is_empty()),
-            mailer_configured: ports.mailer.is_some(),
-            captcha_configured: ports.captcha.is_some(),
-            sidecars: mounts_for_health,
-            dispatcher: ports.dispatcher.clone(),
-            clock: ports.clock.clone().unwrap_or_else(|| Arc::new(SystemClock)),
-            probe_cache: new_probe_cache(),
-        };
+        let health_state = self.health_state(&ports, mounts_for_health);
         let Ports {
             config,
             db,
+            auth: _,
             mailer: _,
             captcha: _,
             rate_limiter: _,

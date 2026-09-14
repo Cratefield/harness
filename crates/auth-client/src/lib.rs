@@ -29,6 +29,7 @@
 
 mod extractor;
 mod jwks;
+mod port;
 mod verify;
 
 pub use extractor::{AuthState, Authenticated, UNAUTHENTICATED};
