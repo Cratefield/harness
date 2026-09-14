@@ -41,6 +41,11 @@ DOC_FILES=(
   "docs/TABLES.md"
 )
 
+# How long to let `wrangler dev` take before calling it a failure. It is
+# a build, not a boot: cold, it installs worker-build, compiles the
+# venture to wasm and downloads wasm-bindgen.
+SERVER_READY_SECS=600
+
 fail=0
 devlog="$(mktemp)"
 fzventure="$root/crates/cli-acceptance/.doc-cmds-fixture"
@@ -180,11 +185,27 @@ run_server_fence() {
       echo "  exit 1"
       echo "fi"
       echo "nohup $line > '$devlog' 2>&1 &"
-      echo "for _ in \$(seq 1 60); do"
-      echo "  curl -sf -m 3 http://127.0.0.1:$port/__health >/dev/null 2>&1 && break"
+      # `wrangler dev` is not a server starting: its custom build runs
+      # `cargo install worker-build` and compiles the venture to wasm,
+      # downloading wasm-bindgen on the way. On a cold runner that is
+      # minutes, and a 120s window turned it into a red gate three times
+      # — twice on main — each log ending mid-download. The wait costs
+      # nothing when the build is warm, because the loop breaks the
+      # moment /__health answers.
+      echo "waited=0"
+      echo "until curl -sf -m 3 http://127.0.0.1:$port/__health >/dev/null 2>&1; do"
+      echo "  if (( waited >= $SERVER_READY_SECS )); then"
+      echo "    echo \"the server never answered /__health in \${waited}s — it may still have been building:\""
+      echo "    tail -20 '$devlog'"
+      echo "    exit 1"
+      echo "  fi"
       echo "  sleep 2"
+      echo "  waited=\$((waited + 2))"
+      # One line a minute, so a red log says whether it was building or
+      # hung. Silence for ten minutes is not a diagnosis.
+      echo "  if (( waited % 60 == 0 )); then echo \"  still waiting for the dev server (\${waited}s)\"; fi"
       echo "done"
-      echo "curl -sf -m 3 http://127.0.0.1:$port/__health >/dev/null || { echo 'server never became ready'; cat '$devlog'; exit 1; }"
+      echo "echo \"the dev server answered after \${waited}s\""
     else
       printf '%s\n' "$line"
     fi
