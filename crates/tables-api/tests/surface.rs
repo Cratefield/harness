@@ -6,7 +6,7 @@
 //! table nobody may write, or a public form for rows only their owner can
 //! reach.
 
-use cratefield_core::{Audience, Surface};
+use cratefield_core::{Audience, Surface, WriteGuards};
 use cratefield_manifest::Access;
 use cratefield_tables::{Schema, TableDef};
 use cratefield_tables_api::{TableApi, surface};
@@ -160,4 +160,57 @@ fn the_paths_are_the_ones_the_router_serves() {
 #[test]
 fn a_venture_with_no_declared_tables_publishes_nothing() {
     assert!(surface(&[]).actions.is_empty());
+}
+
+#[test]
+fn a_writable_table_does_not_make_a_venture_demand_a_captcha() {
+    // `WriteGuards` reads a module's surface to decide what protects its
+    // writes, and a production venture with captcha-guarded writes and no
+    // effective Captcha port is refused at build. So if these actions
+    // read as human forms, a venture with one writable declared table
+    // could not boot in production without a captcha adapter — for writes
+    // its own handlers authenticate.
+    //
+    // They do not, because `RoutePolicy`'s default is "no gateway-level
+    // protection, correct for anything the handler authenticates itself".
+    // That is two defaults lining up rather than a decision anybody wrote
+    // down, which is why this is a test and not a comment.
+    for access in [Access::Owner, Access::TenantMembers, Access::Admin] {
+        let published = for_access(access);
+        let guards = WriteGuards::from_surface("tables", &published);
+        assert!(
+            guards.captcha_modules.is_empty(),
+            "{access} makes the venture demand a captcha for writes it authenticates itself"
+        );
+        assert!(
+            guards.signature_modules.is_empty(),
+            "{access} reads as a webhook receiver"
+        );
+    }
+}
+
+#[test]
+fn a_public_table_demands_nothing_because_it_has_no_writes() {
+    let guards = WriteGuards::from_surface("tables", &for_access(Access::PublicRead));
+    assert!(guards.captcha_modules.is_empty());
+    assert!(guards.signature_modules.is_empty());
+}
+
+#[test]
+fn the_published_json_does_not_ask_a_reader_for_a_captcha_widget() {
+    // `Action::policy` is `#[serde(skip)]`: what reaches a consumer of
+    // the surface document is the legacy `captcha` bool, and a renderer
+    // reads that to decide whether to draw the widget. So the in-process
+    // guard being right is not the whole answer — the serialized form has
+    // to say the same thing.
+    let published = for_access(Access::Owner);
+    let document = serde_json::to_value(&published).expect("serializes");
+    for action in document["actions"].as_array().expect("actions") {
+        assert_eq!(
+            action["captcha"],
+            serde_json::json!(false),
+            "`{}` asks a renderer for a captcha widget",
+            action["name"]
+        );
+    }
 }
