@@ -609,6 +609,82 @@ mod tests {
     }
 
     #[test]
+    fn a_field_that_becomes_an_identifier_cannot_carry_a_quote() {
+        // `name` is written into the generated `Cargo.toml`, into the
+        // generated `wrangler.toml` twice, and into `Venture::new` — all
+        // by interpolation, none of it escaped. A quote in it ended the
+        // literal and the rest became source:
+        //
+        //   cratefield::Venture::new("acme", evil(); Venture::new("x", …)
+        //
+        // A venture author breaking their own build is the small version.
+        // #141 and #159 are a hosted pipeline running this generator over
+        // a manifest somebody else wrote.
+        let base: serde_json::Value =
+            serde_json::from_str(sample_json()).expect("the fixture is JSON");
+        let with = |field: &str, value: serde_json::Value| {
+            let mut object = base.as_object().expect("an object").clone();
+            object.insert(field.to_owned(), value);
+            VentureManifest::from_json_str(&serde_json::Value::Object(object).to_string())
+                .expect("parses")
+                .validate()
+        };
+
+        for (field, value) in [
+            (
+                "name",
+                serde_json::json!("acme\", evil(); cratefield::Venture::new(\"x"),
+            ),
+            ("host", serde_json::json!("acme.test\", evil(), \"x")),
+            (
+                "public_url",
+                serde_json::json!("https://acme.test\", evil(), \"x"),
+            ),
+            (
+                "cors_origins",
+                serde_json::json!(["https://acme.test\", evil(), \"x"]),
+            ),
+        ] {
+            let error = with(field, value).expect_err(field).to_string();
+            assert!(error.contains(field), "{error}");
+            // The value is not echoed back: it is the wrong shape, which
+            // is what should not be pasted into a log or an annotation.
+            assert!(!error.contains("evil()"), "{error}");
+        }
+
+        // The other half. A check that refused everything would satisfy
+        // every assertion above and stop any venture from building.
+        with("name", serde_json::json!("acme-signups_2")).expect("an ordinary name");
+        with("host", serde_json::json!("acme.factory0.dev:8787")).expect("a host with a port");
+        with("public_url", serde_json::json!("https://acme.example")).expect("an ordinary url");
+        with(
+            "cors_origins",
+            serde_json::json!(["https://acme.example", "http://localhost:5173"]),
+        )
+        .expect("ordinary origins");
+    }
+
+    #[test]
+    fn an_origin_with_a_path_is_not_an_origin() {
+        // The rule `cratefield_core` enforces at boot. A manifest that
+        // passes here and is refused there is the failure `cors_origins`
+        // already taught once.
+        let base: serde_json::Value =
+            serde_json::from_str(sample_json()).expect("the fixture is JSON");
+        let mut object = base.as_object().expect("an object").clone();
+        object.insert(
+            "cors_origins".to_owned(),
+            serde_json::json!(["https://acme.example/app"]),
+        );
+        let error = VentureManifest::from_json_str(&serde_json::Value::Object(object).to_string())
+            .expect("parses")
+            .validate()
+            .expect_err("an origin has no path")
+            .to_string();
+        assert!(error.contains("cors_origins"), "{error}");
+    }
+
+    #[test]
     fn a_subject_column_must_be_able_to_hold_a_caller_id() {
         // A subject is a caller's id: a string out of a verified
         // credential. Declared on a column that cannot hold one, every
