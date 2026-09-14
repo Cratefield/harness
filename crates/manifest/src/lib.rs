@@ -20,6 +20,7 @@
 pub mod build_key;
 pub mod catalog;
 pub mod generate;
+mod generate_tables;
 pub mod manifest;
 pub mod privacy;
 pub mod provenance;
@@ -122,17 +123,103 @@ mod tests {
     }
 
     #[test]
-    fn generation_refuses_a_declaration_it_cannot_honour() {
-        // The alternative is a venture that builds, deploys and answers
-        // requests while the tables its author declared do not exist.
+    fn a_declared_table_becomes_a_module_the_venture_composes() {
+        // A declaration that produced no module would be a section that
+        // does nothing: the tables would not be created, would not be in
+        // `fz data export`, and would not be reachable by erasure.
         let manifest = VentureManifest::from_json_str(with_tables()).expect("parses");
-        let catalog = catalog::builtin();
-        let set = manifest.resolve(&catalog).expect("resolves");
-        let error = generate::generate(&manifest, &set, &generate::HarnessSource::default())
-            .expect_err("must refuse");
-        let text = error.to_string();
-        assert!(text.contains("cannot create them"), "{text}");
-        assert!(text.contains("#153"), "{text}");
+        let set = manifest.resolve(&catalog::builtin()).expect("resolves");
+        let venture = generate::generate(&manifest, &set, &generate::HarnessSource::default())
+            .expect("generates");
+
+        let file = |name: &str| {
+            venture
+                .files
+                .iter()
+                .find(|f| f.path == name)
+                .map(|f| f.contents.as_str())
+                .unwrap_or_default()
+        };
+
+        let tables = file("src/tables.rs");
+        assert!(!tables.is_empty(), "no src/tables.rs was emitted");
+        assert!(
+            tables.contains("CREATE TABLE IF NOT EXISTS note"),
+            "{tables}"
+        );
+        // `tables()` and `personal_data()` both name it, which is the
+        // pair `unlisted_tables` and `undeclared_tables` compare.
+        assert!(tables.contains("&[\"note\"]"), "{tables}");
+        assert!(tables.contains("table: \"note\""), "{tables}");
+        assert!(tables.contains("subject: \"author\""), "{tables}");
+        assert!(tables.contains("DataKind::Content"), "{tables}");
+        assert!(tables.contains("Disposition::Erase"), "{tables}");
+
+        // And the venture composes it, or it is a file nobody builds.
+        let lib = file("src/lib.rs");
+        assert!(lib.contains("pub mod tables;"), "{lib}");
+        assert!(
+            lib.contains(".module(crate::tables::DeclaredTables::new())"),
+            "{lib}"
+        );
+    }
+
+    #[test]
+    fn a_venture_that_lists_no_cors_origins_still_generates_valid_rust() {
+        // `.cors_origins([])` has no inferable element type, so this
+        // generated a crate that did not compile. Found by generating a
+        // venture and running `cargo check` over it rather than by any
+        // test here: every fixture in this file lists an origin, so the
+        // empty case had never been rendered.
+        let json = r#"{
+            "name": "acme",
+            "host": "acme.factory0.dev",
+            "modules": ["waitlist"]
+        }"#;
+        let manifest = VentureManifest::from_json_str(json).expect("parses");
+        let set = manifest.resolve(&catalog::builtin()).expect("resolves");
+        let venture = generate::generate(&manifest, &set, &generate::HarnessSource::default())
+            .expect("generates");
+        let lib = venture
+            .files
+            .iter()
+            .find(|f| f.path == "src/lib.rs")
+            .map(|f| f.contents.as_str())
+            .unwrap_or_default();
+        assert!(!lib.contains("cors_origins"), "{lib}");
+
+        // And one that does list them still gets the call.
+        let manifest = VentureManifest::from_json_str(sample_json()).expect("parses");
+        let set = manifest.resolve(&catalog::builtin()).expect("resolves");
+        let venture = generate::generate(&manifest, &set, &generate::HarnessSource::default())
+            .expect("generates");
+        let lib = venture
+            .files
+            .iter()
+            .find(|f| f.path == "src/lib.rs")
+            .map(|f| f.contents.as_str())
+            .unwrap_or_default();
+        assert!(
+            lib.contains(".cors_origins([\"https://acme.example\"])"),
+            "{lib}"
+        );
+    }
+
+    #[test]
+    fn a_venture_with_no_declared_tables_gets_no_tables_module() {
+        let manifest = VentureManifest::from_json_str(sample_json()).expect("parses");
+        let set = manifest.resolve(&catalog::builtin()).expect("resolves");
+        let venture = generate::generate(&manifest, &set, &generate::HarnessSource::default())
+            .expect("generates");
+        let paths: Vec<&str> = venture.files.iter().map(|f| f.path.as_str()).collect();
+        assert!(!paths.contains(&"src/tables.rs"), "{paths:?}");
+        let lib = venture
+            .files
+            .iter()
+            .find(|f| f.path == "src/lib.rs")
+            .map(|f| f.contents.as_str())
+            .unwrap_or_default();
+        assert!(!lib.contains("mod tables"), "{lib}");
     }
 
     /// The same manifest with the privacy block removed.

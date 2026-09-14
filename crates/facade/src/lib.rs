@@ -9,6 +9,9 @@
 #![doc = include_str!("../README.md")]
 #![forbid(unsafe_code)]
 
+// The glob below carries `axum` with it, which is the point: a venture
+// or an out-of-tree module implements `Module::router` against the same
+// axum the harness was built with rather than one it pinned itself.
 pub use cratefield_core::*;
 
 #[cfg(feature = "cloudflare")]
