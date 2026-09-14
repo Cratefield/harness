@@ -132,22 +132,61 @@ impl Postgres {
             .collect())
     }
 
-    /// Records a tenant's status. Best-effort by design
+    /// Records a tenant's status, if the lifecycle allows the move.
+    ///
+    /// Answers whether the row changed. Best-effort by design
     /// (RECONCILIATION.md §6): a write that fails mid-boot still leaves
     /// the tenant refused at request time, because its pool was never
-    /// registered.
+    /// registered. The answer is for the caller that wants to say so —
+    /// `false` covers both "the database would not take it" and "the
+    /// lifecycle does not allow it", which are the same thing to a
+    /// caller: the tenant is not in the status it just asked for.
     ///
-    /// Archived is terminal here too: the `WHERE` refuses to move a row
-    /// out of it. `offboarding` -> `archived` still passes, because the
-    /// guard reads the row's *current* status.
-    pub async fn set_tenant_status(&self, tenant: &str, status: TenantStatus) {
-        let _ = self
+    /// The legal previous statuses are [`TenantStatus::admits`], so
+    /// `archived` stays terminal (it admits nothing, itself included) and
+    /// an `offboarding` tenant cannot be flipped back to `active` by a
+    /// reconciler while its keys are being shredded.
+    pub async fn set_tenant_status(&self, tenant: &str, status: TenantStatus) -> bool {
+        // The legal previous values are part of the `WHERE`, not a read
+        // before the write: two writers moving one tenant at once would
+        // both read a legal status and both write, and the loser's
+        // transition would be checked against a state that no longer
+        // existed. `TenantStatus::admits` is the one place the rule
+        // lives — the reconciler, the offboarding tooling and #154's
+        // lifecycle API all move a tenant, and a rule written into this
+        // clause alone would be a rule the others did not have.
+        let admits = status.admits();
+        let placeholders = std::iter::repeat_n("?", admits.len())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let mut values: Vec<sea_query::Value> = vec![status.as_str().to_owned().into()];
+        values.push(tenant.to_owned().into());
+        values.extend(
+            admits
+                .iter()
+                .map(|previous| previous.as_str().to_owned().into()),
+        );
+        let applied = self
             .execute(&Statement::with_values(
-                "UPDATE harness_tenants SET status = ? WHERE tenant = ? AND status <> 'archived'"
-                    .to_owned(),
-                vec![status.as_str().to_owned().into(), tenant.to_owned().into()],
+                format!(
+                    "UPDATE harness_tenants SET status = ? WHERE tenant = ? AND status IN \
+                     ({placeholders})"
+                ),
+                values,
             ))
             .await;
+        match applied {
+            Ok(rows) => rows > 0,
+            Err(error) => {
+                tracing::warn!(
+                    tenant = %tenant,
+                    status = status.as_str(),
+                    %error,
+                    "could not write the tenant status"
+                );
+                false
+            }
+        }
     }
 
     /// Reconciles one tenant: take the advisory lock, then apply every
@@ -182,7 +221,18 @@ impl Postgres {
         if outcome.is_err() {
             report.status = TenantStatus::Degraded;
         }
-        self.set_tenant_status(&record.tenant, report.status).await;
+        if !self.set_tenant_status(&record.tenant, report.status).await {
+            // Not a boot failure: the pool is registered or it is not,
+            // and that is what serves requests. But a status the registry
+            // would not take means the tenant moved underneath this
+            // reconciliation — being offboarded, most likely — and a
+            // silent miss here is how a fleet and its registry drift.
+            tracing::warn!(
+                tenant = %record.tenant,
+                status = report.status.as_str(),
+                "the registry did not take the reconciled status; the tenant moved underneath it"
+            );
+        }
         tracing::info!(
             tenant = %record.tenant,
             status = report.status.as_str(),
