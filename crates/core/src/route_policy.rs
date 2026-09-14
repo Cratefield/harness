@@ -197,7 +197,19 @@ impl WriteGuards {
         !self.captcha_modules.is_empty()
     }
 
-    /// Whether any module needs the `Payments` port.
+    /// Whether any module takes a **signature-guarded write** — a
+    /// webhook — and so needs a usable [`Payments`] port to verify the
+    /// deliveries against.
+    ///
+    /// Named for the port and computed from the route policy, which is
+    /// not the same set and has been read as though it were: a module
+    /// may require [`Payments`] to open a checkout and take no webhook
+    /// at all, and this answers `false` for it. What it means is "some
+    /// module receives signed webhooks". The `STRIPE_WEBHOOK_SECRET`
+    /// doctor rule is keyed on this, correctly — a venture with no
+    /// webhook route has nothing to verify and needs no secret.
+    ///
+    /// [`Payments`]: crate::ports::Payments
     #[must_use]
     pub fn needs_payments(&self) -> bool {
         !self.signature_modules.is_empty()
