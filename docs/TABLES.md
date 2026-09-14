@@ -97,6 +97,12 @@ Required, with no default, one of four:
 { "table_access": { "note": "owner", "tier": "public-read" } }
 ```
 
+`tenant-members` admits any caller the deployment's verifier accepts. It
+does not check membership, because the harness has no membership fact:
+nothing in a verified credential says which tenant a caller belongs to.
+On a venture `fz build` generates that is the same set — there is one
+tenant — and issue #385 is where it stops being one.
+
 `owner` matches a caller against the column the table's privacy block
 names as its subject, so declaring it on a table that holds nothing
 personal is a manifest error — there is no column to match against.
