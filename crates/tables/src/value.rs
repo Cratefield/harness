@@ -57,6 +57,15 @@ pub enum ErrorCode {
     /// A string did not match its declared format: `email`, `url`, a
     /// timestamp or a UUID.
     BadFormat,
+    /// A string carried U+0000, which no text column can hold.
+    ///
+    /// SQLite stores it and Postgres refuses the whole statement
+    /// (`22P05`), so without this the same declaration serves two
+    /// behaviours: a row that writes in development and a 500 in
+    /// production. Refused in the validator so the answer is a 422
+    /// naming the column rather than a database error naming nothing the
+    /// caller sent.
+    NulByte,
 }
 
 impl ErrorCode {
@@ -72,6 +81,7 @@ impl ErrorCode {
         ErrorCode::TooLarge,
         ErrorCode::NotInEnum,
         ErrorCode::BadFormat,
+        ErrorCode::NulByte,
     ];
 
     /// The wire name used in `corpus/rows.json`.
@@ -88,6 +98,7 @@ impl ErrorCode {
             ErrorCode::TooLarge => "too_large",
             ErrorCode::NotInEnum => "not_in_enum",
             ErrorCode::BadFormat => "bad_format",
+            ErrorCode::NulByte => "nul_byte",
         }
     }
 }
@@ -119,11 +130,7 @@ pub fn check_value(kind: &FieldKind, value: &Value) -> Result<(), ValueError> {
             min_len,
             max_len,
             format,
-        } => {
-            let text = as_string(value, "a string")?;
-            check_length(text, *min_len, *max_len)?;
-            check_format(text, *format)
-        }
+        } => check_text(value, *min_len, *max_len, *format),
         FieldKind::Integer { min, max } => {
             // `as_number` first, so a string or a boolean is reported as
             // the wrong JSON type rather than as a fractional number.
@@ -208,6 +215,45 @@ pub fn check_value(kind: &FieldKind, value: &Value) -> Result<(), ValueError> {
             }
         }
     }
+}
+
+/// A `text` value: storable, then the right length, then the right shape.
+///
+/// Its own function because the arm outgrew `check_value`, and because
+/// the order is part of the contract a reimplementation matches — the
+/// corpus has a case for a value that is both too long and unstorable,
+/// and it expects the storability answer.
+fn check_text(
+    value: &Value,
+    min_len: Option<u32>,
+    max_len: Option<u32>,
+    format: Option<TextFormat>,
+) -> Result<(), ValueError> {
+    let text = as_string(value, "a string")?;
+    // Before length, because it is about whether the value can be
+    // stored at all rather than about its shape. SQLite keeps a
+    // NUL in a TEXT column and PostgreSQL refuses the statement
+    // (`22P05`), so a row accepted here writes in development and
+    // answers 500 in production — the same declaration serving
+    // two behaviours, which is what the boolean and real decoding
+    // rules already exist to stop.
+    //
+    // Only U+0000. Every other control character stores on both
+    // engines, and a text column is allowed to hold a newline:
+    // this is the character no text column has, not a taste in
+    // prose. The declared *default* is held to the stricter rule
+    // enum members are, because that one becomes schema.
+    if let Some(position) = text.find('\0') {
+        return Err(ValueError::new(
+            ErrorCode::NulByte,
+            format!(
+                "holds U+0000 at byte {position}, which no text column can store \
+                         (PostgreSQL refuses it outright)"
+            ),
+        ));
+    }
+    check_length(text, min_len, max_len)?;
+    check_format(text, format)
 }
 
 fn too_small(min: impl std::fmt::Display) -> ValueError {

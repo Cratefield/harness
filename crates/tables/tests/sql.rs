@@ -687,6 +687,31 @@ fn a_filter_value_of_the_wrong_kind_is_refused() {
 }
 
 #[test]
+fn a_declared_default_holding_a_control_character_is_refused() {
+    // A string default reaches the DDL as a literal, exactly like an enum
+    // member — and the enum rule already says why: a NUL truncates the
+    // statement in SQLite and PostgreSQL refuses it, and a newline
+    // produces a schema file nobody can read. The rule was written for
+    // one of the two places a declared string reaches the DDL.
+    let schema = toml::from_str::<Manifest>(
+        "[tables.note]\nprimary_key = \"id\"\n\n[[tables.note.fields]]\nname = \"id\"\nkind = \"text\"\nrequired = true\n\n[[tables.note.fields]]\nname = \"body\"\nkind = \"text\"\ndefault = \"a\\u0000b\"\n",
+    )
+    .expect("parses")
+    .tables;
+    let problems = schema.validate().expect_err("a NUL cannot be a default");
+    let text = format!("{problems:?}");
+    assert!(text.contains("control character"), "{text}");
+
+    // The other half: an ordinary default still works.
+    let fine = toml::from_str::<Manifest>(
+        "[tables.note]\nprimary_key = \"id\"\n\n[[tables.note.fields]]\nname = \"id\"\nkind = \"text\"\nrequired = true\n\n[[tables.note.fields]]\nname = \"body\"\nkind = \"text\"\ndefault = \"unread\"\n",
+    )
+    .expect("parses")
+    .tables;
+    fine.validate().expect("an ordinary default");
+}
+
+#[test]
 fn a_filter_on_a_json_column_is_refused_in_every_path() {
     // A JSON column is stored as its serialization, and `serde_json` runs
     // with `preserve_order` here, so `= ?` compares text whose bytes
