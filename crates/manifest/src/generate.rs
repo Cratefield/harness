@@ -269,6 +269,11 @@ fn cargo_toml(
          [[bin]]\n\
          name = \"fz\"\n\
          path = \"src/fz_main.rs\"\n\
+         # Every venture's `fz` is called `fz`, so two of them in one\n\
+         # workspace document to the same path and `cargo doc` refuses\n\
+         # both. It is a thin CLI shim over `cratefield-cli`; its rustdoc\n\
+         # is not what anybody reads.\n\
+         doc = false\n\
          \n\
          [dependencies]\n\
          {cratefield_dep}\n\

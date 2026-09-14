@@ -127,7 +127,7 @@ mod tests {
             std::env::temp_dir().join(format!("fz-build-key-{}-{}.json", name, std::process::id()));
         std::fs::write(
             &path,
-            format!(r#"{{ "name": "acme", "host": "acme.factory0.dev", "modules": {modules} }}"#),
+            format!(r#"{{ "name": "acme", "host": "acme.factory0.dev", "cors_origins": ["https://acme.example"], "modules": {modules} }}"#),
         )
         .expect("temp manifest writes");
         path
@@ -184,7 +184,7 @@ mod tests {
         .expect("temp manifest writes");
         std::fs::write(
             &b,
-            r#"{ "name": "other", "host": "other.dev", "config": { "brand": "B" }, "modules": ["waitlist"] }"#,
+            r#"{ "name": "other", "host": "other.dev", "cors_origins": ["https://b.dev"], "config": { "brand": "B" }, "modules": ["waitlist"] }"#,
         )
         .expect("temp manifest writes");
         let ka = compute_with(&a, None, RUSTC_TEST_VERSION).unwrap();

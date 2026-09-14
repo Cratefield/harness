@@ -46,6 +46,7 @@ fn manifest_with_access(dir: &Path, name: &str, access: &str) -> std::path::Path
         r#"{{
             "name": "acme",
             "host": "acme.factory0.dev",
+            "cors_origins": ["https://acme.example"],
             "modules": [],
             "tables": {ONE_TABLE},
             "table_privacy": {{ "note": {{ "holds": "personal", "subject": "id",
@@ -89,6 +90,7 @@ fn named_manifest_at(dir: &Path, name: &str, tables: &str) -> std::path::PathBuf
         r#"{{
             "name": "acme",
             "host": "acme.factory0.dev",
+            "cors_origins": ["https://acme.example"],
             "modules": [],
             "tables": {tables},
             "table_privacy": {privacy},

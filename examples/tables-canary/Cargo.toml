@@ -13,6 +13,11 @@ crate-type = ["cdylib", "rlib"]
 [[bin]]
 name = "fz"
 path = "src/fz_main.rs"
+# Every venture's `fz` is called `fz`, so two of them in one
+# workspace document to the same path and `cargo doc` refuses
+# both. It is a thin CLI shim over `cratefield-cli`; its rustdoc
+# is not what anybody reads.
+doc = false
 
 [dependencies]
 cratefield = { path = "../../crates/facade", features = [
