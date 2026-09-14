@@ -61,7 +61,14 @@ The two 404s are the same answer on purpose.
 | `PUT /{table}/{key}` | `200` and the row it replaced |
 | `DELETE /{table}/{key}` | `204`, and nothing |
 
-These are the five the surface publishes, and
+**The last three need a key of one column.** `/{table}/{key}` refuses a
+composite key rather than joining its values with a separator that could
+occur inside one, so a table declaring `primary_key = ["tenant",
+"member"]` has a page and a create and no route that names one row. It
+publishes only those two, for the reason below. Issue #387 is whether it
+should get the other three.
+
+These are the five the surface publishes for a table it can address, and
 `every_published_action_is_a_route_that_exists` is what keeps the two
 lists the same. A published action whose route does not exist is worse
 than an unpublished one: a generated UI renders the form and the
@@ -218,6 +225,12 @@ per request against their own id. So `owner` and `tenant-members` both
 publish as `Audience::Subject`, a variant added for them: calling `owner`
 public would render a form for rows the caller cannot reach, and calling
 it admin would hide it from the person whose rows they are.
+
+A `public-read` table publishes its reads and no writes, because there
+are none — and a composite-key table publishes no single-row action,
+because `/{table}/{key}` does not exist for it. Both are the same rule:
+the contract lists what is there. Without it, a generated client carries
+methods that answer `403` or `400` whatever they are called with.
 
 A `public-read` table publishes its reads and no writes, because there
 are none. The body schema on a write is the table's own JSON Schema — the

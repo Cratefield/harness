@@ -16,6 +16,12 @@
 //!
 //! A `public-read` table publishes its reads and **not** its writes,
 //! because there are none: the level is exactly that.
+//!
+//! A composite-key table publishes its page and its create and **not** the
+//! three single-row actions, for the same reason: `/{table}/{key}` refuses
+//! a key of several columns rather than joining them with a separator
+//! that could occur inside one (issue #387), so those routes do not exist
+//! for it.
 
 use cratefield_core::{Action, Audience, Outcome, Surface};
 use cratefield_manifest::Access;
@@ -33,13 +39,14 @@ pub fn surface(tables: &[TableApi]) -> Surface {
     for api in tables {
         let name = &api.table.name;
         let audience = audience(api.access);
-        out = out
-            .action(
-                Action::new(format!("list-{name}"), Method::GET, format!("/{name}"))
-                    .audience(audience)
-                    .outcome(Outcome::Json),
-            )
-            .action(
+        let by_key = addressable(&api.table);
+        out = out.action(
+            Action::new(format!("list-{name}"), Method::GET, format!("/{name}"))
+                .audience(audience)
+                .outcome(Outcome::Json),
+        );
+        if by_key {
+            out = out.action(
                 Action::new(
                     format!("read-{name}"),
                     Method::GET,
@@ -48,16 +55,20 @@ pub fn surface(tables: &[TableApi]) -> Surface {
                 .audience(audience)
                 .outcome(Outcome::Json),
             );
+        }
         if !writable(api.access) {
             continue;
         }
+        out = out.action(
+            Action::new(format!("create-{name}"), Method::POST, format!("/{name}"))
+                .audience(audience)
+                .input_schema(body_schema(&api.table))
+                .outcome(Outcome::Json),
+        );
+        if !by_key {
+            continue;
+        }
         out = out
-            .action(
-                Action::new(format!("create-{name}"), Method::POST, format!("/{name}"))
-                    .audience(audience)
-                    .input_schema(body_schema(&api.table))
-                    .outcome(Outcome::Json),
-            )
             .action(
                 Action::new(
                     format!("replace-{name}"),
@@ -79,6 +90,23 @@ pub fn surface(tables: &[TableApi]) -> Surface {
             );
     }
     out
+}
+
+/// Whether one row of this table can be named in a path.
+///
+/// A key of several columns cannot: `key_from_path` refuses it with
+/// `composite-key` rather than joining the values with a separator that
+/// could occur inside one. So `/{table}/{key}` does not exist for such a
+/// table, and publishing three actions against it would put four methods
+/// in every generated client that answer 400 whatever they are called
+/// with — the same argument `writable` makes about `public-read`, which
+/// publishes its reads and nothing else rather than a create that is
+/// always refused.
+///
+/// Issue #387 is whether composite-key tables should get single-row
+/// routes at all. Until they do, the contract says what is there.
+fn addressable(table: &cratefield_tables::TableDef) -> bool {
+    table.primary_key.len() == 1
 }
 
 /// The audience a level publishes as.
