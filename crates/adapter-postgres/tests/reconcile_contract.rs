@@ -276,8 +276,31 @@ async fn a_degraded_tenant_is_marked_and_skipped_by_the_fleet() {
     tenant_db.finish().await;
 }
 
+/// Asserts the registry refuses every move back out of `offboarding`.
+///
+/// The fleet skipping an offboarding tenant is one guard; this is the
+/// other, because the reconciler is not the only writer of a status, and
+/// the tenant being shredded is the one that must not come back.
+async fn refuses_every_revival(control: &Postgres, tenant: &str) {
+    for revival in [
+        TenantStatus::Active,
+        TenantStatus::Degraded,
+        TenantStatus::Provisioning,
+    ] {
+        assert!(
+            !control.set_tenant_status(tenant, revival).await,
+            "the registry took {revival} for a tenant being shredded"
+        );
+        assert_eq!(
+            control.tenants().await.expect("registry")[0].status,
+            TenantStatus::Offboarding,
+            "and it moved the row"
+        );
+    }
+}
+
 #[tokio::test]
-async fn an_archived_tenant_cannot_be_resurrected_or_re_flown() {
+async fn a_retired_tenant_cannot_be_resurrected_or_re_flown() {
     // #336 gave the lifecycle an end (`offboarding`, `archived`). This is
     // the registry half of that: once a tenant is archived its database is
     // dropped and its data keys are destroyed, so a row that comes back to
@@ -307,9 +330,14 @@ async fn an_archived_tenant_cannot_be_resurrected_or_re_flown() {
     // fly it — reconnecting mid-shred and flipping it back to `active` is
     // the failure this guards.
     let harness = std::sync::Arc::new(harness());
-    control
-        .set_tenant_status("retiree", TenantStatus::Offboarding)
-        .await;
+    assert!(
+        control
+            .set_tenant_status("retiree", TenantStatus::Offboarding)
+            .await,
+        "retirement starts from active"
+    );
+
+    refuses_every_revival(&control, "retiree").await;
     let reports = control
         .reconcile_fleet(&harness, 8)
         .await
@@ -322,9 +350,12 @@ async fn an_archived_tenant_cannot_be_resurrected_or_re_flown() {
     );
 
     // The shred completes.
-    control
-        .set_tenant_status("retiree", TenantStatus::Archived)
-        .await;
+    assert!(
+        control
+            .set_tenant_status("retiree", TenantStatus::Archived)
+            .await,
+        "the only way out of offboarding"
+    );
 
     // Terminal: no status write moves it back.
     for attempt in [
@@ -333,13 +364,25 @@ async fn an_archived_tenant_cannot_be_resurrected_or_re_flown() {
         TenantStatus::Degraded,
         TenantStatus::Offboarding,
     ] {
-        control.set_tenant_status("retiree", attempt).await;
+        assert!(
+            !control.set_tenant_status("retiree", attempt).await,
+            "the registry reported taking {attempt} for an archived tenant"
+        );
         assert_eq!(
             control.tenants().await.expect("registry")[0].status,
             TenantStatus::Archived,
             "a status write moved an archived tenant to {attempt}"
         );
     }
+    // Including a repeat of `archived` itself: the row is the record that
+    // the keys were destroyed, and rewriting it would move its timestamp
+    // and lose when the shred actually happened.
+    assert!(
+        !control
+            .set_tenant_status("retiree", TenantStatus::Archived)
+            .await,
+        "the record of an irreversible act was rewritten"
+    );
 
     // Terminal: re-registering the id is refused, and says so. The
     // database still exists here, so nothing but the guard stops it.

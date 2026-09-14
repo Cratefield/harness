@@ -85,6 +85,68 @@ impl TenantStatus {
         }
     }
 
+    /// The statuses a tenant may be in and still become this one.
+    ///
+    /// The lifecycle rule, in one place, because more than one writer
+    /// moves a tenant through it: the reconciler, the offboarding
+    /// runbook's tooling and the lifecycle API of #154. A rule that lived
+    /// in one adapter's `WHERE` clause would be a rule the next writer
+    /// did not have.
+    ///
+    /// Written as "who may become me" rather than "who may I become" so
+    /// the match is on the target, which is what a caller setting a
+    /// status has in its hand — and so the list drops straight into the
+    /// `UPDATE`'s `WHERE` as the set of previous values that may be
+    /// overwritten, making the check part of the same statement rather
+    /// than a read the write races.
+    ///
+    /// Each status admits itself, because writing the status a tenant is
+    /// already in changes nothing and a reconciler that runs twice must
+    /// not fail the second time. [`TenantStatus::Archived`] is the
+    /// exception: it admits nothing, itself included. The row is the
+    /// record that the database was dropped and the keys destroyed, and a
+    /// record of an irreversible act is not rewritten.
+    #[must_use]
+    pub const fn admits(self) -> &'static [Self] {
+        match self {
+            // A tenant is registered as provisioning and nothing returns
+            // to it. Re-provisioning an existing tenant is a new tenant,
+            // because the old one's keys are either live or destroyed.
+            Self::Provisioning => &[Self::Provisioning],
+            // Reconciliation succeeded — from a first boot, from a repeat
+            // boot, or from a failure that has cleared. Not from
+            // `Offboarding`: that tenant's export and key shred are under
+            // way (`docs/TENANT-ONBOARDING.md` §2), and a reconciler
+            // reviving it would serve a database whose keys are being
+            // destroyed underneath it.
+            Self::Active => &[Self::Provisioning, Self::Degraded, Self::Active],
+            // Reconciliation failed. Reachable from anything still
+            // serving or trying to.
+            Self::Degraded => &[Self::Provisioning, Self::Active, Self::Degraded],
+            // Retirement starts from anywhere that is not already
+            // retiring or retired, including `Provisioning`: a tenant
+            // abandoned before it ever served still has keys, and they
+            // still have to be shredded.
+            Self::Offboarding => &[
+                Self::Provisioning,
+                Self::Active,
+                Self::Degraded,
+                Self::Offboarding,
+            ],
+            // Only the offboarding that performed the shred ends here.
+            // Archiving straight from `Active` would record a shred that
+            // never happened.
+            Self::Archived => &[Self::Offboarding],
+        }
+    }
+
+    /// Whether `self` may become `next`. The same rule as
+    /// [`TenantStatus::admits`], asked from the other end.
+    #[must_use]
+    pub fn can_become(self, next: Self) -> bool {
+        next.admits().contains(&self)
+    }
+
     /// Parses the registry's text form; anything else (a future version
     /// wrote a status this binary does not know) reads as
     /// [`TenantStatus::Degraded`] — refuse, do not guess.
@@ -558,5 +620,127 @@ mod tests {
     fn an_unknown_status_reads_as_degraded() {
         assert_eq!(TenantStatus::parse("busy"), TenantStatus::Degraded);
         assert_eq!(TenantStatus::parse(""), TenantStatus::Degraded);
+    }
+
+    /// Every status, for the transition table. Not public: a caller
+    /// enumerating an `#[non_exhaustive]` enum is the thing that
+    /// attribute exists to prevent.
+    const EVERY: [TenantStatus; 5] = [
+        TenantStatus::Provisioning,
+        TenantStatus::Active,
+        TenantStatus::Degraded,
+        TenantStatus::Offboarding,
+        TenantStatus::Archived,
+    ];
+
+    #[test]
+    fn a_tenant_being_shredded_is_not_revived_by_a_reconciliation() {
+        // The live one. `offboarding` means the export and key shred of
+        // `docs/TENANT-ONBOARDING.md` §2 are under way; a reconciler
+        // writing `active` would serve a database whose keys are being
+        // destroyed underneath it. The fleet already skips it
+        // (`is_reconciled`), and this is the second line, because the
+        // reconciler is not the only writer.
+        assert!(!TenantStatus::Offboarding.can_become(TenantStatus::Active));
+        assert!(!TenantStatus::Offboarding.can_become(TenantStatus::Degraded));
+        assert!(!TenantStatus::Offboarding.can_become(TenantStatus::Provisioning));
+        // Forward is the only way out.
+        assert!(TenantStatus::Offboarding.can_become(TenantStatus::Archived));
+    }
+
+    #[test]
+    fn archiving_records_a_shred_that_happened() {
+        // Only the offboarding that performed it ends there. Archiving
+        // straight from `active` would record a destruction of keys that
+        // nothing has destroyed.
+        assert_eq!(
+            TenantStatus::Archived.admits(),
+            &[TenantStatus::Offboarding]
+        );
+        for from in EVERY {
+            assert_eq!(
+                from.can_become(TenantStatus::Archived),
+                from == TenantStatus::Offboarding,
+                "{from} -> archived"
+            );
+        }
+    }
+
+    #[test]
+    fn nothing_leaves_archived_including_a_write_of_archived() {
+        // The row is the record that the database was dropped and the
+        // keys destroyed. A record of an irreversible act is not
+        // rewritten — not even with the same word, which would move its
+        // timestamp and lose when the shred actually happened.
+        for to in EVERY {
+            assert!(
+                !TenantStatus::Archived.can_become(to),
+                "archived -> {to} is not a move that exists"
+            );
+        }
+    }
+
+    #[test]
+    fn a_status_written_twice_is_not_a_failure() {
+        // A reconciler that runs twice writes `active` twice, and the
+        // second must not be refused. Archived is the exception, and has
+        // its own test saying why.
+        for status in EVERY {
+            assert_eq!(
+                status.can_become(status),
+                status != TenantStatus::Archived,
+                "{status} -> {status}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_tenant_abandoned_before_it_served_still_has_keys_to_shred() {
+        // So retirement starts from `provisioning` too. Skipping straight
+        // to `archived` would leave the keys alive and claim they were
+        // destroyed.
+        assert!(TenantStatus::Provisioning.can_become(TenantStatus::Offboarding));
+        assert!(!TenantStatus::Provisioning.can_become(TenantStatus::Archived));
+    }
+
+    #[test]
+    fn a_tenant_never_goes_back_to_provisioning() {
+        // Re-provisioning an existing tenant is a new tenant: the old
+        // one's keys are either live or destroyed, and neither is a
+        // starting point.
+        assert_eq!(
+            TenantStatus::Provisioning.admits(),
+            &[TenantStatus::Provisioning]
+        );
+    }
+
+    #[test]
+    fn the_rule_reads_the_same_from_both_ends() {
+        // `admits` is the match and `can_become` asks it backwards. One
+        // rule, so a change to either cannot disagree with the other.
+        for to in EVERY {
+            for from in EVERY {
+                assert_eq!(
+                    from.can_become(to),
+                    to.admits().contains(&from),
+                    "{from} -> {to}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_status_the_fleet_flies_is_one_a_reconciliation_can_write() {
+        // The two rules have to agree or a reconciled tenant is one whose
+        // outcome the registry will not take: `is_reconciled` picks the
+        // tenants the fleet boots, and reconciliation ends by writing
+        // `active` or `degraded`.
+        for status in EVERY.into_iter().filter(|status| status.is_reconciled()) {
+            assert!(
+                status.can_become(TenantStatus::Active)
+                    && status.can_become(TenantStatus::Degraded),
+                "{status} is flown, and its own outcome would be refused"
+            );
+        }
     }
 }
