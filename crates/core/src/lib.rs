@@ -88,8 +88,8 @@ pub use ports::{
     PushError, PushOutcome, RateLimitError, RateLimiter, Realtime, RealtimeError, Recipient,
     Refund, RefundRequest, RoomContext, RoomHandler, RoutingPush, Row, Rows, ScopedBlob,
     SendOutcome, SignatureError, Signer, Statement, Subject, SubscriptionCheckoutRequest,
-    SystemClock, TransferCharge, TryFromValue, UlidIdGen, Verdict, WebhookEvent, check_blob_size,
-    declared_content_length, retry_after, timeout, ttl_secs,
+    SystemClock, TransferCharge, TryFromValue, UlidIdGen, Unconfigured, Verdict, WebhookEvent,
+    check_blob_size, declared_content_length, retry_after, timeout, ttl_secs,
 };
 pub use problem::Problem;
 // `Slugs` is exported beside the `SLUGS` value it types. Without it a

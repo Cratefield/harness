@@ -24,6 +24,9 @@ push = ["dep:cratefield-push-wiring"]
 
 [dependencies]
 cratefield-core = { workspace = true }
+# Verifies a caller's token against the issuer's key set (issue #153),
+# assembled from the environment by `auth_from_env`.
+cratefield-auth-client = { path = "../auth-client" }
 cratefield-push-wiring = { workspace = true, optional = true }
 async-trait = { workspace = true }
 axum = { workspace = true, features = ["tokio", "http1"] }

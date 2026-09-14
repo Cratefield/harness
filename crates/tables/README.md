@@ -492,11 +492,23 @@ route falling back to "everyone" or "nobody" would be deciding that
 silently.
 
 A venture that declares any table whose access is not `public-read`
-generates a module requiring the `Auth` port, and the harness refuses to
-build a composition whose runtime does not provide one. So a deployment
-with an `owner` table and no verifier wired **does not start**, rather
-than starting, serving every other route, and failing the first time
-somebody reads that table — the same outage, found later and by a user.
+generates a module requiring the `Auth` port, and a runtime that wires
+one from the environment (`AUTH_ISSUER`, `AUTH_CLIENT_ID`). The harness
+refuses to build a composition whose runtime provides no `Auth` port at
+all, so a hand-written venture that forgets it does not start.
+
+A generated one always provides the port, because on Workers the `Env`
+exists per request and a runtime cannot know at compose time whether the
+issuer is set. With those variables unset the port is a verifier that
+verifies nothing: an anonymous request stays anonymous, so public tables
+are unaffected, and a request presenting a credential gets `503` — never
+`401`, because the token may be perfectly good and nothing there can
+tell. The boot log names the missing variables.
+
+So the guarantee is "an unconfigured deployment cannot serve a non-public
+table", not "it cannot start". Making production refuse to start on this
+belongs with the production-readiness check that already covers a captcha
+adapter which is present but unbound; it is not built for auth yet.
 
 `fz tables diff` reports a change to this level, and says which way it
 moved. It has to: flipping one table from `owner` to `public-read`

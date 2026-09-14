@@ -215,6 +215,46 @@ mod tests {
     }
 
     #[test]
+    fn a_venture_with_a_non_public_table_wires_a_verifier() {
+        // The module requires `Port::Auth`, so the runtime has to provide
+        // one or the composition is refused at boot — correct, and
+        // useless, because nothing would ever wire it.
+        let manifest = VentureManifest::from_json_str(with_tables()).expect("parses");
+        let set = manifest.resolve(&catalog::builtin()).expect("resolves");
+        let venture = generate::generate(&manifest, &set, &generate::HarnessSource::default())
+            .expect("generates");
+        let lib = venture
+            .files
+            .iter()
+            .find(|f| f.path == "src/lib.rs")
+            .map(|f| f.contents.as_str())
+            .unwrap_or_default();
+        assert!(
+            lib.contains(".auth_from_env()"),
+            "an owner table generated a venture that cannot boot: {lib}"
+        );
+    }
+
+    #[test]
+    fn a_venture_whose_tables_are_all_public_does_not_wire_a_verifier() {
+        // Nothing asks who is calling, so nothing needs an auth service.
+        let manifest = VentureManifest::from_json_str(
+            &with_tables().replace(r#""note": "owner""#, r#""note": "public-read""#),
+        )
+        .expect("parses");
+        let set = manifest.resolve(&catalog::builtin()).expect("resolves");
+        let venture = generate::generate(&manifest, &set, &generate::HarnessSource::default())
+            .expect("generates");
+        let lib = venture
+            .files
+            .iter()
+            .find(|f| f.path == "src/lib.rs")
+            .map(|f| f.contents.as_str())
+            .unwrap_or_default();
+        assert!(!lib.contains("auth_from_env"), "{lib}");
+    }
+
+    #[test]
     fn a_venture_whose_tables_are_all_public_does_not_demand_a_verifier() {
         // The other half, and the one that makes the rule a rule rather
         // than a constant: requiring `Port::Auth` from every venture

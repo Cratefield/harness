@@ -172,3 +172,47 @@ impl<T: Auth + ?Sized> Auth for Arc<T> {
         (**self).identify(headers).await
     }
 }
+
+/// The verifier a deployment gets when it asked for one from the
+/// environment and the environment did not have it.
+///
+/// A **provided port that verifies nothing**, the same shape
+/// `push_from_env` uses for a push router with no transports configured:
+/// on Workers the `Env` exists per request, so a runtime cannot know at
+/// compose time whether the issuer is set, and refusing to provide the
+/// port would make every such deployment fail to boot — including the
+/// ones whose tables are all public and never need it.
+///
+/// What it answers is chosen so nothing reads as working:
+///
+/// - **no credential** is [`Caller::Anonymous`], so a `public-read` table
+///   still serves and a deployment that only publishes is unaffected;
+/// - **a credential** is [`AuthError::Unavailable`], never `NotVerified`
+///   — the token may be perfectly good and nothing here can tell, so
+///   saying it did not verify would be a claim this has not established.
+///
+/// A table whose access needs a caller therefore answers 401 to an
+/// anonymous request and 503 to a signed-in one, and the boot warning
+/// naming the missing variables is in the log either way.
+pub struct Unconfigured {
+    /// What is missing, for the log and for the 503's detail.
+    why: String,
+}
+
+impl Unconfigured {
+    /// A verifier that cannot verify, and says why.
+    #[must_use]
+    pub fn new(why: impl Into<String>) -> Self {
+        Self { why: why.into() }
+    }
+}
+
+#[async_trait]
+impl Auth for Unconfigured {
+    async fn identify(&self, headers: &HeaderMap) -> Result<Caller, AuthError> {
+        if headers.get(http::header::AUTHORIZATION).is_none() {
+            return Ok(Caller::Anonymous);
+        }
+        Err(AuthError::Unavailable(self.why.clone()))
+    }
+}
