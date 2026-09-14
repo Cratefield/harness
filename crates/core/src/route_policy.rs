@@ -239,6 +239,23 @@ pub fn payments_effective(runtime: Option<&Arc<dyn Runtime>>) -> bool {
     runtime.is_some_and(|runtime| runtime.effectively_configured(Port::Payments))
 }
 
+/// The operator's reason, if they actually gave one.
+///
+/// `docs/SECURITY.md` puts it in four words — "A blank reason is not an
+/// acceptance" — and `unprotected_writes_override` already enforced it
+/// for `HARNESS_ALLOW_UNPROTECTED_WRITES`. The `fz doctor` flag reached
+/// the same gate without it: `--allow-no-captcha ""` arrives as
+/// `Some("")`, which waived a production abuse control and recorded an
+/// empty reason for it. A waiver with nothing to answer for is the
+/// silent default the gate exists to remove.
+///
+/// One function, so the two ways to the same waiver cannot disagree
+/// again.
+#[must_use]
+pub fn stated_reason(reason: Option<&str>) -> Option<&str> {
+    reason.map(str::trim).filter(|reason| !reason.is_empty())
+}
+
 /// Config key holding an operator's explicit, recorded acceptance that
 /// this deployment serves guarded routes it cannot fully protect
 /// (issue #143).
@@ -259,8 +276,7 @@ pub const ALLOW_UNPROTECTED_WRITES: &str = "HARNESS_ALLOW_UNPROTECTED_WRITES";
 pub fn unprotected_writes_override(config: &dyn crate::config::Config) -> Option<String> {
     config
         .get(ALLOW_UNPROTECTED_WRITES)
-        .map(|reason| reason.trim().to_owned())
-        .filter(|reason| !reason.is_empty())
+        .and_then(|raw| stated_reason(Some(raw.as_str())).map(str::to_owned))
 }
 
 /// The environment this **deployment** runs in (issue #143).
@@ -325,7 +341,10 @@ pub fn production_readiness(
         return Vec::new();
     }
     let mut errors = Vec::new();
-    if guards.needs_captcha() && !captcha_effective(runtime) && allow_no_captcha.is_none() {
+    if guards.needs_captcha()
+        && !captcha_effective(runtime)
+        && stated_reason(allow_no_captcha).is_none()
+    {
         errors.push(format!(
             "production venture has captcha-guarded public writes from [{}] but the Captcha \
              port is not effectively configured: provide it on the runtime with a bound \
@@ -646,6 +665,20 @@ mod tests {
         assert!(
             production_readiness(VentureEnv::Production, &guards, None, Some("preview")).is_empty()
         );
+        // And it is the *reason* that overrides, not the flag. `fz
+        // doctor --allow-no-captcha ""` hands this `Some("")`, and an
+        // override with nothing to answer for is the silent default
+        // `ALLOW_UNPROTECTED_WRITES` already refuses to be — its
+        // `unprotected_writes_override` trims and drops an empty one.
+        // Two ways to the same waiver, and only one of them asked for a
+        // reason.
+        for nothing in ["", "   ", "\t\n"] {
+            assert_eq!(
+                production_readiness(VentureEnv::Production, &guards, None, Some(nothing)).len(),
+                1,
+                "an empty reason waived the captcha gate: {nothing:?}"
+            );
+        }
     }
 
     #[test]

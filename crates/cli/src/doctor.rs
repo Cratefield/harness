@@ -569,7 +569,11 @@ fn production_port_checks(
         &guards,
         cratefield_core::captcha_effective(harness.runtime()),
     ) {
-        match allow_no_captcha {
+        // The same rule the gate in `route_policy` applies, from the
+        // same function: `--allow-no-captcha ""` is not an acceptance,
+        // so it does not downgrade the failure and does not get logged
+        // as though somebody had answered for it.
+        match cratefield_core::stated_reason(allow_no_captcha) {
             Some(reason) => {
                 // An override of a production abuse control is a decision
                 // someone has to answer for later, so it is recorded, not
@@ -893,6 +897,24 @@ mod tests {
         assert!(failure.contains("effectively configured"));
         assert!(captcha_production_failure(&guards(true), true).is_none());
         assert!(captcha_production_failure(&guards(false), false).is_none());
+
+        // The waiver this failure is matched against is the *reason*,
+        // not the flag. `--allow-no-captcha ""` used to reach the arm
+        // that downgrades the failure to a warning and logs the
+        // operator's acceptance — with an empty reason in the log.
+        // `docs/SECURITY.md` says "A blank reason is not an
+        // acceptance"; this is the half of that sentence the CLI owns.
+        for nothing in ["", "   "] {
+            assert!(
+                cratefield_core::stated_reason(Some(nothing)).is_none(),
+                "an empty reason counted as an acceptance: {nothing:?}"
+            );
+        }
+        assert_eq!(
+            cratefield_core::stated_reason(Some("  previewing the new form  ")),
+            Some("previewing the new form"),
+            "a real reason still overrides, trimmed"
+        );
     }
 
     #[test]
