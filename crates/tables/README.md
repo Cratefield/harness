@@ -491,6 +491,12 @@ personal is a manifest error — there is no column to match against, and a
 route falling back to "everyone" or "nobody" would be deciding that
 silently.
 
+`fz tables diff` reports a change to this level, and says which way it
+moved. It has to: flipping one table from `owner` to `public-read`
+changes no column, so a diff that compared schemas alone answered "No
+change" and exited zero for an edit that publishes every subject's
+private rows.
+
 Nothing serves these yet; the CRUD routes are not built. Declaring first
 means that when they arrive, no table can be served without an author
 having said who may see it, and no manifest written before the rule needs

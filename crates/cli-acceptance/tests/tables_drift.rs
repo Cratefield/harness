@@ -39,6 +39,25 @@ impl Drop for TempDir {
     }
 }
 
+/// A manifest declaring `ONE_TABLE` under a chosen access level.
+fn manifest_with_access(dir: &Path, name: &str, access: &str) -> std::path::PathBuf {
+    let path = dir.join(name);
+    let body = format!(
+        r#"{{
+            "name": "acme",
+            "host": "acme.factory0.dev",
+            "modules": [],
+            "tables": {ONE_TABLE},
+            "table_privacy": {{ "note": {{ "holds": "personal", "subject": "id",
+                "kind": "content", "disposition": "erase",
+                "description": "The notes you wrote." }} }},
+            "table_access": {{ "note": "{access}" }}
+        }}"#
+    );
+    std::fs::write(&path, body).expect("manifest writes");
+    path
+}
+
 /// A manifest declaring one table, written to `dir` as `venture.json`.
 fn manifest_at(dir: &Path, tables: &str) -> std::path::PathBuf {
     named_manifest_at(dir, "venture.json", tables)
@@ -269,5 +288,38 @@ fn a_manifest_that_is_not_legal_is_refused_rather_than_compared() {
     assert!(
         error.contains("bad.json"),
         "the message names which one: {error}"
+    );
+}
+
+#[test]
+fn publishing_a_private_table_is_not_reported_as_no_change() {
+    // The gap this closes. Flipping `owner` to `public-read` changes no
+    // column, so the schema diff is empty — and this command answered
+    // "No change: both declare the same 1 table(s)" and exited zero for
+    // an edit that publishes every subject's private rows.
+    let dir = TempDir::new("tables-diff-access");
+    let before = manifest_with_access(dir.path(), "before.json", "owner");
+    let after = manifest_with_access(dir.path(), "after.json", "public-read");
+
+    let count = cratefield_cli::tables::diff_report(&before, &after).expect("both are legal");
+    assert_eq!(count, 1, "the access change has to be a reported change");
+
+    // And the count is the exit code, which is what a CI job comparing a
+    // branch's manifest against main's branches on.
+    let refused =
+        cratefield_cli::tables::diff(&before, &after).expect_err("a change means a non-zero exit");
+    assert!(refused.contains("1 change"), "{refused}");
+}
+
+#[test]
+fn an_unchanged_declaration_is_still_no_change() {
+    // The other half: the new comparison must not invent differences, or
+    // the exit code stops meaning anything.
+    let dir = TempDir::new("tables-diff-same");
+    let before = manifest_with_access(dir.path(), "before.json", "owner");
+    let after = manifest_with_access(dir.path(), "after.json", "owner");
+    assert_eq!(
+        cratefield_cli::tables::diff_report(&before, &after).expect("both are legal"),
+        0
     );
 }

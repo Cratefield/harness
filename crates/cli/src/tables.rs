@@ -49,13 +49,55 @@ pub fn diff_report(previous: &Path, current: &Path) -> Result<usize, String> {
     let before = load(previous)?;
     let after = load(current)?;
     let changes = cratefield_tables::diff(&before.tables, &after.tables);
+    // The schema is not the whole declaration. Flipping one table from
+    // `owner` to `public-read` changes no column, so the schema diff is
+    // empty — and this command answered "No change" and exited zero for
+    // an edit that publishes every subject's private rows.
+    let declared = cratefield_manifest::declaration_diff(
+        &before.table_access,
+        &after.table_access,
+        &before.table_privacy,
+        &after.table_privacy,
+    );
 
-    if changes.is_empty() {
+    if changes.is_empty() && declared.is_empty() {
         println!(
-            "No change: both declare the same {} table(s).",
+            "No change: both declare the same {} table(s), with the same access and privacy.",
             after.tables.tables.len()
         );
         return Ok(0);
+    }
+    if !declared.is_empty() {
+        // First, and not under the expand/contract/rewrite heading: those
+        // three words are about what a change costs to *apply*, and these
+        // changes cost nothing to apply and can still be the most
+        // consequential line in the diff.
+        println!(
+            "{} change(s) to who may reach these tables and what they hold:\n",
+            declared.len()
+        );
+        for change in &declared {
+            println!("  {}", change.line());
+        }
+        let widened = declared
+            .iter()
+            .filter(|change| {
+                matches!(
+                    change,
+                    cratefield_manifest::DeclarationChange::Access {
+                        direction: cratefield_manifest::Move::Widens,
+                        ..
+                    }
+                )
+            })
+            .count();
+        if widened > 0 {
+            println!("\n  {widened} of them widen reach. Read those before shipping.");
+        }
+        println!();
+    }
+    if changes.is_empty() {
+        return Ok(declared.len());
     }
     println!("{} change(s) to the declaration:\n", changes.len());
     for change in &changes {
@@ -73,7 +115,7 @@ pub fn diff_report(previous: &Path, current: &Path) -> Result<usize, String> {
     println!(
         "\n  expand: additive, a rollback stays free\n           contract: safe once nothing deployed reads it\n           rewrite: cannot be applied forward-only to rows that already exist"
     );
-    Ok(changes.len())
+    Ok(changes.len() + declared.len())
 }
 
 /// Reads and validates one manifest. Validated on purpose: comparing two

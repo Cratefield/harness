@@ -20,6 +20,7 @@
 pub mod access;
 pub mod build_key;
 pub mod catalog;
+pub mod diff;
 pub mod generate;
 mod generate_tables;
 pub mod manifest;
@@ -37,6 +38,7 @@ pub use manifest::{ManifestError, ModuleRef, VentureManifest};
 // of its `tables` field without adding a dependency of its own.
 pub use access::{Access, AccessMap, LEVELS};
 pub use cratefield_tables::Schema;
+pub use diff::{Change as DeclarationChange, Move, diff as declaration_diff};
 pub use privacy::{Disposition, KINDS, TablePrivacy, TablePrivacyMap};
 pub use provenance::{
     BuildEnvViolation, BuildEnvironmentAttestation, PROVENANCE_SCHEMA, Provenance, ProvenanceError,
