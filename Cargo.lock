@@ -1470,14 +1470,17 @@ dependencies = [
 name = "cratefield-tables-api"
 version = "0.1.0"
 dependencies = [
+ "cratefield-adapter-sqlite",
  "cratefield-core",
  "cratefield-manifest",
  "cratefield-tables",
  "cratefield-testing",
  "http",
+ "pollster",
  "serde",
  "serde_json",
  "toml 0.8.23",
+ "tracing",
 ]
 
 [[package]]

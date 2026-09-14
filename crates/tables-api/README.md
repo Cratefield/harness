@@ -27,8 +27,29 @@ It is a function of values with no HTTP in it, which is deliberate: it is
 the part that decides who sees whose rows, so every case is a test that
 reads as a sentence rather than as a request.
 
-The routes that call it are the next piece. Nothing serves a declared
-table yet.
+## Reading
+
+`page` and `one` apply that decision against a database. Both carry the
+scope into the `WHERE` rather than filtering rows already fetched: a
+filter applied afterwards turns a `LIMIT 50` into a page of however many
+survived, and the shortfall is a count of the rows the caller was not
+allowed to see.
+
+They take a `&dyn Database`, and the routes hand them a `TenantConn` —
+never `ctx.ports.db`, which is the same handle for every request whoever
+asked. Taking the trait is what lets them be exercised against a real
+database without an HTTP stack; `TenantConn` has no constructor, which is
+the point of it.
+
+| answer | when |
+|---|---|
+| `404 no-such-table` | the venture declares no table by that name |
+| `404 no-such-row` | there is no such row **or** it is not the caller's |
+| `401 unauthenticated` | no credential where one is needed, or one that did not verify |
+| `503 verifier-unavailable` | a credential was presented and could not be checked |
+| `500 table-misdeclared` | `owner` with no subject column to match against |
+
+The two 404s are the same answer on purpose. Writes are the next piece.
 
 ## The rules, and why each is that way
 

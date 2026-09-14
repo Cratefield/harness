@@ -304,20 +304,74 @@ pub fn insert(table: &TableDef, row: &Value) -> Result<Statement, RowErrors> {
     Ok(Statement::render(&insert))
 }
 
-/// `SELECT` of one row by primary key.
+/// Rows belonging to one subject: the condition an `owner` table's
+/// access level puts on every read.
+///
+/// A parameter rather than something the caller applies afterwards. The
+/// condition joins the same `WHERE` as the key and the cursor, because a
+/// filter applied to rows already fetched turns a `LIMIT 20` into a page
+/// of however many survived — and the shortfall is a count of the rows
+/// the caller was not allowed to see.
+#[derive(Debug, Clone, Copy)]
+pub struct Owned<'a> {
+    /// The table's subject column.
+    pub column: &'a str,
+    /// The caller's own id.
+    pub subject: &'a Value,
+}
+
+/// `SELECT` of one row by primary key, optionally scoped to one subject.
+///
+/// With `owned`, a row belonging to somebody else does not match — so the
+/// caller is answered "not found" rather than "forbidden", which is an
+/// answer about a row they were never in a position to learn exists.
 ///
 /// # Errors
 ///
 /// When `key` does not carry every primary-key column the table declares
-/// — half a composite key selects an arbitrary row.
-pub fn select_one(table: &TableDef, key: &Value) -> Result<Statement, DecodeError> {
+/// — half a composite key selects an arbitrary row — or when the subject
+/// column is not a field of the table.
+pub fn select_one(
+    table: &TableDef,
+    key: &Value,
+    owned: Option<Owned<'_>>,
+) -> Result<Statement, DecodeError> {
     let mut select = Query::select();
     select
         .columns(table.fields.iter().map(|field| Alias::new(&field.name)))
         .from(Alias::new(&table.name))
-        .cond_where(key_predicate(table, key)?)
+        .cond_where(key_predicate(table, key)?.add_option(owned_predicate(table, owned)?))
         .limit(1);
     Ok(Statement::render(&select))
+}
+
+/// `subject_column = ?`, when the read is scoped to one subject.
+fn owned_predicate(
+    table: &TableDef,
+    owned: Option<Owned<'_>>,
+) -> Result<Option<sea_query::SimpleExpr>, DecodeError> {
+    let Some(owned) = owned else {
+        return Ok(None);
+    };
+    let field = table
+        .fields
+        .iter()
+        .find(|field| field.name == owned.column)
+        .ok_or_else(|| DecodeError {
+            table: table.name.clone(),
+            column: owned.column.to_owned(),
+            detail: "the subject column this read is scoped to is not a field of the table"
+                .to_owned(),
+        })?;
+    let value = to_sql(field, Some(owned.subject)).ok_or_else(|| DecodeError {
+        table: table.name.clone(),
+        column: owned.column.to_owned(),
+        detail: format!(
+            "the subject this read is scoped to is not {}",
+            field.kind.as_str()
+        ),
+    })?;
+    Ok(Some(Expr::col(Alias::new(owned.column)).eq(value)))
 }
 
 /// `SELECT` of a page, ordered by primary key, optionally after a cursor.
@@ -333,6 +387,7 @@ pub fn select_page(
     table: &TableDef,
     limit: u64,
     after: Option<&Value>,
+    owned: Option<Owned<'_>>,
 ) -> Result<Statement, DecodeError> {
     let mut select = Query::select();
     select
@@ -342,9 +397,15 @@ pub fn select_page(
     for column in &table.primary_key {
         select.order_by(Alias::new(column), Order::Asc);
     }
+    // Both conditions, `AND`ed: the cursor is where the page starts and
+    // the scope is which rows are in it. Applying the scope afterwards
+    // would page through rows the caller cannot see and hand back short
+    // pages that count them.
+    let mut all = Cond::all().add_option(owned_predicate(table, owned)?);
     if let Some(after) = after {
-        select.cond_where(after_predicate(table, after)?);
+        all = all.add(after_predicate(table, after)?);
     }
+    select.cond_where(all);
     Ok(Statement::render(&select))
 }
 

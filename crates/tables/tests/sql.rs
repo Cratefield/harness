@@ -7,8 +7,8 @@
 
 use cratefield_core::Row;
 use cratefield_tables::{
-    DecodeError, Schema, UpdateError, delete, from_sql, insert, row_json, select_one, select_page,
-    to_sql, update,
+    DecodeError, Owned, Schema, UpdateError, delete, from_sql, insert, row_json, select_one,
+    select_page, to_sql, update,
 };
 use sea_query::Value as SeaValue;
 use serde_json::{Value, json};
@@ -142,8 +142,8 @@ fn a_row_key_cannot_become_an_identifier() {
     let key = json!({ "id": ID });
     let statements = [
         insert(&table, &row).expect("insert").sql,
-        select_one(&table, &key).expect("select one").sql,
-        select_page(&table, 10, Some(&key)).expect("page").sql,
+        select_one(&table, &key, None).expect("select one").sql,
+        select_page(&table, 10, Some(&key), None).expect("page").sql,
         update(&table, &key, &row).expect("update").sql,
         delete(&table, &key).expect("delete").sql,
     ];
@@ -184,7 +184,7 @@ fn half_a_composite_key_is_refused_rather_than_matching_every_row_sharing_it() {
     assert_eq!(error.column, "member", "{error}");
     assert!(error.to_string().contains("does not give it"), "{error}");
 
-    assert!(select_one(&table, &half).is_err(), "select too");
+    assert!(select_one(&table, &half, None).is_err(), "select too");
 
     let whole = json!({ "tenant": "acme", "member": "ada" });
     let statement = delete(&table, &whole).expect("a whole key");
@@ -215,11 +215,11 @@ fn a_key_value_of_the_wrong_kind_is_refused_rather_than_bound_as_a_null() {
     assert!(error.to_string().contains("is not uuid"), "{error}");
 
     assert!(
-        select_one(&table, &json!({ "id": 42 })).is_err(),
+        select_one(&table, &json!({ "id": 42 }), None).is_err(),
         "select too"
     );
     assert!(
-        select_page(&table, 10, Some(&json!({ "id": 42 }))).is_err(),
+        select_page(&table, 10, Some(&json!({ "id": 42 })), None).is_err(),
         "and the cursor"
     );
     assert!(
@@ -432,7 +432,7 @@ fn an_update_to_an_illegal_row_is_refused_before_the_database_sees_it() {
 fn a_page_is_ordered_by_the_primary_key_so_two_requests_agree() {
     // A LIMIT with no ORDER BY is whatever the engine felt like, and two
     // requests for "the first ten" may then share rows or skip them.
-    let statement = select_page(&note(), 10, None).expect("no cursor");
+    let statement = select_page(&note(), 10, None, None).expect("no cursor");
     assert!(statement.sql.contains("ORDER BY"), "{}", statement.sql);
     assert!(statement.sql.contains("LIMIT"), "{}", statement.sql);
 }
@@ -446,6 +446,7 @@ fn a_composite_cursor_is_lexicographic_and_uses_no_row_value_comparison() {
         &membership(),
         10,
         Some(&json!({ "tenant": "acme", "member": "ada" })),
+        None,
     )
     .expect("a whole cursor");
     assert!(statement.sql.contains(" OR "), "{}", statement.sql);
@@ -459,7 +460,67 @@ fn a_composite_cursor_is_lexicographic_and_uses_no_row_value_comparison() {
 
 #[test]
 fn half_a_cursor_is_refused_like_half_a_key() {
-    let error = select_page(&membership(), 10, Some(&json!({ "tenant": "acme" })))
+    let error = select_page(&membership(), 10, Some(&json!({ "tenant": "acme" })), None)
         .expect_err("half a cursor");
     assert_eq!(error.column, "member", "{error}");
+}
+
+#[test]
+fn a_scoped_read_puts_the_subject_in_the_same_where_as_the_key() {
+    // Not a filter applied to rows already fetched: that turns a
+    // `LIMIT 20` into a page of however many survived, and the shortfall
+    // is a count of the rows the caller was not allowed to see.
+    let table = note();
+    let subject = json!("ada");
+    let owned = Owned {
+        column: "body",
+        subject: &subject,
+    };
+
+    let one = select_one(&table, &json!({ "id": ID }), Some(owned)).expect("scoped");
+    assert!(one.sql.contains(" AND "), "{}", one.sql);
+    assert_eq!(one.values.0.len(), 3, "id, body and the LIMIT: {}", one.sql);
+
+    let page = select_page(&table, 10, None, Some(owned)).expect("scoped");
+    assert!(page.sql.contains("\"body\" = ?"), "{}", page.sql);
+    assert!(page.sql.contains("LIMIT"), "{}", page.sql);
+}
+
+#[test]
+fn a_scoped_page_keeps_both_the_cursor_and_the_scope() {
+    // Dropping either one is a different bug: without the scope the page
+    // leaks, without the cursor it repeats.
+    let table = note();
+    let subject = json!("ada");
+    let page = select_page(
+        &table,
+        10,
+        Some(&json!({ "id": ID })),
+        Some(Owned {
+            column: "body",
+            subject: &subject,
+        }),
+    )
+    .expect("scoped and paged");
+    assert!(page.sql.contains("\"body\" = ?"), "the scope: {}", page.sql);
+    assert!(page.sql.contains("\"id\" > ?"), "the cursor: {}", page.sql);
+}
+
+#[test]
+fn a_scope_naming_a_column_the_table_does_not_have_is_refused() {
+    // `WHERE nope = 'ada'` is a database error at best and a match on
+    // nothing at worst — and "nothing" for an owner table reads to the
+    // caller as "you have no rows".
+    let subject = json!("ada");
+    let error = select_page(
+        &note(),
+        10,
+        None,
+        Some(Owned {
+            column: "nope",
+            subject: &subject,
+        }),
+    )
+    .expect_err("not a field");
+    assert_eq!(error.column, "nope", "{error}");
 }
