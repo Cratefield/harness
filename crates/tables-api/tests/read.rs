@@ -149,6 +149,73 @@ fn a_page_of_a_public_table_holds_every_row() {
 }
 
 #[test]
+fn a_filter_for_a_null_finds_the_rows_whose_column_is_unset() {
+    // The end of the path the SQL-shape test starts: a caller asking for
+    // the rows whose `body` is unset gets them. Before, the comparison
+    // was `body = ?` bound to a null, which is false for every row in
+    // SQL — so this answered `200` with an empty page whatever the table
+    // held, and nothing in the answer said the question could not be
+    // asked.
+    //
+    // Only a batch read can ask it: a query string is text, so `?body=`
+    // is the empty string and there is no spelling of null in one.
+    let db = seeded();
+    pollster::block_on(async {
+        db.execute(&Statement::with_values(
+            "INSERT INTO note (id, author, body) VALUES (?, ?, NULL)".to_owned(),
+            vec!["n4".into(), "ada".into()],
+        ))
+        .await
+        .expect("a note with no body");
+    });
+    let tables = tables(Access::PublicRead, AuthMode::TokenIsTheSubject);
+    let filters = [cratefield_tables::Filter {
+        column: "body".to_owned(),
+        value: Value::Null,
+    }];
+    let out = pollster::block_on(page(
+        &tables,
+        &db,
+        &HeaderMap::new(),
+        &scope(),
+        Asked {
+            table: "note",
+            after: None,
+            filters: &filters,
+            sort: None,
+        },
+    ))
+    .expect("a null is a question");
+    assert_eq!(ids(&out), ["n4"], "the rows with a body came back too");
+}
+
+#[test]
+fn a_filter_for_a_value_still_excludes_the_rows_whose_column_is_unset() {
+    // The other half. A change that answered `IS NULL` for every filter
+    // would satisfy the test above, and this is the one it fails.
+    let db = seeded();
+    let tables = tables(Access::PublicRead, AuthMode::TokenIsTheSubject);
+    let filters = [cratefield_tables::Filter {
+        column: "body".to_owned(),
+        value: json!("hers"),
+    }];
+    let out = pollster::block_on(page(
+        &tables,
+        &db,
+        &HeaderMap::new(),
+        &scope(),
+        Asked {
+            table: "note",
+            after: None,
+            filters: &filters,
+            sort: None,
+        },
+    ))
+    .expect("an ordinary filter");
+    assert_eq!(ids(&out), ["n2"]);
+}
+
+#[test]
 fn a_page_of_an_owner_table_holds_only_the_callers_rows() {
     // The one that matters. A rule decided correctly and then not applied
     // is worse than no rule: the tests for the decision still pass.

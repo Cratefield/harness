@@ -131,7 +131,9 @@ is an answer about a row they were never in a position to learn exists.
 `next` is the cursor and `?after=` takes it back exactly as it was given.
 Every other query parameter is an equality filter on a declared column;
 one that names a column the table does not have is a `400`, not a
-parameter ignored.
+parameter ignored. A batch read carries its filters as JSON rather
+than text, so it is the only one that can ask for a column that is
+**unset** — `"where": {"body": null}` finds those rows rather than none.
 
 ## What a venture needs wired
 
