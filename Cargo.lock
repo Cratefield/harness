@@ -1470,6 +1470,7 @@ dependencies = [
 name = "cratefield-tables-api"
 version = "0.1.0"
 dependencies = [
+ "axum",
  "cratefield-adapter-sqlite",
  "cratefield-core",
  "cratefield-manifest",
@@ -1480,6 +1481,7 @@ dependencies = [
  "serde",
  "serde_json",
  "toml 0.8.23",
+ "tower",
  "tracing",
 ]
 

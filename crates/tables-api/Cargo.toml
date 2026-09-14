@@ -24,7 +24,9 @@ cratefield-tables = { path = "../tables" }
 # declares. A light crate — serde, serde_json, sha2 and `cratefield-tables`
 # — so a runtime module depending on it pulls nothing a Worker cannot run.
 cratefield-manifest = { workspace = true }
+axum = { workspace = true }
 http = { workspace = true }
+serde = { workspace = true }
 tracing = { workspace = true }
 serde_json = { workspace = true }
 
@@ -32,7 +34,8 @@ serde_json = { workspace = true }
 # Path-only, like every other internal dev-dependency: `cargo publish`
 # resolves dev-dependencies against crates.io, and a path-only one is
 # stripped from the packaged manifest.
-cratefield-testing = { path = "../testing" }
+cratefield-testing = { path = "../testing", features = ["harness", "postgres"] }
+tower = { workspace = true }
 cratefield-adapter-sqlite = { path = "../adapter-sqlite" }
 pollster = { workspace = true }
 serde_json = { workspace = true }

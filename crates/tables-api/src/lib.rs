@@ -20,6 +20,8 @@
 
 pub mod access;
 pub mod read;
+pub mod routes;
 
 pub use access::{FORBIDDEN, MISDECLARED, Reach, TableApi, UNAUTHENTICATED, may_read};
 pub use read::{PAGE, Tables, one, page};
+pub use routes::{BAD_KEY, COMPOSITE_KEY, Key, key_from_path, router};
