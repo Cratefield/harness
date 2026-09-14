@@ -202,6 +202,15 @@ impl VentureManifest {
         if self.host.trim().is_empty() {
             return Err(ManifestError::MissingField("host"));
         }
+        // The harness refuses a venture with no CORS origin
+        // (`Venture::validate`), and a generated venture composes with
+        // `.expect("generated venture harness is valid")` — so without
+        // this the manifest builds happily and the venture panics on its
+        // first request. Found by composing a generated venture, which
+        // nothing did until `examples/tables-canary`.
+        if self.cors_origins.is_empty() {
+            return Err(ManifestError::MissingField("cors_origins"));
+        }
         let mut seen = std::collections::HashSet::new();
         for slug in self.module_slugs() {
             if !seen.insert(slug) {

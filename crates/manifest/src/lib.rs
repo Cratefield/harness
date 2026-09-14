@@ -65,6 +65,7 @@ mod tests {
         r#"{
             "name": "acme-signups",
             "host": "acme.factory0.dev",
+            "cors_origins": ["https://acme.example"],
             "modules": ["waitlist"],
             "tables": {
                 "note": {
@@ -332,14 +333,27 @@ mod tests {
         // venture and running `cargo check` over it rather than by any
         // test here: every fixture in this file lists an origin, so the
         // empty case had never been rendered.
-        let json = r#"{
-            "name": "acme",
-            "host": "acme.factory0.dev",
-            "modules": ["waitlist"]
-        }"#;
-        let manifest = VentureManifest::from_json_str(json).expect("parses");
-        let set = manifest.resolve(&catalog::builtin()).expect("resolves");
-        let venture = generate::generate(&manifest, &set, &generate::HarnessSource::default())
+        //
+        // `validate()` now refuses an empty list, so `fz build` cannot
+        // reach this — but `generate()` is a library function and this
+        // calls it directly, which is the only way the renderer's empty
+        // case stays covered. The test's name is about the Rust it
+        // renders; whether that venture would *boot* is a different
+        // question, and the answer was no.
+        // The module set comes from a manifest that is legal; the
+        // manifest handed to `generate` is then emptied of its origins,
+        // which `validate` would refuse and `generate` does not check.
+        let legal = VentureManifest::from_json_str(sample_json()).expect("parses");
+        let set = legal.resolve(&catalog::builtin()).expect("resolves");
+        let mut without = legal.clone();
+        without.cors_origins.clear();
+        assert!(
+            without.validate().is_err(),
+            "an empty origin list has to be a manifest error, or `fz build` \
+             emits a venture that panics on its first request"
+        );
+
+        let venture = generate::generate(&without, &set, &generate::HarnessSource::default())
             .expect("generates");
         let lib = venture
             .files
@@ -656,7 +670,7 @@ mod tests {
 
     #[test]
     fn an_unknown_module_is_refused_with_a_clear_error() {
-        let json = r#"{ "name": "x", "host": "x.dev", "modules": ["ghost"] }"#;
+        let json = r#"{ "name": "x", "host": "x.dev", "cors_origins": ["https://x.dev"], "modules": ["ghost"] }"#;
         let manifest = VentureManifest::from_json_str(json).expect("parses");
         let err = manifest.resolve(&builtin()).expect_err("unknown module");
         assert!(matches!(
@@ -677,7 +691,7 @@ mod tests {
 
     #[test]
     fn a_duplicate_module_is_refused() {
-        let json = r#"{ "name": "x", "host": "x.dev", "modules": ["cms", "cms"] }"#;
+        let json = r#"{ "name": "x", "host": "x.dev", "cors_origins": ["https://x.dev"], "modules": ["cms", "cms"] }"#;
         let manifest = VentureManifest::from_json_str(json).expect("parses");
         assert_eq!(
             manifest.validate(),
@@ -747,7 +761,7 @@ mod tests {
 
     #[test]
     fn a_cms_only_venture_needs_no_mailer() {
-        let json = r#"{ "name": "docs-site", "host": "docs.dev", "modules": ["cms"] }"#;
+        let json = r#"{ "name": "docs-site", "host": "docs.dev", "cors_origins": ["https://docs.dev"], "modules": ["cms"] }"#;
         let manifest = VentureManifest::from_json_str(json).expect("parses");
         let set = manifest.resolve(&builtin()).expect("resolves");
         let venture = generate(&manifest, &set, &HarnessSource::default()).expect("generates");
@@ -858,7 +872,7 @@ mod tests {
 
     #[test]
     fn the_manifest_propagates_a_release_refusal() {
-        let json = r#"{ "name": "x", "host": "x.dev", "modules": ["blog"] }"#;
+        let json = r#"{ "name": "x", "host": "x.dev", "cors_origins": ["https://x.dev"], "modules": ["blog"] }"#;
         let manifest = VentureManifest::from_json_str(json).expect("parses");
         let catalog = single_entry(
             "blog",
