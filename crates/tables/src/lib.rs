@@ -79,8 +79,8 @@ pub use schema::{
     Schema, TableDef, TextFormat, is_identifier,
 };
 pub use sql::{
-    DecodeError, Owned, UpdateError, delete, from_sql, insert, row_json, select_one, select_page,
-    to_sql, update,
+    DecodeError, Filter, Owned, Page, UpdateError, delete, from_sql, insert, row_json, select_one,
+    select_page, to_sql, update,
 };
 pub use validate::{
     MAX_DETAIL_ERRORS, MAX_UNKNOWN_KEY_CHARS, RowError, RowErrors, normalize_row, validate_row,

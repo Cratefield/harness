@@ -53,10 +53,16 @@ required = true
 name = "label"
 kind = "text"
 required = true
+
+# A non-text column, so a filter's *value* can be checked and not only
+# its name. Every other column here is text, which accepts anything.
+[[tables.tier.fields]]
+name = "rank"
+kind = "integer"
 "#;
 
 const DDL: &str = "CREATE TABLE IF NOT EXISTS note (id TEXT PRIMARY KEY NOT NULL, author TEXT NOT NULL, body TEXT); \
-     CREATE TABLE IF NOT EXISTS tier (slug TEXT PRIMARY KEY NOT NULL, label TEXT NOT NULL)";
+     CREATE TABLE IF NOT EXISTS tier (slug TEXT PRIMARY KEY NOT NULL, label TEXT NOT NULL, rank INTEGER)";
 
 const MIGRATIONS: [SqlMigration; 1] = [SqlMigration::new("0001", "tables", DDL)];
 
@@ -592,5 +598,99 @@ async fn a_table_whose_key_is_not_called_id_is_addressed_by_its_own_key() {
                 .status,
             404
         );
+    }
+}
+
+#[pollster::test]
+async fn a_filter_narrows_a_page() {
+    for kit in kits(Access::PublicRead) {
+        seed(&kit).await;
+        let mine = get_as(&kit, "/v1/tables/note?author=ada", None).await;
+        assert_eq!(mine.status, 200, "{}", mine.body);
+        assert_eq!(ids(&mine.body), ["n1", "n3"]);
+    }
+}
+
+#[pollster::test]
+async fn a_filter_cannot_widen_an_owner_scope() {
+    // The one that matters. Under `owner` the subject condition and the
+    // filter are both in the `WHERE`, so filtering on the subject column
+    // narrows the caller's own rows and reaches nobody else's. A filter
+    // that *replaced* the scope would hand ada grace's row for the asking.
+    for kit in kits(Access::Owner) {
+        seed(&kit).await;
+
+        let theirs = get_as(&kit, "/v1/tables/note?author=grace", Some("ada")).await;
+        assert_eq!(theirs.status, 200, "{}", theirs.body);
+        assert!(
+            ids(&theirs.body).is_empty(),
+            "a filter reached another subject's rows: {}",
+            theirs.body
+        );
+
+        // And her own filter still narrows her own rows.
+        let hers = get_as(&kit, "/v1/tables/note?author=ada", Some("ada")).await;
+        assert_eq!(ids(&hers.body), ["n1", "n3"]);
+    }
+}
+
+#[pollster::test]
+async fn a_filter_on_a_column_the_table_does_not_have_is_refused() {
+    // Not ignored. Ignoring it answers a question the caller did not ask,
+    // with more rows than they asked for — and a client that misspells a
+    // column would get a page that looks right.
+    for kit in kits(Access::PublicRead) {
+        seed(&kit).await;
+        let answer = get_as(&kit, "/v1/tables/note?auther=ada", None).await;
+        assert_eq!(answer.status, 400, "{}", answer.body);
+        assert!(answer.body.contains("bad-filter"), "{}", answer.body);
+        assert!(answer.body.contains("auther"), "say which: {}", answer.body);
+    }
+}
+
+#[pollster::test]
+async fn a_filter_whose_value_is_not_the_columns_kind_is_refused() {
+    // The column name being declared is not enough: a query string is
+    // text, and what that text means is the column's kind. `rank` is an
+    // integer, so `gold` is not a value of it.
+    for kit in kits(Access::TenantMembers) {
+        let answer = get_as(&kit, "/v1/tables/tier?rank=gold", Some("ada")).await;
+        assert_eq!(answer.status, 400, "{}", answer.body);
+        assert!(answer.body.contains("bad-filter"), "{}", answer.body);
+        assert!(answer.body.contains("rank"), "say which: {}", answer.body);
+
+        // And a number is.
+        let fine = get_as(&kit, "/v1/tables/tier?rank=1", Some("ada")).await;
+        assert_eq!(fine.status, 200, "{}", fine.body);
+    }
+}
+
+#[pollster::test]
+async fn an_empty_filter_value_is_a_legal_text_value() {
+    // Worth pinning rather than leaving to chance: `?body=` is a filter
+    // for the empty string, not an absent filter. Treating it as absent
+    // would widen the page on a query the caller meant to narrow it.
+    for kit in kits(Access::TenantMembers) {
+        seed(&kit).await;
+        let answer = get_as(&kit, "/v1/tables/note?body=", Some("ada")).await;
+        assert_eq!(answer.status, 200, "{}", answer.body);
+        assert!(
+            ids(&answer.body).is_empty(),
+            "an empty filter value was dropped: {}",
+            answer.body
+        );
+    }
+}
+
+#[pollster::test]
+async fn the_cursor_and_a_filter_hold_together() {
+    // Both conditions stand: the filter says which rows and the cursor
+    // says where in them. Dropping either is a different bug — without
+    // the filter the page widens, without the cursor it repeats.
+    for kit in kits(Access::PublicRead) {
+        seed(&kit).await;
+        let answer = get_as(&kit, "/v1/tables/note?author=ada&after=n1", None).await;
+        assert_eq!(answer.status, 200, "{}", answer.body);
+        assert_eq!(ids(&answer.body), ["n3"]);
     }
 }

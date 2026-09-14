@@ -139,6 +139,7 @@ fn a_page_of_a_public_table_holds_every_row() {
         &scope(),
         "note",
         None,
+        &[],
     ))
     .expect("public");
     assert_eq!(ids(&out), ["n1", "n2", "n3"]);
@@ -157,6 +158,7 @@ fn a_page_of_an_owner_table_holds_only_the_callers_rows() {
         &scope(),
         "note",
         None,
+        &[],
     ))
     .expect("ada is signed in");
     assert_eq!(ids(&out), ["n1", "n3"], "grace's row was in ada's page");
@@ -173,6 +175,7 @@ fn another_subject_gets_their_own_rows_and_not_the_first_ones() {
         &scope(),
         "note",
         None,
+        &[],
     ))
     .expect("grace is signed in");
     assert_eq!(ids(&out), ["n2"]);
@@ -242,6 +245,7 @@ fn an_anonymous_caller_is_told_to_sign_in_rather_than_handed_an_empty_page() {
         &scope(),
         "note",
         None,
+        &[],
     ))
     .expect_err("not signed in");
     assert_eq!(refusal.status.as_u16(), 401);
@@ -261,6 +265,7 @@ fn a_credential_that_does_not_verify_is_refused_even_on_a_public_table() {
         &scope(),
         "note",
         None,
+        &[],
     ))
     .expect_err("the token is bad");
     assert_eq!(refusal.status.as_u16(), 401);
@@ -273,6 +278,7 @@ fn a_credential_that_does_not_verify_is_refused_even_on_a_public_table() {
         &scope(),
         "note",
         None,
+        &[],
     ))
     .expect("public");
     assert_eq!(ids(&out).len(), 3);
@@ -289,6 +295,7 @@ fn a_verifier_that_cannot_answer_is_a_503_and_not_a_401() {
         &scope(),
         "note",
         None,
+        &[],
     ))
     .expect_err("the verifier is down");
     assert_eq!(
@@ -309,6 +316,7 @@ fn a_table_that_is_not_declared_is_not_found() {
         &scope(),
         "ledger",
         None,
+        &[],
     ))
     .expect_err("not declared");
     assert_eq!(refusal.status.as_u16(), 404);
@@ -326,6 +334,7 @@ fn a_cursor_names_the_last_row_on_the_page() {
         &scope(),
         "note",
         None,
+        &[],
     ))
     .expect("public");
     // Three rows is short of a page, so there is nothing after them and
@@ -341,6 +350,7 @@ fn a_cursor_names_the_last_row_on_the_page() {
         &scope(),
         "note",
         Some(&json!({ "id": "n1" })),
+        &[],
     ))
     .expect("public");
     assert_eq!(ids(&after), ["n2", "n3"]);
@@ -366,6 +376,7 @@ fn a_full_page_hands_back_a_cursor_and_a_short_one_does_not() {
         &scope(),
         "note",
         None,
+        &[],
     ))
     .expect("public");
     assert_eq!(
@@ -381,6 +392,7 @@ fn a_full_page_hands_back_a_cursor_and_a_short_one_does_not() {
         &scope(),
         "note",
         Some(&first["next"]),
+        &[],
     ))
     .expect("public");
     assert!((second["rows"].as_array().expect("rows").len() as u64) < cratefield_tables_api::PAGE);
