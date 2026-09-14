@@ -40,6 +40,9 @@ pub struct Codes {
     /// The production payments rule: signature-guarded routes without
     /// `STRIPE_WEBHOOK_SECRET`.
     pub payments_webhook_secret_missing: DoctorCodeDef,
+    /// The production auth rule: a module that must identify a caller,
+    /// in a deployment that cannot.
+    pub auth_not_configured: DoctorCodeDef,
     /// A sidecar mount names a module compiled into this venture; the
     /// runtime ignores the mount.
     pub sidecar_shadows_module: DoctorCodeDef,
@@ -141,6 +144,11 @@ pub const CODES: Codes = Codes {
         code: "payments-webhook-secret-missing",
         title: "Payments webhook secret missing",
         description: "A production venture has signature-guarded routes but STRIPE_WEBHOOK_SECRET is unset.",
+    },
+    auth_not_configured: DoctorCodeDef {
+        code: "auth-not-configured",
+        title: "Cannot identify a caller",
+        description: "A production venture mounts a module that requires the Auth port, but AUTH_ISSUER or AUTH_CLIENT_ID is unset — every route needing a caller answers 503.",
     },
     sidecar_shadows_module: DoctorCodeDef {
         code: "sidecar-shadows-module",
@@ -259,6 +267,7 @@ pub const CODES: Codes = Codes {
 #[must_use]
 pub fn registry() -> Vec<&'static DoctorCodeDef> {
     vec![
+        &CODES.auth_not_configured,
         &CODES.captcha_not_effective,
         &CODES.card_data_in_migration,
         &CODES.composition_drift,
@@ -335,6 +344,7 @@ mod tests {
         assert_eq!(by_slug.len(), registered.len(), "duplicate code registered");
 
         let fields = [
+            CODES.auth_not_configured.code,
             CODES.harness_api_mismatch.code,
             CODES.lockfile_unreadable.code,
             CODES.migration_not_collected.code,

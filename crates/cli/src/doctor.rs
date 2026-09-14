@@ -209,7 +209,13 @@ fn run_checks(
         eprintln!("fz: warning: {note}");
     }
     if env == VentureEnv::Production {
-        production_port_checks(harness, allow_no_captcha, output, &mut failures);
+        production_port_checks(
+            harness,
+            Configured::from_env(),
+            allow_no_captcha,
+            output,
+            &mut failures,
+        );
     }
 
     push_checks(harness, env, output, &mut failures);
@@ -527,8 +533,33 @@ fn push_wiring_checks(
 
 /// The production-only port rules, gathered so `doctor` stays a flat list of
 /// checks: the captcha rule (with its override) and the payments webhook rule.
+/// Which production secrets the environment actually holds.
+///
+/// Read once and passed in, rather than each check reaching for
+/// `std::env` itself. Environment variables are process-global and tests
+/// run in one process, so a check that reads them directly can be tested
+/// as a pure function and never as a *called* one — falsifying the auth
+/// check showed exactly that: deleting the call left every test green.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Configured {
+    pub(crate) auth_issuer: bool,
+    pub(crate) auth_client_id: bool,
+    pub(crate) stripe_webhook_secret: bool,
+}
+
+impl Configured {
+    fn from_env() -> Self {
+        Self {
+            auth_issuer: set("AUTH_ISSUER"),
+            auth_client_id: set("AUTH_CLIENT_ID"),
+            stripe_webhook_secret: set("STRIPE_WEBHOOK_SECRET"),
+        }
+    }
+}
+
 fn production_port_checks(
     harness: &Harness,
+    configured: Configured,
     allow_no_captcha: Option<&str>,
     output: Output,
     failures: &mut Vec<DoctorFailure>,
@@ -568,15 +599,70 @@ fn production_port_checks(
         }
     }
 
-    let webhook_secret_present =
-        std::env::var("STRIPE_WEBHOOK_SECRET").is_ok_and(|value| !value.trim().is_empty());
-    if let Some(message) = payments_webhook_failure(guards.needs_payments(), webhook_secret_present)
+    if let Some(message) = auth_production_failure(
+        harness
+            .modules()
+            .iter()
+            .any(|module| module.requires().contains(&Port::Auth)),
+        configured.auth_issuer,
+        configured.auth_client_id,
+    ) {
+        failures.push(DoctorFailure {
+            code: &CODES.auth_not_configured,
+            message,
+        });
+    }
+
+    if let Some(message) =
+        payments_webhook_failure(guards.needs_payments(), configured.stripe_webhook_secret)
     {
         failures.push(DoctorFailure {
             code: &CODES.payments_webhook_secret_missing,
             message,
         });
     }
+}
+
+/// Whether an environment variable is set to something non-blank.
+fn set(key: &str) -> bool {
+    std::env::var(key).is_ok_and(|value| !value.trim().is_empty())
+}
+
+/// The production auth rule (issue #153): a module that declares
+/// `Port::Auth` is a module that must know who is calling, and a
+/// deployment with no issuer configured cannot tell it.
+///
+/// The runtime provides the port either way — on Workers the `Env` exists
+/// per request, so a runtime cannot know at compose time whether the
+/// issuer is set, and refusing to provide it would stop every such
+/// deployment booting, including the ones whose tables are all public.
+/// The cost of that choice is that the failure moves to request time: an
+/// unconfigured deployment serves its public routes and answers `503` on
+/// every route that needs a caller.
+///
+/// `fz doctor` runs where the operator's environment is, which is why the
+/// check belongs here — the same place `STRIPE_WEBHOOK_SECRET` is read,
+/// and for the same reason.
+fn auth_production_failure(
+    needs_auth: bool,
+    issuer_set: bool,
+    client_id_set: bool,
+) -> Option<String> {
+    if !needs_auth || (issuer_set && client_id_set) {
+        return None;
+    }
+    let mut missing = Vec::new();
+    if !issuer_set {
+        missing.push("AUTH_ISSUER");
+    }
+    if !client_id_set {
+        missing.push("AUTH_CLIENT_ID");
+    }
+    Some(format!(
+        "a module requires the Auth port and {} is not set; every route that needs a signed-in \
+         caller will answer 503",
+        missing.join(" and ")
+    ))
 }
 
 /// The production captcha rule (issue #133): captcha-guarded writes need a
@@ -628,8 +714,108 @@ mod tests {
         CODES, DoctorFailure, DoctorReport, Output, PushDeclaration, captcha_production_failure,
         payments_webhook_failure, push_wiring_checks,
     };
-    use cratefield_core::{MapConfig, Port, VentureEnv, WriteGuards};
+    use cratefield_core::{
+        Config, ConfigError, Harness, MapConfig, Migrations, Module, ModuleContext, Port, Runtime,
+        Venture, VentureEnv, WriteGuards,
+    };
     use cratefield_push_wiring::{PUSH_ENV, PushKey, PushWiring, inspect_push};
+    use std::sync::Arc;
+
+    /// A module that must know who is calling.
+    pub(super) struct NeedsAuth;
+
+    /// One that does not.
+    pub(super) struct Nothing;
+
+    macro_rules! bare_module {
+        ($ty:ty, $name:literal, $ports:expr) => {
+            impl Module for $ty {
+                fn name(&self) -> &'static str {
+                    $name
+                }
+                fn version(&self) -> &'static str {
+                    "0.0.0"
+                }
+                fn requires(&self) -> &'static [Port] {
+                    $ports
+                }
+                fn migrations(&self) -> Migrations {
+                    Migrations::default()
+                }
+                fn validate_config(&self, _cfg: &dyn Config) -> Result<(), ConfigError> {
+                    Ok(())
+                }
+                fn router(&self, _ctx: ModuleContext) -> cratefield_core::axum::Router {
+                    cratefield_core::axum::Router::new()
+                }
+            }
+        };
+    }
+
+    /// A module with a signature-guarded write — a webhook receiver.
+    pub(super) struct TakesWebhooks;
+
+    bare_module!(NeedsAuth, "needs-auth", &[Port::Auth]);
+    bare_module!(Nothing, "nothing", &[]);
+    impl Module for TakesWebhooks {
+        fn name(&self) -> &'static str {
+            "takes-webhooks"
+        }
+        fn version(&self) -> &'static str {
+            "0.0.0"
+        }
+        fn requires(&self) -> &'static [Port] {
+            &[Port::Payments]
+        }
+        fn migrations(&self) -> Migrations {
+            Migrations::default()
+        }
+        fn validate_config(&self, _cfg: &dyn Config) -> Result<(), ConfigError> {
+            Ok(())
+        }
+        fn surface(&self) -> cratefield_core::Surface {
+            Self::surface()
+        }
+        fn router(&self, _ctx: ModuleContext) -> cratefield_core::axum::Router {
+            cratefield_core::axum::Router::new()
+        }
+    }
+
+    impl TakesWebhooks {
+        /// Declared through the surface, which is where `WriteGuards`
+        /// reads a route's policy from.
+        fn surface() -> cratefield_core::Surface {
+            cratefield_core::Surface::new().action(
+                cratefield_core::Action::post("receive", "/receive")
+                    .policy(cratefield_core::RoutePolicy::Signature)
+                    .outcome(cratefield_core::Outcome::Json),
+            )
+        }
+    }
+
+    /// A runtime that provides everything, so composition succeeds and the
+    /// production checks are what the test is about.
+    struct AllPorts;
+
+    impl Runtime for AllPorts {
+        fn provides(&self) -> Vec<Port> {
+            Port::ALL.to_vec()
+        }
+    }
+
+    /// A composed harness mounting one module.
+    pub(super) fn harness_of(module: Arc<dyn Module>) -> Harness {
+        Harness::builder()
+            .venture(
+                Venture::new("acme", "acme.test")
+                    .cors_origins(["https://acme.test"])
+                    .env(VentureEnv::Production),
+            )
+            .module_arc(module)
+            .runtime(AllPorts)
+            .build()
+            .expect("the fixture composes")
+    }
 
     /// A venture whose modules only *may* use push: the wiring is checked,
     /// but nothing has to be routed.
@@ -654,6 +840,48 @@ mod tests {
             signature_modules: Vec::new(),
             signed_link_modules: Vec::new(),
         }
+    }
+
+    #[test]
+    fn a_venture_that_needs_no_caller_is_not_asked_for_an_issuer() {
+        // Most ventures do not mount a module that identifies callers.
+        // Demanding an auth service from them would be demanding one they
+        // have no use for.
+        assert_eq!(super::auth_production_failure(false, false, false), None);
+    }
+
+    #[test]
+    fn a_module_that_must_know_who_is_calling_needs_an_issuer_in_production() {
+        // The runtime provides the port either way, so the failure is not
+        // at boot: it is every route that needs a caller answering 503,
+        // which is the thing an operator wants told before the deploy.
+        let refusal = super::auth_production_failure(true, false, false)
+            .expect("a module needs a caller and nothing can name one");
+        assert!(refusal.contains("AUTH_ISSUER"), "{refusal}");
+        assert!(refusal.contains("AUTH_CLIENT_ID"), "{refusal}");
+        assert!(refusal.contains("503"), "say what goes wrong: {refusal}");
+    }
+
+    #[test]
+    fn half_a_verifier_is_still_a_failure_and_names_the_half() {
+        // Setting one of the two is the likely mistake, and a message
+        // that said "auth is not configured" would send an operator to
+        // check the one they already set.
+        let missing_id = super::auth_production_failure(true, true, false).expect("half");
+        assert!(missing_id.contains("AUTH_CLIENT_ID"), "{missing_id}");
+        assert!(!missing_id.contains("AUTH_ISSUER"), "{missing_id}");
+
+        let missing_issuer = super::auth_production_failure(true, false, true).expect("half");
+        assert!(missing_issuer.contains("AUTH_ISSUER"), "{missing_issuer}");
+        assert!(
+            !missing_issuer.contains("AUTH_CLIENT_ID"),
+            "{missing_issuer}"
+        );
+    }
+
+    #[test]
+    fn a_configured_verifier_is_no_failure() {
+        assert_eq!(super::auth_production_failure(true, true, true), None);
     }
 
     #[test]
@@ -879,5 +1107,99 @@ mod tests {
             &mut failures,
         );
         assert!(failures.is_empty(), "{failures:?}");
+    }
+}
+
+#[cfg(test)]
+mod production_wiring {
+    //! That the production checks are *called*, not only correct.
+    //!
+    //! Falsifying the auth rule showed the gap: deleting its call from
+    //! `production_port_checks` left every test green, because each check
+    //! was only ever exercised as a pure function. The same was true of
+    //! the payments rule, and both are covered here.
+    //!
+    //! The captcha rule is **not**, and cannot be: `Harness::build`
+    //! refuses a production composition with a form-guarded write and an
+    //! ineffective Captcha port, so a harness that would trip the
+    //! doctor's copy of that rule cannot be composed to hand it. The
+    //! doctor re-checks it deliberately — to keep the rule visible in
+    //! operator tooling — and the only path that reaches it is a venture
+    //! built with `--allow-no-captcha`, which is the override, not the
+    //! failure. Its own pure test stands.
+
+    use super::tests::{NeedsAuth, Nothing, harness_of};
+    use super::{CODES, Configured, DoctorFailure, Output, production_port_checks};
+
+    fn failures(
+        module: std::sync::Arc<dyn cratefield_core::Module>,
+        configured: Configured,
+    ) -> Vec<String> {
+        let harness = harness_of(module);
+        let mut out = Vec::new();
+        production_port_checks(&harness, configured, None, Output::Json, &mut out);
+        out.iter()
+            .map(|failure: &DoctorFailure| failure.code.code.to_owned())
+            .collect()
+    }
+
+    const NONE_SET: Configured = Configured {
+        auth_issuer: false,
+        auth_client_id: false,
+        stripe_webhook_secret: false,
+    };
+
+    #[test]
+    fn a_module_needing_a_caller_with_no_issuer_is_reported() {
+        assert!(
+            failures(std::sync::Arc::new(NeedsAuth), NONE_SET)
+                .contains(&CODES.auth_not_configured.code.to_owned()),
+            "the rule is correct and nothing calls it"
+        );
+    }
+
+    #[test]
+    fn the_same_module_with_an_issuer_is_not() {
+        let configured = Configured {
+            auth_issuer: true,
+            auth_client_id: true,
+            ..NONE_SET
+        };
+        assert!(
+            !failures(std::sync::Arc::new(NeedsAuth), configured)
+                .contains(&CODES.auth_not_configured.code.to_owned())
+        );
+    }
+
+    #[test]
+    fn a_webhook_receiver_with_no_secret_is_reported() {
+        // The same gap the auth rule had: the payments rule was correct
+        // and only ever tested as a pure function, so deleting its call
+        // left every test green.
+        assert!(
+            failures(std::sync::Arc::new(super::tests::TakesWebhooks), NONE_SET)
+                .contains(&CODES.payments_webhook_secret_missing.code.to_owned()),
+            "the payments rule is correct and nothing calls it"
+        );
+    }
+
+    #[test]
+    fn the_same_receiver_with_a_secret_is_not() {
+        let configured = Configured {
+            stripe_webhook_secret: true,
+            ..NONE_SET
+        };
+        assert!(
+            !failures(std::sync::Arc::new(super::tests::TakesWebhooks), configured)
+                .contains(&CODES.payments_webhook_secret_missing.code.to_owned())
+        );
+    }
+
+    #[test]
+    fn a_module_needing_no_caller_is_never_asked() {
+        assert!(
+            !failures(std::sync::Arc::new(Nothing), NONE_SET)
+                .contains(&CODES.auth_not_configured.code.to_owned())
+        );
     }
 }
