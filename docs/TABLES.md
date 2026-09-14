@@ -47,6 +47,12 @@ stay vocabularies.
 `kind` is one of `text`, `integer`, `real`, `boolean`, `timestamp`,
 `uuid`, `json`, `enum`. A primary key may be one column or several.
 
+A `text` value may not hold U+0000: SQLite stores it and PostgreSQL
+refuses the statement, so a declaration that allowed it would behave
+differently on the two engines. The same goes for a control character in
+a declared `default` or an `enum` member, which reach the schema file
+itself.
+
 The kinds are a small purpose-built set rather than JSON Schema, because
 JSON Schema is sprawling and says nothing about how a field becomes a
 SQLite or Postgres column. JSON Schema is emitted as a derived view for

@@ -350,6 +350,12 @@ The rules, which are also the rules a generated client has to match:
   implementation counts `[...s].length` and never `s.length`. There is no
   normalisation: `e` plus a combining acute is two characters.
 - **Nothing is trimmed.** Whitespace is part of the value.
+- **A text value may not hold U+0000.** SQLite stores a NUL in a `TEXT`
+  column and PostgreSQL refuses the statement (`22P05`), so accepting one
+  means a row that writes in development and answers `500` in production.
+  Only U+0000 — every other control character stores on both engines, and
+  a text column is allowed to hold a newline. In JavaScript the check is
+  `s.includes("\u0000")`, before any length or format rule.
 - **Bounds are inclusive** at both ends.
 - **Uniqueness and foreign keys are not checked here.** They read other
   rows, which makes them the database's job and marks the line between a

@@ -814,6 +814,19 @@ fn validate_field(errors: &mut ConfigError, table: &TableDef, field: &FieldDef) 
         FieldKind::Boolean | FieldKind::Timestamp | FieldKind::Uuid | FieldKind::Json => {}
     }
 
+    // A string default reaches the DDL as a literal, exactly like an enum
+    // member, so it carries that rule rather than the looser one a
+    // caller's value gets: a control character there is a schema file
+    // nobody can read, and a NUL is a statement PostgreSQL refuses. The
+    // position is named because the character does not print.
+    if let Some(text) = field.default.as_ref().and_then(serde_json::Value::as_str)
+        && let Some(position) = text.chars().position(char::is_control)
+    {
+        errors.push(format!(
+            "{at}: the default `{}` holds a control character at position {position}",
+            text.escape_debug()
+        ));
+    }
     if let Some(default) = &field.default
         && let Err(error) = crate::value::check_value(&field.kind, default)
     {
