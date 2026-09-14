@@ -46,6 +46,34 @@ pub enum Step {
     Rewrite,
 }
 
+/// Declares [`Step::ALL`] and, from the same list, a match that has to be
+/// exhaustive.
+///
+/// `fz tables diff` and `fz tables drift` each summarise a report by
+/// counting the changes at every step, and each wrote the three out by
+/// hand. A fourth step would be counted by neither: the summary would
+/// stay plausible and under-report what a change costs, in the command
+/// whose whole job is saying what it costs.
+macro_rules! steps {
+    ($($variant:ident),+ $(,)?) => {
+        impl Step {
+            /// Every step, in the order a report summarises them.
+            pub const ALL: &'static [Step] = &[$(Step::$variant),+];
+        }
+
+        /// Never called. It exists so that a variant absent from the list
+        /// above is a compile error here.
+        #[expect(dead_code, reason = "its only job is to be exhaustive")]
+        fn every_step_is_in_all(step: Step) {
+            match step {
+                $(Step::$variant => {}),+
+            }
+        }
+    };
+}
+
+steps!(Expand, Contract, Rewrite);
+
 impl Step {
     /// The wire form, lowercase and stable.
     #[must_use]
