@@ -1020,7 +1020,16 @@ pub fn init(
         name: name.to_owned(),
         host: host.to_owned(),
         public_url: None,
-        cors_origins: Vec::new(),
+        // The venture's own host, which is the origin a browser on its
+        // site sends. Scaffolded rather than left empty because the
+        // harness refuses a venture with none — `fz init` writing a
+        // manifest that `fz build` would reject is a first step that
+        // fails on the second.
+        //
+        // A guess, and the one an author is most likely to want: a front
+        // end on another domain is a line they edit, which is a better
+        // failure than a manifest that does not build.
+        cors_origins: vec![format!("https://{host}")],
         modules: Vec::new(),
         config: BTreeMap::new(),
         seed_sql: None,
@@ -1586,7 +1595,10 @@ mod tests {
             name: "acme".to_owned(),
             host: "acme.factory0.dev".to_owned(),
             public_url: None,
-            cors_origins: Vec::new(),
+            // Required since the manifest began refusing an empty list:
+            // the harness refuses a venture with no origin, so a manifest
+            // that allows one generates a venture that panics at boot.
+            cors_origins: vec!["https://acme.example".to_owned()],
             modules: modules
                 .iter()
                 .map(|slug| ModuleRef::Slug((*slug).to_owned()))

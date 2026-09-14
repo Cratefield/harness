@@ -4,6 +4,19 @@
 # justifications below.
 # Advisories: vulnerabilities deny (cargo-deny v2 field layout).
 
+# `examples/tables-canary` is a generated artifact, not a crate anybody
+# ships: `fz build` writes it from `venture.json`, and it is committed so
+# CI compiles and composes a generated venture (nothing else does). The
+# generator does not emit a `license` field, and it should not — a
+# venture belongs to its author, and the harness picking their licence
+# would be picking it for every venture.
+#
+# Excluded by name rather than by setting `[licenses] private = { ignore
+# = true }`, which would stop checking every `publish = false` crate in
+# the workspace. This is one generated directory.
+[graph]
+exclude = ["tables-canary"]
+
 [advisories]
 version = 2
 yanked = "deny"

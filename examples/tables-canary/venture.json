@@ -1,0 +1,62 @@
+{
+  "name": "tables-canary",
+  "host": "tables-canary.factory0.dev",
+  "cors_origins": [
+    "https://tables-canary.factory0.dev"
+  ],
+  "modules": [],
+  "tables": {
+    "note": {
+      "primary_key": "id",
+      "fields": [
+        {
+          "name": "id",
+          "kind": "uuid",
+          "required": true
+        },
+        {
+          "name": "author",
+          "kind": "text",
+          "required": true
+        },
+        {
+          "name": "body",
+          "kind": "text",
+          "max_len": 400
+        }
+      ]
+    },
+    "tier": {
+      "primary_key": "slug",
+      "fields": [
+        {
+          "name": "slug",
+          "kind": "text",
+          "required": true
+        },
+        {
+          "name": "label",
+          "kind": "text",
+          "required": true
+        }
+      ]
+    }
+  },
+  "table_privacy": {
+    "note": {
+      "holds": "personal",
+      "subject": "author",
+      "kind": "content",
+      "disposition": "erase",
+      "description": "The notes you wrote, and who wrote them."
+    },
+    "tier": {
+      "holds": "nothing",
+      "reason": "Plan tiers; nobody is in them."
+    }
+  },
+  "table_access": {
+    "note": "owner",
+    "tier": "public-read"
+  }
+}

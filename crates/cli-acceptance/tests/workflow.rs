@@ -71,6 +71,7 @@ fn write_manifest(path: &Path, modules: &[&str], config: &[(&str, &str)]) {
         path,
         format!(
             "{{\n  \"name\": \"acme\",\n  \"host\": \"acme.factory0.dev\",\n  \
+             \"cors_origins\": [\"https://acme.example\"],\n  \
              \"modules\": [{module_list}],\n  \"config\": {{{config_list}}}\n}}\n"
         ),
     )
