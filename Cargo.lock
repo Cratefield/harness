@@ -1477,6 +1477,7 @@ dependencies = [
  "cratefield-adapter-sqlite",
  "cratefield-core",
  "cratefield-manifest",
+ "cratefield-module-privacy",
  "cratefield-tables",
  "cratefield-testing",
  "http",

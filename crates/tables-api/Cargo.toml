@@ -40,6 +40,10 @@ serde_json = { workspace = true }
 cratefield-testing = { path = "../testing", features = ["harness", "postgres"] }
 tower = { workspace = true }
 cratefield-adapter-sqlite = { path = "../adapter-sqlite" }
+# The subject-access and erasure routes, mounted beside a declared-tables
+# module so the privacy declaration on a declared table is checked end to
+# end rather than assumed.
+cratefield-module-privacy = { path = "../module-privacy" }
 pollster = { workspace = true }
 serde_json = { workspace = true }
 toml = { workspace = true }

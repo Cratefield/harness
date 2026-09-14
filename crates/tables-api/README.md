@@ -139,6 +139,24 @@ are none. The body schema on a write is the table's own JSON Schema — the
 same bytes the row validator enforces, so a generated form and the route
 it posts to cannot disagree about what a row is.
 
+## What a declared table's privacy block actually does
+
+`tests/privacy.rs` mounts a declared-tables module beside
+`cratefield-privacy` and asks the questions a subject would:
+
+- a subject's `/v1/privacy/export` carries their rows from the declared
+  table, and the sentence the author wrote is published with them;
+- a table declared to hold nobody is in no subject's export;
+- `/v1/privacy/manifest` names both, and publishes the reason the second
+  holds nobody;
+- an erasure removes the subject's rows and leaves another subject's
+  alone;
+- and leaves the table that holds nobody alone, which is the failure that
+  would delete a venture's reference data the first time anybody asked.
+
+A declaration that never reaches an export is decoration, and it is
+decoration that reads as compliance. These are what make it not that.
+
 ## The rules, and why each is that way
 
 | level | anonymous | signed in | reaches |
