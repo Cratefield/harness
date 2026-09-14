@@ -122,8 +122,15 @@ pub enum AuthError {
     /// expired, wrong audience, unknown key. One variant on purpose: each
     /// answer a caller can tell apart is a hint about how to get closer.
     NotVerified,
-    /// The verifier could not be reached or could not answer. The
-    /// message is for a log; it never reaches the caller.
+    /// The verifier could not be reached or could not answer.
+    ///
+    /// The message is an adapter's, so it can carry a connection URL
+    /// with credentials in it, or an address. `Display` runs it through
+    /// [`crate::logging::scrub_text`] for the reason `DbError` does
+    /// (#135): "this never reaches a caller" is a promise about every
+    /// call site rather than about this type, and four credential leaks
+    /// in this codebase had exactly that shape. `Debug` keeps the raw
+    /// string, and the logging formatters scrub `{:?}` too.
     Unavailable(String),
 }
 
@@ -131,7 +138,11 @@ impl std::fmt::Display for AuthError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::NotVerified => f.write_str("the credential did not verify"),
-            Self::Unavailable(detail) => write!(f, "the verifier could not answer: {detail}"),
+            Self::Unavailable(detail) => write!(
+                f,
+                "the verifier could not answer: {}",
+                crate::logging::scrub_text(detail)
+            ),
         }
     }
 }

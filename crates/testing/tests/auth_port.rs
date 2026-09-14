@@ -62,6 +62,24 @@ fn a_verifier_that_cannot_answer_is_a_different_refusal() {
 }
 
 #[test]
+fn an_unavailable_message_is_scrubbed_on_the_way_out() {
+    // The detail is an adapter's, so it can carry a connection URL with
+    // credentials in it. `DbError` scrubs for this reason (#135), and
+    // "it never reaches a caller" is a promise about every call site
+    // rather than about this type.
+    let raw = "connect failed: https://svc:hunter2@auth.example/jwks for ada@example.com";
+    let rendered = AuthError::Unavailable(raw.to_owned()).to_string();
+    assert!(!rendered.contains("hunter2"), "{rendered}");
+    assert!(!rendered.contains("ada@example.com"), "{rendered}");
+    // And it still says what went wrong, or the scrub has eaten the
+    // message instead of the secret.
+    assert!(
+        rendered.contains("the verifier could not answer"),
+        "{rendered}"
+    );
+}
+
+#[test]
 fn a_verified_credential_carries_the_subject_a_table_matches_on() {
     let auth = FakeAuth::subjects();
     let who = pollster::block_on(auth.identify(&with_bearer("ada"))).expect("verifies");
