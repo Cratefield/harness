@@ -424,6 +424,45 @@ mod tests {
         }
     }
 
+    /// Declares [`EVERY`] and, from the same list, a match that has to
+    /// be exhaustive.
+    ///
+    /// Every "for each status" test reads `EVERY` rather than writing its
+    /// own list, because a hand-written list quietly covers one fewer
+    /// case than its name claims the day a variant is added — which had
+    /// already happened here: `Offboarding` and `Archived` arrived in
+    /// #336 and the serialization test kept checking three of five.
+    ///
+    /// The macro is what makes that impossible rather than merely
+    /// discouraged. A first attempt at this used a separate
+    /// `position(status) -> usize` with an exhaustive match, which only
+    /// forced the *function* to be updated: nothing ever called it for a
+    /// variant the array did not already hold, so the array could stay
+    /// short and every test still passed. Adding a variant to the enum
+    /// now fails to compile in `exhaustive` below, and the only way to
+    /// satisfy that is to add it to this one invocation — which is also
+    /// the array.
+    macro_rules! statuses {
+        ($($variant:ident),+ $(,)?) => {
+            /// Every status. Not public: a caller enumerating an
+            /// `#[non_exhaustive]` enum is the thing that attribute
+            /// exists to prevent, and inside the crate it is exhaustive
+            /// anyway.
+            const EVERY: &[TenantStatus] = &[$(TenantStatus::$variant),+];
+
+            /// Never called. It exists so that a variant absent from the
+            /// list above is a compile error here.
+            #[expect(dead_code, reason = "its only job is to be exhaustive")]
+            fn exhaustive(status: TenantStatus) {
+                match status {
+                    $(TenantStatus::$variant => {}),+
+                }
+            }
+        };
+    }
+
+    statuses!(Provisioning, Active, Degraded, Offboarding, Archived);
+
     #[test]
     fn the_implicit_tenant_answers_for_every_host() {
         use super::{IMPLICIT_TENANT, ImplicitTenant, ResolveTenant};
@@ -482,13 +521,7 @@ mod tests {
 
     #[test]
     fn every_status_round_trips_through_the_registry_text() {
-        for status in [
-            TenantStatus::Active,
-            TenantStatus::Provisioning,
-            TenantStatus::Degraded,
-            TenantStatus::Offboarding,
-            TenantStatus::Archived,
-        ] {
+        for &status in EVERY {
             assert_eq!(
                 TenantStatus::parse(status.as_str()),
                 status,
@@ -500,12 +533,10 @@ mod tests {
     #[test]
     fn only_active_serves() {
         // The whole lifecycle, stated once: exactly one status admits.
-        for status in [
-            TenantStatus::Provisioning,
-            TenantStatus::Degraded,
-            TenantStatus::Offboarding,
-            TenantStatus::Archived,
-        ] {
+        for &status in EVERY
+            .iter()
+            .filter(|status| **status != TenantStatus::Active)
+        {
             assert!(
                 found(status).admit().is_err(),
                 "{status} must not serve requests"
@@ -554,13 +585,7 @@ mod tests {
         // answer a request and no boot brings it back. Asserting each
         // separately would let a future variant satisfy one and not the
         // other.
-        for status in [
-            TenantStatus::Active,
-            TenantStatus::Provisioning,
-            TenantStatus::Degraded,
-            TenantStatus::Offboarding,
-            TenantStatus::Archived,
-        ] {
+        for &status in EVERY {
             if status.is_terminal() {
                 assert!(found(status).admit().is_err(), "{status} served");
                 assert!(!status.is_reconciled(), "{status} was flown");
@@ -591,11 +616,7 @@ mod tests {
 
     #[test]
     fn serializes_as_the_registry_text_not_the_variant_name() {
-        for status in [
-            TenantStatus::Active,
-            TenantStatus::Provisioning,
-            TenantStatus::Degraded,
-        ] {
+        for &status in EVERY {
             let json = serde_json::to_string(&status).expect("a unit variant serializes");
             assert_eq!(
                 json,
@@ -606,32 +627,10 @@ mod tests {
     }
 
     #[test]
-    fn round_trips_through_the_registry_text() {
-        for status in [
-            TenantStatus::Active,
-            TenantStatus::Provisioning,
-            TenantStatus::Degraded,
-        ] {
-            assert_eq!(TenantStatus::parse(status.as_str()), status);
-        }
-    }
-
-    #[test]
     fn an_unknown_status_reads_as_degraded() {
         assert_eq!(TenantStatus::parse("busy"), TenantStatus::Degraded);
         assert_eq!(TenantStatus::parse(""), TenantStatus::Degraded);
     }
-
-    /// Every status, for the transition table. Not public: a caller
-    /// enumerating an `#[non_exhaustive]` enum is the thing that
-    /// attribute exists to prevent.
-    const EVERY: [TenantStatus; 5] = [
-        TenantStatus::Provisioning,
-        TenantStatus::Active,
-        TenantStatus::Degraded,
-        TenantStatus::Offboarding,
-        TenantStatus::Archived,
-    ];
 
     #[test]
     fn a_tenant_being_shredded_is_not_revived_by_a_reconciliation() {
@@ -657,7 +656,7 @@ mod tests {
             TenantStatus::Archived.admits(),
             &[TenantStatus::Offboarding]
         );
-        for from in EVERY {
+        for &from in EVERY {
             assert_eq!(
                 from.can_become(TenantStatus::Archived),
                 from == TenantStatus::Offboarding,
@@ -672,7 +671,7 @@ mod tests {
         // keys destroyed. A record of an irreversible act is not
         // rewritten — not even with the same word, which would move its
         // timestamp and lose when the shred actually happened.
-        for to in EVERY {
+        for &to in EVERY {
             assert!(
                 !TenantStatus::Archived.can_become(to),
                 "archived -> {to} is not a move that exists"
@@ -685,7 +684,7 @@ mod tests {
         // A reconciler that runs twice writes `active` twice, and the
         // second must not be refused. Archived is the exception, and has
         // its own test saying why.
-        for status in EVERY {
+        for &status in EVERY {
             assert_eq!(
                 status.can_become(status),
                 status != TenantStatus::Archived,
@@ -718,8 +717,8 @@ mod tests {
     fn the_rule_reads_the_same_from_both_ends() {
         // `admits` is the match and `can_become` asks it backwards. One
         // rule, so a change to either cannot disagree with the other.
-        for to in EVERY {
-            for from in EVERY {
+        for &to in EVERY {
+            for &from in EVERY {
                 assert_eq!(
                     from.can_become(to),
                     to.admits().contains(&from),
@@ -735,7 +734,7 @@ mod tests {
         // outcome the registry will not take: `is_reconciled` picks the
         // tenants the fleet boots, and reconciliation ends by writing
         // `active` or `degraded`.
-        for status in EVERY.into_iter().filter(|status| status.is_reconciled()) {
+        for &status in EVERY.iter().filter(|status| status.is_reconciled()) {
             assert!(
                 status.can_become(TenantStatus::Active)
                     && status.can_become(TenantStatus::Degraded),

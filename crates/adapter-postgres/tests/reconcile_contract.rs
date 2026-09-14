@@ -276,6 +276,19 @@ async fn a_degraded_tenant_is_marked_and_skipped_by_the_fleet() {
     tenant_db.finish().await;
 }
 
+/// A status this binary has never heard of, written straight into the
+/// registry the way a newer binary would.
+async fn store_unknown_status(control: &Postgres, tenant: &str) {
+    use cratefield_core::Database as _;
+    control
+        .execute(&cratefield_core::Statement::with_values(
+            "UPDATE harness_tenants SET status = ? WHERE tenant = ?".to_owned(),
+            vec!["suspended".to_owned().into(), tenant.to_owned().into()],
+        ))
+        .await
+        .expect("the registry takes any text");
+}
+
 /// Asserts the registry refuses every move back out of `offboarding`.
 ///
 /// The fleet skipping an offboarding tenant is one guard; this is the
@@ -419,6 +432,76 @@ async fn a_retired_tenant_cannot_be_resurrected_or_re_flown() {
     assert_eq!(reports.len(), 1);
     assert_eq!(reports[0].tenant, "successor");
     assert_eq!(reports[0].status, TenantStatus::Active);
+
+    control_db.finish().await;
+    tenant_db.finish().await;
+}
+
+#[tokio::test]
+async fn a_status_this_binary_does_not_know_is_not_overwritten_by_it() {
+    // Mixed-version deploys are the normal case during a rollout. A newer
+    // binary writes a status this one has never heard of; this one must
+    // leave it alone rather than deciding it is `degraded` — which is how
+    // `TenantStatus::parse` reads it — and writing `active` over it.
+    //
+    // Two guards happen to cover this and only one is deliberate. The
+    // fleet skips it, because an unknown status parses as `degraded` and
+    // `is_reconciled` is false there. The one that matters is the
+    // registry's: `set_tenant_status` compares the *stored text* against
+    // `TenantStatus::admits`, and a word not in that list matches nothing.
+    // Had the guard been written against the parsed value it would have
+    // seen `degraded`, found it admitted, and clobbered the row.
+    let Some(base) = base_url() else {
+        eprintln!("SKIPPED: {}", skip_reason());
+        return;
+    };
+    let Some(control_db) = TempDb::create(&base, "reconctl4").await else {
+        panic!("throwaway database creation failed");
+    };
+    let control = Postgres::connect(&control_db.url).await.expect("connect");
+    control
+        .bootstrap_registry()
+        .await
+        .expect("registry bootstraps");
+    let Some(tenant_db) = TempDb::create(&base, "reconfuture").await else {
+        panic!("throwaway database creation failed");
+    };
+    control
+        .register_tenant("future", &tenant_db.url)
+        .await
+        .expect("registers");
+    store_unknown_status(&control, "future").await;
+
+    for attempt in [
+        TenantStatus::Active,
+        TenantStatus::Degraded,
+        TenantStatus::Offboarding,
+        TenantStatus::Archived,
+        TenantStatus::Provisioning,
+    ] {
+        assert!(
+            !control.set_tenant_status("future", attempt).await,
+            "the registry took {attempt} over a status it cannot read"
+        );
+    }
+    // Still the newer binary's word, untouched, for it to act on.
+    assert_eq!(
+        control.tenants().await.expect("registry")[0].status,
+        TenantStatus::Degraded,
+        "this binary reads the unknown word as degraded"
+    );
+
+    // And it is not flown, so nothing reconciles it into a status this
+    // binary does understand.
+    let harness = std::sync::Arc::new(harness());
+    let reports = control
+        .reconcile_fleet(&harness, 8)
+        .await
+        .expect("fleet runs");
+    assert!(
+        reports.is_empty(),
+        "a tenant with an unknown status was flown"
+    );
 
     control_db.finish().await;
     tenant_db.finish().await;
