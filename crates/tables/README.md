@@ -472,6 +472,30 @@ this says what it costs. Refusing a contract would make the tool wrong
 for the case the expand/contract discipline exists to serve — dropping a
 column on purpose, in its own migration, once nothing reads it.
 
+## A declared table has to say who may reach it
+
+`access` is one of `public-read`, `owner`, `tenant-members` or `admin` —
+a small fixed vocabulary evaluated in Rust, and it **stays** a vocabulary.
+A policy language in a manifest is a second program with no type checker
+and no tests deciding who sees what; four words the harness evaluates are
+four things a reviewer can read.
+
+Required, with no default, for the reason the privacy block has one:
+`public-read` by default publishes a venture's tables the day the CRUD
+layer lands, and `admin` by default makes them useless until somebody
+notices.
+
+`owner` matches a caller against the column the table's privacy block
+names as its subject, so declaring it on a table that holds nothing
+personal is a manifest error — there is no column to match against, and a
+route falling back to "everyone" or "nobody" would be deciding that
+silently.
+
+Nothing serves these yet; the CRUD routes are not built. Declaring first
+means that when they arrive, no table can be served without an author
+having said who may see it, and no manifest written before the rule needs
+migrating to it.
+
 ## A declared table has to say what it holds
 
 The declaration lives in the manifest rather than here, because a
