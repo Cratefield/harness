@@ -84,9 +84,12 @@ Two secrets, through the secrets layer (never plain env in production):
 - `STRIPE_SECRET_KEY` — the `sk_...` API key.
 - `STRIPE_WEBHOOK_SECRET` — the `whsec_...` endpoint signing secret.
 
-`fz doctor` fails a **production** venture that provides the `Payments` port
-without `STRIPE_WEBHOOK_SECRET` set: without it, webhook signatures cannot be
-verified and forged events would be trusted. When no key is set at all the
+`fz doctor` fails a **production** venture that mounts a module with a
+signature-guarded write — a webhook — without `STRIPE_WEBHOOK_SECRET` set:
+without it, webhook signatures cannot be verified and forged events would be
+trusted. The trigger is the webhook route, not the `Payments` port: a venture
+that only opens checkouts and receives no webhook has nothing to verify and
+needs no secret, and is not failed for missing one. When no key is set at all the
 adapter reports `NotConfigured` and makes no network call, so a venture builds
 and runs without Stripe.
 
