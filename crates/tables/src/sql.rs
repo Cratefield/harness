@@ -31,7 +31,7 @@
 //! JSON Schema.
 
 use cratefield_core::{Row, Statement};
-use sea_query::{Alias, Cond, Expr, Order, Query, Value as SeaValue};
+use sea_query::{Alias, Cond, Expr, Order, Query, SimpleExpr, Value as SeaValue};
 use serde_json::{Map, Value};
 
 use crate::schema::{FieldDef, FieldKind, TableDef};
@@ -146,6 +146,19 @@ pub fn from_sql(table: &str, field: &FieldDef, value: &SeaValue) -> Result<Value
         column: field.name.clone(),
         detail: detail.to_owned(),
     };
+    // SQLite has no typed nulls: its adapter maps every `NULL` to
+    // `SeaValue::String(None)` whatever the column is declared as,
+    // because the value carries no type to map from. So a null in an
+    // `integer`, `real` or `boolean` column arrives here looking like a
+    // text null, and reading that as a wrong kind answers 500 for a row
+    // that is exactly what the declaration says it is.
+    //
+    // Only the *null* case widens. A text value in an integer column is
+    // still an error, which is the part worth keeping: that one means the
+    // database has drifted from the declaration.
+    if matches!(value, SeaValue::String(None)) {
+        return Ok(Value::Null);
+    }
     match &field.kind {
         FieldKind::Boolean => match value {
             SeaValue::Bool(None) | SeaValue::Int(None) | SeaValue::BigInt(None) => Ok(Value::Null),
@@ -374,6 +387,38 @@ fn owned_predicate(
     Ok(Some(Expr::col(Alias::new(owned.column)).eq(value)))
 }
 
+/// One equality condition on a declared column.
+///
+/// Equality, and nothing else. #153's own rule bounds the declaration
+/// surface — *anything referencing another row or another request is a
+/// function, not a field* — and the same instinct bounds what a caller
+/// may ask of one: ranges, prefixes and `LIKE` are queries a module
+/// writes, not vocabulary a manifest grows into.
+#[derive(Debug, Clone)]
+pub struct Filter {
+    /// The declared column.
+    pub column: String,
+    /// What it must equal, as JSON.
+    pub value: Value,
+}
+
+/// What a page asks for.
+///
+/// A struct rather than five positional arguments: the last two are both
+/// optional and both about *which rows*, and a call site that swapped
+/// them would compile.
+#[derive(Debug, Clone, Copy)]
+pub struct Page<'a> {
+    /// The most rows to return.
+    pub limit: u64,
+    /// The key of the last row of the previous page.
+    pub after: Option<&'a Value>,
+    /// The subject scope an `owner` table's access level decided.
+    pub owned: Option<Owned<'a>>,
+    /// What the caller asked to narrow by.
+    pub filters: &'a [Filter],
+}
+
 /// `SELECT` of a page, ordered by primary key, optionally after a cursor.
 ///
 /// Ordered by the primary key because a page has to be stable: a `LIMIT`
@@ -383,30 +428,56 @@ fn owned_predicate(
 /// # Errors
 ///
 /// When `after` is given and does not carry every primary-key column.
-pub fn select_page(
-    table: &TableDef,
-    limit: u64,
-    after: Option<&Value>,
-    owned: Option<Owned<'_>>,
-) -> Result<Statement, DecodeError> {
+pub fn select_page(table: &TableDef, page: Page<'_>) -> Result<Statement, DecodeError> {
     let mut select = Query::select();
     select
         .columns(table.fields.iter().map(|field| Alias::new(&field.name)))
         .from(Alias::new(&table.name))
-        .limit(limit);
+        .limit(page.limit);
     for column in &table.primary_key {
         select.order_by(Alias::new(column), Order::Asc);
     }
-    // Both conditions, `AND`ed: the cursor is where the page starts and
-    // the scope is which rows are in it. Applying the scope afterwards
-    // would page through rows the caller cannot see and hand back short
-    // pages that count them.
-    let mut all = Cond::all().add_option(owned_predicate(table, owned)?);
-    if let Some(after) = after {
+    // Every condition `AND`ed: the cursor is where the page starts, the
+    // scope is which rows the caller may see, and the filters are which
+    // of those they asked for. Applying any of them afterwards would page
+    // through rows that are then discarded and hand back short pages that
+    // count them.
+    //
+    // The scope goes in first and is never replaced by a filter — a
+    // caller filtering on the subject column narrows their own rows and
+    // cannot reach anybody else's, because both conditions stand.
+    let mut all = Cond::all().add_option(owned_predicate(table, page.owned)?);
+    if let Some(after) = page.after {
         all = all.add(after_predicate(table, after)?);
+    }
+    for filter in page.filters {
+        all = all.add(filter_predicate(table, filter)?);
     }
     select.cond_where(all);
     Ok(Statement::render(&select))
+}
+
+/// `column = ?`, for one caller-supplied filter.
+///
+/// The column must be a declared field and the value must be its kind.
+/// Neither is ignored: a filter that is silently dropped answers a
+/// question the caller did not ask, with more rows than they asked for.
+fn filter_predicate(table: &TableDef, filter: &Filter) -> Result<SimpleExpr, DecodeError> {
+    let field = table
+        .fields
+        .iter()
+        .find(|field| field.name == filter.column)
+        .ok_or_else(|| DecodeError {
+            table: table.name.clone(),
+            column: filter.column.clone(),
+            detail: "is not a field of this table".to_owned(),
+        })?;
+    let value = to_sql(field, Some(&filter.value)).ok_or_else(|| DecodeError {
+        table: table.name.clone(),
+        column: filter.column.clone(),
+        detail: format!("is {} and the value given is not", field.kind.as_str()),
+    })?;
+    Ok(Expr::col(Alias::new(&filter.column)).eq(value))
 }
 
 /// `UPDATE` of one row by primary key, replacing every declared

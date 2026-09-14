@@ -69,6 +69,14 @@ pub const VERIFIER_UNAVAILABLE: ProblemDef = ProblemDef {
     description: "The service that verifies credentials could not answer. Try again shortly.",
 };
 
+/// The caller narrowed by something this table cannot be narrowed by.
+pub const BAD_FILTER: ProblemDef = ProblemDef {
+    slug: "bad-filter",
+    status: StatusCode::BAD_REQUEST,
+    title: "Not a filter for this table",
+    description: "A query parameter names a column the table does not declare, or a value that is not that column's kind.",
+};
+
 /// A credential was presented and did not verify.
 pub const NOT_VERIFIED: ProblemDef = ProblemDef {
     slug: "unauthenticated",
@@ -167,6 +175,7 @@ pub async fn page(
     scope: &Scope,
     name: &str,
     after: Option<&Value>,
+    filters: &[cratefield_tables::Filter],
 ) -> Result<Value, Problem> {
     let api = tables.find(name)?;
     let caller = who(tables, headers, api).await?;
@@ -177,9 +186,19 @@ pub async fn page(
     )?;
     let subject = subject_value(&reach);
 
-    let statement =
-        cratefield_tables::select_page(&api.table, PAGE, after, owned(&reach, &subject))
-            .map_err(|err| misdeclared(scope, &err))?;
+    let statement = cratefield_tables::select_page(
+        &api.table,
+        cratefield_tables::Page {
+            limit: PAGE,
+            after,
+            // The scope first, and the filters after: both stand, so a
+            // caller filtering on the subject column narrows their own
+            // rows and cannot reach anybody else's.
+            owned: owned(&reach, &subject),
+            filters,
+        },
+    )
+    .map_err(|err| bad_filter(scope, &err, api))?;
     let rows = conn
         .query(&statement)
         .await
@@ -249,6 +268,25 @@ fn next_cursor(table: &TableDef, last: Option<&Value>) -> Value {
         cursor.insert(column.clone(), value.clone());
     }
     Value::Object(cursor)
+}
+
+/// A page the caller asked for that this table cannot answer.
+///
+/// A filter naming a column the table does not have, or a value that is
+/// not that column's kind, is the caller's mistake and says so — with the
+/// column name, which they sent. A failure that names nothing else is a
+/// misdeclaration, and that is ours.
+fn bad_filter(scope: &Scope, err: &cratefield_tables::DecodeError, api: &TableApi) -> Problem {
+    if api
+        .table
+        .fields
+        .iter()
+        .any(|field| field.name == err.column)
+        || !api.table.primary_key.contains(&err.column)
+    {
+        return Problem::new(&BAD_FILTER).with_detail(format!("`{}` {}", err.column, err.detail));
+    }
+    misdeclared(scope, err)
 }
 
 /// A statement that could not be built from the declaration.

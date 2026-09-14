@@ -7,11 +7,21 @@
 
 use cratefield_core::Row;
 use cratefield_tables::{
-    DecodeError, Owned, Schema, UpdateError, delete, from_sql, insert, row_json, select_one,
-    select_page, to_sql, update,
+    DecodeError, Filter, Owned, Page, Schema, UpdateError, delete, from_sql, insert, row_json,
+    select_one, select_page, to_sql, update,
 };
 use sea_query::Value as SeaValue;
 use serde_json::{Value, json};
+
+/// A page request with no filters, which is what most of these are about.
+fn page<'a>(limit: u64, after: Option<&'a Value>, owned: Option<Owned<'a>>) -> Page<'a> {
+    Page {
+        limit,
+        after,
+        owned,
+        filters: &[],
+    }
+}
 
 #[derive(serde::Deserialize)]
 struct Manifest {
@@ -143,7 +153,9 @@ fn a_row_key_cannot_become_an_identifier() {
     let statements = [
         insert(&table, &row).expect("insert").sql,
         select_one(&table, &key, None).expect("select one").sql,
-        select_page(&table, 10, Some(&key), None).expect("page").sql,
+        select_page(&table, page(10, Some(&key), None))
+            .expect("page")
+            .sql,
         update(&table, &key, &row, None).expect("update").sql,
         delete(&table, &key, None).expect("delete").sql,
     ];
@@ -220,7 +232,7 @@ fn a_key_value_of_the_wrong_kind_is_refused_rather_than_bound_as_a_null() {
         "select too"
     );
     assert!(
-        select_page(&table, 10, Some(&json!({ "id": 42 })), None).is_err(),
+        select_page(&table, page(10, Some(&json!({ "id": 42 })), None)).is_err(),
         "and the cursor"
     );
     assert!(
@@ -440,7 +452,7 @@ fn an_update_to_an_illegal_row_is_refused_before_the_database_sees_it() {
 fn a_page_is_ordered_by_the_primary_key_so_two_requests_agree() {
     // A LIMIT with no ORDER BY is whatever the engine felt like, and two
     // requests for "the first ten" may then share rows or skip them.
-    let statement = select_page(&note(), 10, None, None).expect("no cursor");
+    let statement = select_page(&note(), page(10, None, None)).expect("no cursor");
     assert!(statement.sql.contains("ORDER BY"), "{}", statement.sql);
     assert!(statement.sql.contains("LIMIT"), "{}", statement.sql);
 }
@@ -452,9 +464,11 @@ fn a_composite_cursor_is_lexicographic_and_uses_no_row_value_comparison() {
     // a difference between two deployments of one declaration.
     let statement = select_page(
         &membership(),
-        10,
-        Some(&json!({ "tenant": "acme", "member": "ada" })),
-        None,
+        page(
+            10,
+            Some(&json!({ "tenant": "acme", "member": "ada" })),
+            None,
+        ),
     )
     .expect("a whole cursor");
     assert!(statement.sql.contains(" OR "), "{}", statement.sql);
@@ -468,8 +482,11 @@ fn a_composite_cursor_is_lexicographic_and_uses_no_row_value_comparison() {
 
 #[test]
 fn half_a_cursor_is_refused_like_half_a_key() {
-    let error = select_page(&membership(), 10, Some(&json!({ "tenant": "acme" })), None)
-        .expect_err("half a cursor");
+    let error = select_page(
+        &membership(),
+        page(10, Some(&json!({ "tenant": "acme" })), None),
+    )
+    .expect_err("half a cursor");
     assert_eq!(error.column, "member", "{error}");
 }
 
@@ -489,7 +506,7 @@ fn a_scoped_read_puts_the_subject_in_the_same_where_as_the_key() {
     assert!(one.sql.contains(" AND "), "{}", one.sql);
     assert_eq!(one.values.0.len(), 3, "id, body and the LIMIT: {}", one.sql);
 
-    let page = select_page(&table, 10, None, Some(owned)).expect("scoped");
+    let page = select_page(&table, page(10, None, Some(owned))).expect("scoped");
     assert!(page.sql.contains("\"body\" = ?"), "{}", page.sql);
     assert!(page.sql.contains("LIMIT"), "{}", page.sql);
 }
@@ -502,12 +519,14 @@ fn a_scoped_page_keeps_both_the_cursor_and_the_scope() {
     let subject = json!("ada");
     let page = select_page(
         &table,
-        10,
-        Some(&json!({ "id": ID })),
-        Some(Owned {
-            column: "body",
-            subject: &subject,
-        }),
+        page(
+            10,
+            Some(&json!({ "id": ID })),
+            Some(Owned {
+                column: "body",
+                subject: &subject,
+            }),
+        ),
     )
     .expect("scoped and paged");
     assert!(page.sql.contains("\"body\" = ?"), "the scope: {}", page.sql);
@@ -522,13 +541,143 @@ fn a_scope_naming_a_column_the_table_does_not_have_is_refused() {
     let subject = json!("ada");
     let error = select_page(
         &note(),
-        10,
-        None,
-        Some(Owned {
-            column: "nope",
-            subject: &subject,
-        }),
+        page(
+            10,
+            None,
+            Some(Owned {
+                column: "nope",
+                subject: &subject,
+            }),
+        ),
     )
     .expect_err("not a field");
     assert_eq!(error.column, "nope", "{error}");
+}
+
+#[test]
+fn an_untyped_null_decodes_for_every_declared_kind() {
+    // SQLite has no typed nulls: its adapter maps every `NULL` to
+    // `SeaValue::String(None)` whatever the column is declared as,
+    // because the value carries no type to map from. So a null in an
+    // `integer`, `real` or `boolean` column arrives looking like a text
+    // null, and reading that as a wrong kind answers 500 for a row that
+    // is exactly what the declaration says it is.
+    //
+    // Found by adding one nullable integer column to a route fixture and
+    // watching the read 500 — every declared table with a nullable
+    // non-text column was unreadable on the D1 path.
+    let table = note();
+    for name in ["pinned", "weight", "views", "meta", "body"] {
+        let field = table
+            .fields
+            .iter()
+            .find(|field| field.name == name)
+            .expect("declared");
+        assert_eq!(
+            from_sql("note", field, &SeaValue::String(None)),
+            Ok(Value::Null),
+            "a null in `{name}` ({}) did not decode",
+            field.kind.as_str()
+        );
+    }
+}
+
+#[test]
+fn an_untyped_value_that_is_not_null_is_still_the_wrong_kind() {
+    // Only the null case widens. A text value in an integer column means
+    // the database has drifted from the declaration, and that is the part
+    // worth keeping.
+    let table = note();
+    let views = table
+        .fields
+        .iter()
+        .find(|field| field.name == "views")
+        .expect("declared");
+    assert!(
+        from_sql(
+            "note",
+            views,
+            &SeaValue::String(Some(Box::new("seven".to_owned())))
+        )
+        .is_err(),
+        "text in an integer column has to stay an error"
+    );
+}
+
+#[test]
+fn a_filter_joins_the_scope_rather_than_replacing_it() {
+    // Both conditions in one `WHERE`. A filter that replaced the scope
+    // would hand a caller rows the access decision said were not theirs,
+    // and the statement would look perfectly ordinary.
+    let table = note();
+    let subject = json!("ada");
+    let filters = [Filter {
+        column: "views".to_owned(),
+        value: json!(7),
+    }];
+    let statement = select_page(
+        &table,
+        Page {
+            limit: 10,
+            after: None,
+            owned: Some(Owned {
+                column: "body",
+                subject: &subject,
+            }),
+            filters: &filters,
+        },
+    )
+    .expect("scoped and filtered");
+    assert!(statement.sql.contains("\"body\" = ?"), "{}", statement.sql);
+    assert!(
+        statement.sql.contains("\"views\" = ?"),
+        "the filter: {}",
+        statement.sql
+    );
+    assert_eq!(
+        statement.values.0.len(),
+        3,
+        "the scope, the filter and the bound LIMIT: {}",
+        statement.sql
+    );
+}
+
+#[test]
+fn a_filter_on_a_column_the_table_does_not_declare_is_refused() {
+    let filters = [Filter {
+        column: "nope".to_owned(),
+        value: json!("x"),
+    }];
+    let error = select_page(
+        &note(),
+        Page {
+            limit: 10,
+            after: None,
+            owned: None,
+            filters: &filters,
+        },
+    )
+    .expect_err("not a field");
+    assert_eq!(error.column, "nope", "{error}");
+}
+
+#[test]
+fn a_filter_value_of_the_wrong_kind_is_refused() {
+    // Not bound as a null, which would make `WHERE views = NULL` — never
+    // true — and answer an empty page to a question that was malformed.
+    let filters = [Filter {
+        column: "views".to_owned(),
+        value: json!("seven"),
+    }];
+    let error = select_page(
+        &note(),
+        Page {
+            limit: 10,
+            after: None,
+            owned: None,
+            filters: &filters,
+        },
+    )
+    .expect_err("not an integer");
+    assert_eq!(error.column, "views", "{error}");
 }

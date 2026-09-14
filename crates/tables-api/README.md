@@ -55,7 +55,7 @@ The two 404s are the same answer on purpose.
 
 | route | answers |
 |---|---|
-| `GET /{table}?after=` | a page of rows, and `next` when there is another |
+| `GET /{table}?after=&<column>=` | a page of rows, and `next` when there is another |
 | `POST /{table}` | `201` and the row it created |
 | `GET /{table}/{key}` | one row by its primary key |
 | `PUT /{table}/{key}` | `200` and the row it replaced |
@@ -87,6 +87,25 @@ an invented separator — which would make a key containing that separator
 unaddressable, silently, and only for the rows that contain it. A `real`,
 `boolean` or `json` key is refused too: a float compared with `=` is a key
 that sometimes matches nothing, for reasons the caller cannot see.
+
+## Narrowing a page
+
+Every query parameter but `after` is a filter, named for the column it
+narrows. **Equality, and nothing else.** #153's rule bounds the
+declaration surface — *anything referencing another row or another
+request is a function, not a field* — and the same instinct bounds what a
+caller may ask of one: ranges, prefixes and `LIKE` are queries a module
+writes, not vocabulary a manifest grows into.
+
+A parameter naming a column the table does not declare is a `400`, not a
+parameter ignored. Ignoring it answers a question the caller did not ask,
+with more rows than they asked for — and a client that misspells a column
+would get a page that looks right. The value is checked against the
+column's kind for the same reason.
+
+**A filter cannot widen an `owner` scope.** The subject condition and the
+filters are all in the same `WHERE`, so filtering on the subject column
+narrows the caller's own rows and reaches nobody else's.
 
 ## Writing
 

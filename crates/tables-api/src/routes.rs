@@ -30,7 +30,7 @@ use axum::Router;
 use axum::extract::{Path, Query, State};
 use axum::routing::get;
 use cratefield_core::{Problem, ProblemDef, Scope, TenantConn};
-use cratefield_tables::{FieldKind, TableDef};
+use cratefield_tables::{FieldKind, Filter, TableDef};
 use http::{HeaderMap, StatusCode};
 use serde_json::{Value, json};
 
@@ -67,10 +67,22 @@ pub fn router(tables: Arc<Tables>) -> Router {
         .with_state(tables)
 }
 
-/// `?after=<key>` — where the next page starts.
+/// The query string of a page request.
+///
+/// `after` is the cursor; **every other parameter is a filter**, named
+/// for the column it narrows. That is the whole vocabulary: equality on a
+/// declared column, and nothing that reaches another row or another
+/// request — the rule #153 sets for the declaration surface, applied to
+/// what a caller may ask of it.
+///
+/// Collected rather than declared, because the columns are a venture's
+/// and this type is the harness's.
 #[derive(serde::Deserialize)]
-struct Cursor {
+struct PageQuery {
+    #[serde(default)]
     after: Option<String>,
+    #[serde(flatten)]
+    filters: std::collections::BTreeMap<String, String>,
 }
 
 async fn page_route(
@@ -78,15 +90,23 @@ async fn page_route(
     conn: TenantConn,
     State(tables): State<Arc<Tables>>,
     Path(table): Path<String>,
-    Query(cursor): Query<Cursor>,
+    Query(query): Query<PageQuery>,
     headers: HeaderMap,
 ) -> Result<axum::Json<Value>, Problem> {
     // The cursor is parsed against the same table the page is of, so a
     // cursor for a different table's key shape is a 400 here rather than
     // a `WHERE` comparing a string to an integer further down.
-    let after = match (&cursor.after, tables.declared(&table)) {
+    let declared = tables.declared(&table);
+    let after = match (&query.after, declared) {
         (Some(raw), Some(api)) => Some(key_from_path(&api.table, raw)?),
         _ => None,
+    };
+    let filters = match declared {
+        Some(api) => filters_from_query(&api.table, &query.filters)?,
+        // The table is not declared. `page` answers the 404, and parsing
+        // filters against a table the caller may not be allowed to know
+        // exists would answer a different question first.
+        None => Vec::new(),
     };
     let body = page(
         &tables,
@@ -95,6 +115,7 @@ async fn page_route(
         &scope,
         &table,
         after.as_ref().map(|value| &value.0),
+        &filters,
     )
     .await?;
     Ok(axum::Json(body))
@@ -210,4 +231,74 @@ async fn remove_route(
     // No body: there is nothing left to describe, and inventing one
     // ("deleted": true) is a second thing to keep true.
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// The query string's non-cursor parameters, as filters on declared
+/// columns.
+///
+/// A parameter naming a column the table does not declare is a `400`, not
+/// a parameter ignored. Ignoring it answers a question the caller did not
+/// ask, with more rows than they asked for — and a client that misspells
+/// a column would get a page that looks right.
+///
+/// # Errors
+///
+/// [`crate::read::BAD_FILTER`] naming the parameter.
+fn filters_from_query(
+    table: &TableDef,
+    given: &std::collections::BTreeMap<String, String>,
+) -> Result<Vec<Filter>, Problem> {
+    let mut filters = Vec::with_capacity(given.len());
+    for (column, raw) in given {
+        let field = table
+            .fields
+            .iter()
+            .find(|field| &field.name == column)
+            .ok_or_else(|| {
+                Problem::new(&crate::read::BAD_FILTER)
+                    .with_detail(format!("`{column}` is not a field of this table"))
+            })?;
+        filters.push(Filter {
+            column: column.clone(),
+            // A query string is text; the column's kind says what that
+            // text means. `key_from_path` answers the same question for a
+            // path segment, and this is the one place they differ: a
+            // filter may name any declared column, not only a key, so a
+            // `real` or `boolean` column is filterable where it is not
+            // addressable.
+            value: value_from_text(field, raw)?,
+        });
+    }
+    Ok(filters)
+}
+
+/// One query-string value, as the JSON its column's kind calls for.
+fn value_from_text(field: &cratefield_tables::FieldDef, raw: &str) -> Result<Value, Problem> {
+    let bad = || {
+        Problem::new(&crate::read::BAD_FILTER).with_detail(format!(
+            "`{}` is {} and `{raw}` is not",
+            field.name,
+            field.kind.as_str()
+        ))
+    };
+    Ok(match &field.kind {
+        FieldKind::Text { .. }
+        | FieldKind::Uuid
+        | FieldKind::Timestamp
+        | FieldKind::Enum { .. } => Value::String(raw.to_owned()),
+        FieldKind::Integer { .. } => raw.parse::<i64>().map(Value::from).map_err(|_e| bad())?,
+        FieldKind::Real { .. } => raw.parse::<f64>().map(Value::from).map_err(|_e| bad())?,
+        FieldKind::Boolean => match raw {
+            "true" => Value::Bool(true),
+            "false" => Value::Bool(false),
+            // Not `1`/`0`/`yes`: the declared kind is a boolean and the
+            // wire form for one is `true` or `false`. Guessing at the
+            // others is a vocabulary nobody wrote down.
+            _ => return Err(bad()),
+        },
+        // A JSON column has no single text form to compare for equality,
+        // and comparing serialized text would make the answer depend on
+        // key order and spacing.
+        FieldKind::Json => return Err(bad()),
+    })
 }
