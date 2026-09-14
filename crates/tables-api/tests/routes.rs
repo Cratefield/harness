@@ -37,17 +37,38 @@ required = true
 [[tables.note.fields]]
 name = "body"
 kind = "text"
+
+# A second table whose primary key is *not* called `id`. Without it a
+# route that ignored `key_from_path` and hardcoded `{"id": segment}`
+# passed every test, because `note`'s key happens to be `id`.
+[tables.tier]
+primary_key = "slug"
+
+[[tables.tier.fields]]
+name = "slug"
+kind = "text"
+required = true
+
+[[tables.tier.fields]]
+name = "label"
+kind = "text"
+required = true
 "#;
 
-const DDL: &str = "CREATE TABLE IF NOT EXISTS note (id TEXT PRIMARY KEY NOT NULL, author TEXT NOT NULL, body TEXT)";
+const DDL: &str = "CREATE TABLE IF NOT EXISTS note (id TEXT PRIMARY KEY NOT NULL, author TEXT NOT NULL, body TEXT); \
+     CREATE TABLE IF NOT EXISTS tier (slug TEXT PRIMARY KEY NOT NULL, label TEXT NOT NULL)";
 
 const MIGRATIONS: [SqlMigration; 1] = [SqlMigration::new("0001", "tables", DDL)];
 
 fn note() -> TableDef {
+    declared("note")
+}
+
+fn declared(name: &str) -> TableDef {
     toml::from_str::<Fragment>(NOTE)
         .expect("parses")
         .tables
-        .table("note")
+        .table(name)
         .expect("declared")
         .clone()
 }
@@ -70,7 +91,7 @@ impl Module for DeclaredTables {
         &[Port::Db, Port::Auth]
     }
     fn tables(&self) -> &'static [&'static str] {
-        &["note"]
+        &["note", "tier"]
     }
     fn migrations(&self) -> Migrations {
         Migrations::sqlite(&MIGRATIONS)
@@ -80,11 +101,18 @@ impl Module for DeclaredTables {
     }
     fn router(&self, ctx: ModuleContext) -> axum::Router {
         cratefield_tables_api::router(Arc::new(Tables {
-            tables: vec![TableApi {
-                table: note(),
-                access: self.access,
-                subject: Some("author".to_owned()),
-            }],
+            tables: vec![
+                TableApi {
+                    table: note(),
+                    access: self.access,
+                    subject: Some("author".to_owned()),
+                },
+                TableApi {
+                    table: declared("tier"),
+                    access: self.access,
+                    subject: None,
+                },
+            ],
             ctx: Arc::new(ctx),
         }))
     }
@@ -122,6 +150,38 @@ async fn seed(kit: &TestHarness) {
 struct Answer {
     status: axum::http::StatusCode,
     body: String,
+}
+
+async fn send(
+    kit: &TestHarness,
+    method: Method,
+    path: &str,
+    bearer: Option<&str>,
+    body: Option<&str>,
+) -> Answer {
+    use axum::body::Body;
+    use axum::http::{Request, header};
+    use tower::ServiceExt;
+    let mut builder = Request::builder().method(method).uri(path);
+    if let Some(token) = bearer {
+        builder = builder.header(header::AUTHORIZATION, format!("Bearer {token}"));
+    }
+    let request = match body {
+        Some(json) => builder
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(json.to_owned())),
+        None => builder.body(Body::empty()),
+    }
+    .expect("request");
+    let response = kit.router.clone().oneshot(request).await.expect("answers");
+    let status = response.status();
+    let bytes = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+        .await
+        .expect("body");
+    Answer {
+        status,
+        body: String::from_utf8(bytes.to_vec()).expect("utf-8"),
+    }
 }
 
 async fn get_as(kit: &TestHarness, path: &str, bearer: Option<&str>) -> Answer {
@@ -322,4 +382,215 @@ fn a_float_key_is_refused_rather_than_compared_for_equality() {
 fn a_text_key_is_taken_as_written() {
     let key = cratefield_tables_api::key_from_path(&note(), "n1").expect("text");
     assert_eq!(key.0, serde_json::json!({ "id": "n1" }));
+}
+
+#[pollster::test]
+async fn a_row_is_created_changed_and_deleted_over_http() {
+    // The three routes the surface publishes and nothing served. A
+    // published action whose route does not exist is worse than an
+    // unpublished one: a generated UI renders the form and the
+    // submission 404s.
+    for kit in kits(Access::Owner) {
+        seed(&kit).await;
+
+        let created = send(
+            &kit,
+            Method::POST,
+            "/v1/tables/note",
+            Some("ada"),
+            Some(r#"{"id":"n9","body":"mine"}"#),
+        )
+        .await;
+        assert_eq!(created.status, 201, "{}", created.body);
+        // The harness filled in whose row it is; the body never said.
+        assert!(
+            created.body.contains("\"author\":\"ada\""),
+            "{}",
+            created.body
+        );
+
+        let replaced = send(
+            &kit,
+            Method::PUT,
+            "/v1/tables/note/n9",
+            Some("ada"),
+            Some(r#"{"id":"n9","body":"edited"}"#),
+        )
+        .await;
+        assert_eq!(replaced.status, 200, "{}", replaced.body);
+
+        let read = get_as(&kit, "/v1/tables/note/n9", Some("ada")).await;
+        assert!(read.body.contains("edited"), "{}", read.body);
+
+        let removed = send(
+            &kit,
+            Method::DELETE,
+            "/v1/tables/note/n9",
+            Some("ada"),
+            None,
+        )
+        .await;
+        assert_eq!(removed.status, 204, "{}", removed.body);
+        assert!(
+            removed.body.is_empty(),
+            "a 204 carries no body: {}",
+            removed.body
+        );
+
+        assert_eq!(
+            get_as(&kit, "/v1/tables/note/n9", Some("ada")).await.status,
+            404
+        );
+    }
+}
+
+#[pollster::test]
+async fn a_caller_cannot_write_over_somebody_elses_row_through_the_routes() {
+    // The access decision reaching the write routes, not just the
+    // handlers: grace's row survives ada's PUT and her DELETE.
+    for kit in kits(Access::Owner) {
+        seed(&kit).await;
+
+        let put = send(
+            &kit,
+            Method::PUT,
+            "/v1/tables/note/n2",
+            Some("ada"),
+            Some(r#"{"id":"n2","body":"taken over"}"#),
+        )
+        .await;
+        assert_eq!(put.status, 404, "{}", put.body);
+
+        let del = send(
+            &kit,
+            Method::DELETE,
+            "/v1/tables/note/n2",
+            Some("ada"),
+            None,
+        )
+        .await;
+        assert_eq!(del.status, 404, "{}", del.body);
+
+        // The row itself, which is the part that matters.
+        let still = get_as(&kit, "/v1/tables/note/n2", Some("grace")).await;
+        assert_eq!(still.status, 200, "{}", still.body);
+        assert!(
+            still.body.contains("hers"),
+            "grace's row was changed: {}",
+            still.body
+        );
+    }
+}
+
+#[pollster::test]
+async fn a_public_table_refuses_every_write() {
+    for kit in kits(Access::PublicRead) {
+        seed(&kit).await;
+        let created = send(
+            &kit,
+            Method::POST,
+            "/v1/tables/note",
+            None,
+            Some(r#"{"id":"n9","author":"ada","body":"mine"}"#),
+        )
+        .await;
+        assert_eq!(created.status, 403, "{}", created.body);
+        assert!(created.body.contains("table-read-only"), "{}", created.body);
+    }
+}
+
+#[pollster::test]
+async fn every_published_action_is_a_route_that_exists() {
+    // The cross-check that was missing. The surface published creates,
+    // replaces and deletes while the router served two GETs, so the
+    // published contract promised routes that answered 405.
+    //
+    // "Exists" is the question here, not "succeeds": a refusal is a route
+    // answering. A 405 is the router saying the method is not mounted.
+    use cratefield_tables_api::{TableApi, surface};
+
+    for kit in kits(Access::Owner) {
+        seed(&kit).await;
+        let published = surface(&[TableApi {
+            table: note(),
+            access: Access::Owner,
+            subject: Some("author".to_owned()),
+        }]);
+        assert!(!published.actions.is_empty(), "nothing was published");
+
+        for action in &published.actions {
+            let path = format!("/v1/tables{}", action.path.replace("{key}", "n1"));
+            let body = matches!(action.method, Method::POST | Method::PUT)
+                .then_some(r#"{"id":"n1","body":"x"}"#);
+            let answer = send(&kit, action.method.clone(), &path, Some("ada"), body).await;
+            assert_ne!(
+                answer.status, 405,
+                "`{}` is published as {} {} and the router does not serve it",
+                action.name, action.method, path
+            );
+            assert_ne!(
+                answer.status, 404,
+                "`{}` is published as {} {} and the route is not there: {}",
+                action.name, action.method, path, answer.body
+            );
+        }
+    }
+}
+
+#[pollster::test]
+async fn a_table_whose_key_is_not_called_id_is_addressed_by_its_own_key() {
+    // `note`'s primary key is `id`, so a route that ignored
+    // `key_from_path` and hardcoded `{"id": segment}` passed every test
+    // here. `tier` is keyed by `slug`, which tells the two apart.
+    for kit in kits(Access::TenantMembers) {
+        {
+            use cratefield_core::Statement;
+            kit.db
+                .execute(&Statement::with_values(
+                    "INSERT INTO tier (slug, label) VALUES (?, ?)".to_owned(),
+                    vec!["gold".into(), "Gold".into()],
+                ))
+                .await
+                .expect("seeded");
+        }
+
+        let read = get_as(&kit, "/v1/tables/tier/gold", Some("ada")).await;
+        assert_eq!(read.status, 200, "{}", read.body);
+        assert!(read.body.contains("Gold"), "{}", read.body);
+
+        // A PUT too: each route parses the key itself, so each needs a
+        // table whose key is not called `id` to be checked against.
+        let replaced = send(
+            &kit,
+            Method::PUT,
+            "/v1/tables/tier/gold",
+            Some("ada"),
+            Some(r#"{"slug":"gold","label":"Gold tier"}"#),
+        )
+        .await;
+        assert_eq!(replaced.status, 200, "{}", replaced.body);
+        assert!(
+            get_as(&kit, "/v1/tables/tier/gold", Some("ada"))
+                .await
+                .body
+                .contains("Gold tier"),
+            "the replacement did not land"
+        );
+
+        let removed = send(
+            &kit,
+            Method::DELETE,
+            "/v1/tables/tier/gold",
+            Some("ada"),
+            None,
+        )
+        .await;
+        assert_eq!(removed.status, 204, "{}", removed.body);
+        assert_eq!(
+            get_as(&kit, "/v1/tables/tier/gold", Some("ada"))
+                .await
+                .status,
+            404
+        );
+    }
 }
