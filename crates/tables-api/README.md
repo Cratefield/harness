@@ -88,6 +88,22 @@ unaddressable, silently, and only for the rows that contain it. A `real`,
 `boolean` or `json` key is refused too: a float compared with `=` is a key
 that sometimes matches nothing, for reasons the caller cannot see.
 
+## Paging
+
+`next` is the cursor, and `?after=` takes it back **exactly as it was
+given** — the same JSON, percent-encoded. One shape, because two would
+mean every client carries the translation between them, and the only
+place that knowledge exists is here.
+
+It is not parsed by `key_from_path`. That exists for a *path segment*,
+which can carry one value, so it refuses a composite key — and refusing
+there made a composite-key table unpageable past its first page over
+HTTP, while `select_page` could express the query perfectly well.
+
+A cursor that is not JSON, is not an object, omits a key column, or names
+one with a value that is not its kind, is a `400 bad-cursor` that says
+which.
+
 ## Narrowing a page
 
 Every query parameter but `after` is a filter, named for the column it
