@@ -19,5 +19,7 @@
 //! it, so every case is a value rather than a request.
 
 pub mod access;
+pub mod read;
 
 pub use access::{FORBIDDEN, MISDECLARED, Reach, TableApi, UNAUTHENTICATED, may_read};
+pub use read::{PAGE, Tables, one, page};
