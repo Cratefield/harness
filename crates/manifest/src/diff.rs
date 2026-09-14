@@ -176,16 +176,15 @@ pub fn diff(
 /// What changed between two privacy declarations, one sentence each.
 fn privacy_details(from: &TablePrivacy, to: &TablePrivacy) -> Vec<String> {
     match (from, to) {
-        (TablePrivacy::Nothing { .. }, TablePrivacy::Nothing { reason: to }) => {
-            let TablePrivacy::Nothing { reason: was } = from else {
-                unreachable!("matched above")
-            };
-            if was == to {
-                Vec::new()
-            } else {
-                vec![format!("the reason it holds nothing changed to {to:?}")]
-            }
+        (TablePrivacy::Nothing { reason: was }, TablePrivacy::Nothing { reason })
+            if was != reason =>
+        {
+            vec![format!(
+                "the reason it holds nothing changed to {reason:?} — that sentence is what tells a \
+             reader this table was considered rather than overlooked"
+            )]
         }
+        (TablePrivacy::Nothing { .. }, TablePrivacy::Nothing { .. }) => Vec::new(),
         // The two that change what erasure and export do to the table.
         (TablePrivacy::Nothing { .. }, TablePrivacy::Personal { subject, .. }) => vec![format!(
             "now holds personal data, subject column `{subject}` — it enters export and erasure"

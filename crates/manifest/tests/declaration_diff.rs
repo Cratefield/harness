@@ -197,6 +197,36 @@ fn what_erasure_does_is_reported_when_it_changes() {
 }
 
 #[test]
+fn rewriting_why_a_table_holds_nothing_is_reported() {
+    // The reason is the whole point of `holds = "nothing"`: it is what
+    // tells a reader the table was considered rather than overlooked. An
+    // edit to it is an edit to that claim.
+    let change = only(&declaration_diff(
+        &access(Access::PublicRead),
+        &access(Access::PublicRead),
+        &nothing("Reference data, nobody is in it."),
+        &nothing("Plan tiers."),
+    ));
+    let DeclarationChange::Privacy { detail, .. } = change else {
+        panic!("{change:?}");
+    };
+    assert!(detail.contains("Plan tiers."), "{detail}");
+}
+
+#[test]
+fn an_unchanged_reason_is_not_a_change() {
+    assert!(
+        declaration_diff(
+            &access(Access::PublicRead),
+            &access(Access::PublicRead),
+            &nothing("Reference data, nobody is in it."),
+            &nothing("Reference data, nobody is in it."),
+        )
+        .is_empty()
+    );
+}
+
+#[test]
 fn a_table_that_is_only_on_one_side_is_left_to_the_schema_diff() {
     // It already says a table arrived or left. Repeating it here would
     // double every such line in a report that prints both.
