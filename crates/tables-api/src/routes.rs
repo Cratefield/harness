@@ -28,12 +28,13 @@ use std::sync::Arc;
 
 use axum::Router;
 use axum::extract::{Path, Query, State};
-use axum::routing::get;
+use axum::routing::{get, post};
 use cratefield_core::{Problem, ProblemDef, Scope, TenantConn};
 use cratefield_tables::{FieldKind, Filter, TableDef};
 use http::{HeaderMap, StatusCode};
 use serde_json::{Value, json};
 
+use crate::batch::{Batch, PATH};
 use crate::read::{Tables, one, page};
 
 /// The cursor is not one this table hands out.
@@ -67,6 +68,12 @@ pub const COMPOSITE_KEY: ProblemDef = ProblemDef {
 /// The routes, over the declared tables in `tables`.
 pub fn router(tables: Arc<Tables>) -> Router {
     Router::new()
+        // Before `/{table}`, though it cannot collide: `__batch` is not a
+        // legal declared table name — a name starts with a lowercase
+        // letter and may not contain `__` — so a venture cannot declare a
+        // table that shadows this. Registered first anyway, because
+        // "cannot collide" is a fact about a validator somewhere else.
+        .route(PATH, post(batch_route))
         .route("/{table}", get(page_route).post(create_route))
         .route(
             "/{table}/{key}",
@@ -357,4 +364,15 @@ pub fn cursor_from_query(table: &TableDef, raw: &str) -> Result<Key, Problem> {
         }
     }
     Ok(Key(value))
+}
+
+async fn batch_route(
+    scope: Scope,
+    conn: TenantConn,
+    State(tables): State<Arc<Tables>>,
+    headers: HeaderMap,
+    body: axum::Json<Batch>,
+) -> Result<axum::Json<Value>, Problem> {
+    let answer = crate::batch::run(&tables, &conn, &headers, &scope, &body.0).await?;
+    Ok(axum::Json(answer))
 }

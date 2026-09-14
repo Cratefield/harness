@@ -104,6 +104,29 @@ A cursor that is not JSON, is not an object, omits a key column, or names
 one with a value that is not its kind, is a `400 bad-cursor` that says
 which.
 
+## Several reads in one request
+
+`POST /{mount}/__batch` with `{"reads":[{"table":"note","where":{...},"after":...}]}`
+answers them in the order they were asked, at most 20 per batch.
+
+What it buys is **one round trip**. Not parallelism: the reads run in
+sequence against the request's one database handle, because that is what
+a handle is. Claiming otherwise would have a caller sizing their batches
+by the wrong number.
+
+**A batch cannot ask for what the caller could not ask alone.** Each read
+is decided on its own, against the same access level it would face
+singly.
+
+**One refused read refuses the whole batch**, naming which. A `200`
+carrying a refusal per result is a success that is not one, and every
+client would have to remember to look inside it.
+
+`__batch` can never collide with a declared table: a table name starts
+with a lowercase letter and may not contain `__`. The route is registered
+first anyway — "cannot collide" is a fact about a validator somewhere
+else — and a test asserts the name is not a legal identifier.
+
 ## Narrowing a page
 
 Every query parameter but `after` is a filter, named for the column it
