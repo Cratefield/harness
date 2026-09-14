@@ -70,6 +70,8 @@ pub struct Cloudflare {
     payments: Option<Arc<dyn Payments>>,
     captcha: Option<Arc<dyn Captcha>>,
     auth: Option<Arc<dyn Auth>>,
+    /// Whether to assemble the `Auth` port from the environment.
+    auth_from_env: bool,
     /// Whether to assemble the `Push` port from the environment
     /// (issue #191). The `Env` only exists per event, so the assembly is
     /// deferred to `ports()` and memoised for the isolate.
@@ -100,6 +102,7 @@ impl Cloudflare {
             payments: None,
             captcha: None,
             auth: None,
+            auth_from_env: false,
             #[cfg(feature = "push")]
             push_from_env: false,
             #[cfg(feature = "push")]
@@ -269,6 +272,44 @@ impl Cloudflare {
         self
     }
 
+    /// The clock, the HTTP client built on it, and the verifier built on
+    /// both — the verifier fetches the issuer's key set over HTTP and
+    /// dates the tokens by the clock, so it comes after them.
+    ///
+    /// Its own method because `ports` is at clippy's line limit.
+    fn clock_http_and_auth(&self, ports: &mut Ports) {
+        let clock: Arc<dyn Clock> = Arc::new(WorkersClock);
+        ports.clock = Some(Arc::clone(&clock));
+        let http: Arc<dyn cratefield_core::HttpClient> = Arc::new(BoundedHttpClient::new(
+            Arc::new(FetchClient),
+            Arc::clone(&clock),
+        ));
+        ports.http = Some(Arc::clone(&http));
+        if ports.auth.is_none() && self.auth_from_env {
+            ports.auth = Some(cratefield_auth_client::from_config(
+                ports.config.as_ref(),
+                http,
+                clock,
+            ));
+        }
+    }
+
+    /// Assembles the `Auth` port from `AUTH_ISSUER` and `AUTH_CLIENT_ID`
+    /// (issue #153), the way `push_from_env` assembles push.
+    ///
+    /// The port is provided either way. The `Env` exists per request on
+    /// Workers, so a runtime cannot know at compose time whether the
+    /// issuer is set, and refusing to provide the port would make every
+    /// such deployment fail to boot — including the ones whose tables are
+    /// all public. With the variables unset the port is a
+    /// `cratefield_core::Unconfigured`, which answers 503 to a request
+    /// that presents a credential and leaves an anonymous one anonymous.
+    #[must_use]
+    pub fn auth_from_env(mut self) -> Self {
+        self.auth_from_env = true;
+        self
+    }
+
     #[must_use]
     pub fn captcha_arc(mut self, captcha: Arc<dyn Captcha>) -> Self {
         self.captcha = Some(captcha);
@@ -363,12 +404,7 @@ impl Cloudflare {
             }
         }
 
-        let clock: Arc<dyn Clock> = Arc::new(WorkersClock);
-        ports.clock = Some(Arc::clone(&clock));
-        ports.http = Some(Arc::new(BoundedHttpClient::new(
-            Arc::new(FetchClient),
-            clock,
-        )));
+        self.clock_http_and_auth(&mut ports);
         ports.id_gen = Some(Arc::new(UlidIdGen));
         ports.defer = Some(defer);
         ports.mailer.clone_from(&self.mailer);
@@ -438,7 +474,8 @@ impl Runtime for Cloudflare {
         if self.payments.is_some() {
             provided.push(Port::Payments);
         }
-        if self.auth.is_some() {
+        // Provided whatever the environment holds — see `auth_from_env`.
+        if self.auth.is_some() || self.auth_from_env {
             provided.push(Port::Auth);
         }
         if self.captcha.is_some() {

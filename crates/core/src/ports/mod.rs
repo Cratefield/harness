@@ -22,7 +22,7 @@ mod rate_limiter;
 mod realtime;
 pub(crate) mod signer;
 
-pub use auth::{Auth, AuthError, Caller, Subject};
+pub use auth::{Auth, AuthError, Caller, Subject, Unconfigured};
 pub use blob::{Blob, BlobError, BlobObject, MAX_BLOB_BYTES, ScopedBlob, check_blob_size};
 pub use captcha::{Captcha, CaptchaBinding, CaptchaError, Verdict};
 pub use clock::{Clock, SystemClock, timeout};

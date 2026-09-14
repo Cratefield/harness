@@ -49,3 +49,40 @@ pub const JWKS_MIN_REFETCH_SECS: i64 = 60;
 
 /// Clock skew tolerated on `exp`, `nbf` and `iat`.
 pub const LEEWAY_SECS: i64 = 60;
+
+/// The `Auth` port a deployment gets from its environment (issue #153).
+///
+/// `AUTH_ISSUER` and `AUTH_CLIENT_ID` together give a real verifier.
+/// Either one missing gives a [`cratefield_core::Unconfigured`], which
+/// answers 503 to a request that presents a credential and leaves an
+/// anonymous one anonymous — and the warning here names what is missing,
+/// because the alternative is an operator reading 503s with no cause.
+#[must_use]
+pub fn from_config(
+    config: &dyn cratefield_core::Config,
+    http: std::sync::Arc<dyn cratefield_core::HttpClient>,
+    clock: std::sync::Arc<dyn cratefield_core::Clock>,
+) -> std::sync::Arc<dyn cratefield_core::Auth> {
+    let issuer = config.get("AUTH_ISSUER").filter(|v| !v.is_empty());
+    let client_id = config.get("AUTH_CLIENT_ID").filter(|v| !v.is_empty());
+    match (issuer, client_id) {
+        (Some(issuer), Some(client_id)) => {
+            std::sync::Arc::new(jwks::AuthClient::new(http, clock, issuer, client_id))
+        }
+        (issuer, client_id) => {
+            let mut missing = Vec::new();
+            if issuer.is_none() {
+                missing.push("AUTH_ISSUER");
+            }
+            if client_id.is_none() {
+                missing.push("AUTH_CLIENT_ID");
+            }
+            let why = format!(
+                "this deployment cannot identify a caller: {} is not set",
+                missing.join(" and ")
+            );
+            tracing::warn!(missing = %missing.join(","), "{why}");
+            std::sync::Arc::new(cratefield_core::Unconfigured::new(why))
+        }
+    }
+}

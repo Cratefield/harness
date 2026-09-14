@@ -194,6 +194,19 @@ pub fn generate(
     })
 }
 
+/// Whether the venture declares a table that is not `public-read`.
+///
+/// The same question `generate_tables::required_ports` asks, from the
+/// other side: that one decides what the module requires, this one
+/// decides what the runtime provides, and a venture where those two
+/// disagree does not boot.
+fn needs_a_verifier(manifest: &VentureManifest) -> bool {
+    manifest
+        .table_access
+        .values()
+        .any(|access| *access != crate::access::Access::PublicRead)
+}
+
 fn crate_ident(name: &str) -> String {
     name.replace('-', "_")
 }
@@ -315,7 +328,15 @@ fn lib_rs(manifest: &VentureManifest, modules: &[&ModuleCodegen], needs_mailer: 
     } else {
         "Cloudflare::new().db(\"DB\")"
     };
-    let runtime_expr = runtime_expr.replace("{host}", &manifest.host);
+    let mut runtime_expr = runtime_expr.replace("{host}", &manifest.host);
+    // A venture whose tables are not all public has to be able to say who
+    // is asking, and the module that serves them declares `Port::Auth`.
+    // Without this the composition is refused at boot — the required port
+    // is not provided — which is correct and useless: nothing would ever
+    // wire it. `auth_from_env` reads `AUTH_ISSUER` and `AUTH_CLIENT_ID`.
+    if needs_a_verifier(manifest) {
+        runtime_expr.push_str(".auth_from_env()");
+    }
 
     // The shared composition. `build()` takes a runtime for validation and
     // returns the Harness; serving uses a second identical runtime.
