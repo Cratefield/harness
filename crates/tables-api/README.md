@@ -73,7 +73,37 @@ unaddressable, silently, and only for the rows that contain it. A `real`,
 `boolean` or `json` key is refused too: a float compared with `=` is a key
 that sometimes matches nothing, for reasons the caller cannot see.
 
-Writes are the next piece.
+## Writing
+
+`create`, `replace` and `remove`. `may_write` is a **separate** decision
+from `may_read`, because `public-read` reads for everybody and writes for
+nobody — one function answering both would need a parameter saying which,
+and the day somebody passes the wrong one a public table becomes
+writable.
+
+| level | may write |
+|---|---|
+| `public-read` | **nobody** (`403 table-read-only`) |
+| `tenant-members` | any signed-in caller, any row |
+| `owner` | a signed-in caller, their own rows |
+| `admin` | an admin token |
+
+**A row a caller writes is a row they own.** Under `owner` the subject
+column is settled by the harness, not taken from the body: absent or null
+is filled in with the caller's id, already theirs is left alone, and
+somebody else's is **refused** rather than quietly corrected. Overwriting
+would be safe — the row would still be the caller's — but the client
+asked for something and got something else without being told, which is
+how a bug in a client becomes data nobody can explain.
+
+**Changing or deleting a row that is not yours reports no such row.** Not
+a 403, for the reason a read gives the same answer. The scope is part of
+the `UPDATE`'s and `DELETE`'s `WHERE`, so the row matches nothing and
+zero rows changed is the refusal.
+
+`replace` writes every declared non-key field. A merge would make "unset
+this field" unexpressible: an absent key and a null one would both have
+to mean "leave it".
 
 ## The rules, and why each is that way
 

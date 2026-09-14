@@ -19,6 +19,7 @@ use cratefield_core::{Caller, Problem, ProblemDef};
 use cratefield_manifest::Access;
 use cratefield_tables::TableDef;
 use http::StatusCode;
+use serde_json::Value;
 
 /// A caller presented no credential where one is required.
 pub const UNAUTHENTICATED: ProblemDef = ProblemDef {
@@ -102,25 +103,12 @@ pub fn may_read(
             caller.id().ok_or_else(|| Problem::new(&UNAUTHENTICATED))?;
             Ok(Reach::Everything)
         }
-        Access::Owner => {
-            let subject = caller
-                .id()
-                .ok_or_else(|| Problem::new(&UNAUTHENTICATED))?
-                .to_owned();
-            // `fz build` refuses a manifest that declares `owner` on a
-            // table holding nothing personal, so this is a deployment
-            // that did not come from one. Refusing is the only safe
-            // answer: with no column to match, "everything" and "nothing"
-            // are both wrong and one of them is a leak.
-            let column = api
-                .subject
-                .clone()
-                .ok_or_else(|| Problem::new(&MISDECLARED))?;
-            if !api.table.fields.iter().any(|field| field.name == column) {
-                return Err(Problem::new(&MISDECLARED));
-            }
-            Ok(Reach::OwnedBy { column, subject })
-        }
+        // `fz build` refuses a manifest that declares `owner` on a table
+        // holding nothing personal, so a missing subject column is a
+        // deployment that did not come from one. Refusing is the only
+        // safe answer: with no column to match, "everything" and
+        // "nothing" are both wrong and one of them is a leak.
+        Access::Owner => owner_scope(api, caller),
         Access::Admin => {
             admin?;
             Ok(Reach::Everything)
@@ -129,5 +117,109 @@ pub fn may_read(
         // arrive here rather than fall into one of the four above. The
         // safe answer for a level this build does not understand is no.
         _ => Err(Problem::new(&FORBIDDEN)),
+    }
+}
+
+/// A table nobody may write through this API.
+pub const READ_ONLY: ProblemDef = ProblemDef {
+    slug: "table-read-only",
+    status: StatusCode::FORBIDDEN,
+    title: "Not writable",
+    description: "This table's declared access is public-read: it is served, never written.",
+};
+
+/// A write that would give a row to somebody other than its writer.
+pub const NOT_YOURS_TO_GIVE: ProblemDef = ProblemDef {
+    slug: "not-yours-to-give",
+    status: StatusCode::FORBIDDEN,
+    title: "That row would not be yours",
+    description: "The subject column names a different caller; a row written here is your own.",
+};
+
+/// Whether this caller may write this table, and which rows.
+///
+/// The same shape as [`may_read`] and deliberately a separate function:
+/// `public-read` reads for everybody and writes for nobody, so one
+/// function answering both would need a parameter saying which — and the
+/// day somebody passes the wrong one, a public table becomes writable.
+///
+/// # Errors
+///
+/// [`READ_ONLY`] for `public-read`, [`UNAUTHENTICATED`] when the level
+/// needs a signed-in caller and there is none, the admin check's own
+/// problem for `admin`, and [`MISDECLARED`] when `owner` has no subject
+/// column to match against.
+pub fn may_write(
+    api: &TableApi,
+    caller: &Caller,
+    admin: Result<(), Problem>,
+) -> Result<Reach, Problem> {
+    match api.access {
+        // Read by everybody, written by nobody. A venture that wants
+        // public rows written has not declared `public-read`.
+        Access::PublicRead => Err(Problem::new(&READ_ONLY)),
+        Access::TenantMembers => {
+            caller.id().ok_or_else(|| Problem::new(&UNAUTHENTICATED))?;
+            Ok(Reach::Everything)
+        }
+        Access::Owner => owner_scope(api, caller),
+        Access::Admin => {
+            admin?;
+            Ok(Reach::Everything)
+        }
+        _ => Err(Problem::new(&FORBIDDEN)),
+    }
+}
+
+/// The `owner` scope, shared by reads and writes because getting it
+/// right twice is how the two drift apart.
+fn owner_scope(api: &TableApi, caller: &Caller) -> Result<Reach, Problem> {
+    let subject = caller
+        .id()
+        .ok_or_else(|| Problem::new(&UNAUTHENTICATED))?
+        .to_owned();
+    let column = api
+        .subject
+        .clone()
+        .ok_or_else(|| Problem::new(&MISDECLARED))?;
+    if !api.table.fields.iter().any(|field| field.name == column) {
+        return Err(Problem::new(&MISDECLARED));
+    }
+    Ok(Reach::OwnedBy { column, subject })
+}
+
+/// Settles the subject column of a row about to be written.
+///
+/// Under [`Reach::OwnedBy`] the harness sets it, not the caller:
+///
+/// - absent, or null, and it is filled in with the caller's own id;
+/// - already the caller's, and it is left alone;
+/// - somebody else's, and the write is refused.
+///
+/// The third is the one worth arguing about. Overwriting silently would
+/// be safe — the row would still be the caller's — but the client asked
+/// for something and got something else without being told, which is how
+/// a bug in a client becomes data nobody can explain. Refusing says what
+/// happened.
+///
+/// # Errors
+///
+/// [`NOT_YOURS_TO_GIVE`] when the row names a different subject.
+pub fn settle_subject(reach: &Reach, row: &mut Value) -> Result<(), Problem> {
+    let Reach::OwnedBy { column, subject } = reach else {
+        return Ok(());
+    };
+    let Some(object) = row.as_object_mut() else {
+        // Not an object: the row validator refuses it with a message
+        // about that, which is the more useful one.
+        return Ok(());
+    };
+    match object.get(column) {
+        None | Some(Value::Null) => {
+            object.insert(column.clone(), Value::String(subject.clone()));
+            Ok(())
+        }
+        Some(Value::String(named)) if named == subject => Ok(()),
+        Some(_) => Err(Problem::new(&NOT_YOURS_TO_GIVE)),
     }
 }
