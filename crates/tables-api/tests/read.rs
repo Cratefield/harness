@@ -12,7 +12,7 @@ use cratefield_adapter_sqlite::SqliteDatabase;
 use cratefield_core::{Config, Database, ModuleContext, Ports, Statement};
 use cratefield_manifest::Access;
 use cratefield_tables::{Schema, TableDef};
-use cratefield_tables_api::{TableApi, Tables, one, page};
+use cratefield_tables_api::{Asked, TableApi, Tables, one, page};
 use cratefield_testing::{AuthMode, FakeAuth};
 use http::HeaderMap;
 use serde_json::{Value, json};
@@ -137,9 +137,12 @@ fn a_page_of_a_public_table_holds_every_row() {
         &db,
         &HeaderMap::new(),
         &scope(),
-        "note",
-        None,
-        &[],
+        Asked {
+            table: "note",
+            after: None,
+            filters: &[],
+            sort: None,
+        },
     ))
     .expect("public");
     assert_eq!(ids(&out), ["n1", "n2", "n3"]);
@@ -156,9 +159,12 @@ fn a_page_of_an_owner_table_holds_only_the_callers_rows() {
         &db,
         &as_caller("ada"),
         &scope(),
-        "note",
-        None,
-        &[],
+        Asked {
+            table: "note",
+            after: None,
+            filters: &[],
+            sort: None,
+        },
     ))
     .expect("ada is signed in");
     assert_eq!(ids(&out), ["n1", "n3"], "grace's row was in ada's page");
@@ -173,9 +179,12 @@ fn another_subject_gets_their_own_rows_and_not_the_first_ones() {
         &db,
         &as_caller("grace"),
         &scope(),
-        "note",
-        None,
-        &[],
+        Asked {
+            table: "note",
+            after: None,
+            filters: &[],
+            sort: None,
+        },
     ))
     .expect("grace is signed in");
     assert_eq!(ids(&out), ["n2"]);
@@ -243,9 +252,12 @@ fn an_anonymous_caller_is_told_to_sign_in_rather_than_handed_an_empty_page() {
         &db,
         &HeaderMap::new(),
         &scope(),
-        "note",
-        None,
-        &[],
+        Asked {
+            table: "note",
+            after: None,
+            filters: &[],
+            sort: None,
+        },
     ))
     .expect_err("not signed in");
     assert_eq!(refusal.status.as_u16(), 401);
@@ -263,9 +275,12 @@ fn a_credential_that_does_not_verify_is_refused_even_on_a_public_table() {
         &db,
         &as_caller("expired"),
         &scope(),
-        "note",
-        None,
-        &[],
+        Asked {
+            table: "note",
+            after: None,
+            filters: &[],
+            sort: None,
+        },
     ))
     .expect_err("the token is bad");
     assert_eq!(refusal.status.as_u16(), 401);
@@ -276,9 +291,12 @@ fn a_credential_that_does_not_verify_is_refused_even_on_a_public_table() {
         &db,
         &HeaderMap::new(),
         &scope(),
-        "note",
-        None,
-        &[],
+        Asked {
+            table: "note",
+            after: None,
+            filters: &[],
+            sort: None,
+        },
     ))
     .expect("public");
     assert_eq!(ids(&out).len(), 3);
@@ -293,9 +311,12 @@ fn a_verifier_that_cannot_answer_is_a_503_and_not_a_401() {
         &db,
         &as_caller("ada"),
         &scope(),
-        "note",
-        None,
-        &[],
+        Asked {
+            table: "note",
+            after: None,
+            filters: &[],
+            sort: None,
+        },
     ))
     .expect_err("the verifier is down");
     assert_eq!(
@@ -314,9 +335,12 @@ fn a_table_that_is_not_declared_is_not_found() {
         &db,
         &HeaderMap::new(),
         &scope(),
-        "ledger",
-        None,
-        &[],
+        Asked {
+            table: "ledger",
+            after: None,
+            filters: &[],
+            sort: None,
+        },
     ))
     .expect_err("not declared");
     assert_eq!(refusal.status.as_u16(), 404);
@@ -332,9 +356,12 @@ fn a_cursor_names_the_last_row_on_the_page() {
         &db,
         &HeaderMap::new(),
         &scope(),
-        "note",
-        None,
-        &[],
+        Asked {
+            table: "note",
+            after: None,
+            filters: &[],
+            sort: None,
+        },
     ))
     .expect("public");
     // Three rows is short of a page, so there is nothing after them and
@@ -348,9 +375,12 @@ fn a_cursor_names_the_last_row_on_the_page() {
         &db,
         &HeaderMap::new(),
         &scope(),
-        "note",
-        Some(&json!({ "id": "n1" })),
-        &[],
+        Asked {
+            table: "note",
+            after: Some(&json!({ "id": "n1" })),
+            filters: &[],
+            sort: None,
+        },
     ))
     .expect("public");
     assert_eq!(ids(&after), ["n2", "n3"]);
@@ -374,9 +404,12 @@ fn a_full_page_hands_back_a_cursor_and_a_short_one_does_not() {
         &db,
         &HeaderMap::new(),
         &scope(),
-        "note",
-        None,
-        &[],
+        Asked {
+            table: "note",
+            after: None,
+            filters: &[],
+            sort: None,
+        },
     ))
     .expect("public");
     assert_eq!(
@@ -390,9 +423,12 @@ fn a_full_page_hands_back_a_cursor_and_a_short_one_does_not() {
         &db,
         &HeaderMap::new(),
         &scope(),
-        "note",
-        Some(&first["next"]),
-        &[],
+        Asked {
+            table: "note",
+            after: Some(&first["next"]),
+            filters: &[],
+            sort: None,
+        },
     ))
     .expect("public");
     assert!((second["rows"].as_array().expect("rows").len() as u64) < cratefield_tables_api::PAGE);
