@@ -187,51 +187,46 @@ impl Ports {
     }
 
     /// The set of ports this bundle actually provides.
+    ///
+    /// Walks [`Port::ALL`] and asks [`Self::has`], so a variant added to
+    /// the enum cannot be left out of the answer: the match in `has` is
+    /// exhaustive and the compiler refuses a new one until it is
+    /// handled. Written out as fifteen `if`s, it had already lost one —
+    /// `Port::Auth` was missing, so this reported fourteen of fifteen
+    /// and a bundle with a verifier wired said it had none.
+    #[must_use]
     pub fn provides(&self) -> Vec<Port> {
-        let mut provided = Vec::new();
-        if self.db.is_some() {
-            provided.push(Port::Db);
+        Port::ALL
+            .iter()
+            .copied()
+            .filter(|port| self.has(*port))
+            .collect()
+    }
+
+    /// Whether one port is wired in this bundle.
+    ///
+    /// The exhaustive match is the point. `dispatcher` and `tenants` are
+    /// deliberately absent from [`Port`] — no module may reach either —
+    /// so they have nothing to answer here.
+    #[must_use]
+    pub fn has(&self, port: Port) -> bool {
+        match port {
+            Port::Db => self.db.is_some(),
+            Port::Auth => self.auth.is_some(),
+            Port::Mailer => self.mailer.is_some(),
+            Port::Captcha => self.captcha.is_some(),
+            Port::RateLimiter => self.rate_limiter.is_some(),
+            Port::Signer => self.signer.is_some(),
+            Port::KeyValue => self.kv.is_some(),
+            Port::Blob => self.blob.is_some(),
+            Port::Push => self.push.is_some(),
+            Port::Payments => self.payments.is_some(),
+            Port::Realtime => self.realtime.is_some(),
+            Port::HttpClient => self.http.is_some(),
+            Port::Clock => self.clock.is_some(),
+            Port::IdGen => self.id_gen.is_some(),
+            Port::Defer => self.defer.is_some(),
         }
-        if self.mailer.is_some() {
-            provided.push(Port::Mailer);
-        }
-        if self.captcha.is_some() {
-            provided.push(Port::Captcha);
-        }
-        if self.rate_limiter.is_some() {
-            provided.push(Port::RateLimiter);
-        }
-        if self.signer.is_some() {
-            provided.push(Port::Signer);
-        }
-        if self.kv.is_some() {
-            provided.push(Port::KeyValue);
-        }
-        if self.blob.is_some() {
-            provided.push(Port::Blob);
-        }
-        if self.push.is_some() {
-            provided.push(Port::Push);
-        }
-        if self.payments.is_some() {
-            provided.push(Port::Payments);
-        }
-        if self.realtime.is_some() {
-            provided.push(Port::Realtime);
-        }
-        if self.http.is_some() {
-            provided.push(Port::HttpClient);
-        }
-        if self.clock.is_some() {
-            provided.push(Port::Clock);
-        }
-        if self.id_gen.is_some() {
-            provided.push(Port::IdGen);
-        }
-        if self.defer.is_some() {
-            provided.push(Port::Defer);
-        }
-        provided
     }
 
     /// A copy of this bundle in which every port the module did not declare
