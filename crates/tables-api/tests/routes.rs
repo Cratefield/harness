@@ -870,3 +870,135 @@ async fn a_cursor_that_is_not_this_tables_is_refused_with_a_reason() {
         assert!(missing.body.contains("`id`"), "say which: {}", missing.body);
     }
 }
+
+/// A `POST /v1/tables/__batch` with a JSON body.
+async fn batch(kit: &TestHarness, bearer: Option<&str>, body: &str) -> Answer {
+    send(kit, Method::POST, "/v1/tables/__batch", bearer, Some(body)).await
+}
+
+#[pollster::test]
+async fn a_batch_answers_several_reads_in_request_order() {
+    for kit in kits(Access::PublicRead) {
+        seed(&kit).await;
+        let answer = batch(
+            &kit,
+            None,
+            r#"{"reads":[{"table":"tier"},{"table":"note"},{"table":"tier"}]}"#,
+        )
+        .await;
+        assert_eq!(answer.status, 200, "{}", answer.body);
+        let results = serde_json::from_str::<serde_json::Value>(&answer.body).expect("json");
+        let tables: Vec<&str> = results["results"]
+            .as_array()
+            .expect("results")
+            .iter()
+            .map(|entry| entry["table"].as_str().expect("table"))
+            .collect();
+        assert_eq!(tables, ["tier", "note", "tier"], "order is the caller's");
+    }
+}
+
+#[pollster::test]
+async fn a_batch_cannot_ask_for_what_the_caller_could_not_ask_alone() {
+    // The rule that matters. Each read is decided on its own, against
+    // this caller — a batch is a way to ask several questions in one
+    // request, never a way to ask one that would be refused singly.
+    for kit in kits(Access::Owner) {
+        seed(&kit).await;
+        let refused = batch(&kit, None, r#"{"reads":[{"table":"note"}]}"#).await;
+        assert_eq!(refused.status, 401, "{}", refused.body);
+
+        // And signed in, the same batch is scoped to the caller's rows.
+        let mine = batch(&kit, Some("ada"), r#"{"reads":[{"table":"note"}]}"#).await;
+        assert_eq!(mine.status, 200, "{}", mine.body);
+        let results = serde_json::from_str::<serde_json::Value>(&mine.body).expect("json");
+        let ids: Vec<&str> = results["results"][0]["rows"]
+            .as_array()
+            .expect("rows")
+            .iter()
+            .map(|row| row["id"].as_str().expect("id"))
+            .collect();
+        assert_eq!(ids, ["n1", "n3"], "a batch widened an owner scope");
+    }
+}
+
+#[pollster::test]
+async fn one_refused_read_refuses_the_whole_batch_and_says_which() {
+    // Not a 200 carrying a refusal per result: a success that is not one,
+    // which every client would have to remember to look inside.
+    for kit in kits(Access::PublicRead) {
+        seed(&kit).await;
+        let answer = batch(
+            &kit,
+            None,
+            r#"{"reads":[{"table":"note"},{"table":"ledger"},{"table":"tier"}]}"#,
+        )
+        .await;
+        assert_eq!(answer.status, 404, "{}", answer.body);
+        assert!(
+            answer.body.contains("read 1") && answer.body.contains("ledger"),
+            "say which read it was: {}",
+            answer.body
+        );
+    }
+}
+
+#[pollster::test]
+async fn a_batch_filters_and_pages_each_read_on_its_own() {
+    for kit in kits(Access::PublicRead) {
+        seed(&kit).await;
+        let answer = batch(
+            &kit,
+            None,
+            r#"{"reads":[{"table":"note","where":{"author":"ada"}},{"table":"note"}]}"#,
+        )
+        .await;
+        assert_eq!(answer.status, 200, "{}", answer.body);
+        let results = serde_json::from_str::<serde_json::Value>(&answer.body).expect("json");
+        assert_eq!(
+            results["results"][0]["rows"]
+                .as_array()
+                .expect("rows")
+                .len(),
+            2
+        );
+        assert_eq!(
+            results["results"][1]["rows"]
+                .as_array()
+                .expect("rows")
+                .len(),
+            3
+        );
+    }
+}
+
+#[pollster::test]
+async fn a_batch_with_no_reads_or_too_many_is_refused() {
+    for kit in kits(Access::PublicRead) {
+        let empty = batch(&kit, None, r#"{"reads":[]}"#).await;
+        assert_eq!(empty.status, 400, "{}", empty.body);
+        assert!(empty.body.contains("no-reads"), "{}", empty.body);
+
+        let many = format!(
+            r#"{{"reads":[{}]}}"#,
+            std::iter::repeat_n(r#"{"table":"note"}"#, cratefield_tables_api::MAX_READS + 1)
+                .collect::<Vec<_>>()
+                .join(",")
+        );
+        let over = batch(&kit, None, &many).await;
+        assert_eq!(over.status, 400, "{}", over.body);
+        assert!(over.body.contains("too-many-reads"), "{}", over.body);
+    }
+}
+
+#[test]
+fn the_batch_path_can_never_be_a_table_name() {
+    // The route is registered before `/{table}`, but the reason it cannot
+    // collide is upstream of the router: a declared name starts with a
+    // lowercase letter and may not contain `__`.
+    let name = cratefield_tables_api::batch::PATH.trim_start_matches('/');
+    assert!(
+        !cratefield_tables::is_identifier(name),
+        "`{name}` is a legal table name, so a venture could shadow the batch route"
+    );
+}
