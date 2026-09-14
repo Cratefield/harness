@@ -93,8 +93,43 @@ impl std::fmt::Display for Access {
 /// Every declared table's access level, keyed by table name.
 pub type AccessMap = std::collections::BTreeMap<String, Access>;
 
-/// The four, for an error message that lists them.
-pub const LEVELS: &[&str] = &["public-read", "owner", "tenant-members", "admin"];
+/// Declares [`LEVELS`] and, from the same list, a match that has to be
+/// exhaustive.
+///
+/// `LEVELS` is the menu an author is offered when they leave `access`
+/// out. A level missing from it is one the harness enforces and the
+/// error message never mentions, which is the worst way to learn a
+/// vocabulary — so the list and the type come from one place.
+macro_rules! levels {
+    ($($variant:ident => $wire:literal),+ $(,)?) => {
+        /// Every level, for an error message that lists them.
+        pub const LEVELS: &[&str] = &[$($wire),+];
+
+        /// Never called. It exists so that a variant absent from the list
+        /// above is a compile error here, and so that the wire name in it
+        /// is the one [`Access::as_str`] answers.
+        #[expect(dead_code, reason = "its only job is to be exhaustive")]
+        fn every_level_is_listed(access: Access) -> &'static str {
+            match access {
+                $(Access::$variant => {
+                    debug_assert_eq!(Access::$variant.as_str(), $wire);
+                    $wire
+                }),+
+                // No wildcard. `Access` is `#[non_exhaustive]`, which
+                // does not make an in-crate match non-exhaustive — one
+                // here would be unreachable and would quietly take away
+                // the only thing this function does.
+            }
+        }
+    };
+}
+
+levels!(
+    PublicRead => "public-read",
+    Owner => "owner",
+    TenantMembers => "tenant-members",
+    Admin => "admin",
+);
 
 /// Checks every declared table has a level, and that the level is one the
 /// table can actually enforce.

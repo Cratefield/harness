@@ -55,6 +55,37 @@ pub enum DataKind {
     Financial,
 }
 
+/// Declares [`DataKind::ALL`] and, from the same list, a match that has to
+/// be exhaustive.
+///
+/// The manifest carries its own copy of this vocabulary
+/// (`cratefield_manifest::KINDS`) because that crate does not depend on
+/// the harness, and `fz build` turns an author's `kind` straight into
+/// `DataKind::<Kind>` in generated source. A variant here that the
+/// manifest does not know is a kind no author can declare; a string
+/// there that is not a variant here is a generated venture that does not
+/// compile. `the_manifest_knows_every_data_kind` compares them, and this
+/// is what gives it something to compare against.
+macro_rules! kinds {
+    ($($variant:ident),+ $(,)?) => {
+        impl DataKind {
+            /// Every kind.
+            pub const ALL: &'static [DataKind] = &[$(DataKind::$variant),+];
+        }
+
+        /// Never called. It exists so that a variant absent from the list
+        /// above is a compile error here.
+        #[expect(dead_code, reason = "its only job is to be exhaustive")]
+        fn every_kind_is_in_all(kind: DataKind) {
+            match kind {
+                $(DataKind::$variant => {}),+
+            }
+        }
+    };
+}
+
+kinds!(Contact, Identifier, Fitness, Usage, Content, Financial);
+
 impl DataKind {
     /// The stable wire name, used by the manifest endpoint and by anything that
     /// renders the table. Kebab-case, matching the harness's route convention.
