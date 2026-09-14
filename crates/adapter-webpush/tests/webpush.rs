@@ -9,6 +9,12 @@
 
 mod support;
 
+/// `Notification::new("Hi", "there")` as it is serialised before
+/// encryption. Named because two assertions need it: that it does not
+/// appear on the wire, and that the record is exactly its length plus
+/// the aes128gcm header and tag.
+const PLAINTEXT: &[u8] = b"{\"title\":\"Hi\",\"body\":\"there\",\"silent\":false}";
+
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -168,10 +174,6 @@ fn delivers_and_sends_the_rfc8030_request() {
     let http = ScriptedHttp::new();
     let push = adapter(&http, &StepClock::at(1_700_000_000));
 
-    // What the notification is before encryption, for the two assertions
-    // below: that it does not appear on the wire, and that the record is
-    // exactly its length plus the header and the tag.
-    const PLAINTEXT: &[u8] = b"{\"title\":\"Hi\",\"body\":\"there\",\"silent\":false}";
     let outcome = pollster::block_on(push.send(&subscriber(), &Notification::new("Hi", "there")))
         .expect("delivered");
     assert_eq!(
