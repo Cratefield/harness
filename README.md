@@ -285,8 +285,10 @@ crates/
   testing/                 cratefield-testing
 examples/
   venture/                 smallest complete venture; CI builds it to wasm
+  tables-canary/           a venture that declares its own tables, generated and committed
 docs/
   ARCHITECTURE.md
+  TABLES.md                a venture declares its own tables; what it gets
   KEY-ROTATION.md          rotating data keys and re-wrapping under a new master key
   MIGRATION-STREAMS.md     two repositories applying migrations to one database
   RECONCILIATION.md        boot-time reconciliation across tenant databases
