@@ -140,7 +140,10 @@ Every other query parameter is an equality filter on a declared column;
 one that names a column the table does not have is a `400`, not a
 parameter ignored. A batch read carries its filters as JSON rather
 than text, so it is the only one that can ask for a column that is
-**unset** — `"where": {"body": null}` finds those rows rather than none.
+**unset** — `"where": {"body": null}` finds those rows rather than none. A
+`json` column cannot be filtered on at all — its stored text depends on
+the order its keys were written in — though asking whether one is unset
+still works.
 
 ## What a venture needs wired
 

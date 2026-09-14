@@ -176,6 +176,15 @@ the table held. Only a batch read can ask it — a query string is text, so
 which is why the path that could express the question is the one with no
 way to say it.
 
+**A `json` column is not filterable.** It is stored as its
+serialization, so equality compares text whose bytes depend on the order
+the keys were written in — `{"tier":"gold","since":2026}` and
+`{"since":2026,"tier":"gold"}` are one value and two different things to
+compare against. Reading inside a JSON column is a query a module or a
+sidecar writes, which is #153's rule again. Asking whether one is
+**unset** still works: that is a question about the column, not about
+what is inside it.
+
 **A filter cannot widen an `owner` scope.** The subject condition and the
 filters are all in the same `WHERE`, so filtering on the subject column
 narrows the caller's own rows and reaches nobody else's.

@@ -522,6 +522,27 @@ fn filter_predicate(table: &TableDef, filter: &Filter) -> Result<SimpleExpr, Dec
     if filter.value.is_null() {
         return Ok(Expr::col(Alias::new(&filter.column)).is_null());
     }
+    // A JSON column is stored as its serialization, so `= ?` compares
+    // text. `serde_json` runs with `preserve_order` here — required, so
+    // the JSON Schema view lists properties in declaration order — which
+    // makes that text depend on the order the keys were written in.
+    // `{"tier":"gold","since":2026}` and `{"since":2026,"tier":"gold"}`
+    // are the same value and two different rows to compare against, so
+    // the same question gets two answers and neither is wrong-looking.
+    //
+    // The query-string parser already refuses these, and says why: "a
+    // JSON column has no single text form to compare for equality". It
+    // is refused here instead so the batch path, which carries JSON
+    // values rather than text, cannot ask what that one cannot.
+    if matches!(field.kind, FieldKind::Json) {
+        return Err(DecodeError {
+            table: table.name.clone(),
+            column: filter.column.clone(),
+            detail: "is json, which has no single text form to compare for equality; reading \
+                     inside a JSON column is a query a module or a sidecar writes"
+                .to_owned(),
+        });
+    }
     let value = to_sql(field, Some(&filter.value)).ok_or_else(|| DecodeError {
         table: table.name.clone(),
         column: filter.column.clone(),
