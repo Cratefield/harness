@@ -175,8 +175,8 @@ impl PoolRegistry {
   the tenant count rather than with its traffic.
 - **Evicted when idle.** A pool with no checkout for `TENANT_POOL_IDLE`
   (default 5 minutes) closes. The registry is a cache, not an inventory.
-- **Capped per tenant** (`TENANT_POOL_MAX`, default 8) and **in total**
-  (`TENANT_POOL_TOTAL`, default 64). The per-tenant cap is what stops one
+- **Capped per tenant** (`PoolLimits::max_connections`, default 8) and
+  **in total** (`TENANT_POOL_TOTAL`, default 64). The per-tenant cap is what stops one
   busy tenant taking every connection on a shared cluster; the total cap
   is what stops the process taking every connection on the *server*,
   which is the failure the per-tenant cap alone does not prevent. A
@@ -369,7 +369,7 @@ written.
 
 Pool-per-tenant in one process is fine at six tenants and it is not fine
 at six hundred. The number that matters is not the tenant count but the
-product of *concurrently active* tenants and `TENANT_POOL_MAX` against
+product of *concurrently active* tenants and `PoolLimits::max_connections` against
 the cluster's `max_connections`. At the defaults (8 per tenant, 64
 total), one replica sustains 8 busy tenants before the total cap is what
 refuses, not the per-tenant one.

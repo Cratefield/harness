@@ -268,7 +268,7 @@ it posts to cannot disagree about what a row is.
 ## What a declared table's privacy block actually does
 
 `tests/privacy.rs` mounts a declared-tables module beside
-`cratefield-privacy` and asks the questions a subject would:
+`cratefield-module-privacy` and asks the questions a subject would:
 
 - a subject's `/v1/privacy/export` carries their rows from the declared
   table, and the sentence the author wrote is published with them;
