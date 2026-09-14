@@ -65,6 +65,11 @@ pub use cratefield_i18n as i18n;
 #[cfg(feature = "manifest")]
 pub use cratefield_manifest as manifest;
 
+/// The HTTP API over a venture's declared tables (issue #153). A
+/// generated venture's tables module calls `tables_api::router`.
+#[cfg(feature = "tables-api")]
+pub use cratefield_tables_api as tables_api;
+
 #[cfg(feature = "auth-client")]
 pub use cratefield_auth_client as auth_client;
 

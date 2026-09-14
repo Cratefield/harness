@@ -167,7 +167,45 @@ mod tests {
             "an owner table generated a module that needs no verifier: {tables}"
         );
 
+        // The module serves the tables rather than only creating them.
+        // `crates/tables-api/tests/routes.rs` hand-writes this same shape
+        // and compiles and drives it, so what these assert is that the
+        // generator emits that shape — not that the shape works.
+        assert!(
+            tables.contains("cratefield::tables_api::router(Arc::new("),
+            "the generated module creates the tables and serves nothing: {tables}"
+        );
+        assert!(
+            tables.contains("cratefield::tables_api::Tables {"),
+            "{tables}"
+        );
+        assert!(tables.contains("const DECLARED: &str = r#"), "{tables}");
+        // And reads it while composing, so a declaration it cannot read
+        // refuses the deployment rather than serving no tables.
+        //
+        // The body of `validate_config` alone, not everything after it:
+        // the first version of this sliced to the end of the file, which
+        // contains `router`'s own `parse` call, so it passed with
+        // `validate_config` returning `Ok(())`.
+        let validate = {
+            let from = tables
+                .find("fn validate_config")
+                .expect("the module validates its config");
+            let rest = &tables[from..];
+            let to = rest.find("fn router").expect("router follows it");
+            &rest[..to]
+        };
+        assert!(
+            validate.contains("cratefield::tables_api::parse(DECLARED)"),
+            "the declaration is never read while composing: {validate}"
+        );
+
         // And the venture composes it, or it is a file nobody builds.
+        // The facade feature that carries the routes, or the generated
+        // crate does not compile: `cratefield::tables_api` is behind it.
+        let cargo = file("Cargo.toml");
+        assert!(cargo.contains("\"tables-api\","), "{cargo}");
+
         let lib = file("src/lib.rs");
         assert!(lib.contains("pub mod tables;"), "{lib}");
         assert!(

@@ -19,6 +19,7 @@
 //! it, so every case is a value rather than a request.
 
 pub mod access;
+pub mod declared;
 pub mod read;
 pub mod routes;
 pub mod write;
@@ -27,6 +28,7 @@ pub use access::{
     FORBIDDEN, MISDECLARED, NOT_YOURS_TO_GIVE, READ_ONLY, Reach, TableApi, UNAUTHENTICATED,
     may_read, may_write, settle_subject,
 };
+pub use declared::{Declared, parse};
 pub use read::{PAGE, Tables, one, page};
 pub use routes::{BAD_KEY, COMPOSITE_KEY, Key, key_from_path, router};
 pub use write::{ALREADY_EXISTS, NOT_A_ROW, create, remove, replace};

@@ -662,6 +662,7 @@ dependencies = [
  "cratefield-runtime-cloudflare",
  "cratefield-runtime-native",
  "cratefield-secrets",
+ "cratefield-tables-api",
  "cratefield-testing",
  "cratefield-ui",
 ]

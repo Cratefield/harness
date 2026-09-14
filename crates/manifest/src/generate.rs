@@ -213,6 +213,11 @@ fn cargo_toml(
     for m in modules {
         features.insert(m.feature);
     }
+    // A venture with declared tables carries the routes that serve them;
+    // one without has no use for them and should not pull the crate.
+    if crate::generate_tables::declares_tables(manifest) {
+        features.insert("tables-api");
+    }
     let mut feature_lines = String::new();
     for feature in &features {
         let _ = writeln!(feature_lines, "    \"{feature}\",");
