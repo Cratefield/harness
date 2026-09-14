@@ -96,6 +96,16 @@ fn field_schema(table: &TableDef, field: &FieldDef) -> Value {
                 };
                 schema.insert("format".to_owned(), json!(name));
             }
+            // The validator refuses U+0000 in a text value, because
+            // SQLite stores one and PostgreSQL refuses the statement. A
+            // published schema that did not say so would be a contract
+            // looser than the thing it describes: a generated form would
+            // accept the value and the write would answer 422.
+            //
+            // `not`/`pattern` rather than an anchored positive pattern:
+            // `pattern` is a search rather than a match, so this reads as
+            // "no NUL anywhere in it" with no anchoring to get wrong.
+            schema.insert("not".to_owned(), json!({ "pattern": "\u{0}" }));
         }
         FieldKind::Integer { min, max } => {
             set_type("integer");
