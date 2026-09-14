@@ -155,6 +155,7 @@ fn the_stripe_identifiers_we_do_store_are_not_refused() {
         "CREATE TABLE customers (\n  \
            stripe_customer_id TEXT,\n  \
            stripe_payment_method_id TEXT,\n  \
+           stripe_payment_intent_id TEXT,\n  \
            stripe_subscription_id TEXT,\n  \
            card_brand TEXT,\n  \
            card_last4 TEXT\n\
