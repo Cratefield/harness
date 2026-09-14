@@ -100,6 +100,8 @@ pub(crate) fn tables_rs(manifest: &VentureManifest) -> String {
         .collect::<Vec<_>>()
         .join(", ");
 
+    let ports = required_ports(manifest);
+
     let _ = write!(
         out,
         "impl Module for {TYPE} {{\n\
@@ -110,7 +112,7 @@ pub(crate) fn tables_rs(manifest: &VentureManifest) -> String {
          \x20       env!(\"CARGO_PKG_VERSION\")\n\
          \x20   }}\n\n\
          \x20   fn requires(&self) -> &'static [Port] {{\n\
-         \x20       &[Port::Db]\n\
+         \x20       {ports}\n\
          \x20   }}\n\n\
          \x20   fn tables(&self) -> &'static [&'static str] {{\n\
          \x20       &[{names}]\n\
@@ -133,6 +135,35 @@ pub(crate) fn tables_rs(manifest: &VentureManifest) -> String {
          }}\n"
     );
     out
+}
+
+/// The ports the generated module declares.
+///
+/// `Port::Db` always — the module's whole job is creating the tables.
+/// `Port::Auth` as soon as one declared table's access level is anything
+/// but `public-read`, because every other level is a question about who
+/// is asking and the harness answers it through that port.
+///
+/// Declared rather than looked up at request time, which is the point. A
+/// module whose required port the runtime does not provide is a build
+/// error (`Harness::build`), so a venture with an `owner` table and no
+/// verifier wired **refuses to start**. Without this the deployment would
+/// boot, serve every other route, and only fail when somebody read that
+/// table — which is the same outage discovered later and by a user.
+///
+/// A level this build does not recognise counts as needing a verifier:
+/// `public-read` is the only one that does not, so anything else is
+/// treated as something, and the safe guess is that it asks who you are.
+fn required_ports(manifest: &VentureManifest) -> &'static str {
+    let needs_a_caller = manifest
+        .table_access
+        .values()
+        .any(|access| *access != crate::access::Access::PublicRead);
+    if needs_a_caller {
+        "&[Port::Db, Port::Auth]"
+    } else {
+        "&[Port::Db]"
+    }
 }
 
 /// The `personal_data()` table, rendered from what the author declared.
