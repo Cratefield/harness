@@ -1584,7 +1584,7 @@ pub(crate) fn dispatch(command: &crate::Command) -> Option<ExitCode> {
 
 #[cfg(test)]
 mod tests {
-    use super::{compute_plan, plan_digest, resolved_env};
+    use super::{compute_plan, init, plan_digest, resolved_env};
     use crate::lock::Lock;
     use cratefield_core::VentureEnv;
     use cratefield_manifest::{ModuleRef, VentureManifest, builtin};
@@ -1666,5 +1666,38 @@ mod tests {
             plan_digest(&content_a).expect("digests"),
             plan_digest(&content_b).expect("digests")
         );
+    }
+
+    /// `fz init` had no test, and its own comment says why one was
+    /// wanted: "`fz init` writing a manifest that `fz build` would reject
+    /// is a first step that fails on the second". The scaffolded origin
+    /// was added for that reason and nothing checked it stayed true.
+    #[test]
+    fn init_scaffolds_a_manifest_the_rest_of_the_toolchain_accepts() {
+        let dir = cratefield_testing::TempDir::new("fz-init");
+        let path = dir.path().join("venture.json");
+        init("acme-signups", "acme.factory0.dev", &path, false).expect("init writes one");
+        let written = std::fs::read_to_string(&path).expect("it is there");
+        let manifest = VentureManifest::from_json_str(&written).expect("it parses");
+        manifest.validate().expect("and it is one fz build accepts");
+        assert_eq!(manifest.cors_origins, ["https://acme.factory0.dev"]);
+    }
+
+    #[test]
+    fn init_refuses_a_name_that_is_not_one_and_writes_nothing() {
+        // The refusal has to come before the file: a manifest on disk
+        // that cannot build is worse than no manifest, because the next
+        // command reads it rather than the author's intent.
+        let dir = cratefield_testing::TempDir::new("fz-init");
+        let path = dir.path().join("venture.json");
+        let failures = init("My Venture", "acme.factory0.dev", &path, false)
+            .expect_err("a venture name is a slug");
+        assert!(
+            failures
+                .iter()
+                .any(|failure| failure.message.contains("name")),
+            "{failures:?}"
+        );
+        assert!(!path.exists(), "a manifest that cannot build was written");
     }
 }

@@ -139,6 +139,13 @@ pub enum ManifestError {
     /// The `[tables]` declaration is not legal. Every problem at once,
     /// the way `Schema::validate` reports them.
     Tables(Vec<String>),
+    /// A field that becomes an identifier in generated files is not one.
+    NotAnIdentifier {
+        /// Which field.
+        field: &'static str,
+        /// What it has to look like, for the author to compare against.
+        expected: &'static str,
+    },
 }
 
 impl std::fmt::Display for ManifestError {
@@ -157,6 +164,14 @@ impl std::fmt::Display for ManifestError {
                 }
                 Ok(())
             }
+            // The value is not echoed. It reached here because it is the
+            // wrong shape, and the wrong shape is exactly what should not
+            // be pasted into a terminal, a log line or a CI annotation.
+            ManifestError::NotAnIdentifier { field, expected } => write!(
+                f,
+                "manifest `{field}` goes into generated files as it is written, so it has to be \
+                 {expected}"
+            ),
         }
     }
 }
@@ -211,6 +226,50 @@ impl VentureManifest {
         if self.cors_origins.is_empty() {
             return Err(ManifestError::MissingField("cors_origins"));
         }
+        // These four are interpolated into generated files: `name` into
+        // the generated `Cargo.toml`, the generated `wrangler.toml`
+        // (twice, as the worker and the database name) and into
+        // `Venture::new`; `host` and the origins into `Venture::new` and
+        // the worker's routes. Nothing escaped them, so a `"` in any of
+        // them ended the literal it was written into and the rest became
+        // source. It has to be checked here because there is no one
+        // escaping that covers Rust, TOML and a URL at once — and the
+        // shapes are narrow enough that saying what they are is better
+        // than escaping what they might be.
+        //
+        // It matters more than a venture author breaking their own
+        // build: #141 and #159 are a hosted pipeline that runs this
+        // generator over a manifest somebody else submitted.
+        if !is_slug(&self.name) {
+            return Err(ManifestError::NotAnIdentifier {
+                field: "name",
+                expected: "lowercase letters, digits, `-` and `_`, starting with a letter or digit",
+            });
+        }
+        if !is_hostport(&self.host) {
+            return Err(ManifestError::NotAnIdentifier {
+                field: "host",
+                expected: "a hostname, optionally with a port — letters, digits, `.`, `-`, `:`",
+            });
+        }
+        if self
+            .public_url
+            .as_deref()
+            .is_some_and(|url| !is_origin(url))
+        {
+            return Err(ManifestError::NotAnIdentifier {
+                field: "public_url",
+                expected: "scheme://host[:port], with no path, query or fragment",
+            });
+        }
+        for origin in &self.cors_origins {
+            if !is_origin(origin) {
+                return Err(ManifestError::NotAnIdentifier {
+                    field: "cors_origins",
+                    expected: "scheme://host[:port], with no path, query or fragment",
+                });
+            }
+        }
         let mut seen = std::collections::HashSet::new();
         for slug in self.module_slugs() {
             if !seen.insert(slug) {
@@ -253,4 +312,44 @@ impl VentureManifest {
             .resolve(&self.module_slugs())
             .map_err(ManifestError::Resolve)
     }
+}
+
+/// A venture name, which becomes a Cargo package name and a Workers
+/// script name. Both accept this set; neither accepts a quote.
+fn is_slug(name: &str) -> bool {
+    let mut chars = name.chars();
+    chars
+        .next()
+        .is_some_and(|first| first.is_ascii_lowercase() || first.is_ascii_digit())
+        && chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_')
+}
+
+/// A hostname, optionally with a port.
+fn is_hostport(host: &str) -> bool {
+    !host.is_empty()
+        && host
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-' || c == ':')
+}
+
+/// `scheme://host[:port]`, with no path, query or fragment.
+///
+/// The same shape `cratefield_core`'s `is_valid_origin` enforces at boot,
+/// written again rather than shared: this crate deliberately does not
+/// depend on the harness, and a manifest that passed here and was refused
+/// at boot is the failure `cors_origins` already taught once. Stricter or
+/// equal is the safe direction for a copy — it refuses while building
+/// rather than while serving.
+fn is_origin(origin: &str) -> bool {
+    let Some((scheme, rest)) = origin.split_once("://") else {
+        return false;
+    };
+    if scheme.is_empty() || !scheme.chars().all(|c| c.is_ascii_alphanumeric()) {
+        return false;
+    }
+    if rest.contains(['/', '?', '#']) {
+        return false;
+    }
+    let host = rest.split_once(':').map_or(rest, |(host, _port)| host);
+    is_hostport(host)
 }
