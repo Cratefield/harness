@@ -160,6 +160,13 @@ mod tests {
         assert!(tables.contains("DataKind::Content"), "{tables}");
         assert!(tables.contains("Disposition::Erase"), "{tables}");
 
+        // A table whose access is not `public-read` is a question about
+        // who is asking, so the module declares the port that answers it.
+        assert!(
+            tables.contains("&[Port::Db, Port::Auth]"),
+            "an owner table generated a module that needs no verifier: {tables}"
+        );
+
         // And the venture composes it, or it is a file nobody builds.
         let lib = file("src/lib.rs");
         assert!(lib.contains("pub mod tables;"), "{lib}");
@@ -167,6 +174,66 @@ mod tests {
             lib.contains(".module(crate::tables::DeclaredTables::new())"),
             "{lib}"
         );
+    }
+
+    #[test]
+    fn a_venture_whose_tables_are_all_public_does_not_demand_a_verifier() {
+        // The other half, and the one that makes the rule a rule rather
+        // than a constant: requiring `Port::Auth` from every venture
+        // would make a deployment that serves only public reference data
+        // refuse to start until somebody wired an auth service it has no
+        // use for.
+        let tables = generated_tables_rs(
+            &with_tables().replace(r#""note": "owner""#, r#""note": "public-read""#),
+        );
+        assert!(tables.contains("&[Port::Db]"), "{tables}");
+        assert!(!tables.contains("Port::Auth"), "{tables}");
+    }
+
+    /// `src/tables.rs` as generated from a manifest's JSON.
+    fn generated_tables_rs(json: &str) -> String {
+        let manifest = VentureManifest::from_json_str(json).expect("the fixture parses");
+        let set = manifest.resolve(&catalog::builtin()).expect("resolves");
+        let venture = generate::generate(&manifest, &set, &generate::HarnessSource::default())
+            .expect("generates");
+        venture
+            .files
+            .iter()
+            .find(|f| f.path == "src/tables.rs")
+            .map(|f| f.contents.clone())
+            .unwrap_or_default()
+    }
+
+    #[test]
+    fn one_table_that_is_not_public_is_enough_to_need_a_verifier() {
+        // Any, not all: a venture serving nine public tables and one
+        // `owner` table still has to be able to say who is asking.
+        let two_tables = with_tables()
+            .replace(
+                r#""note": {
+                    "primary_key": "id","#,
+                r#""tier": {
+                    "primary_key": "id",
+                    "fields": [ { "name": "id", "kind": "uuid", "required": true } ]
+                },
+                "note": {
+                    "primary_key": "id","#,
+            )
+            .replace(
+                r#""table_privacy": {"#,
+                r#""table_privacy": {
+                "tier": { "holds": "nothing", "reason": "Plan tiers; nobody is in them." },"#,
+            )
+            .replace(
+                r#""table_access": { "note": "owner" }"#,
+                r#""table_access": { "note": "owner", "tier": "public-read" }"#,
+            );
+        let tables = generated_tables_rs(&two_tables);
+        assert!(
+            tables.contains("\"tier\""),
+            "the fixture has both: {tables}"
+        );
+        assert!(tables.contains("Port::Auth"), "{tables}");
     }
 
     #[test]

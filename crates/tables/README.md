@@ -491,6 +491,13 @@ personal is a manifest error — there is no column to match against, and a
 route falling back to "everyone" or "nobody" would be deciding that
 silently.
 
+A venture that declares any table whose access is not `public-read`
+generates a module requiring the `Auth` port, and the harness refuses to
+build a composition whose runtime does not provide one. So a deployment
+with an `owner` table and no verifier wired **does not start**, rather
+than starting, serving every other route, and failing the first time
+somebody reads that table — the same outage, found later and by a user.
+
 `fz tables diff` reports a change to this level, and says which way it
 moved. It has to: flipping one table from `owner` to `public-read`
 changes no column, so a diff that compared schemas alone answered "No
