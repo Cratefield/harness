@@ -7,8 +7,8 @@
 
 use cratefield_core::Row;
 use cratefield_tables::{
-    DecodeError, Filter, Owned, Page, Schema, UpdateError, delete, from_sql, insert, row_json,
-    select_one, select_page, to_sql, update,
+    DecodeError, Filter, Owned, Page, Schema, Sort, UpdateError, delete, from_sql, insert,
+    row_json, select_one, select_page, to_sql, update,
 };
 use sea_query::Value as SeaValue;
 use serde_json::{Value, json};
@@ -20,6 +20,7 @@ fn page<'a>(limit: u64, after: Option<&'a Value>, owned: Option<Owned<'a>>) -> P
         after,
         owned,
         filters: &[],
+        sort: None,
     }
 }
 
@@ -625,6 +626,7 @@ fn a_filter_joins_the_scope_rather_than_replacing_it() {
                 subject: &subject,
             }),
             filters: &filters,
+            sort: None,
         },
     )
     .expect("scoped and filtered");
@@ -655,6 +657,7 @@ fn a_filter_on_a_column_the_table_does_not_declare_is_refused() {
             after: None,
             owned: None,
             filters: &filters,
+            sort: None,
         },
     )
     .expect_err("not a field");
@@ -676,8 +679,193 @@ fn a_filter_value_of_the_wrong_kind_is_refused() {
             after: None,
             owned: None,
             filters: &filters,
+            sort: None,
         },
     )
     .expect_err("not an integer");
     assert_eq!(error.column, "views", "{error}");
+}
+
+#[test]
+fn a_sorted_page_orders_by_the_column_then_the_key() {
+    // The key is the tiebreaker, and it has to be there: two rows with
+    // the same sort value in no fixed order make a page that repeats one
+    // and skips the other, and nothing in the answer says so.
+    //
+    // Asserted on `membership`, whose key is two columns neither of which
+    // is the sort column — sorting `note` by its own `id` cannot tell an
+    // ordering that includes the key from one that does not.
+    let statement = select_page(
+        &membership(),
+        Page {
+            limit: 10,
+            after: None,
+            owned: None,
+            filters: &[],
+            sort: Some(Sort {
+                column: "role",
+                descending: false,
+            }),
+        },
+    )
+    .expect("sorted");
+    let order = statement
+        .sql
+        .split_once("ORDER BY")
+        .expect("there is an order")
+        .1;
+    let at = |column: &str| {
+        order
+            .find(&format!("\"{column}\""))
+            .unwrap_or_else(|| panic!("`{column}` is not in the ordering: {order}"))
+    };
+    assert!(
+        at("role") < at("tenant") && at("tenant") < at("member"),
+        "the sort column comes first and the whole key follows it: {order}"
+    );
+}
+
+#[test]
+fn a_descending_sort_walks_the_cursor_the_other_way() {
+    // Ascending resumes with `>`; descending has to resume with `<`, or
+    // the second page is the first page again.
+    let table = note();
+    let cursor = json!({ "id": ID });
+    let down = select_page(
+        &table,
+        Page {
+            limit: 10,
+            after: Some(&cursor),
+            owned: None,
+            filters: &[],
+            sort: Some(Sort {
+                column: "id",
+                descending: true,
+            }),
+        },
+    )
+    .expect("sorted");
+    assert!(down.sql.contains("\"id\" < ?"), "{}", down.sql);
+    assert!(down.sql.contains("DESC"), "{}", down.sql);
+
+    let up = select_page(
+        &table,
+        Page {
+            limit: 10,
+            after: Some(&cursor),
+            owned: None,
+            filters: &[],
+            sort: Some(Sort {
+                column: "id",
+                descending: false,
+            }),
+        },
+    )
+    .expect("sorted");
+    assert!(up.sql.contains("\"id\" > ?"), "{}", up.sql);
+}
+
+#[test]
+fn a_cursor_over_a_sorted_page_carries_the_sort_column_too() {
+    // The cursor walks the ordering the page is in. Comparing only the
+    // key would resume in the wrong place the moment the page is not in
+    // key order.
+    //
+    // `membership` is the fixture for this: `role` is required and not
+    // part of the key, which is the only shape where the sort column and
+    // the tiebreaker are different columns.
+    let table = membership();
+    let cursor = json!({ "role": "member", "tenant": "acme", "member": "ada" });
+    let statement = select_page(
+        &table,
+        Page {
+            limit: 10,
+            after: Some(&cursor),
+            owned: None,
+            filters: &[],
+            sort: Some(Sort {
+                column: "role",
+                descending: false,
+            }),
+        },
+    )
+    .expect("sorted and paged");
+    assert!(statement.sql.contains("\"role\" > ?"), "{}", statement.sql);
+    assert!(
+        statement.sql.contains("\"role\" = ?"),
+        "and the tiebreaker branch: {}",
+        statement.sql
+    );
+    assert!(
+        statement.sql.contains("\"tenant\" > ?"),
+        "{}",
+        statement.sql
+    );
+    assert!(
+        statement.sql.contains("\"member\" > ?"),
+        "{}",
+        statement.sql
+    );
+}
+
+#[test]
+fn a_cursor_that_omits_the_sort_column_is_refused() {
+    let cursor = json!({ "tenant": "acme", "member": "ada" });
+    let error = select_page(
+        &membership(),
+        Page {
+            limit: 10,
+            after: Some(&cursor),
+            owned: None,
+            filters: &[],
+            sort: Some(Sort {
+                column: "role",
+                descending: false,
+            }),
+        },
+    )
+    .expect_err("half a cursor");
+    assert_eq!(error.column, "role", "{error}");
+}
+
+#[test]
+fn an_optional_column_cannot_be_sorted_by() {
+    // SQLite sorts `NULL` first and Postgres sorts it last, so a page
+    // ordered by a nullable column is a different page on each engine —
+    // the same declaration serving two answers.
+    let table = note();
+    let error = select_page(
+        &table,
+        Page {
+            limit: 10,
+            after: None,
+            owned: None,
+            filters: &[],
+            sort: Some(Sort {
+                column: "body",
+                descending: false,
+            }),
+        },
+    )
+    .expect_err("body is optional");
+    assert!(error.detail.contains("nulls sort"), "{error}");
+}
+
+#[test]
+fn a_sort_column_the_table_does_not_have_is_refused() {
+    let error = select_page(
+        &note(),
+        Page {
+            limit: 10,
+            after: None,
+            owned: None,
+            filters: &[],
+            sort: Some(Sort {
+                column: "nope",
+                descending: false,
+            }),
+        },
+    )
+    .expect_err("not a field");
+    assert_eq!(error.column, "nope", "{error}");
 }

@@ -196,6 +196,12 @@ pub async fn page(
             // rows and cannot reach anybody else's.
             owned: owned(&reach, &subject),
             filters,
+            // No `?sort=` yet. A sorted page's cursor has to carry the
+            // sort column as well as the key, and `?after=` currently
+            // takes a single key value — so a sorted first page would be
+            // right and its second page wrong. The route wiring lands
+            // with the JSON cursor (#379).
+            sort: None,
         },
     )
     .map_err(|err| bad_filter(scope, &err, api))?;
