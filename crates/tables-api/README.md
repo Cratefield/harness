@@ -74,6 +74,17 @@ lists the same. A published action whose route does not exist is worse
 than an unpublished one: a generated UI renders the form and the
 submission 405s.
 
+**A `409` means the key is taken and nothing else.** The `Database` port
+has no typed constraint error, so a collision is recognised by the two
+engines' own phrases — `UNIQUE constraint failed` and `duplicate key
+value violates unique constraint` — and never by the bare word `unique`,
+which also matches the *table's name*. A venture with a table called
+`unique_codes` had every database failure on it answered `409`,
+including `no such table` after a half-applied migration: the caller is
+told the key is taken, picks another, and is told the same. Anything the
+phrases do not match is the generic failure, which is the safe
+direction — a `500` where a `409` was due costs a retry.
+
 A create answers `201` rather than `200`, because a create that answers
 `200` is indistinguishable from an update to a client watching status
 codes. A delete answers `204` with no body: there is nothing left to

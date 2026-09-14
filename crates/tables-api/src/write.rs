@@ -117,15 +117,26 @@ pub async fn create(
 /// Whether a database error is a primary-key or unique collision.
 ///
 /// Message matching, which is why it is written down rather than inlined:
-/// the `Database` port has no typed constraint error, and both engines
-/// say "unique" in the message for this case (SQLite `UNIQUE constraint
-/// failed`, Postgres `duplicate key value violates unique constraint`).
-/// A message that says neither falls through to the generic failure, so
-/// the worst case is a 500 where a 409 was due — never a 409 claiming a
-/// conflict that did not happen.
+/// the `Database` port has no typed constraint error, so the two engines'
+/// own phrases are what there is — SQLite and D1 say `UNIQUE constraint
+/// failed`, Postgres says `duplicate key value violates unique
+/// constraint`.
+///
+/// **The phrases, not the word.** Matching a bare `unique` matched the
+/// table's *name* too: a venture may declare a table called
+/// `unique_codes`, and then `no such table: unique_codes` — the shape of
+/// a half-applied migration — came back as `409 already-exists`. The
+/// caller is told the key is taken, tries another, and is told the same;
+/// the real failure never appears, because the conflict branch does not
+/// log. Both phrases contain a space, which a declared name cannot.
+///
+/// A message that matches neither falls through to the generic failure,
+/// which is the safe direction: a 500 where a 409 was due costs a
+/// retry, and a 409 that did not happen sends a caller looking for a row
+/// that is not there.
 fn looks_like_a_conflict(err: &cratefield_core::DbError) -> bool {
     let text = format!("{err:?}").to_ascii_lowercase();
-    text.contains("unique") || text.contains("duplicate key")
+    text.contains("unique constraint failed") || text.contains("violates unique constraint")
 }
 
 /// Replaces one row, by key.
