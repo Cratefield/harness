@@ -104,7 +104,7 @@ pub fn diff_report(previous: &Path, current: &Path) -> Result<usize, String> {
         println!("  [{}] {}", change.step, change.line());
     }
     println!();
-    for step in [Step::Expand, Step::Contract, Step::Rewrite] {
+    for step in Step::ALL.iter().copied() {
         let count = changes.iter().filter(|change| change.step == step).count();
         if count > 0 {
             println!("  {count} {step}");
@@ -226,7 +226,7 @@ fn report(manifest_path: &Path, dialect: &str, url: &str) -> Result<usize, Strin
             println!("  [{}] {}", change.step, change.line());
         }
         println!();
-        for step in [Step::Expand, Step::Contract, Step::Rewrite] {
+        for step in Step::ALL.iter().copied() {
             let count = changes.iter().filter(|change| change.step == step).count();
             if count > 0 {
                 println!("  {count} {step}");
