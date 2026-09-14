@@ -1467,6 +1467,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "cratefield-tables-api"
+version = "0.1.0"
+dependencies = [
+ "cratefield-core",
+ "cratefield-manifest",
+ "cratefield-tables",
+ "cratefield-testing",
+ "http",
+ "serde",
+ "serde_json",
+ "toml 0.8.23",
+]
+
+[[package]]
 name = "cratefield-testing"
 version = "0.2.2"
 dependencies = [
