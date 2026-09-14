@@ -223,6 +223,65 @@ fn a_key_that_is_taken_is_a_conflict_and_not_a_500() {
     assert_eq!(refusal.status.as_u16(), 409, "{}", refusal.slug);
 }
 
+/// A declared table whose *name* contains the word the conflict check
+/// used to look for, and which is missing from the database.
+const UNIQUE_CODES: &str = r#"
+[tables.unique_codes]
+primary_key = "id"
+
+[[tables.unique_codes.fields]]
+name = "id"
+kind = "text"
+required = true
+
+[[tables.unique_codes.fields]]
+name = "author"
+kind = "text"
+required = true
+"#;
+
+#[test]
+fn a_failure_that_is_not_a_conflict_is_not_one_because_the_table_is_named_unique() {
+    // `no such table: unique_codes` — the shape of a half-applied
+    // migration — matched a bare `unique` and came back as `409
+    // already-exists`. The caller is told the key is taken, picks
+    // another, and is told the same; the real failure never surfaces,
+    // because the conflict branch does not log.
+    let table = toml::from_str::<Fragment>(UNIQUE_CODES)
+        .expect("parses")
+        .tables
+        .table("unique_codes")
+        .expect("declared")
+        .clone();
+    let base = tables(Access::TenantMembers);
+    let tables = Tables {
+        tables: vec![TableApi {
+            table,
+            access: Access::TenantMembers,
+            subject: Some("author".to_owned()),
+        }],
+        ctx: base.ctx,
+    };
+    // An empty database: the declared table was never created.
+    let db = SqliteDatabase::in_memory().expect("in-memory sqlite");
+    let refusal = pollster::block_on(create(
+        &tables,
+        &db,
+        &as_caller("ada"),
+        &scope(),
+        "unique_codes",
+        json!({ "id": "c1", "author": "ada" }),
+    ))
+    .expect_err("there is no such table");
+    assert_ne!(
+        refusal.status.as_u16(),
+        409,
+        "a conflict that did not happen: {}",
+        refusal.slug
+    );
+    assert_eq!(refusal.status.as_u16(), 500, "{}", refusal.slug);
+}
+
 #[test]
 fn changing_somebody_elses_row_reports_no_such_row() {
     // Not a 403: that is an answer about a row the caller was never in a
