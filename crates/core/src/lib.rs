@@ -100,7 +100,7 @@ pub use problems::{ProblemDef, SLUGS, Slugs, registry as problem_registry};
 pub use rate_limit::{RateLimit, RateLimitFailure, check_rate_limit, client_ip, rate_limit_keys};
 pub use route_policy::{
     ALLOW_UNPROTECTED_WRITES, RoutePolicy, WriteGuards, captcha_effective, deployed_env,
-    env_disagreement, payments_effective, production_readiness, signer_effective,
+    env_disagreement, payments_effective, production_readiness, signer_effective, stated_reason,
     unprotected_writes_override, verify_human_form,
 };
 pub use scope::Scope;
