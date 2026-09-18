@@ -639,6 +639,13 @@ pub fn builtin() -> Catalog {
                 Tier::Optional,
                 &[],
             ),
+            m(
+                "changelog",
+                "Changelog",
+                "A project's releases mirrored into your own database, served without calling upstream.",
+                Tier::Optional,
+                &[],
+            ),
         ],
     }
 }
