@@ -190,6 +190,7 @@ crate exists**, so the very first release of each crate is manual:
    cargo publish -p cratefield-runtime-cloudflare
    cargo publish -p cratefield-runtime-native
    cargo publish -p cratefield-testing
+   cargo publish -p cratefield-module-telemetry
    cargo publish -p cratefield-module-email-signup
    cargo publish -p cratefield-module-waitlist
    cargo publish -p cratefield-module-cms

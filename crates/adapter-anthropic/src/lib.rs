@@ -183,11 +183,11 @@ fn wire_request<'a>(model: &'a str, prompt: &'a Prompt) -> MessagesRequest<'a> {
         max_tokens: prompt.max_tokens,
         system: prompt.system.as_deref(),
         messages: prompt
-            .turns
+            .messages
             .iter()
             .map(|turn| WireTurn {
                 role: wire_role(turn.role),
-                content: turn.text.as_str(),
+                content: turn.content.as_str(),
             })
             .collect(),
         tools,
@@ -258,7 +258,7 @@ fn provider_message(body: &str) -> String {
 
 #[async_trait]
 impl TextModel for Anthropic {
-    async fn complete(&self, prompt: Prompt) -> Result<Completion, TextModelError> {
+    async fn complete(&self, prompt: &Prompt) -> Result<Completion, TextModelError> {
         // Outcome logging in the resend adapter's shape: provider, status,
         // outcome, model, token counts. The API key is never logged, and
         // neither is the prompt nor the completion — a prompt is user
@@ -373,11 +373,11 @@ impl TextModel for Anthropic {
             json = None;
         }
 
+        // `Completion` is non-exhaustive and carries the two counts flat,
+        // so the wire's usage block is unwrapped straight onto the builder
+        // rather than rebuilt as a struct of its own.
         let wire_usage = parsed.usage.unwrap_or_default();
-        let usage = cratefield_core::Usage {
-            input_tokens: wire_usage.input_tokens,
-            output_tokens: wire_usage.output_tokens,
-        };
+        let (input_tokens, output_tokens) = (wire_usage.input_tokens, wire_usage.output_tokens);
         let model = if parsed.model.is_empty() {
             self.model.clone()
         } else {
@@ -388,15 +388,15 @@ impl TextModel for Anthropic {
             code = status.as_u16(),
             outcome = "completed",
             model = %model,
-            input_tokens = usage.input_tokens,
-            output_tokens = usage.output_tokens,
+            input_tokens,
+            output_tokens,
             "text model outcome"
         );
-        Ok(Completion {
-            text: completion_text,
-            json,
-            model,
-            usage,
-        })
+        let mut completion = Completion::new(completion_text, model)
+            .usage(u64::from(input_tokens), u64::from(output_tokens));
+        if let Some(json) = json {
+            completion = completion.json(json);
+        }
+        Ok(completion)
     }
 }

@@ -181,13 +181,20 @@ fn ua_family_of(user_agent: &str) -> String {
 }
 
 /// Middleware: `/v1/*` responses carry
-/// `Cache-Control: no-store`, `X-Content-Type-Options: nosniff` and
-/// `Referrer-Policy: no-referrer` (architecture section 6).
+/// `Cache-Control: no-store`, `X-Content-Type-Options: nosniff`,
+/// `Referrer-Policy: no-referrer`, `X-Frame-Options: DENY` and
+/// `Content-Security-Policy: frame-ancestors 'none'` (architecture
+/// section 6). `/v1` is never meant to be framed: the API answers in
+/// JSON no page has business embedding, and the one document it serves —
+/// the magic-link confirmation — is HTML that must refuse to render
+/// inside a third party's frame, where a surrounding attacker page could
+/// clickjack the confirm button (issue #435).
 pub(crate) async fn security_headers_layer(request: Request, next: Next) -> AxumResponse {
     let is_api = request.uri().path().starts_with("/v1/");
     let mut response = next.run(request).await;
     if is_api {
         insert_no_store_headers(response.headers_mut());
+        insert_framing_headers(response.headers_mut());
     }
     response
 }
@@ -221,6 +228,30 @@ fn insert_no_store_headers(headers: &mut axum::http::HeaderMap) {
     headers.insert(
         header::HeaderName::from_static("referrer-policy"),
         HeaderValue::from_static("no-referrer"),
+    );
+}
+
+/// Frame-blocking headers, scoped to `/v1/*` only. Deliberately not
+/// folded into [`insert_no_store_headers`]: the token-bearing layer below
+/// shares that helper for *any* path whose query carries a `token` —
+/// including `/ui/*`, which sets its own `Content-Security-Policy` and
+/// `X-Frame-Options` (and deliberately none on `?fragment=1` fragments).
+/// Stamping the framing pair there would override the UI's answer; here
+/// it only ever lands on `/v1`, which has none of its own (issue #435).
+fn insert_framing_headers(headers: &mut axum::http::HeaderMap) {
+    // `insert`, not `append`: duplicated `X-Frame-Options` values are
+    // ill-defined and some browsers ignore the header entirely when it
+    // repeats, so the strictest value simply replaces whatever was there.
+    headers.insert(header::X_FRAME_OPTIONS, HeaderValue::from_static("DENY"));
+    // `append`, not `insert`: a browser handed several CSP policies
+    // enforces all of them — their intersection — so appending can only
+    // tighten whatever a `/v1` module set on its own response, where an
+    // `insert` would silently delete a fuller policy and substitute this
+    // one-directive one. No module sets a CSP under `/v1` today; this is
+    // written for the one that eventually does.
+    headers.append(
+        header::CONTENT_SECURITY_POLICY,
+        HeaderValue::from_static("frame-ancestors 'none'"),
     );
 }
 

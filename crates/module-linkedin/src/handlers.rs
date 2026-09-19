@@ -10,7 +10,7 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, patch, post};
 use cratefield_core::{
-    Clock, Database, Defer, HttpClient, IdGen, Json, ModuleConfig, ModuleContext, Problem,
+    Clock, Config, Database, Defer, HttpClient, IdGen, Json, ModuleConfig, ModuleContext, Problem,
     ProblemDef, Scope, Signer, rate_limit_keys, rate_limited, require_admin,
 };
 use serde_json::json;
@@ -84,6 +84,26 @@ pub(crate) fn cfg(ctx: &ModuleContext) -> ModuleConfig<'_> {
     ModuleConfig::new("linkedin", ctx.config.as_ref())
 }
 
+/// The image-upload cap in effect for this deployment: the configured
+/// `MAX_IMAGE_BYTES`, or `base` (the builder's compile-time setting) when
+/// the key is absent or does not parse. Config wins, like every other
+/// setting.
+///
+/// One helper for both readers of the key (issue #440): the image route's
+/// `DefaultBodyLimit` (`router` below) and the module's
+/// `Module::max_body_bytes` must agree, or the Cloudflare runtime's
+/// pre-buffer guard would refuse a body the route itself would have
+/// accepted. A value that fails to parse falls back to `base` rather than
+/// to nothing, exactly as it always did: `validate_config` reports the
+/// malformed key loudly at cold start, and the module degrades rather than
+/// failing the deployment (issue #101).
+pub(crate) fn max_image_bytes(cfg: &dyn Config, base: usize) -> usize {
+    ModuleConfig::new("linkedin", cfg)
+        .get_opt("MAX_IMAGE_BYTES")
+        .and_then(|raw| raw.parse().ok())
+        .unwrap_or(base)
+}
+
 /// Compile-time settings overlaid with configuration. Config wins, so a
 /// deployment can move the API version pin without a rebuild.
 pub(crate) fn settings_of(ctx: &ModuleContext, base: &Settings) -> Settings {
@@ -92,10 +112,7 @@ pub(crate) fn settings_of(ctx: &ModuleContext, base: &Settings) -> Settings {
     settings.api_version = cfg.get_str("API_VERSION", &settings.api_version);
     settings.default_visibility = cfg.get_str("DEFAULT_VISIBILITY", &settings.default_visibility);
     settings.refresh_lead_days = cfg.get_u32("REFRESH_LEAD_DAYS", settings.refresh_lead_days);
-    settings.max_image_bytes = cfg
-        .get_opt("MAX_IMAGE_BYTES")
-        .and_then(|raw| raw.parse().ok())
-        .unwrap_or(settings.max_image_bytes);
+    settings.max_image_bytes = max_image_bytes(ctx.config.as_ref(), settings.max_image_bytes);
     settings.publish_lease_secs = cfg
         .get_opt("PUBLISH_LEASE_SECS")
         .and_then(|raw| raw.parse().ok())

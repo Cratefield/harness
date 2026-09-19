@@ -12,8 +12,8 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use cratefield_adapter_anthropic::Anthropic;
 use cratefield_core::{
-    BoundedHttpClient, Clock, HttpClient, HttpError, MAX_RESPONSE_BYTES, Prompt, TextModel,
-    TextModelError,
+    BoundedHttpClient, Clock, HttpClient, HttpError, MAX_RESPONSE_BYTES, ModelTier, Prompt,
+    TextModel, TextModelError,
 };
 use cratefield_testing::FakeHttpClient;
 use http::{HeaderMap, Request, Response, StatusCode};
@@ -136,7 +136,11 @@ fn adapter(http: Arc<FakeHttp>) -> Anthropic {
 }
 
 fn prompt() -> Prompt {
-    Prompt::user("Say hello", 256)
+    // `Fast` because these tests assert on transport behaviour, not on
+    // which model a tier picks; the adapter maps the tier to its own id.
+    Prompt::new(ModelTier::Fast)
+        .user("Say hello")
+        .max_tokens(256)
 }
 
 /// A real 200 shape: two text blocks (they must join), model and usage.
@@ -157,7 +161,7 @@ const SUCCESS_BODY: &str = r#"{
 async fn request_shape_method_uri_headers_and_body() {
     let (http, rx) = fixture(200, SUCCESS_BODY, None);
     let completion = adapter(http)
-        .complete(prompt().with_system("be brief"))
+        .complete(&prompt().system("be brief"))
         .await
         .expect("completes");
     assert_eq!(completion.text, "Hello, world.");
@@ -189,11 +193,11 @@ async fn request_shape_method_uri_headers_and_body() {
 #[pollster::test]
 async fn success_maps_to_completion_with_text_model_and_usage() {
     let (http, _rx) = fixture(200, SUCCESS_BODY, None);
-    let completion = adapter(http).complete(prompt()).await.expect("completes");
+    let completion = adapter(http).complete(&prompt()).await.expect("completes");
     assert_eq!(completion.text, "Hello, world.");
     assert_eq!(completion.model, "claude-opus-5");
-    assert_eq!(completion.usage.input_tokens, 12);
-    assert_eq!(completion.usage.output_tokens, 34);
+    assert_eq!(completion.input_tokens, 12);
+    assert_eq!(completion.output_tokens, 34);
     assert_eq!(completion.json, None);
 }
 
@@ -212,7 +216,7 @@ async fn a_truncated_text_completion_still_succeeds() {
         "usage": {"input_tokens": 9, "output_tokens": 1}
     }"#;
     let (http, _rx) = fixture(200, body, None);
-    let completion = adapter(http).complete(prompt()).await.expect("completes");
+    let completion = adapter(http).complete(&prompt()).await.expect("completes");
     assert_eq!(completion.text, "Hel");
     assert_eq!(completion.json, None);
 }
@@ -236,8 +240,8 @@ async fn json_schema_sends_a_forced_tool_and_returns_its_input() {
         "usage": {"input_tokens": 9, "output_tokens": 4}
     }"#;
     let (http, rx) = fixture(200, body, None);
-    let prompt = prompt().with_json_schema(schema.clone());
-    let completion = adapter(http).complete(prompt).await.expect("completes");
+    let prompt = prompt().json_schema(schema.clone());
+    let completion = adapter(http).complete(&prompt).await.expect("completes");
     assert_eq!(completion.json, Some(serde_json::json!({"summary": "hi"})));
 
     let captured = rx.try_recv().expect("one request");
@@ -257,7 +261,7 @@ async fn rate_limited_reads_retry_after_delta_seconds() {
         r#"{"type":"error","error":{"type":"rate_limit_error","message":"Number of requests too high"}}"#,
         Some("5"),
     );
-    let err = adapter(http).complete(prompt()).await.unwrap_err();
+    let err = adapter(http).complete(&prompt()).await.unwrap_err();
     match err {
         TextModelError::Transient { retry_after } => {
             assert_eq!(retry_after, Some(Duration::from_secs(5)));
@@ -284,7 +288,7 @@ async fn rate_limited_reads_the_http_date_form() {
         Some(DUMMY_KEY.to_string()),
         "claude-opus-5",
     );
-    let err = model.complete(prompt()).await.unwrap_err();
+    let err = model.complete(&prompt()).await.unwrap_err();
     match err {
         TextModelError::Transient { retry_after } => {
             assert_eq!(retry_after, Some(Duration::from_secs(3600)));
@@ -296,7 +300,7 @@ async fn rate_limited_reads_the_http_date_form() {
 #[pollster::test]
 async fn rate_limited_without_header_has_none() {
     let (http, _rx) = fixture(429, r#"{"error":{"message":"rate limit"}}"#, None);
-    let err = adapter(http).complete(prompt()).await.unwrap_err();
+    let err = adapter(http).complete(&prompt()).await.unwrap_err();
     match err {
         TextModelError::Transient { retry_after } => assert!(retry_after.is_none()),
         other => panic!("wrong error: {other}"),
@@ -310,7 +314,7 @@ async fn server_error_maps_to_transient() {
         r#"{"type":"error","error":{"type":"api_error","message":"internal"}}"#,
         None,
     );
-    let err = adapter(http).complete(prompt()).await.unwrap_err();
+    let err = adapter(http).complete(&prompt()).await.unwrap_err();
     match err {
         TextModelError::Transient { retry_after } => assert_eq!(retry_after, None),
         other => panic!("wrong error: {other}"),
@@ -326,7 +330,7 @@ async fn overloaded_529_maps_to_transient() {
         r#"{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}"#,
         None,
     );
-    let err = adapter(http).complete(prompt()).await.unwrap_err();
+    let err = adapter(http).complete(&prompt()).await.unwrap_err();
     assert!(
         matches!(err, TextModelError::Transient { retry_after: None }),
         "got {err}"
@@ -340,7 +344,7 @@ async fn bad_request_maps_to_rejected_with_the_provider_message() {
         r#"{"type":"error","error":{"type":"invalid_request_error","message":"messages: roles must alternate"}}"#,
         None,
     );
-    let err = adapter(http).complete(prompt()).await.unwrap_err();
+    let err = adapter(http).complete(&prompt()).await.unwrap_err();
     match err {
         TextModelError::Rejected(detail) => {
             assert_eq!(detail, "messages: roles must alternate");
@@ -356,7 +360,7 @@ async fn unprocessable_maps_to_rejected_with_the_provider_message() {
         r#"{"type":"error","error":{"type":"invalid_request_error","message":"content was filtered"}}"#,
         None,
     );
-    let err = adapter(http).complete(prompt()).await.unwrap_err();
+    let err = adapter(http).complete(&prompt()).await.unwrap_err();
     match err {
         TextModelError::Rejected(detail) => assert_eq!(detail, "content was filtered"),
         other => panic!("wrong error: {other}"),
@@ -372,7 +376,7 @@ async fn unauthorized_maps_to_rejected() {
         r#"{"type":"error","error":{"type":"authentication_error","message":"invalid x-api-key"}}"#,
         None,
     );
-    let err = adapter(http).complete(prompt()).await.unwrap_err();
+    let err = adapter(http).complete(&prompt()).await.unwrap_err();
     match err {
         TextModelError::Rejected(detail) => assert_eq!(detail, "invalid x-api-key"),
         other => panic!("wrong error: {other}"),
@@ -386,7 +390,7 @@ async fn forbidden_maps_to_rejected() {
         r#"{"type":"error","error":{"type":"permission_error","message":"not allowed for this key"}}"#,
         None,
     );
-    let err = adapter(http).complete(prompt()).await.unwrap_err();
+    let err = adapter(http).complete(&prompt()).await.unwrap_err();
     match err {
         TextModelError::Rejected(detail) => assert_eq!(detail, "not allowed for this key"),
         other => panic!("wrong error: {other}"),
@@ -402,7 +406,7 @@ async fn any_other_client_error_maps_to_rejected() {
         r#"{"type":"error","error":{"type":"not_found_error","message":"model: claude-nope"}}"#,
         None,
     );
-    let err = adapter(http).complete(prompt()).await.unwrap_err();
+    let err = adapter(http).complete(&prompt()).await.unwrap_err();
     match err {
         TextModelError::Rejected(detail) => assert_eq!(detail, "model: claude-nope"),
         other => panic!("wrong error: {other}"),
@@ -413,7 +417,7 @@ async fn any_other_client_error_maps_to_rejected() {
 async fn anything_unexpected_maps_to_transport() {
     // A redirect never became a response: the call did not complete.
     let (http, _rx) = fixture(302, "<html>see other</html>", None);
-    let err = adapter(http).complete(prompt()).await.unwrap_err();
+    let err = adapter(http).complete(&prompt()).await.unwrap_err();
     match err {
         TextModelError::Transport(message) => {
             assert!(message.contains("302"), "{message}");
@@ -429,7 +433,7 @@ async fn deadline_exceeded_maps_to_transport() {
     let model = scripted(vec![Err(HttpError::DeadlineExceeded {
         after: Duration::from_secs(30),
     })]);
-    let err = model.complete(prompt()).await.unwrap_err();
+    let err = model.complete(&prompt()).await.unwrap_err();
     assert!(matches!(err, TextModelError::Transport(_)), "got {err}");
     assert!(!err.to_string().contains(DUMMY_KEY));
 }
@@ -437,7 +441,7 @@ async fn deadline_exceeded_maps_to_transport() {
 #[pollster::test]
 async fn connect_failure_maps_to_transport() {
     let model = scripted(vec![Err(HttpError::Transport("dns is down".to_owned()))]);
-    let err = model.complete(prompt()).await.unwrap_err();
+    let err = model.complete(&prompt()).await.unwrap_err();
     assert!(matches!(err, TextModelError::Transport(_)), "got {err}");
 }
 
@@ -446,7 +450,7 @@ async fn scripted_response_too_large_maps_to_transport() {
     let model = scripted(vec![Err(HttpError::ResponseTooLarge {
         limit: MAX_RESPONSE_BYTES,
     })]);
-    let err = model.complete(prompt()).await.unwrap_err();
+    let err = model.complete(&prompt()).await.unwrap_err();
     assert!(matches!(err, TextModelError::Transport(_)), "got {err}");
 }
 
@@ -461,7 +465,7 @@ async fn a_response_body_over_the_port_cap_is_refused_as_transport() {
         .status(200)
         .body(oversized)
         .expect("response"))]);
-    let err = model.complete(prompt()).await.unwrap_err();
+    let err = model.complete(&prompt()).await.unwrap_err();
     assert!(matches!(err, TextModelError::Transport(_)), "got {err}");
 }
 
@@ -475,7 +479,7 @@ async fn a_declared_length_over_the_cap_is_refused_before_the_body_is_read() {
         .body(Bytes::from_static(b"tiny"))
         .expect("response");
     let model = scripted(vec![Ok(response)]);
-    let err = model.complete(prompt()).await.unwrap_err();
+    let err = model.complete(&prompt()).await.unwrap_err();
     assert!(matches!(err, TextModelError::Transport(_)), "got {err}");
 }
 
@@ -484,7 +488,7 @@ async fn an_unparseable_success_body_maps_to_transport() {
     // Not `Rejected`: nothing about the prompt was refused — the answer
     // just never arrived in usable form.
     let (http, _rx) = fixture(200, "<html>gateway error</html>", None);
-    let err = adapter(http).complete(prompt()).await.unwrap_err();
+    let err = adapter(http).complete(&prompt()).await.unwrap_err();
     assert!(
         matches!(&err, TextModelError::Transport(message) if message.contains("did not parse")),
         "got {err}"
@@ -496,8 +500,8 @@ async fn a_forced_json_call_without_a_tool_block_maps_to_transport() {
     // Forced tool use was the whole point of the call; a text-only answer
     // means the JSON path broke between provider and here.
     let (http, _rx) = fixture(200, SUCCESS_BODY, None);
-    let prompt = prompt().with_json_schema(serde_json::json!({"type": "object"}));
-    let err = adapter(http).complete(prompt).await.unwrap_err();
+    let prompt = prompt().json_schema(serde_json::json!({"type": "object"}));
+    let err = adapter(http).complete(&prompt).await.unwrap_err();
     match err {
         TextModelError::Transport(message) => {
             assert!(message.contains("tool_use block"), "{message}");
@@ -524,8 +528,8 @@ async fn a_truncated_forced_json_call_is_rejected() {
         "usage": {"input_tokens": 9, "output_tokens": 4}
     }"#;
     let (http, _rx) = fixture(200, body, None);
-    let prompt = prompt().with_json_schema(serde_json::json!({"type": "object"}));
-    let err = adapter(http).complete(prompt).await.unwrap_err();
+    let prompt = prompt().json_schema(serde_json::json!({"type": "object"}));
+    let err = adapter(http).complete(&prompt).await.unwrap_err();
     match err {
         TextModelError::Rejected(detail) => {
             assert!(detail.contains("max_tokens"), "{detail}");
@@ -541,7 +545,7 @@ async fn a_truncated_forced_json_call_is_rejected() {
 async fn not_configured_fails_before_any_network_call() {
     let http = Arc::new(FakeHttpClient::scripted(vec![]));
     let model = Anthropic::new(http.clone(), clock_at(0), None, "claude-opus-5");
-    let err = model.complete(prompt()).await.unwrap_err();
+    let err = model.complete(&prompt()).await.unwrap_err();
     assert!(matches!(err, TextModelError::NotConfigured));
     assert!(
         http.captured().is_empty(),
@@ -564,7 +568,7 @@ async fn every_error_display_and_debug_omit_the_key() {
     for (status, body) in variants {
         let (http, _rx) = fixture(status, body, None);
         let err = adapter(http)
-            .complete(prompt())
+            .complete(&prompt())
             .await
             .expect_err("must fail");
         let rendered = err.to_string();
@@ -595,7 +599,7 @@ async fn a_provider_message_that_echoes_secrets_is_scrubbed() {
     // hashed and a query string redacted before anyone logs it.
     let body = r#"{"type":"error","error":{"type":"invalid_request_error","message":"prompt rejected for alice@example.test: see https://x.test/rules?ref=live-abcdef"}}"#;
     let (http, _rx) = fixture(400, body, None);
-    let err = adapter(http).complete(prompt()).await.unwrap_err();
+    let err = adapter(http).complete(&prompt()).await.unwrap_err();
     let rendered = err.to_string();
     assert!(!rendered.contains('@'), "{rendered}");
     assert!(!rendered.contains("alice"), "{rendered}");
@@ -700,20 +704,20 @@ async fn no_log_line_carries_the_key_prompt_or_completion() {
     tracing::callsite::rebuild_interest_cache();
 
     let (http, _rx) = fixture(200, SUCCESS_BODY, None);
-    let _ = adapter(http).complete(prompt()).await;
+    let _ = adapter(http).complete(&prompt()).await;
     let (http, _rx) = fixture(
         401,
         r#"{"type":"error","error":{"type":"authentication_error","message":"invalid x-api-key"}}"#,
         None,
     );
-    let _ = adapter(http).complete(prompt()).await;
+    let _ = adapter(http).complete(&prompt()).await;
     let unconfigured = Anthropic::new(
         Arc::new(FakeHttpClient::scripted(vec![])),
         clock_at(0),
         None,
         "claude-opus-5",
     );
-    let _ = unconfigured.complete(prompt()).await;
+    let _ = unconfigured.complete(&prompt()).await;
 
     let lines = capture.lines.lock().expect("log lock").clone();
     // All three paths really were captured; a silent subscriber would make

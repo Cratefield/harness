@@ -93,5 +93,8 @@ pub use cratefield_module_changelog as changelog;
 #[cfg(feature = "notifications")]
 pub use cratefield_module_notifications as notifications;
 
+#[cfg(feature = "telemetry")]
+pub use cratefield_module_telemetry as telemetry;
+
 #[cfg(feature = "testing")]
 pub use cratefield_testing as testing;

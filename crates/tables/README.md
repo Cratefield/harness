@@ -525,10 +525,10 @@ changes no column, so a diff that compared schemas alone answered "No
 change" and exited zero for an edit that publishes every subject's
 private rows.
 
-Nothing serves these yet; the CRUD routes are not built. Declaring first
-means that when they arrive, no table can be served without an author
-having said who may see it, and no manifest written before the rule needs
-migrating to it.
+The routes that serve these are built now, downstream in
+`crates/tables-api` — and the declaration came first, so no table can be
+served without an author having said who may see it, and no manifest
+written before the rule needs migrating to it.
 
 ## A declared table has to say what it holds
 
@@ -584,15 +584,14 @@ inherits a list rather than a surprise.
 
 ## Not built here
 
-This crate is the schema definition and nothing downstream of it. Each of
-these is a follow-up:
+This crate is the schema definition; everything that serves a
+declaration lives downstream of it, in `crates/tables-api` — the CRUD
+routes, the access vocabulary, the batched read endpoint, the
+`/__surface` publishing, and the composite-key single-row routes of ADR
+0018. What is still open is the client half:
 
-- CRUD route handlers, the `public-read | owner | tenant-members | admin`
-  access vocabulary, and the batched read endpoint.
 - The generated `@cratefield/client` TypeScript package, and the second
-  run of `corpus/rows.json` against its Zod schemas.
-- Publishing declared tables on `/__surface`, and any control plane or
-  manifest generator wiring.
+  run of `corpus/rows.json` against its Zod schemas (#155).
 
 ---
 

@@ -19,7 +19,7 @@ use std::sync::Arc;
 use cratefield_adapter_sqlite::SqliteDatabase;
 use cratefield_core::Database;
 use cratefield_kms::{Dek, Kms, LocalFileKms};
-use cratefield_secrets::{Actor, SecretBytes, Secrets, StoreId, verify};
+use cratefield_secrets::{Actor, SecretBytes, Secrets, SecretsError, StoreId, verify};
 
 fn kms() -> Arc<dyn Kms> {
     let kek = Dek::generate().expect("rng");
@@ -43,7 +43,9 @@ async fn each_store_provisions_its_own_key_and_keeps_it() {
     let db = shared_db();
     let secrets = Secrets::new(kms());
     let global = secrets.control_plane_global(Arc::clone(&db));
-    let tenant = secrets.tenant("tenant-a", Arc::clone(&db));
+    let tenant = secrets
+        .tenant("tenant-a", Arc::clone(&db))
+        .expect("the tenant store opens");
 
     global
         .put("platform/demo-key", &SecretBytes::from("g"), &actor())
@@ -82,7 +84,9 @@ async fn a_shared_database_serves_each_stores_reads_independently() {
     let db = shared_db();
     let secrets = Secrets::new(kms());
     let global = secrets.control_plane_global(Arc::clone(&db));
-    let tenant = secrets.tenant("tenant-a", Arc::clone(&db));
+    let tenant = secrets
+        .tenant("tenant-a", Arc::clone(&db))
+        .expect("the tenant store opens");
 
     // The same name in both stores: the collision that used to make one
     // store's `get` find the other's row and fail to decrypt it.
@@ -125,7 +129,9 @@ async fn deleting_in_one_store_leaves_the_other_stores_rows_alone() {
     let db = shared_db();
     let secrets = Secrets::new(kms());
     let global = secrets.control_plane_global(Arc::clone(&db));
-    let tenant = secrets.tenant("tenant-a", Arc::clone(&db));
+    let tenant = secrets
+        .tenant("tenant-a", Arc::clone(&db))
+        .expect("the tenant store opens");
 
     for store in [&global, &tenant] {
         store
@@ -163,7 +169,9 @@ async fn rotating_one_store_never_touches_another_stores_rows() {
     let db = shared_db();
     let secrets = Secrets::new(kms());
     let global = secrets.control_plane_global(Arc::clone(&db));
-    let tenant = secrets.tenant("tenant-a", Arc::clone(&db));
+    let tenant = secrets
+        .tenant("tenant-a", Arc::clone(&db))
+        .expect("the tenant store opens");
 
     global
         .put(
@@ -224,7 +232,9 @@ async fn a_rewrap_touches_only_its_own_stores_keys() {
     let db = shared_db();
     let secrets = Secrets::new(kms());
     let global = secrets.control_plane_global(Arc::clone(&db));
-    let tenant = secrets.tenant("tenant-a", Arc::clone(&db));
+    let tenant = secrets
+        .tenant("tenant-a", Arc::clone(&db))
+        .expect("the tenant store opens");
 
     global
         .put("platform/demo-key", &SecretBytes::from("g"), &actor())
@@ -268,7 +278,9 @@ async fn both_stores_chains_verify_on_the_shared_ledger() {
     let db = shared_db();
     let secrets = Secrets::new(kms());
     let global = secrets.control_plane_global(Arc::clone(&db));
-    let tenant = secrets.tenant("tenant-a", Arc::clone(&db));
+    let tenant = secrets
+        .tenant("tenant-a", Arc::clone(&db))
+        .expect("the tenant store opens");
 
     global
         .put("platform/demo-key", &SecretBytes::from("g"), &actor())
@@ -311,7 +323,9 @@ async fn an_unstamped_row_belongs_to_no_store() {
     let db = shared_db();
     let secrets = Secrets::new(kms());
     let global = secrets.control_plane_global(Arc::clone(&db));
-    let tenant = secrets.tenant("tenant-a", Arc::clone(&db));
+    let tenant = secrets
+        .tenant("tenant-a", Arc::clone(&db))
+        .expect("the tenant store opens");
     let actor = actor();
     global
         .put("platform/key", &SecretBytes::from("legacy value"), &actor)
@@ -385,6 +399,335 @@ async fn an_unstamped_row_belongs_to_no_store() {
     );
 }
 
+/// The regression test for the cross-store rotation write (issue #434):
+/// conventional secret names are shared across stores by design and the
+/// primary key is `(store, name, version)`, so two stores legitimately
+/// hold the same `(name, version)` — and the re-encryption UPDATE must
+/// carry the store predicate or one store's rotation overwrites the
+/// other's ciphertext, and the other store's plaintext is gone.
+#[pollster::test]
+async fn rotating_one_store_never_rewrites_the_other_stores_row_of_the_same_name() {
+    let db = shared_db();
+    let secrets = Secrets::new(kms());
+    let global = secrets.control_plane_global(Arc::clone(&db));
+    let tenant = secrets
+        .tenant("tenant-a", Arc::clone(&db))
+        .expect("the tenant store opens");
+
+    // The same name in both stores, different plaintexts, both at
+    // version 1: the row pair the shared primary key permits.
+    global
+        .put(
+            "stripe/api_key",
+            &SecretBytes::from("global value"),
+            &actor(),
+        )
+        .await
+        .expect("global put");
+    tenant
+        .put(
+            "stripe/api_key",
+            &SecretBytes::from("tenant value"),
+            &actor(),
+        )
+        .await
+        .expect("tenant put");
+
+    // The tenant's row, straight from the database, before the rotation.
+    let before = stored_row(db.as_ref(), "tenant-a").await;
+
+    let report = global
+        .rotate_dek(&actor(), false)
+        .await
+        .expect("rotate global");
+    assert_eq!(
+        report.reencrypted, 1,
+        "only the rotating store's own row is live to it"
+    );
+
+    // The untouched store's row is byte-identical afterwards: same
+    // key_id, same nonce, same ciphertext.
+    let after = stored_row(db.as_ref(), "tenant-a").await;
+    assert_eq!(
+        after, before,
+        "rotating one store must not touch the other store's row of the same name"
+    );
+
+    // The untouched store still reads its own original plaintext.
+    assert_eq!(
+        tenant
+            .get("stripe/api_key", &actor())
+            .await
+            .expect("read")
+            .expect("present")
+            .expose(),
+        b"tenant value"
+    );
+    // And the rotated store gets its own plaintext back under its new key.
+    assert_eq!(
+        global
+            .get("stripe/api_key", &actor())
+            .await
+            .expect("read")
+            .expect("present")
+            .expose(),
+        b"global value"
+    );
+}
+
+/// Rotating one store must not move another store's key rows through the
+/// key states: `retiring` and `retired` belong to the rotating store's
+/// own key alone. A cross-store collision on `key_id` cannot arise —
+/// `key_id` is the table's primary key and the ids are random — so the
+/// invariant is pinned directly: the other store's key rows keep their
+/// state, and it owns exactly the rows it owned before the rotation.
+#[pollster::test]
+async fn rotating_one_store_never_moves_another_stores_key_rows_through_their_states() {
+    let db = shared_db();
+    let secrets = Secrets::new(kms());
+    let global = secrets.control_plane_global(Arc::clone(&db));
+    let tenant = secrets
+        .tenant("tenant-a", Arc::clone(&db))
+        .expect("the tenant store opens");
+
+    global
+        .put("platform/demo-key", &SecretBytes::from("g"), &actor())
+        .await
+        .expect("global put");
+    tenant
+        .put("venture/x", &SecretBytes::from("t"), &actor())
+        .await
+        .expect("tenant put");
+
+    let tenant_before = key_rows(db.as_ref(), "tenant-a").await;
+    assert_eq!(tenant_before.len(), 1, "the tenant owns one key row");
+    assert_eq!(tenant_before[0].1, "active");
+
+    global
+        .rotate_dek(&actor(), false)
+        .await
+        .expect("rotate global");
+
+    let tenant_after = key_rows(db.as_ref(), "tenant-a").await;
+    assert_eq!(
+        tenant_after, tenant_before,
+        "the other store's key rows keep their state and their count"
+    );
+    assert_eq!(
+        tenant_after[0].1, "active",
+        "the other store's key is neither retiring nor retired"
+    );
+
+    // And the other store keeps working on its own key: it reads under
+    // it and a further put still resolves its active key.
+    assert_eq!(
+        tenant
+            .get("venture/x", &actor())
+            .await
+            .expect("read")
+            .expect("present")
+            .expose(),
+        b"t"
+    );
+    tenant
+        .put("venture/y", &SecretBytes::from("u"), &actor())
+        .await
+        .expect("a put still resolves the other store's active key");
+}
+
+/// One store cannot unwrap another store's key row: `key` resolves a key
+/// id within its own store or not at all. `key` itself is `pub(crate)`,
+/// so this drives the nearest public path — `get`, which resolves every
+/// row's key through it. The row has been repointed at another store's
+/// key id, and only a store-scoped lookup turns that into `NoKey`; an
+/// unscoped one would return the foreign wrapped bytes and the read
+/// would fail later, and differently, on the AAD instead.
+#[pollster::test]
+async fn a_store_cannot_unwrap_another_stores_key_row() {
+    let db = shared_db();
+    let secrets = Secrets::new(kms());
+    let global = secrets.control_plane_global(Arc::clone(&db));
+    let tenant = secrets
+        .tenant("tenant-a", Arc::clone(&db))
+        .expect("the tenant store opens");
+
+    global
+        .put("platform/demo-key", &SecretBytes::from("g"), &actor())
+        .await
+        .expect("global put");
+    tenant
+        .put("venture/x", &SecretBytes::from("t"), &actor())
+        .await
+        .expect("tenant put");
+
+    // Repoint the global store's row at the tenant's key id: the row now
+    // names a key this store does not own.
+    let tenant_key_id: String = db
+        .query(&cratefield_core::Statement::new(
+            "SELECT key_id FROM harness_secret_keys WHERE store = 'tenant-a'",
+        ))
+        .await
+        .expect("read the tenant's key")
+        .rows
+        .first()
+        .and_then(|row| row.get("key_id"))
+        .expect("the tenant's key id");
+    db.execute(&cratefield_core::Statement::with_values(
+        "UPDATE harness_secrets SET key_id = ? WHERE store = 'global'",
+        vec![sea_query_text(&tenant_key_id)],
+    ))
+    .await
+    .expect("repoint the row");
+
+    let err = global
+        .get("platform/demo-key", &actor())
+        .await
+        .expect_err("a row naming another store's key cannot be opened");
+    assert!(
+        matches!(err, SecretsError::NoKey(ref store) if store == "global"),
+        "the key lookup is scoped to the asking store: {err}"
+    );
+
+    // The store that owns the key still reads with it.
+    assert_eq!(
+        tenant
+            .get("venture/x", &actor())
+            .await
+            .expect("read")
+            .expect("present")
+            .expose(),
+        b"t"
+    );
+}
+
+/// `global` names the control plane's own store — the one
+/// [`Secrets::global`] reaches behind its harness-only proof. A tenant
+/// store stamped `global` would be indistinguishable from it, so the
+/// constructor refuses, and nothing in the database is ever stamped
+/// with the reserved name.
+#[pollster::test]
+async fn tenant_refuses_the_control_planes_store_name() {
+    let db = shared_db();
+    let secrets = Secrets::new(kms());
+    let global = secrets.control_plane_global(Arc::clone(&db));
+    global
+        .put("platform/demo-key", &SecretBytes::from("g"), &actor())
+        .await
+        .expect("global put");
+
+    let err = secrets
+        .tenant("global", Arc::clone(&db))
+        .err()
+        .expect("`global` is reserved for the control plane's store");
+    assert!(
+        matches!(err, SecretsError::Invalid(_)),
+        "the refusal is Invalid: {err}"
+    );
+
+    // The refusal left no rows behind: every secret row in the shared
+    // database still belongs to the control plane's store, and the
+    // secret it holds is readable through that store alone.
+    let stores: Vec<String> = db
+        .query(&cratefield_core::Statement::new(
+            "SELECT DISTINCT store FROM harness_secrets",
+        ))
+        .await
+        .expect("read the stores stamped")
+        .rows
+        .iter()
+        .filter_map(|row| row.get("store"))
+        .collect();
+    assert_eq!(stores, vec!["global"], "no row was stamped `global` twice");
+    assert_eq!(
+        global
+            .get("platform/demo-key", &actor())
+            .await
+            .expect("read")
+            .expect("present")
+            .expose(),
+        b"g"
+    );
+}
+
+/// A store stamped with nothing is nobody's: no scoping clause can
+/// ever select those rows again, so the constructor refuses a blank id.
+#[pollster::test]
+async fn tenant_refuses_a_blank_id() {
+    let db = shared_db();
+    let secrets = Secrets::new(kms());
+    for id in ["", "   "] {
+        let err = secrets
+            .tenant(id, Arc::clone(&db))
+            .err()
+            .expect("a blank id is nobody's store");
+        assert!(
+            matches!(err, SecretsError::Invalid(_)),
+            "the refusal of `{id}` is Invalid: {err}"
+        );
+    }
+}
+
+/// The ordinary case the two refusals exist to protect.
+#[pollster::test]
+async fn an_ordinary_tenant_id_still_opens() {
+    let db = shared_db();
+    let secrets = Secrets::new(kms());
+    let tenant = secrets
+        .tenant("acme", Arc::clone(&db))
+        .expect("an ordinary tenant id");
+    tenant
+        .put("venture/x", &SecretBytes::from("t"), &actor())
+        .await
+        .expect("tenant put");
+    assert_eq!(
+        tenant
+            .get("venture/x", &actor())
+            .await
+            .expect("read")
+            .expect("present")
+            .expose(),
+        b"t"
+    );
+}
+
 fn sea_query_text(value: &str) -> sea_query::Value {
     sea_query::Value::String(Some(Box::new(value.to_owned())))
+}
+
+/// One store's `harness_secrets` row read straight from the database:
+/// the three columns a rotation overwrites, as raw bytes.
+async fn stored_row(db: &dyn Database, store: &str) -> (String, Vec<u8>, Vec<u8>) {
+    let rows = db
+        .query(&cratefield_core::Statement::with_values(
+            "SELECT key_id, nonce, ciphertext FROM harness_secrets WHERE store = ?",
+            vec![sea_query_text(store)],
+        ))
+        .await
+        .expect("read the store's secret rows");
+    let row = rows.rows.first().expect("the store has a secret row");
+    (
+        row.get::<String>("key_id").expect("key_id"),
+        row.get::<Vec<u8>>("nonce").expect("nonce"),
+        row.get::<Vec<u8>>("ciphertext").expect("ciphertext"),
+    )
+}
+
+/// A store's `harness_secret_keys` rows straight from the database:
+/// `(key_id, state)`, in a stable order.
+async fn key_rows(db: &dyn Database, store: &str) -> Vec<(String, String)> {
+    db.query(&cratefield_core::Statement::with_values(
+        "SELECT key_id, state FROM harness_secret_keys WHERE store = ? ORDER BY key_id",
+        vec![sea_query_text(store)],
+    ))
+    .await
+    .expect("read the store's key rows")
+    .rows
+    .iter()
+    .map(|row| {
+        (
+            row.get::<String>("key_id").expect("key_id"),
+            row.get::<String>("state").expect("state"),
+        )
+    })
+    .collect()
 }

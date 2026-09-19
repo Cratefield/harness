@@ -381,6 +381,23 @@ impl Module for Linkedin {
         errors.into_result()
     }
 
+    /// The image upload is the one route here that raises core's 64 KiB
+    /// `/v1/*` cap, so the ceiling a runtime can refuse at before buffering
+    /// is that route's effective cap: the configured `MAX_IMAGE_BYTES`, or
+    /// the builder's setting when the key is absent (issue #440).
+    ///
+    /// The key is read through the same helper the route's
+    /// `DefaultBodyLimit` uses, so the two cannot drift: an operator who
+    /// raises `MAX_IMAGE_BYTES` above the compiled default must not find
+    /// the runtime refusing, before the route is ever reached, a body the
+    /// route would have accepted. It is never below core's
+    /// `MAX_BODY_BYTES` either way — the runtime floors the value — and the
+    /// route's own `DefaultBodyLimit` stays the precise per-route
+    /// enforcer.
+    fn max_body_bytes(&self, cfg: &dyn Config) -> usize {
+        handlers::max_image_bytes(cfg, self.settings.max_image_bytes)
+    }
+
     fn router(&self, ctx: ModuleContext) -> axum::Router {
         let shared = Arc::new(ctx);
         // First build wins; on Workers every request rebuilds the router with

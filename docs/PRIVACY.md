@@ -2,7 +2,8 @@
 
 This document is the data map required by architecture section 11 and
 issue #13. It covers the two M1 modules: `cratefield-module-email-signup`
-and `cratefield-module-waitlist`.
+and `cratefield-module-waitlist`, and the telemetry module
+(`cratefield-module-telemetry`, issue #413).
 
 **A deployment's own map is a route, not this file.** Since
 `cratefield-module-privacy`, each module declares what it holds next to the
@@ -84,6 +85,45 @@ unlike a queued job it is not gone within the hour.
 
 Retention: none. The row is written on the first mail and updated on every
 later one; only a failed send releases it.
+
+### `telemetry_events` (module-telemetry)
+
+Aggregate usage counters, one row per bucket, never one row per event
+([TELEMETRY.md](TELEMETRY.md)). A bucket is one install's accumulated counts
+for one event name under one combination of the closed-vocabulary values —
+which is why every descriptive column below is a label from a fixed list and
+none is free text.
+
+| Column | Kind | Purpose |
+|---|---|---|
+| `bucket_key` | primary key | One accumulation bucket: the dimension tuple joined with `\|`, day first, then install, client shape, event name, outcome, error class, duration bucket — the day is part of the key, so a bucket is one install's counts for one day. The event name is venture-chosen and could in principle carry a `\|`; the nine components around it cannot, and a declared name that does is refused at build time, so the tuple still splits uniquely |
+| `day` | date | The UTC day the bucket was first written — the anchor the retention purge compares |
+| `install_id` | pseudonymous id | The 32-hex install id the payload carried. Pseudonymous, not anonymous: the person's own client prints it (`fz telemetry status`), so an erasure request that supplies it reaches exactly these rows. Nothing stores a link from it to a person, and it rotates every 30 days, so an erasure reaches everything written under the id it names and nothing under the ids before it — the trade [TELEMETRY.md](TELEMETRY.md) states in full |
+| `client_kind`, `client_version`, `platform`, `arch` | labels | The client shape that reported, each from its closed vocabulary |
+| `event` | label | The event name, from the venture's declared vocabulary |
+| `outcome`, `error_kind`, `duration_bucket` | labels | The closed-vocabulary outcome, error class and duration bucket |
+| `events` | counter | How many runs accumulated into the bucket over its lifetime |
+| `first_seen_at`, `last_seen_at` | timestamps | First and most recent touch of the bucket |
+
+Retention: rows whose `day` is older than `TELEMETRY_RETENTION_DAYS` (default
+180 days) are deleted by the module's scheduled handler. No column here is an
+IP address or a user agent — the client IP touches the route only as an
+in-memory rate-limit key, per the principles above, and is never written.
+
+### `telemetry_modules` (module-telemetry)
+
+The payload's `modules` list, flattened: one row per module a given install
+reported on a given day, so the venture can see which composed modules its
+reporting clients actually run.
+
+| Column | Kind | Purpose |
+|---|---|---|
+| `install_id` | pseudonymous id | As above; the column erasure matches |
+| `day` | date | The UTC day |
+| `module` | label | A module name from the payload's `modules` list; the three columns together are the composite primary key |
+
+Retention: rows whose `day` is older than `TELEMETRY_RETENTION_DAYS` (default
+180 days) go in the same scheduled purge as `telemetry_events`.
 
 ## Signed links
 
