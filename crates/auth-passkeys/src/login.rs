@@ -19,8 +19,8 @@ use factory0_auth_core::{
     mark_passkey_suspect, passkey_by_credential_id, set_cookie, touch_credential_used,
     update_passkey_sign_count, user_by_id, user_by_primary_email,
 };
-use http::HeaderMap;
 use http::header;
+use http::{HeaderMap, Uri};
 use serde::Deserialize;
 use serde_json::json;
 use std::sync::Arc;
@@ -310,11 +310,18 @@ async fn verify(
     State(state): State<Arc<ModuleState>>,
     scope: Scope,
     headers: HeaderMap,
+    uri: Uri,
     // Raw bytes rather than the JSON extractor, because an extractor runs
     // before the handler body: a typed one here would answer a parse error
     // to a caller the rate limiter was about to refuse.
     raw: axum::body::Bytes,
 ) -> Result<Response, Problem> {
+    // A verified assertion mints a session, so a form on another site must
+    // not be able to complete one (issue #439). Ahead of the limiter, so
+    // a cross-site POST cannot spend the account's rate-limit budget
+    // either.
+    factory0_auth_core::csrf::require_same_origin(&headers, &uri)
+        .map_err(|problem| problem.instance(&scope.request_id))?;
     if let Some(limited) = limit_login(&state, &headers).await {
         return Ok(limited);
     }

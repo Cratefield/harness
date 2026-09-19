@@ -11,7 +11,7 @@ use factory0_auth_core::{
     insert_user, retire_unconsumed_tokens, set_cookie, single_use_token_by_hash, user_by_id,
     user_by_primary_email,
 };
-use http::{HeaderMap, StatusCode, header};
+use http::{HeaderMap, StatusCode, Uri, header};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -644,8 +644,16 @@ async fn confirm(
     State(state): State<Arc<ModuleState>>,
     scope: Scope,
     headers: HeaderMap,
+    uri: Uri,
     body: String,
 ) -> Result<Response, Problem> {
+    // Spending the token mints a session, so a form on another site must
+    // not be able to press this button for somebody (issue #439). The GET
+    // above is deliberately unguarded: a click out of a mail client is
+    // inherently cross-site, and it is covered by the single-use token in
+    // the URL plus `looks_like_a_click`.
+    factory0_auth_core::csrf::require_same_origin(&headers, &uri)
+        .map_err(|problem| problem.instance(&scope.request_id))?;
     let token = url::form_urlencoded::parse(body.as_bytes())
         .find(|(key, _)| key == "token")
         .map(|(_, value)| value.to_string())

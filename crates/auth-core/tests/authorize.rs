@@ -255,6 +255,65 @@ fn location_of(response: &axum::response::Response) -> String {
         .to_owned()
 }
 
+/// A form POST through the router, with the given extra headers — the
+/// browser signals (`host`, `origin`, `sec-fetch-site`) a confirmation
+/// carries or a cross-site attack betrays itself with.
+async fn post(
+    kit: &TestHarness,
+    uri: &str,
+    cookie: Option<&str>,
+    headers: &[(&str, &str)],
+    body: &str,
+) -> axum::response::Response {
+    let mut request = axum::http::Request::builder()
+        .method(Method::POST)
+        .uri(uri)
+        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded");
+    if let Some(cookie) = cookie {
+        request = request.header(header::COOKIE, format!("__Host-fz_session={cookie}"));
+    }
+    for (name, value) in headers {
+        request = request.header(*name, *value);
+    }
+    kit.router
+        .clone()
+        .oneshot(
+            request
+                .body(axum::body::Body::from(body.to_owned()))
+                .expect("request"),
+        )
+        .await
+        .expect("router answers")
+}
+
+/// Every `Set-Cookie` the response carried, as strings.
+fn set_cookies_of(response: &axum::response::Response) -> Vec<String> {
+    response
+        .headers()
+        .get_all(header::SET_COOKIE)
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .map(str::to_owned)
+        .collect()
+}
+
+/// Whether the clearing cookie — the one that expires the session
+/// cookie — is among the response's `Set-Cookie`s.
+fn clears_the_session(response: &axum::response::Response) -> bool {
+    set_cookies_of(response)
+        .iter()
+        .any(|cookie| cookie.contains("Max-Age=0") || cookie.contains("Expires="))
+}
+
+/// The session row a cookie value names, read straight from the store.
+async fn session_row(kit: &TestHarness, cookie: &str) -> factory0_auth_core::SessionRow {
+    let hash = Sha256::digest(cookie.as_bytes()).to_vec();
+    session_by_token_hash(&*kit.db, &hash)
+        .await
+        .expect("query")
+        .expect("row exists")
+}
+
 /// The whole point of exact matching: a request naming a URI the client
 /// did not register must not send the browser anywhere. A redirect here
 /// is the vulnerability, so the assertion is on the absence of one.
@@ -393,20 +452,329 @@ async fn a_missing_pkce_challenge_is_refused() {
     );
 }
 
-/// Logout revokes the session and clears the cookie; the session it
-/// revoked can no longer mint a code.
+// ---------------------------------------------------------------------
+// RP-initiated logout: GET asks, POST acts (issue #439)
+// ---------------------------------------------------------------------
+
+/// The host the confirmation POSTs are judged against: the `host` header
+/// a browser sends and the origin it claims must agree.
+const AUTH_HOST: &str = "auth.example.test";
+
+/// `GET /logout` with a live session is the whole fix: the page asks,
+/// and nothing is revoked, nothing cleared. The cookie is `SameSite=Lax`,
+/// so it *is* presented on the cross-site top-level GET any page can
+/// produce — which is exactly why the GET must not act.
 #[pollster::test]
-async fn logout_revokes_the_session_and_clears_the_cookie() {
+async fn logout_get_with_a_live_session_asks_and_revokes_nothing() {
     let kit = kit();
     seed_client(&kit).await;
     let cookie = signed_in(&kit, "u1").await;
 
     let response = get(&kit, "/v1/auth-core/logout", Some(&cookie)).await;
+    assert_eq!(response.status(), StatusCode::OK);
     assert!(
-        response.status() == StatusCode::OK || response.status() == StatusCode::FOUND,
-        "logout answers, got {}",
-        response.status()
+        !clears_the_session(&response),
+        "the asking page must not clear the session cookie"
     );
+
+    let page = body_of(response).await;
+    assert!(
+        page.contains("<form method=\"post\" action=\"/v1/auth-core/logout/confirm\">"),
+        "the form posts to the confirm route: {page}"
+    );
+    assert!(
+        page.contains("Sign out of this device?"),
+        "it asks, in so many words: {page}"
+    );
+    // A plain GET carried no pair, so the form carries no hidden inputs
+    // either — the POST must confirm a request the GET actually made.
+    assert!(!page.contains("name=\"client_id\""), "{page}");
+
+    let uri =
+        format!("/v1/auth-core/logout?client_id={CLIENT}&post_logout_redirect_uri={REDIRECT}");
+    let response = get(&kit, &uri, Some(&cookie)).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(!clears_the_session(&response));
+    // The validated pair this GET carried travels into the form, so the
+    // confirmation confirms the request it was asked about.
+    let page = body_of(response).await;
+    assert!(
+        page.contains(&format!("name=\"client_id\" value=\"{CLIENT}\"")),
+        "{page}"
+    );
+    assert!(
+        page.contains(&format!(
+            "name=\"post_logout_redirect_uri\" value=\"{REDIRECT}\""
+        )),
+        "{page}"
+    );
+
+    // Nothing was revoked: the session row is live and the cookie still
+    // mints a code, which is the property an `<img>`-tag attack would
+    // have taken away.
+    assert!(
+        session_row(&kit, &cookie).await.revoked_at.is_none(),
+        "the asking page must not revoke the session"
+    );
+    let after = get(&kit, &authorize_uri(""), Some(&cookie)).await;
+    assert_eq!(
+        after.status(),
+        StatusCode::FOUND,
+        "the session must survive a logout GET that only asked"
+    );
+}
+
+/// A cross-site navigation — the shape an attacker's page produces, and
+/// the shape a legitimate relying-party redirect also produces — gets
+/// the same asking page. It must not fail: RP-initiated logout with no
+/// `id_token_hint` is legitimately cross-site.
+#[pollster::test]
+async fn a_cross_site_navigation_to_logout_still_asks_instead_of_failing() {
+    let kit = kit();
+    seed_client(&kit).await;
+    let cookie = signed_in(&kit, "u1").await;
+
+    let request = axum::http::Request::builder()
+        .method(Method::GET)
+        .uri("/v1/auth-core/logout")
+        .header(header::COOKIE, format!("__Host-fz_session={cookie}"))
+        .header("sec-fetch-site", "cross-site")
+        .body(axum::body::Body::empty())
+        .expect("request");
+    let response = kit
+        .router
+        .clone()
+        .oneshot(request)
+        .await
+        .expect("router answers");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let page = body_of(response).await;
+    assert!(
+        page.contains("action=\"/v1/auth-core/logout/confirm\""),
+        "the attacker's GET is answered with the ask, not an error: {page}"
+    );
+    assert!(
+        session_row(&kit, &cookie).await.revoked_at.is_none(),
+        "the cross-site GET revoked nothing"
+    );
+}
+
+/// Without a live session there is nothing to revoke, so the GET keeps
+/// today's behaviour for everybody who lands here signed out (or
+/// carrying a stale cookie): the clearing cookie, and the validated
+/// redirect.
+#[pollster::test]
+async fn logout_without_a_live_session_still_clears_and_redirects() {
+    let kit = kit();
+    seed_client(&kit).await;
+    let uri =
+        format!("/v1/auth-core/logout?client_id={CLIENT}&post_logout_redirect_uri={REDIRECT}");
+
+    // No cookie at all.
+    let response = get(&kit, &uri, None).await;
+    assert_eq!(response.status(), StatusCode::FOUND);
+    assert!(
+        clears_the_session(&response),
+        "an already-invalid cookie is still cleared: nothing an attacker cares about changes"
+    );
+    assert_eq!(location_of(&response), REDIRECT);
+
+    // A cookie of the issued shape that names nothing live.
+    let stale = "z".repeat(43);
+    let response = get(&kit, &uri, Some(&stale)).await;
+    assert_eq!(response.status(), StatusCode::FOUND);
+    assert!(clears_the_session(&response));
+    assert_eq!(location_of(&response), REDIRECT);
+
+    // And with no redirect target, the signed-out page.
+    let response = get(&kit, "/v1/auth-core/logout", None).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(clears_the_session(&response));
+    let page = body_of(response).await;
+    assert!(page.contains("You are signed out"), "{page}");
+}
+
+/// The POST is what acts: same-origin, it revokes, clears the cookie,
+/// and redirects to the validated target — everything the GET used to
+/// do, and the session it revoked cannot mint another code.
+#[pollster::test]
+async fn confirm_logout_from_the_same_origin_revokes_the_session() {
+    let kit = kit();
+    seed_client(&kit).await;
+    let cookie = signed_in(&kit, "u1").await;
+
+    let response = post(
+        &kit,
+        "/v1/auth-core/logout/confirm",
+        Some(&cookie),
+        &[
+            ("host", AUTH_HOST),
+            ("origin", "https://auth.example.test"),
+            ("sec-fetch-site", "same-origin"),
+        ],
+        &format!("client_id={CLIENT}&post_logout_redirect_uri={REDIRECT}"),
+    )
+    .await;
+
+    assert_eq!(response.status(), StatusCode::FOUND);
+    assert_eq!(location_of(&response), REDIRECT);
+    assert!(clears_the_session(&response), "the act clears the cookie");
+    assert!(
+        session_row(&kit, &cookie).await.revoked_at.is_some(),
+        "the same-origin POST revoked the session"
+    );
+
+    // And the revoked session can no longer authorize — the property the
+    // old GET test asserted, now true of the POST.
+    let after = get(&kit, &authorize_uri(""), Some(&cookie)).await;
+    assert_eq!(
+        after.status(),
+        StatusCode::OK,
+        "a revoked session falls back to the chooser rather than minting a code"
+    );
+}
+
+/// The cross-site POST — the thing SameSite=Lax cannot stop from
+/// *arriving* — is refused on arrival, and the session it was meant to
+/// kill walks away intact.
+#[pollster::test]
+async fn confirm_logout_from_a_cross_site_post_is_refused() {
+    let kit = kit();
+    seed_client(&kit).await;
+    let cookie = signed_in(&kit, "u1").await;
+
+    let response = post(
+        &kit,
+        "/v1/auth-core/logout/confirm",
+        Some(&cookie),
+        // `origin` names another site, `host` names this one: the claim
+        // does not match the request, which is the definition of
+        // cross-site.
+        &[("host", AUTH_HOST), ("origin", "https://evil.example")],
+        &format!("client_id={CLIENT}&post_logout_redirect_uri={REDIRECT}"),
+    )
+    .await;
+
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    assert!(
+        set_cookies_of(&response).is_empty(),
+        "a refusal clears nothing"
+    );
+    assert!(
+        session_row(&kit, &cookie).await.revoked_at.is_none(),
+        "the cross-site POST revoked nothing"
+    );
+    let after = get(&kit, &authorize_uri(""), Some(&cookie)).await;
+    assert_eq!(
+        after.status(),
+        StatusCode::FOUND,
+        "the session must still work after the refused POST"
+    );
+}
+
+/// The POST answers a person who confirms after their cookie already
+/// died the same way the old GET answered them: nothing to revoke, the
+/// clearing cookie anyway, and the validated redirect still happens.
+#[pollster::test]
+async fn confirm_logout_without_a_session_still_redirects_to_the_validated_target() {
+    let kit = kit();
+    seed_client(&kit).await;
+
+    let response = post(
+        &kit,
+        "/v1/auth-core/logout/confirm",
+        None,
+        &[
+            ("host", AUTH_HOST),
+            ("origin", "https://auth.example.test"),
+            ("sec-fetch-site", "same-origin"),
+        ],
+        &format!("client_id={CLIENT}&post_logout_redirect_uri={REDIRECT}"),
+    )
+    .await;
+
+    assert_eq!(response.status(), StatusCode::FOUND);
+    assert_eq!(location_of(&response), REDIRECT);
+    assert!(clears_the_session(&response));
+}
+
+/// A confirmation with no redirect target — the form as it renders for a
+/// plain "sign out of this device" — ends the session and lands on the
+/// signed-out page.
+#[pollster::test]
+async fn confirm_logout_with_no_redirect_target_renders_the_signed_out_page() {
+    let kit = kit();
+    seed_client(&kit).await;
+    let cookie = signed_in(&kit, "u1").await;
+
+    let response = post(
+        &kit,
+        "/v1/auth-core/logout/confirm",
+        Some(&cookie),
+        &[
+            ("host", AUTH_HOST),
+            ("origin", "https://auth.example.test"),
+            ("sec-fetch-site", "same-origin"),
+        ],
+        // The bare form posts an empty body: no successful controls.
+        "",
+    )
+    .await;
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(clears_the_session(&response));
+    let page = body_of(response).await;
+    assert!(page.contains("You are signed out"), "{page}");
+    assert!(
+        session_row(&kit, &cookie).await.revoked_at.is_some(),
+        "the bare confirmation revoked the session"
+    );
+}
+
+/// The old `logout_revokes_the_session_and_clears_the_cookie`, updated
+/// for issue #439 rather than deleted. It exercised `GET /logout` and
+/// asserted the revoke-and-clear that GET used to do — the exact
+/// behaviour the issue removes, because a `SameSite=Lax` cookie is sent
+/// on the cross-site top-level GET any page can produce. The GET half
+/// now asserts the inverse — the ask clears nothing and revokes
+/// nothing — and the original assertions live on, pointed at the
+/// confirming POST that may act.
+#[pollster::test]
+async fn logout_get_only_asks_while_the_confirming_post_revokes_and_clears() {
+    let kit = kit();
+    seed_client(&kit).await;
+    let cookie = signed_in(&kit, "u1").await;
+
+    // The GET half, inverted: the ask leaves the session exactly as it
+    // found it.
+    let response = get(&kit, "/v1/auth-core/logout", Some(&cookie)).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(
+        !clears_the_session(&response),
+        "the asking GET must not clear the cookie"
+    );
+    assert!(
+        session_row(&kit, &cookie).await.revoked_at.is_none(),
+        "the asking GET must not revoke the session"
+    );
+
+    // The POST half, where the original assertions now live: the act
+    // clears the cookie and revokes the session.
+    let response = post(
+        &kit,
+        "/v1/auth-core/logout/confirm",
+        Some(&cookie),
+        &[
+            ("host", AUTH_HOST),
+            ("origin", "https://auth.example.test"),
+            ("sec-fetch-site", "same-origin"),
+        ],
+        // The bare form posts an empty body: no successful controls.
+        "",
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
     let set_cookie = response
         .headers()
         .get(header::SET_COOKIE)
