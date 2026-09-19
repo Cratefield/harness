@@ -6,6 +6,38 @@
 # the workspace dependency requirements it manages. Changelogs are
 # generated per crate from conventional commits (feat/fix grouped,
 # breaking changes highlighted — the git-cliff defaults).
+#
+# Does a breaking core bump release its dependents automatically? Not
+# reliably. Assume it does not, and check (issue #462).
+#
+# release-plz does cascade by default: releasing a crate rewrites that
+# crate's version requirement in the manifests it manages, and every crate
+# whose requirement it rewrote earns a patch bump and is published in the
+# same release PR. There is no setting for this — the cascade cannot be
+# turned on, off or up.
+#
+# But the cascade is keyed on the rewrite, so a hand edit suppresses it.
+# release-plz asks whether a requirement must change to admit the version
+# being released, and reads "no change" as "this dependent needs no
+# release". A requirement of "0.5" already admits 0.5.0, so releasing
+# core as 0.5.0 against a workspace table that already reads "0.5"
+# rewrites nothing and publishes nothing but core. That is how
+# cratefield-core reached 0.5.0 on crates.io with 23 published dependents
+# still requiring ^0.4: the requirement had been edited ahead of the
+# release meant to move it.
+#
+# So bump one place, not two. Set the new version in
+# crates/<name>/Cargo.toml and leave the [workspace.dependencies]
+# requirement in the root Cargo.toml for release-plz to move.
+#
+# Second limit, also not configurable: a cascaded dependent gets a patch
+# bump even when the dependency's change was breaking, because release-plz
+# does not inspect code to see what a dependent re-exports. Note that
+# docs/COMPATIBILITY.md will not show this: it is generated from the
+# workspace manifests, so it describes this tree, not what the published
+# crates require.
+#
+# docs/RELEASING.md has the full account and the recovery steps.
 
 [workspace]
 repo_url = "https://github.com/Cratefield/harness"
