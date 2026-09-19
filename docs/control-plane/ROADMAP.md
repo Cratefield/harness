@@ -448,6 +448,7 @@ are carried by A1 and A6 alongside the labels listed below.
 - **Repo:** `Cratefield/harness`
 - **Issue:** [harness#161](https://github.com/Cratefield/harness/issues/161)
 - **Labels:** `docs`, `needs-human`
+- **Spec:** `docs/control-plane/STARTERS.md`
 - **Body:** Create `Cratefield/starters` with working starters for Next.js, SvelteKit and
   Expo that use the generated TypeScript client, plus Claude Code and Cursor project
   templates that ship `llms.txt` and the MCP server configured. Add a "Deploy to Cratefield"
