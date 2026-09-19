@@ -66,7 +66,8 @@ min = 0
 async fn built(declared: &Schema) -> cratefield_adapter_sqlite::SqliteDatabase {
     let db = cratefield_adapter_sqlite::SqliteDatabase::in_memory().expect("sqlite");
     // The migration ledger both adapters write; the catalog reader
-    // already excludes it, and its presence here is the realistic case.
+    // excludes the harness's reserved prefix, the ledger among them, and
+    // its presence here is the realistic case.
     db.apply_migrations("probe", &[]).expect("ledger");
     let sql = declared.ddl(SqlDialect::Sqlite).expect("renders");
     for statement in sql.split(';').filter(|s| !s.trim().is_empty()) {
