@@ -12,7 +12,7 @@ import { installSqliteBridge } from './sqlite_bridge.js';
 import { callHandle } from './api.js';
 
 const HARNESS_SECRET = 'browser-demo-secret-please-change-me-32b';
-const ADMIN_TOKEN = 'demo-admin-token';
+const ADMIN_TOKEN = 'demo-admin-token-0123456789abcdef';
 
 let ready;
 async function boot() {

@@ -503,6 +503,90 @@ async fn the_host_authorizes_admin_paths_before_forwarding_them() {
     );
 }
 
+/// The harness admin floor reaches a *sidecar-mounted* admin path too
+/// (issue #437). The forwarding router is nested into `api` after the
+/// modules, so the floor has to be applied once over both nests — a layer
+/// only wraps the routes present when it is applied. What is proved here:
+/// a `429` on `/v1/<mount>/admin/*` before the forward runs, keyed
+/// `admin:ip:` like the module floor, and no consult at all for the
+/// mount's public paths.
+#[pollster::test]
+async fn the_harness_floor_limits_a_sidecar_mounted_admin_path() {
+    let router_with_limiter = |limiter: Arc<RecordingLimiter>| {
+        let dispatcher = Arc::new(RecordingDispatcher::new("ACME"));
+        let mut ports = ports_for(r#"{"acme-pricing":"ACME"}"#, &[], Some(dispatcher.clone()));
+        ports.rate_limiter = Some(limiter);
+        (harness_with_sample().router(ports), dispatcher)
+    };
+
+    // Deny: the 429 comes from the harness layer, with the limiter's
+    // retry-after, before the forward is attempted — an unauthorized
+    // caller would otherwise see the admin gate's 401.
+    let deny = Arc::new(RecordingLimiter::new(LimiterVerdict::Deny));
+    let (router, dispatcher) = router_with_limiter(deny.clone());
+    let limited = request(
+        &router,
+        Method::GET,
+        "/v1/acme-pricing/admin/export",
+        &[("cf-connecting-ip", "203.0.113.7")],
+        None,
+    )
+    .await;
+    assert_eq!(limited.status(), StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(
+        limited
+            .headers()
+            .get("retry-after")
+            .and_then(|v| v.to_str().ok()),
+        Some("11"),
+        "the limiter's retry-after reaches the response"
+    );
+    assert_eq!(
+        deny.seen(),
+        vec!["admin:ip:203.0.113.7".to_owned()],
+        "the sidecar floor draws from the same namespaced admin budget"
+    );
+    assert_eq!(
+        dispatcher.calls.load(Ordering::SeqCst),
+        0,
+        "a denied admin request is never forwarded"
+    );
+
+    // Allow: the floor passes the request on to the host's own admin
+    // gate (which answers 401 unauthenticated), and the mount's public
+    // path never consults the limiter at all.
+    let allow = Arc::new(RecordingLimiter::new(LimiterVerdict::Allow));
+    let (router, _dispatcher) = router_with_limiter(allow.clone());
+    let gate = request(
+        &router,
+        Method::GET,
+        "/v1/acme-pricing/admin/export",
+        &[("cf-connecting-ip", "203.0.113.7")],
+        None,
+    )
+    .await;
+    assert_eq!(gate.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(
+        allow.seen(),
+        vec!["admin:ip:203.0.113.7".to_owned()],
+        "the floor consulted once, then let the host's own gate decide"
+    );
+    let public = request(
+        &router,
+        Method::GET,
+        "/v1/acme-pricing/quote",
+        &[("cf-connecting-ip", "203.0.113.7")],
+        None,
+    )
+    .await;
+    assert_eq!(public.status(), StatusCode::OK);
+    assert_eq!(
+        allow.seen().len(),
+        1,
+        "the mount's public path is not limited by the admin floor"
+    );
+}
+
 #[pollster::test]
 async fn the_gateway_stamp_asserts_admin_only_when_the_host_authorized_it() {
     let dispatcher = Arc::new(RecordingDispatcher::new("ACME"));

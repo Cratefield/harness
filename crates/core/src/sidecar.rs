@@ -693,8 +693,9 @@ pub(crate) async fn events_inbound(
 /// arrives under its mount, so both spellings are authorized here, before
 /// the header that proves the caller is an admin is dropped by the
 /// forward allowlist (issue #131). This mirrors the renderer's gating
-/// rule from #130.
-fn is_admin_path(path: &str) -> bool {
+/// rule from #130. Also the harness-layer predicate the admin rate limit
+/// keys on (issue #437) — one answer to "is this an admin path", not two.
+pub(crate) fn is_admin_path(path: &str) -> bool {
     path == "/admin" || path.ends_with("/admin") || path.contains("/admin/")
 }
 

@@ -18,8 +18,8 @@ use crate::lint::banned_tokens;
 use crate::lock::{Lock, read_lock};
 use cratefield_core::lint_card_data;
 use cratefield_core::{
-    HARNESS_API, HARNESS_SIDECARS, Harness, Port, SIDECAR_GATEWAY_SECRET, VentureEnv, deployed_env,
-    env_disagreement, harness_api_mismatch,
+    HARNESS_API, HARNESS_SIDECARS, Harness, MIN_SECRET_BYTES, Port, SIDECAR_GATEWAY_SECRET,
+    VentureEnv, deployed_env, env_disagreement, harness_api_mismatch,
 };
 use cratefield_push_wiring::PushWiring;
 use std::path::Path;
@@ -120,6 +120,7 @@ pub fn doctor(
         allow_no_captcha,
         sidecars,
         Output::Human,
+        Configured::from_env(),
     );
     if report.ok() {
         return Ok(());
@@ -149,6 +150,7 @@ pub fn doctor_json(
         allow_no_captcha,
         sidecars,
         Output::Json,
+        Configured::from_env(),
     );
     match report.render_json() {
         Ok(payload) => println!("{payload}"),
@@ -180,6 +182,7 @@ pub fn doctor_report_json(
         allow_no_captcha,
         sidecars,
         Output::Json,
+        Configured::from_env(),
     )
 }
 
@@ -189,6 +192,7 @@ fn run_checks(
     allow_no_captcha: Option<&str>,
     sidecars: Option<&str>,
     output: Output,
+    configured: Configured,
 ) -> DoctorReport {
     let mut failures: Vec<DoctorFailure> = Vec::new();
 
@@ -209,13 +213,20 @@ fn run_checks(
         eprintln!("fz: warning: {note}");
     }
     if env == VentureEnv::Production {
-        production_port_checks(
-            harness,
-            Configured::from_env(),
-            allow_no_captcha,
-            output,
-            &mut failures,
-        );
+        production_port_checks(harness, configured, allow_no_captcha, output, &mut failures);
+    }
+
+    // The admin-token floor (issue #437) is deliberately *not*
+    // production-only: `HarnessConfig::from_config` refuses a set-but-short
+    // `ADMIN_TOKEN` in every environment (crates/core/src/config.rs), so a
+    // production gate here would leave the doctor more permissive than the
+    // boot it predicts. Absent stays legal here exactly as it does there —
+    // removing the token is how the admin plane stays disabled.
+    if let Some(message) = admin_token_failure(configured.admin_token_bytes) {
+        failures.push(DoctorFailure {
+            code: &CODES.admin_token_too_short,
+            message,
+        });
     }
 
     push_checks(harness, env, output, &mut failures);
@@ -532,8 +543,8 @@ fn push_wiring_checks(
 }
 
 /// The production-only port rules, gathered so `doctor` stays a flat list of
-/// checks: the captcha rule (with its override) and the payments webhook rule.
-/// Which production secrets the environment actually holds.
+/// checks: the captcha rule (with its override), the payments webhook rule,
+/// and the rate-limiter rule (with its override).
 ///
 /// Read once and passed in, rather than each check reaching for
 /// `std::env` itself. Environment variables are process-global and tests
@@ -545,6 +556,11 @@ pub(crate) struct Configured {
     pub(crate) auth_issuer: bool,
     pub(crate) auth_client_id: bool,
     pub(crate) stripe_webhook_secret: bool,
+    /// The `ADMIN_TOKEN`'s length, not its presence: the boot's floor is a
+    /// length (`MIN_SECRET_BYTES`, issue #437), so the doctor has to
+    /// measure the same thing the boot measures. `None` is unset — legal
+    /// everywhere, here as in `HarnessConfig::from_config`.
+    pub(crate) admin_token_bytes: Option<usize>,
 }
 
 impl Configured {
@@ -553,6 +569,14 @@ impl Configured {
             auth_issuer: set("AUTH_ISSUER"),
             auth_client_id: set("AUTH_CLIENT_ID"),
             stripe_webhook_secret: set("STRIPE_WEBHOOK_SECRET"),
+            // Read the way `EnvVars::get` reads — the read the boot's
+            // config makes — so a set-but-empty variable is unset here
+            // too, and the length is the raw value's, untrimmed: the boot
+            // measures the raw value, and the doctor may not be stricter.
+            admin_token_bytes: std::env::var("ADMIN_TOKEN")
+                .ok()
+                .filter(|value| !value.is_empty())
+                .map(|value| value.len()),
         }
     }
 }
@@ -624,6 +648,40 @@ fn production_port_checks(
             code: &CODES.payments_webhook_secret_missing,
             message,
         });
+    }
+
+    // The limiter leg mirrors the captcha rule above, hatch and all: the
+    // same two answers the boot gate (`production_readiness`) reads —
+    // what the composition declares and whether the runtime's limiter is
+    // effective — with an operator's recorded reason downgrading the
+    // failure to a logged warning. `unlimited_public_routes_override`
+    // applies the blank-reason rule itself, so an empty acceptance never
+    // counts, exactly as `stated_reason` does for the captcha flag.
+    if let Some(message) = rate_limiter_production_failure(
+        guards.needs_rate_limiter(),
+        cratefield_core::rate_limiter_effective(harness.runtime()),
+    ) {
+        match cratefield_core::unlimited_public_routes_override(&EnvVars) {
+            Some(reason) => {
+                tracing::warn!(
+                    control = "rate-limiter",
+                    reason,
+                    "production abuse control overridden by an operator"
+                );
+                if output == Output::Human {
+                    eprintln!("fz: warning: rate-limiter override accepted ({reason}): {message}");
+                    eprintln!(
+                        "fz: note: this override is recorded; resolve the RateLimiter binding \
+                         and remove HARNESS_ALLOW_UNLIMITED_PUBLIC_ROUTES before serving \
+                         production traffic"
+                    );
+                }
+            }
+            None => failures.push(DoctorFailure {
+                code: &CODES.rate_limiter_not_effective,
+                message,
+            }),
+        }
     }
 }
 
@@ -712,11 +770,55 @@ fn payments_webhook_failure(
     }
 }
 
+/// The production rate-limiter rule (issue #437): a venture that takes
+/// public writes or admin routes needs a limiter the runtime can actually
+/// consult — an admin bearer token is guessed rather than submitted and has
+/// no captcha or cooldown behind it, and every public write runs without a
+/// budget otherwise. The boot gate (`production_readiness`, via
+/// `Harness::build` and `Harness::router`) enforces the same rule from the
+/// same two answers; the doctor re-checks it so the operator learns before
+/// the deploy, which is where this command runs.
+fn rate_limiter_production_failure(
+    needs_rate_limiter: bool,
+    rate_limiter_effective: bool,
+) -> Option<String> {
+    if needs_rate_limiter && !rate_limiter_effective {
+        Some(
+            "production venture takes public writes or admin routes but the RateLimiter port \
+             is not resolved: admin bearer routes have no brute-force backstop behind the \
+             limiter and every public write runs without a budget — resolve the binding so \
+             the runtime actually hands over a limiter, or set \
+             HARNESS_ALLOW_UNLIMITED_PUBLIC_ROUTES to a reason to serve unlimited (issue #437)"
+                .to_owned(),
+        )
+    } else {
+        None
+    }
+}
+
+/// The admin-token floor (issue #437). `HarnessConfig::from_config`
+/// refuses a set-but-short `ADMIN_TOKEN` in **every** environment
+/// (`MIN_SECRET_BYTES`), so this rule runs unconditionally too: gated on
+/// production it would leave the doctor more permissive than the boot it
+/// predicts. Absent stays legal — the token is what turns the admin plane
+/// on, and removing it is the documented way to keep that plane disabled.
+fn admin_token_failure(admin_token_bytes: Option<usize>) -> Option<String> {
+    let bytes = admin_token_bytes?;
+    (bytes < MIN_SECRET_BYTES).then(|| {
+        format!(
+            "ADMIN_TOKEN is {bytes} bytes but must be at least {MIN_SECRET_BYTES} when set — \
+             the boot refuses it in every environment, so this deploy cannot start. Lengthen \
+             it, or remove it to keep the admin routes disabled (issue #437)"
+        )
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        CODES, DoctorFailure, DoctorReport, Output, PushDeclaration, captcha_production_failure,
-        payments_webhook_failure, push_wiring_checks,
+        CODES, DoctorFailure, DoctorReport, Output, PushDeclaration, admin_token_failure,
+        captcha_production_failure, payments_webhook_failure, push_wiring_checks,
+        rate_limiter_production_failure,
     };
     use cratefield_core::{
         Config, ConfigError, Harness, MapConfig, Migrations, Module, ModuleContext, Port, Runtime,
@@ -843,6 +945,9 @@ mod tests {
             },
             signature_modules: Vec::new(),
             signed_link_modules: Vec::new(),
+            // The rule under test reads only `captcha_modules`; the
+            // limiter-leg answers come from `Default`.
+            ..WriteGuards::default()
         }
     }
 
@@ -922,6 +1027,45 @@ mod tests {
         assert!(payments_webhook_failure(true, false).is_some());
         assert!(payments_webhook_failure(true, true).is_none());
         assert!(payments_webhook_failure(false, false).is_none());
+    }
+
+    #[test]
+    fn a_venture_with_public_writes_or_admin_routes_needs_a_resolved_limiter() {
+        // Fails closed on exactly the two answers the boot gate reads:
+        // something writable or an admin plane, and no effective limiter.
+        let failure =
+            rate_limiter_production_failure(true, false).expect("an unlimited venture fails");
+        assert!(failure.contains("RateLimiter"), "{failure}");
+        assert!(
+            failure.contains("HARNESS_ALLOW_UNLIMITED_PUBLIC_ROUTES"),
+            "the hatch is named the way the captcha rule names its own: {failure}"
+        );
+        assert!(rate_limiter_production_failure(true, true).is_none());
+        // Nothing writable, no admin plane: no budget is owed.
+        assert!(rate_limiter_production_failure(false, false).is_none());
+    }
+
+    #[test]
+    fn an_absent_admin_token_is_not_a_failure() {
+        // Absent is how the admin plane stays disabled, and the boot
+        // treats it the same in every environment.
+        assert_eq!(admin_token_failure(None), None);
+    }
+
+    #[test]
+    fn a_set_but_short_admin_token_fails_at_the_floor_the_boot_enforces() {
+        let refusal = admin_token_failure(Some(8)).expect("a short token");
+        assert!(refusal.contains("ADMIN_TOKEN"), "{refusal}");
+        assert!(refusal.contains("32"), "name the floor: {refusal}");
+        assert!(
+            refusal.contains("every environment"),
+            "the rule is not production-only, and says so: {refusal}"
+        );
+
+        // At the floor and above is what the boot accepts, so the doctor
+        // agrees at the boundary rather than one byte stricter.
+        assert_eq!(admin_token_failure(Some(32)), None);
+        assert_eq!(admin_token_failure(Some(64)), None);
     }
 
     /// The `--json` wire contract (harness #140): field order, the schema
@@ -1149,9 +1293,23 @@ mod production_wiring {
     //! operator tooling — and the only path that reaches it is a venture
     //! built with `--allow-no-captcha`, which is the override, not the
     //! failure. Its own pure test stands.
+    //!
+    //! The rate-limiter leg (issue #437) joins that club for the same
+    //! reason: `Harness::build` runs `append_production_readiness` over
+    //! the same two answers the doctor reads — `WriteGuards::collect`
+    //! plus `rate_limiter_effective` — so a production harness that
+    //! would trip the doctor's copy cannot be composed either (the
+    //! escape is the `HARNESS_ALLOW_UNLIMITED_PUBLIC_ROUTES` env var,
+    //! which a test must not export into a shared process). Its own
+    //! pure test stands.
+    //!
+    //! The admin-token check is wired differently — it is called from
+    //! `run_checks` directly, because the boot enforces it in *every*
+    //! environment — so its proof runs the whole doctor against a
+    //! crafted [`Configured`], no process environment involved.
 
     use super::tests::{NeedsAuth, Nothing, harness_of};
-    use super::{CODES, Configured, DoctorFailure, Output, production_port_checks};
+    use super::{CODES, Configured, DoctorFailure, Output, production_port_checks, run_checks};
 
     fn failures(
         module: std::sync::Arc<dyn cratefield_core::Module>,
@@ -1169,6 +1327,7 @@ mod production_wiring {
         auth_issuer: false,
         auth_client_id: false,
         stripe_webhook_secret: false,
+        admin_token_bytes: None,
     };
 
     #[test]
@@ -1222,6 +1381,50 @@ mod production_wiring {
         assert!(
             !failures(std::sync::Arc::new(Nothing), NONE_SET)
                 .contains(&CODES.auth_not_configured.code.to_owned())
+        );
+    }
+
+    /// Runs the whole doctor — the path `fz doctor` actually takes — so a
+    /// deleted call to the admin-token rule fails here instead of leaving
+    /// the pure tests green. The module declares nothing, the migrations
+    /// directory does not exist (`read_lock` treats that as an empty
+    /// lock), and no sidecars are mounted: the report is empty unless the
+    /// rule under test fires.
+    fn run_report(configured: Configured) -> Vec<String> {
+        let harness = harness_of(std::sync::Arc::new(Nothing));
+        run_checks(
+            &harness,
+            std::path::Path::new("no-migrations-here"),
+            None,
+            None,
+            Output::Json,
+            configured,
+        )
+        .failures
+        .iter()
+        .map(|failure: &DoctorFailure| failure.code.code.to_owned())
+        .collect()
+    }
+
+    #[test]
+    fn a_short_admin_token_reaches_the_report() {
+        let configured = Configured {
+            admin_token_bytes: Some(4),
+            ..NONE_SET
+        };
+        assert_eq!(
+            run_report(configured),
+            vec![CODES.admin_token_too_short.code.to_owned()],
+            "the rule is correct and nothing calls it"
+        );
+    }
+
+    #[test]
+    fn an_absent_admin_token_leaves_the_report_clean() {
+        assert!(
+            run_report(NONE_SET).is_empty(),
+            "{:?}",
+            run_report(NONE_SET)
         );
     }
 }

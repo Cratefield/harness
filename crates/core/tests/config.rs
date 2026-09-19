@@ -11,6 +11,9 @@ use std::sync::Arc;
 
 // Obvious dummy secret, never real.
 const SECRET: &str = "test-secret-0123456789abcdef-0123";
+// Same floor as the signing secret (issue #437), and the same dummy
+// `admin.rs` tests with.
+const ADMIN_TOKEN: &str = "test-admin-token-0123456789abcdef";
 
 #[test]
 fn harness_config_parses_all_keys() {
@@ -20,13 +23,13 @@ fn harness_config_parses_all_keys() {
             "HARNESS_SECRET_PREVIOUS",
             "test-secret-old-0123456789abcdef-x",
         ),
-        ("ADMIN_TOKEN", "test-admin-token"),
+        ("ADMIN_TOKEN", ADMIN_TOKEN),
         ("ENV", "staging"),
     ]);
     let parsed = HarnessConfig::from_config(&config).expect("parses");
     assert_eq!(parsed.harness_secret, SECRET);
     assert!(parsed.harness_secret_previous.is_some());
-    assert_eq!(parsed.admin_token.as_deref(), Some("test-admin-token"));
+    assert_eq!(parsed.admin_token.as_deref(), Some(ADMIN_TOKEN));
     assert_eq!(parsed.env, cratefield_core::VentureEnv::Staging);
     parsed.signer();
 }
@@ -56,6 +59,30 @@ fn short_secret_names_the_minimum() {
             .any(|e| e.contains("at least 32 bytes") && e.contains("HARNESS_SECRET")),
         "errors: {errors:?}"
     );
+}
+
+#[test]
+fn short_admin_token_names_the_floor_and_the_way_out() {
+    // 16 bytes — the shape `test-admin-token` used to pass with.
+    let config = MapConfig::from_pairs([("HARNESS_SECRET", SECRET), ("ADMIN_TOKEN", "short")]);
+    let errors = HarnessConfig::from_config(&config)
+        .expect_err("must fail")
+        .problems;
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.contains("ADMIN_TOKEN") && e.contains("at least 32 bytes")),
+        "errors: {errors:?}"
+    );
+}
+
+#[test]
+fn absent_admin_token_stays_legal() {
+    // No token is the long-standing "admin disabled" configuration: every
+    // admin route answers 401 (issue #437 did not change that).
+    let config = MapConfig::from_pairs([("HARNESS_SECRET", SECRET)]);
+    let parsed = HarnessConfig::from_config(&config).expect("parses");
+    assert_eq!(parsed.admin_token, None);
 }
 
 #[test]
