@@ -273,7 +273,7 @@ impl TextModel for Anthropic {
             return Err(TextModelError::NotConfigured);
         };
 
-        let payload = wire_request(&self.model, &prompt);
+        let payload = wire_request(&self.model, prompt);
         let body = serde_json::to_vec(&payload)
             .map_err(|err| TextModelError::Transport(err.to_string()))?;
 
