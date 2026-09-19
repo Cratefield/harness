@@ -52,6 +52,15 @@ segments, a key in a request body, and refusing the shape in `fz build`
 were rejected. The decision is recorded only: nothing ships yet, and
 the three routes still answer `400 composite-key`.
 
+ADR 0019 decides what the MCP server is allowed to be (#160): a thin
+wrapper over `fz --json`, living in this workspace as `crates/mcp`
+rather than a published repository. Six of the seven tools spawn the
+venture's own `fz` in the venture's directory and hand back the one
+JSON object it printed byte for byte; the seventh, `fz_error_codes`,
+serves the catalogue in-process — read at runtime, never copied. A
+TypeScript server beside `tools/cfjs` and a richer API of its own were
+rejected — each is a second place that can disagree with the CLI.
+
 [0102](0102-crypto-crate.md) chose the crypto crate: RustCrypto's
 `chacha20poly1305`.
 

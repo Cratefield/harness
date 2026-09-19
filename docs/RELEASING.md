@@ -30,6 +30,14 @@ publish is manual, the same as every other new crate: add it to the
 ordered list in step 2 below, then enable its trusted publisher and drop
 the `publish = false` entry.
 
+`cratefield-mcp` (issue #160) carries `publish = false` as well: it is
+new, nothing depends on it, and publishing it is the remaining human step
+ADR 0019 records — until the crates.io setup below exists, a publishable
+crate would only make the release run fail authentication over OIDC.
+When that step lands its first publish is manual, the same as every other
+new crate: add it to the ordered list in step 2 below, then enable its
+trusted publisher and drop the `publish = false` entry.
+
 `cratefield-push-auth` (issue #178) carries `publish = false` in its own
 manifest for the same reason, but with one difference that matters to the
 order below: two **published** crates already depend on it —
