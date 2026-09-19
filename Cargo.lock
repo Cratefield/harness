@@ -652,6 +652,7 @@ dependencies = [
  "cratefield-i18n",
  "cratefield-kms",
  "cratefield-manifest",
+ "cratefield-module-changelog",
  "cratefield-module-cms",
  "cratefield-module-email-signup",
  "cratefield-module-notifications",
@@ -895,6 +896,7 @@ name = "cratefield-catalog"
 version = "0.1.1"
 dependencies = [
  "cratefield-core",
+ "cratefield-module-changelog",
  "cratefield-module-cms",
  "cratefield-module-email-signup",
  "cratefield-module-notifications",
@@ -1072,6 +1074,7 @@ dependencies = [
  "ulid",
  "unicode-normalization",
  "url",
+ "zeroize",
 ]
 
 [[package]]
@@ -1092,6 +1095,7 @@ dependencies = [
  "cratefield-core",
  "cratefield-introspect",
  "cratefield-kms",
+ "cratefield-linker",
  "cratefield-provisioning",
  "cratefield-secrets",
  "cratefield-tables",
@@ -1154,6 +1158,8 @@ name = "cratefield-linker"
 version = "0.1.1"
 dependencies = [
  "cratefield-manifest",
+ "cratefield-provisioning",
+ "pollster",
  "serde",
  "serde_json",
  "sha2 0.11.0",
@@ -1167,6 +1173,29 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.11.0",
+]
+
+[[package]]
+name = "cratefield-module-changelog"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "axum",
+ "bytes",
+ "cratefield-adapter-sqlite",
+ "cratefield-core",
+ "cratefield-testing",
+ "http",
+ "pollster",
+ "schemars 1.2.2",
+ "sea-query",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "time",
+ "tower",
+ "tracing",
+ "ulid",
 ]
 
 [[package]]
@@ -1495,6 +1524,7 @@ dependencies = [
 name = "cratefield-tables-api"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "axum",
  "cratefield-adapter-sqlite",
  "cratefield-core",

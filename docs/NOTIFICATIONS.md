@@ -35,6 +35,9 @@ Read this table before promising a customer anything.
 **No transport has been exercised against a real device or a real vendor
 account.** Each needs an Apple team, a Firebase project, or a physical phone.
 That work is issue #186, and this table is updated when it closes — not before.
+The steps are nevertheless written down:
+[PUSH-LIVE-PROOFS.md](PUSH-LIVE-PROOFS.md) has, per transport, what to set up,
+the exact command to run, and what the output must say to count.
 
 RFC 8291's Appendix A vector is the acceptance test for the Web Push
 encryption. RFC 8292 publishes no vectors, so VAPID is proven by verifying our
@@ -526,7 +529,8 @@ scope, and so are machine translation and a translation-management UI.
   construction `serve()` uses, so what it reaches is what the deployment
   reaches. The recipient is credential material and will be in your shell
   history.
-- **Live proofs** per vendor are issue #186, and none is done.
+- **Live proofs** per vendor are issue #186, and none is done; the steps for
+  each are in [PUSH-LIVE-PROOFS.md](PUSH-LIVE-PROOFS.md).
 
 ## Privacy
 

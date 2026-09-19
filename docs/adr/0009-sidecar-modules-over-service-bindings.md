@@ -33,7 +33,7 @@ That is the case this ADR exists for.
    below, and the answer is copied back through the response allowlist there.
 
 The mount is **runtime configuration, not a builder call.** A `.sidecar()` in
-`src/harness.rs` would bake a customer-specific mount into the artifact, so
+`src/lib.rs` would bake a customer-specific mount into the artifact, so
 the artifact would stop being a function of the module set and #59's cache could
 never hit for a sidecar customer. The mount table is read from configuration
 alongside the other bindings, so one wasm serves customers with and without
@@ -162,3 +162,53 @@ because nothing at the seam said otherwise. #131 writes down the boundary:
 - **One Worker.** `HARNESS_ONE_WORKER` truthy alongside a non-empty
   `HARNESS_SIDECARS` is a configuration error where the table is read: a
   one-Worker deployment serves everything in-process and can mount nothing.
+
+## Amendment (issue #157): a second justification, and the language of a sidecar
+
+**A second justification now stands beside confidentiality.** The
+Decision's case was keeping source away from a supplier. This one needs
+no secrecy at all: the only way to add business rules to a venture today
+is a crate implementing `Module`, and every declaration point on that
+trait is a Rust type — `router()` returns an `axum::Router`,
+`requires()` a `&'static [Port]`, `migrations()` a `Migrations`,
+`events()` a `Vec<(EventName, EventHandler)>` — so a customer who does
+not write Rust has no way in at all, even one glad to show us the
+source. It is a reason in its own right, not a variation on
+confidentiality.
+
+**ADR 0000 is not disturbed.** The harness, core, the runtimes and every
+module the project ships stay Rust. What settles here is narrower: the
+*sidecar's* language was never the harness's business, because the only
+channel is the `Dispatcher` port over a service binding and the contract
+is entirely HTTP-observable. `docs/MOUNTING.md`'s **A sidecar need not
+be written in Rust** is that contract, written as an implementer's
+checklist.
+
+**Data crosses the Tables contract, never a raw handle.** This
+*narrows* the Decision. There, a sidecar binds the host's same database
+because a Rust sidecar carries core, sea-query and the migration
+machinery and can be trusted with a handle. A sidecar carrying none of
+that has no safe way to hold one — no migrations, no dialect-portable
+SQL, no declared-table validation — so it reaches data over the Tables
+HTTP contract instead. The contract is live (#153); the typed client is
+not (#155), so today such a sidecar either hand-rolls its requests
+against the routes or stays confined to logic touching no data.
+
+**`HARNESS_SECRET` still does not cross.** Unchanged from the Decision
+and already enforced in code; a non-Rust sidecar is no different. It
+provisions its own secrets, and `SIDECAR_GATEWAY_SECRET` remains the one
+secret deliberately shared.
+
+**Why a separate Worker, once customer TypeScript is running.** The
+tempting argument here is the one this ADR forbids, so it is written
+down in its place. That a separate Worker redeploys in seconds rather
+than the minutes a wasm rebuild takes is **not** a reason for the
+sidecar to exist — the disclaimer above disqualifies it, and nothing
+here revives it; it is an argument about the *form* the sidecar takes.
+Bundling customer code into the harness Worker would make the artifact a
+function of the customer's code as well as the module set, and would put
+customer code inside the isolate that holds `HARNESS_SECRET`. A separate
+Worker keeps the artifact a pure function of the module set — the
+property that lets the build key deliberately exclude the mount table —
+and keeps the #131 trust boundary intact. The faster redeploy follows as
+a consequence, not a reason, so `## Not a reason: build time` stands.

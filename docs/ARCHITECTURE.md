@@ -28,7 +28,7 @@ a **waitlist** module, deployed for factory0.ventures.
    Adapters implement the traits. This is what makes the self-hosted move a
    change of one runtime crate, not a rewrite.
 2. **Compile-time composition.** A venture backend lists module crates in
-   `Cargo.toml` and composes them in `src/harness.rs`. The wasm binary contains
+   `Cargo.toml` and composes them in `src/lib.rs`. The wasm binary contains
    exactly those modules it serves in-process. No runtime plugin loading, no
    registry service. Cargo features select adapters. One narrowing, ADR 0009: a
    module whose source must stay with its owner may run as a **sidecar**, its
@@ -113,10 +113,12 @@ dependencies and are built from their own directories.
 
 ### `ventures/`
 
-A venture is a Worker composing modules. `ventures/_template` is the layout
-a new one copies: `src/lib.rs` (Worker entry via the runtime crate),
-`wrangler.toml` with `staging`/`production` envs, D1 and rate-limit
-bindings, and a `migrations/` dir maintained by `fz migrations collect`.
+A venture is a Worker composing modules. There is no template to copy: a new
+one starts from a manifest — `fz init` writes `venture.json` (name and host,
+no modules), `fz add` mounts modules onto it, and `fz build` generates the
+crate: `src/lib.rs` (Worker entry via the runtime crate and the generated
+`harness()`), `src/fz_main.rs` (the `fz` bin target), a `wrangler.toml` with
+a D1 binding, and a `migrations/` dir maintained by `fz migrations collect`.
 
 | Venture | Serves |
 |---|---|
@@ -170,7 +172,7 @@ that request's `wait_until`. There is no ambient "current request".
 A venture composes:
 
 ```rust
-// src/harness.rs in a venture repo
+// src/lib.rs in a venture repo
 use cratefield_core::{Harness, Venture};
 use cratefield_runtime_cloudflare::Cloudflare;
 use cratefield_adapter_resend::Resend;
@@ -194,9 +196,11 @@ pub fn harness() -> Harness {
 `Harness::build()` fails when a module requires a port the runtime does not
 provide, when two modules claim the same route prefix or table, when a module's
 `harness_api` differs from core's, or when a template override names an unknown
-module. The template is meant to ship `tests/harness_builds.rs` asserting
-`build()` is `Ok`, so that `cargo test` fails before `wrangler deploy` can
-run — it does not yet, and nor does the template (issue #408).
+module. In a generated venture the `harness()` ends in
+`.expect("generated venture harness is valid")`, so a bad composition fails
+at first compose; `examples/tables-canary/tests/boots.rs` composes the
+generated venture, which turns a bad composition into a
+`cargo test --workspace` failure.
 
 ## 5. Ports
 
@@ -211,7 +215,9 @@ run — it does not yet, and nor does the template (issue #408).
 | `Blob` | `put(key, bytes, content_type)`, `get -> Option<BlobObject>`, `delete` (idempotent), `signed_url(key, ttl)`; keys are module-prefixed and the harness hands each module a `ScopedBlob` so it cannot name another's objects | R2 via `worker::Bucket` (verify in `wrangler dev`) | directory (`DirBlob`); S3-compatible later |
 | `Push` | `send(&Recipient, &Notification) -> Result<PushOutcome>` where `Recipient::{Apns, Fcm, WebPush}` names the transport (ADR 0015), `PushOutcome::{Delivered{id}, NotConfigured}`, `PushError::Unregistered` tells the caller to delete a dead recipient and `PushError::Transient{retry_after}` carries the provider's back-off. `RoutingPush` (in core) dispatches by variant; an unwired transport is `NotConfigured`, not `Rejected` | APNs over `HttpClient` (`cratefield-adapter-apns`, ES256 provider JWT from `cratefield-push-auth`; verify against Apple sandbox) | APNs, FCM and Web Push all shipped; see [NOTIFICATIONS.md](NOTIFICATIONS.md) for which are live-proven (none yet, issue #186) |
 | `Payments` | hosted checkout, subscription checkout, Connect account link, `charge_with_transfer` (destination charge + application fee), `refund`, `verify_webhook` (HMAC + timestamp) — Stripe identifiers and hosted URLs only, never card data (`docs/PAYMENTS.md`) | Stripe over `HttpClient` (`cratefield-adapter-stripe`; verify with test-mode keys) | Stripe (unchanged) |
+| `Tracker` | `file(&Destination, &Credential, &TicketDraft) -> Result<Filed, TrackerError>`, `status(&Destination, &Credential, external_id) -> Result<TicketStatus, TrackerError>` where `Destination::{GitHub, Jira, Linear, Zendesk, Intercom, Salesforce, HubSpot, Slack, Webhook}` names the tracker and `Filed{external_id, url}` carries the id `status` polls by; `TrackerError::{NotConfigured, Unauthorized, Rejected(String), Transient{retry_after}}`; the credential is a per-call argument, not adapter construction state — one hosted Worker serves many customer companies, each with its own token, stored envelope-encrypted by `cratefield-secrets` and decrypted immediately before the call, and `Credential` wraps `zeroize::Zeroizing` with a redacting `Debug`. `RoutingTracker` (in core) dispatches by variant; an unwired destination is `NotConfigured` | **no concrete adapter ships yet** — the port is adapter-injected like `Payments`: the venture constructs its tracker adapter (GitHub, Jira, Linear, ...) and passes it via `tracker`/`tracker_arc`, and `Cloudflare::provides()` lists `Port::Tracker` once wired; `FakeTracker` stands in for tests | same — adapter-injected via `tracker_arc`; nothing concrete ships here either, `FakeTracker` stands in for tests until a real adapter lands |
 | `Realtime` | rooms of WebSocket clients that share a clock and chat: a module implements `RoomHandler` (`on_join`/`on_message`/`on_leave`/`on_alarm`), the port owns the sockets; `Realtime` (`broadcast`/`members`) pokes a room from outside a socket | Durable Object + WebSocket hibernation (`RoomDriver`; the `#[durable_object]` class lives in the venture, see [REALTIME.md](REALTIME.md)). The socket half is proven under `wrangler dev` with two sockets in CI. **The `Realtime` half — `broadcast`/`members` from outside a socket — has no Workers adapter yet**, so `Cloudflare::provides()` does not list this port and a module's `optional()` realtime path is inert there | in-process registry (`InProcessRealtime`) over tokio |
+| `TextModel` | `complete(&Prompt) -> Result<Completion>` where `Prompt` names a `ModelTier::{Fast, Strong}` — never a vendor — plus the turns, an optional JSON schema and a token ceiling; `Completion` carries the text, the parsed JSON when a schema was given, the model that answered and the token usage. `RoutingTextModel` (in core, ADR 0002/ADR 0015) dispatches by tier; an unwired tier is `TextModelError::NotConfigured`, so a venture can put drafting on one vendor and an independent judge on another without either module knowing. No tools, streaming or embeddings in v1 — the Workers runtime buffers whole responses, so a stream has nowhere to arrive | none yet — any `TextModel` over `HttpClient` | none yet — any `TextModel` over `HttpClient` |
 | `HttpClient` | `send(http::Request<Bytes>) -> http::Response<Bytes>` | `worker::Fetch` | `reqwest` |
 | `Clock`, `IdGen` | `now() -> OffsetDateTime`, `ulid() -> String` | in core | in core |
 | `Defer` | `wait_until(BoxFuture)` | `worker::Context::wait_until` | `tokio::spawn` |
@@ -308,7 +314,7 @@ The move for a venture is:
 
 1. Stand up Postgres, run the same module migrations (postgres set).
 2. Copy D1 data with `fz data export` / `fz data import`.
-3. Switch `src/harness.rs` to `.runtime(Native::new().db(Postgres::from_env()).rate_limiter(Redis::from_env()))`, keep `Resend` and `Turnstile`. Build a native binary; ship the Dockerfile from the template.
+3. Switch the composition in `src/lib.rs` to `.runtime(Native::new().db(Postgres::from_env()).rate_limiter(Redis::from_env()))`, keep `Resend` and `Turnstile`. Build a native binary. The Dockerfile to ship is `examples/venture-native/Dockerfile` (distroless, the binary and nothing else); the repo's other Dockerfile, `docker/Dockerfile`, is the forge build image (a standalone `fz` plus a wasm toolchain), not a runtime image.
 4. Point `api.<domain>` at the new host.
 
 No module code changes. The parity suite in `cratefield-testing` runs every

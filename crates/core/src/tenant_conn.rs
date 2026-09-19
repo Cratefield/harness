@@ -21,7 +21,7 @@ use axum::http::request::Parts;
 
 use crate::ports::Database;
 use crate::problem::Problem;
-use crate::tenant::Tenant;
+use crate::tenant::{Tenancy, Tenant};
 
 /// What the resolution layer puts in the request's extensions: the
 /// tenant, and the handle on *its* database.
@@ -30,6 +30,7 @@ use crate::tenant::Tenant;
 #[derive(Clone)]
 pub(crate) struct ResolvedTenant {
     pub(crate) tenant: Tenant,
+    pub(crate) tenancy: Tenancy,
     pub(crate) db: Arc<dyn Database>,
 }
 
@@ -56,6 +57,7 @@ pub(crate) struct ResolvedTenant {
 #[derive(Clone)]
 pub struct TenantConn {
     tenant: Tenant,
+    tenancy: Tenancy,
     db: Arc<dyn Database>,
 }
 
@@ -65,16 +67,36 @@ impl TenantConn {
     pub fn tenant(&self) -> &Tenant {
         &self.tenant
     }
+
+    /// Which tenancy shape served this request: a registry resolved it,
+    /// or the deployment has no registry and this host is the one
+    /// implicit tenant.
+    ///
+    /// A routing fact, not a membership fact (#385):
+    /// [`Tenancy::FromRegistry`] says the registry named this tenant for
+    /// this host, and nothing about who the caller is to it. A rule that
+    /// needs membership reads this to fail closed under
+    /// [`Tenancy::FromRegistry`] — where "any verified caller" and "a
+    /// member of this tenant" are different sets — and to serve under
+    /// [`Tenancy::Sole`], where they are the same set.
+    #[must_use]
+    pub fn tenancy(&self) -> Tenancy {
+        self.tenancy
+    }
 }
 
 impl std::fmt::Debug for TenantConn {
     /// Names the tenant and never the handle. `Display for DbError`
     /// already scrubs a DSN out of a *message* (#135), but `Debug`
     /// derives raw, and a database handle has no business being printed
-    /// at all — so this does not derive.
+    /// at all — so this does not derive. The tenancy bit is shown: it is
+    /// a routing fact with nothing secret in it, and it is the first
+    /// question anyone debugging a refused request asks — did a registry
+    /// even resolve this tenant (#385)?
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("TenantConn")
             .field("tenant", &self.tenant.id())
+            .field("tenancy", &self.tenancy)
             .finish_non_exhaustive()
     }
 }
@@ -121,6 +143,7 @@ where
                 .get::<ResolvedTenant>()
                 .map(|resolved| Self {
                     tenant: resolved.tenant.clone(),
+                    tenancy: resolved.tenancy,
                     db: Arc::clone(&resolved.db),
                 })
                 .ok_or_else(Problem::internal),

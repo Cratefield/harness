@@ -563,7 +563,9 @@ impl Harness {
             blob: _,
             push: _,
             payments: _,
+            tracker: _,
             realtime: _,
+            text_model: _,
             http: _,
             clock,
             id_gen,
@@ -938,9 +940,22 @@ async fn resolve_tenant_layer(
     };
 
     if let Some(db) = db {
+        // Which shape resolved this tenant, carried through to the
+        // handler: a membership rule must be able to tell a registry
+        // deployment from a no-registry one, because the two disagree
+        // about who a verified caller is (#385).
+        let tenancy = if layer.routing.is_some() {
+            crate::tenant::Tenancy::FromRegistry
+        } else {
+            crate::tenant::Tenancy::Sole
+        };
         request
             .extensions_mut()
-            .insert(crate::tenant_conn::ResolvedTenant { tenant, db });
+            .insert(crate::tenant_conn::ResolvedTenant {
+                tenant,
+                tenancy,
+                db,
+            });
     }
     next.run(request).await
 }

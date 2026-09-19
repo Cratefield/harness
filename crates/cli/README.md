@@ -18,8 +18,8 @@ and the agent-safe manifest workflow — `fz plan`, `fz deploy --plan`,
 `fz add`, `fz init`, `fz verify` (harness #140).
 
 `fz` links against your venture's compiled-in harness, so it runs as a bin
-target **inside the venture repo** — the pattern the venture template
-ships:
+target **inside the venture repo** — the shape `fz build` generates for
+every venture:
 
 ```toml
 # venture Cargo.toml

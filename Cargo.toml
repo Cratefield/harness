@@ -12,6 +12,7 @@ exclude = [
     "crates/auth-fz",
     "crates/control-plane-fz",
     "crates/control-plane-dev",
+    "examples/sidecar-worker-ts",
 ]
 
 [workspace.package]
@@ -61,6 +62,10 @@ cratefield-module-email-signup = { path = "crates/module-email-signup", version 
 cratefield-module-privacy = { path = "crates/module-privacy", version = "0.1.0" }
 cratefield-module-waitlist = { path = "crates/module-waitlist", version = "0.1.0" }
 cratefield-module-cms = { path = "crates/module-cms", version = "0.1.0" }
+# The changelog module mirrors a project's GitHub releases (or its
+# CHANGELOG.md) into the venture's own database; its reads never call
+# upstream, so the changelog survives an outage of the thing it mirrors.
+cratefield-module-changelog = { path = "crates/module-changelog", version = "0.1.0" }
 # The notifications module is the first to depend on the auth client, because
 # the account a route acts for comes from the auth extractor (ADR 0016).
 cratefield-module-notifications = { path = "crates/module-notifications", version = "0.1.0" }

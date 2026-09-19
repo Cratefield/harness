@@ -143,7 +143,7 @@ path, never ignored.
 
 | Where | When it is checked |
 |---|---|
-| `Ui::from_spec(include_str!("../ui.json"))` in the venture's `harness.rs` | `Harness::build()`, alongside every other build error |
+| `Ui::from_spec(include_str!("../ui.json"))` in the venture's `src/lib.rs` | `Harness::build()`, alongside every other build error |
 | `UI_SPEC` config value (the control plane, per venture, no rebuild) | The first request; a bad spec answers a problem naming the error on every `/ui` route until it is fixed, and replaces the built-in spec when valid |
 
 The renderer applies it everywhere; the theme tokens are served as

@@ -9,7 +9,7 @@
 use std::sync::Arc;
 
 use cratefield_adapter_sqlite::SqliteDatabase;
-use cratefield_core::{Config, Database, ModuleContext, Ports, Statement};
+use cratefield_core::{Config, Database, ModuleContext, Ports, Statement, Tenancy};
 use cratefield_manifest::Access;
 use cratefield_tables::{Schema, TableDef};
 use cratefield_tables_api::{Asked, TableApi, Tables, one, page};
@@ -135,6 +135,7 @@ fn a_page_of_a_public_table_holds_every_row() {
     let out = pollster::block_on(page(
         &tables,
         &db,
+        Tenancy::Sole,
         &HeaderMap::new(),
         &scope(),
         Asked {
@@ -176,6 +177,7 @@ fn a_filter_for_a_null_finds_the_rows_whose_column_is_unset() {
     let out = pollster::block_on(page(
         &tables,
         &db,
+        Tenancy::Sole,
         &HeaderMap::new(),
         &scope(),
         Asked {
@@ -202,6 +204,7 @@ fn a_filter_for_a_value_still_excludes_the_rows_whose_column_is_unset() {
     let out = pollster::block_on(page(
         &tables,
         &db,
+        Tenancy::Sole,
         &HeaderMap::new(),
         &scope(),
         Asked {
@@ -224,6 +227,7 @@ fn a_page_of_an_owner_table_holds_only_the_callers_rows() {
     let out = pollster::block_on(page(
         &tables,
         &db,
+        Tenancy::Sole,
         &as_caller("ada"),
         &scope(),
         Asked {
@@ -244,6 +248,7 @@ fn another_subject_gets_their_own_rows_and_not_the_first_ones() {
     let out = pollster::block_on(page(
         &tables,
         &db,
+        Tenancy::Sole,
         &as_caller("grace"),
         &scope(),
         Asked {
@@ -268,6 +273,7 @@ fn someone_elses_row_is_not_found_rather_than_forbidden() {
     let refusal = pollster::block_on(one(
         &tables,
         &db,
+        Tenancy::Sole,
         &as_caller("ada"),
         &scope(),
         "note",
@@ -284,6 +290,7 @@ fn someone_elses_row_is_not_found_rather_than_forbidden() {
     let absent = pollster::block_on(one(
         &tables,
         &db,
+        Tenancy::Sole,
         &as_caller("ada"),
         &scope(),
         "note",
@@ -301,6 +308,7 @@ fn a_callers_own_row_is_served() {
     let row = pollster::block_on(one(
         &tables,
         &db,
+        Tenancy::Sole,
         &as_caller("ada"),
         &scope(),
         "note",
@@ -317,6 +325,7 @@ fn an_anonymous_caller_is_told_to_sign_in_rather_than_handed_an_empty_page() {
     let refusal = pollster::block_on(page(
         &tables,
         &db,
+        Tenancy::Sole,
         &HeaderMap::new(),
         &scope(),
         Asked {
@@ -340,6 +349,7 @@ fn a_credential_that_does_not_verify_is_refused_even_on_a_public_table() {
     let refusal = pollster::block_on(page(
         &tables,
         &db,
+        Tenancy::Sole,
         &as_caller("expired"),
         &scope(),
         Asked {
@@ -356,6 +366,7 @@ fn a_credential_that_does_not_verify_is_refused_even_on_a_public_table() {
     let out = pollster::block_on(page(
         &tables,
         &db,
+        Tenancy::Sole,
         &HeaderMap::new(),
         &scope(),
         Asked {
@@ -376,6 +387,7 @@ fn a_verifier_that_cannot_answer_is_a_503_and_not_a_401() {
     let refusal = pollster::block_on(page(
         &tables,
         &db,
+        Tenancy::Sole,
         &as_caller("ada"),
         &scope(),
         Asked {
@@ -400,6 +412,7 @@ fn a_table_that_is_not_declared_is_not_found() {
     let refusal = pollster::block_on(page(
         &tables,
         &db,
+        Tenancy::Sole,
         &HeaderMap::new(),
         &scope(),
         Asked {
@@ -421,6 +434,7 @@ fn a_cursor_names_the_last_row_on_the_page() {
     let out = pollster::block_on(page(
         &tables,
         &db,
+        Tenancy::Sole,
         &HeaderMap::new(),
         &scope(),
         Asked {
@@ -440,6 +454,7 @@ fn a_cursor_names_the_last_row_on_the_page() {
     let after = pollster::block_on(page(
         &tables,
         &db,
+        Tenancy::Sole,
         &HeaderMap::new(),
         &scope(),
         Asked {
@@ -469,6 +484,7 @@ fn a_full_page_hands_back_a_cursor_and_a_short_one_does_not() {
     let first = pollster::block_on(page(
         &tables,
         &db,
+        Tenancy::Sole,
         &HeaderMap::new(),
         &scope(),
         Asked {
@@ -488,6 +504,7 @@ fn a_full_page_hands_back_a_cursor_and_a_short_one_does_not() {
     let second = pollster::block_on(page(
         &tables,
         &db,
+        Tenancy::Sole,
         &HeaderMap::new(),
         &scope(),
         Asked {

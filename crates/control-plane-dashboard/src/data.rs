@@ -61,6 +61,17 @@ pub(super) async fn screen(state: State<Arc<DashboardState>>, headers: HeaderMap
     if let Err(redirect) = guard(ctx, &headers) {
         return redirect;
     }
+    // Admin-gated, like the backup export, because this screen is not
+    // account-scoped and cannot be: a whole-database schema view is every
+    // account's ventures, hostnames and magic-link rows at once, and no
+    // account-shaped cut of it exists to narrow the read to. A session is
+    // the wrong key for a read that reaches past the account boundary —
+    // the same call the backup export and the console's operator invite
+    // make, for the same reason. Guard runs first, so a signed-out
+    // request still meets the login gate rather than a 401.
+    if let Err(problem) = cratefield_core::require_admin(&*ctx.config, &headers) {
+        return problem.into_response();
+    }
     let session = current_session(ctx, &headers).expect("guard proved a session");
 
     let Some(db) = ctx.ports.db.clone() else {
@@ -273,6 +284,11 @@ pub(super) async fn detail(
     let ctx = &state.ctx;
     if let Err(redirect) = guard(ctx, &headers) {
         return redirect;
+    }
+    // Admin-gated for the same reason the screen above is: this read is
+    // not account-scoped either, and a session is the wrong key for it.
+    if let Err(problem) = cratefield_core::require_admin(&*ctx.config, &headers) {
+        return problem.into_response();
     }
     let session = current_session(ctx, &headers).expect("guard proved a session");
     let Some(db) = ctx.ports.db.clone() else {
@@ -601,6 +617,11 @@ pub(super) async fn export(
     if let Err(redirect) = guard(ctx, &headers) {
         return redirect;
     }
+    // Admin-gated for the same reason the screen above is: an export is
+    // not account-scoped either, and a session is the wrong key for it.
+    if let Err(problem) = cratefield_core::require_admin(&*ctx.config, &headers) {
+        return problem.into_response();
+    }
     let Some(db) = ctx.ports.db.clone() else {
         return internal("db port unavailable");
     };
@@ -789,14 +810,12 @@ fn cell(value: &SeaValue) -> String {
 /// One value as CSV: NULL is an empty field (the format's own spelling of
 /// nothing), and bytes are named exactly as [`cell`] names them.
 ///
-/// The two paths agree on purpose. This screen reads the control plane's
-/// own database, and that database holds `harness_secrets.ciphertext`, its
-/// nonce, and the wrapped data key in `harness_secret_keys`. A page that
-/// says "48 bytes" beside a CSV of the same row that spells those bytes
-/// out would be the more dangerous of the two: a file somebody keeps,
-/// mails and backs up, holding key material ADR 0015 keeps out of a
-/// response body. A lossy decode of ciphertext is not readable data for
-/// anyone, so nothing is lost by counting it instead.
+/// The two paths agree on purpose. Bytes are not readable data, and a
+/// lossy decode of them is not either, so counting loses nothing — and a
+/// CSV is a file somebody keeps, mails and backs up, which is exactly the
+/// resting place key material must never reach (ADR 0015's point about a
+/// response body, made one copy later). What a blob holds is its
+/// writer's business; the page and the file both name it and move on.
 fn csv_cell(value: &SeaValue) -> String {
     match value {
         SeaValue::Bytes(Some(v)) => format!("{} bytes", v.len()),
@@ -825,6 +844,7 @@ mod tests {
     use super::*;
     use crate::{Dashboard, text};
     use cratefield_access::{DEFAULT_TTL_SECS, issue_session};
+    use cratefield_accounts::Repository;
     use cratefield_core::Statement;
     use cratefield_testing::TestHarness;
     use http::{Method, Request as HttpRequest, StatusCode, header};
@@ -835,17 +855,30 @@ mod tests {
     /// they are live, not expired.
     const NOW: u64 = 1_800_000_000;
 
+    /// The admin bearer every route under test wants on top of a session:
+    /// the data screens are staff tools, and the kit is staffed.
+    const ADMIN: &str = "test-admin-token";
+
     /// The control plane's own composition, like the suite in `lib.rs`:
     /// the console owns the access/accounts/provisioning schemas, the
     /// dashboard owns `connection`. The data screen reads all of them as
-    /// one database, which is the point of the screen.
+    /// one database, which is the point of the screen — and why the kit
+    /// carries an `ADMIN_TOKEN`: a session alone is not the key for it.
     fn kit() -> TestHarness {
         // No KMS: the data screen never touches one, and the secrets
         // screen's own tests cover both the wired and unwired cases.
-        TestHarness::new(vec![
-            Box::new(cratefield_console::Console),
-            Box::new(Dashboard::new(None)),
-        ])
+        TestHarness::with_ports(
+            vec![
+                Box::new(cratefield_console::Console),
+                Box::new(Dashboard::new(None)),
+            ],
+            |ports| {
+                ports.config = std::sync::Arc::new(cratefield_core::MapConfig::from_pairs(vec![
+                    ("HARNESS_SECRET", cratefield_testing::TEST_HARNESS_SECRET),
+                    ("ADMIN_TOKEN", ADMIN),
+                ]));
+            },
+        )
     }
 
     fn cookie(kit: &TestHarness) -> String {
@@ -853,14 +886,22 @@ mod tests {
         format!("cf_session={token}")
     }
 
+    /// One GET through the router. `admin` is the bearer the staff-only
+    /// routes want alongside the session cookie; `None` is a signed-in
+    /// session with no bearer, the exact request the admin gate exists to
+    /// refuse.
     async fn get(
         kit: &TestHarness,
         uri: &str,
         cookie: Option<&str>,
+        admin: Option<&str>,
     ) -> (StatusCode, String, Option<String>) {
         let mut builder = HttpRequest::builder().method(Method::GET).uri(uri);
         if let Some(cookie) = cookie {
             builder = builder.header(header::COOKIE, cookie);
+        }
+        if let Some(admin) = admin {
+            builder = builder.header(header::AUTHORIZATION, format!("Bearer {admin}"));
         }
         let response = kit
             .router
@@ -893,7 +934,7 @@ mod tests {
     #[pollster::test]
     async fn the_data_screen_draws_the_control_planes_own_schema() {
         let kit = kit();
-        let (status, body, _) = get(&kit, PATH, Some(&cookie(&kit))).await;
+        let (status, body, _) = get(&kit, PATH, Some(&cookie(&kit)), Some(ADMIN)).await;
         assert_eq!(status, StatusCode::OK, "{body}");
 
         // The diagram: real nodes, a real foreign-key line with a real
@@ -960,7 +1001,13 @@ mod tests {
         )
         .await;
 
-        let (status, body, _) = get(&kit, &format!("{PATH}/venture"), Some(&cookie(&kit))).await;
+        let (status, body, _) = get(
+            &kit,
+            &format!("{PATH}/venture"),
+            Some(&cookie(&kit)),
+            Some(ADMIN),
+        )
+        .await;
         assert_eq!(status, StatusCode::OK, "{body}");
         // Columns with full attributes.
         assert!(body.contains("<code>account_id</code>"), "{}", body);
@@ -982,6 +1029,7 @@ mod tests {
             &kit,
             &format!("{PATH}/provision_progress"),
             Some(&cookie(&kit)),
+            Some(ADMIN),
         )
         .await;
         assert!(
@@ -1039,13 +1087,24 @@ mod tests {
             .await;
         }
 
-        let (_, page_one, _) = get(&kit, &format!("{PATH}/venture"), Some(&cookie(&kit))).await;
+        let (_, page_one, _) = get(
+            &kit,
+            &format!("{PATH}/venture"),
+            Some(&cookie(&kit)),
+            Some(ADMIN),
+        )
+        .await;
         assert!(page_one.contains("Page 1 of 2"), "{}", page_one);
         assert!(page_one.contains("v00"), "{}", page_one);
         assert!(!page_one.contains(">v25<"), "{}", page_one);
 
-        let (_, page_two, _) =
-            get(&kit, &format!("{PATH}/venture?page=2"), Some(&cookie(&kit))).await;
+        let (_, page_two, _) = get(
+            &kit,
+            &format!("{PATH}/venture?page=2"),
+            Some(&cookie(&kit)),
+            Some(ADMIN),
+        )
+        .await;
         assert!(page_two.contains("v25"), "{}", page_two);
         assert!(!page_two.contains(">v00<"), "{}", page_two);
     }
@@ -1073,6 +1132,7 @@ mod tests {
             &kit,
             &format!("{PATH}/allowlist/export"),
             Some(&cookie(&kit)),
+            Some(ADMIN),
         )
         .await;
         assert_eq!(status, StatusCode::OK, "{body}");
@@ -1091,7 +1151,7 @@ mod tests {
         // of a relation, so it said four above a diagram that drew two and
         // labelled itself two.
         let kit = kit();
-        let (status, body, _) = get(&kit, PATH, Some(&cookie(&kit))).await;
+        let (status, body, _) = get(&kit, PATH, Some(&cookie(&kit)), Some(ADMIN)).await;
         assert_eq!(status, StatusCode::OK, "{body}");
 
         let label = body
@@ -1115,11 +1175,11 @@ mod tests {
 
     #[pollster::test]
     async fn the_csv_export_names_bytes_it_never_dumps_them() {
-        // The screen reads the control plane's own database, which holds
-        // sealed ciphertext, nonces and a wrapped data key once the
-        // secrets layer is wired. The page counts bytes; a CSV that
-        // spelled them out instead would be the more dangerous of the
-        // two, being a file somebody keeps.
+        // A blob column is wherever a table keeps its opaque bytes —
+        // sealed ciphertext and wrapped keys are why the rule exists.
+        // The page counts bytes; a CSV that spelled them out instead
+        // would be the more dangerous of the two, being a file somebody
+        // keeps.
         let kit = kit();
         seed_rows(
             &kit,
@@ -1142,15 +1202,26 @@ mod tests {
         // Both halves, in both places: the row is there with its other
         // columns — the thing that would have carried the bytes — and the
         // bytes themselves are counted, never spelled.
-        let (status, csv, _) =
-            get(&kit, &format!("{PATH}/sealed/export"), Some(&cookie(&kit))).await;
+        let (status, csv, _) = get(
+            &kit,
+            &format!("{PATH}/sealed/export"),
+            Some(&cookie(&kit)),
+            Some(ADMIN),
+        )
+        .await;
         assert_eq!(status, StatusCode::OK, "{csv}");
         assert!(csv.contains("row_1"), "{csv}");
         assert!(csv.contains("keep me"), "{csv}");
         assert!(csv.contains("21 bytes"), "{csv}");
         assert!(!csv.contains("sk_live_do_not_export"), "{csv}");
 
-        let (status, page, _) = get(&kit, &format!("{PATH}/sealed"), Some(&cookie(&kit))).await;
+        let (status, page, _) = get(
+            &kit,
+            &format!("{PATH}/sealed"),
+            Some(&cookie(&kit)),
+            Some(ADMIN),
+        )
+        .await;
         assert_eq!(status, StatusCode::OK, "{page}");
         assert!(page.contains("21 bytes"), "{page}");
         assert!(!page.contains("sk_live_do_not_export"), "{page}");
@@ -1165,7 +1236,7 @@ mod tests {
             // The migration ledger is bookkeeping, not a table with a page.
             format!("{PATH}/harness_migrations"),
         ] {
-            let (status, _, _) = get(&kit, &uri, Some(&cookie(&kit))).await;
+            let (status, _, _) = get(&kit, &uri, Some(&cookie(&kit)), Some(ADMIN)).await;
             assert_eq!(status, StatusCode::NOT_FOUND, "{uri}");
         }
     }
@@ -1173,7 +1244,67 @@ mod tests {
     #[pollster::test]
     async fn an_unauthenticated_request_is_redirected_to_the_login_gate() {
         let kit = kit();
-        let (status, _, _) = get(&kit, PATH, None).await;
+        let (status, _, _) = get(&kit, PATH, None, None).await;
         assert_eq!(status, StatusCode::SEE_OTHER);
+    }
+
+    #[pollster::test]
+    async fn a_signed_in_operator_alone_cannot_read_the_control_planes_tables() {
+        // Every route here serves the whole control-plane database, so a
+        // session — any session — is not the key for them. Signed in, no
+        // bearer, and refused on all three shapes of the screen.
+        let kit = kit();
+        for uri in [
+            PATH.to_owned(),
+            format!("{PATH}/venture"),
+            format!("{PATH}/venture/export"),
+        ] {
+            let (status, _, _) = get(&kit, &uri, Some(&cookie(&kit)), None).await;
+            assert_eq!(status, StatusCode::UNAUTHORIZED, "{uri}");
+        }
+    }
+
+    #[pollster::test]
+    async fn another_accounts_session_cannot_read_the_control_planes_tables_either() {
+        // The account boundary is not the line these routes guard: a
+        // perfectly valid second account, signed in on its own cookie,
+        // is refused exactly as the first was, because what the routes
+        // serve is scoped to no account at all.
+        let kit = kit();
+        Repository::new(kit.db.clone())
+            .account_for_login("other@cratefield.com", "Other", "acc_2", "t0")
+            .await
+            .expect("second account");
+        let token = issue_session(
+            kit.signer.as_ref(),
+            "other@cratefield.com",
+            NOW,
+            DEFAULT_TTL_SECS,
+        );
+        let other = format!("cf_session={token}");
+        for uri in [
+            PATH.to_owned(),
+            format!("{PATH}/venture"),
+            format!("{PATH}/venture/export"),
+        ] {
+            let (status, _, _) = get(&kit, &uri, Some(&other), None).await;
+            assert_eq!(status, StatusCode::UNAUTHORIZED, "{uri}");
+        }
+    }
+
+    #[pollster::test]
+    async fn a_wrong_admin_token_is_forbidden_rather_than_unauthorized() {
+        // A presented-but-wrong bearer is `require_admin`'s 403 on every
+        // route shape, even for a signed-in session — a different answer
+        // than no bearer at all, on purpose.
+        let kit = kit();
+        for uri in [
+            PATH.to_owned(),
+            format!("{PATH}/venture"),
+            format!("{PATH}/venture/export"),
+        ] {
+            let (status, _, _) = get(&kit, &uri, Some(&cookie(&kit)), Some("not-the-token")).await;
+            assert_eq!(status, StatusCode::FORBIDDEN, "{uri}");
+        }
     }
 }

@@ -194,6 +194,59 @@
       }
     },
     {
+      "slug": "changelog",
+      "name": "Changelog",
+      "summary": "A project's releases mirrored into your own database, served without calling upstream.",
+      "tier": "optional",
+      "depends_on": [],
+      "releases": [
+        {
+          "version": "0.1.1",
+          "digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+          "review": {
+            "approved": {
+              "reviewer": "release-review",
+              "reviewed_at": "2026-09-01T00:00:00Z"
+            }
+          }
+        }
+      ],
+      "detail": {
+        "what_it_is": "A refresh pulls a project's releases — from GitHub's Releases API, or a Keep-a-Changelog file in the repository — and stores each one in your database in the author's own markdown. Your pages read that stored copy and never call upstream, so GitHub being down, rate-limited or misconfigured costs a refresh, not the changelog. Nothing is rewritten or translated: what the author wrote is what your readers get.",
+        "crate_name": "cratefield-module-changelog",
+        "needs": [
+          "Database",
+          "HttpClient",
+          "Clock"
+        ],
+        "optional": [
+          "KeyValue"
+        ],
+        "tables": [
+          "changelog_release",
+          "changelog_source"
+        ],
+        "routes": [
+          {
+            "method": "GET",
+            "path": "/v1/changelog",
+            "note": "The stored releases, newest first. An empty list before the first refresh, never an error."
+          },
+          {
+            "method": "GET",
+            "path": "/v1/changelog/{version}",
+            "note": "One stored release, with its original markdown."
+          },
+          {
+            "method": "POST",
+            "path": "/v1/changelog/admin/refresh",
+            "note": "Admin token: mirror the source now; upstream trouble leaves the stored releases untouched."
+          }
+        ],
+        "surface": "A releases list and an admin refresh control, rendered at /ui from the handler's own types."
+      }
+    },
+    {
       "slug": "notifications",
       "name": "Notifications",
       "summary": "Push to phones and browsers, an in-app inbox, and email — one API, per-person categories, in the recipient's own language.",

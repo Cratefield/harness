@@ -103,7 +103,7 @@ Required, with no default, one of four:
 |---|---|---|
 | `public-read` | anybody | nobody |
 | `owner` | a signed-in caller, their own rows | the same |
-| `tenant-members` | any signed-in caller, every row | the same |
+| `tenant-members` | any signed-in caller, every row; with a tenant registry, nobody | the same |
 | `admin` | an admin token | the same |
 
 ```json
@@ -111,10 +111,27 @@ Required, with no default, one of four:
 ```
 
 `tenant-members` admits any caller the deployment's verifier accepts. It
-does not check membership, because the harness has no membership fact:
-nothing in a verified credential says which tenant a caller belongs to.
-On a venture `fz build` generates that is the same set — there is one
-tenant — and issue #385 is where it stops being one.
+does not check membership, because the membership fact still does not
+exist: nothing in a verified credential says which tenant a caller
+belongs to. On a venture `fz build` generates — a deployment with no
+tenant registry — that is the same set and the level serves as it always
+did: there is one tenant, so every verified caller is a member of it
+because there is no other to belong to.
+
+On a deployment with a registry the tenant comes from the `Host` header
+and the verifier does not, so the two sets come apart, and the level is
+refused at every host — the caller's own included — with a `500`
+(`no-membership-fact`). It is a `500` and not a `403` because nothing
+the caller did is wrong and no credential of theirs fixes it. That is
+the level being switched off where it cannot be honoured, not a
+membership check: the fact that would make one, a tenant claim on the
+subject that the verifier fills in, is issue #385, and #385 is still
+open.
+
+The published surface cannot reflect this: `/__surface` lists a
+`tenant-members` table as needing a signed-in caller whatever the
+deployment's tenancy, because the surface is built from the manifest
+alone and the manifest does not know the tenancy either.
 
 `owner` matches a caller against the column the table's privacy block
 names as its subject, so declaring it on a table that holds nothing
@@ -138,12 +155,14 @@ declares them:
 | `DELETE /{table}/{key}` | `204` |
 | `POST /__batch` | several reads in one round trip |
 
-The three routes naming one row need a primary key of one column. A key
-of several is refused rather than joined with a separator that could
+The three routes naming one row need a primary key of one column. A
+composite key is refused rather than joined with a separator that could
 occur inside one of the values, so a table declaring `primary_key =
 ["tenant", "member"]` is paged and written and never addressed one row at
-a time — and `/__surface` publishes only the two routes it has. Issue
-#387 is whether that stays true.
+a time — and `/__surface` publishes only the two routes it has. ADR 0018
+is the decision on that gap: the three routes return at
+`/{table}/__by?<column>=<value>`, the key named in the query. They are
+not built yet, so today the refusal above is still the whole answer.
 
 A row that is not the caller's is **not found**, never forbidden: a `403`
 is an answer about a row they were never in a position to learn exists.

@@ -120,6 +120,12 @@
   no outbound navigation leaks it through `Referer` (issue #135). The
   admin hard-delete route keys on the opaque row id, never the email
   (`DELETE /v1/email-signup/admin/subscribers/{id}`).
+- **`/v1` is never framed.** Every `/v1/*` response additionally carries
+  `X-Frame-Options: DENY` and `Content-Security-Policy: frame-ancestors
+  'none'` (issue #435): the API answers in JSON, but the magic-link
+  confirmation is HTML served under `/v1`, and a confirm page an
+  attacker's page can embed is one it can clickjack. `/ui/*` sets its
+  own framing headers and stays deliberately outside this rule.
 - **No `unsafe`** in core or any module (`#![forbid(unsafe_code)]`); the
   only `unsafe`-adjacent code is `worker::send::SendWrapper` inside the
   `worker` crate (ADR 0002).

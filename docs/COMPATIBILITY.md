@@ -47,6 +47,7 @@ compatibility-doc` and checked in CI for drift. Do not edit by hand.
 | `cratefield-control-plane` *(not published)* | 0.1.1 | 1 | `^0.5` — `>=0.5.0, <0.6.0` |
 | `cratefield-dashboard` *(not published)* | 0.1.1 | 1 | `^0.5` — `>=0.5.0, <0.6.0` |
 | `cratefield-introspect` *(not published)* | 0.1.1 | 1 | `^0.5` — `>=0.5.0, <0.6.0` |
+| `cratefield-module-changelog` | 0.1.0 | 1 | `^0.5` — `>=0.5.0, <0.6.0` |
 | `cratefield-module-cms` | 0.1.4 | 1 | `^0.5` — `>=0.5.0, <0.6.0` |
 | `cratefield-module-email-signup` | 0.1.4 | 1 | `^0.5` — `>=0.5.0, <0.6.0` |
 | `cratefield-module-hello` *(not published)* | 0.1.1 | 1 | `^0.5` — `>=0.5.0, <0.6.0` |

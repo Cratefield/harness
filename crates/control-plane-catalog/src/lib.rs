@@ -881,6 +881,52 @@ fn cms() -> CatalogModule {
     )
 }
 
+/// The `changelog` entry.
+fn changelog() -> CatalogModule {
+    entry(
+        "changelog",
+        "Changelog",
+        "A project's releases mirrored into your own database, served without calling upstream.",
+        Tier::Optional,
+        &[],
+        detail(
+            "A refresh pulls a project's releases — from GitHub's Releases API, or a \
+                     Keep-a-Changelog file in the repository — and stores each one in your \
+                     database in the author's own markdown. Your pages read that \
+                     stored copy and never call upstream, so GitHub being down, rate-limited or \
+                     misconfigured costs a refresh, not the changelog. Nothing is rewritten or \
+                     translated: what the author wrote is what your readers get.",
+            "cratefield-module-changelog",
+            &["Database", "HttpClient", "Clock"],
+            &["KeyValue"],
+            &["changelog_release", "changelog_source"],
+            vec![
+                route(
+                    "GET",
+                    "/v1/changelog",
+                    "The stored releases, newest first. An empty list before the first \
+                     refresh, never an error.",
+                ),
+                route(
+                    "GET",
+                    "/v1/changelog/{version}",
+                    "One stored release, with its original markdown.",
+                ),
+                route(
+                    "POST",
+                    "/v1/changelog/admin/refresh",
+                    "Admin token: mirror the source now; upstream trouble leaves the stored \
+                     releases untouched.",
+                ),
+            ],
+            Some(
+                "A releases list and an admin refresh control, rendered at /ui from the \
+                 handler's own types.",
+            ),
+        ),
+    )
+}
+
 /// The `notifications` entry.
 fn notifications() -> CatalogModule {
     entry(
@@ -1080,6 +1126,7 @@ pub fn curated() -> Catalog {
             email_signup(),
             waitlist(),
             cms(),
+            changelog(),
             notifications(),
             privacy(),
             telemetry(),

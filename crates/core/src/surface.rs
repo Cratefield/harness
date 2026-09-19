@@ -72,7 +72,10 @@ pub enum Audience {
     /// `unsubscribe`, `status`); rendered as a landing page, never as a
     /// form.
     Link,
-    /// Needs a signed-in caller — any of them (issue #153).
+    /// Needs a signed-in caller — any of them, unless the level refuses
+    /// everyone (issue #153, #385): on a deployment whose tenants come
+    /// from a registry, a `tenant-members` table answers `500` to every
+    /// caller, signed in or not.
     ///
     /// The vocabulary had `Public`, `Admin` and `Link` and no word for
     /// "somebody, and the route decides which rows they see". A declared

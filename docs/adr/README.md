@@ -43,6 +43,43 @@ through a `Scope` change that would bump `HARNESS_API`, carrying exactly
 the guarantees the in-process bus already gave. Bidirectional was
 rejected for the cycle it admits and the delivery question it forces.
 
+ADR 0018 decides how a composite-key declared table is addressed (#387):
+the key is named in the query at `/{table}/__by` rather than in the
+path, because one shared router serves every declared table and a
+static segment shadows `{key}` — so the reservation is made on purpose
+and the row it strands is given the query form back. Per-arity path
+segments, a key in a request body, and refusing the shape in `fz build`
+were rejected. The decision is recorded only: nothing ships yet, and
+the three routes still answer `400 composite-key`.
+
+ADR 0019 decides how a performance change is admitted (#158): a step ships
+only when a published benchmark shows the cost it removes and is reverted
+if that number does not move, and the order is region-pinning the primary,
+immutable reads from KV or the cache, Durable Object warmers, then D1 read
+replication last — last because the assessment that ranked replication
+first was reasoning about one large shared database, and the harness ships
+one small D1 per venture, so the read volume at any primary is one
+venture's, not the platform's. Replication first, all four steps at once,
+pinning on the intuition that nearer is faster, and latency targets for
+the four steps set before any measurement were rejected. The decision is
+recorded only: nothing ships until the numbers behind the first three
+gates are measured — including step 2's immutable-read share, which no
+benchmark counts yet.
+
+ADR 0020 puts the write half of the tenant registry in core (#154):
+`TenantLifecycle` — create, list, status, set_status, with
+`begin_erasure`/`complete_erasure` carrying offboarding's erasure half
+— implemented by the Postgres adapter over the calls that already
+existed, so a CLI built against core is runtime-neutral by
+construction. It is deliberately not a `Port`: modules must never write
+the registry, the transition rule stays `TenantStatus::admits` (#361),
+and provisioning or dropping a database stays an operator step, because
+ADR 0008 scopes a tenant's app role to one database and the harness
+holds no credential that could do either. On D1 the tenant is the
+venture, so the 10 GB cap is a venture-level threshold and promotion is
+a venture-level move — there is no per-tenant lifecycle event for
+leaving D1, and none will be.
+
 [0102](0102-crypto-crate.md) chose the crypto crate: RustCrypto's
 `chacha20poly1305`.
 

@@ -346,7 +346,7 @@ Decisions, one per method:
   combine with your builder settings, hand both to `handlers::router`.
 
 A builder (`Hello::new().max_name_len(..)`) is the composition surface a
-venture sees in `src/harness.rs`. Settings that a venture must be able to
+venture sees in its `src/lib.rs`. Settings that a venture must be able to
 change without recompiling belong in config keys (step 5) with the builder
 value as the default — the real modules do exactly that.
 

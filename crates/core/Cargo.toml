@@ -40,6 +40,11 @@ unicode-normalization = { workspace = true }
 # One `origin_of` for the CSP builder and the VAPID `aud` (issue #215):
 # RFC 6454 is not something to re-derive by splitting on "://".
 url = { workspace = true }
+# The `Tracker` port's `Credential` (issue #431) clears its token on drop,
+# the same way `SecretBytes` in `cratefield-secrets` does — but core cannot
+# depend on that crate (it depends on core), so `Zeroizing` is wrapped
+# directly here.
+zeroize = { workspace = true }
 
 [dev-dependencies]
 schemars = { workspace = true }

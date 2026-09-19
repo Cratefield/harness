@@ -15,22 +15,37 @@
 //! subject filter is part of the same `WHERE` as the key, so the row
 //! simply does not match.
 //!
-//! # `tenant-members` checks that a caller is verified, not that they are
-//! a member
+//! # `tenant-members` under the two tenancy shapes
 //!
-//! There is no membership fact to check. A [`Caller`] is an id, a session
-//! and an address; `Ports::tenants` is not a [`Port`](cratefield_core::Port)
-//! and `view_for` never copies it, so a module cannot ask which tenant it
-//! is serving either. The level therefore admits every subject the
-//! deployment's one verifier accepts.
+//! There is still no membership fact to check. A [`Caller`] is an id, a
+//! session and an address; a `Subject` carries no tenant claim, and
+//! `Ports::tenants` is not a [`Port`](cratefield_core::Port) and
+//! `view_for` never copies it, so a module cannot ask which tenant it is
+//! serving either. What a request does carry is its
+//! [`Tenancy`] — which of the deployment's two shapes served it, read
+//! from the `TenantConn` the resolution layer handed over and from
+//! nowhere else — and the two shapes disagree about what the level would
+//! be admitting.
 //!
-//! Where declared tables run today that is the same set: a venture `fz
-//! build` generates has no tenant registry, so it has one tenant and every
-//! verified subject is a member of it. It stops being the same set on a
-//! deployment with a registry, where the tenant comes from the `Host`
-//! header and the verifier does not — issue #385.
+//! Under [`Tenancy::Sole`] the deployment has no registry: a venture `fz
+//! build` generates has one tenant, and every verified subject is a
+//! member of it because there is no second tenant to belong to. "Any
+//! verified caller" and "a member of this tenant" are the same set, and
+//! the level serves as it always did.
+//!
+//! Under [`Tenancy::FromRegistry`] a registry named the tenant from the
+//! `Host` header, and the two sets come apart: the verifier is the
+//! deployment's while the tenant is the host's, so a subject who signed
+//! in as a user of tenant A presents the same bearer at tenant B's host
+//! and "any verified caller" is a wider set than "a member of this
+//! tenant". Serving the first as the second is the leak of issue #385,
+//! and the fact that would close it — a tenant claim on `Subject` — does
+//! not exist. So the level refuses with [`NO_MEMBERSHIP_FACT`] rather
+//! than guessing who is a member. That is the whole of this: it does not
+//! implement membership, it refuses where membership would be needed,
+//! and #385 stays open for the real answer.
 
-use cratefield_core::{Caller, Problem, ProblemDef};
+use cratefield_core::{Caller, Problem, ProblemDef, Tenancy};
 use cratefield_manifest::Access;
 use cratefield_tables::TableDef;
 use http::StatusCode;
@@ -64,6 +79,26 @@ pub const MISDECLARED: ProblemDef = ProblemDef {
     status: StatusCode::INTERNAL_SERVER_ERROR,
     title: "Table declaration cannot be enforced",
     description: "The table declares owner access without a subject column to match a caller against.",
+};
+
+/// A `tenant-members` table on a deployment whose tenants come from a
+/// registry (issue #385).
+///
+/// Where a registry resolved the tenant, "any caller the verifier
+/// accepts" and "a member of this tenant" are different sets — the
+/// verifier is the deployment's and the tenant is the host's — and the
+/// level has no membership fact to tell them apart with. Serving anyway
+/// would hand every verified caller every tenant's rows, so the level is
+/// refused rather than guessed at.
+///
+/// It is a `500` and not a `403`: nothing the caller did is wrong, and
+/// no credential of theirs fixes it — signing in as somebody else only
+/// presents a different caller the deployment equally cannot place.
+pub const NO_MEMBERSHIP_FACT: ProblemDef = ProblemDef {
+    slug: "no-membership-fact",
+    status: StatusCode::INTERNAL_SERVER_ERROR,
+    title: "Tenant membership cannot be checked",
+    description: "This table admits members of the tenant, and on a deployment that resolves tenants from a registry there is no membership fact to check.",
 };
 
 /// One declared table, with everything a request needs to decide about it.
@@ -103,10 +138,13 @@ pub enum Reach {
 /// # Errors
 ///
 /// [`UNAUTHENTICATED`] when the level needs a signed-in caller and there
-/// is none, the admin check's own problem for `admin`, and
-/// [`MISDECLARED`] when `owner` has no subject column to match against.
+/// is none, the admin check's own problem for `admin`, [`MISDECLARED`]
+/// when `owner` has no subject column to match against, and
+/// [`NO_MEMBERSHIP_FACT`] when the tenant came from a registry, where
+/// `tenant-members` cannot be honoured for anyone.
 pub fn may_read(
     api: &TableApi,
+    tenancy: Tenancy,
     caller: &Caller,
     admin: Result<(), Problem>,
 ) -> Result<Reach, Problem> {
@@ -114,10 +152,34 @@ pub fn may_read(
         // The one level an anonymous caller reaches. Writes are a
         // separate decision and this function does not grant them.
         Access::PublicRead => Ok(Reach::Everything),
-        Access::TenantMembers => {
-            caller.id().ok_or_else(|| Problem::new(&UNAUTHENTICATED))?;
-            Ok(Reach::Everything)
-        }
+        Access::TenantMembers => match tenancy {
+            // The tenancy before the caller. On a registry deployment the
+            // level cannot be honoured whoever is asking, so the caller's
+            // credential is not the question this arm answers; reading it
+            // first would answer an anonymous caller with "sign in" —
+            // advice that would not help, dressed up as a 401 about them
+            // when the fault is the deployment's composition.
+            //
+            // Logged here, where the 500 is constructed, as the sibling
+            // 500s are (`misdeclared`, `unavailable`, `drifted`): an
+            // operator pairing a registry with this level otherwise gets
+            // client-facing 500s and no server-side trace of why.
+            Tenancy::FromRegistry => {
+                tracing::error!(
+                    table = %api.table.name,
+                    "a `tenant-members` table on a registry deployment has no membership fact to check",
+                );
+                Err(Problem::new(&NO_MEMBERSHIP_FACT))
+            }
+            // No registry, one tenant: there is no second tenant to
+            // belong to, so "a member of this tenant" and "any verified
+            // caller" are the same set and the level serves as it always
+            // did.
+            Tenancy::Sole => {
+                caller.id().ok_or_else(|| Problem::new(&UNAUTHENTICATED))?;
+                Ok(Reach::Everything)
+            }
+        },
         // `fz build` refuses a manifest that declares `owner` on a table
         // holding nothing personal, so a missing subject column is a
         // deployment that did not come from one. Refusing is the only
@@ -162,10 +224,13 @@ pub const NOT_YOURS_TO_GIVE: ProblemDef = ProblemDef {
 ///
 /// [`READ_ONLY`] for `public-read`, [`UNAUTHENTICATED`] when the level
 /// needs a signed-in caller and there is none, the admin check's own
-/// problem for `admin`, and [`MISDECLARED`] when `owner` has no subject
-/// column to match against.
+/// problem for `admin`, [`MISDECLARED`] when `owner` has no subject
+/// column to match against, and [`NO_MEMBERSHIP_FACT`] when the tenant
+/// came from a registry, where `tenant-members` cannot be honoured for
+/// anyone.
 pub fn may_write(
     api: &TableApi,
+    tenancy: Tenancy,
     caller: &Caller,
     admin: Result<(), Problem>,
 ) -> Result<Reach, Problem> {
@@ -173,10 +238,24 @@ pub fn may_write(
         // Read by everybody, written by nobody. A venture that wants
         // public rows written has not declared `public-read`.
         Access::PublicRead => Err(Problem::new(&READ_ONLY)),
-        Access::TenantMembers => {
-            caller.id().ok_or_else(|| Problem::new(&UNAUTHENTICATED))?;
-            Ok(Reach::Everything)
-        }
+        Access::TenantMembers => match tenancy {
+            // The same tenancy-before-caller order as the read: the
+            // level is not writable on a registry deployment by anyone,
+            // and a 401 about the caller's credential would misreport a
+            // fault of the deployment's composition as an answer about
+            // them. Logged where constructed, as the read arm above is.
+            Tenancy::FromRegistry => {
+                tracing::error!(
+                    table = %api.table.name,
+                    "a `tenant-members` table on a registry deployment has no membership fact to check",
+                );
+                Err(Problem::new(&NO_MEMBERSHIP_FACT))
+            }
+            Tenancy::Sole => {
+                caller.id().ok_or_else(|| Problem::new(&UNAUTHENTICATED))?;
+                Ok(Reach::Everything)
+            }
+        },
         Access::Owner => owner_scope(api, caller),
         Access::Admin => {
             admin?;

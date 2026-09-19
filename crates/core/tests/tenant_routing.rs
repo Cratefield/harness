@@ -159,7 +159,10 @@ impl Module for WriterModule {
             .route(
                 "/whoami",
                 axum::routing::get(|db: TenantConn| async move {
-                    axum::Json(serde_json::json!({ "tenant": db.tenant().id().to_string() }))
+                    axum::Json(serde_json::json!({
+                        "tenant": db.tenant().id().to_string(),
+                        "tenancy": format!("{:?}", db.tenancy()),
+                    }))
                 }),
             )
     }
@@ -382,4 +385,47 @@ async fn without_a_tenant_plane_every_host_is_the_implicit_tenant() {
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(body_json(response).await["tenant"], "default");
     assert_eq!(db.statements().len(), 1);
+}
+
+// -------------------------------------------------------- the tenancy bit
+
+#[pollster::test]
+async fn a_request_a_registry_resolved_reports_the_registry_tenancy() {
+    // The bit a membership rule reads (#385): on this path a registry
+    // named the tenant, so "any verified caller" and "a member of this
+    // tenant" are *not* the same set and the rule must be able to see
+    // that.
+    let (router, _, _, _registry) = routed();
+    let response = request(
+        &router,
+        Method::GET,
+        "/v1/writer/whoami",
+        &[(header::HOST.as_str(), "a.example")],
+        None,
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(body_json(response).await["tenancy"], "FromRegistry");
+}
+
+#[pollster::test]
+async fn without_a_tenant_plane_the_request_reports_the_sole_tenancy() {
+    // The twin, on the other path: no `ports.tenants`, so the same
+    // handler must see the request as the one implicit tenant — the
+    // shape where the two sets coincide and the rule may serve.
+    let db = Arc::new(RecordingDb::default());
+    let mut ports = Ports::empty();
+    ports.db = Some(Arc::clone(&db) as Arc<dyn Database>);
+    let router = harness().router(ports);
+
+    let response = request(
+        &router,
+        Method::GET,
+        "/v1/writer/whoami",
+        &[(header::HOST.as_str(), "anything.at.all")],
+        None,
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(body_json(response).await["tenancy"], "Sole");
 }

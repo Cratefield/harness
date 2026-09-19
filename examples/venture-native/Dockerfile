@@ -5,8 +5,8 @@
 #
 # Dependency layers are not cached separately (no cargo-chef): this is
 # an example, and the workspace-wide COPY keeps the Dockerfile honest
-# about what the build needs. Production ventures copy this file from
-# the template and add cargo-chef if their CI budget cares.
+# about what the build needs. There is no template: production native
+# ventures copy this file and add cargo-chef if their CI budget cares.
 FROM rust:1-bookworm AS builder
 WORKDIR /build
 COPY . .
