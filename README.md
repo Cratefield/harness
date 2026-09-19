@@ -52,6 +52,8 @@ Decisions, including why the TypeScript attempt was thrown away, are in
 core: [docs/COMPATIBILITY.md](https://github.com/Cratefield/harness/blob/main/docs/COMPATIBILITY.md), generated and
 drift-checked in CI. How crates reach crates.io:
 [docs/RELEASING.md](https://github.com/Cratefield/harness/blob/main/docs/RELEASING.md).
+Driving the venture CLI from an AI agent over MCP:
+[docs/MCP.md](https://github.com/Cratefield/harness/blob/main/docs/MCP.md).
 
 ## How a venture uses it
 

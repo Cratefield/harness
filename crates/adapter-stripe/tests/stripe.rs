@@ -358,6 +358,64 @@ fn verify_webhook_without_a_secret_is_not_configured() {
     assert!(matches!(err, PaymentsError::NotConfigured));
 }
 
+#[test]
+fn verify_webhook_accepts_one_valid_signature_among_several() {
+    // What a signing-secret rotation looks like on the wire: Stripe signs
+    // with both secrets for the overlap, and one match is enough.
+    let body = r#"{"id":"evt_1","type":"x","data":{"object":{}}}"#;
+    let old = sign("whsec_rotated_out", 1_700_000_000, body);
+    let current = sign("whsec_test", 1_700_000_000, body);
+    let header = format!("t=1700000000,v1={old},v1={current}");
+
+    let http = ScriptedHttp::ok("");
+    let s = stripe(http);
+    let event = pollster::block_on(s.verify_webhook(&header, body.as_bytes())).unwrap();
+    assert_eq!(event.id, "evt_1");
+}
+
+#[test]
+fn verify_webhook_accepts_a_matching_last_candidate() {
+    // Every candidate before the match is wrong — including one of the
+    // wrong length — so the match is the last thing checked. The check
+    // must walk the whole list, not stop at the first candidate.
+    let body = r#"{"id":"evt_1","type":"x","data":{"object":{}}}"#;
+    let tampered = sign("whsec_test", 1_700_000_000, "{}");
+    let current = sign("whsec_test", 1_700_000_000, body);
+    let header = format!("t=1700000000,v1={tampered},v1=deadbeef,v1={current}");
+
+    let http = ScriptedHttp::ok("");
+    let s = stripe(http);
+    let event = pollster::block_on(s.verify_webhook(&header, body.as_bytes())).unwrap();
+    assert_eq!(event.id, "evt_1");
+}
+
+#[test]
+fn verify_webhook_refuses_a_signature_of_the_wrong_length() {
+    // A `v1` that does not decode to exactly 32 bytes compares unequal
+    // (constant-time equality is false on a length mismatch) — it never
+    // panics or takes a different path.
+    let body = r#"{"id":"evt_1","type":"x","data":{"object":{}}}"#;
+    let header = "t=1700000000,v1=deadbeef";
+
+    let http = ScriptedHttp::ok("");
+    let s = stripe(http);
+    let err = pollster::block_on(s.verify_webhook(header, body.as_bytes())).unwrap_err();
+    assert!(matches!(err, PaymentsError::SignatureInvalid(_)));
+}
+
+#[test]
+fn verify_webhook_refuses_when_no_candidate_matches() {
+    let body = r#"{"id":"evt_1","type":"x","data":{"object":{}}}"#;
+    let other = sign("whsec_other", 1_700_000_000, body);
+    let truncated = format!("{other}abcd"); // right prefix, wrong length
+    let header = format!("t=1700000000,v1={other},v1={truncated}");
+
+    let http = ScriptedHttp::ok("");
+    let s = stripe(http);
+    let err = pollster::block_on(s.verify_webhook(&header, body.as_bytes())).unwrap_err();
+    assert!(matches!(err, PaymentsError::SignatureInvalid(_)));
+}
+
 // ---------------------------------------------------------------------------
 // A tiny HttpClient that returns a scripted sequence of responses.
 

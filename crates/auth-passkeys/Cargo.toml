@@ -28,6 +28,9 @@ thiserror = { workspace = true }
 base64ct = { workspace = true }
 getrandom = { workspace = true }
 sha2 = { workspace = true }
+# The challenge budget's guarded statements, the way auth-core's store and
+# `SendCooldown` are written.
+sea-query = { workspace = true }
 
 # WebAuthn, per ADR 0200: upstream webauthn-rs cannot build for wasm32
 # (OpenSSL), so relying-party verification is implemented directly on the

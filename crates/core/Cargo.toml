@@ -5,8 +5,9 @@ readme = "README.md"
 keywords = ["cratefield", "harness", "backend", "axum", "modules"]
 categories = ["web-programming", "asynchronous"]
 include = ["src/**/*", "examples/**/*"]
-# 0.3.0 (not workspace): the UI surface (`Module::surface`, `GET /__surface`,
-# ADR 0010) adds a defaulted trait method and a root route.
+# Not the workspace version: core versions independently of the crates that
+# depend on it, and is ahead of them (release-plz.toml documents why that
+# gap needs a deliberate dependent release round).
 version = "0.5.0"
 edition.workspace = true
 rust-version.workspace = true

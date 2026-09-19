@@ -33,6 +33,14 @@ publish is manual, the same as every other new crate: add it to the
 ordered list in step 2 below, then enable its trusted publisher and drop
 the `publish = false` entry.
 
+`cratefield-mcp` (issue #160) carries `publish = false` as well: it is
+new, nothing depends on it, and publishing it is the remaining human step
+ADR 0021 records — until the crates.io setup below exists, a publishable
+crate would only make the release run fail authentication over OIDC.
+When that step lands its first publish is manual, the same as every other
+new crate: add it to the ordered list in step 2 below, then enable its
+trusted publisher and drop the `publish = false` entry.
+
 `cratefield-push-auth` (issue #178) carries `publish = false` in its own
 manifest for the same reason, but with one difference that matters to the
 order below: two **published** crates already depend on it —
@@ -140,43 +148,54 @@ The workflow also takes a manual run (Actions → Release → *Run
 workflow*) with a `dry_run` checkbox, on by default, so the pipeline
 can be exercised without publishing.
 
-## Breaking bumps: bump the crate, not the workspace table
+## Dependent crates do not reliably follow a breaking bump
 
-Sometimes a crate's next version is decided by hand — release-plz missed
-a breaking marker, or the bump is deliberate. Bump **only that crate's
-own `version`** and leave the `[workspace.dependencies]` requirement
-alone (`cargo set-version -p cratefield-core 0.6.0` from `cargo-edit`,
-or by hand), and land the commit with a conventional breaking marker
-(`feat(core)!:` or a `BREAKING CHANGE:` footer) so the changelog flags
-it. release-plz then rewrites the workspace requirement itself, and
-because it made the edit it also patch-bumps every published crate that
-depends on the bumped one, transitively, and publishes them all in the
-same release PR, in dependency order. Per-crate versioning does not
-strand the published set on its own — but only while the requirement is
-left to release-plz.
+**Assume a breaking bump of `cratefield-core` does not release its
+dependents, and check that it did.** release-plz normally cascades: when
+it releases a crate it rewrites that crate's version requirement in
+every manifest it manages, and each crate whose requirement it rewrote
+earns a patch bump and is published in the same release PR. Nothing
+configures this behaviour — there is no option to turn the cascade on,
+off, or up, and no option to make a breaking bump propagate as anything
+larger than a patch.
 
-Hand-editing the workspace requirement defeats the cascade, silently and
-permanently: with the requirement already correct in-tree, release-plz
-has nothing to rewrite, so no dependent moves — and it never re-checks
-either, `release-pr` reports the dependents "already up to date" on
-every later run. That is how the core 0.5 bump landed: PR #336 edited
-the crate and the workspace table in the same commit (issue #462 is the
-consequence; issue #466 is where this was established).
+**The cascade is keyed on that rewrite, which makes it easy to suppress
+by accident.** release-plz asks whether a requirement has to change in
+order to admit the version being released, and reads "no change needed"
+as "this dependent does not need a release". A requirement of `"0.5"`
+already admits 0.5.0, so releasing core as 0.5.0 against a workspace
+table that already reads `"0.5"` rewrites nothing and publishes nothing
+but core. That is how core reached 0.5.0 on crates.io while 23 published
+dependents still required `^0.4` (issue #462): the requirement in the
+root `Cargo.toml` had been edited by hand ahead of the release that was
+meant to move it, so the release round that should have followed never
+ran.
 
-**If a requirement was already hand-edited and dependents are stranded:**
-patch-bump the affected published crates — their own versions only; their
-core requirement already comes from the workspace table — and let
-`release-plz release` publish them. If the release step is still off
-(`CRATES_IO_READY` is not `true` yet), fall back to the manual ordered
-`cargo publish` list in step 2 of Owner setup above.
+**So bump one place, not two.** Set the new version in
+`crates/<name>/Cargo.toml` and leave the `[workspace.dependencies]`
+requirement in the root `Cargo.toml` alone — moving it is release-plz's
+job, and moving it first is what costs the dependent round. If the two
+have already diverged, the dependents will not catch up on their own:
+bump each of them in the release PR by hand, or publish them in the
+dependency order given in step 2 below.
 
-Three boundaries on the cascade. A compatible bump (0.5.0 to 0.5.1) does
-not cascade, and does not need to — the caret requirement already accepts
-it. Dependents get a patch bump even where the requirement move is
-breaking for their own users (release-plz#1599, wontfix). And the
-cascade lives entirely in `release-pr`: if the release-PR gate is off
-(no `RELEASE_PLZ_TOKEN`, `ACTIONS_MAY_OPEN_PRS` not `true`),
-propagation never runs at all.
+**A cascaded dependent gets a patch bump even when the dependency
+broke.** release-plz does not inspect code to work out whether a
+dependent re-exports a type that changed, so a crate whose public
+surface exposes a core type can ship a breaking change as a patch
+release, which consumers pinned with a caret take silently.
+`COMPATIBILITY.md` does not catch this either: it is generated from the
+workspace manifests and checked in CI for drift, so it records the
+ranges this tree declares, not the ranges the published crates actually
+carry.
+
+**Nothing in this repository catches the mismatch.** Every in-tree build
+resolves `cratefield-core` through the path dependency in the root
+`Cargo.toml`, so the workspace compiles against the local 0.5 whatever
+the published requirements say, and CI stays green while the published
+set is unresolvable. Issue #466 tracks the CI job that resolves a
+venture from crates.io alone, which is the check that would have caught
+this.
 
 ## Owner setup (once)
 

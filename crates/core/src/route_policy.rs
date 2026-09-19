@@ -24,7 +24,7 @@ use crate::module::Module;
 use crate::ports::{Captcha, Port};
 use crate::problem::Problem;
 use crate::problems::SLUGS;
-use crate::surface::Surface;
+use crate::surface::{Audience, Surface};
 use crate::venture::VentureEnv;
 
 /// How a request to a declared route proves it is legitimate.
@@ -96,6 +96,24 @@ pub struct WriteGuards {
     /// Modules whose public writes are proved by an artifact this service
     /// issued ([`RoutePolicy::SignedLink`], issue #143).
     pub signed_link_modules: Vec<String>,
+    /// Whether the composition exposes any **public write** at all
+    /// (issue #437): a declared guarded action of any kind — a captcha
+    /// form, a webhook, a signed link — or the module-level
+    /// [`public_writes`] flag for modules that predate surfaces. Broader
+    /// than the three lists above by design: a webhook is an
+    /// unauthenticated endpoint too, and the rate-limiter leg of
+    /// [`production_readiness`] cares that *something* is writable, not
+    /// by which proof.
+    ///
+    /// [`public_writes`]: Module::public_writes
+    pub has_public_writes: bool,
+    /// Whether any declared action is the **admin plane** (issue #437):
+    /// an [`Audience::Admin`] action, or any path under `/admin`. An
+    /// admin route's bearer token is guessed rather than submitted, so
+    /// it needs a budget even when the venture has no public writes —
+    /// which is why this is its own answer and not a byproduct of
+    /// [`Self::has_public_writes`].
+    pub has_admin_routes: bool,
 }
 
 impl WriteGuards {
@@ -139,6 +157,19 @@ impl WriteGuards {
             if signed_link {
                 guards.signed_link_modules.push(module.name().to_owned());
             }
+            // The limiter leg (issue #437) asks two broader questions
+            // than the per-policy lists: is anything writable publicly
+            // at all, and is there an admin plane to brute-force. The
+            // path check is the surface validation rule (`Audience::Admin`
+            // lives under `/admin`), applied in both directions so an
+            // undeclared admin path is caught even when the audience is
+            // missing.
+            if form || signature || signed_link || module.public_writes() {
+                guards.has_public_writes = true;
+            }
+            if Self::declares_admin_routes(&surface) {
+                guards.has_admin_routes = true;
+            }
         }
         guards
     }
@@ -148,7 +179,9 @@ impl WriteGuards {
     /// [`public_writes`](Module::public_writes) of, so the fallback has no
     /// meaning here: whatever the document declares is exactly what it
     /// needs. Same per-action reading as [`Self::collect`] through the one
-    /// [`Action::demands_captcha`] predicate.
+    /// [`Action::demands_captcha`] predicate and the one
+    /// `declares_admin_routes` predicate — a sidecar's admin plane needs
+    /// the limiter floor as much as an in-process module's.
     ///
     /// [`Action::demands_captcha`]: crate::surface::Action::demands_captcha
     #[must_use]
@@ -162,6 +195,8 @@ impl WriteGuards {
             captcha_modules: form.then(|| module.to_owned()).into_iter().collect(),
             signature_modules: signature.then(|| module.to_owned()).into_iter().collect(),
             signed_link_modules: signed_link.then(|| module.to_owned()).into_iter().collect(),
+            has_public_writes: form || signature || signed_link,
+            has_admin_routes: Self::declares_admin_routes(surface),
         }
     }
 
@@ -180,6 +215,21 @@ impl WriteGuards {
             }
         }
         (form, signature)
+    }
+
+    /// Whether the surface declares the admin plane: an
+    /// [`Audience::Admin`](crate::surface::Audience::Admin) action, or any
+    /// path under `/admin`. Both spellings, so an action whose audience was
+    /// forgotten is still counted by where it sits — the same rule
+    /// [`Surface::validate`] enforces, read here instead of trusted.
+    ///
+    /// [`Surface::validate`]: crate::surface::Surface::validate
+    fn declares_admin_routes(surface: &Surface) -> bool {
+        surface.actions.iter().any(|action| {
+            action.audience == Audience::Admin
+                || action.path == "/admin"
+                || action.path.starts_with("/admin/")
+        })
     }
 
     /// Whether any module proves a public write with an artifact this
@@ -213,6 +263,16 @@ impl WriteGuards {
     #[must_use]
     pub fn needs_payments(&self) -> bool {
         !self.signature_modules.is_empty()
+    }
+
+    /// Whether any route in the composition needs a limiter sitting in
+    /// front of it (issue #437): a public write or an admin route. The
+    /// admin plane is enough on its own — a bearer token is guessed, not
+    /// submitted, so a venture that publishes nothing still needs the
+    /// budget before its `/admin/*` routes.
+    #[must_use]
+    pub fn needs_rate_limiter(&self) -> bool {
+        self.has_public_writes || self.has_admin_routes
     }
 }
 
@@ -279,6 +339,26 @@ pub fn unprotected_writes_override(config: &dyn crate::config::Config) -> Option
         .and_then(|raw| stated_reason(Some(raw.as_str())).map(str::to_owned))
 }
 
+/// Config key holding an operator's explicit, recorded acceptance that
+/// this deployment serves its public writes and admin routes with **no
+/// resolved rate limiter** (issue #437). Same contract as
+/// [`ALLOW_UNPROTECTED_WRITES`]: the value is the **reason**, and a blank
+/// one does not count; the boot gate records it once, wherever the
+/// operator ships logs. It exists because the limiter was opt-in — a
+/// runtime that failed to resolve its binding degraded to no limiter and
+/// served — and because the escape from that must be as deliberate as the
+/// gap it accepts. Resolve the binding and delete the key.
+pub const ALLOW_UNLIMITED_PUBLIC_ROUTES: &str = "HARNESS_ALLOW_UNLIMITED_PUBLIC_ROUTES";
+
+/// The operator's recorded reason for serving public writes and admin
+/// routes unlimited, if they set one (issue #437).
+#[must_use]
+pub fn unlimited_public_routes_override(config: &dyn crate::config::Config) -> Option<String> {
+    config
+        .get(ALLOW_UNLIMITED_PUBLIC_ROUTES)
+        .and_then(|raw| stated_reason(Some(raw.as_str())).map(str::to_owned))
+}
+
 /// The environment this **deployment** runs in (issue #143).
 ///
 /// A venture carries a compiled [`VentureEnv`] — a builder default the
@@ -322,12 +402,40 @@ pub fn signer_effective(runtime: Option<&Arc<dyn Runtime>>) -> bool {
     runtime.is_some_and(|runtime| runtime.effectively_configured(Port::Signer))
 }
 
+/// Whether the runtime has a limiter it can actually consult (issue #437).
+///
+/// This is the **runtime's own answer**, and a provisional one: it is all
+/// the build-time gate and `fz doctor` can know, because neither holds the
+/// resolved [`Ports`](crate::ports::Ports). A Cloudflare binding that is
+/// named but fails to resolve still reports `true` here — the adapter
+/// degrades to `ports.rate_limiter == None` with only a warning — so the
+/// boot gate re-checks against the port the runtime actually handed over:
+/// [`production_readiness`] takes that resolved answer as its
+/// `rate_limiter_ready` parameter and never computes it from this.
+#[must_use]
+pub fn rate_limiter_effective(runtime: Option<&Arc<dyn Runtime>>) -> bool {
+    runtime.is_some_and(|runtime| runtime.effectively_configured(Port::RateLimiter))
+}
+
 /// The production abuse-control gate (issue #133), as collected error
 /// strings (the [`ConfigError`] convention: report every problem at
-/// once). Empty for anything but `Production`; pass
-/// `allow_no_captcha = Some(reason)` (the `fz doctor` override) to
-/// downgrade the CAPTCHA refusal to nothing — the runtime path has no
-/// override and always fails closed.
+/// once). Empty for anything but `Production`.
+///
+/// The two overrides are deliberate, independent, recorded decisions:
+/// `allow_no_captcha` (the `fz doctor` flag, and
+/// `HARNESS_ALLOW_UNPROTECTED_WRITES` at the boot gate) downgrades only
+/// the CAPTCHA refusal, and `allow_unlimited`
+/// ([`ALLOW_UNLIMITED_PUBLIC_ROUTES`]) downgrades only the
+/// rate-limiter refusal (issue #437). One key waiving two controls is how
+/// the second stays unwired after the first is fixed.
+///
+/// The limiter leg is keyed on `rate_limiter_ready`, the **resolved**
+/// answer, and never inferred from [`Runtime::provides`]: the Cloudflare
+/// runtime reports [`Port::RateLimiter`] from a configured binding *name*,
+/// and a binding that fails to resolve degrades to
+/// `ports.rate_limiter == None` with only a `warn_once`. Callers holding
+/// ports pass `ports.rate_limiter.is_some()`; the build-time gate and
+/// `fz doctor` pass [`rate_limiter_effective`], the runtime's own answer.
 ///
 /// [`ConfigError`]: crate::config::ConfigError
 #[must_use]
@@ -335,7 +443,9 @@ pub fn production_readiness(
     env: VentureEnv,
     guards: &WriteGuards,
     runtime: Option<&Arc<dyn Runtime>>,
+    rate_limiter_ready: bool,
     allow_no_captcha: Option<&str>,
+    allow_unlimited: Option<&str>,
 ) -> Vec<String> {
     if env != VentureEnv::Production {
         return Vec::new();
@@ -349,7 +459,8 @@ pub fn production_readiness(
             "production venture has captcha-guarded public writes from [{}] but the Captcha \
              port is not effectively configured: provide it on the runtime with a bound \
              adapter (Turnstile needs its secret and expected hostname) — `fz doctor \
-             --allow-no-captcha <reason>` overrides this check for previews only",
+             --allow-no-captcha <reason>` overrides this check for previews only, and \
+             {ALLOW_UNPROTECTED_WRITES} records the acceptance in a serving deployment",
             guards.captcha_modules.join(", ")
         ));
     }
@@ -365,6 +476,19 @@ pub fn production_readiness(
              is not provided — webhook deliveries cannot be verified (see the Inbox dedup \
              ledger and the STRIPE_WEBHOOK_SECRET doctor rule)",
             guards.signature_modules.join(", ")
+        ));
+    }
+    if guards.needs_rate_limiter()
+        && !rate_limiter_ready
+        && stated_reason(allow_unlimited).is_none()
+    {
+        errors.push(format!(
+            "production venture takes public writes or admin routes but the RateLimiter port \
+             is not resolved: admin bearer routes have no brute-force backstop behind the \
+             limiter (the fail-closed rule the sidecar forward runs) and every public write \
+             runs without a budget — resolve the binding so the runtime actually hands over \
+             a limiter, or set {ALLOW_UNLIMITED_PUBLIC_ROUTES} to a reason to serve \
+             unlimited (issue #437)"
         ));
     }
     errors
@@ -644,7 +768,7 @@ mod tests {
         let guards = WriteGuards::collect(&[module("forms", Vec::new(), true)]);
         for env in [VentureEnv::Development, VentureEnv::Staging] {
             assert!(
-                production_readiness(env, &guards, None, None).is_empty(),
+                production_readiness(env, &guards, None, true, None, None).is_empty(),
                 "{env:?} must not gate"
             );
         }
@@ -657,13 +781,24 @@ mod tests {
             vec![Action::post("join", "/").captcha()],
             false,
         )]);
-        let errors = production_readiness(VentureEnv::Production, &guards, None, None);
+        // The limiter leg is held aside (`rate_limiter_ready = true`) so
+        // this test stays about the captcha leg; #437's own tests are
+        // below.
+        let errors = production_readiness(VentureEnv::Production, &guards, None, true, None, None);
         assert_eq!(errors.len(), 1);
         assert!(errors[0].contains("forms"));
         assert!(errors[0].contains("Captcha"));
         // The override exists for `fz doctor` previews only.
         assert!(
-            production_readiness(VentureEnv::Production, &guards, None, Some("preview")).is_empty()
+            production_readiness(
+                VentureEnv::Production,
+                &guards,
+                None,
+                true,
+                Some("preview"),
+                None
+            )
+            .is_empty()
         );
         // And it is the *reason* that overrides, not the flag. `fz
         // doctor --allow-no-captcha ""` hands this `Some("")`, and an
@@ -674,7 +809,15 @@ mod tests {
         // reason.
         for nothing in ["", "   ", "\t\n"] {
             assert_eq!(
-                production_readiness(VentureEnv::Production, &guards, None, Some(nothing)).len(),
+                production_readiness(
+                    VentureEnv::Production,
+                    &guards,
+                    None,
+                    true,
+                    Some(nothing),
+                    None
+                )
+                .len(),
                 1,
                 "an empty reason waived the captcha gate: {nothing:?}"
             );
@@ -688,14 +831,22 @@ mod tests {
             vec![Action::post("webhook", "/webhook").policy(RoutePolicy::Signature)],
             false,
         )]);
-        let errors = production_readiness(VentureEnv::Production, &guards, None, None);
+        let errors = production_readiness(VentureEnv::Production, &guards, None, true, None, None);
         assert_eq!(errors.len(), 1);
         assert!(errors[0].contains("billing"));
         assert!(errors[0].contains("Payments"));
         // No override for the payments leg — webhooks cannot be "previewed"
         // unverified without shipping unsigned money events.
         assert_eq!(
-            production_readiness(VentureEnv::Production, &guards, None, Some("preview")).len(),
+            production_readiness(
+                VentureEnv::Production,
+                &guards,
+                None,
+                true,
+                Some("preview"),
+                None
+            )
+            .len(),
             1
         );
     }
@@ -757,13 +908,15 @@ mod tests {
         // Not an exemption: without a Signer there is nothing to issue or
         // verify the artifact with, so production still refuses.
         let guards = WriteGuards::collect(&[declaring("passkeys", RoutePolicy::SignedLink)]);
-        let errors = production_readiness(VentureEnv::Production, &guards, None, None);
+        let errors = production_readiness(VentureEnv::Production, &guards, None, true, None, None);
         assert_eq!(errors.len(), 1, "{errors:?}");
         assert!(errors[0].contains("signed-link"), "{}", errors[0]);
         assert!(errors[0].contains("passkeys"), "{}", errors[0]);
 
         // And nothing is demanded outside production.
-        assert!(production_readiness(VentureEnv::Staging, &guards, None, None).is_empty());
+        assert!(
+            production_readiness(VentureEnv::Staging, &guards, None, true, None, None).is_empty()
+        );
     }
 
     #[test]
@@ -783,6 +936,138 @@ mod tests {
         assert!(
             guards.signed_link_modules.is_empty(),
             "the module-level fallback must not override a declared action"
+        );
+    }
+
+    // ------------------------------------------------ issue #437
+
+    #[test]
+    fn admin_and_public_writes_are_recorded_on_the_guards() {
+        // An admin action alone is enough: the bearer token is guessed,
+        // not submitted, so the budget question is not a corollary of the
+        // public-write one.
+        let guards = WriteGuards::collect(&[module(
+            "exports",
+            vec![Action::post("export", "/admin/export").audience(Audience::Admin)],
+            false,
+        )]);
+        assert!(guards.has_admin_routes);
+        assert!(!guards.has_public_writes);
+        assert!(guards.needs_rate_limiter());
+
+        // The path half of the predicate, for an action whose audience
+        // was never declared.
+        let guards = WriteGuards::collect(&[module(
+            "landing",
+            vec![Action::get("console", "/admin/console")],
+            false,
+        )]);
+        assert!(guards.has_admin_routes);
+
+        // The module-level fallback flag counts as a public write, the
+        // way the captcha fallback does.
+        let guards = WriteGuards::collect(&[module("legacy", Vec::new(), true)]);
+        assert!(guards.has_public_writes);
+        assert!(!guards.has_admin_routes);
+
+        // And a webhook is an unauthenticated endpoint: it counts for the
+        // limiter leg even though it asks nothing of the captcha one.
+        let guards = WriteGuards::collect(&[module(
+            "billing",
+            vec![Action::post("webhook", "/webhook").policy(RoutePolicy::Signature)],
+            false,
+        )]);
+        assert!(guards.has_public_writes);
+    }
+
+    #[test]
+    fn a_production_venture_needs_a_resolved_rate_limiter() {
+        let guards = WriteGuards::collect(&[module(
+            "forms",
+            vec![Action::post("join", "/").captcha()],
+            false,
+        )]);
+
+        // Advertised is not resolved: the Cloudflare runtime reports the
+        // port from a configured binding name and still hands over `None`
+        // when the binding fails to resolve. The caller says which
+        // happened, and the captcha waiver next door does not reach this
+        // leg.
+        let unlimited = production_readiness(
+            VentureEnv::Production,
+            &guards,
+            None,
+            false,
+            Some("preview"),
+            None,
+        );
+        assert_eq!(unlimited.len(), 1, "{unlimited:?}");
+        assert!(unlimited[0].contains("RateLimiter"), "{}", unlimited[0]);
+        assert!(
+            unlimited[0].contains(ALLOW_UNLIMITED_PUBLIC_ROUTES),
+            "{}",
+            unlimited[0]
+        );
+
+        // Resolved: the leg passes.
+        assert!(
+            production_readiness(
+                VentureEnv::Production,
+                &guards,
+                None,
+                true,
+                Some("preview"),
+                None
+            )
+            .is_empty()
+        );
+
+        // Waived with a reason it passes; waived with a blank one it does
+        // not — the same "a blank reason is not an acceptance" rule the
+        // captcha override runs on.
+        assert!(
+            production_readiness(
+                VentureEnv::Production,
+                &guards,
+                None,
+                false,
+                Some("preview"),
+                Some("issue #437: between pivots"),
+            )
+            .is_empty()
+        );
+        for nothing in ["", "   "] {
+            assert_eq!(
+                production_readiness(
+                    VentureEnv::Production,
+                    &guards,
+                    None,
+                    false,
+                    Some("preview"),
+                    Some(nothing),
+                )
+                .len(),
+                1,
+                "an empty reason waived the limiter gate: {nothing:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_module_with_only_admin_routes_still_needs_the_limiter() {
+        let guards = WriteGuards::collect(&[module(
+            "exports",
+            vec![Action::post("export", "/admin/export").audience(Audience::Admin)],
+            false,
+        )]);
+        assert!(guards.captcha_modules.is_empty());
+        let errors = production_readiness(VentureEnv::Production, &guards, None, false, None, None);
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert!(errors[0].contains("RateLimiter"), "{}", errors[0]);
+        assert!(
+            errors[0].contains(ALLOW_UNLIMITED_PUBLIC_ROUTES),
+            "{}",
+            errors[0]
         );
     }
 }

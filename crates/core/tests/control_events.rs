@@ -30,8 +30,8 @@ use std::sync::Arc;
 use axum::http::{Method, StatusCode};
 use common::{base_venture, body_json, request};
 use cratefield_core::{
-    ALLOW_UNPROTECTED_WRITES, Config, ConfigError, Harness, MapConfig, Migrations, Module,
-    ModuleContext, Port, Ports, Runtime,
+    ALLOW_UNLIMITED_PUBLIC_ROUTES, ALLOW_UNPROTECTED_WRITES, Config, ConfigError, Harness,
+    MapConfig, Migrations, Module, ModuleContext, Port, Ports, Runtime,
 };
 
 // ---------------------------------------------------------- the capture sink
@@ -144,6 +144,13 @@ fn production_ports(acceptance: Option<&str>) -> Ports {
     let mut pairs = vec![("ENV", "production")];
     if let Some(reason) = acceptance {
         pairs.push((ALLOW_UNPROTECTED_WRITES, reason));
+        // These ports wire no `RateLimiter`, and readiness refuses a
+        // production venture with public writes that has none — a waiver
+        // covers only the control it names, so the unprotected-writes
+        // acceptance does not excuse the limiter leg. What this test is
+        // about is the forwarded record, so both legs are accepted and the
+        // boot gets far enough to produce one.
+        pairs.push((ALLOW_UNLIMITED_PUBLIC_ROUTES, reason));
     }
     Ports::with_config(Arc::new(MapConfig::from_pairs(pairs)))
 }
