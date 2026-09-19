@@ -563,6 +563,7 @@ impl Harness {
             blob: _,
             push: _,
             payments: _,
+            tracker: _,
             realtime: _,
             http: _,
             clock,

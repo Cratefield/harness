@@ -53,8 +53,9 @@ pub use dialect::Dialect;
 #[cfg(feature = "harness")]
 pub use fakes::{
     AuthMode, EmptyDatabase, FakeAuth, FakeCaptcha, FakeDefer, FakeDispatcher, FakeHttpClient,
-    FakeMailer, FakePayments, FakePush, FakeRateLimiter, FakeRealtime, FixedClock, MailerMode,
-    MemoryBlob, MemoryKeyValue, PaymentsCall, PaymentsMode, PushMode,
+    FakeMailer, FakePayments, FakePush, FakeRateLimiter, FakeRealtime, FakeTracker, FiledCall,
+    FixedClock, MailerMode, MemoryBlob, MemoryKeyValue, PaymentsCall, PaymentsMode, PushMode,
+    StatusedCall, TrackerMode,
 };
 #[cfg(feature = "harness")]
 pub use harness::TestHarness;

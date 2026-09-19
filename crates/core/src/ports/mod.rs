@@ -21,6 +21,7 @@ mod push;
 mod rate_limiter;
 mod realtime;
 pub(crate) mod signer;
+mod tracker;
 
 pub use auth::{Auth, AuthError, Caller, Subject, Unconfigured};
 pub use blob::{Blob, BlobError, BlobObject, MAX_BLOB_BYTES, ScopedBlob, check_blob_size};
@@ -48,6 +49,10 @@ pub use push::{
 pub use rate_limiter::{Decision, RateLimitError, RateLimiter};
 pub use realtime::{Member, Realtime, RealtimeError, RoomContext, RoomHandler};
 pub use signer::{Kid, MAX_KID_NAME, Payload, SignatureError, Signer};
+pub use tracker::{
+    Credential, Destination, Filed, RoutingTracker, Severity, TicketDraft, TicketState,
+    TicketStatus, Tracker, TrackerError,
+};
 
 use crate::config::Config;
 use crate::module::Module;
@@ -68,6 +73,7 @@ pub enum Port {
     Blob,
     Push,
     Payments,
+    Tracker,
     Realtime,
     HttpClient,
     Clock,
@@ -116,6 +122,7 @@ ports!(
     Blob,
     Push,
     Payments,
+    Tracker,
     Realtime,
     HttpClient,
     Clock,
@@ -136,6 +143,7 @@ impl Port {
             Port::Blob => "Blob",
             Port::Push => "Push",
             Port::Payments => "Payments",
+            Port::Tracker => "Tracker",
             Port::Realtime => "Realtime",
             Port::HttpClient => "HttpClient",
             Port::Clock => "Clock",
@@ -165,6 +173,7 @@ pub struct Ports {
     pub blob: Option<Arc<dyn Blob>>,
     pub push: Option<Arc<dyn Push>>,
     pub payments: Option<Arc<dyn Payments>>,
+    pub tracker: Option<Arc<dyn Tracker>>,
     pub realtime: Option<Arc<dyn Realtime>>,
     pub http: Option<Arc<dyn HttpClient>>,
     pub clock: Option<Arc<dyn Clock>>,
@@ -206,6 +215,7 @@ impl Ports {
             blob: None,
             push: None,
             payments: None,
+            tracker: None,
             realtime: None,
             http: None,
             clock: None,
@@ -251,6 +261,7 @@ impl Ports {
             Port::Blob => self.blob.is_some(),
             Port::Push => self.push.is_some(),
             Port::Payments => self.payments.is_some(),
+            Port::Tracker => self.tracker.is_some(),
             Port::Realtime => self.realtime.is_some(),
             Port::HttpClient => self.http.is_some(),
             Port::Clock => self.clock.is_some(),
@@ -306,6 +317,9 @@ impl Ports {
         }
         if allows(&declared, Port::Payments) {
             view.payments.clone_from(&self.payments);
+        }
+        if allows(&declared, Port::Tracker) {
+            view.tracker.clone_from(&self.tracker);
         }
         if allows(&declared, Port::Realtime) {
             view.realtime.clone_from(&self.realtime);
