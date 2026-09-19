@@ -207,7 +207,7 @@ later. All four of those auth issues are open and unstarted.
 | :--- | :--- | :--- | :--- | :--- |
 | Tenants as a product | a lifecycle API where create, export and delete make GDPR a property of the architecture, promotion past the 10 GB cap onto Postgres through the existing export and import, and the open decision on pricing tenant databases past the first | [harness#23](https://github.com/Cratefield/harness/issues/23), NEW harness epic | H1 Tables | XL |
 | Agency console | one organisation, many client ventures, clone a template, per-client billing, white-label domains | NEW cp issue | billing, custom domains | L |
-| Performance programme | region-pin the primary, KV and Cache for immutable reads, D1 read replication, Durable Object warmers | NEW harness epic | benchmarks | L |
+| Performance programme | region-pin the primary, KV and Cache for immutable reads, Durable Object warmers, D1 read replication | NEW harness epic | benchmarks | L |
 | Distribution | starter kits for Next.js, SvelteKit and Expo, Claude Code and Cursor templates carrying llms.txt and MCP, a deploy button | NEW, creates a repo | client, MCP | M |
 | Sovereign exit | one command moves a venture to a customer-owned Cloudflare account | [harness#141](https://github.com/Cratefield/harness/issues/141) | hosting | M |
 
@@ -427,6 +427,10 @@ are carried by A1 and A6 alongside the labels listed below.
 - **Repo:** `Cratefield/harness`
 - **Issue:** [harness#158](https://github.com/Cratefield/harness/issues/158)
 - **Labels:** `design`, `runtime`
+- **Status:** the order and the gate are decided in ADR 0019 and the programme
+  itself is written up in [PERFORMANCE.md](../PERFORMANCE.md); nothing ships
+  until the numbers behind the gates are measured — and the immutable-reads
+  step gates on one figure more than the benchmark page publishes.
 - **Body:** Epic, and deliberately sequenced after the benchmarks so that each change is
   justified by a measurement rather than by intuition. In order: region-pin a venture's
   primary D1 near its users, serve immutable reads from KV or the Cache API, add Durable
