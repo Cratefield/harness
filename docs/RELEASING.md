@@ -2,8 +2,11 @@
 
 The pipeline is wired; the only things left are one-time crates.io
 setup steps that need a human with the owner account. This page is the
-exact list (issue #15). Everything here is **for the owner** — nothing
-below runs from this repository's CI until it is configured.
+exact list (issue #15). Everything here is **for the owner** — the
+credential-gated steps below run from this repository's CI only once it
+is configured. The one exception that needs nothing: the `crates.io
+resolve` workflow already runs daily with no credentials, checking the
+published set on its own (see "The published set" below).
 
 ## How the pipeline works
 
@@ -328,14 +331,41 @@ While pre-1.0 a minor bump may break (that is what the caret ranges in
 4. The final `0.2.0` follows the normal release-PR flow; the `rc`
    commits appear in its changelog.
 
-## What CI checks without credentials
+## The published set: what runs on its own, what is still by hand
 
-- `cargo publish --dry-run -p cratefield-core` (definition of done in
-  CI's absence: it packages and verification-builds the crate with only
-  registry dependencies).
+One check of the published set now runs on its own: the `crates.io
+resolve` workflow (`.github/workflows/crates-io-resolve.yml` running
+`tools/crates-io-resolve.sh`). It resolves this repository's crates the
+way a stranger does: every publishable crate that exists on crates.io is
+added — no version pin, no path override — to a fresh project in a temp
+directory outside this workspace; the resolution is asserted to hold one
+copy of each in-repo crate (`cargo tree --duplicates`; two copies of one
+of ours is the `expected cratefield_core::Module, found
+cratefield_core::Module` failure downstream); and the result is compiled
+(`cargo check`). A crate whose first publish is still pending is skipped
+with a notice, not failed on — a pending first publish is a gap being
+filled (Owner setup above), not a broken published set.
+
+It runs daily on a schedule, after a real release (the Release workflow
+calls it once a publishing run actually happened, dry runs excepted), and
+on manual dispatch. The schedule is the point: crates.io can become
+incoherent without a single commit here — one publish that half-succeeds
+is enough — and only a scheduled run is both guaranteed to notice and
+guaranteed to rerun after it. It is deliberately not on push or
+pull_request: a broken published set should redden the release pipeline,
+not every unrelated pull request.
+
+This retires the old one-shot advice to re-run `cargo add
+cratefield-core` from an empty project after the first release (issue #15
+acceptance): the workflow now does that for every published crate,
+together, every day.
+
+Still manual, and **not** run by anything in `.github/workflows/` — a
+human runs these when it matters:
+
+- `cargo publish --dry-run -p cratefield-core`: packages and
+  verification-builds the crate with only registry dependencies.
 - `cargo package --list` for every crate: the packaged file list is
   exact (`include` lists), so the migration SQL and mail templates ship
   and no repo-root file (`BUILD-BRIEF.md`, `PROGRESS.md`, `target/`)
   can leak into a package.
-- After the first real release, `cargo add cratefield-core` from an empty
-  project (issue #15 acceptance) should be re-run by hand once.

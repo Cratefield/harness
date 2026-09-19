@@ -1,0 +1,63 @@
+# Issue #466: the published set on crates.io must resolve for a stranger.
+#
+# This repository builds everything in-tree against path dependencies, so
+# it compiles no matter what versions actually sit on crates.io — a publish
+# that leaves the published set unresolvable (core 0.5.0 up while the
+# published dependents still require ^0.4, say) is invisible to every other
+# job here. tools/crates-io-resolve.sh is the stranger: a fresh project, no
+# path overrides, every published crate added, resolved and compiled
+# together.
+#
+# On a schedule because the thing being checked is not this repository: the
+# registry's state can become inconsistent without a single commit here —
+# a publish that half-succeeds is enough. A push- or PR-triggered check
+# would neither catch that nor rerun after it, so this runs daily, is
+# callable from the release pipeline (release.yml, after a real publish)
+# and can be dispatched by hand. It is deliberately NOT on push or
+# pull_request: on a day when the published set is broken, that red belongs
+# here and on the release pipeline, not on every unrelated pull request.
+#
+# Expected to be red while issue #466's state stands; sibling work
+# publishing updated dependents makes it green. The script's failure
+# message says exactly that.
+
+name: crates.io resolve
+
+on:
+  # Off the :00 and :30 minutes every scheduled workflow on GitHub fights
+  # for, which is when delayed runs pile up.
+  schedule:
+    - cron: "17 6 * * *"
+  workflow_call:
+  workflow_dispatch:
+
+jobs:
+  resolve:
+    # No `#` in the name: GitHub truncates a check-run name there, which
+    # registered this as `resolve published crates (issue` — an awkward
+    # string to have to name in branch protection. Issue #34.
+    name: resolve published crates from crates.io
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      CARGO_TERM_COLOR: always
+    steps:
+      - uses: actions/checkout@v4
+      # `stable`, not this repository's usual 1.98.1 pin, deliberately:
+      # this job's whole purpose is to reproduce what an outside user
+      # gets, and an outside user is on current stable. It is inherently
+      # non-reproducible anyway — it resolves against the live registry
+      # with no lockfile — so a third-party release can turn this job red
+      # without a single commit in this repository. That is accepted, and
+      # it is real signal: it means a stranger cannot build the published
+      # set either.
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: stable
+      # Deliberately no Swatinem/rust-cache, which every other job here
+      # uses: the point of this job is a COLD resolve against the live
+      # index and the registry as a stranger sees it. A cache would answer
+      # "did the set resolve the way it did last time", which is the one
+      # question this job exists not to ask.
+      - run: tools/crates-io-resolve.sh
