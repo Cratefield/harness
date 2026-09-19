@@ -550,3 +550,102 @@ fn a_login_ceremony_cannot_be_replayed_into_registration_or_the_reverse() {
         assert_eq!(response.status, StatusCode::UNAUTHORIZED);
     });
 }
+
+/// A verified assertion issues a session, so a form on another site must
+/// not be able to complete one (issue #439): refused on arrival, before
+/// the limiter or the body is looked at. A same-origin request still
+/// reaches the handler's own logic — the same malformed body answers the
+/// route's ordinary validation failure there, not the cross-site refusal.
+#[test]
+fn a_cross_site_assertion_cannot_sign_anyone_in() {
+    pollster::block_on(async {
+        let kit = support::kit();
+
+        let cross_site = support::post_with_headers(
+            &kit,
+            LOGIN_VERIFY,
+            r#"{"credential":{}}"#,
+            &[("host", "auth.factory0.ventures"), ("origin", OTHER_ORIGIN)],
+        )
+        .await;
+        assert_eq!(
+            cross_site.status,
+            StatusCode::FORBIDDEN,
+            "{}",
+            cross_site.text()
+        );
+        assert_eq!(
+            cross_site.json()["type"],
+            "https://factory0.ventures/problems/auth/cross-site-request"
+        );
+        assert!(
+            cross_site.set_cookie().is_none(),
+            "the cross-site assertion signed somebody in"
+        );
+        assert_eq!(
+            support::count(&kit, "sessions"),
+            0,
+            "a session was issued anyway"
+        );
+
+        // The other signal the guard reads, with no `Origin` at all — a
+        // scripted form POST still carries fetch metadata.
+        let fetch_metadata = support::post_with_headers(
+            &kit,
+            LOGIN_VERIFY,
+            r#"{"credential":{}}"#,
+            &[
+                ("host", "auth.factory0.ventures"),
+                ("sec-fetch-site", "cross-site"),
+            ],
+        )
+        .await;
+        assert_eq!(
+            fetch_metadata.status,
+            StatusCode::FORBIDDEN,
+            "{}",
+            fetch_metadata.text()
+        );
+        assert_eq!(
+            fetch_metadata.json()["type"],
+            "https://factory0.ventures/problems/auth/cross-site-request"
+        );
+
+        // A same-origin request — every header a real browser sends — gets
+        // past the guard and into the handler: this body is not a
+        // credential, so the answer is the route's ordinary validation
+        // failure rather than the refusal. The identical body from another
+        // site never reaches that check.
+        let own = support::post_with_headers(
+            &kit,
+            LOGIN_VERIFY,
+            "not json",
+            &[
+                ("host", "auth.factory0.ventures"),
+                ("origin", ORIGIN),
+                ("sec-fetch-site", "same-origin"),
+            ],
+        )
+        .await;
+        assert_eq!(own.status, StatusCode::BAD_REQUEST, "{}", own.text());
+        assert_eq!(
+            own.json()["type"],
+            "https://factory0.ventures/problems/validation-failed"
+        );
+        assert!(own.set_cookie().is_none());
+
+        let same_body_cross_site = support::post_with_headers(
+            &kit,
+            LOGIN_VERIFY,
+            "not json",
+            &[("host", "auth.factory0.ventures"), ("origin", OTHER_ORIGIN)],
+        )
+        .await;
+        assert_eq!(
+            same_body_cross_site.status,
+            StatusCode::FORBIDDEN,
+            "{}",
+            same_body_cross_site.text()
+        );
+    });
+}

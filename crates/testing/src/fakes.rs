@@ -14,9 +14,10 @@
 use async_trait::async_trait;
 use bytes::Bytes;
 use cratefield_core::{
-    Captcha, CaptchaError, Clock, Database, DbError, Decision, Defer, HttpClient, HttpError,
-    KeyValue, KvError, MailError, Mailer, Message, RateLimitError, RateLimiter, Row, Rows,
-    SendOutcome, Statement, Verdict,
+    Captcha, CaptchaError, Clock, Completion, Credential, Database, DbError, Decision, Defer,
+    Destination, Filed, HttpClient, HttpError, KeyValue, KvError, MailError, Mailer, Message,
+    ModelTier, Prompt, RateLimitError, RateLimiter, Row, Rows, SendOutcome, Statement, TextModel,
+    TextModelError, TicketDraft, TicketState, TicketStatus, Tracker, TrackerError, Verdict,
 };
 use futures_core::future::BoxFuture;
 use http::{Request, Response};
@@ -744,6 +745,183 @@ impl cratefield_core::Push for FakePush {
 }
 
 // ---------------------------------------------------------------------------
+// FakeTextModel
+
+/// How a [`FakeTextModel`] answers, mirroring [`PushMode`] for the text
+/// model port (issue #429).
+///
+/// [`Error`](Self::Error) carries the exact error a test wants, and
+/// [`Rejected`](Self::Rejected)/[`Transient`](Self::Transient) are the two
+/// fixed modes the port's own contract names — a caller's retry and
+/// back-off arms stay reachable without inventing provider responses.
+#[derive(Debug, Clone, PartialEq)]
+pub enum TextModelMode {
+    /// Complete with this text, under a deterministic `fake-<tier>` model
+    /// name and plausible token counts.
+    Reply(String),
+    /// Answer exactly this completion, usage and parsed JSON included.
+    Complete(cratefield_core::Completion),
+    /// Report the tier is unwired (`TextModelError::NotConfigured`).
+    NotConfigured,
+    /// A non-retryable refusal carrying the provider text.
+    Rejected(String),
+    /// A retryable failure with the provider's back-off, where it said one.
+    Transient { retry_after: Option<Duration> },
+    /// Exactly this error, text and all.
+    Error(cratefield_core::TextModelError),
+}
+
+/// An in-memory [`TextModel`] for module tests: records every [`Prompt`]
+/// it completed and answers according to its [`TextModelMode`].
+///
+/// The mode is global by default and can be overridden **per tier**
+/// ([`FakeTextModel::set_mode_for`]), mirroring [`FakePush`]'s
+/// per-recipient override — the natural analogue, and the thing the port
+/// exists for: one test can wire the fast tier to a drafted reply and the
+/// strong tier to a refusal, and watch a module treat the two differently
+/// without either vendor being named.
+///
+/// A completion that answered `NotConfigured` or failed is **not**
+/// recorded, the same rule [`FakePush`] applies to a send — the recording
+/// means "the model answered", and a caller that retried on
+/// `Transient { .. }` then sees one recorded prompt per attempt it got an
+/// answer for.
+#[derive(Clone)]
+pub struct FakeTextModel {
+    inner: Arc<FakeTextModelInner>,
+}
+
+struct FakeTextModelInner {
+    mode: Mutex<TextModelMode>,
+    per_tier: Mutex<HashMap<ModelTier, TextModelMode>>,
+    prompts: Mutex<Vec<Prompt>>,
+}
+
+/// Plausible, deterministic token counts for a fake answer: roughly four
+/// characters per token on both sides. Stable for a given prompt and text,
+/// which is what an assertion needs — no test wants to guess a provider's
+/// tokenizer.
+fn fake_usage(prompt: &Prompt, text: &str) -> (u64, u64) {
+    let prompt_chars = prompt.system.as_deref().map_or(0, str::len)
+        + prompt
+            .messages
+            .iter()
+            .map(|turn| turn.content.len())
+            .sum::<usize>();
+    let input = (prompt_chars / 4).max(1) as u64;
+    let output = (text.len() / 4).max(1) as u64;
+    (input, output)
+}
+
+impl FakeTextModel {
+    #[must_use]
+    pub fn new(mode: TextModelMode) -> Self {
+        Self {
+            inner: Arc::new(FakeTextModelInner {
+                mode: Mutex::new(mode),
+                per_tier: Mutex::new(HashMap::new()),
+                prompts: Mutex::new(Vec::new()),
+            }),
+        }
+    }
+
+    /// Every prompt answered so far, in order. A completion that answered
+    /// `NotConfigured` or failed is not recorded.
+    #[must_use]
+    pub fn prompts(&self) -> Vec<Prompt> {
+        self.inner.prompts.lock().expect("text model lock").clone()
+    }
+
+    /// The most recent prompt answered.
+    #[must_use]
+    pub fn last(&self) -> Option<Prompt> {
+        self.inner
+            .prompts
+            .lock()
+            .expect("text model lock")
+            .last()
+            .cloned()
+    }
+
+    /// Switches the mode every tier without an override answers with
+    /// (e.g. flip to `NotConfigured` mid-test).
+    pub fn set_mode(&self, mode: TextModelMode) {
+        *self.inner.mode.lock().expect("text model lock") = mode;
+    }
+
+    /// Makes one tier answer with `mode`, whatever the global mode is —
+    /// the fast tier drafting and the strong tier refusing, say.
+    pub fn set_mode_for(&self, tier: ModelTier, mode: TextModelMode) {
+        self.inner
+            .per_tier
+            .lock()
+            .expect("text model lock")
+            .insert(tier, mode);
+    }
+
+    /// Drops one tier's override, putting it back on the global mode.
+    pub fn clear_mode_for(&self, tier: ModelTier) {
+        self.inner
+            .per_tier
+            .lock()
+            .expect("text model lock")
+            .remove(&tier);
+    }
+
+    /// The mode `tier` will answer with.
+    #[must_use]
+    pub fn mode_for(&self, tier: ModelTier) -> TextModelMode {
+        self.inner
+            .per_tier
+            .lock()
+            .expect("text model lock")
+            .get(&tier)
+            .cloned()
+            .unwrap_or_else(|| self.inner.mode.lock().expect("text model lock").clone())
+    }
+
+    fn record(&self, prompt: &Prompt) {
+        self.inner
+            .prompts
+            .lock()
+            .expect("text model lock")
+            .push(prompt.clone());
+    }
+}
+
+impl Default for FakeTextModel {
+    fn default() -> Self {
+        Self::new(TextModelMode::Reply("fake completion".to_owned()))
+    }
+}
+
+#[async_trait]
+impl TextModel for FakeTextModel {
+    async fn complete(&self, prompt: &Prompt) -> Result<Completion, TextModelError> {
+        match self.mode_for(prompt.tier) {
+            TextModelMode::Reply(text) => {
+                self.record(prompt);
+                let (input_tokens, output_tokens) = fake_usage(prompt, &text);
+                Ok(
+                    Completion::new(text, format!("fake-{}", prompt.tier.name()))
+                        .usage(input_tokens, output_tokens),
+                )
+            }
+            TextModelMode::Complete(completion) => {
+                self.record(prompt);
+                Ok(completion)
+            }
+            TextModelMode::NotConfigured => Err(TextModelError::NotConfigured),
+            TextModelMode::Rejected(message) => Err(TextModelError::Rejected(message)),
+            TextModelMode::Transient { retry_after } => {
+                Err(TextModelError::Transient { retry_after })
+            }
+            TextModelMode::Error(error) => Err(error),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // FakePayments
 
 /// How a [`FakePayments`] responds.
@@ -900,6 +1078,272 @@ impl cratefield_core::Payments for FakePayments {
             id: "evt_fake".to_owned(),
             kind: "checkout.session.completed".to_owned(),
             data: serde_json::json!({ "object": "checkout.session" }),
+        })
+    }
+}
+
+// ---------------------------------------------------------------------------
+// FakeTracker
+
+/// A short, non-reversible stand-in for a [`Credential`] in a recorded
+/// call, after `push.rs`'s `fingerprint` for `Recipient`: enough to tell
+/// two credentials apart in an assertion, useless for recovering the
+/// token.
+///
+/// `push.rs` hashes with `sha2`, which is not a dependency of the kit; a
+/// test fake needs no cross-version stability and no collision resistance
+/// beyond "different credentials assert differently", so std's
+/// [`DefaultHasher`](std::hash::DefaultHasher) does the same job. The
+/// plaintext is never stored — that is the point of the port: a fake that
+/// recorded the secret would make every "the token went nowhere" assertion
+/// unfalsifiable.
+fn fingerprint(credential: &Credential) -> String {
+    use std::hash::{Hash, Hasher};
+
+    // The one `expose` in the kit: the fingerprint is computed and the
+    // borrow dropped before anything is recorded.
+    let mut hasher = std::hash::DefaultHasher::new();
+    credential.expose().hash(&mut hasher);
+    format!("fp:{:016x}", hasher.finish())
+}
+
+/// How a [`FakeTracker`] answers, mirroring [`MailerMode`] and [`PushMode`]
+/// for the tracker port (issue #431).
+///
+/// [`Error`](Self::Error) carries the exact `TrackerError` a test wants,
+/// text and delay and all (issue #236's rule): the fixed modes only ever
+/// produce clean strings, so the arms of a caller's outcome mapping — a
+/// `Rejected` carrying the tracker's own words, a `Transient` carrying a
+/// provider-stated delay — would otherwise be unreachable from a test.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TrackerMode {
+    /// Accept and record the ticket.
+    FileOk,
+    /// Report that no adapter is configured for this destination.
+    NotConfigured,
+    /// Report that the per-tenant credential was refused (`401`/`403`).
+    Unauthorized,
+    /// Report that the tracker refused the ticket — a `4xx` about the
+    /// draft, not about the credential.
+    Rejected,
+    /// A retryable failure with no delay stated.
+    Transient,
+    /// Exactly this error, text and all.
+    Error(TrackerError),
+}
+
+/// One `Tracker::file` a [`FakeTracker`] accepted, for assertions.
+///
+/// The credential appears only as its non-reversible
+/// `fingerprint`: proof that a credential reached the port, and never
+/// the secret itself.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FiledCall {
+    /// Where the ticket was filed.
+    pub dest: Destination,
+    /// The ticket as the caller handed it over.
+    pub draft: TicketDraft,
+    /// A fingerprint of the credential the caller passed.
+    pub credential_fingerprint: String,
+}
+
+/// One `Tracker::status` a [`FakeTracker`] accepted, for assertions.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StatusedCall {
+    /// Where the ticket lives.
+    pub dest: Destination,
+    /// The external id the caller asked about.
+    pub external_id: String,
+    /// A fingerprint of the credential the caller passed.
+    pub credential_fingerprint: String,
+}
+
+/// An in-memory [`Tracker`] for module tests: records every accepted
+/// `file`/`status` call and answers according to its [`TrackerMode`]. A
+/// call the mode answered with an error is not recorded, as [`FakePush`]
+/// does not record a failed send.
+///
+/// The mode is global by default and can be overridden **per destination**
+/// ([`FakeTracker::set_mode_for`]), the [`FakePush`] shape: one tenant's
+/// expired token among live ones. The state an accepted `status` reports
+/// is scripted separately ([`FakeTracker::set_state`]), because "the file
+/// succeeded" and "the ticket has moved on since" are two different
+/// answers a test wants to set independently.
+#[derive(Clone, Debug)]
+pub struct FakeTracker {
+    inner: Arc<FakeTrackerInner>,
+}
+
+#[derive(Debug)]
+struct FakeTrackerInner {
+    mode: Mutex<TrackerMode>,
+    per_destination: Mutex<HashMap<Destination, TrackerMode>>,
+    filed: Mutex<Vec<FiledCall>>,
+    statused: Mutex<Vec<StatusedCall>>,
+    state: Mutex<TicketState>,
+}
+
+impl FakeTracker {
+    #[must_use]
+    pub fn new(mode: TrackerMode) -> Self {
+        Self {
+            inner: Arc::new(FakeTrackerInner {
+                mode: Mutex::new(mode),
+                per_destination: Mutex::new(HashMap::new()),
+                filed: Mutex::new(Vec::new()),
+                statused: Mutex::new(Vec::new()),
+                state: Mutex::new(TicketState::Open),
+            }),
+        }
+    }
+
+    /// Every `file` accepted so far, in order.
+    #[must_use]
+    pub fn filed(&self) -> Vec<FiledCall> {
+        self.inner.filed.lock().expect("tracker lock").clone()
+    }
+
+    /// The most recent `file` accepted.
+    #[must_use]
+    pub fn last_filed(&self) -> Option<FiledCall> {
+        self.inner
+            .filed
+            .lock()
+            .expect("tracker lock")
+            .last()
+            .cloned()
+    }
+
+    /// Every `status` accepted so far, in order.
+    #[must_use]
+    pub fn statused(&self) -> Vec<StatusedCall> {
+        self.inner.statused.lock().expect("tracker lock").clone()
+    }
+
+    /// Switches the mode every destination without an override answers
+    /// with (e.g. flip to `Unauthorized` mid-test).
+    pub fn set_mode(&self, mode: TrackerMode) {
+        *self.inner.mode.lock().expect("tracker lock") = mode;
+    }
+
+    /// Makes one destination answer with `mode`, whatever the global mode
+    /// is — one tenant's expired token among live ones, say.
+    pub fn set_mode_for(&self, dest: &Destination, mode: TrackerMode) {
+        self.inner
+            .per_destination
+            .lock()
+            .expect("tracker lock")
+            .insert(dest.clone(), mode);
+    }
+
+    /// Drops one destination's override, putting it back on the global
+    /// mode.
+    pub fn clear_mode_for(&self, dest: &Destination) {
+        self.inner
+            .per_destination
+            .lock()
+            .expect("tracker lock")
+            .remove(dest);
+    }
+
+    /// The mode `dest` will answer with.
+    #[must_use]
+    pub fn mode_for(&self, dest: &Destination) -> TrackerMode {
+        self.inner
+            .per_destination
+            .lock()
+            .expect("tracker lock")
+            .get(dest)
+            .cloned()
+            .unwrap_or_else(|| self.inner.mode.lock().expect("tracker lock").clone())
+    }
+
+    /// The state an accepted `status` reports.
+    pub fn set_state(&self, state: TicketState) {
+        *self.inner.state.lock().expect("tracker lock") = state;
+    }
+
+    /// The state an accepted `status` currently reports.
+    #[must_use]
+    pub fn state(&self) -> TicketState {
+        *self.inner.state.lock().expect("tracker lock")
+    }
+
+    /// The error arms shared by `file` and `status`: the same fixed modes
+    /// script both, the way a real adapter answers the one `TrackerError`
+    /// vocabulary on both methods.
+    fn error_for(mode: &TrackerMode) -> Option<TrackerError> {
+        match mode {
+            TrackerMode::FileOk => None,
+            TrackerMode::NotConfigured => Some(TrackerError::NotConfigured),
+            TrackerMode::Unauthorized => Some(TrackerError::Unauthorized),
+            TrackerMode::Rejected => {
+                Some(TrackerError::Rejected("fake tracker rejection".to_owned()))
+            }
+            TrackerMode::Transient => Some(TrackerError::Transient { retry_after: None }),
+            TrackerMode::Error(error) => Some(error.clone()),
+        }
+    }
+}
+
+impl Default for FakeTracker {
+    fn default() -> Self {
+        Self::new(TrackerMode::FileOk)
+    }
+}
+
+#[async_trait]
+impl Tracker for FakeTracker {
+    async fn file(
+        &self,
+        dest: &Destination,
+        cred: &Credential,
+        draft: &TicketDraft,
+    ) -> Result<Filed, TrackerError> {
+        if let Some(error) = Self::error_for(&self.mode_for(dest)) {
+            return Err(error);
+        }
+        let id = format!(
+            "fake-{}",
+            self.inner.filed.lock().expect("tracker lock").len()
+        );
+        self.inner
+            .filed
+            .lock()
+            .expect("tracker lock")
+            .push(FiledCall {
+                dest: dest.clone(),
+                draft: draft.clone(),
+                credential_fingerprint: fingerprint(cred),
+            });
+        Ok(Filed {
+            url: format!("https://tracker.fake.test/browse/{id}"),
+            external_id: id,
+        })
+    }
+
+    async fn status(
+        &self,
+        dest: &Destination,
+        cred: &Credential,
+        external_id: &str,
+    ) -> Result<TicketStatus, TrackerError> {
+        if let Some(error) = Self::error_for(&self.mode_for(dest)) {
+            return Err(error);
+        }
+        self.inner
+            .statused
+            .lock()
+            .expect("tracker lock")
+            .push(StatusedCall {
+                dest: dest.clone(),
+                external_id: external_id.to_owned(),
+                credential_fingerprint: fingerprint(cred),
+            });
+        Ok(TicketStatus {
+            external_id: external_id.to_owned(),
+            state: self.state(),
+            url: None,
         })
     }
 }

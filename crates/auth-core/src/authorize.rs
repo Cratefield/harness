@@ -1,6 +1,7 @@
 //! The authorization code flow's browser endpoints (issue #10):
-//! `GET /authorize` and `GET /logout`, with the server-rendered login
-//! chooser and error pages.
+//! `GET /authorize` and `GET /logout` — which asks, `POST
+//! /logout/confirm` being what acts (issue #439) — with the
+//! server-rendered login chooser, confirmation and error pages.
 //!
 //! The two redirect rules everything here bends to:
 //!
@@ -28,12 +29,12 @@
 
 use askama::Template;
 use axum::extract::rejection::QueryRejection;
-use axum::extract::{OriginalUri, Query, State};
-use axum::http::{HeaderMap, StatusCode, header};
+use axum::extract::{Form, OriginalUri, Query, State};
+use axum::http::{HeaderMap, StatusCode, Uri, header};
 use axum::response::{IntoResponse, Response};
-use axum::routing::get;
+use axum::routing::{get, post};
 use base64ct::{Base64UrlUnpadded, Encoding};
-use cratefield_core::{Config, Database, ModuleConfig, Problem, Scope, subject_hash};
+use cratefield_core::{Clock, Config, Database, ModuleConfig, Problem, Scope, subject_hash};
 use serde::Deserialize;
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -194,6 +195,22 @@ struct AuthorizeErrorTemplate {
 #[derive(Template)]
 #[template(path = "signed_out.html")]
 struct SignedOutTemplate;
+
+/// The page a `GET /logout` carrying a live session renders instead of
+/// acting: it asks, and the form's POST is what acts (issue #439).
+#[derive(Template)]
+#[template(path = "confirm_logout.html")]
+struct ConfirmLogoutTemplate {
+    /// Where the form posts — this request's path with `/confirm`
+    /// appended, computed rather than hardcoded so the module's mount
+    /// point stays the harness's decision (`/v1/{module name}`).
+    action: String,
+    /// The client id the GET carried, for the POST to confirm — present
+    /// only when the pair it belongs to validated.
+    client_id: Option<String>,
+    /// The validated post-logout redirect, likewise.
+    post_logout_redirect_uri: Option<String>,
+}
 
 fn iso(t: OffsetDateTime) -> String {
     t.replace_nanosecond(0)
@@ -510,14 +527,24 @@ struct LogoutQuery {
     post_logout_redirect_uri: Option<String>,
 }
 
-/// RP-initiated logout: revokes the session and redirects **only** to
-/// a registered URI of a registered, active client — an unregistered
-/// target renders the error page and never redirects. Without a
-/// redirect target it revokes and shows the signed-out page.
+/// RP-initiated logout, in the shape the OIDC spec recommends when the
+/// request carries no `id_token_hint`: **GET asks, POST acts.**
+///
+/// The session cookie is `SameSite=Lax`, which the browser *does* send on
+/// a cross-site top-level GET — so a GET that revoked would let any page
+/// on the internet sign anyone out with an `<img>` tag. RP-initiated
+/// logout is legitimately that navigation (the relying party redirects
+/// here), so the GET cannot simply be refused; instead it renders the
+/// confirmation page, and only the same-origin POST ends the session.
+///
+/// Either way a redirect happens **only** to a registered URI of a
+/// registered, active client — an unregistered target renders the error
+/// page and never redirects.
 async fn logout(
     scope: Scope,
     State(state): State<Arc<ModuleState>>,
     headers: HeaderMap,
+    OriginalUri(original_uri): OriginalUri,
     query: Result<Query<LogoutQuery>, QueryRejection>,
 ) -> Result<Response, Problem> {
     let Query(query) = query.map_err(|_| Problem::internal())?;
@@ -526,25 +553,130 @@ async fn logout(
         return Err(Problem::internal());
     };
 
-    let target = match (query.client_id, query.post_logout_redirect_uri) {
-        (Some(client_id), Some(redirect)) => {
-            match validate_client_and_uri(&*db, &client_id, &redirect).await {
-                Ok(_) => redirect,
-                // Unknown client, unregistered URI or disabled client:
-                // same page, no redirect, nothing leaked.
-                Err(()) => return Ok(error_page(&scope)),
-            }
-        }
-        (_, Some(_)) => return Ok(error_page(&scope)),
-        // No post-logout redirect requested (or a client id without
-        // one): sign out and render the signed-out page.
-        (_, None) => String::new(),
+    // The same client / URI check as ever, before anything else about the
+    // session is even looked at. A refused pair renders the error page —
+    // not a `Problem`, but *the* response.
+    let Ok(target) = validated_target(
+        &*db,
+        query.client_id.as_deref(),
+        query.post_logout_redirect_uri.as_deref(),
+    )
+    .await
+    else {
+        return Ok(error_page(&scope));
     };
 
+    // A live session is asked, not told: render the confirmation and
+    // revoke nothing, clear nothing. `OriginalUri` and not `Uri` — the
+    // module is nested under `/v1/auth-core` and a nested handler sees
+    // the prefix already stripped (see `/authorize`), while the form's
+    // action has to be the path the browser can actually post to.
     if let Some(cookie) = sessions::cookie_value(&headers)
-        && let Ok(Some(session)) = sessions::validate(&*db, &*clock, &cookie).await
+        && matches!(
+            sessions::validate(&*db, &*clock, &cookie).await,
+            Ok(Some(_))
+        )
     {
-        store::revoke_session(&*db, &session.id, &iso(clock.now())).await?;
+        // The hidden inputs carry the pair only once it validated, so the
+        // POST confirms exactly the request the GET was given.
+        let (client_id, redirect) = if target.is_empty() {
+            (None, None)
+        } else {
+            (query.client_id.clone(), Some(target.clone()))
+        };
+        return Ok(html(&ConfirmLogoutTemplate {
+            action: confirm_action(original_uri.path()),
+            client_id,
+            post_logout_redirect_uri: redirect,
+        }));
+    }
+
+    // No cookie that validates: there is nothing to revoke, so this path
+    // is safe even for the cross-site GET a hostile page can produce.
+    // Clearing an already-invalid cookie changes nothing an attacker
+    // cares about, and the person still gets today's answer — the
+    // validated redirect, or the signed-out page.
+    sign_out(&*db, &*clock, sessions::cookie_value(&headers), target).await
+}
+
+#[derive(Deserialize)]
+struct LogoutConfirmForm {
+    client_id: Option<String>,
+    post_logout_redirect_uri: Option<String>,
+}
+
+/// `POST /logout/confirm` — the act the GET only asked about. The
+/// same-origin guard runs first: `sec-fetch-site` and `origin` are the
+/// two signals a browser sends and a page cannot forge, and they are
+/// what make "a POST from this venture's own confirmation form" a
+/// checked fact rather than an assumption (issue #439). Everything after
+/// the guard is what `GET /logout` used to do.
+async fn logout_confirm(
+    scope: Scope,
+    State(state): State<Arc<ModuleState>>,
+    headers: HeaderMap,
+    uri: Uri,
+    Form(form): Form<LogoutConfirmForm>,
+) -> Result<Response, Problem> {
+    crate::csrf::require_same_origin(&headers, &uri)
+        .map_err(|problem| problem.instance(&scope.request_id))?;
+    let (Some(db), Some(clock)) = (state.ctx.ports.db.clone(), state.ctx.ports.clock.clone())
+    else {
+        return Err(Problem::internal());
+    };
+    let Ok(target) = validated_target(
+        &*db,
+        form.client_id.as_deref(),
+        form.post_logout_redirect_uri.as_deref(),
+    )
+    .await
+    else {
+        return Ok(error_page(&scope));
+    };
+    sign_out(&*db, &*clock, sessions::cookie_value(&headers), target).await
+}
+
+/// The post-logout redirect target, after the one client / URI check both
+/// logout paths run: the redirect only when a pair was named and it
+/// validated. `Err(())` is a refused pair — the caller renders the
+/// generic error page, never a redirect, and never a word that
+/// distinguishes an unknown client from an unregistered URI or a
+/// disabled client.
+async fn validated_target(
+    db: &dyn Database,
+    client_id: Option<&str>,
+    redirect: Option<&str>,
+) -> Result<String, ()> {
+    match (client_id, redirect) {
+        (Some(client_id), Some(redirect)) => {
+            match validate_client_and_uri(db, client_id, redirect).await {
+                Ok(_) => Ok(redirect.to_owned()),
+                Err(()) => Err(()),
+            }
+        }
+        (_, Some(_)) => Err(()),
+        // No post-logout redirect requested (or a client id without
+        // one): sign out and render the signed-out page.
+        (_, None) => Ok(String::new()),
+    }
+}
+
+/// Everything that actually ends a session: revoke the one the cookie
+/// names, if any, emit the audit event, clear the cookie either way, and
+/// land the person on the validated post-logout redirect or the
+/// signed-out page. Shared by the confirming POST and the GET that found
+/// no live session, so the two cannot grow different rules about who is
+/// revoked or where a sign-out ends.
+async fn sign_out(
+    db: &dyn Database,
+    clock: &dyn Clock,
+    cookie: Option<String>,
+    target: String,
+) -> Result<Response, Problem> {
+    if let Some(value) = cookie.as_deref()
+        && let Ok(Some(session)) = sessions::validate(db, clock, value).await
+    {
+        store::revoke_session(db, &session.id, &iso(clock.now())).await?;
         tracing::info!(
             audit = true,
             action = "logout.rp",
@@ -560,10 +692,19 @@ async fn logout(
     Ok((StatusCode::FOUND, clear, [(header::LOCATION, target)]).into_response())
 }
 
+/// The confirmation form's action: this path with `/confirm` appended,
+/// any trailing slash trimmed first. Computed from the request so the
+/// module's mount point (`/v1/{module name}`, set by the harness) stays
+/// the harness's decision rather than a constant in this file.
+fn confirm_action(path: &str) -> String {
+    format!("{}/confirm", path.trim_end_matches('/'))
+}
+
 pub(crate) fn router() -> axum::Router<Arc<ModuleState>> {
     axum::Router::new()
         .route("/authorize", get(authorize))
         .route("/logout", get(logout))
+        .route("/logout/confirm", post(logout_confirm))
 }
 
 #[cfg(test)]
@@ -606,6 +747,57 @@ mod tests {
         );
     }
     use super::*;
+
+    /// The confirmation page must escape whatever its hidden inputs
+    /// carry, whatever the logout query held. The HTTP path cannot
+    /// deliver a raw `<` — `http::Uri` refuses one — so, like the
+    /// chooser test above, this renders the template directly with
+    /// values no request could carry: the escaping is the defence, and
+    /// it must hold without the URI parser being the thing that saves
+    /// us. If `client_id` or `post_logout_redirect_uri` ever moves out
+    /// of an attribute, this fails.
+    #[test]
+    fn a_hostile_redirect_pair_cannot_break_out_of_the_confirmation() {
+        let hostile = "https://app.example/cb?next=\"><script>alert(1)</script>";
+        let page = ConfirmLogoutTemplate {
+            action: "/v1/auth-core/logout/confirm".to_owned(),
+            client_id: Some("\"><script>alert(1)</script>".to_owned()),
+            post_logout_redirect_uri: Some(hostile.to_owned()),
+        }
+        .render()
+        .expect("renders");
+
+        assert!(
+            !page.contains("</script><script>alert(1)"),
+            "a hidden input escaped into the page: {page}"
+        );
+        // askama escapes with numeric entities (`&#60;`), not named ones.
+        // The quote matters as much as the brackets: an unescaped `"`
+        // would close the `value="…"` attribute and let the rest of the
+        // value become markup.
+        assert!(
+            page.contains("&#60;script&#62;") || page.contains("&lt;script&gt;"),
+            "the value should be present and escaped: {page}"
+        );
+        assert!(
+            page.contains("&#34;") || page.contains("&quot;"),
+            "the double quote should be escaped inside the attribute: {page}"
+        );
+    }
+
+    #[test]
+    fn the_confirm_action_appends_to_the_request_path() {
+        // Origin form on the native runtime.
+        assert_eq!(
+            confirm_action("/v1/auth-core/logout"),
+            "/v1/auth-core/logout/confirm"
+        );
+        // A trailing slash must not double up.
+        assert_eq!(
+            confirm_action("/v1/auth-core/logout/"),
+            "/v1/auth-core/logout/confirm"
+        );
+    }
 
     #[test]
     fn query_components_round_trip_through_percent_encoding() {

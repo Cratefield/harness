@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use cratefield_core::{
     Auth, BoundedHttpClient, Captcha, Clock, Defer, HarnessConfig, Mailer, Payments, Port, Ports,
-    Push, Runtime, SidecarMounts, UlidIdGen,
+    Push, Runtime, SidecarMounts, TextModel, Tracker, UlidIdGen,
 };
 use worker::Env;
 
@@ -68,6 +68,11 @@ pub struct Cloudflare {
     mailer: Option<Arc<dyn Mailer>>,
     push: Option<Arc<dyn Push>>,
     payments: Option<Arc<dyn Payments>>,
+    tracker: Option<Arc<dyn Tracker>>,
+    /// The `TextModel` port (issue #429): like `mailer` and `push`, the
+    /// adapter is built from the venture's vendor keys and passed in, not
+    /// resolved from a Worker binding.
+    text_model: Option<Arc<dyn TextModel>>,
     captcha: Option<Arc<dyn Captcha>>,
     auth: Option<Arc<dyn Auth>>,
     /// Whether to assemble the `Auth` port from the environment.
@@ -100,6 +105,8 @@ impl Cloudflare {
             mailer: None,
             push: None,
             payments: None,
+            text_model: None,
+            tracker: None,
             captcha: None,
             auth: None,
             auth_from_env: false,
@@ -246,6 +253,44 @@ impl Cloudflare {
     #[must_use]
     pub fn payments_arc(mut self, payments: Arc<dyn Payments>) -> Self {
         self.payments = Some(payments);
+        self
+    }
+
+    /// The `Tracker` port. Like `mailer` and `payments`, the adapter is
+    /// built by the venture and passed in, not resolved from a Worker
+    /// binding.
+    ///
+    /// Unlike those adapters, it holds no credential: which tracker to file
+    /// into and under whose token are tenant data, supplied per call by the
+    /// module that files — see [`cratefield_core::Tracker`] for why that
+    /// differs from the Resend/Stripe shape.
+    #[must_use]
+    pub fn tracker(mut self, tracker: impl Tracker + 'static) -> Self {
+        self.tracker = Some(Arc::new(tracker));
+        self
+    }
+
+    /// `tracker` for an already-shared adapter.
+    #[must_use]
+    pub fn tracker_arc(mut self, tracker: Arc<dyn Tracker>) -> Self {
+        self.tracker = Some(tracker);
+        self
+    }
+
+    /// The `TextModel` port (issue #429): an adapter over the venture's
+    /// vendor of choice for each [`ModelTier`](cratefield_core::ModelTier),
+    /// or one `RoutingTextModel` over both tiers. Passed in, not resolved
+    /// from a Worker binding — there is no vendor-neutral binding to sniff
+    /// out of the environment.
+    #[must_use]
+    pub fn text_model(mut self, text_model: impl TextModel + 'static) -> Self {
+        self.text_model = Some(Arc::new(text_model));
+        self
+    }
+
+    #[must_use]
+    pub fn text_model_arc(mut self, text_model: Arc<dyn TextModel>) -> Self {
+        self.text_model = Some(text_model);
         self
     }
 
@@ -410,6 +455,8 @@ impl Cloudflare {
         ports.mailer.clone_from(&self.mailer);
         ports.push.clone_from(&self.push);
         ports.payments.clone_from(&self.payments);
+        ports.tracker.clone_from(&self.tracker);
+        ports.text_model.clone_from(&self.text_model);
         ports.captcha.clone_from(&self.captcha);
         ports.auth.clone_from(&self.auth);
 
@@ -474,6 +521,12 @@ impl Runtime for Cloudflare {
         if self.payments.is_some() {
             provided.push(Port::Payments);
         }
+        if self.tracker.is_some() {
+            provided.push(Port::Tracker);
+        }
+        if self.text_model.is_some() {
+            provided.push(Port::TextModel);
+        }
         // Provided whatever the environment holds — see `auth_from_env`.
         if self.auth.is_some() || self.auth_from_env {
             provided.push(Port::Auth);
@@ -504,5 +557,69 @@ impl Runtime for Cloudflare {
             }),
             _ => self.provides().contains(&port),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use cratefield_core::{
+        Credential, Destination, Filed, TicketDraft, TicketState, TicketStatus, TrackerError,
+    };
+
+    /// Stands in for an adapter the venture passed itself. Answers the
+    /// cheapest thing that satisfies the trait; what these tests assert is
+    /// wiring, not adapter behaviour.
+    struct StubTracker;
+
+    #[async_trait::async_trait]
+    impl Tracker for StubTracker {
+        async fn file(
+            &self,
+            _dest: &Destination,
+            _cred: &Credential,
+            _draft: &TicketDraft,
+        ) -> Result<Filed, TrackerError> {
+            Err(TrackerError::NotConfigured)
+        }
+
+        async fn status(
+            &self,
+            _dest: &Destination,
+            _cred: &Credential,
+            external_id: &str,
+        ) -> Result<TicketStatus, TrackerError> {
+            Ok(TicketStatus {
+                external_id: external_id.to_owned(),
+                state: TicketState::Open,
+                url: None,
+            })
+        }
+    }
+
+    // `ports()` cannot be exercised here: it needs a `worker::Env`, which
+    // only exists per fetch on a Workers isolate. The clone into the bundle
+    // is the same one line `payments` does.
+
+    #[test]
+    fn a_runtime_with_no_tracker_provides_no_tracker_port() {
+        assert!(!Cloudflare::new().provides().contains(&Port::Tracker));
+    }
+
+    #[test]
+    fn a_wired_tracker_is_provided_by_either_builder_form() {
+        assert!(
+            Cloudflare::new()
+                .tracker(StubTracker)
+                .provides()
+                .contains(&Port::Tracker)
+        );
+        assert!(
+            Cloudflare::new()
+                .tracker_arc(Arc::new(StubTracker))
+                .provides()
+                .contains(&Port::Tracker)
+        );
     }
 }

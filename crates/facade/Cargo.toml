@@ -84,6 +84,7 @@ waitlist = ["dep:cratefield-module-waitlist"]
 cms = ["dep:cratefield-module-cms"]
 changelog = ["dep:cratefield-module-changelog"]
 notifications = ["dep:cratefield-module-notifications", "i18n"]
+telemetry = ["dep:cratefield-module-telemetry"]
 
 # The conformance kit. Belongs under [dev-dependencies] in a venture.
 testing = ["dep:cratefield-testing"]
@@ -125,6 +126,7 @@ cratefield-module-waitlist = { workspace = true, optional = true }
 cratefield-module-cms = { workspace = true, optional = true }
 cratefield-module-changelog = { workspace = true, optional = true }
 cratefield-module-notifications = { workspace = true, optional = true }
+cratefield-module-telemetry = { workspace = true, optional = true }
 cratefield-testing = { workspace = true, optional = true }
 
 [package.metadata.docs.rs]

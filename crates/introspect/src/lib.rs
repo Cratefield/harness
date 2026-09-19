@@ -48,32 +48,37 @@ pub use drift::{UNSEEN, compare, drift, unseen};
 use cratefield_core::{Database, DbError, Row, Rows, Statement};
 use cratefield_tables::{FieldDef, FieldKind, ForeignKey, Schema, TableDef};
 
-/// The harness's own bookkeeping tables, excluded from every catalog read.
+/// The SQL that keeps the harness's own namespace out of a catalog read:
+/// `AND <column> NOT LIKE 'harness\_%' ESCAPE '\'`, in the same shape the
+/// `sqlite\_%` exclusion beside it takes — or nothing at all when the
+/// caller asked for the whole catalog. The column is passed in because
+/// Postgres cannot name a SELECT alias in its WHERE clause.
 ///
-/// Named one by one rather than by prefix, because a prefix would be a
-/// trap in both directions: `harness_secret_keys` starts with `harness_`
-/// and is a real table holding real (enveloped) data, and a future
-/// bookkeeping table that does not start with the prefix would vanish
-/// silently from every diagram. A name on this list is a claim that the
-/// table holds no venture data, and a new one has to argue its way on.
-const BOOKKEEPING: &[&str] = &[
-    // The migration ledger both adapters write (`apply_migrations`). Its
-    // rows are applied-migration ids and checksums: process state, not
-    // data, and no relation in any schema points at it.
-    "harness_migrations",
-];
-
-/// The SQL that keeps [`BOOKKEEPING`] out of a catalog read, as
-/// `<column> NOT IN (…)`, so the list and the exclusion cannot drift.
-/// The column is passed in because Postgres cannot name a SELECT alias in
-/// its WHERE clause.
-fn not_bookkeeping(column: &str) -> String {
-    let names = BOOKKEEPING
-        .iter()
-        .map(|name| format!("'{}'", name.replace('\'', "''")))
-        .collect::<Vec<_>>()
-        .join(", ");
-    format!("AND {column} NOT IN ({names})")
+/// This excludes the whole `harness_` prefix, and that is a deliberate
+/// reversal of this exclusion's first shape, which named
+/// `harness_migrations` alone and argued against a prefix as "a trap in
+/// both directions". One of those directions closed at the source:
+/// `harness_` is reserved by `cratefield_tables::RESERVED_PREFIXES`, and
+/// the tables crate refuses a venture declaration under it, so no
+/// declared data can ever live under a name this predicate hides — the
+/// prefix cannot swallow a real venture table. What the name-by-name
+/// shape left open is the reason for the reversal: `harness_secrets`,
+/// `harness_secret_keys` and `harness_secret_audit` are harness-owned
+/// tables whose ordinary text columns — secret names, key ids, KMS key
+/// references — are nobody's to browse, and every new harness table used
+/// to have to be remembered here before the catalog would hide it.
+///
+/// The cost, stated rather than hidden: a future bookkeeping table that
+/// does *not* start with `harness_` is not excluded, and will show up in
+/// every diagram until it is renamed under the reserved prefix. The
+/// catalog no longer curates a list, so nothing new has a place to be
+/// forgotten on.
+fn harness_exclusion(whole_catalog: bool, column: &str) -> String {
+    if whole_catalog {
+        String::new()
+    } else {
+        format!("AND {column} NOT LIKE 'harness\\_%' ESCAPE '\\'")
+    }
 }
 
 /// Reads a database's catalog and answers it as a [`Schema`].
@@ -88,16 +93,55 @@ fn not_bookkeeping(column: &str) -> String {
 /// The intended second source, once harness #153 lands, is the tables
 /// contract a venture publishes at `/__surface`; the caller is written to
 /// take a `Schema` from either.
+///
+/// The harness's own `harness_` namespace is excluded from the answer —
+/// see the private `harness_exclusion` for why the exclusion is a prefix
+/// and what that costs. The one caller that must copy the database rather
+/// than browse it, the control-plane backup export, reads through
+/// [`full_schema`] instead.
 pub async fn schema(db: &dyn Database) -> Result<Schema, DbError> {
+    read_schema(db, false).await
+}
+
+/// Reads the database's whole catalog — the harness's own tables
+/// included — as a [`Schema`], where [`schema`] keeps the harness's
+/// reserved `harness_` namespace out.
+///
+/// This exists for the one caller that must **copy** the database rather
+/// than browse it: the dashboard's control-plane backup export. A backup
+/// that quietly stops carrying a table the database holds is worse than
+/// the leak the browse-side exclusion exists to prevent, and the
+/// exclusion cannot know which harness tables a deployment has — the
+/// reconciler's `harness_tenants` registry is created on the control
+/// database at boot, under the reserved prefix, and the reconciler
+/// reads it at runtime. Of this crate's readers, though, the backup is
+/// the only one that should see those tables, because it copies the
+/// database rather than browsing it. So it reads everything here and
+/// applies its own, separately argued skip list, rather than the
+/// catalog deciding for it. Everything that renders a table's name to
+/// a person —
+/// the data screen, `fz tables drift` — wants [`schema`].
+///
+/// # Errors
+///
+/// The same as [`schema`]: [`DbError::Query`] when neither catalog could
+/// be read, with both drivers' messages.
+pub async fn full_schema(db: &dyn Database) -> Result<Schema, DbError> {
+    read_schema(db, true).await
+}
+
+/// The dialect dispatch both entry points share. `whole_catalog` says
+/// whether the harness's reserved namespace stays in the answer.
+async fn read_schema(db: &dyn Database, whole_catalog: bool) -> Result<Schema, DbError> {
     // Dialect probe. The `Database` port exposes no dialect method, and
     // adding one would be a kernel change for a leaf feature, so the
     // catalog is asked in SQLite's dialect first: `sqlite_master` exists
     // only on SQLite, so a success is a positive identification and a
     // failure means "try the next engine", not "broken". The fallback is
     // explicit rather than inferred from some adapter detail.
-    match sqlite_tables(db).await {
+    match sqlite_tables(db, whole_catalog).await {
         Ok(tables) => sqlite_schema(db, tables).await,
-        Err(sqlite_probe) => match postgres_schema(db).await {
+        Err(sqlite_probe) => match postgres_schema(db, whole_catalog).await {
             Ok(schema) => Ok(schema),
             Err(postgres_probe) => Err(DbError::Query(format!(
                 "could not read a schema from either catalog: sqlite said \
@@ -169,23 +213,26 @@ pub async fn rows(
 // The SQLite leg
 // ---------------------------------------------------------------------------
 
-/// The table names SQLite knows, minus its own internals and the harness
-/// bookkeeping. `sqlite_master` exists only on SQLite, which is what
-/// makes this the dialect probe as well as the table list.
-async fn sqlite_tables(db: &dyn Database) -> Result<Vec<String>, DbError> {
+/// The table names SQLite knows, minus its own internals and — unless
+/// `whole_catalog` — the harness's reserved namespace. `sqlite_master`
+/// exists only on SQLite, which is what makes this the dialect probe as
+/// well as the table list.
+async fn sqlite_tables(db: &dyn Database, whole_catalog: bool) -> Result<Vec<String>, DbError> {
     let rows = db
         .query(&Statement::new(format!(
             // `sqlite_*` is SQLite's internal namespace (`sqlite_master`
             // itself, `sqlite_sequence` after any AUTOINCREMENT). The
             // escape keeps `_` from eating one character of a name like
             // `sqlitex`; no real table starts with `sqlite_` because the
-            // tables crate reserves the prefix.
+            // tables crate reserves the prefix. The harness prefix is
+            // excluded for the same reason — reserved to the harness —
+            // unless the caller asked for the whole catalog.
             "SELECT name FROM sqlite_master \
              WHERE type = 'table' \
              AND name NOT LIKE 'sqlite\\_%' ESCAPE '\\' \
-             {excluded} \
+             {harness} \
              ORDER BY name ASC",
-            excluded = not_bookkeeping("name")
+            harness = harness_exclusion(whole_catalog, "name")
         )))
         .await?;
     Ok(rows
@@ -327,15 +374,16 @@ fn sqlite_table(
 
 /// Reads the whole catalog from `information_schema` and `pg_indexes`:
 /// `current_schema()` keeps system schemas out without naming them, so a
-/// fresh deployment's tables and nothing else come back.
-async fn postgres_schema(db: &dyn Database) -> Result<Schema, DbError> {
+/// fresh deployment's tables — minus the harness's namespace, unless
+/// `whole_catalog` — come back.
+async fn postgres_schema(db: &dyn Database, whole_catalog: bool) -> Result<Schema, DbError> {
     let names = db
         .query(&Statement::new(format!(
             "SELECT table_name AS name FROM information_schema.tables \
              WHERE table_schema = current_schema() AND table_type = 'BASE TABLE' \
-             {excluded} \
+             {harness} \
              ORDER BY table_name ASC",
-            excluded = not_bookkeeping("table_name")
+            harness = harness_exclusion(whole_catalog, "table_name")
         )))
         .await?
         .rows
@@ -610,6 +658,16 @@ mod tests {
         for statement in DDL {
             db.execute(&Statement::new(*statement)).await.expect("ddl");
         }
+        // A table under the harness's reserved prefix, named like a real
+        // one: the browsable catalog must not list it, and the
+        // whole-catalog read must. `assert_catalog` holds both ends.
+        db.execute(&Statement::new(
+            "CREATE TABLE harness_secrets (\
+                 name TEXT PRIMARY KEY, \
+                 key_id TEXT NOT NULL)",
+        ))
+        .await
+        .expect("a harness-named table");
         for id in ["p1", "p2"] {
             db.execute(&Statement::with_values(
                 "INSERT INTO parent (id, email, note) VALUES (?, ?, ?)",
@@ -638,11 +696,34 @@ mod tests {
     async fn assert_catalog(db: &dyn Database) {
         let schema = schema(db).await.expect("read the catalog");
 
-        // Table names come back sorted, and the migration ledger — which
-        // exists on the SQLite leg because `apply_migrations` created it —
-        // is not among them.
+        // Table names come back sorted, and no harness-owned table is
+        // among them — neither the migration ledger, which exists on the
+        // SQLite leg because `apply_migrations` created it, nor the
+        // `harness_secrets`-shaped table `seed` creates on both legs.
         let names: Vec<&str> = schema.tables.iter().map(|t| t.name.as_str()).collect();
-        assert_eq!(names, ["child", "parent"], "sorted, bookkeeping excluded");
+        assert_eq!(
+            names,
+            ["child", "parent"],
+            "sorted, the harness prefix excluded"
+        );
+        assert!(
+            schema.table("harness_secrets").is_none(),
+            "no harness_ table is listable"
+        );
+
+        // The whole-catalog read — the backup's — is a superset: the
+        // harness-named table is hidden from the browsable schema but
+        // still in the database it describes.
+        let whole = full_schema(db).await.expect("read the whole catalog");
+        let whole_names: Vec<&str> = whole.tables.iter().map(|t| t.name.as_str()).collect();
+        assert!(
+            whole_names.contains(&"harness_secrets"),
+            "the whole-catalog read still sees the harness-named table: {whole_names:?}"
+        );
+        assert!(
+            whole_names.len() > names.len(),
+            "the browsable catalog hid something the database holds"
+        );
 
         let parent = schema.table("parent").expect("parent");
         assert_eq!(parent.primary_key, ["id"]);
@@ -708,6 +789,43 @@ mod tests {
         db.apply_migrations("probe", &[]).expect("ledger");
         seed(&db).await;
         assert_catalog(&db).await;
+    }
+
+    /// The prefix exclusion's whole story on one database: anything under
+    /// the reserved `harness_` prefix — a real secrets-shaped table, the
+    /// migration ledger — is invisible to [`schema`], and
+    /// [`full_schema`] is the read that still sees the database as it is.
+    #[pollster::test]
+    async fn no_harness_table_is_listable_and_the_whole_catalog_names_them() {
+        let db = cratefield_adapter_sqlite::SqliteDatabase::in_memory().expect("sqlite");
+        db.apply_migrations("probe", &[]).expect("ledger");
+        db.execute(&Statement::new(
+            "CREATE TABLE harness_secret_keys (key_id TEXT PRIMARY KEY, wrapped TEXT)".to_owned(),
+        ))
+        .await
+        .expect("harness-named table");
+        db.execute(&Statement::new(
+            "CREATE TABLE ordinary (id TEXT PRIMARY KEY)".to_owned(),
+        ))
+        .await
+        .expect("ordinary table");
+
+        let browsable = schema(&db).await.expect("catalog");
+        let names: Vec<&str> = browsable.tables.iter().map(|t| t.name.as_str()).collect();
+        assert_eq!(
+            names,
+            ["ordinary"],
+            "no harness_ table is listable, the ledger included: {names:?}"
+        );
+
+        let whole = full_schema(&db).await.expect("whole catalog");
+        let mut whole_names: Vec<&str> = whole.tables.iter().map(|t| t.name.as_str()).collect();
+        whole_names.sort_unstable();
+        assert_eq!(
+            whole_names,
+            ["harness_migrations", "harness_secret_keys", "ordinary"],
+            "the whole-catalog read is the whole catalog: {whole_names:?}"
+        );
     }
 
     #[tokio::test]
