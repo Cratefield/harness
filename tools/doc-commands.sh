@@ -117,40 +117,54 @@ registry() {
       # Prerequisites: idempotent installs.
       echo "run:shell:$root"
       ;;
-    docs/VENTURE-GUIDE.md:2) echo "skip:template file tree, not a command" ;;
-    docs/VENTURE-GUIDE.md:3) echo "skip:rust composition example, not a command" ;;
-    docs/VENTURE-GUIDE.md:4) echo "skip:cargo test of a venture — examples/venture compiles under cargo test --workspace" ;;
-    docs/VENTURE-GUIDE.md:5)
+    docs/VENTURE-GUIDE.md:2)
+      # The guide's opening move: fz init + fz add in a fresh directory.
+      # The `fz` installed below is the venture-linked fixture binary;
+      # init and add are harness-free commands, so it runs them.
+      echo "run:shell:tmpdir"
+      ;;
+    docs/VENTURE-GUIDE.md:3) echo "skip:venture manifest example, not a command" ;;
+    docs/VENTURE-GUIDE.md:4)
+      # fz build needs a harness checkout beside it for --harness-path
+      # ../.. and a long native compile — and the generator's output is
+      # already byte-checked by crates/manifest/tests/canary_is_current.rs.
+      echo "skip:needs a harness checkout for --harness-path and a long compile; the generator's output is drift-checked by crates/manifest/tests/canary_is_current.rs"
+      ;;
+    docs/VENTURE-GUIDE.md:5) echo "skip:generated file tree, not a command" ;;
+    docs/VENTURE-GUIDE.md:6) echo "skip:cargo test of a venture — examples/venture compiles under cargo test --workspace" ;;
+    docs/VENTURE-GUIDE.md:7)
       # The guide's "migrations first, then dev" fence. Its apply line
-      # carries a <database-name> placeholder (the concrete run is block 7);
-      # the dev line is the one this script starts the server from for
-      # blocks 6–9.
+      # carries a <database-name> placeholder (the concrete run is block
+      # 9); the dev line is the one this script starts the server from
+      # for blocks 8–11.
       echo "run:server:$root/examples/venture"
       ;;
-    docs/VENTURE-GUIDE.md:6) echo "run:dollar:$root/examples/venture" ;;
-    docs/VENTURE-GUIDE.md:7) echo "run:dollar:$root/examples/venture" ;;
     docs/VENTURE-GUIDE.md:8) echo "run:dollar:$root/examples/venture" ;;
     docs/VENTURE-GUIDE.md:9) echo "run:dollar:$root/examples/venture" ;;
-    docs/VENTURE-GUIDE.md:10) echo "skip:human step: wrangler d1 create needs an authenticated Cloudflare account" ;;
-    docs/VENTURE-GUIDE.md:11) echo "skip:toml snippet, not a command" ;;
-    docs/VENTURE-GUIDE.md:12)
-      # The prose runs `cargo run --bin fz` from "the venture repo" — the
-      # template wires fz as a bin target. The fixture copy is that repo;
-      # examples/venture has no bin target by design (wasm canary).
+    docs/VENTURE-GUIDE.md:10) echo "run:dollar:$root/examples/venture" ;;
+    docs/VENTURE-GUIDE.md:11) echo "run:dollar:$root/examples/venture" ;;
+    docs/VENTURE-GUIDE.md:12) echo "skip:human step: wrangler d1 create needs an authenticated Cloudflare account" ;;
+    docs/VENTURE-GUIDE.md:13) echo "skip:toml snippet, not a command" ;;
+    docs/VENTURE-GUIDE.md:14)
+      # The prose runs `cargo run --bin fz` from the venture directory —
+      # `fz build` gives every generated venture an `fz` bin target
+      # (src/fz_main.rs). The fixture copy is this repository's stand-in
+      # for one (bin target wired, path deps relative); examples/venture
+      # has no bin target by design (wasm canary).
       echo "run:shell:fzventure"
       ;;
-    docs/VENTURE-GUIDE.md:13) echo "skip:placeholder <venture>-api args; the local half ran as block 7, the remote half needs wrangler auth" ;;
-    docs/VENTURE-GUIDE.md:14) echo "skip:placeholder args; remote apply needs wrangler auth" ;;
-    docs/VENTURE-GUIDE.md:15) echo "skip:pasted d1_migrations table, not a command" ;;
-    docs/VENTURE-GUIDE.md:16) echo "skip:pasted re-applied-migration illustration, not a command" ;;
-    docs/VENTURE-GUIDE.md:17)
+    docs/VENTURE-GUIDE.md:15) echo "skip:placeholder <venture>-api args; the local half ran as block 9, the remote half needs wrangler auth" ;;
+    docs/VENTURE-GUIDE.md:16) echo "skip:placeholder args; remote apply needs wrangler auth" ;;
+    docs/VENTURE-GUIDE.md:17) echo "skip:pasted d1_migrations table, not a command" ;;
+    docs/VENTURE-GUIDE.md:18) echo "skip:pasted re-applied-migration illustration, not a command" ;;
+    docs/VENTURE-GUIDE.md:19)
       # Local, credential-free half of the VAPID recipe. keygen refuses to
       # overwrite an existing file, so it gets a fresh directory.
       echo "run:shell:tmpdir"
       ;;
-    docs/VENTURE-GUIDE.md:18) echo "skip:human step: wrangler secret put needs an authenticated Cloudflare account" ;;
-    docs/VENTURE-GUIDE.md:19) echo "skip:html embed snippet, not a command" ;;
-    docs/VENTURE-GUIDE.md:20) echo "skip:placeholder URLs against a deployed venture" ;;
+    docs/VENTURE-GUIDE.md:20) echo "skip:human step: wrangler secret put needs an authenticated Cloudflare account" ;;
+    docs/VENTURE-GUIDE.md:21) echo "skip:html embed snippet, not a command" ;;
+    docs/VENTURE-GUIDE.md:22) echo "skip:placeholder URLs against a deployed venture" ;;
     *)
       echo "FAIL: unclassified doc fence $1 — classify it in registry() in tools/doc-commands.sh (run it, name the CI job that already runs it, or record why a human must)"
       fail=1
@@ -253,9 +267,10 @@ for file in "${DOC_FILES[@]}"; do
   [[ -f "$file" ]] || { echo "FAIL: covered doc file $file is gone"; exit 1; }
 done
 
-# The `fz` binary stands in for the template's venture-side bin target
-# (guide step 4). The fixture package carries exactly that bin; the cli
-# crate itself has none, so `cargo install --path crates/cli` is a trap.
+# The `fz` binary stands in for the venture-side bin target that `fz
+# build` generates into every venture (src/fz_main.rs; guide steps 1 and
+# 4). The fixture package carries exactly that bin; the cli crate itself
+# has none, so `cargo install --path crates/cli` is a trap.
 command -v fz >/dev/null 2>&1 || cargo install --path crates/cli-acceptance/fixture --bin fz --locked -q
 
 blocks_file="$(mktemp)"

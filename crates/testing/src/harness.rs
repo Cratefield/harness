@@ -180,7 +180,7 @@ impl TestHarness {
 
     /// [`TestHarness::with_ports`] with a hook over the `HarnessBuilder`
     /// before it builds: mount a UI renderer (`.ui(..)`), add a template
-    /// override, anything the venture would do in `harness.rs`.
+    /// override, anything the venture would do in `src/lib.rs`.
     ///
     /// # Panics
     ///

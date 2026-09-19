@@ -1,5 +1,6 @@
 # The deployable auth Worker (auth#41). One Worker + one D1 per environment,
-# the shape of any harness venture (`ventures/_template`).
+# the shape of any harness venture (`examples/tables-canary` is one,
+# generated and committed).
 #
 # needs-human before first deploy: `wrangler d1 create` for each environment
 # and paste the ids below; set HARNESS_SECRET (+ HARNESS_SECRET_PREVIOUS on

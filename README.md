@@ -56,7 +56,7 @@ drift-checked in CI. How crates reach crates.io:
 ## How a venture uses it
 
 ```rust
-// src/harness.rs in a venture repo
+// src/lib.rs in a venture repo
 Harness::builder()
     .venture(Venture::new("acme", "acme.example.com")
         .public_url("https://acme.example.com")
@@ -72,8 +72,11 @@ Harness::builder()
 
 That is the whole composition. `build()` refuses a module that requires a port
 the runtime does not provide, two modules claiming the same table or route, or
-a module built against a different contract version. The venture template runs
-it under `cargo test`, so a misconfiguration fails before `wrangler deploy` can.
+a module built against a different contract version. In a generated venture
+the `harness()` ends in `.expect("generated venture harness is valid")`, so a
+bad composition fails at first compose; `examples/tables-canary/tests/boots.rs`
+composes the generated venture, which turns that into a
+`cargo test --workspace` failure.
 
 ## Shape
 
@@ -181,7 +184,10 @@ makes a crate private now, not a separate repository (ADR
 | `cratefield-introspect` | Reads a database's own catalog over the `Database` port (SQLite pragmas, Postgres `information_schema`) and answers in `cratefield-tables`' vocabulary — the source the dashboard's data screen renders
 
 Ventures live in [`ventures/`](ventures): `cratefield-waitlist` serves
-`api.cratefield.com`, and `_template` is the layout a new one copies.
+`api.cratefield.com`. A new venture is not copied from a template: `fz init`
+writes the manifest, `fz add` mounts modules, `fz build` generates the crate
+— [docs/VENTURE-GUIDE.md](docs/VENTURE-GUIDE.md) walks the path, and
+`examples/tables-canary` is committed `fz build` output.
 
 ## What a module is
 
@@ -240,8 +246,9 @@ Progress is visible in the [milestones](https://github.com/Cratefield/harness/mi
 One structured span per request carries `request_id`, `method`, `route`
 (the matched path), `module`, `status`, `duration_ms`, `ip_hash` and
 `ua_family` — never an email address. Workers Logs is enabled in the
-template `wrangler.toml` (`[observability] enabled = true`); every
-response also echoes `x-request-id`. To pull one request's trail out of
+checked-in `wrangler.toml` files (`[observability] enabled = true` in
+`ventures/cratefield-waitlist/wrangler.toml` and
+`examples/venture/wrangler.toml`); every response also echoes `x-request-id`. To pull one request's trail out of
 the logs, filter on the id the API returned (needs a deployed Worker and
 wrangler auth against your Cloudflare account, so CI cannot run it):
 

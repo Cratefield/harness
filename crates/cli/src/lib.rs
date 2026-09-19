@@ -5,7 +5,7 @@
 //! `fz add`, `fz init`, `fz verify`.
 //!
 //! `fz` is linked into the venture as a bin target so it can see the
-//! compiled-in harness. The documented pattern (venture template):
+//! compiled-in harness. The pattern `fz build` generates:
 //!
 //! ```text
 //! // src/lib.rs
