@@ -29,7 +29,13 @@ fn store() -> (SecretStore, Arc<dyn Database>, StoreId) {
     let id = StoreId::Tenant("tenant-a".to_owned());
     let secrets =
         Secrets::new(kms()).with_audit(Arc::new(ChainAudit::new(id.clone(), Arc::clone(&db))));
-    (secrets.tenant("tenant-a", Arc::clone(&db)), db, id)
+    (
+        secrets
+            .tenant("tenant-a", Arc::clone(&db))
+            .expect("the tenant store opens"),
+        db,
+        id,
+    )
 }
 
 async fn count(db: &dyn Database) -> i64 {
@@ -288,7 +294,9 @@ async fn a_secret_is_refused_when_it_cannot_be_audited() {
         .expect("schema");
     let db: Arc<dyn Database> = Arc::new(db);
     let secrets = Secrets::new(kms()).with_audit(Arc::new(Broken));
-    let store = secrets.tenant("tenant-a", db);
+    let store = secrets
+        .tenant("tenant-a", db)
+        .expect("the tenant store opens");
 
     let err = store
         .put("a/key", &"one".into(), &actor())

@@ -617,7 +617,11 @@ fn standing_cell(standing: Option<&Standing>) -> String {
 /// request — two `Arc` clones — because the database is resolved from
 /// the request's module context, which is the only handle a module
 /// legitimately has.
-fn open_store(state: &DashboardState, db: &Arc<dyn Database>, store: &Store) -> SecretStore {
+fn open_store(
+    state: &DashboardState,
+    db: &Arc<dyn Database>,
+    store: &Store,
+) -> Result<SecretStore, SecretsError> {
     // Every route checks `state.kms.is_none()` before calling here, so
     // the expect is a backstop, not the plan.
     let kms = state
@@ -630,10 +634,20 @@ fn open_store(state: &DashboardState, db: &Arc<dyn Database>, store: &Store) -> 
 /// [`open_store`] without a `DashboardState`: the shape the scheduled
 /// pass needs, because a cron invocation builds no router and parks no
 /// state — it arrives with only the context the runtime hands it.
-fn open_store_at(kms: &Arc<dyn Kms>, db: &Arc<dyn Database>, id: &StoreId) -> SecretStore {
+///
+/// The store id comes from this control plane's own rows, so the
+/// refusals [`Secrets::tenant`] can produce — an id naming the global
+/// store, or a blank one (the shape a legacy row stamped `store = ''`
+/// takes here) — are corrupted rows, reported by the caller, never
+/// opened.
+fn open_store_at(
+    kms: &Arc<dyn Kms>,
+    db: &Arc<dyn Database>,
+    id: &StoreId,
+) -> Result<SecretStore, SecretsError> {
     let secrets = Secrets::new(Arc::clone(kms)).with_audit(chain_sink(Arc::clone(db)));
     match id {
-        StoreId::Global => secrets.control_plane_global(Arc::clone(db)),
+        StoreId::Global => Ok(secrets.control_plane_global(Arc::clone(db))),
         StoreId::Tenant(tenant) => secrets.tenant(tenant, Arc::clone(db)),
     }
 }
@@ -851,7 +865,22 @@ pub(crate) async fn stores(
     let now = now_of(ctx);
     for store in all {
         let id = store.id();
-        let handle = open_store(&state, &db, &store);
+        let handle = match open_store(&state, &db, &store) {
+            Ok(handle) => handle,
+            // A store that will not open is said the same way a store
+            // that will not read is: still on the page, telling what
+            // happened, rather than vanishing from it.
+            Err(err) => {
+                summaries.push(StoreSummary {
+                    chain: ChainStatus::Unreadable(err.to_string()),
+                    live: 0,
+                    newest: String::new(),
+                    store,
+                    standing: None,
+                });
+                continue;
+            }
+        };
         let summary = match handle.list(&actor).await {
             Ok(metas) => {
                 let live = metas.iter().filter(|meta| !meta.deleted).count();
@@ -979,7 +1008,9 @@ async fn load_detail(
     let Ok(actor) = actor_of(&account.identity) else {
         return Err(internal("the session carries no actor"));
     };
-    let handle = open_store(state, &db, &store);
+    let Ok(handle) = open_store(state, &db, &store) else {
+        return Err(internal("could not open the store"));
+    };
     let secrets = match handle.list(&actor).await {
         Ok(metas) => metas,
         Err(err) => {
@@ -1335,7 +1366,9 @@ pub(crate) async fn put_secret(
         return (StatusCode::BAD_REQUEST, "a secret value cannot be empty").into_response();
     }
 
-    let handle = open_store(&state, &db, &store);
+    let Ok(handle) = open_store(&state, &db, &store) else {
+        return internal("could not open the store");
+    };
     let version = match handle.put(&name, &value, &actor).await {
         Ok(version) => version,
         Err(err) => {
@@ -1454,7 +1487,9 @@ pub(crate) async fn delete_secret(
     let Ok(actor) = actor_of(&session.account_id) else {
         return internal("the session carries no actor");
     };
-    let handle = open_store(&state, &db, &store);
+    let Ok(handle) = open_store(&state, &db, &store) else {
+        return internal("could not open the store");
+    };
     if let Err(err) = handle.delete(&name, &actor).await {
         tracing::error!(error = %err, name = %name, "delete failed");
         return error_page("the secret could not be deleted", &err);
@@ -1572,7 +1607,9 @@ async fn key_action(
         return internal("the session carries no actor");
     };
     let run = parse_form(&body).iter().any(|field| field.name == "run");
-    let handle = open_store(&state, &db, &store);
+    let Ok(handle) = open_store(&state, &db, &store) else {
+        return internal("could not open the store");
+    };
     let report = match (&action, run) {
         (KeyAction::Rotate, _) => match handle.rotate_dek(&actor, !run).await {
             Ok(report) => KeyReport::Rotation(report),
@@ -1920,7 +1957,16 @@ pub(crate) async fn scheduled_pass(
         // The store's own API does the work — the same audited path the
         // button uses, so the chain cannot tell a scheduled rotation
         // from a pressed one except by who the actor names.
-        let handle = open_store_at(&kms, &db, &id);
+        let handle = match open_store_at(&kms, &db, &id) {
+            Ok(handle) => handle,
+            // As with a failed policy read: not a rotation failure,
+            // but rotating nothing would be worse — leave the store
+            // for the next pass and log why it was skipped.
+            Err(err) => {
+                tracing::error!(store = %store, error = %err, "store open failed; skipped");
+                continue;
+            }
+        };
         match handle.rotate_dek(&actor, false).await {
             Ok(report) => tracing::info!(
                 store = %store,
@@ -3069,6 +3115,7 @@ mod tests {
         Secrets::new(kms.clone())
             .with_audit(chain_sink(Arc::clone(&kit.db)))
             .tenant("ten_1", Arc::clone(&kit.db))
+            .expect("the venture store opens")
     }
 
     /// Sets one store's policy through the real POST, because a test
