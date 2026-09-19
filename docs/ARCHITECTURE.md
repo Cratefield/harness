@@ -28,7 +28,7 @@ a **waitlist** module, deployed for factory0.ventures.
    Adapters implement the traits. This is what makes the self-hosted move a
    change of one runtime crate, not a rewrite.
 2. **Compile-time composition.** A venture backend lists module crates in
-   `Cargo.toml` and composes them in `src/harness.rs`. The wasm binary contains
+   `Cargo.toml` and composes them in `src/lib.rs`. The wasm binary contains
    exactly those modules it serves in-process. No runtime plugin loading, no
    registry service. Cargo features select adapters. One narrowing, ADR 0009: a
    module whose source must stay with its owner may run as a **sidecar**, its
@@ -112,10 +112,12 @@ dependencies and are built from their own directories.
 
 ### `ventures/`
 
-A venture is a Worker composing modules. `ventures/_template` is the layout
-a new one copies: `src/lib.rs` (Worker entry via the runtime crate),
-`wrangler.toml` with `staging`/`production` envs, D1 and rate-limit
-bindings, and a `migrations/` dir maintained by `fz migrations collect`.
+A venture is a Worker composing modules. There is no template to copy: a new
+one starts from a manifest — `fz init` writes `venture.json` (name and host,
+no modules), `fz add` mounts modules onto it, and `fz build` generates the
+crate: `src/lib.rs` (Worker entry via the runtime crate and the generated
+`harness()`), `src/fz_main.rs` (the `fz` bin target), a `wrangler.toml` with
+a D1 binding, and a `migrations/` dir maintained by `fz migrations collect`.
 
 | Venture | Serves |
 |---|---|
@@ -169,7 +171,7 @@ that request's `wait_until`. There is no ambient "current request".
 A venture composes:
 
 ```rust
-// src/harness.rs in a venture repo
+// src/lib.rs in a venture repo
 use cratefield_core::{Harness, Venture};
 use cratefield_runtime_cloudflare::Cloudflare;
 use cratefield_adapter_resend::Resend;
@@ -193,9 +195,11 @@ pub fn harness() -> Harness {
 `Harness::build()` fails when a module requires a port the runtime does not
 provide, when two modules claim the same route prefix or table, when a module's
 `harness_api` differs from core's, or when a template override names an unknown
-module. The template is meant to ship `tests/harness_builds.rs` asserting
-`build()` is `Ok`, so that `cargo test` fails before `wrangler deploy` can
-run — it does not yet, and nor does the template (issue #408).
+module. In a generated venture the `harness()` ends in
+`.expect("generated venture harness is valid")`, so a bad composition fails
+at first compose; `examples/tables-canary/tests/boots.rs` composes the
+generated venture, which turns a bad composition into a
+`cargo test --workspace` failure.
 
 ## 5. Ports
 
@@ -295,7 +299,7 @@ The move for a venture is:
 
 1. Stand up Postgres, run the same module migrations (postgres set).
 2. Copy D1 data with `fz data export` / `fz data import`.
-3. Switch `src/harness.rs` to `.runtime(Native::new().db(Postgres::from_env()).rate_limiter(Redis::from_env()))`, keep `Resend` and `Turnstile`. Build a native binary; ship the Dockerfile from the template.
+3. Switch the composition in `src/lib.rs` to `.runtime(Native::new().db(Postgres::from_env()).rate_limiter(Redis::from_env()))`, keep `Resend` and `Turnstile`. Build a native binary. The Dockerfile to ship is `examples/venture-native/Dockerfile` (distroless, the binary and nothing else); the repo's other Dockerfile, `docker/Dockerfile`, is the forge build image (a standalone `fz` plus a wasm toolchain), not a runtime image.
 4. Point `api.<domain>` at the new host.
 
 No module code changes. The parity suite in `cratefield-testing` runs every

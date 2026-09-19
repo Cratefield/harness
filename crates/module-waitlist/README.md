@@ -34,7 +34,7 @@ serialize on every engine (D1, SQLite, Postgres) and never share a
 position; a UNIQUE(product, position) index backstops the allocation.
 Positions are never recomputed when rows are deleted.
 
-Register the default mail templates in `harness.rs`:
+Register the default mail templates in the venture's `src/lib.rs`:
 
 ```rust
 use cratefield_core::Harness;

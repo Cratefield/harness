@@ -25,7 +25,7 @@ Three decisions made on day one exist so that this page stays short:
    runtime swaps the adapters behind the same traits.
 2. **Compile-time composition** (ADR
    [0003](adr/0003-compile-time-composition.md)). A venture backend is
-   one `Cargo.toml` + one `src/harness.rs`; changing the `.runtime(..)`
+   one `Cargo.toml` + one `src/lib.rs`; changing the `.runtime(..)`
    line and the adapter dependencies is the whole edit.
 3. **Portable SQL** (ADR
    [0004](adr/0004-sea-query-and-portable-sql-migrations.md)).
@@ -57,8 +57,8 @@ Architecture section 10, expanded. Per venture:
    `fz data import` writes the Postgres database. ULID ids and ISO-8601
    timestamps are engine-neutral by design, so rows move verbatim.
 
-3. **Switch the runtime** in `src/harness.rs` — the one-line diff the
-   architecture promises:
+3. **Switch the runtime** in the venture's composition, `src/lib.rs` —
+   the one-line diff the architecture promises:
 
    ```rust
    // before
@@ -69,8 +69,10 @@ Architecture section 10, expanded. Per venture:
 
    `Resend` and `Turnstile` stay: they are adapters over the
    runtime-neutral `HttpClient` port, so the mailer and captcha move
-   with you unchanged. Build a native binary; ship the Dockerfile from
-   the venture template.
+   with you unchanged. Build a native binary. The Dockerfile to ship is
+   `examples/venture-native/Dockerfile` (distroless, the binary and
+   nothing else); the forge build image (`docker/Dockerfile`) is for
+   compiling, not a runtime image.
 
 4. **Point `api.<domain>` at the new host.** DNS is the cutover. The
    Worker and the D1 database still exist and still answer, so a bad

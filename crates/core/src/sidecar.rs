@@ -3,7 +3,7 @@
 //! caller.
 //!
 //! The mount table is **runtime configuration**, never a builder call. A
-//! `.sidecar()` in `src/harness.rs` would bake a customer-specific mount into
+//! `.sidecar()` in `src/lib.rs` would bake a customer-specific mount into
 //! the artifact, so the artifact would stop being a function of the module set
 //! and could no longer be shared between ventures (#59).
 

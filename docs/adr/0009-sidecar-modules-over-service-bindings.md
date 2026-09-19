@@ -33,7 +33,7 @@ That is the case this ADR exists for.
    below, and the answer is copied back through the response allowlist there.
 
 The mount is **runtime configuration, not a builder call.** A `.sidecar()` in
-`src/harness.rs` would bake a customer-specific mount into the artifact, so
+`src/lib.rs` would bake a customer-specific mount into the artifact, so
 the artifact would stop being a function of the module set and #59's cache could
 never hit for a sidecar customer. The mount table is read from configuration
 alongside the other bindings, so one wasm serves customers with and without

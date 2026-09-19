@@ -175,8 +175,8 @@ configuration on the host and, for a sidecar, a second deployment.
 the binding instead:
 
 ```diff
---- a/src/harness.rs
-+++ b/src/harness.rs
+--- a/src/lib.rs
++++ b/src/lib.rs
 @@
      Harness::builder()
          .venture(Venture::new("acme", "acme.example").public_url("https://acme.example"))
