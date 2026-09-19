@@ -42,6 +42,7 @@ compatibility-doc` and checked in CI for drift. Do not edit by hand.
 | `cratefield-bench-write-ceiling` *(not published)* | 0.1.1 | 1 | `^0.5` — `>=0.5.0, <0.6.0` |
 | `cratefield-chrome` *(not published)* | 0.1.1 | 1 | `^0.5` — `>=0.5.0, <0.6.0` |
 | `cratefield-cli` | 0.2.2 | 1 | `^0.5` — `>=0.5.0, <0.6.0` |
+| `cratefield-client-ts` *(not published)* | 0.1.0 | 1 | `^0.5` — `>=0.5.0, <0.6.0` |
 | `cratefield-connections` *(not published)* | 0.1.1 | 1 | `^0.5` — `>=0.5.0, <0.6.0` |
 | `cratefield-console` *(not published)* | 0.1.1 | 1 | `^0.5` — `>=0.5.0, <0.6.0` |
 | `cratefield-control-plane` *(not published)* | 0.1.1 | 1 | `^0.5` — `>=0.5.0, <0.6.0` |
