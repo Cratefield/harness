@@ -7,10 +7,16 @@
 //! byte assertions, not equality-of-convenience.
 
 use cratefield_linker::{
-    CachedArtifact, ComposedStore, LinkError, LinkInputs, MemorySegments, MemoryStore, Outcome,
-    SegmentSource, link,
+    CachedArtifact, CatalogPins, ComposedStore, LinkError, LinkInputs, LinkedArtifacts,
+    MemorySegments, MemoryStore, NoStore, Outcome, PinSource, Pins, SegmentSource,
+    UnpublishedSegments, link,
 };
-use cratefield_manifest::{Catalog, CatalogModule, ModuleRelease, ReleaseReview, Tier};
+use cratefield_manifest::{Catalog, CatalogModule, ModuleRelease, ReleaseReview, Tier, builtin};
+use cratefield_provisioning::{DeployError, Deployer};
+// `Mutex` is a test/tooling fixture here, not request state (ADR 0007) —
+// the scoped allow follows the policy in the workspace `clippy.toml`.
+#[allow(clippy::disallowed_types)]
+use std::sync::{Arc, Mutex};
 
 // ---------------------------------------------------------------------------
 // Fixtures: a catalog whose pins are real digests of synthetic segments.
@@ -375,12 +381,51 @@ fn changing_a_pinned_version_composes_a_new_bundle_not_the_old_one() {
     assert_ne!(old.bytes, new.bytes);
 }
 
+/// Min, p50, p99 and max over a sample set, with the count they came
+/// from — the reporting shape `docs/BENCHMARKS.md` publishes and
+/// `bench/write-ceiling` prints. The percentile indexes are the bench's
+/// exact integer picks, so the same samples print the same percentiles
+/// everywhere.
+struct Summary {
+    n: usize,
+    min: std::time::Duration,
+    p50: std::time::Duration,
+    p99: std::time::Duration,
+    max: std::time::Duration,
+}
+
+impl Summary {
+    fn new(mut samples: Vec<std::time::Duration>) -> Self {
+        assert!(
+            !samples.is_empty(),
+            "a measurement is nothing without samples"
+        );
+        samples.sort_unstable();
+        let at = |pct: usize| samples[(samples.len() - 1) * pct / 100];
+        Self {
+            n: samples.len(),
+            min: samples[0],
+            p50: at(50),
+            p99: at(99),
+            max: samples[samples.len() - 1],
+        }
+    }
+}
+
 /// The measurement behind `docs/control-plane/LINKER.md`: six synthetic
-/// segments (24 KiB total), timed cold and on a hit. Prints, and asserts
-/// only the structural facts the numbers depend on (hit fetches nothing) —
-/// wall-clock assertions would flake CI; the doc carries the numbers.
+/// segments (24 KiB total), timed cold and on a hit — many samples per
+/// path, never one, because a single timing cannot be told apart from a
+/// scheduler hiccup and a fluctuation read as a cause is exactly what
+/// `docs/BENCHMARKS.md`'s rules exist to prevent. Prints min / p50 / p99 /
+/// max with the sample count, and asserts only the structural facts the
+/// numbers depend on (every cold sample really composed, every hit really
+/// hit) — wall-clock assertions would flake CI; the doc carries the
+/// numbers.
 #[test]
 fn measured_cold_compose_and_cache_hit() {
+    const COLD_SAMPLES: usize = 100;
+    const HIT_SAMPLES: usize = 200;
+
     let (catalog, segments) = six_modules();
     let set = resolve(
         &catalog,
@@ -392,28 +437,55 @@ fn measured_cold_compose_and_cache_hit() {
             "privacy",
         ],
     );
-    let store = MemoryStore::default();
 
-    let start = std::time::Instant::now();
-    let composed = link(&set, &inputs(), &segments, &store).unwrap();
-    let cold = start.elapsed();
-
-    let start = std::time::Instant::now();
-    let hit = link(&set, &inputs(), &segments, &store).unwrap();
-    let warm = start.elapsed();
-
+    // One untimed compose to page the resolver and hasher in; the timed
+    // samples below are not first-touch costs.
+    let warmed = link(&set, &inputs(), &segments, &MemoryStore::default()).unwrap();
     let payload: usize = set
         .releases()
         .iter()
         .map(|r| segments.segment(&r.slug, &r.digest).unwrap().unwrap().len())
         .sum();
+
+    // Cold: a fresh store per sample, so every sample really is cold.
+    let mut cold = Vec::with_capacity(COLD_SAMPLES);
+    for _ in 0..COLD_SAMPLES {
+        let start = std::time::Instant::now();
+        let composed = link(&set, &inputs(), &segments, &MemoryStore::default()).unwrap();
+        cold.push(start.elapsed());
+        assert_eq!(composed.source, Outcome::Composed);
+    }
+
+    // Hit: one store holding the bundle, then hits only.
+    let store = MemoryStore::default();
+    link(&set, &inputs(), &segments, &store).unwrap();
+    let mut hit = Vec::with_capacity(HIT_SAMPLES);
+    for _ in 0..HIT_SAMPLES {
+        let start = std::time::Instant::now();
+        let served = link(&set, &inputs(), &segments, &store).unwrap();
+        hit.push(start.elapsed());
+        assert_eq!(served.source, Outcome::CacheHit);
+    }
+
+    let cold = Summary::new(cold);
+    let hit = Summary::new(hit);
     println!(
-        "cold compose: {cold:?} ({} segments, {payload} bytes, bundle {} bytes)\nhit:         {warm:?}",
+        "cold compose: n={} min={:?} p50={:?} p99={:?} max={:?} \
+         (a fresh store per sample; {} segments, {payload} bytes, bundle {} bytes)\n\
+         hit:          n={} min={:?} p50={:?} p99={:?} max={:?}",
+        cold.n,
+        cold.min,
+        cold.p50,
+        cold.p99,
+        cold.max,
         set.releases().len(),
-        composed.bytes.len()
+        warmed.bytes.len(),
+        hit.n,
+        hit.min,
+        hit.p50,
+        hit.p99,
+        hit.max,
     );
-    assert_eq!(composed.source, Outcome::Composed);
-    assert_eq!(hit.source, Outcome::CacheHit);
 }
 
 /// The harness API version the fixture segments were "compiled" against. The
@@ -438,4 +510,709 @@ fn a_failing_segment_source_fails_the_link() {
     let set = resolve(&catalog, &["email-signup"]);
     let err = link(&set, &inputs(), &FailingSource, &MemoryStore::default()).unwrap_err();
     assert!(matches!(err, LinkError::Store(_)), "got {err}");
+}
+
+/// A failing segment source through the port falls back to the build path
+/// carrying the store's own reason: a store that errored gave no answer at
+/// all, which is the missing-segment rung reached from the other side, not
+/// an integrity failure to refuse over. Refusing there would turn the
+/// optimisation's outage into a failed deploy.
+#[pollster::test]
+async fn a_failing_segment_source_falls_back_carrying_the_store_s_reason() {
+    let (catalog, _) = six_modules();
+    let set = resolve(&catalog, &["email-signup"]);
+    let module_set = set.content_key();
+    let store = MemoryStore::default();
+    let inner = CountingDeployer::new();
+    let counts = inner.handle();
+    let port = LinkedArtifacts::new(
+        CatalogPins(&catalog),
+        inputs(),
+        FailingSource,
+        &store,
+        inner,
+    );
+
+    let err = port.build_artifact(&module_set).await.unwrap_err();
+    let message = err.to_string();
+    assert!(
+        message.contains("artifact store failed: release store unreachable"),
+        "the reason names the store failure: {message}"
+    );
+    assert!(
+        message.contains("so the artifact still needs a build"),
+        "it fell back rather than refused: {message}"
+    );
+    assert!(
+        message.contains("no deployer is wired"),
+        "the inner refusal's text survives verbatim: {message}"
+    );
+    assert_eq!(
+        counts.lock().expect("counting deployer poisoned").builds,
+        [module_set.as_str()],
+        "the build path was the fallback"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// The provisioning adapter: the linker as provisioning's artifact step
+// ---------------------------------------------------------------------------
+
+/// What the inner deployer was asked, one list per step. The artifact step
+/// is the only one the adapter is allowed to change, so the delegation test
+/// asserts every other list verbatim.
+#[derive(Default)]
+struct Calls {
+    builds: Vec<String>,
+    databases: Vec<String>,
+    workers: Vec<(String, String)>,
+    schemas: Vec<(String, String)>,
+    secrets: Vec<String>,
+    routes: Vec<String>,
+    healths: Vec<String>,
+}
+
+/// The inner deployer the port is composed over: counts every call, and
+/// refuses the artifact step in `Unwired`'s own words, so the composed
+/// fallback messages assert something a real resume would record.
+#[allow(clippy::disallowed_types)] // test fixture, not request state
+struct CountingDeployer {
+    calls: Arc<Mutex<Calls>>,
+}
+
+#[allow(clippy::disallowed_types)] // test fixture, not request state
+impl CountingDeployer {
+    fn new() -> Self {
+        Self {
+            calls: Arc::new(Mutex::new(Calls::default())),
+        }
+    }
+
+    /// A handle that outlives the adapter: the port owns the deployer, the
+    /// assertions read the same counters through this.
+    fn handle(&self) -> Arc<Mutex<Calls>> {
+        Arc::clone(&self.calls)
+    }
+}
+
+// The counting fake never awaits anything; the port is async because a real
+// deployer is (same shape as the fakes in `cratefield-provisioning`).
+#[allow(clippy::unused_async_trait_impl)]
+impl Deployer for CountingDeployer {
+    async fn build_artifact(&self, module_set: &str) -> Result<(), DeployError> {
+        self.calls
+            .lock()
+            .expect("counting deployer poisoned")
+            .builds
+            .push(module_set.to_owned());
+        Err(DeployError::new(
+            "no deployer is wired: building the composed artifact needs an adapter that talks to \
+             Cloudflare, and the control plane has none yet. Nothing was changed.",
+        ))
+    }
+
+    async fn ensure_database(&self, tenant: &str) -> Result<(), DeployError> {
+        self.calls
+            .lock()
+            .expect("counting deployer poisoned")
+            .databases
+            .push(tenant.to_owned());
+        Ok(())
+    }
+
+    async fn ensure_worker(&self, tenant: &str, module_set: &str) -> Result<(), DeployError> {
+        self.calls
+            .lock()
+            .expect("counting deployer poisoned")
+            .workers
+            .push((tenant.to_owned(), module_set.to_owned()));
+        Ok(())
+    }
+
+    async fn apply_schema(&self, tenant: &str, module_set: &str) -> Result<(), DeployError> {
+        self.calls
+            .lock()
+            .expect("counting deployer poisoned")
+            .schemas
+            .push((tenant.to_owned(), module_set.to_owned()));
+        Ok(())
+    }
+
+    async fn seed_secrets(&self, tenant: &str) -> Result<(), DeployError> {
+        self.calls
+            .lock()
+            .expect("counting deployer poisoned")
+            .secrets
+            .push(tenant.to_owned());
+        Ok(())
+    }
+
+    async fn bind_route(&self, _tenant: &str, subdomain: &str) -> Result<(), DeployError> {
+        self.calls
+            .lock()
+            .expect("counting deployer poisoned")
+            .routes
+            .push(subdomain.to_owned());
+        Ok(())
+    }
+
+    async fn health_ok(&self, subdomain: &str) -> Result<bool, DeployError> {
+        self.calls
+            .lock()
+            .expect("counting deployer poisoned")
+            .healths
+            .push(subdomain.to_owned());
+        Ok(true)
+    }
+}
+
+/// The amended #59 criterion, at the port: a configuration-only change
+/// (name, host, config, seed data, sidecar mounts) does not move the build
+/// key, so the second run is served from the store — no segment fetched,
+/// and the inner deployer's build path never reached.
+#[pollster::test]
+async fn a_configuration_only_change_through_the_port_does_not_reach_the_build_path() {
+    let (catalog, segments) = six_modules();
+    let set = resolve(&catalog, &["email-signup"]);
+    let module_set = set.content_key();
+    let store = MemoryStore::default();
+    let inner = CountingDeployer::new();
+    let counts = inner.handle();
+    let port = LinkedArtifacts::new(CatalogPins(&catalog), inputs(), &segments, &store, inner);
+
+    port.build_artifact(&module_set).await.unwrap();
+    let misses = segments.fetches();
+    assert_eq!(misses, 2, "the compose fetched one segment per module");
+    assert!(
+        counts
+            .lock()
+            .expect("counting deployer poisoned")
+            .builds
+            .is_empty(),
+        "the linker composed it, so the build path was never reached"
+    );
+
+    // ...the customer renames the venture, changes the host, mounts a
+    // sidecar: none of which is visible to the key ...
+    port.build_artifact(&module_set).await.unwrap();
+    assert_eq!(
+        segments.fetches(),
+        misses,
+        "the second run was served from the store and consulted no segment source"
+    );
+    assert!(
+        counts
+            .lock()
+            .expect("counting deployer poisoned")
+            .builds
+            .is_empty(),
+        "a cache hit does not build either"
+    );
+}
+
+/// A set this port has not seen composes through the linker and lands in
+/// the store under the set's own #59 build key — the build path still
+/// untouched.
+#[pollster::test]
+async fn a_new_module_set_composes_through_the_port_without_reaching_the_build_path() {
+    let (catalog, segments) = six_modules();
+    let set = resolve(&catalog, &["email-signup", "cms"]);
+    let module_set = set.content_key();
+    let store = MemoryStore::default();
+    let inner = CountingDeployer::new();
+    let counts = inner.handle();
+    let port = LinkedArtifacts::new(CatalogPins(&catalog), inputs(), &segments, &store, inner);
+
+    port.build_artifact(&module_set).await.unwrap();
+
+    assert!(
+        counts
+            .lock()
+            .expect("counting deployer poisoned")
+            .builds
+            .is_empty(),
+        "the linker composed the new set; the build path was never reached"
+    );
+    let key = cratefield_manifest::build_key(&cratefield_manifest::BuildKeyInputs {
+        releases: set.releases().to_vec(),
+        harness_api: inputs().harness_api,
+        rustc_version: inputs().rustc_version.clone(),
+        profile: inputs().profile.clone(),
+    })
+    .unwrap();
+    assert!(
+        store.get(&key).unwrap().is_some(),
+        "the composed bundle is stored under the #59 build key"
+    );
+}
+
+/// The adapter over `builtin()`'s pins: the real catalog resolves fine —
+/// the placeholder gate lives in the adapter, not in the pin source — so
+/// this is the check that the gate itself falls back, names the release,
+/// and keeps the inner refusal's text verbatim for the ledger.
+#[pollster::test]
+async fn a_placeholder_pin_falls_back_to_the_build_path_and_names_the_release() {
+    let catalog = builtin();
+    let inner = CountingDeployer::new();
+    let counts = inner.handle();
+    let port = LinkedArtifacts::new(
+        CatalogPins(&catalog),
+        inputs(),
+        UnpublishedSegments,
+        NoStore,
+        inner,
+    );
+
+    let err = port.build_artifact("email-signup").await.unwrap_err();
+    let message = err.to_string();
+    assert!(
+        message.contains("all-zero placeholder"),
+        "the reason names the placeholder: {message}"
+    );
+    assert!(
+        message.contains("`email-signup` release `0.1.1`"),
+        "the reason names the release: {message}"
+    );
+    assert!(
+        message.contains("no deployer is wired"),
+        "the inner refusal's text survives verbatim: {message}"
+    );
+    assert_eq!(
+        counts.lock().expect("counting deployer poisoned").builds,
+        ["email-signup".to_owned()],
+        "the build path was the fallback"
+    );
+}
+
+/// A pinned release whose precompiled segment was never published falls
+/// back and names that release.
+#[pollster::test]
+async fn a_missing_segment_falls_back_to_the_build_path_and_names_the_release() {
+    let (catalog, segments) = six_modules();
+    let set = resolve(&catalog, &["notifications"]);
+    // Every segment but `notifications`' is published. `core` is pulled in
+    // by resolution and links fine; the set stops at `notifications`.
+    let fresh = MemorySegments::default();
+    for release in set.releases() {
+        if release.slug != "notifications" {
+            let bytes = segments
+                .segment(&release.slug, &release.digest)
+                .unwrap()
+                .unwrap();
+            fresh.insert(&release.slug, &release.digest, bytes);
+        }
+    }
+
+    let module_set = set.content_key();
+    let store = MemoryStore::default();
+    let inner = CountingDeployer::new();
+    let counts = inner.handle();
+    let port = LinkedArtifacts::new(CatalogPins(&catalog), inputs(), &fresh, &store, inner);
+
+    let err = port.build_artifact(&module_set).await.unwrap_err();
+    let message = err.to_string();
+    assert!(
+        message.contains("`notifications`"),
+        "names the release: {message}"
+    );
+    assert!(
+        message.contains("no deployer is wired"),
+        "the inner refusal's text survives verbatim: {message}"
+    );
+    assert_eq!(
+        counts.lock().expect("counting deployer poisoned").builds,
+        [module_set.as_str()],
+        "the build path was the fallback"
+    );
+}
+
+/// A segment whose bytes fail their pin is refused outright: the deploy
+/// stops with the reason and the build path is never substituted, because a
+/// build would paper over a store that lies.
+#[pollster::test]
+async fn a_segment_failing_its_pin_through_the_port_is_refused_not_built() {
+    let (catalog, segments) = six_modules();
+    // Sabotage `cms`: the stored bytes no longer match the pinned digest.
+    let wrong = pseudo_bytes(99, 4096);
+    segments.insert("cms", &sha256_hex(&pseudo_bytes(4, 4096)), wrong);
+
+    let set = resolve(&catalog, &["cms"]);
+    let module_set = set.content_key();
+    let store = MemoryStore::default();
+    let inner = CountingDeployer::new();
+    let counts = inner.handle();
+    let port = LinkedArtifacts::new(CatalogPins(&catalog), inputs(), &segments, &store, inner);
+
+    let err = port.build_artifact(&module_set).await.unwrap_err();
+    let message = err.to_string();
+    assert!(message.contains("`cms`"), "names the slug: {message}");
+    assert!(
+        message.contains("refused to compose this set and did not fall back to a build"),
+        "says it refused rather than built: {message}"
+    );
+    assert!(
+        counts
+            .lock()
+            .expect("counting deployer poisoned")
+            .builds
+            .is_empty(),
+        "a failing pin is never papered over with a build"
+    );
+}
+
+/// A corrupt cache entry through the port is refused, not built. The
+/// refusal is decided in the adapter — `link_pins` only returns the error
+/// — so that is where the property has to hold: the deploy stops with the
+/// reason and the inner build path is never substituted, because a build
+/// would ship bytes the store corrupted.
+#[pollster::test]
+async fn a_corrupt_cache_entry_through_the_port_is_refused_not_built() {
+    let (catalog, segments) = six_modules();
+    let set = resolve(&catalog, &["email-signup"]);
+    let module_set = set.content_key();
+
+    // Warm an honest store first, so the next call is a hit — the only
+    // way to reach the cache-verification code.
+    let honest = MemoryStore::default();
+    let warmer = LinkedArtifacts::new(
+        CatalogPins(&catalog),
+        inputs(),
+        &segments,
+        &honest,
+        CountingDeployer::new(),
+    );
+    warmer.build_artifact(&module_set).await.unwrap();
+
+    let inner = CountingDeployer::new();
+    let counts = inner.handle();
+    let sabotaged = CorruptingStore(honest);
+    let port = LinkedArtifacts::new(
+        CatalogPins(&catalog),
+        inputs(),
+        &segments,
+        &sabotaged,
+        inner,
+    );
+
+    let err = port.build_artifact(&module_set).await.unwrap_err();
+    let message = err.to_string();
+    assert!(
+        message.contains("does not match its recorded digest"),
+        "the refusal names the corruption: {message}"
+    );
+    assert!(
+        message.contains("refused to compose this set and did not fall back to a build"),
+        "says it refused rather than built: {message}"
+    );
+    assert!(
+        counts
+            .lock()
+            .expect("counting deployer poisoned")
+            .builds
+            .is_empty(),
+        "an integrity failure is never papered over with a build"
+    );
+}
+
+/// A set the pin source cannot pin falls back carrying the source's own
+/// reason — here a catalog copy that has not caught up with the venture.
+#[pollster::test]
+async fn a_set_the_pin_source_cannot_pin_falls_back_carrying_that_source_s_reason() {
+    let (mut catalog, segments) = six_modules();
+    // The control plane's catalog copy has no `cms`.
+    catalog.modules.retain(|m| m.slug != "cms");
+    let module_set = "cms";
+    let store = MemoryStore::default();
+    let inner = CountingDeployer::new();
+    let counts = inner.handle();
+    let port = LinkedArtifacts::new(CatalogPins(&catalog), inputs(), &segments, &store, inner);
+
+    match CatalogPins(&catalog).pins(module_set) {
+        Pins::Unavailable(reason) => {
+            assert!(
+                reason.contains("`cms` is not a module in the catalog"),
+                "the resolver names the slug: {reason}"
+            );
+            let err = port.build_artifact(module_set).await.unwrap_err();
+            let message = err.to_string();
+            assert!(
+                message.contains(&reason),
+                "the fallback carries the source's reason verbatim: {message}"
+            );
+            assert!(
+                message.contains("no deployer is wired"),
+                "the inner refusal's text survives verbatim: {message}"
+            );
+        }
+        Pins::Published(_) => panic!("a catalog without `cms` cannot pin the set"),
+    }
+    assert_eq!(
+        counts.lock().expect("counting deployer poisoned").builds,
+        [module_set.to_owned()],
+        "the build path was the fallback"
+    );
+}
+
+/// Degenerate content keys pin nothing and panic nowhere: the empty key,
+/// a trailing `+`, and a slug the catalog does not know are all
+/// [`Pins::Unavailable`] with the resolver's reason — never a pin set,
+/// which is what would matter if a malformed key could mint an artifact.
+#[test]
+fn degenerate_content_keys_are_unavailable_never_pinned() {
+    let (catalog, _) = six_modules();
+    for key in ["", "cms+", "no-such-module"] {
+        match CatalogPins(&catalog).pins(key) {
+            Pins::Unavailable(reason) => assert!(
+                !reason.is_empty(),
+                "the unavailability carries a reason for `{key}`: {reason}"
+            ),
+            Pins::Published(releases) => {
+                panic!("`{key}` must not resolve to pins, got {releases:?}")
+            }
+        }
+    }
+}
+
+/// The adapter exists for one step. The other six arrive at the inner
+/// deployer unchanged — same argument list, nothing added.
+#[pollster::test]
+async fn the_other_six_steps_go_to_the_inner_deployer_unchanged() {
+    let (catalog, segments) = six_modules();
+    let store = MemoryStore::default();
+    let inner = CountingDeployer::new();
+    let counts = inner.handle();
+    let port = LinkedArtifacts::new(CatalogPins(&catalog), inputs(), &segments, &store, inner);
+
+    port.ensure_database("tenant-1").await.unwrap();
+    port.ensure_worker("tenant-1", "core+email-signup")
+        .await
+        .unwrap();
+    port.apply_schema("tenant-1", "core+email-signup")
+        .await
+        .unwrap();
+    port.seed_secrets("tenant-1").await.unwrap();
+    port.bind_route("tenant-1", "venture.example.com")
+        .await
+        .unwrap();
+    assert!(port.health_ok("venture.example.com").await.unwrap());
+
+    let calls = counts.lock().expect("counting deployer poisoned");
+    assert_eq!(calls.databases, ["tenant-1".to_owned()]);
+    assert_eq!(
+        calls.workers,
+        [("tenant-1".to_owned(), "core+email-signup".to_owned())]
+    );
+    assert_eq!(
+        calls.schemas,
+        [("tenant-1".to_owned(), "core+email-signup".to_owned())]
+    );
+    assert_eq!(calls.secrets, ["tenant-1".to_owned()]);
+    assert_eq!(calls.routes, ["venture.example.com".to_owned()]);
+    assert_eq!(calls.healths, ["venture.example.com".to_owned()]);
+    assert!(
+        calls.builds.is_empty(),
+        "the artifact step is the only one this adapter touches"
+    );
+}
+
+/// The measurement behind the artifact-step rows of
+/// `docs/control-plane/LINKER.md`, taken where the step actually runs:
+/// through provisioning's [`Deployer`] port. Same workload as
+/// `measured_cold_compose_and_cache_hit` (six synthetic segments, 4 KiB
+/// each), same sample counts, same printed shape, so the lines sit beside
+/// each other; every cold sample composes into a fresh store so every one
+/// really is cold, and the adapter is rebuilt per sample because the
+/// store it owns is what makes a sample cold. Asserts only the
+/// structural facts the numbers depend on — the build path was never
+/// reached, cold samples fetched one segment per module and hit samples
+/// fetched none — because wall-clock assertions would flake CI; the doc
+/// carries the numbers.
+#[pollster::test]
+async fn measured_artifact_step_through_the_port() {
+    const COLD_SAMPLES: usize = 100;
+    const HIT_SAMPLES: usize = 200;
+
+    let (catalog, segments) = six_modules();
+    let set = resolve(
+        &catalog,
+        &[
+            "email-signup",
+            "waitlist",
+            "cms",
+            "notifications",
+            "privacy",
+        ],
+    );
+    let module_set = set.content_key();
+
+    // The adapter owns its inner deployer, so one is built per port; they
+    // all share this one ledger.
+    #[allow(clippy::disallowed_types)] // test fixture, not request state
+    let counts = Arc::new(Mutex::new(Calls::default()));
+    let inner = || CountingDeployer {
+        calls: Arc::clone(&counts),
+    };
+
+    // One untimed cold compose to page the resolver in, on its own
+    // throwaway store.
+    let warmup = LinkedArtifacts::new(
+        CatalogPins(&catalog),
+        inputs(),
+        &segments,
+        MemoryStore::default(),
+        inner(),
+    );
+    warmup.build_artifact(&module_set).await.unwrap();
+
+    // Cold: a fresh store per sample, so every sample really is cold.
+    let mut cold = Vec::with_capacity(COLD_SAMPLES);
+    for _ in 0..COLD_SAMPLES {
+        let port = LinkedArtifacts::new(
+            CatalogPins(&catalog),
+            inputs(),
+            &segments,
+            MemoryStore::default(),
+            inner(),
+        );
+        let start = std::time::Instant::now();
+        port.build_artifact(&module_set).await.unwrap();
+        cold.push(start.elapsed());
+    }
+
+    // Hit: one store warmed once, then hits only.
+    let store = MemoryStore::default();
+    let warmer = LinkedArtifacts::new(CatalogPins(&catalog), inputs(), &segments, &store, inner());
+    warmer.build_artifact(&module_set).await.unwrap();
+    let mut hit = Vec::with_capacity(HIT_SAMPLES);
+    for _ in 0..HIT_SAMPLES {
+        let port =
+            LinkedArtifacts::new(CatalogPins(&catalog), inputs(), &segments, &store, inner());
+        let start = std::time::Instant::now();
+        port.build_artifact(&module_set).await.unwrap();
+        hit.push(start.elapsed());
+    }
+
+    assert!(
+        counts
+            .lock()
+            .expect("counting deployer poisoned")
+            .builds
+            .is_empty(),
+        "every run was served by the linker; the build path was never reached"
+    );
+    // The warm-up, every cold sample, and the hit store's one warm-up
+    // compose each fetched one segment per module; the hits themselves
+    // fetched none.
+    assert_eq!(
+        segments.fetches(),
+        (2 + COLD_SAMPLES) * set.releases().len(),
+        "cold samples fetched one segment per module and hits fetched none"
+    );
+
+    // The port answers `Ok(())` and no more, so the bundle's size is
+    // measured by composing the same set directly.
+    let composed = link(&set, &inputs(), &segments, &MemoryStore::default()).unwrap();
+    let payload: usize = set
+        .releases()
+        .iter()
+        .map(|r| segments.segment(&r.slug, &r.digest).unwrap().unwrap().len())
+        .sum();
+    let cold = Summary::new(cold);
+    let hit = Summary::new(hit);
+    println!(
+        "cold compose: n={} min={:?} p50={:?} p99={:?} max={:?} \
+         (a fresh store per sample; {} segments, {payload} bytes, bundle {} bytes)\n\
+         hit:          n={} min={:?} p50={:?} p99={:?} max={:?}",
+        cold.n,
+        cold.min,
+        cold.p50,
+        cold.p99,
+        cold.max,
+        set.releases().len(),
+        composed.bytes.len(),
+        hit.n,
+        hit.min,
+        hit.p50,
+        hit.p99,
+        hit.max,
+    );
+}
+
+/// The measurement behind the "what the wiring costs today" figure in
+/// `docs/control-plane/LINKER.md`: the artifact step every real set takes
+/// right now. The pins are the catalog's all-zero placeholders — exactly
+/// what the control plane holds until release stamping — so the adapter
+/// refuses to compose and hands the set to the build path with the reason
+/// attached, which is the whole cost: there is no segment to fetch and no
+/// bundle to store, and with placeholders every call takes this same path.
+/// Same [`Deployer`] port as `measured_artifact_step_through_the_port`,
+/// 200 samples like its hit path, and the same structural assertions per
+/// sample — the reason names the placeholder, the inner refusal survives
+/// verbatim, the build path was reached — never wall-clock; the doc
+/// carries the numbers.
+#[pollster::test]
+async fn measured_placeholder_fallback_the_control_plane_takes_today() {
+    const SAMPLES: usize = 200;
+
+    let catalog = builtin();
+    #[allow(clippy::disallowed_types)] // test fixture, not request state
+    let counts = Arc::new(Mutex::new(Calls::default()));
+    let port = LinkedArtifacts::new(
+        CatalogPins(&catalog),
+        inputs(),
+        UnpublishedSegments,
+        NoStore,
+        CountingDeployer {
+            calls: Arc::clone(&counts),
+        },
+    );
+
+    // One untimed warm-up, as in the other measured tests; its reason is
+    // also the one the doc describes, so it is checked in full here.
+    let warmup = port
+        .build_artifact("email-signup")
+        .await
+        .expect_err("nothing is published, so the set falls back to the build path");
+    let message = warmup.to_string();
+    assert!(
+        message.contains("all-zero placeholder"),
+        "the reason names the placeholder: {message}"
+    );
+    assert!(
+        message.contains("no deployer is wired"),
+        "the inner refusal's text survives verbatim: {message}"
+    );
+    let reason_bytes = message.len();
+
+    let mut samples = Vec::with_capacity(SAMPLES);
+    for _ in 0..SAMPLES {
+        let start = std::time::Instant::now();
+        let err = port
+            .build_artifact("email-signup")
+            .await
+            .expect_err("nothing is published, so the set falls back to the build path");
+        samples.push(start.elapsed());
+        let message = err.to_string();
+        assert!(
+            message.contains("all-zero placeholder"),
+            "the reason names the placeholder: {message}"
+        );
+        assert!(
+            message.contains("no deployer is wired"),
+            "the inner refusal's text survives verbatim: {message}"
+        );
+    }
+
+    assert_eq!(
+        counts.lock().expect("counting deployer poisoned").builds,
+        vec!["email-signup".to_owned(); 1 + SAMPLES],
+        "every call, warm-up included, took the build path"
+    );
+
+    let summary = Summary::new(samples);
+    println!(
+        "placeholder fallback: n={} min={:?} p50={:?} p99={:?} max={:?} \
+         (the recorded reason is {reason_bytes} bytes)",
+        summary.n, summary.min, summary.p50, summary.p99, summary.max,
+    );
 }

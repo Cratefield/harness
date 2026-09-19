@@ -13,8 +13,10 @@ workspace = true
 
 [dependencies]
 cratefield-manifest = { workspace = true }
+cratefield-provisioning = { path = "../control-plane-provisioning" }
 sha2 = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 
 [dev-dependencies]
+pollster = { workspace = true }

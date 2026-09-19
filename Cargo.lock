@@ -1092,6 +1092,7 @@ dependencies = [
  "cratefield-core",
  "cratefield-introspect",
  "cratefield-kms",
+ "cratefield-linker",
  "cratefield-provisioning",
  "cratefield-secrets",
  "cratefield-tables",
@@ -1154,6 +1155,8 @@ name = "cratefield-linker"
 version = "0.1.1"
 dependencies = [
  "cratefield-manifest",
+ "cratefield-provisioning",
+ "pollster",
  "serde",
  "serde_json",
  "sha2 0.11.0",

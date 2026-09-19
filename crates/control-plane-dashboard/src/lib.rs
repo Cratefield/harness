@@ -33,6 +33,8 @@
 pub mod backups;
 mod billing;
 mod data;
+/// The deployer the provisioning routes hand the engine.
+pub(crate) mod deployer;
 mod deploys;
 mod diagram;
 /// The domains screen.
@@ -1516,12 +1518,13 @@ async fn archive(
 ///    venture — every step done — would be marked live again without
 ///    rebuilding anything. A module change invalidates the artifact, so the
 ///    run has to start at the first step.
-/// 2. **The engine runs for real.** There is no [`Unwired`] deployer's
-///    worth of pretending: the first step fails, the failure is recorded
-///    against the venture with its reason, and the screen shows it. The day
-///    a real deployer is passed here instead, nothing else changes.
-///
-/// [`Unwired`]: cratefield_provisioning::Unwired
+/// 2. **The engine runs for real.** There is no pretending: the deployer
+///    handed to the engine is [`deployer::current`] — the artifact step
+///    through the linker, every other step still
+///    [`Unwired`](cratefield_provisioning::Unwired) — the first step
+///    fails, the failure is recorded against the venture with its reason,
+///    and the screen shows it. The day a real deployer is passed here
+///    instead, nothing else changes.
 async fn set_modules(
     State(state): State<Arc<DashboardState>>,
     headers: HeaderMap,
@@ -1624,10 +1627,7 @@ async fn set_modules(
         ..venture
     };
     let engine = cratefield_provisioning::Engine::new(db);
-    match engine
-        .provision(&venture, &cratefield_provisioning::Unwired, &now)
-        .await
-    {
+    match engine.provision(&venture, &deployer::current(), &now).await {
         Ok(_) | Err(cratefield_provisioning::ProvisionError::Step { .. }) => {
             // A step failure is a recorded, visible outcome, not a 500: the
             // engine wrote the step and the message against the venture and
@@ -1646,9 +1646,10 @@ async fn set_modules(
 ///
 /// Unlike [`set_modules`] this changes nothing about the venture: the
 /// engine picks up from the step after the last one that completed, which
-/// is exactly what its own documentation promises a retry does. With no
-/// deployer wired it stops again in the same place, and the recorded reason
-/// is refreshed rather than duplicated.
+/// is exactly what its own documentation promises a retry does. Through
+/// [`deployer::current`] it stops again in the same place, and the
+/// recorded reason — the linker's fallback and, behind it, the unwired
+/// build path — is refreshed rather than duplicated.
 async fn reprovision(
     State(state): State<Arc<DashboardState>>,
     headers: HeaderMap,
@@ -1684,10 +1685,7 @@ async fn reprovision(
 
     let now = now_rfc3339(ctx);
     let engine = cratefield_provisioning::Engine::new(db);
-    match engine
-        .provision(&venture, &cratefield_provisioning::Unwired, &now)
-        .await
-    {
+    match engine.provision(&venture, &deployer::current(), &now).await {
         Ok(_) | Err(cratefield_provisioning::ProvisionError::Step { .. }) => {
             Redirect::to(&format!("{BASE}/ventures/{}", venture.id)).into_response()
         }
@@ -2236,6 +2234,30 @@ mod tests {
             venture.status,
             VentureStatus::Live,
             "live would mean the running worker carries privacy, and it does not"
+        );
+    }
+
+    /// The deployer the routes hand the engine fronts the artifact step
+    /// with the linker, so a recorded failure tells the operator the whole
+    /// story: why the linker could not compose (no release digest is
+    /// stamped) *and* what the build path behind it then said. Either half
+    /// alone would read as the whole answer; the ledger carries both.
+    #[pollster::test]
+    async fn a_provisioning_run_records_the_linker_s_reason_and_the_unwired_build_path() {
+        let kit = seeded(VentureStatus::Live).await;
+        record_fully_provisioned(&kit).await;
+
+        let reply = post_modules(&kit, "v1", &["cms", "waitlist", "privacy"]).await;
+        assert_eq!(reply.status, StatusCode::SEE_OTHER, "{}", reply.body);
+
+        let progress = progress_of(kit.db.as_ref(), "v1").await.expect("progress");
+        assert!(
+            progress.error.contains("the all-zero placeholder digest"),
+            "the linker's reason is in the record: {progress:?}"
+        );
+        assert!(
+            progress.error.contains("no deployer is wired"),
+            "the unwired build path's refusal is in the record: {progress:?}"
         );
     }
 
