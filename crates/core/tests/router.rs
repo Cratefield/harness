@@ -258,7 +258,10 @@ async fn cors_preflight_admits_an_authenticated_put() {
     );
 }
 
-/// `/v1/*` responses carry the security headers; `/__health` does not.
+/// `/v1/*` responses carry the security headers — the no-store trio and,
+/// since issue #435, the framing pair: the magic-link confirm page is
+/// HTML served under `/v1`, and must refuse to render inside a third
+/// party's frame. `/__health`, outside `/v1`, carries none of them.
 #[pollster::test]
 async fn security_headers_on_v1_only() {
     let harness = harness_with_sample();
@@ -274,18 +277,28 @@ async fn security_headers_on_v1_only() {
         "nosniff"
     );
     assert_eq!(headers.get("referrer-policy").unwrap(), "no-referrer");
+    assert_eq!(headers.get(header::X_FRAME_OPTIONS).unwrap(), "DENY");
+    assert_eq!(
+        headers.get(header::CONTENT_SECURITY_POLICY).unwrap(),
+        "frame-ancestors 'none'"
+    );
 
     let health = request(&router, Method::GET, "/__health", &[], None).await;
     let headers = health.headers();
     assert!(headers.get(header::CACHE_CONTROL).is_none());
     assert!(headers.get(header::X_CONTENT_TYPE_OPTIONS).is_none());
     assert!(headers.get("referrer-policy").is_none());
+    assert!(headers.get(header::X_FRAME_OPTIONS).is_none());
+    assert!(headers.get(header::CONTENT_SECURITY_POLICY).is_none());
 }
 
 /// A `token` query parameter is a credential in the URL (issue #135):
 /// `/ui/waitlist/status?token=…` authenticates with the URL itself and is
 /// outside `/v1/*`, so the root-level middleware must give any
-/// token-bearing request the no-store headers — whatever the path.
+/// token-bearing request the no-store headers — whatever the path. The
+/// framing headers, though, stay scoped to `/v1` (issue #435): `/ui/*`
+/// sets its own `Content-Security-Policy` and `X-Frame-Options`, and a
+/// token-bearing UI response must not have them stamped over the top.
 #[pollster::test]
 async fn token_bearing_requests_get_no_store_even_off_v1() {
     let harness = harness_with_sample();
@@ -299,6 +312,10 @@ async fn token_bearing_requests_get_no_store_even_off_v1() {
         "nosniff"
     );
     assert_eq!(headers.get("referrer-policy").unwrap(), "no-referrer");
+    // Off `/v1`, a token buys no-store but never the framing pair — that
+    // regression would silently override the UI crate's own headers.
+    assert!(headers.get(header::X_FRAME_OPTIONS).is_none());
+    assert!(headers.get(header::CONTENT_SECURITY_POLICY).is_none());
 
     // The token may sit behind other parameters…
     let response = request(
@@ -731,13 +748,18 @@ async fn an_operator_can_accept_the_gap_explicitly_and_it_is_recorded() {
     assert_eq!(refused.status(), StatusCode::SERVICE_UNAVAILABLE);
 
     // A stated reason serves, and the reason is what someone answers for.
-    let accepted = harness.router(Ports::with_config(Arc::new(MapConfig::from_pairs([
+    // Only the captcha gap is being accepted: the limiter port is
+    // resolved below, because the captcha waiver does not reach that leg
+    // (issue #437).
+    let mut ports = Ports::with_config(Arc::new(MapConfig::from_pairs([
         ("ENV", "production"),
         (
             cratefield_core::ALLOW_UNPROTECTED_WRITES,
             "issue #143: Turnstile pending on the Cloudflare account",
         ),
-    ]))));
+    ])));
+    ports.rate_limiter = Some(Arc::new(RecordingLimiter::new(LimiterVerdict::Allow)));
+    let accepted = harness.router(ports);
     let served = request(
         &accepted,
         Method::POST,
@@ -747,6 +769,220 @@ async fn an_operator_can_accept_the_gap_explicitly_and_it_is_recorded() {
     )
     .await;
     assert_ne!(served.status(), StatusCode::SERVICE_UNAVAILABLE);
+}
+
+/// Issue #437: the limiter leg reads the **resolved** port, not the
+/// runtime's advertisement. `FakeRuntime(all_ports)` reports
+/// `Port::RateLimiter` the way the Cloudflare runtime reports a binding
+/// that is named but failed to resolve — and the deployment refuses the
+/// guarded routes all the same.
+#[pollster::test]
+async fn an_advertised_but_unresolved_limiter_is_not_readiness() {
+    let harness = Harness::builder()
+        .venture(base_venture())
+        .module(PublicWriter)
+        .runtime(FakeRuntime(all_ports()))
+        .build()
+        .expect("builds: at build time the runtime's own answer is all there is");
+
+    let refused = request(
+        &harness.router(ports_with_production_config()),
+        Method::POST,
+        "/v1/writer/join",
+        &[],
+        Some(b"{}".to_vec()),
+    )
+    .await;
+    assert_eq!(refused.status(), StatusCode::SERVICE_UNAVAILABLE);
+
+    // The same deployment with the binding actually resolved serves.
+    let mut ports = ports_with_production_config();
+    ports.rate_limiter = Some(Arc::new(RecordingLimiter::new(LimiterVerdict::Allow)));
+    let served = request(
+        &harness.router(ports),
+        Method::POST,
+        "/v1/writer/join",
+        &[],
+        Some(b"{}".to_vec()),
+    )
+    .await;
+    assert_ne!(served.status(), StatusCode::SERVICE_UNAVAILABLE);
+}
+
+fn ports_with_production_config() -> Ports {
+    Ports::with_config(Arc::new(MapConfig::from_pairs([("ENV", "production")])))
+}
+
+/// The limiter waiver is its own recorded decision: a blank reason is not
+/// an acceptance, and the captcha key does not cover this leg (issue
+/// #437).
+#[pollster::test]
+async fn the_unlimited_public_routes_waiver_is_independent() {
+    let harness = Harness::builder()
+        .venture(base_venture())
+        .module(PublicWriter)
+        .runtime(FakeRuntime(all_ports()))
+        .build()
+        .expect("builds");
+
+    let for_reason = |reason: Option<&str>| {
+        let mut pairs = vec![("ENV", "production")];
+        if let Some(reason) = reason {
+            pairs.push((cratefield_core::ALLOW_UNLIMITED_PUBLIC_ROUTES, reason));
+        }
+        harness.router(Ports::with_config(Arc::new(MapConfig::from_pairs(pairs))))
+    };
+
+    // No waiver at all: refused.
+    let refused = request(
+        &for_reason(None),
+        Method::POST,
+        "/v1/writer/join",
+        &[],
+        Some(b"{}".to_vec()),
+    )
+    .await;
+    assert_eq!(refused.status(), StatusCode::SERVICE_UNAVAILABLE);
+
+    // A blank reason is not an acceptance.
+    let blank = request(
+        &for_reason(Some("   ")),
+        Method::POST,
+        "/v1/writer/join",
+        &[],
+        Some(b"{}".to_vec()),
+    )
+    .await;
+    assert_eq!(blank.status(), StatusCode::SERVICE_UNAVAILABLE);
+
+    // The captcha acceptance does not waive the limiter: they are
+    // independent decisions, recorded separately.
+    let captcha_only = harness.router(Ports::with_config(Arc::new(MapConfig::from_pairs([
+        ("ENV", "production"),
+        (
+            cratefield_core::ALLOW_UNPROTECTED_WRITES,
+            "issue #143: Turnstile pending",
+        ),
+    ]))));
+    let refused = request(
+        &captcha_only,
+        Method::POST,
+        "/v1/writer/join",
+        &[],
+        Some(b"{}".to_vec()),
+    )
+    .await;
+    assert_eq!(refused.status(), StatusCode::SERVICE_UNAVAILABLE);
+
+    // The limiter's own stated reason serves.
+    let served = request(
+        &for_reason(Some("issue #437: binding pending on the account")),
+        Method::POST,
+        "/v1/writer/join",
+        &[],
+        Some(b"{}".to_vec()),
+    )
+    .await;
+    assert_ne!(served.status(), StatusCode::SERVICE_UNAVAILABLE);
+}
+
+/// The harness limits every `/admin/*` route whether or not the module
+/// does (issue #437). `SampleModule`'s admin route limits nothing itself,
+/// so whatever arrives here is the harness floor.
+#[pollster::test]
+async fn the_harness_limits_admin_routes_the_module_does_not() {
+    let harness = harness_with_sample();
+    let router_with_limiter = |limiter: Arc<RecordingLimiter>| {
+        let mut ports = Ports::empty();
+        ports.rate_limiter = Some(limiter);
+        harness.router(ports)
+    };
+
+    // Deny: the 429 comes from the harness layer, with the limiter's
+    // retry-after, before the module's handler runs.
+    let deny = Arc::new(RecordingLimiter::new(LimiterVerdict::Deny));
+    let limited = request(
+        &router_with_limiter(deny.clone()),
+        Method::GET,
+        "/v1/sample/admin/whoami",
+        &[("cf-connecting-ip", "203.0.113.7")],
+        None,
+    )
+    .await;
+    assert_eq!(limited.status(), StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(
+        limited
+            .headers()
+            .get("retry-after")
+            .and_then(|v| v.to_str().ok()),
+        Some("11"),
+        "the limiter's retry-after reaches the response"
+    );
+    assert_eq!(
+        body_json(limited).await["type"]
+            .as_str()
+            .unwrap()
+            .rsplit('/')
+            .next()
+            .unwrap(),
+        "rate-limited"
+    );
+    assert_eq!(
+        deny.seen(),
+        vec!["admin:ip:203.0.113.7".to_owned()],
+        "the admin budget is namespaced away from the public keys"
+    );
+
+    // A limiter transport error also denies: admin bearer guessing has no
+    // backstop, so the harness fails closed.
+    let failing = Arc::new(RecordingLimiter::new(LimiterVerdict::Error));
+    let failed = request(
+        &router_with_limiter(failing),
+        Method::GET,
+        "/v1/sample/admin/whoami",
+        &[("cf-connecting-ip", "203.0.113.7")],
+        None,
+    )
+    .await;
+    assert_eq!(failed.status(), StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(
+        failed
+            .headers()
+            .get("retry-after")
+            .map(axum::http::HeaderValue::as_bytes),
+        None,
+        "a transport error carries no retry-after"
+    );
+
+    // Allow: the handler runs, and a non-admin path on the same module
+    // never consults the limiter.
+    let allow = Arc::new(RecordingLimiter::new(LimiterVerdict::Allow));
+    let router = router_with_limiter(allow.clone());
+    let served = request(
+        &router,
+        Method::GET,
+        "/v1/sample/admin/whoami",
+        &[("cf-connecting-ip", "203.0.113.7")],
+        None,
+    )
+    .await;
+    assert_eq!(served.status(), StatusCode::OK);
+    assert_eq!(body_json(served).await["authorized"], json!(false));
+    assert_eq!(
+        allow.seen(),
+        vec!["admin:ip:203.0.113.7".to_owned()],
+        "fixture: exactly the admin request was consulted"
+    );
+    let public = request(
+        &router,
+        Method::GET,
+        "/v1/sample/hello",
+        &[("cf-connecting-ip", "203.0.113.7")],
+        None,
+    )
+    .await;
+    assert_eq!(public.status(), StatusCode::OK);
+    assert_eq!(allow.seen().len(), 1, "the public route is not limited");
 }
 
 // --------------------------------------- module dependency order (#26)

@@ -475,7 +475,8 @@ fn an_account_with_no_passkeys_looks_like_no_account_at_all() {
         // Both get a real challenge and an empty list, so these two are
         // indistinguishable. This is **not** full enumeration resistance: an
         // account that does have a passkey answers with its credential ids,
-        // which is inherent to the non-discoverable flow.
+        // which is inherent to the non-discoverable flow. The challenge
+        // budget is what bounds how many addresses a caller can ask about.
         for response in [&unknown, &no_passkeys] {
             let body = response.json();
             assert!(!challenge_of(&body).is_empty());
@@ -509,6 +510,142 @@ fn the_endpoints_anyone_can_call_are_rate_limited() {
         }
         // Nothing was written on the way to the refusal.
         assert_eq!(support::count(&kit, "single_use_tokens"), 0);
+    });
+}
+
+#[test]
+fn the_challenge_budget_allows_a_person_and_refuses_a_sweep() {
+    pollster::block_on(async {
+        // No rate limiter wired: the budget is what refuses, which is the
+        // deployment shape the whole fix is for.
+        let kit = support::kit_without_limiter();
+        // Five challenges for one address in a minute (`budget::CHALLENGE_BUDGET_PER_EMAIL`)
+        // — a person retrying, or two devices at once — all arrive.
+        for _ in 0..5 {
+            let response = post(&kit, LOGIN_OPTIONS, r#"{"email":"nick@example.com"}"#, None).await;
+            assert_eq!(response.status, StatusCode::OK, "{}", response.text());
+        }
+
+        // The sixth is refused, and the refusal is the project's 429 with a
+        // Retry-After, not the ceremony-failed answer a browser cannot
+        // distinguish from a broken passkey.
+        let refused = post(&kit, LOGIN_OPTIONS, r#"{"email":"nick@example.com"}"#, None).await;
+        assert_eq!(
+            refused.status,
+            StatusCode::TOO_MANY_REQUESTS,
+            "{}",
+            refused.text()
+        );
+        assert_eq!(
+            refused
+                .headers
+                .get("retry-after")
+                .and_then(|value| value.to_str().ok()),
+            Some("60"),
+            "{:?}",
+            refused.headers
+        );
+
+        // Nothing was stored for the refused call: the cap bounds the write
+        // amplifier, not only the oracle.
+        assert_eq!(support::count(&kit, "single_use_tokens"), 5);
+
+        // A window later (`CHALLENGE_BUDGET_WINDOW_SECS`) the same address
+        // gets a real challenge again.
+        kit.clock.advance_secs(61);
+        let after = post(&kit, LOGIN_OPTIONS, r#"{"email":"nick@example.com"}"#, None).await;
+        assert_eq!(after.status, StatusCode::OK, "{}", after.text());
+        assert_eq!(support::count(&kit, "single_use_tokens"), 6);
+    });
+}
+
+#[test]
+fn the_challenge_budget_is_per_client_address_across_every_address_it_names() {
+    pollster::block_on(async {
+        let kit = support::kit_without_limiter();
+        // Thirty different addresses from one client (`CHALLENGE_BUDGET_PER_IP`):
+        // no single address comes near its own budget, so the sweep is
+        // stopped by the client-address cap and nothing else.
+        for i in 0..30 {
+            let body = format!(r#"{{"email":"sweep{i}@example.com"}}"#);
+            let response = post(&kit, LOGIN_OPTIONS, &body, None).await;
+            assert_eq!(response.status, StatusCode::OK, "{i}: {}", response.text());
+        }
+        let refused = post(
+            &kit,
+            LOGIN_OPTIONS,
+            r#"{"email":"sweep30@example.com"}"#,
+            None,
+        )
+        .await;
+        assert_eq!(refused.status, StatusCode::TOO_MANY_REQUESTS);
+
+        // A different client address has a budget of its own: an office's
+        // other machines keep working while one is capped.
+        let stranger = support::post_from(
+            &kit,
+            LOGIN_OPTIONS,
+            r#"{"email":"sweep30@example.com"}"#,
+            Some("203.0.113.9"),
+        )
+        .await;
+        assert_eq!(stranger.status, StatusCode::OK, "{}", stranger.text());
+    });
+}
+
+#[test]
+fn a_budget_refusal_does_not_say_which_address_has_a_passkey() {
+    pollster::block_on(async {
+        let kit = support::kit_without_limiter();
+        let authenticator = SoftAuthenticator::new(Algorithm::Es256);
+        account_with(&kit, "known@example.com", &authenticator).await;
+
+        // Spend one client address's budget on addresses this test invented.
+        for i in 0..30 {
+            let body = format!(r#"{{"email":"probe{i}@example.com"}}"#);
+            let response = post(&kit, LOGIN_OPTIONS, &body, None).await;
+            assert_eq!(response.status, StatusCode::OK, "{i}: {}", response.text());
+        }
+
+        // Capped, the endpoint answers the account with a passkey, the
+        // account without one, and the address nobody has, with the same
+        // refusal: the budget is spent before the account lookup, so the
+        // cap is not a finer-grained oracle than the endpoint it guards.
+        let with_passkey = post(
+            &kit,
+            LOGIN_OPTIONS,
+            r#"{"email":"known@example.com"}"#,
+            None,
+        )
+        .await;
+        let without = {
+            kit.user("bare@example.com").await;
+            post(&kit, LOGIN_OPTIONS, r#"{"email":"bare@example.com"}"#, None).await
+        };
+        let unknown = post(
+            &kit,
+            LOGIN_OPTIONS,
+            r#"{"email":"nobody@example.com"}"#,
+            None,
+        )
+        .await;
+
+        for (name, response) in [
+            ("with passkey", &with_passkey),
+            ("without", &without),
+            ("unknown", &unknown),
+        ] {
+            assert_eq!(response.status, StatusCode::TOO_MANY_REQUESTS, "{name}");
+        }
+        let shape = |response: &support::Res| {
+            let mut body = response.json();
+            body.as_object_mut()
+                .expect("problem object")
+                .remove("instance");
+            body
+        };
+        assert_eq!(shape(&with_passkey), shape(&without));
+        assert_eq!(shape(&with_passkey), shape(&unknown));
     });
 }
 
@@ -548,5 +685,104 @@ fn a_login_ceremony_cannot_be_replayed_into_registration_or_the_reverse() {
         )
         .await;
         assert_eq!(response.status, StatusCode::UNAUTHORIZED);
+    });
+}
+
+/// A verified assertion issues a session, so a form on another site must
+/// not be able to complete one (issue #439): refused on arrival, before
+/// the limiter or the body is looked at. A same-origin request still
+/// reaches the handler's own logic — the same malformed body answers the
+/// route's ordinary validation failure there, not the cross-site refusal.
+#[test]
+fn a_cross_site_assertion_cannot_sign_anyone_in() {
+    pollster::block_on(async {
+        let kit = support::kit();
+
+        let cross_site = support::post_with_headers(
+            &kit,
+            LOGIN_VERIFY,
+            r#"{"credential":{}}"#,
+            &[("host", "auth.factory0.ventures"), ("origin", OTHER_ORIGIN)],
+        )
+        .await;
+        assert_eq!(
+            cross_site.status,
+            StatusCode::FORBIDDEN,
+            "{}",
+            cross_site.text()
+        );
+        assert_eq!(
+            cross_site.json()["type"],
+            "https://factory0.ventures/problems/auth/cross-site-request"
+        );
+        assert!(
+            cross_site.set_cookie().is_none(),
+            "the cross-site assertion signed somebody in"
+        );
+        assert_eq!(
+            support::count(&kit, "sessions"),
+            0,
+            "a session was issued anyway"
+        );
+
+        // The other signal the guard reads, with no `Origin` at all — a
+        // scripted form POST still carries fetch metadata.
+        let fetch_metadata = support::post_with_headers(
+            &kit,
+            LOGIN_VERIFY,
+            r#"{"credential":{}}"#,
+            &[
+                ("host", "auth.factory0.ventures"),
+                ("sec-fetch-site", "cross-site"),
+            ],
+        )
+        .await;
+        assert_eq!(
+            fetch_metadata.status,
+            StatusCode::FORBIDDEN,
+            "{}",
+            fetch_metadata.text()
+        );
+        assert_eq!(
+            fetch_metadata.json()["type"],
+            "https://factory0.ventures/problems/auth/cross-site-request"
+        );
+
+        // A same-origin request — every header a real browser sends — gets
+        // past the guard and into the handler: this body is not a
+        // credential, so the answer is the route's ordinary validation
+        // failure rather than the refusal. The identical body from another
+        // site never reaches that check.
+        let own = support::post_with_headers(
+            &kit,
+            LOGIN_VERIFY,
+            "not json",
+            &[
+                ("host", "auth.factory0.ventures"),
+                ("origin", ORIGIN),
+                ("sec-fetch-site", "same-origin"),
+            ],
+        )
+        .await;
+        assert_eq!(own.status, StatusCode::BAD_REQUEST, "{}", own.text());
+        assert_eq!(
+            own.json()["type"],
+            "https://factory0.ventures/problems/validation-failed"
+        );
+        assert!(own.set_cookie().is_none());
+
+        let same_body_cross_site = support::post_with_headers(
+            &kit,
+            LOGIN_VERIFY,
+            "not json",
+            &[("host", "auth.factory0.ventures"), ("origin", OTHER_ORIGIN)],
+        )
+        .await;
+        assert_eq!(
+            same_body_cross_site.status,
+            StatusCode::FORBIDDEN,
+            "{}",
+            same_body_cross_site.text()
+        );
     });
 }

@@ -11,7 +11,8 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use cratefield_adapter_webhook_tracker::WebhookTracker;
 use cratefield_core::{
-    Clock, Destination, HttpClient, HttpError, TicketDraft, Tracker, TrackerError,
+    Clock, Credential, Destination, HttpClient, HttpError, Severity, TicketDraft, Tracker,
+    TrackerError,
 };
 use hmac::{Hmac, KeyInit, Mac};
 use http::{HeaderMap, Request, Response, StatusCode};
@@ -173,14 +174,26 @@ fn captured(rx: &mpsc::Receiver<CapturedRequest>) -> Vec<CapturedRequest> {
 
 fn draft() -> TicketDraft {
     TicketDraft::new(
+        "idem-123",
         "Outbox: refund failed",
         "The refund webhook failed twice.",
-        Destination::Webhook {
-            url: URL.to_owned(),
-        },
-        "idem-123",
+        Severity::Error,
     )
-    .labels(["from-outbox"])
+    .labels(vec!["from-outbox".to_owned()])
+}
+
+/// The endpoint these tests file to. The destination is the caller's now,
+/// not the draft's (#453), so it rides every call.
+fn dest() -> Destination {
+    Destination::Webhook {
+        url: URL.to_owned(),
+    }
+}
+
+/// This adapter signs rather than authenticates, so the credential it is
+/// handed names no webhook and is deliberately unused.
+fn cred() -> Credential {
+    Credential::new("unused: the webhook is signed, not authenticated")
 }
 
 fn adapter(http: Arc<FakeHttp>) -> WebhookTracker {
@@ -226,7 +239,10 @@ fn hex_encode(bytes: &[u8]) -> String {
 /// split into `(t, v1)`.
 async fn one_signed_post() -> (CapturedRequest, String, String) {
     let (http, rx) = fixture(vec![respond(200, "{}")]);
-    adapter(http).file(&draft()).await.expect("file ok");
+    adapter(http)
+        .file(&dest(), &cred(), &draft())
+        .await
+        .expect("file ok");
     let mut requests = captured(&rx);
     assert_eq!(requests.len(), 1, "a file call is one request");
     let post = requests.remove(0);
@@ -290,15 +306,16 @@ async fn the_timestamp_comes_from_the_injected_clock() {
     let at = 1_800_000_000_i64;
     let (http, rx) = fixture(vec![respond(200, "{}")]);
     let filed = WebhookTracker::new(http, clock_at(at), SECRET)
-        .file(&draft())
+        .file(&dest(), &cred(), &draft())
         .await
         .expect("file ok");
     // The `Filed` this adapter can honestly report: the key is the id,
     // there is no tracker-side URL, and a webhook answer is never a dedupe
     // verdict of ours.
-    assert_eq!(filed.id, "idem-123");
-    assert_eq!(filed.url, None);
-    assert!(!filed.deduplicated);
+    assert_eq!(filed.external_id, "idem-123");
+    // A webhook mints no id, so the key sent back is the only handle, and
+    // the URL filed to is the only place it went.
+    assert_eq!(filed.url, URL);
 
     let requests = captured(&rx);
     let post = &requests[0];
@@ -359,7 +376,7 @@ async fn status_mapping_is_the_issue_table() {
     for (status, expected) in cases {
         let (http, rx) = fixture(vec![respond(status, r#"{"message":"nope"}"#)]);
         let err = adapter(http)
-            .file(&draft())
+            .file(&dest(), &cred(), &draft())
             .await
             .expect_err("a failed delivery must fail the call");
         match expected {
@@ -389,7 +406,10 @@ async fn rate_limit_reads_the_seconds_form_of_retry_after() {
     let (http, _rx) = fixture(vec![
         respond(429, r#"{"message":"slow down"}"#).with_retry_after("5"),
     ]);
-    let err = adapter(http).file(&draft()).await.unwrap_err();
+    let err = adapter(http)
+        .file(&dest(), &cred(), &draft())
+        .await
+        .unwrap_err();
     match err {
         TrackerError::Transient { retry_after, .. } => {
             assert_eq!(retry_after, Some(Duration::from_secs(5)));
@@ -408,7 +428,7 @@ async fn rate_limit_reads_the_http_date_form_of_retry_after() {
         respond(503, r#"{"message":"slow down"}"#).with_retry_after(&date),
     ]);
     let err = WebhookTracker::new(http, clock_at(1_800_000_000), SECRET)
-        .file(&draft())
+        .file(&dest(), &cred(), &draft())
         .await
         .unwrap_err();
     match err {
@@ -423,17 +443,13 @@ async fn rate_limit_reads_the_http_date_form_of_retry_after() {
 async fn a_transport_failure_is_transient() {
     let (tx, rx) = mpsc::channel();
     let err = WebhookTracker::new(Arc::new(FailingHttp { tx }), clock_at(0), SECRET)
-        .file(&draft())
+        .file(&dest(), &cred(), &draft())
         .await
         .expect_err("dns is down");
     match err {
-        TrackerError::Transient {
-            message,
-            retry_after,
-        } => {
-            assert!(message.contains("dns is down"), "{message}");
-            assert_eq!(retry_after, None);
-        }
+        // `Transient` carries only the delay now; the provider's text rides
+        // the outcome log beside the call rather than the error value.
+        TrackerError::Transient { retry_after } => assert_eq!(retry_after, None),
         other => panic!("wrong error: {other}"),
     }
     assert_eq!(captured(&rx).len(), 1, "the one delivery attempt");
@@ -447,7 +463,7 @@ async fn a_blocked_destination_is_rejected_not_transient() {
     // The port's SSRF vetting refused the tenant-configured URL. A config
     // error, not weather: `Rejected`, and no retry delay is named.
     let err = WebhookTracker::new(Arc::new(BlockingHttp), clock_at(0), SECRET)
-        .file(&draft())
+        .file(&dest(), &cred(), &draft())
         .await
         .expect_err("the port refused the destination");
     match &err {
@@ -464,23 +480,19 @@ async fn a_blocked_destination_is_rejected_not_transient() {
 #[pollster::test]
 async fn a_github_issues_destination_is_rejected_without_network() {
     let (http, rx) = fixture(vec![]);
-    let gh = TicketDraft::new(
-        "Outbox: refund failed",
-        "The refund webhook failed twice.",
-        Destination::GitHubIssues {
-            owner: "acme".to_owned(),
-            repo: "widgets".to_owned(),
-        },
-        "idem-123",
-    );
+    // The destination is the call's now, not the draft's.
+    let gh = Destination::GitHub {
+        owner: "acme".to_owned(),
+        repo: "widgets".to_owned(),
+    };
     let err = adapter(http.clone())
-        .file(&gh)
+        .file(&gh, &cred(), &draft())
         .await
         .expect_err("this adapter does not file GitHub issues");
     match err {
         TrackerError::Rejected(detail) => {
-            assert!(detail.contains("GitHubIssues"), "{detail}");
-            assert!(detail.contains("webhook"), "{detail}");
+            assert!(detail.contains("unsupported destination"), "{detail}");
+            assert!(detail.contains("github"), "{detail}");
         }
         other => panic!("wrong error: {other}"),
     }
@@ -508,7 +520,10 @@ async fn every_error_display_omits_the_secret() {
     ];
     for (status, body) in variants {
         let (http, rx) = fixture(vec![respond(status, body)]);
-        let err = adapter(http).file(&draft()).await.expect_err("must fail");
+        let err = adapter(http)
+            .file(&dest(), &cred(), &draft())
+            .await
+            .expect_err("must fail");
         let rendered = err.to_string();
         // An empty rendering omits the secret and everything else. The
         // display has to remain useful for this absence to mean anything.

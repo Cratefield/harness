@@ -23,7 +23,10 @@
   reads `redirect`/`return`/`next` query parameters.
 - **Admin auth.** `cratefield_core::admin::require_admin`: disabled (401)
   when `ADMIN_TOKEN` is unset, SHA-256-digest constant-time compare,
-  403 on a wrong token; the token never appears in tracing fields.
+  403 on a wrong token; the token never appears in tracing fields. Set,
+  it is a bearer secret like `HARNESS_SECRET` and takes the same floor:
+  `HarnessConfig::from_config` refuses anything under 32 bytes (issue
+  #437). Absent stays legal — admin is simply disabled.
 - **Sidecar trust boundary** (issue #131, ADR 0009 amendment). A mount
   forwards an allowlist only: `content-type`, `content-length`, `accept`,
   `accept-language`, `user-agent`, the host's `x-request-id`, and a
@@ -47,9 +50,29 @@
   mounted module's public part, and validated.
 - **CSV formula-injection guard.** `cratefield_core::csv::escape` prefixes
   `= + - @ \t \r` leading cells with `'` before RFC 4180 quoting.
-- **Rate limits on every public route** — including confirm and status —
-  keyed `ip:<cf-connecting-ip>` (never `x-forwarded-for` on Workers) and
-  `email:<normalized>`; 429 carries `Retry-After`.
+- **Rate limits, and a floor that refuses to serve without them**
+  (issue #437). The harness layer limits every `/admin/*` route by
+  client IP, keyed `admin:ip:<ip>` — its own budget, no email key, since
+  the caller is anonymous until it authenticates. A sidecar mount's
+  admin plane is included: the floor wraps the module and forwarding
+  nests alike, so a denied admin request is never forwarded. It fails
+  closed: a limiter transport error is a bare `429` (no `Retry-After` —
+  the limiter had no answer), not a pass, because the admin bearer has
+  no captcha or cooldown behind it. The
+  admin login form is throttled the same way
+  (`admin-login:ip:<ip>`). Readiness then refuses a venture that takes
+  public writes or admin routes unless a rate limiter is **actually
+  resolved**: a binding named in composition but unresolvable at boot
+  degrades to no limiter, and that now means the guarded routes answer
+  `503 not-production-ready`, not a warning over unlimited routes. The
+  escape is its own recorded decision,
+  `HARNESS_ALLOW_UNLIMITED_PUBLIC_ROUTES=<reason>`, logged once per boot
+  and deliberately separate from
+  `HARNESS_ALLOW_UNPROTECTED_WRITES` — one key waiving two controls is
+  how the second stays unwired after the first is fixed. Where a
+  venture runs a limiter over public routes, keys are
+  `ip:<cf-connecting-ip>` (never `x-forwarded-for` on Workers) and
+  `email:<normalized>`; a denial answers `429` with `Retry-After`.
 - **Production readiness is enforced against the deployment, not a
   compiled default** (issue #143). A venture carries a `VentureEnv` set in
   code, defaulting to `Development`; a deployment carries `ENV`. They
@@ -65,8 +88,10 @@
   at all, the conservative fallback. Two escapes exist and both are
   recorded, never silent: `fz doctor --allow-no-captcha <reason>` for a
   preview, and `HARNESS_ALLOW_UNPROTECTED_WRITES=<reason>` on a
-  deployment, which is logged on every boot. A blank reason is not an
-  acceptance.
+  deployment. The acceptance and the readiness refusal are recorded on
+  every boot on both runtimes (issue #441): natively through the tracing
+  subscriber, on Cloudflare through the control-event forwarder into
+  Workers Logs. A blank reason is not an acceptance.
 - **A public write that is not a browser form says so.** `SignedLink`
   covers a write proved by a single-use, purpose-bound artifact this
   service issued — a magic link, a passkey or OAuth challenge — and
@@ -94,6 +119,20 @@
   forwarder scrubs each line it hands to the runtime sink.
   Rules in `cratefield_core::logging`, shared by every runtime formatter;
   verified by tests.
+- **Where logs are observable (issues #107, #441).** The native runtime
+  installs a redacting JSON subscriber, so every `tracing` event is
+  observable. Cloudflare installs no dispatcher — installing one hangs
+  the workerd isolate (issue #107) — so a bare
+  `tracing::info!`/`warn!`/`error!` is dropped there. What a Worker does
+  emit are the lines core routes through the control-event forwarder
+  into Workers Logs, each scrubbed by `scrub_text` and prefixed with its
+  level (`[info] `, `[warn] `, `[error] `): the boot-time readiness
+  acceptance and refusal, the compiled-versus-deployment env
+  disagreement, sidecar mount-table and gateway misconfiguration,
+  fail-open and fail-closed rate-limiter decisions, the secret-access
+  audit trail, and the internal errors mapped to a 500. Everything
+  else — ordinary per-request `tracing` output — is **not** observable
+  on Workers until a real wasm tracing layer exists.
 - **A column is not safer than a log.** An error string that is scrubbed
   on the way to a log and stored raw is the worse half of the pair: it
   outlives the request, it outlives erasure of the table the value came
@@ -120,6 +159,12 @@
   no outbound navigation leaks it through `Referer` (issue #135). The
   admin hard-delete route keys on the opaque row id, never the email
   (`DELETE /v1/email-signup/admin/subscribers/{id}`).
+- **`/v1` is never framed.** Every `/v1/*` response additionally carries
+  `X-Frame-Options: DENY` and `Content-Security-Policy: frame-ancestors
+  'none'` (issue #435): the API answers in JSON, but the magic-link
+  confirmation is HTML served under `/v1`, and a confirm page an
+  attacker's page can embed is one it can clickjack. `/ui/*` sets its
+  own framing headers and stays deliberately outside this rule.
 - **No `unsafe`** in core or any module (`#![forbid(unsafe_code)]`); the
   only `unsafe`-adjacent code is `worker::send::SendWrapper` inside the
   `worker` crate (ADR 0002).

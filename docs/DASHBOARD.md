@@ -100,6 +100,21 @@ order because the port exposes no dialect) and answered in
 its declared tables at `/__surface` (harness #153), the same renderer
 takes that contract as a second source with no change.
 
+The screen is **staff-only**. The schema page, every per-table page and
+the CSV export each call `cratefield_core::require_admin` just after the
+session guard, for the same reason the backup export is gated: the read
+is not account-scoped and cannot be — a whole-database schema view is
+every account's ventures, every operator's identity and the whole
+request log at once, and no account-shaped cut of it exists to narrow
+the read to. The session guard runs first, so a signed-out request
+still meets the login gate; a signed-in customer gets a 401 problem
+document, and when `ADMIN_TOKEN` is unset the gate is closed entirely,
+as every admin endpoint in the harness is. The nav cannot warn about
+any of this: it is a pure function of the current screen and cannot see
+the admin token, so the "Data browser" entry still renders for every
+signed-in operator, and the 401 is the first thing a customer who
+clicks it meets.
+
 What is on the page:
 
 - **The diagram.** Server-rendered inline SVG — no JavaScript layout, no
@@ -122,9 +137,17 @@ What is on the page:
   through the shared `cratefield_core::csv` quoting (formula-injection
   guarded, capped at the harness-wide export bound).
 
-The harness's own bookkeeping (the `harness_migrations` ledger, SQLite's
-`sqlite_*` internals) is excluded by name, in one commented list, so a
-future table that looks internal but is not cannot vanish silently.
+The harness's own namespace — every table under the reserved `harness_`
+prefix (the migration ledger, the secrets store's tables, the
+reconciler's tenant registry) — and SQLite's `sqlite_*` internals are
+excluded by `NOT LIKE` predicates in `cratefield-introspect`
+(`harness\_%`, and `sqlite\_%` beside it), not a commented list: no
+harness-owned table can be browsed or CSV-exported here for want of an
+entry, and the prefix cannot swallow a real venture table, because
+`harness_` is reserved and the tables crate refuses a declaration under
+it. The one reader that must copy the whole database rather than browse
+it — the backups screen's export — reads the full catalog and omits by
+its own argued skip list instead.
 
 Which database it reads: the control plane's **own**, because the
 control plane is itself a harness venture and its database is the one it
@@ -141,6 +164,19 @@ read-only one, because statement whitelisting, timeouts and result-size
 caps are a second screen's worth of decisions. Filters and sorting beyond
 ordering by primary key too. When any of these boundaries is wrong, the
 argument belongs in the commit that moves it.
+
+**`/v1/dashboard/logs` — the request log.** One row per request this
+dashboard's router has served, and the screen shows the signed-in
+operator's own only, newest first: when each arrived, its method and
+path, and the status and duration it answered with. Isolation is by
+query, the way every account-scoped read in this module narrows — the
+session's account is a bound parameter, the first condition of the
+read — so a filter can narrow the page within your own traffic but can
+never widen it onto another operator's rows. A request made with nobody
+signed in is recorded too, with the empty account, and deliberately
+appears on nobody's page. No query string, request body or header is
+ever recorded: the row's shape is the privacy posture, not a redaction
+pass applied after the fact.
 
 ## How it looks
 

@@ -25,6 +25,14 @@ than not having them.
 | `POST /start` | The form's own target. Same decision as `/login`, answered with a page |
 | `POST /change` | `{ current_password, new_password }`, for a signed-in person |
 
+The three sign-in routes — `POST /start`, `POST /login` and
+`POST /change` — refuse a cross-site request: a `sec-fetch-site` or
+`Origin` naming another site answers `403` (`auth/cross-site-request`)
+before anything else happens. Signing in sets a session cookie, and
+`SameSite=Lax` stops a cross-site POST from *carrying* our cookie, not
+from *setting* one (issue #439). `POST /register` issues no session, so
+a cross-site POST there has nothing to steal.
+
 ### Why this method is a page
 
 The login chooser at `/v1/auth-core/authorize` renders a link, which is

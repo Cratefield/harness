@@ -34,7 +34,8 @@ pub use batch::{Batch, MAX_READS, Read, run as run_batch};
 pub use declared::{Declared, parse};
 pub use read::{Asked, PAGE, Tables, one, page};
 pub use routes::{
-    BAD_CURSOR, BAD_KEY, COMPOSITE_KEY, Key, cursor_from_query, key_from_path, router,
+    BAD_CURSOR, BAD_KEY, COMPOSITE_KEY, Key, NOT_A_KEY_COLUMN, PARTIAL_KEY, cursor_from_query,
+    key_from_path, router,
 };
 pub use surface::surface;
 pub use write::{ALREADY_EXISTS, NOT_A_ROW, create, remove, replace};

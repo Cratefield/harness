@@ -10,7 +10,8 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use cratefield_adapter_github_issues::GitHubIssues;
 use cratefield_core::{
-    Clock, Destination, HttpClient, HttpError, TicketDraft, Tracker, TrackerError,
+    Clock, Credential, Destination, HttpClient, HttpError, Severity, TicketDraft, Tracker,
+    TrackerError,
 };
 use http::{HeaderMap, Request, Response, StatusCode};
 use std::sync::Arc;
@@ -183,19 +184,30 @@ fn posts_to_issues(requests: &[CapturedRequest]) -> usize {
 
 fn draft() -> TicketDraft {
     TicketDraft::new(
+        "idem-123",
         "Outbox: refund failed",
         "The refund webhook failed twice.",
-        Destination::GitHubIssues {
-            owner: OWNER.to_owned(),
-            repo: REPO.to_owned(),
-        },
-        "idem-123",
+        Severity::Error,
     )
-    .labels(["from-outbox"])
+    .labels(vec!["from-outbox".to_owned()])
+}
+
+/// The repository these tests file into. The destination is the caller's
+/// now, not the draft's (#453), so it rides every call.
+fn dest() -> Destination {
+    Destination::GitHub {
+        owner: OWNER.to_owned(),
+        repo: REPO.to_owned(),
+    }
+}
+
+/// The token these tests authenticate with, per call for the same reason.
+fn cred() -> Credential {
+    Credential::new(TOKEN)
 }
 
 fn adapter(http: Arc<FakeHttp>) -> GitHubIssues {
-    GitHubIssues::new(http, clock_at(0), TOKEN).with_base(BASE)
+    GitHubIssues::new(http, clock_at(0)).with_base(BASE)
 }
 
 /// One issue in the shape the search, list and create responses all carry.
@@ -249,7 +261,7 @@ async fn status_mapping_is_the_issue_table() {
     for (status, expected) in cases {
         let (http, rx) = fixture(vec![respond(status, r#"{"message":"nope"}"#)]);
         let err = adapter(http)
-            .file(&draft())
+            .file(&dest(), &cred(), &draft())
             .await
             .expect_err("a failed lookup must fail the call");
         match expected {
@@ -286,7 +298,10 @@ async fn rate_limit_reads_the_seconds_form_of_retry_after() {
     let (http, _rx) = fixture(vec![
         respond(429, r#"{"message":"API rate limit exceeded"}"#).with_retry_after("5"),
     ]);
-    let err = adapter(http).file(&draft()).await.unwrap_err();
+    let err = adapter(http)
+        .file(&dest(), &cred(), &draft())
+        .await
+        .unwrap_err();
     match err {
         TrackerError::Transient { retry_after, .. } => {
             assert_eq!(retry_after, Some(Duration::from_secs(5)));
@@ -304,9 +319,9 @@ async fn rate_limit_reads_the_http_date_form_of_retry_after() {
     let (http, _rx) = fixture(vec![
         respond(503, r#"{"message":"slow down"}"#).with_retry_after(&date),
     ]);
-    let err = GitHubIssues::new(http, clock_at(1_800_000_000), TOKEN)
+    let err = GitHubIssues::new(http, clock_at(1_800_000_000))
         .with_base(BASE)
-        .file(&draft())
+        .file(&dest(), &cred(), &draft())
         .await
         .unwrap_err();
     match err {
@@ -320,19 +335,15 @@ async fn rate_limit_reads_the_http_date_form_of_retry_after() {
 #[pollster::test]
 async fn a_transport_failure_is_transient_and_never_creates() {
     let (tx, rx) = mpsc::channel();
-    let err = GitHubIssues::new(Arc::new(FailingHttp { tx }), clock_at(0), TOKEN)
+    let err = GitHubIssues::new(Arc::new(FailingHttp { tx }), clock_at(0))
         .with_base(BASE)
-        .file(&draft())
+        .file(&dest(), &cred(), &draft())
         .await
         .expect_err("dns is down");
     match err {
-        TrackerError::Transient {
-            message,
-            retry_after,
-        } => {
-            assert!(message.contains("dns is down"), "{message}");
-            assert_eq!(retry_after, None);
-        }
+        // `Transient` carries only the delay now; the provider's text
+        // rides the outcome log beside the call rather than the error.
+        TrackerError::Transient { retry_after } => assert_eq!(retry_after, None),
         other => panic!("wrong error: {other}"),
     }
     let requests = captured(&rx);
@@ -344,9 +355,9 @@ async fn a_transport_failure_is_transient_and_never_creates() {
 async fn a_blocked_destination_is_rejected_not_transient() {
     // The port's SSRF vetting refused the destination URL. A config
     // error, not weather: `Rejected`, and no retry delay is named.
-    let err = GitHubIssues::new(Arc::new(BlockingHttp), clock_at(0), TOKEN)
+    let err = GitHubIssues::new(Arc::new(BlockingHttp), clock_at(0))
         .with_base(BASE)
-        .file(&draft())
+        .file(&dest(), &cred(), &draft())
         .await
         .expect_err("the port refused the destination");
     match &err {
@@ -371,27 +382,24 @@ async fn two_files_with_one_key_create_exactly_one_issue() {
         respond(200, issue_list(&[])),
         respond(201, issue(11, EXISTING_BODY).to_string()),
     ]);
-    let first = adapter(http.clone()).file(&draft()).await.expect("file ok");
-    assert_eq!(first.id, "11");
-    assert_eq!(
-        first.url.as_deref(),
-        Some("https://github.com/acme/widgets/issues/11")
-    );
-    assert!(!first.deduplicated, "a create is not a dedupe");
+    let first = adapter(http.clone())
+        .file(&dest(), &cred(), &draft())
+        .await
+        .expect("file ok");
+    assert_eq!(first.external_id, "11");
+    assert_eq!(first.url, "https://github.com/acme/widgets/issues/11");
 
     // The at-least-once redelivery: search finds what the first created,
     // and no create call is made at all.
     let (http, rx_redelivery) = fixture(vec![respond(200, search_results(&[(11, EXISTING_BODY)]))]);
-    let second = adapter(http.clone()).file(&draft()).await.expect("file ok");
-    assert!(
-        second.deduplicated,
-        "the redelivery reports the existing ticket"
-    );
-    assert_eq!(second.id, "11");
-    assert_eq!(
-        second.url.as_deref(),
-        Some("https://github.com/acme/widgets/issues/11")
-    );
+    let second = adapter(http.clone())
+        .file(&dest(), &cred(), &draft())
+        .await
+        .expect("file ok");
+    // The redelivery reported the existing ticket: proven by the request
+    // count below, which has no create in it.
+    assert_eq!(second.external_id, "11");
+    assert_eq!(second.url, "https://github.com/acme/widgets/issues/11");
 
     assert_eq!(
         posts_to_issues(&captured(&rx)),
@@ -416,13 +424,14 @@ async fn a_retry_finds_the_existing_issue_when_the_search_index_lags() {
         respond(200, search_results(&[])),
         respond(200, issue_list(&[(7, EXISTING_BODY)])),
     ]);
-    let filed = adapter(http.clone()).file(&draft()).await.expect("file ok");
-    assert!(filed.deduplicated);
-    assert_eq!(filed.id, "7");
-    assert_eq!(
-        filed.url.as_deref(),
-        Some("https://github.com/acme/widgets/issues/7")
-    );
+    let filed = adapter(http.clone())
+        .file(&dest(), &cred(), &draft())
+        .await
+        .expect("file ok");
+    // `Filed` carries no dedupe flag; that this was a dedupe hit is proven
+    // by the request count below — a create would be a third request.
+    assert_eq!(filed.external_id, "7");
+    assert_eq!(filed.url, "https://github.com/acme/widgets/issues/7");
     let requests = captured(&rx);
     assert_eq!(requests.len(), 2, "search, then the recent-issues page");
     assert_eq!(
@@ -445,11 +454,11 @@ async fn a_search_hit_without_the_marker_is_a_false_positive() {
         respond(201, issue(12, EXISTING_BODY).to_string()),
     ]);
     let filed = adapter(http.clone())
-        .file(&draft())
+        .file(&dest(), &cred(), &draft())
         .await
         .expect("create still happens");
-    assert!(!filed.deduplicated);
-    assert_eq!(filed.id, "12");
+    // Not a dedupe hit: the third request below is the create.
+    assert_eq!(filed.external_id, "12");
     let requests = captured(&rx);
     assert_eq!(requests.len(), 3, "search, recent issues, then the create");
     assert_eq!(
@@ -469,7 +478,10 @@ async fn the_created_body_carries_the_marker_as_an_html_comment() {
         respond(200, issue_list(&[])),
         respond(201, issue(11, EXISTING_BODY).to_string()),
     ]);
-    adapter(http.clone()).file(&draft()).await.expect("file ok");
+    adapter(http.clone())
+        .file(&dest(), &cred(), &draft())
+        .await
+        .expect("file ok");
     let requests = captured(&rx);
     let post = requests
         .iter()
@@ -499,7 +511,10 @@ async fn every_request_carries_the_github_headers_and_the_base_url() {
         respond(200, issue_list(&[])),
         respond(201, issue(11, EXISTING_BODY).to_string()),
     ]);
-    adapter(http.clone()).file(&draft()).await.expect("file ok");
+    adapter(http.clone())
+        .file(&dest(), &cred(), &draft())
+        .await
+        .expect("file ok");
     for request in captured(&rx) {
         assert_eq!(
             request.headers.get("authorization").unwrap(),
@@ -528,7 +543,10 @@ async fn the_search_targets_the_repository_and_issues_only() {
         respond(200, issue_list(&[])),
         respond(201, issue(11, EXISTING_BODY).to_string()),
     ]);
-    adapter(http.clone()).file(&draft()).await.expect("file ok");
+    adapter(http.clone())
+        .file(&dest(), &cred(), &draft())
+        .await
+        .expect("file ok");
     let requests = captured(&rx);
     let search = &requests[0];
     assert_eq!(search.method, "GET");
@@ -551,22 +569,26 @@ async fn the_search_targets_the_repository_and_issues_only() {
 #[pollster::test]
 async fn a_webhook_destination_is_rejected_without_network() {
     let (http, rx) = fixture(vec![]);
-    let webhook = TicketDraft::new(
-        "Outbox: refund failed",
-        "The refund webhook failed twice.",
-        Destination::Webhook {
-            url: "https://hooks.example.test/tickets".to_owned(),
-        },
-        "idem-123",
-    );
+    // The destination is the call's now, not the draft's, so the mismatch
+    // is between this adapter and the destination it was handed.
+    let webhook = Destination::Webhook {
+        url: "https://hooks.example.test/tickets".to_owned(),
+    };
     let err = adapter(http.clone())
-        .file(&webhook)
+        .file(&webhook, &cred(), &draft())
         .await
         .expect_err("this adapter does not serve webhooks");
     match err {
         TrackerError::Rejected(detail) => {
-            assert!(detail.contains("Webhook"), "{detail}");
-            assert!(detail.contains("GitHub"), "{detail}");
+            assert!(detail.contains("unsupported destination"), "{detail}");
+            // The kind is named, so an operator reading the log knows which
+            // destination was refused — and the webhook URL, a bearer
+            // capability, is never printed.
+            assert!(detail.contains("webhook"), "{detail}");
+            assert!(
+                !detail.contains("hooks.example.test"),
+                "the endpoint must not ride the error: {detail}"
+            );
         }
         other => panic!("wrong error: {other}"),
     }
@@ -597,7 +619,10 @@ async fn every_error_display_omits_the_token() {
     ];
     for (status, body) in variants {
         let (http, _rx) = fixture(vec![respond(status, body)]);
-        let err = adapter(http).file(&draft()).await.expect_err("must fail");
+        let err = adapter(http)
+            .file(&dest(), &cred(), &draft())
+            .await
+            .expect_err("must fail");
         let rendered = err.to_string();
         // An empty rendering omits the token and everything else. The
         // display has to remain useful for this absence to mean anything.

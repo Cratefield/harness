@@ -4,8 +4,9 @@
 #
 # needs-human before first deploy: `wrangler d1 create` for each environment
 # and paste the ids below; set HARNESS_SECRET (+ HARNESS_SECRET_PREVIOUS on
-# rotation) and RESEND_API_KEY as secrets per environment; add the
-# auth.factory0.ventures custom domain on the Kontinuum Cloudflare account.
+# rotation), RESEND_API_KEY and TURNSTILE_SECRET as secrets per environment;
+# add the auth.factory0.ventures custom domain on the Kontinuum Cloudflare
+# account.
 name = "factory0-auth"
 main = "build/worker/shim.mjs"
 compatibility_date = "2026-09-01"
@@ -18,6 +19,21 @@ command = "cargo install -q worker-build && worker-build --release"
 enabled = true
 
 # --- Staging (deployed from `main`) ---
+# Workers Rate Limiting backs the harness's throttle: the admin-login
+# floor, the `admin:ip:*` admin floor, and every guarded public write
+# consult it, and readiness refuses the venture unless a limiter
+# resolves (issue #437). `simple` allows 30 `limit()` calls per key per
+# 60s window — the only supported shape; tune the limit if the venture's
+# traffic outgrows it. Staging's namespace id is its own, so its
+# counters never touch production's.
+[[ratelimits]]
+name = "RATE_LIMITER"
+namespace_id = "1001"
+
+[ratelimits.simple]
+limit = 30
+period = 60
+
 [[d1_databases]]
 binding = "DB"
 database_name = "factory0-auth-staging"
@@ -31,11 +47,24 @@ route = { pattern = "auth.factory0.ventures", custom_domain = true }
 # The harness enforces its production rules against this, not against a
 # compiled default (issue #143). Staging deliberately leaves it unset.
 #
-# needs-human before the first production deploy: `magic-link` verifies a
-# CAPTCHA on `POST /request` and this Worker binds no Captcha port, so the
-# harness will refuse the guarded routes. Bind Turnstile on the runtime, or
-# record an explicit `HARNESS_ALLOW_UNPROTECTED_WRITES` reason if the launch
-# has to go ahead without it.
+# The Turnstile secret is a secret, not a var: `wrangler secret put
+# TURNSTILE_SECRET`. `build_captcha` binds the port and the expected
+# hostname (`auth.factory0.ventures`, this Worker's own route), so
+# readiness is satisfied honestly — the `HARNESS_ALLOW_UNPROTECTED_WRITES`
+# acceptance this file used to tell operators to record is gone, and a
+# missing secret is a deployment that says so, not an open form (issue
+# #437).
+#
+# Production's limiter gets its own namespace id, so its counters stay
+# independent of staging's.
+[[env.production.ratelimits]]
+name = "RATE_LIMITER"
+namespace_id = "1002"
+
+[env.production.ratelimits.simple]
+limit = 30
+period = 60
+
 [env.production.vars]
 ENV = "production"
 

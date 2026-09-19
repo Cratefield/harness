@@ -143,11 +143,20 @@ pub(crate) fn gateway_signer(
     match ring.rotate_signing(Kid::Cur, secret.into_bytes()) {
         Ok(_) => {}
         Err(crate::signer::SignerError::SecretTooShort) => {
-            tracing::error!("{SIDECAR_GATEWAY_SECRET} must be at least {MIN_SECRET_BYTES} bytes");
+            let detail =
+                format!("{SIDECAR_GATEWAY_SECRET} must be at least {MIN_SECRET_BYTES} bytes");
+            tracing::error!("{detail}");
+            // A secret that will not load silently downgrades the gateway
+            // (issue #441): the boot-time misconfiguration must be readable
+            // on wasm, where the tracing event goes nowhere.
+            crate::logging::forward_control_event(crate::logging::ControlLevel::Error, &detail);
             return None;
         }
         Err(err) => {
-            tracing::error!(error = %err, "{SIDECAR_GATEWAY_SECRET} could not enter the gateway ring");
+            let detail =
+                format!("{SIDECAR_GATEWAY_SECRET} could not enter the gateway ring: {err}");
+            tracing::error!(error = %err, "{detail}");
+            crate::logging::forward_control_event(crate::logging::ControlLevel::Error, &detail);
             return None;
         }
     }
@@ -684,8 +693,9 @@ pub(crate) async fn events_inbound(
 /// arrives under its mount, so both spellings are authorized here, before
 /// the header that proves the caller is an admin is dropped by the
 /// forward allowlist (issue #131). This mirrors the renderer's gating
-/// rule from #130.
-fn is_admin_path(path: &str) -> bool {
+/// rule from #130. Also the harness-layer predicate the admin rate limit
+/// keys on (issue #437) — one answer to "is this an admin path", not two.
+pub(crate) fn is_admin_path(path: &str) -> bool {
     path == "/admin" || path.ends_with("/admin") || path.contains("/admin/")
 }
 
@@ -732,10 +742,15 @@ pub(crate) async fn gateway_guard(
         None => problem,
     };
     let Some(signer) = guard.signer.as_ref() else {
-        tracing::error!(
+        let detail = format!(
             "{SIDECAR_REQUIRE_GATEWAY} is set but {SIDECAR_GATEWAY_SECRET} is \
              missing; refusing every guarded request"
         );
+        tracing::error!("{detail}");
+        // The fail-closed 503 is the loud answer a broken deploy deserves
+        // (issue #131); on wasm the tracing event goes nowhere (issue
+        // #441), so the reason rides the forwarder too.
+        crate::logging::forward_control_event(crate::logging::ControlLevel::Error, &detail);
         return refused(Problem::new(&SLUGS.sidecar_unavailable).with_detail(
             "this sidecar requires a gateway token but no gateway secret is configured",
         ))

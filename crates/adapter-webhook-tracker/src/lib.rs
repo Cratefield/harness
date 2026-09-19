@@ -26,8 +26,8 @@
 use async_trait::async_trait;
 use bytes::Bytes;
 use cratefield_core::{
-    Clock, Destination, Filed, HttpClient, HttpError, TicketDraft, Tracker, TrackerError,
-    retry_after,
+    Clock, Credential, Destination, Filed, HttpClient, HttpError, TicketDraft, TicketStatus,
+    Tracker, TrackerError, retry_after,
 };
 use hmac::{Hmac, KeyInit, Mac};
 use http::header::CONTENT_TYPE;
@@ -108,7 +108,7 @@ impl WebhookTracker {
             // (`retry_after` reads both header forms and answers `None` when
             // no header came, so a bare 500 stays unscheduled.)
             status if status.is_server_error() || status == StatusCode::TOO_MANY_REQUESTS => {
-                TrackerError::transient_after(format!("webhook {status}: {detail}"), retry_after)
+                TrackerError::Transient { retry_after }
             }
             // The rest of the `4xx` family reads the same way as `404` and
             // `422`: a fact about our request, which a retry will not fix.
@@ -117,30 +117,29 @@ impl WebhookTracker {
             }
             // A stray `3xx` an unfollowing proxy produced is weather, not a
             // verdict on the draft.
-            status => {
-                TrackerError::transient_after(format!("webhook {status}: {detail}"), retry_after)
-            }
+            _ => TrackerError::Transient { retry_after },
         }
     }
 }
 
 #[async_trait]
 impl Tracker for WebhookTracker {
-    async fn file(&self, draft: &TicketDraft) -> Result<Filed, TrackerError> {
-        let url = match &draft.destination {
+    async fn file(
+        &self,
+        dest: &Destination,
+        _cred: &Credential,
+        draft: &TicketDraft,
+    ) -> Result<Filed, TrackerError> {
+        // The destination is the caller's now, not the draft's: which
+        // tracker to file into is tenant data (#453). The shared secret
+        // stays the adapter's, because it signs the payload rather than
+        // authenticating to a tracker — `cred` names no webhook.
+        let url = match dest {
             Destination::Webhook { url } => url,
-            Destination::GitHubIssues { .. } => {
-                return Err(TrackerError::Rejected(
-                    "destination is GitHubIssues; this adapter files webhooks only".to_owned(),
-                ));
-            }
-            // `#[non_exhaustive]`: a destination a later core adds is
-            // refused here, named, rather than silently doing nothing.
-            _ => {
-                return Err(TrackerError::Rejected(
-                    "this adapter files webhooks only".to_owned(),
-                ));
-            }
+            // `#[non_exhaustive]`: every other destination, including any
+            // a later core adds, is refused by name rather than silently
+            // doing nothing.
+            other => return Err(TrackerError::unsupported_destination(other)),
         };
 
         // One read of the clock stamps both the payload and the signature,
@@ -150,7 +149,7 @@ impl Tracker for WebhookTracker {
         let signed_at = self.clock.now().unix_timestamp();
         let payload = TicketPayload {
             title: &draft.title,
-            body: &draft.body,
+            body: &draft.body_markdown,
             labels: &draft.labels,
             idempotency_key: &draft.idempotency_key,
             filed_at: signed_at,
@@ -158,8 +157,8 @@ impl Tracker for WebhookTracker {
         // Built once: the exact bytes signed are the exact bytes sent. A
         // re-serialisation between signing and sending would be a gap a
         // verifier could fall into.
-        let raw_body =
-            serde_json::to_vec(&payload).map_err(|err| TrackerError::transient(err.to_string()))?;
+        let raw_body = serde_json::to_vec(&payload)
+            .map_err(|_| TrackerError::Transient { retry_after: None })?;
 
         let request = Request::builder()
             .method(http::Method::POST)
@@ -170,7 +169,7 @@ impl Tracker for WebhookTracker {
                 signature_header(&self.secret, signed_at, &raw_body)?,
             )
             .body(Bytes::from(raw_body))
-            .map_err(|err| TrackerError::transient(err.to_string()))?;
+            .map_err(|_| TrackerError::Transient { retry_after: None })?;
         let response = self.http.send(request).await.map_err(|err: HttpError| {
             match err {
                 // The port's SSRF vetting refused the tenant-configured URL
@@ -181,7 +180,17 @@ impl Tracker for WebhookTracker {
                     TrackerError::Rejected(format!("webhook destination refused: {detail}"))
                 }
                 // Any other transport failure is weather — retry.
-                other => TrackerError::transient(other.to_string()),
+                // `Transient` carries only the delay, so the transport's
+                // text goes to the log rather than being dropped.
+                other => {
+                    tracing::warn!(
+                        provider = "webhook",
+                        outcome = "failed",
+                        error = %other,
+                        "tracker outcome"
+                    );
+                    TrackerError::Transient { retry_after: None }
+                }
             }
         })?;
 
@@ -205,7 +214,37 @@ impl Tracker for WebhookTracker {
             idempotency = %draft.idempotency_key,
             "tracker outcome"
         );
-        Ok(Filed::created(draft.idempotency_key.clone(), None))
+        // A webhook mints no id of its own, so the key this adapter sent
+        // is the only handle there is, and the URL filed to is the only
+        // place it went.
+        Ok(Filed {
+            external_id: draft.idempotency_key.clone(),
+            url: url.clone(),
+        })
+    }
+
+    /// A webhook has nothing to read back.
+    ///
+    /// `file` POSTs to a URL and the receiver answers with an HTTP status,
+    /// not a ticket: there is no id on the far side to ask about later, and
+    /// `Filed::external_id` carries the idempotency key this adapter sent
+    /// rather than a handle the receiver minted. Inventing a state here —
+    /// "open", because nothing said otherwise — would make the one method
+    /// callers use to check a ticket lie in exactly the case it exists for.
+    ///
+    /// So it refuses, and says which capability is missing. A venture that
+    /// needs `status` wires a tracker that has tickets; `RoutingTracker`
+    /// exists so it can have both.
+    async fn status(
+        &self,
+        _dest: &Destination,
+        _cred: &Credential,
+        _external_id: &str,
+    ) -> Result<TicketStatus, TrackerError> {
+        Err(TrackerError::Rejected(
+            "a webhook files but does not track: the receiver returns no ticket to read back"
+                .to_owned(),
+        ))
     }
 }
 
@@ -236,7 +275,7 @@ fn signature_header(secret: &str, signed_at: i64, body: &[u8]) -> Result<String,
     // HMAC-SHA256 over `{t}.{body}` — the in-repo idiom, as in the Stripe
     // adapter's own webhook verification.
     let mut mac = Hmac::<Sha256>::new_from_slice(secret.as_bytes())
-        .map_err(|err| TrackerError::transient(err.to_string()))?;
+        .map_err(|_| TrackerError::Transient { retry_after: None })?;
     mac.update(signed_at.to_string().as_bytes());
     mac.update(b".");
     mac.update(body);

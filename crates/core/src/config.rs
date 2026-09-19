@@ -156,7 +156,8 @@ impl<'a> ModuleConfig<'a> {
 
 /// The harness-level keys, parsed once from the environment `Config`
 /// (issue #3): `HARNESS_SECRET` (required, ≥ 32 bytes),
-/// `HARNESS_SECRET_PREVIOUS` (optional), `ADMIN_TOKEN` (optional),
+/// `HARNESS_SECRET_PREVIOUS` (optional), `ADMIN_TOKEN` (optional, ≥ 32
+/// bytes when set — issue #437),
 /// `ENV` (`development|staging|production`, default `development`), and
 /// the issue #137 key-ring keys: `HARNESS_SECRET_REVOKED` (optional,
 /// comma-separated key ids whose tokens must be refused immediately) and
@@ -183,7 +184,8 @@ impl HarnessConfig {
     /// # Errors
     ///
     /// One problem per invalid key, reported together: missing or short
-    /// `HARNESS_SECRET`, unknown `ENV` value.
+    /// `HARNESS_SECRET`, a set-but-short `ADMIN_TOKEN` (issue #437),
+    /// unknown `ENV` value.
     pub fn from_config(config: &dyn Config) -> Result<Self, ConfigError> {
         let mut errors = ConfigError::default();
 
@@ -229,6 +231,25 @@ impl HarnessConfig {
             })
             .unwrap_or_default();
 
+        // An absent token keeps admin disabled the way it always was:
+        // every admin route answers 401, and probing cannot tell that
+        // from a missing header. A present one is a bearer secret like
+        // `HARNESS_SECRET` is a signing key, and gets the same floor
+        // (issue #437) — the readiness gate refuses to serve `/admin`
+        // without a rate limiter, so the token it protects should not be
+        // brute-forceable in the first place.
+        let admin_token = match config.get("ADMIN_TOKEN") {
+            Some(token) if token.len() >= MIN_SECRET_BYTES => Some(token),
+            Some(_) => {
+                errors.push(format!(
+                    "ADMIN_TOKEN must be at least {MIN_SECRET_BYTES} bytes when set (remove it \
+                     to keep the admin routes disabled)"
+                ));
+                None
+            }
+            None => None,
+        };
+
         errors.into_result()?;
         Ok(Self {
             harness_secret: harness_secret.unwrap_or_default(),
@@ -238,7 +259,7 @@ impl HarnessConfig {
                 .get("HARNESS_VENTURE")
                 .map(|value| value.trim().to_owned())
                 .filter(|value| !value.is_empty()),
-            admin_token: config.get("ADMIN_TOKEN"),
+            admin_token,
             env: env.unwrap_or_default(),
         })
     }

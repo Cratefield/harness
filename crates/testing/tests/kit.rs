@@ -203,6 +203,38 @@ async fn discovery_document_serves_at_root() {
     assert_eq!(response.json()["keys"], serde_json::json!([]));
 }
 
+/// The issue #431 fixture: a module that requires the `Tracker` port and
+/// nothing else — no tables, no migrations, no personal data, an empty
+/// router. Conformance's visibility check must see the `FakeTracker` the
+/// kit fakes for it, the way it sees every declared port.
+pub struct TrackerModule;
+
+impl Module for TrackerModule {
+    fn name(&self) -> &'static str {
+        "tracker"
+    }
+    fn version(&self) -> &'static str {
+        env!("CARGO_PKG_VERSION")
+    }
+    fn requires(&self) -> &'static [Port] {
+        &[Port::Tracker]
+    }
+    fn migrations(&self) -> Migrations {
+        Migrations::default()
+    }
+    fn validate_config(&self, _cfg: &dyn Config) -> Result<(), ConfigError> {
+        Ok(())
+    }
+    fn router(&self, _ctx: ModuleContext) -> axum::Router {
+        axum::Router::new()
+    }
+}
+
+#[test]
+fn tracker_module_passes_conformance() {
+    conformance(Box::new(TrackerModule));
+}
+
 #[test]
 fn testing_crate_deps_are_wasm_safe() {
     assert_wasm_safe_deps("cratefield-testing");

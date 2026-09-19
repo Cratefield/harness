@@ -16,6 +16,8 @@ ORM that forks per dialect or drags a runtime into wasm.
   where the SQL truly differs.
 - Portable subset: `TEXT` ULID ids, ISO-8601 `TEXT` timestamps, `INTEGER`
   counters, no `AUTOINCREMENT`, no dialect functions in DDL. `fz doctor` lints it.
+- BLOB columns are in the subset too: a module binds and reads
+  `sea_query::Value::Bytes`, and every adapter round-trips it as bytes.
 - `fz migrations collect` writes wrangler-compatible files into the venture
   repo and pins module -> global mapping in `migrations/.harness-lock.json`.
 
@@ -27,3 +29,11 @@ ORM that forks per dialect or drags a runtime into wasm.
 ## Consequences
 - Migrations are reviewed as plain SQL.
 - Phase 3 adds the Postgres adapter and a parity suite that runs module tests on both engines.
+- The two wasm adapters encode `Bytes` differently on the wire, on purpose:
+  D1 binds a native `js_sys::Uint8Array` (its bridge crosses JsValue), while
+  adapter-sqlite-wasm crosses a JSON string and uses the tagged
+  `{"$bytes": "<base64>"}` form. The difference stays inside each adapter's
+  marshalling boundary — module code only ever sees `sea_query::Value`,
+  `Bytes` in, `Bytes` out — so it is a property of the bridges, not a bug to
+  unify away, and `cratefield_testing::assert_blob_round_trips` is the
+  cross-engine guard that pins the round trip.

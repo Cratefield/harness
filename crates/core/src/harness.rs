@@ -9,6 +9,7 @@
 use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use axum::Router;
@@ -26,14 +27,17 @@ use crate::config::Config;
 use crate::config::ConfigError;
 use crate::events::EventBus;
 use crate::http::{
-    Json, MAX_BODY_BYTES, ScopeState, cors_layer, scope_layer, security_headers_layer,
-    token_response_layer,
+    Json, MAX_BODY_BYTES, ScopeState, cors_layer, rate_limited, scope_layer,
+    security_headers_layer, token_response_layer,
 };
 use crate::module::{HARNESS_API, Module, ModuleContext, harness_api_mismatch};
 use crate::ports::Dispatcher;
-use crate::ports::{Clock, Database, Port, Ports, Statement, SystemClock, warn_undeclared_ports};
+use crate::ports::{
+    Clock, Database, Port, Ports, RateLimiter, Statement, SystemClock, warn_undeclared_ports,
+};
 use crate::problem::Problem;
 use crate::problems::SLUGS;
+use crate::rate_limit::{RateLimit, RateLimitFailure};
 use crate::route_policy::deployed_env;
 use crate::scope::Scope;
 use crate::sidecar::{
@@ -126,6 +130,17 @@ pub struct Harness {
     /// Every module's personal-data declarations, composed once at build so a
     /// request does not walk the module list to answer an export.
     personal_data: Arc<crate::PersonalDataCatalog>,
+    /// Whether the boot has already recorded the operator's
+    /// `HARNESS_ALLOW_UNPROTECTED_WRITES` acceptance (issue #143), and the
+    /// `HARNESS_ALLOW_UNLIMITED_PUBLIC_ROUTES` one (issue #437). Workers
+    /// rebuild the router per request, so the recording has to gate itself:
+    /// one line per waiver, the first time the gate serves on it — not one
+    /// per request. Per-`Harness` rather than a process static, which is the
+    /// same span in every real deployment (the harness is built once per
+    /// isolate) and keeps tests and multi-venture hosts from suppressing
+    /// each other's records.
+    unprotected_acceptance_recorded: AtomicBool,
+    unlimited_acceptance_recorded: AtomicBool,
 }
 
 struct SurfaceVariants {
@@ -178,6 +193,50 @@ impl Harness {
 
     pub fn modules(&self) -> &[Arc<dyn Module>] {
         &self.modules
+    }
+
+    /// The largest body a runtime may buffer for the route at `path`,
+    /// answerable before any byte of it has been read (issue #440).
+    ///
+    /// `DefaultBodyLimit` inside `router()` is the precise per-route
+    /// enforcer, but it fires only once the body is already resident — too
+    /// late for a runtime that must buffer into a fixed memory ceiling (a
+    /// Workers isolate). This is the coarse pre-buffer ceiling that runtime
+    /// consults instead: for a path of the form `/v1/<name>` or
+    /// `/v1/<name>/...` it is the named module's [`Module::max_body_bytes`],
+    /// and for everything else — an unknown module, `/ui/*`, `/__events`,
+    /// `/.well-known/*`, or any path outside `/v1` — [`MAX_BODY_BYTES`].
+    ///
+    /// The result is floored at [`MAX_BODY_BYTES`] even for the module
+    /// routes: a module may raise the ceiling for a route (LinkedIn's image
+    /// upload), but the runtime guard sits in front of the router, and a
+    /// module that tightened it below what the router itself accepts would
+    /// 413 working requests.
+    ///
+    /// `path` is the URL path only — what `url.path()` returns. A query
+    /// string is tolerated and ignored, and empty segments from a leading,
+    /// trailing or doubled slash are collapsed; `/v1` with no module
+    /// segment is simply the default ceiling.
+    pub fn max_body_bytes(&self, path: &str, cfg: &dyn Config) -> usize {
+        // Cut at the first `?` or `#`; a caller passing a whole URL must
+        // not have the module misidentified from its tail.
+        let path = match path.split_once(['?', '#']) {
+            Some((path, _)) => path,
+            None => path,
+        };
+        let mut segments = path.split('/').filter(|segment| !segment.is_empty());
+        if segments.next() != Some("v1") {
+            return MAX_BODY_BYTES;
+        }
+        let Some(name) = segments.next() else {
+            return MAX_BODY_BYTES;
+        };
+        self.modules
+            .iter()
+            .find(|module| module.name() == name)
+            .map_or(MAX_BODY_BYTES, |module| {
+                MAX_BODY_BYTES.max(module.max_body_bytes(cfg))
+            })
     }
 
     pub fn templates(&self) -> &Arc<TemplateRegistry> {
@@ -279,6 +338,9 @@ impl Harness {
 
     /// Nests each in-process module under its `/v1/<name>` prefix.
     /// Split out of [`Harness::router`] so that method stays readable.
+    /// Layered in [`Harness::router`], not here: a layer applied inside
+    /// this function would wrap only the module routes, and the sidecar
+    /// prefixes nested after it would sit outside the admin floor.
     fn nest_modules(&self, ports: &Ports) -> Router {
         let mut api = Router::new();
         for module in &self.modules {
@@ -296,40 +358,138 @@ impl Harness {
     /// check was made against the wrong environment, so it is re-made
     /// here against the same runtime report — the answer must not depend
     /// on whether anyone remembered to call `.env()`.
-    fn production_readiness_now(&self, env: VentureEnv, config: &dyn Config) -> Vec<String> {
+    ///
+    /// The limiter leg is decided here against the **resolved** port, not
+    /// the runtime's advertisement (issue #437): a Cloudflare binding that
+    /// fails to resolve degrades to `ports.rate_limiter == None`, and this
+    /// is the check that catches it.
+    fn production_readiness_now(
+        &self,
+        env: VentureEnv,
+        config: &dyn Config,
+        rate_limiter_ready: bool,
+    ) -> Vec<String> {
         if let Some(note) = crate::route_policy::env_disagreement(self.venture.env, env) {
             tracing::warn!("{note}");
+            crate::logging::forward_control_event(crate::logging::ControlLevel::Warn, &note);
         }
+        // Each escape hatch is read here — in the serving path — and
+        // passed to its own leg, so a waiver covers exactly the control it
+        // names and refuses alongside whatever remains unwaived.
+        let unprotected = crate::route_policy::unprotected_writes_override(config);
+        let unlimited = crate::route_policy::unlimited_public_routes_override(config);
+        let guards = crate::route_policy::WriteGuards::collect(&self.modules);
         let problems = crate::route_policy::production_readiness(
             env,
-            &crate::route_policy::WriteGuards::collect(&self.modules),
+            &guards,
             self.runtime.as_ref(),
-            None,
+            rate_limiter_ready,
+            unprotected.as_deref(),
+            unlimited.as_deref(),
         );
         if problems.is_empty() {
+            // An operator may accept this deployment's gaps explicitly,
+            // and the acceptance is recorded rather than discarded
+            // (issue #143) — once, even though Workers rebuild this
+            // router per request (issue #437).
+            // What the gate WOULD have refused, asked for again with no
+            // waivers: the waived text is never pushed, so this is the only
+            // way to name the problems the operator accepted — and #441's
+            // record is only accountable if it carries them.
+            let accepted = crate::route_policy::production_readiness(
+                env,
+                &guards,
+                self.runtime.as_ref(),
+                rate_limiter_ready,
+                None,
+                None,
+            );
+            self.record_acceptances_once(
+                &guards,
+                rate_limiter_ready,
+                unprotected.as_deref(),
+                unlimited.as_deref(),
+                &accepted,
+            );
             return problems;
         }
-        // An operator may accept this deployment's gap explicitly, and
-        // the acceptance is recorded on every boot rather than discarded
-        // (issue #143). The routes then serve, and the record is what
-        // someone answers for later.
-        if let Some(reason) = crate::route_policy::unprotected_writes_override(config) {
-            tracing::warn!(
-                control = "production-readiness",
-                reason,
-                problems = problems.join("; "),
-                "serving guarded routes unprotected on an operator's recorded acceptance"
-            );
-            return Vec::new();
-        }
+        // No blanket escape hatch here any more. Each waiver is passed
+        // into `production_readiness` above and applied to the leg it
+        // names, so what comes back is already only the UNWAIVED problems
+        // — clearing them all on `unprotected_writes_override` would let a
+        // waiver for one control excuse another, which is exactly what
+        // `a_refusing_deployment_records_no_acceptance_at_all` forbids: a
+        // captcha waiver must not serve a venture with no rate limiter.
         for problem in &problems {
-            error!(
+            let detail = format!(
                 "refusing guarded routes: {problem} — set {} to a reason to accept this \
                  explicitly while the port is wired",
                 crate::route_policy::ALLOW_UNPROTECTED_WRITES
             );
+            error!("{detail}");
+            crate::logging::forward_control_event(crate::logging::ControlLevel::Error, &detail);
         }
         problems
+    }
+
+    /// Records an operator's escape-hatch acceptance exactly once, next to
+    /// the boot decision that served on it (issue #143, #437). Each guard
+    /// below is the readiness leg it mirrors minus the waiver clause, so a
+    /// waiver is recorded only when it actually removed a refusal — not
+    /// when the port was fine all along.
+    fn record_acceptances_once(
+        &self,
+        guards: &crate::route_policy::WriteGuards,
+        rate_limiter_ready: bool,
+        unprotected: Option<&str>,
+        unlimited: Option<&str>,
+        accepted: &[String],
+    ) {
+        if guards.needs_captcha()
+            && !crate::route_policy::captcha_effective(self.runtime.as_ref())
+            && let Some(reason) = unprotected
+            && !self
+                .unprotected_acceptance_recorded
+                .swap(true, Ordering::Relaxed)
+        {
+            let detail = format!(
+                "serving guarded routes unprotected on an operator's recorded acceptance \
+                 (reason: {reason}; problems: {})",
+                accepted.join("; ")
+            );
+            tracing::warn!(
+                control = "production-readiness",
+                acceptance = crate::route_policy::ALLOW_UNPROTECTED_WRITES,
+                reason,
+                "serving captcha-guarded routes unprotected on an operator's recorded acceptance"
+            );
+            // Forwarded, not just traced (issue #441): on wasm the tracing
+            // event goes nowhere, and an acceptance nobody can read is an
+            // acceptance nobody answers for.
+            crate::logging::forward_control_event(crate::logging::ControlLevel::Warn, &detail);
+        }
+        if guards.needs_rate_limiter()
+            && !rate_limiter_ready
+            && let Some(reason) = unlimited
+            && !self
+                .unlimited_acceptance_recorded
+                .swap(true, Ordering::Relaxed)
+        {
+            let detail = format!(
+                "serving public writes and admin routes without a rate limiter on an \
+                 operator's recorded acceptance (reason: {reason}; problems: {})",
+                accepted.join("; ")
+            );
+            tracing::warn!(
+                control = "production-readiness",
+                acceptance = crate::route_policy::ALLOW_UNLIMITED_PUBLIC_ROUTES,
+                reason,
+                "serving public writes and admin routes without a rate limiter on an \
+                 operator's recorded acceptance"
+            );
+            // Forwarded for the same reason as the leg above (issue #441).
+            crate::logging::forward_control_event(crate::logging::ControlLevel::Warn, &detail);
+        }
     }
 
     /// Nests one forwarding router per mounted sidecar (issue #131).
@@ -360,14 +520,23 @@ impl Harness {
             Ok(mounts) => mounts,
             Err(errors) => {
                 for error in errors {
+                    let detail = format!("ignoring the sidecar mount table: {error}");
                     tracing::error!(error, "ignoring the sidecar mount table");
+                    // A dropped mount quietly unmounts a service (issue
+                    // #441): the operator must be able to read why.
+                    crate::logging::forward_control_event(
+                        crate::logging::ControlLevel::Error,
+                        &detail,
+                    );
                 }
                 crate::sidecar::SidecarMounts::default()
             }
         };
         let module_names: Vec<&str> = self.modules.iter().map(|m| m.name()).collect();
         for collision in mounts.collisions(&module_names) {
+            let detail = format!("ignoring the colliding sidecar mount: {collision}");
             tracing::error!(error = collision, "ignoring the colliding sidecar mount");
+            crate::logging::forward_control_event(crate::logging::ControlLevel::Error, &detail);
         }
         mounts
             .iter()
@@ -515,9 +684,12 @@ impl Harness {
 
     pub fn router(&self, ports: Ports) -> Router {
         // The environment the *deployment* declares, not only the one
-        // compiled in (issue #143).
+        // compiled in (issue #143). The limiter leg reads the resolved
+        // port, not the runtime's advertisement (issue #437) — captured
+        // before `ports` is destructured below.
         let env = deployed_env(self.venture.env, ports.config.as_ref());
-        let readiness = self.production_readiness_now(env, ports.config.as_ref());
+        let readiness =
+            self.production_readiness_now(env, ports.config.as_ref(), ports.rate_limiter.is_some());
         let mut api = self.nest_modules(&ports);
         // The gateway signer is this deployment's half of the sidecar
         // trust boundary (issue #131): absent secret, absent capability.
@@ -534,11 +706,26 @@ impl Harness {
             routing: ports.tenants.clone(),
             fallback: ports.db.clone(),
         });
+        // The harness is the floor of the admin plane's abuse control
+        // (issue #437): a module that forgets to limit its own `/admin`
+        // routes still gets the budget, namespaced under `admin:` so a
+        // guess at the admin bearer cannot share — or exhaust — a public
+        // route's. Modules that limit as well are double-limited, which
+        // is the floor's cost and not a bug. Applied here — after the
+        // module *and* sidecar nests — because a layer only wraps the
+        // routes present when it is applied: applied inside either nest,
+        // the other's `/admin/*` paths would sit outside the floor.
+        // Innermost of the four, so it spends budget only on requests
+        // that survived tenant resolution.
         // Resolution last before the module routes, and on them only
         // (TENANT-ROUTING.md §3): `/__health`, `/__ready`, `/.well-known`
         // and `/ui` have no tenant, and resolving there would 404 every
         // liveness probe in production.
         let api = api
+            .layer(from_fn_with_state(
+                ports.rate_limiter.clone(),
+                admin_rate_limit_layer,
+            ))
             .layer(axum::middleware::from_fn_with_state(
                 tenant_layer,
                 resolve_tenant_layer,
@@ -563,7 +750,9 @@ impl Harness {
             blob: _,
             push: _,
             payments: _,
+            tracker: _,
             realtime: _,
+            text_model: _,
             http: _,
             clock,
             id_gen,
@@ -1365,6 +1554,8 @@ impl HarnessBuilder {
 
         Ok(Harness {
             venture: Arc::new(venture),
+            unprotected_acceptance_recorded: AtomicBool::new(false),
+            unlimited_acceptance_recorded: AtomicBool::new(false),
             // Dependency order, which is composition order until a module
             // declares something (RECONCILIATION.md §2).
             // Composed from the resolved order, so the catalog reads the way
@@ -1512,15 +1703,47 @@ async fn production_readiness_guard(
     .into_response()
 }
 
+/// Limits every `/admin/*` route by client IP at the harness layer
+/// (issue #437), whether or not the module limits its own. The keys are
+/// prefixed `admin:` so a guess at the admin bearer draws from its own
+/// budget, the way the auth crates namespace theirs (`auth-password:<key>`),
+/// and no email key joins them — the caller is anonymous until it
+/// authenticates. A limiter transport error denies: the admin token has no
+/// captcha or cooldown behind it, so there is nothing to fail open into
+/// (the sidecar forward reaches the same verdict for the same reason).
+async fn admin_rate_limit_layer(
+    State(limiter): State<Option<Arc<dyn RateLimiter>>>,
+    request: axum::extract::Request,
+    next: Next,
+) -> Response {
+    if !crate::sidecar::is_admin_path(request.uri().path()) {
+        return next.run(request).await;
+    }
+    let keys: Vec<String> = crate::rate_limit::rate_limit_keys(
+        crate::rate_limit::client_ip(request.headers()).as_deref(),
+        None,
+    )
+    .into_iter()
+    .map(|key| format!("admin:{key}"))
+    .collect();
+    if let RateLimit::Denied { retry_after } =
+        crate::rate_limit::check_rate_limit(limiter.as_ref(), &keys, RateLimitFailure::FailClosed)
+            .await
+    {
+        return rate_limited(retry_after);
+    }
+    next.run(request).await
+}
+
 /// Collects the modules' `/.well-known` routers (issue #46): at most one
 /// module may provide one — `/.well-known` is a singleton discovery
 /// namespace — and more is a build error naming every provider.
 /// Production abuse controls are an initialization rule, not a doctor
 /// suggestion (issue #133): a venture that boots in production cannot
 /// rely on captcha or payment verification it does not actually have.
-/// `allow_no_captcha` is deliberately `None` here — the operator
-/// override belongs to `fz doctor`'s deploy-time re-check, never to
-/// the binary that ships.
+/// The overrides are deliberately `None` here — the operator's recorded
+/// acceptances belong to the boot gate, which reads them from the
+/// deployment config against the resolved ports.
 fn append_production_readiness(
     venture: &Venture,
     modules: &[Arc<dyn Module>],
@@ -1531,6 +1754,12 @@ fn append_production_readiness(
         venture.env,
         &crate::route_policy::WriteGuards::collect(modules),
         runtime,
+        // Build time has no resolved ports, so this is the runtime's own
+        // answer — provisionally optimistic for a binding that is named
+        // but fails to resolve. The boot gate re-checks against the port
+        // the runtime actually handed over, and refuses there.
+        crate::route_policy::rate_limiter_effective(runtime),
+        None,
         None,
     ) {
         errors.push(error);
@@ -1557,4 +1786,145 @@ fn collect_well_known(modules: &[Arc<dyn Module>], errors: &mut ConfigError) -> 
         ));
     }
     well_known
+}
+
+#[cfg(test)]
+mod acceptance_recording {
+    //! The once-per-deployment recording of an operator's escape-hatch
+    //! acceptance (issue #143, #437). In-file because the guards are
+    //! private `AtomicBool`s on `Harness`, and per-`Harness` rather than a
+    //! process static so each test's harness carries its own record.
+
+    use super::*;
+    use crate::Migrations;
+    use crate::config::MapConfig;
+
+    /// A surface-less public writer — the conservative-fallback shape,
+    /// which the captcha leg satisfies through the runtime below.
+    struct PubWriter;
+
+    impl Module for PubWriter {
+        fn name(&self) -> &'static str {
+            "writer"
+        }
+        fn version(&self) -> &'static str {
+            "0.0.0-test"
+        }
+        fn requires(&self) -> &'static [Port] {
+            &[]
+        }
+        fn public_writes(&self) -> bool {
+            true
+        }
+        fn migrations(&self) -> Migrations {
+            Migrations::default()
+        }
+        fn validate_config(&self, _: &dyn Config) -> Result<(), ConfigError> {
+            Ok(())
+        }
+        fn router(&self, _: ModuleContext) -> Router {
+            Router::new()
+        }
+    }
+
+    /// Advertises every port, so the captcha leg is satisfied and each
+    /// test below is about the limiter leg alone.
+    struct AllPorts;
+
+    impl Runtime for AllPorts {
+        fn provides(&self) -> Vec<Port> {
+            Port::ALL.to_vec()
+        }
+    }
+
+    fn harness() -> Harness {
+        Harness::builder()
+            .venture(
+                Venture::new("test-venture", "test.example").cors_origins(["https://test.example"]),
+            )
+            .module(PubWriter)
+            .runtime(AllPorts)
+            .build()
+            .expect("a development venture builds")
+    }
+
+    fn deployed(unlimited: Option<&str>) -> MapConfig {
+        let pairs = [("ENV", "production")].into_iter().chain(
+            unlimited.map(|reason| (crate::route_policy::ALLOW_UNLIMITED_PUBLIC_ROUTES, reason)),
+        );
+        MapConfig::from_pairs(pairs)
+    }
+
+    #[test]
+    fn the_waiver_is_recorded_once_and_only_when_it_waived() {
+        let harness = harness();
+        let config = deployed(Some("issue #437: limiter binding pending"));
+        assert!(
+            harness
+                .production_readiness_now(VentureEnv::Production, &config, false)
+                .is_empty(),
+            "the recorded acceptance serves"
+        );
+        assert!(
+            harness
+                .unlimited_acceptance_recorded
+                .load(Ordering::Relaxed)
+        );
+
+        // A later router build — on Workers there is one per request —
+        // neither refuses nor re-records.
+        assert!(
+            harness
+                .production_readiness_now(VentureEnv::Production, &config, false)
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn nothing_is_recorded_when_the_port_was_fine_all_along() {
+        let harness = harness();
+        let config = deployed(Some("unused: the limiter resolved"));
+        assert!(
+            harness
+                .production_readiness_now(VentureEnv::Production, &config, true)
+                .is_empty()
+        );
+        assert!(
+            !harness
+                .unlimited_acceptance_recorded
+                .load(Ordering::Relaxed),
+            "a waiver that removed no refusal is not a recorded acceptance"
+        );
+    }
+
+    #[test]
+    fn a_refusing_deployment_records_no_acceptance_at_all() {
+        let harness = harness();
+        // The captcha waiver does not reach the limiter leg, so the gate
+        // refuses — and an acceptance that left the deployment refusing
+        // recorded nothing, for either key.
+        let config = MapConfig::from_pairs([
+            ("ENV", "production"),
+            (
+                crate::route_policy::ALLOW_UNPROTECTED_WRITES,
+                "captcha pending",
+            ),
+        ]);
+        assert_eq!(
+            harness
+                .production_readiness_now(VentureEnv::Production, &config, false)
+                .len(),
+            1
+        );
+        assert!(
+            !harness
+                .unprotected_acceptance_recorded
+                .load(Ordering::Relaxed)
+        );
+        assert!(
+            !harness
+                .unlimited_acceptance_recorded
+                .load(Ordering::Relaxed)
+        );
+    }
 }

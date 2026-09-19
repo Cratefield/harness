@@ -20,7 +20,7 @@ The rules, which are part of the deliverable:
 | 1 | Cold start to first byte against an evicted venture, split into wasm instantiate and first D1 query | **unmeasured** — needs a deployed venture |
 | 2 | Warm authenticated read p99 at 50 rps, from the D1 primary's region and a distant one | **unmeasured** — needs a deployed venture in two regions |
 | 3 | Per-tenant write ceiling: single-row insert with the audit chain on | **measured**, below |
-| 4 | Provisioning time for a config change and for a new venture, p50 and p99 | **unmeasured** — needs a deploy pipeline (#141) |
+| 4 | Provisioning time for a config change and for a new venture, p50 and p99 | **unmeasured** end-to-end — needs a deploy pipeline (#141); the artifact step alone is measured, in `docs/control-plane/LINKER.md` |
 
 Three of four are unmeasured because there is nowhere to run them: no venture
 is deployed. They are not estimated here. A page of numbers where three are

@@ -52,6 +52,8 @@ Decisions, including why the TypeScript attempt was thrown away, are in
 core: [docs/COMPATIBILITY.md](https://github.com/Cratefield/harness/blob/main/docs/COMPATIBILITY.md), generated and
 drift-checked in CI. How crates reach crates.io:
 [docs/RELEASING.md](https://github.com/Cratefield/harness/blob/main/docs/RELEASING.md).
+Driving the venture CLI from an AI agent over MCP:
+[docs/MCP.md](https://github.com/Cratefield/harness/blob/main/docs/MCP.md).
 
 ## How a venture uses it
 
@@ -125,8 +127,16 @@ flowchart LR
 ## Crates
 
 All public crates are `cratefield-*`, MIT, plus the `cratefield` facade that
-pulls them together. Nothing is published to crates.io yet; depend on this
-repository by git.
+pulls them together.
+
+> **Depend on this repository by git for now, not by version.** Most crates are
+> published, but the published set cannot currently be resolved together:
+> `cratefield-core` is on 0.5, and 23 of its published dependents still require
+> `^0.4`, which excludes it. Asking for core 0.5 and any runtime pulls two
+> copies of core, whose error reads `expected cratefield_core::Module, found
+> cratefield_core::Module`. Only `cratefield-tables` and
+> `cratefield-module-changelog` are on the `^0.5` line today. Issue #464 is the
+> release round that fixes this; after it lands, use versions.
 
 Most ventures want one line:
 
@@ -150,6 +160,7 @@ convenience, not a layer.
 | `cratefield-runtime-cloudflare` | workers-rs entry points; D1, KV, Rate Limiting and `wait_until` mapped to ports |
 | `cratefield-adapter-resend` | `Mailer` over the Resend REST API, with a `NotConfigured` mode until a sending domain is verified |
 | `cratefield-adapter-turnstile` | `Captcha` over Cloudflare Turnstile, fail-closed |
+| `cratefield-adapter-anthropic` | `TextModel` over the Anthropic Messages API (Claude), through the `HttpClient` port — no vendor SDK, `NotConfigured` mode when the key is absent |
 | `cratefield-adapter-sqlite` | `Database` over rusqlite: every test, and single-node self-hosting |
 | `cratefield-module-email-signup` | Email signup with double opt-in, unsubscribe, admin export |
 | `cratefield-module-waitlist` | Per-product waitlist with confirm, position, referral codes |
@@ -169,6 +180,7 @@ convenience, not a layer.
 | `cratefield-module-cms` | A small content store with an editor: typed collections, versioned, in the venture's own database |
 | `cratefield-module-privacy` | Subject access and erasure, assembled from what every other module declares it holds |
 | `cratefield-module-notifications` | Push, an in-app inbox and email from one `notify()`, with per-account per-category preferences ([NOTIFICATIONS.md](docs/NOTIFICATIONS.md)) |
+| `cratefield-module-telemetry` | Aggregate usage counts from clients, consent-first, in the venture's own database ([TELEMETRY.md](docs/TELEMETRY.md)) |
 | `cratefield-i18n` | Server-side localisation: Fluent catalogs, BCP 47 negotiation, text direction |
 | `cratefield-auth-client` | Verifies auth tokens in a consuming app: JWKS fetch and cache, ES256, an axum extractor |
 | `cratefield-module-changelog` | A project's releases mirrored into the venture's own database and served over an API — the reads never call upstream |
@@ -283,9 +295,11 @@ crates/
   runtime-cloudflare/      cratefield-runtime-cloudflare
   adapter-resend/          cratefield-adapter-resend
   adapter-turnstile/       cratefield-adapter-turnstile
+  adapter-anthropic/       cratefield-adapter-anthropic
   adapter-sqlite/          cratefield-adapter-sqlite
   module-email-signup/     cratefield-module-email-signup
   module-waitlist/         cratefield-module-waitlist
+  module-telemetry/        cratefield-module-telemetry
   kms/                     cratefield-kms
   secrets/                 cratefield-secrets
   ui/                      cratefield-ui
@@ -296,6 +310,7 @@ examples/
   tables-canary/           a venture that declares its own tables, generated and committed
 docs/
   ARCHITECTURE.md
+  TELEMETRY.md             aggregate usage from clients, consent and opt-out
   TABLES.md                a venture declares its own tables; what it gets
   KEY-ROTATION.md          rotating data keys and re-wrapping under a new master key
   MIGRATION-STREAMS.md     two repositories applying migrations to one database
@@ -303,6 +318,7 @@ docs/
   MOUNTING.md              compile a module in, or run it as a sidecar
   UI.md                    the UI surface, its markup contract, UiSpec, admin
   ui-llms.txt              the same contract written for a generator
+  llms.txt                 the build-and-deploy contract written for an agent
   adr/                     0000 … 0010
 tools/
   banner-render.html       source of the README banner

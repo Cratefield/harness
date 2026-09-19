@@ -1,7 +1,9 @@
 //! HTTP handlers for `/v1/waitlist` (architecture section 6, issue
 //! #11). Positions are assigned atomically inside `Database::batch_atomic`
 //! (see [`crate::store::confirm_entry`]); the POST answers the same
-//! `202 {"ok":true}` bytes whatever the row state.
+//! `202 {"ok":true}` bytes whatever the row state, and the confirmation
+//! mail is enqueued off the request path (the `Defer` port), so the
+//! bytes and the timing carry no signal about the address.
 
 use axum::extract::{Query, State};
 use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
@@ -500,14 +502,11 @@ async fn join(
         ttl_days,
         now: now.clone(),
     };
-    if let Err(problem) = send_join_confirmation(&state, &scope, &signer, &cfg, mail).await {
-        // The claim was taken but no mail went out (mailer unconfigured
-        // or failing): hand the window back so a genuine retry is not
-        // locked out for the rest of the hour (issue #133).
-        let _ = cooldown.release(&*db, &cooldown_subject).await;
-        return Err(problem);
-    }
 
+    // The row lands on the request path; the mail does not. Every branch
+    // that reaches a send defers it through the request's `Defer` port,
+    // so the answer — always [`accepted`] — carries no signal about
+    // whether the address was known or whether the mailer works.
     if let Some(row) = &existing {
         store::refresh_pending(
             &*db,
@@ -547,6 +546,13 @@ async fn join(
             }),
         );
     }
+    scope.defer.wait_until(defer_join_confirmation(
+        &state.ctx,
+        &db,
+        cooldown,
+        cooldown_subject,
+        join_confirmation_mail(&state, &signer, &cfg, mail),
+    ));
     Ok(accepted())
 }
 
@@ -576,7 +582,7 @@ fn validate_join(
     Ok(normalized)
 }
 
-/// Everything [`send_join_confirmation`] needs for one address.
+/// Everything [`join_confirmation_mail`] needs for one address.
 struct JoinMail {
     id: String,
     generation: i64,
@@ -587,16 +593,15 @@ struct JoinMail {
     now: String,
 }
 
-/// Signs the confirm token, renders and sends the join mail. Mail before
-/// write (as in module-email-signup): a failed send leaves no row behind
-/// the hourly throttle.
-async fn send_join_confirmation(
+/// Signs the confirm token and renders the join mail. Pure computation:
+/// the Resend round trip happens off the request path, in
+/// [`defer_join_confirmation`].
+fn join_confirmation_mail(
     state: &ModuleState,
-    scope: &Scope,
     signer: &Arc<dyn Signer>,
     cfg: &ModuleConfig<'_>,
     mail: JoinMail,
-) -> Result<(), Problem> {
+) -> OutgoingMail {
     let confirm_token = signer.sign(&Payload {
         purpose: PURPOSE_CONFIRM.to_owned(),
         subject: confirm_subject(&mail.id, mail.generation),
@@ -611,27 +616,55 @@ async fn send_join_confirmation(
         confirm_url: format!("{base}/v1/waitlist/confirm?token={confirm_token}"),
         brand: state.ctx.venture.brand.clone(),
     });
-    match mail::send(
-        &state.ctx,
-        &OutgoingMail {
-            to: mail.normalized.clone(),
-            template_id: TEMPLATE_CONFIRM,
-            data,
-            locale: mail.locale,
-            idempotency_key: format!("waitlist:{}:{}", mail.id, mail.now),
-        },
-    )
-    .await
-    {
-        Ok(SendOutcome::Sent { .. }) => Ok(()),
-        Ok(SendOutcome::NotConfigured) => {
-            Err(Problem::new(&SLUGS.mail_not_configured).instance(&scope.request_id))
-        }
-        Err(err) => {
-            tracing::error!(error = %err, "waitlist confirmation mail failed");
-            Err(internal(scope))
-        }
+    OutgoingMail {
+        to: mail.normalized,
+        template_id: TEMPLATE_CONFIRM,
+        data,
+        locale: mail.locale,
+        idempotency_key: format!("waitlist:{}:{}", mail.id, mail.now),
     }
+}
+
+/// The join confirmation send, run after the response through the
+/// request's `Defer` port. A send that fails (or a mailer that is not
+/// configured) can no longer answer the caller, so it is logged for
+/// operators, and it hands the send window back — the release the
+/// synchronous path performed before answering — so a genuine retry is
+/// not locked out for the rest of the hour (issue #133).
+fn defer_join_confirmation(
+    ctx: &Arc<ModuleContext>,
+    db: &Arc<dyn Database>,
+    cooldown: SendCooldown,
+    cooldown_subject: String,
+    mail: OutgoingMail,
+) -> cratefield_core::BoxFuture<'static, ()> {
+    let ctx = Arc::clone(ctx);
+    let db = Arc::clone(db);
+    Box::pin(async move {
+        let failed = match mail::send(&ctx, &mail).await {
+            Ok(SendOutcome::Sent { .. }) => false,
+            Ok(SendOutcome::NotConfigured) => {
+                tracing::error!(
+                    template = mail.template_id,
+                    idempotency = %mail.idempotency_key,
+                    "deferred waitlist confirm mail: no mailer configured"
+                );
+                true
+            }
+            Err(err) => {
+                tracing::error!(
+                    error = %err,
+                    template = mail.template_id,
+                    idempotency = %mail.idempotency_key,
+                    "deferred waitlist confirm mail failed"
+                );
+                true
+            }
+        };
+        if failed && let Err(err) = cooldown.release(&*db, &cooldown_subject).await {
+            tracing::error!(error = %err, "releasing the waitlist send claim failed");
+        }
+    })
 }
 
 #[derive(Deserialize, JsonSchema)]

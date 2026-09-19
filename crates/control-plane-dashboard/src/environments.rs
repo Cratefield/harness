@@ -11,10 +11,11 @@
 //!
 //! Creating staging runs the same provisioning engine as anything else,
 //! against the environment's own tenant, and stops where every
-//! provisioning run stops today: the [`Unwired`] deployer, honestly,
-//! with the step and the reason recorded against the environment. The
-//! venture itself is not touched — a staging run must never read as the
-//! venture itself provisioning.
+//! provisioning run stops today: the artifact step goes through the
+//! linker and falls back to the unwired build path, with the step and
+//! the reason recorded against the environment. The venture itself is
+//! not touched — a staging run must never read as the venture itself
+//! provisioning.
 //!
 //! **Promotion is the point**, and it is plan-then-confirm, the shape
 //! the dashboard already uses for key rotation: the plan names the
@@ -25,12 +26,10 @@
 //! provisioning run completes the schema step; a set change clears that
 //! record (the same contract the venture's editor holds), so "staging
 //! ran the schema step" always means "staging ran *this* set's
-//! migrations". With no deployer wired, staging never completes the
+//! migrations". With the build path unwired, staging never completes the
 //! artifact step, so every module-adding promotion is refused — which
 //! is exactly right: nothing has been rehearsed, and this screen exists
 //! so that cannot be done by accident.
-//!
-//! [`Unwired`]: cratefield_provisioning::Unwired
 
 use std::sync::Arc;
 
@@ -40,12 +39,12 @@ use cratefield_accounts::{Environment, Venture};
 use cratefield_chrome::{Page, escape, render};
 use cratefield_console::current_session;
 use cratefield_core::{Database, Statement};
-use cratefield_provisioning::{Engine, Step, Unwired as UnwiredDeployer};
+use cratefield_provisioning::{Engine, Step};
 use http::{HeaderMap, StatusCode};
 
 use crate::{
-    BASE, DashboardState, Progress, account_nav, account_of, frame, guard, internal, now_rfc3339,
-    progress_of, render_progress, same_set, status_chip, ulid,
+    BASE, DashboardState, Progress, account_nav, account_of, deployer, frame, guard, internal,
+    now_rfc3339, progress_of, render_progress, same_set, status_chip, ulid,
 };
 
 /// Where the screen sits under the dashboard.
@@ -543,11 +542,13 @@ pub(super) async fn add_staging(
         }
     };
 
-    // The engine runs for real and stops at the unwired deployer, which
-    // is a recorded outcome the screen shows — not an error to hide.
+    // The engine runs for real and stops where every run stops today: the
+    // artifact step goes through the linker and falls back to the unwired
+    // build path, which is a recorded outcome the screen shows — not an
+    // error to hide.
     let engine = Engine::new(db);
     match engine
-        .provision_environment(&environment, &UnwiredDeployer, &now)
+        .provision_environment(&environment, &deployer::current(), &now)
         .await
     {
         Ok(()) | Err(cratefield_provisioning::ProvisionError::Step { .. }) => {
@@ -656,7 +657,7 @@ pub(super) async fn set_modules(
 
     let engine = Engine::new(db);
     match engine
-        .provision_environment(&environment, &UnwiredDeployer, &now)
+        .provision_environment(&environment, &deployer::current(), &now)
         .await
     {
         Ok(()) | Err(cratefield_provisioning::ProvisionError::Step { .. }) => {
@@ -870,11 +871,11 @@ pub(super) async fn promotion_confirm(
         ..context.venture.clone()
     };
     let engine = Engine::new(db);
-    match engine.provision(&venture, &UnwiredDeployer, &now).await {
+    match engine.provision(&venture, &deployer::current(), &now).await {
         Ok(_) | Err(cratefield_provisioning::ProvisionError::Step { .. }) => {
             // A step failure is the recorded, visible outcome the
-            // venture's own page renders — with no deployer wired it is
-            // the expected one, and the operator is sent to it.
+            // venture's own page renders — with the build path unwired it
+            // is the expected one, and the operator is sent to it.
             Redirect::to(&format!("{BASE}/ventures/{}", venture.id)).into_response()
         }
         Err(err) => {

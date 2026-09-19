@@ -7,10 +7,15 @@
 //! | `GET /{table}/{key}` | one row by its primary key |
 //! | `PUT /{table}/{key}` | the row it replaced |
 //! | `DELETE /{table}/{key}` | `204`, and nothing |
+//! | `GET /{table}/__by?<column>=<value>&…` | one row by its primary key, named in the query |
+//! | `PUT /{table}/__by?…` | the row it replaced |
+//! | `DELETE /{table}/__by?…` | `204`, and nothing |
 //!
-//! These are the five the surface publishes. A published action whose
-//! route does not exist is worse than an unpublished one: a generated UI
-//! renders the form and the submission 404s.
+//! The first five are what the surface publishes, a `{key}` spelling for
+//! a single-column key and the `__by` spelling for a wider one. A
+//! published action whose route does not exist is worse than an
+//! unpublished one: a generated UI renders the form and the submission
+//! 404s.
 //!
 //! Mounted under the generated module's name, so a venture's `note`
 //! table is at `/v1/tables/note`.
@@ -56,16 +61,37 @@ pub const BAD_KEY: ProblemDef = ProblemDef {
     description: "The path segment is not a value of the table's primary-key column.",
 };
 
-/// The table's primary key is more than one column.
+/// The key in the path, and the table's primary key is more than one
+/// column.
 ///
-/// A composite key has no single path segment to be, and inventing a
-/// separator would make a key containing that separator unaddressable —
-/// silently, and only for the rows that contain it.
+/// The path route refuses it rather than joining the values with a
+/// separator that could occur inside one — silently unaddressable, and
+/// only for the rows that contain it. The key is named in the query
+/// instead, at `/{table}/__by?<column>=<value>` (ADR 0018).
 pub const COMPOSITE_KEY: ProblemDef = ProblemDef {
     slug: "composite-key",
     status: StatusCode::BAD_REQUEST,
-    title: "This table's rows are not addressable by path",
-    description: "The table's primary key is more than one column; read it through the page.",
+    title: "A composite key does not fit in one path segment",
+    description: "The table's primary key is more than one column, so `/{table}/{key}` cannot name a row; name the key in the query at `/{table}/__by?<column>=<value>` instead.",
+};
+
+/// The `__by` query named some of the primary-key columns but not all.
+///
+/// `select_one` refuses a half key for the same reason, rather than
+/// matching every row that shares the named prefix.
+pub const PARTIAL_KEY: ProblemDef = ProblemDef {
+    slug: "partial-key",
+    status: StatusCode::BAD_REQUEST,
+    title: "The key is not complete",
+    description: "Name every primary-key column of the table once: a row is addressed by its whole key. `after` and `sort` are the page's parameters on this route and cannot name a key column, so a table whose key uses one of those names has no address here.",
+};
+
+/// The `__by` query named a column the primary key does not have.
+pub const NOT_A_KEY_COLUMN: ProblemDef = ProblemDef {
+    slug: "not-a-key-column",
+    status: StatusCode::BAD_REQUEST,
+    title: "Not a key column for this table",
+    description: "A `__by` query names primary-key columns only. To narrow by any other column, read the page and filter it.",
 };
 
 /// The routes, over the declared tables in `tables`.
@@ -81,6 +107,20 @@ pub fn router(tables: Arc<Tables>) -> Router {
         .route(
             "/{table}/{key}",
             get(one_route).put(replace_route).delete(remove_route),
+        )
+        // A static segment beats the dynamic `{key}` — in the one shared
+        // router, for *every* table at once. So `__by` captures the row
+        // whose key value is literally `__by` on every table, and serving
+        // the route for single-column-key tables too is what gives that
+        // row an address back (`/{table}/__by?id=__by`); serving it only
+        // where a composite key needs it would strand the row for good.
+        // Under a table mount, a segment beginning `__` belongs to the
+        // harness (ADR 0018).
+        .route(
+            "/{table}/__by",
+            get(one_by_route)
+                .put(replace_by_route)
+                .delete(remove_by_route),
         )
         .with_state(tables)
 }
@@ -179,6 +219,35 @@ async fn one_route(
     Ok(axum::Json(body))
 }
 
+/// One row by its primary key, named in the query: the spelling that
+/// answers for a key of any arity, where `/{table}/{key}` answers for a
+/// key of one. Same body, same statuses, same access decision — only
+/// where the key travels is different.
+async fn one_by_route(
+    scope: Scope,
+    conn: TenantConn,
+    State(tables): State<Arc<Tables>>,
+    Path(table): Path<String>,
+    Query(query): Query<ByQuery>,
+    headers: HeaderMap,
+) -> Result<axum::Json<Value>, Problem> {
+    let api = tables
+        .declared(&table)
+        .ok_or_else(|| Problem::new(&crate::read::NO_SUCH_TABLE))?;
+    let key = key_from_query(&api.table, &query)?;
+    let body = one(
+        &tables,
+        &conn,
+        conn.tenancy(),
+        &headers,
+        &scope,
+        &table,
+        &key.0,
+    )
+    .await?;
+    Ok(axum::Json(body))
+}
+
 /// A primary key, built from a path segment.
 ///
 /// Wrapped so the JSON object it becomes is not mistaken for a row.
@@ -203,25 +272,121 @@ pub fn key_from_path(table: &TableDef, segment: &str) -> Result<Key, Problem> {
         // composition its manifest would not have produced.
         .ok_or_else(|| Problem::new(&crate::access::MISDECLARED))?;
 
-    let value = match &field.kind {
-        // A path segment is text, and these kinds are text.
+    Ok(Key(json!({
+        column.as_str(): key_value_from_text(field, segment)?
+    })))
+}
+
+/// One key value, as the JSON its column's kind calls for.
+///
+/// The one coercion behind both spellings of a key — a path segment
+/// ([`key_from_path`]) and a `__by` query parameter
+/// ([`key_from_query`]) — so a `real`, `boolean` or `json` key is
+/// refused wherever it is named, for the reason it is refused there: a
+/// float compared for equality is a key that sometimes matches nothing,
+/// and a JSON blob has no canonical text to be addressed by. A filter
+/// may name those kinds — [`value_from_text`] answers that question —
+/// because a filter narrows a page a key has already cut to one row.
+///
+/// # Errors
+///
+/// [`BAD_KEY`] when the text is not a value of the column's kind.
+fn key_value_from_text(field: &cratefield_tables::FieldDef, raw: &str) -> Result<Value, Problem> {
+    match &field.kind {
+        // A path segment and a query parameter are text, and these kinds
+        // are text.
         FieldKind::Text { .. }
         | FieldKind::Uuid
         | FieldKind::Timestamp
-        | FieldKind::Enum { .. } => Value::String(segment.to_owned()),
-        FieldKind::Integer { .. } => segment
+        | FieldKind::Enum { .. } => Ok(Value::String(raw.to_owned())),
+        FieldKind::Integer { .. } => raw
             .parse::<i64>()
             .map(Value::from)
-            .map_err(|_ignored| Problem::new(&BAD_KEY))?,
+            .map_err(|_ignored| Problem::new(&BAD_KEY)),
         // Neither is a key anybody should have declared, and `fz build`
-        // does not stop them. Refusing is better than guessing: a float
-        // compared for equality is a key that sometimes matches nothing,
-        // and a JSON blob has no canonical text to be a path segment.
+        // does not stop them. Refusing is better than guessing.
         FieldKind::Real { .. } | FieldKind::Boolean | FieldKind::Json => {
-            return Err(Problem::new(&BAD_KEY));
+            Err(Problem::new(&BAD_KEY))
         }
-    };
-    Ok(Key(json!({ column.as_str(): value })))
+    }
+}
+
+/// The query string of a `__by` request.
+///
+/// Every parameter but two names a primary-key column, and is collected
+/// rather than declared because the key columns are a venture's and this
+/// type is the harness's — the same shape [`PageQuery`] takes on the page
+/// route. The two are `after` and `sort`, the harness's own parameters
+/// here as on the page's: read into their fields so they can never be
+/// read as a key column. A table whose key uses one of those names can
+/// never complete its key on this route, and [`key_from_query`] refuses
+/// it as partial rather than quietly reading the reserved parameter as a
+/// value — which is the strand the reservation ties, stated (ADR 0018).
+#[derive(serde::Deserialize)]
+struct ByQuery {
+    // Read into these fields only so they can never be read as a key
+    // column; nothing in Rust reads them back, and the lint that notices
+    // is told exactly that.
+    #[serde(default)]
+    #[expect(dead_code)]
+    after: Option<String>,
+    #[serde(default)]
+    #[expect(dead_code)]
+    sort: Option<String>,
+    #[serde(flatten)]
+    key: std::collections::BTreeMap<String, String>,
+}
+
+/// Turns the `__by` query into the table's primary key.
+///
+/// The columns are **named**, not positional: reordering a declaration
+/// cannot quietly change what an existing URL means. A query naming a
+/// column outside the key is refused — ignoring it would answer a
+/// question the caller did not ask — and so is a query naming only some
+/// of the key columns, matching the refusal `select_one` makes rather
+/// than matching every row that shares the given prefix.
+///
+/// # Errors
+///
+/// [`NOT_A_KEY_COLUMN`] for a parameter that is not a primary-key
+/// column, [`PARTIAL_KEY`] when a key column is not named, [`BAD_KEY`]
+/// when a named value is not its column's kind, and
+/// [`crate::access::MISDECLARED`] for a key naming a column the table
+/// does not have.
+fn key_from_query(table: &TableDef, query: &ByQuery) -> Result<Key, Problem> {
+    // Named columns first, so a misspelled key column is answered as the
+    // mistake it is rather than as a key that happens to be short.
+    for column in query.key.keys() {
+        if !table.primary_key.contains(column) {
+            return Err(Problem::new(&NOT_A_KEY_COLUMN).with_detail(format!(
+                "`{column}` is not a primary-key column of this table"
+            )));
+        }
+    }
+    let missing: Vec<&str> = table
+        .primary_key
+        .iter()
+        .map(String::as_str)
+        .filter(|column| !query.key.contains_key(*column))
+        .collect();
+    if !missing.is_empty() {
+        return Err(Problem::new(&PARTIAL_KEY).with_detail(format!(
+            "the query does not name `{}`",
+            missing.join("`, `")
+        )));
+    }
+
+    let mut object = serde_json::Map::with_capacity(table.primary_key.len());
+    for column in &table.primary_key {
+        let field = table
+            .fields
+            .iter()
+            .find(|field| &field.name == column)
+            .ok_or_else(|| Problem::new(&crate::access::MISDECLARED))?;
+        let value = key_value_from_text(field, &query.key[column.as_str()])?;
+        object.insert(column.clone(), value);
+    }
+    Ok(Key(Value::Object(object)))
 }
 
 async fn create_route(
@@ -273,6 +438,36 @@ async fn replace_route(
     Ok(axum::Json(row))
 }
 
+/// Replaces one row addressed through `__by`. The key rides the query,
+/// the body is still the row — so the body names the key columns too,
+/// and the `WHERE` is built from the query's spelling of them.
+async fn replace_by_route(
+    scope: Scope,
+    conn: TenantConn,
+    State(tables): State<Arc<Tables>>,
+    Path(table): Path<String>,
+    Query(query): Query<ByQuery>,
+    headers: HeaderMap,
+    body: axum::Json<Value>,
+) -> Result<axum::Json<Value>, Problem> {
+    let api = tables
+        .declared(&table)
+        .ok_or_else(|| Problem::new(&crate::read::NO_SUCH_TABLE))?;
+    let key = key_from_query(&api.table, &query)?;
+    let row = crate::write::replace(
+        &tables,
+        &conn,
+        conn.tenancy(),
+        &headers,
+        &scope,
+        &table,
+        &key.0,
+        body.0,
+    )
+    .await?;
+    Ok(axum::Json(row))
+}
+
 async fn remove_route(
     scope: Scope,
     conn: TenantConn,
@@ -296,6 +491,33 @@ async fn remove_route(
     .await?;
     // No body: there is nothing left to describe, and inventing one
     // ("deleted": true) is a second thing to keep true.
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Removes one row addressed through `__by`, answering `204` and
+/// nothing, as the path route does.
+async fn remove_by_route(
+    scope: Scope,
+    conn: TenantConn,
+    State(tables): State<Arc<Tables>>,
+    Path(table): Path<String>,
+    Query(query): Query<ByQuery>,
+    headers: HeaderMap,
+) -> Result<StatusCode, Problem> {
+    let api = tables
+        .declared(&table)
+        .ok_or_else(|| Problem::new(&crate::read::NO_SUCH_TABLE))?;
+    let key = key_from_query(&api.table, &query)?;
+    crate::write::remove(
+        &tables,
+        &conn,
+        conn.tenancy(),
+        &headers,
+        &scope,
+        &table,
+        &key.0,
+    )
+    .await?;
     Ok(StatusCode::NO_CONTENT)
 }
 

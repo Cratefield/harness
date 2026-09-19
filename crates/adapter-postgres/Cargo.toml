@@ -5,7 +5,7 @@ readme = "README.md"
 keywords = ["cratefield", "postgres", "database", "adapter", "sql"]
 categories = ["database"]
 include = ["src/**/*", "README.md"]
-version = "0.1.4"
+version = "0.1.5"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -42,3 +42,8 @@ cratefield-module-email-signup = { path = "../module-email-signup" }
 cratefield-module-waitlist = { path = "../module-waitlist" }
 axum = { workspace = true }
 tokio = { workspace = true }
+# Only so `tests/database.rs` can run the kit's blob round-trip contract
+# against this adapter (issue #39). `default-features = false` keeps the
+# dev graph off the harness — the helper itself needs nothing beyond
+# `cratefield-core`.
+cratefield-testing = { path = "../testing", default-features = false }

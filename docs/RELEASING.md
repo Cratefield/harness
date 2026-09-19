@@ -2,8 +2,11 @@
 
 The pipeline is wired; the only things left are one-time crates.io
 setup steps that need a human with the owner account. This page is the
-exact list (issue #15). Everything here is **for the owner** — nothing
-below runs from this repository's CI until it is configured.
+exact list (issue #15). Everything here is **for the owner** — the
+credential-gated steps below run from this repository's CI only once it
+is configured. The one exception that needs nothing: the `crates.io
+resolve` workflow already runs daily with no credentials, checking the
+published set on its own (see "The published set" below).
 
 ## How the pipeline works
 
@@ -29,6 +32,14 @@ Nothing depends on it yet and its public surface is still moving, which a
 publish is manual, the same as every other new crate: add it to the
 ordered list in step 2 below, then enable its trusted publisher and drop
 the `publish = false` entry.
+
+`cratefield-mcp` (issue #160) carries `publish = false` as well: it is
+new, nothing depends on it, and publishing it is the remaining human step
+ADR 0021 records — until the crates.io setup below exists, a publishable
+crate would only make the release run fail authentication over OIDC.
+When that step lands its first publish is manual, the same as every other
+new crate: add it to the ordered list in step 2 below, then enable its
+trusted publisher and drop the `publish = false` entry.
 
 `cratefield-push-auth` (issue #178) carries `publish = false` in its own
 manifest for the same reason, but with one difference that matters to the
@@ -137,6 +148,55 @@ The workflow also takes a manual run (Actions → Release → *Run
 workflow*) with a `dry_run` checkbox, on by default, so the pipeline
 can be exercised without publishing.
 
+## Dependent crates do not reliably follow a breaking bump
+
+**Assume a breaking bump of `cratefield-core` does not release its
+dependents, and check that it did.** release-plz normally cascades: when
+it releases a crate it rewrites that crate's version requirement in
+every manifest it manages, and each crate whose requirement it rewrote
+earns a patch bump and is published in the same release PR. Nothing
+configures this behaviour — there is no option to turn the cascade on,
+off, or up, and no option to make a breaking bump propagate as anything
+larger than a patch.
+
+**The cascade is keyed on that rewrite, which makes it easy to suppress
+by accident.** release-plz asks whether a requirement has to change in
+order to admit the version being released, and reads "no change needed"
+as "this dependent does not need a release". A requirement of `"0.5"`
+already admits 0.5.0, so releasing core as 0.5.0 against a workspace
+table that already reads `"0.5"` rewrites nothing and publishes nothing
+but core. That is how core reached 0.5.0 on crates.io while 23 published
+dependents still required `^0.4` (issue #462): the requirement in the
+root `Cargo.toml` had been edited by hand ahead of the release that was
+meant to move it, so the release round that should have followed never
+ran.
+
+**So bump one place, not two.** Set the new version in
+`crates/<name>/Cargo.toml` and leave the `[workspace.dependencies]`
+requirement in the root `Cargo.toml` alone — moving it is release-plz's
+job, and moving it first is what costs the dependent round. If the two
+have already diverged, the dependents will not catch up on their own:
+bump each of them in the release PR by hand, or publish them in the
+dependency order given in step 2 below.
+
+**A cascaded dependent gets a patch bump even when the dependency
+broke.** release-plz does not inspect code to work out whether a
+dependent re-exports a type that changed, so a crate whose public
+surface exposes a core type can ship a breaking change as a patch
+release, which consumers pinned with a caret take silently.
+`COMPATIBILITY.md` does not catch this either: it is generated from the
+workspace manifests and checked in CI for drift, so it records the
+ranges this tree declares, not the ranges the published crates actually
+carry.
+
+**Nothing in this repository catches the mismatch.** Every in-tree build
+resolves `cratefield-core` through the path dependency in the root
+`Cargo.toml`, so the workspace compiles against the local 0.5 whatever
+the published requirements say, and CI stays green while the published
+set is unresolvable. Issue #466 tracks the CI job that resolves a
+venture from crates.io alone, which is the check that would have caught
+this.
+
 ## Owner setup (once)
 
 Step 0 is about GitHub; the rest need the crates.io account that will
@@ -180,6 +240,7 @@ crate exists**, so the very first release of each crate is manual:
    cargo publish -p cratefield-adapter-postgres
    cargo publish -p cratefield-adapter-resend
    cargo publish -p cratefield-adapter-turnstile
+   cargo publish -p cratefield-adapter-anthropic
    cargo publish -p cratefield-push-auth      # before adapter-apns
    cargo publish -p cratefield-adapter-apns
    cargo publish -p cratefield-adapter-fcm    # before the facade
@@ -189,6 +250,7 @@ crate exists**, so the very first release of each crate is manual:
    cargo publish -p cratefield-runtime-cloudflare
    cargo publish -p cratefield-runtime-native
    cargo publish -p cratefield-testing
+   cargo publish -p cratefield-module-telemetry
    cargo publish -p cratefield-module-email-signup
    cargo publish -p cratefield-module-waitlist
    cargo publish -p cratefield-module-cms
@@ -269,14 +331,41 @@ While pre-1.0 a minor bump may break (that is what the caret ranges in
 4. The final `0.2.0` follows the normal release-PR flow; the `rc`
    commits appear in its changelog.
 
-## What CI checks without credentials
+## The published set: what runs on its own, what is still by hand
 
-- `cargo publish --dry-run -p cratefield-core` (definition of done in
-  CI's absence: it packages and verification-builds the crate with only
-  registry dependencies).
+One check of the published set now runs on its own: the `crates.io
+resolve` workflow (`.github/workflows/crates-io-resolve.yml` running
+`tools/crates-io-resolve.sh`). It resolves this repository's crates the
+way a stranger does: every publishable crate that exists on crates.io is
+added — no version pin, no path override — to a fresh project in a temp
+directory outside this workspace; the resolution is asserted to hold one
+copy of each in-repo crate (`cargo tree --duplicates`; two copies of one
+of ours is the `expected cratefield_core::Module, found
+cratefield_core::Module` failure downstream); and the result is compiled
+(`cargo check`). A crate whose first publish is still pending is skipped
+with a notice, not failed on — a pending first publish is a gap being
+filled (Owner setup above), not a broken published set.
+
+It runs daily on a schedule, after a real release (the Release workflow
+calls it once a publishing run actually happened, dry runs excepted), and
+on manual dispatch. The schedule is the point: crates.io can become
+incoherent without a single commit here — one publish that half-succeeds
+is enough — and only a scheduled run is both guaranteed to notice and
+guaranteed to rerun after it. It is deliberately not on push or
+pull_request: a broken published set should redden the release pipeline,
+not every unrelated pull request.
+
+This retires the old one-shot advice to re-run `cargo add
+cratefield-core` from an empty project after the first release (issue #15
+acceptance): the workflow now does that for every published crate,
+together, every day.
+
+Still manual, and **not** run by anything in `.github/workflows/` — a
+human runs these when it matters:
+
+- `cargo publish --dry-run -p cratefield-core`: packages and
+  verification-builds the crate with only registry dependencies.
 - `cargo package --list` for every crate: the packaged file list is
   exact (`include` lists), so the migration SQL and mail templates ship
   and no repo-root file (`BUILD-BRIEF.md`, `PROGRESS.md`, `target/`)
   can leak into a package.
-- After the first real release, `cargo add cratefield-core` from an empty
-  project (issue #15 acceptance) should be re-run by hand once.

@@ -124,3 +124,31 @@ jobs:
           if [ "$CRATES_IO_READY" != "true" ]; then
             echo "::notice title=Publishing is off::CRATES_IO_READY is not 'true', so the release command did not run: the crates have not been first-published by hand yet. See docs/RELEASING.md, Owner setup."
           fi
+
+  # The registry-side check a release cannot give itself. release-plz
+  # publishes from the path-dependency workspace, which compiles no matter
+  # what combination the publishes left on crates.io (issue #466) — this
+  # resolves and compiles the published set the way a stranger does, right
+  # after a real pipeline pass, so a publish that half-succeeded turns up
+  # here with a message naming the conflict instead of at a customer's
+  # first `cargo add`. Reusable form so the schedule can run the identical
+  # job (crates-io-resolve.yml) when nothing was published at all.
+  #
+  # `inputs.dry_run` is safe on the `workflow_run` trigger, where `inputs`
+  # is not populated: an absent input reads as null and `!null` is true, so
+  # only a deliberate dry run — `workflow_dispatch` with the box ticked,
+  # which published nothing — skips the check.
+  #
+  # One race this call cannot close: sparse-index responses are
+  # CDN-served, so a version published seconds ago may not be visible yet
+  # and the check then validates the pre-publish registry state — and
+  # passes. Deliberately no retry logic for that; the daily scheduled run
+  # of crates-io-resolve.yml is the backstop that sees the settled
+  # registry and catches it.
+  crates-io-resolve:
+    needs: release-plz
+    if: >-
+      needs.release-plz.result == 'success' &&
+      vars.CRATES_IO_READY == 'true' &&
+      !inputs.dry_run
+    uses: ./.github/workflows/crates-io-resolve.yml

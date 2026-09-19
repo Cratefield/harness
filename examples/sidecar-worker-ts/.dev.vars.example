@@ -1,0 +1,13 @@
+# Copy to `.dev.vars` (git-ignored) for `wrangler dev`. Both keys are also
+# the only values this Worker reads from the deployment environment.
+
+# Any truthy value (`1`/`true`/`yes`/`on`, case-insensitive) closes the
+# gateway gate over `/v1/*`, `/__surface` and `/__events`. Leave it unset
+# locally only if you know why; the host mounts set it in production.
+SIDECAR_REQUIRE_GATEWAY=1
+
+# The one value shared with the host Worker, which mints every gateway
+# stamp with it. At least 32 bytes — shorter is refused and the Worker
+# fails closed (503) on every guarded request. Generate one:
+#   openssl rand -base64 32
+SIDECAR_GATEWAY_SECRET=replace-me-at-least-32-random-bytes-long!!

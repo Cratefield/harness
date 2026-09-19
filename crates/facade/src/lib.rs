@@ -32,6 +32,9 @@ pub use cratefield_adapter_resend as resend;
 #[cfg(feature = "turnstile")]
 pub use cratefield_adapter_turnstile as turnstile;
 
+#[cfg(feature = "anthropic")]
+pub use cratefield_adapter_anthropic as anthropic;
+
 #[cfg(feature = "apns")]
 pub use cratefield_adapter_apns as apns;
 
@@ -95,6 +98,9 @@ pub use cratefield_module_changelog as changelog;
 
 #[cfg(feature = "notifications")]
 pub use cratefield_module_notifications as notifications;
+
+#[cfg(feature = "telemetry")]
+pub use cratefield_module_telemetry as telemetry;
 
 #[cfg(feature = "testing")]
 pub use cratefield_testing as testing;

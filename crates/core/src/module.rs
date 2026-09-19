@@ -441,6 +441,36 @@ pub trait Module: Send + Sync + 'static {
     ///
     /// `Err` listing every invalid or missing key for this module.
     fn validate_config(&self, cfg: &dyn Config) -> Result<(), ConfigError>;
+    /// The largest request body any route of this module accepts, so a
+    /// runtime can refuse an oversize body **before** buffering it
+    /// (issue #440).
+    ///
+    /// This is a coarse per-module ceiling, not a per-route limit. A
+    /// runtime with a fixed memory budget — a Workers isolate, say — reads
+    /// it through [`Harness::max_body_bytes`] when a request arrives and
+    /// refuses everything above it at the door, because the precise
+    /// enforcement, axum's `DefaultBodyLimit` inside [`Module::router`],
+    /// only fires once the body is already resident in memory. It must
+    /// never return less than the harness-wide [`MAX_BODY_BYTES`]: the
+    /// runtime guard sits **in front of** the router, and a module that
+    /// tightened it would 413 requests the router itself would have
+    /// accepted. Raising it is legitimate — LinkedIn's image upload does —
+    /// but the route that justifies the raise keeps its own
+    /// `DefaultBodyLimit`, which stays the precise per-route enforcer.
+    ///
+    /// `cfg` is the live deployment config, so a module that moves a cap
+    /// from configuration must read it here too: if an operator raises
+    /// `MAX_IMAGE_BYTES` above the compiled default, the runtime guard must
+    /// not refuse a body the route would have accepted.
+    ///
+    /// Default: [`MAX_BODY_BYTES`], so a module that says nothing changes
+    /// nothing.
+    ///
+    /// [`Harness::max_body_bytes`]: crate::Harness::max_body_bytes
+    /// [`MAX_BODY_BYTES`]: crate::http::MAX_BODY_BYTES
+    fn max_body_bytes(&self, _cfg: &dyn Config) -> usize {
+        crate::http::MAX_BODY_BYTES
+    }
     /// Problems the module can find in **itself**, with no configuration
     /// and no environment: its own embedded data, checked against its own
     /// declarations.
