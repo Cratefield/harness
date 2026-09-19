@@ -52,6 +52,20 @@ segments, a key in a request body, and refusing the shape in `fz build`
 were rejected. The decision is recorded only: nothing ships yet, and
 the three routes still answer `400 composite-key`.
 
+ADR 0019 decides how a performance change is admitted (#158): a step ships
+only when a published benchmark shows the cost it removes and is reverted
+if that number does not move, and the order is region-pinning the primary,
+immutable reads from KV or the cache, Durable Object warmers, then D1 read
+replication last — last because the assessment that ranked replication
+first was reasoning about one large shared database, and the harness ships
+one small D1 per venture, so the read volume at any primary is one
+venture's, not the platform's. Replication first, all four steps at once,
+pinning on the intuition that nearer is faster, and latency targets for
+the four steps set before any measurement were rejected. The decision is
+recorded only: nothing ships until the numbers behind the first three
+gates are measured — including step 2's immutable-read share, which no
+benchmark counts yet.
+
 [0102](0102-crypto-crate.md) chose the crypto crate: RustCrypto's
 `chacha20poly1305`.
 
