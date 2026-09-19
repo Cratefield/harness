@@ -8,6 +8,11 @@ name = "d1-blob-canary"
 version = "0.1.0"
 edition = "2021"
 publish = false
+# `cargo deny` refuses an unlicensed crate even when it is `publish = false`,
+# and every other example inherits the workspace's. Edition stays 2021 here
+# on purpose: this crate is pinned to what the `worker` template builds with.
+license.workspace = true
+repository.workspace = true
 
 [lib]
 crate-type = ["cdylib", "rlib"]

@@ -69,6 +69,7 @@ compatibility-doc` and checked in CI for drift. Do not edit by hand.
 | `cratefield-ui` | 0.1.4 | 1 | `^0.5` — `>=0.5.0, <0.6.0` |
 | `cratefield-ui-generator` *(not published)* | 0.1.1 | 1 | `^0.5` — `>=0.5.0, <0.6.0` |
 | `cratefield-waitlist` *(not published)* | 0.1.1 | 1 | `^0.5` — `>=0.5.0, <0.6.0` |
+| `d1-blob-canary` *(not published)* | 0.1.0 | 1 | `^0.5` — `>=0.5.0, <0.6.0` |
 | `factory0-auth-core` *(not published)* | 0.1.1 | 1 | `^0.5` — `>=0.5.0, <0.6.0` |
 | `factory0-auth-magic-link` *(not published)* | 0.1.1 | 1 | `^0.5` — `>=0.5.0, <0.6.0` |
 | `factory0-auth-meta` *(not published)* | 0.1.1 | 1 | `^0.5` — `>=0.5.0, <0.6.0` |
