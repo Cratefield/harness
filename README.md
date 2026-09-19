@@ -311,6 +311,7 @@ docs/
   MOUNTING.md              compile a module in, or run it as a sidecar
   UI.md                    the UI surface, its markup contract, UiSpec, admin
   ui-llms.txt              the same contract written for a generator
+  llms.txt                 the build-and-deploy contract written for an agent
   adr/                     0000 … 0010
 tools/
   banner-render.html       source of the README banner
