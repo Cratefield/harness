@@ -180,6 +180,50 @@ impl Harness {
         &self.modules
     }
 
+    /// The largest body a runtime may buffer for the route at `path`,
+    /// answerable before any byte of it has been read (issue #440).
+    ///
+    /// `DefaultBodyLimit` inside `router()` is the precise per-route
+    /// enforcer, but it fires only once the body is already resident — too
+    /// late for a runtime that must buffer into a fixed memory ceiling (a
+    /// Workers isolate). This is the coarse pre-buffer ceiling that runtime
+    /// consults instead: for a path of the form `/v1/<name>` or
+    /// `/v1/<name>/...` it is the named module's [`Module::max_body_bytes`],
+    /// and for everything else — an unknown module, `/ui/*`, `/__events`,
+    /// `/.well-known/*`, or any path outside `/v1` — [`MAX_BODY_BYTES`].
+    ///
+    /// The result is floored at [`MAX_BODY_BYTES`] even for the module
+    /// routes: a module may raise the ceiling for a route (LinkedIn's image
+    /// upload), but the runtime guard sits in front of the router, and a
+    /// module that tightened it below what the router itself accepts would
+    /// 413 working requests.
+    ///
+    /// `path` is the URL path only — what `url.path()` returns. A query
+    /// string is tolerated and ignored, and empty segments from a leading,
+    /// trailing or doubled slash are collapsed; `/v1` with no module
+    /// segment is simply the default ceiling.
+    pub fn max_body_bytes(&self, path: &str, cfg: &dyn Config) -> usize {
+        // Cut at the first `?` or `#`; a caller passing a whole URL must
+        // not have the module misidentified from its tail.
+        let path = match path.split_once(['?', '#']) {
+            Some((path, _)) => path,
+            None => path,
+        };
+        let mut segments = path.split('/').filter(|segment| !segment.is_empty());
+        if segments.next() != Some("v1") {
+            return MAX_BODY_BYTES;
+        }
+        let Some(name) = segments.next() else {
+            return MAX_BODY_BYTES;
+        };
+        self.modules
+            .iter()
+            .find(|module| module.name() == name)
+            .map_or(MAX_BODY_BYTES, |module| {
+                MAX_BODY_BYTES.max(module.max_body_bytes(cfg))
+            })
+    }
+
     pub fn templates(&self) -> &Arc<TemplateRegistry> {
         &self.templates
     }
