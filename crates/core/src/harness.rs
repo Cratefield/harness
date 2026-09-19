@@ -299,6 +299,7 @@ impl Harness {
     fn production_readiness_now(&self, env: VentureEnv, config: &dyn Config) -> Vec<String> {
         if let Some(note) = crate::route_policy::env_disagreement(self.venture.env, env) {
             tracing::warn!("{note}");
+            crate::logging::forward_control_event(crate::logging::ControlLevel::Warn, &note);
         }
         let problems = crate::route_policy::production_readiness(
             env,
@@ -312,22 +313,32 @@ impl Harness {
         // An operator may accept this deployment's gap explicitly, and
         // the acceptance is recorded on every boot rather than discarded
         // (issue #143). The routes then serve, and the record is what
-        // someone answers for later.
+        // someone answers for later. The record is also forwarded (issue
+        // #441): on wasm the tracing event goes nowhere, and an acceptance
+        // nobody can read is an acceptance nobody answers for.
         if let Some(reason) = crate::route_policy::unprotected_writes_override(config) {
+            let problems = problems.join("; ");
+            let detail = format!(
+                "serving guarded routes unprotected on an operator's recorded acceptance \
+                 (reason: {reason}; problems: {problems})"
+            );
             tracing::warn!(
                 control = "production-readiness",
                 reason,
-                problems = problems.join("; "),
+                problems = problems,
                 "serving guarded routes unprotected on an operator's recorded acceptance"
             );
+            crate::logging::forward_control_event(crate::logging::ControlLevel::Warn, &detail);
             return Vec::new();
         }
         for problem in &problems {
-            error!(
+            let detail = format!(
                 "refusing guarded routes: {problem} — set {} to a reason to accept this \
                  explicitly while the port is wired",
                 crate::route_policy::ALLOW_UNPROTECTED_WRITES
             );
+            error!("{detail}");
+            crate::logging::forward_control_event(crate::logging::ControlLevel::Error, &detail);
         }
         problems
     }
@@ -360,14 +371,23 @@ impl Harness {
             Ok(mounts) => mounts,
             Err(errors) => {
                 for error in errors {
+                    let detail = format!("ignoring the sidecar mount table: {error}");
                     tracing::error!(error, "ignoring the sidecar mount table");
+                    // A dropped mount quietly unmounts a service (issue
+                    // #441): the operator must be able to read why.
+                    crate::logging::forward_control_event(
+                        crate::logging::ControlLevel::Error,
+                        &detail,
+                    );
                 }
                 crate::sidecar::SidecarMounts::default()
             }
         };
         let module_names: Vec<&str> = self.modules.iter().map(|m| m.name()).collect();
         for collision in mounts.collisions(&module_names) {
+            let detail = format!("ignoring the colliding sidecar mount: {collision}");
             tracing::error!(error = collision, "ignoring the colliding sidecar mount");
+            crate::logging::forward_control_event(crate::logging::ControlLevel::Error, &detail);
         }
         mounts
             .iter()

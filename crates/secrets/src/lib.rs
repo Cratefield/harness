@@ -435,6 +435,22 @@ impl Audit for TracingAudit {
             allowed = event.allowed,
             "secret access"
         );
+        // The audit trail is an accountability control, not a nicety, so
+        // the same record rides the forwarder (issue #441): on wasm the
+        // tracing event goes nowhere, and an access nobody can read is an
+        // audit nobody answers for.
+        cratefield_core::forward_control_event(
+            cratefield_core::ControlLevel::Info,
+            &format!(
+                "secret access: store {} {} actor {} name {} version {} allowed {}",
+                event.store,
+                event.access.as_str(),
+                event.actor.as_str(),
+                event.name.unwrap_or("-"),
+                event.version.unwrap_or(0),
+                event.allowed
+            ),
+        );
         Ok(())
     }
 }

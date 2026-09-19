@@ -63,8 +63,9 @@ pub use http::{Form, Json, MAX_BODY_BYTES, X_REQUEST_ID, rate_limited, request_i
 pub use idempotency::Inbox;
 pub use lint::{CARD_DATA, card_data_hit, created_tables, lint_card_data, lint_portable_sql};
 pub use logging::{
-    RedactingVisitor, is_email_field, is_secret_field, redacted_value, scrub_request_url,
-    scrub_text, set_error_forwarder, set_log_pseudonym_key, subject_hash,
+    ControlLevel, RedactingVisitor, forward_control_event, is_email_field, is_secret_field,
+    redacted_value, scrub_request_url, scrub_text, set_error_forwarder, set_log_pseudonym_key,
+    subject_hash,
 };
 pub use module::{
     BoxFuture, HARNESS_API, Migrations, Module, ModuleContext, SqlMigration, assert_migration_set,
