@@ -18,12 +18,19 @@
 //!
 //! The functions take the trait rather than the `TenantConn` so they can
 //! be exercised against a real database without an HTTP stack —
-//! `TenantConn` has no constructor, which is the point of it. The routes
-//! below are where the tenant-bound handle is insisted on.
+//! `TenantConn` has no constructor, which is the point of it. The one
+//! other thing the request needs from that connection — its
+//! [`Tenancy`](cratefield_core::Tenancy), the fact a membership rule
+//! reads (#385) — arrives as its own parameter, fed from
+//! `conn.tenancy()` at the routes; the tests here pass the tenancy they
+//! mean to decide under. The routes below are where the tenant-bound
+//! handle is insisted on.
 
 use std::sync::Arc;
 
-use cratefield_core::{Caller, Database, ModuleContext, Problem, ProblemDef, Scope, require_admin};
+use cratefield_core::{
+    Caller, Database, ModuleContext, Problem, ProblemDef, Scope, Tenancy, require_admin,
+};
 use cratefield_tables::{Owned, TableDef};
 use http::{HeaderMap, StatusCode};
 use serde_json::{Value, json};
@@ -197,6 +204,7 @@ pub struct Asked<'a> {
 pub async fn page(
     tables: &Tables,
     conn: &dyn Database,
+    tenancy: Tenancy,
     headers: &HeaderMap,
     scope: &Scope,
     asked: Asked<'_>,
@@ -211,6 +219,7 @@ pub async fn page(
     let caller = who(tables, headers, api).await?;
     let reach = may_read(
         api,
+        tenancy,
         &caller,
         require_admin(tables.ctx.config.as_ref(), headers),
     )?;
@@ -260,6 +269,7 @@ pub async fn page(
 pub async fn one(
     tables: &Tables,
     conn: &dyn Database,
+    tenancy: Tenancy,
     headers: &HeaderMap,
     scope: &Scope,
     name: &str,
@@ -269,6 +279,7 @@ pub async fn one(
     let caller = who(tables, headers, api).await?;
     let reach = may_read(
         api,
+        tenancy,
         &caller,
         require_admin(tables.ctx.config.as_ref(), headers),
     )?;

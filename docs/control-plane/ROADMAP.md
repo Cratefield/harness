@@ -66,7 +66,11 @@ function change takes seconds instead of a build.
 The access vocabulary for (b) stays small and declarative:
 `public-read | owner | tenant-members | admin`, evaluated in Rust. It is not a policy
 language and should not grow into one, because database-per-tenant already handles the
-dangerous axis at the boundary. State the cost of that rather than discover it. Four words
+dangerous axis at the boundary. State the cost of that rather than discover it. One cost has
+been discovered: `tenant-members` presumes a membership fact the verifier does not supply,
+so on a deployment whose tenants come from a registry the level is refused for everybody
+rather than served to whoever arrives (issue #385, still open — the real answer is a tenant
+claim on the subject). Four words
 cover a product where a row belongs to one user or to one tenant, which is most internal
 tools and most simple CRUD. They do not cover sharing with a named person, publishing a
 draft, project membership with roles, or a marketplace. Those need code, which means the H2

@@ -22,7 +22,10 @@
 //! request's tenant. `ctx.ports.db` is captured once in handler state and
 //! is the same handle for every request whoever asked — for a venture's
 //! own rows that is the difference between serving a row and serving one
-//! tenant's customer their neighbour's data.
+//! tenant's customer their neighbour's data. The tenancy rides out of the
+//! same extractor — `conn.tenancy()` — because the access decision about
+//! who may use this connection has to know whether a registry named its
+//! tenant (#385), and the extractor is the only place that fact exists.
 
 use std::sync::Arc;
 
@@ -134,6 +137,7 @@ async fn page_route(
     let body = page(
         &tables,
         &conn,
+        conn.tenancy(),
         &headers,
         &scope,
         crate::read::Asked {
@@ -162,7 +166,16 @@ async fn one_route(
         .declared(&table)
         .ok_or_else(|| Problem::new(&crate::read::NO_SUCH_TABLE))?;
     let key = key_from_path(&api.table, &key)?;
-    let body = one(&tables, &conn, &headers, &scope, &table, &key.0).await?;
+    let body = one(
+        &tables,
+        &conn,
+        conn.tenancy(),
+        &headers,
+        &scope,
+        &table,
+        &key.0,
+    )
+    .await?;
     Ok(axum::Json(body))
 }
 
@@ -219,7 +232,16 @@ async fn create_route(
     headers: HeaderMap,
     body: axum::Json<Value>,
 ) -> Result<(StatusCode, axum::Json<Value>), Problem> {
-    let row = crate::write::create(&tables, &conn, &headers, &scope, &table, body.0).await?;
+    let row = crate::write::create(
+        &tables,
+        &conn,
+        conn.tenancy(),
+        &headers,
+        &scope,
+        &table,
+        body.0,
+    )
+    .await?;
     // 201, because a create that answers 200 is indistinguishable from an
     // update to a client that is watching status codes.
     Ok((StatusCode::CREATED, axum::Json(row)))
@@ -237,8 +259,17 @@ async fn replace_route(
         .declared(&table)
         .ok_or_else(|| Problem::new(&crate::read::NO_SUCH_TABLE))?;
     let key = key_from_path(&api.table, &key)?;
-    let row =
-        crate::write::replace(&tables, &conn, &headers, &scope, &table, &key.0, body.0).await?;
+    let row = crate::write::replace(
+        &tables,
+        &conn,
+        conn.tenancy(),
+        &headers,
+        &scope,
+        &table,
+        &key.0,
+        body.0,
+    )
+    .await?;
     Ok(axum::Json(row))
 }
 
@@ -253,7 +284,16 @@ async fn remove_route(
         .declared(&table)
         .ok_or_else(|| Problem::new(&crate::read::NO_SUCH_TABLE))?;
     let key = key_from_path(&api.table, &key)?;
-    crate::write::remove(&tables, &conn, &headers, &scope, &table, &key.0).await?;
+    crate::write::remove(
+        &tables,
+        &conn,
+        conn.tenancy(),
+        &headers,
+        &scope,
+        &table,
+        &key.0,
+    )
+    .await?;
     // No body: there is nothing left to describe, and inventing one
     // ("deleted": true) is a second thing to keep true.
     Ok(StatusCode::NO_CONTENT)
@@ -398,7 +438,8 @@ async fn batch_route(
     headers: HeaderMap,
     body: axum::Json<Batch>,
 ) -> Result<axum::Json<Value>, Problem> {
-    let answer = crate::batch::run(&tables, &conn, &headers, &scope, &body.0).await?;
+    let answer =
+        crate::batch::run(&tables, &conn, conn.tenancy(), &headers, &scope, &body.0).await?;
     Ok(axum::Json(answer))
 }
 

@@ -122,7 +122,7 @@ pub use surface::{
 };
 pub use template::{Rendered, Template, TemplateError, TemplateRegistry};
 pub use tenant::{
-    IMPLICIT_TENANT, ImplicitTenant, Resolution, ResolveTenant, Tenant, TenantDatabases,
+    IMPLICIT_TENANT, ImplicitTenant, Resolution, ResolveTenant, Tenancy, Tenant, TenantDatabases,
     TenantDbError, TenantId, TenantRouting, TenantStatus,
 };
 pub use tenant_conn::TenantConn;
