@@ -392,11 +392,24 @@ impl Harness {
             // and the acceptance is recorded rather than discarded
             // (issue #143) — once, even though Workers rebuild this
             // router per request (issue #437).
+            // What the gate WOULD have refused, asked for again with no
+            // waivers: the waived text is never pushed, so this is the only
+            // way to name the problems the operator accepted — and #441's
+            // record is only accountable if it carries them.
+            let accepted = crate::route_policy::production_readiness(
+                env,
+                &guards,
+                self.runtime.as_ref(),
+                rate_limiter_ready,
+                None,
+                None,
+            );
             self.record_acceptances_once(
                 &guards,
                 rate_limiter_ready,
                 unprotected.as_deref(),
                 unlimited.as_deref(),
+                &accepted,
             );
             return problems;
         }
@@ -430,6 +443,7 @@ impl Harness {
         rate_limiter_ready: bool,
         unprotected: Option<&str>,
         unlimited: Option<&str>,
+        accepted: &[String],
     ) {
         if guards.needs_captcha()
             && !crate::route_policy::captcha_effective(self.runtime.as_ref())
@@ -438,12 +452,21 @@ impl Harness {
                 .unprotected_acceptance_recorded
                 .swap(true, Ordering::Relaxed)
         {
+            let detail = format!(
+                "serving guarded routes unprotected on an operator's recorded acceptance \
+                 (reason: {reason}; problems: {})",
+                accepted.join("; ")
+            );
             tracing::warn!(
                 control = "production-readiness",
                 acceptance = crate::route_policy::ALLOW_UNPROTECTED_WRITES,
                 reason,
                 "serving captcha-guarded routes unprotected on an operator's recorded acceptance"
             );
+            // Forwarded, not just traced (issue #441): on wasm the tracing
+            // event goes nowhere, and an acceptance nobody can read is an
+            // acceptance nobody answers for.
+            crate::logging::forward_control_event(crate::logging::ControlLevel::Warn, &detail);
         }
         if guards.needs_rate_limiter()
             && !rate_limiter_ready
@@ -452,6 +475,11 @@ impl Harness {
                 .unlimited_acceptance_recorded
                 .swap(true, Ordering::Relaxed)
         {
+            let detail = format!(
+                "serving public writes and admin routes without a rate limiter on an \
+                 operator's recorded acceptance (reason: {reason}; problems: {})",
+                accepted.join("; ")
+            );
             tracing::warn!(
                 control = "production-readiness",
                 acceptance = crate::route_policy::ALLOW_UNLIMITED_PUBLIC_ROUTES,
@@ -459,6 +487,8 @@ impl Harness {
                 "serving public writes and admin routes without a rate limiter on an \
                  operator's recorded acceptance"
             );
+            // Forwarded for the same reason as the leg above (issue #441).
+            crate::logging::forward_control_event(crate::logging::ControlLevel::Warn, &detail);
         }
     }
 
