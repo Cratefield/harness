@@ -564,6 +564,7 @@ impl Harness {
             push: _,
             payments: _,
             realtime: _,
+            text_model: _,
             http: _,
             clock,
             id_gen,
