@@ -5,6 +5,8 @@
 mod support;
 
 use axum::http::{Method, StatusCode};
+use cratefield_core::{MapConfig, Module as _};
+use fz_module_linkedin::Linkedin;
 use support::{ORG, connect, get, png, post_json, send};
 use tower::ServiceExt;
 
@@ -79,6 +81,29 @@ fn the_route_raises_cores_64_kib_body_cap() {
         assert_eq!(response.status, StatusCode::ACCEPTED, "{}", response.text());
         assert_eq!(response.json()["status"], "available");
     });
+}
+
+/// The ceiling a runtime may refuse at before buffering (issue #440) is the
+/// route's own effective cap, read through the same `MAX_IMAGE_BYTES` key:
+/// an operator who raises the key must not find the runtime 413ing, before
+/// the route is ever reached, a body the route itself accepts.
+#[test]
+fn the_declared_ceiling_tracks_the_max_image_bytes_override() {
+    // Absent the key: the builder's 8 MiB default.
+    assert_eq!(
+        Linkedin::new().max_body_bytes(&MapConfig::default()),
+        8 * 1024 * 1024
+    );
+
+    // The key raises it — above the builder setting, above the compiled
+    // default, either way the declared ceiling follows.
+    let raised = MapConfig::from_pairs([("LINKEDIN_MAX_IMAGE_BYTES", "12345678")]);
+    assert_eq!(Linkedin::new().max_body_bytes(&raised), 12_345_678);
+
+    // Config wins over the builder, like every other setting.
+    let built = Linkedin::new().max_image_bytes(64 * 1024);
+    assert_eq!(built.max_body_bytes(&raised), 12_345_678);
+    assert_eq!(built.max_body_bytes(&MapConfig::default()), 64 * 1024);
 }
 
 #[test]

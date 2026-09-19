@@ -36,7 +36,7 @@ let module = EmailSignup::new().subscribe_on_waitlist_confirm(true);
 adds confirmed waitlist addresses to the signup list through the
 `waitlist.confirmed` event — no crate dependency between the modules.
 
-Register the default mail templates in `harness.rs`:
+Register the default mail templates in the venture's `src/lib.rs`:
 
 ```rust
 use cratefield_core::Harness;

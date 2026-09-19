@@ -4,9 +4,10 @@
 //! artifact to deploy, so `auth.factory0.ventures` did not exist and every
 //! consumer (Yoginini, the Cratefield control plane) was blocked.
 //!
-//! It is an ordinary harness venture — one Worker, one D1 — following the
-//! `ventures/_template` layout. Which login methods ship is simply which
-//! modules are mounted here; the rest mount later without redeploying consumers.
+//! It is an ordinary harness venture — one Worker, one D1 — the shape `fz
+//! build` generates (`examples/tables-canary` is one, committed). Which
+//! login methods ship is simply which modules are mounted here; the rest
+//! mount later without redeploying consumers.
 //!
 //! **Owner-only (needs-human):** `wrangler d1 create` for each environment, the
 //! `HARNESS_SECRET`/signing material, the `auth.factory0.ventures` route on the

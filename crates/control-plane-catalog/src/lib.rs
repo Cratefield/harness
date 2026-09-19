@@ -676,6 +676,7 @@ fn route(method: &str, path: &str, note: &str) -> CatalogRoute {
     }
 }
 fn entry(
+    version: &str,
     slug: &str,
     name: &str,
     summary: &str,
@@ -690,7 +691,7 @@ fn entry(
         tier,
         depends_on: deps.iter().map(|s| (*s).to_owned()).collect(),
         releases: vec![ModuleRelease {
-            version: "0.1.1".to_owned(),
+            version: version.to_owned(),
             digest: format!("sha256:{}", "0".repeat(64)),
             review: ReleaseReview::Approved {
                 reviewer: "release-review".to_owned(),
@@ -723,6 +724,7 @@ fn detail(
 /// The `email-signup` entry.
 fn email_signup() -> CatalogModule {
     entry(
+        "0.1.1",
         "email-signup",
         "Email signup",
         "Collect email addresses with double opt-in, confirmation and unsubscribe.",
@@ -773,6 +775,7 @@ fn email_signup() -> CatalogModule {
 /// The `waitlist` entry.
 fn waitlist() -> CatalogModule {
     entry(
+        "0.1.1",
         "waitlist",
         "Waitlist",
         "A per-product waitlist with confirmation, positions and referral codes.",
@@ -824,6 +827,7 @@ fn waitlist() -> CatalogModule {
 /// The `cms` entry.
 fn cms() -> CatalogModule {
     entry(
+        "0.1.1",
         "cms",
         "Content",
         "Typed, versioned content in your own database, edited through the admin.",
@@ -880,6 +884,7 @@ fn cms() -> CatalogModule {
 /// The `changelog` entry.
 fn changelog() -> CatalogModule {
     entry(
+        "0.1.1",
         "changelog",
         "Changelog",
         "A project's releases mirrored into your own database, served without calling upstream.",
@@ -926,6 +931,7 @@ fn changelog() -> CatalogModule {
 /// The `notifications` entry.
 fn notifications() -> CatalogModule {
     entry(
+        "0.1.1",
         "notifications",
         "Notifications",
         "Push to phones and browsers, an in-app inbox, and email — one API, \
@@ -1014,6 +1020,7 @@ fn notifications() -> CatalogModule {
 /// The `privacy` entry.
 fn privacy() -> CatalogModule {
     entry(
+        "0.1.1",
         "privacy",
         "Privacy requests",
         "Answer a subject access or erasure request from what every other \
@@ -1060,11 +1067,58 @@ fn privacy() -> CatalogModule {
     )
 }
 
+/// The `telemetry` entry.
+fn telemetry() -> CatalogModule {
+    entry(
+        "0.1.0",
+        "telemetry",
+        "Telemetry",
+        "Counted usage events in your own database — a closed event vocabulary, \
+                 consent on by default, and no third-party analytics service.",
+        Tier::Optional,
+        &[],
+        detail(
+            "You declare the closed vocabulary of event names you want counted, \
+                     and clients report batches of counted runs against it: every \
+                     field is an enum, a count, a duration bucket or a fixed-width \
+                     id, so there is no free text and nothing a person wrote can \
+                     arrive at all. The counts accumulate in your own database, \
+                     never in a third-party analytics service. Reporting is on by \
+                     default and easy to refuse — `DO_NOT_TRACK` and `CI` are \
+                     honoured, and the local opt-out works with no network — and \
+                     the install id that keys the rows is pseudonymous, with no \
+                     stored link to a person.",
+            "cratefield-module-telemetry",
+            &["Database"],
+            &["Clock", "RateLimiter"],
+            &["telemetry_events", "telemetry_modules"],
+            vec![
+                route(
+                    "POST",
+                    "/v1/telemetry/events",
+                    "Report a batch of counted events.",
+                ),
+                route(
+                    "GET",
+                    "/v1/telemetry/notice",
+                    "What is counted, and the one-line way to switch it off.",
+                ),
+                route(
+                    "GET",
+                    "/v1/telemetry/admin/usage",
+                    "Admin token: the aggregate rows, grouped so no install is named.",
+                ),
+            ],
+            None,
+        ),
+    )
+}
+
 /// The curated set, in the order the wizard shows it.
 ///
 /// One function per module rather than one long list: each entry is a
 /// paragraph of customer-facing copy plus the facts
-/// `tests/detail_matches_the_modules.rs` pins, and five of those in a
+/// `tests/detail_matches_the_modules.rs` pins, and six of those in a
 /// single function is a screenful nobody can review a change to.
 #[must_use]
 pub fn curated() -> Catalog {
@@ -1076,6 +1130,7 @@ pub fn curated() -> Catalog {
             changelog(),
             notifications(),
             privacy(),
+            telemetry(),
         ],
     }
 }

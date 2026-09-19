@@ -1,0 +1,113 @@
+# Cratefield harness: what an AI coding agent needs
+
+You are building, changing or deploying a Cratefield venture. A venture
+is one Worker, one primary database, one deploy. The manifest — the
+`venture.json` file at the repo root — is the source of truth for what
+the venture is: every command below reads it, and nothing else about the
+composition is authoritative. The `fz` CLI is the only tool you need
+until the final build-and-deploy step.
+
+## The manifest
+Default filename `venture.json`; JSON or TOML, chosen by extension.
+`name`, `host` and `modules` are required; the rest are optional:
+
+- `name` — kebab-case; becomes the generated crate name.
+- `host` — the primary host the backend answers on.
+- `public_url` — the canonical public URL, if it differs from
+  `https://{host}`.
+- `cors_origins` — first-party origins allowed to call the API from a
+  browser; `fz init` seeds it with `["https://{host}"]`.
+- `modules` — bare slugs, or `{"slug": "...", "config": {...}}` objects.
+- `config` — venture-wide keys, read through the `Config` port.
+- `seed_sql` — SQL run once after migrations, to seed rows.
+- `tables`, `table_privacy`, `table_access` — tables the venture declares
+  itself, each with its privacy and its access rules.
+
+```json
+{"name": "acme-signups", "host": "acme.factory0.dev", "modules": ["waitlist", "email-signup"], "config": { "brand": "Acme" }}
+```
+
+## The workflow, in order
+1. `fz init --name <name> --host <host>` — writes a manifest with no
+   modules and `cors_origins` seeded from the host.
+2. `fz add <module>` — appends a catalog module slug to the manifest.
+3. `fz plan --json` — read-only. It writes nothing. It reads the
+   manifest, the lockfile and the deploy record, and prints the
+   normalised plan with its `digest`. The digest is the approval token;
+   capture it.
+4. `fz deploy --plan <digest>` — recomputes the plan and refuses any
+   digest that does not match the recomputation (`stale-plan`). If the
+   plan has gone stale, re-run `fz plan --json` and deploy the fresh
+   digest. Deploy compiles nothing and touches no database; it writes
+   `.harness-deploy.json`. Two consent flags, required when they apply:
+   - `ENV=production` additionally requires
+     `--i-am-deploying-to-production`.
+   - a plan that removes modules requires `--i-am-removing-modules`.
+5. Deploy prints the remaining steps itself; they are:
+   `fz migrations collect`, `fz doctor --json`, `worker-build --release`,
+   `wrangler deploy`.
+
+Never edit `.harness-deploy.json` by hand. When unsure what state a
+venture is in, run `fz verify --json`.
+
+## Machine-readable output
+`--json` exists on exactly `doctor`, `plan`, `deploy`, `add`, `init` and
+`verify`. Nothing else speaks `--json`: `migrations`, `modules`,
+`build`, `build-key`, `data`, `tables` and `push` print prose. Do not
+screen-scrape them; drive them by their files and arguments instead.
+Every JSON object carries the same envelope:
+
+```json
+{"schema": 1, "ok": true, "failures": []}
+```
+
+Per verb: `doctor` and `verify` return `{schema, ok, failures}`; `plan`
+adds `digest`, the plan content and `baseline`; `deploy` adds `changed`,
+`venture`, `env`, `modules_added`, `modules_removed` and `record`; `add`
+adds `module` and `manifest`; `init` adds `name`, `host` and `manifest`.
+Failures are `[{code, message}]`. The `code` is a stable kebab-case slug
+that is never renamed, reworded or removed; messages may change wording
+freely. The catalogue lives in `crates/cli/src/codes.rs`. Branch on
+codes; show messages to the human.
+
+## `fz verify`: what state is the deployment in
+`fz verify --json` diffs the recorded deployment against the current
+manifest. Its codes, all stable:
+
+- `not-deployed` — no deployment is recorded for this manifest.
+- `composition-drift` — the recorded module set no longer matches the
+  manifest's resolved composition.
+- `config-drift` — the recorded config no longer matches the manifest.
+- `env-drift` — the resolved deployment environment changed since the
+  recorded deployment.
+- `manifest-drift` — the recorded digest no longer matches a recomputed
+  plan and no narrower drift explains it.
+
+## Reading the running venture
+`GET /__surface` on the venture's public URL returns the live surface:
+the venture's name and public URL, and per module its name, version,
+actions and views. The public subset is served by default;
+`Authorization: Bearer <ADMIN_TOKEN>` returns the admin variant. The
+response carries a strong `ETag`; send `If-None-Match` and an unchanged
+surface answers `304`. Discover names from the surface instead of
+hardcoding them: a module, action or field you invent does not exist.
+
+```json
+{"surface_api": 1, "harness_api": 1, "venture": {"name": "acme-signups", "public_url": "https://acme.factory0.dev"}, "modules": [{"name": "waitlist", "version": "0.1.0", "actions": [], "views": []}]}
+```
+
+## What does not exist yet
+Do not import, configure or invent these; referencing them is a
+hallucination:
+
+- An MCP server over `fz --json` (harness issue #160) — planned, not
+  published. Until it lands, drive `fz` through its `--json` verbs.
+- `@cratefield/client`, the generated TypeScript client (harness issue
+  #155) — planned, not published. Until it lands, call the venture's
+  public URL over HTTP and read `GET /__surface` for the names.
+
+## Where to read more
+- `docs/ui-llms.txt` — the same shape of contract for generating the
+  venture's UI spec (ADR 0010).
+- `docs/VENTURE-GUIDE.md` — the guide to building a venture, module by
+  module.

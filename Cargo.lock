@@ -657,6 +657,7 @@ dependencies = [
  "cratefield-module-email-signup",
  "cratefield-module-notifications",
  "cratefield-module-privacy",
+ "cratefield-module-telemetry",
  "cratefield-module-waitlist",
  "cratefield-push-auth",
  "cratefield-push-wiring",
@@ -900,6 +901,7 @@ dependencies = [
  "cratefield-module-email-signup",
  "cratefield-module-notifications",
  "cratefield-module-privacy",
+ "cratefield-module-telemetry",
  "cratefield-module-waitlist",
  "serde",
  "serde_json",
@@ -1084,6 +1086,7 @@ dependencies = [
  "ulid",
  "unicode-normalization",
  "url",
+ "zeroize",
 ]
 
 [[package]]
@@ -1104,6 +1107,7 @@ dependencies = [
  "cratefield-core",
  "cratefield-introspect",
  "cratefield-kms",
+ "cratefield-linker",
  "cratefield-provisioning",
  "cratefield-secrets",
  "cratefield-tables",
@@ -1166,6 +1170,8 @@ name = "cratefield-linker"
 version = "0.1.1"
 dependencies = [
  "cratefield-manifest",
+ "cratefield-provisioning",
+ "pollster",
  "serde",
  "serde_json",
  "sha2 0.11.0",
@@ -1316,6 +1322,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "cratefield-module-telemetry"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "cratefield-adapter-sqlite",
+ "cratefield-core",
+ "cratefield-module-privacy",
+ "cratefield-testing",
+ "http",
+ "mime",
+ "pollster",
+ "sea-query",
+ "serde",
+ "serde_json",
+ "time",
+ "tower",
+ "tracing",
+]
+
+[[package]]
 name = "cratefield-module-waitlist"
 version = "0.1.4"
 dependencies = [
@@ -1438,6 +1464,7 @@ dependencies = [
  "futures-util",
  "getrandom 0.4.3",
  "http",
+ "pollster",
  "sea-query",
  "serde",
  "serde_json",
@@ -1510,6 +1537,7 @@ dependencies = [
 name = "cratefield-tables-api"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "axum",
  "cratefield-adapter-sqlite",
  "cratefield-core",

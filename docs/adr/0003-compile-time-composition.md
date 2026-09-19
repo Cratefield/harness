@@ -8,7 +8,7 @@ independent; the harness is open source, some modules private.
 
 ## Decision
 A venture backend is a Cargo project (from `venture-backend-template`) whose
-`src/harness.rs` builds a `Harness` from module crates. The wasm binary
+`src/lib.rs` builds a `Harness` from module crates. The wasm binary
 contains exactly those modules. There is no runtime plugin loading and no
 multi-tenant deployment.
 

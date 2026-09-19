@@ -413,6 +413,37 @@ impl ResolveTenant for ImplicitTenant {
     }
 }
 
+/// Which of the two tenancy shapes served a request.
+///
+/// A deployment either has a tenant plane — a registry that turns each
+/// request's `Host` into a tenant — or it has none, and every host is
+/// the one implicit tenant ([`ImplicitTenant`], TENANT-ROUTING.md §6).
+/// The two shapes differ in more than wiring: they differ in what "a
+/// verified caller" can mean (issue #385). With a registry,
+/// `a.example` and `b.example` are different tenants behind one binary,
+/// and a subject who signed in as a user of tenant A can present the
+/// same bearer at tenant B's host — there, "any verified caller" and
+/// "a member of this tenant" are different sets. Without one, the
+/// request could only ever have reached the single database there is,
+/// and the two sets are the same set.
+///
+/// The bit records which shape a request arrived under, so a rule that
+/// needs membership can fail closed where the sets differ and serve
+/// where they coincide. It is a routing fact and deliberately nothing
+/// more: [`Tenancy::FromRegistry`] says a registry *named* this tenant,
+/// not that the caller belongs to it. Membership is a registry fact
+/// this bit does not carry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Tenancy {
+    /// No tenant plane: every host is the one implicit tenant
+    /// ([`IMPLICIT_TENANT`]), and there is no second tenant to leak
+    /// into.
+    Sole,
+    /// A registry resolved this request's tenant from its `Host`
+    /// header.
+    FromRegistry,
+}
+
 #[cfg(test)]
 mod tests {
     use super::{Resolution, TenantStatus};

@@ -18,7 +18,7 @@ curl -fsS http://127.0.0.1:8792/__ready
 ```
 
 See [CONTRIBUTING.md](../../CONTRIBUTING.md) for the full walkthrough and
-[docs/VENTURE-GUIDE.md](../../docs/VENTURE-GUIDE.md) for the template-to-
+[docs/VENTURE-GUIDE.md](../../docs/VENTURE-GUIDE.md) for the init-to-
 production path this example mirrors. The guide-built module
 [`cratefield-module-hello`](../module-hello/) is its documentation-focused
 sibling.

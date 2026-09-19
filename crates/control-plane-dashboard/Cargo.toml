@@ -17,6 +17,10 @@ cratefield-accounts = { path = "../control-plane-accounts" }
 cratefield-connections = { path = "../control-plane-connections" }
 cratefield-console = { path = "../control-plane-console" }
 cratefield-provisioning = { path = "../control-plane-provisioning" }
+# The deployer the provisioning routes hand the engine: the artifact step
+# goes through the linker (issue #159), which falls back to the build path
+# provisioning already runs.
+cratefield-linker = { path = "../control-plane-linker" }
 # The module set the screen offers is the catalogue's, not a free-text box.
 cratefield-catalog = { path = "../control-plane-catalog" }
 # The billing screen's model and port: the pricing tables sourced from

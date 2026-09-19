@@ -95,11 +95,30 @@ pub async fn check_rate_limit(
                 return RateLimit::Denied { retry_after };
             }
             Err(err) => {
+                // Which way the failure resolved is the composition's
+                // security posture, so it rides the forwarder too (issue
+                // #441): on wasm the tracing event goes nowhere, and a
+                // silently flipped fail-open is not a posture but a hole.
+                // The key rides the structured event only behind the
+                // field-name redaction (`key` is a secret field, issue
+                // #135), so the forwarded line redacts it the same way:
+                // an address or an IP the event never showed must not
+                // reach Workers Logs because the format! did.
+                let redacted_key = crate::logging::redacted_value("key", key);
                 if on_failure == RateLimitFailure::FailClosed {
+                    let detail =
+                        format!("rate limiter unavailable; denying: {err} (key: {redacted_key})");
                     tracing::warn!(error = %err, key = %key, "rate limiter unavailable; denying");
+                    crate::logging::forward_control_event(
+                        crate::logging::ControlLevel::Warn,
+                        &detail,
+                    );
                     return RateLimit::Denied { retry_after: None };
                 }
+                let detail =
+                    format!("rate limiter unavailable; allowing: {err} (key: {redacted_key})");
                 tracing::warn!(error = %err, key = %key, "rate limiter unavailable; allowing");
+                crate::logging::forward_control_event(crate::logging::ControlLevel::Warn, &detail);
             }
         }
     }

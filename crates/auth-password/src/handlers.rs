@@ -17,7 +17,7 @@ use factory0_auth_core::{
     insert_identity, issue as issue_session, password_credential, set_cookie, set_password_hash,
     set_password_lockout, user_by_id, user_by_primary_email, verify_password,
 };
-use http::{HeaderMap, StatusCode, header};
+use http::{HeaderMap, StatusCode, Uri, header};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::sync::Arc;
@@ -370,10 +370,21 @@ async fn start_submit(
     State(state): State<Arc<ModuleState>>,
     scope: Scope,
     headers: HeaderMap,
+    uri: Uri,
     axum::extract::Form(form): axum::extract::Form<StartForm>,
 ) -> Result<Response, Problem> {
     let return_to = safe_return_to(form.return_to.as_deref());
-    match sign_in(&state, &scope, &headers, &form.email, &form.password, None).await? {
+    match sign_in(
+        &state,
+        &scope,
+        &headers,
+        &uri,
+        &form.email,
+        &form.password,
+        None,
+    )
+    .await?
+    {
         Outcome::SignedIn(session) => Ok((
             StatusCode::SEE_OTHER,
             [
@@ -481,6 +492,7 @@ async fn login(
     State(state): State<Arc<ModuleState>>,
     scope: Scope,
     headers: HeaderMap,
+    uri: Uri,
     raw: bytes::Bytes,
 ) -> Result<Response, Problem> {
     let body = body_of(&raw);
@@ -493,6 +505,7 @@ async fn login(
         &state,
         &scope,
         &headers,
+        &uri,
         &credentials.email,
         &credentials.password,
         captcha_token,
@@ -505,17 +518,27 @@ async fn login(
     }
 }
 
-/// Everything both entry points do: limit, captcha, the dummy-hash verify
-/// for an unknown address, the lockout, the session. Shared so a page
-/// cannot grow a second set of rules about who may sign in.
+/// Everything both entry points do: refuse a cross-site POST, limit,
+/// captcha, the dummy-hash verify for an unknown address, the lockout, the
+/// session. Shared so a page cannot grow a second set of rules about who
+/// may sign in.
 async fn sign_in(
     state: &ModuleState,
     scope: &Scope,
     headers: &HeaderMap,
+    uri: &Uri,
     raw_email: &str,
     password: &str,
     captcha_token: Option<&str>,
 ) -> Result<Outcome, Problem> {
+    // A sign-in mints a session, so a form on another site must not be
+    // able to complete one: `SameSite=Lax` keeps the victim's cookie from
+    // *carrying*, not the answer from *setting* the attacker's (issue
+    // #439). The request itself is refused on arrival, ahead of anything
+    // else this function would do with it.
+    factory0_auth_core::csrf::require_same_origin(headers, uri)
+        .map_err(|problem| problem.instance(&scope.request_id))?;
+
     let email = cratefield_core::normalize_email(raw_email);
 
     if let Some(pause) = limit_pause(state, headers, Some(&email)).await {
@@ -595,8 +618,10 @@ async fn sign_in(
             ip: ip.as_deref(),
             user_agent,
             presented_cookie: presented.as_deref(),
-            // A same-origin POST from our own form, so the cookie above
-            // arrives and names the session itself (auth #36).
+            // `require_same_origin` has already turned away every
+            // cross-site POST, so "a same-origin POST from our own form"
+            // is the checked fact that lets the cookie above arrive and
+            // name the session itself (auth #36, #439).
             presented_session_id: None,
             amr: &AMR,
         },
@@ -729,8 +754,13 @@ async fn change(
     State(state): State<Arc<ModuleState>>,
     scope: Scope,
     headers: HeaderMap,
+    uri: Uri,
     raw: bytes::Bytes,
 ) -> Result<Response, Problem> {
+    // A change re-issues a session, so it is a sign-in as far as a
+    // cross-site attacker is concerned (issue #439).
+    factory0_auth_core::csrf::require_same_origin(&headers, &uri)
+        .map_err(|problem| problem.instance(&scope.request_id))?;
     if let Some(limited) = limit(&state, &headers, None).await {
         return Ok(limited);
     }

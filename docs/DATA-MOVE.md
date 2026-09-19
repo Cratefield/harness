@@ -95,7 +95,7 @@ run in production.
    rule returning `503`).
 2. Repeat steps 2–4 against the **production** Postgres, from a fresh
    `wrangler d1 export` so nothing written after the rehearsal leaks in.
-3. Switch `src/harness.rs` to the native runtime
+3. Switch the venture's `src/lib.rs` to the native runtime
    (`.runtime(Native::new().db(Postgres::from_env()))`), build, deploy.
 4. Point `api.<domain>` at the new host, watch `/__health` and
    `/__ready`, unfreeze writes.

@@ -864,13 +864,45 @@ mod tests {
 }
 
 // ---------------------------------------------------------------------------
-// Internal-error forwarder (issue #107)
+// Control-event forwarder (issue #107; widened to every boot-time control
+// event by issue #441)
 
 /// A process-wide sink for internal-error diagnostics, installed by the
 /// runtime. See [`set_error_forwarder`].
 type ErrorForwarder = fn(&str);
 
 static ERROR_FORWARDER: OnceLock<ErrorForwarder> = OnceLock::new();
+
+/// How severe a forwarded control event is (issue #441).
+///
+/// On `wasm32` no tracing dispatcher can be installed (it hangs the
+/// workerd isolate), so the accountability `tracing` carries — the
+/// `HARNESS_ALLOW_UNPROTECTED_WRITES` acceptance, the production-readiness
+/// refusal, a gateway secret that would not load, the secret-access audit —
+/// went nowhere, exactly as the 500-mapped internal errors of issue #107
+/// did. Those events ride the same forwarder as the errors now, but they
+/// are not all failures: the level travels with the line so Workers Logs
+/// shows an acceptance as a warning and an audit record as information,
+/// rather than everything as an error.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ControlLevel {
+    Info,
+    Warn,
+    Error,
+}
+
+impl ControlLevel {
+    /// The lowercase tag prefixed onto a forwarded line (`"[warn] …"`),
+    /// matching the level string the native subscriber writes.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ControlLevel::Info => "info",
+            ControlLevel::Warn => "warn",
+            ControlLevel::Error => "error",
+        }
+    }
+}
 
 /// Installs a process-wide forwarder for internal-error diagnostics
 /// (architecture section 11).
@@ -881,6 +913,8 @@ static ERROR_FORWARDER: OnceLock<ErrorForwarder> = OnceLock::new();
 /// black box (issue #107). The Cloudflare runtime therefore points this
 /// forwarder at `worker::console_error!`, and core calls it alongside its
 /// `tracing::error!` so the same one-line diagnostic reaches Workers Logs.
+/// Since issue #441 the same sink also carries boot-time **control events**
+/// at their own level — see [`forward_control_event`].
 ///
 /// Native runs leave it unset and rely on the tracing subscriber. This is
 /// boot-time infrastructure installed before the first response, not request
@@ -889,15 +923,32 @@ pub fn set_error_forwarder(forwarder: ErrorForwarder) {
     let _ = ERROR_FORWARDER.set(forwarder);
 }
 
+/// Forwards a one-line boot-time control event to the installed sink at its
+/// own level (issue #441); a no-op when none is installed (native, tests).
+///
+/// The same escape hatch the crate-internal `forward_internal_error`
+/// opens, extended past the internal errors mapped to a 500 (issue #107)
+/// to the boot-time control events a wasm target's absent tracing
+/// dispatcher would otherwise swallow (issue #441). Call sites forward
+/// *in addition to* — never instead of — their `tracing::*` event, so
+/// native keeps the structured fields and Workers keeps the fact.
+/// The payload passes [`scrub_text`] (issue #135) and is prefixed second:
+/// the level tag is ours, and must not be scrubbed with what it carries.
+pub fn forward_control_event(level: ControlLevel, line: &str) {
+    if let Some(forwarder) = ERROR_FORWARDER.get() {
+        forwarder(&format!("[{}] {}", level.as_str(), scrub_text(line)));
+    }
+}
+
 /// Forwards a one-line internal-error diagnostic to the installed sink, if
 /// any; a no-op when none is installed (native, tests). The line is a
 /// pre-formatted string, so the structured-field rules ([`redacted_value`])
-/// never see it; it passes [`scrub_text`] here instead (issue #135), which
-/// is idempotent for callers that already scrubbed what they formatted in.
+/// never see it; it passes [`scrub_text`] (issue #135), which is idempotent
+/// for callers that already scrubbed what they formatted in. This is a
+/// [`ControlLevel::Error`] event, and delegates to
+/// [`forward_control_event`] (issue #441).
 pub(crate) fn forward_internal_error(line: &str) {
-    if let Some(forwarder) = ERROR_FORWARDER.get() {
-        forwarder(&scrub_text(line));
-    }
+    forward_control_event(ControlLevel::Error, line);
 }
 
 #[cfg(test)]
@@ -907,23 +958,38 @@ mod forwarder_tests {
     use std::sync::Mutex;
 
     static CAPTURED: Mutex<Vec<String>> = Mutex::new(Vec::new());
+    static INSTALL: std::sync::Once = std::sync::Once::new();
 
     fn capture(line: &str) {
         CAPTURED.lock().unwrap().push(line.to_owned());
     }
 
+    /// Installs the capture sink once per test binary.
+    ///
+    /// **Process-global on purpose.** The first version of this captured
+    /// `tracing` through `with_default`, which is *thread-local*: it held
+    /// locally and failed on CI, because a report emitted on any thread but
+    /// the one running the closure is simply not seen. The sink
+    /// `set_error_forwarder` installs is global and `Mutex`-guarded, so it
+    /// cannot miss a line for scheduling reasons.
+    ///
+    /// Being global means every test writes into one buffer, so an assertion
+    /// has to name something only its own test produces — hence the unique
+    /// needle per test below, rather than counting a shared phrase.
+    fn install_sink() {
+        INSTALL.call_once(|| set_error_forwarder(capture));
+    }
+
     #[test]
     fn an_installed_forwarder_receives_the_line() {
-        // The forwarder is a process-wide `OnceLock`, so this is the only test
-        // that installs one; `set` after the first is a no-op by contract.
-        set_error_forwarder(capture);
-        forward_internal_error("database error mapped to internal problem: boom");
+        install_sink();
+        forward_internal_error("database error mapped to internal problem: forwarder-107-boom");
         assert!(
             CAPTURED
                 .lock()
                 .unwrap()
                 .iter()
-                .any(|line| line.contains("boom")),
+                .any(|line| line.contains("forwarder-107-boom")),
             "the installed forwarder should have received the diagnostic"
         );
 
@@ -949,9 +1015,71 @@ mod forwarder_tests {
     }
 
     #[test]
+    fn control_events_reach_the_sink_prefixed_with_their_level() {
+        install_sink();
+        // One line per level, each with a needle no other test produces: the
+        // sink is shared, so an assertion must find *its own* line.
+        forward_control_event(
+            ControlLevel::Info,
+            "secret access forwarder-441-info store global read allowed",
+        );
+        forward_control_event(
+            ControlLevel::Warn,
+            "forwarder-441-warn serving guarded routes unprotected on an acceptance",
+        );
+        forward_control_event(
+            ControlLevel::Error,
+            "forwarder-441-error refusing guarded routes",
+        );
+        let captured = CAPTURED.lock().unwrap();
+        for (level, needle) in [
+            ("info", "forwarder-441-info"),
+            ("warn", "forwarder-441-warn"),
+            ("error", "forwarder-441-error"),
+        ] {
+            let line = captured
+                .iter()
+                .find(|line| line.contains(needle))
+                .unwrap_or_else(|| panic!("no forwarded line carried {needle}"));
+            let prefix = format!("[{level}] ");
+            assert!(
+                line.starts_with(&prefix),
+                "the {needle} line should be prefixed {prefix:?}: {line}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_internal_error_still_scrubs_and_now_carries_the_error_prefix() {
+        install_sink();
+        forward_internal_error(
+            "forwarder-441-scrub database error: DETAIL: Key (email)=(nick@example.com) \
+             already exists",
+        );
+        let captured = CAPTURED.lock().unwrap();
+        // The plain-text needle survives the scrub; the email must not.
+        let line = captured
+            .iter()
+            .find(|line| line.contains("forwarder-441-scrub"))
+            .expect("the internal error should reach the sink");
+        assert!(line.starts_with("[error] "), "{line}");
+        assert!(!line.contains('@'), "email reached the sink: {line}");
+        assert!(
+            line.contains("[subject_hash:"),
+            "the pseudonym should survive for correlation: {line}"
+        );
+    }
+
+    #[test]
     fn forwarding_without_a_sink_is_a_noop() {
-        // No panic, no output when nothing is installed (native, tests that do
-        // not opt in). This asserts the call is safe regardless of ordering.
+        // No panic when nothing is installed. Other tests in this binary may
+        // already have installed the shared sink, so nothing is asserted
+        // about output; this asserts only that the call is safe regardless
+        // of ordering.
+        forward_control_event(
+            ControlLevel::Warn,
+            "ignored when no sink or captured when set",
+        );
         forward_internal_error("ignored when no sink or captured when set");
     }
 }

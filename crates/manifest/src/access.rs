@@ -53,10 +53,20 @@ pub enum Access {
     ///
     /// On a deployment without a tenant registry — every venture `fz
     /// build` generates — the two are the same set: there is one tenant,
-    /// so every subject the verifier accepts is a member of it. On a
-    /// deployment with a registry they are not, and a subject of one
-    /// tenant reaches another's rows by sending the same credential to
-    /// its host. Issue #385 carries the analysis and the options.
+    /// so every subject the verifier accepts is a member of it, and the
+    /// level serves as named. On a deployment with a registry they are
+    /// not, and the serving layer refuses the level outright rather than
+    /// guess who is a member: `500 no-membership-fact`, at every host,
+    /// the caller's own included.
+    ///
+    /// This crate sees none of that. A manifest does not name the
+    /// deployment's tenancy, so `validate` cannot reject the level the
+    /// way it rejects `owner` on a table with no subject — whether the
+    /// level can be honoured is a fact about the deployment, not the
+    /// manifest — and the refusal can only happen at request time.
+    /// Issue #385 stays open for the real answer: a tenant claim on
+    /// `Subject`, populated by the verifier and checked against the
+    /// tenant the request resolved to.
     TenantMembers,
     /// Only an admin token, the same one `require_admin` checks.
     Admin,
