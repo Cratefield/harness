@@ -667,3 +667,23 @@ jobs:
           curl -sf -m 5 http://127.0.0.1:8799/v1/probe/delivered
           echo ""
           echo "forward delivered and heard"
+
+  sidecar-worker-ts:
+    # The TypeScript sidecar example: typecheck and the bun behaviour tests
+    # (issue #157). Same shape as the cfjs legs above — bun for install and
+    # test, node 22 for the setup action's benefit. What it cannot prove is
+    # a host forwarding over a real service binding; the sidecar-forward
+    # leg above does that for the Rust template.
+    name: sidecar-worker-ts example
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - working-directory: examples/sidecar-worker-ts
+        run: |
+          bun install --frozen-lockfile
+          bun run typecheck
+          bun test

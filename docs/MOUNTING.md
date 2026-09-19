@@ -166,6 +166,54 @@ actions the host could not render anyway.
 which then serves no sidecars (the table is logged and dropped), and by
 `fz`, which says so plainly.
 
+## A sidecar need not be written in Rust
+
+Everything the host requires of a sidecar is HTTP-observable — a couple
+of stamps, an allowlist of headers, a handful of well-known routes — so
+a sidecar may be written in any language a Worker can be (ADR 0009
+amendment). What the repository ships to make that easy is Rust: the
+template, the sidecar half of the guard and event logic in
+`cratefield-core`, the conformance parity kit. A sidecar in anything
+else re-implements that half by hand, and this section is the thing it
+must re-implement: the contract, as an implementer's checklist. A
+worked TypeScript example lives at
+[examples/sidecar-worker-ts/](../examples/sidecar-worker-ts/).
+
+| | |
+| :--- | :--- |
+| Path | Not stripped. The host nests a bare fallback per mount at `/v1/<name>` and forwards the caller's original URI, so the sidecar serves its module at its own `/v1/<name>` — a whole harness, not a prefix-relative handler |
+| Request headers | `content-type`, `content-length`, `accept`, `accept-language`, `user-agent`. Never `authorization` or `cookie`; `host` is not forwarded. The gateway adds `x-request-id`, a host-resolved `cf-connecting-ip` (a client-forged value is replaced, never copied) and, when `SIDECAR_GATEWAY_SECRET` is set, `x-harness-gateway` |
+| Response stamps | `x-harness-api: 1` and `x-harness-module: <name>`, on every response. A wrong `x-harness-api` is `503 sidecar-contract-mismatch`; a missing one is tolerated on the forward path but makes `/__health` report the mount `unreachable`, so stamp it anyway. Echo `x-request-id` |
+| Response headers | `content-type`, `location`, `cache-control`, `etag`, `last-modified`, `vary`, `retry-after`, `content-disposition`, `x-harness-api`, `x-harness-module`, `x-request-id`. Everything else — notably `set-cookie` — stops at the host |
+| `GET /__health` | Answers without a gateway stamp — probes must probe. The host's probe allows 2 s and caches the verdict 30 s |
+| `GET /__surface` | Optional. Byte-capped at 256 KiB before parsing; `surface_api` 1 and `harness_api` 1; exactly one module entry, named exactly the mount name; at most 64 actions and 64 views. Only the public subset merges into `/ui` |
+| `POST /__events` | Body exactly `{"event": "<name>", "payload": <value>}`; answer `202` with `{"accepted": <bool>, "handlers": <n>}` — `202` because the handlers have not run when it answers. A malformed body is `400 validation-failed`. Never retried, inbound only; the guarantees are the **Hearing the host's events** section's, not restated here |
+| Retries | None, anywhere in the contract. The `Dispatcher` port forbids them, because a retry would double any side effect |
+
+**The gateway token is reproducible in any language.** When
+`SIDECAR_REQUIRE_GATEWAY` is truthy the sidecar refuses, on the guarded
+paths, any request whose `x-harness-gateway` token it cannot verify
+(`401 sidecar-unauthorized`). The guarded set is everything under
+`/v1/`, plus exactly `/__surface` and exactly `/__events`; `/__health`,
+the sidecar's own `/ui` and `/.well-known` stay open — probes must
+probe. The wire format is `base64url(json) "." base64url(mac)`, where
+the mac is HMAC-SHA256 over the exact encoded payload bytes and the
+payload JSON is `{purpose, subject, exp, kid}`: purpose
+`sidecar-gateway`, or `sidecar-gateway-admin` on admin paths; a 120 s
+lifetime; a secret of at least 32 bytes. `subject` and `iss` are not
+checked by the sidecar. Nothing here is exotic — plain base64url, JSON
+and HMAC-SHA256, straight from WebCrypto in a Worker — which is the
+point: the gate must be re-implementable wherever the sidecar is
+written. Require the gate without a usable secret and the sidecar fails
+**closed** with `503`.
+
+**What the convenience costs.** The parity kit in `crates/testing`
+drives Rust routers and so cannot prove a non-Rust sidecar answers
+identically; the `fz` schema tooling cannot see sidecar-owned tables
+(#66); and data access means hand-rolled calls against the Tables
+contract until the generated client (#155) lands. A sidecar in another
+language is supported, not free.
+
 ## Moving a module between mounts
 
 The point of the epic is that this needs no change to the module. It is
