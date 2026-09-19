@@ -180,11 +180,10 @@ impl WriteGuards {
     /// meaning here: whatever the document declares is exactly what it
     /// needs. Same per-action reading as [`Self::collect`] through the one
     /// [`Action::demands_captcha`] predicate and the one
-    /// [`declares_admin_routes`] predicate — a sidecar's admin plane needs
+    /// `declares_admin_routes` predicate — a sidecar's admin plane needs
     /// the limiter floor as much as an in-process module's.
     ///
     /// [`Action::demands_captcha`]: crate::surface::Action::demands_captcha
-    /// [`declares_admin_routes`]: Self::declares_admin_routes
     #[must_use]
     pub fn from_surface(module: &str, surface: &Surface) -> Self {
         let (form, signature) = Self::surface_flags(surface);
@@ -426,7 +425,7 @@ pub fn rate_limiter_effective(runtime: Option<&Arc<dyn Runtime>>) -> bool {
 /// `allow_no_captcha` (the `fz doctor` flag, and
 /// `HARNESS_ALLOW_UNPROTECTED_WRITES` at the boot gate) downgrades only
 /// the CAPTCHA refusal, and `allow_unlimited`
-/// ([`HARNESS_ALLOW_UNLIMITED_PUBLIC_ROUTES`]) downgrades only the
+/// ([`ALLOW_UNLIMITED_PUBLIC_ROUTES`]) downgrades only the
 /// rate-limiter refusal (issue #437). One key waiving two controls is how
 /// the second stays unwired after the first is fixed.
 ///
