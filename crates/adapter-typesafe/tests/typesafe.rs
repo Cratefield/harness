@@ -534,6 +534,9 @@ async fn a_malformed_question_set_is_rejected_before_any_network_call() {
 
 #[pollster::test]
 async fn an_over_long_state_is_trimmed_to_the_limit_and_the_warning_is_emitted() {
+    let _limit = STATE_LIMIT
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let (http, rx) = fixture(200, THREE_ANSWERS, None);
     let state = "x".repeat(DEFAULT_MAX_STATE_CHARS + 1);
     let (lines, _) = captured(|| {
@@ -568,8 +571,13 @@ async fn an_over_long_state_is_trimmed_to_the_limit_and_the_warning_is_emitted()
 
 #[pollster::test]
 async fn a_state_within_the_limit_is_not_trimmed_and_not_warned() {
+    let _limit = STATE_LIMIT
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let (http, rx) = fixture(200, THREE_ANSWERS, None);
-    let (lines, _) = captured(|| {
+    // This call's own lines, with the sibling that emits a truncation
+    // warning held off: a superset scan would read its line as this one's.
+    let (lines, _) = captured_own(|| {
         pollster::block_on(async {
             adapter(http.clone())
                 .ask("a short state", &questions())
@@ -691,6 +699,34 @@ fn captured<T>(run: impl FnOnce() -> T) -> (Vec<String>, T) {
     let value = run();
     let captured = lines.lock().expect("log lock").clone();
     (captured, value)
+}
+
+/// Serialises the two state-limit tests against each other.
+///
+/// One of them emits the truncation warning and the other asserts nobody
+/// did. The capture is one global list, so the sibling's line lands in
+/// this one's window whenever they overlap — slicing by index does not
+/// help, because the appends interleave inside the window too. No other
+/// test in this file writes that word, so holding this for both is enough
+/// and costs nothing anywhere else.
+#[cfg(not(target_arch = "wasm32"))]
+static STATE_LIMIT: Mutex<()> = Mutex::new(());
+
+/// Runs `run` and returns only the lines IT emitted.
+///
+/// [`captured`]'s superset is the right shape for the key assertions — a
+/// secret must appear in no line at all, whoever wrote it — but not for an
+/// absence assertion about behaviour. "no line says truncated" scanned
+/// over a superset fails whenever a truncation test happens to run
+/// alongside, which is exactly what it did. Slicing from the pre-run
+/// length keeps the claim about this test's own call.
+#[cfg(not(target_arch = "wasm32"))]
+fn captured_own<T>(run: impl FnOnce() -> T) -> (Vec<String>, T) {
+    let lines = log_lines();
+    let before = lines.lock().expect("log lock").len();
+    let value = run();
+    let after = lines.lock().expect("log lock").clone();
+    (after[before.min(after.len())..].to_vec(), value)
 }
 
 /// Nothing in the captured lines, and nothing in any rendered form of the
