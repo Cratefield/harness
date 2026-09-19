@@ -26,6 +26,7 @@
 pub mod apply;
 pub mod build;
 pub mod build_key;
+pub mod client_ts;
 pub mod codes;
 mod collect;
 pub mod data;
@@ -142,6 +143,26 @@ enum Command {
         /// same catalog the matching `fz build --catalog` would use.
         #[arg(long, value_name = "PATH")]
         catalog: Option<PathBuf>,
+    },
+    /// Generates the typed TypeScript client for a venture (issue #155):
+    /// a `/__surface` contract document in, the files of a deterministic
+    /// `@cratefield/client` package out, written to `--out`. Standalone —
+    /// it reads the contract the venture serves, not a compiled-in
+    /// venture, so the standalone `fz` runs it too.
+    ClientTs {
+        /// The `/__surface` document to read: a path, or `-` for stdin
+        /// (`curl -s https://venture.example/__surface | fz client-ts
+        /// --surface - --out ./client`).
+        #[arg(long, value_name = "PATH")]
+        surface: String,
+        /// Output directory for the generated client package.
+        #[arg(long, value_name = "DIR")]
+        out: PathBuf,
+        /// Prints exactly one JSON object to stdout — `schema`, `ok`, the
+        /// package, the composition hash and the files written — instead
+        /// of prose. The exit code still reflects the verdict.
+        #[arg(long)]
+        json: bool,
     },
     /// Moves venture data between engines (issue #21): export D1/SQLite
     /// data to JSONL with a manifest, import into Postgres.
@@ -577,11 +598,14 @@ pub fn run(build: impl Fn() -> Harness, args: impl IntoIterator<Item = String>) 
                     plan,
                 },
         } => data::import(&harness, &file, &url, append, plan),
-        // Handled by `harness_free` before `build()` above: build needs
-        // no harness, the workflow commands work on the manifest and its
-        // records, and push reads the venture's environment.
+        // Handled by `harness_free` before `build()` above: build and
+        // client-ts generate from a file or a served contract rather than
+        // a compiled-in harness, the workflow commands work on the
+        // manifest and its records, and push reads the venture's
+        // environment.
         Command::Build { .. }
         | Command::BuildKey { .. }
+        | Command::ClientTs { .. }
         | Command::Plan { .. }
         | Command::Deploy { .. }
         | Command::Add { .. }
@@ -623,6 +647,14 @@ fn harness_free(command: &Command) -> Option<ExitCode> {
         Command::BuildKey { manifest, catalog } => {
             Some(finish(crate::build_key::run(manifest, catalog.as_deref())))
         }
+        // Two output disciplines, exactly as `fz doctor` runs them: prose
+        // failures go through `finish`, `--json` prints its own object
+        // and owns the exit code.
+        Command::ClientTs { surface, out, json } => Some(if *json {
+            client_ts::run_json(surface, out)
+        } else {
+            finish(client_ts::run(surface, out))
+        }),
         Command::Push { command } => Some(finish(run_push(command))),
         _ => workflow::dispatch(command),
     }
@@ -704,11 +736,12 @@ fn run_push(command: &PushCommand) -> Result<(), String> {
 
 /// Runs the harness-free `fz` commands from a standalone binary (no
 /// compiled-in venture): `fz build <manifest>`, which generates a harness;
-/// the manifest workflow — `fz plan` / `deploy` / `add` / `init` /
-/// `verify` — which works on the manifest and its records, not on
-/// compiled-in modules; and `fz push`, which reads the venture's
-/// environment. Every other command needs the venture's harness and says
-/// so.
+/// `fz client-ts`, which generates the typed TypeScript client from the
+/// contract a venture serves; the manifest workflow — `fz plan` /
+/// `deploy` / `add` / `init` / `verify` — which works on the manifest and
+/// its records, not on compiled-in modules; and `fz push`, which reads
+/// the venture's environment. Every other command needs the venture's
+/// harness and says so.
 #[must_use = "call process::exit with the returned ExitCode"]
 pub fn run_standalone(args: impl IntoIterator<Item = String>) -> ExitCode {
     let mut full_argv: Vec<String> = Vec::with_capacity(8);
@@ -718,8 +751,9 @@ pub fn run_standalone(args: impl IntoIterator<Item = String>) -> ExitCode {
     let Some(exit) = harness_free(&cli.command) else {
         eprintln!(
             "fz: this command must run inside a venture (it needs the compiled-in harness — see \
-             the cratefield-cli README). Only `fz build <manifest>`, the manifest workflow (`fz \
-             plan` / `deploy` / `add` / `init` / `verify`) and `fz push` run standalone."
+             the cratefield-cli README). Only `fz build <manifest>`, `fz client-ts`, the manifest \
+             workflow (`fz plan` / `deploy` / `add` / `init` / `verify`) and `fz push` run \
+             standalone."
         );
         return ExitCode::FAILURE;
     };
