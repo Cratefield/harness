@@ -65,8 +65,9 @@ The two 404s are the same answer on purpose.
 composite key rather than joining its values with a separator that could
 occur inside one, so a table declaring `primary_key = ["tenant",
 "member"]` has a page and a create and no route that names one row. It
-publishes only those two, for the reason below. Issue #387 is whether it
-should get the other three.
+publishes only those two, for the reason below. ADR 0018 is the
+decision on the other three — `/{table}/__by`, the key named in the
+query — and until that is built, refusing is still what the route does.
 
 These are the five the surface publishes for a table it can address, and
 `every_published_action_is_a_route_that_exists` is what keeps the two
