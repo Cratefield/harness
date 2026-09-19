@@ -24,3 +24,8 @@ time = { workspace = true }
 
 [dev-dependencies]
 pollster = { workspace = true }
+# Only so `tests/sqlite.rs` can run the kit's blob round-trip contract
+# against this adapter (issue #39). `default-features = false` keeps the
+# dev graph off the harness (axum, tower, this adapter again) — the
+# helper itself needs nothing beyond `cratefield-core`.
+cratefield-testing = { path = "../testing", default-features = false }

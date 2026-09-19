@@ -1,0 +1,12 @@
+{
+  "name": "d1-blob-canary",
+  "private": true,
+  "description": "Issue #438 canary: asserts BLOB round trips through the real D1Database adapter under workerd. Driver only - the Worker is the Rust crate in this directory.",
+  "scripts": {
+    "build": "worker-build --release",
+    "test": "node run.mjs"
+  },
+  "devDependencies": {
+    "miniflare": "4.20260730.0"
+  }
+}

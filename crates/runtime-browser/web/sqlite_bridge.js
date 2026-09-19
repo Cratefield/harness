@@ -33,20 +33,58 @@ export async function installSqliteBridge(filename = '/cratefield.sqlite3') {
   }
   globalThis.__cratefieldPersistent = persistent;
 
+  // BLOBs cross the Rust -> JS boundary as the tagged JSON object
+  // `{"$bytes": "<base64>"}`, because the wasm bridge's only crossing is a
+  // JSON string (see adapter-sqlite-wasm/src/marshal.rs) — raw binary cannot
+  // survive it. Only an exact single-key `$bytes` object decodes: a TEXT value
+  // that merely looks like the tag stays TEXT.
+  const BYTES_TAG = '$bytes';
+
+  function bindParam(param) {
+    if (param === null || typeof param !== 'object' || Array.isArray(param)) return param;
+    const keys = Object.keys(param);
+    if (keys.length !== 1 || keys[0] !== BYTES_TAG || typeof param[BYTES_TAG] !== 'string') return param;
+    const bin = atob(param[BYTES_TAG]);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i += 1) { bytes[i] = bin.charCodeAt(i); }
+    return bytes;
+  }
+
+  const decodeParams = (params) => (params ?? []).map(bindParam);
+
+  // sqlite-wasm hands BLOB columns back as Uint8Array (or ArrayBuffer); tag
+  // them so they survive the JSON.stringify crossing back into Rust.
+  function encodeRow(row) {
+    const out = {};
+    for (const key of Object.keys(row)) {
+      const value = row[key];
+      const bytes = value instanceof Uint8Array ? value
+        : (value instanceof ArrayBuffer ? new Uint8Array(value) : null);
+      if (bytes === null) { out[key] = value; continue; }
+      let bin = '';
+      // Chunked so a large blob cannot blow the call stack.
+      for (let i = 0; i < bytes.length; i += 0x8000) {
+        bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+      }
+      out[key] = { [BYTES_TAG]: btoa(bin) };
+    }
+    return out;
+  }
+
   globalThis.__cratefieldSqlite = {
     async run(sql, params) {
-      db.exec({ sql, bind: params ?? [] });
+      db.exec({ sql, bind: decodeParams(params) });
       return db.changes();
     },
     async query(sql, params) {
       const rows = [];
-      db.exec({ sql, bind: params ?? [], rowMode: 'object', callback: (row) => rows.push(row) });
+      db.exec({ sql, bind: decodeParams(params), rowMode: 'object', callback: (row) => rows.push(encodeRow(row)) });
       return rows;
     },
     async batch(items) {
       db.exec('BEGIN');
       try {
-        for (const item of items) { db.exec({ sql: item.sql, bind: item.params ?? [] }); }
+        for (const item of items) { db.exec({ sql: item.sql, bind: decodeParams(item.params) }); }
         db.exec('COMMIT');
       } catch (err) {
         try { db.exec('ROLLBACK'); } catch (_) { /* already rolled back */ }

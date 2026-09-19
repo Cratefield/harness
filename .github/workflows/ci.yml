@@ -687,3 +687,37 @@ jobs:
           bun install --frozen-lockfile
           bun run typecheck
           bun test
+
+  d1-blob-canary:
+    # No `#` in the name — branch protection names the check-run string, and
+    # GitHub truncates at `#` (issue #34).
+    #
+    # The D1 half of the blob round trip (issue 438). Unit tests can bind
+    # bytes through the adapter's own types, but only a real D1 binding
+    # under workerd answers whether the wire encoding survives — the same
+    # reason wrangler-dev above exists for R2. `run.mjs` drives miniflare
+    # programmatically, so unlike the wrangler-dev jobs this needs no bun,
+    # no wrangler and no migration step: the Worker creates its own tables.
+    name: d1 blob canary (examples/d1-blob-canary, miniflare D1)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.98.1"
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - name: Install worker-build
+        run: cargo install -q --locked worker-build
+      - name: Install miniflare
+        working-directory: examples/d1-blob-canary
+        run: npm ci
+      - name: Build the canary worker
+        working-directory: examples/d1-blob-canary
+        run: worker-build --release
+      - name: Blob round trip through real D1 (issue 438)
+        working-directory: examples/d1-blob-canary
+        run: node run.mjs
