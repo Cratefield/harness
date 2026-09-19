@@ -609,9 +609,18 @@ async fn a_provider_message_that_echoes_secrets_is_scrubbed() {
 
 // --- Log-line leakage ----------------------------------------------------
 
+// ---- native-only: the log-leak test -----------------------------------
+//
+// `set_global_default` hangs the workerd isolate — the Workers path forwards
+// to `console_error!` instead (`runtime-cloudflare::tracing_setup`), and
+// `wasm_dispatcher_guard` fails any test file that installs a dispatcher
+// without declaring itself native-only. What this asserts — that no line
+// carries the key, the prompt or the completion — is a property of the
+// adapter's own callsites, which are the same ones compiled for wasm.
 /// Captures each event's fields as one raw `name=value` line. Deliberately
 /// *not* core's `RedactingVisitor`: the assertion is about what the adapter
 /// emits, so no redaction may stand between the event and the test.
+#[cfg(not(target_arch = "wasm32"))]
 #[derive(Default)]
 struct LogCapture {
     lines: Mutex<Vec<String>>,
@@ -619,9 +628,11 @@ struct LogCapture {
 
 /// Renders one event's fields; every record kind defaults to
 /// `record_debug`, so this is the only method the line needs.
+#[cfg(not(target_arch = "wasm32"))]
 #[derive(Default)]
 struct RawLine(String);
 
+#[cfg(not(target_arch = "wasm32"))]
 impl tracing::field::Visit for RawLine {
     fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
         use std::fmt::Write as _;
@@ -632,6 +643,7 @@ impl tracing::field::Visit for RawLine {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl Subscriber for LogCapture {
     fn enabled(&self, _metadata: &Metadata<'_>) -> bool {
         true
@@ -658,9 +670,11 @@ impl Subscriber for LogCapture {
 
 /// The global dispatch needs a `Send + Sync` subscriber it owns; forward
 /// to the shared capture so the test can read the lines afterwards.
+#[cfg(not(target_arch = "wasm32"))]
 #[derive(Clone)]
 struct SharedCapture(Arc<LogCapture>);
 
+#[cfg(not(target_arch = "wasm32"))]
 impl Subscriber for SharedCapture {
     fn enabled(&self, metadata: &Metadata<'_>) -> bool {
         self.0.enabled(metadata)
@@ -685,6 +699,7 @@ impl Subscriber for SharedCapture {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 #[pollster::test]
 async fn no_log_line_carries_the_key_prompt_or_completion() {
     let capture = Arc::new(LogCapture::default());
