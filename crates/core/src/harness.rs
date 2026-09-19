@@ -400,27 +400,13 @@ impl Harness {
             );
             return problems;
         }
-        // An operator may accept this deployment's gap explicitly, and
-        // the acceptance is recorded on every boot rather than discarded
-        // (issue #143). The routes then serve, and the record is what
-        // someone answers for later. The record is also forwarded (issue
-        // #441): on wasm the tracing event goes nowhere, and an acceptance
-        // nobody can read is an acceptance nobody answers for.
-        if let Some(reason) = crate::route_policy::unprotected_writes_override(config) {
-            let problems = problems.join("; ");
-            let detail = format!(
-                "serving guarded routes unprotected on an operator's recorded acceptance \
-                 (reason: {reason}; problems: {problems})"
-            );
-            tracing::warn!(
-                control = "production-readiness",
-                reason,
-                problems = problems,
-                "serving guarded routes unprotected on an operator's recorded acceptance"
-            );
-            crate::logging::forward_control_event(crate::logging::ControlLevel::Warn, &detail);
-            return Vec::new();
-        }
+        // No blanket escape hatch here any more. Each waiver is passed
+        // into `production_readiness` above and applied to the leg it
+        // names, so what comes back is already only the UNWAIVED problems
+        // — clearing them all on `unprotected_writes_override` would let a
+        // waiver for one control excuse another, which is exactly what
+        // `a_refusing_deployment_records_no_acceptance_at_all` forbids: a
+        // captcha waiver must not serve a venture with no rate limiter.
         for problem in &problems {
             let detail = format!(
                 "refusing guarded routes: {problem} — set {} to a reason to accept this \
