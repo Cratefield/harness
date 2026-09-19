@@ -949,6 +949,7 @@ dependencies = [
  "cratefield-adapter-postgres",
  "cratefield-adapter-sqlite",
  "cratefield-adapter-webpush",
+ "cratefield-client-ts",
  "cratefield-core",
  "cratefield-introspect",
  "cratefield-manifest",
@@ -990,6 +991,17 @@ dependencies = [
  "sqlx",
  "tokio",
  "venture-fixture",
+]
+
+[[package]]
+name = "cratefield-client-ts"
+version = "0.1.0"
+dependencies = [
+ "cratefield-core",
+ "cratefield-tables",
+ "cratefield-testing",
+ "serde_json",
+ "sha2 0.11.0",
 ]
 
 [[package]]

@@ -107,6 +107,29 @@ pub struct Codes {
     pub manifest_unreadable: DoctorCodeDef,
     /// A manifest could not be written back to disk.
     pub manifest_write_failed: DoctorCodeDef,
+    /// `fz client-ts` (issue #155): a generated file could not be written
+    /// to `--out`.
+    pub client_write_failed: DoctorCodeDef,
+    /// `fz client-ts`: the tables module publishes an action outside the
+    /// five-verb vocabulary (`list-`/`read-`/`create-`/`replace-`/
+    /// `delete-`, then the table name) the generator reads.
+    pub surface_action_unreadable: DoctorCodeDef,
+    /// `fz client-ts`: the document parsed as JSON but is not a
+    /// `/__surface` document.
+    pub surface_invalid: DoctorCodeDef,
+    /// `fz client-ts`: the document declares no `tables` module, so there
+    /// is no contract to generate a client from.
+    pub surface_no_tables_module: DoctorCodeDef,
+    /// `fz client-ts`: the tables module publishes a table whose name is
+    /// not a safe identifier, which the generator would interpolate into
+    /// the generated TypeScript.
+    pub surface_table_name_invalid: DoctorCodeDef,
+    /// `fz client-ts`: the `/__surface` document could not be read, or is
+    /// not valid JSON.
+    pub surface_unreadable: DoctorCodeDef,
+    /// `fz client-ts`: the document speaks a `surface_api` contract
+    /// version this generator does not read.
+    pub surface_unsupported_contract: DoctorCodeDef,
 }
 
 pub const CODES: Codes = Codes {
@@ -261,6 +284,41 @@ pub const CODES: Codes = Codes {
         title: "Manifest write failed",
         description: "A manifest could not be written back to disk.",
     },
+    client_write_failed: DoctorCodeDef {
+        code: "client-write-failed",
+        title: "Client write failed",
+        description: "A file of the generated TypeScript client could not be written to --out.",
+    },
+    surface_action_unreadable: DoctorCodeDef {
+        code: "surface-action-unreadable",
+        title: "Tables action unreadable",
+        description: "The tables module publishes an action outside the five-verb vocabulary the generator reads.",
+    },
+    surface_invalid: DoctorCodeDef {
+        code: "surface-invalid",
+        title: "Not a surface document",
+        description: "The document parsed as JSON but is not a /__surface document.",
+    },
+    surface_no_tables_module: DoctorCodeDef {
+        code: "surface-no-tables-module",
+        title: "No tables module",
+        description: "The document declares no `tables` module, so there is no contract to generate a client from.",
+    },
+    surface_table_name_invalid: DoctorCodeDef {
+        code: "surface-table-name-invalid",
+        title: "Table name unsupported",
+        description: "The tables module publishes a table whose name is not a safe identifier (lowercase [a-z][a-z0-9]*, no double or trailing underscore), which the generator would interpolate into the generated TypeScript.",
+    },
+    surface_unreadable: DoctorCodeDef {
+        code: "surface-unreadable",
+        title: "Surface document unreadable",
+        description: "The /__surface document could not be read, or is not valid JSON.",
+    },
+    surface_unsupported_contract: DoctorCodeDef {
+        code: "surface-unsupported-contract",
+        title: "Surface contract unsupported",
+        description: "The document speaks a surface_api contract version this generator does not read.",
+    },
 };
 
 /// Every `fz` code definition, for tests and docs. Sorted by code.
@@ -270,6 +328,7 @@ pub fn registry() -> Vec<&'static DoctorCodeDef> {
         &CODES.auth_not_configured,
         &CODES.captcha_not_effective,
         &CODES.card_data_in_migration,
+        &CODES.client_write_failed,
         &CODES.composition_drift,
         &CODES.config_drift,
         &CODES.deploy_plan_required,
@@ -297,6 +356,12 @@ pub fn registry() -> Vec<&'static DoctorCodeDef> {
         &CODES.sidecar_mount_invalid,
         &CODES.sidecar_shadows_module,
         &CODES.stale_plan,
+        &CODES.surface_action_unreadable,
+        &CODES.surface_invalid,
+        &CODES.surface_no_tables_module,
+        &CODES.surface_table_name_invalid,
+        &CODES.surface_unreadable,
+        &CODES.surface_unsupported_contract,
     ]
 }
 
@@ -374,6 +439,13 @@ mod tests {
             CODES.manifest_invalid.code,
             CODES.manifest_unreadable.code,
             CODES.manifest_write_failed.code,
+            CODES.client_write_failed.code,
+            CODES.surface_action_unreadable.code,
+            CODES.surface_invalid.code,
+            CODES.surface_no_tables_module.code,
+            CODES.surface_table_name_invalid.code,
+            CODES.surface_unreadable.code,
+            CODES.surface_unsupported_contract.code,
         ];
         assert_eq!(fields.len(), registered.len());
         for field in fields {
