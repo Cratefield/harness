@@ -273,6 +273,9 @@ impl Cloudflare {
     #[must_use]
     pub fn tracker_arc(mut self, tracker: Arc<dyn Tracker>) -> Self {
         self.tracker = Some(tracker);
+        self
+    }
+
     /// The `TextModel` port (issue #429): an adapter over the venture's
     /// vendor of choice for each [`ModelTier`](cratefield_core::ModelTier),
     /// or one `RoutingTextModel` over both tiers. Passed in, not resolved
@@ -519,6 +522,7 @@ impl Runtime for Cloudflare {
         }
         if self.tracker.is_some() {
             provided.push(Port::Tracker);
+        }
         if self.text_model.is_some() {
             provided.push(Port::TextModel);
         }
