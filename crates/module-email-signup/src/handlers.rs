@@ -2,7 +2,9 @@
 //! #10). Every public handler runs the rate-limit check; the POST also
 //! runs captcha when the port is present, and both write paths preserve
 //! the no-enumeration rule: the same `202 {"ok":true}` bytes whether the
-//! address is new, pending, confirmed or unsubscribed.
+//! address is new, pending, confirmed or unsubscribed. The confirmation
+//! mail is enqueued off the request path (the `Defer` port), so the
+//! bytes and the timing carry no signal about the address either.
 
 use axum::extract::{FromRequest, Path, Query, State};
 use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
@@ -320,7 +322,6 @@ async fn signup(
         return Err(invalid_email_problem(reason).instance(&scope.request_id));
     }
 
-    let cfg = ModuleConfig::new("email-signup", &*state.ctx.config);
     let Some(db) = state.ctx.ports.db.clone() else {
         return Err(internal(&scope));
     };
@@ -350,10 +351,32 @@ async fn signup(
         return signup_without_opt_in(&state, &scope, existing, &normalized, source, &locale, &now)
             .await;
     }
+    signup_double_opt_in(&state, &scope, existing, &body.email, source, &locale, &now).await
+}
 
+/// The double-opt-in leg of [`signup`]: the one path that both writes and
+/// mails. It rewrites (or inserts) the pending row, then defers the
+/// confirmation mail off the request path; the address-existence branches
+/// that answer without writing stay in [`signup`]. Takes the address as
+/// submitted — the row keeps the trimmed raw form next to the normalised
+/// key, and re-normalising is idempotent.
+async fn signup_double_opt_in(
+    state: &ModuleState,
+    scope: &Scope,
+    existing: Option<SubscriberRow>,
+    email: &str,
+    source: Option<String>,
+    locale: &str,
+    now: &str,
+) -> Result<Response, Problem> {
+    let normalized = normalize_email(email);
     let Some(signer): Option<Arc<dyn Signer>> = state.ctx.ports.signer.clone() else {
-        return Err(internal(&scope));
+        return Err(internal(scope));
     };
+    let Some(db) = state.ctx.ports.db.clone() else {
+        return Err(internal(scope));
+    };
+    let cfg = ModuleConfig::new("email-signup", &*state.ctx.config);
     let ttl_days = cfg.get_u32("CONFIRM_TTL_DAYS", state.settings.confirm_ttl_days);
     // The generation the token is signed for, mirroring what
     // `refresh_to_pending`'s `CASE` will compute at write time: a pending
@@ -373,22 +396,37 @@ async fn signup(
         None => (UlidIdGen.ulid(), 1),
     };
     let unsubscribe_token = new_unsubscribe_token();
-    send_confirmation(
-        &state,
-        &scope,
+    // The row lands on the request path; the mail does not. Every branch
+    // that reaches a send defers it through the request's `Defer` port,
+    // so the answer — always [`accepted`] — carries no signal about
+    // whether the address was known or whether the mailer works. What
+    // the old mail-before-write ordering bought — a failed send leaves
+    // nothing that traps the next attempt behind the hourly throttle —
+    // the deferred future now restores when the send fails.
+    let rollback = match &existing {
+        // The refresh stamps `updated_at` with now, and that stamp is the
+        // re-mail gate: hand the old one back on failure.
+        Some(row) => Rollback::RestoreThrottle {
+            id: row.id.clone(),
+            updated_at: row.updated_at.clone(),
+        },
+        // The row did not exist before this request.
+        None => Rollback::DeleteRow { id: id.clone() },
+    };
+    let mail = confirmation_mail(
+        state,
         &signer,
         &cfg,
         Confirmation {
             id: id.clone(),
             generation,
             normalized: normalized.clone(),
-            locale: locale.clone(),
+            locale: locale.to_owned(),
             ttl_days,
             unsubscribe_token: unsubscribe_token.clone(),
-            now: now.clone(),
+            now: now.to_owned(),
         },
-    )
-    .await?;
+    );
 
     match existing {
         Some(row) => {
@@ -396,9 +434,9 @@ async fn signup(
                 &*db,
                 &row.id,
                 source.as_deref(),
-                Some(&locale),
+                Some(locale),
                 &unsubscribe_token,
-                &now,
+                now,
             )
             .await?;
         }
@@ -408,25 +446,28 @@ async fn signup(
                 &SubscriberRow {
                     id,
                     generation,
-                    email: body.email.trim().to_owned(),
+                    email: email.trim().to_owned(),
                     email_normalized: normalized,
                     status: STATUS_PENDING.to_owned(),
                     source,
-                    locale: Some(locale),
+                    locale: Some(locale.to_owned()),
                     confirmed_at: None,
                     unsubscribed_at: None,
                     unsubscribe_token: Some(unsubscribe_token),
-                    created_at: now.clone(),
-                    updated_at: now,
+                    created_at: now.to_owned(),
+                    updated_at: now.to_owned(),
                 },
             )
             .await?;
         }
     }
+    scope
+        .defer
+        .wait_until(defer_signup_confirmation(&state.ctx, &db, rollback, mail));
     Ok(accepted())
 }
 
-/// Everything [`send_confirmation`] needs for one address.
+/// Everything [`confirmation_mail`] needs for one address.
 struct Confirmation {
     id: String,
     generation: i64,
@@ -437,16 +478,15 @@ struct Confirmation {
     now: String,
 }
 
-/// Builds both tokens, renders and sends the confirmation mail. Mail
-/// before write: a `NotConfigured` or failed send leaves no row, so
-/// nothing traps the next attempt behind the hourly throttle.
-async fn send_confirmation(
+/// Signs the confirm token and renders the confirmation mail. Pure
+/// computation: the Resend round trip happens off the request path, in
+/// [`defer_signup_confirmation`].
+fn confirmation_mail(
     state: &ModuleState,
-    scope: &Scope,
     signer: &Arc<dyn Signer>,
     cfg: &ModuleConfig<'_>,
     confirmation: Confirmation,
-) -> Result<(), Problem> {
+) -> OutgoingMail {
     let Confirmation {
         id,
         generation,
@@ -470,27 +510,73 @@ async fn send_confirmation(
         unsubscribe_url: format!("{base}/v1/email-signup/unsubscribe?token={unsubscribe_token}"),
         brand: state.ctx.venture.brand.clone(),
     });
-    match mail::send(
-        &state.ctx,
-        &OutgoingMail {
-            to: normalized.clone(),
-            template_id: TEMPLATE_CONFIRM,
-            data,
-            locale: locale.clone(),
-            idempotency_key: format!("signup:{id}:{now}"),
-        },
-    )
-    .await
-    {
-        Ok(SendOutcome::Sent { .. }) => Ok(()),
-        Ok(SendOutcome::NotConfigured) => {
-            Err(Problem::new(&SLUGS.mail_not_configured).instance(&scope.request_id))
-        }
-        Err(err) => {
-            tracing::error!(error = %err, "confirmation mail failed");
-            Err(internal(scope))
-        }
+    OutgoingMail {
+        to: normalized,
+        template_id: TEMPLATE_CONFIRM,
+        data,
+        locale,
+        idempotency_key: format!("signup:{id}:{now}"),
     }
+}
+
+/// What a failed deferred send must undo so the hourly throttle does not
+/// trap the next attempt — what the old mail-before-write ordering
+/// guaranteed by writing nothing until the mail had gone.
+enum Rollback {
+    /// A refreshed row: the re-mail gate is its `updated_at`, which the
+    /// refresh stamped with now.
+    RestoreThrottle { id: String, updated_at: String },
+    /// A row this request created: it goes away again.
+    DeleteRow { id: String },
+}
+
+/// The signup confirmation send, run after the response through the
+/// request's `Defer` port. A send that fails (or a mailer that is not
+/// configured) can no longer answer the caller, so it is logged for
+/// operators, and the throttle state the request consumed is handed back.
+fn defer_signup_confirmation(
+    ctx: &Arc<ModuleContext>,
+    db: &Arc<dyn Database>,
+    rollback: Rollback,
+    mail: OutgoingMail,
+) -> cratefield_core::BoxFuture<'static, ()> {
+    let ctx = Arc::clone(ctx);
+    let db = Arc::clone(db);
+    Box::pin(async move {
+        let failed = match mail::send(&ctx, &mail).await {
+            Ok(SendOutcome::Sent { .. }) => false,
+            Ok(SendOutcome::NotConfigured) => {
+                tracing::error!(
+                    template = mail.template_id,
+                    idempotency = %mail.idempotency_key,
+                    "deferred signup confirm mail: no mailer configured"
+                );
+                true
+            }
+            Err(err) => {
+                tracing::error!(
+                    error = %err,
+                    template = mail.template_id,
+                    idempotency = %mail.idempotency_key,
+                    "deferred signup confirm mail failed"
+                );
+                true
+            }
+        };
+        if failed {
+            let undone = match rollback {
+                Rollback::RestoreThrottle { id, updated_at } => {
+                    store::restore_updated_at(&*db, &id, &updated_at)
+                        .await
+                        .map(|_| ())
+                }
+                Rollback::DeleteRow { id } => store::delete_by_id(&*db, &id).await.map(|_| ()),
+            };
+            if let Err(err) = undone {
+                tracing::error!(error = %err, "handing the signup re-mail window back failed");
+            }
+        }
+    })
 }
 
 async fn signup_without_opt_in(

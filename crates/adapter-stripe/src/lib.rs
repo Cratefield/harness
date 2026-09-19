@@ -34,6 +34,7 @@ use http::header::{AUTHORIZATION, CONTENT_TYPE};
 use http::{Request, StatusCode};
 use serde_json::Value;
 use sha2::Sha256;
+use subtle::{Choice, ConstantTimeEq};
 
 const STRIPE_API_BASE: &str = "https://api.stripe.com";
 
@@ -399,7 +400,12 @@ impl Payments for Stripe {
         }
 
         // HMAC-SHA256 over `{timestamp}.{body}`, compared constant-time against
-        // each `v1` the header carried.
+        // each `v1` the header carried. No early exit: every candidate is
+        // decoded and compared, the `Choice`s are OR-ed, and the verdict is
+        // converted only once at the end — so how long this takes says nothing
+        // about how much of a wrong signature was right, nor which candidate
+        // (if any) matched. A candidate of the wrong length simply compares
+        // unequal (`ct_eq` is false on a length mismatch).
         let mut mac = Hmac::<Sha256>::new_from_slice(live.webhook_secret.as_bytes())
             .map_err(|err| PaymentsError::SignatureInvalid(err.to_string()))?;
         mac.update(timestamp.to_string().as_bytes());
@@ -407,10 +413,13 @@ impl Payments for Stripe {
         mac.update(body);
         let expected = mac.finalize().into_bytes();
 
-        let matched = signatures.iter().any(|candidate| {
-            hex_decode(candidate).is_some_and(|bytes| bytes.as_slice() == expected.as_slice())
-        });
-        if !matched {
+        let mut matched = Choice::from(0u8);
+        for candidate in &signatures {
+            if let Some(bytes) = hex_decode(candidate) {
+                matched |= bytes.ct_eq(expected.as_slice());
+            }
+        }
+        if !bool::from(matched) {
             return Err(PaymentsError::SignatureInvalid(
                 "no signature matched".to_owned(),
             ));

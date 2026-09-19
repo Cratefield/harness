@@ -75,6 +75,16 @@ pub fn kit_rate_limited() -> Kit {
     })
 }
 
+/// A kit with **no** rate limiter wired at all — the composition the
+/// challenge budget exists for: nothing between `login/options` and an
+/// enumeration sweep but the database cap. The harness's default is an
+/// always-allow limiter, so the absence has to be asked for.
+pub fn kit_without_limiter() -> Kit {
+    kit_patched(config_pairs(), |ports| {
+        ports.rate_limiter = None;
+    })
+}
+
 pub fn kit_with(pairs: Vec<(String, String)>) -> Kit {
     kit_patched(pairs, |_| {})
 }
@@ -204,10 +214,30 @@ pub async fn send(
     body: Option<&str>,
     cookie: Option<&str>,
 ) -> Res {
+    send_with(kit, method, path, body, cookie, None).await
+}
+
+/// [`send`], from a given client address. `cf-connecting-ip` is what the
+/// edge sets and what `client_ip` trusts first, so this is how a test
+/// arrives from a different address.
+pub async fn send_with(
+    kit: &Kit,
+    method: http::Method,
+    path: &str,
+    body: Option<&str>,
+    cookie: Option<&str>,
+    client_ip: Option<&str>,
+) -> Res {
     use tower::ServiceExt;
     let mut builder = axum::http::Request::builder().method(method).uri(path);
     if let Some(cookie) = cookie {
         builder = builder.header(http::header::COOKIE, format!("__Host-fz_session={cookie}"));
+    }
+    if let Some(ip) = client_ip {
+        builder = builder.header(
+            http::header::HeaderName::from_static("cf-connecting-ip"),
+            http::header::HeaderValue::from_str(ip).expect("address is a header value"),
+        );
     }
     let request = match body {
         Some(body) => builder
@@ -236,6 +266,12 @@ pub async fn send(
 
 pub async fn post(kit: &Kit, path: &str, body: &str, cookie: Option<&str>) -> Res {
     send(kit, http::Method::POST, path, Some(body), cookie).await
+}
+
+/// [`post`] from a given client address, or from no address at all when
+/// `None` — which is what `ip:unknown` budgets.
+pub async fn post_from(kit: &Kit, path: &str, body: &str, client_ip: Option<&str>) -> Res {
+    send_with(kit, http::Method::POST, path, Some(body), None, client_ip).await
 }
 
 /// How many rows a table holds.

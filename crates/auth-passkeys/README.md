@@ -29,13 +29,16 @@ rule, checked at configuration time because an origin outside it could never
 produce a valid ceremony: allowing one would only ever be a way to get it
 wrong.
 
-## What this module does not own
+## What this module owns in the database
 
-Nothing in the database. `auth-core` owns `users`, `credentials`,
-`sessions` and `single_use_tokens`, and publishes the typed store API this
-module writes through, so the schema has one definition and one migration
-history. The `passkey_suspect_at` column this module needs was added there,
-in migration `0004`.
+One table: the challenge budget behind `login/options`
+(`auth_passkeys_challenge_budget`, migration `0001` here) — the issuance
+cap that keeps the public endpoint from being swept for accounts whether or
+not a rate limiter is wired up. Everything else belongs to `auth-core`,
+which owns `users`, `credentials`, `sessions` and `single_use_tokens`, and
+publishes the typed store API this module writes through, so that schema
+has one definition and one migration history. The `passkey_suspect_at`
+column this module needs was added there, in migration `0004`.
 
 ## Verification
 
@@ -72,10 +75,12 @@ mark a stranger's passkey as a clone.
 `POST /login/options` with an email returns that account's credential ids,
 which is inherent to the non-discoverable flow: the browser needs them to
 choose an authenticator. An account with no passkeys and an address with no
-account are indistinguishable, but an account *with* a passkey is not. Both
-public endpoints are rate limited by client address for that reason, and by
-address only: keying on the email too would let anyone lock a named account
-out of its own logins.
+account are indistinguishable, but an account *with* a passkey is not. The
+leak is bounded, not closed: a database-enforced challenge budget caps
+options at thirty calls per client address and five per named address a
+minute — with or without a rate limiter, and before the account lookup, so
+a refusal says nothing about the account named. Both public endpoints are
+also rate limited by client address where the composition wires a limiter.
 
 Registration requires a live session but not a *recent* one, so a hijacked
 session can add a passkey. Requiring a fresh authentication before adding a

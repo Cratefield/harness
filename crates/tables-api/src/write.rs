@@ -18,11 +18,20 @@
 //! `replace` writes every declared non-key field from the body. A merge
 //! would make "unset this field" unexpressible: an absent key and a null
 //! one would both have to mean "leave it".
+//!
+//! # A conflict, and whose it is
+//!
+//! A unique violation on create says *a* row holds the values already;
+//! under `owner` whose row it is decides what may be said about it. The
+//! caller's own row is a conflict they can act on, and 409 says so. A
+//! row belonging to somebody else is answered like any other rejected
+//! write: a 409 would confirm a row the reads refuse to confirm, which
+//! is why they answer 404 for one. See [`taken`].
 
 use cratefield_core::{Caller, Database, Problem, ProblemDef, Scope, Tenancy, require_admin};
-use cratefield_tables::{Owned, UpdateError};
+use cratefield_tables::{Owned, TableDef, UpdateError};
 use http::{HeaderMap, StatusCode};
-use serde_json::Value;
+use serde_json::{Map, Value};
 
 use crate::access::{Reach, may_write, settle_subject};
 use crate::read::{NO_SUCH_ROW, Tables, who};
@@ -85,7 +94,9 @@ fn subject_value(reach: &Reach) -> Value {
 /// # Errors
 ///
 /// The access decision's refusal, [`NOT_A_ROW`] when the body is not a
-/// legal row, [`ALREADY_EXISTS`] when the key is taken, or a database
+/// legal row, [`ALREADY_EXISTS`] when the key collides with a row the
+/// caller may be told about — under `owner`, their own — the ordinary
+/// rejection when it collides with one they may not, or a database
 /// failure.
 pub async fn create(
     tables: &Tables,
@@ -104,17 +115,112 @@ pub async fn create(
         .map_err(|errors| Problem::new(&NOT_A_ROW).with_detail(errors.detail()))?;
     match conn.execute(&statement).await {
         Ok(_) => Ok(row),
-        // A unique violation is the key being taken, which is the
-        // caller's to fix; anything else is ours. The adapters do not
-        // give a typed constraint error, so this reads the message —
+        // A unique violation is *a* row holding the values already;
+        // whose row it is decides the answer, and deciding takes a
+        // re-select (`taken`). Anything else is ours. The adapters do
+        // not give a typed constraint error, so this reads the message —
         // and answers the generic failure when it cannot tell, rather
         // than claiming a conflict it has not established.
-        Err(err) if looks_like_a_conflict(&err) => Err(Problem::new(&ALREADY_EXISTS)),
+        Err(err) if looks_like_a_conflict(&err) => {
+            Err(taken(conn, &api, &reach, &row, scope).await)
+        }
         Err(err) => {
             tracing::error!(error = %err, "a declared table's insert failed");
             Err(Problem::internal().instance(&scope.request_id))
         }
     }
+}
+
+/// What a collision on insert means, under the reach the write was
+/// permitted with.
+///
+/// A unique violation establishes that a row holds the values already;
+/// whose row it is decides what may be said about it. Where the reach is
+/// not the caller's own rows, every row is theirs to collide with, and
+/// [`ALREADY_EXISTS`] is the whole answer.
+///
+/// Under [`Reach::OwnedBy`] it is not. A 409 for a collision with a row
+/// belonging to somebody else would confirm a row the caller was never
+/// in a position to learn exists — the fact the reads refuse to confirm
+/// by answering 404 for a row that is not there *or* not theirs
+/// ([`crate::read::one`]). So the conflicting row is selected again with
+/// the owner predicate applied — `select_one`, the statement a read by
+/// key takes, built from the same `owned` scope the writes already
+/// thread through, so the two cannot drift — and 409 is answered only
+/// when that select matches: the caller's own row is the collision, and
+/// the conflict is theirs to fix.
+///
+/// Every other outcome declines to assert a conflict nothing selected.
+/// A key the row does not carry, so the select cannot even be built (a
+/// collision on a column `unique` beyond the key lands here, and the
+/// own-row 409 it gives up is the price of never claiming one), answers
+/// [`NOT_A_ROW`]; so does a select that built and matched nothing — the
+/// ordinary rejection of a write, which says this write did not happen
+/// and nothing about the table. A select that will not build is a
+/// declaration the serving code did not expect, and a database that
+/// would not answer it is down; both are 500s, logged where constructed
+/// as every other failure to reach the database here is.
+///
+/// The re-select runs on both sides of the answer, so an own-row
+/// conflict and somebody else's do the same work and are told apart
+/// only by the answer each earned.
+async fn taken(
+    conn: &dyn Database,
+    api: &crate::access::TableApi,
+    reach: &Reach,
+    row: &Value,
+    scope: &Scope,
+) -> Problem {
+    let subject = subject_value(reach);
+    let Some(owned_rows) = owned(reach, &subject) else {
+        return Problem::new(&ALREADY_EXISTS);
+    };
+    let Some(key) = key_of(&api.table, row) else {
+        return Problem::new(&NOT_A_ROW);
+    };
+    let statement = match cratefield_tables::select_one(&api.table, &key, Some(owned_rows)) {
+        Ok(statement) => statement,
+        // The subject column was checked when the reach was decided (in
+        // `access`), so this is not a refusal about the caller.
+        Err(err) => {
+            tracing::error!(
+                error = %err,
+                "a declared table's conflict re-select could not be built"
+            );
+            return Problem::new(&crate::access::MISDECLARED).instance(&scope.request_id);
+        }
+    };
+    match conn.query(&statement).await {
+        // The row the key selects is the caller's own: the conflict is
+        // real, and the key is theirs to pick again.
+        Ok(rows) if !rows.is_empty() => Problem::new(&ALREADY_EXISTS),
+        // Nothing of theirs holds the key, so the collision is with a
+        // row the caller may not be told about — or, on a second look,
+        // with nothing at all. The ordinary rejection says the same
+        // thing about both.
+        Ok(_) => Problem::new(&NOT_A_ROW),
+        Err(err) => {
+            tracing::error!(error = %err, "a declared table's conflict re-select failed");
+            Problem::internal().instance(&scope.request_id)
+        }
+    }
+}
+
+/// The row's own primary key, as the JSON `select_one` takes it — or
+/// `None` when the row does not carry every key column, and no select
+/// could be built from it. A null counts as not carried: a key column
+/// is `NOT NULL`, so a null key never collided and says nothing about
+/// the row that did.
+fn key_of(table: &TableDef, row: &Value) -> Option<Value> {
+    let mut key = Map::new();
+    for column in &table.primary_key {
+        let value = row.get(column)?;
+        if value.is_null() {
+            return None;
+        }
+        key.insert(column.clone(), value.clone());
+    }
+    Some(Value::Object(key))
 }
 
 /// Whether a database error is a primary-key or unique collision.

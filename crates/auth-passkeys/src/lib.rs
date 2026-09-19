@@ -6,9 +6,13 @@
 //! let module = Passkeys::new();
 //! ```
 //!
-//! The module owns no tables. `auth-core` owns the schema and publishes the
-//! typed store API every login method writes through, so `credentials` and
-//! `single_use_tokens` have exactly one definition and one migration history.
+//! `auth-core` owns the schema every login method writes through: it
+//! publishes the typed store API, so `credentials` and `single_use_tokens`
+//! have exactly one definition and one migration history. This module owns
+//! a single table of its own, the challenge budget behind `login/options`
+//! (see the [`budget`] module), because the issuance cap it enforces is
+//! this module's policy and has to hold even in a composition that wired
+//! up no rate limiter.
 //!
 //! Relying-party verification is implemented here rather than taken from
 //! `webauthn-rs`, which cannot build for `wasm32-unknown-unknown` (ADR 0200).
@@ -22,6 +26,7 @@
 
 #![forbid(unsafe_code)]
 
+mod budget;
 mod challenge;
 mod login;
 mod register;
@@ -29,7 +34,8 @@ mod request;
 mod webauthn;
 
 use cratefield_core::{
-    Config, ConfigError, Migrations, Module, ModuleConfig, ModuleContext, Port, Problem, ProblemDef,
+    AnyError, BoxFuture, Config, ConfigError, DataKind, Disposition, Migrations, Module,
+    ModuleConfig, ModuleContext, PersonalDataSet, Port, Problem, ProblemDef, SqlMigration,
 };
 use http::StatusCode;
 use std::sync::Arc;
@@ -90,6 +96,16 @@ const MAX_CHALLENGE_TTL_SECS: i64 = 900;
 
 /// What the browser is told to wait, in milliseconds.
 const DEFAULT_TIMEOUT_MS: u32 = 60_000;
+
+/// The durable challenge budget behind `login/options` — what stops the
+/// endpoint being an enumeration oracle in a composition that wired up no
+/// rate limiter (issue #442). Name must match
+/// `budget::CHALLENGE_BUDGET_TABLE`.
+const MIGRATION_CHALLENGE_BUDGET: SqlMigration = SqlMigration::new(
+    "0001",
+    "challenge_budget",
+    include_str!("../migrations/sqlite/0001_challenge_budget.sql"),
+);
 
 pub(crate) fn iso(at: OffsetDateTime) -> String {
     at.replace_nanosecond(0)
@@ -266,17 +282,48 @@ impl Module for Passkeys {
         &[Port::Db, Port::Clock, Port::IdGen]
     }
 
-    /// The two login endpoints are reachable by anyone and each one writes a
-    /// challenge row, so they are rate limited where a limiter exists.
+    /// The two login endpoints are reachable by anyone and each one writes
+    /// a challenge row. `login/options` also enforces a database budget of
+    /// its own (see [`budget`]), so a limiter here is a second, configurable
+    /// layer rather than the only thing between the endpoint and an
+    /// enumeration oracle.
     fn optional(&self) -> &'static [Port] {
         &[Port::RateLimiter]
     }
 
-    /// None. `auth-core` owns every table this module writes, so there is
-    /// one schema and one migration history for `credentials` and
-    /// `single_use_tokens` rather than two modules disagreeing about them.
+    /// One: the challenge budget ledger. `auth-core` owns every other table
+    /// this module writes, so there is one schema and one migration history
+    /// for `credentials` and `single_use_tokens` rather than two modules
+    /// disagreeing about them. The budget window is this module's policy,
+    /// the way the sign-in-link send cooldown is auth-magic-link's.
     fn tables(&self) -> &'static [&'static str] {
-        &[]
+        &["auth_passkeys_challenge_budget"]
+    }
+
+    /// The budget row is a counter keyed by a composite subject —
+    /// `email:<address>` or `ip:<address>` — with the window it started in,
+    /// which is the shape [`Disposition::Unreachable`] exists for: an
+    /// equality predicate on the bare address cannot reach it, the same
+    /// reason the waitlist cooldown is declared this way. Nothing in the
+    /// row is a credential, and the retention is short: the scheduled
+    /// handler deletes any row whose window closed more than a day ago, so
+    /// a probed address is not remembered much longer than the probe took.
+    fn personal_data(&self) -> &'static [PersonalDataSet] {
+        const SETS: &[PersonalDataSet] = &[PersonalDataSet {
+            table: "auth_passkeys_challenge_budget",
+            subject: "subject",
+            kind: DataKind::Usage,
+            disposition: Disposition::Unreachable(
+                "the row is a counter keyed by email-or-ip plus window, so no equality \
+                 predicate on your address reaches it, and it is deleted within a day of \
+                 its window closing",
+            ),
+            description: "How many passkey sign-in attempts your address or network made \
+                          recently, so the login page cannot be swept for accounts.",
+            redacted: &[],
+            subject_via: None,
+        }];
+        SETS
     }
 
     fn emits(&self) -> &'static [&'static str] {
@@ -300,7 +347,11 @@ impl Module for Passkeys {
     }
 
     fn migrations(&self) -> Migrations {
-        Migrations::EMPTY
+        const MIGRATIONS: [SqlMigration; 1] = [MIGRATION_CHALLENGE_BUDGET];
+        // Refuses a gap, a duplicate or an entry out of order at build
+        // time (issue #27).
+        const _: () = cratefield_core::assert_migration_set(&MIGRATIONS);
+        Migrations::sqlite(&MIGRATIONS)
     }
 
     fn validate_config(&self, cfg: &dyn Config) -> Result<(), ConfigError> {
@@ -336,6 +387,16 @@ impl Module for Passkeys {
         });
         register::router().merge(login::router()).with_state(state)
     }
+
+    /// Deletes budget rows whose window closed more than a day ago, so the
+    /// ledger holds the recent past and nothing else.
+    fn scheduled<'a>(
+        &'a self,
+        ctx: &'a ModuleContext,
+        cron: &'a str,
+    ) -> BoxFuture<'a, Result<(), AnyError>> {
+        Box::pin(budget::scheduled_prune(ctx, cron))
+    }
 }
 
 #[cfg(test)]
@@ -352,13 +413,42 @@ mod tests {
     }
 
     #[test]
-    fn the_module_declares_no_tables_because_auth_core_owns_them() {
+    fn the_module_owns_only_its_budget_because_auth_core_owns_the_rest() {
         let module = Passkeys::new();
         assert_eq!(module.name(), "auth-passkeys");
-        assert!(module.tables().is_empty());
-        assert!(module.migrations().sqlite.is_empty());
+        // One table, and it is the challenge budget ledger. `auth-core`
+        // owns every other row this module writes; a second name appearing
+        // here means something was declared in the wrong module.
+        assert_eq!(module.tables(), ["auth_passkeys_challenge_budget"]);
+        let migrations = module.migrations().sqlite;
+        assert_eq!(
+            migrations.len(),
+            1,
+            "the ledger is created by this module's one migration"
+        );
+        assert_eq!(migrations[0].id, "0001");
+        assert_eq!(migrations[0].sql, MIGRATION_CHALLENGE_BUDGET.sql);
         assert_eq!(module.requires(), [Port::Db, Port::Clock, Port::IdGen]);
         assert!(module.public_writes());
+    }
+
+    #[test]
+    fn every_table_the_migration_creates_is_declared_and_described() {
+        // The lists have to agree, and nothing else here checks it:
+        // `fz data export` walks `tables()`, subject access and erasure
+        // walk `personal_data()`, and a table in neither is outside all of
+        // them (issue #272).
+        let module = Passkeys::new();
+        assert!(
+            cratefield_core::unlisted_tables(&module).is_empty(),
+            "the migration creates a table `tables()` does not name: {:?}",
+            cratefield_core::unlisted_tables(&module)
+        );
+        assert!(
+            cratefield_core::undeclared_tables(&module).is_empty(),
+            "a declared table has no `personal_data()` entry: {:?}",
+            cratefield_core::undeclared_tables(&module)
+        );
     }
 
     #[test]
