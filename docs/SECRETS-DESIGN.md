@@ -310,6 +310,7 @@ lives once the stores ship (#39) on the native runtime.
 | `ADMIN_TOKEN` | core admin auth | **tenant** | Per venture |
 | `RESEND_API_KEY` | `cratefield-adapter-resend` | **tenant** | The venture's sending account |
 | `TURNSTILE_SECRET` | `cratefield-adapter-turnstile` | **tenant** | The venture's site secret |
+| `ANTHROPIC_API_KEY` | `cratefield-adapter-anthropic` | **tenant** | The venture's model account |
 | `MAIL_FROM`, `MAIL_REPLY_TO` | resend adapter | — (not secrets) | Listed to close the audit of `from_env` inputs |
 | Control database URL | native runtime bootstrap | **environment** | The one value from the environment (ADR 0008); it names the store that holds everything else, so it can never live inside one |
 | KMS credentials / IAM role | native runtime + `fz` | **environment** | Same bootstrap argument: needed to unwrap, so not storable |

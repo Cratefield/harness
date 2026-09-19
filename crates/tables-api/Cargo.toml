@@ -40,6 +40,9 @@ serde_json = { workspace = true }
 cratefield-testing = { path = "../testing", features = ["harness", "postgres"] }
 tower = { workspace = true }
 cratefield-adapter-sqlite = { path = "../adapter-sqlite" }
+# The tenant_isolation suite implements the registry's two traits, and
+# `TenantDatabases` is an async trait.
+async-trait = { workspace = true }
 # The subject-access and erasure routes, mounted beside a declared-tables
 # module so the privacy declaration on a declared table is checked end to
 # end rather than assumed.

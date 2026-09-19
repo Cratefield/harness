@@ -28,6 +28,7 @@ fn pairs() -> Vec<(CatalogModule, Box<dyn Module>)> {
         Box::new(cratefield_module_changelog::Changelog::new()),
         Box::new(cratefield_module_notifications::Notifications::new()),
         Box::new(cratefield_module_privacy::Privacy::new()),
+        Box::new(cratefield_module_telemetry::Telemetry::new()),
     ];
     let catalog = curated();
     assert_eq!(

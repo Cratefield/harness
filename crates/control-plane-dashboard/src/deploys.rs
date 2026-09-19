@@ -3,17 +3,19 @@
 //! The planned copy said there was nothing to list because no Deployer
 //! talks to Cloudflare, and that is true about Cloudflare. It was not
 //! true about the control plane: the engine
-//! (`cratefield-provisioning`) runs for real against
-//! [`Unwired`](cratefield_provisioning::Unwired) and records every
+//! (`cratefield-provisioning`) runs for real against the deployer the
+//! routes wire — the artifact linker in front of
+//! [`Unwired`](cratefield_provisioning::Unwired) — and records every
 //! pressed "Go" in `provision_progress` — which step a run reached,
 //! where it stopped, and when. This screen is that table, read.
 //!
 //! The honest part is the banner: nothing has ever reached Cloudflare.
-//! Every run stops at its first step refusing with "no deployer is
-//! wired", which is a recorded fact rather than a missing feature (#26)
-//! — so the rows here are called **runs**, never deploys, nothing is
-//! "serving", and the page does not read as though deploys were
-//! happening.
+//! Every run stops at its first step — the artifact step goes through the
+//! linker and falls back for want of stamped release digests, and the
+//! build path behind it refuses with "no deployer is wired" — which is a
+//! recorded fact rather than a missing feature (#26) — so the rows here
+//! are called **runs**, never deploys, nothing is "serving", and the page
+//! does not read as though deploys were happening.
 //!
 //! Read-only over the engine's table: this screen never writes
 //! `provision_progress` (changing the engine is out of scope), and the
@@ -238,10 +240,13 @@ fn banner(runs: &[RunRow]) -> String {
     if finished == 0 {
         return format!(
             "<p class=\"dash__banner\"><span class=\"chip\">Recorded fact</span>\
-             <strong>No deploy has ever reached Cloudflare.</strong> The deployer is \
-             <code>Unwired</code> — no adapter talks to Cloudflare yet \
+             <strong>No deploy has ever reached Cloudflare.</strong> The deployer's \
+             build path is <code>Unwired</code> — no adapter talks to Cloudflare yet \
              (<a href=\"{issue}\" rel=\"noopener\">#26</a>) — so every run recorded here \
-             stopped at its first step, refusing with \u{201c}no deployer is wired\u{201d}. \
+             stopped at its first step, the artifact step. That step goes through the \
+             artifact linker first, which falls back to the build path because no \
+             release digest is stamped yet, and the build path is what refuses with \
+             \u{201c}no deployer is wired\u{201d}: each row records the whole story. \
              These are provisioning runs, not deploys: nothing is serving because of \
              them, and the page will not say otherwise. The day a real deployer is \
              wired, a stopped run resumes from the step after its last completed one — \

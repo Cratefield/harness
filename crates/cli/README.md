@@ -14,12 +14,13 @@
 
 The venture CLI: `fz migrations collect`, `fz migrations apply`, `fz
 data export` / `fz data import`, `fz doctor`, `fz modules`, `fz push`,
-and the agent-safe manifest workflow — `fz plan`, `fz deploy --plan`,
-`fz add`, `fz init`, `fz verify` (harness #140).
+the TypeScript client generator `fz client-ts` (issue #155), and the
+agent-safe manifest workflow — `fz plan`, `fz deploy --plan`, `fz add`,
+`fz init`, `fz verify` (harness #140).
 
 `fz` links against your venture's compiled-in harness, so it runs as a bin
-target **inside the venture repo** — the pattern the venture template
-ships:
+target **inside the venture repo** — the shape `fz build` generates for
+every venture:
 
 ```toml
 # venture Cargo.toml
@@ -373,6 +374,35 @@ configuration, not artifact content: two customers on the same module set
 share the key and the artifact while keeping separate Workers, databases and
 secrets, and one wasm serves customers whose `HARNESS_SIDECARS` differ. See
 [docs/ARTIFACT-CACHE.md](../../docs/ARTIFACT-CACHE.md) for the guarantee.
+
+## `fz client-ts --surface <PATH|-> --out <DIR> [--json]` (issue #155)
+
+Generates the typed TypeScript client for a venture: a `/__surface`
+contract document in, the files of a deterministic `@cratefield/client`
+npm package out, written under `--out`. The document is what the running
+venture serves — a path, or `-` to read it off stdin — so the client can
+be generated without checking the venture out at all:
+
+```sh
+curl -s https://venture.example/__surface | fz client-ts --surface - --out ./client
+```
+
+`--out` is written over, not cleaned: the six generated files are replaced
+in place and everything else already there is left alone — including older
+files under `src/`, which `tsconfig.json`'s `include: ["src"]` will then
+type-check and `package.json`'s `files` will ship. The composition hash
+covers only the six written files, so generate into a directory that holds
+nothing else.
+
+Generation is deterministic: the same document generates byte-identical
+files, and the summary prints the package name, the `sha256` composition
+hash over them and the file list, so a regenerated client can be checked
+against a published one before it ships. `--json` prints the same
+verdict as exactly one JSON object on stdout — `schema`, `ok`, and
+either the package, the hash and the files written or `failures` with
+stable codes — with the exit code still reflecting the verdict. Like
+`fz build` and the manifest workflow this command needs no venture
+harness, so the standalone `fz` runs it.
 
 ## `fz modules`
 

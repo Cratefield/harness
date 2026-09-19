@@ -9,7 +9,7 @@
 //! section 4) has no `templates()` hook, so a module's default templates are
 //! its own code: modules ship `pub fn default_templates() ->
 //! Vec<(String, Box<dyn Template>)>` as a plain associated function, and the
-//! venture's `harness.rs` registers them before its overrides — or the
+//! venture's `src/lib.rs` registers them before its overrides — or the
 //! module falls back to its built-in template when the registry misses.
 //! This keeps the trait exactly as specified in the architecture doc.
 

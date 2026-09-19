@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/readme-banner.png" alt="api.factory0.ventures. The first venture backend built on the harness." width="100%">
+  <img src="readme-banner.png" alt="api.factory0.ventures. The first venture backend built on the harness." width="100%">
 </p>
 
 <p align="center">
@@ -28,9 +28,10 @@ for that venture.
 > If the harness cannot run Factory Zero's own signup and waitlist, it is not
 > ready for anyone else's.
 
-Built from
-[venture-backend-template](https://github.com/Factory-Zero/venture-backend-template).
-Same layout, same workflows, one composition file.
+Not built from a template — the harness has none. A venture is scaffolded
+with `fz init`, gains modules with `fz add`, and `fz build` generates the
+crate ([docs/VENTURE-GUIDE.md](../../../docs/VENTURE-GUIDE.md)). What exists
+here today is this README and the composition below.
 
 ## Composition
 

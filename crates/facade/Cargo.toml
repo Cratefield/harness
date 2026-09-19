@@ -5,7 +5,7 @@ readme = "README.md"
 keywords = ["cratefield", "harness", "backend", "axum", "modules"]
 categories = ["web-programming::http-server"]
 include = ["src/**/*", "README.md"]
-version = "0.1.4"
+version = "0.1.5"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -28,6 +28,7 @@ sqlite = ["dep:cratefield-adapter-sqlite"]
 postgres = ["dep:cratefield-adapter-postgres"]
 resend = ["dep:cratefield-adapter-resend"]
 turnstile = ["dep:cratefield-adapter-turnstile"]
+anthropic = ["dep:cratefield-adapter-anthropic"]
 apns = ["dep:cratefield-adapter-apns"]
 fcm = ["dep:cratefield-adapter-fcm"]
 stripe = ["dep:cratefield-adapter-stripe"]
@@ -84,6 +85,7 @@ waitlist = ["dep:cratefield-module-waitlist"]
 cms = ["dep:cratefield-module-cms"]
 changelog = ["dep:cratefield-module-changelog"]
 notifications = ["dep:cratefield-module-notifications", "i18n"]
+telemetry = ["dep:cratefield-module-telemetry"]
 
 # The conformance kit. Belongs under [dev-dependencies] in a venture.
 testing = ["dep:cratefield-testing"]
@@ -96,6 +98,7 @@ cratefield-adapter-sqlite = { workspace = true, optional = true }
 cratefield-adapter-postgres = { workspace = true, optional = true }
 cratefield-adapter-resend = { workspace = true, optional = true }
 cratefield-adapter-turnstile = { workspace = true, optional = true }
+cratefield-adapter-anthropic = { workspace = true, optional = true }
 cratefield-adapter-apns = { workspace = true, optional = true }
 # `publish = false` until its first manual publish (docs/RELEASING.md), so it
 # must be published before the facade's next release, the same way
@@ -125,6 +128,7 @@ cratefield-module-waitlist = { workspace = true, optional = true }
 cratefield-module-cms = { workspace = true, optional = true }
 cratefield-module-changelog = { workspace = true, optional = true }
 cratefield-module-notifications = { workspace = true, optional = true }
+cratefield-module-telemetry = { workspace = true, optional = true }
 cratefield-testing = { workspace = true, optional = true }
 
 [package.metadata.docs.rs]

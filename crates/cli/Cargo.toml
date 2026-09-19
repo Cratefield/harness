@@ -5,7 +5,7 @@ readme = "README.md"
 keywords = ["cratefield", "cli", "migrations", "wrangler", "d1"]
 categories = ["command-line-utilities", "development-tools"]
 include = ["src/**/*", "examples/**/*", "README.md"]
-version = "0.2.2"
+version = "0.2.3"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -120,6 +120,11 @@ cratefield-introspect = { path = "../introspect", optional = true }
 # two manifests needs no database, and the crate carries no I/O and no
 # driver of its own.
 cratefield-tables = { path = "../tables" }
+# `fz client-ts` (issue #155) hands the `/__surface` document to the
+# generator and writes the files it returns. Path-only, no version: the
+# crate is `publish = false` (see its manifest), and a versioned spec
+# could never resolve against crates.io.
+cratefield-client-ts = { path = "../client-ts" }
 # `push-send` only: the native runtime's reqwest client and its outbound
 # policy. Native-only by construction (the crate refuses to compile on wasm),
 # which is why it is optional and off by default.

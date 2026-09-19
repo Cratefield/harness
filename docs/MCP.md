@@ -9,7 +9,7 @@ the venture's real `fz` program and hand back the one JSON object `fz
 [`crates/mcp/README.md`](../crates/mcp/README.md) is the five-minute how
 — the tools, the arguments, the envelope, a client configuration. The
 decision to build it here, as a wrapper and nothing more, is
-[ADR 0019](adr/0019-the-mcp-server-is-a-thin-wrapper-over-fz-json.md).
+[ADR 0021](adr/0021-the-mcp-server-is-a-thin-wrapper-over-fz-json.md).
 
 ## Why a server at all
 
@@ -187,4 +187,4 @@ stdin ending is a clean shutdown. Publishing `cratefield-mcp` to crates.io is
 the remaining human step — the same process as every other crate
 ([docs/RELEASING.md](RELEASING.md)); until then it is built from this
 repository, which is where it belongs (ADR
-[0019](adr/0019-the-mcp-server-is-a-thin-wrapper-over-fz-json.md)).
+[0021](adr/0021-the-mcp-server-is-a-thin-wrapper-over-fz-json.md)).

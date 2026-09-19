@@ -17,7 +17,7 @@ port identified, and the outcome of the admin check, which rows this
 request reaches.
 
 ```rust
-match may_read(&api, &caller, admin)? {
+match may_read(&api, tenancy, &caller, admin)? {
     Reach::Everything => /* the whole table */,
     Reach::OwnedBy { column, subject } => /* rows where column = subject */,
 }
@@ -48,6 +48,7 @@ the point of it.
 | `401 unauthenticated` | no credential where one is needed, or one that did not verify |
 | `503 verifier-unavailable` | a credential was presented and could not be checked |
 | `500 table-misdeclared` | `owner` with no subject column to match against |
+| `500 no-membership-fact` | `tenant-members` where a tenant registry named the tenant — the level is refused to every caller |
 
 The two 404s are the same answer on purpose.
 
@@ -60,16 +61,39 @@ The two 404s are the same answer on purpose.
 | `GET /{table}/{key}` | one row by its primary key |
 | `PUT /{table}/{key}` | `200` and the row it replaced |
 | `DELETE /{table}/{key}` | `204`, and nothing |
+| `GET /{table}/__by?<column>=<value>&…` | one row by its primary key, named in the query |
+| `PUT /{table}/__by?…` | `200` and the row it replaced |
+| `DELETE /{table}/__by?…` | `204`, and nothing |
 
-**The last three need a key of one column.** `/{table}/{key}` refuses a
-composite key rather than joining its values with a separator that could
-occur inside one, so a table declaring `primary_key = ["tenant",
-"member"]` has a page and a create and no route that names one row. It
-publishes only those two, for the reason below. ADR 0018 is the
-decision on the other three — `/{table}/__by`, the key named in the
-query — and until that is built, refusing is still what the route does.
+**`/{table}/{key}` needs a key of one column.** It refuses a composite
+key rather than joining its values with a separator that could occur
+inside one (`400 composite-key`), so a table declaring `primary_key =
+["tenant", "member"]` cannot name a row through it — and its refusal
+names the route that does: `/{table}/__by?<column>=<value>&…`, the key
+named in the query (ADR 0018). The `__by` routes answer with the same
+bodies and statuses the path routes answer — a read returns the row, a
+replace takes the row and answers the replaced one, a remove answers
+`204` and nothing — one route whatever the key's arity.
 
-These are the five the surface publishes for a table it can address, and
+`__by` answers for **every** declared table, not only composite-key
+ones, and not as a second way to do one thing: a static segment beats
+the dynamic `{key}` in the one shared router, so on a single-column-key
+table a row whose key value is literally `__by` would otherwise be
+unreachable, and `/{table}/__by?id=__by` is that row's address back.
+
+The `__by` query names primary-key columns and nothing else. Naming some
+but not all is `400 partial-key` — a row is addressed by its whole key,
+not by every row sharing a prefix. Naming a column outside the key is
+`400 not-a-key-column`, because ignoring it answers a question the
+caller did not ask. Values are parsed exactly as a path segment's, so a
+`real`, `boolean` or `json` key stays refused with `bad-key`. `after`
+and `sort` are the harness's parameters on this sub-path and can never
+name a key column, so a table whose key uses one of those names has no
+address here.
+
+For a readable table the surface publishes the page and the one row,
+and three more for a writable one, each single-row action against
+whichever spelling its table's key calls for — and
 `every_published_action_is_a_route_that_exists` is what keeps the two
 lists the same. A published action whose route does not exist is worse
 than an unpublished one: a generated UI renders the form and the
@@ -212,7 +236,7 @@ writable.
 | level | may write |
 |---|---|
 | `public-read` | **nobody** (`403 table-read-only`) |
-| `tenant-members` | any signed-in caller, any row |
+| `tenant-members` | any signed-in caller, any row; with a tenant registry, nobody |
 | `owner` | a signed-in caller, their own rows |
 | `admin` | an admin token |
 
@@ -221,8 +245,15 @@ tenant.** There is no membership fact to check: a `Caller` carries an id,
 a session and an address, and `Ports::tenants` is not a `Port`, so a
 module cannot ask which tenant it is serving either. On a deployment
 without a registry — every venture `fz build` generates — the two are the
-same set, because there is one tenant. On one with a registry they are
-not, and issue #385 carries the analysis.
+same set, because there is one tenant, and the level serves as it always
+did. On one with a registry they are not, and the level is refused with
+`500 no-membership-fact` at every host, the caller's own included: "any
+verified caller" is a wider set than "a member of this tenant", and
+serving the first as the second is the leak of issue #385. The refusal
+is a `500` and not a `403` — nothing the caller did is wrong and no
+credential of theirs fixes it — and it is not a membership check. #385
+stays open for the fact that would make one, a tenant claim on the
+subject.
 
 **A row a caller writes is a row they own.** Under `owner` the subject
 column is settled by the harness, not taken from the body: absent or null
@@ -255,11 +286,30 @@ publish as `Audience::Subject`, a variant added for them: calling `owner`
 public would render a form for rows the caller cannot reach, and calling
 it admin would hide it from the person whose rows they are.
 
-A `public-read` table publishes its reads and no writes, because there
-are none — and a composite-key table publishes no single-row action,
-because `/{table}/{key}` does not exist for it. Both are the same rule:
-the contract lists what is there. Without it, a generated client carries
-methods that answer `403` or `400` whatever they are called with.
+Nor can a surface say whether the level will be honoured. `surface()`
+reads the manifest and nothing else, so a `tenant-members` table
+publishes as `Audience::Subject` on a registry deployment too — one where
+every request to it will be refused. Closing that needs the deployment's
+tenancy threaded through `Module::surface`, which does not carry it
+today; #385 is where the published contract and the served one come
+apart.
+
+A composite-key table publishes all five actions, its three single-row
+ones against `/{table}/__by` (ADR 0018) — the same rule as ever, that
+the contract lists what is there. Without it, a generated
+client carries methods that answer `403` or `400` whatever they are
+called with.
+
+Where the key travels is a fact about the key's arity, and the
+published path says which: `/{table}/{key}` for a key of one column,
+`/{table}/__by` for a wider one, where the path carries no placeholder
+and the published schema names the key columns instead — as the input
+of a read and a delete, which have no body, and beside a replace's row
+body under `x-cf-query`. That keyword is introduced by this crate,
+riding under the harness's `x-cf-*` namespace: a client generator can
+tell a path parameter from query parameters, and one that does not know
+the keyword ignores it the way it ignores every `x-cf-*` keyword it was
+built before.
 
 A `public-read` table publishes its reads and no writes, because there
 are none. The body schema on a write is the table's own JSON Schema — the
@@ -289,7 +339,8 @@ decoration that reads as compliance. These are what make it not that.
 | level | anonymous | signed in | reaches |
 |---|---|---|---|
 | `public-read` | yes | yes | everything |
-| `tenant-members` | **401** | yes | everything |
+| `tenant-members` | **401** | yes | everything, where there is no tenant registry |
+| `tenant-members`, registry deployment | **500** | **500** | nothing — every host, the caller's own included |
 | `owner` | **401** | yes | only rows whose subject column is theirs |
 | `admin` | the admin check's own answer | same | everything |
 
@@ -319,6 +370,15 @@ wrong and one of them is a leak. The column is checked against the
 table's fields at request time as well as at build time, because a table
 edited under a stale privacy block would otherwise produce
 `WHERE nope = 'ada'`.
+
+**`tenant-members` on a deployment with a tenant registry refuses with
+a 500, to everybody.** The same shape of fault as `table-misdeclared`:
+the deployment's composition, not the caller's doing. There is no
+membership fact (issue #385), and where a registry named the tenant
+"any verified caller" and "a member of this tenant" are different sets,
+so the level is refused at every host — the caller's own included —
+rather than served to whoever arrives. Signing in does not help; a
+different credential is a caller the deployment equally cannot place.
 
 **A level this build does not understand is refused.** `Access` is
 `#[non_exhaustive]`; a level added later arrives at that arm rather than

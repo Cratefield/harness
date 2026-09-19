@@ -11,7 +11,7 @@ use factory0_auth_core::{
     insert_user, retire_unconsumed_tokens, set_cookie, single_use_token_by_hash, user_by_id,
     user_by_primary_email,
 };
-use http::{HeaderMap, StatusCode, header};
+use http::{HeaderMap, StatusCode, Uri, header};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -112,12 +112,13 @@ padding:0 1rem\">{body}</body></html>"
 fn page(status: StatusCode, message: &str, confirm: Option<&str>) -> Response {
     let action = confirm.map_or_else(String::new, |token| {
         format!(
-            "<form method=\"post\"><input type=\"hidden\" name=\"token\" value=\"{token}\">\
+            "<form method=\"post\"><input type=\"hidden\" name=\"token\" value=\"{}\">\
 <button type=\"submit\" style=\"font:inherit;padding:12px 20px;border-radius:6px;\
-border:0;background:#1a1a1a;color:#fff;font-weight:600;cursor:pointer\">Sign in</button></form>"
+border:0;background:#1a1a1a;color:#fff;font-weight:600;cursor:pointer\">Sign in</button></form>",
+            html_escape(token)
         )
     });
-    page_html(status, &format!("<p>{message}</p>{action}"))
+    page_html(status, &format!("<p>{}</p>{action}", html_escape(message)))
 }
 
 /// The refusal, as a pause rather than a rendered response, so the JSON
@@ -260,7 +261,8 @@ cursor:pointer\">Email me a link</button></form>"
 }
 
 /// Escapes the five characters that can leave an HTML attribute or a text
-/// node. `return_to` is caller-supplied and lands in a `value=`.
+/// node. `return_to` and the token on the confirm page are caller-supplied
+/// and land in a `value=`.
 fn html_escape(value: &str) -> String {
     value
         .replace('&', "&amp;")
@@ -592,6 +594,22 @@ fn looks_like_a_click(headers: &HeaderMap) -> bool {
         && value("sec-fetch-dest").as_deref() == Some("document")
 }
 
+/// Whether a presented value could be one of ours at all: exactly the
+/// unpadded-base64url length of [`TOKEN_BYTES`], in that alphabet and no
+/// other.
+///
+/// A value that is not token-shaped is not a token, so it is refused
+/// before it reaches a lookup or a page. This is the first guard and the
+/// escape in [`page`] is the second — the same layering as `return_to`,
+/// and the order that survives either guard being widened alone.
+fn looks_like_a_token(value: &str) -> bool {
+    let len = (TOKEN_BYTES * 4).div_ceil(3);
+    value.len() == len
+        && value
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+}
+
 /// `GET /consume?token=…`, the URL in the mail.
 ///
 /// Does **not** spend the token unless the request looks like a person
@@ -605,7 +623,7 @@ async fn consume(
     Query(query): Query<ConsumeQuery>,
 ) -> Result<Response, Problem> {
     let token = query.token.unwrap_or_default();
-    if token.is_empty() {
+    if !looks_like_a_token(&token) {
         return Ok(expired_page());
     }
     if !looks_like_a_click(&headers) {
@@ -626,13 +644,23 @@ async fn confirm(
     State(state): State<Arc<ModuleState>>,
     scope: Scope,
     headers: HeaderMap,
+    uri: Uri,
     body: String,
 ) -> Result<Response, Problem> {
+    // Spending the token mints a session, so a form on another site must
+    // not be able to press this button for somebody (issue #439). The GET
+    // above is deliberately unguarded: a click out of a mail client is
+    // inherently cross-site, and it is covered by the single-use token in
+    // the URL plus `looks_like_a_click`.
+    factory0_auth_core::csrf::require_same_origin(&headers, &uri)
+        .map_err(|problem| problem.instance(&scope.request_id))?;
     let token = url::form_urlencoded::parse(body.as_bytes())
         .find(|(key, _)| key == "token")
         .map(|(_, value)| value.to_string())
         .unwrap_or_default();
-    if token.is_empty() {
+    // The same shape the GET branch demands, so the two entry points stay
+    // one rule and a malformed value never reaches `spend`.
+    if !looks_like_a_token(&token) {
         return Ok(expired_page());
     }
     spend(&state, &scope, &headers, &token).await
@@ -845,5 +873,49 @@ mod tests {
                 .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
         );
         assert!(first.len() >= 43, "32 bytes of entropy: {first}");
+    }
+
+    #[test]
+    fn only_a_token_shaped_value_passes_the_shape_guard() {
+        // The length is derived from TOKEN_BYTES, so resizing the token
+        // moves the guard with it rather than leaving a stale constant.
+        assert_eq!((TOKEN_BYTES * 4).div_ceil(3), 43);
+        assert!(looks_like_a_token(&random_token().expect("entropy")));
+        // All hyphens is the right shape, if never a real token.
+        assert!(looks_like_a_token(&"-".repeat(43)));
+
+        // Empty is what a missing parameter decodes to; the rest are near
+        // misses, one thing away from the shape.
+        for bad in [
+            String::new(),
+            "+".repeat(43),
+            "/".repeat(43),
+            ".".repeat(43),
+            "-".repeat(42),
+            "-".repeat(44),
+        ] {
+            assert!(!looks_like_a_token(&bad), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn a_hostile_token_cannot_break_out_of_the_hidden_field() {
+        // The shape guard keeps a hostile value from reaching `page` in
+        // the first place, so the escape — the second guard — is tested
+        // here directly, the way `return_to`'s is.
+        let attack = "\"><script>alert(1)</script>";
+        let response = page(StatusCode::OK, "Confirm.", Some(attack));
+        let body = pollster::block_on(axum::body::to_bytes(response.into_body(), usize::MAX))
+            .expect("body reads");
+        let html = String::from_utf8_lossy(&body).to_string();
+        assert!(!html.contains("<script>alert"), "{html}");
+        assert!(
+            !html.contains(attack),
+            "the raw value reached the document: {html}"
+        );
+        assert!(
+            html.contains("value=\"&quot;&gt;&lt;script&gt;"),
+            "the value was dropped, not escaped: {html}"
+        );
     }
 }

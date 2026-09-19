@@ -39,6 +39,7 @@ mod surface;
 mod template;
 mod tenant;
 mod tenant_conn;
+mod tenant_lifecycle;
 mod venture;
 
 // `Module::router` returns an `axum::Router` and `well_known` an
@@ -63,8 +64,9 @@ pub use http::{Form, Json, MAX_BODY_BYTES, X_REQUEST_ID, rate_limited, request_i
 pub use idempotency::Inbox;
 pub use lint::{CARD_DATA, card_data_hit, created_tables, lint_card_data, lint_portable_sql};
 pub use logging::{
-    RedactingVisitor, is_email_field, is_secret_field, redacted_value, scrub_request_url,
-    scrub_text, set_error_forwarder, set_log_pseudonym_key, subject_hash,
+    ControlLevel, RedactingVisitor, forward_control_event, is_email_field, is_secret_field,
+    redacted_value, scrub_request_url, scrub_text, set_error_forwarder, set_log_pseudonym_key,
+    subject_hash,
 };
 pub use module::{
     BoxFuture, HARNESS_API, Migrations, Module, ModuleContext, SqlMigration, assert_migration_set,
@@ -79,17 +81,20 @@ pub use personal_data::{
 };
 pub use ports::{
     Auth, AuthError, Blob, BlobError, BlobObject, BoundedHttpClient, Caller, Captcha,
-    CaptchaBinding, CaptchaError, Charge, CheckoutRequest, CheckoutSession, Clock,
-    ConnectAccountLink, ConnectAccountLinkRequest, DEFAULT_RESPONSE_TIMEOUT, Database, DbError,
-    Decision, Defer, DispatchError, Dispatcher, HttpClient, HttpError, HttpPolicy, IdGen, KeyValue,
-    Kid, KvError, LineItem, LocKeys, MAX_BLOB_BYTES, MAX_CONCURRENT_REQUESTS, MAX_KID_NAME,
-    MAX_RESPONSE_BYTES, MAX_RESPONSE_TIMEOUT, MailError, Mailer, Member, Message, Money, NoopDefer,
-    Notification, Payload, Payments, PaymentsError, Platform, Port, Ports, Priority, Push,
+    CaptchaBinding, CaptchaError, Charge, CheckoutRequest, CheckoutSession, Clock, Completion,
+    ConnectAccountLink, ConnectAccountLinkRequest, Credential, DEFAULT_MAX_TOKENS,
+    DEFAULT_RESPONSE_TIMEOUT, Database, DbError, Decision, Defer, Destination, DispatchError,
+    Dispatcher, Filed, HttpClient, HttpError, HttpPolicy, IdGen, KeyValue, Kid, KvError, LineItem,
+    LocKeys, MAX_BLOB_BYTES, MAX_CONCURRENT_REQUESTS, MAX_KID_NAME, MAX_RESPONSE_BYTES,
+    MAX_RESPONSE_TIMEOUT, MailError, Mailer, Member, Message, ModelTier, Money, NoopDefer,
+    Notification, Payload, Payments, PaymentsError, Platform, Port, Ports, Priority, Prompt, Push,
     PushError, PushOutcome, RateLimitError, RateLimiter, Realtime, RealtimeError, Recipient,
-    Refund, RefundRequest, RoomContext, RoomHandler, RoutingPush, Row, Rows, ScopedBlob,
-    SendOutcome, SignatureError, Signer, Statement, Subject, SubscriptionCheckoutRequest,
-    SystemClock, TransferCharge, TryFromValue, UlidIdGen, Unconfigured, Verdict, WebhookEvent,
-    check_blob_size, declared_content_length, retry_after, timeout, ttl_secs,
+    Refund, RefundRequest, Role, RoomContext, RoomHandler, RoutingPush, RoutingTextModel,
+    RoutingTracker, Row, Rows, ScopedBlob, SendOutcome, Severity, SignatureError, Signer,
+    Statement, Subject, SubscriptionCheckoutRequest, SystemClock, TextModel, TextModelError,
+    TicketDraft, TicketState, TicketStatus, Tracker, TrackerError, TransferCharge, TryFromValue,
+    Turn, UlidIdGen, Unconfigured, Verdict, WebhookEvent, check_blob_size, declared_content_length,
+    retry_after, timeout, ttl_secs,
 };
 pub use problem::Problem;
 // `Slugs` is exported beside the `SLUGS` value it types. Without it a
@@ -122,8 +127,11 @@ pub use surface::{
 };
 pub use template::{Rendered, Template, TemplateError, TemplateRegistry};
 pub use tenant::{
-    IMPLICIT_TENANT, ImplicitTenant, Resolution, ResolveTenant, Tenant, TenantDatabases,
+    IMPLICIT_TENANT, ImplicitTenant, Resolution, ResolveTenant, Tenancy, Tenant, TenantDatabases,
     TenantDbError, TenantId, TenantRouting, TenantStatus,
 };
 pub use tenant_conn::TenantConn;
+pub use tenant_lifecycle::{
+    ErasureStep, TenantLifecycle, TenantLifecycleError, TenantSummary, remaining_erasure,
+};
 pub use venture::{Brand, Venture, VentureEnv};

@@ -29,7 +29,7 @@
 
 use std::sync::Arc;
 
-use cratefield_core::{Database, Problem, ProblemDef, Scope};
+use cratefield_core::{Database, Problem, ProblemDef, Scope, Tenancy};
 use http::{HeaderMap, StatusCode};
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
@@ -103,6 +103,7 @@ pub struct Batch {
 pub async fn run(
     tables: &Tables,
     conn: &dyn Database,
+    tenancy: Tenancy,
     headers: &HeaderMap,
     scope: &Scope,
     batch: &Batch,
@@ -127,6 +128,7 @@ pub async fn run(
         let body = crate::read::page(
             tables,
             conn,
+            tenancy,
             headers,
             scope,
             crate::read::Asked {

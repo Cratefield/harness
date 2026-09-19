@@ -103,7 +103,7 @@ Required, with no default, one of four:
 |---|---|---|
 | `public-read` | anybody | nobody |
 | `owner` | a signed-in caller, their own rows | the same |
-| `tenant-members` | any signed-in caller, every row | the same |
+| `tenant-members` | any signed-in caller, every row; with a tenant registry, nobody | the same |
 | `admin` | an admin token | the same |
 
 ```json
@@ -111,10 +111,27 @@ Required, with no default, one of four:
 ```
 
 `tenant-members` admits any caller the deployment's verifier accepts. It
-does not check membership, because the harness has no membership fact:
-nothing in a verified credential says which tenant a caller belongs to.
-On a venture `fz build` generates that is the same set — there is one
-tenant — and issue #385 is where it stops being one.
+does not check membership, because the membership fact still does not
+exist: nothing in a verified credential says which tenant a caller
+belongs to. On a venture `fz build` generates — a deployment with no
+tenant registry — that is the same set and the level serves as it always
+did: there is one tenant, so every verified caller is a member of it
+because there is no other to belong to.
+
+On a deployment with a registry the tenant comes from the `Host` header
+and the verifier does not, so the two sets come apart, and the level is
+refused at every host — the caller's own included — with a `500`
+(`no-membership-fact`). It is a `500` and not a `403` because nothing
+the caller did is wrong and no credential of theirs fixes it. That is
+the level being switched off where it cannot be honoured, not a
+membership check: the fact that would make one, a tenant claim on the
+subject that the verifier fills in, is issue #385, and #385 is still
+open.
+
+The published surface cannot reflect this: `/__surface` lists a
+`tenant-members` table as needing a signed-in caller whatever the
+deployment's tenancy, because the surface is built from the manifest
+alone and the manifest does not know the tenancy either.
 
 `owner` matches a caller against the column the table's privacy block
 names as its subject, so declaring it on a table that holds nothing
@@ -136,16 +153,44 @@ declares them:
 | `GET /{table}/{key}` | one row |
 | `PUT /{table}/{key}` | `200` and the row it replaced |
 | `DELETE /{table}/{key}` | `204` |
+| `GET /{table}/__by?<column>=<value>&…` | one row, its key named in the query |
+| `PUT /{table}/__by?…` | `200` and the row it replaced |
+| `DELETE /{table}/__by?…` | `204` |
 | `POST /__batch` | several reads in one round trip |
 
-The three routes naming one row need a primary key of one column. A
-composite key is refused rather than joined with a separator that could
-occur inside one of the values, so a table declaring `primary_key =
-["tenant", "member"]` is paged and written and never addressed one row at
-a time — and `/__surface` publishes only the two routes it has. ADR 0018
-is the decision on that gap: the three routes return at
-`/{table}/__by?<column>=<value>`, the key named in the query. They are
-not built yet, so today the refusal above is still the whole answer.
+`/{table}/{key}` addresses a row when the primary key is one column. A
+composite key does not fit in one path segment, and that route refuses
+it (`400 composite-key`) rather than join its values with a separator
+that could occur inside one of the values — and names the route that
+does answer: `/{table}/__by?<column>=<value>&…`, the key written as the
+query, one parameter per primary-key column (ADR 0018). A membership
+table keyed by `tenant` and `member` reads one row at
+`/v1/tables/membership/__by?tenant=acme&member=ada`. The columns are
+named, not positional, so reordering the declaration cannot quietly
+change what an existing URL means, and the three methods answer exactly
+as the path routes do: a read returns the row, a replace takes the row
+and answers the replaced one, a remove answers `204` and nothing.
+
+The query names primary-key columns and nothing else. Naming some but
+not all is `400 partial-key` — a row is addressed by its whole key, not
+by every row sharing a prefix. Naming a column outside the key is `400
+not-a-key-column`; to narrow by another column, read the page and
+filter it. Values are parsed exactly as a path segment's is, so a
+`real`, `boolean` or `json` key column stays refused (`400 bad-key`).
+
+`after` and `sort` are the harness's parameters on this sub-path and
+can never name a key column, so a table whose primary key uses one of
+those names has no address here. The page, the create and `__batch`
+still serve it.
+
+`__by` answers for **every** declared table, not only composite-key
+ones, because a static segment beats `{key}` in the router: on a
+single-column-key table a row whose key value is literally `__by` is
+unreachable by path, and `/{table}/__by?id=__by` is that row's address.
+`/__surface` publishes all five actions either way and says where the
+key goes — an `__by` path carries no placeholder, so a read or a delete
+publishes the key columns as its input schema, and a replace publishes
+the row body with the key columns beside it under `x-cf-query`.
 
 A row that is not the caller's is **not found**, never forbidden: a `403`
 is an answer about a row they were never in a position to learn exists.

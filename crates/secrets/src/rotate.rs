@@ -96,8 +96,12 @@ impl SecretStore {
         self.db()
             .batch_atomic(&[
                 Statement::with_values(
-                    "UPDATE harness_secret_keys SET state = 'retiring' WHERE key_id = ?",
-                    vec![text(&old_key_id)],
+                    format!(
+                        "UPDATE harness_secret_keys SET state = 'retiring' \
+                         WHERE key_id = ? AND {}",
+                        crate::scoped_store()
+                    ),
+                    vec![text(&old_key_id), text(self.id().as_str())],
                 ),
                 insert,
             ])
@@ -115,14 +119,18 @@ impl SecretStore {
                 self.seal(name, *version, &new_key_id, &new_dek, plaintext.expose())?;
             self.db()
                 .execute(&Statement::with_values(
-                    "UPDATE harness_secrets SET key_id = ?, nonce = ?, ciphertext = ? \
-                     WHERE name = ? AND version = ?",
+                    format!(
+                        "UPDATE harness_secrets SET key_id = ?, nonce = ?, ciphertext = ? \
+                         WHERE name = ? AND version = ? AND {}",
+                        crate::scoped_store()
+                    ),
                     vec![
                         text(&new_key_id),
                         blob(nonce),
                         blob(ciphertext),
                         text(name),
                         SeaValue::BigInt(Some(i64::from(*version))),
+                        text(self.id().as_str()),
                     ],
                 ))
                 .await?;
@@ -139,8 +147,12 @@ impl SecretStore {
         if retired_old {
             self.db()
                 .execute(&Statement::with_values(
-                    "UPDATE harness_secret_keys SET state = 'retired' WHERE key_id = ?",
-                    vec![text(&old_key_id)],
+                    format!(
+                        "UPDATE harness_secret_keys SET state = 'retired' \
+                         WHERE key_id = ? AND {}",
+                        crate::scoped_store()
+                    ),
+                    vec![text(&old_key_id), text(self.id().as_str())],
                 ))
                 .await?;
         }
@@ -203,13 +215,17 @@ impl SecretStore {
             let wrapped = self.kms().wrap(&dek).await?;
             self.db()
                 .execute(&Statement::with_values(
-                    "UPDATE harness_secret_keys SET wrapped_dek = ?, kms_provider = ?, \
-                     kms_key_ref = ? WHERE key_id = ?",
+                    format!(
+                        "UPDATE harness_secret_keys SET wrapped_dek = ?, kms_provider = ?, \
+                         kms_key_ref = ? WHERE key_id = ? AND {}",
+                        crate::scoped_store()
+                    ),
                     vec![
                         blob(wrapped),
                         text(self.kms().provider()),
                         text(self.kms().key_ref()),
                         text(key_id),
+                        text(self.id().as_str()),
                     ],
                 ))
                 .await?;

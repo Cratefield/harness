@@ -8,6 +8,14 @@
 //! layer — when, method, path, status, duration, and the account the
 //! session belonged to when there was one.
 //!
+//! What the screen shows is scoped before it is filtered: it reads only
+//! the signed-in operator's own rows. The account is a bound parameter
+//! of the read — isolation stays by query, the way the rest of this
+//! module reads — so another operator's traffic is not on the page, and
+//! a row written for a request with nobody signed in carries the empty
+//! account, which puts it on nobody's page. That last part is the
+//! design, not a gap: an anonymous request belongs to no operator.
+//!
 //! What the table deliberately never holds: query strings, bodies,
 //! headers. A path is a path; everything else is where personal data
 //! and credentials live. The row's shape is the privacy posture, not a
@@ -170,14 +178,15 @@ async fn enforce_retention(db: &dyn Database, now: OffsetDateTime) -> Result<(),
 // The screen
 // ---------------------------------------------------------------------------
 
-/// One recorded request.
+/// One recorded request. No account field: every row the Logs screen
+/// renders is the signed-in operator's by construction, so an account
+/// column would repeat the banner on every row.
 struct LogRow {
     at: String,
     method: String,
     path: String,
     status: u16,
     duration_ms: i64,
-    account_id: String,
 }
 
 /// The status classes the filter offers. Exactly the three the screen
@@ -230,11 +239,21 @@ impl Filters {
     }
 }
 
-/// The WHERE clause the filters select with: fixed fragments, every
-/// value bound — user text never becomes SQL, only a parameter.
-fn filter_conditions(filters: &Filters) -> (String, Vec<SeaValue>) {
+/// The WHERE clause the read selects with. The operator's account leads
+/// it — a bound parameter, never interpolated, so the scope is part of
+/// the query itself and no filter can widen it back onto another
+/// account's rows. Fixed fragments after it, every value bound: user
+/// text never becomes SQL, only a parameter.
+fn filter_conditions(account_id: &str, filters: &Filters) -> (String, Vec<SeaValue>) {
     let mut conditions: Vec<&'static str> = Vec::new();
     let mut params: Vec<SeaValue> = Vec::new();
+    // The scope composes with the filters, never yields to them. A row
+    // written for a request with nobody signed in carries the empty
+    // account, so it falls out of every operator's view — deliberate:
+    // an anonymous request belongs to no operator, and the only reader
+    // here is a signed-in one.
+    conditions.push("account_id = ?");
+    params.push(text(account_id));
     if let Some(bounds) = filters.class.and_then(class_bounds) {
         conditions.push("status >= ? AND status <= ?");
         params.push(SeaValue::Int(Some(bounds.0)));
@@ -244,22 +263,20 @@ fn filter_conditions(filters: &Filters) -> (String, Vec<SeaValue>) {
         conditions.push("path LIKE ?");
         params.push(text(&format!("{prefix}%")));
     }
-    if conditions.is_empty() {
-        (String::new(), params)
-    } else {
-        (format!(" WHERE {}", conditions.join(" AND ")), params)
-    }
+    (format!(" WHERE {}", conditions.join(" AND ")), params)
 }
 
-/// One page of the log under `filters`: how many rows match, which page
-/// this is, how many pages there are, and the rows themselves, newest
-/// first.
+/// One page of the signed-in operator's log under `filters`: how many
+/// rows match, which page this is, how many pages there are, and the
+/// rows themselves, newest first. The account is a parameter the caller
+/// must supply, so there is no way to read the log unscoped.
 async fn read_page(
     db: &dyn Database,
+    account_id: &str,
     filters: &Filters,
     requested_page: u64,
 ) -> Result<(u64, u64, Vec<LogRow>), cratefield_core::DbError> {
-    let (where_clause, params) = filter_conditions(filters);
+    let (where_clause, params) = filter_conditions(account_id, filters);
     let count: u64 = db
         .query(&Statement::with_values(
             format!("SELECT COUNT(*) AS n FROM request_log{where_clause}"),
@@ -281,7 +298,7 @@ async fn read_page(
     let rows = db
         .query(&Statement::with_values(
             format!(
-                "SELECT at, method, path, status, duration_ms, account_id \
+                "SELECT at, method, path, status, duration_ms \
                  FROM request_log{where_clause} \
                  ORDER BY at DESC, id DESC LIMIT ? OFFSET ?"
             ),
@@ -296,15 +313,15 @@ async fn read_page(
             path: row.get("path").unwrap_or_default(),
             status: row.get("status").unwrap_or_default(),
             duration_ms: row.get("duration_ms").unwrap_or_default(),
-            account_id: row.get("account_id").unwrap_or_default(),
         })
         .collect();
     Ok((count, page_number, rows))
 }
 
-/// `/v1/dashboard/logs` — the retained requests, newest first,
-/// filterable by status class and path prefix, paginated the way the
-/// data screen paginates.
+/// `/v1/dashboard/logs` — the signed-in operator's own requests, newest
+/// first, filterable by status class and path prefix, paginated the way
+/// the data screen paginates. The session's account is passed into the
+/// read as a bound parameter, so the page shows nobody else's rows.
 pub(super) async fn screen(
     state: State<Arc<DashboardState>>,
     headers: HeaderMap,
@@ -324,13 +341,14 @@ pub(super) async fn screen(
         .find(|(key, _)| key == "page")
         .and_then(|(_, value)| value.parse::<u64>().ok())
         .unwrap_or(1);
-    let (count, page_number, rows) = match read_page(db.as_ref(), &filters, requested_page).await {
-        Ok(page) => page,
-        Err(err) => {
-            tracing::error!(error = %err, "request log read failed");
-            return internal("could not read the request log");
-        }
-    };
+    let (count, page_number, rows) =
+        match read_page(db.as_ref(), &session.account_id, &filters, requested_page).await {
+            Ok(page) => page,
+            Err(err) => {
+                tracing::error!(error = %err, "request log read failed");
+                return internal("could not read the request log");
+            }
+        };
     let pages = count.div_ceil(PAGE_SIZE).max(1);
 
     let table = rows_table(&rows);
@@ -360,8 +378,8 @@ pub(super) async fn screen(
         signed_in_as: Some(&session.account_id),
         body: &format!(
             "<div class=\"page-h\"><h1>Logs</h1></div>\
-             <p class=\"lede\">What the control plane served, kept long enough to look \
-             at after the fact.</p>{frame}",
+             <p class=\"lede\">What your sessions asked of the control plane, kept long \
+             enough to look at after the fact.</p>{frame}",
             frame = frame(&account_nav("logs"), &crumb, &body),
         ),
     }))
@@ -382,9 +400,10 @@ fn render_body(filters: &Filters, count: u64, table: &str, nav: &str) -> (String
     };
     let body = format!(
         "<p class=\"dash__banner\"><span class=\"chip\">Scope</span>\
-         <strong>These are the control plane's own requests.</strong> Every request this \
-         dashboard served: when it arrived, its method and path, the status and duration \
-         it answered with, and the account the session belonged to when there was one. \
+         <strong>These are your requests.</strong> What your sessions asked of this \
+         dashboard: when each arrived, its method and path, and the status and duration \
+         it answered with. A request made with nobody signed in is recorded too, but it \
+         belongs to no operator, so it is on nobody's page. \
          A venture's own logs are a different thing — they need the venture reachable, \
          which needs <a href=\"{issue}\" rel=\"noopener\">#26</a>, and a retention story \
          of their own — and this screen does not pretend to have them.</p>\
@@ -428,14 +447,17 @@ fn render_body(filters: &Filters, count: u64, table: &str, nav: &str) -> (String
 
 /// The rows as the read-only table the data screen uses: one row per
 /// recorded request, the status coloured by the same three classes the
-/// filter offers.
+/// filter offers. Every row on the page is already the signed-in
+/// operator's, so there is no account column — the banner carries the
+/// scope.
 #[allow(clippy::format_push_string)] // the house idiom for HTML building
 fn rows_table(rows: &[LogRow]) -> String {
     let mut table = String::new();
     if rows.is_empty() {
         table.push_str(
             "<p class=\"dash__empty\">No requests recorded for this filter. An empty \
-             log with no filter also means no traffic yet — this page's own request is \
+             log with no filter also means no traffic from you yet — only your own \
+             sessions' requests are on this page, and this page's own request is \
              written after the page is built, so reload and it will be here.</p>",
         );
         return table;
@@ -443,7 +465,7 @@ fn rows_table(rows: &[LogRow]) -> String {
     table.push_str("<div class=\"dash__scroll\"><table class=\"dash__rows\">");
     table.push_str(
         "<thead><tr><th>When</th><th>Method</th><th>Path</th>\
-         <th>Status</th><th>Duration</th><th>Account</th></tr></thead><tbody>",
+         <th>Status</th><th>Duration</th></tr></thead><tbody>",
     );
     for row in rows {
         let status_class = if row.status >= 500 {
@@ -456,17 +478,12 @@ fn rows_table(rows: &[LogRow]) -> String {
         table.push_str(&format!(
             "<tr><td>{at}</td><td>{method}</td><td>{path}</td> \
              <td><span class=\"{status_class}\">{status}</span></td> \
-             <td>{duration_ms} ms</td><td>{account}</td></tr>",
+             <td>{duration_ms} ms</td></tr>",
             at = escape(&row.at),
             method = escape(&row.method),
             path = escape(&row.path),
             status = row.status,
             duration_ms = row.duration_ms,
-            account = if row.account_id.is_empty() {
-                String::from("<span class=\"dash__meta\">— no session</span>")
-            } else {
-                escape(&row.account_id)
-            },
         ));
     }
     table.push_str("</tbody></table></div>");
@@ -533,7 +550,11 @@ mod tests {
     }
 
     fn cookie(kit: &TestHarness) -> String {
-        let token = issue_session(kit.signer.as_ref(), EMAIL, NOW, DEFAULT_TTL_SECS);
+        cookie_for(kit, EMAIL)
+    }
+
+    fn cookie_for(kit: &TestHarness, account: &str) -> String {
+        let token = issue_session(kit.signer.as_ref(), account, NOW, DEFAULT_TTL_SECS);
         format!("cf_session={token}")
     }
 
@@ -569,8 +590,19 @@ mod tests {
 
     /// Plants a row exactly the recorder's shape, with an id the test
     /// controls so ordering is deterministic (ULIDs sort after any id
-    /// starting with a digit, so planted rows read as the oldest).
-    async fn plant(kit: &TestHarness, id: &str, at: &str, method: &str, path: &str, status: u16) {
+    /// starting with a digit, so planted rows read as the oldest). The
+    /// account is the row's `account_id` — the read is scoped to the
+    /// session's account, so a row only reaches a page through the
+    /// account it is planted under.
+    async fn plant(
+        kit: &TestHarness,
+        id: &str,
+        at: &str,
+        method: &str,
+        path: &str,
+        status: u16,
+        account_id: &str,
+    ) {
         kit.db
             .execute(&Statement::with_values(
                 "INSERT INTO request_log (id, at, method, path, status, duration_ms, account_id) \
@@ -582,7 +614,7 @@ mod tests {
                     text(path),
                     SeaValue::Int(Some(i32::from(status))),
                     SeaValue::BigInt(Some(3)),
-                    text(""),
+                    text(account_id),
                 ],
             ))
             .await
@@ -602,10 +634,7 @@ mod tests {
         // The earlier request is on the page, and the banner keeps the
         // scope honest.
         assert!(body.contains("<td>/v1/dashboard</td>"), "{body}");
-        assert!(
-            body.contains("These are the control plane's own requests"),
-            "{body}"
-        );
+        assert!(body.contains("These are your requests"), "{body}");
         assert!(body.contains("issues/26"), "{body}");
 
         // And the request that rendered the page appears on refresh.
@@ -638,8 +667,8 @@ mod tests {
                 .execute(&Statement::with_values(
                     "INSERT INTO request_log \
                      (id, at, method, path, status, duration_ms, account_id) \
-                     VALUES (?, ?, 'GET', ?, 200, 1, '')",
-                    vec![text(id), text(at), text(path)],
+                     VALUES (?, ?, 'GET', ?, 200, 1, ?)",
+                    vec![text(id), text(at), text(path), text(EMAIL)],
                 ))
                 .await
                 .expect("seed a row");
@@ -778,9 +807,18 @@ mod tests {
         let recent = (now - time::Duration::days(1))
             .format(&Rfc3339)
             .unwrap_or_default();
-        plant(&kit, "a_old", &old, "GET", "/gone", 200).await;
+        plant(&kit, "a_old", &old, "GET", "/gone", 200, EMAIL).await;
         for n in 0..(MAX_ROWS + 5) {
-            plant(&kit, &format!("r{n:05}"), &recent, "GET", "/loop", 200).await;
+            plant(
+                &kit,
+                &format!("r{n:05}"),
+                &recent,
+                "GET",
+                "/loop",
+                200,
+                EMAIL,
+            )
+            .await;
         }
 
         enforce_retention(kit.db.as_ref(), now)
@@ -857,6 +895,7 @@ mod tests {
                 "GET",
                 path,
                 status,
+                EMAIL,
             )
             .await;
         }
@@ -897,5 +936,66 @@ mod tests {
         let (status, body) = get(&kit, &format!("{PATH}?class=9xx"), Some(&cookie(&kit))).await;
         assert_eq!(status, StatusCode::OK, "{body}");
         assert!(body.contains("/other/miss"), "{body}");
+    }
+
+    #[pollster::test]
+    async fn another_accounts_requests_are_not_on_this_operators_log() {
+        let kit = kit();
+        seed_account(&kit).await;
+        // A second operator, so there is someone else's traffic to keep
+        // off the page. The account row must exist for the guard to pass
+        // a session through, and `account_for_login` is what the console
+        // itself calls on first login — the identity it takes is the same
+        // string the recorder stamps into `request_log.account_id`.
+        let other = "other@cratefield.com";
+        Repository::new(kit.db.clone())
+            .account_for_login(other, "Other", "acc_2", "t0")
+            .await
+            .expect("second account");
+
+        // Distinctive traffic per operator, planted the way the recorder
+        // writes it, each row its own minute inside the retention window
+        // (as in the pagination test).
+        let when = |n: i64| {
+            (kit.clock.now() - time::Duration::days(1) - time::Duration::minutes(n))
+                .format(&Rfc3339)
+                .unwrap_or_default()
+        };
+        plant(&kit, "m1", &when(3), "GET", "/mine/one", 200, EMAIL).await;
+        plant(&kit, "m2", &when(2), "GET", "/mine/two", 404, EMAIL).await;
+        plant(&kit, "t1", &when(1), "GET", "/theirs/only", 500, other).await;
+
+        // Signed in as the first operator: their two rows, and no sign of
+        // the other account's traffic or identity.
+        let (status, body) = get(&kit, PATH, Some(&cookie(&kit))).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert!(body.contains("<td>/mine/one</td>"), "{body}");
+        assert!(body.contains("<td>/mine/two</td>"), "{body}");
+        assert!(!body.contains("/theirs/only"), "{body}");
+        assert!(!body.contains(other), "{body}");
+        assert!(body.contains("2 requests"), "{body}");
+
+        // A filter narrows within the operator's own rows; it must never
+        // widen the page back onto another account's.
+        let (status, body) = get(&kit, &format!("{PATH}?class=4xx"), Some(&cookie(&kit))).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert!(body.contains("<td>/mine/two</td>"), "{body}");
+        assert!(body.contains("1 request"), "{body}");
+        assert!(!body.contains("/theirs/only"), "{body}");
+        let (status, body) =
+            get(&kit, &format!("{PATH}?prefix=/theirs"), Some(&cookie(&kit))).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert!(!body.contains("/theirs/only"), "{body}");
+        assert!(body.contains("No requests recorded"), "{body}");
+
+        // The mirror image: the second operator sees their one row and
+        // none of the first operator's.
+        let (status, body) = get(&kit, PATH, Some(&cookie_for(&kit, other))).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert!(body.contains("<td>/theirs/only</td>"), "{body}");
+        assert!(body.contains("1 request"), "{body}");
+        assert!(!body.contains("<td>/mine/one</td>"), "{body}");
+        assert!(!body.contains("<td>/mine/two</td>"), "{body}");
+        assert!(!body.contains(EMAIL), "{body}");
     }
 }

@@ -8,7 +8,7 @@ own to drift,
 which is the point. The rationale is in
 [docs/MCP.md](../../docs/MCP.md); the decision to build it here, as a
 wrapper, is
-[ADR 0019](../../docs/adr/0019-the-mcp-server-is-a-thin-wrapper-over-fz-json.md).
+[ADR 0021](../../docs/adr/0021-the-mcp-server-is-a-thin-wrapper-over-fz-json.md).
 
 ## Run it
 

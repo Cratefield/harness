@@ -1,5 +1,5 @@
 [package]
-publish = false  # publishing is the remaining human step (ADR 0019); see docs/RELEASING.md
+publish = false  # publishing is the remaining human step (ADR 0021); see docs/RELEASING.md
 name = "cratefield-mcp"
 description = "Model Context Protocol server over `fz --json`: every tool result is the CLI's own JSON envelope, and its error-code catalogue is read at runtime, never copied"
 readme = "README.md"

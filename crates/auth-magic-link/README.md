@@ -27,6 +27,14 @@ It is also the answer to three things other modules leave undone:
 | `GET /consume?token=…` | The URL in the mail. Signs in, or shows a confirm button |
 | `POST /consume` | The confirm button |
 
+`POST /consume` refuses a cross-site request — `403`,
+`auth/cross-site-request` (issue #439). Pressing the confirm button signs
+somebody in, and `SameSite=Lax` stops a cross-site POST from *carrying*
+our session cookie, not from *setting* one. `GET /consume` is
+deliberately open to any site: a click out of a mail client is inherently
+cross-site, and it is covered by the single-use token and the click check
+below.
+
 ### Why this method is a page
 
 The login chooser at `/v1/auth-core/authorize` can render two things: a

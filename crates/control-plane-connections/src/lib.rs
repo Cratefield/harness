@@ -418,7 +418,7 @@ impl Connections {
         kind: &ConnectionKind,
         now: &str,
     ) -> Result<Connection, ConnError> {
-        self.store(scope)
+        self.store(scope)?
             .delete(&kind.secret_name(), &scope.actor())
             .await?;
         self.upsert(
@@ -482,7 +482,7 @@ impl Connections {
         scope: &VentureScope,
     ) -> Result<Option<SecretBytes>, ConnError> {
         Ok(self
-            .store(scope)
+            .store(scope)?
             .get(GOOGLE_SECRET_NAME, &scope.actor())
             .await?)
     }
@@ -504,13 +504,13 @@ impl Connections {
             service: service.to_owned(),
         }
         .secret_name();
-        Ok(self.store(scope).get(&name, &scope.actor()).await?)
+        Ok(self.store(scope)?.get(&name, &scope.actor()).await?)
     }
 
     // -- internals ------------------------------------------------------
 
-    fn store(&self, scope: &VentureScope) -> cratefield_secrets::SecretStore {
-        self.secrets.tenant(scope.tenant(), self.db.clone())
+    fn store(&self, scope: &VentureScope) -> Result<cratefield_secrets::SecretStore, ConnError> {
+        Ok(self.secrets.tenant(scope.tenant(), self.db.clone())?)
     }
 
     async fn store_secret(
@@ -519,7 +519,7 @@ impl Connections {
         kind: &ConnectionKind,
         value: &str,
     ) -> Result<(), ConnError> {
-        self.store(scope)
+        self.store(scope)?
             .put(
                 &kind.secret_name(),
                 &SecretBytes::new(value.as_bytes().to_vec()),

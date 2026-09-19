@@ -1,4 +1,4 @@
-# ADR 0019: The MCP server is a thin wrapper over `fz --json`, living in this workspace
+# ADR 0021: The MCP server is a thin wrapper over `fz --json`, living in this workspace
 
 Status: accepted, 2026-09-19. Issue #160. The issue asked for a published
 MCP server and assumed the answer came with a new public repository and a
