@@ -102,7 +102,7 @@ impl Secrets {
     /// # use cratefield_core::Database;
     /// # use cratefield_secrets::Secrets;
     /// fn a_module_reaches_its_own_store(secrets: &Secrets, db: Arc<dyn Database>) {
-    ///     let _mine = secrets.tenant("acme", db);
+    ///     let _mine = secrets.tenant("acme", db).expect("an ordinary tenant id");
     /// }
     /// ```
     #[must_use]
@@ -112,9 +112,33 @@ impl Secrets {
 
     /// One tenant's store, in that tenant's own database. This is what a
     /// module is given.
-    #[must_use]
-    pub fn tenant(&self, tenant: &str, db: Arc<dyn Database>) -> SecretStore {
-        self.store(StoreId::Tenant(tenant.to_owned()), db)
+    ///
+    /// The id becomes the row stamp and the AAD verbatim, so it is
+    /// checked here rather than taken on trust.
+    ///
+    /// # Errors
+    ///
+    /// [`SecretsError::Invalid`] when the id is `"global"`: that names
+    /// the control plane's store, which only [`Secrets::global`]'s proof
+    /// may open — a tenant store stamped `global` would be
+    /// indistinguishable from it, and the proof would gate nothing. Also
+    /// when the id is empty or whitespace: a store stamped with nothing
+    /// is nobody's, invisible to every store. Surrounding whitespace is
+    /// preserved, not trimmed — `" acme "` is stamped verbatim and
+    /// names a different store than `acme`.
+    pub fn tenant(&self, tenant: &str, db: Arc<dyn Database>) -> Result<SecretStore, SecretsError> {
+        if tenant == "global" {
+            return Err(SecretsError::Invalid(
+                "`global` names the control plane's store, which only the harness may open"
+                    .to_owned(),
+            ));
+        }
+        if tenant.trim().is_empty() {
+            return Err(SecretsError::Invalid(
+                "a tenant id cannot be blank: a store stamped with nothing is nobody's".to_owned(),
+            ));
+        }
+        Ok(self.store(StoreId::Tenant(tenant.to_owned()), db))
     }
 
     /// The control database's global store, for the control plane's own
@@ -558,8 +582,12 @@ impl SecretStore {
         let rows = self
             .db
             .query(&Statement::with_values(
-                "SELECT wrapped_dek FROM harness_secret_keys WHERE key_id = ?",
-                vec![text(key_id)],
+                format!(
+                    "SELECT wrapped_dek FROM harness_secret_keys \
+                     WHERE key_id = ? AND {}",
+                    scoped_store()
+                ),
+                vec![text(key_id), text(self.id.as_str())],
             ))
             .await?;
         let wrapped: Vec<u8> = rows
@@ -734,7 +762,9 @@ mod tests {
 
         // And it is a genuinely separate store: the same name in a
         // tenant's database is a different secret, not this one.
-        let tenant = secrets.tenant("acme", migrated_db());
+        let tenant = secrets
+            .tenant("acme", migrated_db())
+            .expect("the tenant store opens");
         assert!(
             tenant
                 .get("tenants/acme/db_ref", &actor)

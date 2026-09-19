@@ -19,11 +19,19 @@
 //! A `public-read` table publishes its reads and **not** its writes,
 //! because there are none: the level is exactly that.
 //!
-//! A composite-key table publishes its page and its create and **not** the
-//! three single-row actions, for the same reason: `/{table}/{key}` refuses
-//! a key of several columns rather than joining them with a separator
-//! that could occur inside one (issue #387), so those routes do not exist
-//! for it.
+//! Where a table's single-row actions address a row depends on its key's
+//! arity, and the published path says which: `/{table}/{key}` puts the
+//! key in the path — a key of one column — and `/{table}/__by` puts it in
+//! the query, one parameter per primary-key column (ADR 0018). A consumer
+//! generating a client can tell the two apart: a `{key}` placeholder in
+//! the path is a path parameter, and an input schema on a `GET` or a
+//! `DELETE` is the query. A `PUT` takes a body *and* that query; its
+//! input stays the body — the row — and the query rides on it as an
+//! `x-cf-query` extension. That keyword is introduced by this crate —
+//! it is not one of the harness's field hints, and a reader will not
+//! find it in `cratefield_core` — riding under the harness's `x-cf-*`
+//! namespace, where a consumer that does not know it ignores it the way
+//! it ignores every `x-cf-*` keyword it was built before.
 
 use cratefield_core::{Action, Audience, Outcome, Surface};
 use cratefield_manifest::Access;
@@ -41,23 +49,33 @@ pub fn surface(tables: &[TableApi]) -> Surface {
     for api in tables {
         let name = &api.table.name;
         let audience = audience(api.access);
-        let by_key = addressable(&api.table);
         out = out.action(
             Action::new(format!("list-{name}"), Method::GET, format!("/{name}"))
                 .audience(audience)
                 .outcome(Outcome::Json),
         );
-        if by_key {
-            out = out.action(
-                Action::new(
-                    format!("read-{name}"),
-                    Method::GET,
-                    format!("/{name}/{{key}}"),
-                )
-                .audience(audience)
-                .outcome(Outcome::Json),
-            );
+        // The single-row spelling. A key of one column is a path segment;
+        // a wider key is named in the query, at the harness's reserved
+        // `__by` sub-path. The route under either spelling answers for
+        // what it publishes — `every_published_action_is_a_route_that_exists`
+        // is what keeps the two lists the same.
+        let by_path = api.table.primary_key.len() == 1;
+        let row_path = if by_path {
+            format!("/{name}/{{key}}")
+        } else {
+            format!("/{name}/__by")
+        };
+        let mut read = Action::new(format!("read-{name}"), Method::GET, row_path.clone())
+            .audience(audience)
+            .outcome(Outcome::Json);
+        if !by_path {
+            // The path carries no key, so the query does — and a GET's
+            // input is its query, so the published schema is what names
+            // the key columns. Without it, a consumer would know the
+            // route exists and not what to ask it with.
+            read = read.input_schema(by_query_schema(&api.table));
         }
+        out = out.action(read);
         if !writable(api.access) {
             continue;
         }
@@ -67,49 +85,34 @@ pub fn surface(tables: &[TableApi]) -> Surface {
                 .input_schema(body_schema(&api.table))
                 .outcome(Outcome::Json),
         );
-        if !by_key {
-            continue;
+        out = out.action(
+            Action::new(format!("replace-{name}"), Method::PUT, row_path.clone())
+                .audience(audience)
+                .input_schema(if by_path {
+                    body_schema(&api.table)
+                } else {
+                    // The path carries no key, so the query must — but a
+                    // PUT's input is its body, and `input` has one slot.
+                    // The body keeps it and the query rides beside it as
+                    // `x-cf-query` (see `replace_input`); folding the key
+                    // columns into the body's properties instead would
+                    // publish a row the route refuses, a `400 partial-key`
+                    // the contract itself invited.
+                    replace_input(&api.table)
+                })
+                .outcome(Outcome::Json),
+        );
+        let mut delete = Action::new(format!("delete-{name}"), Method::DELETE, row_path)
+            .audience(audience)
+            .outcome(Outcome::Json);
+        if !by_path {
+            // A delete has no body, so its input is its query — the same
+            // schema the read takes.
+            delete = delete.input_schema(by_query_schema(&api.table));
         }
-        out = out
-            .action(
-                Action::new(
-                    format!("replace-{name}"),
-                    Method::PUT,
-                    format!("/{name}/{{key}}"),
-                )
-                .audience(audience)
-                .input_schema(body_schema(&api.table))
-                .outcome(Outcome::Json),
-            )
-            .action(
-                Action::new(
-                    format!("delete-{name}"),
-                    Method::DELETE,
-                    format!("/{name}/{{key}}"),
-                )
-                .audience(audience)
-                .outcome(Outcome::Json),
-            );
+        out = out.action(delete);
     }
     out
-}
-
-/// Whether one row of this table can be named in a path.
-///
-/// A key of several columns cannot: `key_from_path` refuses it with
-/// `composite-key` rather than joining the values with a separator that
-/// could occur inside one. So `/{table}/{key}` does not exist for such a
-/// table, and publishing three actions against it would put three methods
-/// in every generated client that answer 400 whatever they are called
-/// with — the same argument `writable` makes about `public-read`, which
-/// publishes its reads and nothing else rather than a create that is
-/// always refused.
-///
-/// ADR 0018 decides they should: the three actions return at
-/// `/{table}/__by`, the key named in the query. That sub-path is not
-/// built yet, so until it is, the contract says what is there.
-fn addressable(table: &cratefield_tables::TableDef) -> bool {
-    table.primary_key.len() == 1
 }
 
 /// The audience a level publishes as.
@@ -149,4 +152,58 @@ fn writable(access: Access) -> bool {
 fn body_schema(table: &cratefield_tables::TableDef) -> schemars::Schema {
     schemars::Schema::try_from(cratefield_tables::json_schema(table))
         .unwrap_or_else(|_never| schemars::Schema::default())
+}
+
+/// The `__by` query's JSON Schema: one property per primary-key column,
+/// every one of them required, each described exactly as the row schema
+/// describes it — the same derived bytes, cut down to the columns the
+/// route reads. `additionalProperties: false`, because a query naming a
+/// column outside the key is refused, and a published contract looser
+/// than the route would be a form that renders inputs the request
+/// refuses.
+fn by_query_schema(table: &cratefield_tables::TableDef) -> schemars::Schema {
+    schemars::Schema::try_from(by_query_value(table))
+        .unwrap_or_else(|_never| schemars::Schema::default())
+}
+
+/// [`by_query_schema`] as the raw value, so a caller can embed it as a
+/// keyword inside another schema without a serialize round-trip.
+fn by_query_value(table: &cratefield_tables::TableDef) -> serde_json::Value {
+    let row = cratefield_tables::json_schema(table);
+    let mut properties = serde_json::Map::new();
+    let mut required = Vec::with_capacity(table.primary_key.len());
+    for column in &table.primary_key {
+        if let Some(property) = row.get("properties").and_then(|props| props.get(column)) {
+            properties.insert(column.clone(), property.clone());
+        }
+        required.push(serde_json::Value::String(column.clone()));
+    }
+    serde_json::json!({
+        "type": "object",
+        "properties": serde_json::Value::Object(properties),
+        "required": required,
+        "additionalProperties": false,
+    })
+}
+
+/// A composite-key table's `replace` input: the row schema a form renders
+/// from, carrying the `__by` query it must also send as an `x-cf-query`
+/// extension.
+///
+/// A PUT is the one single-row action that takes both a body and a query,
+/// and an [`Action`] has one `input` slot — the body for a writing
+/// method. The row keeps it: folding the key columns into the body's own
+/// properties instead would publish a row the route refuses (the key is
+/// read from the query and a `400 partial-key` says so), and a contract
+/// looser than the route is the failure `/__surface` exists to prevent.
+/// So the query rides on the schema as an `x-cf-*` keyword — the channel
+/// the harness already defines for facts that ride beside the derived
+/// schema, which a consumer built before the keyword ignores, never an
+/// error.
+fn replace_input(table: &cratefield_tables::TableDef) -> schemars::Schema {
+    let mut row = cratefield_tables::json_schema(table);
+    if let Some(object) = row.as_object_mut() {
+        object.insert("x-cf-query".to_owned(), by_query_value(table));
+    }
+    schemars::Schema::try_from(row).unwrap_or_else(|_never| schemars::Schema::default())
 }

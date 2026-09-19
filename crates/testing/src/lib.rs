@@ -26,6 +26,10 @@
 // `tmp`: a light consumer can assert the batch contract without the
 // harness graph (issues #126, #201).
 mod batch;
+// Byte round-trips (issue #39): ungated for the same reason as `batch`
+// — it binds through sea-query's `From` impls without naming the crate,
+// so it needs nothing beyond `cratefield-core`.
+mod blob;
 #[cfg(feature = "harness")]
 mod conformance;
 #[cfg(feature = "harness")]
@@ -46,6 +50,7 @@ mod tmp;
 pub mod vectors;
 
 pub use batch::assert_batch_is_atomic;
+pub use blob::assert_blob_round_trips;
 #[cfg(feature = "harness")]
 pub use conformance::{conformance, conformance_in_process_only, sidecar_parity};
 #[cfg(feature = "harness")]
@@ -53,8 +58,9 @@ pub use dialect::Dialect;
 #[cfg(feature = "harness")]
 pub use fakes::{
     AuthMode, EmptyDatabase, FakeAuth, FakeCaptcha, FakeDefer, FakeDispatcher, FakeHttpClient,
-    FakeMailer, FakePayments, FakePush, FakeRateLimiter, FakeRealtime, FakeTextModel, FixedClock,
-    MailerMode, MemoryBlob, MemoryKeyValue, PaymentsCall, PaymentsMode, PushMode, TextModelMode,
+    FakeMailer, FakePayments, FakePush, FakeRateLimiter, FakeRealtime, FakeTextModel, FakeTracker,
+    FiledCall, FixedClock, MailerMode, MemoryBlob, MemoryKeyValue, PaymentsCall, PaymentsMode,
+    PushMode, StatusedCall, TextModelMode, TrackerMode,
 };
 #[cfg(feature = "harness")]
 pub use harness::TestHarness;

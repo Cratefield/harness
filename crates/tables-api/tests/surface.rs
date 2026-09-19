@@ -246,14 +246,10 @@ fn the_published_json_does_not_ask_a_reader_for_a_captcha_widget() {
 
 #[test]
 fn a_composite_key_table_publishes_only_the_routes_it_has() {
-    // `/{table}/{key}` refuses a key of several columns rather than
-    // joining them with a separator that could occur inside one, so those
-    // three routes do not exist for this table yet — ADR 0018 gives them
-    // `/{table}/__by`, the key named in the query, and until that is
-    // built this is the contract. Publishing them would put three
-    // methods in every generated client that answer 400 whatever they
-    // are called with — which is the argument `public-read` already wins
-    // by publishing its reads and not a create.
+    // ADR 0018: the three actions return, against the harness's reserved
+    // `__by` sub-path — the key named in the query, where the path could
+    // carry only one segment and refused to invent a separator. The
+    // contract lists what is there, and what is there now is five.
     let published = surface(&[TableApi {
         table: membership(),
         access: Access::TenantMembers,
@@ -261,16 +257,60 @@ fn a_composite_key_table_publishes_only_the_routes_it_has() {
     }]);
     assert_eq!(
         names(&published),
-        vec!["list-membership", "create-membership"],
-        "a composite-key table has a page and a create, and no route naming one row"
+        [
+            "list-membership",
+            "read-membership",
+            "create-membership",
+            "replace-membership",
+            "delete-membership"
+        ],
+        "a composite-key table publishes all five again"
     );
+
+    let read = &published.actions[1];
+    assert_eq!(read.path, "/membership/__by");
+    let query = read
+        .input
+        .as_ref()
+        .expect("a GET's input is its query, and this one names the key");
+    let query = serde_json::to_value(query).expect("serializes");
+    assert_eq!(
+        query["required"],
+        serde_json::json!(["tenant", "member"]),
+        "the key columns, all of them"
+    );
+    assert_eq!(query["properties"]["tenant"]["type"], "string");
+
+    let replace = &published.actions[3];
+    assert_eq!(replace.path, "/membership/__by");
+    // A PUT's input is still its body — the row — so a form renders from
+    // the table's own schema exactly as it does for a single-column key;
+    // the key columns it must also send ride beside the body as
+    // `x-cf-query`, pinned in full by
+    // `a_composite_key_tables_replace_publishes_which_key_columns_go_in_the_query`.
+    let body = replace.input.as_ref().expect("the body schema");
+    let body = serde_json::to_value(body).expect("serializes");
+    let row = cratefield_tables::json_schema(&membership());
+    assert_eq!(body["properties"], row["properties"]);
+    assert_eq!(body["required"], row["required"]);
+
+    let delete = &published.actions[4];
+    assert_eq!(delete.path, "/membership/__by");
+    let query = delete
+        .input
+        .as_ref()
+        .expect("a delete has no body, so its input is its query");
+    let query = serde_json::to_value(query).expect("serializes");
+    assert_eq!(query["required"], serde_json::json!(["tenant", "member"]));
 }
 
 #[test]
 fn a_single_column_key_still_publishes_all_five() {
-    // The other half of the pair: the check above passes for a surface
-    // that had simply stopped publishing single-row actions for
-    // everything, and that is not what was asked for.
+    // The other half of the pair: the test above passes for a surface
+    // that had moved *every* table's single-row actions to `__by`, and
+    // that is not what changed. A key of one column is a path segment
+    // and stays one; the composite-key spelling is for the keys the path
+    // could not carry.
     let published = for_access(Access::TenantMembers);
     assert_eq!(
         names(&published),
@@ -281,5 +321,103 @@ fn a_single_column_key_still_publishes_all_five() {
             "replace-note",
             "delete-note"
         ]
+    );
+    assert_eq!(
+        published
+            .actions
+            .iter()
+            .find(|action| action.name == "read-note")
+            .expect("a read")
+            .path,
+        "/note/{key}",
+        "the single-column spelling is the path"
+    );
+}
+
+#[test]
+fn the_published_shape_tells_a_path_parameter_from_a_query_parameter() {
+    // A consumer generating a client has to know where the key goes, and
+    // the published shape says so: a `{key}` placeholder in the path is
+    // a path parameter carrying one value; an `__by` path carries no
+    // placeholder at all, and the input schema — a GET's input is its
+    // query — names the key columns instead.
+    let single = for_access(Access::TenantMembers);
+    let read = single
+        .actions
+        .iter()
+        .find(|action| action.name == "read-note")
+        .expect("a read");
+    assert_eq!(read.path, "/note/{key}");
+    assert!(
+        read.input.is_none(),
+        "a path key takes no query: {:?}",
+        read.input
+    );
+
+    let composite = surface(&[TableApi {
+        table: membership(),
+        access: Access::TenantMembers,
+        subject: None,
+    }]);
+    let read = composite
+        .actions
+        .iter()
+        .find(|action| action.name == "read-membership")
+        .expect("a read");
+    assert!(
+        !read.path.contains('{'),
+        "no placeholder in the query spelling: {}",
+        read.path
+    );
+    let query =
+        serde_json::to_value(read.input.as_ref().expect("the query schema")).expect("serializes");
+    assert_eq!(query["type"], "object");
+    assert_eq!(query["required"], serde_json::json!(["tenant", "member"]));
+    assert_eq!(
+        query["additionalProperties"], false,
+        "the query names key columns only, as the route refuses the rest"
+    );
+}
+
+#[test]
+fn a_composite_key_tables_replace_publishes_which_key_columns_go_in_the_query() {
+    // The defect this pins: `replace-` published the row body alone, so a
+    // client generated from the contract knew the PUT route and not that
+    // it must append `?<col>=<value>&…` — and learned it from a
+    // `400 partial-key` instead of from the document. `input` has one
+    // slot and a PUT's is its body, so the query rides beside the body as
+    // an `x-cf-query` extension on the same schema — riding under the
+    // `x-cf-*` namespace the harness defines, whose forward-compatibility
+    // guarantee it borrows (a keyword the consumer does not know is
+    // ignored, never an error); the keyword itself is introduced by this
+    // crate and appears nowhere in the harness.
+    let published = surface(&[TableApi {
+        table: membership(),
+        access: Access::TenantMembers,
+        subject: None,
+    }]);
+    let replace = published
+        .actions
+        .iter()
+        .find(|action| action.name == "replace-membership")
+        .expect("a replace");
+    assert_eq!(replace.path, "/membership/__by");
+    let input =
+        serde_json::to_value(replace.input.as_ref().expect("the body schema")).expect("serializes");
+    // The body is still the row the form renders from.
+    let row = cratefield_tables::json_schema(&membership());
+    assert_eq!(input["properties"], row["properties"]);
+    assert_eq!(input["required"], row["required"]);
+    // And the query names every key column, each described as the row
+    // describes it, and nothing else — the same schema the read's and the
+    // delete's inputs publish outright.
+    let query = &input["x-cf-query"];
+    assert_eq!(query["type"], "object");
+    assert_eq!(query["required"], serde_json::json!(["tenant", "member"]));
+    assert_eq!(query["properties"]["tenant"]["type"], "string");
+    assert_eq!(query["properties"]["member"]["type"], "string");
+    assert_eq!(
+        query["additionalProperties"], false,
+        "the query names key columns only, as the route refuses the rest"
     );
 }

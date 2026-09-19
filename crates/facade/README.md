@@ -54,6 +54,7 @@ feature, and each feature names exactly one crate:
 | `waitlist` | `cratefield-module-waitlist` | `cratefield::waitlist` | Per-product waitlist |
 | `cms` | `cratefield-module-cms` | `cratefield::cms` | Small content store |
 | `changelog` | `cratefield-module-changelog` | `cratefield::changelog` | A project's releases, mirrored into your own database |
+| `telemetry` | `cratefield-module-telemetry` | `cratefield::telemetry` | Aggregate usage counts from clients, consent-first, in the venture's own database |
 | `testing` | `cratefield-testing` | `cratefield::testing` | The conformance kit; belongs under `[dev-dependencies]` |
 
 There is no default feature. A runtime is a decision, not a default, and an

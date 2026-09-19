@@ -277,6 +277,7 @@ async fn seed_secrets(db: &Arc<dyn Database>, secrets: &Secrets) {
         .expect("seed the platform key");
     secrets
         .tenant("ten_live", Arc::clone(db))
+        .expect("the venture store opens")
         .put(
             "venture-google-client-secret",
             &SecretBytes::from("GOCSPX-dev-only-obviously-fake-client-secret"),

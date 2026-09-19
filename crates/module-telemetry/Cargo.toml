@@ -1,0 +1,49 @@
+[package]
+name = "cratefield-module-telemetry"
+description = "Cratefield module: counted aggregate usage telemetry with a consent model built in — pseudonymous, with no stored link to a person"
+readme = "README.md"
+keywords = ["cratefield", "telemetry", "usage", "consent", "module"]
+categories = ["web-programming"]
+include = ["src/**/*", "migrations/**/*", "tests/**/*", "README.md"]
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+cratefield-core = { workspace = true }
+axum = { workspace = true }
+http = { workspace = true }
+# What "names JSON" means on the ingest route's content-type guard: the
+# same parser axum's `Json` extractor uses, so the guard accepts exactly
+# what the extractor it replaced accepted.
+mime = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sea-query = { workspace = true }
+tracing = { workspace = true }
+time = { workspace = true }
+
+[dev-dependencies]
+# Dev-only, and only so `tests/privacy.rs` can prove the personal-data
+# declarations against the module that actually reads them (issue #413,
+# after issue #265 established the pattern). A declaration is a promise
+# about another crate's behaviour — what the manifest publishes, what an
+# erasure deletes — so asserting the list against itself would prove none
+# of it. Path-only, so it is stripped from the packaged manifest rather
+# than resolved from crates.io.
+cratefield-module-privacy = { path = "../module-privacy" }
+# The in-memory SQLite adapter, so the store's accumulation and purge can
+# be tested against real SQL instead of against a mock of SQL.
+cratefield-adapter-sqlite = { path = "../adapter-sqlite" }
+# The `postgres` feature unlocks the Postgres parity leg of the testing
+# kit (issue #20); the leg itself only runs when FZ_TEST_POSTGRES_URL
+# names a server. Dev-only, so it never reaches a venture's wasm graph.
+cratefield-testing = { path = "../testing", features = ["postgres"] }
+serde_json = { workspace = true }
+pollster = { workspace = true }
+tower = { workspace = true }

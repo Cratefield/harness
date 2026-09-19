@@ -12,8 +12,8 @@ use std::sync::Arc;
 
 use crate::dialect::Dialect;
 use crate::fakes::{
-    FakeCaptcha, FakeDefer, FakeHttpClient, FakeMailer, FakeRateLimiter, FakeTextModel, FixedClock,
-    MemoryKeyValue,
+    FakeCaptcha, FakeDefer, FakeHttpClient, FakeMailer, FakeRateLimiter, FakeTextModel,
+    FakeTracker, FixedClock, MemoryKeyValue,
 };
 
 struct TestRuntime;
@@ -41,6 +41,7 @@ pub struct TestHarness {
     pub kv: MemoryKeyValue,
     pub http: FakeHttpClient,
     pub defer: FakeDefer,
+    pub tracker: FakeTracker,
     pub signer: Arc<HmacSigner>,
     /// The migrated database backing the `Database` port (shared with
     /// the router — assertions see module writes). On Postgres every
@@ -230,6 +231,7 @@ impl TestHarness {
         let kv = MemoryKeyValue::new();
         let http = FakeHttpClient::ok_json("{}");
         let defer = FakeDefer::new();
+        let tracker = FakeTracker::new(crate::fakes::TrackerMode::FileOk);
         let signer = Arc::new(
             HmacSigner::new(crate::TEST_HARNESS_SECRET, None).expect("test secret is long enough"),
         );
@@ -246,6 +248,7 @@ impl TestHarness {
         ports.clock = Some(Arc::new(clock.clone()));
         ports.id_gen = Some(Arc::new(UlidIdGen));
         ports.defer = Some(Arc::new(defer.clone()));
+        ports.tracker = Some(Arc::new(tracker.clone()));
         patch(&mut ports);
 
         let router = harness.router(ports);
@@ -260,6 +263,7 @@ impl TestHarness {
             kv,
             http,
             defer,
+            tracker,
             signer,
             db,
             modules: shared,

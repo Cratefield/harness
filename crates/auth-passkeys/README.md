@@ -14,6 +14,11 @@ Passkey registration and login for the Factory Zero auth service
 | `GET /credentials` | required | The account's passkeys |
 | `DELETE /credentials/{id}` | required | Removes one, unless it is the account's only way in |
 
+`POST /login/verify` refuses a cross-site request — `403`,
+`auth/cross-site-request`, ahead of the rate limiter. A verified
+assertion issues a session, and `SameSite=Lax` stops a cross-site POST
+from *carrying* our session cookie, not from *setting* one (issue #439).
+
 ## Configuration
 
 | Key | Required | Default |

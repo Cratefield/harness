@@ -214,30 +214,26 @@ pub async fn send(
     body: Option<&str>,
     cookie: Option<&str>,
 ) -> Res {
-    send_with(kit, method, path, body, cookie, None).await
+    send_with_headers(kit, method, path, body, cookie, &[]).await
 }
 
-/// [`send`], from a given client address. `cf-connecting-ip` is what the
-/// edge sets and what `client_ip` trusts first, so this is how a test
-/// arrives from a different address.
-pub async fn send_with(
+/// `send` for a request that carries extra headers — the browser headers
+/// (`origin`, `host`, `sec-fetch-site`) the login-CSRF guard reads.
+pub async fn send_with_headers(
     kit: &Kit,
     method: http::Method,
     path: &str,
     body: Option<&str>,
     cookie: Option<&str>,
-    client_ip: Option<&str>,
+    extra: &[(&str, &str)],
 ) -> Res {
     use tower::ServiceExt;
     let mut builder = axum::http::Request::builder().method(method).uri(path);
     if let Some(cookie) = cookie {
         builder = builder.header(http::header::COOKIE, format!("__Host-fz_session={cookie}"));
     }
-    if let Some(ip) = client_ip {
-        builder = builder.header(
-            http::header::HeaderName::from_static("cf-connecting-ip"),
-            http::header::HeaderValue::from_str(ip).expect("address is a header value"),
-        );
+    for (name, value) in extra {
+        builder = builder.header(*name, *value);
     }
     let request = match body {
         Some(body) => builder
@@ -268,10 +264,21 @@ pub async fn post(kit: &Kit, path: &str, body: &str, cookie: Option<&str>) -> Re
     send(kit, http::Method::POST, path, Some(body), cookie).await
 }
 
+/// `post` with extra headers, for the same reason `send_with_headers` exists.
+pub async fn post_with_headers(kit: &Kit, path: &str, body: &str, extra: &[(&str, &str)]) -> Res {
+    send_with_headers(kit, http::Method::POST, path, Some(body), None, extra).await
+}
+
 /// [`post`] from a given client address, or from no address at all when
-/// `None` — which is what `ip:unknown` budgets.
+/// `None` — which is what `ip:unknown` budgets. `cf-connecting-ip` is what
+/// the edge sets and what `client_ip` trusts first, so this is how a test
+/// arrives from a different address. It is a header like any other, so it
+/// goes through `post_with_headers` rather than a second path of its own.
 pub async fn post_from(kit: &Kit, path: &str, body: &str, client_ip: Option<&str>) -> Res {
-    send_with(kit, http::Method::POST, path, Some(body), None, client_ip).await
+    match client_ip {
+        Some(ip) => post_with_headers(kit, path, body, &[("cf-connecting-ip", ip)]).await,
+        None => post_with_headers(kit, path, body, &[]).await,
+    }
 }
 
 /// How many rows a table holds.

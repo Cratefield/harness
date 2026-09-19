@@ -1,0 +1,19 @@
+{
+	"compilerOptions": {
+		"target": "ES2022",
+		"module": "ES2022",
+		"moduleResolution": "bundler",
+		"lib": ["ES2022"],
+		// The Workers runtime globals (`Request`, `crypto.subtle`,
+		// `ExecutionContext`) — the same vocabulary `wrangler deploy` bundles
+		// this Worker against.
+		"types": ["@cloudflare/workers-types"],
+		"strict": true,
+		"noUncheckedIndexedAccess": true,
+		"isolatedModules": true,
+		"forceConsistentCasingInFileNames": true,
+		"skipLibCheck": true,
+		"noEmit": true
+	},
+	"include": ["src", "test"]
+}

@@ -25,7 +25,13 @@ fn store_with(kms: Arc<dyn Kms>) -> (SecretStore, Arc<dyn Database>, StoreId) {
     let id = StoreId::Tenant("tenant-a".to_owned());
     let secrets =
         Secrets::new(kms).with_audit(Arc::new(ChainAudit::new(id.clone(), Arc::clone(&db))));
-    (secrets.tenant("tenant-a", Arc::clone(&db)), db, id)
+    (
+        secrets
+            .tenant("tenant-a", Arc::clone(&db))
+            .expect("the tenant store opens"),
+        db,
+        id,
+    )
 }
 
 async fn key_states(db: &dyn Database) -> Vec<(String, String)> {

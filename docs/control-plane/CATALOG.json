@@ -402,6 +402,58 @@
         ],
         "surface": null
       }
+    },
+    {
+      "slug": "telemetry",
+      "name": "Telemetry",
+      "summary": "Counted usage events in your own database — a closed event vocabulary, consent on by default, and no third-party analytics service.",
+      "tier": "optional",
+      "depends_on": [],
+      "releases": [
+        {
+          "version": "0.1.0",
+          "digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+          "review": {
+            "approved": {
+              "reviewer": "release-review",
+              "reviewed_at": "2026-09-01T00:00:00Z"
+            }
+          }
+        }
+      ],
+      "detail": {
+        "what_it_is": "You declare the closed vocabulary of event names you want counted, and clients report batches of counted runs against it: every field is an enum, a count, a duration bucket or a fixed-width id, so there is no free text and nothing a person wrote can arrive at all. The counts accumulate in your own database, never in a third-party analytics service. Reporting is on by default and easy to refuse — `DO_NOT_TRACK` and `CI` are honoured, and the local opt-out works with no network — and the install id that keys the rows is pseudonymous, with no stored link to a person.",
+        "crate_name": "cratefield-module-telemetry",
+        "needs": [
+          "Database"
+        ],
+        "optional": [
+          "Clock",
+          "RateLimiter"
+        ],
+        "tables": [
+          "telemetry_events",
+          "telemetry_modules"
+        ],
+        "routes": [
+          {
+            "method": "POST",
+            "path": "/v1/telemetry/events",
+            "note": "Report a batch of counted events."
+          },
+          {
+            "method": "GET",
+            "path": "/v1/telemetry/notice",
+            "note": "What is counted, and the one-line way to switch it off."
+          },
+          {
+            "method": "GET",
+            "path": "/v1/telemetry/admin/usage",
+            "note": "Admin token: the aggregate rows, grouped so no install is named."
+          }
+        ],
+        "surface": null
+      }
     }
   ]
 }

@@ -22,7 +22,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use cratefield_core::{
     Auth, Blob, BoundedHttpClient, Captcha, Clock, Database, HarnessConfig, KeyValue, Mailer,
-    Payments, Port, Ports, Push, RateLimiter, Realtime, Runtime, TextModel, UlidIdGen,
+    Payments, Port, Ports, Push, RateLimiter, Realtime, Runtime, TextModel, Tracker, UlidIdGen,
 };
 
 use crate::config::EnvConfig;
@@ -55,6 +55,7 @@ pub struct Native {
     blob: Option<Arc<dyn Blob>>,
     push: Option<Arc<dyn Push>>,
     payments: Option<Arc<dyn Payments>>,
+    tracker: Option<Arc<dyn Tracker>>,
     realtime: Option<Arc<dyn Realtime>>,
     /// The `TextModel` port (issue #429): like `mailer`, the adapter is
     /// built from the venture's vendor keys and passed in — there is no
@@ -220,6 +221,20 @@ impl Native {
         self
     }
 
+    /// The `Tracker` port: a [`cratefield_core::RoutingTracker`] over the
+    /// per-tracker adapters the venture configured, or a test fake.
+    ///
+    /// Unlike every other adapter on this harness, the adapter holds no
+    /// credential: which tracker to file into and under whose token are
+    /// tenant data, supplied per call by the module that files — see
+    /// [`cratefield_core::Tracker`] for why that differs from the
+    /// Resend/Stripe shape.
+    #[must_use]
+    pub fn tracker_arc(mut self, tracker: Arc<dyn Tracker>) -> Self {
+        self.tracker = Some(tracker);
+        self
+    }
+
     /// The `Realtime` port: the in-process room registry
     /// ([`crate::InProcessRealtime`]) built from the module's `RoomHandler`.
     #[must_use]
@@ -319,6 +334,7 @@ impl Native {
         ports.blob.clone_from(&self.blob);
         ports.push.clone_from(&self.push);
         ports.payments.clone_from(&self.payments);
+        ports.tracker.clone_from(&self.tracker);
         ports.realtime.clone_from(&self.realtime);
         ports.text_model.clone_from(&self.text_model);
         ports.mailer.clone_from(&self.mailer);
@@ -418,6 +434,9 @@ impl Runtime for Native {
         if self.payments.is_some() {
             provided.push(Port::Payments);
         }
+        if self.tracker.is_some() {
+            provided.push(Port::Tracker);
+        }
         if self.realtime.is_some() {
             provided.push(Port::Realtime);
         }
@@ -468,6 +487,7 @@ pub(crate) fn clone_ports(ports: &Ports) -> Ports {
     snapshot.blob.clone_from(&ports.blob);
     snapshot.push.clone_from(&ports.push);
     snapshot.payments.clone_from(&ports.payments);
+    snapshot.tracker.clone_from(&ports.tracker);
     snapshot.realtime.clone_from(&ports.realtime);
     snapshot.text_model.clone_from(&ports.text_model);
     snapshot.http.clone_from(&ports.http);

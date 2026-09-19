@@ -1,0 +1,32 @@
+# The sidecar Worker's deployment configuration. The name is the one value
+# you must set before the first deploy; the secret is put with
+# `wrangler secret put` (see `.dev.vars.example` for local development).
+name = "my-sidecar"
+# TypeScript goes straight through `wrangler deploy` — no build step, no
+# wasm shim, which is the practical difference from the Rust template.
+main = "src/index.ts"
+compatibility_date = "2026-09-01"
+
+[observability]
+enabled = true
+
+# **Not publicly routable, on purpose.** `workers_dev = false` below, and
+# no `routes` at all.
+#
+# The host's rate limiting, captcha checks and request-id trust all key
+# off the `cf-connecting-ip` *the host resolved and forwards*. This Worker
+# is directly reachable by the internet only if you give it a URL — and a
+# request that arrives directly can carry any `cf-connecting-ip` it likes,
+# bypassing every one of those controls without touching the host. The
+# service binding is the only door: the host is the public face, this
+# Worker answers it at `/v1/<module name>`, and `/__health` exists for
+# probes. Do not add `workers_dev` or `routes` back without an ADR.
+workers_dev = false
+
+# **No `[[d1_databases]]` — deliberately, unlike the Rust template.** This
+# module reaches its data through the host's Tables HTTP contract (issue
+# #153), not through a raw D1 handle of its own; the generated typed client
+# for that contract lands with issue #155. A raw binding here would split
+# the module's data plane from the contract the host enforces access
+# control on. Until #155 ships, this Worker declares no tables and touches
+# no database at all — see "What this cannot do yet" in the README.

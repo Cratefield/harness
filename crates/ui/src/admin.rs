@@ -184,7 +184,15 @@ pub(crate) async fn login_post(
             }
             Ok(_) => {}
             Err(err) => {
+                let detail = format!("admin login rate limiter unavailable; failing open: {err}");
                 tracing::warn!(error = %err, "admin login rate limiter unavailable; failing open");
+                // Failing open is the one posture where the admin login's
+                // backstop is gone, so the fact rides the forwarder too
+                // (issue #441): on wasm the tracing event goes nowhere.
+                cratefield_core::forward_control_event(
+                    cratefield_core::ControlLevel::Warn,
+                    &detail,
+                );
             }
         }
     }

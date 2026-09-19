@@ -29,6 +29,7 @@ compatibility-doc` and checked in CI for drift. Do not edit by hand.
 | `cratefield` | 0.1.4 | 1 | `^0.5` — `>=0.5.0, <0.6.0` |
 | `cratefield-access` *(not published)* | 0.1.1 | 1 | `^0.5` — `>=0.5.0, <0.6.0` |
 | `cratefield-accounts` *(not published)* | 0.1.1 | 1 | `^0.5` — `>=0.5.0, <0.6.0` |
+| `cratefield-adapter-anthropic` | 0.1.0 | 1 | `^0.5` — `>=0.5.0, <0.6.0` |
 | `cratefield-adapter-apns` | 0.1.4 | 1 | `^0.5` — `>=0.5.0, <0.6.0` |
 | `cratefield-adapter-fcm` | 0.1.3 | 1 | `^0.5` — `>=0.5.0, <0.6.0` |
 | `cratefield-adapter-postgres` | 0.1.4 | 1 | `^0.5` — `>=0.5.0, <0.6.0` |
@@ -42,6 +43,7 @@ compatibility-doc` and checked in CI for drift. Do not edit by hand.
 | `cratefield-bench-write-ceiling` *(not published)* | 0.1.1 | 1 | `^0.5` — `>=0.5.0, <0.6.0` |
 | `cratefield-chrome` *(not published)* | 0.1.1 | 1 | `^0.5` — `>=0.5.0, <0.6.0` |
 | `cratefield-cli` | 0.2.2 | 1 | `^0.5` — `>=0.5.0, <0.6.0` |
+| `cratefield-client-ts` *(not published)* | 0.1.0 | 1 | `^0.5` — `>=0.5.0, <0.6.0` |
 | `cratefield-connections` *(not published)* | 0.1.1 | 1 | `^0.5` — `>=0.5.0, <0.6.0` |
 | `cratefield-console` *(not published)* | 0.1.1 | 1 | `^0.5` — `>=0.5.0, <0.6.0` |
 | `cratefield-control-plane` *(not published)* | 0.1.1 | 1 | `^0.5` — `>=0.5.0, <0.6.0` |
@@ -53,6 +55,7 @@ compatibility-doc` and checked in CI for drift. Do not edit by hand.
 | `cratefield-module-hello` *(not published)* | 0.1.1 | 1 | `^0.5` — `>=0.5.0, <0.6.0` |
 | `cratefield-module-notifications` | 0.1.3 | 1 | `^0.5` — `>=0.5.0, <0.6.0` |
 | `cratefield-module-privacy` | 0.1.3 | 1 | `^0.5` — `>=0.5.0, <0.6.0` |
+| `cratefield-module-telemetry` | 0.1.0 | 1 | `^0.5` — `>=0.5.0, <0.6.0` |
 | `cratefield-module-waitlist` | 0.1.4 | 1 | `^0.5` — `>=0.5.0, <0.6.0` |
 | `cratefield-provisioning` *(not published)* | 0.1.1 | 1 | `^0.5` — `>=0.5.0, <0.6.0` |
 | `cratefield-push-auth` | 0.1.4 | 1 | `^0.5` — `>=0.5.0, <0.6.0` |
@@ -68,6 +71,7 @@ compatibility-doc` and checked in CI for drift. Do not edit by hand.
 | `cratefield-ui` | 0.1.4 | 1 | `^0.5` — `>=0.5.0, <0.6.0` |
 | `cratefield-ui-generator` *(not published)* | 0.1.1 | 1 | `^0.5` — `>=0.5.0, <0.6.0` |
 | `cratefield-waitlist` *(not published)* | 0.1.1 | 1 | `^0.5` — `>=0.5.0, <0.6.0` |
+| `d1-blob-canary` *(not published)* | 0.1.0 | 1 | `^0.5` — `>=0.5.0, <0.6.0` |
 | `factory0-auth-core` *(not published)* | 0.1.1 | 1 | `^0.5` — `>=0.5.0, <0.6.0` |
 | `factory0-auth-magic-link` *(not published)* | 0.1.1 | 1 | `^0.5` — `>=0.5.0, <0.6.0` |
 | `factory0-auth-meta` *(not published)* | 0.1.1 | 1 | `^0.5` — `>=0.5.0, <0.6.0` |
