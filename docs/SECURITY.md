@@ -88,8 +88,10 @@
   at all, the conservative fallback. Two escapes exist and both are
   recorded, never silent: `fz doctor --allow-no-captcha <reason>` for a
   preview, and `HARNESS_ALLOW_UNPROTECTED_WRITES=<reason>` on a
-  deployment, which is logged on every boot. A blank reason is not an
-  acceptance.
+  deployment. The acceptance and the readiness refusal are recorded on
+  every boot on both runtimes (issue #441): natively through the tracing
+  subscriber, on Cloudflare through the control-event forwarder into
+  Workers Logs. A blank reason is not an acceptance.
 - **A public write that is not a browser form says so.** `SignedLink`
   covers a write proved by a single-use, purpose-bound artifact this
   service issued — a magic link, a passkey or OAuth challenge — and
@@ -117,6 +119,20 @@
   forwarder scrubs each line it hands to the runtime sink.
   Rules in `cratefield_core::logging`, shared by every runtime formatter;
   verified by tests.
+- **Where logs are observable (issues #107, #441).** The native runtime
+  installs a redacting JSON subscriber, so every `tracing` event is
+  observable. Cloudflare installs no dispatcher — installing one hangs
+  the workerd isolate (issue #107) — so a bare
+  `tracing::info!`/`warn!`/`error!` is dropped there. What a Worker does
+  emit are the lines core routes through the control-event forwarder
+  into Workers Logs, each scrubbed by `scrub_text` and prefixed with its
+  level (`[info] `, `[warn] `, `[error] `): the boot-time readiness
+  acceptance and refusal, the compiled-versus-deployment env
+  disagreement, sidecar mount-table and gateway misconfiguration,
+  fail-open and fail-closed rate-limiter decisions, the secret-access
+  audit trail, and the internal errors mapped to a 500. Everything
+  else — ordinary per-request `tracing` output — is **not** observable
+  on Workers until a real wasm tracing layer exists.
 - **A column is not safer than a log.** An error string that is scrubbed
   on the way to a log and stored raw is the worse half of the pair: it
   outlives the request, it outlives erasure of the table the value came
@@ -143,6 +159,12 @@
   no outbound navigation leaks it through `Referer` (issue #135). The
   admin hard-delete route keys on the opaque row id, never the email
   (`DELETE /v1/email-signup/admin/subscribers/{id}`).
+- **`/v1` is never framed.** Every `/v1/*` response additionally carries
+  `X-Frame-Options: DENY` and `Content-Security-Policy: frame-ancestors
+  'none'` (issue #435): the API answers in JSON, but the magic-link
+  confirmation is HTML served under `/v1`, and a confirm page an
+  attacker's page can embed is one it can clickjack. `/ui/*` sets its
+  own framing headers and stays deliberately outside this rule.
 - **No `unsafe`** in core or any module (`#![forbid(unsafe_code)]`); the
   only `unsafe`-adjacent code is `worker::send::SendWrapper` inside the
   `worker` crate (ADR 0002).

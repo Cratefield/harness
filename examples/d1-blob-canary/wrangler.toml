@@ -1,0 +1,16 @@
+# The issue #438 canary's deployable shape (parity with crates/auth-worker).
+# The test harness (run.mjs) drives miniflare programmatically and does not
+# read this file; it is here so `wrangler deploy` would work unchanged after
+# a real `wrangler d1 create` replaces the id below.
+name = "d1-blob-canary"
+main = "build/worker/shim.mjs"
+compatibility_date = "2024-11-01"
+
+[build]
+command = "cargo install -q worker-build && worker-build --release"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "d1-blob-canary"
+database_id = "REPLACE_WITH_D1_ID"
+migrations_dir = "migrations"

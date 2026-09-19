@@ -146,12 +146,27 @@ impl Res {
 }
 
 async fn post(kit: &Kit, uri: &str, body: Value, cookie: Option<&str>) -> Res {
+    post_with(kit, uri, body, cookie, &[]).await
+}
+
+/// `post` for a request that carries extra headers — the browser headers
+/// (`origin`, `host`, `sec-fetch-site`) the login-CSRF guard reads.
+async fn post_with(
+    kit: &Kit,
+    uri: &str,
+    body: Value,
+    cookie: Option<&str>,
+    extra: &[(&str, &str)],
+) -> Res {
     let mut builder = Request::builder()
         .method(Method::POST)
         .uri(uri)
         .header(header::CONTENT_TYPE, "application/json");
     if let Some(cookie) = cookie {
         builder = builder.header(header::COOKIE, format!("__Host-fz_session={cookie}"));
+    }
+    for (name, value) in extra {
+        builder = builder.header(*name, *value);
     }
     let response = kit
         .harness
@@ -878,10 +893,19 @@ async fn get_page(kit: &Kit, uri: &str) -> Res {
 }
 
 async fn post_form(kit: &Kit, uri: &str, body: &str) -> Res {
-    let request = Request::builder()
+    post_form_with(kit, uri, body, &[]).await
+}
+
+/// `post_form` with extra headers, for the same reason `post_with` exists.
+async fn post_form_with(kit: &Kit, uri: &str, body: &str, extra: &[(&str, &str)]) -> Res {
+    let mut builder = Request::builder()
         .method(Method::POST)
         .uri(uri)
-        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded");
+    for (name, value) in extra {
+        builder = builder.header(*name, *value);
+    }
+    let request = builder
         .body(axum::body::Body::from(body.to_owned()))
         .expect("request");
     drive(kit, request).await
@@ -1037,6 +1061,262 @@ fn a_return_to_cannot_break_out_of_the_hidden_field_or_leave_the_service() {
                 .and_then(|v| v.to_str().ok()),
             Some("/"),
             "an absolute return_to was followed"
+        );
+    });
+}
+
+// ---------------------------------------------------------------------
+// Login CSRF (#439)
+
+/// `SameSite=Lax` stops a cross-site POST from *carrying* our session
+/// cookie, not from *setting* one. A form on evil.example that posts the
+/// attacker's credentials to us used to complete and leave the victim
+/// signed in as the attacker. Both password entry paths now refuse it.
+#[test]
+fn a_cross_site_form_cannot_sign_anyone_in() {
+    pollster::block_on(async {
+        let kit = kit();
+        register(&kit, "ada@example.com", GOOD).await;
+        let cross_site: &[(&str, &str)] = &[
+            ("host", "auth.example.test"),
+            ("origin", "https://evil.example"),
+        ];
+        let refused_as = |label: &str, response: &Res| {
+            assert_eq!(
+                response.status,
+                StatusCode::FORBIDDEN,
+                "{label}: {}",
+                response.text()
+            );
+            assert_eq!(
+                response.json()["type"],
+                "https://factory0.ventures/problems/auth/cross-site-request",
+                "{label}"
+            );
+            assert!(
+                response.cookie("__Host-fz_session").is_none(),
+                "{label} set a session cookie for a cross-site POST"
+            );
+        };
+
+        let json_login = post_with(
+            &kit,
+            LOGIN,
+            json!({ "email": "ada@example.com", "password": GOOD }),
+            None,
+            cross_site,
+        )
+        .await;
+        refused_as("POST /login", &json_login);
+
+        let form = post_form_with(
+            &kit,
+            START,
+            "email=ada%40example.com&password=a+long+enough+password",
+            cross_site,
+        )
+        .await;
+        refused_as("POST /start", &form);
+
+        assert_eq!(count(&kit, "sessions"), 0, "a session was issued anyway");
+    });
+}
+
+/// The other signal the guard reads: `sec-fetch-site: cross-site`, with no
+/// `Origin` at all — a scripted form POST still carries fetch metadata.
+#[test]
+fn a_cross_site_fetch_metadata_is_refused_too() {
+    pollster::block_on(async {
+        let kit = kit();
+        register(&kit, "ada@example.com", GOOD).await;
+
+        let response = post_with(
+            &kit,
+            LOGIN,
+            json!({ "email": "ada@example.com", "password": GOOD }),
+            None,
+            &[
+                ("host", "auth.example.test"),
+                ("sec-fetch-site", "cross-site"),
+            ],
+        )
+        .await;
+        assert_eq!(
+            response.status,
+            StatusCode::FORBIDDEN,
+            "{}",
+            response.text()
+        );
+        assert_eq!(
+            response.json()["type"],
+            "https://factory0.ventures/problems/auth/cross-site-request"
+        );
+        assert!(
+            response.cookie("__Host-fz_session").is_none(),
+            "the cross-site POST set a session cookie"
+        );
+        assert_eq!(count(&kit, "sessions"), 0);
+    });
+}
+
+/// The guard must not break the front door: a browser posting from our own
+/// form, with every header it would really send, still signs in.
+#[test]
+fn a_same_origin_sign_in_still_works() {
+    pollster::block_on(async {
+        let kit = kit();
+        register(&kit, "ada@example.com", GOOD).await;
+        let own: &[(&str, &str)] = &[
+            ("host", "auth.example.test"),
+            ("origin", "https://auth.example.test"),
+            ("sec-fetch-site", "same-origin"),
+        ];
+
+        let json_login = post_with(
+            &kit,
+            LOGIN,
+            json!({ "email": "ada@example.com", "password": GOOD }),
+            None,
+            own,
+        )
+        .await;
+        assert_eq!(json_login.status, StatusCode::OK, "{}", json_login.text());
+        assert!(json_login.cookie("__Host-fz_session").is_some());
+
+        let form = post_form_with(
+            &kit,
+            START,
+            "email=ada%40example.com&password=a+long+enough+password",
+            own,
+        )
+        .await;
+        assert_eq!(form.status, StatusCode::SEE_OTHER, "{}", form.text());
+        assert!(form.cookie("__Host-fz_session").is_some());
+    });
+}
+
+/// A password change re-issues a session, so it is a sign-in as far as a
+/// cross-site attacker is concerned: refused before anything happens, and
+/// a same-origin change still reaches the handler's own logic.
+#[test]
+fn a_cross_site_post_cannot_change_a_password() {
+    pollster::block_on(async {
+        let kit = kit();
+        register(&kit, "ada@example.com", GOOD).await;
+        let cookie = login(&kit, "ada@example.com", GOOD)
+            .await
+            .cookie("__Host-fz_session")
+            .expect("a session");
+
+        let cross_site = post_with(
+            &kit,
+            CHANGE,
+            json!({ "current_password": GOOD, "new_password": "a different long password" }),
+            Some(&cookie),
+            &[
+                ("host", "auth.example.test"),
+                ("origin", "https://evil.example"),
+            ],
+        )
+        .await;
+        assert_eq!(
+            cross_site.status,
+            StatusCode::FORBIDDEN,
+            "{}",
+            cross_site.text()
+        );
+        assert_eq!(
+            cross_site.json()["type"],
+            "https://factory0.ventures/problems/auth/cross-site-request"
+        );
+        assert!(
+            cross_site.cookie("__Host-fz_session").is_none(),
+            "the cross-site change re-issued a session"
+        );
+
+        // Nothing happened: the refusal minted no session of its own.
+        assert_eq!(count(&kit, "sessions"), 1);
+
+        // And the old password still works — this signs in once more, so
+        // it stays after the count above.
+        assert_eq!(
+            login(&kit, "ada@example.com", GOOD).await.status,
+            StatusCode::OK
+        );
+
+        // A same-origin request reaches the handler's own logic: this one
+        // fails for the route's ordinary reason, a password too short to
+        // keep, rather than the cross-site refusal.
+        let own = post_with(
+            &kit,
+            CHANGE,
+            json!({ "current_password": GOOD, "new_password": "short" }),
+            Some(&cookie),
+            &[
+                ("host", "auth.example.test"),
+                ("origin", "https://auth.example.test"),
+                ("sec-fetch-site", "same-origin"),
+            ],
+        )
+        .await;
+        assert_eq!(own.status, StatusCode::BAD_REQUEST, "{}", own.text());
+        assert_eq!(
+            own.json()["type"],
+            "https://factory0.ventures/problems/auth/password-unsuitable"
+        );
+    });
+}
+
+/// The change re-issues a session, so the guard must not break it either:
+/// a browser changing its password from our own form, with every header it
+/// would really send, still succeeds end to end — and gets its fresh
+/// session cookie back.
+#[test]
+fn a_same_origin_password_change_still_works() {
+    pollster::block_on(async {
+        let kit = kit();
+        register(&kit, "ada@example.com", GOOD).await;
+        let cookie = login(&kit, "ada@example.com", GOOD)
+            .await
+            .cookie("__Host-fz_session")
+            .expect("a session");
+
+        let response = post_with(
+            &kit,
+            CHANGE,
+            json!({ "current_password": GOOD, "new_password": "a different long password" }),
+            Some(&cookie),
+            &[
+                ("host", "auth.example.test"),
+                ("origin", "https://auth.example.test"),
+                ("sec-fetch-site", "same-origin"),
+            ],
+        )
+        .await;
+        assert_eq!(response.status, StatusCode::OK, "{}", response.text());
+        let fresh = response
+            .cookie("__Host-fz_session")
+            .expect("the change re-issues a session");
+        assert_ne!(fresh, cookie, "the re-issued cookie is the one presented");
+        assert!(
+            factory0_auth_core::validate(&*kit.db, &*kit.clock, &cookie)
+                .await
+                .expect("query")
+                .is_none(),
+            "the presented session survived the change"
+        );
+
+        // And the change itself took: the old password is done, the new
+        // one signs in.
+        assert_eq!(
+            login(&kit, "ada@example.com", GOOD).await.status,
+            StatusCode::UNAUTHORIZED
+        );
+        assert_eq!(
+            login(&kit, "ada@example.com", "a different long password")
+                .await
+                .status,
+            StatusCode::OK
         );
     });
 }

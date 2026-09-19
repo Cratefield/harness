@@ -19,8 +19,8 @@ use factory0_auth_core::{
     mark_passkey_suspect, passkey_by_credential_id, set_cookie, touch_credential_used,
     update_passkey_sign_count, user_by_id, user_by_primary_email,
 };
-use http::HeaderMap;
 use http::header;
+use http::{HeaderMap, Uri};
 use serde::Deserialize;
 use serde_json::json;
 use std::sync::Arc;
@@ -31,7 +31,9 @@ use webauthn_rs_proto::{
 
 use crate::ModuleState;
 use crate::challenge::{self, PURPOSE_LOGIN};
-use crate::request::{ceremony_failed, client_hints, internal, limit_login, ok, ports};
+use crate::request::{
+    ceremony_failed, client_hints, internal, limit_challenges, limit_login, ok, ports,
+};
 use crate::webauthn::{StoredPasskey, UserVerification, WebauthnError, verify_assertion};
 
 pub(crate) const EVENT_LOGGED_IN: &str = "auth-passkeys.logged_in";
@@ -84,6 +86,13 @@ async fn options(
         .map(|email| cratefield_core::normalize_email(&email))
         .filter(|email| !email.is_empty());
 
+    // The budget is spent before anything about the named address is read,
+    // so a refusal carries no signal about the account — and no challenge
+    // row is written for a refused call.
+    if let Some(limited) = limit_challenges(&state, &scope, &headers, email.as_deref()).await? {
+        return Ok(limited);
+    }
+
     let mut allow = Vec::new();
     let mut user_id = None;
     if let Some(email) = email.as_deref() {
@@ -91,7 +100,11 @@ async fn options(
         // is exactly what an account with no passkeys gets. It is **not**
         // full enumeration resistance: an account that does have a passkey
         // answers with its credential ids, which is inherent to the
-        // non-discoverable flow and is why the endpoint is rate limited.
+        // non-discoverable flow. What bounds the leak is the challenge
+        // budget above — a database-enforced cap that holds whether or not
+        // the composition wired up the optional rate limiter — after which
+        // every address is answered with the same 429 until the window
+        // passes.
         if let Some(user) = user_by_primary_email(db, email).await.map_err(|err| {
             tracing::error!(error = %err, "could not look up the account");
             internal(&scope)
@@ -310,11 +323,18 @@ async fn verify(
     State(state): State<Arc<ModuleState>>,
     scope: Scope,
     headers: HeaderMap,
+    uri: Uri,
     // Raw bytes rather than the JSON extractor, because an extractor runs
     // before the handler body: a typed one here would answer a parse error
     // to a caller the rate limiter was about to refuse.
     raw: axum::body::Bytes,
 ) -> Result<Response, Problem> {
+    // A verified assertion mints a session, so a form on another site must
+    // not be able to complete one (issue #439). Ahead of the limiter, so
+    // a cross-site POST cannot spend the account's rate-limit budget
+    // either.
+    factory0_auth_core::csrf::require_same_origin(&headers, &uri)
+        .map_err(|problem| problem.instance(&scope.request_id))?;
     if let Some(limited) = limit_login(&state, &headers).await {
         return Ok(limited);
     }

@@ -318,9 +318,11 @@ pub enum SecretsError {
         name: String,
         version: Version,
     },
-    /// The store has no data key yet, or its key row is gone (an
-    /// offboarding shred). Every ciphertext in it is unreadable, which
-    /// is a deliberate state, not a fault to paper over.
+    /// The store has no data key yet, its key row is gone (an
+    /// offboarding shred), or the key id names a row stamped with
+    /// another store, which this one cannot see. Every ciphertext in it
+    /// is unreadable, which is a deliberate state, not a fault to paper
+    /// over.
     #[error("store `{0}` has no usable data key: nothing in it can be decrypted")]
     NoKey(String),
     #[error("invalid input: {0}")]
@@ -434,6 +436,22 @@ impl Audit for TracingAudit {
             version = event.version.unwrap_or(0),
             allowed = event.allowed,
             "secret access"
+        );
+        // The audit trail is an accountability control, not a nicety, so
+        // the same record rides the forwarder (issue #441): on wasm the
+        // tracing event goes nowhere, and an access nobody can read is an
+        // audit nobody answers for.
+        cratefield_core::forward_control_event(
+            cratefield_core::ControlLevel::Info,
+            &format!(
+                "secret access: store {} {} actor {} name {} version {} allowed {}",
+                event.store,
+                event.access.as_str(),
+                event.actor.as_str(),
+                event.name.unwrap_or("-"),
+                event.version.unwrap_or(0),
+                event.allowed
+            ),
         );
         Ok(())
     }

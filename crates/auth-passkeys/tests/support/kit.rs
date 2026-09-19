@@ -75,6 +75,16 @@ pub fn kit_rate_limited() -> Kit {
     })
 }
 
+/// A kit with **no** rate limiter wired at all — the composition the
+/// challenge budget exists for: nothing between `login/options` and an
+/// enumeration sweep but the database cap. The harness's default is an
+/// always-allow limiter, so the absence has to be asked for.
+pub fn kit_without_limiter() -> Kit {
+    kit_patched(config_pairs(), |ports| {
+        ports.rate_limiter = None;
+    })
+}
+
 pub fn kit_with(pairs: Vec<(String, String)>) -> Kit {
     kit_patched(pairs, |_| {})
 }
@@ -204,10 +214,26 @@ pub async fn send(
     body: Option<&str>,
     cookie: Option<&str>,
 ) -> Res {
+    send_with_headers(kit, method, path, body, cookie, &[]).await
+}
+
+/// `send` for a request that carries extra headers — the browser headers
+/// (`origin`, `host`, `sec-fetch-site`) the login-CSRF guard reads.
+pub async fn send_with_headers(
+    kit: &Kit,
+    method: http::Method,
+    path: &str,
+    body: Option<&str>,
+    cookie: Option<&str>,
+    extra: &[(&str, &str)],
+) -> Res {
     use tower::ServiceExt;
     let mut builder = axum::http::Request::builder().method(method).uri(path);
     if let Some(cookie) = cookie {
         builder = builder.header(http::header::COOKIE, format!("__Host-fz_session={cookie}"));
+    }
+    for (name, value) in extra {
+        builder = builder.header(*name, *value);
     }
     let request = match body {
         Some(body) => builder
@@ -236,6 +262,23 @@ pub async fn send(
 
 pub async fn post(kit: &Kit, path: &str, body: &str, cookie: Option<&str>) -> Res {
     send(kit, http::Method::POST, path, Some(body), cookie).await
+}
+
+/// `post` with extra headers, for the same reason `send_with_headers` exists.
+pub async fn post_with_headers(kit: &Kit, path: &str, body: &str, extra: &[(&str, &str)]) -> Res {
+    send_with_headers(kit, http::Method::POST, path, Some(body), None, extra).await
+}
+
+/// [`post`] from a given client address, or from no address at all when
+/// `None` — which is what `ip:unknown` budgets. `cf-connecting-ip` is what
+/// the edge sets and what `client_ip` trusts first, so this is how a test
+/// arrives from a different address. It is a header like any other, so it
+/// goes through `post_with_headers` rather than a second path of its own.
+pub async fn post_from(kit: &Kit, path: &str, body: &str, client_ip: Option<&str>) -> Res {
+    match client_ip {
+        Some(ip) => post_with_headers(kit, path, body, &[("cf-connecting-ip", ip)]).await,
+        None => post_with_headers(kit, path, body, &[]).await,
+    }
 }
 
 /// How many rows a table holds.

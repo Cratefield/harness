@@ -137,6 +137,55 @@ The workflow also takes a manual run (Actions → Release → *Run
 workflow*) with a `dry_run` checkbox, on by default, so the pipeline
 can be exercised without publishing.
 
+## Dependent crates do not reliably follow a breaking bump
+
+**Assume a breaking bump of `cratefield-core` does not release its
+dependents, and check that it did.** release-plz normally cascades: when
+it releases a crate it rewrites that crate's version requirement in
+every manifest it manages, and each crate whose requirement it rewrote
+earns a patch bump and is published in the same release PR. Nothing
+configures this behaviour — there is no option to turn the cascade on,
+off, or up, and no option to make a breaking bump propagate as anything
+larger than a patch.
+
+**The cascade is keyed on that rewrite, which makes it easy to suppress
+by accident.** release-plz asks whether a requirement has to change in
+order to admit the version being released, and reads "no change needed"
+as "this dependent does not need a release". A requirement of `"0.5"`
+already admits 0.5.0, so releasing core as 0.5.0 against a workspace
+table that already reads `"0.5"` rewrites nothing and publishes nothing
+but core. That is how core reached 0.5.0 on crates.io while 23 published
+dependents still required `^0.4` (issue #462): the requirement in the
+root `Cargo.toml` had been edited by hand ahead of the release that was
+meant to move it, so the release round that should have followed never
+ran.
+
+**So bump one place, not two.** Set the new version in
+`crates/<name>/Cargo.toml` and leave the `[workspace.dependencies]`
+requirement in the root `Cargo.toml` alone — moving it is release-plz's
+job, and moving it first is what costs the dependent round. If the two
+have already diverged, the dependents will not catch up on their own:
+bump each of them in the release PR by hand, or publish them in the
+dependency order given in step 2 below.
+
+**A cascaded dependent gets a patch bump even when the dependency
+broke.** release-plz does not inspect code to work out whether a
+dependent re-exports a type that changed, so a crate whose public
+surface exposes a core type can ship a breaking change as a patch
+release, which consumers pinned with a caret take silently.
+`COMPATIBILITY.md` does not catch this either: it is generated from the
+workspace manifests and checked in CI for drift, so it records the
+ranges this tree declares, not the ranges the published crates actually
+carry.
+
+**Nothing in this repository catches the mismatch.** Every in-tree build
+resolves `cratefield-core` through the path dependency in the root
+`Cargo.toml`, so the workspace compiles against the local 0.5 whatever
+the published requirements say, and CI stays green while the published
+set is unresolvable. Issue #466 tracks the CI job that resolves a
+venture from crates.io alone, which is the check that would have caught
+this.
+
 ## Owner setup (once)
 
 Step 0 is about GitHub; the rest need the crates.io account that will
@@ -180,6 +229,7 @@ crate exists**, so the very first release of each crate is manual:
    cargo publish -p cratefield-adapter-postgres
    cargo publish -p cratefield-adapter-resend
    cargo publish -p cratefield-adapter-turnstile
+   cargo publish -p cratefield-adapter-anthropic
    cargo publish -p cratefield-push-auth      # before adapter-apns
    cargo publish -p cratefield-adapter-apns
    cargo publish -p cratefield-adapter-fcm    # before the facade
@@ -189,6 +239,7 @@ crate exists**, so the very first release of each crate is manual:
    cargo publish -p cratefield-runtime-cloudflare
    cargo publish -p cratefield-runtime-native
    cargo publish -p cratefield-testing
+   cargo publish -p cratefield-module-telemetry
    cargo publish -p cratefield-module-email-signup
    cargo publish -p cratefield-module-waitlist
    cargo publish -p cratefield-module-cms

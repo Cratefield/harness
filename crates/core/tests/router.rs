@@ -258,7 +258,10 @@ async fn cors_preflight_admits_an_authenticated_put() {
     );
 }
 
-/// `/v1/*` responses carry the security headers; `/__health` does not.
+/// `/v1/*` responses carry the security headers — the no-store trio and,
+/// since issue #435, the framing pair: the magic-link confirm page is
+/// HTML served under `/v1`, and must refuse to render inside a third
+/// party's frame. `/__health`, outside `/v1`, carries none of them.
 #[pollster::test]
 async fn security_headers_on_v1_only() {
     let harness = harness_with_sample();
@@ -274,18 +277,28 @@ async fn security_headers_on_v1_only() {
         "nosniff"
     );
     assert_eq!(headers.get("referrer-policy").unwrap(), "no-referrer");
+    assert_eq!(headers.get(header::X_FRAME_OPTIONS).unwrap(), "DENY");
+    assert_eq!(
+        headers.get(header::CONTENT_SECURITY_POLICY).unwrap(),
+        "frame-ancestors 'none'"
+    );
 
     let health = request(&router, Method::GET, "/__health", &[], None).await;
     let headers = health.headers();
     assert!(headers.get(header::CACHE_CONTROL).is_none());
     assert!(headers.get(header::X_CONTENT_TYPE_OPTIONS).is_none());
     assert!(headers.get("referrer-policy").is_none());
+    assert!(headers.get(header::X_FRAME_OPTIONS).is_none());
+    assert!(headers.get(header::CONTENT_SECURITY_POLICY).is_none());
 }
 
 /// A `token` query parameter is a credential in the URL (issue #135):
 /// `/ui/waitlist/status?token=…` authenticates with the URL itself and is
 /// outside `/v1/*`, so the root-level middleware must give any
-/// token-bearing request the no-store headers — whatever the path.
+/// token-bearing request the no-store headers — whatever the path. The
+/// framing headers, though, stay scoped to `/v1` (issue #435): `/ui/*`
+/// sets its own `Content-Security-Policy` and `X-Frame-Options`, and a
+/// token-bearing UI response must not have them stamped over the top.
 #[pollster::test]
 async fn token_bearing_requests_get_no_store_even_off_v1() {
     let harness = harness_with_sample();
@@ -299,6 +312,10 @@ async fn token_bearing_requests_get_no_store_even_off_v1() {
         "nosniff"
     );
     assert_eq!(headers.get("referrer-policy").unwrap(), "no-referrer");
+    // Off `/v1`, a token buys no-store but never the framing pair — that
+    // regression would silently override the UI crate's own headers.
+    assert!(headers.get(header::X_FRAME_OPTIONS).is_none());
+    assert!(headers.get(header::CONTENT_SECURITY_POLICY).is_none());
 
     // The token may sit behind other parameters…
     let response = request(

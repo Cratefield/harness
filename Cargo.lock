@@ -637,8 +637,9 @@ dependencies = [
 
 [[package]]
 name = "cratefield"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
+ "cratefield-adapter-anthropic",
  "cratefield-adapter-apns",
  "cratefield-adapter-fcm",
  "cratefield-adapter-postgres",
@@ -657,6 +658,7 @@ dependencies = [
  "cratefield-module-email-signup",
  "cratefield-module-notifications",
  "cratefield-module-privacy",
+ "cratefield-module-telemetry",
  "cratefield-module-waitlist",
  "cratefield-push-auth",
  "cratefield-push-wiring",
@@ -692,8 +694,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "cratefield-adapter-anthropic"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "cratefield-core",
+ "cratefield-testing",
+ "getrandom 0.4.3",
+ "http",
+ "pollster",
+ "serde",
+ "serde_json",
+ "time",
+ "tracing",
+]
+
+[[package]]
 name = "cratefield-adapter-apns"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "async-trait",
  "base64 0.23.1",
@@ -712,7 +731,7 @@ dependencies = [
 
 [[package]]
 name = "cratefield-adapter-fcm"
-version = "0.1.3"
+version = "0.1.4"
 dependencies = [
  "async-trait",
  "base64 0.23.1",
@@ -732,13 +751,14 @@ dependencies = [
 
 [[package]]
 name = "cratefield-adapter-postgres"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "async-trait",
  "axum",
  "cratefield-core",
  "cratefield-module-email-signup",
  "cratefield-module-waitlist",
+ "cratefield-testing",
  "futures-util",
  "sea-query",
  "sqlx",
@@ -749,7 +769,7 @@ dependencies = [
 
 [[package]]
 name = "cratefield-adapter-resend"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "async-trait",
  "bytes",
@@ -764,10 +784,11 @@ dependencies = [
 
 [[package]]
 name = "cratefield-adapter-sqlite"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "async-trait",
  "cratefield-core",
+ "cratefield-testing",
  "pollster",
  "rusqlite",
  "sea-query",
@@ -780,6 +801,7 @@ name = "cratefield-adapter-sqlite-wasm"
 version = "0.1.1"
 dependencies = [
  "async-trait",
+ "base64 0.23.1",
  "cratefield-core",
  "getrandom 0.4.3",
  "js-sys",
@@ -793,7 +815,7 @@ dependencies = [
 
 [[package]]
 name = "cratefield-adapter-stripe"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "async-trait",
  "bytes",
@@ -804,6 +826,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.11.0",
+ "subtle",
  "thiserror 2.0.20",
  "time",
  "tracing",
@@ -811,7 +834,7 @@ dependencies = [
 
 [[package]]
 name = "cratefield-adapter-turnstile"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "async-trait",
  "bytes",
@@ -827,7 +850,7 @@ dependencies = [
 
 [[package]]
 name = "cratefield-adapter-webpush"
-version = "0.1.3"
+version = "0.1.4"
 dependencies = [
  "aes-gcm",
  "async-trait",
@@ -852,7 +875,7 @@ dependencies = [
 
 [[package]]
 name = "cratefield-auth-client"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "async-trait",
  "axum",
@@ -900,6 +923,7 @@ dependencies = [
  "cratefield-module-email-signup",
  "cratefield-module-notifications",
  "cratefield-module-privacy",
+ "cratefield-module-telemetry",
  "cratefield-module-waitlist",
  "serde",
  "serde_json",
@@ -919,13 +943,14 @@ dependencies = [
 
 [[package]]
 name = "cratefield-cli"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "base64 0.23.1",
  "clap",
  "cratefield-adapter-postgres",
  "cratefield-adapter-sqlite",
  "cratefield-adapter-webpush",
+ "cratefield-client-ts",
  "cratefield-core",
  "cratefield-introspect",
  "cratefield-manifest",
@@ -967,6 +992,17 @@ dependencies = [
  "sqlx",
  "tokio",
  "venture-fixture",
+]
+
+[[package]]
+name = "cratefield-client-ts"
+version = "0.1.0"
+dependencies = [
+ "cratefield-core",
+ "cratefield-tables",
+ "cratefield-testing",
+ "serde_json",
+ "sha2 0.11.0",
 ]
 
 [[package]]
@@ -1072,6 +1108,7 @@ dependencies = [
  "ulid",
  "unicode-normalization",
  "url",
+ "zeroize",
 ]
 
 [[package]]
@@ -1092,6 +1129,7 @@ dependencies = [
  "cratefield-core",
  "cratefield-introspect",
  "cratefield-kms",
+ "cratefield-linker",
  "cratefield-provisioning",
  "cratefield-secrets",
  "cratefield-tables",
@@ -1154,6 +1192,8 @@ name = "cratefield-linker"
 version = "0.1.1"
 dependencies = [
  "cratefield-manifest",
+ "cratefield-provisioning",
+ "pollster",
  "serde",
  "serde_json",
  "sha2 0.11.0",
@@ -1194,7 +1234,7 @@ dependencies = [
 
 [[package]]
 name = "cratefield-module-cms"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "axum",
  "cratefield-adapter-sqlite",
@@ -1214,7 +1254,7 @@ dependencies = [
 
 [[package]]
 name = "cratefield-module-email-signup"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "askama",
  "async-trait",
@@ -1256,7 +1296,7 @@ dependencies = [
 
 [[package]]
 name = "cratefield-module-notifications"
-version = "0.1.3"
+version = "0.1.4"
 dependencies = [
  "async-trait",
  "axum",
@@ -1289,7 +1329,7 @@ dependencies = [
 
 [[package]]
 name = "cratefield-module-privacy"
-version = "0.1.3"
+version = "0.1.4"
 dependencies = [
  "axum",
  "cratefield-core",
@@ -1304,8 +1344,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "cratefield-module-telemetry"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "cratefield-adapter-sqlite",
+ "cratefield-core",
+ "cratefield-module-privacy",
+ "cratefield-testing",
+ "http",
+ "mime",
+ "pollster",
+ "sea-query",
+ "serde",
+ "serde_json",
+ "time",
+ "tower",
+ "tracing",
+]
+
+[[package]]
 name = "cratefield-module-waitlist"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "askama",
  "async-trait",
@@ -1341,7 +1401,7 @@ dependencies = [
 
 [[package]]
 name = "cratefield-push-auth"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "async-trait",
  "base64 0.23.1",
@@ -1356,7 +1416,7 @@ dependencies = [
 
 [[package]]
 name = "cratefield-push-wiring"
-version = "0.1.3"
+version = "0.1.4"
 dependencies = [
  "async-trait",
  "bytes",
@@ -1414,7 +1474,7 @@ dependencies = [
 
 [[package]]
 name = "cratefield-runtime-cloudflare"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "async-trait",
  "axum",
@@ -1426,6 +1486,7 @@ dependencies = [
  "futures-util",
  "getrandom 0.4.3",
  "http",
+ "pollster",
  "sea-query",
  "serde",
  "serde_json",
@@ -1438,7 +1499,7 @@ dependencies = [
 
 [[package]]
 name = "cratefield-runtime-native"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "async-trait",
  "axum",
@@ -1464,7 +1525,7 @@ dependencies = [
 
 [[package]]
 name = "cratefield-secrets"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "async-trait",
  "chacha20poly1305",
@@ -1518,7 +1579,7 @@ dependencies = [
 
 [[package]]
 name = "cratefield-testing"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "async-trait",
  "axum",
@@ -1540,7 +1601,7 @@ dependencies = [
 
 [[package]]
 name = "cratefield-ui"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "async-trait",
  "axum",
@@ -1723,6 +1784,21 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.119",
+]
+
+[[package]]
+name = "d1-blob-canary"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "cratefield-core",
+ "cratefield-kms",
+ "cratefield-runtime-cloudflare",
+ "cratefield-secrets",
+ "factory0-auth-core",
+ "getrandom 0.4.3",
+ "serde_json",
+ "worker",
 ]
 
 [[package]]
@@ -2223,6 +2299,7 @@ dependencies = [
  "pollster",
  "rand 0.8.8",
  "rsa",
+ "sea-query",
  "serde",
  "serde_json",
  "sha2 0.11.0",

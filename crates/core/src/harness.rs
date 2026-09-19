@@ -195,6 +195,50 @@ impl Harness {
         &self.modules
     }
 
+    /// The largest body a runtime may buffer for the route at `path`,
+    /// answerable before any byte of it has been read (issue #440).
+    ///
+    /// `DefaultBodyLimit` inside `router()` is the precise per-route
+    /// enforcer, but it fires only once the body is already resident — too
+    /// late for a runtime that must buffer into a fixed memory ceiling (a
+    /// Workers isolate). This is the coarse pre-buffer ceiling that runtime
+    /// consults instead: for a path of the form `/v1/<name>` or
+    /// `/v1/<name>/...` it is the named module's [`Module::max_body_bytes`],
+    /// and for everything else — an unknown module, `/ui/*`, `/__events`,
+    /// `/.well-known/*`, or any path outside `/v1` — [`MAX_BODY_BYTES`].
+    ///
+    /// The result is floored at [`MAX_BODY_BYTES`] even for the module
+    /// routes: a module may raise the ceiling for a route (LinkedIn's image
+    /// upload), but the runtime guard sits in front of the router, and a
+    /// module that tightened it below what the router itself accepts would
+    /// 413 working requests.
+    ///
+    /// `path` is the URL path only — what `url.path()` returns. A query
+    /// string is tolerated and ignored, and empty segments from a leading,
+    /// trailing or doubled slash are collapsed; `/v1` with no module
+    /// segment is simply the default ceiling.
+    pub fn max_body_bytes(&self, path: &str, cfg: &dyn Config) -> usize {
+        // Cut at the first `?` or `#`; a caller passing a whole URL must
+        // not have the module misidentified from its tail.
+        let path = match path.split_once(['?', '#']) {
+            Some((path, _)) => path,
+            None => path,
+        };
+        let mut segments = path.split('/').filter(|segment| !segment.is_empty());
+        if segments.next() != Some("v1") {
+            return MAX_BODY_BYTES;
+        }
+        let Some(name) = segments.next() else {
+            return MAX_BODY_BYTES;
+        };
+        self.modules
+            .iter()
+            .find(|module| module.name() == name)
+            .map_or(MAX_BODY_BYTES, |module| {
+                MAX_BODY_BYTES.max(module.max_body_bytes(cfg))
+            })
+    }
+
     pub fn templates(&self) -> &Arc<TemplateRegistry> {
         &self.templates
     }
@@ -327,6 +371,7 @@ impl Harness {
     ) -> Vec<String> {
         if let Some(note) = crate::route_policy::env_disagreement(self.venture.env, env) {
             tracing::warn!("{note}");
+            crate::logging::forward_control_event(crate::logging::ControlLevel::Warn, &note);
         }
         // Each escape hatch is read here — in the serving path — and
         // passed to its own leg, so a waiver covers exactly the control it
@@ -355,10 +400,35 @@ impl Harness {
             );
             return problems;
         }
-        // Every remaining problem names its own remedy: the key to set,
-        // or the port to wire, per leg.
+        // An operator may accept this deployment's gap explicitly, and
+        // the acceptance is recorded on every boot rather than discarded
+        // (issue #143). The routes then serve, and the record is what
+        // someone answers for later. The record is also forwarded (issue
+        // #441): on wasm the tracing event goes nowhere, and an acceptance
+        // nobody can read is an acceptance nobody answers for.
+        if let Some(reason) = crate::route_policy::unprotected_writes_override(config) {
+            let problems = problems.join("; ");
+            let detail = format!(
+                "serving guarded routes unprotected on an operator's recorded acceptance \
+                 (reason: {reason}; problems: {problems})"
+            );
+            tracing::warn!(
+                control = "production-readiness",
+                reason,
+                problems = problems,
+                "serving guarded routes unprotected on an operator's recorded acceptance"
+            );
+            crate::logging::forward_control_event(crate::logging::ControlLevel::Warn, &detail);
+            return Vec::new();
+        }
         for problem in &problems {
-            error!("refusing guarded routes: {problem}");
+            let detail = format!(
+                "refusing guarded routes: {problem} — set {} to a reason to accept this \
+                 explicitly while the port is wired",
+                crate::route_policy::ALLOW_UNPROTECTED_WRITES
+            );
+            error!("{detail}");
+            crate::logging::forward_control_event(crate::logging::ControlLevel::Error, &detail);
         }
         problems
     }
@@ -434,14 +504,23 @@ impl Harness {
             Ok(mounts) => mounts,
             Err(errors) => {
                 for error in errors {
+                    let detail = format!("ignoring the sidecar mount table: {error}");
                     tracing::error!(error, "ignoring the sidecar mount table");
+                    // A dropped mount quietly unmounts a service (issue
+                    // #441): the operator must be able to read why.
+                    crate::logging::forward_control_event(
+                        crate::logging::ControlLevel::Error,
+                        &detail,
+                    );
                 }
                 crate::sidecar::SidecarMounts::default()
             }
         };
         let module_names: Vec<&str> = self.modules.iter().map(|m| m.name()).collect();
         for collision in mounts.collisions(&module_names) {
+            let detail = format!("ignoring the colliding sidecar mount: {collision}");
             tracing::error!(error = collision, "ignoring the colliding sidecar mount");
+            crate::logging::forward_control_event(crate::logging::ControlLevel::Error, &detail);
         }
         mounts
             .iter()
@@ -655,7 +734,9 @@ impl Harness {
             blob: _,
             push: _,
             payments: _,
+            tracker: _,
             realtime: _,
+            text_model: _,
             http: _,
             clock,
             id_gen,

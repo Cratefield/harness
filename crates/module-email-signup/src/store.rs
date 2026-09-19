@@ -206,6 +206,23 @@ pub(crate) async fn refresh_to_pending(
     db.execute(&Statement::render(&update)).await
 }
 
+/// Restores the `updated_at` a refresh stamped with now. That column is
+/// the hourly re-mail gate, so a confirmation mail that never went out
+/// hands the window back — the deferred send's counterpart of the old
+/// mail-before-write ordering.
+pub(crate) async fn restore_updated_at(
+    db: &dyn Database,
+    id: &str,
+    updated_at: &str,
+) -> Result<u64, DbError> {
+    let mut update = Query::update();
+    update
+        .table(iden("subscribers"))
+        .values([(iden("updated_at"), updated_at.into())])
+        .and_where(Expr::col(iden("id")).eq(id));
+    db.execute(&Statement::render(&update)).await
+}
+
 /// The row the current opaque unsubscribe token belongs to (issue #137).
 pub(crate) async fn find_by_unsubscribe_token(
     db: &dyn Database,

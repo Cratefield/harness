@@ -21,7 +21,12 @@ fn store_on(secrets: &Secrets, id: &str) -> (SecretStore, Arc<dyn Database>) {
     db.apply_migrations("secrets", cratefield_secrets::migrations().sqlite)
         .expect("schema applies");
     let db: Arc<dyn Database> = Arc::new(db);
-    (secrets.tenant(id, Arc::clone(&db)), db)
+    (
+        secrets
+            .tenant(id, Arc::clone(&db))
+            .expect("the tenant store opens"),
+        db,
+    )
 }
 
 fn text(value: &str) -> sea_query::Value {
@@ -235,13 +240,16 @@ async fn the_binding_matrix_holds() {
     // 3. key_id repointed at another real key in the same store. The
     // foreign key means it must be a key that exists, so this is the
     // realistic version of the attack: two DEKs, the row moved between
-    // them.
+    // them. It is stamped with this store — an unstamped key row is
+    // nobody's, and `key` resolves a key id within its own store or not
+    // at all.
     let second = Dek::generate().expect("rng");
     let wrapped = kms.wrap(&second).await.expect("wrap");
     db.execute(&Statement::with_values(
         "INSERT INTO harness_secret_keys \
-         (key_id, kms_provider, kms_key_ref, wrapped_dek, cipher, state, created_at) \
-         VALUES ('dek_second', 'local-file', 'test-kek', ?, 'xchacha20poly1305', 'retiring', '2026-01-01T00:00:00Z')",
+         (key_id, kms_provider, kms_key_ref, wrapped_dek, cipher, state, created_at, store) \
+         VALUES ('dek_second', 'local-file', 'test-kek', ?, 'xchacha20poly1305', 'retiring', \
+                 '2026-01-01T00:00:00Z', 'tenant-a')",
         vec![sea_query::Value::Bytes(Some(Box::new(wrapped)))],
     ))
     .await

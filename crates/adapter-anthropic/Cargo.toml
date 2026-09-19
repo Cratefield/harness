@@ -1,0 +1,43 @@
+[package]
+name = "cratefield-adapter-anthropic"
+description = "TextModel port over the Anthropic Messages API for the Cratefield harness"
+readme = "README.md"
+keywords = ["cratefield", "anthropic", "claude", "llm", "adapter"]
+categories = ["api-bindings"]
+include = ["src/**/*", "README.md"]
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+cratefield-core = { workspace = true }
+async-trait = { workspace = true }
+http = { workspace = true }
+bytes = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+# Nothing here draws randomness, but `cratefield-core`'s `ulid` reaches
+# `getrandom` through `rand`, and picking `getrandom`'s `wasm_js` backend is
+# the final crate's job in this workspace, so `cargo build --target
+# wasm32-unknown-unknown -p cratefield-adapter-anthropic` stands on its own.
+getrandom = { workspace = true }
+
+[dev-dependencies]
+# Path-only (never `workspace = true` — see the rule comment at the root
+# `Cargo.toml`): `cargo publish` resolves dev-dependencies against
+# crates.io, and a path-only dev-dependency is stripped from the packaged
+# manifest.
+#
+# The default `harness` feature is needed because `FakeHttpClient` lives
+# behind it (`crates/testing/src/fakes.rs`); the push adapters get away
+# with `default-features = false, features = ["port-conformance"]`
+# because they only need `assert_wasm_safe_deps` and no HTTP fake.
+cratefield-testing = { path = "../testing" }
+pollster = { workspace = true }
+time = { workspace = true }

@@ -4,9 +4,10 @@ Issue #36, part of epic #23. Six tenants were set up from memory; the seventh
 should follow a written path that ends in a verifiable state, and the last one
 should be removed by a path that ends in a verifiable absence.
 
-Each tenant is one database (ADR 0008). The mechanical steps exist as harness calls; what is
-missing is the CLI wrapper and a runtime-agnostic home for them — §4 says
-exactly what and why.
+Each tenant is one database (ADR 0008). The mechanical steps exist as
+harness calls, now behind a runtime-neutral port (`TenantLifecycle`,
+#154); what is missing is the CLI wrapper — §4 says exactly what and
+why.
 
 ## 1. Onboarding
 
@@ -67,19 +68,31 @@ The issue asks for `harness tenant create <id>` performing the mechanical
 steps. Those steps are no longer missing — they are `Postgres::register_tenant`
 and `Postgres::set_tenant_status` in `cratefield-adapter-postgres`, against the
 `harness_tenants` registry on the control database, and reconciliation makes
-the `provisioning` -> `active` flip itself. Two things stand between those and
-the command the issue names:
+the `provisioning` -> `active` flip itself. Two things stood between those and
+the command the issue names; #154 has lifted the first:
 
-- **The write path is Postgres-only.** `harness_tenants` exists on the
-  Postgres control database and nowhere else; the wasm runtime resolves
-  through `ImplicitTenant` and has no registry to write to. A CLI subcommand
-  would either be a Postgres-only command wearing a runtime-neutral name, or
-  the place where a second answer to "what is a tenant" gets invented. The
-  lifecycle needs a port in core first — #154.
+- **The write path was Postgres-only.** `harness_tenants` existed on
+  the Postgres control database and nowhere else, so a CLI subcommand
+  would either have been a Postgres-only command wearing a
+  runtime-neutral name, or the place where a second answer to "what is
+  a tenant" gets invented. #154 resolves it without inventing one: the
+  write half of the registry is now `TenantLifecycle`, a port in core
+  (`crates/core/src/tenant_lifecycle.rs`) that
+  `cratefield-adapter-postgres` implements over the same two calls, so
+  a CLI built against core is runtime-neutral by construction. The
+  port consumes the transition rule where #361 put it,
+  `TenantStatus::admits`, and is deliberately not in the `Ports`
+  struct — modules must never write the registry. That shape is
+  recorded in
+  [ADR 0020](adr/0020-the-tenant-lifecycle-is-a-port-in-core.md). The
+  wasm runtime still resolves through `ImplicitTenant` and still has
+  no registry to write to; that remains true and is fine — a CLI
+  writes the control database, not a runtime.
 - **Nothing has run the path end to end.** No tenant database has been
   provisioned, so neither the calls nor this document has been executed
   against a real tenant. A command is worth writing after the procedure it
-  automates has been performed once, not before. See §5.
+  automates has been performed once, not before — and writing it is
+  #36's, not #154's. See §5.
 
 What *is* enforced, as of the `offboarding`/`archived` statuses landing:
 
@@ -101,3 +114,8 @@ been offboarded through it. The issue asks for both, timed. Neither is
 possible yet: no tenant database has been provisioned, which is also why
 `docs/ROLLBACK.md` §7 records its restore drill as unrun. The first execution
 of this runbook is the thing that tells you whether it is right.
+
+No venture has been promoted off D1 either. The promotion path — a
+venture outgrowing the 10 GB cap — is written down in
+[TENANT-PROMOTION.md](TENANT-PROMOTION.md) and shares this section's
+honesty.

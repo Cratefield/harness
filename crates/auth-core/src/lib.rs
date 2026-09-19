@@ -30,6 +30,9 @@ mod authorize;
 // could ask for it.
 pub use authorize::{LOGIN_METHODS_KEY, known_method_slugs};
 mod clients;
+/// Login CSRF (issue #439): the same-origin guard a state-changing route
+/// runs before it acts, and the 403 problem it answers with.
+pub mod csrf;
 pub mod federated;
 pub mod linking;
 mod secrets;

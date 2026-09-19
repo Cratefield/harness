@@ -38,7 +38,8 @@ fn main() {
     let id = StoreId::Tenant("bench".to_owned());
     let store = Secrets::new(kms)
         .with_audit(Arc::new(ChainAudit::new(id, Arc::clone(&db))))
-        .tenant("bench", Arc::clone(&db));
+        .tenant("bench", Arc::clone(&db))
+        .expect("the bench store opens");
     let actor = Actor::new("bench").expect("named");
 
     pollster::block_on(async {
