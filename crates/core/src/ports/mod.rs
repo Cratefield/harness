@@ -22,6 +22,7 @@ mod rate_limiter;
 mod realtime;
 pub(crate) mod signer;
 mod text_model;
+mod tracker;
 
 pub use auth::{Auth, AuthError, Caller, Subject, Unconfigured};
 pub use blob::{Blob, BlobError, BlobObject, MAX_BLOB_BYTES, ScopedBlob, check_blob_size};
@@ -53,6 +54,10 @@ pub use text_model::{
     Completion, DEFAULT_MAX_TOKENS, ModelTier, Prompt, Role, RoutingTextModel, TextModel,
     TextModelError, Turn,
 };
+pub use tracker::{
+    Credential, Destination, Filed, RoutingTracker, Severity, TicketDraft, TicketState,
+    TicketStatus, Tracker, TrackerError,
+};
 
 use crate::config::Config;
 use crate::module::Module;
@@ -73,6 +78,7 @@ pub enum Port {
     Blob,
     Push,
     Payments,
+    Tracker,
     Realtime,
     TextModel,
     HttpClient,
@@ -122,6 +128,7 @@ ports!(
     Blob,
     Push,
     Payments,
+    Tracker,
     Realtime,
     TextModel,
     HttpClient,
@@ -143,6 +150,7 @@ impl Port {
             Port::Blob => "Blob",
             Port::Push => "Push",
             Port::Payments => "Payments",
+            Port::Tracker => "Tracker",
             Port::Realtime => "Realtime",
             Port::TextModel => "TextModel",
             Port::HttpClient => "HttpClient",
@@ -173,6 +181,7 @@ pub struct Ports {
     pub blob: Option<Arc<dyn Blob>>,
     pub push: Option<Arc<dyn Push>>,
     pub payments: Option<Arc<dyn Payments>>,
+    pub tracker: Option<Arc<dyn Tracker>>,
     pub realtime: Option<Arc<dyn Realtime>>,
     /// A text completion by [`ModelTier`](crate::ModelTier), never by
     /// vendor (issue #429).
@@ -217,6 +226,7 @@ impl Ports {
             blob: None,
             push: None,
             payments: None,
+            tracker: None,
             realtime: None,
             text_model: None,
             http: None,
@@ -263,6 +273,7 @@ impl Ports {
             Port::Blob => self.blob.is_some(),
             Port::Push => self.push.is_some(),
             Port::Payments => self.payments.is_some(),
+            Port::Tracker => self.tracker.is_some(),
             Port::Realtime => self.realtime.is_some(),
             Port::TextModel => self.text_model.is_some(),
             Port::HttpClient => self.http.is_some(),
@@ -319,6 +330,9 @@ impl Ports {
         }
         if allows(&declared, Port::Payments) {
             view.payments.clone_from(&self.payments);
+        }
+        if allows(&declared, Port::Tracker) {
+            view.tracker.clone_from(&self.tracker);
         }
         if allows(&declared, Port::Realtime) {
             view.realtime.clone_from(&self.realtime);
