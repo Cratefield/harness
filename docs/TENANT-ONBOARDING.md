@@ -15,7 +15,7 @@ credential, and the harness cannot do them.
 
 | # | Step | Who | Verified by |
 | --: | :--- | :--- | :--- |
-| 1 | Provision the database: cluster, size, PITR on | **operator** | the provider console shows PITR enabled |
+| 1 | Provision the database: cluster, size, PITR on with retention **≥ 30 days** | **operator** | the provider console shows PITR enabled and its retention is ≥ 30 days |
 | 2 | Create an application role scoped to that database only | **operator** | the role cannot see another tenant's database |
 | 3 | Store the DSN as a global secret under the name that becomes `db_ref` | **operator** | `harness_secrets` holds it; the DSN is never pasted into the registry |
 | 4 | Insert the registry row with status `provisioning` | harness, no CLI (§4) | the row exists and `status = 'provisioning'` |
@@ -24,6 +24,9 @@ credential, and the harness cannot do them.
 | 7 | Flip status to `active` | harness (reconciliation does it) | `status = 'active'` |
 | 8 | Configure routing — host or key — and confirm the tenant answers | **operator** | `/__health` reports the tenant |
 | 9 | Record the tenant and its database in the SOC 2 asset inventory | **operator** | the row is in the inventory |
+
+Step 1's retention floor is not a local choice: `docs/ROLLBACK.md` §6
+sets it to match D1's Time Travel window so both paths share one runbook.
 
 Step 3 keeps the DSN out of the registry on purpose: the registry says *which*
 secret holds the connection string, never the string. A registry readable by

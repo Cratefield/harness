@@ -161,7 +161,7 @@ wrangler d1 migrations apply <database> --remote
 ```
 
 The window is **30 days** on D1. Past that there is no restore point and
-the answer is the nightly export, which is why §5 requires one.
+the answer is the nightly export, which is why §6 requires one.
 
 On Postgres the shape is identical with the provider's PITR in place of
 steps 1 and 3, and `fz migrations apply --dialect postgres --url "$DSN"`
