@@ -739,6 +739,7 @@ dependencies = [
  "cratefield-core",
  "cratefield-module-email-signup",
  "cratefield-module-waitlist",
+ "cratefield-testing",
  "futures-util",
  "sea-query",
  "sqlx",
@@ -768,6 +769,7 @@ version = "0.1.4"
 dependencies = [
  "async-trait",
  "cratefield-core",
+ "cratefield-testing",
  "pollster",
  "rusqlite",
  "sea-query",
@@ -780,6 +782,7 @@ name = "cratefield-adapter-sqlite-wasm"
 version = "0.1.1"
 dependencies = [
  "async-trait",
+ "base64 0.23.1",
  "cratefield-core",
  "getrandom 0.4.3",
  "js-sys",
@@ -1723,6 +1726,21 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.119",
+]
+
+[[package]]
+name = "d1-blob-canary"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "cratefield-core",
+ "cratefield-kms",
+ "cratefield-runtime-cloudflare",
+ "cratefield-secrets",
+ "factory0-auth-core",
+ "getrandom 0.4.3",
+ "serde_json",
+ "worker",
 ]
 
 [[package]]

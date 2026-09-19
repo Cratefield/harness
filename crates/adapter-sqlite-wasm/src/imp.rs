@@ -1,6 +1,7 @@
 //! The wasm32 implementation (see crate docs). Split out so the crate is
 //! cleanly empty on native targets.
 
+use crate::marshal::{json_to_sea, sea_to_json};
 use async_trait::async_trait;
 use cratefield_core::{Database, DbError, Row, Rows, SqlMigration, Statement};
 use js_sys::Promise;
@@ -192,43 +193,5 @@ impl Database for SqliteWasmDatabase {
             .await
             .map_err(|err| DbError::Batch(js_error(&err)))?;
         Ok(())
-    }
-}
-
-// The sea-query <-> JSON marshalling matches `cratefield-runtime-cloudflare`'s
-// D1 adapter so the portable subset round-trips identically (ADR 0004).
-
-fn sea_to_json(value: &SeaValue) -> Json {
-    match value {
-        SeaValue::Bool(Some(v)) => Json::Bool(*v),
-        SeaValue::TinyInt(Some(v)) => (*v).into(),
-        SeaValue::SmallInt(Some(v)) => (*v).into(),
-        SeaValue::Int(Some(v)) => (*v).into(),
-        SeaValue::BigInt(Some(v)) => (*v).into(),
-        SeaValue::TinyUnsigned(Some(v)) => (*v).into(),
-        SeaValue::SmallUnsigned(Some(v)) => (*v).into(),
-        SeaValue::Unsigned(Some(v)) => (*v).into(),
-        SeaValue::BigUnsigned(Some(v)) => (*v).into(),
-        SeaValue::Float(Some(v)) => f64::from(*v).into(),
-        SeaValue::Double(Some(v)) => (*v).into(),
-        SeaValue::String(Some(v)) => v.as_str().into(),
-        SeaValue::Char(Some(v)) => v.to_string().into(),
-        _ => Json::Null,
-    }
-}
-
-fn json_to_sea(value: &Json) -> SeaValue {
-    match value {
-        Json::Null => SeaValue::String(None),
-        Json::Bool(v) => SeaValue::Bool(Some(*v)),
-        Json::Number(n) => {
-            if let Some(i) = n.as_i64() {
-                SeaValue::BigInt(Some(i))
-            } else {
-                SeaValue::Double(Some(n.as_f64().unwrap_or_default()))
-            }
-        }
-        Json::String(s) => SeaValue::String(Some(Box::new(s.clone()))),
-        Json::Array(_) | Json::Object(_) => SeaValue::String(Some(Box::from(value.to_string()))),
     }
 }

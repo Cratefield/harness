@@ -10,9 +10,10 @@
 //! actual sqlite-wasm database (opened on an OPFS-backed VFS, in a dedicated
 //! Worker so its OO1 API is synchronous). The bridge exposes three async
 //! methods — `run(sql, params)`, `query(sql, params)`, `batch(items)` — and
-//! this crate marshals sea-query values to/from JSON exactly as the D1 adapter
-//! does, so the portable SQL subset behaves identically to D1 and rusqlite
-//! (ADR 0004). Reference bridge: `js/sqlite_bridge_demo.js`.
+//! this crate marshals sea-query values to/from JSON: the portable scalar
+//! subset behaves identically to D1 and rusqlite (ADR 0004), while BLOBs use a
+//! tagged base64 JSON encoding because this bridge's only crossing into JS is
+//! a JSON string (see [`marshal`]). Reference bridge: `js/sqlite_bridge_demo.js`.
 //!
 //! Because the port is a zero-sized unit type that only calls free JS imports
 //! (never storing a `JsValue`), it is trivially `Send + Sync`; JS futures are
@@ -22,6 +23,10 @@
 //! On non-wasm targets this crate is intentionally empty.
 
 #![cfg_attr(docsrs, feature(doc_cfg))]
+
+// Not wasm-gated: the marshalling is pure, so its tests run on the host
+// (see the module docs for why it is `pub`).
+pub mod marshal;
 
 #[cfg(target_arch = "wasm32")]
 mod imp;
