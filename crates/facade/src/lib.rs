@@ -53,6 +53,12 @@ pub use cratefield_adapter_stripe as stripe;
 #[cfg(feature = "webpush")]
 pub use cratefield_adapter_webpush as webpush;
 
+#[cfg(feature = "github-issues")]
+pub use cratefield_adapter_github_issues as github_issues;
+
+#[cfg(feature = "webhook-tracker")]
+pub use cratefield_adapter_webhook_tracker as webhook_tracker;
+
 #[cfg(feature = "ui")]
 pub use cratefield_ui as ui;
 

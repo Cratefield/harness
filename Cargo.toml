@@ -39,6 +39,12 @@ cratefield-runtime-cloudflare = { path = "crates/runtime-cloudflare", version = 
 cratefield-runtime-native = { path = "crates/runtime-native", version = "0.1.0" }
 cratefield-runtime-browser = { path = "crates/runtime-browser", version = "0.1.0" }
 cratefield-adapter-resend = { path = "crates/adapter-resend", version = "0.2" }
+# Issue tracker (issue #432): the `Tracker` port over the GitHub Issues REST
+# API — search-before-create so the at-least-once outbox files one ticket.
+cratefield-adapter-github-issues = { path = "crates/adapter-github-issues", version = "0.1.0" }
+# Its sibling: the `Tracker` port over a tenant-configured webhook, the body
+# HMAC-SHA256-signed so the receiver can trust it came from us.
+cratefield-adapter-webhook-tracker = { path = "crates/adapter-webhook-tracker", version = "0.1.0" }
 cratefield-adapter-turnstile = { path = "crates/adapter-turnstile", version = "0.1.0" }
 # The first `TextModel` adapter (issue #430): the Claude Messages API over
 # the `HttpClient` port, against the minimal `TextModel` trait module in core.
