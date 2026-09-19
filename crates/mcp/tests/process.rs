@@ -68,7 +68,16 @@ fn the_real_runner_spawns_the_stub_with_leading_args_in_the_configured_cwd() {
     );
     assert_eq!(
         envelope["cwd"],
-        dir.path().display().to_string(),
+        // Canonicalised on both sides: on macOS the temp dir is handed out
+        // as `/var/...`, which is a symlink to `/private/var/...`, and the
+        // child reports the resolved path. Comparing the unresolved string
+        // fails there and nowhere else, so the test only ever held on the
+        // Linux runner.
+        dir.path()
+            .canonicalize()
+            .expect("the temp dir exists")
+            .display()
+            .to_string(),
         "the child runs in the configured directory"
     );
 }
