@@ -80,6 +80,28 @@ venture, so the 10 GB cap is a venture-level threshold and promotion is
 a venture-level move — there is no per-tenant lifecycle event for
 leaving D1, and none will be.
 
+ADR 0021 extends ADR 0019's measurement discipline to money and answer
+quality (#457): a switch to a cheaper classifier is admitted by a
+committed `AgreementReport` naming exactly the pair of adapters the
+router holds, measured per question kind, on thresholds calibrated for
+the cheap adapter alone, with enough answers clearing those floors and
+the disagreement over just those answers under the cap — one adapter's
+`0.8` is not another's, and an average over kinds or over unsure
+answers is exactly the number that hides that. The accounting it
+needs lands in core as value types, not a port: `Price`, `Cost` and
+`PriceSheet` in integer pico-USD, where a missing price is unknown
+rather than free, and a `CostLedger` whose `record` cannot fail the
+decision it records — the instrument that judges the vendors belongs
+beside the types it prices, while #456 owns the classifier port
+itself. `RoutingPolicy::default()` is `Off`, a pin is absolute and
+naming an adapter the router does not hold answers
+`ClassifierError::NotConfigured` rather than rerouting, and one shared
+threshold, cheap-by-default with an opt-out, and floating-point money
+were rejected. The gate is recorded only: nothing routes cheap
+anywhere until a venture runs the measurement, and no number is
+recorded here, because ADRs are not edited after acceptance and the
+numbers are a venture's to measure.
+
 [0102](0102-crypto-crate.md) chose the crypto crate: RustCrypto's
 `chacha20poly1305`.
 

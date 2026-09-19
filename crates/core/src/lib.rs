@@ -13,8 +13,12 @@
 #![forbid(unsafe_code)]
 
 mod admin;
+mod classifier;
+mod classifier_agreement;
+mod classifier_routing;
 mod config;
 mod cooldown;
+mod cost;
 mod csv;
 mod email;
 mod events;
@@ -51,8 +55,24 @@ mod venture;
 pub use axum;
 
 pub use admin::{bearer_token, constant_time_eq, require_admin};
+pub use classifier::{
+    AdapterId, Classification, Classifier, ClassifierError, Question, QuestionKind, Score,
+    TextModelClassifier,
+};
+pub use classifier_agreement::{
+    AgreementAt, AgreementLog, AgreementReport, CalibrationPoint, CorpusQuestion, Disagreement,
+    KindAgreement, MeasurementOptions, Observation, measure_agreement,
+};
+pub use classifier_routing::{
+    Plan, RouteReason, Routed, RoutingClassifier, RoutingMode, RoutingPolicy, ShadowClassifier,
+    Thresholds,
+};
 pub use config::{Config, ConfigError, EmptyConfig, HarnessConfig, MapConfig, ModuleConfig};
 pub use cooldown::SendCooldown;
+pub use cost::{
+    CallOutcome, CallRecord, CallRole, Cost, CostLedger, InMemoryLedger, LedgerTotals, Price,
+    PriceSheet,
+};
 pub use csv::{FORMULA_PREFIXES, MAX_EXPORT_ROWS, escape as csv_escape, row as csv_row};
 pub use email::{
     MAX_EMAIL_BYTES, MAX_LOCAL_BYTES, invalid_email_problem, is_valid,

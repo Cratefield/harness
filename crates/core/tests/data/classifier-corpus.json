@@ -1,0 +1,554 @@
+{
+  "questions": [
+    {
+      "kind": "waitlist-signup-quality",
+      "text": "Waitlist join for product `kontinuum`. answers: {\"role\": \"studio manager\", \"team_size\": \"5\", \"notes\": \"We currently juggle three spreadsheets and a shared inbox to schedule our coaches. We would move everything over the week you open.\"}",
+      "labels": [
+        "prospect",
+        "junk"
+      ],
+      "gold": "prospect"
+    },
+    {
+      "kind": "waitlist-signup-quality",
+      "text": "Waitlist join for product `undercover-rockstars`. answers: {\"notes\": \"Solo developer building a small booking tool for a physiotherapy practice; I want one queue both of us can see.\"}",
+      "labels": [
+        "prospect",
+        "junk"
+      ],
+      "gold": "prospect"
+    },
+    {
+      "kind": "waitlist-signup-quality",
+      "text": "Waitlist join for product `kontinuum`. answers: {\"company\": \"harbour-line-coaching\", \"what_for\": \"Saturday group-ride scheduling and reminder mails\", \"team_size\": \"12\"}",
+      "labels": [
+        "prospect",
+        "junk"
+      ],
+      "gold": "prospect"
+    },
+    {
+      "kind": "waitlist-signup-quality",
+      "text": "Waitlist join for product `kontinuum`. answers: {\"url\": \"https://seo-magic.example.com\", \"notes\": \"We build 5000 backlinks per month for our clients. Reply to this address for our full price list.\"}",
+      "labels": [
+        "prospect",
+        "junk"
+      ],
+      "gold": "junk"
+    },
+    {
+      "kind": "waitlist-signup-quality",
+      "text": "Waitlist join for product `undercover-rockstars`. answers: {\"notes\": \"FREE SIGNALS GROUP - join our channel for daily crypto calls, guaranteed 100x, zero risk, link in bio\"}",
+      "labels": [
+        "prospect",
+        "junk"
+      ],
+      "gold": "junk"
+    },
+    {
+      "kind": "waitlist-signup-quality",
+      "text": "Waitlist join for product `kontinuum`. answers: {\"a\": \"1\", \"b\": \"2\", \"notes\": \"asdf jkl qwer test test\"}",
+      "labels": [
+        "prospect",
+        "junk"
+      ],
+      "gold": "junk"
+    },
+    {
+      "kind": "waitlist-signup-quality",
+      "text": "Waitlist join for product `kontinuum`. answers: {\"notes\": \"just me, very keen, happy to pay the day it opens\"}",
+      "labels": [
+        "prospect",
+        "junk"
+      ],
+      "gold": "prospect"
+    },
+    {
+      "kind": "waitlist-signup-quality",
+      "text": "Waitlist join for product `undercover-rockstars`. answers: {\"company\": \"pipeline-boosters\", \"notes\": \"Impressive launch! We help SaaS teams book 10x more demos. Grab a slot at pipeline-boosters.example.com and we will walk your team through it.\"}",
+      "labels": [
+        "prospect",
+        "junk"
+      ],
+      "gold": "junk"
+    },
+    {
+      "kind": "waitlist-signup-quality",
+      "text": "Waitlist join for product `kontinuum`. answers: {\"notes\": \"I am building a competing scheduling tool and want to study your onboarding flow before our own launch next month.\"}",
+      "labels": [
+        "prospect",
+        "junk"
+      ],
+      "gold": "junk"
+    },
+    {
+      "kind": "waitlist-signup-quality",
+      "text": "Waitlist join for product `undercover-rockstars`. answers: {\"notes\": \"I never signed up for this - somebody entered my address without asking. Remove it and do not mail me again.\"}",
+      "labels": [
+        "prospect",
+        "junk"
+      ],
+      "gold": "junk"
+    },
+    {
+      "kind": "waitlist-signup-quality",
+      "text": "Waitlist join for product `kontinuum`. answers: {\"notes\": \"We run an agency that sets up booking sites for coaching clients; put us down for the thirty-seat plan the day you open.\"}",
+      "labels": [
+        "prospect",
+        "junk"
+      ],
+      "gold": "prospect"
+    },
+    {
+      "kind": "waitlist-signup-quality",
+      "text": "Waitlist join for product `undercover-rockstars`. answers: {\"notes\": \"I am writing a roundup of launch tools for a newsletter; could I get a demo account to take screenshots?\"}",
+      "labels": [
+        "prospect",
+        "junk"
+      ],
+      "gold": "junk"
+    },
+    {
+      "kind": "inbound-message-language",
+      "text": "Selamat siang, saya ingin menanyakan apakah pesanan saya sudah dikirim. Terima kasih atas bantuannya.",
+      "labels": [
+        "en",
+        "id",
+        "de",
+        "ar"
+      ],
+      "gold": "id"
+    },
+    {
+      "kind": "inbound-message-language",
+      "text": "Hi, could you confirm whether my booking for Thursday evening actually went through? I never received the confirmation email.",
+      "labels": [
+        "en",
+        "id",
+        "de",
+        "ar"
+      ],
+      "gold": "en"
+    },
+    {
+      "kind": "inbound-message-language",
+      "text": "Guten Tag, ich habe eine Frage zu meiner Rechnung vom letzten Monat. Können Sie mir bitte weiterhelfen?",
+      "labels": [
+        "en",
+        "id",
+        "de",
+        "ar"
+      ],
+      "gold": "de"
+    },
+    {
+      "kind": "inbound-message-language",
+      "text": "مرحبا، هل يمكنكم تأكيد موعد الاستلام يوم السبت؟ شكرا جزيلا لكم",
+      "labels": [
+        "en",
+        "id",
+        "de",
+        "ar"
+      ],
+      "gold": "ar"
+    },
+    {
+      "kind": "inbound-message-language",
+      "text": "Halo kak, boleh tanya? My confirmation link has expired - apakah bisa dikirim ulang ke email saya? Terima kasih banyak.",
+      "labels": [
+        "en",
+        "id",
+        "de",
+        "ar"
+      ],
+      "gold": "id"
+    },
+    {
+      "kind": "inbound-message-language",
+      "text": "I have since yesterday a problem with the login. The page opens, but when I enter my address nothing happens at all. Can you check what is wrong there?",
+      "labels": [
+        "en",
+        "id",
+        "de",
+        "ar"
+      ],
+      "gold": "en"
+    },
+    {
+      "kind": "inbound-message-language",
+      "text": "Sorry, ich bin erst ab Donnerstag wieder am Rechner - can we move the onboarding call to next week? Schicken Sie mir einfach zwei Terminvorschläge.",
+      "labels": [
+        "en",
+        "id",
+        "de",
+        "ar"
+      ],
+      "gold": "de"
+    },
+    {
+      "kind": "inbound-message-language",
+      "text": "Thank you for signing up!\n\n---------- Forwarded message ----------\nFrom: notifications@example.com\nSubject: Confirm your spot\n\nHalo, saya sudah dua kali klik link konfirmasi tapi halamannya selalu kadaluarsa. Mohon dibantu.",
+      "labels": [
+        "en",
+        "id",
+        "de",
+        "ar"
+      ],
+      "gold": "id"
+    },
+    {
+      "kind": "inbound-message-language",
+      "text": "السلام عليكم، حاولت الدخول إلى حسابي عبر https://api.example.org/login لكن الصفحة لا تفتح. فهل من مساعدة؟",
+      "labels": [
+        "en",
+        "id",
+        "de",
+        "ar"
+      ],
+      "gold": "ar"
+    },
+    {
+      "kind": "inbound-message-language",
+      "text": "mau tanya, besok buka jam berapa ya? tolong dibalas ya",
+      "labels": [
+        "en",
+        "id",
+        "de",
+        "ar"
+      ],
+      "gold": "id"
+    },
+    {
+      "kind": "inbound-message-language",
+      "text": "Ich habe leider immer noch kein Bestätigungsmail bekommen. Kann es sein, dass der Link abgelaufen ist? Thanks im Voraus für die Hilfe.",
+      "labels": [
+        "en",
+        "id",
+        "de",
+        "ar"
+      ],
+      "gold": "de"
+    },
+    {
+      "kind": "inbound-message-language",
+      "text": "Hello, is it possible to change the email address on my account? Nothing sensitive, I just renamed the domain we use.",
+      "labels": [
+        "en",
+        "id",
+        "de",
+        "ar"
+      ],
+      "gold": "en"
+    },
+    {
+      "kind": "privacy-request-kind",
+      "text": "Under GDPR Article 15 I am requesting a copy of all personal data you hold about me, in a machine-readable format.",
+      "labels": [
+        "access",
+        "erasure",
+        "other"
+      ],
+      "gold": "access"
+    },
+    {
+      "kind": "privacy-request-kind",
+      "text": "Please erase everything you hold about me, including my waitlist entries and my subscription history. I understand this cannot be undone.",
+      "labels": [
+        "access",
+        "erasure",
+        "other"
+      ],
+      "gold": "erasure"
+    },
+    {
+      "kind": "privacy-request-kind",
+      "text": "My card was charged twice on the same day. Can you refund one of the two charges?",
+      "labels": [
+        "access",
+        "erasure",
+        "other"
+      ],
+      "gold": "other"
+    },
+    {
+      "kind": "privacy-request-kind",
+      "text": "How do I change the email address on my account? I no longer use the old one.",
+      "labels": [
+        "access",
+        "erasure",
+        "other"
+      ],
+      "gold": "other"
+    },
+    {
+      "kind": "privacy-request-kind",
+      "text": "Please remove me from your mailing list.",
+      "labels": [
+        "access",
+        "erasure",
+        "other"
+      ],
+      "gold": "other"
+    },
+    {
+      "kind": "privacy-request-kind",
+      "text": "Before I decide anything, can you confirm whether you still hold the address I joined the waitlist with? A yes or no is enough.",
+      "labels": [
+        "access",
+        "erasure",
+        "other"
+      ],
+      "gold": "access"
+    },
+    {
+      "kind": "privacy-request-kind",
+      "text": "I am the executor of my father's estate; he held an account here. We need his data removed and can supply the documentation.",
+      "labels": [
+        "access",
+        "erasure",
+        "other"
+      ],
+      "gold": "erasure"
+    },
+    {
+      "kind": "privacy-request-kind",
+      "text": "I downloaded my export and it contains rows about another customer. Your subject matching looks broken - who do I report this to?",
+      "labels": [
+        "access",
+        "erasure",
+        "other"
+      ],
+      "gold": "other"
+    },
+    {
+      "kind": "privacy-request-kind",
+      "text": "delete all my data",
+      "labels": [
+        "access",
+        "erasure",
+        "other"
+      ],
+      "gold": "erasure"
+    },
+    {
+      "kind": "privacy-request-kind",
+      "text": "I would like to exercise my right to data portability - please send my data to porter@example.org.",
+      "labels": [
+        "access",
+        "erasure",
+        "other"
+      ],
+      "gold": "access"
+    },
+    {
+      "kind": "privacy-request-kind",
+      "text": "Could you send me everything you hold on me? I want to check what my former business partner signed us up with.",
+      "labels": [
+        "access",
+        "erasure",
+        "other"
+      ],
+      "gold": "access"
+    },
+    {
+      "kind": "privacy-request-kind",
+      "text": "I withdraw my consent as of today. Stop processing my data and take everything about me offline.",
+      "labels": [
+        "access",
+        "erasure",
+        "other"
+      ],
+      "gold": "erasure"
+    },
+    {
+      "kind": "cms-draft-review",
+      "text": "Draft for collection `pages`, slug `pricing`, title `Pricing`. Body: Our plans start at $X per month. TODO: confirm the numbers with finance before this goes out.",
+      "labels": [
+        "publish-ready",
+        "needs-review"
+      ],
+      "gold": "needs-review"
+    },
+    {
+      "kind": "cms-draft-review",
+      "text": "Draft for collection `posts`, slug `team`, title `About the team`. Body: Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.",
+      "labels": [
+        "publish-ready",
+        "needs-review"
+      ],
+      "gold": "needs-review"
+    },
+    {
+      "kind": "cms-draft-review",
+      "text": "Draft for collection `posts`, slug `may-changelog`, title `What shipped in May`. Body: This month we shipped referral codes on share links, a CSV export for confirmed entries, and a fix so BLOB columns no longer bind as NULL on D1. Nothing else changed.",
+      "labels": [
+        "publish-ready",
+        "needs-review"
+      ],
+      "gold": "publish-ready"
+    },
+    {
+      "kind": "cms-draft-review",
+      "text": "Draft for collection `pages`, slug `confirming`, title `How confirming works`. Body: When you join a waitlist we mail you a confirmation link. The link stays valid for seven days; if it expires, joining again sends a fresh one. We never send more than one confirmation mail to the same address in an hour.",
+      "labels": [
+        "publish-ready",
+        "needs-review"
+      ],
+      "gold": "publish-ready"
+    },
+    {
+      "kind": "cms-draft-review",
+      "text": "Draft for collection `pages`, slug `why-us`, title `Why teams pick us`. Body: We are the fastest scheduling tool on the market, loved by thousands of teams, with a 99.9% satisfaction rating and the best support in the industry.",
+      "labels": [
+        "publish-ready",
+        "needs-review"
+      ],
+      "gold": "needs-review"
+    },
+    {
+      "kind": "cms-draft-review",
+      "text": "Draft for collection `posts`, slug `customer-story`, title `A customer story`. Body: One customer told us this is the best tool their studio ever bought. Quote: m.rivera@example.org wrote to say we saved her ten hours a week.",
+      "labels": [
+        "publish-ready",
+        "needs-review"
+      ],
+      "gold": "needs-review"
+    },
+    {
+      "kind": "cms-draft-review",
+      "text": "Draft for collection `pages`, slug `getting-started`, title `Getting started`. Body: Create an account, pick your products, and paste your first list. A screenshot of the dashboard is attached below: https://staging.example.org/assets/onboarding.png",
+      "labels": [
+        "publish-ready",
+        "needs-review"
+      ],
+      "gold": "needs-review"
+    },
+    {
+      "kind": "cms-draft-review",
+      "text": "Draft for collection `posts`, slug `early-bird`, title `Early-bird offer`. Body: Early-bird pricing ends 31 March 2025 - book before that date and save 40% on the first year.",
+      "labels": [
+        "publish-ready",
+        "needs-review"
+      ],
+      "gold": "needs-review"
+    },
+    {
+      "kind": "cms-draft-review",
+      "text": "Draft for collection `pages`, slug `status`, title `Status and maintenance`. Body: Planned maintenance is announced on our status page at status.example.org. We post at least an hour before any window, and you can subscribe there for updates.",
+      "labels": [
+        "publish-ready",
+        "needs-review"
+      ],
+      "gold": "publish-ready"
+    },
+    {
+      "kind": "cms-draft-review",
+      "text": "Draft for collection `pages`, slug `importing`, title `Importing from a spreadsheet`. Body: You can import addresses from any CSV file. The first row must be column headers. We match rows on the email column.",
+      "labels": [
+        "publish-ready",
+        "needs-review"
+      ],
+      "gold": "publish-ready"
+    },
+    {
+      "kind": "release-note-kind",
+      "text": "### Added\n- referral codes on the status page share link\n- admin CSV export of confirmed entries",
+      "labels": [
+        "feature",
+        "fix",
+        "breaking"
+      ],
+      "gold": "feature"
+    },
+    {
+      "kind": "release-note-kind",
+      "text": "### Fixed\n- BLOB columns no longer bind as NULL on D1 and sqlite-wasm\n- a genuine retry is no longer locked out for an hour when the first confirmation mail failed",
+      "labels": [
+        "feature",
+        "fix",
+        "breaking"
+      ],
+      "gold": "fix"
+    },
+    {
+      "kind": "release-note-kind",
+      "text": "### Changed\n- confirm tokens now carry a generation; links minted before this release stop working\n### Removed\n- the unsigned status redirect",
+      "labels": [
+        "feature",
+        "fix",
+        "breaking"
+      ],
+      "gold": "breaking"
+    },
+    {
+      "kind": "release-note-kind",
+      "text": "### Changed\n- the status response renames `referralCode` to `referral_code`. Update any client that still reads the old field.",
+      "labels": [
+        "feature",
+        "fix",
+        "breaking"
+      ],
+      "gold": "breaking"
+    },
+    {
+      "kind": "release-note-kind",
+      "text": "### Added\n- joins may now carry free-form answers, validated against a schema the venture configures\n### Changed\n- a join whose answers fail validation is refused with 400 instead of being stored",
+      "labels": [
+        "feature",
+        "fix",
+        "breaking"
+      ],
+      "gold": "breaking"
+    },
+    {
+      "kind": "release-note-kind",
+      "text": "### Fixed\n- a missing captcha check on the join route, reported by a researcher\n### Security\n- rate limits now key on the address as well as the IP",
+      "labels": [
+        "feature",
+        "fix",
+        "breaking"
+      ],
+      "gold": "fix"
+    },
+    {
+      "kind": "release-note-kind",
+      "text": "### Reverted\n- the bulk-import endpoint introduced in 2.3.0, which corrupted referral credits under concurrent confirms\n- callers keep the per-row import path from 2.2.x",
+      "labels": [
+        "feature",
+        "fix",
+        "breaking"
+      ],
+      "gold": "fix"
+    },
+    {
+      "kind": "release-note-kind",
+      "text": "### Added\n- a typed TypeScript client generated from the /__surface contract",
+      "labels": [
+        "feature",
+        "fix",
+        "breaking"
+      ],
+      "gold": "feature"
+    },
+    {
+      "kind": "release-note-kind",
+      "text": "### Fixed\n- an oversize request body is now refused before it is read into memory",
+      "labels": [
+        "feature",
+        "fix",
+        "breaking"
+      ],
+      "gold": "fix"
+    },
+    {
+      "kind": "release-note-kind",
+      "text": "### Changed\n- position allocation moved inside the confirm batch\n- no change in behaviour or response shape for callers",
+      "labels": [
+        "feature",
+        "fix",
+        "breaking"
+      ],
+      "gold": "fix"
+    }
+  ]
+}
