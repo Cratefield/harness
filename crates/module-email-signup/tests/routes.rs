@@ -118,6 +118,7 @@ async fn new_signup_sends_one_mail_with_two_valid_links() {
         let response = signup(&kit, "nick@example.com").await;
         assert_eq!(response.status, StatusCode::ACCEPTED);
         assert_eq!(response.body().as_ref(), b"{\"ok\":true}");
+        kit.defer.drain().await;
 
         let sent = kit.mailer.sent();
         assert_eq!(sent.len(), 1, "exactly one mail");
@@ -167,6 +168,7 @@ async fn second_post_within_an_hour_sends_nothing() {
     for kit in kits() {
         signup(&kit, "nick@example.com").await;
         signup(&kit, "nick@example.com").await;
+        kit.defer.drain().await;
         assert_eq!(kit.mailer.sent().len(), 1);
         assert_eq!(
             column(&kit, "nick@example.com", "status").as_deref(),
@@ -188,6 +190,7 @@ async fn stale_pending_row_is_remailed_and_refreshed() {
         );
         let response = signup(&kit, "stale@example.com").await;
         assert_eq!(response.status, StatusCode::ACCEPTED);
+        kit.defer.drain().await;
         assert_eq!(kit.mailer.sent().len(), 1, "older than an hour: re-mailed");
         let updated = column(&kit, "stale@example.com", "updated_at").expect("updated_at");
         assert!(updated > iso_ago(60), "updated_at refreshed: {updated}");
@@ -206,6 +209,7 @@ async fn unsubscribed_row_older_than_an_hour_rejoins_as_pending() {
             "launch",
         );
         signup(&kit, "back@example.com").await;
+        kit.defer.drain().await;
         assert_eq!(kit.mailer.sent().len(), 1);
         assert_eq!(
             column(&kit, "back@example.com", "status").as_deref(),
@@ -263,6 +267,7 @@ async fn four_post_responses_are_byte_identical() {
             canonical.iter().all(|body| *body == canonical[0]),
             "byte-identical bodies: {canonical:?}"
         );
+        kit.defer.drain().await;
         assert_eq!(
             kit.mailer.sent().len(),
             2,
@@ -275,6 +280,7 @@ async fn four_post_responses_are_byte_identical() {
 async fn confirm_flips_once_and_replay_is_a_noop_redirect() {
     for kit in kits() {
         signup(&kit, "nick@example.com").await;
+        kit.defer.drain().await;
         let confirm_path = path_of(&links(&kit)[0]);
 
         let first = request(&kit.router, Method::GET, &confirm_path, None).await;
@@ -324,6 +330,7 @@ async fn expired_token_redirects_to_the_expired_page() {
 async fn unsubscribe_from_confirmed_and_from_pending() {
     for kit in kits() {
         signup(&kit, "nick@example.com").await;
+        kit.defer.drain().await;
         let confirm_path = path_of(&links(&kit)[0]);
         request(&kit.router, Method::GET, &confirm_path, None).await;
         assert_eq!(
@@ -348,6 +355,7 @@ async fn unsubscribe_from_confirmed_and_from_pending() {
 
         // pending rows unsubscribe the same way.
         signup(&kit, "soon@example.com").await;
+        kit.defer.drain().await;
         let pending_unsub = path_of(&links(&kit)[1]);
         let response = request(&kit.router, Method::POST, &pending_unsub, None).await;
         assert_eq!(response.status, StatusCode::SEE_OTHER);
@@ -368,6 +376,7 @@ async fn a_link_scanner_fetching_the_unsubscribe_link_does_not_unsubscribe() {
     // from a genuine opt-out.
     for kit in kits() {
         signup(&kit, "nick@example.com").await;
+        kit.defer.drain().await;
         request(&kit.router, Method::GET, &path_of(&links(&kit)[0]), None).await;
         let unsub_path = path_of(&links(&kit)[1]);
         let token = unsub_path
@@ -513,6 +522,7 @@ async fn legacy_signed_unsubscribe_links_still_unsubscribe() {
 async fn unsubscribe_post_returns_200_and_invalid_token_is_400() {
     for kit in kits() {
         signup(&kit, "nick@example.com").await;
+        kit.defer.drain().await;
         let unsub_token = links(&kit)[1]
             .split("token=")
             .nth(1)
@@ -868,19 +878,102 @@ async fn rate_limit_denial_is_429_with_retry_after() {
     }
 }
 
+/// The account-existence oracle, closed: a confirmed address, an unknown
+/// address and a mailer that cannot send all answer the same bytes — and
+/// no branch waits for a mail round trip, because the send only runs when
+/// the test drains the `Defer` queue.
 #[pollster::test]
-async fn mailer_not_configured_is_503_and_writes_nothing() {
+async fn signup_answers_identically_whatever_the_mailer_does() {
     for kit in kits() {
+        // A known, confirmed address: the branch that used to answer early.
+        signup(&kit, "known@example.com").await;
+        kit.defer.drain().await;
+        request(&kit.router, Method::GET, &path_of(&links(&kit)[0]), None).await;
+        let confirmed = signup(&kit, "known@example.com").await;
+
+        // Unknown addresses, one per mailer health. Each failing send is
+        // drained while its mode still holds, so the deferred future sees
+        // the mailer it was scheduled with.
+        kit.mailer.set_mode(MailerMode::Fail);
+        let failing = signup(&kit, "failing@example.com").await;
+        kit.defer.drain().await;
         kit.mailer.set_mode(MailerMode::NotConfigured);
-        let response = signup(&kit, "nick@example.com").await;
-        assert_eq!(response.status, StatusCode::SERVICE_UNAVAILABLE);
+        let unconfigured = signup(&kit, "unconfigured@example.com").await;
+        kit.defer.drain().await;
+        kit.mailer.set_mode(MailerMode::SendOk);
+        let healthy = signup(&kit, "healthy@example.com").await;
+
+        for (name, response) in [
+            ("confirmed", &confirmed),
+            ("failing mailer", &failing),
+            ("unconfigured mailer", &unconfigured),
+            ("healthy mailer", &healthy),
+        ] {
+            assert_eq!(response.status, StatusCode::ACCEPTED, "{name}");
+            assert_eq!(response.body().as_ref(), b"{\"ok\":true}", "{name}");
+        }
+
+        // Nothing was awaited on the request path: only the known
+        // address's confirm mail, drained before its confirm, exists.
         assert_eq!(
-            response.json()["type"],
-            "https://factory0.ventures/problems/mail-not-configured"
+            kit.mailer.sent().len(),
+            1,
+            "the signup sends are not awaited"
         );
+        kit.defer.drain().await;
+        assert_eq!(
+            kit.mailer.sent().len(),
+            2,
+            "the healthy signup mail plus the known address's confirm mail; \
+             the failed and unconfigured sends recorded nothing"
+        );
+    }
+}
+
+/// A deferred send that fails must not consume the address's re-mail
+/// window — what the old mail-before-write ordering guaranteed: the
+/// refreshed row gets its `updated_at` back, a row the failed signup
+/// created goes away, and the retry actually mails.
+#[pollster::test]
+async fn a_deferred_send_failure_leaves_the_retry_able_to_mail() {
+    for kit in kits() {
+        // An existing row refreshed by a failed send: the window reopens.
+        seed(
+            &kit,
+            "01HC00000000000000000000011",
+            "stale@example.com",
+            "pending",
+            &iso_ago(2 * 3600),
+            "launch",
+        );
+        kit.mailer.set_mode(MailerMode::Fail);
+        let first = signup(&kit, "stale@example.com").await;
+        assert_eq!(first.status, StatusCode::ACCEPTED);
+        assert_eq!(first.body().as_ref(), b"{\"ok\":true}");
+        kit.defer.drain().await;
+        assert!(kit.mailer.sent().is_empty(), "no mail was recorded");
         assert!(
-            column(&kit, "nick@example.com", "id").is_none(),
-            "no row written"
+            column(&kit, "stale@example.com", "updated_at").as_deref()
+                <= Some(iso_ago(3600).as_str()),
+            "the re-mail window was handed back"
+        );
+
+        // A row the failed signup created: gone again.
+        signup(&kit, "fresh@example.com").await;
+        kit.defer.drain().await;
+        assert!(
+            column(&kit, "fresh@example.com", "id").is_none(),
+            "a row with no mail behind it does not survive"
+        );
+
+        kit.mailer.set_mode(MailerMode::SendOk);
+        let retry = signup(&kit, "stale@example.com").await;
+        assert_eq!(retry.status, StatusCode::ACCEPTED);
+        kit.defer.drain().await;
+        assert_eq!(
+            kit.mailer.sent().len(),
+            1,
+            "the retry mails: neither failure trapped it behind the throttle"
         );
     }
 }
@@ -917,6 +1010,7 @@ async fn welcome_mail_is_sent_on_confirm_when_enabled() {
         TestHarness::all_dialects(|| vec![Box::new(EmailSignup::new().welcome_on_confirm(true))])
     {
         signup(&kit, "nick@example.com").await;
+        kit.defer.drain().await;
         assert_eq!(kit.mailer.sent().len(), 1);
         let confirm_path = path_of(&links(&kit)[0]);
         request(&kit.router, Method::GET, &confirm_path, None).await;
@@ -1028,6 +1122,7 @@ async fn waitlist_confirmed_event_subscribes_the_address() {
 async fn redirect_params_are_ignored() {
     for kit in kits() {
         signup(&kit, "nick@example.com").await;
+        kit.defer.drain().await;
         let confirm_path = path_of(&links(&kit)[0]);
         let plain = request(&kit.router, Method::GET, &confirm_path, None).await;
         for param in ["redirect", "return", "next"] {
@@ -1056,6 +1151,7 @@ async fn redirect_params_are_ignored() {
 async fn old_generation_tokens_die_after_unsubscribe_and_resubscribe() {
     for kit in kits() {
         signup(&kit, "nick@example.com").await;
+        kit.defer.drain().await;
         let id = column(&kit, "nick@example.com", "id").expect("id");
         assert_eq!(column_i64(&kit, "nick@example.com", "generation"), Some(1));
         let first = links(&kit);
@@ -1092,6 +1188,7 @@ async fn old_generation_tokens_die_after_unsubscribe_and_resubscribe() {
         // Resubscribe past the hourly throttle: a new generation.
         age_row(&kit, "nick@example.com", 2 * 3600);
         signup(&kit, "nick@example.com").await;
+        kit.defer.drain().await;
         assert_eq!(
             column(&kit, "nick@example.com", "status").as_deref(),
             Some("pending")
@@ -1138,10 +1235,12 @@ async fn old_generation_tokens_die_after_unsubscribe_and_resubscribe() {
 async fn pending_remail_keeps_the_earlier_link_valid() {
     for kit in kits() {
         signup(&kit, "nick@example.com").await;
+        kit.defer.drain().await;
         let confirm1 = path_of(&links(&kit)[0]);
 
         age_row(&kit, "nick@example.com", 2 * 3600);
         signup(&kit, "nick@example.com").await;
+        kit.defer.drain().await;
         assert_eq!(kit.mailer.sent().len(), 2, "stale pending row re-mailed");
         assert_eq!(
             column_i64(&kit, "nick@example.com", "generation"),
@@ -1168,6 +1267,7 @@ async fn pending_remail_keeps_the_earlier_link_valid() {
 async fn signup_never_resets_a_confirmed_row() {
     for kit in kits() {
         signup(&kit, "nick@example.com").await;
+        kit.defer.drain().await;
         let confirm1 = path_of(&links(&kit)[0]);
         request(&kit.router, Method::GET, &confirm1, None).await;
         let confirmed_at = column(&kit, "nick@example.com", "confirmed_at").expect("confirmed_at");
@@ -1199,6 +1299,7 @@ async fn signup_never_resets_a_confirmed_row() {
 async fn deleted_row_tokens_do_not_confirm_a_recreated_row() {
     for kit in admin_kits() {
         signup(&kit, "gone@example.com").await;
+        kit.defer.drain().await;
         let old_id = column(&kit, "gone@example.com", "id").expect("id");
         let confirm1 = path_of(&links(&kit)[0]);
 
@@ -1218,6 +1319,7 @@ async fn deleted_row_tokens_do_not_confirm_a_recreated_row() {
         assert_eq!(deleted.status(), StatusCode::OK);
 
         signup(&kit, "gone@example.com").await;
+        kit.defer.drain().await;
         let new_id = column(&kit, "gone@example.com", "id").expect("id");
         assert_ne!(old_id, new_id, "recreation is a new immutable record");
         let confirm2 = path_of(&links(&kit)[0]);
@@ -1246,6 +1348,7 @@ async fn deleted_row_tokens_do_not_confirm_a_recreated_row() {
 async fn concurrent_confirms_flip_the_row_once() {
     for kit in kits() {
         signup(&kit, "nick@example.com").await;
+        kit.defer.drain().await;
         let confirm_path = path_of(&links(&kit)[0]);
 
         let mut handles = Vec::new();

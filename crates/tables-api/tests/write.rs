@@ -14,7 +14,8 @@ use cratefield_core::{
 use cratefield_manifest::Access;
 use cratefield_tables::{Schema, TableDef};
 use cratefield_tables_api::{
-    Reach, TableApi, Tables, create, may_write, one, remove, replace, settle_subject,
+    ALREADY_EXISTS, NOT_A_ROW, Reach, TableApi, Tables, create, may_write, one, remove, replace,
+    settle_subject,
 };
 use cratefield_testing::{AuthMode, FakeAuth};
 use http::HeaderMap;
@@ -227,8 +228,93 @@ fn a_key_that_is_taken_is_a_conflict_and_not_a_500() {
         "note",
         json!({ "id": "n1", "body": "again" }),
     ))
-    .expect_err("n1 exists");
+    .expect_err("n1 exists, and it is hers");
     assert_eq!(refusal.status.as_u16(), 409, "{}", refusal.slug);
+    // Her own row, so the conflict is hers to fix and says its name.
+    assert_eq!(refusal.slug, ALREADY_EXISTS.slug);
+}
+
+#[test]
+fn a_key_taken_by_somebody_elses_row_is_an_ordinary_rejected_write() {
+    // The existence oracle: a 409 for a collision with grace's row would
+    // confirm a row ada was never in a position to learn exists — the
+    // same fact reads refuse to confirm, answering 404. So the conflict
+    // is re-selected with the owner predicate, nothing of ada's matches,
+    // and the answer is the ordinary rejection of a write: the same
+    // problem a body that is not a row gets, asserting nothing about the
+    // table except that this write did not happen.
+    let db = seeded();
+    let tables = tables(Access::Owner);
+    let refusal = pollster::block_on(create(
+        &tables,
+        &db,
+        Tenancy::Sole,
+        &as_caller("ada"),
+        &scope(),
+        "note",
+        json!({ "id": "n2", "body": "mine now" }),
+    ))
+    .expect_err("n2 exists, and it is grace's");
+    let ordinary = Problem::new(&NOT_A_ROW);
+    assert_eq!(refusal.status, ordinary.status, "{}", refusal.slug);
+    assert_eq!(refusal.slug, ordinary.slug);
+    assert_eq!(refusal.title, ordinary.title);
+    // Nothing a caller could branch on: no detail naming the column, no
+    // conflict slug, no instance — the bare shape of the rejection.
+    assert_eq!(refusal.detail, ordinary.detail);
+    assert_eq!(refusal.instance, ordinary.instance);
+
+    // The same slug and status an ordinary rejected write carries for a
+    // body that is not a row — only that refusal's detail names what was
+    // wrong with the body, which this body is not.
+    let illegal = pollster::block_on(create(
+        &tables,
+        &db,
+        Tenancy::Sole,
+        &as_caller("ada"),
+        &scope(),
+        "note",
+        json!({ "id": "n9", "nope": "undeclared" }),
+    ))
+    .expect_err("not a row");
+    assert_eq!(illegal.status, refusal.status);
+    assert_eq!(illegal.slug, refusal.slug);
+    assert_eq!(illegal.title, refusal.title);
+
+    // And grace's row is exactly as it was.
+    let hers = pollster::block_on(one(
+        &tables,
+        &db,
+        Tenancy::Sole,
+        &as_caller("grace"),
+        &scope(),
+        "note",
+        &json!({ "id": "n2" }),
+    ))
+    .expect("still hers");
+    assert_eq!(hers["body"], json!("seed"));
+}
+
+#[test]
+fn a_conflict_on_a_table_not_scoped_to_the_caller_is_still_a_conflict() {
+    // `tenant-members` is not scoped to the caller's own rows: every row
+    // is ada's to collide with, whoever wrote it, so n2 — grace's, under
+    // `owner` — is a plain 409 here, and the answer the `owner` table
+    // gives for the same insert is the difference the re-select makes.
+    let db = seeded();
+    let tables = tables(Access::TenantMembers);
+    let refusal = pollster::block_on(create(
+        &tables,
+        &db,
+        Tenancy::Sole,
+        &as_caller("ada"),
+        &scope(),
+        "note",
+        json!({ "id": "n2", "author": "ada", "body": "mine now" }),
+    ))
+    .expect_err("n2 exists");
+    assert_eq!(refusal.status.as_u16(), 409, "{}", refusal.slug);
+    assert_eq!(refusal.slug, ALREADY_EXISTS.slug);
 }
 
 /// A declared table whose *name* contains the word the conflict check

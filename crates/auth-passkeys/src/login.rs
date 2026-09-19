@@ -31,7 +31,9 @@ use webauthn_rs_proto::{
 
 use crate::ModuleState;
 use crate::challenge::{self, PURPOSE_LOGIN};
-use crate::request::{ceremony_failed, client_hints, internal, limit_login, ok, ports};
+use crate::request::{
+    ceremony_failed, client_hints, internal, limit_challenges, limit_login, ok, ports,
+};
 use crate::webauthn::{StoredPasskey, UserVerification, WebauthnError, verify_assertion};
 
 pub(crate) const EVENT_LOGGED_IN: &str = "auth-passkeys.logged_in";
@@ -84,6 +86,13 @@ async fn options(
         .map(|email| cratefield_core::normalize_email(&email))
         .filter(|email| !email.is_empty());
 
+    // The budget is spent before anything about the named address is read,
+    // so a refusal carries no signal about the account — and no challenge
+    // row is written for a refused call.
+    if let Some(limited) = limit_challenges(&state, &scope, &headers, email.as_deref()).await? {
+        return Ok(limited);
+    }
+
     let mut allow = Vec::new();
     let mut user_id = None;
     if let Some(email) = email.as_deref() {
@@ -91,7 +100,11 @@ async fn options(
         // is exactly what an account with no passkeys gets. It is **not**
         // full enumeration resistance: an account that does have a passkey
         // answers with its credential ids, which is inherent to the
-        // non-discoverable flow and is why the endpoint is rate limited.
+        // non-discoverable flow. What bounds the leak is the challenge
+        // budget above — a database-enforced cap that holds whether or not
+        // the composition wired up the optional rate limiter — after which
+        // every address is answered with the same 429 until the window
+        // passes.
         if let Some(user) = user_by_primary_email(db, email).await.map_err(|err| {
             tracing::error!(error = %err, "could not look up the account");
             internal(&scope)

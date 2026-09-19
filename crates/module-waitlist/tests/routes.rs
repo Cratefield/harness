@@ -49,9 +49,19 @@ fn iso_ago(secs: i64) -> String {
         .unwrap_or_default()
 }
 
-/// The i-th sent mail's confirm link as a router path.
+/// The i-th **join** mail's confirm link as a router path. Join mails are
+/// selected by their link, not by position in `sent()`: a drained
+/// confirmed mail (deferred by an earlier confirm GET) lands in the same
+/// recording between two join mails.
 fn confirm_path(kit: &TestHarness, index: usize) -> String {
-    let message = kit.mailer.sent()[index].clone();
+    let message = kit
+        .mailer
+        .sent()
+        .iter()
+        .filter(|message| message.text.contains("/v1/waitlist/confirm?token="))
+        .nth(index)
+        .expect("confirm link in text body")
+        .clone();
     let url = message
         .text
         .lines()
@@ -112,6 +122,7 @@ async fn join_then_confirm_assigns_positions_in_order() {
             assert_eq!(response.status, StatusCode::ACCEPTED);
             assert_eq!(response.body().as_ref(), b"{\"ok\":true}");
         }
+        kit.defer.drain().await;
         assert_eq!(kit.mailer.sent().len(), 3);
 
         for (index, email, expected) in [
@@ -159,6 +170,7 @@ async fn five_concurrent_confirms_get_distinct_positions() {
         for email in &emails {
             join(&kit, email, "kontinuum").await;
         }
+        kit.defer.drain().await;
         assert_eq!(kit.mailer.sent().len(), 5);
 
         let gate = barrier(5);
@@ -195,6 +207,7 @@ async fn five_concurrent_confirms_get_distinct_positions() {
 async fn referral_credit_only_from_confirmed_same_product_referrers() {
     for kit in kits() {
         join(&kit, "first@example.com", "kontinuum").await;
+        kit.defer.drain().await;
         request(&kit.router, Method::GET, &confirm_path(&kit, 0), None).await;
         let referrer_code =
             column_text(&kit, "first@example.com", "referral_code").expect("code assigned");
@@ -203,6 +216,7 @@ async fn referral_credit_only_from_confirmed_same_product_referrers() {
 
         // A confirmed entry on the OTHER product: code must not count.
         join(&kit, "other@example.com", "undercover").await;
+        kit.defer.drain().await;
         request(&kit.router, Method::GET, &confirm_path(&kit, 1), None).await;
         let other_code =
             column_text(&kit, "other@example.com", "referral_code").expect("code assigned");
@@ -233,6 +247,7 @@ async fn referral_credit_only_from_confirmed_same_product_referrers() {
 
         // Credit lands only when the referred entry confirms.
         assert_eq!(column_int(&kit, "first@example.com", "referrals"), Some(0));
+        kit.defer.drain().await;
         request(&kit.router, Method::GET, &confirm_path(&kit, 2), None).await;
         assert_eq!(column_int(&kit, "first@example.com", "referrals"), Some(1));
         assert_eq!(
@@ -250,6 +265,7 @@ async fn referrals_can_be_disabled() {
         )]
     }) {
         join(&kit, "first@example.com", "kontinuum").await;
+        kit.defer.drain().await;
         request(&kit.router, Method::GET, &confirm_path(&kit, 0), None).await;
         let code = column_text(&kit, "first@example.com", "referral_code").expect("code");
 
@@ -257,6 +273,7 @@ async fn referrals_can_be_disabled() {
             r#"{{"email":"second@example.com","product":"kontinuum","ref":"{code}","captchaToken":"x"}}"#
         );
         request(&kit.router, Method::POST, "/v1/waitlist", Some(&body)).await;
+        kit.defer.drain().await;
         request(&kit.router, Method::GET, &confirm_path(&kit, 1), None).await;
         assert_eq!(column_int(&kit, "first@example.com", "referrals"), Some(0));
     }
@@ -279,6 +296,7 @@ async fn unknown_product_is_a_400_problem() {
 async fn status_token_round_trip() {
     for kit in kits() {
         join(&kit, "nick@example.com", "kontinuum").await;
+        kit.defer.drain().await;
         let confirmed = request(&kit.router, Method::GET, &confirm_path(&kit, 0), None).await;
         let location = confirmed
             .headers
@@ -327,6 +345,7 @@ async fn status_token_round_trip() {
 async fn confirmed_mail_is_sent_after_confirm() {
     for kit in kits() {
         join(&kit, "nick@example.com", "kontinuum").await;
+        kit.defer.drain().await;
         request(&kit.router, Method::GET, &confirm_path(&kit, 0), None).await;
         kit.defer.drain().await;
         assert_eq!(kit.mailer.sent().len(), 2, "confirm + confirmed mails");
@@ -350,6 +369,7 @@ async fn byte_identical_join_responses_across_states() {
 
         // confirmed
         join(&kit, "done@example.com", "kontinuum").await;
+        kit.defer.drain().await;
         request(&kit.router, Method::GET, &confirm_path(&kit, 2), None).await;
         let confirmed = join(&kit, "done@example.com", "kontinuum").await;
 
@@ -377,10 +397,12 @@ async fn byte_identical_join_responses_across_states() {
             canonical.iter().all(|body| *body == canonical[0]),
             "byte-identical bodies: {canonical:?}"
         );
+        kit.defer.drain().await;
         assert_eq!(
             kit.mailer.sent().len(),
-            4,
-            "new + pending + done + stale-re-mail"
+            5,
+            "new + pending + done + stale-re-mail, plus the confirmed mail \
+             the confirm GET above deferred"
         );
     }
 }
@@ -389,6 +411,7 @@ async fn byte_identical_join_responses_across_states() {
 async fn send_cooldown_claims_one_mail_per_window() {
     for kit in kits() {
         join(&kit, "once@example.com", "kontinuum").await;
+        kit.defer.drain().await;
         // A repeat join inside the window answers position-only. The claim
         // in waitlist_send_cooldown — not the FailOpen test limiter — is
         // what keeps a header burst from becoming a mail burst (#133).
@@ -397,6 +420,7 @@ async fn send_cooldown_claims_one_mail_per_window() {
         assert_eq!(kit.mailer.sent().len(), 1, "the repeat must not re-send");
         // A different product is a different claim.
         join(&kit, "once@example.com", "undercover").await;
+        kit.defer.drain().await;
         assert_eq!(kit.mailer.sent().len(), 2, "one claim per address+product");
         // An expired claim renews.
         let sql = format!(
@@ -406,34 +430,90 @@ async fn send_cooldown_claims_one_mail_per_window() {
         );
         pollster::block_on(kit.db.execute(&Statement::new(sql))).expect("age claim");
         join(&kit, "once@example.com", "kontinuum").await;
+        kit.defer.drain().await;
         assert_eq!(kit.mailer.sent().len(), 3, "an aged-out claim re-sends");
     }
 }
 
+/// The account-existence oracle, closed: a confirmed address, an unknown
+/// address and a mailer that cannot send all answer the same bytes — and
+/// no branch waits for a mail round trip, because the send only runs when
+/// the test drains the `Defer` queue.
 #[pollster::test]
-async fn send_claim_releases_when_the_mail_fails() {
+async fn join_answers_identically_whatever_the_mailer_does() {
     for kit in kits() {
-        // A failed send must not consume the claim: the next join mails.
+        // A known, confirmed address: the branch that used to answer early.
+        join(&kit, "known@example.com", "kontinuum").await;
+        kit.defer.drain().await;
+        request(&kit.router, Method::GET, &confirm_path(&kit, 0), None).await;
+        // The confirm GET deferred the confirmed mail: drain it while the
+        // mailer is healthy, so the failing modes below each see only the
+        // join mail they were scheduled with.
+        kit.defer.drain().await;
+        let confirmed = join(&kit, "known@example.com", "kontinuum").await;
+
+        // Unknown addresses, one per mailer health. Each deferred send is
+        // drained while its mode still holds, so the future sees the
+        // mailer it was scheduled with — and nothing else is queued.
+        kit.mailer.set_mode(MailerMode::Fail);
+        let failing = join(&kit, "failing@example.com", "kontinuum").await;
+        kit.defer.drain().await;
         kit.mailer.set_mode(MailerMode::NotConfigured);
-        let failed = join(&kit, "retry@example.com", "kontinuum").await;
-        assert_eq!(failed.status, StatusCode::SERVICE_UNAVAILABLE);
+        let unconfigured = join(&kit, "unconfigured@example.com", "kontinuum").await;
+        kit.defer.drain().await;
         kit.mailer.set_mode(MailerMode::SendOk);
-        join(&kit, "retry@example.com", "kontinuum").await;
-        assert_eq!(kit.mailer.sent().len(), 1, "the 503 released the claim");
+        let healthy = join(&kit, "healthy@example.com", "kontinuum").await;
+
+        for (name, response) in [
+            ("confirmed", &confirmed),
+            ("failing mailer", &failing),
+            ("unconfigured mailer", &unconfigured),
+            ("healthy mailer", &healthy),
+        ] {
+            assert_eq!(response.status, StatusCode::ACCEPTED, "{name}");
+            assert_eq!(response.body().as_ref(), b"{\"ok\":true}", "{name}");
+        }
+
+        // Nothing was awaited on the request path: only the known
+        // address's join mail and its confirmed mail exist so far.
+        assert_eq!(kit.mailer.sent().len(), 2, "the join sends are not awaited");
+        kit.defer.drain().await;
+        assert_eq!(
+            kit.mailer.sent().len(),
+            3,
+            "the healthy join mail joins them; the failed and unconfigured \
+             sends recorded nothing"
+        );
     }
 }
 
+/// A deferred send that fails must hand the send window back (issue
+/// #133's release, which the synchronous path performed before
+/// answering): the retry actually re-mails instead of being locked out
+/// for the hour.
 #[pollster::test]
-async fn mailer_not_configured_is_503_and_writes_nothing() {
+async fn a_deferred_send_failure_releases_the_claim_for_the_retry() {
     for kit in kits() {
-        kit.mailer.set_mode(MailerMode::NotConfigured);
-        let response = join(&kit, "nick@example.com", "kontinuum").await;
-        assert_eq!(response.status, StatusCode::SERVICE_UNAVAILABLE);
-        assert_eq!(
-            response.json()["type"],
-            "https://factory0.ventures/problems/mail-not-configured"
+        kit.mailer.set_mode(MailerMode::Fail);
+        let first = join(&kit, "retry@example.com", "kontinuum").await;
+        assert_eq!(first.status, StatusCode::ACCEPTED);
+        assert_eq!(first.body().as_ref(), b"{\"ok\":true}");
+        kit.defer.drain().await;
+        assert!(
+            kit.mailer.sent().is_empty(),
+            "the failed send recorded nothing"
         );
-        assert!(column_text(&kit, "nick@example.com", "id").is_none());
+
+        kit.mailer.set_mode(MailerMode::SendOk);
+        let retry = join(&kit, "retry@example.com", "kontinuum").await;
+        assert_eq!(retry.status, StatusCode::ACCEPTED);
+        assert_eq!(retry.body().as_ref(), b"{\"ok\":true}");
+        kit.defer.drain().await;
+        assert_eq!(
+            kit.mailer.sent().len(),
+            1,
+            "the retry mails: the failed send released the claim"
+        );
     }
 }
 
@@ -674,6 +754,7 @@ fn redirect_shape(location: &axum::http::HeaderValue) -> String {
 async fn redirect_params_are_ignored() {
     for kit in kits() {
         join(&kit, "nick@example.com", "kontinuum").await;
+        kit.defer.drain().await;
         let confirm = request(&kit.router, Method::GET, &confirm_path(&kit, 0), None).await;
         let path = confirm_path(&kit, 0);
         for param in ["redirect", "return", "next"] {
@@ -707,6 +788,7 @@ async fn redirect_params_are_ignored() {
 fn double_submit_of_one_confirm_link_credits_the_referrer_once() {
     for kit in kits() {
         pollster::block_on(join(&kit, "ref@example.com", "kontinuum"));
+        pollster::block_on(kit.defer.drain());
         pollster::block_on(request(
             &kit.router,
             Method::GET,
@@ -725,6 +807,7 @@ fn double_submit_of_one_confirm_link_credits_the_referrer_once() {
                 r#"{{"email":"friend@example.com","product":"kontinuum","ref":"{code}","captchaToken":"x"}}"#
             )),
         ));
+        pollster::block_on(kit.defer.drain());
         let path = confirm_path(&kit, 1);
 
         // The mail scanner prefetches the link while the human clicks it.
@@ -769,6 +852,7 @@ fn double_submit_of_one_confirm_link_credits_the_referrer_once() {
 async fn replayed_confirm_keeps_position_and_does_not_reflip() {
     for kit in kits() {
         join(&kit, "nick@example.com", "kontinuum").await;
+        kit.defer.drain().await;
         let path = confirm_path(&kit, 0);
         request(&kit.router, Method::GET, &path, None).await;
         assert_eq!(column_int(&kit, "nick@example.com", "position"), Some(1));
@@ -796,11 +880,13 @@ async fn replayed_confirm_keeps_position_and_does_not_reflip() {
 async fn purged_entry_token_cannot_confirm_a_recreated_entry() {
     for kit in kits() {
         join(&kit, "nick@example.com", "kontinuum").await;
+        kit.defer.drain().await;
         let old_path = confirm_path(&kit, 0);
         let old_id = column_text(&kit, "nick@example.com", "id").expect("id");
 
         delete_entry(&kit, "nick@example.com");
         join(&kit, "nick@example.com", "kontinuum").await;
+        kit.defer.drain().await;
         let new_path = confirm_path(&kit, 1);
         let new_id = column_text(&kit, "nick@example.com", "id").expect("id");
         assert_ne!(old_id, new_id, "recreation is a new immutable record");
@@ -899,6 +985,7 @@ async fn mismatched_generation_token_never_flips() {
 async fn two_remailed_tokens_race_to_one_confirm_and_one_credit() {
     for kit in kits() {
         join(&kit, "ref@example.com", "kontinuum").await;
+        kit.defer.drain().await;
         request(&kit.router, Method::GET, &confirm_path(&kit, 0), None).await;
         let code = column_text(&kit, "ref@example.com", "referral_code").expect("code");
         let referrer_id = column_text(&kit, "ref@example.com", "id").expect("id");
@@ -907,10 +994,12 @@ async fn two_remailed_tokens_race_to_one_confirm_and_one_credit() {
             r#"{{"email":"friend@example.com","product":"kontinuum","ref":"{code}","captchaToken":"x"}}"#
         );
         request(&kit.router, Method::POST, "/v1/waitlist", Some(&join_body)).await;
+        kit.defer.drain().await;
         let first_link = confirm_path(&kit, 1);
 
         age_entry(&kit, "friend@example.com", 2 * 3600);
         request(&kit.router, Method::POST, "/v1/waitlist", Some(&join_body)).await;
+        kit.defer.drain().await;
         let second_link = confirm_path(&kit, 2);
 
         let gate = barrier(2);
@@ -963,6 +1052,7 @@ async fn two_remailed_tokens_race_to_one_confirm_and_one_credit() {
 async fn a_duplicate_confirmation_request_never_credits_again() {
     for kit in kits() {
         join(&kit, "ref@example.com", "kontinuum").await;
+        kit.defer.drain().await;
         request(&kit.router, Method::GET, &confirm_path(&kit, 0), None).await;
         let code = column_text(&kit, "ref@example.com", "referral_code").expect("code");
         let referrer_id = column_text(&kit, "ref@example.com", "id").expect("id");
@@ -971,6 +1061,7 @@ async fn a_duplicate_confirmation_request_never_credits_again() {
             r#"{{"email":"friend@example.com","product":"kontinuum","ref":"{code}","captchaToken":"x"}}"#
         );
         request(&kit.router, Method::POST, "/v1/waitlist", Some(&join_body)).await;
+        kit.defer.drain().await;
         let link = confirm_path(&kit, 1);
 
         for _ in 0..3 {

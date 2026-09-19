@@ -25,6 +25,11 @@ tracing = { workspace = true }
 thiserror = { workspace = true }
 hmac = { workspace = true }
 sha2 = { workspace = true }
+# Verifying the Stripe webhook signature (#442): the candidate `v1`
+# signatures are compared constant-time, so timing does not leak how much
+# of a wrong signature was right. Already in the tree via the Svix check
+# in `module-notifications`.
+subtle = { workspace = true }
 
 [dev-dependencies]
 pollster = { workspace = true }
