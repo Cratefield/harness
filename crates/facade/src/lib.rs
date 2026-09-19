@@ -59,6 +59,18 @@ pub use cratefield_adapter_github_issues as github_issues;
 #[cfg(feature = "webhook-tracker")]
 pub use cratefield_adapter_webhook_tracker as webhook_tracker;
 
+// The portable classifier adapters (issue #456). The third one,
+// `cratefield-adapter-workers-ai`, is deliberately not re-exported here: it
+// depends on the `worker` crate and the `env.AI` binding, so a venture on
+// Workers depends on it directly — the same way it depends on the
+// `cloudflare` runtime — and a native venture never pulls `worker` through
+// this facade.
+#[cfg(feature = "typesafe")]
+pub use cratefield_adapter_typesafe as typesafe;
+
+#[cfg(feature = "classifier-llm")]
+pub use cratefield_adapter_classifier_llm as classifier_llm;
+
 #[cfg(feature = "ui")]
 pub use cratefield_ui as ui;
 

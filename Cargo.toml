@@ -68,6 +68,12 @@ cratefield-adapter-sqlite-wasm = { path = "crates/adapter-sqlite-wasm", version 
 # anything on the wasm path — CI asserts the venture wasm graph stays
 # sqlx-free.
 cratefield-adapter-postgres = { path = "crates/adapter-postgres", version = "0.1.0" }
+# The classifier adapters (issue #456): `Classifier` over the operator's
+# TypeSafe API key, over the `TextModel` port, and over the Workers `env.AI`
+# binding. The first two are portable; workers-ai only functions on wasm.
+cratefield-adapter-typesafe = { path = "crates/adapter-typesafe", version = "0.1.0" }
+cratefield-adapter-classifier-llm = { path = "crates/adapter-classifier-llm", version = "0.1.0" }
+cratefield-adapter-workers-ai = { path = "crates/adapter-workers-ai", version = "0.1.0" }
 cratefield-module-email-signup = { path = "crates/module-email-signup", version = "0.1.0" }
 cratefield-module-privacy = { path = "crates/module-privacy", version = "0.1.0" }
 cratefield-module-waitlist = { path = "crates/module-waitlist", version = "0.1.0" }

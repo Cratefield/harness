@@ -641,6 +641,7 @@ version = "0.1.5"
 dependencies = [
  "cratefield-adapter-anthropic",
  "cratefield-adapter-apns",
+ "cratefield-adapter-classifier-llm",
  "cratefield-adapter-fcm",
  "cratefield-adapter-github-issues",
  "cratefield-adapter-postgres",
@@ -648,6 +649,7 @@ dependencies = [
  "cratefield-adapter-sqlite",
  "cratefield-adapter-stripe",
  "cratefield-adapter-turnstile",
+ "cratefield-adapter-typesafe",
  "cratefield-adapter-webhook-tracker",
  "cratefield-adapter-webpush",
  "cratefield-auth-client",
@@ -728,6 +730,20 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.20",
  "time",
+ "tracing",
+]
+
+[[package]]
+name = "cratefield-adapter-classifier-llm"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "cratefield-core",
+ "cratefield-testing",
+ "getrandom 0.4.3",
+ "pollster",
+ "serde",
+ "serde_json",
  "tracing",
 ]
 
@@ -868,6 +884,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "cratefield-adapter-typesafe"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "cratefield-core",
+ "cratefield-testing",
+ "getrandom 0.4.3",
+ "http",
+ "pollster",
+ "serde",
+ "serde_json",
+ "time",
+ "tracing",
+]
+
+[[package]]
 name = "cratefield-adapter-webhook-tracker"
 version = "0.1.0"
 dependencies = [
@@ -909,6 +942,21 @@ dependencies = [
  "time",
  "tokio",
  "zeroize",
+]
+
+[[package]]
+name = "cratefield-adapter-workers-ai"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "cratefield-core",
+ "cratefield-testing",
+ "getrandom 0.4.3",
+ "pollster",
+ "serde",
+ "serde_json",
+ "tracing",
+ "worker",
 ]
 
 [[package]]

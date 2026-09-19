@@ -5,8 +5,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use cratefield_core::{
-    Auth, BoundedHttpClient, Captcha, Clock, Defer, HarnessConfig, Mailer, Payments, Port, Ports,
-    Push, Runtime, SidecarMounts, TextModel, Tracker, UlidIdGen,
+    Auth, BoundedHttpClient, Captcha, Classifier, Clock, Defer, HarnessConfig, Mailer, Payments,
+    Port, Ports, Push, Runtime, SidecarMounts, TextModel, Tracker, UlidIdGen,
 };
 use worker::Env;
 
@@ -73,6 +73,11 @@ pub struct Cloudflare {
     /// adapter is built from the venture's vendor keys and passed in, not
     /// resolved from a Worker binding.
     text_model: Option<Arc<dyn TextModel>>,
+    /// The `Classifier` port (issue #456), the sibling of `text_model`:
+    /// passed in the same way. The Workers AI adapter reads the `env.AI`
+    /// binding itself, so the wiring a venture writes is identical to the
+    /// native runtime's.
+    classifier: Option<Arc<dyn Classifier>>,
     captcha: Option<Arc<dyn Captcha>>,
     auth: Option<Arc<dyn Auth>>,
     /// Whether to assemble the `Auth` port from the environment.
@@ -106,6 +111,7 @@ impl Cloudflare {
             push: None,
             payments: None,
             text_model: None,
+            classifier: None,
             tracker: None,
             captcha: None,
             auth: None,
@@ -294,6 +300,24 @@ impl Cloudflare {
         self
     }
 
+    /// The `Classifier` port (issue #456): a typed, calibrated decision —
+    /// "which of these is it, and how sure are you" — passed in like
+    /// `text_model`. An adapter over the Workers AI `env.AI` binding is
+    /// still built by the venture and handed here, so there is no new
+    /// binding name to learn.
+    #[must_use]
+    pub fn classifier(mut self, classifier: impl Classifier + 'static) -> Self {
+        self.classifier = Some(Arc::new(classifier));
+        self
+    }
+
+    /// `classifier` for an already-shared adapter.
+    #[must_use]
+    pub fn classifier_arc(mut self, classifier: Arc<dyn Classifier>) -> Self {
+        self.classifier = Some(classifier);
+        self
+    }
+
     #[must_use]
     pub fn captcha(mut self, captcha: impl Captcha + 'static) -> Self {
         self.captcha = Some(Arc::new(captcha));
@@ -457,6 +481,7 @@ impl Cloudflare {
         ports.payments.clone_from(&self.payments);
         ports.tracker.clone_from(&self.tracker);
         ports.text_model.clone_from(&self.text_model);
+        ports.classifier.clone_from(&self.classifier);
         ports.captcha.clone_from(&self.captcha);
         ports.auth.clone_from(&self.auth);
 
@@ -527,6 +552,9 @@ impl Runtime for Cloudflare {
         if self.text_model.is_some() {
             provided.push(Port::TextModel);
         }
+        if self.classifier.is_some() {
+            provided.push(Port::Classifier);
+        }
         // Provided whatever the environment holds — see `auth_from_env`.
         if self.auth.is_some() || self.auth_from_env {
             provided.push(Port::Auth);
@@ -565,7 +593,8 @@ mod tests {
     use super::*;
 
     use cratefield_core::{
-        Credential, Destination, Filed, TicketDraft, TicketState, TicketStatus, TrackerError,
+        Answer, Calibration, ClassifierError, ClassifierProfile, Credential, Destination, Filed,
+        Question, TicketDraft, TicketState, TicketStatus, TrackerError,
     };
 
     /// Stands in for an adapter the venture passed itself. Answers the
@@ -620,6 +649,48 @@ mod tests {
                 .tracker_arc(Arc::new(StubTracker))
                 .provides()
                 .contains(&Port::Tracker)
+        );
+    }
+
+    /// Stands in for an adapter the venture passed itself — a
+    /// `cratefield-adapter-workers-ai` or `cratefield-adapter-typesafe`,
+    /// say. Answers the cheapest thing that satisfies the trait; what
+    /// these tests assert is wiring, not adapter behaviour.
+    struct StubClassifier;
+
+    #[async_trait::async_trait]
+    impl Classifier for StubClassifier {
+        fn profile(&self) -> ClassifierProfile {
+            ClassifierProfile::new(Calibration::LanguageModel, 1_000)
+        }
+
+        async fn ask(
+            &self,
+            _state: &str,
+            _questions: &BTreeMap<String, Question>,
+        ) -> Result<BTreeMap<String, Answer>, ClassifierError> {
+            Err(ClassifierError::NotConfigured)
+        }
+    }
+
+    #[test]
+    fn a_runtime_with_no_classifier_provides_no_classifier_port() {
+        assert!(!Cloudflare::new().provides().contains(&Port::Classifier));
+    }
+
+    #[test]
+    fn a_wired_classifier_is_provided_by_either_builder_form() {
+        assert!(
+            Cloudflare::new()
+                .classifier(StubClassifier)
+                .provides()
+                .contains(&Port::Classifier)
+        );
+        assert!(
+            Cloudflare::new()
+                .classifier_arc(Arc::new(StubClassifier))
+                .provides()
+                .contains(&Port::Classifier)
         );
     }
 }

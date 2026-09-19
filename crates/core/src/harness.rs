@@ -753,6 +753,7 @@ impl Harness {
             tracker: _,
             realtime: _,
             text_model: _,
+            classifier: _,
             http: _,
             clock,
             id_gen,

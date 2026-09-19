@@ -57,15 +57,20 @@ pub use conformance::{conformance, conformance_in_process_only, sidecar_parity};
 pub use dialect::Dialect;
 #[cfg(feature = "harness")]
 pub use fakes::{
-    AuthMode, EmptyDatabase, FakeAuth, FakeCaptcha, FakeDefer, FakeDispatcher, FakeHttpClient,
-    FakeMailer, FakePayments, FakePush, FakeRateLimiter, FakeRealtime, FakeTextModel, FakeTracker,
-    FiledCall, FixedClock, MailerMode, MemoryBlob, MemoryKeyValue, PaymentsCall, PaymentsMode,
-    PushMode, StatusedCall, TextModelMode, TrackerMode,
+    Ask, AuthMode, ClassifierMode, EmptyDatabase, FakeAuth, FakeCaptcha, FakeClassifier, FakeDefer,
+    FakeDispatcher, FakeHttpClient, FakeMailer, FakePayments, FakePush, FakeRateLimiter,
+    FakeRealtime, FakeTextModel, FakeTracker, FiledCall, FixedClock, MailerMode, MemoryBlob,
+    MemoryKeyValue, PaymentsCall, PaymentsMode, PushMode, StatusedCall, TextModelMode, TrackerMode,
 };
 #[cfg(feature = "harness")]
 pub use harness::TestHarness;
 #[cfg(feature = "port-conformance")]
-pub use port::{assert_wasm_safe_deps, push_recipient_conformance};
+pub use port::{
+    assert_wasm_safe_deps, classifier_conformance, classifier_conformance_questions,
+    classifier_conformance_state, classifier_not_configured,
+    classifier_rejects_malformed_questions, classifier_truncates_long_state,
+    push_recipient_conformance,
+};
 #[cfg(feature = "harness")]
 pub use request::{TestResponse, request, request_as};
 #[cfg(feature = "harness")]

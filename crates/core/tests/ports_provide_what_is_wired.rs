@@ -56,5 +56,5 @@ fn every_port_has_an_answer_and_the_enum_cannot_outgrow_it() {
         .collect();
     assert_eq!(walked, ports.provides());
     assert!(!walked.is_empty(), "the comparison must not be vacuous");
-    assert_eq!(Port::ALL.len(), 17, "a new port needs a case in `has`");
+    assert_eq!(Port::ALL.len(), 18, "a new port needs a case in `has`");
 }
