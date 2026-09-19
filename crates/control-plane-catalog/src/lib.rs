@@ -884,6 +884,7 @@ fn cms() -> CatalogModule {
 /// The `changelog` entry.
 fn changelog() -> CatalogModule {
     entry(
+        "0.1.1",
         "changelog",
         "Changelog",
         "A project's releases mirrored into your own database, served without calling upstream.",
