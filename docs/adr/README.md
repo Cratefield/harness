@@ -66,6 +66,20 @@ recorded only: nothing ships until the numbers behind the first three
 gates are measured — including step 2's immutable-read share, which no
 benchmark counts yet.
 
+ADR 0020 puts the write half of the tenant registry in core (#154):
+`TenantLifecycle` — create, list, status, set_status, with
+`begin_erasure`/`complete_erasure` carrying offboarding's erasure half
+— implemented by the Postgres adapter over the calls that already
+existed, so a CLI built against core is runtime-neutral by
+construction. It is deliberately not a `Port`: modules must never write
+the registry, the transition rule stays `TenantStatus::admits` (#361),
+and provisioning or dropping a database stays an operator step, because
+ADR 0008 scopes a tenant's app role to one database and the harness
+holds no credential that could do either. On D1 the tenant is the
+venture, so the 10 GB cap is a venture-level threshold and promotion is
+a venture-level move — there is no per-tenant lifecycle event for
+leaving D1, and none will be.
+
 [0102](0102-crypto-crate.md) chose the crypto crate: RustCrypto's
 `chacha20poly1305`.
 
