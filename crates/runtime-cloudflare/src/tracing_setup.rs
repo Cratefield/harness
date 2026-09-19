@@ -4,11 +4,15 @@
 //! `set_default`) hangs the single-threaded workerd/miniflare isolate
 //! (verified empirically on wrangler 4.129). So `install_tracing` installs no
 //! dispatcher on wasm; instead it registers a forwarder with core
-//! ([`cratefield_core::set_error_forwarder`]) so core's internal-error
-//! diagnostics — every `tracing::error!` that maps a failure to a 500 — reach
-//! `worker::console_error!` instead of vanishing (issue #107). Runtime logging
-//! goes through the crate's `rt_log!` macro, which writes plain lines to
-//! `worker::console_log!`/`console_error!` (Workers Logs picks them up).
+//! ([`cratefield_core::set_error_forwarder`]) so core's boot-time control
+//! events — the production-readiness acceptance and refusal, a sidecar
+//! gateway misconfiguration, the secret-access audit — and the
+//! internal-error diagnostics that map a failure to a 500 reach
+//! `worker::console_error!` instead of vanishing (issues #107, #441). Each
+//! forwarded line carries its own level as a `[warn] `/`[error] `/`[info] `
+//! prefix; runtime logging goes through the crate's `rt_log!` macro, which
+//! writes plain lines to `worker::console_log!`/`console_error!` (Workers
+//! Logs picks them up).
 //!
 //! **Native (tests, the future `runtime-native`):** a hand-rolled
 //! subscriber writes one JSON line per event with field redaction per
@@ -30,10 +34,13 @@ pub fn install_tracing() {
     #[cfg(target_arch = "wasm32")]
     INSTALLED.get_or_init(|| {
         // No tracing dispatcher on wasm (it hangs the isolate). Instead give
-        // core a forwarder so its internal-error diagnostics — the ones that
-        // map a failure to a 500 — reach Workers Logs via `console_error!`,
-        // rather than vanishing (issue #107).
-        cratefield_core::set_error_forwarder(|line| worker::console_error!("[error] {line}"));
+        // core a forwarder so its boot-time control events — readiness
+        // acceptance and refusal, gateway misconfiguration, the
+        // secret-access audit — and the internal errors mapped to a 500
+        // reach Workers Logs via `console_error!`, rather than vanishing
+        // (issues #107, #441). Core prefixes each line with its own level,
+        // so this prints it verbatim.
+        cratefield_core::set_error_forwarder(|line| worker::console_error!("{line}"));
     });
     #[cfg(not(target_arch = "wasm32"))]
     INSTALLED.get_or_init(|| {
