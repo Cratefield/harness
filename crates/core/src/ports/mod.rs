@@ -21,6 +21,7 @@ mod push;
 mod rate_limiter;
 mod realtime;
 pub(crate) mod signer;
+mod text_model;
 
 pub use auth::{Auth, AuthError, Caller, Subject, Unconfigured};
 pub use blob::{Blob, BlobError, BlobObject, MAX_BLOB_BYTES, ScopedBlob, check_blob_size};
@@ -48,6 +49,10 @@ pub use push::{
 pub use rate_limiter::{Decision, RateLimitError, RateLimiter};
 pub use realtime::{Member, Realtime, RealtimeError, RoomContext, RoomHandler};
 pub use signer::{Kid, MAX_KID_NAME, Payload, SignatureError, Signer};
+pub use text_model::{
+    Completion, DEFAULT_MAX_TOKENS, ModelTier, Prompt, Role, RoutingTextModel, TextModel,
+    TextModelError, Turn,
+};
 
 use crate::config::Config;
 use crate::module::Module;
@@ -69,6 +74,7 @@ pub enum Port {
     Push,
     Payments,
     Realtime,
+    TextModel,
     HttpClient,
     Clock,
     IdGen,
@@ -117,6 +123,7 @@ ports!(
     Push,
     Payments,
     Realtime,
+    TextModel,
     HttpClient,
     Clock,
     IdGen,
@@ -137,6 +144,7 @@ impl Port {
             Port::Push => "Push",
             Port::Payments => "Payments",
             Port::Realtime => "Realtime",
+            Port::TextModel => "TextModel",
             Port::HttpClient => "HttpClient",
             Port::Clock => "Clock",
             Port::IdGen => "IdGen",
@@ -166,6 +174,9 @@ pub struct Ports {
     pub push: Option<Arc<dyn Push>>,
     pub payments: Option<Arc<dyn Payments>>,
     pub realtime: Option<Arc<dyn Realtime>>,
+    /// A text completion by [`ModelTier`](crate::ModelTier), never by
+    /// vendor (issue #429).
+    pub text_model: Option<Arc<dyn TextModel>>,
     pub http: Option<Arc<dyn HttpClient>>,
     pub clock: Option<Arc<dyn Clock>>,
     pub id_gen: Option<Arc<dyn IdGen>>,
@@ -207,6 +218,7 @@ impl Ports {
             push: None,
             payments: None,
             realtime: None,
+            text_model: None,
             http: None,
             clock: None,
             id_gen: None,
@@ -252,6 +264,7 @@ impl Ports {
             Port::Push => self.push.is_some(),
             Port::Payments => self.payments.is_some(),
             Port::Realtime => self.realtime.is_some(),
+            Port::TextModel => self.text_model.is_some(),
             Port::HttpClient => self.http.is_some(),
             Port::Clock => self.clock.is_some(),
             Port::IdGen => self.id_gen.is_some(),
@@ -309,6 +322,9 @@ impl Ports {
         }
         if allows(&declared, Port::Realtime) {
             view.realtime.clone_from(&self.realtime);
+        }
+        if allows(&declared, Port::TextModel) {
+            view.text_model.clone_from(&self.text_model);
         }
         if allows(&declared, Port::HttpClient) {
             view.http.clone_from(&self.http);
