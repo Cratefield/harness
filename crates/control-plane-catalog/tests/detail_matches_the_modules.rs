@@ -25,6 +25,7 @@ fn pairs() -> Vec<(CatalogModule, Box<dyn Module>)> {
         Box::new(cratefield_module_email_signup::EmailSignup::new()),
         Box::new(cratefield_module_waitlist::Waitlist::new()),
         Box::new(cratefield_module_cms::Cms::new()),
+        Box::new(cratefield_module_changelog::Changelog::new()),
         Box::new(cratefield_module_notifications::Notifications::new()),
         Box::new(cratefield_module_privacy::Privacy::new()),
     ];

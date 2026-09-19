@@ -168,6 +168,7 @@ convenience, not a layer.
 | `cratefield-module-notifications` | Push, an in-app inbox and email from one `notify()`, with per-account per-category preferences ([NOTIFICATIONS.md](docs/NOTIFICATIONS.md)) |
 | `cratefield-i18n` | Server-side localisation: Fluent catalogs, BCP 47 negotiation, text direction |
 | `cratefield-auth-client` | Verifies auth tokens in a consuming app: JWKS fetch and cache, ES256, an axum extractor |
+| `cratefield-module-changelog` | A project's releases mirrored into the venture's own database and served over an API — the reads never call upstream |
 
 Everything else in the workspace is unpublished — `publish = false` is what
 makes a crate private now, not a separate repository (ADR

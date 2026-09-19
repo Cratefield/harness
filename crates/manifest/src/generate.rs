@@ -83,6 +83,14 @@ const REGISTRY: &[ModuleCodegen] = &[
         has_templates: false,
         needs_mailer: false,
     },
+    ModuleCodegen {
+        slug: "changelog",
+        feature: "changelog",
+        module: "changelog",
+        type_name: "Changelog",
+        has_templates: false,
+        needs_mailer: false,
+    },
 ];
 
 fn codegen_for(slug: &str) -> Option<&'static ModuleCodegen> {

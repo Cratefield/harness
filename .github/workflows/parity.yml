@@ -54,7 +54,9 @@ jobs:
         run: |
           cargo test -p cratefield-module-email-signup
           cargo test -p cratefield-module-waitlist
+          cargo test -p cratefield-module-changelog
       - name: Conformance kit on the matrix dialect
         run: |
           cargo test -p cratefield-module-email-signup --test conformance
           cargo test -p cratefield-module-waitlist --test conformance
+          cargo test -p cratefield-module-changelog --test conformance

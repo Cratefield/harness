@@ -20,6 +20,7 @@ cratefield-module-waitlist	CRATEFIELD · MODULE · WAITLIST	A place in the queue
 cratefield-module-cms	CRATEFIELD · MODULE · CONTENT	Drafts are not published.	Typed collections, a revision on every save, publishing as its own act — in your database.	TYPED · VERSIONED · YOUR DATABASE	GET /v1/cms
 cratefield-module-notifications	CRATEFIELD · MODULE · NOTIFICATIONS	One call, wherever they are.	Push, an in-app inbox and email from one notify(), per person, per category, in their language.	PUSH · INBOX · EMAIL · PER-PERSON	notify()
 cratefield-module-privacy	CRATEFIELD · MODULE · PRIVACY	Answer the request.	Subject access and erasure, assembled from what every other module declares it holds.	EXPORT · ERASURE · DECLARED	GET /v1/privacy/export
+cratefield-module-changelog	CRATEFIELD · MODULE · CHANGELOG	Your releases, served.	Mirrors a project's GitHub releases into your own database and serves them — the read path never calls upstream.	GITHUB RELEASES · MIRRORED MARKDOWN · YOUR DATABASE	GET /v1/changelog
 cratefield-auth-client	CRATEFIELD · AUTH · CLIENT	Who the caller is.	Verifies auth-service tokens in your app: JWKS fetch and cache, ES256, an axum extractor.	JWKS · ES256 · EXTRACTOR	Authenticated
 cratefield-secrets	CRATEFIELD · SECRETS	Never read back.	Envelope encryption over the Database port, two tiers, ciphertexts bound to their own row.	ENVELOPE · AAD-BOUND · AUDITED	wrap()
 cratefield-kms	CRATEFIELD · KMS PORT	Wrap and unwrap.	The KMS port for data keys, with a local-file provider that refuses to run in production.	WRAP · UNWRAP · LOCAL DEV	kms.wrap()

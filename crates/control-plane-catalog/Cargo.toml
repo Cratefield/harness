@@ -24,5 +24,6 @@ cratefield-core = { workspace = true }
 cratefield-module-email-signup = { workspace = true }
 cratefield-module-waitlist = { workspace = true }
 cratefield-module-cms = { workspace = true }
+cratefield-module-changelog = { workspace = true }
 cratefield-module-notifications = { workspace = true }
 cratefield-module-privacy = { workspace = true }
