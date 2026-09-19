@@ -73,6 +73,7 @@ compile_error!(
 );
 
 mod convert;
+mod lifecycle;
 mod migrate;
 mod reconcile;
 mod registry;

@@ -39,6 +39,7 @@ mod surface;
 mod template;
 mod tenant;
 mod tenant_conn;
+mod tenant_lifecycle;
 mod venture;
 
 // `Module::router` returns an `axum::Router` and `well_known` an
@@ -126,4 +127,7 @@ pub use tenant::{
     TenantDbError, TenantId, TenantRouting, TenantStatus,
 };
 pub use tenant_conn::TenantConn;
+pub use tenant_lifecycle::{
+    ErasureStep, TenantLifecycle, TenantLifecycleError, TenantSummary, remaining_erasure,
+};
 pub use venture::{Brand, Venture, VentureEnv};
