@@ -12,6 +12,7 @@ exclude = [
     "crates/auth-fz",
     "crates/control-plane-fz",
     "crates/control-plane-dev",
+    "examples/sidecar-worker-ts",
 ]
 
 [workspace.package]
