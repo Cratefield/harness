@@ -81,11 +81,60 @@ required = true
 name = "role"
 kind = "text"
 required = true
+
+# Kinds no path segment and no `__by` query parameter can carry as a key:
+# the `__by` query parses its values through the same coercion
+# `key_from_path` uses, so a `real`, `boolean` or `json` key is refused
+# wherever it is named.
+[tables.reading]
+primary_key = "at"
+
+[[tables.reading.fields]]
+name = "at"
+kind = "real"
+required = true
+
+[tables.flipped]
+primary_key = "enabled"
+
+[[tables.flipped.fields]]
+name = "enabled"
+kind = "boolean"
+required = true
+
+[tables.payload]
+primary_key = "doc"
+
+[[tables.payload.fields]]
+name = "doc"
+kind = "json"
+required = true
+
+# `after` and `sort` are the harness's parameters on the `__by` sub-path,
+# so a key that uses them can never be completed there — the reservation
+# is the strand, and this table is what pins it as stated rather than
+# discovered.
+[tables.staged]
+primary_key = ["after", "sort"]
+
+[[tables.staged.fields]]
+name = "after"
+kind = "text"
+required = true
+
+[[tables.staged.fields]]
+name = "sort"
+kind = "text"
+required = true
 "#;
 
 const DDL: &str = "CREATE TABLE IF NOT EXISTS note (id TEXT PRIMARY KEY NOT NULL, author TEXT NOT NULL, body TEXT); \
      CREATE TABLE IF NOT EXISTS tier (slug TEXT PRIMARY KEY NOT NULL, label TEXT NOT NULL, rank INTEGER); \
-     CREATE TABLE IF NOT EXISTS membership (tenant TEXT NOT NULL, member TEXT NOT NULL, role TEXT NOT NULL, PRIMARY KEY (tenant, member))";
+     CREATE TABLE IF NOT EXISTS membership (tenant TEXT NOT NULL, member TEXT NOT NULL, role TEXT NOT NULL, PRIMARY KEY (tenant, member)); \
+     CREATE TABLE IF NOT EXISTS reading (at REAL PRIMARY KEY NOT NULL); \
+     CREATE TABLE IF NOT EXISTS flipped (enabled BOOLEAN PRIMARY KEY NOT NULL); \
+     CREATE TABLE IF NOT EXISTS payload (doc TEXT PRIMARY KEY NOT NULL); \
+     CREATE TABLE IF NOT EXISTS staged (\"after\" TEXT NOT NULL, \"sort\" TEXT NOT NULL, PRIMARY KEY (\"after\", \"sort\"))";
 
 const MIGRATIONS: [SqlMigration; 1] = [SqlMigration::new("0001", "tables", DDL)];
 
@@ -120,7 +169,15 @@ impl Module for DeclaredTables {
         &[Port::Db, Port::Auth]
     }
     fn tables(&self) -> &'static [&'static str] {
-        &["note", "tier", "membership"]
+        &[
+            "note",
+            "tier",
+            "membership",
+            "reading",
+            "flipped",
+            "payload",
+            "staged",
+        ]
     }
     fn migrations(&self) -> Migrations {
         Migrations::sqlite(&MIGRATIONS)
@@ -141,8 +198,32 @@ impl Module for DeclaredTables {
                     access: self.access,
                     subject: None,
                 },
+                // `member` is the subject column, so the composite table
+                // has an `owner` shape too: a membership row belongs to
+                // its member, which is what makes the `__by` leak test a
+                // leak test rather than a 500.
                 TableApi {
                     table: declared("membership"),
+                    access: self.access,
+                    subject: Some("member".to_owned()),
+                },
+                TableApi {
+                    table: declared("reading"),
+                    access: self.access,
+                    subject: None,
+                },
+                TableApi {
+                    table: declared("flipped"),
+                    access: self.access,
+                    subject: None,
+                },
+                TableApi {
+                    table: declared("payload"),
+                    access: self.access,
+                    subject: None,
+                },
+                TableApi {
+                    table: declared("staged"),
                     access: self.access,
                     subject: None,
                 },
@@ -553,11 +634,20 @@ async fn every_published_action_is_a_route_that_exists() {
 
     for kit in kits(Access::Owner) {
         seed(&kit).await;
-        let published = surface(&[TableApi {
-            table: note(),
-            access: Access::Owner,
-            subject: Some("author".to_owned()),
-        }]);
+        // Both arities: the path spelling for a single-column key and the
+        // `__by` spelling the composite-key table publishes against.
+        let published = surface(&[
+            TableApi {
+                table: note(),
+                access: Access::Owner,
+                subject: Some("author".to_owned()),
+            },
+            TableApi {
+                table: declared("membership"),
+                access: Access::Owner,
+                subject: Some("member".to_owned()),
+            },
+        ]);
         assert!(!published.actions.is_empty(), "nothing was published");
 
         for action in &published.actions {
@@ -565,6 +655,10 @@ async fn every_published_action_is_a_route_that_exists() {
             let body = matches!(action.method, Method::POST | Method::PUT)
                 .then_some(r#"{"id":"n1","body":"x"}"#);
             let answer = send(&kit, action.method.clone(), &path, Some("ada"), body).await;
+            // A `__by` action sent without its query answers
+            // `400 partial-key` — which is the route answering, which is
+            // all "exists" asks. The query's own behaviour is the tests
+            // above.
             assert_ne!(
                 answer.status, 405,
                 "`{}` is published as {} {} and the router does not serve it",
@@ -633,6 +727,372 @@ async fn a_table_whose_key_is_not_called_id_is_addressed_by_its_own_key() {
                 .await
                 .status,
             404
+        );
+    }
+}
+
+// ------------------------------------------------ the `__by` sub-path
+//
+// ADR 0018: `/{table}/__by?<column>=<value>&…` answers `GET`, `PUT` and
+// `DELETE` with the bodies and statuses the path routes answer, the key
+// named in the query. One route whatever the key's arity, no separator
+// to escape, and the columns named rather than positional.
+
+#[pollster::test]
+async fn a_composite_key_row_is_served_by_its_key_named_in_the_query() {
+    // The columns are named, not positional: the parameters in an order
+    // the declaration does not list still name the same row, which is
+    // the property no separator spelling has.
+    for kit in kits(Access::TenantMembers) {
+        {
+            use cratefield_core::Statement;
+            for (tenant, member) in [("acme", "ada"), ("acme", "grace")] {
+                kit.db
+                    .execute(&Statement::with_values(
+                        "INSERT INTO membership (tenant, member, role) VALUES (?, ?, ?)".to_owned(),
+                        vec![tenant.into(), member.into(), "member".into()],
+                    ))
+                    .await
+                    .expect("seeded");
+            }
+        }
+
+        let row = get_as(
+            &kit,
+            "/v1/tables/membership/__by?member=ada&tenant=acme",
+            Some("ada"),
+        )
+        .await;
+        assert_eq!(row.status, 200, "{}", row.body);
+        let body = serde_json::from_str::<serde_json::Value>(&row.body).expect("json");
+        assert_eq!(body["tenant"], "acme", "one row, not a page: {}", row.body);
+        assert_eq!(body["member"], "ada");
+
+        let other = get_as(
+            &kit,
+            "/v1/tables/membership/__by?tenant=acme&member=grace",
+            Some("ada"),
+        )
+        .await;
+        assert_eq!(other.status, 200, "{}", other.body);
+        assert!(other.body.contains("grace"), "{}", other.body);
+    }
+}
+
+#[pollster::test]
+async fn a_composite_key_row_is_replaced_and_removed_through_by_query() {
+    // The same statuses and bodies the path routes answer: a replace
+    // answers the row it replaced, a remove answers `204` and nothing,
+    // and both change the row the query named.
+    for kit in kits(Access::TenantMembers) {
+        {
+            use cratefield_core::Statement;
+            kit.db
+                .execute(&Statement::with_values(
+                    "INSERT INTO membership (tenant, member, role) VALUES (?, ?, ?)".to_owned(),
+                    vec!["acme".into(), "ada".into(), "member".into()],
+                ))
+                .await
+                .expect("seeded");
+        }
+
+        let replaced = send(
+            &kit,
+            Method::PUT,
+            "/v1/tables/membership/__by?tenant=acme&member=ada",
+            Some("ada"),
+            Some(r#"{"tenant":"acme","member":"ada","role":"admin"}"#),
+        )
+        .await;
+        assert_eq!(replaced.status, 200, "{}", replaced.body);
+        assert!(replaced.body.contains("admin"), "{}", replaced.body);
+
+        let read = get_as(
+            &kit,
+            "/v1/tables/membership/__by?tenant=acme&member=ada",
+            Some("ada"),
+        )
+        .await;
+        assert!(read.body.contains("admin"), "the replacement did not land");
+
+        let removed = send(
+            &kit,
+            Method::DELETE,
+            "/v1/tables/membership/__by?tenant=acme&member=ada",
+            Some("ada"),
+            None,
+        )
+        .await;
+        assert_eq!(removed.status, 204, "{}", removed.body);
+        assert!(
+            removed.body.is_empty(),
+            "a 204 carries no body: {}",
+            removed.body
+        );
+
+        let gone = get_as(
+            &kit,
+            "/v1/tables/membership/__by?tenant=acme&member=ada",
+            Some("ada"),
+        )
+        .await;
+        assert_eq!(gone.status, 404, "{}", gone.body);
+    }
+}
+
+#[pollster::test]
+async fn a_complete_key_for_a_row_that_was_never_seeded_is_a_404_through_by() {
+    // The direct answer, not the incidental one a delete leaves behind:
+    // a key that is well formed and names every column, for a row that
+    // does not exist, is a `no-such-row` — the same answer, byte for
+    // byte, that the path route gives a single-column table for an
+    // absent row. A refusal about the spelling would make the two
+    // spellings of one address disagree about the same empty result.
+    for kit in kits(Access::PublicRead) {
+        seed(&kit).await;
+        let absent = get_as(
+            &kit,
+            "/v1/tables/membership/__by?tenant=acme&member=nope",
+            None,
+        )
+        .await;
+        assert_eq!(absent.status, 404, "{}", absent.body);
+        assert!(absent.body.contains("no-such-row"), "{}", absent.body);
+
+        let by_path = get_as(&kit, "/v1/tables/note/nope", None).await;
+        assert_eq!(by_path.status, 404, "{}", by_path.body);
+        assert_eq!(
+            absent.body, by_path.body,
+            "the two spellings must answer an absent row identically"
+        );
+    }
+}
+
+#[pollster::test]
+async fn a_partial_key_through_by_is_refused_and_says_what_is_missing() {
+    // `select_one` refuses a half key rather than matching every row
+    // that shares the given prefix, and the route refuses before it
+    // asks. The detail names the column, so the fix is in the answer.
+    for kit in kits(Access::TenantMembers) {
+        let half = get_as(&kit, "/v1/tables/membership/__by?tenant=acme", Some("ada")).await;
+        assert_eq!(half.status, 400, "{}", half.body);
+        assert!(half.body.contains("partial-key"), "{}", half.body);
+        assert!(half.body.contains("member"), "say which: {}", half.body);
+
+        let none = get_as(&kit, "/v1/tables/membership/__by", Some("ada")).await;
+        assert_eq!(none.status, 400, "{}", none.body);
+        assert!(none.body.contains("partial-key"), "{}", none.body);
+    }
+}
+
+#[pollster::test]
+async fn a_query_naming_a_column_outside_the_key_is_refused_through_by() {
+    // Ignoring it would answer a question the caller did not ask — the
+    // page is where a table is narrowed, and `__by` names one row. A
+    // misspelled key column is answered as the mistake it is, naming the
+    // column, rather than as a key that happens to be short.
+    for kit in kits(Access::TenantMembers) {
+        let extra = get_as(
+            &kit,
+            "/v1/tables/membership/__by?tenant=acme&member=ada&role=member",
+            Some("ada"),
+        )
+        .await;
+        assert_eq!(extra.status, 400, "{}", extra.body);
+        assert!(extra.body.contains("not-a-key-column"), "{}", extra.body);
+        assert!(extra.body.contains("role"), "say which: {}", extra.body);
+
+        let misspelled = get_as(
+            &kit,
+            "/v1/tables/membership/__by?tennat=acme&member=ada",
+            Some("ada"),
+        )
+        .await;
+        assert_eq!(misspelled.status, 400, "{}", misspelled.body);
+        assert!(
+            misspelled.body.contains("tennat"),
+            "say which: {}",
+            misspelled.body
+        );
+    }
+}
+
+#[pollster::test]
+async fn a_real_boolean_and_json_key_are_refused_when_named_in_the_by_query() {
+    // The `__by` query parses its values through the same coercion
+    // `key_from_path` uses, so a kind no address can carry stays refused
+    // on the route that was built for the keys the path could not.
+    for kit in kits(Access::TenantMembers) {
+        for (table, column) in [
+            ("reading", "at"),
+            ("flipped", "enabled"),
+            ("payload", "doc"),
+        ] {
+            let answer = get_as(
+                &kit,
+                &format!("/v1/tables/{table}/__by?{column}=1"),
+                Some("ada"),
+            )
+            .await;
+            assert_eq!(answer.status, 400, "{table}: {}", answer.body);
+            assert!(
+                answer.body.contains("bad-key"),
+                "{table} refused as something else: {}",
+                answer.body
+            );
+        }
+    }
+}
+
+#[pollster::test]
+async fn a_single_column_table_is_addressed_through_by_as_well() {
+    // The route answers for every declared table, not only composite-key
+    // ones. For everybody else it is the longhand of the path spelling —
+    // and, the next test says, the only address the reserved segment
+    // leaves one particular row.
+    for kit in kits(Access::PublicRead) {
+        seed(&kit).await;
+        let row = get_as(&kit, "/v1/tables/note/__by?id=n2", None).await;
+        assert_eq!(row.status, 200, "{}", row.body);
+        assert!(row.body.contains("hers"), "{}", row.body);
+    }
+}
+
+#[pollster::test]
+async fn the_row_whose_key_is_the_reserved_segment_is_reached_through_by() {
+    // The strand the reservation ties, and the way back. `__by` is a
+    // static segment and a static segment beats `{key}`, so the row of
+    // `note` whose id is literally `__by` is no longer reachable by
+    // path — that URL is the harness's route now, answering 400 for a
+    // key that is not there rather than the row. Serving `__by` for
+    // single-column tables too is what gives the row an address:
+    // `?id=__by`.
+    for kit in kits(Access::PublicRead) {
+        {
+            use cratefield_core::Statement;
+            kit.db
+                .execute(&Statement::with_values(
+                    "INSERT INTO note (id, author, body) VALUES (?, ?, ?)".to_owned(),
+                    vec!["__by".into(), "ada".into(), "reserved".into()],
+                ))
+                .await
+                .expect("seeded");
+        }
+
+        let stranded = get_as(&kit, "/v1/tables/note/__by", None).await;
+        assert_eq!(stranded.status, 400, "{}", stranded.body);
+        assert!(
+            stranded.body.contains("partial-key"),
+            "the strand is stated, not discovered: {}",
+            stranded.body
+        );
+
+        let reached = get_as(&kit, "/v1/tables/note/__by?id=__by", None).await;
+        assert_eq!(reached.status, 200, "{}", reached.body);
+        assert!(reached.body.contains("reserved"), "{}", reached.body);
+    }
+}
+
+#[pollster::test]
+async fn a_key_column_named_after_or_sort_has_no_address_on_by() {
+    // `after` and `sort` are the harness's parameters on this sub-path,
+    // read into their own fields before the key is — so a table whose
+    // key uses one of those names can never complete its key here.
+    // Naming both reserved words still leaves the key empty, and the
+    // refusal says which column is missing rather than quietly reading
+    // the reserved parameter as a value.
+    for kit in kits(Access::TenantMembers) {
+        let both = get_as(
+            &kit,
+            "/v1/tables/staged/__by?after=soon&sort=later",
+            Some("ada"),
+        )
+        .await;
+        assert_eq!(both.status, 400, "{}", both.body);
+        assert!(both.body.contains("partial-key"), "{}", both.body);
+        assert!(both.body.contains("after"), "say which: {}", both.body);
+        assert!(both.body.contains("sort"), "say which: {}", both.body);
+
+        let one = get_as(&kit, "/v1/tables/staged/__by?after=soon", Some("ada")).await;
+        assert_eq!(one.status, 400, "{}", one.body);
+        assert!(one.body.contains("sort"), "say which: {}", one.body);
+    }
+}
+
+#[pollster::test]
+async fn an_owner_table_serves_only_the_callers_own_row_through_by() {
+    // The scope and the key are in the same `WHERE` on this route as on
+    // the path one: ada naming grace's row by its full key is answered
+    // not-found — the same answer an absent row gets — and naming her
+    // own is answered with it.
+    for kit in kits(Access::Owner) {
+        {
+            use cratefield_core::Statement;
+            for member in ["ada", "grace"] {
+                kit.db
+                    .execute(&Statement::with_values(
+                        "INSERT INTO membership (tenant, member, role) VALUES (?, ?, ?)".to_owned(),
+                        vec!["acme".into(), member.into(), "member".into()],
+                    ))
+                    .await
+                    .expect("seeded");
+            }
+        }
+
+        let theirs = get_as(
+            &kit,
+            "/v1/tables/membership/__by?tenant=acme&member=grace",
+            Some("ada"),
+        )
+        .await;
+        assert_eq!(theirs.status, 404, "{}", theirs.body);
+        assert!(theirs.body.contains("no-such-row"), "{}", theirs.body);
+
+        let hers = get_as(
+            &kit,
+            "/v1/tables/membership/__by?tenant=acme&member=ada",
+            Some("ada"),
+        )
+        .await;
+        assert_eq!(hers.status, 200, "{}", hers.body);
+    }
+}
+
+#[pollster::test]
+async fn a_table_the_caller_may_not_read_is_refused_through_by() {
+    // The key parses before the access decision runs, so a well-formed
+    // key buys nobody the row. An anonymous caller is told to sign in —
+    // the same answer the path route gives, from the same decision — and
+    // a caller who does sign in is refused by that decision as well:
+    // `tier` declares `owner` with no subject column, which is
+    // `table-misdeclared` for whoever asks, verified or not. The row is
+    // seeded, so a `200` here would take a skipped decision to explain.
+    for kit in kits(Access::Owner) {
+        {
+            use cratefield_core::Statement;
+            kit.db
+                .execute(&Statement::with_values(
+                    "INSERT INTO tier (slug, label) VALUES (?, ?)".to_owned(),
+                    vec!["gold".into(), "Gold".into()],
+                ))
+                .await
+                .expect("seeded");
+        }
+
+        let anonymous = get_as(&kit, "/v1/tables/tier/__by?slug=gold", None).await;
+        assert_eq!(anonymous.status, 401, "{}", anonymous.body);
+        assert!(
+            anonymous.body.contains("unauthenticated"),
+            "{}",
+            anonymous.body
+        );
+
+        let signed_in = get_as(&kit, "/v1/tables/tier/__by?slug=gold", Some("ada")).await;
+        assert_eq!(signed_in.status, 500, "{}", signed_in.body);
+        assert!(
+            signed_in.body.contains("table-misdeclared"),
+            "{}",
+            signed_in.body
         );
     }
 }
