@@ -204,10 +204,26 @@ pub async fn send(
     body: Option<&str>,
     cookie: Option<&str>,
 ) -> Res {
+    send_with_headers(kit, method, path, body, cookie, &[]).await
+}
+
+/// `send` for a request that carries extra headers — the browser headers
+/// (`origin`, `host`, `sec-fetch-site`) the login-CSRF guard reads.
+pub async fn send_with_headers(
+    kit: &Kit,
+    method: http::Method,
+    path: &str,
+    body: Option<&str>,
+    cookie: Option<&str>,
+    extra: &[(&str, &str)],
+) -> Res {
     use tower::ServiceExt;
     let mut builder = axum::http::Request::builder().method(method).uri(path);
     if let Some(cookie) = cookie {
         builder = builder.header(http::header::COOKIE, format!("__Host-fz_session={cookie}"));
+    }
+    for (name, value) in extra {
+        builder = builder.header(*name, *value);
     }
     let request = match body {
         Some(body) => builder
@@ -236,6 +252,11 @@ pub async fn send(
 
 pub async fn post(kit: &Kit, path: &str, body: &str, cookie: Option<&str>) -> Res {
     send(kit, http::Method::POST, path, Some(body), cookie).await
+}
+
+/// `post` with extra headers, for the same reason `send_with_headers` exists.
+pub async fn post_with_headers(kit: &Kit, path: &str, body: &str, extra: &[(&str, &str)]) -> Res {
+    send_with_headers(kit, http::Method::POST, path, Some(body), None, extra).await
 }
 
 /// How many rows a table holds.

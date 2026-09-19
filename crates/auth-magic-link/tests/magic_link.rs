@@ -463,6 +463,62 @@ fn the_confirm_button_spends_the_token() {
     });
 }
 
+/// The confirm button spends the token and mints a session, so a form on
+/// another site must not be able to press it for somebody (issue #439):
+/// refused on arrival, the token unspent. A same-origin press — every
+/// header a real browser sends — still works.
+#[test]
+fn a_cross_site_confirm_cannot_spend_a_token_or_sign_anyone_in() {
+    pollster::block_on(async {
+        let kit = kit();
+        seed(&kit, "ada@example.com", false).await;
+        request_link(&kit, "ada@example.com").await;
+        let token = kit.outbox.last_token().expect("a token");
+
+        let cross_site = post_form_with(
+            &kit,
+            CONSUME,
+            &format!("token={token}"),
+            &[
+                ("host", "auth.example.test"),
+                ("origin", "https://evil.example"),
+            ],
+        )
+        .await;
+        assert_eq!(
+            cross_site.status,
+            StatusCode::FORBIDDEN,
+            "{}",
+            cross_site.text()
+        );
+        assert_eq!(
+            cross_site.json()["type"],
+            "https://factory0.ventures/problems/auth/cross-site-request"
+        );
+        assert!(
+            cross_site.cookie("__Host-fz_session").is_none(),
+            "the cross-site confirm signed somebody in"
+        );
+        assert_eq!(count(&kit, "sessions"), 0, "a session was issued anyway");
+
+        // The refusal spent nothing: the same token, same-origin, still
+        // signs the person in.
+        let own = post_form_with(
+            &kit,
+            CONSUME,
+            &format!("token={token}"),
+            &[
+                ("host", "auth.example.test"),
+                ("origin", "https://auth.example.test"),
+                ("sec-fetch-site", "same-origin"),
+            ],
+        )
+        .await;
+        assert_eq!(own.status, StatusCode::FOUND, "{}", own.text());
+        assert!(own.cookie("__Host-fz_session").is_some());
+    });
+}
+
 /// A prefetch must not become an oracle either: a real token and a fake
 /// one get the same page.
 #[test]
@@ -697,10 +753,20 @@ async fn get_page(kit: &Kit, uri: &str) -> Res {
 }
 
 async fn post_form(kit: &Kit, uri: &str, body: &str) -> Res {
-    let request = Request::builder()
+    post_form_with(kit, uri, body, &[]).await
+}
+
+/// `post_form` for a request that carries extra headers — the browser
+/// headers (`origin`, `host`, `sec-fetch-site`) the login-CSRF guard reads.
+async fn post_form_with(kit: &Kit, uri: &str, body: &str, extra: &[(&str, &str)]) -> Res {
+    let mut builder = Request::builder()
         .method(Method::POST)
         .uri(uri)
-        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded");
+    for (name, value) in extra {
+        builder = builder.header(*name, *value);
+    }
+    let request = builder
         .body(axum::body::Body::from(body.to_owned()))
         .expect("request");
     send(kit, request).await
