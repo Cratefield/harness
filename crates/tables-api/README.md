@@ -61,16 +61,39 @@ The two 404s are the same answer on purpose.
 | `GET /{table}/{key}` | one row by its primary key |
 | `PUT /{table}/{key}` | `200` and the row it replaced |
 | `DELETE /{table}/{key}` | `204`, and nothing |
+| `GET /{table}/__by?<column>=<value>&…` | one row by its primary key, named in the query |
+| `PUT /{table}/__by?…` | `200` and the row it replaced |
+| `DELETE /{table}/__by?…` | `204`, and nothing |
 
-**The last three need a key of one column.** `/{table}/{key}` refuses a
-composite key rather than joining its values with a separator that could
-occur inside one, so a table declaring `primary_key = ["tenant",
-"member"]` has a page and a create and no route that names one row. It
-publishes only those two, for the reason below. ADR 0018 is the
-decision on the other three — `/{table}/__by`, the key named in the
-query — and until that is built, refusing is still what the route does.
+**`/{table}/{key}` needs a key of one column.** It refuses a composite
+key rather than joining its values with a separator that could occur
+inside one (`400 composite-key`), so a table declaring `primary_key =
+["tenant", "member"]` cannot name a row through it — and its refusal
+names the route that does: `/{table}/__by?<column>=<value>&…`, the key
+named in the query (ADR 0018). The `__by` routes answer with the same
+bodies and statuses the path routes answer — a read returns the row, a
+replace takes the row and answers the replaced one, a remove answers
+`204` and nothing — one route whatever the key's arity.
 
-These are the five the surface publishes for a table it can address, and
+`__by` answers for **every** declared table, not only composite-key
+ones, and not as a second way to do one thing: a static segment beats
+the dynamic `{key}` in the one shared router, so on a single-column-key
+table a row whose key value is literally `__by` would otherwise be
+unreachable, and `/{table}/__by?id=__by` is that row's address back.
+
+The `__by` query names primary-key columns and nothing else. Naming some
+but not all is `400 partial-key` — a row is addressed by its whole key,
+not by every row sharing a prefix. Naming a column outside the key is
+`400 not-a-key-column`, because ignoring it answers a question the
+caller did not ask. Values are parsed exactly as a path segment's, so a
+`real`, `boolean` or `json` key stays refused with `bad-key`. `after`
+and `sort` are the harness's parameters on this sub-path and can never
+name a key column, so a table whose key uses one of those names has no
+address here.
+
+For a readable table the surface publishes the page and the one row,
+and three more for a writable one, each single-row action against
+whichever spelling its table's key calls for — and
 `every_published_action_is_a_route_that_exists` is what keeps the two
 lists the same. A published action whose route does not exist is worse
 than an unpublished one: a generated UI renders the form and the
@@ -271,11 +294,22 @@ tenancy threaded through `Module::surface`, which does not carry it
 today; #385 is where the published contract and the served one come
 apart.
 
-A `public-read` table publishes its reads and no writes, because there
-are none — and a composite-key table publishes no single-row action,
-because `/{table}/{key}` does not exist for it. Both are the same rule:
-the contract lists what is there. Without it, a generated client carries
-methods that answer `403` or `400` whatever they are called with.
+A composite-key table publishes all five actions, its three single-row
+ones against `/{table}/__by` (ADR 0018) — the same rule as ever, that
+the contract lists what is there. Without it, a generated
+client carries methods that answer `403` or `400` whatever they are
+called with.
+
+Where the key travels is a fact about the key's arity, and the
+published path says which: `/{table}/{key}` for a key of one column,
+`/{table}/__by` for a wider one, where the path carries no placeholder
+and the published schema names the key columns instead — as the input
+of a read and a delete, which have no body, and beside a replace's row
+body under `x-cf-query`. That keyword is introduced by this crate,
+riding under the harness's `x-cf-*` namespace: a client generator can
+tell a path parameter from query parameters, and one that does not know
+the keyword ignores it the way it ignores every `x-cf-*` keyword it was
+built before.
 
 A `public-read` table publishes its reads and no writes, because there
 are none. The body schema on a write is the table's own JSON Schema — the

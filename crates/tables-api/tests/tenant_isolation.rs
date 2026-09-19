@@ -418,6 +418,59 @@ async fn one_replace_and_remove_refuse_the_same_way_on_a_registry_deployment() {
     );
 }
 
+#[pollster::test]
+async fn the_by_query_route_refuses_the_same_way_on_a_registry_deployment() {
+    // The addressing route the composite-key work added goes through the
+    // same decision, so the registry refusal reaches it too — a route
+    // that bypassed `conn.tenancy()` would serve this level through
+    // `__by` after every path route had been pinned shut above.
+    let (kit, _a, _b) = routed().await;
+
+    let one = send_as(
+        &kit,
+        Method::GET,
+        "b.example",
+        "/v1/tables/note/__by?id=n1",
+        Some("ada"),
+        None,
+    )
+    .await;
+    assert_eq!(one.status, 500, "{}", one.body);
+    assert!(one.body.contains("no-membership-fact"), "{}", one.body);
+
+    let replaced = send_as(
+        &kit,
+        Method::PUT,
+        "b.example",
+        "/v1/tables/note/__by?id=n1",
+        Some("ada"),
+        Some(r#"{"id":"n1","author":"ada","body":"mine"}"#),
+    )
+    .await;
+    assert_eq!(replaced.status, 500, "{}", replaced.body);
+    assert!(
+        replaced.body.contains("no-membership-fact"),
+        "{}",
+        replaced.body
+    );
+
+    let removed = send_as(
+        &kit,
+        Method::DELETE,
+        "b.example",
+        "/v1/tables/note/__by?id=n1",
+        Some("ada"),
+        None,
+    )
+    .await;
+    assert_eq!(removed.status, 500, "{}", removed.body);
+    assert!(
+        removed.body.contains("no-membership-fact"),
+        "{}",
+        removed.body
+    );
+}
+
 // ------------------------------------------- the routing is not the bug
 
 #[pollster::test]
@@ -445,6 +498,46 @@ async fn a_registry_deployment_still_serves_each_host_its_own_database() {
         Method::GET,
         "b.example",
         "/v1/tables/bulletin",
+        Some("ada"),
+        None,
+    )
+    .await;
+    assert_eq!(at_b.status, 200, "{}", at_b.body);
+    assert!(
+        at_b.body.contains("bulletin of tenant b"),
+        "the same bearer at the other host answered another database: {}",
+        at_b.body
+    );
+}
+
+#[pollster::test]
+async fn the_by_query_still_serves_each_host_its_own_row() {
+    // The positive control the refusal above needs. `__by` cannot be
+    // proven safe by its refusal alone: on the table where the tenancy
+    // check passes — `bulletin` is `public-read` — the route answers,
+    // and answers from the host's own database. The same bearer asking
+    // for the same key at two hosts gets two different rows, so the
+    // addressing route read the tenant-bound connection and not the
+    // fallback nothing seeds.
+    let (kit, _a, _b) = routed().await;
+
+    let at_a = send_as(
+        &kit,
+        Method::GET,
+        "a.example",
+        "/v1/tables/bulletin/__by?id=b1",
+        Some("ada"),
+        None,
+    )
+    .await;
+    assert_eq!(at_a.status, 200, "{}", at_a.body);
+    assert!(at_a.body.contains("bulletin of tenant a"), "{}", at_a.body);
+
+    let at_b = send_as(
+        &kit,
+        Method::GET,
+        "b.example",
+        "/v1/tables/bulletin/__by?id=b1",
         Some("ada"),
         None,
     )
