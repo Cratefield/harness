@@ -1,0 +1,40 @@
+[package]
+publish = false  # publishing is the remaining human step (ADR 0021); see docs/RELEASING.md
+name = "cratefield-mcp"
+description = "Model Context Protocol server over `fz --json`: every tool result is the CLI's own JSON envelope, and its error-code catalogue is read at runtime, never copied"
+readme = "README.md"
+keywords = ["cratefield", "mcp", "model-context-protocol", "agents"]
+categories = ["command-line-utilities", "development-tools"]
+include = ["src/**/*", "README.md"]
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "fz-mcp"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+# The catalogue comes from the CLI itself, live through
+# `cratefield_cli::codes::registry()` — never a copy that can drift.
+cratefield-cli = { workspace = true }
+serde = { workspace = true }
+# Plain workspace `serde_json`, no `preserve_order`: features unify
+# across the whole workspace build, so enabling it here would switch
+# `serde_json::Value`'s map to an `IndexMap` for every crate. Ordering
+# is not needed anyway — the text an agent reads is fz's own stdout
+# line passed through byte for byte, and the envelopes this crate
+# synthesises serialise from structs, whose field order serde keeps
+# without any feature.
+serde_json = { workspace = true }
+
+[dev-dependencies]
+# Path-only, not `workspace = true`: the workspace entry's default
+# feature pulls the heavy conformance graph, and all this crate's tests
+# want is `TempDir`.
+cratefield-testing = { path = "../testing" }

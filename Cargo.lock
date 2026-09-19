@@ -1210,6 +1210,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "cratefield-mcp"
+version = "0.1.0"
+dependencies = [
+ "cratefield-cli",
+ "cratefield-testing",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "cratefield-module-changelog"
 version = "0.1.0"
 dependencies = [
