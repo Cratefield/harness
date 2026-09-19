@@ -1498,6 +1498,7 @@ dependencies = [
 name = "cratefield-tables-api"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "axum",
  "cratefield-adapter-sqlite",
  "cratefield-core",

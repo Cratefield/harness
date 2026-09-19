@@ -19,7 +19,7 @@
 //! would make "unset this field" unexpressible: an absent key and a null
 //! one would both have to mean "leave it".
 
-use cratefield_core::{Caller, Database, Problem, ProblemDef, Scope, require_admin};
+use cratefield_core::{Caller, Database, Problem, ProblemDef, Scope, Tenancy, require_admin};
 use cratefield_tables::{Owned, UpdateError};
 use http::{HeaderMap, StatusCode};
 use serde_json::Value;
@@ -46,6 +46,7 @@ pub const ALREADY_EXISTS: ProblemDef = ProblemDef {
 /// The decision and the scope for a write, shared by all three.
 async fn permit(
     tables: &Tables,
+    tenancy: Tenancy,
     headers: &HeaderMap,
     name: &str,
 ) -> Result<(crate::access::TableApi, Reach), Problem> {
@@ -57,6 +58,7 @@ async fn permit(
     let caller: Caller = who(tables, headers, &api).await?;
     let reach = may_write(
         &api,
+        tenancy,
         &caller,
         require_admin(tables.ctx.config.as_ref(), headers),
     )?;
@@ -88,12 +90,13 @@ fn subject_value(reach: &Reach) -> Value {
 pub async fn create(
     tables: &Tables,
     conn: &dyn Database,
+    tenancy: Tenancy,
     headers: &HeaderMap,
     scope: &Scope,
     name: &str,
     body: Value,
 ) -> Result<Value, Problem> {
-    let (api, reach) = permit(tables, headers, name).await?;
+    let (api, reach) = permit(tables, tenancy, headers, name).await?;
     let mut row = body;
     settle_subject(&reach, &mut row)?;
 
@@ -146,16 +149,22 @@ fn looks_like_a_conflict(err: &cratefield_core::DbError) -> bool {
 /// The access decision's refusal, [`NOT_A_ROW`], [`NO_SUCH_ROW`] when
 /// nothing was changed — which under `owner` also covers a row belonging
 /// to somebody else — or a database failure.
+// One over the lint's seven: the tenancy arrived and every argument
+// earns its place. Folding the rest into a struct to hide the count
+// would trade a visible signature for a `Asked`-style one nobody asked
+// for — `page` earned that struct; this grew by one parameter, once.
+#[allow(clippy::too_many_arguments)]
 pub async fn replace(
     tables: &Tables,
     conn: &dyn Database,
+    tenancy: Tenancy,
     headers: &HeaderMap,
     scope: &Scope,
     name: &str,
     key: &Value,
     body: Value,
 ) -> Result<Value, Problem> {
-    let (api, reach) = permit(tables, headers, name).await?;
+    let (api, reach) = permit(tables, tenancy, headers, name).await?;
     let mut row = body;
     settle_subject(&reach, &mut row)?;
     let subject = subject_value(&reach);
@@ -197,12 +206,13 @@ pub async fn replace(
 pub async fn remove(
     tables: &Tables,
     conn: &dyn Database,
+    tenancy: Tenancy,
     headers: &HeaderMap,
     scope: &Scope,
     name: &str,
     key: &Value,
 ) -> Result<(), Problem> {
-    let (api, reach) = permit(tables, headers, name).await?;
+    let (api, reach) = permit(tables, tenancy, headers, name).await?;
     let subject = subject_value(&reach);
 
     let statement =

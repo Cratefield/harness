@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use cratefield_adapter_sqlite::SqliteDatabase;
 use cratefield_core::{
-    Caller, Config, Database, ModuleContext, Ports, Problem, Statement, Subject,
+    Caller, Config, Database, ModuleContext, Ports, Problem, Statement, Subject, Tenancy,
 };
 use cratefield_manifest::Access;
 use cratefield_tables::{Schema, TableDef};
@@ -129,8 +129,13 @@ fn api(access: Access, subject: Option<&str>) -> TableApi {
 fn a_public_table_is_served_and_never_written() {
     // `public-read` is exactly that. A venture that wants public rows
     // written has not declared this level.
-    let refusal =
-        may_write(&api(Access::PublicRead, None), &ada(), Ok(())).expect_err("public-read is read");
+    let refusal = may_write(
+        &api(Access::PublicRead, None),
+        Tenancy::Sole,
+        &ada(),
+        Ok(()),
+    )
+    .expect_err("public-read is read");
     assert_eq!(refusal.slug, "table-read-only");
     assert_eq!(refusal.status.as_u16(), 403);
 }
@@ -186,6 +191,7 @@ fn a_created_row_is_stored_under_the_callers_own_name() {
     let written = pollster::block_on(create(
         &tables,
         &db,
+        Tenancy::Sole,
         &as_caller("ada"),
         &scope(),
         "note",
@@ -198,6 +204,7 @@ fn a_created_row_is_stored_under_the_callers_own_name() {
     let read = pollster::block_on(one(
         &tables,
         &db,
+        Tenancy::Sole,
         &as_caller("ada"),
         &scope(),
         "note",
@@ -214,6 +221,7 @@ fn a_key_that_is_taken_is_a_conflict_and_not_a_500() {
     let refusal = pollster::block_on(create(
         &tables,
         &db,
+        Tenancy::Sole,
         &as_caller("ada"),
         &scope(),
         "note",
@@ -267,6 +275,7 @@ fn a_failure_that_is_not_a_conflict_is_not_one_because_the_table_is_named_unique
     let refusal = pollster::block_on(create(
         &tables,
         &db,
+        Tenancy::Sole,
         &as_caller("ada"),
         &scope(),
         "unique_codes",
@@ -291,6 +300,7 @@ fn changing_somebody_elses_row_reports_no_such_row() {
     let refusal = pollster::block_on(replace(
         &tables,
         &db,
+        Tenancy::Sole,
         &as_caller("ada"),
         &scope(),
         "note",
@@ -304,6 +314,7 @@ fn changing_somebody_elses_row_reports_no_such_row() {
     let hers = pollster::block_on(one(
         &tables,
         &db,
+        Tenancy::Sole,
         &as_caller("grace"),
         &scope(),
         "note",
@@ -320,6 +331,7 @@ fn deleting_somebody_elses_row_reports_no_such_row_and_leaves_it() {
     let refusal = pollster::block_on(remove(
         &tables,
         &db,
+        Tenancy::Sole,
         &as_caller("ada"),
         &scope(),
         "note",
@@ -332,6 +344,7 @@ fn deleting_somebody_elses_row_reports_no_such_row_and_leaves_it() {
         pollster::block_on(one(
             &tables,
             &db,
+            Tenancy::Sole,
             &as_caller("grace"),
             &scope(),
             "note",
@@ -349,6 +362,7 @@ fn a_caller_changes_and_deletes_their_own_row() {
     pollster::block_on(replace(
         &tables,
         &db,
+        Tenancy::Sole,
         &as_caller("ada"),
         &scope(),
         "note",
@@ -359,6 +373,7 @@ fn a_caller_changes_and_deletes_their_own_row() {
     let read = pollster::block_on(one(
         &tables,
         &db,
+        Tenancy::Sole,
         &as_caller("ada"),
         &scope(),
         "note",
@@ -370,6 +385,7 @@ fn a_caller_changes_and_deletes_their_own_row() {
     pollster::block_on(remove(
         &tables,
         &db,
+        Tenancy::Sole,
         &as_caller("ada"),
         &scope(),
         "note",
@@ -380,6 +396,7 @@ fn a_caller_changes_and_deletes_their_own_row() {
         pollster::block_on(one(
             &tables,
             &db,
+            Tenancy::Sole,
             &as_caller("ada"),
             &scope(),
             "note",
@@ -397,6 +414,7 @@ fn a_body_that_is_not_a_legal_row_is_refused_before_the_database_sees_it() {
     let refusal: Problem = pollster::block_on(create(
         &tables,
         &db,
+        Tenancy::Sole,
         &as_caller("ada"),
         &scope(),
         "note",
@@ -411,13 +429,17 @@ fn any_verified_caller_writes_any_row_of_a_tenant_table() {
     // Ada overwrites a row whose subject column says `grace`, which is
     // the level: `tenant-members` is not scoped to the caller's own rows.
     // It is not scoped to the caller's own *tenant* either — nothing here
-    // makes Ada a member of one and the decision has no tenant in it
-    // (issue #385).
+    // makes Ada a member of one. What makes the write serve is the
+    // tenancy shape, and `Tenancy::Sole` is the shape where the level
+    // holds: no registry, one tenant, so "any verified caller" and
+    // "a member of this tenant" are the same set (issue #385). Under
+    // `Tenancy::FromRegistry` the same write refuses.
     let db = seeded();
     let tables = tables(Access::TenantMembers);
     pollster::block_on(replace(
         &tables,
         &db,
+        Tenancy::Sole,
         &as_caller("ada"),
         &scope(),
         "note",
@@ -434,6 +456,7 @@ fn an_anonymous_caller_may_not_write() {
     let refusal = pollster::block_on(create(
         &tables,
         &db,
+        Tenancy::Sole,
         &HeaderMap::new(),
         &scope(),
         "note",

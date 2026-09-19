@@ -27,8 +27,8 @@ pub mod surface;
 pub mod write;
 
 pub use access::{
-    FORBIDDEN, MISDECLARED, NOT_YOURS_TO_GIVE, READ_ONLY, Reach, TableApi, UNAUTHENTICATED,
-    may_read, may_write, settle_subject,
+    FORBIDDEN, MISDECLARED, NO_MEMBERSHIP_FACT, NOT_YOURS_TO_GIVE, READ_ONLY, Reach, TableApi,
+    UNAUTHENTICATED, may_read, may_write, settle_subject,
 };
 pub use batch::{Batch, MAX_READS, Read, run as run_batch};
 pub use declared::{Declared, parse};

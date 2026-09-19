@@ -31,6 +31,13 @@
 //! not an operator can reach the table at all — which is the thing a
 //! reviewer is looking for — even though an admin sees more rows than an
 //! owner does.
+//!
+//! The rank reads the level off the manifest, and the manifest does not
+//! know the deployment's tenancy: `owner` → `tenant-members` reports
+//! [`Move::Widens`] even on a deployment whose tenants come from a
+//! registry, where the serving layer refuses the level for everybody
+//! (issue #385). The word describes the direction of the edit, not the
+//! rows anyone will get.
 
 use crate::access::{Access, AccessMap};
 use crate::privacy::{TablePrivacy, TablePrivacyMap};

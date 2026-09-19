@@ -9,8 +9,10 @@
 //!
 //! It says a route exists, what it takes, and whether a credential is
 //! needed. It does **not** say which rows the caller will get: that is
-//! the table's access level, decided per request against the caller's own
-//! id. So `owner` and `tenant-members` both publish as
+//! the table's access level, decided per request — against the caller's
+//! own id, and for `tenant-members` against the request's tenancy
+//! first, which refuses the level to everyone where a registry named
+//! the tenant (#385). So `owner` and `tenant-members` both publish as
 //! [`Audience::Subject`] — a credential is needed either way — and the
 //! difference between them is not a fact about the route.
 //!

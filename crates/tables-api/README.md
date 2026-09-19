@@ -17,7 +17,7 @@ port identified, and the outcome of the admin check, which rows this
 request reaches.
 
 ```rust
-match may_read(&api, &caller, admin)? {
+match may_read(&api, tenancy, &caller, admin)? {
     Reach::Everything => /* the whole table */,
     Reach::OwnedBy { column, subject } => /* rows where column = subject */,
 }
@@ -48,6 +48,7 @@ the point of it.
 | `401 unauthenticated` | no credential where one is needed, or one that did not verify |
 | `503 verifier-unavailable` | a credential was presented and could not be checked |
 | `500 table-misdeclared` | `owner` with no subject column to match against |
+| `500 no-membership-fact` | `tenant-members` where a tenant registry named the tenant — the level is refused to every caller |
 
 The two 404s are the same answer on purpose.
 
@@ -212,7 +213,7 @@ writable.
 | level | may write |
 |---|---|
 | `public-read` | **nobody** (`403 table-read-only`) |
-| `tenant-members` | any signed-in caller, any row |
+| `tenant-members` | any signed-in caller, any row; with a tenant registry, nobody |
 | `owner` | a signed-in caller, their own rows |
 | `admin` | an admin token |
 
@@ -221,8 +222,15 @@ tenant.** There is no membership fact to check: a `Caller` carries an id,
 a session and an address, and `Ports::tenants` is not a `Port`, so a
 module cannot ask which tenant it is serving either. On a deployment
 without a registry — every venture `fz build` generates — the two are the
-same set, because there is one tenant. On one with a registry they are
-not, and issue #385 carries the analysis.
+same set, because there is one tenant, and the level serves as it always
+did. On one with a registry they are not, and the level is refused with
+`500 no-membership-fact` at every host, the caller's own included: "any
+verified caller" is a wider set than "a member of this tenant", and
+serving the first as the second is the leak of issue #385. The refusal
+is a `500` and not a `403` — nothing the caller did is wrong and no
+credential of theirs fixes it — and it is not a membership check. #385
+stays open for the fact that would make one, a tenant claim on the
+subject.
 
 **A row a caller writes is a row they own.** Under `owner` the subject
 column is settled by the harness, not taken from the body: absent or null
@@ -254,6 +262,14 @@ per request against their own id. So `owner` and `tenant-members` both
 publish as `Audience::Subject`, a variant added for them: calling `owner`
 public would render a form for rows the caller cannot reach, and calling
 it admin would hide it from the person whose rows they are.
+
+Nor can a surface say whether the level will be honoured. `surface()`
+reads the manifest and nothing else, so a `tenant-members` table
+publishes as `Audience::Subject` on a registry deployment too — one where
+every request to it will be refused. Closing that needs the deployment's
+tenancy threaded through `Module::surface`, which does not carry it
+today; #385 is where the published contract and the served one come
+apart.
 
 A `public-read` table publishes its reads and no writes, because there
 are none — and a composite-key table publishes no single-row action,
@@ -289,7 +305,8 @@ decoration that reads as compliance. These are what make it not that.
 | level | anonymous | signed in | reaches |
 |---|---|---|---|
 | `public-read` | yes | yes | everything |
-| `tenant-members` | **401** | yes | everything |
+| `tenant-members` | **401** | yes | everything, where there is no tenant registry |
+| `tenant-members`, registry deployment | **500** | **500** | nothing — every host, the caller's own included |
 | `owner` | **401** | yes | only rows whose subject column is theirs |
 | `admin` | the admin check's own answer | same | everything |
 
@@ -319,6 +336,15 @@ wrong and one of them is a leak. The column is checked against the
 table's fields at request time as well as at build time, because a table
 edited under a stale privacy block would otherwise produce
 `WHERE nope = 'ada'`.
+
+**`tenant-members` on a deployment with a tenant registry refuses with
+a 500, to everybody.** The same shape of fault as `table-misdeclared`:
+the deployment's composition, not the caller's doing. There is no
+membership fact (issue #385), and where a registry named the tenant
+"any verified caller" and "a member of this tenant" are different sets,
+so the level is refused at every host — the caller's own included —
+rather than served to whoever arrives. Signing in does not help; a
+different credential is a caller the deployment equally cannot place.
 
 **A level this build does not understand is refused.** `Access` is
 `#[non_exhaustive]`; a level added later arrives at that arm rather than
