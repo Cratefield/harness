@@ -6,6 +6,17 @@
 # the workspace dependency requirements it manages. Changelogs are
 # generated per crate from conventional commits (feat/fix grouped,
 # breaking changes highlighted — the git-cliff defaults).
+#
+# Breaking bumps cascade (issue #466): when release-plz rewrites a
+# workspace dependency requirement itself, it patch-bumps every published
+# crate that depends on the bumped one, transitively, and publishes them
+# all in the same release PR, in dependency order — so per-crate
+# versioning alone strands nothing. Hand-editing the
+# `[workspace.dependencies]` requirement bypasses that: the requirement
+# already reads correct in-tree, so release-plz rewrites nothing and
+# strands every dependent silently, which is what the hand-done core 0.5
+# bump did (issue #462). Rule: bump only the crate's own version, never
+# the workspace requirement. Procedure: docs/RELEASING.md.
 
 [workspace]
 repo_url = "https://github.com/Cratefield/harness"
