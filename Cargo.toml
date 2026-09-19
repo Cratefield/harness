@@ -69,6 +69,9 @@ cratefield-module-changelog = { path = "crates/module-changelog", version = "0.1
 # The notifications module is the first to depend on the auth client, because
 # the account a route acts for comes from the auth extractor (ADR 0016).
 cratefield-module-notifications = { path = "crates/module-notifications", version = "0.1.0" }
+# Aggregate usage telemetry (issue #413): counted events behind a closed
+# grammar, with the consent model built into the crate.
+cratefield-module-telemetry = { path = "crates/module-telemetry", version = "0.1.0" }
 # Declared here rather than by bare path in the one crate that uses it: a
 # path-only dependency has no version, and `cargo publish` refuses a
 # dependency without one. It was invisible while both crates were
@@ -112,6 +115,12 @@ axum = { version = "0.8.9", default-features = false, features = [
     "original-uri",
 ] }
 http = "1.5.0"
+# Media-type parsing for the telemetry ingest route's content-type guard
+# (issue #413): the same crate axum's `Json` extractor uses to decide what
+# counts as JSON, so the route's own check accepts exactly what the
+# extractor accepted — `application/json`, `application/*+json`, charset
+# parameters and case differences included. Pure Rust, wasm-safe.
+mime = "0.3.17"
 tower = { version = "0.5.3", features = ["util"] }
 tower-http = { version = "0.7.1", default-features = false, features = ["cors"] }
 bytes = "1.12.1"

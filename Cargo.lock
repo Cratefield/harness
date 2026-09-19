@@ -657,6 +657,7 @@ dependencies = [
  "cratefield-module-email-signup",
  "cratefield-module-notifications",
  "cratefield-module-privacy",
+ "cratefield-module-telemetry",
  "cratefield-module-waitlist",
  "cratefield-push-auth",
  "cratefield-push-wiring",
@@ -900,6 +901,7 @@ dependencies = [
  "cratefield-module-email-signup",
  "cratefield-module-notifications",
  "cratefield-module-privacy",
+ "cratefield-module-telemetry",
  "cratefield-module-waitlist",
  "serde",
  "serde_json",
@@ -1303,6 +1305,26 @@ dependencies = [
  "sea-query",
  "serde",
  "serde_json",
+ "tower",
+ "tracing",
+]
+
+[[package]]
+name = "cratefield-module-telemetry"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "cratefield-adapter-sqlite",
+ "cratefield-core",
+ "cratefield-module-privacy",
+ "cratefield-testing",
+ "http",
+ "mime",
+ "pollster",
+ "sea-query",
+ "serde",
+ "serde_json",
+ "time",
  "tower",
  "tracing",
 ]

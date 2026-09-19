@@ -84,6 +84,7 @@ what actually keeps a crate off crates.io.
 | `cratefield-adapter-sqlite` | `Database` over `rusqlite` (bundled). Used by every test, and viable for a single-node self-hosted deployment. |
 | `cratefield-module-email-signup` | Collect an email, double opt-in, unsubscribe, admin export. |
 | `cratefield-module-waitlist` | Join a per-product waitlist, confirm, position, referral codes, admin export. |
+| `cratefield-module-telemetry` | Aggregate usage counts from clients (issue #413): closed event and module vocabularies, a batched counts-only payload, a machine-readable consent notice, opt-out via a local switch or `DO_NOT_TRACK`/`CI`, and aggregate admin rows. No third-party analytics, no free text ([TELEMETRY.md](TELEMETRY.md)). |
 | `cratefield-cli` | Binary `fz`: `fz migrations collect`, `fz doctor`, `fz modules`. Run from the venture repo with `cargo run -p` or installed. |
 | `cratefield-testing` | Conformance kit for modules: fake mailer, fake captcha, fake rate limiter, fixed clock, in-memory `Database`, request helpers over the axum router (no network). Used by public and private modules alike. |
 | `cratefield-adapter-postgres` | `Database` over `sqlx` Postgres, for the native runtime. The parity suite runs every module's suite against SQLite and Postgres (`.github/workflows/parity.yml`). |
@@ -262,6 +263,18 @@ Table `subscribers(id, email, email_normalized unique, status, source, locale, c
 Table `waitlist_entries(id, email, email_normalized, product, status, position, referral_code unique, referred_by, referrals, answers, created_at, confirmed_at)`, unique on `(email_normalized, product)`.
 
 Emits `waitlist.confirmed`; a venture can subscribe that event to also add the address to the signup list.
+
+### Telemetry module
+
+| Route | Behaviour |
+|---|---|
+| `POST /v1/telemetry/events` | A batch of counted events under schema version 1: enums, bounded counts, duration buckets, a 32-hex install id — no free text anywhere ([TELEMETRY.md](TELEMETRY.md)). `202 {"ok":true}`. Unauthenticated by design, because the caller is a CLI, not a browser; guarded by the `RateLimiter` port, the 64-event batch cap and a closed-vocabulary parser that rejects unknown fields and never echoes an offending value in its error body — `Batch::parse`, hand-written over `serde_json::Value` precisely so a rejection cannot quote the value the way serde's own errors would. |
+| `GET /v1/telemetry/notice` | The machine-readable consent notice: the exact first-run text, the opt-out command, and every payload field with its permitted vocabulary. Unauthenticated — a notice you must authenticate to read is not a notice. |
+| `GET /v1/telemetry/admin/usage` | Admin. Aggregate rows only; no per-install rows. |
+
+Table `telemetry_events(bucket_key, day, install_id, client_kind, client_version, platform, arch, event, outcome, error_kind, duration_bucket, events, first_seen_at, last_seen_at)`, one accumulation bucket per row — no row per event — and `telemetry_modules(install_id, day, module)` for the payload's `modules` list.
+
+Emits `telemetry.recorded` when a batch is accepted.
 
 ## 7. Migrations
 
