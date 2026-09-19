@@ -51,11 +51,11 @@
 //! - [`LinkError::SegmentMissing`] — the release is pinned but its
 //!   precompiled segment is not published;
 //! - [`LinkError::Store`] — a store errored, so the linker got no answer
-//!   at all. That is [`SegmentMissing`]'s rung reached from the other
-//!   side: a store that cannot answer is no more reason to fail the deploy
-//!   than one that honestly answers "no", and an optimisation's outage
-//!   must not become a failed deploy. The store's own message travels in
-//!   the reason.
+//!   at all. That is [`LinkError::SegmentMissing`]'s rung reached from the
+//!   other side: a store that cannot answer is no more reason to fail the
+//!   deploy than one that honestly answers "no", and an optimisation's
+//!   outage must not become a failed deploy. The store's own message
+//!   travels in the reason.
 //!
 //! Refused outright, never papered over with a build:
 //! [`LinkError::DigestMismatch`] and [`LinkError::CorruptCache`] mean bytes
