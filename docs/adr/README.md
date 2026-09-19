@@ -43,6 +43,15 @@ through a `Scope` change that would bump `HARNESS_API`, carrying exactly
 the guarantees the in-process bus already gave. Bidirectional was
 rejected for the cycle it admits and the delivery question it forces.
 
+ADR 0018 decides how a composite-key declared table is addressed (#387):
+the key is named in the query at `/{table}/__by` rather than in the
+path, because one shared router serves every declared table and a
+static segment shadows `{key}` — so the reservation is made on purpose
+and the row it strands is given the query form back. Per-arity path
+segments, a key in a request body, and refusing the shape in `fz build`
+were rejected. The decision is recorded only: nothing ships yet, and
+the three routes still answer `400 composite-key`.
+
 [0102](0102-crypto-crate.md) chose the crypto crate: RustCrypto's
 `chacha20poly1305`.
 

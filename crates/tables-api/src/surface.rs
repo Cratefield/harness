@@ -97,14 +97,15 @@ pub fn surface(tables: &[TableApi]) -> Surface {
 /// A key of several columns cannot: `key_from_path` refuses it with
 /// `composite-key` rather than joining the values with a separator that
 /// could occur inside one. So `/{table}/{key}` does not exist for such a
-/// table, and publishing three actions against it would put four methods
+/// table, and publishing three actions against it would put three methods
 /// in every generated client that answer 400 whatever they are called
 /// with — the same argument `writable` makes about `public-read`, which
 /// publishes its reads and nothing else rather than a create that is
 /// always refused.
 ///
-/// Issue #387 is whether composite-key tables should get single-row
-/// routes at all. Until they do, the contract says what is there.
+/// ADR 0018 decides they should: the three actions return at
+/// `/{table}/__by`, the key named in the query. That sub-path is not
+/// built yet, so until it is, the contract says what is there.
 fn addressable(table: &cratefield_tables::TableDef) -> bool {
     table.primary_key.len() == 1
 }

@@ -248,10 +248,12 @@ fn the_published_json_does_not_ask_a_reader_for_a_captcha_widget() {
 fn a_composite_key_table_publishes_only_the_routes_it_has() {
     // `/{table}/{key}` refuses a key of several columns rather than
     // joining them with a separator that could occur inside one, so those
-    // three routes do not exist for this table (#387). Publishing them
-    // would put three methods in every generated client that answer 400
-    // whatever they are called with — which is the argument `public-read`
-    // already wins by publishing its reads and not a create.
+    // three routes do not exist for this table yet — ADR 0018 gives them
+    // `/{table}/__by`, the key named in the query, and until that is
+    // built this is the contract. Publishing them would put three
+    // methods in every generated client that answer 400 whatever they
+    // are called with — which is the argument `public-read` already wins
+    // by publishing its reads and not a create.
     let published = surface(&[TableApi {
         table: membership(),
         access: Access::TenantMembers,
