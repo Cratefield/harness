@@ -26,3 +26,9 @@ cratefield-module-waitlist = { workspace = true }
 cratefield-module-cms = { workspace = true }
 cratefield-module-notifications = { workspace = true }
 cratefield-module-privacy = { workspace = true }
+# The same check, for the telemetry entry (issue #413). Path-only rather
+# than `workspace = true` because `cargo publish` resolves dev-dependencies
+# against crates.io too, and a path-only one is stripped from the packaged
+# manifest — the rule `docs/RELEASING.md` states for every internal
+# dev-dependency in this workspace.
+cratefield-module-telemetry = { path = "../module-telemetry" }

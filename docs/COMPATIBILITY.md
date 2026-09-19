@@ -52,6 +52,7 @@ compatibility-doc` and checked in CI for drift. Do not edit by hand.
 | `cratefield-module-hello` *(not published)* | 0.1.1 | 1 | `^0.5` — `>=0.5.0, <0.6.0` |
 | `cratefield-module-notifications` | 0.1.3 | 1 | `^0.5` — `>=0.5.0, <0.6.0` |
 | `cratefield-module-privacy` | 0.1.3 | 1 | `^0.5` — `>=0.5.0, <0.6.0` |
+| `cratefield-module-telemetry` | 0.1.0 | 1 | `^0.5` — `>=0.5.0, <0.6.0` |
 | `cratefield-module-waitlist` | 0.1.4 | 1 | `^0.5` — `>=0.5.0, <0.6.0` |
 | `cratefield-provisioning` *(not published)* | 0.1.1 | 1 | `^0.5` — `>=0.5.0, <0.6.0` |
 | `cratefield-push-auth` | 0.1.4 | 1 | `^0.5` — `>=0.5.0, <0.6.0` |

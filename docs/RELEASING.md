@@ -189,6 +189,7 @@ crate exists**, so the very first release of each crate is manual:
    cargo publish -p cratefield-runtime-cloudflare
    cargo publish -p cratefield-runtime-native
    cargo publish -p cratefield-testing
+   cargo publish -p cratefield-module-telemetry
    cargo publish -p cratefield-module-email-signup
    cargo publish -p cratefield-module-waitlist
    cargo publish -p cratefield-module-cms
@@ -201,7 +202,7 @@ crate exists**, so the very first release of each crate is manual:
    cargo publish -p cratefield            # the facade: depends on all of them
    ```
 
-   Twenty-one crates, and the order is the dependency order: `--dry-run` for
+   Twenty-six crates, and the order is the dependency order: `--dry-run` for
    a crate whose upstream `cratefield-*` dependencies are not on crates.io
    yet resolves against the registry and fails until those are published.
    Regenerate the list with the topological sort in
