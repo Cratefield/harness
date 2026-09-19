@@ -343,7 +343,14 @@ async fn secrets(env: Env) -> Result<Json, Json> {
     let db = d1(env).await?;
     migrate(&db).await?;
 
-    let store = Secrets::new(Arc::new(CanaryKms)).tenant("canary-tenant", Arc::new(db));
+    // `tenant` is fallible since the store-scoping fix: it refuses `global`
+    // and blank ids. `canary-tenant` is neither, so this only ever fires if
+    // that rule changes under us — which is worth failing the canary loudly.
+    let store = Secrets::new(Arc::new(CanaryKms))
+        .tenant("canary-tenant", Arc::new(db))
+        .map_err(
+            |err| json!({ "ok": false, "stage": "Secrets::tenant", "error": err.to_string() }),
+        )?;
     let actor = Actor::new("d1-blob-canary")
         .map_err(|err| json!({ "ok": false, "stage": "Actor::new", "error": err.to_string() }))?;
 
