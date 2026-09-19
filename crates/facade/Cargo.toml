@@ -5,7 +5,7 @@ readme = "README.md"
 keywords = ["cratefield", "harness", "backend", "axum", "modules"]
 categories = ["web-programming::http-server"]
 include = ["src/**/*", "README.md"]
-version = "0.1.4"
+version = "0.1.5"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -28,10 +28,16 @@ sqlite = ["dep:cratefield-adapter-sqlite"]
 postgres = ["dep:cratefield-adapter-postgres"]
 resend = ["dep:cratefield-adapter-resend"]
 turnstile = ["dep:cratefield-adapter-turnstile"]
+anthropic = ["dep:cratefield-adapter-anthropic"]
 apns = ["dep:cratefield-adapter-apns"]
 fcm = ["dep:cratefield-adapter-fcm"]
 stripe = ["dep:cratefield-adapter-stripe"]
 webpush = ["dep:cratefield-adapter-webpush"]
+# The Tracker port's two adapters (issue #432): GitHub Issues, and the
+# HMAC-signed webhook a tenant configures.
+github-issues = ["dep:cratefield-adapter-github-issues"]
+webhook-tracker = ["dep:cratefield-adapter-webhook-tracker"]
+
 # The portable classifier adapters (issue #456). `Classifier` over the
 # operator's own TypeSafe API key (via `HttpClient`) and over the `TextModel`
 # port. The third classifier adapter, workers-ai, is deliberately not a
@@ -106,6 +112,7 @@ cratefield-adapter-sqlite = { workspace = true, optional = true }
 cratefield-adapter-postgres = { workspace = true, optional = true }
 cratefield-adapter-resend = { workspace = true, optional = true }
 cratefield-adapter-turnstile = { workspace = true, optional = true }
+cratefield-adapter-anthropic = { workspace = true, optional = true }
 cratefield-adapter-apns = { workspace = true, optional = true }
 # `publish = false` until its first manual publish (docs/RELEASING.md), so it
 # must be published before the facade's next release, the same way
@@ -121,6 +128,11 @@ cratefield-adapter-stripe = { workspace = true, optional = true }
 cratefield-push-wiring = { workspace = true, optional = true }
 # `publish = false` until its first manual publish (docs/RELEASING.md).
 cratefield-adapter-webpush = { workspace = true, optional = true }
+# The Tracker port's two adapters (issue #432), siblings under the port that
+# lives in core (ADR 0002: the port there, the vendor clients here).
+cratefield-adapter-github-issues = { workspace = true, optional = true }
+cratefield-adapter-webhook-tracker = { workspace = true, optional = true }
+
 # The two portable classifier adapters (issue #456). `adapter-workers-ai` is
 # absent on purpose: it needs the `worker` crate and the `env.AI` binding, so
 # re-exporting it here would put `worker` on every native venture's graph.

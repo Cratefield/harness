@@ -418,7 +418,7 @@ jobs:
         run: |
           # Throwaway secrets so the signer and the admin UI are on; the
           # example's mailer stays NotConfigured, nothing is ever sent.
-          printf 'HARNESS_SECRET=ci-only-secret-0123456789abcdef-xyz\nADMIN_TOKEN=ci-only-admin-token\n' > .dev.vars
+          printf 'HARNESS_SECRET=ci-only-secret-0123456789abcdef-xyz\nADMIN_TOKEN=ci-only-admin-token-0123456789abcdef\n' > .dev.vars
           # `--test-scheduled` exposes /__scheduled, the only way to run the
           # cron entry point against a live isolate. Without it the
           # scheduled half ships untested: it is a different entry point
@@ -469,7 +469,7 @@ jobs:
           curl -s -m 10 -o /dev/null -w "%{http_code}" http://127.0.0.1:8787/ui/admin | grep -q '^303$'
           curl -s -m 10 -o /dev/null -D /tmp/login.headers -X POST http://127.0.0.1:8787/ui/admin/login \
             -H 'origin: http://127.0.0.1:8787' -H 'content-type: application/x-www-form-urlencoded' \
-            --data 'token=ci-only-admin-token'
+            --data 'token=ci-only-admin-token-0123456789abcdef'
           grep -qi '^set-cookie: cf_admin=' /tmp/login.headers
           COOKIE=$(grep -i '^set-cookie:' /tmp/login.headers | sed 's/^[^:]*: *//' | cut -d';' -f1)
           curl -sf -m 10 -H "cookie: $COOKIE" http://127.0.0.1:8787/ui/admin/waitlist/export \
@@ -624,7 +624,7 @@ jobs:
           # service binding; everything else is the default example. The
           # gateway secret must match the sidecar's or the forward arrives
           # unstamped and the mount is dead.
-          printf 'HARNESS_SECRET=ci-only-secret-0123456789abcdef-xyz\nADMIN_TOKEN=ci-only-admin-token\nSIDECAR_GATEWAY_SECRET=ci-only-gateway-secret-0123456789abcdef\n' > .dev.vars
+          printf 'HARNESS_SECRET=ci-only-secret-0123456789abcdef-xyz\nADMIN_TOKEN=ci-only-admin-token-0123456789abcdef\nSIDECAR_GATEWAY_SECRET=ci-only-gateway-secret-0123456789abcdef\n' > .dev.vars
           nohup bunx wrangler dev --local --env sidecar > /tmp/host.log 2>&1 &
           for _ in $(seq 1 60); do
             code=$(curl -s -o /dev/null -w "%{http_code}" -m 3 http://127.0.0.1:8787/__health || true)
@@ -701,3 +701,37 @@ jobs:
           bun install --frozen-lockfile
           bun run typecheck
           bun test
+
+  d1-blob-canary:
+    # No `#` in the name — branch protection names the check-run string, and
+    # GitHub truncates at `#` (issue #34).
+    #
+    # The D1 half of the blob round trip (issue 438). Unit tests can bind
+    # bytes through the adapter's own types, but only a real D1 binding
+    # under workerd answers whether the wire encoding survives — the same
+    # reason wrangler-dev above exists for R2. `run.mjs` drives miniflare
+    # programmatically, so unlike the wrangler-dev jobs this needs no bun,
+    # no wrangler and no migration step: the Worker creates its own tables.
+    name: d1 blob canary (examples/d1-blob-canary, miniflare D1)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.98.1"
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - name: Install worker-build
+        run: cargo install -q --locked worker-build
+      - name: Install miniflare
+        working-directory: examples/d1-blob-canary
+        run: npm ci
+      - name: Build the canary worker
+        working-directory: examples/d1-blob-canary
+        run: worker-build --release
+      - name: Blob round trip through real D1 (issue 438)
+        working-directory: examples/d1-blob-canary
+        run: node run.mjs

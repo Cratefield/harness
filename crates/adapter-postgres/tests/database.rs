@@ -240,3 +240,17 @@ async fn row_helper_types_behave() {
     assert_eq!(row.get::<bool>("seen"), Some(true));
     assert_eq!(row.get::<Option<String>>("note"), Some(None));
 }
+
+/// The blob round-trip contract (issue #39) on the live server: bytes
+/// bound as `Value::Bytes` — NULs, non-UTF-8, a length that is not a
+/// multiple of three — survive the `$n` rewrite and the BYTEA read-back
+/// exactly, and SQL NULL reads back as no bytes.
+#[tokio::test]
+async fn blob_round_trips() {
+    let Some((db, temp)) = fresh_db().await else {
+        eprintln!("SKIPPED: {}", skip_reason());
+        return;
+    };
+    cratefield_testing::assert_blob_round_trips(&db).await;
+    temp.finish().await;
+}

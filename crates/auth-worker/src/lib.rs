@@ -19,6 +19,7 @@ use std::sync::{Arc, OnceLock};
 
 use async_trait::async_trait;
 use cratefield_adapter_resend::Resend;
+use cratefield_adapter_turnstile::Turnstile;
 use cratefield_core::{Harness, MailError, Mailer, Message, SendOutcome, Venture};
 use cratefield_runtime_cloudflare::{
     Cloudflare, FetchClient, WorkersClock, serve, serve_scheduled,
@@ -62,11 +63,61 @@ fn build_mailer(env: &Env) -> Arc<dyn Mailer> {
     }
 }
 
+/// Turnstile when `TURNSTILE_SECRET` is present on the Worker `Env`, else
+/// no `Captcha` port at all.
+///
+/// Read from the binding rather than `std::env`, which is empty on Workers.
+///
+/// The hostname is bound deliberately: an unbound adapter reports itself
+/// not effectively configured, so `production_readiness` would still
+/// refuse the composition (issue #133). `auth.factory0.ventures` is the
+/// route this Worker is served on, and the login methods guard their
+/// forms there — one expected hostname is right. Fail-open stays off:
+/// the captcha is the only backstop behind the limiter on some flows,
+/// and a down Turnstile must not become an open gate.
+fn build_captcha(env: &Env) -> Option<Turnstile> {
+    let secret = env
+        .secret("TURNSTILE_SECRET")
+        .ok()
+        .map(|secret| secret.to_string())
+        .filter(|secret| !secret.is_empty())?;
+    Some(
+        Turnstile::new(Arc::new(FetchClient), Arc::new(WorkersClock), secret)
+            .expected_hostname("auth.factory0.ventures"),
+    )
+}
+
+/// The Cloudflare runtime, built twice over: once for `Harness::build`'s
+/// composition check, once for `serve` to resolve per-request ports from.
+/// Both carry the same bindings, so `provides()` tells the truth about
+/// what requests will actually see.
+fn runtime_for(env: &Env, mailer: Arc<dyn Mailer>) -> Cloudflare {
+    let mut runtime = Cloudflare::new()
+        .db("DB")
+        .mailer_arc(mailer)
+        // Workers Rate Limiting (the `[[ratelimits]]` stanza in
+        // wrangler.toml): the harness consults it for the admin floor and
+        // every guarded public write, and readiness refuses a venture
+        // with public writes or admin routes unless a limiter resolves
+        // (issue #437).
+        .rate_limiter("RATE_LIMITER");
+    if let Some(captcha) = build_captcha(env) {
+        runtime = runtime.captcha(captcha);
+    }
+    runtime
+}
+
 static INSTANCE: OnceLock<(Harness, Cloudflare)> = OnceLock::new();
 
 /// The composed auth venture: `auth-core` plus every merged login method, over
 /// the Cloudflare runtime. Built once per isolate (ADR 0007: no ambient
 /// request state).
+///
+/// The isolate is built from the `Env` of the first request it serves —
+/// the same trade the mailer already makes. Bindings are per-deployment
+/// configuration in practice: a Worker's `Env` is identical on every
+/// request of a deployment, so reading the secrets once is reading them
+/// always. `cratefield-waitlist` composes the same way.
 fn instance(env: &Env) -> &'static (Harness, Cloudflare) {
     INSTANCE.get_or_init(|| {
         let mailer = build_mailer(env);
@@ -97,11 +148,11 @@ fn instance(env: &Env) -> &'static (Harness, Cloudflare) {
             .module(factory0_auth_magic_link::MagicLink::new())
             .module(factory0_auth_password::Password::new())
             .module(factory0_auth_meta::Meta::new())
-            .runtime(Cloudflare::new().db("DB").mailer_arc(Arc::clone(&mailer)))
+            .runtime(runtime_for(env, Arc::clone(&mailer)))
             .build()
             .expect("the auth venture is a valid harness");
         // The runtime `serve` resolves ports from must carry the mailer too.
-        let runtime = Cloudflare::new().db("DB").mailer_arc(mailer);
+        let runtime = runtime_for(env, mailer);
         (harness, runtime)
     })
 }

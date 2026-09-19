@@ -253,3 +253,14 @@ async fn non_transactional_migration_without_a_guard_is_refused() {
         .expect("tracking readable");
     assert_eq!(rows.rows[0].get::<i64>("n"), Some(0));
 }
+
+/// The blob round-trip contract (issue #39): bytes bound as
+/// `Value::Bytes` — NULs, non-UTF-8, a length that is not a multiple of
+/// three — read back exactly, and a NULL blob reads back as no bytes.
+/// A regression guard for the adapter's `SqliteValue::Blob` →
+/// `Value::Bytes` read-back path.
+#[pollster::test]
+async fn blob_round_trips() {
+    let db = SqliteDatabase::in_memory().expect("db");
+    cratefield_testing::assert_blob_round_trips(&db).await;
+}

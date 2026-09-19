@@ -15,8 +15,9 @@ use axum::extract::State;
 use axum::http::{HeaderValue, Method, Request, header};
 use axum::response::Response;
 use cratefield_core::{
-    Config, ConfigError, Database, DbError, Form, Harness, HarnessBuilder, Json, Migrations,
-    Module, ModuleContext, Port, Ports, Row, Rows, Runtime, Statement, SystemClock,
+    Config, ConfigError, Database, DbError, Decision, Form, Harness, HarnessBuilder, Json,
+    Migrations, Module, ModuleContext, Port, Ports, RateLimitError, RateLimiter, Row, Rows,
+    Runtime, Statement, SystemClock,
 };
 use futures_channel::oneshot::Receiver;
 use serde::Deserialize;
@@ -29,6 +30,66 @@ pub type ParkGate = Receiver<&'static str>;
 // follows the policy in clippy.toml (interior mutability for fakes).
 #[allow(clippy::disallowed_types)]
 pub type SharedParkGate = Arc<std::sync::Mutex<Option<ParkGate>>>;
+
+/// What the fake limiter answers, per key it is consulted for.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum LimiterVerdict {
+    Allow,
+    Deny,
+    Error,
+}
+
+/// A `RateLimiter` with a fixed verdict that records every key it is
+/// consulted for, so a test can assert the harness namespaced the admin
+/// budget (`admin:ip:...`) and left public routes alone.
+pub struct RecordingLimiter {
+    verdict: LimiterVerdict,
+    // Test-fixture recording, not request state; the scoped allow follows
+    // the policy in clippy.toml (interior mutability for fakes).
+    #[allow(clippy::disallowed_types)]
+    seen: Arc<std::sync::Mutex<Vec<String>>>,
+}
+
+impl RecordingLimiter {
+    // Test-fixture recording, not request state; the scoped allow follows
+    // the policy in clippy.toml (interior mutability for fakes).
+    #[allow(clippy::disallowed_types)]
+    pub fn new(verdict: LimiterVerdict) -> Self {
+        Self {
+            verdict,
+            seen: Arc::new(std::sync::Mutex::new(Vec::new())),
+        }
+    }
+
+    /// Every key consulted so far, in order.
+    pub fn seen(&self) -> Vec<String> {
+        self.seen
+            .lock()
+            .expect("limiter seen lock uncontended")
+            .clone()
+    }
+}
+
+#[async_trait]
+impl RateLimiter for RecordingLimiter {
+    async fn limit(&self, key: &str) -> Result<Decision, RateLimitError> {
+        self.seen
+            .lock()
+            .expect("limiter seen lock uncontended")
+            .push(key.to_owned());
+        match self.verdict {
+            LimiterVerdict::Allow => Ok(Decision {
+                ok: true,
+                retry_after: None,
+            }),
+            LimiterVerdict::Deny => Ok(Decision {
+                ok: false,
+                retry_after: Some(Duration::from_secs(11)),
+            }),
+            LimiterVerdict::Error => Err(RateLimitError::Transport("down".to_owned())),
+        }
+    }
+}
 
 /// The sample module from issue #2's acceptance: mounts one route reachable
 /// at `/v1/sample`. Optionally parks one request on a channel for the

@@ -75,6 +75,16 @@ pub fn kit_rate_limited() -> Kit {
     })
 }
 
+/// A kit with **no** rate limiter wired at all — the composition the
+/// challenge budget exists for: nothing between `login/options` and an
+/// enumeration sweep but the database cap. The harness's default is an
+/// always-allow limiter, so the absence has to be asked for.
+pub fn kit_without_limiter() -> Kit {
+    kit_patched(config_pairs(), |ports| {
+        ports.rate_limiter = None;
+    })
+}
+
 pub fn kit_with(pairs: Vec<(String, String)>) -> Kit {
     kit_patched(pairs, |_| {})
 }
@@ -257,6 +267,18 @@ pub async fn post(kit: &Kit, path: &str, body: &str, cookie: Option<&str>) -> Re
 /// `post` with extra headers, for the same reason `send_with_headers` exists.
 pub async fn post_with_headers(kit: &Kit, path: &str, body: &str, extra: &[(&str, &str)]) -> Res {
     send_with_headers(kit, http::Method::POST, path, Some(body), None, extra).await
+}
+
+/// [`post`] from a given client address, or from no address at all when
+/// `None` — which is what `ip:unknown` budgets. `cf-connecting-ip` is what
+/// the edge sets and what `client_ip` trusts first, so this is how a test
+/// arrives from a different address. It is a header like any other, so it
+/// goes through `post_with_headers` rather than a second path of its own.
+pub async fn post_from(kit: &Kit, path: &str, body: &str, client_ip: Option<&str>) -> Res {
+    match client_ip {
+        Some(ip) => post_with_headers(kit, path, body, &[("cf-connecting-ip", ip)]).await,
+        None => post_with_headers(kit, path, body, &[]).await,
+    }
 }
 
 /// How many rows a table holds.

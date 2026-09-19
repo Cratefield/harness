@@ -1,0 +1,42 @@
+[package]
+name = "cratefield-client-ts"
+description = "The deterministic TypeScript client generator: a /__surface contract in, the files of a typed @cratefield/client package out"
+readme = "README.md"
+keywords = ["cratefield", "typescript", "codegen", "client"]
+categories = ["development-tools", "web-programming"]
+include = ["src/**/*", "README.md"]
+# New and unproven: the public surface is still moving, so it is held out
+# of the release run the way `cratefield-tables` is (release-plz.toml
+# carries the matching entry). The CLI now consumes it — `fz client-ts`
+# (issue #155) — but that does not lift the hold: its first publish is
+# manual (docs/RELEASING.md) either way.
+publish = false
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+# The `/__surface` types (`SurfaceDocument` and friends). serde-only in
+# there, so this stays wasm-clean too.
+cratefield-core = { workspace = true }
+serde_json = { workspace = true }
+# The composition hash, the same construction the manifest generator uses.
+sha2 = { workspace = true }
+
+[dev-dependencies]
+# Path-only, like every internal dev-dependency: `cargo publish` resolves
+# dev-dependencies against crates.io, and a path-only one is stripped from
+# the packaged manifest. `TempDir` is what the TypeScript compile check
+# writes the generated package into.
+cratefield-testing = { path = "../testing" }
+# Test-only, for one assertion: that the table-name rule in `contract.rs`
+# (`is_table_name`) still agrees with its source of truth,
+# `cratefield_tables::is_identifier` (`crates/tables/src/schema.rs:894`).
+# Not a runtime dependency — `cratefield-tables` pulls `sea-query`, and
+# this crate stays serde-only.
+cratefield-tables = { path = "../tables" }

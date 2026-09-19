@@ -183,7 +183,9 @@ async fn submit_dispatches_in_process_and_renders_the_notice() {
             .body
             .contains("Check your inbox to confirm your spot.")
     );
-    // The module ran: it sent the confirmation mail through the fake.
+    // The module ran: it sent the confirmation mail through the fake,
+    // deferred off the request path — flush it before reading the fake.
+    kit.defer.drain().await;
     let mail = kit.mailer.last_message().expect("confirmation mail sent");
     assert_eq!(mail.to, "ada@example.com");
 }
@@ -251,6 +253,7 @@ async fn signed_link_redirect_passes_through_and_status_renders_a_list() {
         Some("email=ada%40example.com&product=kontinuum&cf-turnstile-response=tok"),
     )
     .await;
+    kit.defer.drain().await;
     let mail = kit.mailer.last_message().expect("mail");
     let text = format!("{}\n{}", mail.text, mail.html);
     let start = text
@@ -475,6 +478,7 @@ async fn email_signup_confirm_lands_on_the_ui_done_page() {
     .await;
     assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
     assert!(reply.body.contains("Check your inbox"));
+    kit.defer.drain().await;
     let mail = kit.mailer.last_message().expect("confirmation mail");
     let text = format!("{}\n{}", mail.text, mail.html);
     let marker = "/v1/email-signup/confirm?token=";

@@ -19,6 +19,24 @@ ENV = "production"
 # the `HARNESS_ALLOW_UNPROTECTED_WRITES` acceptance that used to sit here
 # is gone (issue #143).
 
+# Workers Rate Limiting backs the harness's throttle: the `admin:ip:*`
+# admin floor and every guarded public write consult it, and readiness
+# refuses the venture unless a limiter resolves (issue #437). `simple`
+# allows 30 `limit()` calls per key per 60s window — the only supported
+# shape; tune the limit if the venture's traffic outgrows it. This
+# deployment has a single top-level environment (`ENV = "production"`
+# above, deployed with a bare `wrangler deploy`), so one namespace id
+# covers it; there is no `[env.production]` section to redeclare the
+# binding for. The id is this Worker's own, distinct from the auth
+# worker's limiters on the same account.
+[[ratelimits]]
+name = "RATE_LIMITER"
+namespace_id = "2001"
+
+[ratelimits.simple]
+limit = 30
+period = 60
+
 [[d1_databases]]
 binding = "DB"
 database_name = "cratefield-waitlist"

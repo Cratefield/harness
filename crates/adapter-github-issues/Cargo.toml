@@ -1,0 +1,40 @@
+[package]
+name = "cratefield-adapter-github-issues"
+description = "Tracker port over the GitHub Issues REST API for the Cratefield harness"
+readme = "README.md"
+keywords = ["cratefield", "github", "issues", "tracker", "adapter"]
+categories = ["api-bindings"]
+include = ["src/**/*", "README.md"]
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+cratefield-core = { workspace = true }
+async-trait = { workspace = true }
+http = { workspace = true }
+bytes = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+# Not called from this crate — nothing here draws randomness. It is here to
+# pick getrandom's `wasm_js` backend, which `ulid` (via cratefield-core)
+# pulls in and which otherwise only a leaf crate selects, so that
+# `cargo build --target wasm32-unknown-unknown -p cratefield-adapter-github-issues`
+# stands on its own (issue #432, on the pattern of issue #178). The same
+# line, for the same reason, is in cratefield-push-auth, cratefield-kms and
+# the auth crates.
+getrandom = { workspace = true }
+
+[dev-dependencies]
+# Path-only on purpose: `cargo publish` resolves dev-dependencies against
+# crates.io, and a path-only one is stripped from the packaged manifest
+# (see the note in the workspace manifest).
+cratefield-testing = { path = "../testing", default-features = false, features = ["port-conformance"] }
+pollster = { workspace = true }
+time = { workspace = true }

@@ -32,6 +32,9 @@ pub use cratefield_adapter_resend as resend;
 #[cfg(feature = "turnstile")]
 pub use cratefield_adapter_turnstile as turnstile;
 
+#[cfg(feature = "anthropic")]
+pub use cratefield_adapter_anthropic as anthropic;
+
 #[cfg(feature = "apns")]
 pub use cratefield_adapter_apns as apns;
 
@@ -49,6 +52,12 @@ pub use cratefield_adapter_stripe as stripe;
 
 #[cfg(feature = "webpush")]
 pub use cratefield_adapter_webpush as webpush;
+
+#[cfg(feature = "github-issues")]
+pub use cratefield_adapter_github_issues as github_issues;
+
+#[cfg(feature = "webhook-tracker")]
+pub use cratefield_adapter_webhook_tracker as webhook_tracker;
 
 // The portable classifier adapters (issue #456). The third one,
 // `cratefield-adapter-workers-ai`, is deliberately not re-exported here: it

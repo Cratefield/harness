@@ -118,7 +118,15 @@ fn instance(env: &Env) -> &'static (Harness, Cloudflare) {
                     .status_redirect("https://cratefield.com/"),
             )
             .runtime({
-                let mut runtime = Cloudflare::new().db("DB").mailer_arc(Arc::clone(&mailer));
+                let mut runtime = Cloudflare::new()
+                    .db("DB")
+                    .mailer_arc(Arc::clone(&mailer))
+                    // Workers Rate Limiting (the `[[ratelimits]]` stanza in
+                    // wrangler.toml): the harness consults it for the admin
+                    // floor and every guarded public write, and readiness
+                    // refuses a venture with public writes or admin routes
+                    // unless a limiter resolves (issue #437).
+                    .rate_limiter("RATE_LIMITER");
                 if let Some(captcha) = build_captcha(env) {
                     runtime = runtime.captcha(captcha);
                 }
@@ -126,8 +134,13 @@ fn instance(env: &Env) -> &'static (Harness, Cloudflare) {
             })
             .build()
             .expect("cratefield waitlist harness is valid");
-        // The runtime `serve` resolves ports from must carry the mailer too.
-        let mut runtime = Cloudflare::new().db("DB").mailer_arc(mailer);
+        // The runtime `serve` resolves ports from must carry the mailer too
+        // — and the same limiter binding, so `provides()` tells the truth
+        // about what requests will actually see.
+        let mut runtime = Cloudflare::new()
+            .db("DB")
+            .mailer_arc(mailer)
+            .rate_limiter("RATE_LIMITER");
         if let Some(captcha) = build_captcha(env) {
             runtime = runtime.captcha(captcha);
         }
