@@ -20,7 +20,7 @@
 //! be exercised against a real database without an HTTP stack —
 //! `TenantConn` has no constructor, which is the point of it. The one
 //! other thing the request needs from that connection — its
-//! [`Tenancy`](cratefield_core::Tenancy), the fact a membership rule
+//! [`Tenancy`], the fact a membership rule
 //! reads (#385) — arrives as its own parameter, fed from
 //! `conn.tenancy()` at the routes; the tests here pass the tenancy they
 //! mean to decide under. The routes below are where the tenant-bound
