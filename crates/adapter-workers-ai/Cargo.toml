@@ -1,0 +1,36 @@
+[package]
+name = "cratefield-adapter-workers-ai"
+description = "Classifier port over the Cloudflare Workers AI binding for the Cratefield harness"
+readme = "README.md"
+keywords = ["cratefield", "workers-ai", "classifier", "cloudflare", "adapter"]
+categories = ["api-bindings"]
+include = ["src/**/*", "README.md"]
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+cratefield-core = { workspace = true }
+async-trait = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+worker = { workspace = true }
+
+[dev-dependencies]
+# Path, not `workspace = true`: internal dev-dependencies are declared
+# path-only so `cargo publish` never resolves them against crates.io
+# (see the root manifest).
+cratefield-testing = { path = "../testing" }
+pollster = { workspace = true }
+
+# A wasm leaf crate: getrandom (reached through core's `ulid` -> `rand`)
+# needs the opt-in `wasm_js` backend on wasm32-unknown-unknown, enabled by
+# unifying this target-scoped pin into the graph (see the root manifest).
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+getrandom = { workspace = true }

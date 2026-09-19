@@ -14,14 +14,16 @@
 use async_trait::async_trait;
 use bytes::Bytes;
 use cratefield_core::{
-    Captcha, CaptchaError, Clock, Completion, Credential, Database, DbError, Decision, Defer,
+    Answer, AnswerValue, Calibration, Captcha, CaptchaError, Classifier, ClassifierError,
+    ClassifierProfile, Clock, Completion, Credential, Database, DbError, Decision, Defer,
     Destination, Filed, HttpClient, HttpError, KeyValue, KvError, MailError, Mailer, Message,
-    ModelTier, Prompt, RateLimitError, RateLimiter, Row, Rows, SendOutcome, Statement, TextModel,
-    TextModelError, TicketDraft, TicketState, TicketStatus, Tracker, TrackerError, Verdict,
+    ModelTier, Prompt, Question, RateLimitError, RateLimiter, Row, Rows, SendOutcome, Statement,
+    TextModel, TextModelError, TicketDraft, TicketState, TicketStatus, Tracker, TrackerError,
+    Verdict, validate_questions,
 };
 use futures_core::future::BoxFuture;
 use http::{Request, Response};
-use std::collections::{HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
@@ -918,6 +920,235 @@ impl TextModel for FakeTextModel {
             }
             TextModelMode::Error(error) => Err(error),
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// FakeClassifier
+
+/// How a [`FakeClassifier`] answers, mirroring [`TextModelMode`] for the
+/// classifier port (issue #456).
+///
+/// The fixed modes [`NotConfigured`](Self::NotConfigured),
+/// [`Rejected`](Self::Rejected) and [`Transient`](Self::Transient) are the
+/// three the port's own contract names, and [`Error`](Self::Error) carries
+/// any `ClassifierError` a test wants — between them every arm of a
+/// caller's error mapping is reachable, `Transport` included.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ClassifierMode {
+    /// Answer exactly these, keyed by question id. A question the set asks
+    /// that the map does not name falls back to the deterministic answer,
+    /// so one test can script a subset and let the rest stay plausible.
+    Answers(BTreeMap<String, Answer>),
+    /// Answer every question deterministically from its own labels (the
+    /// default): the first label, with a plausible normalised distribution
+    /// over all of them. A module under conformance gets a usable answer
+    /// without scripting anything.
+    Deterministic,
+    /// Report the port is unwired (`ClassifierError::NotConfigured`).
+    NotConfigured,
+    /// A non-retryable refusal carrying the provider text.
+    Rejected(String),
+    /// A retryable failure with the provider's back-off, where it said one.
+    Transient { retry_after: Option<Duration> },
+    /// Exactly this error, text and all.
+    Error(ClassifierError),
+}
+
+/// One `Classifier::ask` a [`FakeClassifier`] answered, for assertions:
+/// the state as it arrived (untruncated — this fake has no provider
+/// budget to spend) and the question ids in the set, in map order.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Ask {
+    /// The state the questions were asked about.
+    pub state: String,
+    /// The ids of the questions in the set, in `BTreeMap` order.
+    pub question_ids: Vec<String>,
+}
+
+/// An in-memory [`Classifier`] for module tests: records every ask it
+/// answered and answers according to its [`ClassifierMode`].
+///
+/// The mode is global by default and can be overridden **per question**
+/// ([`FakeClassifier::set_answer_for`]), mirroring [`FakeTextModel`]'s
+/// per-tier override: one test can script one question's probabilities
+/// while the rest stay deterministic.
+///
+/// An ask that failed (`NotConfigured`, `Rejected`, `Transient` or
+/// `Error`) is **not** recorded, the same rule [`FakeTextModel`] applies
+/// to a completion — the recording means "the classifier answered", so a
+/// caller that retried on `Transient { .. }` sees one recorded ask per
+/// attempt that got answers.
+#[derive(Clone)]
+pub struct FakeClassifier {
+    inner: Arc<FakeClassifierInner>,
+}
+
+struct FakeClassifierInner {
+    mode: Mutex<ClassifierMode>,
+    per_question: Mutex<BTreeMap<String, Answer>>,
+    asks: Mutex<Vec<Ask>>,
+    profile: Mutex<ClassifierProfile>,
+}
+
+/// The deterministic answer for `question`: its first label
+/// ([`Question::labels`] order — first criterion, first level, or `true`
+/// for a `Noul`) carries most of the mass, spread plausibly over all the
+/// labels. Pure: the same question always answers the same way, which is
+/// what an assertion needs.
+fn deterministic_answer(question: &Question) -> Answer {
+    let labels = question.labels();
+    let chosen = labels.first().copied().unwrap_or_default();
+    // Most of the mass on the chosen label, the rest split evenly: for a
+    // two-label question 0.6/0.4, for five 0.6 then four shares of 0.1.
+    let share = if labels.len() > 1 {
+        0.4 / f32::from(u16::try_from(labels.len() - 1).unwrap_or(1))
+    } else {
+        0.0
+    };
+    let probabilities: BTreeMap<String, f32> = labels
+        .iter()
+        .map(|label| {
+            let mass = if *label == chosen { 0.6 } else { share };
+            ((*label).to_owned(), mass)
+        })
+        .collect();
+    match question {
+        Question::Choice { .. } => Answer::choice(chosen, probabilities),
+        Question::Noul { .. } => Answer::noul(chosen == "true", probabilities),
+        // A scale's labels are usually named for their scores ("1".."5"),
+        // so the first level parses; when it does not, the score is 0.0
+        // and the confidence still comes from the label itself.
+        Question::Score { .. } => Answer::new(
+            AnswerValue::Score(chosen.parse().unwrap_or_default()),
+            probabilities,
+            0.6,
+        ),
+    }
+}
+
+impl FakeClassifier {
+    #[must_use]
+    pub fn new(mode: ClassifierMode) -> Self {
+        Self {
+            inner: Arc::new(FakeClassifierInner {
+                mode: Mutex::new(mode),
+                per_question: Mutex::new(BTreeMap::new()),
+                asks: Mutex::new(Vec::new()),
+                profile: Mutex::new(ClassifierProfile::new(
+                    Calibration::Classifier,
+                    cratefield_core::DEFAULT_MAX_STATE_CHARS,
+                )),
+            }),
+        }
+    }
+
+    /// Every ask answered so far, in order. An ask that failed is not
+    /// recorded.
+    #[must_use]
+    pub fn asks(&self) -> Vec<Ask> {
+        self.inner.asks.lock().expect("classifier lock").clone()
+    }
+
+    /// The most recent ask answered.
+    #[must_use]
+    pub fn last(&self) -> Option<Ask> {
+        self.inner
+            .asks
+            .lock()
+            .expect("classifier lock")
+            .last()
+            .cloned()
+    }
+
+    /// Switches the mode every question without an override answers with
+    /// (e.g. flip to `NotConfigured` mid-test).
+    pub fn set_mode(&self, mode: ClassifierMode) {
+        *self.inner.mode.lock().expect("classifier lock") = mode;
+    }
+
+    /// Makes one question answer with `answer`, whatever the mode is —
+    /// scripting one question's probabilities while the rest stay
+    /// deterministic, say.
+    pub fn set_answer_for(&self, question_id: impl Into<String>, answer: Answer) {
+        self.inner
+            .per_question
+            .lock()
+            .expect("classifier lock")
+            .insert(question_id.into(), answer);
+    }
+
+    /// Drops one question's override, putting it back on the mode.
+    pub fn clear_answer_for(&self, question_id: &str) {
+        self.inner
+            .per_question
+            .lock()
+            .expect("classifier lock")
+            .remove(question_id);
+    }
+
+    /// Reports `calibration` and `max_state_chars` from
+    /// [`Classifier::profile`], so a test can exercise a module's
+    /// calibration- or truncation-aware behaviour against either family.
+    pub fn set_profile(&self, calibration: Calibration, max_state_chars: usize) {
+        *self.inner.profile.lock().expect("classifier lock") =
+            ClassifierProfile::new(calibration, max_state_chars);
+    }
+}
+
+impl Default for FakeClassifier {
+    fn default() -> Self {
+        Self::new(ClassifierMode::Deterministic)
+    }
+}
+
+#[async_trait]
+impl Classifier for FakeClassifier {
+    fn profile(&self) -> ClassifierProfile {
+        *self.inner.profile.lock().expect("classifier lock")
+    }
+
+    async fn ask(
+        &self,
+        state: &str,
+        questions: &BTreeMap<String, Question>,
+    ) -> Result<BTreeMap<String, Answer>, ClassifierError> {
+        // A malformed set lands on `Rejected`, never a panic — the same
+        // way a real adapter refuses it.
+        validate_questions(questions)?;
+
+        let mode = self.inner.mode.lock().expect("classifier lock").clone();
+        match mode {
+            ClassifierMode::NotConfigured => return Err(ClassifierError::NotConfigured),
+            ClassifierMode::Rejected(message) => return Err(ClassifierError::Rejected(message)),
+            ClassifierMode::Transient { retry_after } => {
+                return Err(ClassifierError::Transient { retry_after });
+            }
+            ClassifierMode::Error(error) => return Err(error),
+            ClassifierMode::Answers(_) | ClassifierMode::Deterministic => {}
+        }
+
+        let overrides = self.inner.per_question.lock().expect("classifier lock");
+        let answers: BTreeMap<String, Answer> = questions
+            .iter()
+            .map(|(id, question)| {
+                let answer = overrides.get(id).cloned().unwrap_or_else(|| match &mode {
+                    ClassifierMode::Answers(map) => map
+                        .get(id)
+                        .cloned()
+                        .unwrap_or_else(|| deterministic_answer(question)),
+                    _ => deterministic_answer(question),
+                });
+                (id.clone(), answer)
+            })
+            .collect();
+        drop(overrides);
+
+        self.inner.asks.lock().expect("classifier lock").push(Ask {
+            state: state.to_owned(),
+            question_ids: questions.keys().cloned().collect(),
+        });
+        Ok(answers)
     }
 }
 

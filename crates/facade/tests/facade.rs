@@ -118,8 +118,16 @@ fn feature_line(manifest: &str, name: &str) -> Option<String> {
 #[test]
 fn every_publishable_library_is_reachable_from_the_facade() {
     // `cratefield-cli` is the `fz` binary: nothing `use`s it, so it is not
-    // a facade dependency. `cratefield` is this crate.
-    const NOT_LIBRARIES: &[&str] = &["cratefield-cli", "cratefield"];
+    // a facade dependency. `cratefield` is this crate. workers-ai is the
+    // classifier adapter that needs the Workers `env.AI` binding (and the
+    // `worker` crate): a facade feature would be platform-blind, so a
+    // venture on Workers depends on it directly and no native venture ever
+    // pulls `worker` through here (issue #456).
+    const NOT_LIBRARIES: &[&str] = &[
+        "cratefield-cli",
+        "cratefield",
+        "cratefield-adapter-workers-ai",
+    ];
 
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()

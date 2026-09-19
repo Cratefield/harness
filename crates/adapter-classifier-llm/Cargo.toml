@@ -1,0 +1,37 @@
+[package]
+name = "cratefield-adapter-classifier-llm"
+description = "Classifier port over the harness's own TextModel port, via JSON-schema structured output, for the Cratefield harness"
+readme = "README.md"
+keywords = ["cratefield", "classifier", "llm", "text-model", "adapter"]
+categories = ["web-programming"]
+include = ["src/**/*", "README.md"]
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+cratefield-core = { workspace = true }
+async-trait = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+# Not called from this crate — a classification makes no random choices.
+# It is here to pick getrandom's `wasm_js` backend, which `ulid` (via
+# cratefield-core) pulls in and which otherwise only a leaf crate selects,
+# so that `cargo build --target wasm32-unknown-unknown -p
+# cratefield-adapter-classifier-llm` stands on its own (issue #178). The
+# same line, for the same reason, is in cratefield-push-auth, the auth
+# crates and cratefield-kms.
+getrandom = { workspace = true }
+
+[dev-dependencies]
+# Path, not `workspace = true`: this adapter's tests are the consumer the
+# shared conformance kit must stay light for, and a bare path pins the
+# sibling crate this task shares the tree with.
+cratefield-testing = { path = "../testing" }
+pollster = { workspace = true }

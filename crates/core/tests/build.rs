@@ -212,6 +212,28 @@ fn a_module_that_asks_for_a_completion_will_not_boot_without_the_text_model_port
 }
 
 #[test]
+fn a_module_that_asks_for_a_classification_will_not_boot_without_the_classifier_port() {
+    // Issue #456: the `Classifier` port gets the same refusal every port
+    // gets — a module cannot be mounted where the runtime cannot serve
+    // what it declared.
+    let problems = failure_lines(
+        Harness::builder()
+            .venture(base_venture())
+            .module(SampleModule {
+                requires: &[cratefield_core::Port::Classifier],
+                ..SampleModule::default()
+            })
+            .runtime(FakeRuntime(vec![cratefield_core::Port::Db])),
+    );
+    assert!(
+        problems.iter().any(|p| p
+            .contains("requires port Classifier which the runtime does not provide")
+            && p.contains("sample")),
+        "problems: {problems:?}"
+    );
+}
+
+#[test]
 fn a_module_that_files_an_escalation_will_not_boot_without_the_tracker_port() {
     // The guarantee the `Tracker` port exists for (issue #431). A module
     // that files an escalation must not boot on a runtime with nowhere to

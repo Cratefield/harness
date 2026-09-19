@@ -8,6 +8,7 @@
 mod auth;
 mod blob;
 mod captcha;
+mod classifier;
 mod clock;
 mod database;
 mod defer;
@@ -27,6 +28,10 @@ mod tracker;
 pub use auth::{Auth, AuthError, Caller, Subject, Unconfigured};
 pub use blob::{Blob, BlobError, BlobObject, MAX_BLOB_BYTES, ScopedBlob, check_blob_size};
 pub use captcha::{Captcha, CaptchaBinding, CaptchaError, Verdict};
+pub use classifier::{
+    Answer, AnswerValue, Calibration, Classifier, ClassifierError, ClassifierProfile,
+    DEFAULT_MAX_STATE_CHARS, Question, validate_questions,
+};
 pub use clock::{Clock, SystemClock, timeout};
 pub use database::{Database, DbError, Row, Rows, Statement, TryFromValue};
 pub use defer::{Defer, NoopDefer};
@@ -81,6 +86,7 @@ pub enum Port {
     Tracker,
     Realtime,
     TextModel,
+    Classifier,
     HttpClient,
     Clock,
     IdGen,
@@ -131,6 +137,7 @@ ports!(
     Tracker,
     Realtime,
     TextModel,
+    Classifier,
     HttpClient,
     Clock,
     IdGen,
@@ -153,6 +160,7 @@ impl Port {
             Port::Tracker => "Tracker",
             Port::Realtime => "Realtime",
             Port::TextModel => "TextModel",
+            Port::Classifier => "Classifier",
             Port::HttpClient => "HttpClient",
             Port::Clock => "Clock",
             Port::IdGen => "IdGen",
@@ -186,6 +194,10 @@ pub struct Ports {
     /// A text completion by [`ModelTier`](crate::ModelTier), never by
     /// vendor (issue #429).
     pub text_model: Option<Arc<dyn TextModel>>,
+    /// A typed, calibrated decision by a set of
+    /// [`Question`](crate::Question)s, never by vendor (issue #456) —
+    /// the sibling of `text_model`.
+    pub classifier: Option<Arc<dyn Classifier>>,
     pub http: Option<Arc<dyn HttpClient>>,
     pub clock: Option<Arc<dyn Clock>>,
     pub id_gen: Option<Arc<dyn IdGen>>,
@@ -229,6 +241,7 @@ impl Ports {
             tracker: None,
             realtime: None,
             text_model: None,
+            classifier: None,
             http: None,
             clock: None,
             id_gen: None,
@@ -276,6 +289,7 @@ impl Ports {
             Port::Tracker => self.tracker.is_some(),
             Port::Realtime => self.realtime.is_some(),
             Port::TextModel => self.text_model.is_some(),
+            Port::Classifier => self.classifier.is_some(),
             Port::HttpClient => self.http.is_some(),
             Port::Clock => self.clock.is_some(),
             Port::IdGen => self.id_gen.is_some(),
@@ -339,6 +353,9 @@ impl Ports {
         }
         if allows(&declared, Port::TextModel) {
             view.text_model.clone_from(&self.text_model);
+        }
+        if allows(&declared, Port::Classifier) {
+            view.classifier.clone_from(&self.classifier);
         }
         if allows(&declared, Port::HttpClient) {
             view.http.clone_from(&self.http);

@@ -359,6 +359,20 @@ jobs:
       # concurrent memoizer rather than the `Rc`/`RefCell` default.
       - name: Build cratefield-i18n to wasm
         run: cargo build --target wasm32-unknown-unknown -p cratefield-i18n
+      # Same reason for the two portable classifier adapters (issue #456):
+      # typesafe rides the `HttpClient` port and classifier-llm the
+      # `TextModel` port, and no venture in this repo enables either facade
+      # feature yet, so nothing else would notice a dependency that cannot
+      # reach wasm32.
+      - name: Build cratefield-adapter-typesafe to wasm
+        run: cargo build --target wasm32-unknown-unknown -p cratefield-adapter-typesafe
+      - name: Build cratefield-adapter-classifier-llm to wasm
+        run: cargo build --target wasm32-unknown-unknown -p cratefield-adapter-classifier-llm
+      # And for workers-ai (issue #456) wasm32 is the whole point: it only
+      # functions on an isolate, where the `env.AI` binding exists, so the
+      # native build proves nothing and this leg is its only positive proof.
+      - name: Build cratefield-adapter-workers-ai to wasm
+        run: cargo build --target wasm32-unknown-unknown -p cratefield-adapter-workers-ai
       - name: Build example venture to wasm
         working-directory: examples/venture
         run: worker-build --release

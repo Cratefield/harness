@@ -32,6 +32,15 @@ apns = ["dep:cratefield-adapter-apns"]
 fcm = ["dep:cratefield-adapter-fcm"]
 stripe = ["dep:cratefield-adapter-stripe"]
 webpush = ["dep:cratefield-adapter-webpush"]
+# The portable classifier adapters (issue #456). `Classifier` over the
+# operator's own TypeSafe API key (via `HttpClient`) and over the `TextModel`
+# port. The third classifier adapter, workers-ai, is deliberately not a
+# feature here: it depends on the `worker` crate and the `env.AI` binding,
+# so a venture on Workers depends on it directly — the same way it already
+# depends on the `cloudflare` runtime — and a native venture never pulls
+# `worker` through this crate.
+typesafe = ["dep:cratefield-adapter-typesafe"]
+classifier-llm = ["dep:cratefield-adapter-classifier-llm"]
 
 # The push adapters' provider tokens (ES256 for APNs and VAPID, RS256 for
 # Google service accounts). Pulled in by `apns` and by `fcm` already; a
@@ -112,6 +121,12 @@ cratefield-adapter-stripe = { workspace = true, optional = true }
 cratefield-push-wiring = { workspace = true, optional = true }
 # `publish = false` until its first manual publish (docs/RELEASING.md).
 cratefield-adapter-webpush = { workspace = true, optional = true }
+# The two portable classifier adapters (issue #456). `adapter-workers-ai` is
+# absent on purpose: it needs the `worker` crate and the `env.AI` binding, so
+# re-exporting it here would put `worker` on every native venture's graph.
+# Ventures on Workers depend on it directly.
+cratefield-adapter-typesafe = { workspace = true, optional = true }
+cratefield-adapter-classifier-llm = { workspace = true, optional = true }
 cratefield-ui = { workspace = true, optional = true }
 # `publish = false` until its first manual publish (docs/RELEASING.md).
 cratefield-i18n = { workspace = true, optional = true }

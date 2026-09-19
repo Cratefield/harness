@@ -110,6 +110,7 @@ fn full_fake_ports() -> Ports {
     )));
     ports.realtime = Some(Arc::new(crate::fakes::FakeRealtime::new()));
     ports.text_model = Some(Arc::new(crate::fakes::FakeTextModel::default()));
+    ports.classifier = Some(Arc::new(crate::fakes::FakeClassifier::default()));
     ports.http = Some(Arc::new(crate::fakes::FakeHttpClient::ok_json("{}")));
     ports.clock = Some(Arc::new(crate::fakes::FixedClock(
         time::OffsetDateTime::from_unix_timestamp(1_800_000_000).expect("fixed epoch"),
@@ -468,6 +469,7 @@ fn check_visibility_and_scope(
         (Port::Tracker, view.tracker.is_some()),
         (Port::Realtime, view.realtime.is_some()),
         (Port::TextModel, view.text_model.is_some()),
+        (Port::Classifier, view.classifier.is_some()),
         (Port::HttpClient, view.http.is_some()),
         (Port::Clock, view.clock.is_some()),
         (Port::IdGen, view.id_gen.is_some()),

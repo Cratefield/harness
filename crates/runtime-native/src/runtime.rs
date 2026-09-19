@@ -21,8 +21,9 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use cratefield_core::{
-    Auth, Blob, BoundedHttpClient, Captcha, Clock, Database, HarnessConfig, KeyValue, Mailer,
-    Payments, Port, Ports, Push, RateLimiter, Realtime, Runtime, TextModel, Tracker, UlidIdGen,
+    Auth, Blob, BoundedHttpClient, Captcha, Classifier, Clock, Database, HarnessConfig, KeyValue,
+    Mailer, Payments, Port, Ports, Push, RateLimiter, Realtime, Runtime, TextModel, Tracker,
+    UlidIdGen,
 };
 
 use crate::config::EnvConfig;
@@ -61,6 +62,11 @@ pub struct Native {
     /// built from the venture's vendor keys and passed in — there is no
     /// vendor-neutral binding to sniff out of the environment.
     text_model: Option<Arc<dyn TextModel>>,
+    /// The `Classifier` port (issue #456), the sibling of `text_model`:
+    /// the adapter is passed in the same way. An adapter that reaches a
+    /// Workers AI binding still arrives here as an instance, so the two
+    /// runtimes wire this port identically.
+    classifier: Option<Arc<dyn Classifier>>,
     mailer: Option<Arc<dyn Mailer>>,
     captcha: Option<Arc<dyn Captcha>>,
     auth: Option<Arc<dyn Auth>>,
@@ -260,6 +266,23 @@ impl Native {
         self
     }
 
+    /// The `Classifier` port (issue #456): a typed, calibrated decision —
+    /// "which of these is it, and how sure are you" — from a purpose-built
+    /// classifier, a Workers AI binding (on the Workers twin) or an LLM
+    /// behind the `TextModel` port. The same pattern as `text_model`.
+    #[must_use]
+    pub fn classifier(mut self, classifier: impl Classifier + 'static) -> Self {
+        self.classifier = Some(Arc::new(classifier));
+        self
+    }
+
+    /// `classifier` for an already-shared adapter.
+    #[must_use]
+    pub fn classifier_arc(mut self, classifier: Arc<dyn Classifier>) -> Self {
+        self.classifier = Some(classifier);
+        self
+    }
+
     #[must_use]
     pub fn mailer(mut self, mailer: impl Mailer + 'static) -> Self {
         self.mailer = Some(Arc::new(mailer));
@@ -337,6 +360,7 @@ impl Native {
         ports.tracker.clone_from(&self.tracker);
         ports.realtime.clone_from(&self.realtime);
         ports.text_model.clone_from(&self.text_model);
+        ports.classifier.clone_from(&self.classifier);
         ports.mailer.clone_from(&self.mailer);
         ports.captcha.clone_from(&self.captcha);
         ports.auth.clone_from(&self.auth);
@@ -443,6 +467,9 @@ impl Runtime for Native {
         if self.text_model.is_some() {
             provided.push(Port::TextModel);
         }
+        if self.classifier.is_some() {
+            provided.push(Port::Classifier);
+        }
         if self.mailer.is_some() {
             provided.push(Port::Mailer);
         }
@@ -490,6 +517,7 @@ pub(crate) fn clone_ports(ports: &Ports) -> Ports {
     snapshot.tracker.clone_from(&ports.tracker);
     snapshot.realtime.clone_from(&ports.realtime);
     snapshot.text_model.clone_from(&ports.text_model);
+    snapshot.classifier.clone_from(&ports.classifier);
     snapshot.http.clone_from(&ports.http);
     snapshot.clock.clone_from(&ports.clock);
     snapshot.id_gen.clone_from(&ports.id_gen);

@@ -47,6 +47,8 @@ feature, and each feature names exactly one crate:
 | `apns` | `cratefield-adapter-apns` | `cratefield::apns` | `Push` over Apple Push Notification service |
 | `webpush` | `cratefield-adapter-webpush` | `cratefield::webpush` | `Push` over Web Push (RFC 8030), browsers and UnifiedPush |
 | `push-auth` | `cratefield-push-auth` | `cratefield::push_auth` | Provider-JWT signing for the push adapters (ES256 for APNs and VAPID, RS256 for Google service accounts) with a keyed token cache. Pulled in by `apns` and `webpush` already; a feature of its own for using it directly |
+| `typesafe` | `cratefield-adapter-typesafe` | `cratefield::typesafe` | `Classifier` over the operator's own `TypeSafe` API key, via the `HttpClient` port |
+| `classifier-llm` | `cratefield-adapter-classifier-llm` | `cratefield::classifier_llm` | `Classifier` over the `TextModel` port, JSON-schema output, no new vendor |
 | `ui` | `cratefield-ui` | `cratefield::ui` | Renders the module surface as HTML |
 | `secrets` | `cratefield-secrets` | `cratefield::secrets` | Envelope-encrypted secrets |
 | `kms` | `cratefield-kms` | `cratefield::kms` | The KMS port and its local-file provider |
@@ -56,6 +58,12 @@ feature, and each feature names exactly one crate:
 | `changelog` | `cratefield-module-changelog` | `cratefield::changelog` | A project's releases, mirrored into your own database |
 | `telemetry` | `cratefield-module-telemetry` | `cratefield::telemetry` | Aggregate usage counts from clients, consent-first, in the venture's own database |
 | `testing` | `cratefield-testing` | `cratefield::testing` | The conformance kit; belongs under `[dev-dependencies]` |
+
+The third classifier adapter, `cratefield-adapter-workers-ai`, has no
+feature here on purpose: it needs the Workers `env.AI` binding (and the
+`worker` crate), so a venture on Workers depends on it directly — the same
+way it depends on the `cloudflare` runtime — and no native venture pulls
+`worker` through this crate.
 
 There is no default feature. A runtime is a decision, not a default, and an
 empty default is what keeps `tokio` and `sqlx` out of a Workers build
