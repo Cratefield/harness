@@ -13,8 +13,7 @@ use std::sync::Arc;
 use crate::dialect::Dialect;
 use crate::fakes::{
     FakeCaptcha, FakeDefer, FakeHttpClient, FakeMailer, FakeRateLimiter, FakeTextModel,
-    FakeTracker, FixedClock,
-    MemoryKeyValue,
+    FakeTracker, FixedClock, MemoryKeyValue,
 };
 
 struct TestRuntime;

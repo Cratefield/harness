@@ -15,8 +15,8 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use cratefield_core::{
     Captcha, CaptchaError, Clock, Completion, Credential, Database, DbError, Decision, Defer,
-    Destination, Filed, HttpClient, HttpError, KeyValue, KvError, Mailer, MailError, Message,
-    ModelTier, Prompt, RateLimiter, RateLimitError, Row, Rows, SendOutcome, Statement, TextModel,
+    Destination, Filed, HttpClient, HttpError, KeyValue, KvError, MailError, Mailer, Message,
+    ModelTier, Prompt, RateLimitError, RateLimiter, Row, Rows, SendOutcome, Statement, TextModel,
     TextModelError, TicketDraft, TicketState, TicketStatus, Tracker, TrackerError, Verdict,
 };
 use futures_core::future::BoxFuture;
