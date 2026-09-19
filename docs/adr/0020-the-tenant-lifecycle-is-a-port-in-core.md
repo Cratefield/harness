@@ -1,4 +1,4 @@
-# ADR 0019: The tenant lifecycle is a port in core, and the operator steps stay operator
+# ADR 0020: The tenant lifecycle is a port in core, and the operator steps stay operator
 
 Status: accepted, 2026-09-19. Issue #154, part of epic #23 (tenants as
 a product). Records where the registry's write half lives, and what it

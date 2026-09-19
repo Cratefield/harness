@@ -84,7 +84,7 @@ the command the issue names; #154 has lifted the first:
   `TenantStatus::admits`, and is deliberately not in the `Ports`
   struct — modules must never write the registry. That shape is
   recorded in
-  [ADR 0019](adr/0019-the-tenant-lifecycle-is-a-port-in-core.md). The
+  [ADR 0020](adr/0020-the-tenant-lifecycle-is-a-port-in-core.md). The
   wasm runtime still resolves through `ImplicitTenant` and still has
   no registry to write to; that remains true and is fine — a CLI
   writes the control database, not a runtime.

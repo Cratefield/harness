@@ -189,6 +189,28 @@ fn a_module_that_must_know_who_is_calling_will_not_boot_without_the_auth_port() 
     );
 }
 
+#[test]
+fn a_module_that_asks_for_a_completion_will_not_boot_without_the_text_model_port() {
+    // Issue #429: the port is additive to HARNESS_API = 1, and the refusal
+    // is the same one every port gets — a module cannot be mounted where
+    // the runtime cannot serve what it declared.
+    let problems = failure_lines(
+        Harness::builder()
+            .venture(base_venture())
+            .module(SampleModule {
+                requires: &[cratefield_core::Port::TextModel],
+                ..SampleModule::default()
+            })
+            .runtime(FakeRuntime(vec![cratefield_core::Port::Db])),
+    );
+    assert!(
+        problems.iter().any(|p| p
+            .contains("requires port TextModel which the runtime does not provide")
+            && p.contains("sample")),
+        "problems: {problems:?}"
+    );
+}
+
 /// A surface whose action sits under `/admin/` with `audience`.
 fn under_admin(audience: cratefield_core::Audience) -> cratefield_core::Surface {
     cratefield_core::Surface::new().action(

@@ -125,8 +125,16 @@ flowchart LR
 ## Crates
 
 All public crates are `cratefield-*`, MIT, plus the `cratefield` facade that
-pulls them together. Nothing is published to crates.io yet; depend on this
-repository by git.
+pulls them together.
+
+> **Depend on this repository by git for now, not by version.** Most crates are
+> published, but the published set cannot currently be resolved together:
+> `cratefield-core` is on 0.5, and 23 of its published dependents still require
+> `^0.4`, which excludes it. Asking for core 0.5 and any runtime pulls two
+> copies of core, whose error reads `expected cratefield_core::Module, found
+> cratefield_core::Module`. Only `cratefield-tables` and
+> `cratefield-module-changelog` are on the `^0.5` line today. Issue #464 is the
+> release round that fixes this; after it lands, use versions.
 
 Most ventures want one line:
 
@@ -303,6 +311,7 @@ docs/
   MOUNTING.md              compile a module in, or run it as a sidecar
   UI.md                    the UI surface, its markup contract, UiSpec, admin
   ui-llms.txt              the same contract written for a generator
+  llms.txt                 the build-and-deploy contract written for an agent
   adr/                     0000 … 0010
 tools/
   banner-render.html       source of the README banner

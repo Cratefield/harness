@@ -140,7 +140,7 @@ a port in `crates/core/src/tenant_lifecycle.rs` with `create`,
 `complete_erasure` for the offboarding half.
 `cratefield-adapter-postgres` implements it over the writes that
 already existed, `register_tenant` and `set_tenant_status`. [ADR
-0019](adr/0019-the-tenant-lifecycle-is-a-port-in-core.md) records what
+0020](adr/0020-the-tenant-lifecycle-is-a-port-in-core.md) records what
 the port is deliberately not. It is not in the `Ports` struct, because
 modules must never write the registry. It consumes the transition rule
 where #361 put it, `TenantStatus::admits`, rather than restating it.
