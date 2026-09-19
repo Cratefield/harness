@@ -13,6 +13,10 @@
 //! the hostname), and an expected action rejects a token minted for a
 //! different flow. [`Captcha::binding`] reports both, so the harness can
 //! tell "port present" from "verification configured".
+//!
+//! The siteverify form body is fully percent-encoded and the token is
+//! shape-checked before anything is sent: a malformed token verifies as
+//! `invalid-input-response` locally, with no request at all (issue #436).
 
 #![doc = include_str!("../README.md")]
 #![forbid(unsafe_code)]
@@ -107,6 +111,62 @@ impl Turnstile {
     }
 }
 
+/// Turnstile tokens are ASCII `[A-Za-z0-9._-]`, bounded in length; a
+/// value outside that shape is not a token this adapter will carry.
+const MAX_TOKEN_LEN: usize = 2048;
+
+/// True when `token` matches `[A-Za-z0-9._-]{1,2048}`. The check runs
+/// before anything is built or sent, so an attacker-supplied token is
+/// never passed on to siteverify at all.
+fn is_plausible_token(token: &str) -> bool {
+    let len = token.len();
+    if len == 0 || len > MAX_TOKEN_LEN {
+        return false;
+    }
+    token
+        .bytes()
+        .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+}
+
+// Duplicated from the Stripe adapter (`crates/adapter-stripe`) rather than
+// shared: a dependency edge between two adapters (or a new public helper
+// in `cratefield-core`) costs more than a fifteen-line copy, so issue #436
+// chose the local copy.
+/// Percent-encodes for `application/x-www-form-urlencoded`: unreserved bytes
+/// pass through, everything else (space included, as `%20`) is escaped.
+fn percent_encode(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    for &byte in input.as_bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(byte as char);
+            }
+            other => {
+                use std::fmt::Write as _;
+                let _ = write!(out, "%{other:02X}");
+            }
+        }
+    }
+    out
+}
+
+/// Builds the siteverify form body with every field percent-encoded.
+/// `token` arrives from the untrusted request body and `remote_ip` from
+/// request headers, so an unencoded `&` or `=` would inject an extra
+/// parameter into the verification request (issue #436).
+fn encode_form(secret: &str, token: &str, remote_ip: Option<&str>) -> String {
+    let mut form = format!(
+        "secret={}&response={}",
+        percent_encode(secret),
+        percent_encode(token)
+    );
+    if let Some(ip) = remote_ip {
+        form.push_str("&remoteip=");
+        form.push_str(&percent_encode(ip));
+    }
+    form
+}
+
 #[derive(serde::Deserialize)]
 struct SiteverifyResponse {
     #[serde(default)]
@@ -122,10 +182,19 @@ struct SiteverifyResponse {
 #[async_trait]
 impl Captcha for Turnstile {
     async fn verify(&self, token: &str, remote_ip: Option<&str>) -> Result<Verdict, CaptchaError> {
-        let mut form = format!("secret={}&response={}", self.secret, token);
-        if let Some(ip) = remote_ip {
-            form = format!("{form}&remoteip={ip}");
+        // A malformed token is refused before anything is built or sent.
+        // This refusal is unconditional: `fail_open` exists for transport
+        // and availability failures, not for a syntactically invalid
+        // token — a fail-open adapter must not wave one through to a
+        // provider that could be tricked by it (issue #436).
+        if !is_plausible_token(token) {
+            tracing::warn!("refusing malformed turnstile token");
+            return Ok(Verdict {
+                ok: false,
+                reason: Some("invalid-input-response".to_string()),
+            });
         }
+        let form = encode_form(&self.secret, token, remote_ip);
         let request = Request::builder()
             .method(http::Method::POST)
             .uri(SITEVERIFY_URL)
@@ -209,5 +278,69 @@ impl Captcha for Turnstile {
             action_bound: self.expected_action.is_some(),
             fail_open: self.fail_open,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn percent_encode_passes_unreserved_bytes_and_escapes_the_rest() {
+        assert_eq!(percent_encode("abcXYZ019-_.~"), "abcXYZ019-_.~");
+        assert_eq!(percent_encode("a b"), "a%20b");
+        assert_eq!(percent_encode("secret&x=1"), "secret%26x%3D1");
+        assert_eq!(percent_encode("café"), "caf%C3%A9");
+        assert_eq!(percent_encode(""), "");
+    }
+
+    #[test]
+    fn a_hostile_token_and_ip_cannot_add_a_form_key() {
+        // The injection the issue describes: `&` and `=` in the token (or
+        // the header-supplied IP) must arrive as data, not as structure.
+        let body = encode_form(
+            "secret-value",
+            "abc&sitekey=evil&idempotency_key=x",
+            Some("1.2.3.4&foo=bar"),
+        );
+        let mut keys: Vec<&str> = body
+            .split('&')
+            .map(|pair| pair.split('=').next().expect("a pair always has a key"))
+            .collect();
+        keys.sort_unstable();
+        assert_eq!(keys, vec!["remoteip", "response", "secret"]);
+        assert!(body.contains("response=abc%26sitekey%3Devil%26idempotency_key%3Dx"));
+        assert!(body.contains("remoteip=1.2.3.4%26foo%3Dbar"));
+    }
+
+    #[test]
+    fn the_secret_is_encoded_too() {
+        assert_eq!(
+            encode_form("s&ecret=1", "tok", None),
+            "secret=s%26ecret%3D1&response=tok"
+        );
+        assert_eq!(
+            encode_form("secret-value", "tok", None),
+            "secret=secret-value&response=tok"
+        );
+    }
+
+    #[test]
+    fn tokens_on_the_plausible_shape_pass_the_check() {
+        assert!(is_plausible_token("0.z8xQa_7-bBcCdDeE"));
+        let exactly_2048 = "a".repeat(MAX_TOKEN_LEN);
+        assert!(is_plausible_token(&exactly_2048));
+    }
+
+    #[test]
+    fn tokens_off_the_plausible_shape_fail_the_check() {
+        assert!(!is_plausible_token(""));
+        assert!(!is_plausible_token("bad&token"));
+        assert!(!is_plausible_token("bad token"));
+        assert!(!is_plausible_token("bad;token"));
+        assert!(!is_plausible_token("bad/token"));
+        assert!(!is_plausible_token("héllo"));
+        let one_past_the_ceiling = "a".repeat(MAX_TOKEN_LEN + 1);
+        assert!(!is_plausible_token(&one_past_the_ceiling));
     }
 }
