@@ -80,8 +80,27 @@ These are empirical facts recorded while building this crate; see
 - The `worker` crate's `http` feature stays **off**: with it enabled, D1
   writes hang the isolate. `serve()` therefore takes the native
   `worker::Request` (the fetch macro's `FromRequest` accepts it).
-- Request bodies are buffered via `Request::bytes()` before entering the
-  router; every streaming bridge between `worker::Body` and axum hangs.
+- Request bodies are gated before they are resident (issue #440): a
+  `content-length` over the route's ceiling is refused unread, and a body
+  with no usable `content-length` is read through `Request::stream()` and
+  cut off once the ceiling is passed. A request with no body at all (most
+  GETs) is answered as empty without any read: 0.8.5's `stream()` sets
+  `body_used` before discovering there is no body, after which `bytes()`
+  only answers `BodyUsed`. Declared lengths within the ceiling
+  are still buffered via `Request::bytes()`; every streaming bridge
+  between `worker::Body` and axum hangs.
+- `wrangler dev` only: refusing a body unread (issue #440) leaves the
+  tail undrained, and the dev proxy's `middleware-ensure-req-body-drained`
+  logs `Failed to drain the unused request body. Error: Network connection
+  lost.` and breaks miniflare's `ProxyWorker` loopback slot, so the NEXT
+  local request fails with a spurious 500 `Network connection lost` — it
+  never reaches the isolate. Exactly one request is lost and the dev
+  server recovers by itself; a client that overstates `content-length`
+  and then sends fewer bytes may see the 413 withheld locally for the
+  same reason. Dev-proxy artefact only: production workerd cancels
+  unread request bodies natively (no `ProxyWorker`, no drain middleware).
+  Verified wrangler 4.135.0 / workerd 1.20260918.1; known upstream as
+  workers-sdk issue #4562.
 - Installing a `tracing` dispatcher (`set_global_default`/`set_default`)
   hangs the isolate, so `install_tracing()` is a no-op on wasm and runtime
   logs go through `worker::console_log!`/`console_error!` directly
