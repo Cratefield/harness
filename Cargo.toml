@@ -38,6 +38,9 @@ cratefield-runtime-native = { path = "crates/runtime-native", version = "0.1.0" 
 cratefield-runtime-browser = { path = "crates/runtime-browser", version = "0.1.0" }
 cratefield-adapter-resend = { path = "crates/adapter-resend", version = "0.2" }
 cratefield-adapter-turnstile = { path = "crates/adapter-turnstile", version = "0.1.0" }
+# The first `TextModel` adapter (issue #430): the Claude Messages API over
+# the `HttpClient` port, against the minimal `TextModel` trait module in core.
+cratefield-adapter-anthropic = { path = "crates/adapter-anthropic", version = "0.1" }
 cratefield-adapter-apns = { path = "crates/adapter-apns", version = "0.1.0" }
 cratefield-adapter-fcm = { path = "crates/adapter-fcm", version = "0.1.0" }
 # The provider tokens the push adapters present (issue #178): ES256 for APNs

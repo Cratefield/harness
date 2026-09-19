@@ -21,6 +21,7 @@ mod push;
 mod rate_limiter;
 mod realtime;
 pub(crate) mod signer;
+mod text_model;
 
 pub use auth::{Auth, AuthError, Caller, Subject, Unconfigured};
 pub use blob::{Blob, BlobError, BlobObject, MAX_BLOB_BYTES, ScopedBlob, check_blob_size};
@@ -48,6 +49,9 @@ pub use push::{
 pub use rate_limiter::{Decision, RateLimitError, RateLimiter};
 pub use realtime::{Member, Realtime, RealtimeError, RoomContext, RoomHandler};
 pub use signer::{Kid, MAX_KID_NAME, Payload, SignatureError, Signer};
+// A trait module, not a `Port` variant — see the module docs for why the
+// enum and the runtime wiring stay untouched for now.
+pub use text_model::{Completion, Prompt, Role, TextModel, TextModelError, Turn, Usage};
 
 use crate::config::Config;
 use crate::module::Module;

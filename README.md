@@ -150,6 +150,7 @@ convenience, not a layer.
 | `cratefield-runtime-cloudflare` | workers-rs entry points; D1, KV, Rate Limiting and `wait_until` mapped to ports |
 | `cratefield-adapter-resend` | `Mailer` over the Resend REST API, with a `NotConfigured` mode until a sending domain is verified |
 | `cratefield-adapter-turnstile` | `Captcha` over Cloudflare Turnstile, fail-closed |
+| `cratefield-adapter-anthropic` | `TextModel` over the Anthropic Messages API (Claude), through the `HttpClient` port — no vendor SDK, `NotConfigured` mode when the key is absent |
 | `cratefield-adapter-sqlite` | `Database` over rusqlite: every test, and single-node self-hosting |
 | `cratefield-module-email-signup` | Email signup with double opt-in, unsubscribe, admin export |
 | `cratefield-module-waitlist` | Per-product waitlist with confirm, position, referral codes |
@@ -283,6 +284,7 @@ crates/
   runtime-cloudflare/      cratefield-runtime-cloudflare
   adapter-resend/          cratefield-adapter-resend
   adapter-turnstile/       cratefield-adapter-turnstile
+  adapter-anthropic/       cratefield-adapter-anthropic
   adapter-sqlite/          cratefield-adapter-sqlite
   module-email-signup/     cratefield-module-email-signup
   module-waitlist/         cratefield-module-waitlist

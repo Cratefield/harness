@@ -639,6 +639,7 @@ dependencies = [
 name = "cratefield"
 version = "0.1.4"
 dependencies = [
+ "cratefield-adapter-anthropic",
  "cratefield-adapter-apns",
  "cratefield-adapter-fcm",
  "cratefield-adapter-postgres",
@@ -689,6 +690,23 @@ dependencies = [
  "sea-query",
  "serde",
  "time",
+]
+
+[[package]]
+name = "cratefield-adapter-anthropic"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "cratefield-core",
+ "cratefield-testing",
+ "getrandom 0.4.3",
+ "http",
+ "pollster",
+ "serde",
+ "serde_json",
+ "time",
+ "tracing",
 ]
 
 [[package]]
