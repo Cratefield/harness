@@ -18,6 +18,11 @@ const REQUEST: &str = "/v1/auth-magic-link/request";
 const CONSUME: &str = "/v1/auth-magic-link/consume";
 const BASE: &str = "https://auth.factory0.ventures";
 
+/// A token-shaped value that was never issued: exactly the length and
+/// alphabet a real token has, so it gets past the shape guard and reaches
+/// the lookup, which is where a made-up credential belongs.
+const BOGUS_TOKEN: &str = "a-bogus-token-of-exactly-the-correct-length";
+
 struct TestClock(AtomicI64);
 
 impl Clock for TestClock {
@@ -395,7 +400,7 @@ fn an_expired_and_an_already_used_token_fail_identically() {
         let expired = click(&kit, &stale).await;
 
         // Never issued.
-        let never = click(&kit, "a-token-that-was-never-issued").await;
+        let never = click(&kit, BOGUS_TOKEN).await;
 
         assert_eq!(spent.status, StatusCode::BAD_REQUEST);
         assert_eq!(expired.status, spent.status);
@@ -474,11 +479,98 @@ fn a_prefetch_cannot_be_used_to_test_whether_a_token_is_real() {
         let real = kit.outbox.last_token().expect("a token");
 
         let genuine = prefetch(&kit, &real).await;
-        let invented = prefetch(&kit, "a-token-that-was-never-issued").await;
+        let invented = prefetch(&kit, BOGUS_TOKEN).await;
         assert_eq!(genuine.status, invented.status);
         // The bodies differ only in the token echoed into the form.
         assert!(genuine.text().contains("Confirm"));
         assert!(invented.text().contains("Confirm"));
+    });
+}
+
+/// The confirm page interpolates the token it was handed, so the shape
+/// guard is what stands between a hostile query parameter and the
+/// document: a value that could not be a token is not a token, and gets
+/// the expired page instead of reaching the HTML at all.
+#[test]
+fn a_token_that_is_not_token_shaped_gets_the_expired_page() {
+    pollster::block_on(async {
+        // The shape check is the first guard and the escape in the hidden
+        // field the second — the order that survives either being widened
+        // alone.
+        let kit = kit();
+        let attack = "\"><script>alert(1)</script>";
+        let encoded = "%22%3E%3Cscript%3Ealert(1)%3C%2Fscript%3E";
+        let response = prefetch(&kit, encoded).await;
+        assert_eq!(
+            response.status,
+            StatusCode::BAD_REQUEST,
+            "{}",
+            response.text()
+        );
+        let html = response.text();
+        assert!(html.contains("expired"), "not the expired page: {html}");
+        assert!(!html.contains("<script"), "{html}");
+        assert!(
+            !html.contains(attack),
+            "the raw value reached the document: {html}"
+        );
+        assert!(!html.contains("<form"), "the confirm form rendered: {html}");
+    });
+}
+
+/// And the confirm button demands the same token shape: the two entry
+/// points parse the value independently, so the guard is pinned on each.
+#[test]
+fn a_posted_token_that_is_not_token_shaped_gets_the_expired_page() {
+    pollster::block_on(async {
+        let kit = kit();
+        let attack = "\"><script>alert(1)</script>";
+        let response = post_form(
+            &kit,
+            CONSUME,
+            "token=%22%3E%3Cscript%3Ealert(1)%3C%2Fscript%3E",
+        )
+        .await;
+        assert_eq!(
+            response.status,
+            StatusCode::BAD_REQUEST,
+            "{}",
+            response.text()
+        );
+        let html = response.text();
+        assert!(html.contains("expired"), "not the expired page: {html}");
+        assert!(!html.contains("<script"), "{html}");
+        assert!(
+            !html.contains(attack),
+            "the raw value reached the document: {html}"
+        );
+        assert!(!html.contains("<form"), "the confirm form rendered: {html}");
+        assert_eq!(count(&kit, "sessions"), 0, "a malformed token spent one");
+    });
+}
+
+/// And the guard refuses only what could never be a token: a stranger's
+/// value of the exact right shape still reaches the lookup, and is
+/// answered exactly the way an expired link is.
+#[test]
+fn a_well_formed_but_unknown_token_still_fails_like_an_expired_one() {
+    pollster::block_on(async {
+        let kit = kit();
+        assert_eq!(BOGUS_TOKEN.len(), 43, "the shape the guard demands");
+        seed(&kit, "ada@example.com", false).await;
+
+        // A genuinely expired link, to compare against.
+        request_link(&kit, "ada@example.com").await;
+        let real = kit.outbox.last_token().expect("a token");
+        kit.clock.0.fetch_add(901, Ordering::SeqCst);
+        let expired = click(&kit, &real).await;
+
+        let invented = click(&kit, BOGUS_TOKEN).await;
+        assert_eq!(invented.status, expired.status);
+        assert_eq!(
+            invented.body, expired.body,
+            "a well-formed stranger is distinguishable from an expired link"
+        );
     });
 }
 
@@ -561,8 +653,10 @@ fn a_token_of_another_kind_cannot_be_spent_here() {
 
         // An authorization code, presented to the magic link. Different
         // kind, same table: without the kind check this would be a way to
-        // turn one credential into another.
-        let token = "an-authorization-code-value";
+        // turn one credential into another. Token-shaped on purpose, so
+        // it is the kind check that refuses it and not the shape guard
+        // before it.
+        let token = BOGUS_TOKEN;
         let digest = {
             use sha2::{Digest, Sha256};
             Sha256::digest(token.as_bytes()).to_vec()
@@ -652,7 +746,7 @@ fn a_new_link_retires_the_one_it_replaces() {
         // The one it replaced does not — and fails the way a made-up token
         // does, so holding a retired link teaches nothing.
         let retired = click(&kit, &first).await;
-        let invented = click(&kit, "a-token-that-was-never-issued").await;
+        let invented = click(&kit, BOGUS_TOKEN).await;
         assert_eq!(retired.status, invented.status);
         assert_eq!(retired.body, invented.body);
     });
