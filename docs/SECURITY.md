@@ -23,7 +23,10 @@
   reads `redirect`/`return`/`next` query parameters.
 - **Admin auth.** `cratefield_core::admin::require_admin`: disabled (401)
   when `ADMIN_TOKEN` is unset, SHA-256-digest constant-time compare,
-  403 on a wrong token; the token never appears in tracing fields.
+  403 on a wrong token; the token never appears in tracing fields. Set,
+  it is a bearer secret like `HARNESS_SECRET` and takes the same floor:
+  `HarnessConfig::from_config` refuses anything under 32 bytes (issue
+  #437). Absent stays legal — admin is simply disabled.
 - **Sidecar trust boundary** (issue #131, ADR 0009 amendment). A mount
   forwards an allowlist only: `content-type`, `content-length`, `accept`,
   `accept-language`, `user-agent`, the host's `x-request-id`, and a
@@ -47,9 +50,29 @@
   mounted module's public part, and validated.
 - **CSV formula-injection guard.** `cratefield_core::csv::escape` prefixes
   `= + - @ \t \r` leading cells with `'` before RFC 4180 quoting.
-- **Rate limits on every public route** — including confirm and status —
-  keyed `ip:<cf-connecting-ip>` (never `x-forwarded-for` on Workers) and
-  `email:<normalized>`; 429 carries `Retry-After`.
+- **Rate limits, and a floor that refuses to serve without them**
+  (issue #437). The harness layer limits every `/admin/*` route by
+  client IP, keyed `admin:ip:<ip>` — its own budget, no email key, since
+  the caller is anonymous until it authenticates. A sidecar mount's
+  admin plane is included: the floor wraps the module and forwarding
+  nests alike, so a denied admin request is never forwarded. It fails
+  closed: a limiter transport error is a bare `429` (no `Retry-After` —
+  the limiter had no answer), not a pass, because the admin bearer has
+  no captcha or cooldown behind it. The
+  admin login form is throttled the same way
+  (`admin-login:ip:<ip>`). Readiness then refuses a venture that takes
+  public writes or admin routes unless a rate limiter is **actually
+  resolved**: a binding named in composition but unresolvable at boot
+  degrades to no limiter, and that now means the guarded routes answer
+  `503 not-production-ready`, not a warning over unlimited routes. The
+  escape is its own recorded decision,
+  `HARNESS_ALLOW_UNLIMITED_PUBLIC_ROUTES=<reason>`, logged once per boot
+  and deliberately separate from
+  `HARNESS_ALLOW_UNPROTECTED_WRITES` — one key waiving two controls is
+  how the second stays unwired after the first is fixed. Where a
+  venture runs a limiter over public routes, keys are
+  `ip:<cf-connecting-ip>` (never `x-forwarded-for` on Workers) and
+  `email:<normalized>`; a denial answers `429` with `Retry-After`.
 - **Production readiness is enforced against the deployment, not a
   compiled default** (issue #143). A venture carries a `VentureEnv` set in
   code, defaulting to `Development`; a deployment carries `ENV`. They

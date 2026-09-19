@@ -17,7 +17,8 @@ use axum::extract::{Path, State};
 use axum::http::{HeaderMap, HeaderValue, Method, StatusCode, header};
 use axum::response::{IntoResponse, Redirect, Response};
 use cratefield_core::{
-    Action, Audience, Clock, Kid, Payload, Problem, Scope, View, client_ip, constant_time_eq,
+    Action, Audience, Clock, Kid, Payload, Problem, RateLimit, RateLimitFailure, Scope, View,
+    check_rate_limit, client_ip, constant_time_eq,
 };
 use maud::Markup;
 use serde_json::Value;
@@ -168,25 +169,32 @@ pub(crate) async fn login_post(
     if !same_origin(&headers) {
         return forbidden(&scope, "login must be posted from this origin");
     }
-    if let Some(limiter) = &state.ctx.rate_limiter {
-        let key = format!("admin-login:ip:{}", client_ip(&headers).unwrap_or_default());
-        match limiter.limit(&key).await {
-            Ok(decision) if !decision.ok => {
-                let mut out = login_page(
-                    &state,
-                    &[(
-                        String::new(),
-                        "Too many attempts. Please try again later.".into(),
-                    )],
-                );
-                *out.status_mut() = StatusCode::TOO_MANY_REQUESTS;
-                return out;
-            }
-            Ok(_) => {}
-            Err(err) => {
-                tracing::warn!(error = %err, "admin login rate limiter unavailable; failing open");
-            }
-        }
+    // The limiter is the only thing between this form and an offline
+    // brute-force of the admin token, so a transport error denies the
+    // request (issue #133) — the login page has no captcha-or-cooldown
+    // backstop behind it. A `None` limiter still allows: readiness
+    // refuses a venture with admin routes unless one is resolved, or the
+    // operator recorded an acceptance.
+    let keys = vec![format!(
+        "admin-login:ip:{}",
+        client_ip(&headers).unwrap_or_default()
+    )];
+    if let RateLimit::Denied { .. } = check_rate_limit(
+        state.ctx.rate_limiter.as_ref(),
+        &keys,
+        RateLimitFailure::FailClosed,
+    )
+    .await
+    {
+        let mut out = login_page(
+            &state,
+            &[(
+                String::new(),
+                "Too many attempts. Please try again later.".into(),
+            )],
+        );
+        *out.status_mut() = StatusCode::TOO_MANY_REQUESTS;
+        return out;
     }
     let presented = form
         .iter()

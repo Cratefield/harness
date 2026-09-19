@@ -517,3 +517,65 @@ async fn admin_posts_need_same_origin_proof_beyond_the_cookie() {
         referer.body
     );
 }
+
+/// A limiter whose transport is down: the login post must be denied, not
+/// waved through to the token compare (issue #437).
+struct DownLimiter;
+
+#[async_trait::async_trait]
+impl cratefield_core::RateLimiter for DownLimiter {
+    async fn limit(
+        &self,
+        _key: &str,
+    ) -> Result<cratefield_core::Decision, cratefield_core::RateLimitError> {
+        Err(cratefield_core::RateLimitError::Transport(
+            "limiter down".to_owned(),
+        ))
+    }
+}
+
+fn down_limiter_kit() -> TestHarness {
+    TestHarness::with_builder(
+        vec![
+            Box::new(EmailSignup::new().double_opt_in(false)),
+            Box::new(Waitlist::new().products(["kontinuum"])),
+        ],
+        |builder| builder.ui(Ui::new()),
+        |ports| {
+            ports.config = Arc::new(cratefield_core::MapConfig::from_pairs(vec![
+                ("HARNESS_SECRET", cratefield_testing::TEST_HARNESS_SECRET),
+                ("ADMIN_TOKEN", TOKEN),
+            ]));
+            ports.rate_limiter = Some(Arc::new(DownLimiter));
+        },
+    )
+}
+
+#[pollster::test]
+async fn a_limiter_error_denies_the_login_instead_of_failing_open() {
+    let kit = down_limiter_kit();
+    let reply = send(
+        &kit,
+        Method::POST,
+        "/ui/admin/login",
+        &[ORIGIN],
+        Some(&format!("token={TOKEN}")),
+    )
+    .await;
+    assert_eq!(
+        reply.status,
+        StatusCode::TOO_MANY_REQUESTS,
+        "{}",
+        reply.body
+    );
+    assert!(
+        reply
+            .body
+            .contains("Too many attempts. Please try again later."),
+        "{}",
+        reply.body
+    );
+    // The post never reached the token compare, so no session is minted
+    // even though the presented token was the right one.
+    assert!(reply.header(header::SET_COOKIE).is_empty());
+}

@@ -2,5 +2,5 @@
 # Never put a real secret here.
 HARNESS_SECRET=dummy-harness-secret-0123456789abcdef
 # HARNESS_SECRET_PREVIOUS=dummy-previous-secret-0123456789
-# ADMIN_TOKEN=dummy-admin-token
+# ADMIN_TOKEN=dummy-admin-token-0123456789abcdef
 ENV=development

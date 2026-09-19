@@ -15,7 +15,7 @@
 HARNESS_SECRET=generate-with-openssl-rand-hex-32
 
 # This sidecar's own admin plane. Distinct from the host's.
-ADMIN_TOKEN=generate-a-separate-one
+ADMIN_TOKEN=generate-a-separate-one-0123456789abcdef
 
 # The gateway secret, on both this Worker and the host (>= 32 bytes).
 # With `SIDECAR_REQUIRE_GATEWAY=1` this Worker refuses every `/v1/*` and

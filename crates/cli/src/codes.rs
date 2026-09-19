@@ -107,6 +107,14 @@ pub struct Codes {
     pub manifest_unreadable: DoctorCodeDef,
     /// A manifest could not be written back to disk.
     pub manifest_write_failed: DoctorCodeDef,
+    /// `ADMIN_TOKEN` is set but shorter than the 32-byte floor
+    /// `HarnessConfig::from_config` enforces in every environment
+    /// (issue #437).
+    pub admin_token_too_short: DoctorCodeDef,
+    /// The production rate-limiter rule (issue #437): a venture with
+    /// public writes or admin routes on a runtime whose `RateLimiter` port
+    /// is not resolved, and no recorded acceptance.
+    pub rate_limiter_not_effective: DoctorCodeDef,
 }
 
 pub const CODES: Codes = Codes {
@@ -261,12 +269,23 @@ pub const CODES: Codes = Codes {
         title: "Manifest write failed",
         description: "A manifest could not be written back to disk.",
     },
+    admin_token_too_short: DoctorCodeDef {
+        code: "admin-token-too-short",
+        title: "Admin token too short",
+        description: "ADMIN_TOKEN is set but shorter than the 32-byte floor the boot enforces in every environment; lengthen it or remove it.",
+    },
+    rate_limiter_not_effective: DoctorCodeDef {
+        code: "rate-limiter-not-effective",
+        title: "Rate limiter not effective",
+        description: "A production venture takes public writes or admin routes but the RateLimiter port is not resolved; set HARNESS_ALLOW_UNLIMITED_PUBLIC_ROUTES to a reason to serve unlimited.",
+    },
 };
 
 /// Every `fz` code definition, for tests and docs. Sorted by code.
 #[must_use]
 pub fn registry() -> Vec<&'static DoctorCodeDef> {
     vec![
+        &CODES.admin_token_too_short,
         &CODES.auth_not_configured,
         &CODES.captcha_not_effective,
         &CODES.card_data_in_migration,
@@ -294,6 +313,7 @@ pub fn registry() -> Vec<&'static DoctorCodeDef> {
         &CODES.production_deploy_unauthorized,
         &CODES.push_required_but_unrouted,
         &CODES.push_transport_misconfigured,
+        &CODES.rate_limiter_not_effective,
         &CODES.sidecar_mount_invalid,
         &CODES.sidecar_shadows_module,
         &CODES.stale_plan,
@@ -344,6 +364,7 @@ mod tests {
         assert_eq!(by_slug.len(), registered.len(), "duplicate code registered");
 
         let fields = [
+            CODES.admin_token_too_short.code,
             CODES.auth_not_configured.code,
             CODES.harness_api_mismatch.code,
             CODES.lockfile_unreadable.code,
@@ -358,6 +379,7 @@ mod tests {
             CODES.card_data_in_migration.code,
             CODES.push_transport_misconfigured.code,
             CODES.push_required_but_unrouted.code,
+            CODES.rate_limiter_not_effective.code,
             CODES.module_self_check.code,
             CODES.module_unknown.code,
             CODES.not_deployed.code,

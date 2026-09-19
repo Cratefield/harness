@@ -2264,6 +2264,7 @@ version = "0.1.1"
 dependencies = [
  "async-trait",
  "cratefield-adapter-resend",
+ "cratefield-adapter-turnstile",
  "cratefield-core",
  "cratefield-runtime-cloudflare",
  "factory0-auth-core",
