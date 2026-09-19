@@ -31,12 +31,14 @@ compatibility-doc` and checked in CI for drift. Do not edit by hand.
 | `cratefield-accounts` *(not published)* | 0.1.1 | 1 | `^0.5` — `>=0.5.0, <0.6.0` |
 | `cratefield-adapter-apns` | 0.1.4 | 1 | `^0.5` — `>=0.5.0, <0.6.0` |
 | `cratefield-adapter-fcm` | 0.1.3 | 1 | `^0.5` — `>=0.5.0, <0.6.0` |
+| `cratefield-adapter-github-issues` | 0.1.0 | 1 | `^0.5` — `>=0.5.0, <0.6.0` |
 | `cratefield-adapter-postgres` | 0.1.4 | 1 | `^0.5` — `>=0.5.0, <0.6.0` |
 | `cratefield-adapter-resend` | 0.2.2 | 1 | `^0.5` — `>=0.5.0, <0.6.0` |
 | `cratefield-adapter-sqlite` | 0.1.4 | 1 | `^0.5` — `>=0.5.0, <0.6.0` |
 | `cratefield-adapter-sqlite-wasm` *(not published)* | 0.1.1 | 1 | `^0.5` — `>=0.5.0, <0.6.0` |
 | `cratefield-adapter-stripe` | 0.1.4 | 1 | `^0.5` — `>=0.5.0, <0.6.0` |
 | `cratefield-adapter-turnstile` | 0.1.4 | 1 | `^0.5` — `>=0.5.0, <0.6.0` |
+| `cratefield-adapter-webhook-tracker` | 0.1.0 | 1 | `^0.5` — `>=0.5.0, <0.6.0` |
 | `cratefield-adapter-webpush` | 0.1.3 | 1 | `^0.5` — `>=0.5.0, <0.6.0` |
 | `cratefield-auth-client` | 0.1.2 | 1 | `^0.5` — `>=0.5.0, <0.6.0` |
 | `cratefield-bench-write-ceiling` *(not published)* | 0.1.1 | 1 | `^0.5` — `>=0.5.0, <0.6.0` |

@@ -641,11 +641,13 @@ version = "0.1.4"
 dependencies = [
  "cratefield-adapter-apns",
  "cratefield-adapter-fcm",
+ "cratefield-adapter-github-issues",
  "cratefield-adapter-postgres",
  "cratefield-adapter-resend",
  "cratefield-adapter-sqlite",
  "cratefield-adapter-stripe",
  "cratefield-adapter-turnstile",
+ "cratefield-adapter-webhook-tracker",
  "cratefield-adapter-webpush",
  "cratefield-auth-client",
  "cratefield-core",
@@ -726,6 +728,23 @@ dependencies = [
  "serde_json",
  "serde_urlencoded",
  "thiserror 2.0.20",
+ "time",
+ "tracing",
+]
+
+[[package]]
+name = "cratefield-adapter-github-issues"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "cratefield-core",
+ "cratefield-testing",
+ "getrandom 0.4.3",
+ "http",
+ "pollster",
+ "serde",
+ "serde_json",
  "time",
  "tracing",
 ]
@@ -821,6 +840,25 @@ dependencies = [
  "pollster",
  "serde",
  "serde_json",
+ "time",
+ "tracing",
+]
+
+[[package]]
+name = "cratefield-adapter-webhook-tracker"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "cratefield-core",
+ "cratefield-testing",
+ "getrandom 0.4.3",
+ "hmac 0.13.0",
+ "http",
+ "pollster",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
  "time",
  "tracing",
 ]

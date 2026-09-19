@@ -21,6 +21,7 @@ mod push;
 mod rate_limiter;
 mod realtime;
 pub(crate) mod signer;
+mod tracker;
 
 pub use auth::{Auth, AuthError, Caller, Subject, Unconfigured};
 pub use blob::{Blob, BlobError, BlobObject, MAX_BLOB_BYTES, ScopedBlob, check_blob_size};
@@ -48,6 +49,7 @@ pub use push::{
 pub use rate_limiter::{Decision, RateLimitError, RateLimiter};
 pub use realtime::{Member, Realtime, RealtimeError, RoomContext, RoomHandler};
 pub use signer::{Kid, MAX_KID_NAME, Payload, SignatureError, Signer};
+pub use tracker::{Destination, Filed, TicketDraft, Tracker, TrackerError};
 
 use crate::config::Config;
 use crate::module::Module;

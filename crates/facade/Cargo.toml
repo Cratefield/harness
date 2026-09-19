@@ -32,6 +32,10 @@ apns = ["dep:cratefield-adapter-apns"]
 fcm = ["dep:cratefield-adapter-fcm"]
 stripe = ["dep:cratefield-adapter-stripe"]
 webpush = ["dep:cratefield-adapter-webpush"]
+# The Tracker port's two adapters (issue #432): GitHub Issues, and the
+# HMAC-signed webhook a tenant configures.
+github-issues = ["dep:cratefield-adapter-github-issues"]
+webhook-tracker = ["dep:cratefield-adapter-webhook-tracker"]
 
 # The push adapters' provider tokens (ES256 for APNs and VAPID, RS256 for
 # Google service accounts). Pulled in by `apns` and by `fcm` already; a
@@ -111,6 +115,10 @@ cratefield-adapter-stripe = { workspace = true, optional = true }
 cratefield-push-wiring = { workspace = true, optional = true }
 # `publish = false` until its first manual publish (docs/RELEASING.md).
 cratefield-adapter-webpush = { workspace = true, optional = true }
+# The Tracker port's two adapters (issue #432), siblings under the port that
+# lives in core (ADR 0002: the port there, the vendor clients here).
+cratefield-adapter-github-issues = { workspace = true, optional = true }
+cratefield-adapter-webhook-tracker = { workspace = true, optional = true }
 cratefield-ui = { workspace = true, optional = true }
 # `publish = false` until its first manual publish (docs/RELEASING.md).
 cratefield-i18n = { workspace = true, optional = true }
