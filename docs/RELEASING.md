@@ -180,6 +180,7 @@ crate exists**, so the very first release of each crate is manual:
    cargo publish -p cratefield-adapter-postgres
    cargo publish -p cratefield-adapter-resend
    cargo publish -p cratefield-adapter-turnstile
+   cargo publish -p cratefield-adapter-anthropic
    cargo publish -p cratefield-push-auth      # before adapter-apns
    cargo publish -p cratefield-adapter-apns
    cargo publish -p cratefield-adapter-fcm    # before the facade

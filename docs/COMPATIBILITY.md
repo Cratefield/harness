@@ -29,6 +29,7 @@ compatibility-doc` and checked in CI for drift. Do not edit by hand.
 | `cratefield` | 0.1.4 | 1 | `^0.5` — `>=0.5.0, <0.6.0` |
 | `cratefield-access` *(not published)* | 0.1.1 | 1 | `^0.5` — `>=0.5.0, <0.6.0` |
 | `cratefield-accounts` *(not published)* | 0.1.1 | 1 | `^0.5` — `>=0.5.0, <0.6.0` |
+| `cratefield-adapter-anthropic` | 0.1.0 | 1 | `^0.5` — `>=0.5.0, <0.6.0` |
 | `cratefield-adapter-apns` | 0.1.4 | 1 | `^0.5` — `>=0.5.0, <0.6.0` |
 | `cratefield-adapter-fcm` | 0.1.3 | 1 | `^0.5` — `>=0.5.0, <0.6.0` |
 | `cratefield-adapter-postgres` | 0.1.4 | 1 | `^0.5` — `>=0.5.0, <0.6.0` |
