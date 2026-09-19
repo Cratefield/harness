@@ -2600,6 +2600,25 @@ mod tests {
                 Some(&cookie(&kit)),
             )
             .await;
+            // The one gated entry in the navigation: the data browser is a
+            // staff tool behind `require_admin`, and the nav cannot know
+            // that — it still renders for every signed-in operator, so the
+            // 401 problem document is the honest answer to the click. Its
+            // siblings answer 200 and name themselves.
+            if *slug == "data" {
+                assert_eq!(
+                    reply.status,
+                    StatusCode::UNAUTHORIZED,
+                    "{slug}: {}",
+                    reply.body
+                );
+                assert!(
+                    reply.body.contains("admin-unauthorized"),
+                    "{slug} must answer with the admin problem document: {}",
+                    reply.body
+                );
+                continue;
+            }
             assert_eq!(reply.status, StatusCode::OK, "{slug}: {}", reply.body);
             assert!(
                 reply.body.contains(title),

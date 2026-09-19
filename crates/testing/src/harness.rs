@@ -12,7 +12,8 @@ use std::sync::Arc;
 
 use crate::dialect::Dialect;
 use crate::fakes::{
-    FakeCaptcha, FakeDefer, FakeHttpClient, FakeMailer, FakeRateLimiter, FakeTracker, FixedClock,
+    FakeCaptcha, FakeDefer, FakeHttpClient, FakeMailer, FakeRateLimiter, FakeTextModel,
+    FakeTracker, FixedClock,
     MemoryKeyValue,
 };
 
@@ -36,6 +37,7 @@ pub struct TestHarness {
     pub mailer: FakeMailer,
     pub captcha: FakeCaptcha,
     pub rate_limiter: FakeRateLimiter,
+    pub text_model: FakeTextModel,
     pub clock: FixedClock,
     pub kv: MemoryKeyValue,
     pub http: FakeHttpClient,
@@ -223,6 +225,7 @@ impl TestHarness {
         let mailer = FakeMailer::new(crate::fakes::MailerMode::SendOk);
         let captcha = FakeCaptcha::allow_all();
         let rate_limiter = FakeRateLimiter::always_allow();
+        let text_model = FakeTextModel::default();
         let clock = FixedClock(
             time::OffsetDateTime::from_unix_timestamp(1_800_000_000).expect("fixed epoch"),
         );
@@ -239,6 +242,7 @@ impl TestHarness {
         ports.mailer = Some(Arc::new(mailer.clone()));
         ports.captcha = Some(Arc::new(captcha.clone()));
         ports.rate_limiter = Some(Arc::new(rate_limiter.clone()));
+        ports.text_model = Some(Arc::new(text_model.clone()));
         ports.signer = Some(signer.clone());
         ports.kv = Some(Arc::new(kv.clone()));
         ports.http = Some(Arc::new(http.clone()));
@@ -255,6 +259,7 @@ impl TestHarness {
             mailer,
             captcha,
             rate_limiter,
+            text_model,
             clock,
             kv,
             http,

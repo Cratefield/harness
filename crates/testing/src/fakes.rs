@@ -14,10 +14,10 @@
 use async_trait::async_trait;
 use bytes::Bytes;
 use cratefield_core::{
-    Captcha, CaptchaError, Clock, Credential, Database, DbError, Decision, Defer, Destination,
-    Filed, HttpClient, HttpError, KeyValue, KvError, MailError, Mailer, Message, RateLimitError,
-    RateLimiter, Row, Rows, SendOutcome, Statement, TicketDraft, TicketState, TicketStatus,
-    Tracker, TrackerError, Verdict,
+    Captcha, CaptchaError, Clock, Completion, Credential, Database, DbError, Decision, Defer,
+    Destination, Filed, HttpClient, HttpError, KeyValue, KvError, Mailer, MailError, Message,
+    ModelTier, Prompt, RateLimiter, RateLimitError, Row, Rows, SendOutcome, Statement, TextModel,
+    TextModelError, TicketDraft, TicketState, TicketStatus, Tracker, TrackerError, Verdict,
 };
 use futures_core::future::BoxFuture;
 use http::{Request, Response};
@@ -740,6 +740,183 @@ impl cratefield_core::Push for FakePush {
             PushMode::Unregistered => Err(cratefield_core::PushError::Unregistered),
             PushMode::Transient => Err(cratefield_core::PushError::transient("fake push failure")),
             PushMode::Error(error) => Err(error),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// FakeTextModel
+
+/// How a [`FakeTextModel`] answers, mirroring [`PushMode`] for the text
+/// model port (issue #429).
+///
+/// [`Error`](Self::Error) carries the exact error a test wants, and
+/// [`Rejected`](Self::Rejected)/[`Transient`](Self::Transient) are the two
+/// fixed modes the port's own contract names — a caller's retry and
+/// back-off arms stay reachable without inventing provider responses.
+#[derive(Debug, Clone, PartialEq)]
+pub enum TextModelMode {
+    /// Complete with this text, under a deterministic `fake-<tier>` model
+    /// name and plausible token counts.
+    Reply(String),
+    /// Answer exactly this completion, usage and parsed JSON included.
+    Complete(cratefield_core::Completion),
+    /// Report the tier is unwired (`TextModelError::NotConfigured`).
+    NotConfigured,
+    /// A non-retryable refusal carrying the provider text.
+    Rejected(String),
+    /// A retryable failure with the provider's back-off, where it said one.
+    Transient { retry_after: Option<Duration> },
+    /// Exactly this error, text and all.
+    Error(cratefield_core::TextModelError),
+}
+
+/// An in-memory [`TextModel`] for module tests: records every [`Prompt`]
+/// it completed and answers according to its [`TextModelMode`].
+///
+/// The mode is global by default and can be overridden **per tier**
+/// ([`FakeTextModel::set_mode_for`]), mirroring [`FakePush`]'s
+/// per-recipient override — the natural analogue, and the thing the port
+/// exists for: one test can wire the fast tier to a drafted reply and the
+/// strong tier to a refusal, and watch a module treat the two differently
+/// without either vendor being named.
+///
+/// A completion that answered `NotConfigured` or failed is **not**
+/// recorded, the same rule [`FakePush`] applies to a send — the recording
+/// means "the model answered", and a caller that retried on
+/// `Transient { .. }` then sees one recorded prompt per attempt it got an
+/// answer for.
+#[derive(Clone)]
+pub struct FakeTextModel {
+    inner: Arc<FakeTextModelInner>,
+}
+
+struct FakeTextModelInner {
+    mode: Mutex<TextModelMode>,
+    per_tier: Mutex<HashMap<ModelTier, TextModelMode>>,
+    prompts: Mutex<Vec<Prompt>>,
+}
+
+/// Plausible, deterministic token counts for a fake answer: roughly four
+/// characters per token on both sides. Stable for a given prompt and text,
+/// which is what an assertion needs — no test wants to guess a provider's
+/// tokenizer.
+fn fake_usage(prompt: &Prompt, text: &str) -> (u64, u64) {
+    let prompt_chars = prompt.system.as_deref().map_or(0, str::len)
+        + prompt
+            .messages
+            .iter()
+            .map(|turn| turn.content.len())
+            .sum::<usize>();
+    let input = (prompt_chars / 4).max(1) as u64;
+    let output = (text.len() / 4).max(1) as u64;
+    (input, output)
+}
+
+impl FakeTextModel {
+    #[must_use]
+    pub fn new(mode: TextModelMode) -> Self {
+        Self {
+            inner: Arc::new(FakeTextModelInner {
+                mode: Mutex::new(mode),
+                per_tier: Mutex::new(HashMap::new()),
+                prompts: Mutex::new(Vec::new()),
+            }),
+        }
+    }
+
+    /// Every prompt answered so far, in order. A completion that answered
+    /// `NotConfigured` or failed is not recorded.
+    #[must_use]
+    pub fn prompts(&self) -> Vec<Prompt> {
+        self.inner.prompts.lock().expect("text model lock").clone()
+    }
+
+    /// The most recent prompt answered.
+    #[must_use]
+    pub fn last(&self) -> Option<Prompt> {
+        self.inner
+            .prompts
+            .lock()
+            .expect("text model lock")
+            .last()
+            .cloned()
+    }
+
+    /// Switches the mode every tier without an override answers with
+    /// (e.g. flip to `NotConfigured` mid-test).
+    pub fn set_mode(&self, mode: TextModelMode) {
+        *self.inner.mode.lock().expect("text model lock") = mode;
+    }
+
+    /// Makes one tier answer with `mode`, whatever the global mode is —
+    /// the fast tier drafting and the strong tier refusing, say.
+    pub fn set_mode_for(&self, tier: ModelTier, mode: TextModelMode) {
+        self.inner
+            .per_tier
+            .lock()
+            .expect("text model lock")
+            .insert(tier, mode);
+    }
+
+    /// Drops one tier's override, putting it back on the global mode.
+    pub fn clear_mode_for(&self, tier: ModelTier) {
+        self.inner
+            .per_tier
+            .lock()
+            .expect("text model lock")
+            .remove(&tier);
+    }
+
+    /// The mode `tier` will answer with.
+    #[must_use]
+    pub fn mode_for(&self, tier: ModelTier) -> TextModelMode {
+        self.inner
+            .per_tier
+            .lock()
+            .expect("text model lock")
+            .get(&tier)
+            .cloned()
+            .unwrap_or_else(|| self.inner.mode.lock().expect("text model lock").clone())
+    }
+
+    fn record(&self, prompt: &Prompt) {
+        self.inner
+            .prompts
+            .lock()
+            .expect("text model lock")
+            .push(prompt.clone());
+    }
+}
+
+impl Default for FakeTextModel {
+    fn default() -> Self {
+        Self::new(TextModelMode::Reply("fake completion".to_owned()))
+    }
+}
+
+#[async_trait]
+impl TextModel for FakeTextModel {
+    async fn complete(&self, prompt: &Prompt) -> Result<Completion, TextModelError> {
+        match self.mode_for(prompt.tier) {
+            TextModelMode::Reply(text) => {
+                self.record(prompt);
+                let (input_tokens, output_tokens) = fake_usage(prompt, &text);
+                Ok(
+                    Completion::new(text, format!("fake-{}", prompt.tier.name()))
+                        .usage(input_tokens, output_tokens),
+                )
+            }
+            TextModelMode::Complete(completion) => {
+                self.record(prompt);
+                Ok(completion)
+            }
+            TextModelMode::NotConfigured => Err(TextModelError::NotConfigured),
+            TextModelMode::Rejected(message) => Err(TextModelError::Rejected(message)),
+            TextModelMode::Transient { retry_after } => {
+                Err(TextModelError::Transient { retry_after })
+            }
+            TextModelMode::Error(error) => Err(error),
         }
     }
 }

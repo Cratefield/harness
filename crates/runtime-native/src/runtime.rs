@@ -22,7 +22,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use cratefield_core::{
     Auth, Blob, BoundedHttpClient, Captcha, Clock, Database, HarnessConfig, KeyValue, Mailer,
-    Payments, Port, Ports, Push, RateLimiter, Realtime, Runtime, Tracker, UlidIdGen,
+    Payments, Port, Ports, Push, RateLimiter, Realtime, Runtime, TextModel, Tracker, UlidIdGen,
 };
 
 use crate::config::EnvConfig;
@@ -57,6 +57,10 @@ pub struct Native {
     payments: Option<Arc<dyn Payments>>,
     tracker: Option<Arc<dyn Tracker>>,
     realtime: Option<Arc<dyn Realtime>>,
+    /// The `TextModel` port (issue #429): like `mailer`, the adapter is
+    /// built from the venture's vendor keys and passed in — there is no
+    /// vendor-neutral binding to sniff out of the environment.
+    text_model: Option<Arc<dyn TextModel>>,
     mailer: Option<Arc<dyn Mailer>>,
     captcha: Option<Arc<dyn Captcha>>,
     auth: Option<Arc<dyn Auth>>,
@@ -239,6 +243,23 @@ impl Native {
         self
     }
 
+    /// The `TextModel` port (issue #429): an adapter over the venture's
+    /// vendor of choice for each [`ModelTier`](cratefield_core::ModelTier),
+    /// or one `RoutingTextModel` over both tiers. The same pattern as
+    /// `mailer`.
+    #[must_use]
+    pub fn text_model(mut self, text_model: impl TextModel + 'static) -> Self {
+        self.text_model = Some(Arc::new(text_model));
+        self
+    }
+
+    /// `text_model` for an already-shared adapter.
+    #[must_use]
+    pub fn text_model_arc(mut self, text_model: Arc<dyn TextModel>) -> Self {
+        self.text_model = Some(text_model);
+        self
+    }
+
     #[must_use]
     pub fn mailer(mut self, mailer: impl Mailer + 'static) -> Self {
         self.mailer = Some(Arc::new(mailer));
@@ -315,6 +336,7 @@ impl Native {
         ports.payments.clone_from(&self.payments);
         ports.tracker.clone_from(&self.tracker);
         ports.realtime.clone_from(&self.realtime);
+        ports.text_model.clone_from(&self.text_model);
         ports.mailer.clone_from(&self.mailer);
         ports.captcha.clone_from(&self.captcha);
         ports.auth.clone_from(&self.auth);
@@ -418,6 +440,9 @@ impl Runtime for Native {
         if self.realtime.is_some() {
             provided.push(Port::Realtime);
         }
+        if self.text_model.is_some() {
+            provided.push(Port::TextModel);
+        }
         if self.mailer.is_some() {
             provided.push(Port::Mailer);
         }
@@ -464,6 +489,7 @@ pub(crate) fn clone_ports(ports: &Ports) -> Ports {
     snapshot.payments.clone_from(&ports.payments);
     snapshot.tracker.clone_from(&ports.tracker);
     snapshot.realtime.clone_from(&ports.realtime);
+    snapshot.text_model.clone_from(&ports.text_model);
     snapshot.http.clone_from(&ports.http);
     snapshot.clock.clone_from(&ports.clock);
     snapshot.id_gen.clone_from(&ports.id_gen);

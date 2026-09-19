@@ -307,23 +307,27 @@ pub(crate) async fn attempt_backup<S: BackupStore>(
 // ---------------------------------------------------------------------------
 
 /// Tables the export never carries, with the reason rendered on the
-/// page. `fz data export` makes the first call (migration bookkeeping
-/// is infrastructure, not data); the data screen's CSV made the rest
-/// (key material does not belong in a file somebody keeps, ciphertext
-/// without its master key is noise either way, and the audit chain is
-/// both BLOB-digested — outside the portable subset this format
-/// carries — and an attestation of rows this export deliberately
-/// omits, so half of it here would vouch for nothing).
+/// page. These are this export's own calls, argued per table — the
+/// catalog it reads is the whole database, so anything left out is left
+/// out here, on the record: the migration ledger is process state a
+/// restored control plane rebuilds by re-running migrations (the same
+/// call `fz data export` makes, which exports declared tables and so
+/// never carries the ledger at all); key material does not belong in a
+/// file somebody keeps; ciphertext without its master key is noise
+/// either way; and the audit chain is both BLOB-digested — outside the
+/// portable subset this format carries — and an attestation of rows this
+/// export deliberately omits, so half of it here would vouch for
+/// nothing.
 const SKIPPED: &[(&str, &str)] = &[
     (
         "harness_migrations",
-        "migration bookkeeping, not data — `fz data export` makes the same call",
+        "process state, not data — a restored control plane rebuilds it by re-running \
+         migrations (`fz data export` makes the same call)",
     ),
     (
         "harness_secrets",
         "sealed ciphertext, and a file somebody keeps is exactly where key material must \
-         not go. Re-seal secrets into a restored control plane; the data screen's CSV \
-         export makes the same call.",
+         not go. Re-seal secrets into a restored control plane.",
     ),
     (
         "harness_secret_keys",
@@ -354,7 +358,16 @@ pub(crate) struct Export {
 }
 
 pub(crate) async fn export_control_plane(db: &dyn Database) -> Result<Export, String> {
-    let schema = introspect::schema(db)
+    // The backup's catalog is the whole database, not the browsable one.
+    // `introspect::schema` keeps the harness's reserved prefix out — the
+    // right call for a screen that renders table names to a person — and
+    // taken as the backup's source it would let a harness table drop out
+    // of this file silently: `harness_tenants`, the reconciler's
+    // registry, is created on this very database at boot, under the
+    // reserved prefix, and is exactly the kind of row a restore needs.
+    // So the backup reads everything and keeps its own skip list below,
+    // argued per table, rather than letting the catalog decide.
+    let schema = introspect::full_schema(db)
         .await
         .map_err(|err| err.to_string())?;
     let skipped: Vec<&str> = SKIPPED.iter().map(|(table, _)| *table).collect();
@@ -923,27 +936,21 @@ pub(super) async fn export(state: State<Arc<DashboardState>>, headers: HeaderMap
     if let Err(redirect) = guard(ctx, &headers) {
         return redirect;
     }
-    // Admin-gated, unlike every other screen here, because this one is
-    // not account-scoped and cannot be: a backup of the control database
-    // is every account's ventures, every operator's identity and the
-    // whole request log, and scoping it to the asking account would
-    // produce a file that is not a backup. Every other read in this
-    // dashboard is narrowed to the operator's own account, so a
-    // signed-in session is the wrong key for the one operation that
-    // reaches past it — the same call the console's operator invite
-    // makes, for the same reason.
+    // Admin-gated, and this export is half the reason the gate exists.
+    // Reads in this dashboard are narrowed to the asking operator's own
+    // account — attempts, rehearsals, ventures, log rows — and the
+    // handful that cannot be are staff tools behind `require_admin`:
+    // the data screen's whole-database views, and this export. Neither
+    // is account-scoped and neither can be: a backup of the control
+    // database is every account's ventures, every operator's identity
+    // and the whole request log, and scoping it to the asking account
+    // would produce a file that is not a backup. A signed-in session is
+    // the wrong key for a read that reaches past the account boundary —
+    // the same call the console's operator invite makes, for the same
+    // reason.
     if let Err(problem) = cratefield_core::require_admin(&*ctx.config, &headers) {
         return problem.into_response();
     }
-    // Admin-gated, unlike every other screen here, because this one is
-    // not account-scoped and cannot be: a backup of the control database
-    // is every account's ventures, every operator's identity and the
-    // whole request log, and scoping it to the asking account would
-    // produce a file that is not a backup. Every other read in this
-    // dashboard is narrowed to the operator's own account, so a
-    // signed-in session is the wrong key for the one operation that
-    // reaches past it — the same call the console's operator invite
-    // makes, for the same reason.
     let session = current_session(ctx, &headers).expect("guard proved a session");
     let (account, _repo) = match account_of(ctx, &session.account_id).await {
         Ok(pair) => pair,
@@ -1267,11 +1274,12 @@ mod tests {
 
     #[pollster::test]
     async fn a_signed_in_operator_alone_cannot_export_the_control_database() {
-        // Every other read in this dashboard is narrowed to the asking
-        // account. This one cannot be — a backup of the control database
-        // is every account's ventures, every operator's identity and the
-        // whole request log — so a session is the wrong key for it, and
-        // it takes the same admin token the console's operator invite
+        // Reads in this dashboard are narrowed to the asking account.
+        // This one cannot be — like the data screen's whole-database
+        // views, it is a staff tool behind `require_admin` — because a
+        // backup of the control database is every account's ventures,
+        // every operator's identity and the whole request log. So it
+        // takes the same admin token the console's operator invite
         // takes.
         let kit = seeded().await;
         let cookie = cookie(&kit);
@@ -1305,6 +1313,67 @@ mod tests {
             allowed.body.contains("\"table\":\"account\""),
             "{}",
             allowed.body
+        );
+    }
+
+    #[pollster::test]
+    async fn the_backup_carries_a_harness_table_the_data_catalog_does_not_browse() {
+        // `harness_tenants` is the reconciler's registry, created on the
+        // control database at boot under the harness's reserved prefix
+        // (adapter-postgres `reconcile.rs`). The data screen's catalog
+        // read excludes the whole prefix, and must — the screen is not
+        // for browsing harness tables. The backup must still carry the
+        // registry, so it reads the whole catalog and omits by its own
+        // list. The reconciler is Postgres-only and these tests run on
+        // SQLite, so the registry is stood in here with its exact shape.
+        let kit = seeded().await;
+        kit.db
+            .execute(&Statement::new(
+                "CREATE TABLE harness_tenants (\
+                     tenant TEXT PRIMARY KEY, \
+                     dsn TEXT NOT NULL, \
+                     status TEXT NOT NULL)",
+            ))
+            .await
+            .expect("the registry table");
+        kit.db
+            .execute(&Statement::with_values(
+                "INSERT INTO harness_tenants (tenant, dsn, status) VALUES (?, ?, ?)",
+                vec![
+                    text("ten_1"),
+                    text("postgres://control/ten_1"),
+                    text("active"),
+                ],
+            ))
+            .await
+            .expect("the registry row");
+
+        // The data catalog does not list it.
+        let browsable = introspect::schema(kit.db.as_ref()).await.expect("catalog");
+        assert!(
+            browsable.table("harness_tenants").is_none(),
+            "the reserved prefix must not be browsable"
+        );
+
+        // The backup names the table and carries its row.
+        let reply = export_as_admin(&kit, &cookie(&kit)).await;
+        assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
+        let first_line = reply.body.lines().next().expect("manifest line");
+        let manifest: Json = serde_json::from_str(first_line).expect("manifest is JSON");
+        let names: Vec<&str> = manifest["tables"]
+            .as_array()
+            .expect("tables")
+            .iter()
+            .map(|entry| entry["table"].as_str().expect("name"))
+            .collect();
+        assert!(
+            names.contains(&"harness_tenants"),
+            "the backup must carry the registry the catalog hides: {names:?}"
+        );
+        assert!(
+            reply.body.contains("\"table\":\"harness_tenants\""),
+            "the registry's rows are in the file: {}",
+            &reply.body[..reply.body.len().min(600)]
         );
     }
 

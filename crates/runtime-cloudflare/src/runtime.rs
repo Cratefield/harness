@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use cratefield_core::{
     Auth, BoundedHttpClient, Captcha, Clock, Defer, HarnessConfig, Mailer, Payments, Port, Ports,
-    Push, Runtime, SidecarMounts, Tracker, UlidIdGen,
+    Push, Runtime, SidecarMounts, TextModel, Tracker, UlidIdGen,
 };
 use worker::Env;
 
@@ -69,6 +69,10 @@ pub struct Cloudflare {
     push: Option<Arc<dyn Push>>,
     payments: Option<Arc<dyn Payments>>,
     tracker: Option<Arc<dyn Tracker>>,
+    /// The `TextModel` port (issue #429): like `mailer` and `push`, the
+    /// adapter is built from the venture's vendor keys and passed in, not
+    /// resolved from a Worker binding.
+    text_model: Option<Arc<dyn TextModel>>,
     captcha: Option<Arc<dyn Captcha>>,
     auth: Option<Arc<dyn Auth>>,
     /// Whether to assemble the `Auth` port from the environment.
@@ -101,7 +105,7 @@ impl Cloudflare {
             mailer: None,
             push: None,
             payments: None,
-            tracker: None,
+            text_model: None, tracker: None,
             captcha: None,
             auth: None,
             auth_from_env: false,
@@ -269,6 +273,20 @@ impl Cloudflare {
     #[must_use]
     pub fn tracker_arc(mut self, tracker: Arc<dyn Tracker>) -> Self {
         self.tracker = Some(tracker);
+    /// The `TextModel` port (issue #429): an adapter over the venture's
+    /// vendor of choice for each [`ModelTier`](cratefield_core::ModelTier),
+    /// or one `RoutingTextModel` over both tiers. Passed in, not resolved
+    /// from a Worker binding — there is no vendor-neutral binding to sniff
+    /// out of the environment.
+    #[must_use]
+    pub fn text_model(mut self, text_model: impl TextModel + 'static) -> Self {
+        self.text_model = Some(Arc::new(text_model));
+        self
+    }
+
+    #[must_use]
+    pub fn text_model_arc(mut self, text_model: Arc<dyn TextModel>) -> Self {
+        self.text_model = Some(text_model);
         self
     }
 
@@ -434,6 +452,7 @@ impl Cloudflare {
         ports.push.clone_from(&self.push);
         ports.payments.clone_from(&self.payments);
         ports.tracker.clone_from(&self.tracker);
+        ports.text_model.clone_from(&self.text_model);
         ports.captcha.clone_from(&self.captcha);
         ports.auth.clone_from(&self.auth);
 
@@ -500,6 +519,8 @@ impl Runtime for Cloudflare {
         }
         if self.tracker.is_some() {
             provided.push(Port::Tracker);
+        if self.text_model.is_some() {
+            provided.push(Port::TextModel);
         }
         // Provided whatever the environment holds — see `auth_from_env`.
         if self.auth.is_some() || self.auth_from_env {
