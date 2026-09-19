@@ -10,7 +10,7 @@
 //! publishes the typed store API, so `credentials` and `single_use_tokens`
 //! have exactly one definition and one migration history. This module owns
 //! a single table of its own, the challenge budget behind `login/options`
-//! (see the [`budget`] module), because the issuance cap it enforces is
+//! (see the `budget` module), because the issuance cap it enforces is
 //! this module's policy and has to hold even in a composition that wired
 //! up no rate limiter.
 //!
@@ -284,9 +284,9 @@ impl Module for Passkeys {
 
     /// The two login endpoints are reachable by anyone and each one writes
     /// a challenge row. `login/options` also enforces a database budget of
-    /// its own (see [`budget`]), so a limiter here is a second, configurable
-    /// layer rather than the only thing between the endpoint and an
-    /// enumeration oracle.
+    /// its own (see the `budget` module), so a limiter here is a second,
+    /// configurable layer rather than the only thing between the endpoint
+    /// and an enumeration oracle.
     fn optional(&self) -> &'static [Port] {
         &[Port::RateLimiter]
     }

@@ -26,7 +26,7 @@
 //! caller's own row is a conflict they can act on, and 409 says so. A
 //! row belonging to somebody else is answered like any other rejected
 //! write: a 409 would confirm a row the reads refuse to confirm, which
-//! is why they answer 404 for one. See [`taken`].
+//! is why they answer 404 for one. See this module's `taken`.
 
 use cratefield_core::{Caller, Database, Problem, ProblemDef, Scope, Tenancy, require_admin};
 use cratefield_tables::{Owned, TableDef, UpdateError};
