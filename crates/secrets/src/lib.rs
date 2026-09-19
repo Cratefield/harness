@@ -318,9 +318,11 @@ pub enum SecretsError {
         name: String,
         version: Version,
     },
-    /// The store has no data key yet, or its key row is gone (an
-    /// offboarding shred). Every ciphertext in it is unreadable, which
-    /// is a deliberate state, not a fault to paper over.
+    /// The store has no data key yet, its key row is gone (an
+    /// offboarding shred), or the key id names a row stamped with
+    /// another store, which this one cannot see. Every ciphertext in it
+    /// is unreadable, which is a deliberate state, not a fault to paper
+    /// over.
     #[error("store `{0}` has no usable data key: nothing in it can be decrypted")]
     NoKey(String),
     #[error("invalid input: {0}")]
