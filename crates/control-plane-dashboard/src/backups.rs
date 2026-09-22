@@ -341,6 +341,27 @@ const SKIPPED: &[(&str, &str)] = &[
     ),
 ];
 
+/// Columns the export carries the row of but never the value of —
+/// `SKIPPED`'s standard applied to a column, where the table itself has
+/// to travel. `harness_tenants` is the reconciler's registry and a
+/// restore needs it, so its rows stay; but its `dsn` is a complete
+/// credential for the tenant's database, and a file somebody keeps is
+/// exactly where that must not go. Each value is written as
+/// `REDACTED_VALUE` instead (a string, not null: the column is NOT
+/// NULL), and the manifest's sha256 is over the bytes actually written,
+/// so the file still verifies. The DSN is re-registered after a restore,
+/// the way secrets are re-sealed.
+const REDACTED: &[(&str, &str, &str)] = &[(
+    "harness_tenants",
+    "dsn",
+    "each tenant's connection string is a complete credential for its database, so \
+     the registry's rows travel without it. Re-register tenant DSNs into a restored \
+     control plane.",
+)];
+
+/// What a `REDACTED` column's value is written as.
+const REDACTED_VALUE: &str = "[redacted]";
+
 /// The export's shape is `fz data export`'s: one manifest line naming
 /// every table with its columns, row count and sha256, then one
 /// `{"table","row"}` record per row, table by table. Same field names,
@@ -352,7 +373,8 @@ const SKIPPED: &[(&str, &str)] = &[
 /// rather than hidden in the format: tables are ordered by name (a
 /// module cannot read the composition's lock order, which belongs to
 /// the harness — `fz data export` reads it from a compiled-in harness),
-/// and three tables are omitted by name ([`SKIPPED`]).
+/// and four tables are omitted by name (`SKIPPED`), with one column's
+/// values withheld from a table that is kept (`REDACTED`).
 pub(crate) struct Export {
     pub body: String,
 }
@@ -464,9 +486,16 @@ fn record_line(table: &str, row: &cratefield_core::Row) -> Result<String, String
     names.sort_unstable();
     let mut object = serde_json::Map::new();
     for name in names {
-        let value = row.get::<SeaValue>(name).unwrap_or(SeaValue::String(None));
-        let json = sea_value_to_json(&value)
-            .map_err(|problem| format!("table {table}, column {name}: {problem}"))?;
+        let redacted = REDACTED
+            .iter()
+            .any(|(t, column, _)| *t == table && *column == name);
+        let json = if redacted {
+            Json::String(REDACTED_VALUE.to_owned())
+        } else {
+            let value = row.get::<SeaValue>(name).unwrap_or(SeaValue::String(None));
+            sea_value_to_json(&value)
+                .map_err(|problem| format!("table {table}, column {name}: {problem}"))?
+        };
         object.insert(name.to_owned(), json);
     }
     serde_json::to_string(&json!({ "table": table, "row": object }))
@@ -631,7 +660,7 @@ PY";
          <pre><code>{verifier}</code></pre></li>\
          <li><strong>Read what it omitted.</strong> The manifest lists what moved; \
          the notes above list what did not and why. A restore that expects sealed \
-         secrets from this file will not find them — by design.</li>\
+         secrets or tenant DSNs from this file will not find them — by design.</li>\
          <li><strong>Record it below.</strong> What you ran, and what you saw. The \
          point of the record is the date: \"verified on…\" is a claim with a \
          timestamp, and its absence is visible.</li></ol>\
@@ -796,7 +825,8 @@ fn page(
          and sha256, then one JSON record per row. Tables are ordered by name; the \
          CLI's lock order belongs to the harness it is compiled into, and a module \
          reads the live catalog instead.</p>\
-         <p class=\"dash__note\">Deliberately omitted: {omitted}</p></div>\
+         <p class=\"dash__note\">Deliberately omitted: {omitted}</p>\
+         <p class=\"dash__note\">Deliberately redacted: {redacted}</p></div>\
          {time_travel}\
          <div class=\"dash__card dash__card--wide\">\
          <p class=\"dash__card-h\">Restore</p>{status}\
@@ -821,6 +851,17 @@ fn page(
         omitted = SKIPPED
             .iter()
             .map(|(table, why)| format!("<code>{}</code> — {}", escape(table), escape(why)))
+            .collect::<Vec<_>>()
+            .join("; "),
+        redacted = REDACTED
+            .iter()
+            .map(|(table, column, why)| format!(
+                "<code>{}.{}</code> (written as <code>{}</code>) — {}",
+                escape(table),
+                escape(column),
+                escape(REDACTED_VALUE),
+                escape(why)
+            ))
             .collect::<Vec<_>>()
             .join("; "),
         time_travel = time_travel_card(),
@@ -1327,26 +1368,7 @@ mod tests {
         // list. The reconciler is Postgres-only and these tests run on
         // SQLite, so the registry is stood in here with its exact shape.
         let kit = seeded().await;
-        kit.db
-            .execute(&Statement::new(
-                "CREATE TABLE harness_tenants (\
-                     tenant TEXT PRIMARY KEY, \
-                     dsn TEXT NOT NULL, \
-                     status TEXT NOT NULL)",
-            ))
-            .await
-            .expect("the registry table");
-        kit.db
-            .execute(&Statement::with_values(
-                "INSERT INTO harness_tenants (tenant, dsn, status) VALUES (?, ?, ?)",
-                vec![
-                    text("ten_1"),
-                    text("postgres://control/ten_1"),
-                    text("active"),
-                ],
-            ))
-            .await
-            .expect("the registry row");
+        stand_in_the_tenant_registry(&kit).await;
 
         // The data catalog does not list it.
         let browsable = introspect::schema(kit.db.as_ref()).await.expect("catalog");
@@ -1374,6 +1396,84 @@ mod tests {
             reply.body.contains("\"table\":\"harness_tenants\""),
             "the registry's rows are in the file: {}",
             &reply.body[..reply.body.len().min(600)]
+        );
+    }
+
+    /// A registry DSN shaped like the real thing: user, password, host.
+    const TENANT_DSN: &str = "postgres://tenant_user:s3cret@db.internal:5432/ten_1";
+
+    /// `harness_tenants` with its exact shape and one row. The
+    /// reconciler that creates it is Postgres-only and these tests run
+    /// on SQLite, so the registry is stood in here.
+    async fn stand_in_the_tenant_registry(kit: &TestHarness) {
+        kit.db
+            .execute(&Statement::new(
+                "CREATE TABLE harness_tenants (\
+                     tenant TEXT PRIMARY KEY, \
+                     dsn TEXT NOT NULL, \
+                     status TEXT NOT NULL)",
+            ))
+            .await
+            .expect("the registry table");
+        kit.db
+            .execute(&Statement::with_values(
+                "INSERT INTO harness_tenants (tenant, dsn, status) VALUES (?, ?, ?)",
+                vec![text("ten_1"), text(TENANT_DSN), text("active")],
+            ))
+            .await
+            .expect("the registry row");
+    }
+
+    #[pollster::test]
+    async fn the_backup_keeps_the_tenant_registry_but_never_its_credential() {
+        // The registry row travels (a restore needs it), but its `dsn`
+        // is a complete credential for the tenant database — the same
+        // key material `SKIPPED` keeps out of a file somebody keeps. The
+        // row goes out with the placeholder in its place, and the
+        // manifest still verifies over what was written.
+        let kit = seeded().await;
+        stand_in_the_tenant_registry(&kit).await;
+
+        let reply = export_as_admin(&kit, &cookie(&kit)).await;
+        assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
+        assert!(
+            !reply.body.contains(TENANT_DSN),
+            "the tenant DSN must not be in the file"
+        );
+        assert!(
+            !reply.body.contains("s3cret"),
+            "nor any part of its password"
+        );
+
+        // The row is there, whole except for the credential.
+        let mut lines: Vec<&str> = reply.body.split('\n').collect();
+        if lines.last() == Some(&"") {
+            lines.pop();
+        }
+        let registry: Vec<&str> = lines[1..]
+            .iter()
+            .copied()
+            .filter(|line| line.contains("\"table\":\"harness_tenants\""))
+            .collect();
+        assert_eq!(registry.len(), 1, "the registry row travels: {registry:?}");
+        let record: Json = serde_json::from_str(registry[0]).expect("record");
+        assert_eq!(record["row"]["tenant"], "ten_1");
+        assert_eq!(record["row"]["status"], "active");
+        assert_eq!(record["row"]["dsn"], REDACTED_VALUE);
+
+        // The manifest vouches for the bytes written, placeholder and all.
+        let manifest: Json = serde_json::from_str(lines[0]).expect("manifest is JSON");
+        let entry = manifest["tables"]
+            .as_array()
+            .expect("tables")
+            .iter()
+            .find(|entry| entry["table"] == "harness_tenants")
+            .expect("the registry is in the manifest");
+        assert_eq!(entry["rows"], 1);
+        assert_eq!(
+            entry["sha256"].as_str().expect("sha"),
+            sha256_hex(format!("{}\n", registry[0]).as_bytes()),
+            "the registry's hash is over the redacted line"
         );
     }
 
@@ -1569,6 +1669,13 @@ mod tests {
             reply
                 .body
                 .contains("A backup that has never been restored is not a backup"),
+            "{}",
+            reply.body
+        );
+        // The redacted column is named, so nobody expects it in the file.
+        assert!(
+            reply.body.contains("Deliberately redacted:")
+                && reply.body.contains("<code>harness_tenants.dsn</code>"),
             "{}",
             reply.body
         );
