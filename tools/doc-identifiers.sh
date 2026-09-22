@@ -33,6 +33,8 @@ declare -A EXTERNAL=(
 
 failures=()
 while IFS= read -r doc; do
+  # Listed but gone from disk: a deletion not yet staged. Nothing to check.
+  [ -f "$doc" ] || continue
   while IFS= read -r name; do
     [ -z "$name" ] && continue
     if [ -n "${EXTERNAL[$name]:-}" ]; then
@@ -46,11 +48,19 @@ while IFS= read -r doc; do
     # pointer has to land on something that is not prose about the
     # pointer. Both were caught by breaking the check on purpose and
     # finding it still green.
-    if ! git grep -q -- "$name" -- crates tools ventures examples ':!*.md' ':!tools/doc-identifiers.sh' 2>/dev/null; then
+    #
+    # `--untracked` for the same reason the document list below takes
+    # `--others`: a new doc citing a name from a new, not-yet-added source
+    # file would otherwise be red locally and green once committed.
+    if ! git grep -q --untracked -- "$name" -- crates tools ventures examples ':!*.md' ':!tools/doc-identifiers.sh' 2>/dev/null; then
       failures+=("$doc names \`$name\`, which is nowhere in the tree. A document that points at a name nothing defines cannot be followed: rename the pointer, or add the thing back.")
     fi
   done < <(grep -oE '`[a-z][a-z0-9]*(_[a-z0-9]+){2,}`' "$doc" | tr -d '`' | sort -u)
-done < <(git ls-files 'docs/*.md' 'docs/**/*.md' 'crates/*/README.md' 'README.md')
+# Untracked (but not ignored) documents too. Tracked-only was a false
+# green on exactly the doc being written: it is untracked until committed,
+# so the check passed having read nothing of it (issue #445). `sort -u`
+# because an unmerged path is listed once per stage.
+done < <(git ls-files --cached --others --exclude-standard -- 'docs/*.md' 'docs/**/*.md' 'crates/*/README.md' 'README.md' | sort -u)
 
 if [ "${#failures[@]}" -gt 0 ]; then
   printf '::error::%s\n' "${failures[@]}" >&2
