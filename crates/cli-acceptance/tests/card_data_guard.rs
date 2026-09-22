@@ -17,12 +17,23 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+fn clear_git_env(cmd: &mut Command) {
+    // A `GIT_DIR` / `GIT_WORK_TREE` / `GIT_INDEX_FILE` (or any other `GIT_*`
+    // knob, e.g. `GIT_CONFIG_COUNT` / `GIT_CONFIG_KEY_*`) inherited from the
+    // caller would redirect the fixture's `git` invocations into the caller's
+    // repository instead of the throwaway fixture (issues #474, #479), so
+    // strip every `GIT_*` variable from the child's environment.
+    for (key, _) in std::env::vars() {
+        if key.starts_with("GIT_") {
+            cmd.env_remove(key);
+        }
+    }
+}
+
 fn git(dir: &Path, args: &[&str]) {
-    let status = Command::new("git")
-        .current_dir(dir)
-        .args(args)
-        .status()
-        .expect("git runs");
+    let mut cmd = Command::new("git");
+    clear_git_env(&mut cmd);
+    let status = cmd.current_dir(dir).args(args).status().expect("git runs");
     assert!(status.success(), "git {args:?} failed");
 }
 
@@ -93,7 +104,9 @@ impl Fixture {
     /// Runs the real guard against `base`. Returns (success, stderr).
     fn run_guard(&self) -> (bool, String) {
         let script = repo_root().join("tools/migration-guard.sh");
-        let out = Command::new(&script)
+        let mut cmd = Command::new(&script);
+        clear_git_env(&mut cmd);
+        let out = cmd
             .current_dir(self.dir.path())
             .arg("base")
             .output()
