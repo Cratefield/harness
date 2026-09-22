@@ -40,56 +40,128 @@ impl Default for HarnessSource {
 }
 
 /// Codegen facts about one module: how the facade exposes it and what the
-/// composition must wire for it. This is the one place a new module is
-/// taught to the generator.
-struct ModuleCodegen {
-    slug: &'static str,
+/// composition must wire for it, plus the catalog row it is offered under.
+/// This is the one place a new module is taught to the harness:
+/// [`crate::catalog::builtin`] is built from this list, and control-plane's
+/// `curated()` is built from that.
+pub(crate) struct ModuleCodegen {
+    pub(crate) slug: &'static str,
+    /// The catalog name, shown in the wizard.
+    pub(crate) name: &'static str,
+    /// The catalog summary: one line, for a customer rather than a compiler.
+    pub(crate) summary: &'static str,
+    /// The exact version the catalog pins the module's release to.
+    pub(crate) version: &'static str,
     /// The `cratefield` facade feature that pulls the module in.
-    feature: &'static str,
+    pub(crate) feature: &'static str,
     /// The facade submodule the type lives under (`cratefield::{module}`).
-    module: &'static str,
+    pub(crate) module: &'static str,
     /// The module's constructor type.
-    type_name: &'static str,
+    pub(crate) type_name: &'static str,
     /// The module ships `default_templates()` to register.
-    has_templates: bool,
+    pub(crate) has_templates: bool,
     /// The module requires the `Mailer` port, so the runtime must provide
     /// one (the generator wires a not-configured Resend, like the example
     /// venture: the port exists, nothing is sent until a key is set).
-    needs_mailer: bool,
+    pub(crate) needs_mailer: bool,
+    /// The module requires the `Push` port, so the runtime assembles one
+    /// from the environment (`push-wiring` and `.push_from_env()`, like the
+    /// example venture: with nothing configured every send answers
+    /// `NotConfigured`).
+    pub(crate) needs_push: bool,
 }
 
-const REGISTRY: &[ModuleCodegen] = &[
+/// Every module the harness ships, in the order the wizard shows them.
+pub(crate) const REGISTRY: &[ModuleCodegen] = &[
     ModuleCodegen {
         slug: "email-signup",
+        name: "Email signup",
+        summary: "Collect email addresses with double opt-in, confirmation and unsubscribe.",
+        version: "0.1.1",
         feature: "email-signup",
         module: "email_signup",
         type_name: "EmailSignup",
         has_templates: true,
         needs_mailer: true,
+        needs_push: false,
     },
     ModuleCodegen {
         slug: "waitlist",
+        name: "Waitlist",
+        summary: "A per-product waitlist with confirmation, positions and referral codes.",
+        version: "0.1.1",
         feature: "waitlist",
         module: "waitlist",
         type_name: "Waitlist",
         has_templates: true,
         needs_mailer: true,
+        needs_push: false,
     },
     ModuleCodegen {
         slug: "cms",
+        name: "Content",
+        summary: "Typed, versioned content in your own database, edited through the admin.",
+        version: "0.1.1",
         feature: "cms",
         module: "cms",
         type_name: "Cms",
         has_templates: false,
         needs_mailer: false,
+        needs_push: false,
     },
     ModuleCodegen {
         slug: "changelog",
+        name: "Changelog",
+        summary: "A project's releases mirrored into your own database, served without calling \
+                  upstream.",
+        version: "0.1.1",
         feature: "changelog",
         module: "changelog",
         type_name: "Changelog",
         has_templates: false,
         needs_mailer: false,
+        needs_push: false,
+    },
+    ModuleCodegen {
+        slug: "notifications",
+        name: "Notifications",
+        summary: "Push to phones and browsers, an in-app inbox, and email — one API, \
+                  per-person categories, in the recipient's own language.",
+        version: "0.1.1",
+        feature: "notifications",
+        module: "notifications",
+        type_name: "Notifications",
+        has_templates: false,
+        // `Mailer` is optional: only a category with `email(true)` uses it.
+        needs_mailer: false,
+        needs_push: true,
+    },
+    ModuleCodegen {
+        slug: "privacy",
+        name: "Privacy requests",
+        summary: "Answer a subject access or erasure request from what every other module \
+                  declares it holds. Optional, and the only honest default for a deployment \
+                  holding personal data.",
+        version: "0.1.1",
+        feature: "privacy",
+        module: "privacy",
+        type_name: "Privacy",
+        has_templates: false,
+        needs_mailer: false,
+        needs_push: false,
+    },
+    ModuleCodegen {
+        slug: "telemetry",
+        name: "Telemetry",
+        summary: "Counted usage events in your own database — a closed event vocabulary, \
+                  consent on by default, and no third-party analytics service.",
+        version: "0.1.0",
+        feature: "telemetry",
+        module: "telemetry",
+        type_name: "Telemetry",
+        has_templates: false,
+        needs_mailer: false,
+        needs_push: false,
     },
 ];
 
@@ -159,15 +231,16 @@ pub fn generate(
         .collect::<Result<_, _>>()?;
 
     let needs_mailer = modules.iter().any(|m| m.needs_mailer);
+    let needs_push = modules.iter().any(|m| m.needs_push);
 
     let mut files = vec![
         GeneratedFile {
             path: "Cargo.toml".to_owned(),
-            contents: cargo_toml(manifest, &modules, needs_mailer, source),
+            contents: cargo_toml(manifest, &modules, needs_mailer, needs_push, source),
         },
         GeneratedFile {
             path: "src/lib.rs".to_owned(),
-            contents: lib_rs(manifest, &modules, needs_mailer),
+            contents: lib_rs(manifest, &modules, needs_mailer, needs_push),
         },
         GeneratedFile {
             path: "src/fz_main.rs".to_owned(),
@@ -223,6 +296,7 @@ fn cargo_toml(
     manifest: &VentureManifest,
     modules: &[&ModuleCodegen],
     needs_mailer: bool,
+    needs_push: bool,
     source: &HarnessSource,
 ) -> String {
     // Sorted, de-duplicated feature set for a deterministic manifest.
@@ -230,6 +304,9 @@ fn cargo_toml(
     features.insert("cloudflare");
     if needs_mailer {
         features.insert("resend");
+    }
+    if needs_push {
+        features.insert("push-wiring");
     }
     for m in modules {
         features.insert(m.feature);
@@ -330,7 +407,12 @@ fn module_set_key(modules: &[&ModuleCodegen]) -> String {
 }
 
 #[allow(clippy::too_many_lines)]
-fn lib_rs(manifest: &VentureManifest, modules: &[&ModuleCodegen], needs_mailer: bool) -> String {
+fn lib_rs(
+    manifest: &VentureManifest,
+    modules: &[&ModuleCodegen],
+    needs_mailer: bool,
+    needs_push: bool,
+) -> String {
     let mut out = String::new();
     out.push_str(
         "//! GENERATED by `fz build` from the venture manifest. Do not edit by\n\
@@ -377,6 +459,12 @@ fn lib_rs(manifest: &VentureManifest, modules: &[&ModuleCodegen], needs_mailer: 
     // wire it. `auth_from_env` reads `AUTH_ISSUER` and `AUTH_CLIENT_ID`.
     if needs_a_verifier(manifest) {
         runtime_expr.push_str(".auth_from_env()");
+    }
+    // A module that requires `Push` gets it assembled from the environment
+    // (`push-wiring` in `Cargo.toml` above). With no keys set every send
+    // answers `NotConfigured` and dead-letters with that reason.
+    if needs_push {
+        runtime_expr.push_str(".push_from_env()");
     }
 
     // The shared composition. `build()` takes a runtime for validation and

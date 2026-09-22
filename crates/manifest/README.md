@@ -41,8 +41,13 @@ browser and what you deploy are the same module set by construction.
 - `catalog` — the module catalog and dependency resolution. This is the
   wasm-clean canonical home of the resolver control-plane's
   `cratefield_catalog` currently carries a copy of; the two are kept
-  semantically identical (same ordering, same `content_key`) so control-plane
-  can later depend on this crate.
+  semantically identical (same ordering, same `content_key`) so control-plane,
+  which already takes its module list from `builtin()`, can later drop its
+  copy of the types and resolver. The list of modules is not copied: it lives
+  in this crate's codegen registry, `builtin()` is built from it, and
+  control-plane's `curated()` is derived from `builtin()`, adding the
+  per-module detail the wizard shows. A module `fz add` offers is therefore
+  one `fz build` can compose.
 - `manifest` — the `VentureManifest` format and parsing.
 - `generate` — the deterministic Rust composition generator: manifest →
   `Cargo.toml` + `src/lib.rs` + `src/fz_main.rs` + `wrangler.toml`. Pure
