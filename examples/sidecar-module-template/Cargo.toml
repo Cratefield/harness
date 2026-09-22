@@ -29,7 +29,7 @@ tracing = { workspace = true }
 time = { workspace = true }
 worker = { workspace = true }
 
-# Host-only: the `fz` bin (`src/fz_main.rs`) uses it for
+# Host-only: the `sidecar-fz` bin (`src/fz_main.rs`) uses it for
 # `fz migrations collect` and `fz doctor`. Scoped to every non-wasm
 # target so the CLI and its native-only dependencies (rusqlite, sqlx)
 # never enter the wasm graph worker-build compiles; the bin target is
@@ -38,7 +38,7 @@ worker = { workspace = true }
 cratefield-cli = { workspace = true }
 
 [[bin]]
-name = "fz"
+name = "sidecar-fz"
 path = "src/fz_main.rs"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]

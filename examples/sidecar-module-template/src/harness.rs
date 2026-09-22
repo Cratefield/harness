@@ -48,9 +48,10 @@ pub fn build(runtime: &Cloudflare) -> cratefield_core::Harness {
         .expect("sidecar template harness is valid")
 }
 
-/// The same harness with its own runtime, for the `fz` bin: it needs the
-/// compiled-in modules to collect migrations and run the doctor, and it
-/// serves nothing, so it builds an instance instead of borrowing one.
+/// The same harness with its own runtime, for the `sidecar-fz` bin: it
+/// needs the compiled-in modules to collect migrations and run the
+/// doctor, and it serves nothing, so it builds an instance instead of
+/// borrowing one.
 ///
 /// # Panics
 ///
