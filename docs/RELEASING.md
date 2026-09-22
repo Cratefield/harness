@@ -25,13 +25,14 @@ Configuration lives in `release-plz.toml` (per-crate versioning,
 conventional-commit changelogs, `publish = false` for `examples/*` and
 the CLI acceptance crate).
 
-`cratefield-tables` also carries `publish = false`, and is held back from
-crates.io until the CRUD layer and the first in-repo consumer land.
-Nothing depends on it yet and its public surface is still moving, which a
-0.1 on crates.io would pin permanently. When it is ready its first
-publish is manual, the same as every other new crate: add it to the
-ordered list in step 2 below, then enable its trusted publisher and drop
-the `publish = false` entry.
+`cratefield-tables` is held back only by its `[[package]]` entry in
+`release-plz.toml`; its own manifest carries no `publish = false`. It is
+held until the CRUD layer lands, because its public surface is still
+moving. 0.1.1 is nevertheless on crates.io, and `cratefield-manifest` and
+`cratefield-cli` now depend on it through a path-only dependency, so
+neither of them can be packaged until that dependency gains a version (see
+the note under step 2 below). When it is ready, drop the
+`release-plz.toml` entry and add it to the ordered list in step 2.
 
 `cratefield-mcp` (issue #160) carries `publish = false` as well: it is
 new, nothing depends on it, and publishing it is the remaining human step
@@ -41,65 +42,18 @@ When that step lands its first publish is manual, the same as every other
 new crate: add it to the ordered list in step 2 below, then enable its
 trusted publisher and drop the `publish = false` entry.
 
-`cratefield-push-auth` (issue #178) carries `publish = false` in its own
-manifest for the same reason, but with one difference that matters to the
-order below: two **published** crates already depend on it —
-`cratefield-adapter-apns` and the `cratefield` facade (behind its
-`push-auth` feature). So it must be first-published *before* either of
-them, or their `cargo publish` fails resolving a crate that is not on
-crates.io. It is in the ordered list below in that position; drop its
-`publish = false` at the same time.
-
-`cratefield-adapter-fcm` (issue #179) and `cratefield-adapter-webpush`
-(issue #180) inherit the same rule for the same reason. Each carries
-`publish = false`, and the `cratefield` facade depends on both behind optional
-`fcm` and `webpush` features — an **optional** dependency still has to resolve
-on crates.io when the facade is packaged, so `cargo publish -p cratefield`
-fails until each is first-published. Both are in the ordered list below, after
-`cratefield-adapter-apns`; drop each `publish = false` at the same time.
-
-`cratefield-push-wiring` (issue #191) carries `publish = false` because it
-depends on those two, and it binds harder than they do: `cratefield-cli`
-depends on it **not** optionally (`fz doctor` reads the push environment
-through it, which is the point — one reader), and the two runtimes and the
-facade depend on it behind optional `push`/`push-wiring` features. So it must
-be first-published before `cratefield-cli`, both runtimes and the facade, and
-it cannot be first-published before `cratefield-adapter-fcm` and
-`cratefield-adapter-webpush`. It is in the ordered list below in that
-position; drop its `publish = false` at the same time.
-
-`cratefield-i18n` (issue #190), `cratefield-module-privacy` and
-`cratefield-module-notifications` (issue #182) were wired into the facade
-after this list was written, and the list was not updated. All three carry
-`publish = false`, all three are optional dependencies of the facade, and an
-optional dependency still has to resolve on crates.io when the facade is
-packaged — so today the last line of the list cannot run at all:
-
-```
-$ cargo publish --dry-run --no-verify -p cratefield
-error: failed to prepare local package for uploading
-
-Caused by:
-  no matching package named `cratefield-adapter-fcm` found
-  location searched: crates.io index
-```
-
-`adapter-fcm` is only the first name it reaches; `adapter-webpush`,
-`push-wiring`, `i18n`, `module-privacy` and `module-notifications` are behind
-it. Seven first publishes stand between the current state and a facade
-release, and crates.io rate-limits new crates, so it is not one sitting.
-
-**`cratefield-module-notifications` also depends on `cratefield-auth-client`**,
-which is the edge easiest to miss: it leaves the `cratefield-*` namespace for
-the auth stack (ADR 0013), it is not optional, and `cratefield-auth-client`
-carries `publish = false` like the rest of those crates. It depends on nothing
-but `cratefield-core`, so it can be first-published as soon as core is; it is
-in the ordered list below in that position.
+`cratefield-push-auth`, `cratefield-adapter-fcm`,
+`cratefield-adapter-webpush`, `cratefield-push-wiring`, `cratefield-i18n`,
+`cratefield-module-privacy`, `cratefield-module-notifications` and
+`cratefield-auth-client` were held back with `publish = false` during
+their first-publish window. None carries the flag any more, all eight are
+on crates.io, and release-plz publishes them like any other crate. In
+particular, nothing holds back `cratefield-push-auth` (#489).
 
 What does **not** constrain the order: `cratefield-module-privacy` is a
 dev-dependency of `module-email-signup`, `module-waitlist` and
-`module-notifications`, and those are path-only by the rule above, so they are
-stripped from the packaged manifests. Those three published while
+`module-notifications`, and those are path-only by the rule in step 2 below, so
+they are stripped from the packaged manifests. Those three published while
 `module-privacy` did not exist on crates.io, which is the proof. Only the
 facade's real (optional) dependency on it constrains anything.
 
@@ -235,50 +189,68 @@ crate exists**, so the very first release of each crate is manual:
    ```sh
    export CARGO_REGISTRY_TOKEN=...   # the scoped token from step 1
    cargo publish --dry-run -p cratefield-core   # then without --dry-run
-   cargo publish -p cratefield-kms
-   cargo publish -p cratefield-adapter-sqlite
-   cargo publish -p cratefield-adapter-postgres
-   cargo publish -p cratefield-adapter-resend
-   cargo publish -p cratefield-adapter-turnstile
-   cargo publish -p cratefield-adapter-anthropic
-   cargo publish -p cratefield-push-auth      # before adapter-apns
-   cargo publish -p cratefield-adapter-apns
-   cargo publish -p cratefield-adapter-fcm    # before the facade
-   cargo publish -p cratefield-adapter-webpush  # before the facade
-   cargo publish -p cratefield-secrets
-   cargo publish -p cratefield-push-wiring    # before the runtimes and the CLI
-   cargo publish -p cratefield-runtime-cloudflare
-   cargo publish -p cratefield-runtime-native
-   cargo publish -p cratefield-testing
-   cargo publish -p cratefield-module-telemetry
-   cargo publish -p cratefield-module-email-signup
-   cargo publish -p cratefield-module-waitlist
-   cargo publish -p cratefield-module-cms
-   cargo publish -p cratefield-module-changelog
+   cargo publish -p cratefield-manifest  # cannot package yet: path-only dep, see tools/package-check.sh
    cargo publish -p cratefield-i18n           # before module-notifications
-   cargo publish -p cratefield-auth-client      # before module-notifications
+   cargo publish -p cratefield-kms
+   cargo publish -p cratefield-adapter-anthropic
+   cargo publish -p cratefield-adapter-postgres
+   cargo publish -p cratefield-module-email-signup
+   cargo publish -p cratefield-adapter-sqlite
+   cargo publish -p cratefield-testing        # before module-privacy and auth-client (versioned dev-dep)
    cargo publish -p cratefield-module-privacy # before the facade
-   cargo publish -p cratefield-module-notifications  # needs both of those
+   cargo publish -p cratefield-module-waitlist
+   cargo publish -p cratefield-push-auth      # before adapter-apns, -fcm, -webpush and the CLI
+   cargo publish -p cratefield-adapter-classifier-llm
+   cargo publish -p cratefield-adapter-github-issues
+   cargo publish -p cratefield-adapter-resend
+   cargo publish -p cratefield-adapter-stripe
+   cargo publish -p cratefield-adapter-turnstile
+   cargo publish -p cratefield-adapter-typesafe
+   cargo publish -p cratefield-adapter-webhook-tracker
+   cargo publish -p cratefield-auth-client    # before module-notifications and the runtimes
+   cargo publish -p cratefield-adapter-workers-ai
+   cargo publish -p cratefield-module-changelog
+   cargo publish -p cratefield-module-cms
+   cargo publish -p cratefield-module-telemetry
    cargo publish -p cratefield-ui
-   cargo publish -p cratefield-cli
-   cargo publish -p cratefield            # the facade: depends on all of them
+   cargo publish -p cratefield-secrets
+   cargo publish -p cratefield-adapter-apns
+   cargo publish -p cratefield-adapter-fcm    # before push-wiring and the facade
+   cargo publish -p cratefield-adapter-webpush  # before push-wiring, the CLI and the facade
+   cargo publish -p cratefield-module-notifications  # needs i18n and auth-client
+   cargo publish -p cratefield-push-wiring    # before the runtimes and the CLI
+   cargo publish -p cratefield-runtime-native  # cannot package yet: path-only dep, see tools/package-check.sh
+   cargo publish -p cratefield-runtime-cloudflare  # cannot package yet: path-only dep, see tools/package-check.sh
+   cargo publish -p cratefield-cli  # cannot package yet: path-only dep, see tools/package-check.sh
+   cargo publish -p cratefield            # the facade; cannot package yet: path-only dep, see tools/package-check.sh
    ```
 
-   Twenty-six crates, and the order is the dependency order: `--dry-run` for
-   a crate whose upstream `cratefield-*` dependencies are not on crates.io
-   yet resolves against the registry and fails until those are published.
-   Regenerate the list with the topological sort in
-   [COMPATIBILITY.md](COMPATIBILITY.md) if a crate is added.
+   Thirty-five crates, and the order is the dependency order: `--dry-run`
+   for a crate whose upstream `cratefield-*` dependencies are not on
+   crates.io yet resolves against the registry and fails until those are
+   published. The `package` CI job (`tools/package-check.sh`) fails if this
+   list misses a publishable crate, lists one that is not publishable, or
+   puts a crate before one of its `cratefield-*` dependencies, so a new
+   crate has to be added here in a valid position. Five lines cannot run
+   yet: each of those crates has a path-only dependency with no version,
+   which `cargo package` refuses (`UNPACKAGEABLE` in the script names
+   them). An older version of this list put `cratefield-auth-client` after
+   the two runtimes that depend on it; it now comes before them.
 
    `cargo publish` resolves **dev**-dependencies against crates.io too,
-   which is why every internal dev-dependency in this workspace is
-   declared path-only rather than `workspace = true` (see the note in the
-   root `Cargo.toml`). Cargo strips a path-only dev-dependency from the
+   which is why internal dev-dependencies in this workspace are declared
+   path-only rather than `workspace = true` (see the note in the root
+   `Cargo.toml`). Cargo strips a path-only dev-dependency from the
    packaged manifest, so `cratefield-ui` can dev-depend on the unpublished
    `module-hello` example, and the
    `adapter-postgres -> module-* -> testing -> adapter-postgres` dev cycle
    never has to be broken with `--no-verify`. If you ever find yourself
-   reaching for `--no-verify`, a dev-dependency has grown a version.
+   reaching for `--no-verify`, a dev-dependency has grown a version. Two
+   already have: `cratefield-module-privacy` and `cratefield-auth-client`
+   dev-depend on `cratefield-testing` through `workspace = true`, so that
+   requirement ships, and `cratefield-testing` has to be published before
+   either of them. The order check counts versioned dev-dependencies for
+   that reason.
 3. **Enable trusted publishing per crate.** For each published crate:
    crates.io → crate page → *Settings* → *Trusted publishing* → add
    repository `Cratefield/harness`, workflow `release.yml`,
@@ -360,12 +332,32 @@ cratefield-core` from an empty project after the first release (issue #15
 acceptance): the workflow now does that for every published crate,
 together, every day.
 
-Still manual, and **not** run by anything in `.github/workflows/` — a
-human runs these when it matters:
+The package itself is checked on every push and pull request, by the
+`package` job in `.github/workflows/ci.yml` running
+`tools/package-check.sh` with no credentials:
 
-- `cargo publish --dry-run -p cratefield-core`: packages and
-  verification-builds the crate with only registry dependencies.
-- `cargo package --list` for every crate: the packaged file list is
-  exact (`include` lists), so the migration SQL and mail templates ship
-  and no repo-root file (`BUILD-BRIEF.md`, `PROGRESS.md`, `target/`)
-  can leak into a package.
+- **Publish-order drift**: the first-publish list in step 2 above must
+  name exactly the publishable set (`publish` unset in the crate's
+  manifest and not held back in `release-plz.toml`), each crate after its
+  normal and build `cratefield-*` dependencies and its versioned
+  dev-dependencies, and each only once.
+- **`UNPACKAGEABLE` stays honest**: each crate the script lists as unable
+  to package must still fail `cargo package` for the path-only
+  dependency it records; once one packages, the job fails until its entry is removed.
+- **Leak deny-list**: `cargo package --list` for every publishable crate,
+  failing if a packaged path is under `target/` or is `BRIEF.md`, a
+  `*-BRIEF.md` such as `BUILD-BRIEF.md`, `PROGRESS.md` or a `.env*` file.
+- **Verification build**: one multi-package `cargo package` over every
+  publishable crate not in `UNPACKAGEABLE`. Cargo overlays the freshly
+  packaged crates as a local registry, so unpublished versions resolve,
+  and builds each from its extracted tarball. That is the only build that
+  notices a file `include_str!` reads but the crate's `include` list
+  leaves out (#499): every other build reads the source tree.
+
+`tools/package-check.sh --no-verify` runs everything but the verification
+build, for a fast local check that takes seconds once cargo's index
+is warm.
+
+Still manual: the credentialed publish itself. Every first publish is
+`cargo publish` with the scoped token (step 2 above); only after that
+does the release run publish a crate on its own, over OIDC.
