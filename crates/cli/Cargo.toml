@@ -119,7 +119,7 @@ cratefield-introspect = { path = "../introspect", optional = true }
 # diff one of them runs. Not optional and not behind `postgres`: comparing
 # two manifests needs no database, and the crate carries no I/O and no
 # driver of its own.
-cratefield-tables = { path = "../tables" }
+cratefield-tables = { workspace = true }
 # `fz client-ts` (issue #155) hands the `/__surface` document to the
 # generator and writes the files it returns. Path-only, no version: the
 # crate is `publish = false` (see its manifest), and a versioned spec

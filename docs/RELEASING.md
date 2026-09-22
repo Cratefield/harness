@@ -25,13 +25,11 @@ Configuration lives in `release-plz.toml` (per-crate versioning,
 conventional-commit changelogs, `publish = false` for `examples/*` and
 the CLI acceptance crate).
 
-`cratefield-tables` also carries `publish = false`, and is held back from
-crates.io until the CRUD layer and the first in-repo consumer land.
-Nothing depends on it yet and its public surface is still moving, which a
-0.1 on crates.io would pin permanently. When it is ready its first
-publish is manual, the same as every other new crate: add it to the
-ordered list in step 2 below, then enable its trusted publisher and drop
-the `publish = false` entry.
+`cratefield-tables` is no longer held back: its first publish (0.1.1) was
+done by hand, and `cratefield-manifest` and `cratefield-cli` depend on it,
+so it is in the ordered list in step 2 below ahead of both. Its trusted
+publisher (step 3) is still to be enabled; until it is, the release run
+cannot publish it over OIDC.
 
 `cratefield-mcp` (issue #160) carries `publish = false` as well: it is
 new, nothing depends on it, and publishing it is the remaining human step
@@ -260,11 +258,13 @@ crate exists**, so the very first release of each crate is manual:
    cargo publish -p cratefield-module-privacy # before the facade
    cargo publish -p cratefield-module-notifications  # needs both of those
    cargo publish -p cratefield-ui
+   cargo publish -p cratefield-tables         # before the manifest and the CLI
+   cargo publish -p cratefield-manifest       # before the CLI and the facade
    cargo publish -p cratefield-cli
    cargo publish -p cratefield            # the facade: depends on all of them
    ```
 
-   Twenty-six crates, and the order is the dependency order: `--dry-run` for
+   Thirty crates, and the order is the dependency order: `--dry-run` for
    a crate whose upstream `cratefield-*` dependencies are not on crates.io
    yet resolves against the registry and fails until those are published.
    Regenerate the list with the topological sort in

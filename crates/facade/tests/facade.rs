@@ -122,11 +122,17 @@ fn every_publishable_library_is_reachable_from_the_facade() {
     // classifier adapter that needs the Workers `env.AI` binding (and the
     // `worker` crate): a facade feature would be platform-blind, so a
     // venture on Workers depends on it directly and no native venture ever
-    // pulls `worker` through here (issue #456).
+    // pulls `worker` through here (issue #456). tables is build-side: the
+    // manifest and the CLI depend on it, but a venture never names it —
+    // generated code reaches its tables through `cratefield::tables_api`,
+    // and `Schema` is re-exported through `cratefield::manifest`. A
+    // `tables` alias would also sit one word away from the generated
+    // venture's own `crate::tables` module (issue #492).
     const NOT_LIBRARIES: &[&str] = &[
         "cratefield-cli",
         "cratefield",
         "cratefield-adapter-workers-ai",
+        "cratefield-tables",
     ];
 
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))

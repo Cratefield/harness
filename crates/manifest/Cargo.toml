@@ -22,7 +22,7 @@ workspace = true
 # The [tables] declaration a manifest carries (issue #153). No I/O and
 # no driver in that crate either, so the manifest stays serde-only and
 # wasm-clean.
-cratefield-tables = { path = "../tables" }
+cratefield-tables = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }

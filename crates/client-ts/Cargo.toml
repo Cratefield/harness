@@ -6,10 +6,10 @@ keywords = ["cratefield", "typescript", "codegen", "client"]
 categories = ["development-tools", "web-programming"]
 include = ["src/**/*", "README.md"]
 # New and unproven: the public surface is still moving, so it is held out
-# of the release run the way `cratefield-tables` is (release-plz.toml
-# carries the matching entry). The CLI now consumes it — `fz client-ts`
-# (issue #155) — but that does not lift the hold: its first publish is
-# manual (docs/RELEASING.md) either way.
+# of the release run (release-plz.toml carries the matching entry). The
+# CLI now consumes it — `fz client-ts` (issue #155) — but that does not
+# lift the hold: its first publish is manual (docs/RELEASING.md) either
+# way.
 publish = false
 version = "0.1.0"
 edition.workspace = true
