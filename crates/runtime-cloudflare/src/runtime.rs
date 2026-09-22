@@ -483,7 +483,13 @@ impl Cloudflare {
         ports.text_model.clone_from(&self.text_model);
         ports.classifier.clone_from(&self.classifier);
         ports.captcha.clone_from(&self.captcha);
-        ports.auth.clone_from(&self.auth);
+        // Only when set: `clock_http_and_auth` may already have assembled
+        // `ports.auth` from `AUTH_ISSUER` + `AUTH_CLIENT_ID` under
+        // `auth_from_env`, and `Option::clone_from(None)` would wipe it —
+        // leaving every `Port::Auth` route with `no-verifier`.
+        if let Some(auth) = &self.auth {
+            ports.auth = Some(Arc::clone(auth));
+        }
 
         // An explicit adapter wins; otherwise assemble one from the
         // environment when the venture asked for it (issue #191).
