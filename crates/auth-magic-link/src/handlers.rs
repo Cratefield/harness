@@ -569,31 +569,6 @@ async fn create_account(
     Ok(id)
 }
 
-/// Whether this request looks like a person clicking rather than a mail
-/// client checking the link.
-///
-/// **A heuristic, and the limits are the point.** Fetch metadata headers
-/// are sent by every current browser on a top-level navigation:
-/// `Sec-Fetch-Mode: navigate` and `Sec-Fetch-Dest: document`. A scanner
-/// fetching the URL out of band sends neither, or sends `empty`/`no-cors`.
-///
-/// What it does **not** catch: a scanner that copies a real browser's
-/// headers, or one that renders the message in a real browser engine.
-/// What it must not do is refuse a real person — so a request with no
-/// fetch metadata at all (an old browser, a stripped proxy) gets the
-/// confirm button rather than a refusal, which costs one click and works
-/// everywhere.
-fn looks_like_a_click(headers: &HeaderMap) -> bool {
-    let value = |name: &str| {
-        headers
-            .get(name)
-            .and_then(|value| value.to_str().ok())
-            .map(str::to_ascii_lowercase)
-    };
-    value("sec-fetch-mode").as_deref() == Some("navigate")
-        && value("sec-fetch-dest").as_deref() == Some("document")
-}
-
 /// Whether a presented value could be one of ours at all: exactly the
 /// unpadded-base64url length of [`TOKEN_BYTES`], in that alphabet and no
 /// other.
@@ -612,31 +587,32 @@ fn looks_like_a_token(value: &str) -> bool {
 
 /// `GET /consume?token=…`, the URL in the mail.
 ///
-/// Does **not** spend the token unless the request looks like a person
-/// clicking. Mail clients and corporate scanners prefetch links, and a
-/// prefetch that consumed a single-use token would sign nobody in and
-/// leave the person with a link that has already been used.
-async fn consume(
-    State(state): State<Arc<ModuleState>>,
-    scope: Scope,
-    headers: HeaderMap,
-    Query(query): Query<ConsumeQuery>,
-) -> Result<Response, Problem> {
+/// **Never spends the token.** It answers every token-shaped value with
+/// the confirm page, and only that page's same-origin `POST` signs
+/// anybody in. Two reasons, either of which would be enough:
+///
+/// - Mail clients and corporate scanners prefetch links, and a prefetch
+///   that consumed a single-use token would sign nobody in and leave the
+///   person with a link that has already been used.
+/// - A GET that signs in is login CSRF (issue #483). An attacker asks
+///   for a link to their own address, reads the token, and sends the
+///   victim's browser to it; that forced cross-site navigation carries
+///   exactly the fetch metadata a click out of webmail does, so no header
+///   can tell the two apart, and the victim would be signed in as the
+///   attacker.
+///
+/// Nothing is read either: the page is the same whether or not the token
+/// is real, so nobody can use this route to test one.
+async fn consume(Query(query): Query<ConsumeQuery>) -> Response {
     let token = query.token.unwrap_or_default();
     if !looks_like_a_token(&token) {
-        return Ok(expired_page());
+        return expired_page();
     }
-    if !looks_like_a_click(&headers) {
-        // Nothing is read, nothing is spent: the answer is the same page
-        // whether or not the token is real, so a scanner cannot use this
-        // to test one.
-        return Ok(page(
-            StatusCode::OK,
-            "Confirm that it was you who asked to sign in.",
-            Some(&token),
-        ));
-    }
-    spend(&state, &scope, &headers, &token).await
+    page(
+        StatusCode::OK,
+        "Confirm that it was you who asked to sign in.",
+        Some(&token),
+    )
 }
 
 /// `POST /consume`, the confirm button.
@@ -648,10 +624,11 @@ async fn confirm(
     body: String,
 ) -> Result<Response, Problem> {
     // Spending the token mints a session, so a form on another site must
-    // not be able to press this button for somebody (issue #439). The GET
-    // above is deliberately unguarded: a click out of a mail client is
-    // inherently cross-site, and it is covered by the single-use token in
-    // the URL plus `looks_like_a_click`.
+    // not be able to press this button for somebody (issue #439). This is
+    // the only way in: the GET above never spends, because a click out of
+    // a mail client is inherently cross-site and so is a forced
+    // navigation (issue #483), and only a request from our own page can
+    // be told apart from both.
     factory0_auth_core::csrf::require_same_origin(&headers, &uri)
         .map_err(|problem| problem.instance(&scope.request_id))?;
     let token = url::form_urlencoded::parse(body.as_bytes())
@@ -742,8 +719,9 @@ async fn spend(
                 .get(header::USER_AGENT)
                 .and_then(|value| value.to_str().ok()),
             presented_cookie: presented.as_deref(),
-            // A top-level GET from the mailed link, so the cookie above
-            // arrives and names the session itself (auth #36).
+            // A same-origin form POST from the confirm page, so the
+            // cookie above arrives and names the session itself (auth
+            // #36).
             presented_session_id: None,
             amr: &AMR,
         },
@@ -773,6 +751,8 @@ async fn spend(
         .and_then(|candidate| safe_return_to(Some(&candidate)))
         .unwrap_or_else(|| settings.default_return_to.clone());
 
+    // This answers the confirm page's POST. Every browser follows a 302
+    // after a POST with a GET, so `return_to` is fetched, never re-posted.
     let mut response = (StatusCode::FOUND, [(header::LOCATION, return_to)]).into_response();
     if let Ok(value) = header::HeaderValue::from_str(&set_cookie(&session.value)) {
         response.headers_mut().append(header::SET_COOKIE, value);
@@ -807,42 +787,6 @@ mod tests {
             "/ok\nSet-Cookie: x",
         ] {
             assert_eq!(safe_return_to(Some(bad)), None, "{bad} was accepted");
-        }
-    }
-
-    #[test]
-    fn only_a_browser_navigation_counts_as_a_click() {
-        let with = |pairs: &[(&str, &str)]| {
-            let mut headers = HeaderMap::new();
-            for (name, value) in pairs {
-                headers.insert(
-                    http::HeaderName::from_bytes(name.as_bytes()).expect("name"),
-                    value.parse().expect("value"),
-                );
-            }
-            headers
-        };
-
-        assert!(looks_like_a_click(&with(&[
-            ("sec-fetch-mode", "navigate"),
-            ("sec-fetch-dest", "document"),
-        ])));
-        // Case is not significant in the header value.
-        assert!(looks_like_a_click(&with(&[
-            ("sec-fetch-mode", "Navigate"),
-            ("sec-fetch-dest", "Document"),
-        ])));
-
-        // What a scanner sends, and what an old browser sends: neither is
-        // refused, both get the confirm button.
-        for headers in [
-            with(&[]),
-            with(&[("sec-fetch-mode", "no-cors"), ("sec-fetch-dest", "empty")]),
-            with(&[("sec-fetch-mode", "navigate")]),
-            with(&[("sec-fetch-dest", "document")]),
-            with(&[("sec-fetch-mode", "cors"), ("sec-fetch-dest", "document")]),
-        ] {
-            assert!(!looks_like_a_click(&headers), "{headers:?}");
         }
     }
 
