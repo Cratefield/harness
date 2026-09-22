@@ -98,7 +98,8 @@
   requires a usable `Signer` rather than a `Captcha`. Surface-less
   modules declare it with `Module::public_write_policy`. This is not an
   exemption: without a signer there is nothing to issue or verify the
-  artifact with, and production refuses.
+  artifact with, and production refuses — against the signer the runtime
+  actually resolved, not the one it advertises (issue #478).
 - **PII minimalism and retention.** See [PRIVACY.md](PRIVACY.md).
 - **Redaction.** Field names matching `(?i)secret|token|key|
   authorization|password` are replaced with `[redacted]`; email values

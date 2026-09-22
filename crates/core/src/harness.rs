@@ -362,12 +362,15 @@ impl Harness {
     /// The limiter leg is decided here against the **resolved** port, not
     /// the runtime's advertisement (issue #437): a Cloudflare binding that
     /// fails to resolve degrades to `ports.rate_limiter == None`, and this
-    /// is the check that catches it.
+    /// is the check that catches it. The signer leg likewise (issue #478):
+    /// a harness configuration that fails to parse leaves `ports.signer ==
+    /// None` behind an advertised `Port::Signer`.
     fn production_readiness_now(
         &self,
         env: VentureEnv,
         config: &dyn Config,
         rate_limiter_ready: bool,
+        signer_ready: bool,
     ) -> Vec<String> {
         if let Some(note) = crate::route_policy::env_disagreement(self.venture.env, env) {
             tracing::warn!("{note}");
@@ -384,6 +387,7 @@ impl Harness {
             &guards,
             self.runtime.as_ref(),
             rate_limiter_ready,
+            signer_ready,
             unprotected.as_deref(),
             unlimited.as_deref(),
         );
@@ -401,6 +405,7 @@ impl Harness {
                 &guards,
                 self.runtime.as_ref(),
                 rate_limiter_ready,
+                signer_ready,
                 None,
                 None,
             );
@@ -684,12 +689,12 @@ impl Harness {
 
     pub fn router(&self, ports: Ports) -> Router {
         // The environment the *deployment* declares, not only the one
-        // compiled in (issue #143). The limiter leg reads the resolved
-        // port, not the runtime's advertisement (issue #437) — captured
-        // before `ports` is destructured below.
+        // compiled in (issue #143). The limiter and signer legs read the
+        // resolved ports, not the runtime's advertisement (issues #437,
+        // #478) — captured before `ports` is destructured below.
         let env = deployed_env(self.venture.env, ports.config.as_ref());
-        let readiness =
-            self.production_readiness_now(env, ports.config.as_ref(), ports.rate_limiter.is_some());
+        let (limiter, signer) = (ports.rate_limiter.is_some(), ports.signer.is_some());
+        let readiness = self.production_readiness_now(env, ports.config.as_ref(), limiter, signer);
         let mut api = self.nest_modules(&ports);
         // The gateway signer is this deployment's half of the sidecar
         // trust boundary (issue #131): absent secret, absent capability.
@@ -1755,11 +1760,13 @@ fn append_production_readiness(
         venture.env,
         &crate::route_policy::WriteGuards::collect(modules),
         runtime,
-        // Build time has no resolved ports, so this is the runtime's own
-        // answer — provisionally optimistic for a binding that is named
-        // but fails to resolve. The boot gate re-checks against the port
-        // the runtime actually handed over, and refuses there.
+        // Build time has no resolved ports, so these are the runtime's own
+        // answers — provisionally optimistic for a binding that is named
+        // but fails to resolve, or a secret that fails to parse. The boot
+        // gate re-checks against the ports the runtime actually handed
+        // over, and refuses there.
         crate::route_policy::rate_limiter_effective(runtime),
+        crate::route_policy::signer_effective(runtime),
         None,
         None,
     ) {
@@ -1862,7 +1869,7 @@ mod acceptance_recording {
         let config = deployed(Some("issue #437: limiter binding pending"));
         assert!(
             harness
-                .production_readiness_now(VentureEnv::Production, &config, false)
+                .production_readiness_now(VentureEnv::Production, &config, false, true)
                 .is_empty(),
             "the recorded acceptance serves"
         );
@@ -1876,7 +1883,7 @@ mod acceptance_recording {
         // neither refuses nor re-records.
         assert!(
             harness
-                .production_readiness_now(VentureEnv::Production, &config, false)
+                .production_readiness_now(VentureEnv::Production, &config, false, true)
                 .is_empty()
         );
     }
@@ -1887,7 +1894,7 @@ mod acceptance_recording {
         let config = deployed(Some("unused: the limiter resolved"));
         assert!(
             harness
-                .production_readiness_now(VentureEnv::Production, &config, true)
+                .production_readiness_now(VentureEnv::Production, &config, true, true)
                 .is_empty()
         );
         assert!(
@@ -1913,7 +1920,7 @@ mod acceptance_recording {
         ]);
         assert_eq!(
             harness
-                .production_readiness_now(VentureEnv::Production, &config, false)
+                .production_readiness_now(VentureEnv::Production, &config, false, true)
                 .len(),
             1
         );

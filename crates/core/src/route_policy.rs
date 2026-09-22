@@ -397,6 +397,13 @@ pub fn env_disagreement(compiled: VentureEnv, deployed: VentureEnv) -> Option<St
 
 /// Whether the runtime can issue and verify the artifacts a
 /// [`RoutePolicy::SignedLink`] route rests on (issue #143).
+///
+/// Like [`rate_limiter_effective`], the runtime's own, provisional
+/// answer: the native and Cloudflare runtimes advertise [`Port::Signer`]
+/// unconditionally and leave `ports.signer == None` with only a warning
+/// when the harness configuration does not parse (issue #478). The boot
+/// gate re-checks against the resolved port — [`production_readiness`]
+/// takes it as its `signer_ready` parameter.
 #[must_use]
 pub fn signer_effective(runtime: Option<&Arc<dyn Runtime>>) -> bool {
     runtime.is_some_and(|runtime| runtime.effectively_configured(Port::Signer))
@@ -437,6 +444,12 @@ pub fn rate_limiter_effective(runtime: Option<&Arc<dyn Runtime>>) -> bool {
 /// ports pass `ports.rate_limiter.is_some()`; the build-time gate and
 /// `fz doctor` pass [`rate_limiter_effective`], the runtime's own answer.
 ///
+/// The signer leg is keyed the same way on `signer_ready` (issue #478):
+/// the runtimes advertise [`Port::Signer`] yet leave `ports.signer ==
+/// None` when the harness configuration fails to parse. Callers holding
+/// ports pass `ports.signer.is_some()`; the build-time gate passes
+/// [`signer_effective`].
+///
 /// [`ConfigError`]: crate::config::ConfigError
 #[must_use]
 pub fn production_readiness(
@@ -444,6 +457,7 @@ pub fn production_readiness(
     guards: &WriteGuards,
     runtime: Option<&Arc<dyn Runtime>>,
     rate_limiter_ready: bool,
+    signer_ready: bool,
     allow_no_captcha: Option<&str>,
     allow_unlimited: Option<&str>,
 ) -> Vec<String> {
@@ -464,7 +478,7 @@ pub fn production_readiness(
             guards.captcha_modules.join(", ")
         ));
     }
-    if guards.needs_signer() && !signer_effective(runtime) {
+    if guards.needs_signer() && !signer_ready {
         errors.push(format!(
             "production venture has signed-link public writes from [{}] but the Signer port              is not provided — the magic links, challenges and unsubscribe links those routes              verify cannot be issued or checked without one (issue #143)",
             guards.signed_link_modules.join(", ")
@@ -768,7 +782,7 @@ mod tests {
         let guards = WriteGuards::collect(&[module("forms", Vec::new(), true)]);
         for env in [VentureEnv::Development, VentureEnv::Staging] {
             assert!(
-                production_readiness(env, &guards, None, true, None, None).is_empty(),
+                production_readiness(env, &guards, None, true, false, None, None).is_empty(),
                 "{env:?} must not gate"
             );
         }
@@ -784,7 +798,15 @@ mod tests {
         // The limiter leg is held aside (`rate_limiter_ready = true`) so
         // this test stays about the captcha leg; #437's own tests are
         // below.
-        let errors = production_readiness(VentureEnv::Production, &guards, None, true, None, None);
+        let errors = production_readiness(
+            VentureEnv::Production,
+            &guards,
+            None,
+            true,
+            false,
+            None,
+            None,
+        );
         assert_eq!(errors.len(), 1);
         assert!(errors[0].contains("forms"));
         assert!(errors[0].contains("Captcha"));
@@ -795,6 +817,7 @@ mod tests {
                 &guards,
                 None,
                 true,
+                false,
                 Some("preview"),
                 None
             )
@@ -814,6 +837,7 @@ mod tests {
                     &guards,
                     None,
                     true,
+                    false,
                     Some(nothing),
                     None
                 )
@@ -831,7 +855,15 @@ mod tests {
             vec![Action::post("webhook", "/webhook").policy(RoutePolicy::Signature)],
             false,
         )]);
-        let errors = production_readiness(VentureEnv::Production, &guards, None, true, None, None);
+        let errors = production_readiness(
+            VentureEnv::Production,
+            &guards,
+            None,
+            true,
+            false,
+            None,
+            None,
+        );
         assert_eq!(errors.len(), 1);
         assert!(errors[0].contains("billing"));
         assert!(errors[0].contains("Payments"));
@@ -843,6 +875,7 @@ mod tests {
                 &guards,
                 None,
                 true,
+                false,
                 Some("preview"),
                 None
             )
@@ -908,15 +941,49 @@ mod tests {
         // Not an exemption: without a Signer there is nothing to issue or
         // verify the artifact with, so production still refuses.
         let guards = WriteGuards::collect(&[declaring("passkeys", RoutePolicy::SignedLink)]);
-        let errors = production_readiness(VentureEnv::Production, &guards, None, true, None, None);
+        let errors = production_readiness(
+            VentureEnv::Production,
+            &guards,
+            None,
+            true,
+            false,
+            None,
+            None,
+        );
         assert_eq!(errors.len(), 1, "{errors:?}");
         assert!(errors[0].contains("signed-link"), "{}", errors[0]);
         assert!(errors[0].contains("passkeys"), "{}", errors[0]);
 
         // And nothing is demanded outside production.
         assert!(
-            production_readiness(VentureEnv::Staging, &guards, None, true, None, None).is_empty()
+            production_readiness(VentureEnv::Staging, &guards, None, true, false, None, None)
+                .is_empty()
         );
+    }
+
+    #[test]
+    fn a_production_venture_needs_a_resolved_signer() {
+        // Issue #478: the runtime advertises the Signer port, but a
+        // harness configuration that fails to parse (a bad `ENV`, a short
+        // `ADMIN_TOKEN`) leaves `ports.signer == None`. Advertised is not
+        // resolved, so the caller's answer decides the leg.
+        struct Advertises;
+        impl Runtime for Advertises {
+            fn provides(&self) -> Vec<Port> {
+                vec![Port::Signer]
+            }
+        }
+        let runtime: Arc<dyn Runtime> = Arc::new(Advertises);
+        let guards = WriteGuards::collect(&[declaring("passkeys", RoutePolicy::SignedLink)]);
+        let check = |env, signer_ready| {
+            production_readiness(env, &guards, Some(&runtime), true, signer_ready, None, None)
+        };
+
+        let errors = check(VentureEnv::Production, false);
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert!(errors[0].contains("Signer"), "{}", errors[0]);
+        assert!(check(VentureEnv::Production, true).is_empty());
+        assert!(check(VentureEnv::Development, false).is_empty());
     }
 
     #[test]
@@ -998,6 +1065,7 @@ mod tests {
             &guards,
             None,
             false,
+            false,
             Some("preview"),
             None,
         );
@@ -1016,6 +1084,7 @@ mod tests {
                 &guards,
                 None,
                 true,
+                false,
                 Some("preview"),
                 None
             )
@@ -1031,6 +1100,7 @@ mod tests {
                 &guards,
                 None,
                 false,
+                false,
                 Some("preview"),
                 Some("issue #437: between pivots"),
             )
@@ -1042,6 +1112,7 @@ mod tests {
                     VentureEnv::Production,
                     &guards,
                     None,
+                    false,
                     false,
                     Some("preview"),
                     Some(nothing),
@@ -1061,7 +1132,15 @@ mod tests {
             false,
         )]);
         assert!(guards.captcha_modules.is_empty());
-        let errors = production_readiness(VentureEnv::Production, &guards, None, false, None, None);
+        let errors = production_readiness(
+            VentureEnv::Production,
+            &guards,
+            None,
+            false,
+            false,
+            None,
+            None,
+        );
         assert_eq!(errors.len(), 1, "{errors:?}");
         assert!(errors[0].contains("RateLimiter"), "{}", errors[0]);
         assert!(

@@ -809,6 +809,82 @@ async fn an_advertised_but_unresolved_limiter_is_not_readiness() {
     assert_ne!(served.status(), StatusCode::SERVICE_UNAVAILABLE);
 }
 
+/// A public writer proved by a signed link, so the Signer leg applies.
+struct SignedLinkWriter;
+
+impl Module for SignedLinkWriter {
+    fn name(&self) -> &'static str {
+        "links"
+    }
+    fn version(&self) -> &'static str {
+        "0.0.0-test"
+    }
+    fn requires(&self) -> &'static [Port] {
+        &[]
+    }
+    fn public_writes(&self) -> bool {
+        true
+    }
+    fn public_write_policy(&self) -> cratefield_core::RoutePolicy {
+        cratefield_core::RoutePolicy::SignedLink
+    }
+    fn migrations(&self) -> cratefield_core::Migrations {
+        cratefield_core::Migrations::default()
+    }
+    fn validate_config(&self, _: &dyn Config) -> Result<(), cratefield_core::ConfigError> {
+        Ok(())
+    }
+    fn router(&self, _: cratefield_core::ModuleContext) -> Router {
+        Router::new().route("/join", axum::routing::post(|| async { "ok" }))
+    }
+}
+
+/// Issue #478: the signer leg reads the **resolved** port too. The
+/// runtimes advertise `Port::Signer` unconditionally, yet leave
+/// `ports.signer == None` when the harness configuration fails to parse.
+#[pollster::test]
+async fn an_advertised_but_unresolved_signer_is_not_readiness() {
+    let harness = Harness::builder()
+        .venture(base_venture())
+        .module(SignedLinkWriter)
+        .runtime(FakeRuntime(all_ports()))
+        .build()
+        .expect("builds: at build time the runtime's own answer is all there is");
+    let join = |signer: Option<Arc<dyn cratefield_core::Signer>>| {
+        let mut ports = ports_with_production_config();
+        ports.rate_limiter = Some(Arc::new(RecordingLimiter::new(LimiterVerdict::Allow)));
+        ports.signer = signer;
+        let router = harness.router(ports);
+        async move {
+            request(
+                &router,
+                Method::POST,
+                "/v1/links/join",
+                &[],
+                Some(b"{}".to_vec()),
+            )
+            .await
+        }
+    };
+
+    let refused = join(None).await;
+    assert_eq!(refused.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let detail = body_json(refused).await["detail"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert!(detail.contains("Signer"), "{detail}");
+
+    // The same deployment with the signer actually resolved serves.
+    let signer =
+        cratefield_core::HmacSigner::new("0".repeat(cratefield_core::MIN_SECRET_BYTES), None)
+            .expect("test signer");
+    assert_ne!(
+        join(Some(Arc::new(signer))).await.status(),
+        StatusCode::SERVICE_UNAVAILABLE
+    );
+}
+
 fn ports_with_production_config() -> Ports {
     Ports::with_config(Arc::new(MapConfig::from_pairs([("ENV", "production")])))
 }
