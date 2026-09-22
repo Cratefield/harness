@@ -39,7 +39,7 @@ pub use tracing_setup::install_tracing;
 
 use crate::body_limit::{BodyPlan, Capped, body_plan, read_capped};
 use axum::response::IntoResponse;
-use cratefield_core::{Harness, Problem};
+use cratefield_core::{Harness, Problem, RequestSummary};
 use std::sync::Arc;
 use tower::ServiceExt;
 use worker::{Context, Env, Request as WorkerRequest, Response as WorkerResponse};
@@ -246,7 +246,23 @@ pub async fn serve(
         .oneshot(buffered)
         .await
         .map_err(|err| worker::Error::RustError(err.to_string()))?;
+    if let Some(line) = response.extensions().get().and_then(summary_line) {
+        // The request span is inert on Workers (no dispatcher, see
+        // `tracing_setup`), so its fields reach Workers Logs as one JSON
+        // line instead — indexed as fields, and matched by
+        // `wrangler tail --search <request-id>`.
+        #[cfg(target_arch = "wasm32")]
+        worker::console_log!("{line}");
+        #[cfg(not(target_arch = "wasm32"))]
+        tracing::info!("{line}");
+    }
     response_to_worker(response).await
+}
+
+/// The Workers Logs line for one request: the core [`RequestSummary`]
+/// serialized as JSON.
+fn summary_line(summary: &RequestSummary) -> Option<String> {
+    serde_json::to_string(summary).ok()
 }
 
 async fn response_to_worker(
@@ -306,5 +322,29 @@ pub async fn serve_scheduled(
                 "scheduled module work failed",
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn summary_line_is_one_json_object_carrying_the_request_id() {
+        let summary = RequestSummary {
+            request_id: "01J9ZQ4V6X8Y2K3M5N7P9R1T3W".to_owned(),
+            method: "GET".to_owned(),
+            route: "/v1/sample/hello".to_owned(),
+            module: "sample".to_owned(),
+            status: 200,
+            ip_hash: "0123456789ab".to_owned(),
+            ua_family: "mozilla".to_owned(),
+        };
+        let line = summary_line(&summary).expect("serializes");
+        assert!(!line.contains('\n'), "one line: {line}");
+        let parsed: serde_json::Value = serde_json::from_str(&line).expect("valid JSON");
+        assert_eq!(parsed["request_id"], "01J9ZQ4V6X8Y2K3M5N7P9R1T3W");
+        assert_eq!(parsed["route"], "/v1/sample/hello");
+        assert_eq!(parsed["status"], 200);
     }
 }

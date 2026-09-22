@@ -130,9 +130,12 @@
   acceptance and refusal, the compiled-versus-deployment env
   disagreement, sidecar mount-table and gateway misconfiguration,
   fail-open and fail-closed rate-limiter decisions, the secret-access
-  audit trail, and the internal errors mapped to a 500. Everything
-  else — ordinary per-request `tracing` output — is **not** observable
-  on Workers until a real wasm tracing layer exists.
+  audit trail, and the internal errors mapped to a 500. The runtime
+  also writes one JSON request-summary line per request — the request
+  span's `request_id`, `method`, `route` (the matched pattern, never the
+  raw path), `module`, `status`, `ip_hash` and `ua_family` (issue #476).
+  Everything else — ordinary per-request `tracing` output — is **not**
+  observable on Workers until a real wasm tracing layer exists.
 - **A column is not safer than a log.** An error string that is scrubbed
   on the way to a log and stored raw is the worse half of the pair: it
   outlives the request, it outlives erasure of the table the value came

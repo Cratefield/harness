@@ -60,7 +60,9 @@ pub use email::{
 };
 pub use events::{AnyError, EventBus, EventHandler, EventName};
 pub use harness::{Harness, HarnessBuilder, Runtime};
-pub use http::{Form, Json, MAX_BODY_BYTES, X_REQUEST_ID, rate_limited, request_id_is_valid};
+pub use http::{
+    Form, Json, MAX_BODY_BYTES, RequestSummary, X_REQUEST_ID, rate_limited, request_id_is_valid,
+};
 pub use idempotency::Inbox;
 pub use lint::{CARD_DATA, card_data_hit, created_tables, lint_card_data, lint_portable_sql};
 pub use logging::{

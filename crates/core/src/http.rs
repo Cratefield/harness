@@ -39,6 +39,22 @@ pub fn request_id_is_valid(value: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
 }
 
+/// The per-request span's fields as plain data, attached to every
+/// response's extensions by the request-id layer so a runtime with no
+/// tracing dispatcher — Cloudflare — can still log them. `route` is the
+/// matched pattern, never the raw path (`""` when nothing matched). There
+/// is no `duration_ms`: wasm32 has no monotonic clock to measure it with.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct RequestSummary {
+    pub request_id: String,
+    pub method: String,
+    pub route: String,
+    pub module: String,
+    pub status: u16,
+    pub ip_hash: String,
+    pub ua_family: String,
+}
+
 /// State the request-id layer needs, resolved from `Ports` when the router
 /// is assembled.
 #[derive(Clone)]
@@ -147,20 +163,29 @@ pub(crate) async fn scope_layer(
     {
         response.headers_mut().insert(X_HARNESS_MODULE, value);
     }
+    let module = route
+        .strip_prefix("/v1/")
+        .and_then(|rest| rest.split('/').next())
+        .unwrap_or_default()
+        .to_owned();
+    let status = response.status().as_u16();
     span.record("route", route.as_str());
-    span.record(
-        "module",
-        route
-            .strip_prefix("/v1/")
-            .and_then(|rest| rest.split('/').next())
-            .unwrap_or_default(),
-    );
-    span.record("status", response.status().as_u16());
+    span.record("module", module.as_str());
+    span.record("status", status);
     #[cfg(not(target_arch = "wasm32"))]
     {
         let duration_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
         span.record("duration_ms", duration_ms);
     }
+    response.extensions_mut().insert(RequestSummary {
+        request_id,
+        method,
+        route,
+        module,
+        status,
+        ip_hash,
+        ua_family,
+    });
     response
 }
 
