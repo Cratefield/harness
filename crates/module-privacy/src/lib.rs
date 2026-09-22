@@ -14,7 +14,7 @@
 //! let module = Privacy::new();
 //! ```
 //!
-//! **Two routes, both read-only.**
+//! **Four routes: two read, two erase.**
 //!
 //! - `GET /v1/privacy/manifest` — the table a privacy page publishes: every
 //!   declaration, its kind, what erasure would do to it, and the sentence the
@@ -22,12 +22,18 @@
 //!   describes the deployment, not a person.
 //! - `GET /v1/privacy/export?subject=<id>` — every row every module holds for
 //!   one subject. Admin-guarded, because it returns somebody's data.
+//! - `POST /v1/privacy/erase` — the preview: per table, the action erasure
+//!   takes (`erase`, `anonymise` or `retain`) and the rows it matches, plus a
+//!   signed confirmation token that lives 15 minutes. Writes nothing.
+//!   Admin-guarded.
+//! - `POST /v1/privacy/erase/confirm` — carries out the erasure the token
+//!   names, in one atomic batch, then re-counts every table whose action is
+//!   `erase` and fails if any rows remain. The subject comes from the token,
+//!   never the body. Admin-guarded.
 //!
-//! Erasure is deliberately not here yet. It is the destructive half and it
-//! wants its own review, its own two-step confirmation and its own receipt;
-//! shipping the reading half first means a venture can answer "what do you have
-//! about me" before it can answer "remove it", which is the order those two
-//! questions usually arrive in anyway.
+//! Erasure is two steps because it cannot be undone and one HTTP call is easy
+//! to send by mistake: the preview is the moment an operator reads what would
+//! go, and what would be kept, before anything does.
 //!
 //! **The manifest is the point.** A privacy page written beside the schema
 //! drifts from it the first time a migration lands and nobody remembers the
@@ -52,7 +58,7 @@ mod handlers;
 use cratefield_core::{ConfigError, Migrations, Module, ModuleContext, Port};
 use std::sync::Arc;
 
-/// Subject access over whatever the venture composed.
+/// Subject access and erasure over whatever the venture composed.
 #[derive(Clone, Debug, Default)]
 pub struct Privacy {
     _private: (),
@@ -76,7 +82,8 @@ impl Module for Privacy {
         env!("CARGO_PKG_VERSION")
     }
 
-    /// The database it reads is other modules' tables; it owns none itself.
+    /// The database it reads and erases is other modules' tables; it owns
+    /// none itself.
     /// `Signer` is required, not optional: without it there is no
     /// confirmation token, and erasure would have to be a single call.
     fn requires(&self) -> &'static [Port] {
@@ -85,8 +92,8 @@ impl Module for Privacy {
 
     /// No tables. A module that owned one would have to declare its own
     /// personal data, and a privacy module keeping records about the people who
-    /// asked what it keeps is a joke that writes itself. Erasure will need a
-    /// receipts table and will have to answer that question honestly then.
+    /// asked what it keeps is a joke that writes itself. Erasure keeps none
+    /// either: its receipt is the confirm response, not a stored record.
     fn tables(&self) -> &'static [&'static str] {
         &[]
     }

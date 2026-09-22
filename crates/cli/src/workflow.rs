@@ -754,8 +754,8 @@ fn diff_config(
 ///   moved since the recorded deployment;
 /// - a production venture without `--i-am-deploying-to-production` —
 ///   the second consent, deliberately unlike the first;
-/// - a plan that removes modules (their data leaves the venture)
-///   without that same flag.
+/// - a plan that removes modules without `--i-am-removing-modules`, a
+///   consent separate from the production one.
 ///
 /// Writing the composition itself — compiling, standing up the Worker,
 /// applying migrations — stays with the needs-human steps `fz build`

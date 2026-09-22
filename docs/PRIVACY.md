@@ -78,13 +78,18 @@ One row per `(address, product)` pair and the moment the last mail went out,
 which is what enforces one mail per address per window. **The address is
 inside the primary key** rather than in a column of its own, so
 `… WHERE <column> = ?` cannot reach it and an erasure request does not: the
-table is declared `PersonalDataSet::none` with that stated as its published
-reason. It is the shape issue #266 describes for `Outbox`, with one
-difference worth knowing — a cooldown row is renewed rather than expired, so
-unlike a queued job it is not gone within the hour.
+table is declared `PersonalDataSet::unreachable`, so
+`GET /v1/privacy/manifest` lists it under `unreachable`, with what it holds
+and why erasure cannot match it, rather than under `not_personal`. It is the
+shape issue #266 describes for `Outbox`, with one difference worth knowing —
+a cooldown row is renewed on every later mail rather than written once, so
+it lasts as long as the address keeps being mailed, not one window.
 
-Retention: none. The row is written on the first mail and updated on every
-later one; only a failed send releases it.
+Retention: the row is written on the first mail and updated on every later
+one. The module's scheduled handler deletes it once `last_sent_at` is more
+than two hours old (twice the one-hour send window), so it goes on the first
+scheduled run after two hours without a mail; a failed send releases it at
+once.
 
 ### `telemetry_events` (module-telemetry)
 

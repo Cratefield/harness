@@ -91,7 +91,7 @@ site can't generate a surprise bandwidth bill.
 | :--- | :--- | :--- |
 | Ventures | 1 | several |
 | Domain | `you.cratefield.app` subdomain | custom domain (Cloudflare for SaaS) |
-| Modules | core + curated (signups, waitlist, CMS) | full catalog |
+| Modules | core + every curated module | full catalog |
 | Requests | ~100k/mo, throttled not billed | high, then metered |
 | Database | ~100 MB D1, **always on** | up to 10 GB/db |
 | Email | ~100/mo shared domain | bring-your-own key, higher cap |

@@ -49,9 +49,9 @@ typesafe = ["dep:cratefield-adapter-typesafe"]
 classifier-llm = ["dep:cratefield-adapter-classifier-llm"]
 
 # The push adapters' provider tokens (ES256 for APNs and VAPID, RS256 for
-# Google service accounts). Pulled in by `apns` and by `fcm` already; a
-# feature of its own for a venture that mints a VAPID token without either
-# adapter.
+# Google service accounts). Pulled in by `apns`, `fcm` and `webpush`
+# already; a feature of its own for a venture that mints a provider token
+# without any of those adapters.
 push-auth = ["dep:cratefield-push-auth"]
 
 # The runtime push wiring (issue #191): `build_push` and the one table of

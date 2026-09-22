@@ -482,4 +482,30 @@ mod tests {
         assert!(!body.contains("beta"), "{body}");
         assert!(body.contains("No ventures yet"), "{body}");
     }
+
+    #[test]
+    fn the_free_tier_names_every_curated_module_or_none_of_them() {
+        let modules = TIERS
+            .iter()
+            .find(|line| line.dimension == "Modules")
+            .expect("the tier table has a Modules row");
+        let free = modules.free.to_lowercase();
+        let curated = cratefield_catalog::curated().modules;
+        // A module counts as named when its display name or its slug
+        // appears in the copy, the way a reader would spot it.
+        let named = curated
+            .iter()
+            .filter(|m| {
+                free.contains(&m.name.to_lowercase()) || free.contains(&m.slug.to_lowercase())
+            })
+            .count();
+        assert!(
+            named == 0 || named == curated.len(),
+            "the free tier's Modules copy {:?} names {named} of {} curated modules: \
+             a partial list goes stale the moment a curated module is added (#427), \
+             so name them all or none",
+            modules.free,
+            curated.len()
+        );
+    }
 }
