@@ -258,7 +258,11 @@ Progress is visible in the [milestones](https://github.com/Cratefield/harness/mi
 
 One structured span per request carries `request_id`, `method`, `route`
 (the matched path), `module`, `status`, `duration_ms`, `ip_hash` and
-`ua_family` — never an email address. Workers Logs is enabled in the
+`ua_family` — never an email address. Natively those fields are recorded
+on the span; on Cloudflare, where no tracing dispatcher runs, the runtime
+writes the same fields as one JSON line per request to Workers Logs.
+`duration_ms` is native-only — on Workers the platform's own invocation
+log carries the timing. Workers Logs is enabled in the
 checked-in `wrangler.toml` files (`[observability] enabled = true` in
 `ventures/cratefield-waitlist/wrangler.toml` and
 `examples/venture/wrangler.toml`); every response also echoes `x-request-id`. To pull one request's trail out of

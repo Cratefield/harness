@@ -14,6 +14,7 @@ use std::sync::{Arc, Mutex};
 
 use axum::http::{HeaderValue, Method, Request, StatusCode, header};
 use common::*;
+use cratefield_core::{RequestSummary, X_REQUEST_ID};
 use tracing::span::{Attributes, Id, Record};
 use tracing::{Event, Metadata, Subscriber};
 
@@ -189,4 +190,40 @@ fn request_span_shape_snapshot() {
         .collect();
     shape.sort();
     insta::assert_snapshot!(shape.join("\n"));
+}
+
+/// The same fields ride the response as data (issue #476): Cloudflare runs
+/// no tracing dispatcher, so the runtime logs this instead of the span.
+#[test]
+fn response_carries_the_request_summary() {
+    let harness = harness_with_sample();
+    let router = harness.router(ports_with(None));
+    let request = Request::builder()
+        .method(Method::GET)
+        .uri("/v1/sample/hello")
+        .header("cf-connecting-ip", HeaderValue::from_static("203.0.113.9"))
+        .header(
+            header::USER_AGENT,
+            HeaderValue::from_static("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)"),
+        )
+        .body(axum::body::Body::empty())
+        .expect("request");
+    let response =
+        pollster::block_on(tower::ServiceExt::oneshot(router, request)).expect("router answers");
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let summary = response
+        .extensions()
+        .get::<RequestSummary>()
+        .expect("summary on the response");
+    assert_eq!(summary.method, "GET");
+    assert_eq!(summary.route, "/v1/sample/hello", "matched path, not raw");
+    assert_eq!(summary.module, "sample");
+    assert_eq!(summary.status, 200);
+    assert_is_hash(&summary.ip_hash);
+    assert_eq!(summary.ua_family, "mozilla");
+    assert_eq!(
+        response.headers()[X_REQUEST_ID].to_str().expect("ascii"),
+        summary.request_id
+    );
 }
