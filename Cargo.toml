@@ -101,6 +101,11 @@ cratefield-testing = { path = "crates/testing", version = "0.2" }
 # The control plane's shared page chrome (cratefield.com's look, one copy).
 cratefield-chrome = { path = "crates/control-plane-chrome", version = "0.1.0" }
 cratefield-cli = { path = "crates/cli", version = "0.2" }
+# Declared tables (issue #153): the schema type, its DDL and row validation.
+# Here rather than by bare path in its dependents for the reason
+# `cratefield-auth-client` is: the manifest and the CLI are published, and
+# `cargo publish` refuses a dependency without a version.
+cratefield-tables = { path = "crates/tables", version = "0.1.0" }
 # The venture manifest + deterministic composition generator (issue #138).
 # Depends only on serde/serde_json so both engines can consume it: the
 # native compile engine (fz build) and, later, the wasm compose engine.
