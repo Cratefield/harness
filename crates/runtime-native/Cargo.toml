@@ -83,6 +83,8 @@ tracing-subscriber = { version = "0.3.23", default-features = false, features = 
 
 [dev-dependencies]
 cratefield-adapter-sqlite = { path = "../adapter-sqlite" }
+# `full_fake_ports`, for proving `clone_ports` carries every port.
+cratefield-testing = { path = "../testing" }
 tokio = { workspace = true, features = ["test-util"] }
 serde_json = { workspace = true }
 http = { workspace = true }

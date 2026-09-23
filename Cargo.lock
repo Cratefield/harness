@@ -1605,6 +1605,7 @@ dependencies = [
  "cratefield-auth-client",
  "cratefield-core",
  "cratefield-push-wiring",
+ "cratefield-testing",
  "croner",
  "futures-core",
  "http",

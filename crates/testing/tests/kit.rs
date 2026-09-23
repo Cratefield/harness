@@ -5,7 +5,7 @@ use cratefield_core::{
 };
 use cratefield_testing::{
     FakeCaptcha, FakeDefer, FakeHttpClient, FakeMailer, FakeRateLimiter, MailerMode,
-    MemoryKeyValue, TestHarness, assert_wasm_safe_deps, conformance, request,
+    MemoryKeyValue, TestHarness, assert_wasm_safe_deps, conformance, full_fake_ports, request,
 };
 use std::sync::Arc;
 use std::time::Duration;
@@ -233,6 +233,57 @@ impl Module for TrackerModule {
 #[test]
 fn tracker_module_passes_conformance() {
     conformance(Box::new(TrackerModule));
+}
+
+#[test]
+fn full_fake_ports_wires_every_port() {
+    // Walks `Port::ALL`, so a variant added to the enum and not faked here
+    // fails this rather than slipping past check 4, as `Auth` did (#450).
+    let ports = full_fake_ports();
+    for port in Port::ALL {
+        assert!(
+            ports.has(*port),
+            "full_fake_ports does not wire {}",
+            port.name()
+        );
+    }
+}
+
+/// The issue #450 fixture: a module that declares `Auth` and nothing else.
+/// Check 4 must see the fake verifier through its view.
+pub struct AuthModule;
+
+impl Module for AuthModule {
+    fn name(&self) -> &'static str {
+        "authed"
+    }
+    fn version(&self) -> &'static str {
+        env!("CARGO_PKG_VERSION")
+    }
+    fn requires(&self) -> &'static [Port] {
+        &[Port::Auth]
+    }
+    fn migrations(&self) -> Migrations {
+        Migrations::default()
+    }
+    fn validate_config(&self, _cfg: &dyn Config) -> Result<(), ConfigError> {
+        Ok(())
+    }
+    fn router(&self, _ctx: ModuleContext) -> axum::Router {
+        axum::Router::new()
+    }
+}
+
+#[test]
+fn auth_module_passes_conformance() {
+    conformance(Box::new(AuthModule));
+}
+
+#[test]
+fn auth_is_visible_only_to_a_module_that_declares_it() {
+    let ports = full_fake_ports();
+    assert!(ports.view_for(&AuthModule).auth.is_some());
+    assert!(ports.view_for(&TrackerModule).auth.is_none());
 }
 
 #[test]

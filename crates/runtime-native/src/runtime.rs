@@ -499,13 +499,15 @@ impl Runtime for Native {
     }
 }
 
-/// Snapshots a [`Ports`] bundle by cloning every `Arc` (core's `Ports`
-/// is not `Clone`; every field is a shared handle, so this is the whole
-/// job). Used to give the cron scheduler the same adapters the HTTP
-/// router serves with.
+/// Snapshots a [`Ports`] bundle by cloning the `Arc` of every [`Port`]
+/// and the config (core's `Ports` is not `Clone`; every field is a shared
+/// handle, so this is the whole job). `dispatcher` and `tenants` are not
+/// ports and are left `None`. Used to give the cron scheduler the same
+/// adapters the HTTP router serves with.
 pub(crate) fn clone_ports(ports: &Ports) -> Ports {
     let mut snapshot = Ports::with_config(Arc::clone(&ports.config));
     snapshot.db.clone_from(&ports.db);
+    snapshot.auth.clone_from(&ports.auth);
     snapshot.mailer.clone_from(&ports.mailer);
     snapshot.captcha.clone_from(&ports.captcha);
     snapshot.rate_limiter.clone_from(&ports.rate_limiter);
@@ -523,4 +525,25 @@ pub(crate) fn clone_ports(ports: &Ports) -> Ports {
     snapshot.id_gen.clone_from(&ports.id_gen);
     snapshot.defer.clone_from(&ports.defer);
     snapshot
+}
+
+#[cfg(test)]
+mod tests {
+    use super::clone_ports;
+    use cratefield_core::Port;
+
+    #[test]
+    fn clone_ports_carries_every_port() {
+        // Walks `Port::ALL`, so a port added to the enum and not copied
+        // here fails this — the way `auth` was dropped (issue #449).
+        let source = cratefield_testing::full_fake_ports();
+        assert!(
+            Port::ALL.iter().all(|port| source.has(*port)),
+            "the source bundle must wire every port for this to prove anything"
+        );
+        let snapshot = clone_ports(&source);
+        for port in Port::ALL {
+            assert!(snapshot.has(*port), "clone_ports drops {}", port.name());
+        }
+    }
 }
