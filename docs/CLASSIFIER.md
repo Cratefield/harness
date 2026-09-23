@@ -86,3 +86,6 @@ No training and no feedback loop — the port answers questions, it does not
 learn from the answers. No streaming — a decision is one request and one
 answer, like `TextModel`'s completion. And no persistence: if the decision
 matters later, the module writes it down.
+
+Routing between a cheap and an expensive adapter, and what each call costs, is
+built on the port rather than in it: see [CLASSIFIER-ROUTING.md](CLASSIFIER-ROUTING.md).
