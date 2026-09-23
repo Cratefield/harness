@@ -1,8 +1,9 @@
 //! `cratefield` is the harness as one dependency: a facade that re-exports
-//! `cratefield-core` at the root and every other crate behind a feature of
-//! its own. It contains no code, so `cratefield::Harness` and
-//! `cratefield_core::Harness` are one type and a venture can move between
-//! the facade and the parts freely.
+//! `cratefield-core` at the root and the other library crates behind
+//! features of their own (all but the Workers-only
+//! `cratefield-adapter-workers-ai`). It contains no code, so
+//! `cratefield::Harness` and `cratefield_core::Harness` are one type and a
+//! venture can move between the facade and the parts freely.
 //!
 //! There is no default feature: a runtime is a decision, not a default.
 

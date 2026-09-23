@@ -237,9 +237,10 @@ impl Module for Waitlist {
     /// access request the one operation that writes an address into those
     /// logs.
     ///
-    /// **Why the other two are `none`.** `waitlist_position_lock` is one row
-    /// per product and genuinely names nobody. `waitlist_send_cooldown` is
-    /// the harder case and its reason says so plainly: its primary key is the
+    /// **Why the other two have no subject column.** `waitlist_position_lock`
+    /// is one row per product, genuinely names nobody, and is `none`.
+    /// `waitlist_send_cooldown` is the harder case, declared `unreachable`,
+    /// and its reason says so plainly: its primary key is the
     /// address and product the mail throttle counts against, so the address
     /// is inside a key rather than in a column of its own, and
     /// `… WHERE <column> = ?` cannot reach it. That is the same shape issue
