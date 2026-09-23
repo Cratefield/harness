@@ -92,13 +92,25 @@ impl Store {
 /// that is not this account's is a 404, exactly as the venture screen
 /// answers it: the store list is scoped the same way the venture list
 /// is, by query.
+///
+/// The global store is different in kind: it is not account-scoped and
+/// cannot be — it holds the control plane's own credentials, not any one
+/// account's — so a session is the wrong key for it, exactly as it is for
+/// the whole-database browser (`data.rs`) and the DB export
+/// (`backups.rs`). It is gated behind `require_admin`, the `ADMIN_TOKEN`
+/// bearer, a strictly higher bar than any operator session. A signed-in
+/// operator without that bearer gets the same 401/403 those screens do.
 #[allow(clippy::result_large_err)]
 async fn resolve_store(
     ctx: &ModuleContext,
+    headers: &HeaderMap,
     account: &cratefield_accounts::Account,
     slug: &str,
 ) -> Result<Store, Response> {
     if slug == "global" {
+        if let Err(problem) = cratefield_core::require_admin(&*ctx.config, headers) {
+            return Err(problem.into_response());
+        }
         return Ok(Store::Global);
     }
     let db = ctx
@@ -857,7 +869,16 @@ pub(crate) async fn stores(
     // `list` is an audited access — the page reads each store through
     // the real API, attributed to the operator, exactly as an operator
     // clicking through would be.
-    let mut all: Vec<Store> = vec![Store::Global];
+    //
+    // The global store belongs to the control plane, not to any account,
+    // and is gated behind the ADMIN_TOKEN bearer wherever it is touched
+    // (see `resolve_store`). Its row is listed only for an admin, so a
+    // plain operator's store list holds their tenant stores alone and
+    // never advertises a store they cannot open.
+    let mut all: Vec<Store> = Vec::new();
+    if cratefield_core::require_admin(&*ctx.config, &headers).is_ok() {
+        all.push(Store::Global);
+    }
     for venture in ventures {
         all.push(Store::Tenant { venture });
     }
@@ -994,11 +1015,12 @@ struct StoreDetail {
 #[allow(clippy::result_large_err)]
 async fn load_detail(
     state: &Arc<DashboardState>,
+    headers: &HeaderMap,
     account: &cratefield_accounts::Account,
     slug: &str,
 ) -> Result<StoreDetail, Response> {
     let ctx = &state.ctx;
-    let store = resolve_store(ctx, account, slug).await?;
+    let store = resolve_store(ctx, headers, account, slug).await?;
     let Some(db) = ctx.ports.db.clone() else {
         return Err(internal("db port unavailable"));
     };
@@ -1074,7 +1096,7 @@ pub(crate) async fn store_detail(
         Ok(pair) => pair,
         Err(response) => return response,
     };
-    let detail = match load_detail(&state, &account, &slug).await {
+    let detail = match load_detail(&state, &headers, &account, &slug).await {
         Ok(detail) => detail,
         Err(response) => return response,
     };
@@ -1335,7 +1357,7 @@ pub(crate) async fn put_secret(
         Ok(pair) => pair,
         Err(response) => return response,
     };
-    let store = match resolve_store(ctx, &account, &slug).await {
+    let store = match resolve_store(ctx, &headers, &account, &slug).await {
         Ok(store) => store,
         Err(response) => return response,
     };
@@ -1396,7 +1418,7 @@ pub(crate) async fn put_secret(
         version = version,
         first = first,
     );
-    match load_detail(&state, &account, &slug).await {
+    match load_detail(&state, &headers, &account, &slug).await {
         Ok(detail) => Html(render_detail(&session.account_id, &detail, &banner)).into_response(),
         // The put succeeded; only the re-read failed. Say that rather
         // than letting a 500 read as "it did not work".
@@ -1431,7 +1453,7 @@ pub(crate) async fn delete_secret(
         Ok(pair) => pair,
         Err(response) => return response,
     };
-    let store = match resolve_store(ctx, &account, &slug).await {
+    let store = match resolve_store(ctx, &headers, &account, &slug).await {
         Ok(store) => store,
         Err(response) => return response,
     };
@@ -1501,7 +1523,7 @@ pub(crate) async fn delete_secret(
          it.</p>",
         name = escape(&name),
     );
-    match load_detail(&state, &account, &slug).await {
+    match load_detail(&state, &headers, &account, &slug).await {
         Ok(detail) => Html(render_detail(&session.account_id, &detail, &banner)).into_response(),
         Err(_) => (
             StatusCode::OK,
@@ -1593,7 +1615,7 @@ async fn key_action(
         Ok(pair) => pair,
         Err(response) => return response,
     };
-    let store = match resolve_store(ctx, &account, &slug).await {
+    let store = match resolve_store(ctx, &headers, &account, &slug).await {
         Ok(store) => store,
         Err(response) => return response,
     };
@@ -1779,7 +1801,7 @@ pub(crate) async fn set_policy(
         Ok(pair) => pair,
         Err(response) => return response,
     };
-    let store = match resolve_store(ctx, &account, &slug).await {
+    let store = match resolve_store(ctx, &headers, &account, &slug).await {
         Ok(store) => store,
         Err(response) => return response,
     };
@@ -1829,7 +1851,7 @@ pub(crate) async fn set_policy(
          policy reports age, and replacing a credential stays with whoever holds the \
          next one.</p>",
     );
-    match load_detail(&state, &account, &slug).await {
+    match load_detail(&state, &headers, &account, &slug).await {
         Ok(detail) => Html(render_detail(&session.account_id, &detail, &banner)).into_response(),
         Err(_) => (
             StatusCode::OK,
@@ -2083,6 +2105,13 @@ mod tests {
 
     const EMAIL: &str = "op@cratefield.com";
     const NOW: u64 = 1_800_000_000;
+    /// The admin token the harness is configured with. The global store
+    /// is the control plane's own credential store, gated behind
+    /// `require_admin` end to end (see `resolve_store`), so the
+    /// functional tests below act as the admin the routes now require —
+    /// `send` carries this bearer by default. The gate itself is proven
+    /// by the tests that use [`send_plain`], which omit it.
+    const ADMIN: &str = "test-admin-token";
     /// A sentinel no honest page would produce: every "the value does
     /// not appear" assertion below is paired, in the same test, with the
     /// name and version that WOULD have carried it.
@@ -2094,6 +2123,7 @@ mod tests {
         body: String,
     }
 
+    /// A request carrying the admin bearer the global store requires.
     async fn send(
         kit: &TestHarness,
         method: Method,
@@ -2101,9 +2131,35 @@ mod tests {
         cookie: Option<&str>,
         form: Option<&str>,
     ) -> Reply {
+        send_inner(kit, method, uri, cookie, form, true).await
+    }
+
+    /// A request with a session cookie but no admin bearer — a plain
+    /// signed-in operator, the actor the global-store gate must refuse.
+    async fn send_plain(
+        kit: &TestHarness,
+        method: Method,
+        uri: &str,
+        cookie: Option<&str>,
+        form: Option<&str>,
+    ) -> Reply {
+        send_inner(kit, method, uri, cookie, form, false).await
+    }
+
+    async fn send_inner(
+        kit: &TestHarness,
+        method: Method,
+        uri: &str,
+        cookie: Option<&str>,
+        form: Option<&str>,
+        admin: bool,
+    ) -> Reply {
         let mut builder = HttpRequest::builder().method(method).uri(uri);
         if let Some(cookie) = cookie {
             builder = builder.header(http::header::COOKIE, cookie);
+        }
+        if admin {
+            builder = builder.header(http::header::AUTHORIZATION, format!("Bearer {ADMIN}"));
         }
         let body = match form {
             Some(form) => {
@@ -2160,7 +2216,15 @@ mod tests {
     }
 
     async fn seeded(kms: Option<Arc<dyn cratefield_kms::Kms>>) -> TestHarness {
-        let kit = TestHarness::new(modules(kms));
+        // The global store is admin-gated (see `resolve_store`), so the
+        // harness carries an `ADMIN_TOKEN` for the bearer `send`
+        // presents — the same shape the backup-export tests configure.
+        let kit = TestHarness::with_ports(modules(kms), |ports| {
+            ports.config = Arc::new(cratefield_core::MapConfig::from_pairs(vec![(
+                "ADMIN_TOKEN",
+                ADMIN,
+            )]));
+        });
         let repo = cratefield_accounts::Repository::new(kit.db.clone());
         repo.account_for_login(EMAIL, "Op", "acc_1", "t0")
             .await
@@ -2210,6 +2274,8 @@ mod tests {
     async fn the_store_list_renders_the_global_store_and_each_venture() {
         let kms = kms();
         let kit = seeded(Some(kms.clone())).await;
+        // `send` presents the admin bearer the global store now requires,
+        // so the admin sees the global row alongside the tenant stores.
         let reply = send(
             &kit,
             Method::GET,
@@ -2219,13 +2285,146 @@ mod tests {
         )
         .await;
         assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
-        assert!(reply.body.contains("global"), "{}", reply.body);
+        assert!(
+            // The global row's reason-for-being, apostrophe HTML-escaped
+            // in the page, so the match avoids it; it is the one place
+            // this phrase appears, unlike "global", which is also in the
+            // lede.
+            reply
+                .body
+                .contains("own connection strings and platform keys"),
+            "the admin's list carries the global store row: {}",
+            reply.body
+        );
         assert!(
             reply.body.contains("my-app"),
             "the venture's tenant store is missing: {}",
             reply.body
         );
         assert!(reply.body.contains("Names and versions"), "{}", reply.body);
+    }
+
+    #[pollster::test]
+    async fn the_store_list_hides_the_global_store_from_a_plain_operator() {
+        // The gate in the list mirrors the gate in `resolve_store`: a
+        // signed-in operator without the admin bearer never sees the
+        // global store advertised — only their own tenant stores — so
+        // the screen does not offer a store they cannot open. This is
+        // the behaviour the pre-fix suite got wrong: it rendered the
+        // global row to every session.
+        let kms = kms();
+        let kit = seeded(Some(kms.clone())).await;
+        let reply = send_plain(
+            &kit,
+            Method::GET,
+            &format!("{BASE}/secrets"),
+            Some(&cookie(&kit)),
+            None,
+        )
+        .await;
+        assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
+        assert!(
+            // The global row's reason-for-being (see the admin test);
+            // its absence is how we know the row itself is gone, not
+            // merely the word "global", which the lede also carries.
+            !reply
+                .body
+                .contains("own connection strings and platform keys"),
+            "a plain operator's list must not carry the global store row: {}",
+            reply.body
+        );
+        assert!(
+            reply.body.contains("my-app"),
+            "the operator's own tenant store is still listed: {}",
+            reply.body
+        );
+    }
+
+    #[pollster::test]
+    async fn a_plain_operator_cannot_touch_the_global_store() {
+        // The heart of the fix (issue #514). The global store is the
+        // control plane's own credential store, not any one account's,
+        // so — like the whole-database browser (`data.rs`) and the DB
+        // export (`backups.rs`) — it sits behind the ADMIN_TOKEN bearer,
+        // a strictly higher bar than an operator session. A signed-in
+        // operator with no bearer must be refused on every global route:
+        // read, write, delete, and both key actions. The pre-fix suite
+        // encoded the opposite — that a session alone was enough — which
+        // is exactly the vulnerability.
+        let kms = kms();
+        let kit = seeded(Some(kms.clone())).await;
+        let cookie = cookie(&kit);
+
+        // Each mutating/reading global route, presented with a session
+        // but no admin bearer. `admin_unauthorized` is a 401.
+        let cases: &[(Method, String, Option<String>)] = &[
+            (Method::GET, format!("{BASE}/secrets/global"), None),
+            (
+                Method::POST,
+                format!("{BASE}/secrets/global/put"),
+                Some("name=live/api_key&value=whatever".to_owned()),
+            ),
+            (
+                Method::POST,
+                format!("{BASE}/secrets/global/delete"),
+                Some("name=live/api_key".to_owned()),
+            ),
+            (
+                Method::POST,
+                format!("{BASE}/secrets/global/rotate"),
+                Some("confirm=1".to_owned()),
+            ),
+            (
+                Method::POST,
+                format!("{BASE}/secrets/global/rewrap"),
+                Some("confirm=1".to_owned()),
+            ),
+            (
+                Method::POST,
+                format!("{BASE}/secrets/global/policy"),
+                Some("key_days=30&secret_days=30".to_owned()),
+            ),
+        ];
+        for (method, uri, form) in cases {
+            let refused =
+                send_plain(&kit, method.clone(), uri, Some(&cookie), form.as_deref()).await;
+            assert_eq!(
+                refused.status,
+                StatusCode::UNAUTHORIZED,
+                "a session alone must not reach {uri}: {}",
+                refused.body
+            );
+        }
+
+        // The value never landed: the same read path the tests use to
+        // prove a value round-trips shows the global store untouched.
+        let actor = Actor::new("test").expect("named");
+        assert!(
+            open(&kit, &kms)
+                .get("live/api_key", &actor)
+                .await
+                .expect("read")
+                .is_none(),
+            "no refused write may have reached the global store"
+        );
+
+        // The positive control: the same plain session still opens the
+        // operator's own tenant store, so the refusals above are the
+        // admin gate, not a broken route.
+        let tenant = send_plain(
+            &kit,
+            Method::GET,
+            &format!("{BASE}/secrets/v1"),
+            Some(&cookie),
+            None,
+        )
+        .await;
+        assert_eq!(
+            tenant.status,
+            StatusCode::OK,
+            "the tenant store is session-only and unaffected: {}",
+            tenant.body
+        );
     }
 
     // -- the detail page ------------------------------------------------
@@ -3672,6 +3871,9 @@ mod tests {
             ports.config = Arc::new(MapConfig::from_pairs([
                 ("DASHBOARD_KEY_MAX_AGE_DAYS", "45"),
                 ("DASHBOARD_SECRET_MAX_AGE_DAYS", "200"),
+                // The global store is admin-gated, and `send` presents
+                // the bearer for it; the harness must accept it.
+                ("ADMIN_TOKEN", ADMIN),
             ]));
         });
         let repo = cratefield_accounts::Repository::new(kit.db.clone());
