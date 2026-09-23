@@ -121,6 +121,27 @@ impl Subscriber for SharedSubscriber {
     }
 }
 
+/// Runs `run` with `dispatch` as this thread's default subscriber.
+///
+/// Tests run in parallel, and tracing caches each callsite's interest
+/// globally. While at most one dispatcher is registered, tracing computes
+/// that interest from whichever thread registers the callsite first, so the
+/// sibling test below, which drives the same `request` span with no
+/// subscriber, could cache `never` for it and the capture would come back
+/// empty (issue #526, about one run in three). Keeping a second dispatcher
+/// alive for the whole process makes tracing consult every registered
+/// dispatcher instead, and rebuilding the cache under the scoped default
+/// clears a `never` cached before either existed. The same fix as
+/// `captured` in `crates/adapter-turnstile/tests/turnstile.rs`.
+fn with_capture(dispatch: &tracing::Dispatch, run: impl FnOnce()) {
+    static KEEP_MULTI_DISPATCH: std::sync::OnceLock<tracing::Dispatch> = std::sync::OnceLock::new();
+    KEEP_MULTI_DISPATCH.get_or_init(|| tracing::Dispatch::new(SpanCapturingSubscriber::default()));
+    tracing::dispatcher::with_default(dispatch, || {
+        tracing::callsite::rebuild_interest_cache();
+        run();
+    });
+}
+
 fn assert_is_hash(value: &str) {
     assert_eq!(value.len(), 12, "ip_hash shape: {value}");
     assert!(value.chars().all(|c| c.is_ascii_hexdigit()), "{value}");
@@ -133,7 +154,7 @@ fn request_span_shape_snapshot() {
     let subscriber = SharedSubscriber(Arc::default());
     let dispatch = tracing::dispatcher::Dispatch::new(subscriber.clone());
 
-    tracing::dispatcher::with_default(&dispatch, || {
+    with_capture(&dispatch, || {
         pollster::block_on(async {
             let request = Request::builder()
                 .method(Method::GET)
