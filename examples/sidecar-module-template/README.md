@@ -17,7 +17,7 @@ What is here:
 src/module.rs     the module — one table, one route pair, one cron purge. THE FILE YOU EDIT
 src/harness.rs    the venture identity + wiring; the four values there must match your host Worker
 src/lib.rs        the Worker entry points (fetch, scheduled) — usually never touched
-src/fz_main.rs    the fz bin: migrations collect, doctor
+src/fz_main.rs    the sidecar-fz bin: migrations collect, doctor
 migrations/       the collected migration stream this repo applies itself (see below)
 wrangler.toml     deployment config; every non-obvious line has a why
 tests/            the cratefield-testing conformance kit + route/cron behaviour
