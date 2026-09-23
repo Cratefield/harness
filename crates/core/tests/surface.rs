@@ -25,6 +25,12 @@ struct JoinBody {
     captcha_token: Option<String>,
 }
 
+#[derive(JsonSchema)]
+#[allow(dead_code)]
+struct Exported {
+    emails: Vec<String>,
+}
+
 /// A module with one public form, one signed link and one admin export.
 struct Described {
     bad: bool,
@@ -61,7 +67,8 @@ impl Module for Described {
             .action(
                 Action::get("export", "/admin/export.csv")
                     .audience(Audience::Admin)
-                    .outcome(Outcome::Json),
+                    .outcome(Outcome::Json)
+                    .output::<Exported>(),
             )
             .view(View::form("join"))
             .view(View::table("export", vec![Column::new("email", "Email")]));
@@ -132,6 +139,8 @@ async fn public_surface_lists_public_actions_only() {
         join["input"]["properties"]["captchaToken"]["x-cf-hidden"],
         true
     );
+    // An action that declares no output publishes no key for it.
+    assert!(join.get("output").is_none(), "{join}");
 }
 
 #[pollster::test]
@@ -155,6 +164,9 @@ async fn admin_bearer_reveals_admin_actions_with_a_different_etag() {
     let module = &body["modules"][0];
     assert_eq!(module["actions"].as_array().unwrap().len(), 3);
     assert_eq!(module["actions"][2]["audience"], "admin");
+    let output = &module["actions"][2]["output"];
+    assert_eq!(output["type"], "object");
+    assert_eq!(output["properties"]["emails"]["type"], "array");
     assert_eq!(module["views"].as_array().unwrap().len(), 2);
     assert_eq!(module["views"][1]["kind"], "table");
 

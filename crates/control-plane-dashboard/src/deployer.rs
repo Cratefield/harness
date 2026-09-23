@@ -38,10 +38,11 @@ pub(crate) const TOOLCHAIN: &str = "rustc 1.98.1";
 /// A [`PinSource`] over the control plane's own copy of the catalog: the
 /// curated set, resolved the way the screens resolve a selection, with the
 /// `+`-joined module-set content key split back into slugs. The two catalog
-/// crates are a deliberate duplicate (issue #5) — `cratefield-catalog` is
-/// what the screens speak, `cratefield-manifest` is what the linker's pins
-/// are typed as — and this field-for-field mapping is the seam between
-/// them; nothing else crosses it.
+/// crates' types and resolvers are a deliberate duplicate (issue #5) —
+/// `cratefield-catalog` is what the screens speak, `cratefield-manifest` is
+/// what the linker's pins are typed as — and this field-for-field mapping
+/// is the seam between them. The module list and pins themselves are not
+/// duplicated: `curated()` takes them from `cratefield_manifest::builtin()`.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct CuratedPins;
 
@@ -98,9 +99,10 @@ mod tests {
     /// cannot be separated from the file it reads.
     const RUST_TOOLCHAIN: &str = include_str!("../../../rust-toolchain.toml");
 
-    /// The seam between the two catalog crates (issue #5's deliberate
-    /// duplicate) carries every module of a curated set across intact —
-    /// slug, version and digest, field for field — and every digest it
+    /// The seam between the two catalog crates' types (issue #5's
+    /// deliberate duplicate; the module list itself is `builtin()`'s)
+    /// carries every module of a curated set across intact — slug,
+    /// version and digest, field for field — and every digest it
     /// hands the linker is the all-zero placeholder, which is exactly why
     /// the adapter refuses to compose and falls back to the build path.
     /// The reference is resolved from the content key, because the key is

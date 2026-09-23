@@ -82,8 +82,7 @@ pub fn require_same_origin(headers: &HeaderMap, uri: &Uri) -> Result<(), Problem
                 ));
             }
         };
-        // Case is not significant in the value (the house precedent is
-        // `looks_like_a_click` in auth-magic-link); anything that is not
+        // Case is not significant in the value; anything that is not
         // `same-origin` or `none` after that is refused, `same-site`
         // included.
         match site.as_str() {

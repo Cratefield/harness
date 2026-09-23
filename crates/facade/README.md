@@ -33,7 +33,8 @@ rewriting anything.
 
 `cratefield-core` is re-exported at the root, so the builder, the `Module`
 trait and the port traits are simply `cratefield::*`. Everything else is a
-feature, and each feature names exactly one crate:
+feature. Each feature enables one crate; `push-wiring` and `notifications`
+also switch on the extra features noted in their rows:
 
 | Feature | Crate | Reached as | What it is |
 |---|---|---|---|
@@ -43,19 +44,30 @@ feature, and each feature names exactly one crate:
 | `postgres` | `cratefield-adapter-postgres` | `cratefield::postgres` | `Database` over sqlx |
 | `resend` | `cratefield-adapter-resend` | `cratefield::resend` | `Mailer` over the Resend API |
 | `turnstile` | `cratefield-adapter-turnstile` | `cratefield::turnstile` | `Captcha` over Cloudflare Turnstile |
+| `anthropic` | `cratefield-adapter-anthropic` | `cratefield::anthropic` | `TextModel` over the Anthropic Messages API, via the `HttpClient` port |
 | `stripe` | `cratefield-adapter-stripe` | `cratefield::stripe` | `Payments` over the Stripe API |
 | `apns` | `cratefield-adapter-apns` | `cratefield::apns` | `Push` over Apple Push Notification service |
+| `fcm` | `cratefield-adapter-fcm` | `cratefield::fcm` | `Push` over Firebase Cloud Messaging (HTTP v1) |
 | `webpush` | `cratefield-adapter-webpush` | `cratefield::webpush` | `Push` over Web Push (RFC 8030), browsers and UnifiedPush |
-| `push-auth` | `cratefield-push-auth` | `cratefield::push_auth` | Provider-JWT signing for the push adapters (ES256 for APNs and VAPID, RS256 for Google service accounts) with a keyed token cache. Pulled in by `apns` and `webpush` already; a feature of its own for using it directly |
+| `push-auth` | `cratefield-push-auth` | `cratefield::push_auth` | Provider-JWT signing for the push adapters (ES256 for APNs and VAPID, RS256 for Google service accounts) with a keyed token cache. Pulled in by `apns`, `fcm` and `webpush` already; a feature of its own for using it directly |
+| `push-wiring` | `cratefield-push-wiring` | `cratefield::push_wiring` | Assembles the `Push` port from the environment, with the one table of variable names that `serve()`, `fz push` and `fz doctor` share. Pulls all three push adapters, and also turns on `push` in whichever runtime is enabled, for `push_from_env()` |
+| `github-issues` | `cratefield-adapter-github-issues` | `cratefield::github_issues` | `Tracker` over the GitHub Issues REST API |
+| `webhook-tracker` | `cratefield-adapter-webhook-tracker` | `cratefield::webhook_tracker` | `Tracker` over an HMAC-signed webhook the tenant configures |
 | `typesafe` | `cratefield-adapter-typesafe` | `cratefield::typesafe` | `Classifier` over the operator's own `TypeSafe` API key, via the `HttpClient` port |
 | `classifier-llm` | `cratefield-adapter-classifier-llm` | `cratefield::classifier_llm` | `Classifier` over the `TextModel` port, JSON-schema output, no new vendor |
 | `ui` | `cratefield-ui` | `cratefield::ui` | Renders the module surface as HTML |
+| `i18n` | `cratefield-i18n` | `cratefield::i18n` | Server-side localisation: Fluent catalogs, BCP 47 negotiation and text direction. Pulled in by `notifications` already; a feature of its own for localising a venture's own strings |
 | `secrets` | `cratefield-secrets` | `cratefield::secrets` | Envelope-encrypted secrets |
 | `kms` | `cratefield-kms` | `cratefield::kms` | The KMS port and its local-file provider |
+| `manifest` | `cratefield-manifest` | `cratefield::manifest` | The venture manifest and its composition generator; `fz` reads it, a running venture does not need it |
+| `tables-api` | `cratefield-tables-api` | `cratefield::tables_api` | The HTTP API over a venture's declared tables; `fz build` turns it on for a manifest with a `[tables]` section |
+| `auth-client` | `cratefield-auth-client` | `cratefield::auth_client` | Verifies auth-service tokens: JWKS fetch and cache, ES256 verification and an axum extractor |
 | `email-signup` | `cratefield-module-email-signup` | `cratefield::email_signup` | Double opt-in email signup |
+| `privacy` | `cratefield-module-privacy` | `cratefield::privacy` | Subject access and erasure, over what every other module declares it holds |
 | `waitlist` | `cratefield-module-waitlist` | `cratefield::waitlist` | Per-product waitlist |
 | `cms` | `cratefield-module-cms` | `cratefield::cms` | Small content store |
 | `changelog` | `cratefield-module-changelog` | `cratefield::changelog` | A project's releases, mirrored into your own database |
+| `notifications` | `cratefield-module-notifications` | `cratefield::notifications` | Push subscriptions, per-account per-category preferences, fan-out, prune and retry. Also turns on `i18n` |
 | `telemetry` | `cratefield-module-telemetry` | `cratefield::telemetry` | Aggregate usage counts from clients, consent-first, in the venture's own database |
 | `testing` | `cratefield-testing` | `cratefield::testing` | The conformance kit; belongs under `[dev-dependencies]` |
 

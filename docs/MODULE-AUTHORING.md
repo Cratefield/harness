@@ -871,7 +871,8 @@ so `Module::surface` lists the **actions** (routes, relative to
 action is derived from the handler's own body type, so it cannot drift from
 the route: derive `JsonSchema` next to `Deserialize` and put the UI hints on
 the fields as `x-cf-*` keywords (the full list is on
-`cratefield_core::HINT_KEYWORDS`).
+`cratefield_core::HINT_KEYWORDS`). An action with a `Json` outcome may also
+publish the shape it answers with, `.output::<Reply>()`.
 
 ```rust
 #[derive(Deserialize, JsonSchema)]
@@ -893,11 +894,12 @@ and in the trait impl, `fn surface(&self) -> Surface { handlers::surface() }`.
 
 Rules `Harness::build` enforces: action names are kebab-case and unique,
 paths start with `/`, an `Admin` action lives under `/admin/` (and nothing
-else does), an input schema describes an object, and a view names an action
-the module declares. Mark fields the visitor must never type
-(`captchaToken`, a referral code, a locale) with `x-cf-hidden`; a hint that
-only exists at runtime (a `select` over configured products) is set after
-derivation with `cratefield_core::hint_field`, as the waitlist does.
+else does), an input or output schema describes an object, only a `Json`
+action declares an output, and a view names an action the module declares.
+Mark fields the visitor must never type (`captchaToken`, a referral code, a
+locale) with `x-cf-hidden`; a hint that only exists at runtime (a `select`
+over configured products) is set after derivation with
+`cratefield_core::hint_field`, as the waitlist does.
 
 `GET /__surface` on the venture then lists the module. Admin actions and the
 views over them appear only when the request carries the admin bearer.

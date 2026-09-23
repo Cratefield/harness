@@ -84,11 +84,22 @@ impl Module for WellKnownProbe {
 /// router; reachable at `/.well-known{WELL_KNOWN_PROBE_PATH}`.
 const WELL_KNOWN_PROBE_PATH: &str = "/conformance-probe";
 
-/// A `Ports` with every port faked, for the visibility check: declared
-/// ports must survive `view_for`, undeclared ones must be hidden.
-fn full_fake_ports() -> Ports {
+/// A [`Ports`] bundle with every [`Port`] wired to a fake, for checks that
+/// need a full bundle: conformance's visibility check (declared ports must
+/// survive [`Ports::view_for`], undeclared ones must be hidden), and a
+/// runtime proving it carries every port through a copy of its bundle.
+/// `dispatcher` and `tenants` are not ports and stay `None`.
+///
+/// # Panics
+///
+/// Only if the kit's own fixed signer secret or clock epoch is invalid.
+#[must_use]
+pub fn full_fake_ports() -> Ports {
     let mut ports = Ports::empty();
     ports.db = Some(Arc::new(crate::fakes::EmptyDatabase));
+    ports.auth = Some(Arc::new(crate::fakes::FakeAuth::new(
+        crate::fakes::AuthMode::Anonymous,
+    )));
     ports.mailer = Some(Arc::new(crate::fakes::FakeMailer::new(
         crate::fakes::MailerMode::SendOk,
     )));
@@ -455,29 +466,13 @@ fn check_visibility_and_scope(
     has_well_known: bool,
 ) {
     // 4. undeclared ports are hidden (declared ones stay visible).
+    // Walks `Port::ALL` rather than a list of its own: a hand-written one
+    // had already lost `Port::Auth` (issue #450).
     let view = full_fake_ports().view_for(module);
-    for (port, provided) in [
-        (Port::Db, view.db.is_some()),
-        (Port::Mailer, view.mailer.is_some()),
-        (Port::Captcha, view.captcha.is_some()),
-        (Port::RateLimiter, view.rate_limiter.is_some()),
-        (Port::Signer, view.signer.is_some()),
-        (Port::KeyValue, view.kv.is_some()),
-        (Port::Blob, view.blob.is_some()),
-        (Port::Push, view.push.is_some()),
-        (Port::Payments, view.payments.is_some()),
-        (Port::Tracker, view.tracker.is_some()),
-        (Port::Realtime, view.realtime.is_some()),
-        (Port::TextModel, view.text_model.is_some()),
-        (Port::Classifier, view.classifier.is_some()),
-        (Port::HttpClient, view.http.is_some()),
-        (Port::Clock, view.clock.is_some()),
-        (Port::IdGen, view.id_gen.is_some()),
-        (Port::Defer, view.defer.is_some()),
-    ] {
-        let declared = module.requires().contains(&port) || module.optional().contains(&port);
+    for port in Port::ALL {
+        let declared = module.requires().contains(port) || module.optional().contains(port);
         assert_eq!(
-            provided,
+            view.has(*port),
             declared,
             "{name}: port {} must be visible only when declared",
             port.name()

@@ -25,14 +25,11 @@ Configuration lives in `release-plz.toml` (per-crate versioning,
 conventional-commit changelogs, `publish = false` for `examples/*` and
 the CLI acceptance crate).
 
-`cratefield-tables` is held back only by its `[[package]]` entry in
-`release-plz.toml`; its own manifest carries no `publish = false`. It is
-held until the CRUD layer lands, because its public surface is still
-moving. 0.1.1 is nevertheless on crates.io, and `cratefield-manifest` and
-`cratefield-cli` now depend on it through a path-only dependency, so
-neither of them can be packaged until that dependency gains a version (see
-the note under step 2 below). When it is ready, drop the
-`release-plz.toml` entry and add it to the ordered list in step 2.
+`cratefield-tables` is no longer held back: its first publish (0.1.1) was
+done by hand, and `cratefield-manifest` and `cratefield-cli` depend on it,
+so it is in the ordered list in step 2 below ahead of both. Its trusted
+publisher (step 3) is still to be enabled; until it is, the release run
+cannot publish it over OIDC.
 
 `cratefield-mcp` (issue #160) carries `publish = false` as well: it is
 new, nothing depends on it, and publishing it is the remaining human step
@@ -189,7 +186,8 @@ crate exists**, so the very first release of each crate is manual:
    ```sh
    export CARGO_REGISTRY_TOKEN=...   # the scoped token from step 1
    cargo publish --dry-run -p cratefield-core   # then without --dry-run
-   cargo publish -p cratefield-manifest  # cannot package yet: path-only dep, see tools/package-check.sh
+   cargo publish -p cratefield-tables         # before the manifest and the CLI
+   cargo publish -p cratefield-manifest       # before the CLI and the facade
    cargo publish -p cratefield-i18n           # before module-notifications
    cargo publish -p cratefield-kms
    cargo publish -p cratefield-adapter-anthropic
@@ -225,13 +223,13 @@ crate exists**, so the very first release of each crate is manual:
    cargo publish -p cratefield            # the facade; cannot package yet: path-only dep, see tools/package-check.sh
    ```
 
-   Thirty-five crates, and the order is the dependency order: `--dry-run`
+   Thirty-six crates, and the order is the dependency order: `--dry-run`
    for a crate whose upstream `cratefield-*` dependencies are not on
    crates.io yet resolves against the registry and fails until those are
    published. The `package` CI job (`tools/package-check.sh`) fails if this
    list misses a publishable crate, lists one that is not publishable, or
    puts a crate before one of its `cratefield-*` dependencies, so a new
-   crate has to be added here in a valid position. Five lines cannot run
+   crate has to be added here in a valid position. Four lines cannot run
    yet: each of those crates has a path-only dependency with no version,
    which `cargo package` refuses (`UNPACKAGEABLE` in the script names
    them). An older version of this list put `cratefield-auth-client` after

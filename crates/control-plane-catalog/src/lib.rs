@@ -11,11 +11,13 @@
 //!   refused, with the reason, so the wizard can grey out a checkbox
 //!   instead of producing a broken set.
 //!
-//! The catalog is **data the control plane owns**, not a scan of a
-//! registry: a module is here because someone wrote its customer-facing
-//! description and set its tier. A cyclic or dangling dependency is a
-//! catalog error caught by [`Catalog::validate`] before it ships, never
-//! a customer's problem at pick time.
+//! The catalog is **data**, not a scan of a registry. Which modules are
+//! in it — with their names, tiers and pinned releases — is the manifest
+//! crate's `builtin()` catalog, the same list `fz build` composes from,
+//! so the two cannot offer different modules; [`curated`] adds the
+//! customer-facing [`ModuleDetail`] this crate owns. A cyclic or
+//! dangling dependency is a catalog error caught by [`Catalog::validate`]
+//! before it ships, never a customer's problem at pick time.
 //!
 //! ## What may be selected (issue #142)
 //!
@@ -176,10 +178,11 @@ pub struct CatalogRoute {
 /// the route *set* is checked by eye. That is the one part of this file a
 /// reviewer has to read against the module.
 ///
-/// When issue #5 folds this crate into `cratefield-manifest::catalog`,
-/// this moves with it. The manifest's copy carries no detail today
-/// because nothing renders from it, and a second copy of the same prose
-/// would drift from this one the first time either was edited.
+/// Detail is the one part of an entry this crate adds: [`curated`] takes
+/// every other field from the manifest crate's `builtin()` catalog, which
+/// carries no detail because nothing renders from it there. When issue #5
+/// folds this crate into `cratefield-manifest::catalog`, this moves with
+/// it.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct ModuleDetail {
     /// A paragraph: what the module is, in the customer's terms.
@@ -654,51 +657,11 @@ fn pin(module: &CatalogModule) -> Result<PinnedRelease, ResolveError> {
     Err(ResolveError::Unpinned(slug))
 }
 
-/// The curated catalog the control plane ships with. Seeded with the
-/// harness modules that exist today; dependency edges are added as
-/// modules gain them (harness#26, `depends_on`). The resolution engine
-/// is exercised against richer synthetic catalogs in the tests.
-///
-/// Each entry carries one reviewed release pinned to the current crate
-/// version. The seed digests are the all-zero `sha256:` value on purpose
-/// and visibly so: a digest is stamped when CI cuts a release from the
-/// built artifact (control-plane infrastructure, out of this repo), and a
-/// placeholder nobody can mistake for a real one beats a fabricated one
-/// that would pass every format check while meaning nothing (issue #142
-/// honesty rule). Resolution gates on review state and pin *shape*; a
-/// sanctioned build refuses the placeholder until stamping lands — see
-/// the `provenance` module of the manifest crate.
 fn route(method: &str, path: &str, note: &str) -> CatalogRoute {
     CatalogRoute {
         method: method.to_owned(),
         path: path.to_owned(),
         note: note.to_owned(),
-    }
-}
-fn entry(
-    version: &str,
-    slug: &str,
-    name: &str,
-    summary: &str,
-    tier: Tier,
-    deps: &[&str],
-    detail: ModuleDetail,
-) -> CatalogModule {
-    CatalogModule {
-        slug: slug.to_owned(),
-        name: name.to_owned(),
-        summary: summary.to_owned(),
-        tier,
-        depends_on: deps.iter().map(|s| (*s).to_owned()).collect(),
-        releases: vec![ModuleRelease {
-            version: version.to_owned(),
-            digest: format!("sha256:{}", "0".repeat(64)),
-            review: ReleaseReview::Approved {
-                reviewer: "release-review".to_owned(),
-                reviewed_at: "2026-09-01T00:00:00Z".to_owned(),
-            },
-        }],
-        detail,
     }
 }
 fn detail(
@@ -721,417 +684,445 @@ fn detail(
         surface: surface.map(str::to_owned),
     }
 }
-/// The `email-signup` entry.
-fn email_signup() -> CatalogModule {
-    entry(
-        "0.1.1",
-        "email-signup",
-        "Email signup",
-        "Collect email addresses with double opt-in, confirmation and unsubscribe.",
-        Tier::Optional,
-        &[],
-        detail(
-            "A visitor gives you an address and confirms it by email before it \
-                     counts. Nothing is ever added to the list without that second step, \
-                     and unsubscribing is one link away in every message. The join \
-                     endpoint answers identically whatever the address's state, so \
-                     nobody can use it to find out who already signed up.",
-            "cratefield-module-email-signup",
-            &["Database", "Mailer", "Signer"],
-            &["Captcha", "RateLimiter"],
-            &["subscribers"],
-            vec![
-                route(
-                    "POST",
-                    "/v1/email-signup",
-                    "Join. The same answer for every address state.",
-                ),
-                route(
-                    "GET",
-                    "/v1/email-signup/confirm",
-                    "Confirm the address from the emailed link.",
-                ),
-                route(
-                    "GET POST",
-                    "/v1/email-signup/unsubscribe",
-                    "Leave the list, from a link or a form.",
-                ),
-                route(
-                    "GET",
-                    "/v1/email-signup/admin/export.csv",
-                    "Admin token: the full list as CSV.",
-                ),
-                route(
-                    "DELETE",
-                    "/v1/email-signup/admin/subscribers/{id}",
-                    "Admin token: remove one subscriber.",
-                ),
-            ],
-            Some("A join form and an admin table, rendered at /ui from the handler's own types."),
-        ),
-    )
-}
-
-/// The `waitlist` entry.
-fn waitlist() -> CatalogModule {
-    entry(
-        "0.1.1",
-        "waitlist",
-        "Waitlist",
-        "A per-product waitlist with confirmation, positions and referral codes.",
-        Tier::Optional,
-        &[],
-        detail(
-            "Somebody joins a named waitlist and confirms by email; on \
-                     confirmation they are given a dense queue position inside a single \
-                     atomic batch, so two people confirming at the same moment never \
-                     share a place. Referral codes credit a confirmed referrer on the \
-                     same product. Like the signup module it answers identically for \
-                     every row state, so the endpoint reveals nothing about who is on \
-                     the list.",
-            "cratefield-module-waitlist",
-            &["Database", "Mailer", "Signer"],
-            &["Captcha", "RateLimiter"],
-            &[
-                "waitlist_entries",
-                "waitlist_send_cooldown",
-                "waitlist_position_lock",
-            ],
-            vec![
-                route(
-                    "POST",
-                    "/v1/waitlist",
-                    "Join. Answers 202 whatever the state.",
-                ),
-                route(
-                    "GET",
-                    "/v1/waitlist/confirm",
-                    "Confirm and take a position.",
-                ),
-                route(
-                    "GET",
-                    "/v1/waitlist/status",
-                    "A signed status token: position, referrals, share link.",
-                ),
-                route(
-                    "GET",
-                    "/v1/waitlist/admin/export.csv",
-                    "Admin token: the full list as CSV.",
-                ),
-            ],
-            Some("A join form, a status page and an admin export table, rendered at /ui."),
-        ),
-    )
-}
-
-/// The `cms` entry.
-fn cms() -> CatalogModule {
-    entry(
-        "0.1.1",
-        "cms",
-        "Content",
-        "Typed, versioned content in your own database, edited through the admin.",
-        Tier::Optional,
-        &[],
-        detail(
-            "Content lives in collections you define, every save keeps a \
-                     revision, and publishing is a separate act from saving — so a \
-                     draft is never what the public reads. The public routes are reads \
-                     of published content only; every write goes through the admin. It \
-                     never leaves your database and never calls anybody else's service.",
-            "cratefield-module-cms",
-            &["Database"],
-            &[],
-            &["cms_item", "cms_revision"],
-            vec![
-                route(
-                    "GET",
-                    "/v1/cms/{collection}",
-                    "Published items in a collection.",
-                ),
-                route("GET", "/v1/cms/{collection}/{slug}", "One published item."),
-                route(
-                    "GET",
-                    "/v1/cms/admin/list",
-                    "Admin: everything, drafts included.",
-                ),
-                route(
-                    "POST",
-                    "/v1/cms/admin/save",
-                    "Admin: save a draft, keeping a revision.",
-                ),
-                route(
-                    "POST",
-                    "/v1/cms/admin/publish",
-                    "Admin: make a revision the public one.",
-                ),
-                route(
-                    "POST",
-                    "/v1/cms/admin/unpublish",
-                    "Admin: take an item off the public routes.",
-                ),
-                route(
-                    "POST",
-                    "/v1/cms/admin/delete",
-                    "Admin: remove an item and its revisions.",
-                ),
-            ],
-            Some("An editing admin, rendered at /ui from the handler's own types."),
-        ),
-    )
-}
-
-/// The `changelog` entry.
-fn changelog() -> CatalogModule {
-    entry(
-        "0.1.1",
-        "changelog",
-        "Changelog",
-        "A project's releases mirrored into your own database, served without calling upstream.",
-        Tier::Optional,
-        &[],
-        detail(
-            "A refresh pulls a project's releases — from GitHub's Releases API, or a \
-                     Keep-a-Changelog file in the repository — and stores each one in your \
-                     database in the author's own markdown. Your pages read that \
-                     stored copy and never call upstream, so GitHub being down, rate-limited or \
-                     misconfigured costs a refresh, not the changelog. Nothing is rewritten or \
-                     translated: what the author wrote is what your readers get.",
-            "cratefield-module-changelog",
-            &["Database", "HttpClient", "Clock"],
-            &["KeyValue"],
-            &["changelog_release", "changelog_source"],
-            vec![
-                route(
-                    "GET",
-                    "/v1/changelog",
-                    "The stored releases, newest first. An empty list before the first \
-                     refresh, never an error.",
-                ),
-                route(
-                    "GET",
-                    "/v1/changelog/{version}",
-                    "One stored release, with its original markdown.",
-                ),
-                route(
-                    "POST",
-                    "/v1/changelog/admin/refresh",
-                    "Admin token: mirror the source now; upstream trouble leaves the stored \
-                     releases untouched.",
-                ),
-            ],
-            Some(
-                "A releases list and an admin refresh control, rendered at /ui from the \
-                 handler's own types.",
+/// The `email-signup` detail.
+fn email_signup() -> ModuleDetail {
+    detail(
+        "A visitor gives you an address and confirms it by email before it \
+                 counts. Nothing is ever added to the list without that second step, \
+                 and unsubscribing is one link away in every message. The join \
+                 endpoint answers identically whatever the address's state, so \
+                 nobody can use it to find out who already signed up.",
+        "cratefield-module-email-signup",
+        &["Database", "Mailer", "Signer"],
+        &["Captcha", "RateLimiter"],
+        &["subscribers"],
+        vec![
+            route(
+                "POST",
+                "/v1/email-signup",
+                "Join. The same answer for every address state.",
             ),
-        ),
+            route(
+                "GET",
+                "/v1/email-signup/confirm",
+                "Confirm the address from the emailed link.",
+            ),
+            route(
+                "GET POST",
+                "/v1/email-signup/unsubscribe",
+                "Leave the list, from a link or a form.",
+            ),
+            route(
+                "GET",
+                "/v1/email-signup/admin/export.csv",
+                "Admin token: the full list as CSV.",
+            ),
+            route(
+                "DELETE",
+                "/v1/email-signup/admin/subscribers/{id}",
+                "Admin token: remove one subscriber.",
+            ),
+        ],
+        Some("A join form and an admin table, rendered at /ui from the handler's own types."),
     )
 }
 
-/// The `notifications` entry.
-fn notifications() -> CatalogModule {
-    entry(
-        "0.1.1",
-        "notifications",
-        "Notifications",
-        "Push to phones and browsers, an in-app inbox, and email — one API, \
-                 per-person categories, in the recipient's own language.",
-        Tier::Optional,
+/// The `waitlist` detail.
+fn waitlist() -> ModuleDetail {
+    detail(
+        "Somebody joins a named waitlist and confirms by email; on \
+                 confirmation they are given a dense queue position inside a single \
+                 atomic batch, so two people confirming at the same moment never \
+                 share a place. Referral codes credit a confirmed referrer on the \
+                 same product. Like the signup module it answers identically for \
+                 every row state, so the endpoint reveals nothing about who is on \
+                 the list.",
+        "cratefield-module-waitlist",
+        &["Database", "Mailer", "Signer"],
+        &["Captcha", "RateLimiter"],
+        &[
+            "waitlist_entries",
+            "waitlist_send_cooldown",
+            "waitlist_position_lock",
+        ],
+        vec![
+            route(
+                "POST",
+                "/v1/waitlist",
+                "Join. Answers 202 whatever the state.",
+            ),
+            route(
+                "GET",
+                "/v1/waitlist/confirm",
+                "Confirm and take a position.",
+            ),
+            route(
+                "GET",
+                "/v1/waitlist/status",
+                "A signed status token: position, referrals, share link.",
+            ),
+            route(
+                "GET",
+                "/v1/waitlist/admin/export.csv",
+                "Admin token: the full list as CSV.",
+            ),
+        ],
+        Some("A join form, a status page and an admin export table, rendered at /ui."),
+    )
+}
+
+/// The `cms` detail.
+fn cms() -> ModuleDetail {
+    detail(
+        "Content lives in collections you define, every save keeps a \
+                 revision, and publishing is a separate act from saving — so a \
+                 draft is never what the public reads. The public routes are reads \
+                 of published content only; every write goes through the admin. It \
+                 never leaves your database and never calls anybody else's service.",
+        "cratefield-module-cms",
+        &["Database"],
         &[],
-        detail(
-            "One call reaches a person wherever they agreed to be reached: a \
-                     push notification on a phone or a browser, a message in the in-app \
-                     inbox, an email — chosen per person, per category, and written in \
-                     the language they picked. Undeliverable work is kept and retried \
-                     rather than dropped, and what cannot be delivered at all lands in \
-                     dead letters instead of vanishing.",
-            "cratefield-module-notifications",
-            &["Database", "Push", "Clock", "IdGen"],
-            &["Defer", "HttpClient", "Realtime", "Mailer", "Signer"],
-            &[
-                "notifications_subscriptions",
-                "notifications_preferences",
-                "notifications_outbox",
-                "notifications_dead_letters",
-                "notifications_inbox",
-                "notifications_email_targets",
-                "notifications_email_sends",
-                "notifications_locales",
-                "notifications_email_suppressed",
-            ],
-            vec![
-                route(
-                    "GET",
-                    "/v1/notifications",
-                    "The in-app inbox for the signed-in person.",
-                ),
-                route(
-                    "GET",
-                    "/v1/notifications/unread-count",
-                    "How many are unread.",
-                ),
-                route("POST", "/v1/notifications/{id}/read", "Mark one read."),
-                route(
-                    "POST",
-                    "/v1/notifications/read-all",
-                    "Mark everything read.",
-                ),
-                route(
-                    "DELETE",
-                    "/v1/notifications/{id}",
-                    "Remove one from the inbox.",
-                ),
-                route(
-                    "PUT GET",
-                    "/v1/notifications/subscriptions",
-                    "Register a device or browser; list the registered ones.",
-                ),
-                route(
-                    "DELETE",
-                    "/v1/notifications/subscriptions/{id}",
-                    "Unregister one.",
-                ),
-                route(
-                    "GET PUT",
-                    "/v1/notifications/preferences",
-                    "Which categories reach this person, and how.",
-                ),
-                route(
-                    "PUT",
-                    "/v1/notifications/email",
-                    "The address this person is emailed at.",
-                ),
-                route(
-                    "GET",
-                    "/v1/notifications/vapid-public-key",
-                    "The Web Push key a browser subscribes with.",
-                ),
-                route(
-                    "POST",
-                    "/v1/notifications/email/webhook",
-                    "The mail provider's delivery and bounce reports.",
-                ),
-            ],
-            None,
+        &["cms_item", "cms_revision"],
+        vec![
+            route(
+                "GET",
+                "/v1/cms/{collection}",
+                "Published items in a collection.",
+            ),
+            route("GET", "/v1/cms/{collection}/{slug}", "One published item."),
+            route(
+                "GET",
+                "/v1/cms/admin/list",
+                "Admin: everything, drafts included.",
+            ),
+            route(
+                "POST",
+                "/v1/cms/admin/save",
+                "Admin: save a draft, keeping a revision.",
+            ),
+            route(
+                "POST",
+                "/v1/cms/admin/publish",
+                "Admin: make a revision the public one.",
+            ),
+            route(
+                "POST",
+                "/v1/cms/admin/unpublish",
+                "Admin: take an item off the public routes.",
+            ),
+            route(
+                "POST",
+                "/v1/cms/admin/delete",
+                "Admin: remove an item and its revisions.",
+            ),
+        ],
+        Some("An editing admin, rendered at /ui from the handler's own types."),
+    )
+}
+
+/// The `changelog` detail.
+fn changelog() -> ModuleDetail {
+    detail(
+        "A refresh pulls a project's releases — from GitHub's Releases API, or a \
+                 Keep-a-Changelog file in the repository — and stores each one in your \
+                 database in the author's own markdown. Your pages read that \
+                 stored copy and never call upstream, so GitHub being down, rate-limited or \
+                 misconfigured costs a refresh, not the changelog. Nothing is rewritten or \
+                 translated: what the author wrote is what your readers get.",
+        "cratefield-module-changelog",
+        &["Database", "HttpClient", "Clock"],
+        &["KeyValue"],
+        &["changelog_release", "changelog_source"],
+        vec![
+            route(
+                "GET",
+                "/v1/changelog",
+                "The stored releases, newest first. An empty list before the first \
+                 refresh, never an error.",
+            ),
+            route(
+                "GET",
+                "/v1/changelog/{version}",
+                "One stored release, with its original markdown.",
+            ),
+            route(
+                "POST",
+                "/v1/changelog/admin/refresh",
+                "Admin token: mirror the source now; upstream trouble leaves the stored \
+                 releases untouched.",
+            ),
+        ],
+        Some(
+            "A releases list and an admin refresh control, rendered at /ui from the \
+             handler's own types.",
         ),
     )
 }
 
-/// The `privacy` entry.
-fn privacy() -> CatalogModule {
-    entry(
-        "0.1.1",
-        "privacy",
-        "Privacy requests",
-        "Answer a subject access or erasure request from what every other \
-                 module declares it holds. Optional, and the only honest default \
-                 for a deployment holding personal data.",
-        Tier::Optional,
+/// The `notifications` detail.
+fn notifications() -> ModuleDetail {
+    detail(
+        "One call reaches a person wherever they agreed to be reached: a \
+                 push notification on a phone or a browser, a message in the in-app \
+                 inbox, an email — chosen per person, per category, and written in \
+                 the language they picked. Undeliverable work is kept and retried \
+                 rather than dropped, and what cannot be delivered at all lands in \
+                 dead letters instead of vanishing.",
+        "cratefield-module-notifications",
+        &["Database", "Push", "Clock", "IdGen"],
+        &["Defer", "HttpClient", "Realtime", "Mailer", "Signer"],
+        &[
+            "notifications_subscriptions",
+            "notifications_preferences",
+            "notifications_outbox",
+            "notifications_dead_letters",
+            "notifications_inbox",
+            "notifications_email_targets",
+            "notifications_email_sends",
+            "notifications_locales",
+            "notifications_email_suppressed",
+        ],
+        vec![
+            route(
+                "GET",
+                "/v1/notifications",
+                "The in-app inbox for the signed-in person.",
+            ),
+            route(
+                "GET",
+                "/v1/notifications/unread-count",
+                "How many are unread.",
+            ),
+            route("POST", "/v1/notifications/{id}/read", "Mark one read."),
+            route(
+                "POST",
+                "/v1/notifications/read-all",
+                "Mark everything read.",
+            ),
+            route(
+                "DELETE",
+                "/v1/notifications/{id}",
+                "Remove one from the inbox.",
+            ),
+            route(
+                "PUT GET",
+                "/v1/notifications/subscriptions",
+                "Register a device or browser; list the registered ones.",
+            ),
+            route(
+                "DELETE",
+                "/v1/notifications/subscriptions/{id}",
+                "Unregister one.",
+            ),
+            route(
+                "GET PUT",
+                "/v1/notifications/preferences",
+                "Which categories reach this person, and how.",
+            ),
+            route(
+                "PUT",
+                "/v1/notifications/email",
+                "The address this person is emailed at.",
+            ),
+            route(
+                "GET",
+                "/v1/notifications/vapid-public-key",
+                "The Web Push key a browser subscribes with.",
+            ),
+            route(
+                "POST",
+                "/v1/notifications/email/webhook",
+                "The mail provider's delivery and bounce reports.",
+            ),
+        ],
+        None,
+    )
+}
+
+/// The `privacy` detail.
+fn privacy() -> ModuleDetail {
+    detail(
+        "Every other module declares what it holds about a person, and \
+                 this module turns those declarations into the two answers the law \
+                 asks for: everything you hold about somebody, and its deletion. It \
+                 owns no tables of its own — it reads the composition — so a module \
+                 added later is covered the day it is mounted, and a table nobody \
+                 declared is reported as exactly that rather than passed over in \
+                 silence.",
+        "cratefield-module-privacy",
+        &["Database", "Signer"],
         &[],
-        detail(
-            "Every other module declares what it holds about a person, and \
-                     this module turns those declarations into the two answers the law \
-                     asks for: everything you hold about somebody, and its deletion. It \
-                     owns no tables of its own — it reads the composition — so a module \
-                     added later is covered the day it is mounted, and a table nobody \
-                     declared is reported as exactly that rather than passed over in \
-                     silence.",
-            "cratefield-module-privacy",
-            &["Database", "Signer"],
-            &[],
-            &[],
-            vec![
-                route(
-                    "GET",
-                    "/v1/privacy/manifest",
-                    "What this deployment holds, table by table, for a privacy page.",
-                ),
-                route(
-                    "GET",
-                    "/v1/privacy/export",
-                    "Every row every module holds for one subject.",
-                ),
-                route(
-                    "POST",
-                    "/v1/privacy/erase",
-                    "Preview an erasure and get a confirmation token.",
-                ),
-                route(
-                    "POST",
-                    "/v1/privacy/erase/confirm",
-                    "Carry it out, and report what was reached.",
-                ),
-            ],
-            None,
-        ),
-    )
-}
-
-/// The `telemetry` entry.
-fn telemetry() -> CatalogModule {
-    entry(
-        "0.1.0",
-        "telemetry",
-        "Telemetry",
-        "Counted usage events in your own database — a closed event vocabulary, \
-                 consent on by default, and no third-party analytics service.",
-        Tier::Optional,
         &[],
-        detail(
-            "You declare the closed vocabulary of event names you want counted, \
-                     and clients report batches of counted runs against it: every \
-                     field is an enum, a count, a duration bucket or a fixed-width \
-                     id, so there is no free text and nothing a person wrote can \
-                     arrive at all. The counts accumulate in your own database, \
-                     never in a third-party analytics service. Reporting is on by \
-                     default and easy to refuse — `DO_NOT_TRACK` and `CI` are \
-                     honoured, and the local opt-out works with no network — and \
-                     the install id that keys the rows is pseudonymous, with no \
-                     stored link to a person.",
-            "cratefield-module-telemetry",
-            &["Database"],
-            &["Clock", "RateLimiter"],
-            &["telemetry_events", "telemetry_modules"],
-            vec![
-                route(
-                    "POST",
-                    "/v1/telemetry/events",
-                    "Report a batch of counted events.",
-                ),
-                route(
-                    "GET",
-                    "/v1/telemetry/notice",
-                    "What is counted, and the one-line way to switch it off.",
-                ),
-                route(
-                    "GET",
-                    "/v1/telemetry/admin/usage",
-                    "Admin token: the aggregate rows, grouped so no install is named.",
-                ),
-            ],
-            None,
-        ),
+        vec![
+            route(
+                "GET",
+                "/v1/privacy/manifest",
+                "What this deployment holds, table by table, for a privacy page.",
+            ),
+            route(
+                "GET",
+                "/v1/privacy/export",
+                "Every row every module holds for one subject.",
+            ),
+            route(
+                "POST",
+                "/v1/privacy/erase",
+                "Preview an erasure and get a confirmation token.",
+            ),
+            route(
+                "POST",
+                "/v1/privacy/erase/confirm",
+                "Carry it out, and report what was reached.",
+            ),
+        ],
+        None,
     )
 }
 
-/// The curated set, in the order the wizard shows it.
+/// The `telemetry` detail.
+fn telemetry() -> ModuleDetail {
+    detail(
+        "You declare the closed vocabulary of event names you want counted, \
+                 and clients report batches of counted runs against it: every \
+                 field is an enum, a count, a duration bucket or a fixed-width \
+                 id, so there is no free text and nothing a person wrote can \
+                 arrive at all. The counts accumulate in your own database, \
+                 never in a third-party analytics service. Reporting is on by \
+                 default and easy to refuse — `DO_NOT_TRACK` and `CI` are \
+                 honoured, and the local opt-out works with no network — and \
+                 the install id that keys the rows is pseudonymous, with no \
+                 stored link to a person.",
+        "cratefield-module-telemetry",
+        &["Database"],
+        &["Clock", "RateLimiter"],
+        &["telemetry_events", "telemetry_modules"],
+        vec![
+            route(
+                "POST",
+                "/v1/telemetry/events",
+                "Report a batch of counted events.",
+            ),
+            route(
+                "GET",
+                "/v1/telemetry/notice",
+                "What is counted, and the one-line way to switch it off.",
+            ),
+            route(
+                "GET",
+                "/v1/telemetry/admin/usage",
+                "Admin token: the aggregate rows, grouped so no install is named.",
+            ),
+        ],
+        None,
+    )
+}
+
+/// The curated catalog the control plane ships with: the manifest crate's
+/// `builtin()` catalog — the one list of the harness modules, with their
+/// tiers, dependency edges and pinned releases — with each entry's
+/// [`ModuleDetail`] added. The resolution engine is exercised against
+/// richer synthetic catalogs in the tests.
 ///
-/// One function per module rather than one long list: each entry is a
+/// The releases are `builtin()`'s: one reviewed release per module,
+/// pinned to an exact version, with the all-zero `sha256:`
+/// placeholder digest on purpose and visibly so (issue #142 honesty
+/// rule). A sanctioned build refuses the placeholder until release
+/// stamping lands — see the `provenance` module of the manifest crate.
+///
+/// One detail function per module rather than one long list: each is a
 /// paragraph of customer-facing copy plus the facts
-/// `tests/detail_matches_the_modules.rs` pins, and six of those in a
+/// `tests/detail_matches_the_modules.rs` pins, and seven of those in a
 /// single function is a screenful nobody can review a change to.
 #[must_use]
 pub fn curated() -> Catalog {
     Catalog {
-        modules: vec![
-            email_signup(),
-            waitlist(),
-            cms(),
-            changelog(),
-            notifications(),
-            privacy(),
-            telemetry(),
-        ],
+        modules: cratefield_manifest::builtin()
+            .modules
+            .into_iter()
+            .map(|module| {
+                let detail = detail_for(&module.slug);
+                from_builtin(module, detail)
+            })
+            .collect(),
+    }
+}
+
+/// The detail for one built-in module. A slug with none yet gets an
+/// empty detail rather than a panic — the dashboard builds the catalog on
+/// request paths — and `curated_is_builtin_plus_detail` fails the suite
+/// until somebody writes it.
+fn detail_for(slug: &str) -> ModuleDetail {
+    match slug {
+        "email-signup" => email_signup(),
+        "waitlist" => waitlist(),
+        "cms" => cms(),
+        "changelog" => changelog(),
+        "notifications" => notifications(),
+        "privacy" => privacy(),
+        "telemetry" => telemetry(),
+        _ => ModuleDetail::default(),
+    }
+}
+
+/// One entry of the manifest crate's catalog as one of this crate's.
+///
+/// Every `match` names every variant, with no wildcard arm, and every
+/// destructuring names every field: a tier, review state or field added
+/// over there fails to compile here, rather than being mapped to
+/// whichever variant a wildcard happened to pick or silently dropped.
+fn from_builtin(module: cratefield_manifest::CatalogModule, detail: ModuleDetail) -> CatalogModule {
+    use cratefield_manifest::{ReleaseReview as Review, Tier as BuiltinTier};
+    let cratefield_manifest::CatalogModule {
+        slug,
+        name,
+        summary,
+        tier,
+        depends_on,
+        releases,
+    } = module;
+    CatalogModule {
+        slug,
+        name,
+        summary,
+        tier: match tier {
+            BuiltinTier::Core => Tier::Core,
+            BuiltinTier::Optional => Tier::Optional,
+        },
+        depends_on,
+        releases: releases
+            .into_iter()
+            .map(|release| {
+                let cratefield_manifest::ModuleRelease {
+                    version,
+                    digest,
+                    review,
+                } = release;
+                ModuleRelease {
+                    version,
+                    digest,
+                    review: match review {
+                        Review::Pending => ReleaseReview::Pending,
+                        Review::Approved {
+                            reviewer,
+                            reviewed_at,
+                        } => ReleaseReview::Approved {
+                            reviewer,
+                            reviewed_at,
+                        },
+                        Review::Revoked {
+                            by,
+                            revoked_at,
+                            reason,
+                        } => ReleaseReview::Revoked {
+                            by,
+                            revoked_at,
+                            reason,
+                        },
+                    },
+                }
+            })
+            .collect(),
+        detail,
     }
 }
 
@@ -1497,5 +1488,42 @@ mod tests {
         assert!(is_sha256_digest(&format!("sha256:{}", "f".repeat(64))));
         assert!(!is_sha256_digest(&format!("sha256:{}", "F".repeat(64))));
         assert!(!is_sha256_digest(&format!("sha1:{}", "a".repeat(40))));
+    }
+
+    #[test]
+    fn curated_is_builtin_plus_detail() {
+        // One list of modules (issues #428, #451): the wizard must offer
+        // exactly what `fz build` composes, field for field and in the
+        // same order, with only the detail added here.
+        let builtin = cratefield_manifest::builtin();
+        let curated = curated();
+
+        let mut ours = serde_json::to_value(&curated).expect("serialises");
+        for module in ours["modules"].as_array_mut().expect("a list") {
+            module
+                .as_object_mut()
+                .expect("an object")
+                .remove("detail")
+                .expect("every entry carries detail");
+        }
+        let theirs = serde_json::to_value(&builtin).expect("serialises");
+        assert_eq!(ours, theirs, "curated() is builtin() plus detail");
+
+        let slugs: Vec<&str> = builtin.modules.iter().map(|m| m.slug.as_str()).collect();
+        assert_eq!(
+            curated.resolve(&slugs).expect("resolves").content_key(),
+            builtin.resolve(&slugs).expect("resolves").content_key(),
+        );
+
+        // A module added to the registry without a detail function falls
+        // back to an empty detail; that is a gap in the wizard, not a
+        // module nobody can open.
+        for module in &curated.modules {
+            assert!(
+                !module.detail.crate_name.is_empty() && !module.detail.routes.is_empty(),
+                "`{}` has no detail: add it to detail_for",
+                module.slug
+            );
+        }
     }
 }

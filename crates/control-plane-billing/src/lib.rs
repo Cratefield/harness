@@ -153,7 +153,7 @@ pub const TIERS: &[TierLine] = &[
     },
     TierLine {
         dimension: "Modules",
-        free: "core + curated (signups, waitlist, CMS)",
+        free: "core + every curated module",
         paid: "full catalog",
     },
     TierLine {

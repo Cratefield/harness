@@ -19,11 +19,6 @@ Schema view for anyone who wants one.
 Pure logic. No I/O, no database driver, no clock and no randomness, so it
 builds for `wasm32-unknown-unknown` alongside `cratefield-core`.
 
-**Held out of the release run.** 0.1.1 is on crates.io, but the public
-surface is still moving: `release-plz.toml` carries `publish = false`
-for it, so release-plz publishes no new version until the CRUD layer
-lands ([RELEASING.md](../../docs/RELEASING.md)).
-
 ## The schema type
 
 ```rust

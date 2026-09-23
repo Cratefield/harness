@@ -639,11 +639,17 @@ pub(super) async fn export(
     let mut header_done = false;
     let mut more = false;
     while written < EXPORT_CAP {
+        let want = EXPORT_PAGE.min(EXPORT_CAP - written);
+        // The page that would reach the cap reads one row past it: the
+        // probe row proves a next page exists without being written, so a
+        // table of exactly `EXPORT_CAP` rows — whose last page is full —
+        // does not claim one. Earlier pages keep the plain page size.
+        let probing = written + want >= EXPORT_CAP;
         let page = match introspect::rows(
             db.as_ref(),
             &table,
             &order_by,
-            EXPORT_PAGE.min(EXPORT_CAP - written),
+            if probing { want + 1 } else { want },
             written,
         )
         .await
@@ -663,18 +669,29 @@ pub(super) async fn export(
             header_done = true;
         }
         for row in &page.rows {
+            // The probe row is never written: output stops at exactly the
+            // cap even when the read carried one row more.
+            if written >= EXPORT_CAP {
+                break;
+            }
             let cells: Vec<String> = row.columns().map(|(_, value)| csv_cell(value)).collect();
             let cells: Vec<&str> = cells.iter().map(String::as_str).collect();
             csv.push_str(&cratefield_core::csv_row(&cells));
             written += 1;
         }
-        // A short page means the table ended; a full page at the cap
-        // means the file does not carry everything, and the header below
-        // says so rather than letting "exported everything" be claimed.
+        if probing {
+            // The probe decides the header: an extra row back means a next
+            // page exists, and no extra row means the table ended exactly
+            // at the cap. Either way the export is complete — at the cap
+            // or at the table's end — so the loop ends here.
+            more = u64::try_from(page.len()).unwrap_or(0) > want;
+            break;
+        }
+        // A short page means the table ended; a full page below the cap
+        // leaves `more` false and the loop reads on.
         if u64::try_from(page.len()).unwrap_or(0) < EXPORT_PAGE {
             break;
         }
-        more = written >= EXPORT_CAP;
     }
 
     let mut response = Response::new(axum::body::Body::from(csv));
@@ -896,6 +913,30 @@ mod tests {
         cookie: Option<&str>,
         admin: Option<&str>,
     ) -> (StatusCode, String, Option<String>) {
+        let (status, headers, body) = get_with_headers(kit, uri, cookie, admin).await;
+        let content_type = headers
+            .get(header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_owned);
+        (status, body, content_type)
+    }
+
+    async fn seed_rows(kit: &TestHarness, sql: &str, values: Vec<sea_query::Value>) {
+        kit.db
+            .execute(&Statement::with_values(sql.to_owned(), values))
+            .await
+            .expect("seed");
+    }
+
+    /// One GET through the router, returning every response header: the
+    /// export-cap tests pin `x-cf-export-more` with it, and `get` above is
+    /// this with only the content type kept.
+    async fn get_with_headers(
+        kit: &TestHarness,
+        uri: &str,
+        cookie: Option<&str>,
+        admin: Option<&str>,
+    ) -> (StatusCode, HeaderMap, String) {
         let mut builder = HttpRequest::builder().method(Method::GET).uri(uri);
         if let Some(cookie) = cookie {
             builder = builder.header(header::COOKIE, cookie);
@@ -915,20 +956,35 @@ mod tests {
             .expect("body");
         (
             parts.status,
+            parts.headers,
             String::from_utf8(bytes.to_vec()).expect("utf-8"),
-            parts
-                .headers
-                .get(header::CONTENT_TYPE)
-                .and_then(|value| value.to_str().ok())
-                .map(str::to_owned),
         )
     }
 
-    async fn seed_rows(kit: &TestHarness, sql: &str, values: Vec<sea_query::Value>) {
-        kit.db
-            .execute(&Statement::with_values(sql.to_owned(), values))
-            .await
-            .expect("seed");
+    /// `count` rows in `allowlist`, multi-row INSERTs per chunk: the cap
+    /// boundary tests seed thousands of rows, and row-at-a-time seeding
+    /// would be thousands of round trips.
+    async fn seed_allowlist_rows(kit: &TestHarness, count: usize) {
+        const CHUNK: usize = 100;
+        let mut start = 0;
+        while start < count {
+            let end = (start + CHUNK).min(count);
+            let placeholders = vec!["(?, ?, ?, ?, ?)"; end - start].join(", ");
+            let sql = format!(
+                "INSERT INTO allowlist (value, kind, note, added_by, added_at) VALUES \
+                 {placeholders}"
+            );
+            let mut values = Vec::with_capacity((end - start) * 5);
+            for n in start..end {
+                values.push(text(&format!("user{n:05}@example.com")));
+                values.push(text("email"));
+                values.push(text("seed"));
+                values.push(text("op"));
+                values.push(text("t0"));
+            }
+            seed_rows(kit, &sql, values).await;
+            start = end;
+        }
     }
 
     #[pollster::test]
@@ -1142,6 +1198,64 @@ mod tests {
             "{body}"
         );
         assert!(body.contains("'=cmd|' /C calc'"), "{body}");
+    }
+
+    #[pollster::test]
+    async fn the_csv_export_at_exactly_the_cap_claims_nothing_more() {
+        // The false positive this pins: at exactly `MAX_EXPORT_ROWS` the
+        // last page is full, so "a short page means the table ended" never
+        // fires — and still `x-cf-export-more` must stay absent, because
+        // the file carries the whole table. Seeding the full cap (rather
+        // than a smaller stand-in) exercises the real page arithmetic:
+        // ten full 500-row pages, the shape that used to misreport.
+        let kit = kit();
+        seed_allowlist_rows(&kit, cratefield_core::MAX_EXPORT_ROWS).await;
+
+        let (status, headers, body) = get_with_headers(
+            &kit,
+            &format!("{PATH}/allowlist/export"),
+            Some(&cookie(&kit)),
+            Some(ADMIN),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(
+            headers.get("x-cf-export-more").is_none(),
+            "a complete file must not claim a next page"
+        );
+        let rows = body.lines().count().saturating_sub(1);
+        assert_eq!(rows, cratefield_core::MAX_EXPORT_ROWS, "every row exported");
+    }
+
+    #[pollster::test]
+    async fn the_csv_export_past_the_cap_says_so_and_stops_at_it() {
+        // One row over the cap: the probe row comes back, so the header
+        // must say `true` — and the file itself must still stop at exactly
+        // the cap, never carrying the probe row.
+        let kit = kit();
+        seed_allowlist_rows(&kit, cratefield_core::MAX_EXPORT_ROWS + 1).await;
+
+        let (status, headers, body) = get_with_headers(
+            &kit,
+            &format!("{PATH}/allowlist/export"),
+            Some(&cookie(&kit)),
+            Some(ADMIN),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            headers
+                .get("x-cf-export-more")
+                .and_then(|value| value.to_str().ok()),
+            Some("true"),
+            "a truncated file must say a next page exists"
+        );
+        let rows = body.lines().count().saturating_sub(1);
+        assert_eq!(
+            rows,
+            cratefield_core::MAX_EXPORT_ROWS,
+            "output stops at the cap"
+        );
     }
 
     #[pollster::test]

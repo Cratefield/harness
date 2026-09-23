@@ -201,9 +201,10 @@ enum Command {
     /// current inputs and refuses any other digest. Records the plan in
     /// `.harness-deploy.json` beside the manifest — compiling,
     /// standing up the Worker and applying migrations stay with the
-    /// needs-human steps it prints. A production venture, and any plan
-    /// that removes modules, needs `--i-am-deploying-to-production`
-    /// as a second, separate consent (harness #140).
+    /// needs-human steps it prints. A production venture needs
+    /// `--i-am-deploying-to-production` as a second, separate consent
+    /// (harness #140); a plan that removes modules needs
+    /// `--i-am-removing-modules`, a consent separate from that one.
     Deploy {
         /// The digest `fz plan --json` printed — the approval token.
         #[arg(long, value_name = "DIGEST")]

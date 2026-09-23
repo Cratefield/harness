@@ -150,6 +150,53 @@ fn a_page_of_a_public_table_holds_every_row() {
 }
 
 #[test]
+fn a_page_has_the_shape_the_surface_publishes_for_it() {
+    // `list-note`'s published output against a page the route really
+    // answers: the envelope's keys, and every row's keys among the
+    // columns the row schema names.
+    let db = seeded();
+    let tables = tables(Access::PublicRead, AuthMode::TokenIsTheSubject);
+    let out = pollster::block_on(page(
+        &tables,
+        &db,
+        Tenancy::Sole,
+        &HeaderMap::new(),
+        &scope(),
+        Asked {
+            table: "note",
+            after: None,
+            filters: &[],
+            sort: None,
+        },
+    ))
+    .expect("public");
+    let published = cratefield_tables_api::surface(&tables.tables);
+    let list = published
+        .actions
+        .iter()
+        .find(|action| action.name == "list-note")
+        .expect("published");
+    let schema = serde_json::to_value(list.output.as_ref().expect("an output")).expect("json");
+
+    let envelope: Vec<&String> = out.as_object().expect("an object").keys().collect();
+    let declared: Vec<&String> = schema["properties"]
+        .as_object()
+        .expect("properties")
+        .keys()
+        .collect();
+    assert_eq!(envelope, declared);
+    assert!(out["next"].is_null(), "a short page has no cursor");
+    let columns = schema["properties"]["rows"]["items"]["properties"]
+        .as_object()
+        .expect("the row's properties");
+    for row in out["rows"].as_array().expect("rows") {
+        for key in row.as_object().expect("a row").keys() {
+            assert!(columns.contains_key(key), "`{key}` is not published");
+        }
+    }
+}
+
+#[test]
 fn a_filter_for_a_null_finds_the_rows_whose_column_is_unset() {
     // The end of the path the SQL-shape test starts: a caller asking for
     // the rows whose `body` is unset gets them. Before, the comparison

@@ -5,9 +5,14 @@
 //! (issue #5). The two are kept **semantically identical** on purpose —
 //! same postorder-DFS ordering, same `content_key` (sorted slugs joined
 //! with `+`, harness ADR 0009), same unknown/cycle/dangling errors — so
-//! control-plane can later depend on this crate and delete its copy. The
+//! control-plane, which already takes its module list from [`builtin`],
+//! can later drop its copy of the types and resolver. The
 //! manifest ([`crate::VentureManifest`]) is the serializable front-end to
 //! this resolver; it does not fork the logic.
+//!
+//! The module *list* is not copied: [`builtin`] is the one list of the
+//! modules the harness ships, and control-plane's `curated()` is built
+//! from it.
 //!
 //! ## What may be selected (issue #142)
 //!
@@ -583,13 +588,19 @@ fn pin(module: &CatalogModule) -> Result<PinnedRelease, ResolveError> {
     Err(ResolveError::Unpinned(slug))
 }
 
-/// The built-in catalog: the harness modules that exist today, matching
-/// control-plane's `curated()` slugs, tiers and pins. Dependency edges
-/// are added as modules gain them.
+/// The built-in catalog: the harness modules that exist today, every
+/// one optional, with no dependency edges yet (they are added as modules
+/// gain them).
 ///
-/// Each entry carries one reviewed release pinned to the current crate
-/// version. The seed digests are the all-zero `sha256:` value on purpose
-/// and visibly so: a digest is stamped when CI cuts a release from the
+/// The list is the generator's codegen registry (`generate.rs`), so a
+/// module the catalog offers is one `fz build` can compose — there is no
+/// second list to forget. Control-plane's `curated()` is derived from
+/// this function and adds the per-module detail the wizard shows; its
+/// tests fail if the two ever disagree.
+///
+/// Each entry carries one reviewed release, pinned to the version its
+/// registry entry names. The seed digests are the all-zero `sha256:`
+/// value on purpose and visibly so: a digest is stamped when CI cuts a release from the
 /// built artifact (control-plane infrastructure, out of this repo), and a
 /// placeholder nobody can mistake for a real one beats a fabricated one
 /// that would pass every format check while meaning nothing (issue #142
@@ -599,53 +610,24 @@ fn pin(module: &CatalogModule) -> Result<PinnedRelease, ResolveError> {
 /// [`crate::provenance`].
 #[must_use]
 pub fn builtin() -> Catalog {
-    fn m(slug: &str, name: &str, summary: &str, tier: Tier, deps: &[&str]) -> CatalogModule {
-        CatalogModule {
-            slug: slug.to_owned(),
-            name: name.to_owned(),
-            summary: summary.to_owned(),
-            tier,
-            depends_on: deps.iter().map(|s| (*s).to_owned()).collect(),
-            releases: vec![ModuleRelease {
-                version: "0.1.1".to_owned(),
-                digest: format!("sha256:{}", "0".repeat(64)),
-                review: ReleaseReview::Approved {
-                    reviewer: "release-review".to_owned(),
-                    reviewed_at: "2026-09-01T00:00:00Z".to_owned(),
-                },
-            }],
-        }
-    }
     Catalog {
-        modules: vec![
-            m(
-                "email-signup",
-                "Email signup",
-                "Collect email addresses with double opt-in, confirmation and unsubscribe.",
-                Tier::Optional,
-                &[],
-            ),
-            m(
-                "waitlist",
-                "Waitlist",
-                "A per-product waitlist with confirmation, positions and referral codes.",
-                Tier::Optional,
-                &[],
-            ),
-            m(
-                "cms",
-                "Content",
-                "Typed, versioned content in your own database, edited through the admin.",
-                Tier::Optional,
-                &[],
-            ),
-            m(
-                "changelog",
-                "Changelog",
-                "A project's releases mirrored into your own database, served without calling upstream.",
-                Tier::Optional,
-                &[],
-            ),
-        ],
+        modules: crate::generate::REGISTRY
+            .iter()
+            .map(|m| CatalogModule {
+                slug: m.slug.to_owned(),
+                name: m.name.to_owned(),
+                summary: m.summary.to_owned(),
+                tier: Tier::Optional,
+                depends_on: Vec::new(),
+                releases: vec![ModuleRelease {
+                    version: m.version.to_owned(),
+                    digest: format!("sha256:{}", "0".repeat(64)),
+                    review: ReleaseReview::Approved {
+                        reviewer: "release-review".to_owned(),
+                        reviewed_at: "2026-09-01T00:00:00Z".to_owned(),
+                    },
+                }],
+            })
+            .collect(),
     }
 }

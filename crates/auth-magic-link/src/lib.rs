@@ -23,12 +23,15 @@
 //!   dead end; a passwordless account has no other way in at all.
 //! - **Registration by mail**, for a venture that wants no passwords.
 //!
-//! **Mail clients prefetch links.** Outlook, some corporate scanners and
-//! several mobile clients fetch every URL in a message to check it for
-//! malware, which would consume a single-use token before the person ever
-//! clicked. `consume` therefore only signs somebody in on a request that
-//! looks like a human clicking, and shows a confirm button otherwise. The
-//! heuristic and its limits are documented on the handler.
+//! **The link asks; only the button acts.** `GET /consume` never spends
+//! the token: it always renders a confirm page, and only that page's
+//! same-origin `POST` signs somebody in. Outlook, some corporate scanners
+//! and several mobile clients fetch every URL in a message to check it
+//! for malware, which would otherwise consume the token before the person
+//! ever clicked. And a GET that signed in would be login CSRF (issue
+//! #483): a site that forces a browser onto an attacker's own link sends
+//! the same fetch metadata as a click out of webmail, so no header can
+//! tell the two apart.
 
 #![forbid(unsafe_code)]
 

@@ -24,16 +24,15 @@ It is also the answer to three things other modules leave undone:
 | `POST /request` | `{ email, return_to? }`. Always `202`, always the same body |
 | `GET /start?return_to=/path` | The form a person types their address into |
 | `POST /start` | The form's own target. Same decision as `/request`, answered with a page |
-| `GET /consume?token=…` | The URL in the mail. Signs in, or shows a confirm button |
-| `POST /consume` | The confirm button |
+| `GET /consume?token=…` | The URL in the mail. Always shows a confirm button; never signs in |
+| `POST /consume` | The confirm button. The only thing that signs in |
 
 `POST /consume` refuses a cross-site request — `403`,
 `auth/cross-site-request` (issue #439). Pressing the confirm button signs
 somebody in, and `SameSite=Lax` stops a cross-site POST from *carrying*
-our session cookie, not from *setting* one. `GET /consume` is
-deliberately open to any site: a click out of a mail client is inherently
-cross-site, and it is covered by the single-use token and the click check
-below.
+our session cookie, not from *setting* one. `GET /consume` is open to any
+site — a click out of a mail client is inherently cross-site — and that is
+exactly why it changes nothing: see below.
 
 ### Why this method is a page
 
@@ -85,27 +84,32 @@ minute does not survive a slow mail queue. Hence the range.
 anyone can create an account for any address they can type. A venture that
 wants passwordless sign-up turns it on knowing that.
 
-## Mail clients prefetch links
+## The link asks; the button acts
 
-Outlook, corporate scanners and several mobile clients fetch every URL in a
-message to check it for malware. A prefetch that consumed a single-use
-token would sign nobody in and leave the person holding a link that has
-already been used — the failure mode that makes people give up on magic
-links entirely.
+`GET /consume` **never signs anybody in**. Every token-shaped link lands on
+a confirm page, and only the same-origin `POST` from that page's button
+spends the token. That costs one click, and it answers two problems at
+once.
 
-So `GET /consume` only signs somebody in when the request **looks like a
-person clicking**: `Sec-Fetch-Mode: navigate` and `Sec-Fetch-Dest:
-document`, which every current browser sends on a top-level navigation and
-an out-of-band fetch does not. Anything else gets a confirm button.
+**Mail clients prefetch links.** Outlook, corporate scanners and several
+mobile clients fetch every URL in a message to check it for malware. A
+prefetch that consumed a single-use token would sign nobody in and leave
+the person holding a link that has already been used — the failure mode
+that makes people give up on magic links entirely.
 
-**What the heuristic does not catch**, said plainly because it matters: a
-scanner that copies a browser's headers, or one that renders the message in
-a real browser engine. What it must never do is refuse a real person, so a
-request with no fetch metadata at all — an old browser, a stripped proxy —
-gets the button rather than a refusal. That costs one click and works
-everywhere.
+**A GET that signs in is login CSRF** (issue #483). An attacker asks for a
+link to their own address, reads the token out of their own inbox, and
+sends the victim's browser to it — `location.href = …` on any page will
+do. The victim is then signed in as the attacker, and whatever they do
+next lands in the attacker's account. An earlier version signed in when
+the request looked like a person clicking (`Sec-Fetch-Mode: navigate`,
+`Sec-Fetch-Dest: document`), but a forced cross-site navigation sends
+exactly those headers, byte for byte the same as a click out of webmail.
+No header can tell the two apart, so the GET does not try. The button's
+`POST` can be told apart — it comes from our own page — and the guard on
+it refuses anything that does not.
 
-The prefetch page is also not an oracle: a real token and an invented one
+The confirm page is also not an oracle: a real token and an invented one
 get the same page, and nothing is read or spent to produce it.
 
 ## Single-use under concurrency

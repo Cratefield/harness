@@ -190,7 +190,10 @@ unreachable by path, and `/{table}/__by?id=__by` is that row's address.
 `/__surface` publishes all five actions either way and says where the
 key goes — an `__by` path carries no placeholder, so a read or a delete
 publishes the key columns as its input schema, and a replace publishes
-the row body with the key columns beside it under `x-cf-query`.
+the row body with the key columns beside it under `x-cf-query`. The two
+reads publish what they answer as their output schema — the row, and the
+page of rows beside `next` — so a `public-read` table, which has no write
+to carry the row as an input, still says what a row is.
 
 A row that is not the caller's is **not found**, never forbidden: a `403`
 is an answer about a row they were never in a position to learn exists.

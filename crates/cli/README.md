@@ -224,7 +224,7 @@ different one. The baseline-dependent deltas (added/removed lists) are
 presentation, deliberately not hashed — an approval is of the
 destination, not the journey.
 
-## `fz deploy --plan <digest> [--manifest venture.json] [--i-am-deploying-to-production] [--json]`
+## `fz deploy --plan <digest> [--manifest venture.json] [--i-am-deploying-to-production] [--i-am-removing-modules] [--json]`
 
 Applies exactly the approved plan: recomputes it from the current
 inputs and refuses any other digest — a stale approval cannot deploy
@@ -249,8 +249,10 @@ Two consents, deliberately separate:
 - a venture whose manifest config resolves `ENV=production` refuses
   without `--i-am-deploying-to-production`
   (`production-deploy-unauthorized`);
-- a plan that removes modules — their data leaves the served venture —
-  refuses without the same flag (`destructive-change-unauthorized`).
+- a plan that removes modules refuses without `--i-am-removing-modules`
+  (`destructive-change-unauthorized`). A removal stops serving those
+  modules and deletes no data: their tables, and the migrations that
+  created them, stay applied with their rows.
 
 ## `fz add <module> [--manifest venture.json] [--json]`
 

@@ -185,14 +185,55 @@ async fn request_link(kit: &Kit, email: &str) -> Res {
     send(kit, request).await
 }
 
-/// A `GET /consume` with the fetch metadata a browser sends when somebody
-/// clicks a link in a mail client.
+/// What a person does with the link: open it out of webmail, which lands
+/// on the confirm page, then press the button on that page. Returns the
+/// button's answer.
+///
+/// The GET carries the fetch metadata a browser sends on a click out of a
+/// mail client — cross-site, because webmail is another site — and must
+/// only ever render the confirm page (issue #483). The POST carries what
+/// a browser sends when a form on our own page is submitted to itself.
 async fn click(kit: &Kit, token: &str) -> Res {
+    let link = format!("{CONSUME}?token={token}");
+    let opened = navigate(kit, &link).await;
+    assert_eq!(opened.status, StatusCode::OK, "{}", opened.text());
+    assert!(
+        opened.cookie("__Host-fz_session").is_none(),
+        "opening the link signed somebody in"
+    );
+    assert!(
+        opened
+            .text()
+            .contains(&format!("name=\"token\" value=\"{token}\"")),
+        "the confirm page does not carry the token: {}",
+        opened.text()
+    );
+    // The form has no `action`, so it posts back to the page's own URL.
+    post_form_with(
+        kit,
+        &link,
+        &format!("token={token}"),
+        &[
+            ("host", "auth.example.test"),
+            ("origin", "https://auth.example.test"),
+            ("sec-fetch-site", "same-origin"),
+        ],
+    )
+    .await
+}
+
+/// A top-level cross-site navigation to `uri`: what a browser sends for a
+/// click out of webmail, and byte for byte what it sends when another
+/// site does `location.href = uri`.
+async fn navigate(kit: &Kit, uri: &str) -> Res {
     let request = Request::builder()
         .method(Method::GET)
-        .uri(format!("{CONSUME}?token={token}"))
+        .uri(uri)
+        .header("host", "auth.example.test")
         .header("sec-fetch-mode", "navigate")
         .header("sec-fetch-dest", "document")
+        .header("sec-fetch-site", "cross-site")
+        .header("sec-fetch-user", "?1")
         .body(axum::body::Body::empty())
         .expect("request");
     send(kit, request).await
@@ -439,7 +480,8 @@ fn a_prefetch_does_not_spend_the_token_and_a_click_still_works() {
         }
         assert_eq!(count(&kit, "sessions"), 0);
 
-        // The person then clicks, and it still works.
+        // The person then opens it and presses the button, and it still
+        // works.
         let response = click(&kit, &token).await;
         assert_eq!(response.status, StatusCode::FOUND, "{}", response.text());
         assert_eq!(count(&kit, "sessions"), 1);
@@ -521,6 +563,54 @@ fn a_cross_site_confirm_cannot_spend_a_token_or_sign_anyone_in() {
         .await;
         assert_eq!(own.status, StatusCode::FOUND, "{}", own.text());
         assert!(own.cookie("__Host-fz_session").is_some());
+    });
+}
+
+/// Login CSRF through the link itself (issue #483). An attacker requests a
+/// link for their own address, reads the token, and forces the victim's
+/// browser onto it. That navigation carries exactly the fetch metadata a
+/// click out of webmail does, so the GET must sign nobody in whatever it
+/// carries — it renders the confirm page and spends nothing. The attacker
+/// cannot press the button for the victim either: a cross-site POST is
+/// refused, which `a_cross_site_confirm_cannot_spend_a_token_or_sign_anyone_in`
+/// pins.
+#[test]
+fn a_forced_navigation_to_the_link_does_not_sign_anyone_in() {
+    pollster::block_on(async {
+        let kit = kit();
+        seed(&kit, "mallory@example.com", false).await;
+        request_link(&kit, "mallory@example.com").await;
+        let token = kit.outbox.last_token().expect("a token");
+
+        let forced = navigate(&kit, &format!("{CONSUME}?token={token}")).await;
+        assert_eq!(forced.status, StatusCode::OK, "{}", forced.text());
+        assert!(
+            forced.cookie("__Host-fz_session").is_none(),
+            "a forced navigation signed the victim in"
+        );
+        assert!(forced.location().is_none(), "the GET redirected");
+        assert_eq!(count(&kit, "sessions"), 0, "a session was issued anyway");
+        let html = forced.text();
+        assert!(html.contains("<form method=\"post\""), "{html}");
+        assert!(
+            html.contains(&format!("name=\"token\" value=\"{token}\"")),
+            "{html}"
+        );
+        let user = user_by_primary_email(&*kit.db, "mallory@example.com")
+            .await
+            .expect("query")
+            .expect("a user");
+        assert!(
+            !user.primary_email_verified,
+            "a bare GET verified the address"
+        );
+
+        // The GET spent nothing: the owner of the link can still use it,
+        // from the confirm page, same-origin.
+        let pressed = click(&kit, &token).await;
+        assert_eq!(pressed.status, StatusCode::FOUND, "{}", pressed.text());
+        assert!(pressed.cookie("__Host-fz_session").is_some());
+        assert_eq!(count(&kit, "sessions"), 1);
     });
 }
 

@@ -1,4 +1,5 @@
-//! The two read-only routes, and the statement builder they share.
+//! The four routes — two read, two erase — and the statement builder they
+//! share.
 
 use crate::erase;
 use axum::extract::{Query, State};

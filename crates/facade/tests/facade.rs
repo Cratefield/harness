@@ -91,13 +91,85 @@ fn every_feature_aliases_the_crate_it_enables() {
     }
 }
 
-/// The `[features]` entry for `name`, flattened onto one line — the
-/// declaration may wrap, as `push-wiring` does.
-fn feature_line(manifest: &str, name: &str) -> Option<String> {
+/// The README's feature table is included into the crate docs, and it
+/// drifted: eleven features had been added to the manifest without a row
+/// (issue #426). Every feature in `[features]` has exactly one row, and
+/// every row names a feature that exists.
+#[test]
+fn the_readme_lists_every_feature_once() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let manifest = std::fs::read_to_string(root.join("Cargo.toml")).expect("the facade's manifest");
+    let readme = std::fs::read_to_string(root.join("README.md")).expect("the facade's README");
+
+    // A declaration starts at the left margin; comments, blank lines and
+    // the continuation lines of a wrapped one (`push-wiring`) do not.
+    let features: Vec<&str> = features_section(&manifest)
+        .expect("the facade's manifest has a [features] section")
+        .lines()
+        .filter(|line| !line.starts_with([' ', '#', ']', '[']))
+        .filter_map(|line| line.split_once(" =").map(|(name, _)| name.trim()))
+        .filter(|name| !name.is_empty() && *name != "default")
+        .collect();
+    // The absences below would all hold over an empty list, and an empty
+    // list is exactly what a changed manifest layout would produce.
+    assert!(
+        features.len() >= 20,
+        "only {} features parsed from the manifest — the scan is reading nothing: {features:?}",
+        features.len()
+    );
+
+    // The first cell of each table row, when it is a backticked name.
+    let rows: Vec<&str> = readme
+        .lines()
+        .filter_map(|line| line.strip_prefix("| `"))
+        .filter_map(|rest| rest.split_once("` |").map(|(name, _)| name))
+        .collect();
+
+    let missing: Vec<&str> = features
+        .iter()
+        .copied()
+        .filter(|feature| !rows.contains(feature))
+        .collect();
+    assert!(
+        missing.is_empty(),
+        "features with no row in crates/facade/README.md: {missing:?}\n\
+         add a `| `<feature>` | <crate> | `cratefield::<alias>` | <what it is> |` row for each"
+    );
+
+    let unknown: Vec<&str> = rows
+        .iter()
+        .copied()
+        .filter(|row| !features.contains(row))
+        .collect();
+    assert!(
+        unknown.is_empty(),
+        "README rows for features the manifest does not declare: {unknown:?}"
+    );
+
+    let repeated: Vec<&str> = features
+        .iter()
+        .copied()
+        .filter(|feature| rows.iter().filter(|row| *row == feature).count() > 1)
+        .collect();
+    assert!(
+        repeated.is_empty(),
+        "features with more than one README row: {repeated:?}"
+    );
+}
+
+/// The manifest's `[features]` section, from its header up to the next
+/// section's.
+fn features_section(manifest: &str) -> Option<&str> {
     let features = manifest.find("\n[features]")?;
     let rest = &manifest[features..];
     let end = rest[1..].find("\n[").map_or(rest.len(), |at| at + 1);
-    let section = &rest[..end];
+    Some(&rest[..end])
+}
+
+/// The `[features]` entry for `name`, flattened onto one line — the
+/// declaration may wrap, as `push-wiring` does.
+fn feature_line(manifest: &str, name: &str) -> Option<String> {
+    let section = features_section(manifest)?;
     let at = section.find(&format!("\n{name} ="))?;
     let from = &section[at + 1..];
     let close = from.find(']')?;
@@ -122,11 +194,17 @@ fn every_publishable_library_is_reachable_from_the_facade() {
     // classifier adapter that needs the Workers `env.AI` binding (and the
     // `worker` crate): a facade feature would be platform-blind, so a
     // venture on Workers depends on it directly and no native venture ever
-    // pulls `worker` through here (issue #456).
+    // pulls `worker` through here (issue #456). tables is build-side: the
+    // manifest and the CLI depend on it, but a venture never names it —
+    // generated code reaches its tables through `cratefield::tables_api`,
+    // and `Schema` is re-exported through `cratefield::manifest`. A
+    // `tables` alias would also sit one word away from the generated
+    // venture's own `crate::tables` module (issue #492).
     const NOT_LIBRARIES: &[&str] = &[
         "cratefield-cli",
         "cratefield",
         "cratefield-adapter-workers-ai",
+        "cratefield-tables",
     ];
 
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))

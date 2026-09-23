@@ -19,6 +19,11 @@
 //! A `public-read` table publishes its reads and **not** its writes,
 //! because there are none: the level is exactly that.
 //!
+//! A read publishes what it answers as its output: the row schema for the
+//! single row, and for the page an envelope of those rows beside the
+//! `next` cursor. It is the same derived schema a write takes as its body,
+//! so a consumer of a table it may only read still learns what a row is.
+//!
 //! Where a table's single-row actions address a row depends on its key's
 //! arity, and the published path says which: `/{table}/{key}` puts the
 //! key in the path — a key of one column — and `/{table}/__by` puts it in
@@ -41,8 +46,9 @@ use crate::access::TableApi;
 
 /// The surface for a venture's declared tables.
 ///
-/// Two actions per readable table — the page and the single row — and
-/// three more for a writable one.
+/// Two actions per readable table — the page and the single row, each
+/// publishing the shape it answers with as its output — and three more
+/// for a writable one.
 #[must_use]
 pub fn surface(tables: &[TableApi]) -> Surface {
     let mut out = Surface::new();
@@ -52,7 +58,8 @@ pub fn surface(tables: &[TableApi]) -> Surface {
         out = out.action(
             Action::new(format!("list-{name}"), Method::GET, format!("/{name}"))
                 .audience(audience)
-                .outcome(Outcome::Json),
+                .outcome(Outcome::Json)
+                .output_schema(page_schema(&api.table)),
         );
         // The single-row spelling. A key of one column is a path segment;
         // a wider key is named in the query, at the harness's reserved
@@ -67,7 +74,8 @@ pub fn surface(tables: &[TableApi]) -> Surface {
         };
         let mut read = Action::new(format!("read-{name}"), Method::GET, row_path.clone())
             .audience(audience)
-            .outcome(Outcome::Json);
+            .outcome(Outcome::Json)
+            .output_schema(body_schema(&api.table));
         if !by_path {
             // The path carries no key, so the query does — and a GET's
             // input is its query, so the published schema is what names
@@ -152,6 +160,29 @@ fn writable(access: Access) -> bool {
 fn body_schema(table: &cratefield_tables::TableDef) -> schemars::Schema {
     schemars::Schema::try_from(cratefield_tables::json_schema(table))
         .unwrap_or_else(|_never| schemars::Schema::default())
+}
+
+/// The page `list-*` answers with: the rows, each described by the row
+/// schema, and `next`, the cursor to send back as `?after=` — `null` on a
+/// page that came back short, the last. The rows' schema drops `$schema`,
+/// which belongs at the root of a document and not inside one.
+fn page_schema(table: &cratefield_tables::TableDef) -> schemars::Schema {
+    let mut row = cratefield_tables::json_schema(table);
+    if let Some(object) = row.as_object_mut() {
+        object.remove("$schema");
+    }
+    let page = serde_json::json!({
+        "type": "object",
+        "properties": {
+            "rows": { "type": "array", "items": row },
+            "next": {
+                "type": ["object", "null"],
+                "description": "The cursor to send back as `?after=`; null on the last page.",
+            },
+        },
+        "required": ["rows", "next"],
+    });
+    schemars::Schema::try_from(page).unwrap_or_else(|_never| schemars::Schema::default())
 }
 
 /// The `__by` query's JSON Schema: one property per primary-key column,

@@ -5,7 +5,8 @@
 //! An axum `Router` is opaque, so nothing here is discovered: a module says
 //! what it offers, and the input schema of each action is derived with
 //! `schemars` from the same serde type the handler deserializes, which is
-//! what keeps the declaration from drifting.
+//! what keeps the declaration from drifting. An action whose outcome is
+//! `Json` may also publish an output schema, the shape of what it answers.
 //!
 //! UI hints ride on the schema as `x-cf-*` extension keywords set with
 //! `#[schemars(extend("x-cf-label" = "Email"))]` on a field. The keywords
@@ -120,6 +121,11 @@ pub struct Action {
     /// `None` for an action that takes nothing.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub input: Option<Schema>,
+    /// JSON Schema of the body a [`Json`](Outcome::Json) outcome answers
+    /// with, so a consumer knows the shape of a read before calling it.
+    /// `None` when the module does not say.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub output: Option<Schema>,
     pub outcome: Outcome,
     /// The explicit protection this route demands (issue #133). Kept in
     /// sync with [`captcha`](Self::captcha) by the builders and asserted
@@ -172,6 +178,7 @@ impl Action {
             path: path.into(),
             audience: Audience::Public,
             input: None,
+            output: None,
             outcome: Outcome::Accepted {
                 message: "Thanks, you're in.".to_owned(),
             },
@@ -198,6 +205,21 @@ impl Action {
     #[must_use]
     pub fn input_schema(mut self, schema: Schema) -> Self {
         self.input = Some(schema);
+        self
+    }
+
+    /// Derives the output schema from the type the handler answers with.
+    #[must_use]
+    pub fn output<T: JsonSchema>(mut self) -> Self {
+        self.output = Some(schema_for::<T>());
+        self
+    }
+
+    /// Supplies an output schema built by hand (a row shape declared at
+    /// runtime rather than by a Rust type).
+    #[must_use]
+    pub fn output_schema(mut self, schema: Schema) -> Self {
+        self.output = Some(schema);
         self
     }
 
@@ -353,7 +375,8 @@ impl Surface {
     /// every problem (the `Harness::build` convention): duplicate or
     /// malformed action names, paths not starting with `/`, an `Admin`
     /// action outside `/admin/` (or a non-admin one inside it), an input
-    /// schema that is not an object, and views naming unknown actions.
+    /// or output schema that is not an object, an output on an action whose
+    /// outcome is not `Json`, and views naming unknown actions.
     pub fn validate(&self, module: &str, errors: &mut ConfigError) {
         let mut seen: HashSet<&str> = HashSet::new();
         for action in &self.actions {
@@ -404,6 +427,20 @@ impl Surface {
                     "module `{module}` surface action `{name}` input schema must describe an \
                      object (a struct with named fields), so a renderer can lay out fields"
                 ));
+            }
+            if let Some(schema) = &action.output {
+                if !is_object_schema(schema) {
+                    errors.push(format!(
+                        "module `{module}` surface action `{name}` output schema must describe \
+                         an object, the JSON body the action answers with"
+                    ));
+                }
+                if action.outcome != Outcome::Json {
+                    errors.push(format!(
+                        "module `{module}` surface action `{name}` declares an output schema \
+                         but its outcome is not json; only a JSON body has a shape to publish"
+                    ));
+                }
             }
             match action.policy {
                 crate::route_policy::RoutePolicy::HumanForm if !action.captcha => {
@@ -866,7 +903,8 @@ mod tests {
             .action(
                 Action::get("export", "/admin/export.csv")
                     .audience(Audience::Admin)
-                    .outcome(Outcome::Json),
+                    .outcome(Outcome::Json)
+                    .output::<JoinBody>(),
             )
             .view(View::form("join"))
             .view(View::table("export", vec![Column::new("email", "Email")]));
@@ -886,6 +924,12 @@ mod tests {
             .action(Action::post("hidden", "/admin/thing"))
             .action(Action::delete("wipe", "/wipe"))
             .action(Action::post("list", "/list").input::<NotAnObject>())
+            .action(
+                Action::get("rows", "/rows")
+                    .outcome(Outcome::Json)
+                    .output::<NotAnObject>(),
+            )
+            .action(Action::post("send", "/send").output::<JoinBody>())
             .view(View::form("missing"));
         let errors = errors_of(&surface);
         let joined = errors.join("\n");
@@ -896,6 +940,8 @@ mod tests {
             "action `hidden` is under /admin/ but its audience is not admin",
             "action `wipe` is admin but its path `/wipe` is not under /admin/",
             "action `list` input schema must describe an object",
+            "action `rows` output schema must describe an object",
+            "action `send` declares an output schema but its outcome is not json",
             "view references action `missing`",
         ] {
             assert!(joined.contains(needle), "missing `{needle}` in:\n{joined}");

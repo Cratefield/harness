@@ -44,7 +44,9 @@ is a list of **actions** and **views**:
 - An `Action` names a route the module already serves (method and path
   relative to `/v1/<name>`), its **audience** (`Public`, `Admin`, or `Link`
   for signed-token GETs such as `confirm`), its **input schema**, and its
-  **outcome** (`Accepted { message }`, `Redirect`, or `Json`).
+  **outcome** (`Accepted { message }`, `Redirect`, or `Json`). A `Json`
+  action may also carry an **output schema**, the body it answers with
+  (added by issue #455).
 - The input schema is derived with `schemars` from the **same serde type the
   handler deserializes**, so the surface cannot drift from the handler. UI
   hints (label, placeholder, widget, hidden) are `x-cf-*` extension keywords

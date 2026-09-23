@@ -68,6 +68,8 @@ async fn join_accepts_an_email() {
   two-concurrent-requests request-id test (ADR 0007), and — for modules
   with a `well_known` router — that it serves at the root
   `/.well-known` and never under `/v1` (#46).
+- `full_fake_ports()` — a `Ports` bundle with every `Port` wired to a
+  fake: the one conformance's visibility check uses.
 - `assert_wasm_safe_deps(env!("CARGO_PKG_NAME"))` — `cargo tree` check:
   no `worker`/`wasm-bindgen`/`tokio`/`reqwest` in the module's normal
   dependency tree.

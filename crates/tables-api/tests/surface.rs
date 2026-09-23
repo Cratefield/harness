@@ -421,3 +421,37 @@ fn a_composite_key_tables_replace_publishes_which_key_columns_go_in_the_query() 
         "the query names key columns only, as the route refuses the rest"
     );
 }
+
+#[test]
+fn a_public_read_table_publishes_what_its_reads_answer() {
+    // A `public-read` table publishes no write, so no action carries the
+    // row as its input; without an output a consumer would know the
+    // routes and not what a row is.
+    let published = for_access(Access::PublicRead);
+    let output = |name: &str| {
+        let action = published
+            .actions
+            .iter()
+            .find(|action| action.name == name)
+            .expect("published");
+        serde_json::to_value(action.output.as_ref().expect("an output")).expect("serializes")
+    };
+    let row = cratefield_tables::json_schema(&note());
+    assert_eq!(output("read-note"), row, "a single read answers the row");
+
+    let page = output("list-note");
+    assert_eq!(page["type"], "object");
+    assert_eq!(page["required"], serde_json::json!(["rows", "next"]));
+    assert_eq!(page["properties"]["rows"]["type"], "array");
+    let mut items = row;
+    items
+        .as_object_mut()
+        .expect("an object schema")
+        .remove("$schema");
+    assert_eq!(page["properties"]["rows"]["items"], items);
+    assert_eq!(
+        page["properties"]["next"]["type"],
+        serde_json::json!(["object", "null"]),
+        "the last page's cursor is null"
+    );
+}
