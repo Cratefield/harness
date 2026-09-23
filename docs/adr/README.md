@@ -89,6 +89,17 @@ serves the catalogue in-process — read at runtime, never copied. A
 TypeScript server beside `tools/cfjs` and a richer API of its own were
 rejected — each is a second place that can disagree with the CLI.
 
+ADR 0022 admits a cheaper classifier only on measurement (#457). Nothing
+routes to the cheap adapter by default. `RoutingClassifier` sends it a
+kind of question only when a committed `AgreementReport` shows that this
+pair of adapters agree on that kind. The agreement is measured at the
+thresholds the router will use, and those thresholds belong to the cheap
+adapter and name its `Calibration`. A threshold tuned under another
+calibration is refused at wiring. Unsure cheap answers escalate together
+in one second call. Off and pinned modes bypass routing. Every call is
+recorded with estimated tokens, because the port reports no usage, and
+integer prices, where an unpriced adapter is unknown rather than free.
+
 [0102](0102-crypto-crate.md) chose the crypto crate: RustCrypto's
 `chacha20poly1305`.
 
