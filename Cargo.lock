@@ -1129,6 +1129,7 @@ dependencies = [
  "cratefield-module-privacy",
  "cratefield-provisioning",
  "cratefield-testing",
+ "factory0-auth-core",
  "factory0-auth-meta",
  "factory0-auth-oidc",
  "getrandom 0.4.3",

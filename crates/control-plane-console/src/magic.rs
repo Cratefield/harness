@@ -29,25 +29,28 @@
 //!    simultaneous clicks, not a read-then-write race). Default fifteen
 //!    minutes. A mail archive is not an authentication factor.
 //!
-//! **Machines follow links too, and browsers guess.** Outlook, corporate
-//! scanners and several mobile clients fetch every URL in a message, and
-//! Chrome *prerenders* a URL typed in the address bar — which against a
-//! naive single-use token spends it before the person ever sees a page.
-//! A `GET` therefore completes the sign-in only when the request looks
-//! like a person clicking: the fetch metadata a top-level navigation
-//! sends (`Sec-Fetch-Mode: navigate`, `Sec-Fetch-Dest: document`) **and**
-//! no header saying the browser is speculating. That second half is not
-//! optional — a prerender is a navigation and sends exactly the same
-//! metadata a click does, so fetch metadata alone let Chrome spend every
-//! link and show the person "no longer valid" for one they had never
-//! followed. `Sec-Purpose` (and the older `Purpose: prefetch`) is how a
-//! browser says it is guessing. Anything that is not a click gets a
-//! confirm button, including requests with no fetch metadata at all — an
-//! old browser must cost one click, never a refusal. What the
-//! heuristic cannot catch, said because it matters: a scanner that copies
-//! a browser's headers, or renders mail in a real engine. The confirm
-//! page is identical for a real and an invented token and reads nothing
-//! to produce itself, so it is not an oracle either.
+//! **The link asks; only the button acts.** `GET /magic-link/consume`
+//! never spends the token and never signs anybody in: it always renders
+//! a confirm page, and only that page's same-origin `POST` redeems the
+//! link. Two reasons, either of which would be enough:
+//!
+//! - Machines follow links too, and browsers guess. Outlook, corporate
+//!   scanners and several mobile clients fetch every URL in a message,
+//!   and Chrome *prerenders* a URL typed in the address bar — which
+//!   against a naive single-use token spends it before the person ever
+//!   sees a page.
+//! - A GET that signs in is login CSRF (issue #524, the console's copy of
+//!   auth #483). An attacker asks for a link to their own invited
+//!   address, reads the token, and sends an operator's browser to it; that
+//!   forced cross-site navigation carries exactly the fetch metadata a
+//!   click out of webmail does, so no header can tell the two apart, and
+//!   the operator would be signed in as the attacker.
+//!
+//! The `POST` is refused unless the browser reports it as coming from the
+//! console's own origin (`factory0_auth_core::csrf::require_same_origin`),
+//! so another site cannot press the button for somebody either. The
+//! confirm page is identical for a real and an invented token and reads
+//! nothing to produce itself, so it is not an oracle either.
 //!
 //! **Where no mailer is configured the option does not exist.** The login
 //! page checks for the `Mailer` port and `CONSOLE_MAGIC_LINK_FROM` before
@@ -62,7 +65,7 @@ use cratefield_core::{
     Message, ModuleConfig, ModuleContext, SendOutcome, normalize_email, rate_limit_keys,
     rate_limited,
 };
-use http::{HeaderMap, StatusCode, header};
+use http::{HeaderMap, StatusCode, Uri, header};
 use serde::Deserialize;
 use sha2::{Digest as _, Sha256};
 use std::sync::Arc;
@@ -281,19 +284,13 @@ pub(crate) async fn magic_request(
 
 /// `GET /magic-link/consume?token=…` — the URL in the mail.
 ///
-/// Completes the sign-in only when the request looks like a person
-/// clicking; a prefetch or a metadata-less client gets the confirm button,
-/// which costs one click and works everywhere. The button page is the
-/// same for a real and an invented token, and nothing is read or spent to
-/// produce it.
-pub(crate) async fn magic_consume_get(
-    State(state): State<Arc<ConsoleState>>,
-    headers: HeaderMap,
-    Query(params): Query<ConsumeParams>,
-) -> Response {
-    if looks_like_a_click(&headers) {
-        return finish(state, params.token.unwrap_or_default()).await;
-    }
+/// **Never spends the token and never signs anybody in**, whatever the
+/// request carries: a click, a prefetch, a prerender and a navigation
+/// forced by another site all get the same confirm page, and only that
+/// page's same-origin `POST` redeems the link (issue #524). The page is
+/// the same for a real and an invented token, and nothing is read or
+/// spent to produce it.
+pub(crate) async fn magic_consume_get(Query(params): Query<ConsumeParams>) -> Response {
     confirm_page(params.token.as_deref().unwrap_or_default())
 }
 
@@ -301,8 +298,19 @@ pub(crate) async fn magic_consume_get(
 /// credential, posted back by the person holding the mail.
 pub(crate) async fn magic_consume_post(
     State(state): State<Arc<ConsoleState>>,
+    headers: HeaderMap,
+    uri: Uri,
     body: String,
 ) -> Response {
+    // Redeeming the token mints a session, so a form on another site must
+    // not be able to press this button for somebody. This is the only way
+    // in: the GET above never redeems, because a click out of a mail
+    // client is inherently cross-site and so is a forced navigation
+    // (issue #524), and only a request from our own page can be told
+    // apart from both.
+    if let Err(problem) = factory0_auth_core::csrf::require_same_origin(&headers, &uri) {
+        return problem.into_response();
+    }
     let form = parse_form(&body);
     let token = form
         .iter()
@@ -371,52 +379,6 @@ async fn finish(state: Arc<ConsoleState>, token: String) -> Response {
     }
 }
 
-/// Whether a request looks like a person clicking a link in a mail client:
-/// the fetch metadata every current browser sends on a top-level
-/// navigation, and **no** header saying the browser is guessing.
-/// Deliberately narrow: the cost of a false negative is one extra click on
-/// the confirm page, and the cost of a false positive is a speculative
-/// load spending a single-use token.
-///
-/// The speculative half is not hypothetical. Chrome prerenders a URL typed
-/// in the address bar, and a prerender *is* a navigation — it sends
-/// `Sec-Fetch-Mode: navigate` and `Sec-Fetch-Dest: document` exactly as a
-/// click does. Against fetch metadata alone, Chrome spent every link
-/// before its own page load could use it, and the person saw "no longer
-/// valid" on a link they had never followed. `Sec-Purpose` is the header
-/// browsers send to say the request is speculative (`prefetch`,
-/// `prefetch;prerender`), and `Purpose: prefetch` is the older spelling
-/// several clients and scanners still use. A request carrying either is a
-/// machine whatever its fetch mode claims, and gets the confirm page.
-fn looks_like_a_click(headers: &HeaderMap) -> bool {
-    if is_speculative(headers) {
-        return false;
-    }
-    let mode = headers
-        .get("sec-fetch-mode")
-        .and_then(|value| value.to_str().ok());
-    let dest = headers
-        .get("sec-fetch-dest")
-        .and_then(|value| value.to_str().ok());
-    mode == Some("navigate") && dest == Some("document")
-}
-
-/// Whether the browser is telling us this request is a guess rather than
-/// an act: a prefetch, a prerender, or whatever a future spelling of the
-/// same idea calls itself. Matched loosely on purpose — the values are a
-/// list that grows (`prefetch`, `prefetch;prerender`), and a header that
-/// mentions either at all is not a person.
-fn is_speculative(headers: &HeaderMap) -> bool {
-    ["sec-purpose", "purpose", "x-purpose", "x-moz"]
-        .iter()
-        .filter_map(|name| headers.get(*name))
-        .filter_map(|value| value.to_str().ok())
-        .any(|value| {
-            let value = value.to_ascii_lowercase();
-            value.contains("prefetch") || value.contains("prerender") || value.contains("preview")
-        })
-}
-
 /// The one page every dead link answers with — used, expired, or never
 /// issued. Telling them apart would tell an attacker which third it is.
 fn link_invalid_page() -> Response {
@@ -435,8 +397,9 @@ fn link_invalid_page() -> Response {
         .into_response()
 }
 
-/// The confirm button a prefetch (or a browser without fetch metadata)
-/// gets instead of a spent token.
+/// The confirm button every `GET` of the link gets instead of a spent
+/// token. Its form posts to the console's own origin, which is what lets
+/// [`magic_consume_post`] tell it apart from a form on another site.
 fn confirm_page(token: &str) -> Response {
     (
         StatusCode::OK,
