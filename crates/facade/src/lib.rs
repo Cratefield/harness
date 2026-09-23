@@ -1,7 +1,13 @@
 //! `cratefield` is the harness as one dependency: a facade that re-exports
-//! `cratefield-core` at the root and the other library crates behind
-//! features of their own (all but the Workers-only
-//! `cratefield-adapter-workers-ai`). It contains no code, so
+//! `cratefield-core` at the root and the other publishable library crates
+//! behind features of their own, all but two: the Workers-only
+//! `cratefield-adapter-workers-ai`, which needs the Workers `env.AI`
+//! binding, so a venture on Workers depends on it directly; and the
+//! build-side `cratefield-tables`, which the manifest and the CLI use but a
+//! venture never names — its tables are served through
+//! `cratefield::tables_api`, and `Schema` is re-exported through
+//! `cratefield::manifest`. The `fz` binary, `cratefield-cli`, is not a
+//! library and is installed on its own. It contains no code, so
 //! `cratefield::Harness` and `cratefield_core::Harness` are one type and a
 //! venture can move between the facade and the parts freely.
 //!
