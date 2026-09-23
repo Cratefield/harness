@@ -26,6 +26,10 @@ cratefield-provisioning = { path = "../control-plane-provisioning" }
 # recorded in those modules' docs.
 factory0-auth-oidc = { path = "../auth-oidc" }
 factory0-auth-meta = { path = "../auth-meta" }
+# The one same-origin guard (`csrf::require_same_origin`) that every
+# session-minting POST in the auth crates uses; the magic link's confirm
+# button uses it too (issue #524). Already built through auth-oidc.
+factory0-auth-core = { path = "../auth-core" }
 axum = { workspace = true }
 http = { workspace = true }
 bytes = "1"

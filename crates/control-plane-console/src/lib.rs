@@ -2362,10 +2362,58 @@ mod tests {
         path.trim_end_matches(['.', ',', ')']).to_owned()
     }
 
-    const CLICK_HEADERS: &[(&str, &str)] = &[
+    /// A top-level cross-site navigation: what a browser sends for a click
+    /// out of webmail, and byte for byte what it sends when another site
+    /// does `location.href = link` (issue #524).
+    const NAVIGATE_HEADERS: &[(&str, &str)] = &[
+        ("host", "console.cratefield.com"),
         ("sec-fetch-mode", "navigate"),
         ("sec-fetch-dest", "document"),
+        ("sec-fetch-site", "cross-site"),
+        ("sec-fetch-user", "?1"),
     ];
+
+    /// What a browser sends when a form on the console's own page is
+    /// submitted to the console.
+    const SAME_ORIGIN_POST_HEADERS: &[(&str, &str)] = &[
+        ("host", "console.cratefield.com"),
+        ("origin", "https://console.cratefield.com"),
+        ("sec-fetch-site", "same-origin"),
+    ];
+
+    /// Whether a reply set the console's session cookie.
+    fn signs_in(reply: &Reply) -> bool {
+        reply
+            .set_cookies
+            .iter()
+            .any(|cookie| cookie.starts_with("cf_session="))
+    }
+
+    /// What a person does with the mailed link: open it, which only ever
+    /// lands on the confirm page, then press the button on that page.
+    /// Returns the button's answer.
+    async fn open_and_confirm(kit: &Kit, link: &str, token: &str) -> Reply {
+        let opened = call(&kit.router, get(link, NAVIGATE_HEADERS)).await;
+        assert_eq!(opened.status, StatusCode::OK, "{}", opened.body);
+        assert!(!signs_in(&opened), "opening the link signed somebody in");
+        assert!(
+            opened.body.contains(&format!(
+                "action=\"{BASE}/magic-link/consume\">\
+                 <input type=\"hidden\" name=\"token\" value=\"{token}\">"
+            )),
+            "the confirm page does not post the token back: {}",
+            opened.body
+        );
+        call(
+            &kit.router,
+            post_form(
+                &format!("{BASE}/magic-link/consume"),
+                SAME_ORIGIN_POST_HEADERS,
+                &format!("token={token}"),
+            ),
+        )
+        .await
+    }
 
     #[pollster::test]
     async fn the_login_page_with_nothing_configured_offers_dev_login_and_names_the_rest() {
@@ -2493,8 +2541,8 @@ mod tests {
             "the mailed link must address the route this console mounts"
         );
 
-        // Following the link as a person clicking would lands a session.
-        let landed = call(&kit.router, get(&clicked, CLICK_HEADERS)).await;
+        // Opening the link and pressing the button lands a session.
+        let landed = open_and_confirm(&kit, &clicked, &token).await;
         assert_eq!(landed.status, StatusCode::SEE_OTHER);
         assert_eq!(landed.location, "/v1/console");
         let session_cookie = landed
@@ -2502,20 +2550,13 @@ mod tests {
             .iter()
             .find(|cookie| cookie.starts_with("cf_session="))
             .expect("a session cookie");
-        let token = session_token_from_cookie_header(session_cookie).unwrap();
-        let session = read_session(&signer(), token).expect("a proven session");
+        let session_token = session_token_from_cookie_header(session_cookie).unwrap();
+        let session = read_session(&signer(), session_token).expect("a proven session");
         assert_eq!(session.account_id, "op@cratefield.com");
 
         // The same link again is dead: a mail archive is not an
         // authentication factor.
-        let again = call(
-            &kit.router,
-            get(
-                &format!("/v1/console/magic-link/consume?token={token}"),
-                CLICK_HEADERS,
-            ),
-        )
-        .await;
+        let again = open_and_confirm(&kit, &clicked, &token).await;
         assert_eq!(again.status, StatusCode::BAD_REQUEST);
         assert!(again.body.contains("no longer valid"));
     }
@@ -2590,12 +2631,10 @@ mod tests {
         let token = token_from(&kit.mailer.last_message().expect("the mail"));
 
         kit.clock.advance(61);
-        let late = call(
-            &kit.router,
-            get(
-                &format!("/v1/console/magic-link/consume?token={token}"),
-                CLICK_HEADERS,
-            ),
+        let late = open_and_confirm(
+            &kit,
+            &format!("/v1/console/magic-link/consume?token={token}"),
+            &token,
         )
         .await;
         assert_eq!(late.status, StatusCode::BAD_REQUEST);
@@ -2645,23 +2684,132 @@ mod tests {
             "the prefetch signed nobody in"
         );
 
-        // The person's click — the confirm button — still works.
+        // The person's click — the confirm button, posted from the
+        // console's own page — still works.
         let confirmed = call(
             &kit.router,
             post_form(
                 "/v1/console/magic-link/consume",
-                &[],
+                SAME_ORIGIN_POST_HEADERS,
                 &format!("token={token}"),
             ),
         )
         .await;
         assert_eq!(confirmed.status, StatusCode::SEE_OTHER);
+        assert!(signs_in(&confirmed));
+    }
+
+    #[pollster::test]
+    async fn a_forced_navigation_to_the_magic_link_does_not_sign_anyone_in() {
+        // Login CSRF through the link itself (issue #524). An attacker
+        // with an invited address asks for a link, reads the token out of
+        // their own mail, and forces an operator's browser onto it — an
+        // `<img>`, an iframe, `location.href`. That navigation carries
+        // exactly the fetch metadata a click out of webmail does, so the
+        // GET must sign nobody in whatever it carries.
+        let kit = kit(cratefield_core::MapConfig::from_pairs([
+            ("CONSOLE_MAGIC_LINK_FROM", "noreply@cratefield.com"),
+            ("CONSOLE_BASE_URL", "https://console.cratefield.com"),
+        ]));
+        invite(&kit, "mallory@cratefield.com").await;
+        call(
+            &kit.router,
+            post_form(
+                "/v1/console/magic-link/request",
+                &[],
+                "email=mallory@cratefield.com",
+            ),
+        )
+        .await;
+        let mail = kit.mailer.last_message().expect("the mail");
+        let token = token_from(&mail);
+        let link = link_path_from(&mail);
+
+        let forced = call(&kit.router, get(&link, NAVIGATE_HEADERS)).await;
+        assert_eq!(forced.status, StatusCode::OK, "{}", forced.body);
         assert!(
-            confirmed
-                .set_cookies
-                .iter()
-                .any(|cookie| cookie.starts_with("cf_session="))
+            forced.set_cookies.is_empty(),
+            "a forced navigation set a cookie: {:?}",
+            forced.set_cookies
         );
+        assert!(forced.location.is_empty(), "the GET redirected");
+        assert!(forced.body.contains("Sign in to Cratefield?"));
+
+        // The GET spent nothing: the owner of the link can still use it,
+        // from the confirm page, same-origin.
+        let pressed = open_and_confirm(&kit, &link, &token).await;
+        assert_eq!(pressed.status, StatusCode::SEE_OTHER, "{}", pressed.body);
+        assert!(signs_in(&pressed));
+    }
+
+    #[pollster::test]
+    async fn a_cross_site_confirm_cannot_spend_a_magic_link_or_sign_anyone_in() {
+        // The other half of issue #524: the attacker cannot press the
+        // button for the operator either. A form on another site posting
+        // the token is refused before the token is looked at.
+        let kit = kit(cratefield_core::MapConfig::from_pairs([
+            ("CONSOLE_MAGIC_LINK_FROM", "noreply@cratefield.com"),
+            ("CONSOLE_BASE_URL", "https://console.cratefield.com"),
+        ]));
+        invite(&kit, "mallory@cratefield.com").await;
+        call(
+            &kit.router,
+            post_form(
+                "/v1/console/magic-link/request",
+                &[],
+                "email=mallory@cratefield.com",
+            ),
+        )
+        .await;
+        let mail = kit.mailer.last_message().expect("the mail");
+        let token = token_from(&mail);
+
+        for headers in [
+            // Another site's form, as every current browser reports it.
+            &[
+                ("host", "console.cratefield.com"),
+                ("origin", "https://evil.example"),
+                ("sec-fetch-site", "cross-site"),
+            ][..],
+            // A sibling subdomain: same-site is still not same-origin.
+            &[
+                ("host", "console.cratefield.com"),
+                ("origin", "https://evil.cratefield.com"),
+                ("sec-fetch-site", "same-site"),
+            ][..],
+            // A browser that sends only the origin.
+            &[
+                ("host", "console.cratefield.com"),
+                ("origin", "https://evil.example"),
+            ][..],
+        ] {
+            let refused = call(
+                &kit.router,
+                post_form(
+                    "/v1/console/magic-link/consume",
+                    headers,
+                    &format!("token={token}"),
+                ),
+            )
+            .await;
+            assert_eq!(
+                refused.status,
+                StatusCode::FORBIDDEN,
+                "{headers:?}: {}",
+                refused.body
+            );
+            assert!(
+                refused.body.contains("auth/cross-site-request"),
+                "{headers:?} was not refused as cross-site: {}",
+                refused.body
+            );
+            assert!(!signs_in(&refused), "{headers:?} signed somebody in");
+        }
+
+        // Refused, not spent: the link still works from its own page.
+        let pressed = open_and_confirm(&kit, &link_path_from(&mail), &token).await;
+        assert_eq!(pressed.status, StatusCode::SEE_OTHER, "{}", pressed.body);
+        assert!(signs_in(&pressed));
     }
 
     #[pollster::test]
@@ -2717,25 +2865,15 @@ mod tests {
                 speculative.0,
                 guessed.body
             );
-            assert!(
-                !guessed
-                    .set_cookies
-                    .iter()
-                    .any(|cookie| cookie.starts_with("cf_session=")),
-                "{} signed somebody in",
-                speculative.0
-            );
+            assert!(!signs_in(&guessed), "{} signed somebody in", speculative.0);
         }
 
         // The positive half, and the point: after all that guessing the
         // link is still the person's to use, and their click works.
-        let clicked = call(&kit.router, get(&link, CLICK_HEADERS)).await;
+        let clicked = open_and_confirm(&kit, &link, &token).await;
         assert_eq!(clicked.status, StatusCode::SEE_OTHER, "{}", clicked.body);
         assert!(
-            clicked
-                .set_cookies
-                .iter()
-                .any(|cookie| cookie.starts_with("cf_session=")),
+            signs_in(&clicked),
             "the person's own click must still land a session"
         );
     }
@@ -2772,12 +2910,10 @@ mod tests {
             .await
             .expect("revoke");
 
-        let refused = call(
-            &kit.router,
-            get(
-                &format!("/v1/console/magic-link/consume?token={token}"),
-                CLICK_HEADERS,
-            ),
+        let refused = open_and_confirm(
+            &kit,
+            &format!("/v1/console/magic-link/consume?token={token}"),
+            &token,
         )
         .await;
         assert_eq!(refused.status, StatusCode::FORBIDDEN);
