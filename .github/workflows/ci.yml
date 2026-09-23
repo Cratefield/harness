@@ -196,6 +196,24 @@ jobs:
       - uses: oven-sh/setup-bun@v2
       - run: tools/doc-commands.sh
 
+  package:
+    # Every other build reads the source tree, so a file `include_str!`
+    # needs but a crate's `include` list drops compiles here and fails only
+    # at publish (issue #499). This packages the publishable crates and
+    # builds them from their tarballs, and holds docs/RELEASING.md's
+    # first-publish list to the workspace (issues #489, #490, #491, #493,
+    # #495). No credentials: nothing is uploaded.
+    name: cargo package
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.98.1"
+      - uses: Swatinem/rust-cache@v2
+      - name: "cargo package: publish order, file lists, verification build"
+        run: tools/package-check.sh
+
   webpush-ntfy:
     # No `#` in the name: GitHub truncates a check-run name there (issue #34).
     name: web push conformance against a real ntfy server

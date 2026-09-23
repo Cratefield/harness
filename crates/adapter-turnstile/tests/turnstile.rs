@@ -506,12 +506,32 @@ impl LineVisitor {
 
 /// Runs `run` under the capturing subscriber, returning the emitted lines
 /// and whatever `run` produced.
+///
+/// Tests run in parallel, and tracing caches each callsite's interest
+/// globally. While at most one dispatcher is registered, tracing computes
+/// that interest from whichever thread registers the callsite first, so a
+/// parallel test with no subscriber could cache `never` for the warn this
+/// test waits on, and the line would never arrive (a flake, about one run
+/// in three). Keeping a second dispatcher alive for the whole process makes
+/// tracing consult every registered dispatcher instead, and rebuilding the
+/// cache under the scoped default clears a `never` cached before either
+/// existed.
 fn captured<T>(run: impl FnOnce() -> T) -> (Vec<String>, T) {
+    static KEEP_MULTI_DISPATCH: std::sync::OnceLock<tracing::dispatcher::Dispatch> =
+        std::sync::OnceLock::new();
+    KEEP_MULTI_DISPATCH.get_or_init(|| {
+        tracing::dispatcher::Dispatch::new(CapturingSubscriber {
+            lines: Arc::new(Mutex::new(Vec::new())),
+        })
+    });
     let lines = Arc::new(Mutex::new(Vec::new()));
     let dispatch = tracing::dispatcher::Dispatch::new(CapturingSubscriber {
         lines: Arc::clone(&lines),
     });
-    let value = tracing::dispatcher::with_default(&dispatch, run);
+    let value = tracing::dispatcher::with_default(&dispatch, || {
+        tracing::callsite::rebuild_interest_cache();
+        run()
+    });
     let lines = lines.lock().expect("log lock").clone();
     (lines, value)
 }

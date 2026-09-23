@@ -7,9 +7,9 @@ build/
 PROGRESS.md
 
 # Agent scratch that belongs in the worktree, never in the repo. BRIEF.md
-# reached main once, in #250. The other guard is
-# `cargo package --list` (docs/RELEASING.md), and that one only catches a
-# root file that would ship inside a published crate.
+# reached main once, in #250. The other guard is the `package` CI job's
+# deny-list (tools/package-check.sh), and that one only catches a
+# *BRIEF.md or PROGRESS.md that would ship inside a published crate.
 /BRIEF.md
 /BUILD-BRIEF.md
 /*-BRIEF.md
