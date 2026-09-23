@@ -484,7 +484,9 @@ pub fn production_readiness(
     }
     if guards.needs_signer() && !signer_ready {
         errors.push(format!(
-            "production venture has signed-link public writes from [{}] but the Signer port              is not provided — the magic links, challenges and unsubscribe links those routes              verify cannot be issued or checked without one (issue #143)",
+            "production venture has signed-link public writes from [{}] but the Signer port \
+             is not provided — the magic links, challenges and unsubscribe links those \
+             routes verify cannot be issued or checked without one (issue #143)",
             guards.signed_link_modules.join(", ")
         ));
     }
@@ -992,6 +994,14 @@ mod tests {
         let errors = check(VentureEnv::Production, false);
         assert_eq!(errors.len(), 1, "{errors:?}");
         assert!(errors[0].contains("Signer"), "{}", errors[0]);
+        // The literal is split across lines; it renders as one sentence, the
+        // same fix #511 made to the ENV warning (#512 made this reachable at boot).
+        assert!(!errors[0].contains("  "), "{}", errors[0]);
+        assert!(
+            errors[0].contains("but the Signer port is not provided"),
+            "{}",
+            errors[0]
+        );
         assert!(check(VentureEnv::Production, true).is_empty());
         assert!(check(VentureEnv::Development, false).is_empty());
     }
