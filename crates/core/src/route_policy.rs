@@ -388,7 +388,11 @@ pub fn deployed_env(compiled: VentureEnv, config: &dyn crate::config::Config) ->
 pub fn env_disagreement(compiled: VentureEnv, deployed: VentureEnv) -> Option<String> {
     (compiled != deployed).then(|| {
         format!(
-            "this deployment declares ENV={} but the venture was compiled with              VentureEnv::{compiled:?}: the production readiness gate at build time ran              against the wrong environment. Treating it as {} — call              `.env(VentureEnv::{deployed:?})` on the venture so the build refuses what              the deployment cannot serve (issue #143)",
+            "this deployment declares ENV={} but the venture was compiled with \
+             VentureEnv::{compiled:?}: the production readiness gate at build time ran \
+             against the wrong environment. Treating it as {} — call \
+             `.env(VentureEnv::{deployed:?})` on the venture so the build refuses what \
+             the deployment cannot serve (issue #143)",
             deployed.as_str(),
             deployed.as_str(),
         )
@@ -882,6 +886,12 @@ mod tests {
         let note = env_disagreement(VentureEnv::Development, VentureEnv::Production)
             .expect("a compiled-vs-deployed mismatch is reported");
         assert!(note.contains("ENV=production"), "{note}");
+        // The literal is split across lines; it renders as one sentence (issue #477).
+        assert!(!note.contains("  "), "{note}");
+        assert!(
+            note.contains("compiled with VentureEnv::Development: the production readiness gate"),
+            "{note}"
+        );
     }
 
     #[test]
