@@ -741,7 +741,7 @@ impl SendReport {
             SendOutcome::Sent(Err(err)) => format!(
                 "result: FAILED\n  {}\n  {}\n",
                 self.redacted(&err.to_string()),
-                advice(err)
+                advice(err, self.transport)
             ),
             // Everything else is "nothing was sent", and the reason is the
             // transport's wiring verdict. `NotConfigured` belongs here too:
@@ -831,22 +831,29 @@ fn credential_parts(recipient: &Recipient) -> Vec<String> {
     parts
 }
 
-/// What the operator should do about a failed send. The error's own message
-/// says what happened; this says what it means.
-fn advice(err: &PushError) -> &'static str {
-    match err {
+/// What the operator should do about a failed send over `transport`. The
+/// error's own message says what happened; this says what it means.
+fn advice(err: &PushError, transport: Platform) -> &'static str {
+    match (err, transport) {
         // The one error in the port that is an instruction, and the one it
-        // is most expensive to act on wrongly for Web Push.
-        PushError::Unregistered => {
+        // is most expensive to act on wrongly for Web Push. Every adapter
+        // answers it, so what comes after the shared sentence has to be
+        // true of the transport that answered.
+        (PushError::Unregistered, Platform::Web) => {
             "this recipient is gone: delete it from the venture's registry. A Web Push \
              subscription cannot be recreated server-side — only the browser can, by \
              subscribing again."
         }
-        PushError::Rejected(_) => {
+        (PushError::Unregistered, Platform::Ios | Platform::Android) => {
+            "this recipient is gone: delete it from the venture's registry. A device token \
+             cannot be minted server-side — only the app on the device can get a new one, by \
+             registering for push again."
+        }
+        (PushError::Rejected(_), _) => {
             "the provider refused the request; it will refuse it again unchanged. Check the \
              recipient and this transport's credentials (`fz doctor`)."
         }
-        PushError::Transient { .. } => {
+        (PushError::Transient { .. }, _) => {
             "retryable: the provider was unavailable or asked for a pause. Nothing about the \
              recipient or the credentials is proven wrong by this."
         }
@@ -1463,6 +1470,30 @@ mod tests {
             !rendered.contains(DEVICE_TOKEN),
             "the device token leaked through the failure:\n{rendered}"
         );
+    }
+
+    /// All three adapters answer `Unregistered` — APNs and Web Push on a
+    /// 410, FCM on `UNREGISTERED` — so the advice for it is only true if
+    /// it is the transport's own: a device token is not a subscription,
+    /// and no browser is going to resubscribe an iPhone app.
+    #[test]
+    fn unregistered_advice_is_the_transports_own() {
+        let web = advice(&PushError::Unregistered, Platform::Web);
+        assert!(
+            web.contains("delete it from the venture's registry"),
+            "{web}"
+        );
+        assert!(web.contains("browser"), "{web}");
+
+        for platform in [Platform::Ios, Platform::Android] {
+            let device = advice(&PushError::Unregistered, platform);
+            assert!(
+                device.contains("delete it from the venture's registry"),
+                "{platform:?}: {device}"
+            );
+            assert!(!device.contains("browser"), "{platform:?}: {device}");
+            assert!(!device.contains("Web Push"), "{platform:?}: {device}");
+        }
     }
 
     #[test]
