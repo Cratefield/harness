@@ -1004,6 +1004,7 @@ name = "cratefield-catalog"
 version = "0.1.1"
 dependencies = [
  "cratefield-core",
+ "cratefield-manifest",
  "cratefield-module-changelog",
  "cratefield-module-cms",
  "cratefield-module-email-signup",

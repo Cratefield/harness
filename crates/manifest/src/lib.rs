@@ -987,6 +987,72 @@ mod tests {
         );
     }
 
+    /// The generated venture for `modules`, as (`Cargo.toml`, `src/lib.rs`).
+    fn generated_for(modules: &[&str]) -> (String, String) {
+        let json = serde_json::json!({
+            "name": "every-module",
+            "host": "every.dev",
+            "cors_origins": ["https://every.dev"],
+            "modules": modules,
+        });
+        let manifest = VentureManifest::from_json_str(&json.to_string()).expect("parses");
+        let set = manifest.resolve(&builtin()).expect("resolves");
+        let venture = generate(&manifest, &set, &HarnessSource::default()).expect("generates");
+        let file = |name: &str| {
+            venture
+                .files
+                .iter()
+                .find(|f| f.path == name)
+                .map(|f| f.contents.clone())
+                .unwrap_or_default()
+        };
+        (file("Cargo.toml"), file("src/lib.rs"))
+    }
+
+    #[test]
+    fn every_builtin_module_generates() {
+        // Issues #428 and #451: a module the catalog offers that the
+        // generator cannot compose is `fz add` accepting what `fz build`
+        // then refuses.
+        let catalog = builtin();
+        let slugs: Vec<&str> = catalog.modules.iter().map(|m| m.slug.as_str()).collect();
+        for slug in &slugs {
+            let (_, lib) = generated_for(&[*slug]);
+            let codegen = generate::REGISTRY
+                .iter()
+                .find(|m| m.slug == *slug)
+                .expect("in the registry");
+            let module = format!(".module({}::new())", codegen.type_name);
+            assert!(lib.contains(&module), "{slug}: {lib}");
+        }
+        let (_, lib) = generated_for(&slugs);
+        for codegen in generate::REGISTRY {
+            let module = format!(".module({}::new())", codegen.type_name);
+            assert!(lib.contains(&module), "{lib}");
+        }
+    }
+
+    #[test]
+    fn a_module_that_needs_push_gets_it_from_the_environment() {
+        let (cargo, lib) = generated_for(&["notifications"]);
+        assert!(cargo.contains("\"push-wiring\""), "{cargo}");
+        assert!(lib.contains(".push_from_env()"), "{lib}");
+
+        let (cargo, lib) = generated_for(&["cms"]);
+        assert!(!cargo.contains("push-wiring"), "{cargo}");
+        assert!(!lib.contains("push_from_env"), "{lib}");
+    }
+
+    #[test]
+    fn a_manifest_with_privacy_resolves_against_the_builtin_catalog() {
+        // The reported repro: `fz build` with `privacy` answered
+        // `UnknownModule`, though the control plane's wizard offered it.
+        let json = r#"{ "name": "x", "host": "x.dev", "cors_origins": ["https://x.dev"], "modules": ["waitlist", "privacy"] }"#;
+        let manifest = VentureManifest::from_json_str(json).expect("parses");
+        let set = manifest.resolve(&builtin()).expect("resolves");
+        assert_eq!(set.content_key(), "privacy+waitlist");
+    }
+
     #[test]
     fn a_path_source_emits_path_deps_for_offline_builds() {
         let manifest = VentureManifest::from_json_str(sample_json()).expect("parses");

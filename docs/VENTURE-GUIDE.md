@@ -48,8 +48,8 @@ fz add waitlist
 
 `fz init` writes exactly one file, `venture.json`: the name, the host,
 `cors_origins` seeded with the host's own origin, and an empty module
-list. `fz add` knows the three optional modules the catalog ships —
-`email-signup`, `waitlist`, `cms` — and refuses an unknown slug, naming
+list. `fz add` knows every optional module the catalog ships — the
+same list `fz build` composes from — and refuses an unknown slug, naming
 the ones that exist. A module reference is a bare slug or an object
 carrying that module's `config`; both forms appear in the real manifest
 [`crates/manifest/examples/acme-signups.json`](../crates/manifest/examples/acme-signups.json).

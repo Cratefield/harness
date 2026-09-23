@@ -12,6 +12,10 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
+# The one list of the harness modules (`builtin()`), which `curated()` adds
+# its per-module detail to — so the wizard cannot offer a module `fz build`
+# does not know, or miss one it does.
+cratefield-manifest = { workspace = true }
 serde = { workspace = true }
 
 [dev-dependencies]
