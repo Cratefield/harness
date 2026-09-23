@@ -64,7 +64,7 @@ behave identically.
 | Key | Default | Meaning |
 |---|---|---|
 | `LISTEN_ADDR` | `127.0.0.1:8080` | Bind address. Loopback by default; say `0.0.0.0:8080` when you mean it (the compose example does). |
-| `HARNESS_SECRET`, `HARNESS_SECRET_PREVIOUS`, `ADMIN_TOKEN`, `ENV` | — | Harness-level keys, parsed by `HarnessConfig` exactly as on Workers. `HARNESS_SECRET` missing/short leaves the Signer port unset (warned once). |
+| `HARNESS_SECRET`, `HARNESS_SECRET_PREVIOUS`, `ADMIN_TOKEN`, `ENV` | — | Harness-level keys, parsed by `HarnessConfig` exactly as on Workers. A missing or short `HARNESS_SECRET`, a set-but-short `ADMIN_TOKEN` or an unknown `ENV` leaves the Signer port unset, warned once naming the problem; a production venture with signed-link writes then answers `503 not-production-ready` on `/v1/*`. |
 | `TRUSTED_PROXY_HEADERS` | *(empty)* | Header names allowed to carry the client IP (see below). **Default: trust no forwarding header.** |
 | `CRONS` | *(empty)* | Comma-separated cron expressions (UTC), fanned out to every module's `scheduled(ctx, cron)` — wrangler's `[triggers] crons` in config form. Invalid entries fail startup. |
 | `REDIS_URL` | *(unset)* | Redis for `RateLimiter` + `KeyValue`; unset disables both ports. |

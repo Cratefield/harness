@@ -381,10 +381,7 @@ impl Native {
                 cratefield_core::set_log_pseudonym_key(parsed.harness_secret.as_bytes());
                 ports.signer = Some(Arc::new(parsed.signer()));
             }
-            Err(_) => warn_once(
-                &WARNED_SIGNER,
-                "HARNESS_SECRET missing or invalid: Signer port not provided",
-            ),
+            Err(err) => warn_once(&WARNED_SIGNER, &format!("Signer port not provided: {err}")),
         }
 
         let clock: Arc<dyn Clock> = Arc::new(TokioClock);
