@@ -63,19 +63,29 @@ succeeded) — the adapter never interprets it.
 A verified signature authenticates a *delivery*, not a *first* delivery: Stripe
 retries, and two workers can process the same event at once. Before applying an
 effect, a handler claims the event id through `cratefield_core::Inbox` — a dedup
-ledger over the `Database` port whose primary key + `ON CONFLICT DO NOTHING` lets
-exactly one caller win:
+ledger over the `Database` port whose primary key lets exactly one caller win.
+The claim goes in the **same atomic batch** as the effect's database writes
+(grant the entitlement, extend the trial) — `claim_with`, or
+`claim_statement(..)` first in your own `db.batch_atomic(..)`: the two commit
+together or not at all, so a worker that dies mid-way leaves the key unclaimed
+and Stripe's retry re-runs both (issue #534). An effect that leaves the process
+(a receipt mail, a webhook onward) cannot go in the batch: enqueue it as an
+`Outbox` row (`enqueue_statement(..)`) in the same batch, so it is durable
+exactly when the claim is — a direct external call made after `claim_with`
+returns `true` is lost with nothing to retry it if the worker dies after the
+commit.
 
 ```rust,ignore
 let inbox = Inbox::new("billing_inbox"); // the module ships create_table_sql() as a migration
 let event = payments.verify_webhook(sig, body).await?;
-if inbox.claim(db, &event.id, &now).await? {
-    // first time: apply the effect exactly once
+if inbox.claim_with(db, &event.id, &now, &grant_entitlement_stmts).await? {
+    // first time: the claim AND the effect just committed together
 } // else: a duplicate/replayed/concurrent delivery — already handled
 ```
 
 So a duplicate, replayed, concurrent or out-of-order delivery applies its effect
-at most once (issue #134).
+exactly once (issue #134), and a delivery that fails part-way is retried rather
+than lost (issue #534).
 
 ## Configuration
 
