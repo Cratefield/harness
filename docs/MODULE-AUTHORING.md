@@ -663,8 +663,13 @@ reach for two core primitives:
   queued row on that column, and a row with `None` is returned for
   nobody's subject (issue #266).
 - **`cratefield_core::Inbox`** — before applying an inbound effect (a
-  Stripe webhook, a redelivered event), `claim(db, event_id, now)`; only
-  the first caller gets `true`. Exactly-once for the consumer.
+  Stripe webhook, a redelivered event), claim the event id; only the
+  first caller gets `true`. When the effect is database writes, use
+  `claim_with(db, event_id, now, &effect_statements)` — or put
+  `claim_statement(..)` first in your own `db.batch_atomic(..)`, the
+  outbox rule mirrored — so the claim and the effect commit together or
+  not at all: a crash between them leaves the key unclaimed and the
+  redelivery re-runs both. Exactly-once for the consumer.
 
 Each owns a table the module declares — ship `create_table_sql()` as a
 migration (Step 3). Pair them: an outbox gives at-least-once delivery, an
