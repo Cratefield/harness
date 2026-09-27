@@ -114,19 +114,10 @@ cratefield-adapter-resend = { workspace = true, optional = true }
 cratefield-adapter-turnstile = { workspace = true, optional = true }
 cratefield-adapter-anthropic = { workspace = true, optional = true }
 cratefield-adapter-apns = { workspace = true, optional = true }
-# `publish = false` until its first manual publish (docs/RELEASING.md), so it
-# must be published before the facade's next release, the same way
-# `cratefield-push-auth` was.
 cratefield-adapter-fcm = { workspace = true, optional = true }
-# `publish = false` until its first manual publish (docs/RELEASING.md), so it
-# must be published before the facade's next release — it is a dependency of
-# `cratefield-adapter-apns` as well as of this crate.
 cratefield-push-auth = { workspace = true, optional = true }
 cratefield-adapter-stripe = { workspace = true, optional = true }
-# `publish = false` until its first manual publish (docs/RELEASING.md), like
-# the two push adapters it depends on.
 cratefield-push-wiring = { workspace = true, optional = true }
-# `publish = false` until its first manual publish (docs/RELEASING.md).
 cratefield-adapter-webpush = { workspace = true, optional = true }
 # The Tracker port's two adapters (issue #432), siblings under the port that
 # lives in core (ADR 0002: the port there, the vendor clients here).
@@ -140,7 +131,6 @@ cratefield-adapter-webhook-tracker = { workspace = true, optional = true }
 cratefield-adapter-typesafe = { workspace = true, optional = true }
 cratefield-adapter-classifier-llm = { workspace = true, optional = true }
 cratefield-ui = { workspace = true, optional = true }
-# `publish = false` until its first manual publish (docs/RELEASING.md).
 cratefield-i18n = { workspace = true, optional = true }
 cratefield-manifest = { workspace = true, optional = true }
 cratefield-tables-api = { path = "../tables-api", optional = true }
