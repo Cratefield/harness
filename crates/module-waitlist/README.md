@@ -26,6 +26,11 @@ let module = Waitlist::new()
     .referrals(true);
 ```
 
+Joins may carry a free-form `answers` JSON object: `.answers_schema(|answers| ..)`
+validates it whenever answers are present, `.require_answers(true)` rejects
+joins without them, and the admin export carries the stored answers as a
+quoted CSV column.
+
 **Position semantics**: positions are per product, assigned densely at
 confirm time from a per-product counter on `waitlist_position_lock` that
 the lock-taking UPDATE increments, inside one all-or-nothing

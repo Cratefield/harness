@@ -561,6 +561,101 @@ async fn answers_schema_is_enforced() {
     }
 }
 
+#[pollster::test]
+async fn require_answers_is_enforced() {
+    for kit in TestHarness::all_dialects(|| {
+        vec![Box::new(
+            Waitlist::new()
+                .products(["kontinuum"])
+                .require_answers(true)
+                .answers_schema(|answers| {
+                    answers
+                        .get("size")
+                        .and_then(|v| v.as_str())
+                        .is_some_and(|size| ["s", "m", "l"].contains(&size))
+                        .then_some(())
+                        .ok_or_else(|| "size must be one of s|m|l".to_string())
+                }),
+        )]
+    }) {
+        // Absent and explicit `null` both count as "no answers".
+        for body in [
+            r#"{"email":"nick@example.com","product":"kontinuum","captchaToken":"x"}"#,
+            r#"{"email":"nick@example.com","product":"kontinuum","answers":null,"captchaToken":"x"}"#,
+        ] {
+            let missing = request(&kit.router, Method::POST, "/v1/waitlist", Some(body)).await;
+            assert_eq!(missing.status, StatusCode::BAD_REQUEST);
+            assert_eq!(
+                missing.json()["type"],
+                "https://factory0.ventures/problems/validation-failed"
+            );
+        }
+
+        // The schema still runs when answers are present.
+        let bad = request(
+        &kit.router,
+        Method::POST,
+        "/v1/waitlist",
+        Some(r#"{"email":"nick@example.com","product":"kontinuum","answers":{"size":"xxl"},"captchaToken":"x"}"#),
+    )
+    .await;
+        assert_eq!(bad.status, StatusCode::BAD_REQUEST);
+
+        let good = request(
+        &kit.router,
+        Method::POST,
+        "/v1/waitlist",
+        Some(r#"{"email":"nick@example.com","product":"kontinuum","answers":{"size":"m"},"captchaToken":"x"}"#),
+    )
+    .await;
+        assert_eq!(good.status, StatusCode::ACCEPTED);
+        assert_eq!(
+            column_text(&kit, "nick@example.com", "answers").as_deref(),
+            Some(r#"{"size":"m"}"#)
+        );
+    }
+}
+
+#[pollster::test]
+async fn admin_export_includes_and_quotes_answers() {
+    for kit in admin_kits() {
+        let answered = request(
+            &kit.router,
+            Method::POST,
+            "/v1/waitlist",
+            Some(
+                r#"{"email":"founder@example.com","product":"kontinuum","answers":{"role":"founder, CTO","q":"say \"hi\""},"captchaToken":"x"}"#,
+            ),
+        )
+        .await;
+        assert_eq!(answered.status, StatusCode::ACCEPTED);
+        join(&kit, "plain@example.com", "kontinuum").await;
+
+        let (_, body) = export_csv(&kit, "/v1/waitlist/admin/export.csv?product=kontinuum").await;
+        assert!(
+            body.lines().next().expect("header").ends_with(",answers"),
+            "{body}"
+        );
+
+        // The comma and the quotes inside the JSON survive as one
+        // RFC 4180-quoted cell; an entry without answers leaves the
+        // trailing cell empty (empty `confirmed_at`, empty `answers`).
+        let answered_row = body
+            .lines()
+            .find(|line| line.contains("founder@example.com"))
+            .expect("answered row");
+        assert!(
+            answered_row.ends_with(r#""{""role"":""founder, CTO"",""q"":""say \""hi\""""}""#),
+            "{body}"
+        );
+        let plain_row = body
+            .lines()
+            .find(|line| line.contains("plain@example.com"))
+            .expect("plain row");
+        assert!(plain_row.ends_with(",,"), "{body}");
+    }
+}
+
 fn admin_kits() -> Vec<TestHarness> {
     TestHarness::all_dialects_with_ports(
         || vec![Box::new(Waitlist::new().products(["kontinuum"]))],
