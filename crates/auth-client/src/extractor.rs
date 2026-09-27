@@ -76,12 +76,7 @@ fn bearer(parts: &Parts) -> Option<&str> {
 /// expired: all the same. A caller learns that it is not authenticated
 /// and nothing else, because each distinguishable answer is a hint
 /// about how to get closer.
-pub const UNAUTHENTICATED: cratefield_core::ProblemDef = cratefield_core::ProblemDef {
-    slug: "unauthenticated",
-    status: axum::http::StatusCode::UNAUTHORIZED,
-    title: "Not authenticated",
-    description: "The request carried no usable Factory Zero access token.",
-};
+pub const UNAUTHENTICATED: cratefield_core::ProblemDef = cratefield_core::SLUGS.unauthenticated;
 
 fn unauthorized() -> Problem {
     Problem::new(&UNAUTHENTICATED)

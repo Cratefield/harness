@@ -92,13 +92,11 @@ pub const BAD_FILTER: ProblemDef = ProblemDef {
     description: "A query parameter names a column the table does not declare, or a value that is not that column's kind.",
 };
 
-/// A credential was presented and did not verify.
-pub const NOT_VERIFIED: ProblemDef = ProblemDef {
-    slug: "unauthenticated",
-    status: StatusCode::UNAUTHORIZED,
-    title: "Not signed in",
-    description: "The request carried a credential that did not verify.",
-};
+/// A credential was presented and did not verify — core's shared 401,
+/// `cratefield_core::SLUGS.unauthenticated`, the same body
+/// [`crate::access::UNAUTHENTICATED`] answers with for no credential at
+/// all: which half failed would be a hint about how to get closer.
+pub const NOT_VERIFIED: ProblemDef = cratefield_core::SLUGS.unauthenticated;
 
 /// What the routes are built over.
 pub struct Tables {

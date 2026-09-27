@@ -36,9 +36,12 @@ use serde_json::{Map, Value};
 use crate::access::{Reach, may_write, settle_subject};
 use crate::read::{NO_SUCH_ROW, Tables, who};
 
-/// The body was not a legal row for this table.
+/// The body was not a legal row for this table. Its own slug rather than
+/// core's `validation-failed`: that is a 400 for a request that did not
+/// deserialize; this body parsed and still named no row the table
+/// declares, so it rides a 422.
 pub const NOT_A_ROW: ProblemDef = ProblemDef {
-    slug: "validation-failed",
+    slug: "not-a-row",
     status: StatusCode::UNPROCESSABLE_ENTITY,
     title: "Not a row of this table",
     description: "The body does not match the table's declared columns.",

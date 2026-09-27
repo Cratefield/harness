@@ -1,6 +1,9 @@
 //! The registry of every problem slug the harness can emit (architecture
 //! section 6): stable `type` URIs, statuses and descriptions. Modules add
-//! their own slugs as `const ProblemDef`s in the same shape.
+//! their own slugs as `const ProblemDef`s in the same shape, and every
+//! slug — core's and modules' — must be unique workspace-wide:
+//! `errors-doc` collects the definitions from source and fails CI on a
+//! slug defined twice (issue #419).
 
 use axum::http::StatusCode;
 
@@ -27,6 +30,12 @@ pub struct Slugs {
     /// 400: the request named a resource outside the configured set
     /// (e.g. an unknown waitlist product).
     pub unknown_product: ProblemDef,
+    /// 401: a credential was presented and did not verify, or none was
+    /// presented where one is required. The one 401 for every
+    /// unauthenticated caller — the auth-client bearer check, the tables
+    /// API's access decision and the modules reusing them all answer
+    /// with it.
+    pub unauthenticated: ProblemDef,
     /// 401: admin endpoints are disabled (`ADMIN_TOKEN` unset) or the
     /// request carried no bearer token.
     pub admin_unauthorized: ProblemDef,
@@ -96,6 +105,12 @@ pub const SLUGS: Slugs = Slugs {
         status: StatusCode::BAD_REQUEST,
         title: "Unknown product",
         description: "The named product is not on this waitlist.",
+    },
+    unauthenticated: ProblemDef {
+        slug: "unauthenticated",
+        status: StatusCode::UNAUTHORIZED,
+        title: "Not authenticated",
+        description: "A credential was presented and did not verify, or none was presented where one is required.",
     },
     admin_unauthorized: ProblemDef {
         slug: "admin-unauthorized",
@@ -190,6 +205,7 @@ pub fn registry() -> Vec<&'static ProblemDef> {
         &SLUGS.captcha_failed,
         &SLUGS.invalid_token,
         &SLUGS.unknown_product,
+        &SLUGS.unauthenticated,
         &SLUGS.admin_unauthorized,
         &SLUGS.admin_forbidden,
         &SLUGS.sidecar_unauthorized,

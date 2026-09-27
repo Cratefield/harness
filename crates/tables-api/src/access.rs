@@ -51,13 +51,12 @@ use cratefield_tables::TableDef;
 use http::StatusCode;
 use serde_json::Value;
 
-/// A caller presented no credential where one is required.
-pub const UNAUTHENTICATED: ProblemDef = ProblemDef {
-    slug: "unauthenticated",
-    status: StatusCode::UNAUTHORIZED,
-    title: "Not signed in",
-    description: "This table is not public; the request carried no verified credential.",
-};
+/// A caller presented no credential where one is required — core's shared
+/// 401, `cratefield_core::SLUGS.unauthenticated`. The same body answers a
+/// presented credential that did not verify ([`crate::read::NOT_VERIFIED`]):
+/// one 401 for every unauthenticated caller, because each distinguishable
+/// answer is a hint about how to get closer.
+pub const UNAUTHENTICATED: ProblemDef = cratefield_core::SLUGS.unauthenticated;
 
 /// A caller is signed in and still may not reach this table.
 pub const FORBIDDEN: ProblemDef = ProblemDef {
