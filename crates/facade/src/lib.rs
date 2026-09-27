@@ -101,6 +101,9 @@ pub use cratefield_tables_api as tables_api;
 #[cfg(feature = "auth-client")]
 pub use cratefield_auth_client as auth_client;
 
+#[cfg(feature = "oauth-client")]
+pub use cratefield_oauth_client as oauth_client;
+
 #[cfg(feature = "email-signup")]
 pub use cratefield_module_email_signup as email_signup;
 

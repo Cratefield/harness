@@ -664,6 +664,7 @@ dependencies = [
  "cratefield-module-privacy",
  "cratefield-module-telemetry",
  "cratefield-module-waitlist",
+ "cratefield-oauth-client",
  "cratefield-push-auth",
  "cratefield-push-wiring",
  "cratefield-runtime-cloudflare",
@@ -1483,6 +1484,25 @@ dependencies = [
  "tower",
  "tracing",
  "ulid",
+]
+
+[[package]]
+name = "cratefield-oauth-client"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "base64 0.23.1",
+ "bytes",
+ "chacha20poly1305",
+ "cratefield-core",
+ "getrandom 0.4.3",
+ "http",
+ "pollster",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "thiserror 2.0.20",
+ "zeroize",
 ]
 
 [[package]]
@@ -2656,14 +2676,12 @@ version = "0.1.1"
 dependencies = [
  "async-trait",
  "axum",
- "base64 0.23.1",
  "bytes",
- "chacha20poly1305",
  "cratefield-adapter-sqlite",
  "cratefield-core",
  "cratefield-module-privacy",
+ "cratefield-oauth-client",
  "cratefield-testing",
- "getrandom 0.4.3",
  "http",
  "pollster",
  "sea-query",

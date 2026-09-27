@@ -22,6 +22,7 @@ cratefield-module-notifications	CRATEFIELD · MODULE · NOTIFICATIONS	One call, 
 cratefield-module-privacy	CRATEFIELD · MODULE · PRIVACY	Answer the request.	Subject access and erasure, assembled from what every other module declares it holds.	EXPORT · ERASURE · DECLARED	GET /v1/privacy/export
 cratefield-module-changelog	CRATEFIELD · MODULE · CHANGELOG	Your releases, served.	Mirrors a project's GitHub releases into your own database and serves them — the read path never calls upstream.	GITHUB RELEASES · MIRRORED MARKDOWN · YOUR DATABASE	GET /v1/changelog
 cratefield-auth-client	CRATEFIELD · AUTH · CLIENT	Who the caller is.	Verifies auth-service tokens in your app: JWKS fetch and cache, ES256, an axum extractor.	JWKS · ES256 · EXTRACTOR	Authenticated
+cratefield-oauth-client	CRATEFIELD · OAUTH · CLIENT	One protocol, spoken once.	Authorize URLs, code exchange, refresh and revocation over the HttpClient port, with PKCE and the sealer tokens are stored under.	OAUTH 2.0 · PKCE · SEALED	exchange_code()
 cratefield-secrets	CRATEFIELD · SECRETS	Never read back.	Envelope encryption over the Database port, two tiers, ciphertexts bound to their own row.	ENVELOPE · AAD-BOUND · AUDITED	wrap()
 cratefield-kms	CRATEFIELD · KMS PORT	Wrap and unwrap.	The KMS port for data keys, with a local-file provider that refuses to run in production.	WRAP · UNWRAP · LOCAL DEV	kms.wrap()
 cratefield-i18n	CRATEFIELD · I18N	In their own language.	Fluent catalogs, BCP 47 negotiation and text direction. No I/O, nothing notification-specific.	FLUENT · BCP 47 · DIRECTION	t("booked")
