@@ -52,8 +52,8 @@ pub struct ToolAnnotations {
     /// Does the tool only read? The spec's `readOnlyHint`.
     pub read_only_hint: bool,
     /// Can the tool destroy data? The spec's `destructiveHint`; only
-    /// `fz_deploy` may, by removing modules — their data leaves the
-    /// venture.
+    /// `fz_deploy` may, by removing modules — they leave the served
+    /// composition, and no data is deleted.
     pub destructive_hint: bool,
     /// Is calling it twice the same as calling it once? The spec's
     /// `idempotentHint`.
@@ -423,7 +423,7 @@ fn deploy() -> ToolDef {
             (
                 "i_am_removing_modules",
                 boolean_property(
-                    "Required by fz when the plan removes modules from the served composition — their data leaves the venture.",
+                    "Required by fz when the plan removes modules from the served composition — no data is deleted.",
                 ),
             ),
         ],

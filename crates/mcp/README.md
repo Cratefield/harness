@@ -92,9 +92,10 @@ hazard.
 | `fz_deploy` | false | true | false | true |
 | `fz_error_codes` | true | false | true | false |
 
-Only `fz_deploy` is destructive — a plan that removes modules takes their
-data out of the venture — and only `fz_deploy` is open-world: it is the
-step that leads to a Worker standing up in the world.
+Only `fz_deploy` is destructive — a plan that removes modules takes them
+out of the served composition, not their data — and only `fz_deploy` is
+open-world: it is the step that leads to a Worker standing up in the
+world.
 
 ## One envelope
 
