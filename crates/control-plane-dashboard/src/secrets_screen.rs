@@ -3175,7 +3175,8 @@ mod tests {
     // -------------------------------------------------------------------
 
     use cratefield_core::{
-        Config, MapConfig, ModuleContext, PersonalDataCatalog, Ports, TemplateRegistry, UlidIdGen,
+        Config, MapConfig, ModuleContext, PersonalDataCatalog, Ports, ScheduledBudget,
+        TemplateRegistry, UlidIdGen,
     };
 
     /// The kit's fixed clock as a moment. Every age asserted on below is
@@ -3296,6 +3297,7 @@ mod tests {
             unprotected_writes_accepted: false,
             ui_mounted: false,
             personal_data: Arc::new(PersonalDataCatalog::default()),
+            scheduled: Arc::new(ScheduledBudget::unbounded()),
         };
         let module = kit
             .modules

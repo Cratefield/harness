@@ -2018,7 +2018,9 @@ mod tests {
 
     /// Builds a `ModuleContext` with a signer + db for the guard tests.
     fn test_ctx(db: Arc<dyn Database>) -> ModuleContext {
-        use cratefield_core::{EmptyConfig, EventBus, Ports, TemplateRegistry, Venture};
+        use cratefield_core::{
+            EmptyConfig, EventBus, Ports, ScheduledBudget, TemplateRegistry, Venture,
+        };
         let mut ports = Ports::with_config(Arc::new(EmptyConfig));
         ports.signer = Some(Arc::new(signer()));
         ports.db = Some(db);
@@ -2033,6 +2035,7 @@ mod tests {
             unprotected_writes_accepted: false,
             personal_data: Arc::new(cratefield_core::PersonalDataCatalog::default()),
             ui_mounted: false,
+            scheduled: Arc::new(ScheduledBudget::unbounded()),
         }
     }
 
@@ -2261,7 +2264,7 @@ mod tests {
     }
 
     fn kit_over(config: cratefield_core::MapConfig, http: &Arc<ScriptedHttp>) -> Kit {
-        use cratefield_core::{EventBus, Ports, TemplateRegistry, Venture};
+        use cratefield_core::{EventBus, Ports, ScheduledBudget, TemplateRegistry, Venture};
         let db = db();
         let mailer = cratefield_testing::FakeMailer::new(cratefield_testing::MailerMode::SendOk);
         let clock = AdvancingClock::at(
@@ -2286,6 +2289,7 @@ mod tests {
             unprotected_writes_accepted: false,
             personal_data: Arc::new(cratefield_core::PersonalDataCatalog::default()),
             ui_mounted: false,
+            scheduled: Arc::new(ScheduledBudget::unbounded()),
         };
         Kit {
             router: Console.router(ctx),

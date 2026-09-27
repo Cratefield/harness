@@ -15,7 +15,8 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use cratefield_core::{Clock, Harness, Ports};
+use cratefield_core::{Clock, Harness, Ports, ScheduledLimits, ScheduledSplit};
+use time::OffsetDateTime;
 use tokio::task::JoinHandle;
 
 /// A `CRONS` entry that could not be parsed.
@@ -72,11 +73,29 @@ async fn run_expression(harness: Arc<Harness>, ports: Ports, expr: String, cron:
 /// Fans one trigger out to every module's `scheduled(ctx, cron)` with a
 /// per-tick context. Handler errors are logged and never fail the tick
 /// (or the process) — the semantics of `serve_scheduled` on Workers.
-/// Public so a venture that owns its scheduler (or its tests) can drive
-/// the same fan-out itself.
+/// Every module gets an **unbounded** budget (`ctx.scheduled` is the same
+/// contract here it is on Workers, it just never runs out: the native
+/// runtime has no Workers invocation allowance to spend against). Public
+/// so a venture that owns its scheduler (or its tests) can drive the same
+/// fan-out itself.
 pub async fn fan_out(harness: &Harness, ports: &Ports, cron: &str) {
+    // The clock and the epoch fallback are never read for real: an
+    // unbounded split computes no deadlines.
+    let clock = ports.clock.clone();
+    let mut split = ScheduledSplit::new(
+        ScheduledLimits::UNBOUNDED,
+        clock
+            .as_ref()
+            .map_or(OffsetDateTime::UNIX_EPOCH, |clock| clock.now()),
+        harness.modules().len(),
+    );
     for module in harness.modules() {
-        let module_ctx = harness.module_context(module.as_ref(), ports);
+        let now = clock
+            .as_ref()
+            .map_or(OffsetDateTime::UNIX_EPOCH, |clock| clock.now());
+        let budget = Arc::new(split.next(now));
+        let mut module_ctx = harness.module_context(module.as_ref(), ports);
+        module_ctx.scheduled = Arc::clone(&budget);
         if let Err(err) = module.scheduled(&module_ctx, cron).await {
             tracing::error!(
                 module = module.name(),
@@ -85,6 +104,7 @@ pub async fn fan_out(harness: &Harness, ports: &Ports, cron: &str) {
                 "scheduled module work failed",
             );
         }
+        split.settle(&budget);
     }
 }
 

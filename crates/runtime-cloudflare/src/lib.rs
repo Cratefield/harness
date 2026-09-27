@@ -39,8 +39,9 @@ pub use tracing_setup::install_tracing;
 
 use crate::body_limit::{BodyPlan, Capped, body_plan, read_capped};
 use axum::response::IntoResponse;
-use cratefield_core::{Harness, Problem, RequestSummary};
+use cratefield_core::{Harness, Problem, RequestSummary, ScheduledLimits, ScheduledSplit};
 use std::sync::Arc;
+use time::OffsetDateTime;
 use tower::ServiceExt;
 use worker::{Context, Env, Request as WorkerRequest, Response as WorkerResponse};
 
@@ -297,8 +298,20 @@ async fn response_to_worker(
 /// Responses are JSON (small); 1 MiB is a generous ceiling.
 const MAX_RESPONSE_BUFFER: usize = 1024 * 1024;
 
-/// Fans a scheduled event out to every module's `scheduled(ctx, cron)`.
-/// Handler errors are logged and never fail the cron.
+/// The conservative limits a scheduled invocation runs under when the
+/// venture does not choose its own: 25 seconds of wall time and 40
+/// subrequest-shaped steps. Chosen to fit the Workers Free plan's 50
+/// subrequests per invocation with headroom, not taken from the plan: it
+/// is a default, not a platform fact, and a venture on a paid plan passes
+/// its own limits to [`serve_scheduled_with_limits`].
+pub const CLOUDFLARE_SCHEDULED_LIMITS: ScheduledLimits = ScheduledLimits {
+    wall: Some(time::Duration::seconds(25)),
+    subrequests: Some(40),
+};
+
+/// Fans a scheduled event out to every module's `scheduled(ctx, cron)`
+/// under [`CLOUDFLARE_SCHEDULED_LIMITS`]. Handler errors are logged and
+/// never fail the cron.
 pub async fn serve_scheduled(
     harness: &Harness,
     runtime: &Cloudflare,
@@ -306,14 +319,60 @@ pub async fn serve_scheduled(
     env: Env,
     ctx: worker::ScheduleContext,
 ) {
+    serve_scheduled_with_limits(
+        harness,
+        runtime,
+        event,
+        env,
+        ctx,
+        CLOUDFLARE_SCHEDULED_LIMITS,
+    )
+    .await;
+}
+
+/// [`serve_scheduled`] with the invocation's limits named explicitly
+/// (issue #537): the whole run may spend `limits.wall` of wall time and
+/// `limits.subrequests` subrequest-shaped steps, split across the modules
+/// in order with each module's unspent share rolling forward to the ones
+/// after it. A module's share arrives as `ModuleContext::scheduled`, which
+/// the module — and `Outbox::drain_within` — checks cooperatively before
+/// each unit of work; the runtime never cancels a module that ignores it.
+/// A module that runs its share out is named in Workers Logs, and a
+/// handler error is still only logged, never a failed cron.
+pub async fn serve_scheduled_with_limits(
+    harness: &Harness,
+    runtime: &Cloudflare,
+    event: worker::ScheduledEvent,
+    env: Env,
+    ctx: worker::ScheduleContext,
+    limits: ScheduledLimits,
+) {
     install_tracing();
     let cron = event.cron();
     let ports = runtime.ports(&env, Arc::new(ScheduleDefer(ctx)));
     check_module_config_once(harness, ports.config.as_ref());
     #[cfg(feature = "push")]
     check_push_wiring_once(harness, runtime, &env, ports.config.as_ref());
+    // `ports` always wires WorkersClock, so the first arm is the real one.
+    // A ports set without a clock cannot check a wall limit at all, so it
+    // runs the unbounded split — which reads no clock and computes no
+    // deadline, so the epoch placeholders below are never observed.
+    let clock = ports.clock.clone();
+    let mut split = match clock.as_ref() {
+        Some(clock) => ScheduledSplit::new(limits, clock.now(), harness.modules().len()),
+        None => ScheduledSplit::new(
+            ScheduledLimits::UNBOUNDED,
+            OffsetDateTime::UNIX_EPOCH,
+            harness.modules().len(),
+        ),
+    };
     for module in harness.modules() {
-        let module_ctx = harness.module_context(module.as_ref(), &ports);
+        let now = clock
+            .as_ref()
+            .map_or(OffsetDateTime::UNIX_EPOCH, |clock| clock.now());
+        let budget = Arc::new(split.next(now));
+        let mut module_ctx = harness.module_context(module.as_ref(), &ports);
+        module_ctx.scheduled = Arc::clone(&budget);
         if let Err(err) = module.scheduled(&module_ctx, &cron).await {
             tracing::error!(
                 module = module.name(),
@@ -322,6 +381,20 @@ pub async fn serve_scheduled(
                 "scheduled module work failed",
             );
         }
+        // Judged on a fresh reading: a module that overran spent wall time
+        // this invocation does not have to wait for the next one to be named.
+        let after = clock
+            .as_ref()
+            .map_or(OffsetDateTime::UNIX_EPOCH, |clock| clock.now());
+        if budget.exhausted(after) {
+            tracing::warn!(
+                module = module.name(),
+                cron = %cron,
+                spent = budget.spent(),
+                "scheduled module work exhausted its budget",
+            );
+        }
+        split.settle(&budget);
     }
 }
 

@@ -5,6 +5,7 @@
 use crate::config::{Config, ConfigError};
 use crate::events::{AnyError, EventBus, EventHandler, EventName};
 use crate::ports::{Port, Ports};
+use crate::scheduled::ScheduledBudget;
 use crate::surface::Surface;
 use crate::template::TemplateRegistry;
 use crate::venture::Venture;
@@ -310,6 +311,13 @@ pub struct ModuleContext {
     /// unsubscribed, status) to `<api base>/ui/<module>/<action>/<page>`
     /// instead of pages the venture site has to provide.
     pub ui_mounted: bool,
+    /// The budget for the current scheduled invocation (issue #537):
+    /// cooperative, so a module checks it around each unit of work and
+    /// stops — never cancelled — when it has run out. Split across the
+    /// modules by the runtime with each module's unspent share rolling
+    /// forward. **Unbounded outside `scheduled`**: request handlers can
+    /// read it and never see a limit that does not apply to them.
+    pub scheduled: Arc<ScheduledBudget>,
 }
 
 /// A Factory Zero module. Object-safe; composed as `Arc<dyn Module>`.

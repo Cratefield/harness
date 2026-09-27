@@ -9,7 +9,8 @@ use std::sync::Arc;
 
 use cratefield_adapter_sqlite::SqliteDatabase;
 use cratefield_core::{
-    Caller, Config, Database, ModuleContext, Ports, Problem, Statement, Subject, Tenancy,
+    Caller, Config, Database, ModuleContext, Ports, Problem, ScheduledBudget, Statement, Subject,
+    Tenancy,
 };
 use cratefield_manifest::Access;
 use cratefield_tables::{Schema, TableDef};
@@ -93,6 +94,7 @@ fn tables(access: Access) -> Tables {
             unprotected_writes_accepted: false,
             personal_data: Arc::new(cratefield_core::PersonalDataCatalog::default()),
             ui_mounted: false,
+            scheduled: Arc::new(ScheduledBudget::unbounded()),
         }),
     }
 }

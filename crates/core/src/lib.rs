@@ -35,6 +35,7 @@ mod problem;
 mod problems;
 mod rate_limit;
 mod route_policy;
+mod scheduled;
 mod scope;
 mod sidecar;
 mod signer;
@@ -91,7 +92,7 @@ pub use module::{
     migration_missing_guard,
 };
 pub use origin::{OriginError, origin_of};
-pub use outbox::{Outbox, OutboxRecord};
+pub use outbox::{DrainOptions, DrainReport, Outbox, OutboxRecord, Processed};
 pub use personal_data::{
     CatalogEntry, DataKind, Disposition, PersonalDataCatalog, PersonalDataSet, SubjectVia,
     is_plain_identifier, migration_tables, undeclared_tables, unlisted_tables,
@@ -127,6 +128,7 @@ pub use route_policy::{
     rate_limiter_effective, signer_effective, stated_reason, unlimited_public_routes_override,
     unprotected_writes_override, verify_human_form,
 };
+pub use scheduled::{ScheduledBudget, ScheduledLimits, ScheduledSplit};
 pub use scope::Scope;
 pub use sidecar::{
     GATEWAY_ADMIN_PURPOSE, GATEWAY_PURPOSE, GATEWAY_TOKEN_TTL_SECS, HARNESS_ONE_WORKER,
