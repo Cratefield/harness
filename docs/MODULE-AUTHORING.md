@@ -623,6 +623,19 @@ patterns from `crates/module-waitlist/src/handlers.rs` —
 `check_captcha`, `rate_limited`, `require_admin` are the reusable
 pieces.
 
+Developer-facing API keys (issue #532) follow the same shape when a
+route serves machine callers the venture enrolls itself: declare
+`.policy(RoutePolicy::ApiKey)` on the action (guarded, never captcha'd,
+never shown in a rendered surface), ship the key table's
+`create_table_sql` as a migration, and gate the handler with
+`cratefield_core::require_api_key(&keys, &headers, "read")` — one
+uniform 401 for anything wrong with the presented credential, 403 when
+a valid key lacks the scope. `principal.rate_limit_key()` slots the key
+into the same `check_rate_limit` loop as the `ip:`/`email:` keys, so a
+`D1RateLimiter` policy can give each key its own budget. This is auth,
+not routing: [TENANT-ROUTING.md](TENANT-ROUTING.md) §3 rejected API
+keys for host→tenant selection, and that rejection stands.
+
 ## Step 5 — Config keys
 
 Keys are `SCREAMING_SNAKE`, prefixed with the module name:

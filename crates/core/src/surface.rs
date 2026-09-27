@@ -457,6 +457,13 @@ impl Surface {
                          webhook — drop `.captcha()` (issue #133)",
                     ));
                 }
+                crate::route_policy::RoutePolicy::ApiKey if action.captcha => {
+                    errors.push(format!(
+                        "module `{module}` surface action `{name}` declares policy=ApiKey \
+                         (a machine caller) but captcha=true; a captcha cannot protect an \
+                         API-key route — drop `.captcha()` (issue #532)",
+                    ));
+                }
                 // `Open` accepts either: `captcha: true` is the legacy
                 // pre-#133 mirror (WriteGuards treats it as HumanForm),
                 // and an Open unprotected route is the default.
@@ -481,6 +488,10 @@ impl Surface {
     /// actions (webhooks) are called by providers, never by browsers —
     /// exposing them in the public surface was part of the issue #133
     /// confusion (a captcha widget rendered on a route no human submits).
+    /// [`ApiKey`](crate::route_policy::RoutePolicy::ApiKey) actions
+    /// (issue #532) are called by developer machines carrying a bearer
+    /// key no browser has, so they stay out of the rendered surface for
+    /// the same reason.
     #[must_use]
     pub fn public(&self) -> Surface {
         let actions: Vec<Action> = self
@@ -489,6 +500,7 @@ impl Surface {
             .filter(|action| {
                 action.audience != Audience::Admin
                     && action.policy != crate::route_policy::RoutePolicy::Signature
+                    && action.policy != crate::route_policy::RoutePolicy::ApiKey
             })
             .cloned()
             .collect();
@@ -1024,5 +1036,30 @@ mod tests {
         let modules: Vec<std::sync::Arc<dyn Module>> = vec![std::sync::Arc::new(Silent)];
         let doc = SurfaceDocument::compose(&venture, &modules);
         assert!(doc.modules.is_empty());
+    }
+
+    #[test]
+    fn an_api_key_action_refuses_a_captcha_and_hides_from_the_public_surface() {
+        // A renderer-side document can still carry the impossible pair
+        // (policy=ApiKey, captcha=true) — the validator refuses it, the
+        // same rule a Signature webhook runs under (issue #532).
+        let mut action =
+            Action::post("sync", "/sync").policy(crate::route_policy::RoutePolicy::ApiKey);
+        action.captcha = true;
+        let errors = errors_of(&Surface::new().action(action));
+        assert!(
+            errors.iter().any(|error| error.contains("policy=ApiKey")),
+            "{errors:?}"
+        );
+
+        // And the rendered public surface never shows an api-key action:
+        // a browser has no key to present, so a form on one is the same
+        // issue-#133 confusion a webhook widget was.
+        let surface = Surface::new()
+            .action(Action::post("sync", "/sync").policy(crate::route_policy::RoutePolicy::ApiKey))
+            .action(join());
+        let public = surface.public();
+        assert!(public.actions.iter().all(|action| action.name != "sync"));
+        assert!(public.actions.iter().any(|action| action.name == "join"));
     }
 }

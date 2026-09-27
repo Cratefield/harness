@@ -39,6 +39,13 @@ pub struct Slugs {
     /// 401: admin endpoints are disabled (`ADMIN_TOKEN` unset) or the
     /// request carried no bearer token.
     pub admin_unauthorized: ProblemDef,
+    /// 401: a developer API key was missing, malformed, unknown, revoked
+    /// or failed its hash check — one uniform answer for all five, so a
+    /// probe cannot tell which (issue #532).
+    pub api_key_unauthorized: ProblemDef,
+    /// 403: the presented API key is valid but lacks the scope the route
+    /// requires (issue #532).
+    pub api_key_forbidden: ProblemDef,
     /// 403: the presented admin token is wrong.
     pub admin_forbidden: ProblemDef,
     /// 401: a request reached a sidecar-guarded route (`/v1/*` or
@@ -117,6 +124,18 @@ pub const SLUGS: Slugs = Slugs {
         status: StatusCode::UNAUTHORIZED,
         title: "Admin access unauthorized",
         description: "Admin endpoints are disabled or the request has no bearer token.",
+    },
+    api_key_unauthorized: ProblemDef {
+        slug: "api-key-unauthorized",
+        status: StatusCode::UNAUTHORIZED,
+        title: "API key unauthorized",
+        description: "The request's API key was missing, malformed, unknown, revoked or invalid; one uniform answer for all five.",
+    },
+    api_key_forbidden: ProblemDef {
+        slug: "api-key-forbidden",
+        status: StatusCode::FORBIDDEN,
+        title: "API key lacks the required scope",
+        description: "The presented API key is valid but does not carry the scope this route requires.",
     },
     admin_forbidden: ProblemDef {
         slug: "admin-forbidden",
@@ -207,6 +226,8 @@ pub fn registry() -> Vec<&'static ProblemDef> {
         &SLUGS.unknown_product,
         &SLUGS.unauthenticated,
         &SLUGS.admin_unauthorized,
+        &SLUGS.api_key_unauthorized,
+        &SLUGS.api_key_forbidden,
         &SLUGS.admin_forbidden,
         &SLUGS.sidecar_unauthorized,
         &SLUGS.not_production_ready,

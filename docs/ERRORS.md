@@ -15,6 +15,8 @@ request id.
 | `admin-forbidden` | 403 | Admin token rejected | `cratefield-core` | The presented admin token is wrong. |
 | `admin-unauthorized` | 401 | Admin access unauthorized | `cratefield-core` | Admin endpoints are disabled or the request has no bearer token. |
 | `already-exists` | 409 | That key is taken | `cratefield-tables-api` | A row of this table already has that primary key. |
+| `api-key-forbidden` | 403 | API key lacks the required scope | `cratefield-core` | The presented API key is valid but does not carry the scope this route requires. |
+| `api-key-unauthorized` | 401 | API key unauthorized | `cratefield-core` | The request's API key was missing, malformed, unknown, revoked or invalid; one uniform answer for all five. |
 | `auth/client-disabled` | 403 | Client is disabled | `factory0-auth-core` | A disabled client is refused by every flow |
 | `auth/cross-site-request` | 403 | A same-origin request is required | `factory0-auth-core` | Fetch metadata or the origin header reports another site; a request that can change state is accepted only from this venture's own origin |
 | `auth/last-login-method` | 409 | That is the account's only login method | `factory0-auth-passkeys` | Add another passkey or link a provider before removing this one |
