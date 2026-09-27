@@ -79,8 +79,9 @@ Architecture section 10, expanded. Per venture:
    cutover is a DNS revert, not a restore.
 
 No module code changes. That claim is what the parity suite protects:
-`cratefield-testing` runs every module's tests against SQLite **and**
-Postgres in CI (`.github/workflows/parity.yml`), so "works on D1" and
+`cratefield-testing` runs module suites against SQLite **and** Postgres
+in CI (`.github/workflows/parity.yml`; CI's workspace `cargo test` runs
+every module with `FZ_TEST_POSTGRES_URL` set), so "works on D1" and
 "works on Postgres" cannot drift apart between releases.
 
 ## The native runtime is multi-tenant — one database per tenant

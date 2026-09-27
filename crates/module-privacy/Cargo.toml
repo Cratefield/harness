@@ -24,6 +24,9 @@ sea-query = { workspace = true }
 tracing = { workspace = true }
 
 [dev-dependencies]
-cratefield-testing = { workspace = true }
+# The `postgres` feature unlocks the Postgres parity leg of the testing
+# kit (issue #20); the leg itself only runs when FZ_TEST_POSTGRES_URL
+# names a server.
+cratefield-testing = { path = "../testing", features = ["postgres"] }
 pollster = { workspace = true }
 tower = { workspace = true }
