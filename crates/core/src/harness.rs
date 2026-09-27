@@ -382,7 +382,7 @@ impl Harness {
         let unprotected = crate::route_policy::unprotected_writes_override(config);
         let unlimited = crate::route_policy::unlimited_public_routes_override(config);
         let guards = crate::route_policy::WriteGuards::collect(&self.modules);
-        let problems = crate::route_policy::production_readiness(
+        let mut problems = crate::route_policy::production_readiness(
             env,
             &guards,
             self.runtime.as_ref(),
@@ -391,7 +391,12 @@ impl Harness {
             unprotected.as_deref(),
             unlimited.as_deref(),
         );
-        if problems.is_empty() {
+        // The webhook-secret leg is boot-time-only (issue #533): it reads
+        // the deployment config, which the build-time gate does not have.
+        // It has no waiver, so it is held out of the loop below — that loop
+        // names the escape hatch, which clears nothing here.
+        let hmac_problems = crate::route_policy::webhook_secret_readiness(env, &guards, config);
+        if problems.is_empty() && hmac_problems.is_empty() {
             // An operator may accept this deployment's gaps explicitly,
             // and the acceptance is recorded rather than discarded
             // (issue #143) — once, even though Workers rebuild this
@@ -434,6 +439,7 @@ impl Harness {
             error!("{detail}");
             crate::logging::forward_control_event(crate::logging::ControlLevel::Error, &detail);
         }
+        problems.extend(hmac_problems);
         problems
     }
 
@@ -1749,7 +1755,9 @@ async fn admin_rate_limit_layer(
 /// rely on captcha or payment verification it does not actually have.
 /// The overrides are deliberately `None` here — the operator's recorded
 /// acceptances belong to the boot gate, which reads them from the
-/// deployment config against the resolved ports.
+/// deployment config against the resolved ports. The webhook-secret leg
+/// (`webhook_secret_readiness`, issue #533) is skipped for the same
+/// reason: it reads the deployment config, which a build has none of.
 fn append_production_readiness(
     venture: &Venture,
     modules: &[Arc<dyn Module>],
@@ -1933,6 +1941,80 @@ mod acceptance_recording {
             !harness
                 .unlimited_acceptance_recorded
                 .load(Ordering::Relaxed)
+        );
+    }
+
+    /// A webhook receiver that verifies its deliveries with the core HMAC
+    /// scheme (issue #533): a signature writer that asks nothing of the
+    /// Payments port — its secret key is the whole production gate.
+    struct HmacWriter;
+
+    impl Module for HmacWriter {
+        fn name(&self) -> &'static str {
+            "webhooks"
+        }
+        fn version(&self) -> &'static str {
+            "0.0.0-test"
+        }
+        fn requires(&self) -> &'static [Port] {
+            &[]
+        }
+        fn public_writes(&self) -> bool {
+            true
+        }
+        fn public_write_policy(&self) -> crate::route_policy::RoutePolicy {
+            crate::route_policy::RoutePolicy::Signature
+        }
+        fn signature_verification(&self) -> crate::route_policy::SignatureVerification {
+            crate::route_policy::SignatureVerification::Hmac {
+                secret: "WEBHOOK_SECRET",
+            }
+        }
+        fn migrations(&self) -> Migrations {
+            Migrations::default()
+        }
+        fn validate_config(&self, _: &dyn Config) -> Result<(), ConfigError> {
+            Ok(())
+        }
+        fn router(&self, _: ModuleContext) -> Router {
+            Router::new()
+        }
+    }
+
+    #[test]
+    fn a_non_payments_signature_venture_boots_on_its_webhook_secret_alone() {
+        let harness = Harness::builder()
+            .venture(
+                Venture::new("test-venture", "test.example").cors_origins(["https://test.example"]),
+            )
+            .module(HmacWriter)
+            .runtime(AllPorts)
+            .build()
+            .expect("a development venture builds");
+        let deployed = MapConfig::from_pairs([("ENV", "production")]);
+        let problems =
+            harness.production_readiness_now(VentureEnv::Production, &deployed, true, true);
+        assert_eq!(problems.len(), 1, "{problems:?}");
+        assert!(
+            problems[0].contains("WEBHOOKS_WEBHOOK_SECRET"),
+            "{}",
+            problems[0]
+        );
+        assert!(
+            !problems[0].contains("Payments"),
+            "a module verifying through the HMAC scheme is not the Payments leg's business: {}",
+            problems[0]
+        );
+
+        // The secret configured: the same venture is ready to serve.
+        let ready = MapConfig::from_pairs([
+            ("ENV", "production"),
+            ("WEBHOOKS_WEBHOOK_SECRET", "whsec-test-dummy"),
+        ]);
+        assert!(
+            harness
+                .production_readiness_now(VentureEnv::Production, &ready, true, true)
+                .is_empty()
         );
     }
 }

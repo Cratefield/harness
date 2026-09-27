@@ -99,7 +99,13 @@ signature-guarded write — a webhook — without `STRIPE_WEBHOOK_SECRET` set:
 without it, webhook signatures cannot be verified and forged events would be
 trusted. The trigger is the webhook route, not the `Payments` port: a venture
 that only opens checkouts and receives no webhook has nothing to verify and
-needs no secret, and is not failed for missing one. When no key is set at all the
+needs no secret, and is not failed for missing one. More precisely, the
+trigger is the webhook route *plus* the module verifying through
+`Payments::verify_webhook` (the default): a module that declared
+`SignatureVerification::Hmac` (issue #533) verifies with the core
+`webhook_signature` scheme instead, gated on its own module-scoped secret
+key rather than `STRIPE_WEBHOOK_SECRET` or the `Payments` port.
+When no key is set at all the
 adapter reports `NotConfigured` and makes no network call, so a venture builds
 and runs without Stripe.
 

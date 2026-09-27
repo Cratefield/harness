@@ -82,7 +82,6 @@ mod locale;
 mod message;
 mod notify;
 mod store;
-mod webhook;
 
 pub use handlers::{
     ChannelPatch, NO_APPLICATION_SERVER_KEY, PreferencesBody, REHOME_LIMIT, RecipientBody,

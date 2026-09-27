@@ -2,7 +2,7 @@
 //!
 //! Every declared write route carries an explicit [`RoutePolicy`]: it is
 //! open, protected by a human-form CAPTCHA, or protected by a machine
-//! signature (a payments webhook). The old shape — a bare `captcha: bool`
+//! signature (a provider webhook). The old shape — a bare `captcha: bool`
 //! plus the module-level `public_writes()` flag consulted only by
 //! `fz doctor` — let a webhook satisfy "has captcha" while simultaneously
 //! getting a captcha widget rendered on it, and left production booting
@@ -45,9 +45,10 @@ pub enum RoutePolicy {
     /// and `Harness::build` refuses to boot a production venture whose
     /// runtime cannot actually do that ([`captcha_effective`]).
     HumanForm,
-    /// An authenticated machine caller — a payments webhook. The handler
-    /// proves the delivery with [`Payments::verify_webhook`]
-    /// (`cratefield_core::Payments`) plus the [`Inbox`] dedup ledger. A
+    /// An authenticated machine caller — a provider webhook. The handler
+    /// proves the delivery with the module's declared verifier
+    /// ([`SignatureVerification`]: `Payments::verify_webhook` by default,
+    /// or a `webhook_signature` scheme) plus the [`Inbox`] dedup ledger. A
     /// CAPTCHA is meaningless here (the caller has no browser) and must
     /// never be rendered or required on such a route.
     ///
@@ -83,6 +84,27 @@ impl RoutePolicy {
     }
 }
 
+/// Which verifier proves a module's [`RoutePolicy::Signature`] deliveries
+/// (issue #533): the `Payments` port — the default every existing module was
+/// built against — or the core `webhook_signature` HMAC scheme keyed by the
+/// module's own config secret. The production gate demands whichever the
+/// module named, never both and never neither.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SignatureVerification {
+    /// `Payments::verify_webhook` — the default; production requires an
+    /// effective `Payments` port.
+    Payments,
+    /// A `webhook_signature` scheme keyed by a module-scoped config secret:
+    /// `secret` is a [`ModuleConfig`](crate::config::ModuleConfig)
+    /// **suffix**, read as `{MODULE}_{SECRET}` (`"WEBHOOK_SECRET"` on module
+    /// `pos` is `POS_WEBHOOK_SECRET`). Production requires that key — see
+    /// [`webhook_secret_readiness`] — and no `Payments` port.
+    Hmac {
+        /// The module-scoped config key suffix holding the shared secret.
+        secret: &'static str,
+    },
+}
+
 /// What the composed modules demand of the runtime, module by module.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct WriteGuards {
@@ -91,8 +113,18 @@ pub struct WriteGuards {
     ///
     /// [`public_writes`]: Module::public_writes
     pub captcha_modules: Vec<String>,
-    /// Modules with a [`RoutePolicy::Signature`]-guarded write (webhooks).
+    /// Modules with a [`RoutePolicy::Signature`]-guarded write (webhooks),
+    /// however they verify them.
     pub signature_modules: Vec<String>,
+    /// The signature modules that prove their deliveries through
+    /// `Payments::verify_webhook` — the default [`SignatureVerification`].
+    pub payments_signature_modules: Vec<String>,
+    /// The signature modules proving their deliveries with a
+    /// `webhook_signature` scheme (issue #533), paired with the
+    /// [`ModuleConfig`](crate::config::ModuleConfig) **suffix** of the key
+    /// holding each secret; [`Self::hmac_signature_secrets`] composes the
+    /// full keys.
+    pub hmac_signature_modules: Vec<(String, &'static str)>,
     /// Modules whose public writes are proved by an artifact this service
     /// issued ([`RoutePolicy::SignedLink`], issue #143).
     pub signed_link_modules: Vec<String>,
@@ -153,6 +185,19 @@ impl WriteGuards {
             }
             if signature {
                 guards.signature_modules.push(module.name().to_owned());
+                // Whichever verifier the module declared (issue #533).
+                match module.signature_verification() {
+                    SignatureVerification::Payments => {
+                        guards
+                            .payments_signature_modules
+                            .push(module.name().to_owned());
+                    }
+                    SignatureVerification::Hmac { secret } => {
+                        guards
+                            .hmac_signature_modules
+                            .push((module.name().to_owned(), secret));
+                    }
+                }
             }
             if signed_link {
                 guards.signed_link_modules.push(module.name().to_owned());
@@ -176,10 +221,12 @@ impl WriteGuards {
 
     /// The guards a **declared surface** demands (issue #131). A sidecar's
     /// merged surface is not a [`Module`] this process can ask
-    /// [`public_writes`](Module::public_writes) of, so the fallback has no
-    /// meaning here: whatever the document declares is exactly what it
-    /// needs. Same per-action reading as [`Self::collect`] through the one
-    /// [`Action::demands_captcha`] predicate and the one
+    /// [`public_writes`](Module::public_writes) or
+    /// [`signature_verification`](Module::signature_verification) of, so
+    /// whatever the document declares is exactly what it needs, and its
+    /// signature routes verify through `Payments`, the default (issue
+    /// #533). Same per-action reading as [`Self::collect`]
+    /// through the one [`Action::demands_captcha`] predicate and the one
     /// `declares_admin_routes` predicate — a sidecar's admin plane needs
     /// the limiter floor as much as an in-process module's.
     ///
@@ -194,6 +241,8 @@ impl WriteGuards {
         Self {
             captcha_modules: form.then(|| module.to_owned()).into_iter().collect(),
             signature_modules: signature.then(|| module.to_owned()).into_iter().collect(),
+            payments_signature_modules: signature.then(|| module.to_owned()).into_iter().collect(),
+            hmac_signature_modules: Vec::new(),
             signed_link_modules: signed_link.then(|| module.to_owned()).into_iter().collect(),
             has_public_writes: form || signature || signed_link,
             has_admin_routes: Self::declares_admin_routes(surface),
@@ -247,22 +296,33 @@ impl WriteGuards {
         !self.captcha_modules.is_empty()
     }
 
-    /// Whether any module takes a **signature-guarded write** — a
-    /// webhook — and so needs a usable [`Payments`] port to verify the
-    /// deliveries against.
-    ///
-    /// Named for the port and computed from the route policy, which is
-    /// not the same set and has been read as though it were: a module
-    /// may require [`Payments`] to open a checkout and take no webhook
-    /// at all, and this answers `false` for it. What it means is "some
-    /// module receives signed webhooks". The `STRIPE_WEBHOOK_SECRET`
-    /// doctor rule is keyed on this, correctly — a venture with no
-    /// webhook route has nothing to verify and needs no secret.
-    ///
-    /// [`Payments`]: crate::ports::Payments
+    /// Whether any module proves a public write with
+    /// [`Payments::verify_webhook`](crate::ports::Payments). Since issue
+    /// #533 this is no longer "some module receives signed webhooks": a
+    /// module may declare [`SignatureVerification::Hmac`] and verify with
+    /// the core `webhook_signature` scheme instead, and this answers
+    /// `false` for it — its production requirement is its secret key, not a
+    /// port (see [`webhook_secret_readiness`]). The `STRIPE_WEBHOOK_SECRET`
+    /// doctor rule is keyed on this, correctly.
     #[must_use]
     pub fn needs_payments(&self) -> bool {
-        !self.signature_modules.is_empty()
+        !self.payments_signature_modules.is_empty()
+    }
+
+    /// The HMAC-verified signature modules and the **full** config key each
+    /// reads its secret from, composed through
+    /// [`ModuleConfig`](crate::config::ModuleConfig)'s `{MODULE}_{SUFFIX}`
+    /// rule — the one place the prefix logic lives (issue #533).
+    #[must_use]
+    pub fn hmac_signature_secrets(&self) -> Vec<(String, String)> {
+        self.hmac_signature_modules
+            .iter()
+            .map(|(module, suffix)| {
+                let key = crate::config::ModuleConfig::new(module, &crate::config::EmptyConfig)
+                    .key(suffix);
+                (module.clone(), key)
+            })
+            .collect()
     }
 
     /// Whether any route in the composition needs a limiter sitting in
@@ -289,14 +349,49 @@ pub fn captcha_effective(runtime: Option<&Arc<dyn Runtime>>) -> bool {
     runtime.is_some_and(|runtime| runtime.effectively_configured(Port::Captcha))
 }
 
-/// Whether the runtime can verify webhook signatures for
-/// [`RoutePolicy::Signature`]-guarded routes. Presence of the `Payments`
-/// bar: signature verification is the adapter's per-request duty
-/// (`verify_webhook` + `Inbox`), and which secret it checks against is
-/// deploy configuration that `fz doctor` reads from the environment.
+/// Whether the runtime can verify webhook signatures for the
+/// [`RoutePolicy::Signature`]-guarded routes whose modules verify through
+/// `Payments` (the default): signature verification is the adapter's
+/// per-request duty (`verify_webhook` + `Inbox`), and which secret it
+/// checks against is deploy configuration. A module that declared
+/// [`SignatureVerification::Hmac`] is not this function's business — its
+/// production requirement is its secret key, checked by
+/// [`webhook_secret_readiness`].
 #[must_use]
 pub fn payments_effective(runtime: Option<&Arc<dyn Runtime>>) -> bool {
     runtime.is_some_and(|runtime| runtime.effectively_configured(Port::Payments))
+}
+
+/// The boot-time leg for HMAC-verified signature modules (issue #533): in
+/// production, each one's configured secret key must be present and
+/// non-blank, or the module's handler refuses every delivery. The errors
+/// name the module and the config key, never the value, and there is no
+/// waiver: an operator who wants the endpoint unverified removes the
+/// route, which is a build-time decision. Run by the boot gate
+/// ([`Harness::router`](crate::Harness::router)'s readiness re-check),
+/// which holds the deployment config; the build-time gate has none, so it
+/// skips this leg — the same split as the overrides there.
+#[must_use]
+pub fn webhook_secret_readiness(
+    env: VentureEnv,
+    guards: &WriteGuards,
+    config: &dyn crate::config::Config,
+) -> Vec<String> {
+    if env != VentureEnv::Production {
+        return Vec::new();
+    }
+    guards
+        .hmac_signature_secrets()
+        .iter()
+        .filter(|(_, key)| config.get(key).is_none_or(|value| value.trim().is_empty()))
+        .map(|(module, key)| {
+            format!(
+                "production venture verifies `{module}` webhook signatures with the \
+                 webhook_signature HMAC scheme but `{key}` is not set — its handler refuses \
+                 every delivery until the provider's signing secret is configured"
+            )
+        })
+        .collect()
 }
 
 /// The operator's reason, if they actually gave one.
@@ -492,10 +587,12 @@ pub fn production_readiness(
     }
     if guards.needs_payments() && !payments_effective(runtime) {
         errors.push(format!(
-            "production venture has signature-guarded routes from [{}] but the Payments port \
-             is not provided — webhook deliveries cannot be verified (see the Inbox dedup \
-             ledger and the STRIPE_WEBHOOK_SECRET doctor rule)",
-            guards.signature_modules.join(", ")
+            "production venture has signature-guarded routes from [{}] that verify through \
+             Payments but the Payments port is not provided — those webhook deliveries cannot \
+             be verified (see the Inbox dedup ledger and the STRIPE_WEBHOOK_SECRET doctor \
+             rule; modules verifying with the webhook_signature HMAC scheme instead are \
+             gated on their own secret key, not this port)",
+            guards.payments_signature_modules.join(", ")
         ));
     }
     if guards.needs_rate_limiter()
@@ -665,6 +762,7 @@ mod tests {
         surface: Surface,
         public_writes: bool,
         public_write_policy: RoutePolicy,
+        verification: SignatureVerification,
     }
 
     impl Module for Guarded {
@@ -682,6 +780,9 @@ mod tests {
         }
         fn public_write_policy(&self) -> RoutePolicy {
             self.public_write_policy
+        }
+        fn signature_verification(&self) -> SignatureVerification {
+            self.verification
         }
         fn migrations(&self) -> Migrations {
             Migrations::default()
@@ -709,6 +810,7 @@ mod tests {
             },
             public_writes,
             public_write_policy: RoutePolicy::HumanForm,
+            verification: SignatureVerification::Payments,
         })
     }
 
@@ -722,6 +824,7 @@ mod tests {
             },
             public_writes: true,
             public_write_policy: policy,
+            verification: SignatureVerification::Payments,
         })
     }
 
@@ -890,9 +993,113 @@ mod tests {
         );
     }
 
-    // ------------------------------------------------ issue #143
+    // ------------------------------------------------ issue #533
 
     use crate::config::MapConfig;
+
+    /// A webhook receiver verifying with the core HMAC scheme, holding its
+    /// secret under `{MODULE}_WEBHOOK_SECRET`.
+    fn hmac_module(name: &'static str) -> Arc<dyn Module> {
+        Arc::new(Guarded {
+            name,
+            surface: Surface {
+                actions: vec![Action::post("webhook", "/webhook").policy(RoutePolicy::Signature)],
+                views: vec![],
+            },
+            public_writes: false,
+            public_write_policy: RoutePolicy::HumanForm,
+            verification: SignatureVerification::Hmac {
+                secret: "WEBHOOK_SECRET",
+            },
+        })
+    }
+
+    #[test]
+    fn an_hmac_signature_writer_needs_no_payments_and_names_its_secret_key() {
+        let guards = WriteGuards::collect(&[hmac_module("pos")]);
+        assert_eq!(guards.signature_modules, ["pos"]);
+        assert!(!guards.needs_payments());
+        assert_eq!(
+            guards.hmac_signature_secrets(),
+            vec![("pos".to_owned(), "POS_WEBHOOK_SECRET".to_owned())],
+            "the full key is composed through ModuleConfig's prefix rule"
+        );
+    }
+
+    #[test]
+    fn the_webhook_secret_gate_is_production_only() {
+        let guards = WriteGuards::collect(&[hmac_module("pos")]);
+        // No runtime at all — no Payments port anywhere — and production is
+        // clean once the secret is set.
+        let set = MapConfig::from_pairs([("POS_WEBHOOK_SECRET", "whsec-test-dummy")]);
+        assert!(
+            production_readiness(
+                VentureEnv::Production,
+                &guards,
+                None,
+                true,
+                false,
+                None,
+                None
+            )
+            .is_empty()
+        );
+        assert!(webhook_secret_readiness(VentureEnv::Production, &guards, &set).is_empty());
+        // Missing or blank refuses in production, naming the module and the
+        // key; staging demands nothing (the handler refuses every delivery
+        // per request anyway).
+        for config in [
+            MapConfig::default(),
+            MapConfig::from_pairs([("POS_WEBHOOK_SECRET", "   ")]),
+        ] {
+            let errors = webhook_secret_readiness(VentureEnv::Production, &guards, &config);
+            assert_eq!(errors.len(), 1, "{errors:?}");
+            assert!(
+                errors[0].contains("pos") && errors[0].contains("POS_WEBHOOK_SECRET"),
+                "{}",
+                errors[0]
+            );
+        }
+        assert!(
+            webhook_secret_readiness(VentureEnv::Staging, &guards, &MapConfig::default())
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn a_mixed_venture_gates_payments_only_for_the_module_that_names_it() {
+        // A sidecar document cannot name a verifier, so it keeps the
+        // pre-#533 behaviour: the Payments gate.
+        let surface = Surface {
+            actions: vec![Action::post("webhook", "/webhook").policy(RoutePolicy::Signature)],
+            views: vec![],
+        };
+        assert!(WriteGuards::from_surface("remote", &surface).needs_payments());
+        // A mixed venture still demands Payments for exactly the module
+        // that verifies through it.
+        let guards = WriteGuards::collect(&[
+            hmac_module("pos"),
+            declaring("billing", RoutePolicy::Signature),
+        ]);
+        assert!(guards.needs_payments());
+        let errors = production_readiness(
+            VentureEnv::Production,
+            &guards,
+            None,
+            true,
+            false,
+            None,
+            None,
+        );
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert!(
+            errors[0].contains("billing") && !errors[0].contains("pos"),
+            "{}",
+            errors[0]
+        );
+    }
+
+    // ------------------------------------------------ issue #143
 
     #[test]
     fn the_deployment_environment_is_the_stricter_of_the_two() {
@@ -1018,6 +1225,7 @@ mod tests {
             },
             public_writes: true,
             public_write_policy: RoutePolicy::SignedLink,
+            verification: SignatureVerification::Payments,
         })]);
         assert_eq!(guards.captcha_modules, ["mixed"]);
         assert!(

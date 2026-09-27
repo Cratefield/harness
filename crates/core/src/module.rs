@@ -422,6 +422,33 @@ pub trait Module: Send + Sync + 'static {
     fn public_write_policy(&self) -> crate::route_policy::RoutePolicy {
         crate::route_policy::RoutePolicy::HumanForm
     }
+    /// Which verifier proves this module's [`RoutePolicy::Signature`]
+    /// deliveries (issue #533): how a webhook handler checks a machine
+    /// signature before acting.
+    ///
+    /// Consulted only when the module actually has signature-guarded
+    /// routes — [`WriteGuards::collect`] reads it per signature module and
+    /// the production gate demands exactly what was declared:
+    ///
+    /// - [`SignatureVerification::Payments`](crate::route_policy::SignatureVerification::Payments)
+    ///   (the default): the handler
+    ///   proves deliveries with `Payments::verify_webhook` plus the Inbox
+    ///   dedup ledger, and production requires an effective `Payments`
+    ///   port. Every module built before this existed gets this, unchanged.
+    /// - [`SignatureVerification::Hmac`](crate::route_policy::SignatureVerification::Hmac):
+    ///   the handler proves deliveries
+    ///   with the core `webhook_signature` scheme (Svix, Stripe-style, or
+    ///   a provider-specific layout), keyed by the module-scoped config
+    ///   secret named here — a [`ModuleConfig`] suffix, so `"WEBHOOK_SECRET"`
+    ///   on module `pos` is read from `POS_WEBHOOK_SECRET`. Production
+    ///   requires that key and no `Payments` port.
+    ///
+    /// [`RoutePolicy::Signature`]: crate::route_policy::RoutePolicy::Signature
+    /// [`WriteGuards::collect`]: crate::route_policy::WriteGuards::collect
+    /// [`ModuleConfig`]: crate::config::ModuleConfig
+    fn signature_verification(&self) -> crate::route_policy::SignatureVerification {
+        crate::route_policy::SignatureVerification::Payments
+    }
     /// The module's migrations, embedded per dialect.
     fn migrations(&self) -> Migrations;
     /// Rejects invalid configuration: missing required keys or malformed
