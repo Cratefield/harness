@@ -80,6 +80,7 @@ pub(crate) struct Settings {
     pub retention_days_pending: u32,
     pub status_redirect: Option<String>,
     pub referrals: bool,
+    pub require_answers: bool,
     pub answers_schema: crate::AnswersSchema,
 }
 
@@ -408,6 +409,7 @@ pub(crate) fn surface(settings: &Settings) -> Surface {
                 ("referrals", "Referrals"),
                 ("created_at", "Created"),
                 ("confirmed_at", "Confirmed"),
+                ("answers", "Answers"),
             ]
             .into_iter()
             .map(|(key, label)| Column::new(key, label))
@@ -556,8 +558,9 @@ async fn join(
     Ok(accepted())
 }
 
-/// Normalises the address and enforces the product allowlist and the
-/// venture's answers schema; `Err` carries the matching problem.
+/// Normalises the address and enforces the product allowlist, the
+/// required-answers rule and the venture's answers schema; `Err` carries
+/// the matching problem.
 fn validate_join(
     state: &ModuleState,
     scope: &Scope,
@@ -571,6 +574,11 @@ fn validate_join(
     let products = effective_products(cfg, &state.settings);
     if !product_allowed(&products, &body.product) {
         return Err(Problem::new(&SLUGS.unknown_product).instance(&scope.request_id));
+    }
+    if state.settings.require_answers && body.answers.is_none() {
+        return Err(
+            Problem::validation_failed("answers: required".to_owned()).instance(&scope.request_id)
+        );
     }
     if let Some(answers) = &body.answers
         && let Err(detail) = (state.settings.answers_schema)(answers)
@@ -842,7 +850,7 @@ async fn admin_export(
     let more = rows.len() > limit;
     let page = if more { &rows[..limit] } else { &rows[..] };
     let mut body = String::from(
-        "id,email,product,status,position,referral_code,referred_by,referrals,created_at,confirmed_at\n",
+        "id,email,product,status,position,referral_code,referred_by,referrals,created_at,confirmed_at,answers\n",
     );
     for row in page {
         let cells = [
@@ -856,6 +864,7 @@ async fn admin_export(
             &row.referrals.to_string(),
             row.created_at.as_str(),
             row.confirmed_at.as_deref().unwrap_or(""),
+            row.answers.as_deref().unwrap_or(""),
         ];
         body.push_str(&csv_row(&cells));
     }

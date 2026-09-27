@@ -123,6 +123,7 @@ impl Waitlist {
                 retention_days_pending: 30,
                 status_redirect: None,
                 referrals: true,
+                require_answers: false,
                 answers_schema: accept_any_answers(),
             },
         }
@@ -175,13 +176,23 @@ impl Waitlist {
     }
 
     /// Validates the free-form `answers` JSON of a join (default: accept
-    /// anything).
+    /// anything). Only runs when the join carries answers; pair with
+    /// [`Self::require_answers`] to also reject joins without them.
     #[must_use]
     pub fn answers_schema(
         mut self,
         validate: impl Fn(&Value) -> Result<(), String> + Send + Sync + 'static,
     ) -> Self {
         self.settings.answers_schema = Arc::new(validate);
+        self
+    }
+
+    /// Whether a join must carry `answers` (default `false`): with
+    /// `true`, a body without the field — absent or `null` — is
+    /// rejected as `validation-failed`.
+    #[must_use]
+    pub fn require_answers(mut self, required: bool) -> Self {
+        self.settings.require_answers = required;
         self
     }
 }
