@@ -134,7 +134,7 @@ async fn limit(state: &ModuleState, headers: &HeaderMap) -> Option<Response> {
     for key in cratefield_core::rate_limit_keys(ip.as_deref(), None) {
         match limiter.limit(&format!("auth-oidc:{key}")).await {
             Ok(decision) if !decision.ok => {
-                return Some(cratefield_core::rate_limited(decision.retry_after).into_response());
+                return Some(cratefield_core::rate_limited(&decision).into_response());
             }
             Ok(_) => {}
             Err(err) => {

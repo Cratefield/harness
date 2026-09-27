@@ -12,7 +12,8 @@ use worker::Env;
 
 use crate::config::EnvConfig;
 use crate::ports::{
-    D1Database, FetchClient, KvStorePort, R2Blob, RateLimitPort, ServiceDispatcher, WorkersClock,
+    D1Database, D1RateLimiter, FetchClient, KvStorePort, Limit, R2Blob, RateLimitPolicy,
+    RateLimitPort, ServiceDispatcher, WorkersClock,
 };
 
 fn warn_once(flag: &AtomicBool, message: &str) {
@@ -65,6 +66,10 @@ pub struct Cloudflare {
     kv_binding: Option<&'static str>,
     blob_binding: Option<&'static str>,
     rate_limiter_binding: Option<&'static str>,
+    /// The D1-backed per-key limiter (issue #538): the binding it reads its
+    /// counters from, plus the policy mapping a key to its budget. Fills
+    /// the same `RateLimiter` slot as `rate_limiter_binding`.
+    d1_rate_limiter: Option<(&'static str, RateLimitPolicy)>,
     mailer: Option<Arc<dyn Mailer>>,
     push: Option<Arc<dyn Push>>,
     payments: Option<Arc<dyn Payments>>,
@@ -107,6 +112,7 @@ impl Cloudflare {
             kv_binding: None,
             blob_binding: None,
             rate_limiter_binding: None,
+            d1_rate_limiter: None,
             mailer: None,
             push: None,
             payments: None,
@@ -145,6 +151,27 @@ impl Cloudflare {
     #[must_use]
     pub fn rate_limiter(mut self, binding: &'static str) -> Self {
         self.rate_limiter_binding = Some(binding);
+        self
+    }
+
+    /// The `RateLimiter` port over D1 (issue #538): a fixed window per key,
+    /// one atomic upsert per request ([`D1RateLimiter`]), so the budget can
+    /// vary per key — the Workers Rate Limiting binding above is one limit
+    /// per namespace. The policy maps a key to its [`Limit`]; `None` means
+    /// unlimited, allowed without a D1 round trip. Encode the plan in the
+    /// key (`plan:pro:ip:203.0.113.7`) and match on the prefix.
+    ///
+    /// Fills the same port slot as [`rate_limiter`](Self::rate_limiter);
+    /// where both are wired, this one wins. The counters table ships as
+    /// `RATE_LIMIT_COUNTERS_SQL`: add it to the venture's `migrations/`
+    /// directory.
+    #[must_use]
+    pub fn d1_rate_limiter(
+        mut self,
+        binding: &'static str,
+        policy: impl Fn(&str) -> Option<Limit> + Send + Sync + 'static,
+    ) -> Self {
+        self.d1_rate_limiter = Some((binding, Arc::new(policy)));
         self
     }
 
@@ -363,6 +390,36 @@ impl Cloudflare {
         }
     }
 
+    /// The two `RateLimiter` sources: the Workers Rate Limiting binding
+    /// (one limit per namespace) and the D1-backed per-key limiter over a
+    /// D1 binding (issue #538), which wins where both are wired — the
+    /// per-key policy is what a venture with plans needs, the binding is
+    /// the cheaper default.
+    ///
+    /// Its own method because `ports` is at clippy's line limit.
+    fn rate_limiter_port(&self, env: &Env, ports: &mut Ports) {
+        if let Some(name) = self.rate_limiter_binding {
+            match env.rate_limiter(name) {
+                Ok(limiter) => ports.rate_limiter = Some(Arc::new(RateLimitPort(limiter))),
+                Err(err) => warn_once(
+                    &WARNED_RATE_LIMIT,
+                    &format!("Rate limit binding {name:?} not available: {err}"),
+                ),
+            }
+        }
+        if let Some((name, policy)) = &self.d1_rate_limiter {
+            match env.d1(name) {
+                Ok(db) => {
+                    ports.rate_limiter = Some(Arc::new(D1RateLimiter::new(db, Arc::clone(policy))));
+                }
+                Err(err) => warn_once(
+                    &WARNED_RATE_LIMIT,
+                    &format!("D1 rate limit binding {name:?} not available: {err}"),
+                ),
+            }
+        }
+    }
+
     /// Assembles the `Auth` port from `AUTH_ISSUER` and `AUTH_CLIENT_ID`
     /// (issue #153), the way `push_from_env` assembles push.
     ///
@@ -419,15 +476,7 @@ impl Cloudflare {
                 ),
             }
         }
-        if let Some(name) = self.rate_limiter_binding {
-            match env.rate_limiter(name) {
-                Ok(limiter) => ports.rate_limiter = Some(Arc::new(RateLimitPort(limiter))),
-                Err(err) => warn_once(
-                    &WARNED_RATE_LIMIT,
-                    &format!("Rate limit binding {name:?} not available: {err}"),
-                ),
-            }
-        }
+        self.rate_limiter_port(env, &mut ports);
 
         match HarnessConfig::from_config(&EnvConfig(env.clone())) {
             Ok(config) => {
@@ -521,7 +570,7 @@ impl Runtime for Cloudflare {
         if self.blob_binding.is_some() {
             provided.push(Port::Blob);
         }
-        if self.rate_limiter_binding.is_some() {
+        if self.rate_limiter_binding.is_some() || self.d1_rate_limiter.is_some() {
             provided.push(Port::RateLimiter);
         }
         if self.mailer.is_some() {

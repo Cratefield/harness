@@ -11,11 +11,10 @@ use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, post};
 use cratefield_core::{
-    Action, Audience, Captcha, Clock, Column, Database, Decision, IdGen, Json, Kid,
-    MAX_EXPORT_ROWS, ModuleConfig, ModuleContext, Outcome, Payload, Problem, RateLimiter, SLUGS,
-    Scope, SendOutcome, Signer, Surface, SystemClock, UlidIdGen, View, client_ip, csv_row,
-    invalid_email_problem, normalize_email, rate_limit_keys, rate_limited, require_admin,
-    validation_error,
+    Action, Audience, Captcha, Clock, Column, Database, IdGen, Json, Kid, MAX_EXPORT_ROWS,
+    ModuleConfig, ModuleContext, Outcome, Payload, Problem, RateLimiter, SLUGS, Scope, SendOutcome,
+    Signer, Surface, SystemClock, UlidIdGen, View, client_ip, csv_row, invalid_email_problem,
+    normalize_email, rate_limit_keys, rate_limited, require_admin, validation_error,
 };
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -166,11 +165,8 @@ async fn rate_limit(
     let ip = client_ip(headers);
     for key in rate_limit_keys(ip.as_deref(), email) {
         match limiter.limit(&key).await {
-            Ok(Decision { ok: true, .. }) => {}
-            Ok(Decision {
-                ok: false,
-                retry_after,
-            }) => return Some(rate_limited(retry_after)),
+            Ok(decision) if decision.ok => {}
+            Ok(decision) => return Some(rate_limited(&decision)),
             Err(err) => {
                 tracing::warn!(error = %err, key = %key, "rate limiter unavailable; allowing");
             }

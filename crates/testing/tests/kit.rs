@@ -418,10 +418,12 @@ async fn fake_rate_limiter_is_scripted() {
         vec![Decision {
             ok: false,
             retry_after: Some(Duration::from_secs(3)),
+            quota: None,
         }],
         Decision {
             ok: true,
             retry_after: None,
+            quota: None,
         },
     );
     let first = limiter.limit("k").await.expect("l");

@@ -19,8 +19,8 @@ use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
 use cratefield_core::{
-    Clock, Decision, Json, ModuleContext, Problem, ProblemDef, RateLimiter, Scope, SystemClock,
-    client_ip, rate_limit_keys, rate_limited, require_admin,
+    Clock, Json, ModuleContext, Problem, ProblemDef, RateLimiter, Scope, SystemClock, client_ip,
+    rate_limit_keys, rate_limited, require_admin,
 };
 
 use crate::consent;
@@ -190,12 +190,9 @@ async fn rate_limit(state: &ModuleState, headers: &HeaderMap) -> Option<Response
     let ip = client_ip(headers);
     for key in rate_limit_keys(ip.as_deref(), None) {
         match limiter.limit(&key).await {
-            Ok(Decision { ok: true, .. }) => {}
-            Ok(Decision {
-                ok: false,
-                retry_after,
-            }) => {
-                return Some(rate_limited(retry_after));
+            Ok(decision) if decision.ok => {}
+            Ok(decision) => {
+                return Some(rate_limited(&decision));
             }
             Err(err) => {
                 tracing::warn!(error = %err, key = %key, "rate limiter unavailable; allowing");

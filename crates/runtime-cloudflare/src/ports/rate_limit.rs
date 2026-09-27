@@ -18,6 +18,9 @@ impl RateLimiter for RateLimitPort {
         Ok(Decision {
             ok: outcome.success,
             retry_after: None,
+            // The binding answers a boolean per namespace: it has no
+            // window to report, so no quota and no `RateLimit-*` headers.
+            quota: None,
         })
     }
 }

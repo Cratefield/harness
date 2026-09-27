@@ -1732,11 +1732,11 @@ async fn admin_rate_limit_layer(
     .into_iter()
     .map(|key| format!("admin:{key}"))
     .collect();
-    if let RateLimit::Denied { retry_after } =
+    if let RateLimit::Denied { decision } =
         crate::rate_limit::check_rate_limit(limiter.as_ref(), &keys, RateLimitFailure::FailClosed)
             .await
     {
-        return rate_limited(retry_after);
+        return rate_limited(&decision);
     }
     next.run(request).await
 }

@@ -52,7 +52,7 @@ pub use push::{
     LocKeys, Notification, Platform, Priority, Push, PushError, PushOutcome, Recipient,
     RoutingPush, retry_after, ttl_secs,
 };
-pub use rate_limiter::{Decision, RateLimitError, RateLimiter};
+pub use rate_limiter::{Decision, Quota, RateLimitError, RateLimiter};
 pub use realtime::{Member, Realtime, RealtimeError, RoomContext, RoomHandler};
 pub use signer::{Kid, MAX_KID_NAME, Payload, SignatureError, Signer};
 pub use text_model::{

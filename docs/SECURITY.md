@@ -72,7 +72,14 @@
   how the second stays unwired after the first is fixed. Where a
   venture runs a limiter over public routes, keys are
   `ip:<cf-connecting-ip>` (never `x-forwarded-for` on Workers) and
-  `email:<normalized>`; a denial answers `429` with `Retry-After`.
+  `email:<normalized>`; a denial answers `429` with `Retry-After` (the
+  limiter's own pause, or the window's reset), plus the IETF draft
+  `RateLimit-Limit` / `-Remaining` / `-Reset` headers when the limiter
+  reports a quota. Which limits apply is a composition choice: the
+  Workers Rate Limiting binding is one limit per namespace, so per-key
+  budgets (per plan, per address) need the D1-backed limiter
+  (`D1RateLimiter`, issue #538) — the policy maps a key's `plan:` prefix
+  to its own cap.
 - **Production readiness is enforced against the deployment, not a
   compiled default** (issue #143). A venture carries a `VentureEnv` set in
   code, defaulting to `Development`; a deployment carries `ENV`. They

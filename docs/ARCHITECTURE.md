@@ -73,7 +73,7 @@ what actually keeps a crate off crates.io.
 | Crate | Role |
 |---|---|
 | `cratefield-core` | `Module` trait, `Harness` builder, axum router assembly, port traits, typed config, problem+json errors, request scope, tracing setup, in-process event bus, template registry. |
-| `cratefield-runtime-cloudflare` | `#[event(fetch)]` and `#[event(scheduled)]` entry points on `workers-rs`. Maps bindings to ports: D1 -> `Database` (sea-query -> `D1PreparedStatement`), KV -> `KeyValue`, Rate Limiting binding -> `RateLimiter`, `HARNESS_SECRET` -> `Signer`, `Context::wait_until` -> `Defer`. |
+| `cratefield-runtime-cloudflare` | `#[event(fetch)]` and `#[event(scheduled)]` entry points on `workers-rs`. Maps bindings to ports: D1 -> `Database` (sea-query -> `D1PreparedStatement`), KV -> `KeyValue`, Rate Limiting binding -> `RateLimiter`, D1 -> per-key `RateLimiter` (issue #538), `HARNESS_SECRET` -> `Signer`, `Context::wait_until` -> `Defer`. |
 | `cratefield-adapter-resend` | `Mailer` over the Resend REST API using the runtime's `HttpClient` port (no vendor SDK). Idempotency keys, error mapping, `NotConfigured` mode when the key is absent. |
 | `cratefield-adapter-turnstile` | `Captcha` over Cloudflare Turnstile siteverify. |
 | `cratefield-adapter-anthropic` | `TextModel` over the Anthropic Messages API using the runtime's `HttpClient` port (no vendor SDK). One prompt in, one completion out — no streaming, no retries inside the adapter; a JSON schema is requested as a forced tool call and returned as the tool input; error mapping puts 429/5xx in `Transient` (the provider's `Retry-After` honoured in both RFC 9110 forms), the provider's 4xx refusals in `Rejected`, and everything that stops the call completing in `Transport`; `NotConfigured` mode when the key is absent. |
@@ -210,7 +210,7 @@ generated venture, which turns a bad composition into a
 | `Database` | `execute(&Statement) -> Result<u64>`, `query(&Statement) -> Result<Rows>`, `batch(&[Statement])` (atomic where the engine supports it); `Statement` = sea-query `(sql, values)` | D1 via `worker::D1Database` | Postgres via `sqlx`; SQLite via `rusqlite` |
 | `Mailer` | `send(Message) -> Result<SendOutcome>` where `SendOutcome::{Sent{id}, NotConfigured}` | Resend over `HttpClient` | Resend (unchanged) |
 | `Captcha` | `verify(token, remote_ip) -> Result<Verdict>` | Turnstile over `HttpClient` | Turnstile |
-| `RateLimiter` | `limit(key) -> Result<Decision{ok, retry_after}>` | Workers Rate Limiting binding | Redis |
+| `RateLimiter` | `limit(key) -> Result<Decision{ok, retry_after, quota}>` | Workers Rate Limiting binding (one limit per namespace); D1 per-key fixed window (`D1RateLimiter`, ship `RATE_LIMIT_COUNTERS_SQL` as a migration) | Redis |
 | `Signer` | `sign(Payload) -> String`, `verify(token, purpose) -> Option<Payload>` | HMAC-SHA256 (`hmac` + `sha2`) with `HARNESS_SECRET`; in core | same |
 | `KeyValue` | `get/put/delete` with TTL | KV | Redis |
 | `Blob` | `put(key, bytes, content_type)`, `get -> Option<BlobObject>`, `delete` (idempotent), `signed_url(key, ttl)`; keys are module-prefixed and the harness hands each module a `ScopedBlob` so it cannot name another's objects | R2 via `worker::Bucket` (verify in `wrangler dev`) | directory (`DirBlob`); S3-compatible later |

@@ -206,6 +206,7 @@ impl FakeRateLimiter {
             Decision {
                 ok: true,
                 retry_after: None,
+                quota: None,
             },
         )
     }

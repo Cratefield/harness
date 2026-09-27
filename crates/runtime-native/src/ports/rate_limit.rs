@@ -124,6 +124,9 @@ impl RateLimiter for RedisRateLimiter {
             } else {
                 None
             },
+            // The script reports the verdict and the retry pause; the
+            // window's membership count is not returned, so no quota.
+            quota: None,
         })
     }
 }

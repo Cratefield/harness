@@ -205,7 +205,7 @@ async fn rate_limit(
     )
     .await
     {
-        RateLimit::Denied { retry_after } => Some(rate_limited(retry_after)),
+        RateLimit::Denied { decision } => Some(rate_limited(&decision)),
         RateLimit::Allowed => None,
     }
 }

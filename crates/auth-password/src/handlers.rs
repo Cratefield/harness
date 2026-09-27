@@ -95,7 +95,7 @@ async fn limit_pause(
     state: &ModuleState,
     headers: &HeaderMap,
     email: Option<&str>,
-) -> Option<Option<std::time::Duration>> {
+) -> Option<cratefield_core::Decision> {
     let limiter = state.ctx.ports.rate_limiter.as_deref()?;
     let ip = cratefield_core::client_ip(headers);
     // Keyed on the address as well as the caller: an attacker with a
@@ -103,7 +103,7 @@ async fn limit_pause(
     // protecting from a distributed guess even before the lockout bites.
     for key in cratefield_core::rate_limit_keys(ip.as_deref(), email) {
         match limiter.limit(&format!("auth-password:{key}")).await {
-            Ok(decision) if !decision.ok => return Some(decision.retry_after),
+            Ok(decision) if !decision.ok => return Some(decision),
             Ok(_) => {}
             Err(err) => {
                 tracing::warn!(error = %err, "the auth-password rate limiter is unavailable");
@@ -117,7 +117,7 @@ async fn limit_pause(
 async fn limit(state: &ModuleState, headers: &HeaderMap, email: Option<&str>) -> Option<Response> {
     limit_pause(state, headers, email)
         .await
-        .map(|pause| cratefield_core::rate_limited(pause).into_response())
+        .map(|decision| cratefield_core::rate_limited(&decision).into_response())
 }
 
 /// Verifies the captcha when a deployment provides one.
@@ -484,7 +484,7 @@ fn html_escape(value: &str) -> String {
 enum Outcome {
     SignedIn(Box<IssuedSession>),
     Refused,
-    RateLimited(Option<std::time::Duration>),
+    RateLimited(cratefield_core::Decision),
 }
 
 /// `POST /login`.
@@ -514,7 +514,9 @@ async fn login(
     {
         Outcome::SignedIn(session) => Ok(signed_in(&session)),
         Outcome::Refused => Err(refused(&scope)),
-        Outcome::RateLimited(pause) => Ok(cratefield_core::rate_limited(pause).into_response()),
+        Outcome::RateLimited(decision) => {
+            Ok(cratefield_core::rate_limited(&decision).into_response())
+        }
     }
 }
 
@@ -541,8 +543,8 @@ async fn sign_in(
 
     let email = cratefield_core::normalize_email(raw_email);
 
-    if let Some(pause) = limit_pause(state, headers, Some(&email)).await {
-        return Ok(Outcome::RateLimited(pause));
+    if let Some(decision) = limit_pause(state, headers, Some(&email)).await {
+        return Ok(Outcome::RateLimited(decision));
     }
     if !captcha_ok(state, captcha_token, headers).await {
         return Ok(Outcome::Refused);

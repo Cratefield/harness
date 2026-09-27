@@ -177,14 +177,14 @@ pub(crate) async fn magic_request(
     let mut keys = rate_limit_keys(ip.as_deref(), None);
     keys.push(format!("magic-link:addr:{}", hash_hex(email.as_bytes())));
     keys.push("magic-link:total".to_owned());
-    if let cratefield_core::RateLimit::Denied { retry_after } = cratefield_core::check_rate_limit(
+    if let cratefield_core::RateLimit::Denied { decision } = cratefield_core::check_rate_limit(
         ctx.ports.rate_limiter.as_ref(),
         &keys,
         cratefield_core::RateLimitFailure::FailOpen,
     )
     .await
     {
-        return rate_limited(retry_after);
+        return rate_limited(&decision);
     }
 
     let (Some(db), Some(mailer), Some(clock)) = (

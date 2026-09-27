@@ -64,7 +64,7 @@ pub(crate) async fn limit_login(state: &ModuleState, headers: &HeaderMap) -> Opt
     for key in cratefield_core::rate_limit_keys(ip.as_deref(), None) {
         match limiter.limit(&format!("auth-passkeys:{key}")).await {
             Ok(decision) if !decision.ok => {
-                return Some(cratefield_core::rate_limited(decision.retry_after).into_response());
+                return Some(cratefield_core::rate_limited(&decision).into_response());
             }
             Ok(_) => {}
             Err(err) => {
@@ -113,10 +113,17 @@ pub(crate) async fn limit_challenges(
             Ok(true) => {}
             Ok(false) => {
                 tracing::warn!(subject = %subject, "the login challenge budget is spent");
+                // The budget knows a pause, not a quota: the window is this
+                // module's own cutoff over stored rows, so there are no
+                // `RateLimit-*` headers to report.
                 return Ok(Some(
-                    cratefield_core::rate_limited(Some(std::time::Duration::from_secs(
-                        crate::budget::CHALLENGE_BUDGET_WINDOW_SECS as u64,
-                    )))
+                    cratefield_core::rate_limited(&cratefield_core::Decision {
+                        ok: false,
+                        retry_after: Some(std::time::Duration::from_secs(
+                            crate::budget::CHALLENGE_BUDGET_WINDOW_SECS as u64,
+                        )),
+                        quota: None,
+                    })
                     .into_response(),
                 ));
             }
