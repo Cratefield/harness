@@ -89,6 +89,10 @@ cratefield-module-notifications = { path = "crates/module-notifications", versio
 # Aggregate usage telemetry (issue #413): counted events behind a closed
 # grammar, with the consent model built into the crate.
 cratefield-module-telemetry = { path = "crates/module-telemetry", version = "0.1.0" }
+# Outbound webhooks (issue #536): per-subject endpoints, signed POSTs over
+# the core outbox, dead letters and replay. The Rust API is the surface —
+# the module ships no routes of its own.
+cratefield-module-webhooks = { path = "crates/module-webhooks", version = "0.1.0" }
 # Declared here rather than by bare path in the one crate that uses it: a
 # path-only dependency has no version, and `cargo publish` refuses a
 # dependency without one. It was invisible while both crates were

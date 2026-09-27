@@ -664,6 +664,7 @@ dependencies = [
  "cratefield-module-privacy",
  "cratefield-module-telemetry",
  "cratefield-module-waitlist",
+ "cratefield-module-webhooks",
  "cratefield-oauth-client",
  "cratefield-push-auth",
  "cratefield-push-wiring",
@@ -1485,6 +1486,28 @@ dependencies = [
  "tower",
  "tracing",
  "ulid",
+]
+
+[[package]]
+name = "cratefield-module-webhooks"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "axum",
+ "bytes",
+ "cratefield-adapter-sqlite",
+ "cratefield-core",
+ "cratefield-testing",
+ "getrandom 0.4.3",
+ "hmac 0.13.0",
+ "http",
+ "pollster",
+ "sea-query",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "time",
+ "tracing",
 ]
 
 [[package]]
