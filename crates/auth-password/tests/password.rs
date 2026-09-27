@@ -71,6 +71,7 @@ impl RateLimiter for FakeLimiter {
         Ok(Decision {
             ok: left > 0,
             retry_after: Some(std::time::Duration::from_secs(60)),
+            quota: None,
         })
     }
 }

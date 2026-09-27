@@ -391,14 +391,14 @@ async fn forward(
         Method::POST | Method::PUT | Method::PATCH | Method::DELETE
     ) {
         let keys = rate_limit_keys(client_ip(&parts.headers).as_deref(), None);
-        if let RateLimit::Denied { retry_after } = check_rate_limit(
+        if let RateLimit::Denied { decision } = check_rate_limit(
             state.rate_limiter.as_ref(),
             &keys,
             RateLimitFailure::FailClosed,
         )
         .await
         {
-            return crate::http::rate_limited(retry_after);
+            return crate::http::rate_limited(&decision);
         }
     }
 

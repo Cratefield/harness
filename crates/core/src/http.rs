@@ -12,7 +12,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::module::HARNESS_API;
-use crate::ports::{Defer, IdGen};
+use crate::ports::{Decision, Defer, IdGen, Quota};
 use crate::problem::Problem;
 use crate::scope::Scope;
 use crate::sidecar::{X_HARNESS_API, X_HARNESS_MODULE};
@@ -360,20 +360,52 @@ where
     }
 }
 
-/// A `429 rate-limited` problem carrying `Retry-After: <seconds>` when the
-/// limiter reported a pause (architecture section 6).
-pub fn rate_limited(retry_after: Option<Duration>) -> AxumResponse {
+/// A `429 rate-limited` problem (architecture section 6). `Retry-After:
+/// <seconds>` comes from the [`Decision`]'s own pause, falling back to the
+/// quota's reset when the limiter reports a window but no pause; a known
+/// quota also rides the IETF draft `RateLimit-Limit`, `RateLimit-Remaining`
+/// and `RateLimit-Reset` headers (delta-seconds), so a well-behaved client
+/// can pace itself without probing (issue #538). A decision with no quota
+/// at all — a Workers Rate Limiting binding, or a failure resolved at the
+/// call site — is a bare `429` + `Retry-After`, exactly as before.
+pub fn rate_limited(decision: &Decision) -> AxumResponse {
     let problem = Problem::new(&crate::problems::SLUGS.rate_limited);
     let mut response = problem.into_response();
-    if let Some(pause) = retry_after {
-        let secs = pause.as_secs().max(1);
-        if let Ok(value) = HeaderValue::from_str(&secs.to_string()) {
-            response
-                .headers_mut()
-                .insert(header::HeaderName::from_static("retry-after"), value);
+    let pause = decision
+        .retry_after
+        .or_else(|| decision.quota.as_ref().map(|quota| quota.reset));
+    if let Some(pause) = pause
+        && let Ok(value) = HeaderValue::from_str(&delta_seconds(pause))
+    {
+        response.headers_mut().insert(header::RETRY_AFTER, value);
+    }
+    if let Some(quota) = decision.quota.as_ref() {
+        for (name, value) in quota_headers(quota) {
+            if let Ok(value) = HeaderValue::from_str(&value) {
+                response
+                    .headers_mut()
+                    .insert(header::HeaderName::from_static(name), value);
+            }
         }
     }
     response
+}
+
+/// The `RateLimit-*` headers for one quota, as `(name, value)` pairs with
+/// lowercase static names.
+fn quota_headers(quota: &Quota) -> [(&'static str, String); 3] {
+    [
+        ("ratelimit-limit", quota.limit.to_string()),
+        ("ratelimit-remaining", quota.remaining.to_string()),
+        ("ratelimit-reset", delta_seconds(quota.reset)),
+    ]
+}
+
+/// Delta-seconds for `Retry-After` and `RateLimit-Reset`: rounded up, so a
+/// client never waits a shorter time than the truth, and never zero.
+fn delta_seconds(pause: Duration) -> String {
+    let millis = u64::try_from(pause.as_millis()).unwrap_or(u64::MAX);
+    millis.div_ceil(1_000).max(1).to_string()
 }
 
 /// CORS allowlist from the venture's origins; never a wildcard
@@ -408,4 +440,77 @@ pub(crate) fn cors_layer(origins: &[String]) -> tower_http::cors::CorsLayer {
         ])
         .allow_headers([header::CONTENT_TYPE, header::AUTHORIZATION])
         .max_age(CORS_PREFLIGHT_MAX_AGE)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::http::StatusCode;
+
+    fn header(response: &AxumResponse, name: &str) -> Option<String> {
+        response
+            .headers()
+            .get(name)
+            .and_then(|value| value.to_str().ok().map(str::to_owned))
+    }
+
+    #[test]
+    fn a_pause_becomes_retry_after_and_nothing_else() {
+        let response = rate_limited(&Decision {
+            ok: false,
+            retry_after: Some(Duration::from_secs(7)),
+            quota: None,
+        });
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(header(&response, "retry-after").as_deref(), Some("7"));
+        assert!(header(&response, "ratelimit-limit").is_none());
+    }
+
+    #[test]
+    fn a_quota_rides_the_ratelimit_headers() {
+        let response = rate_limited(&Decision {
+            ok: false,
+            retry_after: None,
+            quota: Some(Quota {
+                limit: 30,
+                remaining: 0,
+                reset: Duration::from_secs(43),
+            }),
+        });
+        assert_eq!(header(&response, "retry-after").as_deref(), Some("43"));
+        assert_eq!(header(&response, "ratelimit-limit").as_deref(), Some("30"));
+        assert_eq!(
+            header(&response, "ratelimit-remaining").as_deref(),
+            Some("0")
+        );
+        assert_eq!(header(&response, "ratelimit-reset").as_deref(), Some("43"));
+    }
+
+    #[test]
+    fn the_quotas_reset_backfills_a_missing_retry_after() {
+        let response = rate_limited(&Decision {
+            ok: false,
+            retry_after: None,
+            quota: Some(Quota {
+                limit: 5,
+                remaining: 2,
+                reset: Duration::from_millis(1500),
+            }),
+        });
+        // Delta-seconds round up: a client never waits less than the truth.
+        assert_eq!(header(&response, "retry-after").as_deref(), Some("2"));
+        assert_eq!(header(&response, "ratelimit-reset").as_deref(), Some("2"));
+    }
+
+    #[test]
+    fn an_answerless_decision_is_a_bare_429() {
+        let response = rate_limited(&Decision {
+            ok: false,
+            retry_after: None,
+            quota: None,
+        });
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert!(header(&response, "retry-after").is_none());
+        assert!(header(&response, "ratelimit-limit").is_none());
+    }
 }

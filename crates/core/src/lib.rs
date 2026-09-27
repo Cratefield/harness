@@ -106,7 +106,7 @@ pub use ports::{
     KvError, LineItem, LocKeys, MAX_BLOB_BYTES, MAX_CONCURRENT_REQUESTS, MAX_KID_NAME,
     MAX_RESPONSE_BYTES, MAX_RESPONSE_TIMEOUT, MailError, Mailer, Member, Message, ModelTier, Money,
     NoopDefer, Notification, Payload, Payments, PaymentsError, Platform, Port, Ports, Priority,
-    Prompt, Push, PushError, PushOutcome, Question, RateLimitError, RateLimiter, Realtime,
+    Prompt, Push, PushError, PushOutcome, Question, Quota, RateLimitError, RateLimiter, Realtime,
     RealtimeError, Recipient, Refund, RefundRequest, Role, RoomContext, RoomHandler, RoutingPush,
     RoutingTextModel, RoutingTracker, Row, Rows, ScopedBlob, SendOutcome, Severity, SignatureError,
     Signer, Statement, Subject, SubscriptionCheckoutRequest, SystemClock, TextModel,

@@ -10,7 +10,6 @@ use axum::http::HeaderName;
 use crate::email;
 use crate::ports::{Decision, RateLimiter};
 use std::sync::Arc;
-use std::time::Duration;
 
 /// The client IP for rate limiting, from the headers.
 ///
@@ -70,7 +69,12 @@ pub enum RateLimitFailure {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RateLimit {
     Allowed,
-    Denied { retry_after: Option<Duration> },
+    /// The blocking [`Decision`] rides along, so the caller can answer
+    /// with its quota (`RateLimit-*` headers, issue #538) and its
+    /// `retry_after` without a second look at the limiter.
+    Denied {
+        decision: Decision,
+    },
 }
 
 /// Shared limiter loop: every key must pass, and a transport error is
@@ -87,12 +91,9 @@ pub async fn check_rate_limit(
     };
     for key in keys {
         match limiter.limit(key).await {
-            Ok(Decision { ok: true, .. }) => {}
-            Ok(Decision {
-                ok: false,
-                retry_after,
-            }) => {
-                return RateLimit::Denied { retry_after };
+            Ok(decision) if decision.ok => {}
+            Ok(decision) => {
+                return RateLimit::Denied { decision };
             }
             Err(err) => {
                 // Which way the failure resolved is the composition's
@@ -113,7 +114,13 @@ pub async fn check_rate_limit(
                         crate::logging::ControlLevel::Warn,
                         &detail,
                     );
-                    return RateLimit::Denied { retry_after: None };
+                    return RateLimit::Denied {
+                        decision: Decision {
+                            ok: false,
+                            retry_after: None,
+                            quota: None,
+                        },
+                    };
                 }
                 let detail =
                     format!("rate limiter unavailable; allowing: {err} (key: {redacted_key})");
@@ -129,6 +136,7 @@ pub async fn check_rate_limit(
 mod tests {
     use super::*;
     use axum::http::header;
+    use std::time::Duration;
 
     #[test]
     fn keys_are_ip_then_normalized_email() {
@@ -169,6 +177,7 @@ mod tests {
     struct StubLimiter {
         ok: bool,
         transport_error: bool,
+        quota: bool,
     }
 
     #[async_trait::async_trait]
@@ -180,6 +189,11 @@ mod tests {
             Ok(Decision {
                 ok: self.ok,
                 retry_after: (!self.ok).then(|| Duration::from_secs(7)),
+                quota: self.quota.then(|| crate::ports::Quota {
+                    limit: 30,
+                    remaining: 0,
+                    reset: Duration::from_secs(9),
+                }),
             })
         }
     }
@@ -188,6 +202,15 @@ mod tests {
         Arc::new(StubLimiter {
             ok,
             transport_error,
+            quota: false,
+        })
+    }
+
+    fn quota_limiter() -> Arc<dyn RateLimiter> {
+        Arc::new(StubLimiter {
+            ok: false,
+            transport_error: false,
+            quota: true,
         })
     }
 
@@ -216,7 +239,24 @@ mod tests {
         )
         .await;
         assert!(
-            matches!(&result, RateLimit::Denied { retry_after } if *retry_after == Some(Duration::from_secs(7))),
+            matches!(&result, RateLimit::Denied { decision }
+                if decision.retry_after == Some(Duration::from_secs(7)) && decision.quota.is_none()),
+            "{result:?}"
+        );
+    }
+
+    #[pollster::test]
+    async fn a_denied_key_carries_its_quota_whole() {
+        let result = check_rate_limit(
+            Some(&quota_limiter()),
+            &ip_key(),
+            RateLimitFailure::FailClosed,
+        )
+        .await;
+        assert!(
+            matches!(&result, RateLimit::Denied { decision }
+                if decision.quota.as_ref().is_some_and(|quota| quota.limit == 30
+                    && quota.reset == Duration::from_secs(9))),
             "{result:?}"
         );
     }
@@ -237,7 +277,8 @@ mod tests {
         )
         .await;
         assert!(
-            matches!(&closed, RateLimit::Denied { retry_after: None }),
+            matches!(&closed, RateLimit::Denied { decision }
+                if decision.retry_after.is_none() && decision.quota.is_none()),
             "{closed:?}"
         );
     }

@@ -476,6 +476,7 @@ fn the_rate_limiter_can_refuse_a_batch() {
     let deny = Decision {
         ok: false,
         retry_after: Some(Duration::from_secs(17)),
+        quota: None,
     };
     let kits = TestHarness::all_dialects_with_ports(
         || {

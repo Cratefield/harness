@@ -81,10 +81,12 @@ impl RateLimiter for RecordingLimiter {
             LimiterVerdict::Allow => Ok(Decision {
                 ok: true,
                 retry_after: None,
+                quota: None,
             }),
             LimiterVerdict::Deny => Ok(Decision {
                 ok: false,
                 retry_after: Some(Duration::from_secs(11)),
+                quota: None,
             }),
             LimiterVerdict::Error => Err(RateLimitError::Transport("down".to_owned())),
         }

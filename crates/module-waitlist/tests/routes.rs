@@ -782,6 +782,7 @@ async fn rate_limit_denial_is_429_with_retry_after() {
     let deny = Decision {
         ok: false,
         retry_after: Some(Duration::from_secs(17)),
+        quota: None,
     };
     for kit in TestHarness::all_dialects_with_ports(
         || vec![Box::new(Waitlist::new().products(["kontinuum"]))],

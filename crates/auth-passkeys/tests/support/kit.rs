@@ -69,6 +69,7 @@ pub fn kit_rate_limited() -> Kit {
                 cratefield_core::Decision {
                     ok: false,
                     retry_after: Some(std::time::Duration::from_secs(30)),
+                    quota: None,
                 },
             ),
         ));

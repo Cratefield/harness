@@ -3,6 +3,7 @@
 mod blob;
 mod clock;
 mod d1;
+mod d1_rate_limit;
 mod defer;
 mod dispatcher;
 mod http;
@@ -13,6 +14,7 @@ mod realtime;
 pub(crate) use blob::R2Blob;
 pub use clock::WorkersClock;
 pub use d1::D1Database;
+pub use d1_rate_limit::{D1RateLimiter, Limit, RATE_LIMIT_COUNTERS_SQL, RateLimitPolicy};
 pub use defer::{ContextDefer, ScheduleDefer};
 pub(crate) use dispatcher::ServiceDispatcher;
 pub use http::FetchClient;

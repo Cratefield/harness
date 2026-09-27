@@ -127,14 +127,14 @@ async fn limit_pause(
     state: &ModuleState,
     headers: &HeaderMap,
     email: Option<&str>,
-) -> Option<Option<std::time::Duration>> {
+) -> Option<cratefield_core::Decision> {
     let limiter = state.ctx.ports.rate_limiter.as_deref()?;
     let ip = cratefield_core::client_ip(headers);
     // Keyed on the address as well as the caller: an unlimited request
     // endpoint is a way to send somebody a hundred emails.
     for key in cratefield_core::rate_limit_keys(ip.as_deref(), email) {
         match limiter.limit(&format!("auth-magic-link:{key}")).await {
-            Ok(decision) if !decision.ok => return Some(decision.retry_after),
+            Ok(decision) if !decision.ok => return Some(decision),
             Ok(_) => {}
             Err(err) => {
                 tracing::warn!(error = %err, "the auth-magic-link rate limiter is unavailable");
@@ -278,10 +278,10 @@ fn html_escape(value: &str) -> String {
 /// second request inside the send window are one answer on purpose.
 enum Verdict {
     Accepted,
-    /// The limiter refused, with the pause it asked for. The caller
+    /// The limiter refused, with the decision it answered. The caller
     /// renders it, because JSON and a page are different answers to the
     /// same refusal.
-    RateLimited(Option<std::time::Duration>),
+    RateLimited(cratefield_core::Decision),
 }
 
 /// `POST /request`.
@@ -311,7 +311,9 @@ async fn request(
     .await?
     {
         Verdict::Accepted => Ok(accepted()),
-        Verdict::RateLimited(pause) => Ok(cratefield_core::rate_limited(pause).into_response()),
+        Verdict::RateLimited(decision) => {
+            Ok(cratefield_core::rate_limited(&decision).into_response())
+        }
     }
 }
 
@@ -328,8 +330,8 @@ async fn decide(
 ) -> Result<Verdict, Problem> {
     let email = cratefield_core::normalize_email(raw_email);
 
-    if let Some(pause) = limit_pause(state, headers, Some(&email)).await {
-        return Ok(Verdict::RateLimited(pause));
+    if let Some(decision) = limit_pause(state, headers, Some(&email)).await {
+        return Ok(Verdict::RateLimited(decision));
     }
     if !captcha_ok(state, captcha_token, headers).await {
         // Even this is the accepted answer: a caller who can tell a failed

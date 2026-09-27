@@ -272,7 +272,7 @@ pub(crate) async fn limit_public(state: &ModuleState, headers: &HeaderMap) -> Op
     for key in rate_limit_keys(ip.as_deref(), None) {
         match limiter.limit(&key).await {
             Ok(decision) if !decision.ok => {
-                return Some(rate_limited(decision.retry_after).into_response());
+                return Some(rate_limited(&decision).into_response());
             }
             Ok(_) => {}
             Err(error) => {

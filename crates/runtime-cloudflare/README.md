@@ -42,7 +42,12 @@ pub async fn scheduled(event: worker::ScheduledEvent, env: Env, ctx: worker::Sch
 ```
 
 The runtime builder: `Cloudflare::new().db("DB").kv("KV").rate_limiter("RATE_LIMITER")`
-plus `.mailer(...)`/`.captcha(...)` with adapter instances.
+plus `.mailer(...)`/`.captcha(...)` with adapter instances. For per-key
+limits (per plan, per address — the binding above is one limit per
+namespace), wire `.d1_rate_limiter("DB", policy)` instead: a D1-backed
+fixed window per key whose policy maps each key to its cap. Ship the
+table it counts in by adding the `RATE_LIMIT_COUNTERS_SQL` statement to
+the venture's `migrations/` directory.
 
 ## wrangler.toml
 
