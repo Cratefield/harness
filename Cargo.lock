@@ -1489,12 +1489,16 @@ dependencies = [
 name = "cratefield-provisioning"
 version = "0.1.1"
 dependencies = [
+ "bytes",
  "cratefield-accounts",
  "cratefield-adapter-sqlite",
  "cratefield-core",
+ "cratefield-testing",
+ "http",
  "pollster",
  "sea-query",
  "serde",
+ "serde_json",
 ]
 
 [[package]]

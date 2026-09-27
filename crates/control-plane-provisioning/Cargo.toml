@@ -15,8 +15,15 @@ workspace = true
 cratefield-core = { workspace = true }
 cratefield-accounts = { path = "../control-plane-accounts" }
 serde = { workspace = true }
+# The Cloudflare D1 adapter's api calls go over the HttpClient port with
+# the same `http`-types-over-bytes shape the Resend adapter uses.
+serde_json = { workspace = true }
+http = { workspace = true }
+bytes = { workspace = true }
 sea-query = { workspace = true }
 
 [dev-dependencies]
 cratefield-adapter-sqlite = { path = "../adapter-sqlite" }
+# `FakeHttpClient` scripts the D1 api's replies behind the adapter.
+cratefield-testing = { path = "../testing" }
 pollster = { version = "0.4", features = ["macro"] }

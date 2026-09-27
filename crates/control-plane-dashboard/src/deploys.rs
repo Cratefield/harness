@@ -241,7 +241,7 @@ fn banner(runs: &[RunRow]) -> String {
         return format!(
             "<p class=\"dash__banner\"><span class=\"chip\">Recorded fact</span>\
              <strong>No deploy has ever reached Cloudflare.</strong> The deployer's \
-             build path is <code>Unwired</code> — no adapter talks to Cloudflare yet \
+             build path is <code>Unwired</code> — no build adapter exists yet \
              (<a href=\"{issue}\" rel=\"noopener\">#26</a>) — so every run recorded here \
              stopped at its first step, the artifact step. That step goes through the \
              artifact linker first, which falls back to the build path because no \

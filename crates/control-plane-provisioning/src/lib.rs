@@ -14,12 +14,16 @@
 //!
 //! **The port is the seam.** [`Deployer`] is what actually talks to
 //! Cloudflare; its methods are all "ensure" shaped, so calling one twice is
-//! safe. This crate host-tests the engine against a fake deployer. The live
-//! adapter — the one that holds the platform credential and does real deploys
-//! (ADR section 4) — implements the same port and is wired in where the
-//! credential lives, never in this crate.
+//! safe. This crate host-tests the engine against a fake deployer. Live
+//! adapters — [`CloudflareDatabase`] for the database step is the first —
+//! implement the same port and are wired in where the credential lives, in
+//! the composition that hands the engine its deployer.
 
 #![forbid(unsafe_code)]
+
+mod cloudflare;
+
+pub use cloudflare::CloudflareDatabase;
 
 use std::sync::Arc;
 

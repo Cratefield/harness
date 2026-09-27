@@ -548,7 +548,11 @@ pub(super) async fn add_staging(
     // error to hide.
     let engine = Engine::new(db);
     match engine
-        .provision_environment(&environment, &deployer::current(), &now)
+        .provision_environment(
+            &environment,
+            &deployer::current(ctx.ports.http.clone()),
+            &now,
+        )
         .await
     {
         Ok(()) | Err(cratefield_provisioning::ProvisionError::Step { .. }) => {
@@ -657,7 +661,11 @@ pub(super) async fn set_modules(
 
     let engine = Engine::new(db);
     match engine
-        .provision_environment(&environment, &deployer::current(), &now)
+        .provision_environment(
+            &environment,
+            &deployer::current(ctx.ports.http.clone()),
+            &now,
+        )
         .await
     {
         Ok(()) | Err(cratefield_provisioning::ProvisionError::Step { .. }) => {
@@ -871,7 +879,10 @@ pub(super) async fn promotion_confirm(
         ..context.venture.clone()
     };
     let engine = Engine::new(db);
-    match engine.provision(&venture, &deployer::current(), &now).await {
+    match engine
+        .provision(&venture, &deployer::current(ctx.ports.http.clone()), &now)
+        .await
+    {
         Ok(_) | Err(cratefield_provisioning::ProvisionError::Step { .. }) => {
             // A step failure is the recorded, visible outcome the
             // venture's own page renders — with the build path unwired it
