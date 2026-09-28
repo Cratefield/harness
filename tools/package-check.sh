@@ -41,10 +41,6 @@ done
 # check below fails once an entry packages, or fails for another reason, so
 # this list cannot outlive the reason for it.
 UNPACKAGEABLE=(
-  cratefield-runtime-native:cratefield-auth-client
-  cratefield-runtime-cloudflare:cratefield-auth-client
-  # Also path-only: cratefield-introspect.
-  cratefield-cli:cratefield-client-ts
   cratefield:cratefield-tables-api
 )
 

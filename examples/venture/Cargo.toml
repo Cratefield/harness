@@ -29,7 +29,7 @@ workspace = true
 # the environment (issue #191). With nothing configured the router answers
 # `NotConfigured` for every recipient — which is exactly what the wasm build
 # and the `wrangler dev` smoke should exercise: the assembled router boots.
-cratefield = { path = "../../crates/facade", version = "0.1.0", features = [
+cratefield = { path = "../../crates/facade", version = "0.2", features = [
     "cloudflare",
     "ui",
     "resend",
