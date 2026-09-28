@@ -84,11 +84,25 @@
   resolved**: a binding named in composition but unresolvable at boot
   degrades to no limiter, and that now means the guarded routes answer
   `503 not-production-ready`, not a warning over unlimited routes. The
+  rule is also declaration-keyed (issue #562): a module that declares the
+  `RateLimiter` port — even merely `optional()`, and even over public
+  **reads** like a search endpoint, where nothing is writable — holds a
+  production venture to a resolved limiter, and the refusal names the
+  module and its routes (`waitlist (POST /v1/waitlist,
+  GET /v1/waitlist/search)`) instead of asking the operator to re-derive
+  which route made the gate fire. On Workers, a binding named on the
+  runtime that fails to resolve at request time fails closed in every
+  environment — `/v1/*` answers `503 not-production-ready` naming the
+  binding, once per isolate — because unlimited is a decision the
+  composition makes, never one a missing binding makes for it. The
   escape is its own recorded decision,
   `HARNESS_ALLOW_UNLIMITED_PUBLIC_ROUTES=<reason>`, logged once per boot
   and deliberately separate from
   `HARNESS_ALLOW_UNPROTECTED_WRITES` — one key waiving two controls is
-  how the second stays unwired after the first is fixed. Where a
+  how the second stays unwired after the first is fixed. That waiver
+  governs the readiness gate only: it does not lift the Workers
+  missing-binding refusal, which clears when the deployment matches the
+  composition again (or the binding leaves the composition). Where a
   venture runs a limiter over public routes, keys are
   `ip:<cf-connecting-ip>` (never `x-forwarded-for` on Workers) and
   `email:<normalized>`; a denial answers `429` with `Retry-After` (the
