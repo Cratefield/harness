@@ -100,6 +100,14 @@ in one second call. Off and pinned modes bypass routing. Every call is
 recorded with estimated tokens, because the port reports no usage, and
 integer prices, where an unpriced adapter is unknown rather than free.
 
+ADR 0023 puts a scheduled invocation on a cooperative budget (#537):
+`ModuleContext::scheduled` is the module's share of the tick's wall time
+and subrequests, split by the runtime with unspent share rolling
+forward, checked by the module (never cancelled by it). `Outbox::
+drain_within` is the "N due items per tick" drain, and `reschedule` is
+the per-item cursor for recurring polling. Cloudflare Queues fan-out is
+left for a follow-up.
+
 [0102](0102-crypto-crate.md) chose the crypto crate: RustCrypto's
 `chacha20poly1305`.
 

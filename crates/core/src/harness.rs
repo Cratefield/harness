@@ -39,6 +39,7 @@ use crate::problem::Problem;
 use crate::problems::SLUGS;
 use crate::rate_limit::{RateLimit, RateLimitFailure};
 use crate::route_policy::deployed_env;
+use crate::scheduled::ScheduledBudget;
 use crate::scope::Scope;
 use crate::sidecar::{
     GatewayGuard, SIDECAR_REQUIRE_GATEWAY, SidecarMount, X_HARNESS_GATEWAY, gateway_guard,
@@ -279,6 +280,10 @@ impl Harness {
             .is_some(),
             personal_data: Arc::clone(&self.personal_data),
             ui_mounted: self.ui.is_some(),
+            // Unbounded: the core has no invocation limits to spend. The
+            // runtimes replace this per module during scheduled fan-out
+            // (issue #537); request handlers keep this one.
+            scheduled: Arc::new(ScheduledBudget::unbounded()),
         }
     }
 

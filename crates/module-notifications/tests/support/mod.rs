@@ -33,8 +33,8 @@ use bytes::Bytes;
 use cratefield_core::{
     AnyError, BoxFuture, Clock, Config, ConfigError, Defer, EventHandler, EventName, HttpClient,
     HttpError, MapConfig, Migrations, Module, ModuleContext, Notification, PersonalDataCatalog,
-    Port, Ports, Push, PushError, PushOutcome, Recipient, Scope, Statement, TemplateRegistry,
-    UlidIdGen, Venture,
+    Port, Ports, Push, PushError, PushOutcome, Recipient, ScheduledBudget, Scope, Statement,
+    TemplateRegistry, UlidIdGen, Venture,
 };
 use cratefield_module_notifications::{Category, Notifications, Notifier, Transport};
 use cratefield_testing::{FakePush, PushMode, TestHarness};
@@ -753,6 +753,7 @@ impl Kit {
             unprotected_writes_accepted: false,
             ui_mounted: false,
             personal_data: Arc::new(PersonalDataCatalog::default()),
+            scheduled: Arc::new(ScheduledBudget::unbounded()),
         }
     }
 

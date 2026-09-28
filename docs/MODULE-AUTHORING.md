@@ -56,6 +56,7 @@ pub struct ModuleContext {
     pub events: EventBus,
     pub templates: Arc<TemplateRegistry>,
     pub venture: Arc<Venture>,   // name, domain, public_url, cors_origins, env
+    pub scheduled: Arc<ScheduledBudget>, // this cron tick's budget; unbounded otherwise
 }
 ```
 
@@ -974,6 +975,22 @@ Everything else a module can do, with the module that does it:
   router-build time has **none** on a cold isolate and a stale one on a
   warm isolate — and a test fixture that hands `scheduled` a stripped-down
   context cannot notice either.
+
+  One scheduled invocation is shared by every module, and on Workers it
+  has hard limits. The runtime splits those limits across the modules in
+  order — each module's unspent share rolls forward to the next — and
+  hands your module its slice as `ctx.scheduled`. The budget is
+  **cooperative**: the runtime never cancels your work, but check
+  `ctx.scheduled.try_spend(1)` around each unit (one account polled, one
+  mail sent) and stop when it answers `false`. For "process N due items
+  per tick", drain the outbox with
+  `Outbox::drain_within(&db, clock, &ctx.scheduled, opts, handle)`: it
+  claims, handles and stops within the budget. One row per thing to poll
+  plus `Processed::NextAt(..)` — answered with the row's next poll time —
+  makes the row its own cursor, rescheduled without counting an attempt,
+  so it comes back due exactly when it should. Outside `scheduled` the
+  budget is unbounded. A paid-plan venture with room to spare passes its
+  own limits via `serve_scheduled_with_limits` (ADR 0023).
 - **A token verifier** (`cratefield_auth_client::AuthClient`): build it once
   and park it, not inside `router()`. `router()` runs per request on
   Workers, and a fresh `AuthClient` starts with an empty JWKS cache: one
