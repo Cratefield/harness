@@ -122,6 +122,12 @@ pub fn full_fake_ports() -> Ports {
     ports.realtime = Some(Arc::new(crate::fakes::FakeRealtime::new()));
     ports.text_model = Some(Arc::new(crate::fakes::FakeTextModel::default()));
     ports.classifier = Some(Arc::new(crate::fakes::FakeClassifier::default()));
+    // The index's dimensions are the fake embedder's width: an index and
+    // the embedder feeding it must agree (issue #561).
+    ports.vector_index = Some(Arc::new(cratefield_core::ExactVectorIndex::new(
+        crate::fakes::FAKE_EMBEDDER_DIMENSIONS,
+    )));
+    ports.embedder = Some(Arc::new(crate::fakes::FakeEmbedder));
     ports.http = Some(Arc::new(crate::fakes::FakeHttpClient::ok_json("{}")));
     ports.clock = Some(Arc::new(crate::fakes::FixedClock(
         time::OffsetDateTime::from_unix_timestamp(1_800_000_000).expect("fixed epoch"),

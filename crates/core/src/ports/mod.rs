@@ -13,6 +13,7 @@ mod clock;
 mod database;
 mod defer;
 mod dispatcher;
+mod embedder;
 mod http;
 mod idgen;
 mod kv;
@@ -24,6 +25,7 @@ mod realtime;
 pub(crate) mod signer;
 mod text_model;
 mod tracker;
+mod vector_index;
 
 pub use auth::{Auth, AuthError, Caller, Subject, Unconfigured};
 pub use blob::{Blob, BlobError, BlobObject, MAX_BLOB_BYTES, ScopedBlob, check_blob_size};
@@ -36,6 +38,7 @@ pub use clock::{Clock, SystemClock, timeout};
 pub use database::{Database, DbError, Row, Rows, Statement, TryFromValue};
 pub use defer::{Defer, NoopDefer};
 pub use dispatcher::{DispatchError, Dispatcher};
+pub use embedder::{EmbedError, Embedder, Embeddings};
 pub use http::{
     BoundedHttpClient, DEFAULT_RESPONSE_TIMEOUT, HttpClient, HttpError, HttpPolicy,
     MAX_CONCURRENT_REQUESTS, MAX_RESPONSE_BYTES, MAX_RESPONSE_TIMEOUT, declared_content_length,
@@ -63,6 +66,10 @@ pub use tracker::{
     Credential, Destination, Filed, RoutingTracker, Severity, TicketDraft, TicketState,
     TicketStatus, Tracker, TrackerError,
 };
+pub use vector_index::{
+    ExactVectorIndex, MAX_NAMESPACE_BYTES, VectorFilter, VectorIndex, VectorIndexError,
+    VectorMatch, VectorNamespace, VectorRecord,
+};
 
 use crate::config::Config;
 use crate::module::Module;
@@ -87,6 +94,8 @@ pub enum Port {
     Realtime,
     TextModel,
     Classifier,
+    VectorIndex,
+    Embedder,
     HttpClient,
     Clock,
     IdGen,
@@ -138,6 +147,8 @@ ports!(
     Realtime,
     TextModel,
     Classifier,
+    VectorIndex,
+    Embedder,
     HttpClient,
     Clock,
     IdGen,
@@ -161,6 +172,8 @@ impl Port {
             Port::Realtime => "Realtime",
             Port::TextModel => "TextModel",
             Port::Classifier => "Classifier",
+            Port::VectorIndex => "vector_index",
+            Port::Embedder => "embedder",
             Port::HttpClient => "HttpClient",
             Port::Clock => "Clock",
             Port::IdGen => "IdGen",
@@ -198,6 +211,12 @@ pub struct Ports {
     /// [`Question`](crate::Question)s, never by vendor (issue #456) —
     /// the sibling of `text_model`.
     pub classifier: Option<Arc<dyn Classifier>>,
+    /// Nearest-neighbour search over tenant-scoped namespaces (issue
+    /// #561), the output side of embeddings, as `text_model` is.
+    pub vector_index: Option<Arc<dyn VectorIndex>>,
+    /// Text into embedding vectors (issue #561), the input side of
+    /// [`Ports::vector_index`].
+    pub embedder: Option<Arc<dyn Embedder>>,
     pub http: Option<Arc<dyn HttpClient>>,
     pub clock: Option<Arc<dyn Clock>>,
     pub id_gen: Option<Arc<dyn IdGen>>,
@@ -242,6 +261,8 @@ impl Ports {
             realtime: None,
             text_model: None,
             classifier: None,
+            vector_index: None,
+            embedder: None,
             http: None,
             clock: None,
             id_gen: None,
@@ -290,6 +311,8 @@ impl Ports {
             Port::Realtime => self.realtime.is_some(),
             Port::TextModel => self.text_model.is_some(),
             Port::Classifier => self.classifier.is_some(),
+            Port::VectorIndex => self.vector_index.is_some(),
+            Port::Embedder => self.embedder.is_some(),
             Port::HttpClient => self.http.is_some(),
             Port::Clock => self.clock.is_some(),
             Port::IdGen => self.id_gen.is_some(),
@@ -356,6 +379,12 @@ impl Ports {
         }
         if allows(&declared, Port::Classifier) {
             view.classifier.clone_from(&self.classifier);
+        }
+        if allows(&declared, Port::VectorIndex) {
+            view.vector_index.clone_from(&self.vector_index);
+        }
+        if allows(&declared, Port::Embedder) {
+            view.embedder.clone_from(&self.embedder);
         }
         if allows(&declared, Port::HttpClient) {
             view.http.clone_from(&self.http);

@@ -21,9 +21,9 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use cratefield_core::{
-    Auth, Blob, BoundedHttpClient, Captcha, Classifier, Clock, Database, HarnessConfig, KeyValue,
-    Mailer, Payments, Port, Ports, Push, RateLimiter, Realtime, Runtime, TextModel, Tracker,
-    UlidIdGen,
+    Auth, Blob, BoundedHttpClient, Captcha, Classifier, Clock, Database, Embedder, HarnessConfig,
+    KeyValue, Mailer, Payments, Port, Ports, Push, RateLimiter, Realtime, Runtime, TextModel,
+    Tracker, UlidIdGen, VectorIndex,
 };
 
 use crate::config::EnvConfig;
@@ -67,6 +67,12 @@ pub struct Native {
     /// Workers AI binding still arrives here as an instance, so the two
     /// runtimes wire this port identically.
     classifier: Option<Arc<dyn Classifier>>,
+    /// The `VectorIndex` port (issue #561): in-process
+    /// [`ExactVectorIndex`](cratefield_core::ExactVectorIndex) or a hosted
+    /// index's adapter, passed in like every other adapter here.
+    vector_index: Option<Arc<dyn VectorIndex>>,
+    /// The `Embedder` port (issue #561), the input side of `vector_index`.
+    embedder: Option<Arc<dyn Embedder>>,
     mailer: Option<Arc<dyn Mailer>>,
     captcha: Option<Arc<dyn Captcha>>,
     auth: Option<Arc<dyn Auth>>,
@@ -283,6 +289,24 @@ impl Native {
         self
     }
 
+    /// The `VectorIndex` port (issue #561): nearest-neighbour search over
+    /// the namespaces a module asks for — in-process
+    /// [`ExactVectorIndex`](cratefield_core::ExactVectorIndex) or a hosted
+    /// index's adapter.
+    #[must_use]
+    pub fn vector_index_arc(mut self, index: Arc<dyn VectorIndex>) -> Self {
+        self.vector_index = Some(index);
+        self
+    }
+
+    /// The `Embedder` port (issue #561): text into embedding vectors, as
+    /// wide as the `vector_index` wired alongside it expects.
+    #[must_use]
+    pub fn embedder_arc(mut self, embedder: Arc<dyn Embedder>) -> Self {
+        self.embedder = Some(embedder);
+        self
+    }
+
     #[must_use]
     pub fn mailer(mut self, mailer: impl Mailer + 'static) -> Self {
         self.mailer = Some(Arc::new(mailer));
@@ -361,6 +385,8 @@ impl Native {
         ports.realtime.clone_from(&self.realtime);
         ports.text_model.clone_from(&self.text_model);
         ports.classifier.clone_from(&self.classifier);
+        ports.vector_index.clone_from(&self.vector_index);
+        ports.embedder.clone_from(&self.embedder);
         ports.mailer.clone_from(&self.mailer);
         ports.captcha.clone_from(&self.captcha);
         ports.auth.clone_from(&self.auth);
@@ -467,6 +493,12 @@ impl Runtime for Native {
         if self.classifier.is_some() {
             provided.push(Port::Classifier);
         }
+        if self.vector_index.is_some() {
+            provided.push(Port::VectorIndex);
+        }
+        if self.embedder.is_some() {
+            provided.push(Port::Embedder);
+        }
         if self.mailer.is_some() {
             provided.push(Port::Mailer);
         }
@@ -517,6 +549,8 @@ pub(crate) fn clone_ports(ports: &Ports) -> Ports {
     snapshot.realtime.clone_from(&ports.realtime);
     snapshot.text_model.clone_from(&ports.text_model);
     snapshot.classifier.clone_from(&ports.classifier);
+    snapshot.vector_index.clone_from(&ports.vector_index);
+    snapshot.embedder.clone_from(&ports.embedder);
     snapshot.http.clone_from(&ports.http);
     snapshot.clock.clone_from(&ports.clock);
     snapshot.id_gen.clone_from(&ports.id_gen);
@@ -527,7 +561,8 @@ pub(crate) fn clone_ports(ports: &Ports) -> Ports {
 #[cfg(test)]
 mod tests {
     use super::clone_ports;
-    use cratefield_core::Port;
+    use cratefield_core::{Port, Runtime};
+    use std::sync::Arc;
 
     #[test]
     fn clone_ports_carries_every_port() {
@@ -542,5 +577,18 @@ mod tests {
         for port in Port::ALL {
             assert!(snapshot.has(*port), "clone_ports drops {}", port.name());
         }
+    }
+
+    #[test]
+    fn the_vector_ports_are_provided_only_when_wired() {
+        // `ExactVectorIndex` and the kit's `FakeEmbedder` are real ports.
+        let wired = super::Native::new()
+            .vector_index_arc(Arc::new(cratefield_core::ExactVectorIndex::new(3)))
+            .embedder_arc(Arc::new(cratefield_testing::FakeEmbedder));
+        assert!(wired.provides().contains(&Port::VectorIndex));
+        assert!(wired.provides().contains(&Port::Embedder));
+        let bare = super::Native::new();
+        assert!(!bare.provides().contains(&Port::VectorIndex));
+        assert!(!bare.provides().contains(&Port::Embedder));
     }
 }

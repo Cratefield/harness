@@ -48,12 +48,11 @@ harness = [
 ]
 
 # Port-only conformance helpers that need nothing beyond
-# `cratefield-core` (issue #201): `push_recipient_conformance` and
-# `assert_wasm_safe_deps` (plus the always-light `vectors` and
-# `TempDir`). Pulls no database adapter, no axum, no tower, no
-# sea-query — the feature an adapter depends on when its whole use of
-# the kit is one free function over a port.
-port-conformance = []
+# `cratefield-core` (issue #201): `push_recipient_conformance`,
+# `vector_index_conformance` and `assert_wasm_safe_deps`. Pulls no
+# database adapter, no axum, no tower — the feature an adapter depends on
+# when its whole use of the kit is one free function over a port.
+port-conformance = ["dep:serde_json"]
 
 # The Postgres parity leg (issue #20): pulls the native-only Postgres
 # adapter and a private tokio runtime that drives its sqlx pool. Opt-in

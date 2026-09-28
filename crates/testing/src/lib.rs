@@ -57,10 +57,11 @@ pub use conformance::{conformance, conformance_in_process_only, full_fake_ports,
 pub use dialect::Dialect;
 #[cfg(feature = "harness")]
 pub use fakes::{
-    Ask, AuthMode, ClassifierMode, EmptyDatabase, FakeAuth, FakeCaptcha, FakeClassifier, FakeDefer,
-    FakeDispatcher, FakeHttpClient, FakeMailer, FakePayments, FakePush, FakeRateLimiter,
-    FakeRealtime, FakeTextModel, FakeTracker, FiledCall, FixedClock, MailerMode, MemoryBlob,
-    MemoryKeyValue, PaymentsCall, PaymentsMode, PushMode, StatusedCall, TextModelMode, TrackerMode,
+    Ask, AuthMode, ClassifierMode, EmptyDatabase, FAKE_EMBEDDER_DIMENSIONS, FAKE_EMBEDDER_MODEL,
+    FakeAuth, FakeCaptcha, FakeClassifier, FakeDefer, FakeDispatcher, FakeEmbedder, FakeHttpClient,
+    FakeMailer, FakePayments, FakePush, FakeRateLimiter, FakeRealtime, FakeTextModel, FakeTracker,
+    FiledCall, FixedClock, MailerMode, MemoryBlob, MemoryKeyValue, PaymentsCall, PaymentsMode,
+    PushMode, StatusedCall, TextModelMode, TrackerMode,
 };
 #[cfg(feature = "harness")]
 pub use harness::TestHarness;
@@ -71,7 +72,7 @@ pub use port::{
     classifier_conformance, classifier_conformance_questions, classifier_conformance_state,
     classifier_not_configured, classifier_rejects_malformed_questions,
     classifier_truncates_long_state, push_recipient_conformance, text_model_conformance,
-    text_model_conformance_not_configured, text_model_conformance_prompt,
+    text_model_conformance_not_configured, text_model_conformance_prompt, vector_index_conformance,
 };
 #[cfg(feature = "harness")]
 pub use request::{TestResponse, request, request_as};

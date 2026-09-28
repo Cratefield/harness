@@ -594,6 +594,56 @@ impl cratefield_core::Blob for MemoryBlob {
 }
 
 // ---------------------------------------------------------------------------
+// FakeEmbedder
+
+/// The width of every [`FakeEmbedder`] vector, and so of the
+/// [`ExactVectorIndex`](cratefield_core::ExactVectorIndex) the kit wires in
+/// [`full_fake_ports`](crate::full_fake_ports) — the two must agree.
+pub const FAKE_EMBEDDER_DIMENSIONS: usize = 8;
+
+/// The model name a [`FakeEmbedder`] reports.
+pub const FAKE_EMBEDDER_MODEL: &str = "fake-embedder";
+
+/// A deterministic [`cratefield_core::Embedder`] for module tests: one
+/// fixed-width vector per input text, derived from the text's own bytes,
+/// and a whitespace-word-count `input_tokens`.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct FakeEmbedder;
+
+impl FakeEmbedder {
+    /// The vector `text` embeds to: its bytes accumulated round-robin into
+    /// [`FAKE_EMBEDDER_DIMENSIONS`] slots. Pure, so a test can compute the
+    /// expected vector itself.
+    #[must_use]
+    pub fn vector(text: &str) -> Vec<f32> {
+        let mut out = vec![0.0; FAKE_EMBEDDER_DIMENSIONS];
+        for (index, byte) in text.bytes().enumerate() {
+            out[index % FAKE_EMBEDDER_DIMENSIONS] += f32::from(byte);
+        }
+        out
+    }
+}
+
+#[async_trait]
+impl cratefield_core::Embedder for FakeEmbedder {
+    async fn embed(
+        &self,
+        texts: &[String],
+    ) -> Result<cratefield_core::Embeddings, cratefield_core::EmbedError> {
+        let input_tokens = texts
+            .iter()
+            .map(|text| text.split_whitespace().count() as u64)
+            .sum();
+        let mut embeddings =
+            cratefield_core::Embeddings::new(FAKE_EMBEDDER_MODEL).usage(input_tokens);
+        for text in texts {
+            embeddings = embeddings.vector(Self::vector(text));
+        }
+        Ok(embeddings)
+    }
+}
+
+// ---------------------------------------------------------------------------
 // FakePush
 
 /// How a [`FakePush`] responds, mirroring [`MailerMode`] for the push port.
