@@ -165,6 +165,22 @@ pub struct WriteGuards {
     /// which is why this is its own answer and not a byproduct of
     /// [`Self::has_public_writes`].
     pub has_admin_routes: bool,
+    /// Modules that **declare** `Port::RateLimiter` — in `requires()` or
+    /// `optional()` — and expose public routes, each paired with those
+    /// routes named `METHOD /v1/<module><path>` (issue #562). A module
+    /// saying it throttles is a claim about the routes it publishes, so
+    /// the readiness gate reads both halves: the declaration from the
+    /// module, the routes from its surface. Public here is
+    /// [`Surface::public`](crate::surface::Surface::public)'s renderer
+    /// answer minus `Audience::Subject` — reachable without an
+    /// authenticated principal, the admin plane excluded
+    /// (`has_admin_routes` already speaks for it), webhooks and API-key
+    /// routes excluded (`has_public_writes` already speaks for the
+    /// webhook, and an API-key route's budget is the per-key hook).
+    /// Empty for sidecar surfaces ([`Self::from_surface`]): a merged
+    /// document carries no `requires()`/`optional()` to read, and its
+    /// public writes and admin routes stay under the two legs above.
+    pub rate_limiter_modules: Vec<(String, Vec<String>)>,
 }
 
 impl WriteGuards {
@@ -241,6 +257,23 @@ impl WriteGuards {
             if Self::declares_admin_routes(&surface) {
                 guards.has_admin_routes = true;
             }
+            // The declaration-keyed half of the limiter leg (issue #562):
+            // a module that declares `Port::RateLimiter` claims it
+            // throttles its public routes, and the readiness gate holds
+            // the composition to that claim even when nothing here is a
+            // public *write* — a public search endpoint is throttled
+            // surface all the same. Routes ride along so the error can
+            // name what runs unlimited.
+            if module.requires().contains(&Port::RateLimiter)
+                || module.optional().contains(&Port::RateLimiter)
+            {
+                let routes = Self::public_limiter_routes(module.name(), &surface);
+                if !routes.is_empty() {
+                    guards
+                        .rate_limiter_modules
+                        .push((module.name().to_owned(), routes));
+                }
+            }
         }
         guards
     }
@@ -272,6 +305,10 @@ impl WriteGuards {
             signed_link_modules: signed_link.then(|| module.to_owned()).into_iter().collect(),
             has_public_writes: form || signature || signed_link,
             has_admin_routes: Self::declares_admin_routes(surface),
+            // No declaration to read (see `rate_limiter_modules`): a
+            // sidecar's public writes and admin routes stay under the
+            // two legs above.
+            rate_limiter_modules: Vec::new(),
         }
     }
 
@@ -351,14 +388,45 @@ impl WriteGuards {
             .collect()
     }
 
+    /// The module's public routes, named the way the readiness error names
+    /// them: `METHOD /v1/<module><path>` (issue #562). The surface stores
+    /// paths relative to the module's mount, so the mount is composed back
+    /// on here — the error should name the URL that runs unlimited, not a
+    /// surface-internal fragment.
+    fn public_limiter_routes(module: &str, surface: &Surface) -> Vec<String> {
+        surface
+            .actions
+            .iter()
+            .filter(|action| {
+                action.audience != Audience::Admin
+                    && action.audience != Audience::Subject
+                    && action.policy != RoutePolicy::Signature
+                    && action.policy != RoutePolicy::ApiKey
+            })
+            .map(|action| {
+                // The index action is declared `/`, and the mounted URL
+                // has no trailing slash to name.
+                let path = action.path.trim_end_matches('/');
+                if path.is_empty() {
+                    format!("{} /v1/{module}", action.method)
+                } else {
+                    format!("{} /v1/{module}{path}", action.method)
+                }
+            })
+            .collect()
+    }
+
     /// Whether any route in the composition needs a limiter sitting in
-    /// front of it (issue #437): a public write or an admin route. The
-    /// admin plane is enough on its own — a bearer token is guessed, not
-    /// submitted, so a venture that publishes nothing still needs the
-    /// budget before its `/admin/*` routes.
+    /// front of it (issues #437, #562): a public write, an admin route,
+    /// or a module that declares `Port::RateLimiter` over public routes.
+    /// The admin plane is enough on its own — a bearer token is guessed,
+    /// not submitted, so a venture that publishes nothing still needs the
+    /// budget before its `/admin/*` routes — and a module declaring the
+    /// port is a claim to throttle that the gate holds the venture to
+    /// even when nothing it publishes is a write.
     #[must_use]
     pub fn needs_rate_limiter(&self) -> bool {
-        self.has_public_writes || self.has_admin_routes
+        self.has_public_writes || self.has_admin_routes || !self.rate_limiter_modules.is_empty()
     }
 }
 
@@ -568,6 +636,10 @@ pub fn rate_limiter_effective(runtime: Option<&Arc<dyn Runtime>>) -> bool {
 /// `ports.rate_limiter == None` with only a `warn_once`. Callers holding
 /// ports pass `ports.rate_limiter.is_some()`; the build-time gate and
 /// `fz doctor` pass [`rate_limiter_effective`], the runtime's own answer.
+/// The leg is additive on declarations (issue #562): a module whose
+/// `requires()`/`optional()` names [`Port::RateLimiter`] and that exposes
+/// public routes makes the leg fire on its own, and the message names each
+/// declaring module with its routes instead of the undeclared-writer text.
 ///
 /// The signer leg is keyed the same way on `signer_ready` (issue #478):
 /// the runtimes advertise [`Port::Signer`] yet leave `ports.signer ==
@@ -625,14 +697,35 @@ pub fn production_readiness(
         && !rate_limiter_ready
         && stated_reason(allow_unlimited).is_none()
     {
-        errors.push(format!(
-            "production venture takes public writes or admin routes but the RateLimiter port \
-             is not resolved: admin bearer routes have no brute-force backstop behind the \
-             limiter (the fail-closed rule the sidecar forward runs) and every public write \
-             runs without a budget — resolve the binding so the runtime actually hands over \
-             a limiter, or set {ALLOW_UNLIMITED_PUBLIC_ROUTES} to a reason to serve \
-             unlimited (issue #437)"
-        ));
+        // When a module *declares* the port (issue #562), name it and the
+        // routes it publishes unlimited — the captcha leg's convention:
+        // the operator should be able to fix the named thing, not go
+        // hunting for which route made the gate fire.
+        if guards.rate_limiter_modules.is_empty() {
+            errors.push(format!(
+                "production venture takes public writes or admin routes but the RateLimiter \
+                 port is not resolved: admin bearer routes have no brute-force backstop behind \
+                 the limiter (the fail-closed rule the sidecar forward runs) and every public \
+                 write runs without a budget — resolve the binding so the runtime actually \
+                 hands over a limiter, or set {ALLOW_UNLIMITED_PUBLIC_ROUTES} to a reason to \
+                 serve unlimited (issue #437)"
+            ));
+        } else {
+            let declared = guards
+                .rate_limiter_modules
+                .iter()
+                .map(|(module, routes)| format!("{module} ({})", routes.join(", ")))
+                .collect::<Vec<_>>()
+                .join(", ");
+            errors.push(format!(
+                "production venture declares RateLimiter for public routes from [{declared}] \
+                 but the RateLimiter port is not resolved: those routes — and any public write \
+                 or admin route beside them — run without a budget — resolve the binding so \
+                 the runtime actually hands over a limiter, or set \
+                 {ALLOW_UNLIMITED_PUBLIC_ROUTES} to a reason to serve unlimited \
+                 (issues #437, #562)"
+            ));
+        }
     }
     errors
 }
@@ -1402,6 +1495,197 @@ mod tests {
             "{}",
             errors[0]
         );
+    }
+
+    // ------------------------------------------------ issue #562
+
+    /// A module that declares `Port::RateLimiter` (optional, the common
+    /// shape — the waitlist and auth modules all declare it there) and
+    /// publishes public routes.
+    struct DeclaresLimiter {
+        name: &'static str,
+        surface: Surface,
+    }
+
+    impl Module for DeclaresLimiter {
+        fn name(&self) -> &'static str {
+            self.name
+        }
+        fn version(&self) -> &'static str {
+            "0.0.0-test"
+        }
+        fn requires(&self) -> &'static [Port] {
+            &[]
+        }
+        fn optional(&self) -> &'static [Port] {
+            &[Port::RateLimiter]
+        }
+        fn migrations(&self) -> Migrations {
+            Migrations::default()
+        }
+        fn validate_config(
+            &self,
+            _: &dyn crate::config::Config,
+        ) -> Result<(), crate::config::ConfigError> {
+            Ok(())
+        }
+        fn surface(&self) -> Surface {
+            self.surface.clone()
+        }
+        fn router(&self, _: crate::ModuleContext) -> axum::Router {
+            axum::Router::new()
+        }
+    }
+
+    #[test]
+    fn a_declared_limiter_over_public_reads_needs_one_resolved() {
+        // A public search endpoint is not a write and not the admin
+        // plane, so the #437 triggers stay silent — but the module says
+        // it throttles, and the gate holds the venture to that claim
+        // (issue #562).
+        let guards = WriteGuards::collect(&[Arc::new(DeclaresLimiter {
+            name: "search",
+            surface: Surface {
+                actions: vec![
+                    Action::get("query", "/search").audience(Audience::Public),
+                    Action::get("suggest", "/suggest").audience(Audience::Public),
+                ],
+                views: vec![],
+            },
+        })]);
+        assert!(guards.captcha_modules.is_empty());
+        assert!(!guards.has_public_writes);
+        assert!(!guards.has_admin_routes);
+        assert_eq!(
+            guards.rate_limiter_modules,
+            vec![(
+                "search".to_owned(),
+                vec![
+                    "GET /v1/search/search".to_owned(),
+                    "GET /v1/search/suggest".to_owned(),
+                ]
+            )]
+        );
+        assert!(guards.needs_rate_limiter());
+
+        // Unresolved: the error names the module and its routes.
+        let errors = production_readiness(
+            VentureEnv::Production,
+            &guards,
+            None,
+            false,
+            false,
+            None,
+            None,
+        );
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert!(errors[0].contains("search"), "{}", errors[0]);
+        assert!(errors[0].contains("GET /v1/search/search"), "{}", errors[0]);
+
+        // Resolved: the leg passes.
+        assert!(
+            production_readiness(
+                VentureEnv::Production,
+                &guards,
+                None,
+                true,
+                false,
+                None,
+                None
+            )
+            .is_empty()
+        );
+
+        // The waiver still waives, and non-production never gates.
+        assert!(
+            production_readiness(
+                VentureEnv::Production,
+                &guards,
+                None,
+                false,
+                false,
+                None,
+                Some("issue #562: binding pending"),
+            )
+            .is_empty()
+        );
+        for env in [VentureEnv::Development, VentureEnv::Staging] {
+            assert!(
+                production_readiness(env, &guards, None, false, false, None, None).is_empty(),
+                "{env:?} must not gate"
+            );
+        }
+    }
+
+    #[test]
+    fn a_declared_limiter_error_names_each_module_and_its_routes() {
+        // Two declaring modules, and a module declaring the port with no
+        // public route to hang it on contributes nothing to the list.
+        let guards = WriteGuards::collect(&[
+            Arc::new(DeclaresLimiter {
+                name: "waitlist",
+                surface: Surface {
+                    actions: vec![Action::post("join", "/").captcha()],
+                    views: vec![],
+                },
+            }),
+            Arc::new(DeclaresLimiter {
+                name: "quiet",
+                surface: Surface {
+                    actions: vec![
+                        Action::post("export", "/admin/export").audience(Audience::Admin),
+                    ],
+                    views: vec![],
+                },
+            }),
+        ]);
+        assert_eq!(
+            guards.rate_limiter_modules,
+            vec![("waitlist".to_owned(), vec!["POST /v1/waitlist".to_owned()])]
+        );
+        let errors = production_readiness(
+            VentureEnv::Production,
+            &guards,
+            None,
+            false,
+            false,
+            Some("preview"),
+            None,
+        );
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert!(errors[0].contains("waitlist (POST /v1/waitlist)"));
+    }
+
+    #[test]
+    fn the_undeclared_limiter_error_keeps_its_own_message() {
+        // Without a declaring module the leg keeps the #437 message —
+        // there is nothing to name, and existing operators read that
+        // text in their doctor output and logs.
+        let guards = WriteGuards::collect(&[module(
+            "forms",
+            vec![Action::post("join", "/").captcha()],
+            false,
+        )]);
+        assert!(guards.rate_limiter_modules.is_empty());
+        // The captcha leg is waived aside so the assertion stays about
+        // which limiter message fired (the captcha waiver never reaches
+        // this leg — see the #437 test above).
+        let errors = production_readiness(
+            VentureEnv::Production,
+            &guards,
+            None,
+            false,
+            false,
+            Some("preview"),
+            None,
+        );
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert!(
+            errors[0].contains("takes public writes or admin routes"),
+            "{}",
+            errors[0]
+        );
+        assert!(!errors[0].contains("declares RateLimiter"));
     }
 
     // ------------------------------------------------ issue #532

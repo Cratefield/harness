@@ -39,8 +39,9 @@ pub use runtime::Cloudflare;
 pub use tracing_setup::install_tracing;
 
 use crate::body_limit::{BodyPlan, Capped, body_plan, read_capped};
+use crate::runtime::{WARNED_UNRESOLVED_LIMITER, warn_once};
 use axum::response::IntoResponse;
-use cratefield_core::{Harness, Problem, RequestSummary, ScheduledLimits, ScheduledSplit};
+use cratefield_core::{Harness, Problem, RequestSummary, SLUGS, ScheduledLimits, ScheduledSplit};
 use std::sync::Arc;
 use time::OffsetDateTime;
 use tower::ServiceExt;
@@ -168,8 +169,32 @@ pub async fn serve(
     // same config the module contexts were built with — clone the `Arc`
     // out first.
     let config = Arc::clone(&ports.config);
-    let router = harness.router(ports);
     let url = req.url()?;
+    // Fail closed when the composition named a limiter binding that did
+    // not resolve (issue #562): those routes were written to be throttled,
+    // and a missing binding used to degrade to serving them unlimited with
+    // only a logged warning. `/v1/*` only, like the readiness guard — the
+    // probes and the UI stay up to say why — and in every environment:
+    // unlimited is a decision the composition makes, never one a missing
+    // binding makes for it. `ports.rate_limiter` stays `None`, so
+    // `production_readiness` still reads this as "not readiness".
+    if let Some(detail) = runtime.unresolved_limiter_refusal(ports.rate_limiter.is_some())
+        && url.path().starts_with("/v1/")
+    {
+        // Once per isolate, not once per refused request (the readiness
+        // guard's record discipline, issue #441).
+        warn_once(&WARNED_UNRESOLVED_LIMITER, &detail);
+        // This short-circuits before the router, so the 503 carries no
+        // CORS headers and an OPTIONS preflight is refused like any other
+        // request — accepted: a Worker that cannot throttle is down.
+        return response_to_worker(
+            Problem::new(&SLUGS.not_production_ready)
+                .with_detail(detail)
+                .into_response(),
+        )
+        .await;
+    }
+    let router = harness.router(ports);
     let limit = harness.max_body_bytes(url.path(), config.as_ref());
 
     // Copied out so the header borrow ends before the body is read mutably.

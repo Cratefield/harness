@@ -670,6 +670,11 @@ fn production_port_checks(
     if let Some(message) = rate_limiter_production_failure(
         guards.needs_rate_limiter(),
         cratefield_core::rate_limiter_effective(harness.runtime()),
+        &guards
+            .rate_limiter_modules
+            .iter()
+            .map(|(module, routes)| format!("{module} ({})", routes.join(", ")))
+            .collect::<Vec<_>>(),
     ) {
         match cratefield_core::unlimited_public_routes_override(&EnvVars) {
             Some(reason) => {
@@ -814,16 +819,38 @@ fn hmac_webhook_failure(
 fn rate_limiter_production_failure(
     needs_rate_limiter: bool,
     rate_limiter_effective: bool,
+    declaring: &[String],
 ) -> Option<String> {
     if needs_rate_limiter && !rate_limiter_effective {
-        Some(
-            "production venture takes public writes or admin routes but the RateLimiter port \
-             is not resolved: admin bearer routes have no brute-force backstop behind the \
-             limiter and every public write runs without a budget — resolve the binding so \
-             the runtime actually hands over a limiter, or set \
-             HARNESS_ALLOW_UNLIMITED_PUBLIC_ROUTES to a reason to serve unlimited (issue #437)"
-                .to_owned(),
-        )
+        // Modules that declare the port (issue #562) are named with their
+        // routes, the way the boot gate names them — the operator should
+        // be able to fix the named thing without re-deriving which route
+        // made the rule fire, and the consequence named is theirs, not a
+        // public-write venture's.
+        let (who, cost) = if declaring.is_empty() {
+            (
+                "takes public writes or admin routes".to_owned(),
+                "admin bearer routes have no brute-force backstop behind the limiter and \
+                 every public write runs without a budget"
+                    .to_owned(),
+            )
+        } else {
+            (
+                format!(
+                    "declares RateLimiter for public routes from [{}]",
+                    declaring.join(", ")
+                ),
+                "those routes — and any public write or admin route beside them — run \
+                 without a budget"
+                    .to_owned(),
+            )
+        };
+        Some(format!(
+            "production venture {who} but the RateLimiter port is not resolved: {cost} — \
+                 resolve the binding so the runtime actually hands over a limiter, or set \
+                 HARNESS_ALLOW_UNLIMITED_PUBLIC_ROUTES to a reason to serve unlimited \
+                 (issues #437, #562)"
+        ))
     } else {
         None
     }
@@ -1087,15 +1114,32 @@ mod tests {
         // Fails closed on exactly the two answers the boot gate reads:
         // something writable or an admin plane, and no effective limiter.
         let failure =
-            rate_limiter_production_failure(true, false).expect("an unlimited venture fails");
+            rate_limiter_production_failure(true, false, &[]).expect("an unlimited venture fails");
         assert!(failure.contains("RateLimiter"), "{failure}");
         assert!(
             failure.contains("HARNESS_ALLOW_UNLIMITED_PUBLIC_ROUTES"),
             "the hatch is named the way the captcha rule names its own: {failure}"
         );
-        assert!(rate_limiter_production_failure(true, true).is_none());
+        assert!(rate_limiter_production_failure(true, true, &[]).is_none());
         // Nothing writable, no admin plane: no budget is owed.
-        assert!(rate_limiter_production_failure(false, false).is_none());
+        assert!(rate_limiter_production_failure(false, false, &[]).is_none());
+    }
+
+    #[test]
+    fn a_doctor_limiter_failure_names_the_declaring_modules() {
+        // Issue #562: when a module declares the port, the doctor message
+        // names it and its routes, the way the boot gate's message does.
+        let failure = rate_limiter_production_failure(
+            true,
+            false,
+            &["waitlist (POST /v1/waitlist, GET /v1/waitlist/search)".to_owned()],
+        )
+        .expect("a declaring venture fails");
+        assert!(failure.contains("declares RateLimiter"), "{failure}");
+        assert!(
+            failure.contains("waitlist (POST /v1/waitlist, GET /v1/waitlist/search)"),
+            "{failure}"
+        );
     }
 
     #[test]

@@ -889,6 +889,73 @@ fn ports_with_production_config() -> Ports {
     Ports::with_config(Arc::new(MapConfig::from_pairs([("ENV", "production")])))
 }
 
+/// A public read the module declares it throttles — no captcha form, no
+/// public write, no admin plane (issue #562).
+fn search_surface() -> cratefield_core::Surface {
+    cratefield_core::Surface::new().action(
+        cratefield_core::Action::get("search", "/search")
+            .audience(cratefield_core::Audience::Public),
+    )
+}
+
+/// Issue #562: a module that declares `Port::RateLimiter` — even merely
+/// `optional()` — over public routes holds the production deployment to a
+/// resolved limiter, and the refusal names the module and the routes that
+/// would run unlimited.
+#[pollster::test]
+async fn a_declared_limiter_without_a_binding_refuses_and_names_the_routes() {
+    let harness = Harness::builder()
+        .venture(base_venture())
+        .module(SampleModule {
+            optional: &[Port::RateLimiter],
+            surface: Some(search_surface),
+            ..SampleModule::default()
+        })
+        .runtime(FakeRuntime(all_ports()))
+        .build()
+        .expect("builds: at build time the runtime's own answer is all there is");
+
+    let refused = request(
+        &harness.router(ports_with_production_config()),
+        Method::GET,
+        "/v1/sample/hello",
+        &[],
+        None,
+    )
+    .await;
+    assert_eq!(refused.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let detail = body_json(refused).await["detail"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert!(detail.contains("sample"), "{detail}");
+    assert!(detail.contains("GET /v1/sample/search"), "{detail}");
+
+    // Not production, no gate.
+    let open = request(
+        &harness.router(Ports::with_config(Arc::new(MapConfig::default()))),
+        Method::GET,
+        "/v1/sample/hello",
+        &[],
+        None,
+    )
+    .await;
+    assert_ne!(open.status(), StatusCode::SERVICE_UNAVAILABLE);
+
+    // The binding actually resolved: serves.
+    let mut ports = ports_with_production_config();
+    ports.rate_limiter = Some(Arc::new(RecordingLimiter::new(LimiterVerdict::Allow)));
+    let served = request(
+        &harness.router(ports),
+        Method::GET,
+        "/v1/sample/hello",
+        &[],
+        None,
+    )
+    .await;
+    assert_ne!(served.status(), StatusCode::SERVICE_UNAVAILABLE);
+}
+
 /// The limiter waiver is its own recorded decision: a blank reason is not
 /// an acceptance, and the captcha key does not cover this leg (issue
 /// #437).
