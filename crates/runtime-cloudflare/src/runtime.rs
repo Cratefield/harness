@@ -16,7 +16,7 @@ use crate::ports::{
     RateLimitPort, ServiceDispatcher, WorkersClock,
 };
 
-fn warn_once(flag: &AtomicBool, message: &str) {
+pub(crate) fn warn_once(flag: &AtomicBool, message: &str) {
     if !flag.load(Ordering::Relaxed) {
         flag.store(true, Ordering::Relaxed);
         rt_log!(warn, "{message}");
@@ -47,6 +47,9 @@ static WARNED_DB: AtomicBool = AtomicBool::new(false);
 static WARNED_KV: AtomicBool = AtomicBool::new(false);
 static WARNED_BLOB: AtomicBool = AtomicBool::new(false);
 static WARNED_RATE_LIMIT: AtomicBool = AtomicBool::new(false);
+/// The missing-binding refusal (issue #562): logged once per isolate, the
+/// same `warn_once` discipline as the degraded-binding warning above.
+pub(crate) static WARNED_UNRESOLVED_LIMITER: AtomicBool = AtomicBool::new(false);
 static WARNED_SIGNER: AtomicBool = AtomicBool::new(false);
 static WARNED_SIDECAR: AtomicBool = AtomicBool::new(false);
 
@@ -420,6 +423,31 @@ impl Cloudflare {
         }
     }
 
+    /// The `/v1/*` refusal when a limiter binding is **named** on this
+    /// runtime but resolved to nothing (issue #562): the detail of the
+    /// problem the serve path answers with, or `None` to serve.
+    ///
+    /// Composition named a binding, so the venture was written to be
+    /// throttled; a deployment where that binding is missing from the
+    /// uploaded Worker (or is the wrong type) used to degrade to no
+    /// limiter with only a warning — `ports.rate_limiter == None`, which
+    /// `production_readiness` reads as "not readiness" and refuses in
+    /// production, but which served **unlimited** everywhere a deployment
+    /// did not declare production. Failing closed here closes that gap in
+    /// every environment while leaving the readiness semantics alone: an
+    /// advertised-but-unresolved limiter is still not readiness.
+    #[must_use]
+    pub(crate) fn unresolved_limiter_refusal(&self, resolved: bool) -> Option<String> {
+        let mut named: Vec<&str> = Vec::new();
+        if let Some(name) = self.rate_limiter_binding {
+            named.push(name);
+        }
+        if let Some((name, _)) = &self.d1_rate_limiter {
+            named.push(name);
+        }
+        missing_limiter_detail(&named, resolved)
+    }
+
     /// Assembles the `Auth` port from `AUTH_ISSUER` and `AUTH_CLIENT_ID`
     /// (issue #153), the way `push_from_env` assembles push.
     ///
@@ -640,13 +668,38 @@ impl Runtime for Cloudflare {
     }
 }
 
+/// The fail-closed decision behind
+/// [`Cloudflare::unresolved_limiter_refusal`](crate::Cloudflare::unresolved_limiter_refusal),
+/// pure so it can be unit-tested off-wasm: bindings are named on the
+/// runtime, `resolved` says whether any of them actually handed a limiter
+/// over.
+/// Nothing named is the composition choosing to run without one — not a
+/// failure here, and readiness is the gate that judges it in production.
+fn missing_limiter_detail(named: &[&str], resolved: bool) -> Option<String> {
+    if named.is_empty() || resolved {
+        return None;
+    }
+    let quoted = named
+        .iter()
+        .map(|name| format!("{name:?}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    Some(format!(
+        "rate limit binding {quoted} is configured on this Worker but did not resolve at \
+         request time: /v1/* is refused rather than served without a budget — the binding is \
+         missing from this deployment or is the wrong type, and the readiness gate would \
+         refuse it in production all the same (issue #562)"
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     use cratefield_core::{
         Answer, Calibration, ClassifierError, ClassifierProfile, Credential, Destination, Filed,
-        Question, TicketDraft, TicketState, TicketStatus, TrackerError,
+        Harness, Question, TicketDraft, TicketState, TicketStatus, TrackerError, Venture,
+        VentureEnv,
     };
 
     /// Stands in for an adapter the venture passed itself. Answers the
@@ -683,9 +736,131 @@ mod tests {
     // only exists per fetch on a Workers isolate. The clone into the bundle
     // is the same one line `payments` does.
 
+    // ------------------------------------------- fail-closed limiter (#562)
+
+    #[test]
+    fn a_named_but_unresolved_limiter_binding_refuses() {
+        let detail = missing_limiter_detail(&["RATE_LIMITER"], false)
+            .expect("a named, unresolved binding refuses");
+        assert!(detail.contains("RATE_LIMITER"), "{detail}");
+        assert!(detail.contains("not resolve"), "{detail}");
+
+        // Both limiter sources named and neither resolved: both named.
+        let detail = missing_limiter_detail(&["RATE_LIMITER", "RATE_LIMIT_COUNTERS"], false)
+            .expect("neither source resolved");
+        assert!(detail.contains("RATE_LIMITER"), "{detail}");
+        assert!(detail.contains("RATE_LIMIT_COUNTERS"), "{detail}");
+    }
+
+    #[test]
+    fn an_unnamed_limiter_binding_is_not_a_refusal() {
+        // No binding named is the composition choosing to run without a
+        // limiter — readiness's business in production, not the serve
+        // path's in every environment.
+        assert_eq!(missing_limiter_detail(&[], false), None);
+    }
+
+    #[test]
+    fn a_resolved_limiter_binding_serves() {
+        assert_eq!(missing_limiter_detail(&["RATE_LIMITER"], true), None);
+        // Both sources named, the D1 one winning: resolved is resolved.
+        assert_eq!(
+            missing_limiter_detail(&["RATE_LIMITER", "RATE_LIMIT_COUNTERS"], true),
+            None
+        );
+    }
+
+    #[test]
+    fn the_refusal_follows_exactly_the_named_bindings() {
+        // Through the accessor the serve path uses: nothing configured on
+        // the runtime, serve; the Workers binding configured, refuse only
+        // when nothing resolved.
+        assert_eq!(Cloudflare::new().unresolved_limiter_refusal(false), None);
+        assert!(
+            Cloudflare::new()
+                .rate_limiter("RATE_LIMITER")
+                .unresolved_limiter_refusal(false)
+                .is_some()
+        );
+        assert_eq!(
+            Cloudflare::new()
+                .rate_limiter("RATE_LIMITER")
+                .unresolved_limiter_refusal(true),
+            None
+        );
+    }
+
     #[test]
     fn a_runtime_with_no_tracker_provides_no_tracker_port() {
         assert!(!Cloudflare::new().provides().contains(&Port::Tracker));
+    }
+
+    /// A public read published by a module that declares the limiter port
+    /// (issue #562) — the shape of every waitlist/auth composition.
+    struct DeclaresLimiter;
+
+    impl cratefield_core::Module for DeclaresLimiter {
+        fn name(&self) -> &'static str {
+            "search"
+        }
+        fn version(&self) -> &'static str {
+            "0.0.0-test"
+        }
+        fn requires(&self) -> &'static [Port] {
+            &[]
+        }
+        fn optional(&self) -> &'static [Port] {
+            &[Port::RateLimiter]
+        }
+        fn migrations(&self) -> cratefield_core::Migrations {
+            cratefield_core::Migrations::default()
+        }
+        fn validate_config(
+            &self,
+            _: &dyn cratefield_core::Config,
+        ) -> Result<(), cratefield_core::ConfigError> {
+            Ok(())
+        }
+        fn surface(&self) -> cratefield_core::Surface {
+            cratefield_core::Surface::new().action(
+                cratefield_core::Action::get("search", "/search")
+                    .audience(cratefield_core::Audience::Public),
+            )
+        }
+        fn router(&self, _: cratefield_core::ModuleContext) -> axum::Router {
+            axum::Router::new()
+        }
+    }
+
+    #[test]
+    fn a_production_harness_without_a_limiter_binding_fails_to_build_naming_the_module() {
+        let error = Harness::builder()
+            .venture(
+                Venture::new("venture", "test.example")
+                    .cors_origins(["https://test.example"])
+                    .env(VentureEnv::Production),
+            )
+            .module(DeclaresLimiter)
+            .runtime(Cloudflare::new())
+            .build()
+            .expect_err("no limiter binding named: the build refuses");
+        let message = error.problems.join("\n");
+        assert!(message.contains("search"), "{message}");
+        assert!(message.contains("GET /v1/search/search"), "{message}");
+
+        // The binding named: the build-time leg reads the runtime's own
+        // answer, which is provisionally satisfied — resolution at request
+        // time is the serve path's fail-closed rule.
+        Harness::builder()
+            .venture(
+                Venture::new("venture", "test.example")
+                    .cors_origins(["https://test.example"])
+                    .env(VentureEnv::Production),
+            )
+            .module(DeclaresLimiter)
+            .runtime(Cloudflare::new().rate_limiter("RATE_LIMITER"))
+            .build()
+            .expect("a named binding satisfies the build-time limiter leg");
     }
 
     #[test]

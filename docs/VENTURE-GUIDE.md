@@ -347,6 +347,39 @@ hatches is [ARCHITECTURE.md](ARCHITECTURE.md) section 6. Create a Turnstile
 widget for the venture's domains; the sitekey goes to the frontend, the
 secret key becomes `TURNSTILE_SECRET`.
 
+## 5b. Rate limiting — declare it, then mount it (issue #562)
+
+The modules you compose declare the `RateLimiter` port (the signup and
+waitlist modules, the auth methods, telemetry), and a module declaring it
+is a claim that its public routes are throttled — public **reads**
+included, not just writes: a search endpoint is enumeration surface all
+the same. Production holds the venture to that claim. With no limiter
+mounted (or a binding that never resolves), the build refuses and the
+error names the module and its routes — `waitlist (POST /v1/waitlist,
+GET /v1/waitlist/search)` — so you fix the named thing.
+
+Mount one on the runtime you serve with:
+
+- **Workers**: the Rate Limiting binding — `.rate_limiter("RATE_LIMITER")`
+  in composition plus the `[[ratelimits]]` stanza in `wrangler.toml` (the
+  `cratefield-waitlist` venture is a working example) — or, for per-key
+  budgets (per plan, per address), the D1-backed limiter
+  `.d1_rate_limiter(..)` (issue #538).
+- **Native (self-hosted)**: `.rate_limiter_arc(..)` — a
+  `RedisRateLimiter` comes with the runtime.
+
+A binding **named** on the Worker but missing from the deployment
+(wrong name, wrong type, dropped from `wrangler.toml`) does
+not degrade to serving unlimited: `/v1/*` answers `503
+not-production-ready` naming the binding, in every environment, until
+the deployment and the composition agree again. That refusal is not
+lifted by `HARNESS_ALLOW_UNLIMITED_PUBLIC_ROUTES=<reason>` — the waiver
+governs the readiness gate only, so the escape from the `503` is to make
+the deployment match the composition (or drop the binding from it and
+rebuild). If you truly want the readiness gate to allow serving without
+a budget, say so with the waiver — a recorded decision, logged at boot,
+that a blank reason does not satisfy.
+
 ## 6. Secrets, per environment
 
 **Human** for production; local development uses `.dev.vars` (step 2).
