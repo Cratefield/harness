@@ -28,7 +28,8 @@ repository = "https://github.com/Cratefield/harness"
 # minor bump can never silently mix with older modules and adapters.
 # At 1.0 the range becomes "^1" (compatible within the major). The
 # supported ranges per release are listed in docs/COMPATIBILITY.md.
-# core is ahead of the other crates at 0.5.x. Note that editing this
+# Core versions independently and is ahead of the other crates; its
+# current number lives in crates/core/Cargo.toml. Note that editing this
 # requirement by hand ahead of a core release suppresses release-plz's
 # dependent release round — see the note in release-plz.toml (issue #462).
 cratefield-core = { path = "crates/core", version = "0.5" }
