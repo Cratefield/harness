@@ -1248,7 +1248,7 @@ export type ProblemSlug =
   | "bad-cursor" // 400
   | "bad-key" // 400
   | "composite-key" // 400
-  | "validation-failed" // 422
+  | "not-a-row" // 422
   | "already-exists"; // 409
 
 /**

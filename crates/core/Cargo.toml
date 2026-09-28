@@ -52,3 +52,8 @@ schemars = { workspace = true }
 pollster = { workspace = true }
 futures-channel = { workspace = true }
 insta = { workspace = true }
+# errors-doc parses every workspace crate's source for `ProblemDef`
+# literals (issue #419); `span-locations` is what turns a found literal's
+# span into the file:line a failure names. Both are already in the tree.
+proc-macro2 = { version = "1", features = ["span-locations"] }
+syn = { version = "2", features = ["full", "visit"] }
