@@ -111,6 +111,16 @@ left for a follow-up.
 [0102](0102-crypto-crate.md) chose the crypto crate: RustCrypto's
 `chacha20poly1305`.
 
+[0103](0103-worker-secret-kek.md) accepts a versioned Worker-secret KEK
+as the production KMS (#535): `HARNESS_KEK_CURRENT` names the version
+that wraps,
+`HARNESS_KEK_V1` onward hold the material, and unwrap dispatches on the
+authenticated version header in the blob — so rotation is put the next
+version, point, redeploy, re-wrap, delete. It is not an HSM KMS and is
+not claimed as one: the Worker isolate can read the KEK material. The
+Worker path adopting the tenant secrets store over it is a follow-up,
+not decided there.
+
 ## The auth service
 
 Numbered from 0200. These were 0100–0104 in `Factory-Zero/auth`; they were

@@ -23,6 +23,15 @@ its master key sits on a local disk where anything that can read the file
 can read the key, so it **refuses to construct when the environment is
 production**.
 
+`WorkerSecretKms` (issue #535, ADR 0103) is the production provider for the
+Cloudflare path. Its KEK is a versioned set of Worker secrets —
+`HARNESS_KEK_CURRENT` names the version that wraps, `HARNESS_KEK_V1`,
+`HARNESS_KEK_V2`, … hold the material — read once at construction, and
+unwrap dispatches on the version header in the blob, so rotation is put
+the next version, point, redeploy, re-wrap, delete (`docs/KEY-ROTATION.md`).
+It does not refuse production: the KEK lives in the platform's secret
+store, never on a host disk. It is not an HSM KMS and is not claimed as one.
+
 Managed providers (AWS KMS, Google Cloud KMS) are not implemented yet: they
 need credentials and a nightly job against the real service, and an
 unexercised vendor integration in this position is worse than an absent one.
