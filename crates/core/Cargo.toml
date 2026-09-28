@@ -60,7 +60,10 @@ syn = { version = "2", features = ["full", "visit"] }
 # Behaviour tests for the `api_key` store run against a real engine, the
 # way `cratefield-testing`'s idempotency suite does (see
 # tests/api_keys.rs); a dev-dependency never reaches the lib build, so
-# the wasm boundary is untouched.
-cratefield-adapter-sqlite = { workspace = true }
+# the wasm boundary is untouched. Path-only on purpose: adapter-sqlite
+# depends on core, so a versioned dev-dependency here would be a publish
+# cycle (core first-publishes before it). `cargo publish` strips a
+# path-only dev-dependency from the packaged manifest.
+cratefield-adapter-sqlite = { path = "../adapter-sqlite" }
 # Recomputing the stored digest in tests/api_keys.rs.
 hex = { workspace = true }
