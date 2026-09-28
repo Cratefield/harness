@@ -1520,7 +1520,9 @@ async fn archive(
 ///    run has to start at the first step.
 /// 2. **The engine runs for real.** There is no pretending: the deployer
 ///    handed to the engine is [`deployer::current`] — the artifact step
-///    through the linker, every other step still
+///    through the linker, the database step through
+///    [`CloudflareDatabase`](cratefield_provisioning::CloudflareDatabase)
+///    when the environment carries credentials, every other step still
 ///    [`Unwired`](cratefield_provisioning::Unwired) — the first step
 ///    fails, the failure is recorded against the venture with its reason,
 ///    and the screen shows it. The day a real deployer is passed here
@@ -1627,7 +1629,10 @@ async fn set_modules(
         ..venture
     };
     let engine = cratefield_provisioning::Engine::new(db);
-    match engine.provision(&venture, &deployer::current(), &now).await {
+    match engine
+        .provision(&venture, &deployer::current(ctx.ports.http.clone()), &now)
+        .await
+    {
         Ok(_) | Err(cratefield_provisioning::ProvisionError::Step { .. }) => {
             // A step failure is a recorded, visible outcome, not a 500: the
             // engine wrote the step and the message against the venture and
@@ -1685,7 +1690,10 @@ async fn reprovision(
 
     let now = now_rfc3339(ctx);
     let engine = cratefield_provisioning::Engine::new(db);
-    match engine.provision(&venture, &deployer::current(), &now).await {
+    match engine
+        .provision(&venture, &deployer::current(ctx.ports.http.clone()), &now)
+        .await
+    {
         Ok(_) | Err(cratefield_provisioning::ProvisionError::Step { .. }) => {
             Redirect::to(&format!("{BASE}/ventures/{}", venture.id)).into_response()
         }

@@ -1,29 +1,35 @@
 //! The deployer the dashboard's provisioning routes hand the engine.
 //!
-//! Provisioning's [`Deployer`] port is seven steps, and the artifact step
-//! is the only one anything exists for yet. [`current`] hands the engine
+//! Provisioning's [`Deployer`] port is seven steps, and two of them have
+//! something real behind them so far. [`current`] hands the engine
 //! [`LinkedArtifacts`]: the linker (issue #159) resolves the venture's
 //! module-set key against the control plane's own copy of the catalog and
 //! composes the artifact from pinned releases when it can, falling back to
 //! the build path — provisioning's [`Unwired`] — with the reason attached
-//! when it cannot. Every other step is [`Unwired`]'s verbatim, because no
-//! adapter talks to Cloudflare yet (#141).
+//! when it cannot. Under that, [`CloudflareDatabase`] makes the database
+//! step a real D1 call when the composition was given Cloudflare
+//! credentials, and a pass-through to [`Unwired`] when it was not — the
+//! case in every test today. Every other step is [`Unwired`]'s verbatim,
+//! because no adapter exists for it yet (#141).
 //!
 //! [`Deployer`]: cratefield_provisioning::Deployer
 //!
 //! Today nothing composes: every pin in the curated catalog is the
 //! all-zero placeholder digest until release stamping lands, so every real
 //! set falls back to the build path, and the reason the ledger records is
-//! that no release digest is stamped. The wiring is still the point — the
-//! day segments are published, the decisions in this file are the ones
-//! every run goes through, and a configuration-only change finds the
-//! composed bundle instead of a build.
+//! that no release digest is stamped — the run stops at the artifact step
+//! before the database step is ever reached. The wiring is still the
+//! point — the day segments are published, the decisions in this file are
+//! the ones every run goes through, and a configuration-only change finds
+//! the composed bundle instead of a build.
 
-use cratefield_core::HARNESS_API;
+use std::sync::Arc;
+
+use cratefield_core::{HARNESS_API, HttpClient};
 use cratefield_linker::{
     LinkInputs, LinkedArtifacts, NoStore, PinSource, PinnedRelease, Pins, UnpublishedSegments,
 };
-use cratefield_provisioning::Unwired;
+use cratefield_provisioning::{CloudflareDatabase, Unwired};
 
 /// The rustc version named in the artifact's build key. The key is a
 /// function of the rustc version (issue #59), so it must describe whatever
@@ -68,25 +74,35 @@ impl PinSource for CuratedPins {
 }
 
 /// The deployer the provisioning routes hand the engine. The artifact step
-/// goes through the linker; every other step still goes to [`Unwired`],
-/// because no adapter talks to Cloudflare yet (#141). With
-/// [`UnpublishedSegments`] every real set falls back to the build path
-/// today — the reason being that no release digest is stamped — and that
-/// reason is what the ledger records, ahead of the build path's own
-/// refusal.
+/// goes through the linker; the database step goes to [`CloudflareDatabase`]
+/// with the credentials the environment carries — real when
+/// `CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_API_TOKEN` are both set and the
+/// composition wired the http port, a pass-through to [`Unwired`] when they
+/// were not, which is why the existing screens and tests behave exactly as
+/// before. Every other step still goes to [`Unwired`], because no adapter
+/// exists for it yet (#141). With [`UnpublishedSegments`] every real set
+/// falls back to the build path today — the reason being that no release
+/// digest is stamped — and that reason is what the ledger records, ahead
+/// of the build path's own refusal.
+///
+/// The http port travels in from the caller because it is the module's
+/// own: the same port the `/__health` checks run over, `None` only where
+/// no composition wired one.
 ///
 /// The return type is the concrete composition, deliberately: the
 /// [`Deployer`] port is async-fn-in-trait, so an `impl Deployer` return
 /// gives axum's `Handler` bound (which wants a `Send` future) nothing to
 /// hold onto, and every route using this fails to compile.
 #[must_use]
-pub(crate) fn current() -> LinkedArtifacts<CuratedPins, UnpublishedSegments, NoStore, Unwired> {
+pub(crate) fn current(
+    http: Option<Arc<dyn HttpClient>>,
+) -> LinkedArtifacts<CuratedPins, UnpublishedSegments, NoStore, CloudflareDatabase<Unwired>> {
     LinkedArtifacts::new(
         CuratedPins,
         LinkInputs::release(HARNESS_API, TOOLCHAIN),
         UnpublishedSegments,
         NoStore,
-        Unwired,
+        CloudflareDatabase::from_env(http, Unwired),
     )
 }
 
