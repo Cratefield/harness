@@ -197,6 +197,7 @@ crate exists**, so the very first release of each crate is manual:
    cargo publish -p cratefield-testing        # before module-privacy and auth-client (versioned dev-dep)
    cargo publish -p cratefield-module-privacy # before the facade
    cargo publish -p cratefield-module-waitlist
+   cargo publish -p cratefield-module-webhooks  # before the facade
    cargo publish -p cratefield-push-auth      # before adapter-apns, -fcm, -webpush and the CLI
    cargo publish -p cratefield-adapter-classifier-llm
    cargo publish -p cratefield-adapter-github-issues
