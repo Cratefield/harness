@@ -25,7 +25,7 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use cratefield_core::{
     Clock, Config, Database, HttpClient, HttpError, MapConfig, Module, ModuleContext,
-    PersonalDataCatalog, Port, Ports, TemplateRegistry, Venture,
+    PersonalDataCatalog, Port, Ports, ScheduledBudget, TemplateRegistry, Venture,
 };
 use cratefield_module_webhooks::{
     Delivery, DrainReport, EndpointError, PublishError, Published, Webhooks,
@@ -110,6 +110,7 @@ impl Kit {
             unprotected_writes_accepted: false,
             ui_mounted: false,
             personal_data: Arc::new(PersonalDataCatalog::default()),
+            scheduled: Arc::new(ScheduledBudget::unbounded()),
         }
     }
 
