@@ -121,9 +121,9 @@ cratefield-introspect = { workspace = true, optional = true }
 # driver of its own.
 cratefield-tables = { workspace = true }
 # `fz client-ts` (issue #155) hands the `/__surface` document to the
-# generator and writes the files it returns. Path-only, no version: the
-# crate is `publish = false` (see its manifest), and a versioned spec
-# could never resolve against crates.io.
+# generator and writes the files it returns. Versioned through
+# `[workspace.dependencies]` since 0.6.0 (#558): the crate is publishable
+# now, so the packaged CLI resolves this edge on crates.io.
 cratefield-client-ts = { workspace = true }
 # `push-send` only: the native runtime's reqwest client and its outbound
 # policy. Native-only by construction (the crate refuses to compile on wasm),
