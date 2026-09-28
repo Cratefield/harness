@@ -25,12 +25,14 @@
 #![forbid(unsafe_code)]
 
 mod local;
+mod worker_secret;
 
 use async_trait::async_trait;
 use thiserror::Error;
 use zeroize::{Zeroize, Zeroizing};
 
 pub use local::LocalFileKms;
+pub use worker_secret::WorkerSecretKms;
 
 /// A 256-bit data key. Zeroised on drop, never `Debug`-printed, never
 /// `Clone`d: a key that can be copied is a key that can be left behind.
@@ -131,8 +133,8 @@ impl KmsError {
 /// collapsing them.
 #[async_trait]
 pub trait Kms: Send + Sync {
-    /// Stored with every wrapped key: `"local-file"`, `"aws-kms"`,
-    /// `"gcp-kms"`.
+    /// Stored with every wrapped key: `"local-file"`, `"worker-secret"`,
+    /// `"aws-kms"`, `"gcp-kms"`.
     fn provider(&self) -> &'static str;
 
     /// The master key this instance wraps under, as the vendor names it.

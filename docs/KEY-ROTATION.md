@@ -61,6 +61,24 @@ master key reference and run the same command: it unwraps under whatever
 wrapped each key and wraps again under the current one, recording the new
 provider and reference on the row.
 
+### Rotating the Worker-secret KEK (Cloudflare path)
+
+The Worker-secret provider (ADR 0103) has no in-place rotation — each
+version is its own secret, and the provider holds a numbered set of
+them: `HARNESS_KEK_CURRENT` names the version new wraps use, and
+`HARNESS_KEK_V1` onward hold the material. A rotation:
+
+```sh
+openssl rand -base64 32 | wrangler secret put HARNESS_KEK_V2  # the next version
+wrangler secret put HARNESS_KEK_CURRENT                       # then 2
+```
+
+Redeploy — the provider reads its secrets once, at construction — run
+the re-wrap above so no wrapped key still depends on `HARNESS_KEK_V1`,
+and delete the old secret only after that. Between putting the new
+version and redeploying, nothing has changed: the old deployment keeps
+wrapping under V1 and every read keeps working.
+
 ## After
 
 ```sh

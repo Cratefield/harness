@@ -178,9 +178,13 @@ conformance` is the suite every future provider passes — round trip,
 a fresh nonce per wrap, every single-bit change to the wrapped blob
 refused, and a truncated or empty blob refused rather than panicking.
 
-Managed providers are not written yet: they need credentials and a
-nightly job against the real service, and an unexercised vendor
-integration here would be worse than an absent one.
+Managed vendor providers are not written yet: they need credentials and
+a nightly job against the real service, and an unexercised vendor
+integration here would be worse than an absent one. One production
+provider exists (`WorkerSecretKms`, ADR 0103): its KEK is a versioned
+set of Worker secrets, so it needs no vendor account — but the wiring
+that puts a KMS on the Worker path is a follow-up of #535, and §9's
+"Worker path unchanged" stands until it lands.
 
 ### The store
 
