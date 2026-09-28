@@ -11,7 +11,8 @@
 use std::collections::BTreeMap;
 
 use cratefield_core::{
-    Answer, AnswerValue, Classifier, ClassifierError, PushError, Question, validate_questions,
+    Answer, AnswerValue, Classifier, ClassifierError, ModelTier, Prompt, PushError, Question,
+    TextModel, TextModelError, validate_questions,
 };
 
 /// The three recipients an adapter can be handed, one per transport.
@@ -473,4 +474,132 @@ pub async fn classifier_truncates_long_state(classifier: &dyn Classifier) {
         });
         assert_answer_conforms(id, question, answer);
     }
+}
+
+// ---------------------------------------------------------------------------
+// The `TextModel` port suite (issue #560)
+
+/// The canonical reply the conformance suite expects, verbatim: short and
+/// fixed, so an adapter test can script its transport to answer **exactly
+/// this** in its vendor's wire shape.
+pub const TEXT_MODEL_CONFORMANCE_REPLY: &str = "cratefield text model conformance reply";
+
+/// The canonical input-token count: the total prompt tokens the scripted
+/// transport reports. Every `TextModel` completion reports usage, so the
+/// suite asserts this count exactly — an adapter whose vendor omits a
+/// usage block fails here, not silently in a caller's cost accounting.
+pub const TEXT_MODEL_CONFORMANCE_INPUT_TOKENS: u64 = 17;
+
+/// The canonical output-token count the scripted transport reports.
+pub const TEXT_MODEL_CONFORMANCE_OUTPUT_TOKENS: u64 = 5;
+
+/// The canonical cached-input count: the subset of
+/// [`TEXT_MODEL_CONFORMANCE_INPUT_TOKENS`] the scripted transport reports
+/// serving from its vendor's prompt cache. Must stay within the input
+/// count — the suite asserts that, so the script has to satisfy it.
+pub const TEXT_MODEL_CONFORMANCE_CACHED_INPUT_TOKENS: u64 = 9;
+
+/// The canonical prompt the suite asks: one user turn, no system prompt,
+/// no schema, the default token ceiling. An adapter test scripts its
+/// transport to answer [`TEXT_MODEL_CONFORMANCE_REPLY`] with the canonical
+/// counts ([`TEXT_MODEL_CONFORMANCE_INPUT_TOKENS`],
+/// [`TEXT_MODEL_CONFORMANCE_OUTPUT_TOKENS`],
+/// [`TEXT_MODEL_CONFORMANCE_CACHED_INPUT_TOKENS`]) for this prompt.
+#[must_use]
+pub fn text_model_conformance_prompt() -> Prompt {
+    Prompt::new(ModelTier::Fast).user("Reply with the conformance reply, exactly.")
+}
+
+/// Asserts the [`TextModel`] trait contract against a text model whose
+/// transport is already scripted to complete
+/// [`text_model_conformance_prompt`] with
+/// [`TEXT_MODEL_CONFORMANCE_REPLY`] and the canonical counts in its
+/// vendor's wire shape. The suite makes **exactly one** `complete` call —
+/// script that one request and no other.
+///
+/// Asserted, each panic naming the rule it caught:
+///
+/// 1. `text` is the canonical reply, verbatim — no greeting, no chit-chat,
+///    no markdown fence around it;
+/// 2. `model` is non-empty — a completion names what answered, for the
+///    log line;
+/// 3. usage is reported on **every** completion: `input_tokens` and
+///    `output_tokens` equal the scripted counts;
+/// 4. `cached_input_tokens` is the scripted cache read, and never exceeds
+///    `input_tokens` — the cached subset of a total cannot be larger than
+///    the total;
+/// 5. the prompt carried no schema, so `json` is `None`.
+///
+/// ```rust,ignore
+/// // In the adapter's own test, after scripting its transport:
+/// text_model_conformance(&model).await;
+/// ```
+///
+/// # Panics
+///
+/// Panics with the failing rule named when the contract is violated, and
+/// when the scripted completion fails.
+pub async fn text_model_conformance(model: &dyn TextModel) {
+    let prompt = text_model_conformance_prompt();
+    let completion = model.complete(&prompt).await.unwrap_or_else(|error| {
+        panic!(
+            "the scripted completion failed — script the transport to answer \
+             text_model_conformance_prompt() with TEXT_MODEL_CONFORMANCE_REPLY and the \
+             canonical token counts: {error:?}"
+        )
+    });
+
+    assert_eq!(
+        completion.text, TEXT_MODEL_CONFORMANCE_REPLY,
+        "rule 1 (the text is the scripted reply, verbatim): got {:?}",
+        completion.text
+    );
+    assert!(
+        !completion.model.is_empty(),
+        "rule 2 (the completion names the model that answered): model is empty"
+    );
+    assert!(
+        completion.input_tokens == TEXT_MODEL_CONFORMANCE_INPUT_TOKENS
+            && completion.output_tokens == TEXT_MODEL_CONFORMANCE_OUTPUT_TOKENS,
+        "rule 3 (every completion reports its token usage): got input {}, output {}, \
+         expected {TEXT_MODEL_CONFORMANCE_INPUT_TOKENS}/{TEXT_MODEL_CONFORMANCE_OUTPUT_TOKENS}",
+        completion.input_tokens,
+        completion.output_tokens
+    );
+    assert_eq!(
+        completion.cached_input_tokens,
+        Some(TEXT_MODEL_CONFORMANCE_CACHED_INPUT_TOKENS),
+        "rule 4 (the cached subset is reported where the vendor reports one)"
+    );
+    if let Some(cached) = completion.cached_input_tokens {
+        assert!(
+            cached <= completion.input_tokens,
+            "rule 4 (the cached subset never exceeds the total it is a subset of): cached \
+             {cached} over input {}",
+            completion.input_tokens
+        );
+    }
+    assert!(
+        completion.json.is_none(),
+        "rule 5 (a prompt that asked for no schema comes back without a parsed value): got \
+         {:?}",
+        completion.json
+    );
+}
+
+/// Asserts an adapter with no key behind it answers
+/// [`TextModelError::NotConfigured`] rather than panicking — the unwired
+/// port is an error the caller matches, so a module can degrade on it.
+///
+/// # Panics
+///
+/// Panics when the completion succeeds or fails as anything but
+/// `NotConfigured`.
+pub async fn text_model_conformance_not_configured(model: &dyn TextModel) {
+    let result = model.complete(&text_model_conformance_prompt()).await;
+    assert_eq!(
+        result.err(),
+        Some(TextModelError::NotConfigured),
+        "an adapter with no key answers NotConfigured"
+    );
 }

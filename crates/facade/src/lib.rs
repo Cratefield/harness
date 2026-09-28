@@ -42,6 +42,9 @@ pub use cratefield_adapter_turnstile as turnstile;
 #[cfg(feature = "anthropic")]
 pub use cratefield_adapter_anthropic as anthropic;
 
+#[cfg(feature = "openai-compatible")]
+pub use cratefield_adapter_openai_compatible as openai_compatible;
+
 #[cfg(feature = "apns")]
 pub use cratefield_adapter_apns as apns;
 

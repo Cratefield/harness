@@ -66,10 +66,12 @@ pub use fakes::{
 pub use harness::TestHarness;
 #[cfg(feature = "port-conformance")]
 pub use port::{
-    assert_wasm_safe_deps, classifier_conformance, classifier_conformance_questions,
-    classifier_conformance_state, classifier_not_configured,
-    classifier_rejects_malformed_questions, classifier_truncates_long_state,
-    push_recipient_conformance,
+    TEXT_MODEL_CONFORMANCE_CACHED_INPUT_TOKENS, TEXT_MODEL_CONFORMANCE_INPUT_TOKENS,
+    TEXT_MODEL_CONFORMANCE_OUTPUT_TOKENS, TEXT_MODEL_CONFORMANCE_REPLY, assert_wasm_safe_deps,
+    classifier_conformance, classifier_conformance_questions, classifier_conformance_state,
+    classifier_not_configured, classifier_rejects_malformed_questions,
+    classifier_truncates_long_state, push_recipient_conformance, text_model_conformance,
+    text_model_conformance_not_configured, text_model_conformance_prompt,
 };
 #[cfg(feature = "harness")]
 pub use request::{TestResponse, request, request_as};
