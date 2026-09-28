@@ -6,6 +6,14 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.6.0] — 2026-09-28
+
+A breaking release: `Port` is an exhaustive enum and gained `TextModel`,
+`Tracker`, `Classifier` and `Auth` since 0.5.0, so a `match` over it no longer
+compiles unchanged. Every published dependent is re-released against `^0.6` in
+the same round, so the crates.io set resolves on one core again (#462, #464,
+#558).
+
 ### Added
 
 - **`webhook_signature`**: a generic HMAC-SHA256 webhook verifier

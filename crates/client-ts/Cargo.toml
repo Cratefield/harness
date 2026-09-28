@@ -10,8 +10,7 @@ include = ["src/**/*", "README.md"]
 # CLI now consumes it — `fz client-ts` (issue #155) — but that does not
 # lift the hold: its first publish is manual (docs/RELEASING.md) either
 # way.
-publish = false
-version = "0.1.0"
+version = "0.2.0"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true

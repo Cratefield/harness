@@ -58,12 +58,3 @@ publish = false
 name = "cratefield-bench-write-ceiling"
 publish = false
 
-# The TypeScript client generator (issue #155): the CLI now consumes it —
-# `fz client-ts` generates the package from a served `/__surface` document —
-# but it is new and its public surface is still moving, which a 0.1 on
-# crates.io would pin permanently. Its first publish is manual like every
-# other new crate (docs/RELEASING.md), so leaving it in would only make the
-# release run fail authentication over OIDC.
-[[package]]
-name = "cratefield-client-ts"
-publish = false
