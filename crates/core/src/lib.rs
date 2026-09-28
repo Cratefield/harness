@@ -13,6 +13,7 @@
 #![forbid(unsafe_code)]
 
 mod admin;
+mod api_key;
 mod classifier_agreement;
 mod classifier_routing;
 mod config;
@@ -56,6 +57,10 @@ mod webhook_signature;
 pub use axum;
 
 pub use admin::{bearer_token, constant_time_eq, require_admin};
+pub use api_key::{
+    ApiKeyError, ApiKeyMode, ApiKeyPrincipal, ApiKeys, IssuedKey, RandomBytes, RandomError,
+    require_api_key,
+};
 pub use classifier_agreement::{
     AgreementAt, AgreementLog, AgreementReport, CalibrationPoint, CorpusItem, Disagreement,
     GroundTruth, KindAgreement, answer_margin, measure_agreement, values_agree,

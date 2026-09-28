@@ -27,6 +27,25 @@
   it is a bearer secret like `HARNESS_SECRET` and takes the same floor:
   `HarnessConfig::from_config` refuses anything under 32 bytes (issue
   #437). Absent stays legal — admin is simply disabled.
+- **Developer API keys** (issue #532). `cratefield_core::api_key` is the
+  store and gate for machine callers a venture enrolls itself: a key is
+  `{namespace}_{mode}_{id}_{secret}`, the prefix is public and stored in
+  the clear, and the row keeps only `SHA-256` over the whole token —
+  with 256 bits of randomness a slow KDF buys nothing, so the argon2id
+  preset of ADR 0200 stays where it belongs (passwords and client
+  secrets, whose inputs may be low-entropy). Verification looks the
+  prefix up, re-derives the digest and compares in constant time, and
+  `require_api_key` answers one uniform `401 api-key-unauthorized` for a
+  missing, malformed, unknown, revoked or wrong-secret credential, `403
+  api-key-forbidden` when a valid key lacks the route's scope, and `503
+  not-ready` when the store itself cannot answer. A
+  `RoutePolicy::ApiKey` route is guarded — never captcha'd, never
+  rendered into a public surface — and the scope is the handler's
+  per-request argument, since a `RoutePolicy` is `Copy` + serde. Rotate
+  commits the revoke and the fresh insert in one atomic batch, and
+  `last_used_at` is written at most once per minute per key. This is
+  auth, not routing: [TENANT-ROUTING.md](TENANT-ROUTING.md) §3 rejected
+  API keys for host→tenant selection and that rejection stands.
 - **Sidecar trust boundary** (issue #131, ADR 0009 amendment). A mount
   forwards an allowlist only: `content-type`, `content-length`, `accept`,
   `accept-language`, `user-agent`, the host's `x-request-id`, and a

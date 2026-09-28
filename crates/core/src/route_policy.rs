@@ -74,6 +74,21 @@ pub enum RoutePolicy {
     ///
     /// [`Signer`]: crate::ports::Signer
     SignedLink,
+    /// An authenticated developer caller (issue #532): the request
+    /// presents `Authorization: Bearer <api key>` and the handler gates
+    /// it through [`require_api_key`], which verifies the key's hash and
+    /// checks one scope. A CAPTCHA is meaningless here (the caller is a
+    /// machine) and must never be rendered or required on such a route —
+    /// the same rule as [`RoutePolicy::Signature`].
+    ///
+    /// This variant carries no scope on purpose: a `RoutePolicy` is
+    /// `Copy` + serde and travels through surface documents, so it
+    /// cannot hold a per-action string. The route policy says *how* the
+    /// route is guarded; the scope is the handler's per-request argument
+    /// to `require_api_key`.
+    ///
+    /// [`require_api_key`]: crate::api_key::require_api_key
+    ApiKey,
 }
 
 impl RoutePolicy {
@@ -135,9 +150,13 @@ pub struct WriteGuards {
     /// than the three lists above by design: a webhook is an
     /// unauthenticated endpoint too, and the rate-limiter leg of
     /// [`production_readiness`] cares that *something* is writable, not
-    /// by which proof.
+    /// by which proof. A [`RoutePolicy::ApiKey`] write demands no
+    /// `RateLimiter` here: per-key limiting happens only where a handler
+    /// calls `check_rate_limit` with
+    /// [`ApiKeyPrincipal::rate_limit_key`] and a limiter is wired.
     ///
     /// [`public_writes`]: Module::public_writes
+    /// [`ApiKeyPrincipal::rate_limit_key`]: crate::api_key::ApiKeyPrincipal::rate_limit_key
     pub has_public_writes: bool,
     /// Whether any declared action is the **admin plane** (issue #437):
     /// an [`Audience::Admin`] action, or any path under `/admin`. An
@@ -177,6 +196,13 @@ impl WriteGuards {
                 match module.public_write_policy() {
                     RoutePolicy::Signature => signature = true,
                     RoutePolicy::SignedLink => signed_link = true,
+                    // An API-key writer (issue #532) is guarded — it is
+                    // never pulled into the captcha fallback — but it
+                    // demands no runtime port (the key store is the
+                    // app's) and no production-legible decision: its
+                    // budget is the per-key limiter hook, not a boot
+                    // gate.
+                    RoutePolicy::ApiKey => {}
                     RoutePolicy::HumanForm | RoutePolicy::Open => form = true,
                 }
             }
@@ -1376,5 +1402,46 @@ mod tests {
             "{}",
             errors[0]
         );
+    }
+
+    // ------------------------------------------------ issue #532
+
+    #[test]
+    fn an_api_key_policy_serializes_as_api_key_and_guards() {
+        assert_eq!(
+            serde_json::to_string(&RoutePolicy::ApiKey).expect("serializes"),
+            "\"api-key\""
+        );
+        let policy: RoutePolicy = serde_json::from_str("\"api-key\"").expect("deserializes");
+        assert_eq!(policy, RoutePolicy::ApiKey);
+        assert!(policy.is_guarded());
+    }
+
+    #[test]
+    fn an_api_key_writer_demands_no_captcha_and_no_port() {
+        // A declared api-key action is read as declared: no captcha (a
+        // developer machine cannot fill one), no Signer, no Payments —
+        // and not the public-write leg either, because its budget is the
+        // per-key limiter hook, not a boot gate.
+        let guards = WriteGuards::collect(&[module(
+            "devapi",
+            vec![Action::post("sync", "/sync").policy(RoutePolicy::ApiKey)],
+            false,
+        )]);
+        assert!(guards.captcha_modules.is_empty());
+        assert!(guards.signature_modules.is_empty());
+        assert!(guards.signed_link_modules.is_empty());
+        assert!(!guards.has_public_writes);
+        assert!(!guards.needs_rate_limiter());
+
+        // The surface-less fallback is the same: guarded, never pulled
+        // into the captcha gate.
+        let guards = WriteGuards::collect(&[declaring("devapi", RoutePolicy::ApiKey)]);
+        assert!(
+            guards.captcha_modules.is_empty(),
+            "an api-key writer must not demand a captcha it never renders"
+        );
+        assert!(!guards.needs_signer());
+        assert!(!guards.needs_payments());
     }
 }

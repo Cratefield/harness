@@ -203,6 +203,7 @@ hmac = "0.13.0"
 sha2 = "0.11.0"
 base64 = "0.23.1"
 subtle = "2.6.1"
+hex = "0.4.3"
 # ES256 (P-256 ECDSA) for the APNs provider JWT (adapter-apns, #104). Pure
 # Rust, wasm-safe; `ecdsa` signs with deterministic RFC6979 nonces so it
 # needs no RNG on the isolate, and `pem`/`pkcs8` parse Apple's `.p8` key.
