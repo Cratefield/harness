@@ -1,9 +1,12 @@
-//! `TypeSafe` adapter acceptance tests (issue #456): the happy path carries
-//! all three question kinds in one request, a missing or blank key is
-//! `NotConfigured` without touching the network, every vendor failure maps
-//! to the error the port names (including both `Retry-After` forms), an
-//! over-long `state` is trimmed on the wire and logged, and the API key
-//! never reaches a log line or an error.
+//! `TypeSafe` adapter acceptance tests (issue #456, re-worked onto the
+//! documented Jev API): the happy path carries all three question kinds in
+//! one request against the recorded example bodies of
+//! `docs.typesafe.ai/api.md`, a missing or blank key is `NotConfigured`
+//! without touching the network, every vendor failure maps to the error
+//! the port names (including both `Retry-After` forms and the vendor's
+//! own 529), the vendor's question-size ceilings are refused pre-network,
+//! an over-long `state` is trimmed on the wire and logged, and the API key
+//! never reaches a log line, a debug render or an error.
 //!
 //! All through a local fake `HttpClient` — deliberately built here rather
 //! than borrowed from `cratefield-testing`, so this crate's tests do not
@@ -15,10 +18,11 @@
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use cratefield_adapter_typesafe::TypeSafe;
+use cratefield_adapter_typesafe::{DEFAULT_ENDPOINT, DEFAULT_MODEL, TypeSafe};
 use cratefield_core::{
     AnswerValue, Calibration, Classifier, ClassifierError, ClassifierProfile, Clock,
-    DEFAULT_MAX_STATE_CHARS, HttpClient, HttpError, Question,
+    DEFAULT_MAX_STATE_CHARS, HttpClient, HttpError, HttpPolicy, MAX_RESPONSE_BYTES,
+    MAX_RESPONSE_TIMEOUT, Question,
 };
 use http::{HeaderMap, Request, Response, StatusCode};
 use serde_json::Value;
@@ -31,13 +35,20 @@ use std::time::Duration;
 // Obvious dummy key, never real.
 const DUMMY_KEY: &str = "ts_live_dummy_key_000000";
 
-const CLASSIFY_URI: &str = "https://api.typesafe.ai/v1/classify";
+/// The documented example request/response pair, recorded verbatim from
+/// `https://docs.typesafe.ai/api.md`.
+const REQUEST_FIXTURE: &str = include_str!("fixtures/request.json");
+const RESPONSE_FIXTURE: &str = include_str!("fixtures/response.json");
 
-/// A 200 carrying one answer per question, all three kinds.
-const THREE_ANSWERS: &str = r#"{"answers":[
-  {"id":"topic","value":"bugs","probabilities":{"billing":0.1,"bugs":0.9}},
-  {"id":"severity","value":1,"probabilities":{"1":0.7,"5":0.3}},
-  {"id":"angry","value":"false","probabilities":{"true":0.2,"false":0.8}}]}"#;
+/// A 200 carrying one answer per question, all three kinds, in the
+/// documented shape. The score answer is weighted over the level
+/// *indices* Jev was sent (`"0"` = the port's `"1"`, `"1"` = its `"5"`),
+/// at exactly index 1 — the port's `5`.
+const THREE_ANSWERS: &str = r#"{"model":"jev-1.13.0","answers":{
+  "topic":{"type":"choice","choice":"bugs","probabilities":{"billing":0.1,"bugs":0.9},"confidence":0.9},
+  "severity":{"type":"score","score":1.0,"probabilities":{"0":0.7,"1":0.3},"confidence":0.7},
+  "angry":{"type":"noul","noul":0.2}},
+  "usage":{"input_tokens":296,"output_tokens":20}}"#;
 
 // ---------------------------------------------------------------- fixtures
 
@@ -46,6 +57,9 @@ struct CapturedRequest {
     uri: String,
     headers: HeaderMap,
     body: String,
+    /// The `HttpPolicy` the adapter attached, if it did.
+    policy_timeout: Option<Duration>,
+    policy_max_bytes: Option<usize>,
 }
 
 struct FakeHttp {
@@ -64,12 +78,15 @@ impl HttpClient for FakeHttp {
     async fn send(&self, request: Request<Bytes>) -> Result<Response<Bytes>, HttpError> {
         self.calls.fetch_add(1, Ordering::SeqCst);
         let (parts, body) = request.into_parts();
+        let policy = parts.extensions.get::<HttpPolicy>();
         self.tx
             .send(CapturedRequest {
                 method: parts.method.to_string(),
                 uri: parts.uri.to_string(),
                 headers: parts.headers,
                 body: String::from_utf8_lossy(&body).to_string(),
+                policy_timeout: policy.map(|policy| policy.timeout),
+                policy_max_bytes: policy.map(|policy| policy.max_response_bytes),
             })
             .expect("test channel open");
         if let Some(message) = self.fail_with {
@@ -193,33 +210,22 @@ async fn one_call_answers_all_three_question_kinds() {
     let topic = &answers["topic"];
     assert_eq!(topic.value, AnswerValue::Choice("bugs".to_owned()));
     assert!((topic.confidence - 0.9).abs() < f32::EPSILON, "{topic:?}");
+    // Jev's index 1 is the port's second level, named `5`.
     let severity = &answers["severity"];
-    assert_eq!(severity.value, AnswerValue::Score(1.0));
+    assert_eq!(severity.value, AnswerValue::Score(5.0));
+    assert!((severity.probabilities["1"] - 0.7).abs() < f32::EPSILON);
+    assert!((severity.probabilities["5"] - 0.3).abs() < f32::EPSILON);
     assert!(
         (severity.confidence - 0.7).abs() < f32::EPSILON,
         "{severity:?}"
     );
+    // p(yes) = 0.2: verdict false, confidence the chosen side's 1 - p.
     let angry = &answers["angry"];
     assert_eq!(angry.value, AnswerValue::Noul(false));
     assert!((angry.confidence - 0.8).abs() < f32::EPSILON, "{angry:?}");
-    // `confidence` agrees with `probabilities` on every answer.
+    // The vendor-reported model rides on every answer.
     for (id, answer) in &answers {
-        let label = match answer.value {
-            AnswerValue::Choice(ref label) => label.clone(),
-            AnswerValue::Score(score) => score.to_string(),
-            AnswerValue::Noul(verdict) => {
-                if verdict {
-                    "true".to_owned()
-                } else {
-                    "false".to_owned()
-                }
-            }
-        };
-        let confidence = answer.probabilities.get(&label).copied().unwrap_or(0.0);
-        assert!(
-            (answer.confidence - confidence).abs() < f32::EPSILON,
-            "{id} disagrees with its own probabilities: {answer:?}"
-        );
+        assert_eq!(answer.model.as_deref(), Some("jev-1.13.0"), "{id}");
     }
     assert_eq!(
         http.calls.load(Ordering::SeqCst),
@@ -238,7 +244,7 @@ async fn the_one_request_carries_the_state_and_all_three_questions() {
     let request = rx.try_recv().expect("one request captured");
 
     assert_eq!(request.method, "POST");
-    assert_eq!(request.uri, CLASSIFY_URI);
+    assert_eq!(request.uri, DEFAULT_ENDPOINT);
     let header = |name: &str| {
         request
             .headers
@@ -254,46 +260,88 @@ async fn the_one_request_carries_the_state_and_all_three_questions() {
 
     let sent: Value = serde_json::from_str(&request.body).expect("json body");
     assert_eq!(sent["state"], "a customer note");
-    let sent_questions = sent["questions"].as_array().expect("questions array");
+    assert_eq!(sent["model"], DEFAULT_MODEL, "the pinned model is sent");
+    let sent_questions = sent["questions"].as_object().expect("questions map");
     assert_eq!(sent_questions.len(), 3, "all questions in one request");
 
-    let topic = sent_questions
-        .iter()
-        .find(|q| q["id"] == "topic")
-        .expect("topic");
-    assert_eq!(topic["kind"], "choice");
+    let topic = &sent_questions["topic"];
+    assert_eq!(topic["type"], "choice");
     assert_eq!(
         topic["instructions"],
         "Which topic does the note belong to?"
     );
     assert_eq!(topic["criteria"]["billing"], "money, invoices");
     assert_eq!(topic["criteria"]["bugs"], "something is broken");
-    assert!(topic.get("levels").is_none(), "a choice carries no levels");
 
-    let severity = sent_questions
-        .iter()
-        .find(|q| q["id"] == "severity")
-        .expect("severity");
-    assert_eq!(severity["kind"], "score");
+    let severity = &sent_questions["severity"];
+    assert_eq!(severity["type"], "score");
+    assert_eq!(severity["instructions"], "How severe is the note?");
+    // The ordered level descriptions travel; the port's level names do
+    // not — Jev answers in index space and the adapter re-keys.
     assert_eq!(
-        severity["levels"],
-        serde_json::json!([
-            {"name": "1", "meaning": "a typo"},
-            {"name": "5", "meaning": "data loss"},
-        ])
-    );
-    assert!(
-        severity.get("criteria").is_none(),
-        "a score carries no criteria"
+        severity["criteria"],
+        serde_json::json!(["a typo", "data loss"])
     );
 
-    let angry = sent_questions
-        .iter()
-        .find(|q| q["id"] == "angry")
-        .expect("angry");
-    assert_eq!(angry["kind"], "noul");
-    assert!(angry.get("criteria").is_none(), "a noul carries neither");
-    assert!(angry.get("levels").is_none(), "a noul carries neither");
+    let angry = &sent_questions["angry"];
+    assert_eq!(angry["type"], "noul");
+    assert_eq!(angry["instructions"], "Is the writer angry?");
+    assert!(
+        angry.get("criteria").is_none(),
+        "a noul carries no criteria the port does not have"
+    );
+}
+
+#[pollster::test]
+async fn the_wire_body_matches_the_documented_example() {
+    // The docs' example asks by the `jev-latest` alias; the adapter pins
+    // by default, so the alias is what the pin is overridden to here.
+    let (http, rx) = fixture(200, RESPONSE_FIXTURE, None);
+    let questions = BTreeMap::from([(
+        "is_urgent".to_owned(),
+        Question::Noul {
+            instructions: "Does this convey urgency?".to_owned(),
+        },
+    )]);
+    adapter(http)
+        .with_model("jev-latest")
+        .ask("Help! My payouts have been failing for 3 days.", &questions)
+        .await
+        .expect("answered");
+    let request = rx.try_recv().expect("one request captured");
+    let sent: Value = serde_json::from_str(&request.body).expect("json body");
+    let recorded: Value = serde_json::from_str(REQUEST_FIXTURE).expect("recorded fixture");
+    assert_eq!(
+        sent, recorded,
+        "the wire body is the documented example, verbatim"
+    );
+}
+
+#[pollster::test]
+async fn the_documented_example_response_maps_onto_the_port() {
+    let (http, _rx) = fixture(200, RESPONSE_FIXTURE, None);
+    let questions = BTreeMap::from([(
+        "is_urgent".to_owned(),
+        Question::Noul {
+            instructions: "Does this convey urgency?".to_owned(),
+        },
+    )]);
+    let answers = adapter(http)
+        .ask("Help! My payouts have been failing for 3 days.", &questions)
+        .await
+        .expect("answered");
+    let urgent = &answers["is_urgent"];
+    // p(yes) = 0.95: verdict true, the other side derived as 1 - p, and
+    // the confidence the chosen side's probability.
+    assert_eq!(urgent.value, AnswerValue::Noul(true));
+    assert!((urgent.probabilities["true"] - 0.95).abs() < f32::EPSILON);
+    assert!((urgent.probabilities["false"] - 0.05).abs() < f32::EPSILON);
+    assert!(
+        (urgent.confidence - 0.95).abs() < f32::EPSILON,
+        "{urgent:?}"
+    );
+    // The version the vendor reports it answered under, recorded.
+    assert_eq!(urgent.model.as_deref(), Some("jev-1.13.0"));
 }
 
 #[test]
@@ -341,20 +389,132 @@ async fn from_env_without_typesafe_api_key_provides_no_port() {
     assert!(TypeSafe::from_env(http, clock_at(0)).is_none());
 }
 
+// ---------------------------------------------------------------- model pinning
+
+#[pollster::test]
+async fn with_model_overrides_the_pin_in_the_request_body() {
+    let (http, rx) = fixture(200, THREE_ANSWERS, None);
+    adapter(http)
+        .with_model("jev-1.14.0")
+        .ask("a customer note", &questions())
+        .await
+        .expect("answered");
+    let request = rx.try_recv().expect("one request captured");
+    let sent: Value = serde_json::from_str(&request.body).expect("json body");
+    assert_eq!(sent["model"], "jev-1.14.0");
+}
+
+#[pollster::test]
+async fn the_resolved_model_is_what_the_vendor_said_it_answered_under() {
+    // The body names a version different from the one asked: the answers
+    // record what the vendor reported, not what was requested.
+    let (http, _rx) = fixture(
+        200,
+        r#"{"model":"jev-1.14.0","answers":{
+          "angry":{"type":"noul","noul":0.9}}}"#,
+        None,
+    );
+    let questions = BTreeMap::from([(
+        "angry".to_owned(),
+        Question::Noul {
+            instructions: "Is the writer angry?".to_owned(),
+        },
+    )]);
+    let answers = adapter(http)
+        .with_model("jev-latest")
+        .ask("state", &questions)
+        .await
+        .expect("answered");
+    assert_eq!(answers["angry"].model.as_deref(), Some("jev-1.14.0"));
+
+    // A body without `model` falls back to the model that was asked.
+    let (http, _rx) = fixture(
+        200,
+        r#"{"answers":{"angry":{"type":"noul","noul":0.9}}}"#,
+        None,
+    );
+    let answers = adapter(http)
+        .with_model("jev-latest")
+        .ask("state", &questions)
+        .await
+        .expect("answered");
+    assert_eq!(answers["angry"].model.as_deref(), Some("jev-latest"));
+}
+
+// -------------------------------------------------------------- endpoint override
+
+#[pollster::test]
+async fn the_endpoint_override_is_what_is_posted_to() {
+    let (http, rx) = fixture(200, THREE_ANSWERS, None);
+    adapter(http)
+        .with_endpoint("http://127.0.0.1:9/v1/systemone")
+        .ask("a customer note", &questions())
+        .await
+        .expect("answered");
+    let request = rx.try_recv().expect("one request captured");
+    assert_eq!(request.uri, "http://127.0.0.1:9/v1/systemone");
+}
+
+// ------------------------------------------------------------- vendor ceilings
+
+#[pollster::test]
+async fn a_choice_over_the_vendors_255_options_is_rejected_before_the_wire() {
+    let (http, _rx) = fixture(200, THREE_ANSWERS, None);
+    let criteria: BTreeMap<String, String> = (0..=255)
+        .map(|n| (format!("option-{n}"), "an option".to_owned()))
+        .collect();
+    let questions = BTreeMap::from([(
+        "big".to_owned(),
+        Question::Choice {
+            instructions: "Pick one.".to_owned(),
+            criteria,
+        },
+    )]);
+    let error = adapter(http.clone())
+        .ask("state", &questions)
+        .await
+        .expect_err("over the vendor's ceiling");
+    assert!(matches!(error, ClassifierError::Rejected(_)), "{error:?}");
+    assert_eq!(http.calls.load(Ordering::SeqCst), 0, "no request spent");
+}
+
+#[pollster::test]
+async fn a_score_over_the_vendors_10_levels_is_rejected_before_the_wire() {
+    let (http, _rx) = fixture(200, THREE_ANSWERS, None);
+    let levels: Vec<(String, String)> = (0..=10)
+        .map(|n| (format!("level-{n}"), "a level".to_owned()))
+        .collect();
+    let questions = BTreeMap::from([(
+        "long".to_owned(),
+        Question::Score {
+            instructions: "Rate it.".to_owned(),
+            levels,
+        },
+    )]);
+    let error = adapter(http.clone())
+        .ask("state", &questions)
+        .await
+        .expect_err("over the vendor's ceiling");
+    assert!(matches!(error, ClassifierError::Rejected(_)), "{error:?}");
+    assert_eq!(http.calls.load(Ordering::SeqCst), 0, "no request spent");
+}
+
 // -------------------------------------------------------------- error mapping
 
 #[pollster::test]
 async fn an_http_4xx_is_rejected_with_the_body() {
-    let (http, _rx) = fixture(400, r#"{"error":"invalid api key"}"#, None);
-    let error = adapter(http.clone())
-        .ask("state", &questions())
-        .await
-        .expect_err("refused");
-    assert!(
-        matches!(error, ClassifierError::Rejected(ref body) if body.contains("invalid api key")),
-        "{error:?}"
-    );
-    assert_eq!(http.calls.load(Ordering::SeqCst), 1);
+    for status in [400_u16, 401, 422] {
+        let (http, _rx) = fixture(status, r#"{"error":"invalid api key"}"#, None);
+        let error = adapter(http.clone())
+            .ask("state", &questions())
+            .await
+            .expect_err("refused");
+        assert!(
+            matches!(error, ClassifierError::Rejected(ref body) if body.contains("invalid api key")),
+            "{error:?}"
+        );
+        assert_eq!(http.calls.load(Ordering::SeqCst), 1);
+    }
 }
 
 #[pollster::test]
@@ -371,6 +531,24 @@ async fn a_429_is_transient_with_the_seconds_retry_after_parsed() {
         }
     );
     assert_eq!(error.retry_after(), Some(Duration::from_secs(30)));
+    assert_eq!(http.calls.load(Ordering::SeqCst), 1);
+}
+
+#[pollster::test]
+async fn the_vendors_529_overloaded_is_transient_with_the_back_off() {
+    let (http, _rx) = fixture(529, "overloaded", Some("7"));
+    let error = adapter(http.clone())
+        .ask("state", &questions())
+        .await
+        .expect_err("overloaded");
+    assert_eq!(
+        error,
+        ClassifierError::Transient {
+            retry_after: Some(Duration::from_secs(7))
+        },
+        "529 is the vendor's own retryable status, not a refusal"
+    );
+    assert_eq!(error.retry_after(), Some(Duration::from_secs(7)));
     assert_eq!(http.calls.load(Ordering::SeqCst), 1);
 }
 
@@ -429,7 +607,7 @@ async fn an_unparseable_success_body_is_transport() {
         .await
         .expect_err("did not survive the hop");
     assert!(matches!(error, ClassifierError::Transport(_)), "{error:?}");
-    // A 200 without the answers array is the same hop failure.
+    // A 200 without the answers map is the same hop failure.
     let (http, _rx) = fixture(200, r#"{"nope":true}"#, None);
     let error = adapter(http)
         .ask("state", &questions())
@@ -455,7 +633,8 @@ async fn a_transport_failure_is_transport() {
 async fn an_answer_naming_a_label_the_question_never_offered_is_rejected() {
     let (http, _rx) = fixture(
         200,
-        r#"{"answers":[{"id":"topic","value":"shipping","probabilities":{"shipping":1.0}}]}"#,
+        r#"{"answers":{
+          "topic":{"type":"choice","choice":"shipping","probabilities":{"shipping":1.0},"confidence":1.0}}}"#,
         None,
     );
     let error = adapter(http.clone())
@@ -471,11 +650,27 @@ async fn an_answer_naming_a_label_the_question_never_offered_is_rejected() {
 }
 
 #[pollster::test]
+async fn an_answer_of_the_wrong_shape_is_rejected() {
+    // A noul question answered as a choice.
+    let (http, _rx) = fixture(
+        200,
+        r#"{"answers":{
+          "angry":{"type":"choice","choice":"true","probabilities":{"true":1.0},"confidence":1.0}}}"#,
+        None,
+    );
+    let error = adapter(http)
+        .ask("state", &questions())
+        .await
+        .expect_err("shape mismatch");
+    assert!(matches!(error, ClassifierError::Rejected(_)), "{error:?}");
+}
+
+#[pollster::test]
 async fn a_response_missing_a_question_id_is_rejected_not_invented() {
     let (http, _rx) = fixture(
         200,
-        r#"{"answers":[
-          {"id":"topic","value":"bugs","probabilities":{"bugs":1.0}}]}"#,
+        r#"{"answers":{
+          "topic":{"type":"choice","choice":"bugs","probabilities":{"bugs":1.0},"confidence":1.0}}}"#,
         None,
     );
     let error = adapter(http)
@@ -594,6 +789,26 @@ async fn a_state_within_the_limit_is_not_trimmed_and_not_warned() {
     );
 }
 
+// ------------------------------------------------------------------ the request policy
+
+#[pollster::test]
+async fn the_request_carries_a_deadline_well_under_the_port_ceiling() {
+    let (http, rx) = fixture(200, THREE_ANSWERS, None);
+    adapter(http)
+        .ask("a customer note", &questions())
+        .await
+        .expect("answered");
+    let request = rx.try_recv().expect("one request captured");
+    let timeout = request.policy_timeout.expect("an HttpPolicy is attached");
+    assert_eq!(timeout, Duration::from_secs(20));
+    assert!(
+        timeout < MAX_RESPONSE_TIMEOUT,
+        "well under the port's own ceiling, not equal to it"
+    );
+    // The response cap is the port default, stated explicitly.
+    assert_eq!(request.policy_max_bytes, Some(MAX_RESPONSE_BYTES));
+}
+
 // ------------------------------- the API key is never logged, never returned
 
 /// A distinctive stand-in key whose literal presence is easy to assert
@@ -647,7 +862,7 @@ impl tracing::Subscriber for CapturingSubscriber {
 
     fn record(&self, _span: &tracing::span::Id, _values: &tracing::span::Record<'_>) {}
 
-    fn record_follows_from(&self, _span: &tracing::span::Id, _follows: &tracing::span::Id) {}
+    fn record_follows_from(&self, _span: &tracing::span::Id, _follows_from: &tracing::span::Id) {}
 
     fn event(&self, event: &tracing::Event<'_>) {
         let mut visitor = LineVisitor(String::new());
@@ -742,6 +957,17 @@ fn assert_key_absent(lines: &[String], rendered: &str) {
             "key leaked into a log line: {line}"
         );
     }
+}
+
+#[test]
+fn debug_names_the_endpoint_and_model_never_the_key() {
+    let (http, _rx) = fixture(200, THREE_ANSWERS, None);
+    let adapter = TypeSafe::new(http, clock_at(0), Some(SECRET_PROBE.to_owned()));
+    let rendered = format!("{adapter:?}");
+    assert!(!rendered.contains(SECRET_PROBE), "{rendered}");
+    assert!(rendered.contains(DEFAULT_ENDPOINT), "{rendered}");
+    assert!(rendered.contains(DEFAULT_MODEL), "{rendered}");
+    assert!(rendered.contains("api_key_configured"), "{rendered}");
 }
 
 #[test]

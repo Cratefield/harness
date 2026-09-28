@@ -1,7 +1,7 @@
 //! The shared `Classifier` conformance suite (issue #456) run against the
 //! `TypeSafe` adapter: the same common contract every adapter answers,
-//! over a local `HttpClient` scripted with one well-formed classify body
-//! for `classifier_conformance_questions`.
+//! over a local `HttpClient` scripted with one well-formed Jev body for
+//! `classifier_conformance_questions`.
 
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -15,15 +15,18 @@ use http::{Request, Response, StatusCode};
 use std::sync::Arc;
 use time::OffsetDateTime;
 
-/// A well-formed success body for the canonical question set: every id
-/// asked, every chosen label offered, a probability for every offered
-/// label, the masses summing to one. The adapter validates and does not
-/// renormalise, so this is exactly the shape a conforming vendor sends.
-/// The score answer is a JSON number on the `"1"`/`"5"` scale.
-const CONFORMANCE_BODY: &str = r#"{"answers":[
-  {"id":"topic","value":"bugs","probabilities":{"billing":0.1,"bugs":0.9}},
-  {"id":"severity","value":5,"probabilities":{"1":0.2,"5":0.8}},
-  {"id":"urgent","value":"true","probabilities":{"true":0.75,"false":0.25}}]}"#;
+/// A well-formed success body for the canonical question set, in the
+/// documented Jev shape: every id asked, every chosen label offered, the
+/// masses summing to one. The score answer is weighted over the level
+/// *indices* Jev was sent (`"0"` = the port's `"1"`, `"1"` = its `"5"`)
+/// and lands between them, so the adapter interpolates it onto the
+/// caller's scale; the confidences are the vendor's own, agreeing with
+/// the probability under the chosen label where the port can see one.
+const CONFORMANCE_BODY: &str = r#"{"model":"jev-1.13.0","answers":{
+  "topic":{"type":"choice","choice":"bugs","probabilities":{"billing":0.1,"bugs":0.9},"confidence":0.9},
+  "severity":{"type":"score","score":0.7,"probabilities":{"0":0.3,"1":0.7},"confidence":0.7},
+  "urgent":{"type":"noul","noul":0.75}},
+  "usage":{"input_tokens":296,"output_tokens":20}}"#;
 
 /// An `HttpClient` that answers every call with the same scripted status
 /// and body — the suite asks at most twice, and a vendor answers each

@@ -1,6 +1,6 @@
 [package]
 name = "cratefield-adapter-typesafe"
-description = "Classifier port over the TypeSafe classify API for the Cratefield harness"
+description = "Classifier port over TypeSafe's Jev evaluation API for the Cratefield harness"
 readme = "README.md"
 keywords = ["cratefield", "typesafe", "classifier", "adapter", "ai"]
 categories = ["api-bindings"]
