@@ -121,7 +121,7 @@ pub use ports::{
     TryFromValue, Turn, UlidIdGen, Unconfigured, Verdict, WebhookEvent, check_blob_size,
     declared_content_length, retry_after, timeout, ttl_secs, validate_questions,
 };
-pub use problem::Problem;
+pub use problem::{ABOUT_BLANK, Problem};
 // `Slugs` is exported beside the `SLUGS` value it types. Without it a
 // caller can read `SLUGS.validation_failed` and cannot write a function
 // that takes the table — the value was reachable and its type was not

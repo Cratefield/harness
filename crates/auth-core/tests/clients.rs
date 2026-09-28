@@ -113,7 +113,7 @@ async fn admin_routes_without_a_token_are_disabled() {
         assert_eq!(response.status, StatusCode::UNAUTHORIZED, "{path}");
         assert_eq!(
             response.json()["type"],
-            "https://factory0.ventures/problems/admin-unauthorized"
+            "https://test.example/problems/admin-unauthorized"
         );
     }
 
@@ -121,7 +121,7 @@ async fn admin_routes_without_a_token_are_disabled() {
     assert_eq!(wrong.status, StatusCode::FORBIDDEN);
     assert_eq!(
         wrong.json["type"],
-        "https://factory0.ventures/problems/admin-forbidden"
+        "https://test.example/problems/admin-forbidden"
     );
 }
 
@@ -214,7 +214,7 @@ async fn public_clients_get_no_secret() {
     assert_eq!(rotate.status, StatusCode::BAD_REQUEST);
     assert_eq!(
         rotate.json["type"],
-        "https://factory0.ventures/problems/validation-failed"
+        "https://test.example/problems/validation-failed"
     );
 }
 

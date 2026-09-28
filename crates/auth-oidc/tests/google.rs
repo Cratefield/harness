@@ -425,7 +425,7 @@ fn an_unconfigured_provider_says_so() {
         assert_eq!(response.status, StatusCode::SERVICE_UNAVAILABLE);
         assert_eq!(
             response.json()["type"],
-            "https://factory0.ventures/problems/auth/oidc-provider-unconfigured"
+            "https://test.example/problems/auth/oidc-provider-unconfigured"
         );
         let _ = ISSUER;
     });

@@ -39,7 +39,6 @@ pub use runtime::Cloudflare;
 pub use tracing_setup::install_tracing;
 
 use crate::body_limit::{BodyPlan, Capped, body_plan, read_capped};
-use axum::response::IntoResponse;
 use cratefield_core::{Harness, Problem, RequestSummary, ScheduledLimits, ScheduledSplit};
 use std::sync::Arc;
 use time::OffsetDateTime;
@@ -171,6 +170,10 @@ pub async fn serve(
     let router = harness.router(ports);
     let url = req.url()?;
     let limit = harness.max_body_bytes(url.path(), config.as_ref());
+    // The `413` short-circuit below answers before the router runs, so no
+    // layer stands behind it to name the venture (issue #557): name it
+    // here, the same way the router's outermost layer would.
+    let problem_type_base = harness.venture().problem_type_base();
 
     // Copied out so the header borrow ends before the body is read mutably.
     // `worker::Headers::get` already yields `Option<String>`; a lookup
@@ -183,7 +186,10 @@ pub async fn serve(
             // The tail left unread here trips `wrangler dev`'s drain
             // middleware — a dev-only artefact, recorded in this README's
             // wasm notes.
-            return response_to_worker(Problem::request_too_large().into_response()).await;
+            return response_to_worker(
+                Problem::request_too_large().into_response_with_base(&problem_type_base),
+            )
+            .await;
         }
         BodyPlan::Buffer => req.bytes().await?,
         BodyPlan::Stream => {
@@ -210,7 +216,8 @@ pub async fn serve(
                         Ok(Capped::Within(bytes)) => bytes,
                         Ok(Capped::TooLarge) => {
                             return response_to_worker(
-                                Problem::request_too_large().into_response(),
+                                Problem::request_too_large()
+                                    .into_response_with_base(&problem_type_base),
                             )
                             .await;
                         }

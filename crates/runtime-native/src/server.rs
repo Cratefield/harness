@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use axum::extract::{ConnectInfo, Request, State};
 use axum::middleware::{Next, from_fn_with_state};
-use axum::response::{IntoResponse, Response};
+use axum::response::Response;
 use cratefield_core::{Config, Harness};
 use thiserror::Error;
 use tokio::net::TcpListener;
@@ -219,6 +219,10 @@ struct HostTrust {
     /// address, and refusing those by default would make the safe
     /// deployment the one nobody can run.
     enforce: bool,
+    /// The venture's problem base (issue #557): the refusal is built
+    /// outside the harness router, so no layer stands behind it to name
+    /// the venture.
+    problem_type_base: Arc<str>,
 }
 
 impl HostTrust {
@@ -241,6 +245,7 @@ impl HostTrust {
         Self {
             allowed: Arc::new(allowed),
             enforce,
+            problem_type_base: venture.problem_type_base().into(),
         }
     }
 
@@ -281,17 +286,17 @@ async fn host_layer(State(trust): State<HostTrust>, request: Request, next: Next
     let Some(host) = host else {
         // HTTP/1.1 requires it and HTTP/2 supplies `:authority`; a
         // request with neither cannot be resolved to a venture.
-        return refuse_host(None);
+        return refuse_host(None, &trust.problem_type_base);
     };
     if !trust.answers_to(&host) {
-        return refuse_host(Some(&host));
+        return refuse_host(Some(&host), &trust.problem_type_base);
     }
     next.run(request).await
 }
 
 /// The refusal: `421 Misdirected Request` is precisely this condition —
 /// the connection reached a server that does not answer for the host.
-fn refuse_host(host: Option<&str>) -> Response {
+fn refuse_host(host: Option<&str>, problem_type_base: &str) -> Response {
     if let Some(host) = host {
         tracing::warn!(
             host = crate::ports::host_without_port(host),
@@ -302,7 +307,9 @@ fn refuse_host(host: Option<&str>) -> Response {
     }
     let problem = cratefield_core::Problem::new(&cratefield_core::SLUGS.not_found)
         .with_detail("this deployment does not serve that host");
-    (axum::http::StatusCode::MISDIRECTED_REQUEST, problem).into_response()
+    let mut response = problem.into_response_with_base(problem_type_base);
+    *response.status_mut() = axum::http::StatusCode::MISDIRECTED_REQUEST;
+    response
 }
 
 /// Client-IP middleware: resolve the address (trusted headers first,

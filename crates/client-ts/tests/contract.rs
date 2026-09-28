@@ -747,3 +747,27 @@ fn an_enum_dedupes_to_first_seen_order() {
         "the emitted union carries each literal once: {types}"
     );
 }
+
+/// The generated slug derivation reads the URI's last path segment, not a
+/// fixed `/problems/` prefix: a venture names its problems under its own
+/// base, and a `problem_base` override may end in anything (issue #557).
+#[test]
+fn the_slug_is_the_types_last_path_segment() {
+    let actions = json!([action("list-task", "GET", "/task", "public", None)]);
+    let package =
+        cratefield_client_ts::generate(&document(&actions)).expect("the contract must generate");
+    let runtime = &package
+        .files
+        .iter()
+        .find(|file| file.path == "src/runtime.ts")
+        .expect("the package carries src/runtime.ts")
+        .contents;
+    assert!(
+        runtime.contains("const last = type.slice(type.lastIndexOf(\"/\") + 1);"),
+        "the slug is the last path segment, override bases included: {runtime}"
+    );
+    assert!(
+        !runtime.contains("PROBLEMS_SEGMENT"),
+        "no fixed segment an override base could miss: {runtime}"
+    );
+}

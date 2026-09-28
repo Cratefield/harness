@@ -279,14 +279,14 @@ async fn an_unknown_host_is_404_and_a_degraded_tenant_is_503() {
     assert_eq!(unknown.status(), StatusCode::NOT_FOUND);
     assert_eq!(
         body_json(unknown).await["type"],
-        "https://factory0.ventures/problems/unknown-tenant"
+        "https://test.example/problems/unknown-tenant"
     );
 
     let degraded = post_as(&router, "sick.example", "/v1/writer/write").await;
     assert_eq!(degraded.status(), StatusCode::SERVICE_UNAVAILABLE);
     assert_eq!(
         body_json(degraded).await["type"],
-        "https://factory0.ventures/problems/tenant-degraded"
+        "https://test.example/problems/tenant-degraded"
     );
 
     // Distinguishable on purpose, and neither touched a database.
@@ -312,7 +312,7 @@ async fn a_provisioning_tenant_is_refused_before_its_database_is_opened() {
     assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
     assert_eq!(
         body_json(response).await["type"],
-        "https://factory0.ventures/problems/tenant-degraded"
+        "https://test.example/problems/tenant-degraded"
     );
     assert!(
         registry.asked_for().is_empty(),
@@ -329,7 +329,7 @@ async fn an_unreachable_tenant_database_is_503_and_names_no_dsn() {
     let body = body_json(response).await;
     assert_eq!(
         body["type"],
-        "https://factory0.ventures/problems/tenant-degraded"
+        "https://test.example/problems/tenant-degraded"
     );
     let rendered = body.to_string();
     assert!(

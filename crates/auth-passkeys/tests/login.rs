@@ -713,7 +713,7 @@ fn a_cross_site_assertion_cannot_sign_anyone_in() {
         );
         assert_eq!(
             cross_site.json()["type"],
-            "https://factory0.ventures/problems/auth/cross-site-request"
+            "https://test.example/problems/auth/cross-site-request"
         );
         assert!(
             cross_site.set_cookie().is_none(),
@@ -745,7 +745,7 @@ fn a_cross_site_assertion_cannot_sign_anyone_in() {
         );
         assert_eq!(
             fetch_metadata.json()["type"],
-            "https://factory0.ventures/problems/auth/cross-site-request"
+            "https://test.example/problems/auth/cross-site-request"
         );
 
         // A same-origin request — every header a real browser sends — gets
@@ -767,7 +767,7 @@ fn a_cross_site_assertion_cannot_sign_anyone_in() {
         assert_eq!(own.status, StatusCode::BAD_REQUEST, "{}", own.text());
         assert_eq!(
             own.json()["type"],
-            "https://factory0.ventures/problems/validation-failed"
+            "https://test.example/problems/validation-failed"
         );
         assert!(own.set_cookie().is_none());
 

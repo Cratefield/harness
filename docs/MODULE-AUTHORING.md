@@ -562,8 +562,9 @@ The patterns that matter:
   ties the error document to the request that caused it. Never store a
   `Scope` or pass it to another request's code.
 - **Errors are `Problem`** — RFC 9457 `application/problem+json` with a
-  stable type URI per slug (`https://factory0.ventures/problems/<slug>`)
-  and `instance` = request id. Use the constructors
+  stable type URI per slug under the venture's own base
+  (`<public_url>/problems/<slug>`; `about:blank` when the venture has no
+  public URL) and `instance` = request id. Use the constructors
   (`Problem::validation_failed`, `Problem::internal()`, `Problem::not_ready`, …);
   the taxonomy is generated into [ERRORS.md](ERRORS.md) and drift-checked
   in CI, so never invent a slug by hand.

@@ -709,7 +709,6 @@ fn index_ts(contract: &Contract, tables: &[TsTable]) -> String {
     out.push_str(
         "export {\n\
          \x20 ApiError,\n\
-         \x20 PROBLEM_TYPE_BASE,\n\
          \x20 type ClientOptions,\n\
          \x20 type Cursor,\n\
          \x20 type FetchLike,\n\
@@ -1228,8 +1227,23 @@ function noFetch(): Promise<FetchResponse> {
   );
 }
 
-/** The URI base every problem `type` is under. */
-export const PROBLEM_TYPE_BASE = "https://factory0.ventures/problems/";
+/** The RFC 9457 §4.2.1 `type` for a problem with no URI of its own. */
+const ABOUT_BLANK = "about:blank";
+
+/**
+ * The slug of a problem `type` URI — its last path segment
+ * (docs/ERRORS.md). Each venture names its problems under its own base,
+ * so the full URI is not a stable thing to match on; the slug is.
+ * `about:blank` (a server with no public URL) has no slug, and a URI with
+ * nothing after its last `/` falls back to the full `type`.
+ */
+function problemSlug(type: string): string {
+  if (type === ABOUT_BLANK) {
+    return "";
+  }
+  const last = type.slice(type.lastIndexOf("/") + 1);
+  return last === "" ? type : last;
+}
 
 /**
  * The slugs the tables API answers with, and the status each rides on.
@@ -1288,9 +1302,7 @@ export class ApiError extends Error {
     this.detail = typeof body.detail === "string" ? body.detail : null;
     this.instance = typeof body.instance === "string" ? body.instance : null;
     this.type = typeof body.type === "string" ? body.type : "";
-    this.slug = this.type.startsWith(PROBLEM_TYPE_BASE)
-      ? this.type.slice(PROBLEM_TYPE_BASE.length)
-      : this.type;
+    this.slug = problemSlug(this.type);
   }
 }
 

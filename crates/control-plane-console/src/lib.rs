@@ -2802,8 +2802,12 @@ mod tests {
                 "{headers:?}: {}",
                 refused.body
             );
+            // The kit serves `Console.router` alone — no harness, hence no
+            // venture to name a problem base — so the body's `type` is the
+            // context-free `about:blank`; the title is the problem's
+            // stable, base-free marker (issue #557).
             assert!(
-                refused.body.contains("auth/cross-site-request"),
+                refused.body.contains("A same-origin request is required"),
                 "{headers:?} was not refused as cross-site: {}",
                 refused.body
             );

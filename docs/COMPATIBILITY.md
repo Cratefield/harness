@@ -21,6 +21,13 @@ compatibility-doc` and checked in CI for drift. Do not edit by hand.
   modules. From 1.0 the range is `"^1"`-style: compatible within the
   major. Ventures pin exact versions; the supported range per release
   is the table below.
+- **Problem `type` URIs (cratefield-core 0.6.0):** every venture now
+  names its problem types under its own base —
+  `<public_url>/problems/<slug>`, `about:blank` when it has no public
+  URL — instead of one fixed base. Clients must match on the slug,
+  the URI's last path segment, never on the full URI: the URI names
+  whichever venture served the answer. docs/ERRORS.md is the slug
+  list.
 
 ## Supported core ranges
 

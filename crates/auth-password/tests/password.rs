@@ -292,7 +292,7 @@ fn an_unusable_password_is_named_rather_than_swallowed() {
             assert_eq!(response.status, StatusCode::BAD_REQUEST, "{bad:?}");
             assert_eq!(
                 response.json()["type"],
-                "https://factory0.ventures/problems/auth/password-unsuitable"
+                "https://test.example/problems/auth/password-unsuitable"
             );
         }
         assert_eq!(count(&kit, "users"), 0);
@@ -1091,7 +1091,7 @@ fn a_cross_site_form_cannot_sign_anyone_in() {
             );
             assert_eq!(
                 response.json()["type"],
-                "https://factory0.ventures/problems/auth/cross-site-request",
+                "https://test.example/problems/auth/cross-site-request",
                 "{label}"
             );
             assert!(
@@ -1150,7 +1150,7 @@ fn a_cross_site_fetch_metadata_is_refused_too() {
         );
         assert_eq!(
             response.json()["type"],
-            "https://factory0.ventures/problems/auth/cross-site-request"
+            "https://test.example/problems/auth/cross-site-request"
         );
         assert!(
             response.cookie("__Host-fz_session").is_none(),
@@ -1228,7 +1228,7 @@ fn a_cross_site_post_cannot_change_a_password() {
         );
         assert_eq!(
             cross_site.json()["type"],
-            "https://factory0.ventures/problems/auth/cross-site-request"
+            "https://test.example/problems/auth/cross-site-request"
         );
         assert!(
             cross_site.cookie("__Host-fz_session").is_none(),
@@ -1263,7 +1263,7 @@ fn a_cross_site_post_cannot_change_a_password() {
         assert_eq!(own.status, StatusCode::BAD_REQUEST, "{}", own.text());
         assert_eq!(
             own.json()["type"],
-            "https://factory0.ventures/problems/auth/password-unsuitable"
+            "https://test.example/problems/auth/password-unsuitable"
         );
     });
 }

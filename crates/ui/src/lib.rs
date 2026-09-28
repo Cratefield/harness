@@ -613,6 +613,10 @@ async fn render_result(
     if status.is_redirection() {
         return response;
     }
+    // The problem rides in the extensions (issue #557): the body's `type`
+    // stays context-free (`about:blank`) until a venture's router names
+    // it, and this in-process dispatch sees no such layer.
+    let carried = response.extensions().get::<Problem>().cloned();
     let (_parts, body) = response.into_parts();
     let bytes = axum::body::to_bytes(body, 1024 * 1024)
         .await
@@ -671,14 +675,21 @@ async fn render_result(
         *out.status_mut() = status;
         return out;
     };
-    let slug = problem
-        .and_then(|p| p.get("type").and_then(Value::as_str))
-        .and_then(|t| t.rsplit('/').next())
+    // The carried problem's slug is the stable part of its `type` (issue
+    // #557); the body's `type` only answers for responses without one.
+    let slug = carried
+        .map(|p| p.slug.to_owned())
+        .or_else(|| {
+            problem
+                .and_then(|p| p.get("type").and_then(Value::as_str))
+                .and_then(|t| t.rsplit('/').next())
+                .map(str::to_owned)
+        })
         .unwrap_or_default();
     let field = detail
         .as_deref()
         .and_then(|d| attribute_to_field(d, &fields))
-        .or_else(|| attribute_by_slug(slug, &fields))
+        .or_else(|| attribute_by_slug(&slug, &fields))
         .unwrap_or_default();
     // "email: email must contain exactly one @" next to the email field
     // reads twice; drop the prefix the module put there for API clients.

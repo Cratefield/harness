@@ -84,8 +84,8 @@ fn a_rejection_becomes_the_validation_failed_problem_core_already_publishes() {
         Some("title is 12 characters, longer than the maximum of 5")
     );
     assert_eq!(
-        problem.type_uri(),
-        "https://factory0.ventures/problems/validation-failed"
+        problem.type_uri("https://test.example/problems/"),
+        "https://test.example/problems/validation-failed"
     );
 
     // The `From` impl is the same problem, so `?` in a handler works.

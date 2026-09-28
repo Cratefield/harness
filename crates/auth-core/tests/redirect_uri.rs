@@ -88,7 +88,7 @@ async fn create_rejects_what_the_matcher_would_never_accept() {
         .await;
         assert_eq!(status, StatusCode::BAD_REQUEST, "{why}: {body}");
         assert_eq!(
-            body["type"], "https://factory0.ventures/problems/validation-failed",
+            body["type"], "https://test.example/problems/validation-failed",
             "{why}"
         );
     }

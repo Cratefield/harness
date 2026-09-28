@@ -2,9 +2,10 @@
 // format whether a route answered in-process or over the mount.
 //
 // The shape is RFC 9457 `application/problem+json`, exactly as
-// `crates/core/src/problem.rs` emits it: `type` is a stable URI under
-// `https://factory0.ventures/problems/`, `instance` is the request id, and
-// the body never leaks internals. The slugs below are copied from
+// `crates/core/src/problem.rs` emits it: `type` is the slug under this
+// Worker's own origin (a venture names its problems under its own base —
+// issue #557), `instance` is the request id, and the body never leaks
+// internals. The slugs below are copied from
 // `crates/core/src/problems.rs` — inventing a slug here would give the
 // mounted prefix an error vocabulary the host has never heard of.
 
@@ -42,8 +43,13 @@ export const PROBLEMS = {
 	},
 } as const satisfies Record<string, ProblemDef>;
 
-// The problem `type` base, as in `crates/core/src/problem.rs`.
-const PROBLEM_TYPE_BASE = "https://factory0.ventures/problems/";
+// The problem `type` base: this Worker's own origin, never a hard-coded
+// venture domain. Standalone, the origin is the sidecar's; forwarded
+// through a mount, the host preserves the caller's path, so the origin is
+// whatever serves the request — this Worker's own either way.
+function problemTypeBase(request: Request): string {
+	return `${new URL(request.url).origin}/problems/`;
+}
 
 import { stamped } from "./http";
 
@@ -57,7 +63,7 @@ export function problem(
 	detail?: string,
 ): Response {
 	const body: Record<string, unknown> = {
-		type: `${PROBLEM_TYPE_BASE}${def.slug}`,
+		type: `${problemTypeBase(request)}${def.slug}`,
 		title: def.title,
 		status: def.status,
 	};

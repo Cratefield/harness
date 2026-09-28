@@ -5,15 +5,18 @@ use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use serde_json::json;
 
-/// Base URI for every problem `type`:
-/// `https://factory0.ventures/problems/<slug>`.
-pub(crate) const PROBLEM_TYPE_BASE: &str = "https://factory0.ventures/problems/";
+/// The `type` URI of a problem that has no URI of its own to name (RFC
+/// 9457 §4.2.1): a venture with no public URL, or a response rendered
+/// outside any venture's context. The slug stays in the body's title and
+/// in logs; callers branch on it where one exists.
+pub const ABOUT_BLANK: &str = "about:blank";
 
 /// An API error, serialized as `application/problem+json`.
 ///
-/// `type` is a stable URI under `PROBLEM_TYPE_BASE`, `instance` is the
-/// request id, and the body never leaks internals: 500s carry no stack, no
-/// source error, nothing but the generic `internal` slug.
+/// `type` is the venture's stable slug URI (see
+/// [`Problem::type_uri`]), `instance` is the request id, and the body
+/// never leaks internals: 500s carry no stack, no source error, nothing
+/// but the generic `internal` slug.
 #[derive(Debug, Clone)]
 pub struct Problem {
     pub slug: &'static str,
@@ -67,15 +70,27 @@ impl Problem {
         Self::new(&crate::problems::SLUGS.not_found)
     }
 
-    pub fn type_uri(&self) -> String {
-        format!("{PROBLEM_TYPE_BASE}{}", self.slug)
+    /// The problem's `type` URI: the venture's base followed by the slug.
+    ///
+    /// The base is the *serving* venture's — [`crate::Venture::problem_type_base`]
+    /// — never a constant of this crate: every venture names its problems
+    /// under its own domain. A base of [`ABOUT_BLANK`] (the context-free
+    /// default, and a venture with no public URL) yields `about:blank`
+    /// itself: the slug has no URI to live under, and RFC 9457 §4.2.1
+    /// reserves exactly that value.
+    pub fn type_uri(&self, base: &str) -> String {
+        if base == ABOUT_BLANK {
+            return ABOUT_BLANK.to_owned();
+        }
+        format!("{base}{}", self.slug)
     }
-}
 
-impl IntoResponse for Problem {
-    fn into_response(self) -> Response {
+    /// The RFC 9457 body, with `type` built under `base`. Shared by
+    /// [`IntoResponse`] (the context-free default) and the harness layer
+    /// that re-renders under the serving venture's base.
+    pub(crate) fn body(&self, base: &str) -> serde_json::Value {
         let mut body = json!({
-            "type": self.type_uri(),
+            "type": self.type_uri(base),
             "title": self.title,
             "status": self.status.as_u16(),
         });
@@ -85,18 +100,44 @@ impl IntoResponse for Problem {
         if let Some(instance) = &self.instance {
             body["instance"] = json!(instance);
         }
-        let mut response = (self.status, Json(body)).into_response();
+        body
+    }
+
+    /// Renders this problem as a response whose `type` names `base` — the
+    /// serving venture's [`crate::Venture::problem_type_base`]. For a
+    /// response built *outside* a harness router, where no layer stands
+    /// behind it to name the venture: a runtime's pre-router short-circuit
+    /// (the native host refusal, the Worker's body ceiling).
+    pub fn into_response_with_base(self, base: &str) -> Response {
+        let mut response = (self.status, Json(self.body(base))).into_response();
         response.headers_mut().insert(
             header::CONTENT_TYPE,
             header::HeaderValue::from_static("application/problem+json"),
         );
+        // For the serving venture to re-render under its own base: a
+        // response built here cannot know it. The harness's outermost
+        // layer reads this extension; a response that reaches a caller
+        // without one names `about:blank`, never another venture's domain.
+        response.extensions_mut().insert(self);
         response
+    }
+}
+
+impl IntoResponse for Problem {
+    fn into_response(self) -> Response {
+        self.into_response_with_base(ABOUT_BLANK)
     }
 }
 
 impl std::fmt::Display for Problem {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{} ({})", self.type_uri(), self.status.as_u16())
+        write!(
+            f,
+            "{}: {} ({})",
+            self.slug,
+            self.title,
+            self.status.as_u16()
+        )
     }
 }
 

@@ -82,6 +82,7 @@ impl Default for Brand {
 ///     .public_url("https://factory0.ventures")
 ///     .cors_origins(["https://factory0.ventures"]);
 /// assert_eq!(v.name, "factory0");
+/// assert_eq!(v.problem_type_base(), "https://factory0.ventures/problems/");
 /// ```
 #[derive(Debug, Clone)]
 pub struct Venture {
@@ -97,6 +98,9 @@ pub struct Venture {
     pub env: VentureEnv,
     /// Mail branding (issue #12).
     pub brand: Brand,
+    /// Explicit [`Venture::problem_type_base`] override, for a venture that
+    /// serves its problems from somewhere other than `<public_url>/problems/`.
+    pub problem_base: Option<String>,
 }
 
 impl Venture {
@@ -109,6 +113,7 @@ impl Venture {
             cors_origins: Vec::new(),
             env: VentureEnv::default(),
             brand: Brand::default(),
+            problem_base: None,
         }
     }
 
@@ -116,6 +121,65 @@ impl Venture {
     pub fn public_url(mut self, url: impl Into<String>) -> Self {
         self.public_url = url.into();
         self
+    }
+
+    /// Overrides the base every problem `type` of this venture is served
+    /// under (RFC 9457): the full base URI, ending in `/`. Unset, the base
+    /// derives from [`Venture::public_url`] — see
+    /// [`Venture::problem_type_base`].
+    #[must_use]
+    pub fn problem_base(mut self, url: impl Into<String>) -> Self {
+        self.problem_base = Some(url.into());
+        self
+    }
+
+    /// The base URI every problem `type` of this venture is served under:
+    /// the [`Venture::problem_base`] override when set, else
+    /// `<public_url>/problems/`, else `about:blank`.
+    ///
+    /// A venture with no public URL has no URI of its own to name, and it
+    /// must never name another venture's domain: RFC 9457 §4.2.1 reserves
+    /// `about:blank` for exactly this, so that is the fallback. Callers
+    /// branch on the slug — the URI's last path segment, under the default
+    /// base the segment after `/problems/` — which is the stable part
+    /// (docs/ERRORS.md).
+    ///
+    /// ```
+    /// use cratefield_core::Venture;
+    ///
+    /// // The default: under the venture's own public URL.
+    /// let v = Venture::new("acme", "acme.example").public_url("https://acme.example/");
+    /// assert_eq!(v.problem_type_base(), "https://acme.example/problems/");
+    ///
+    /// // An explicit override wins, normalized to one trailing slash.
+    /// let v = v.problem_base("https://errors.acme.example/types/");
+    /// assert_eq!(v.problem_type_base(), "https://errors.acme.example/types/");
+    /// let v = v.problem_base("https://errors.acme.example/types");
+    /// assert_eq!(v.problem_type_base(), "https://errors.acme.example/types/");
+    ///
+    /// // No public URL: the RFC 9457 default, never someone else's domain.
+    /// let v = Venture::new("acme", "acme.example").public_url("  ");
+    /// assert_eq!(v.problem_type_base(), "about:blank");
+    /// ```
+    #[must_use]
+    pub fn problem_type_base(&self) -> String {
+        if let Some(base) = self
+            .problem_base
+            .as_deref()
+            .map(str::trim)
+            .filter(|base| !base.is_empty())
+        {
+            if base == crate::problem::ABOUT_BLANK {
+                return base.to_owned();
+            }
+            // One trailing slash, so the slug is appended, not glued on.
+            return format!("{}/", base.trim_end_matches('/'));
+        }
+        let public = self.public_url.trim();
+        if public.is_empty() {
+            return crate::problem::ABOUT_BLANK.to_owned();
+        }
+        format!("{}/problems/", public.trim_end_matches('/'))
     }
 
     #[must_use]

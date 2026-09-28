@@ -625,6 +625,46 @@ impl Harness {
         })
     }
 
+    /// The root router: the probes and the surface, inbound events, then
+    /// the API, `/.well-known` and the UI plane nested on top. A sibling
+    /// of [`Harness::ui_router`] in the same spirit — the assembly is one
+    /// concern, [`Harness::router`] another, and keeping them apart is
+    /// what lets each stay readable.
+    fn root_router(
+        &self,
+        api: Router,
+        ui: Option<Router>,
+        gateway: Option<Arc<HmacSigner>>,
+        health_state: HealthState,
+        ready_state: ReadyState,
+        surface_state: SurfaceState,
+    ) -> Router {
+        let root = Router::new()
+            .route("/__health", get(health_handler))
+            .with_state(health_state)
+            .route("/__ready", get(ready_handler))
+            .with_state(ready_state)
+            .route("/__surface", get(surface_handler))
+            .with_state(surface_state)
+            // Empty without a gateway secret, and merging an empty router
+            // adds no route — see `inbound_events_route` for why absent.
+            .merge(self.inbound_events_route(gateway).unwrap_or_default())
+            .merge(api);
+        let root = match &self.well_known {
+            Some(well_known) => root.nest(
+                "/.well-known",
+                well_known
+                    .clone()
+                    .layer(DefaultBodyLimit::max(MAX_BODY_BYTES)),
+            ),
+            None => root,
+        };
+        match ui {
+            Some(ui) => root.nest("/ui", ui),
+            None => root,
+        }
+    }
+
     /// The sidecar half of event forwarding (issue #62, ADR 0017):
     /// `POST /__events`, delivering into this deployment's **own** bus.
     ///
@@ -706,6 +746,10 @@ impl Harness {
         let env = deployed_env(self.venture.env, ports.config.as_ref());
         let (limiter, signer) = (ports.rate_limiter.is_some(), ports.signer.is_some());
         let readiness = self.production_readiness_now(env, ports.config.as_ref(), limiter, signer);
+        // The problem `type` base of *this* venture, resolved once per
+        // router (issue #557): the venture's override, else
+        // `<public_url>/problems/`, else `about:blank`.
+        let problem_type_base: Arc<str> = self.venture.problem_type_base().into();
         let mut api = self.nest_modules(&ports);
         // The gateway signer is this deployment's half of the sidecar
         // trust boundary (issue #131): absent secret, absent capability.
@@ -795,33 +839,7 @@ impl Harness {
             source: surface_source,
         };
 
-        let root = Router::new()
-            .route("/__health", get(health_handler))
-            .with_state(health_state)
-            .route("/__ready", get(ready_handler))
-            .with_state(ready_state)
-            .route("/__surface", get(surface_handler))
-            .with_state(surface_state)
-            // Empty without a gateway secret, and merging an empty router
-            // adds no route — see `inbound_events_route` for why absent.
-            .merge(
-                self.inbound_events_route(gateway.clone())
-                    .unwrap_or_default(),
-            )
-            .merge(api);
-        let root = match &self.well_known {
-            Some(well_known) => root.nest(
-                "/.well-known",
-                well_known
-                    .clone()
-                    .layer(DefaultBodyLimit::max(MAX_BODY_BYTES)),
-            ),
-            None => root,
-        };
-        let root = match ui {
-            Some(ui) => root.nest("/ui", ui),
-            None => root,
-        };
+        let root = self.root_router(api, ui, gateway, health_state, ready_state, surface_state);
 
         // Innermost layer: the gate runs after `Scope`, so refusals carry
         // the request id, and it wraps every route — nested `/v1/*`, `/ui`
@@ -839,7 +857,39 @@ impl Harness {
         .layer(from_fn_with_state(scope_state, scope_layer))
         .layer(axum::middleware::from_fn(token_response_layer))
         .layer(cors_layer(&self.venture.cors_origins))
+        // Outermost of all (issue #557): every problem body is named under
+        // *this* venture's base, whichever layer produced it — a module
+        // handler, the tenant or readiness gates, a 429, a rejection from
+        // an extractor with no state at all. `Problem::into_response`
+        // renders context-free (`about:blank`) and stores itself in the
+        // response extensions; this layer re-renders the body and nothing
+        // else. Applied last, so it wraps the module nests, the sidecars,
+        // `/.well-known`, `/ui` and the fallback alike.
+        .layer(from_fn_with_state(problem_type_base, problem_type_layer))
     }
+}
+
+/// The outermost response layer (issue #557): re-renders a problem body
+/// under the serving venture's base. Status, headers and everything a
+/// module added ride through untouched — only the body is replaced, and
+/// the now-stale `content-length` with it.
+async fn problem_type_layer(
+    State(base): State<Arc<str>>,
+    request: axum::extract::Request,
+    next: Next,
+) -> Response {
+    let mut response = next.run(request).await;
+    let Some(problem) = response.extensions().get::<Problem>().cloned() else {
+        return response;
+    };
+    let body = problem.body(&base).to_string();
+    *response.body_mut() = axum::body::Body::from(body);
+    response.headers_mut().remove(header::CONTENT_LENGTH);
+    // Idempotence: drop the carriage once named. A harness router nested
+    // in a larger service — whose own outermost layer may carry a *different*
+    // venture's base — must not be re-rendered a second time.
+    response.extensions_mut().remove::<Problem>();
+    response
 }
 
 /// What one `/__health` sidecar fan-out produced: when it ran (epoch ms)
