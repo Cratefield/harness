@@ -60,6 +60,8 @@ also switch on the extra features noted in their rows:
 | `secrets` | `cratefield-secrets` | `cratefield::secrets` | Envelope-encrypted secrets |
 | `kms` | `cratefield-kms` | `cratefield::kms` | The KMS port and its local-file provider |
 | `manifest` | `cratefield-manifest` | `cratefield::manifest` | The venture manifest and its composition generator; `fz` reads it, a running venture does not need it |
+| `client-ts` | `cratefield-client-ts` | `cratefield::client_ts` | The TypeScript client generator behind `fz client-ts`: a `/__surface` document in, a typed client package out |
+| `introspect` | `cratefield-introspect` | `cratefield::introspect` | Reads a live database's catalog over the Database port, in `cratefield-tables`' schema vocabulary |
 | `tables-api` | `cratefield-tables-api` | `cratefield::tables_api` | The HTTP API over a venture's declared tables; `fz build` turns it on for a manifest with a `[tables]` section |
 | `auth-client` | `cratefield-auth-client` | `cratefield::auth_client` | Verifies auth-service tokens: JWKS fetch and cache, ES256 verification and an axum extractor |
 | `oauth-client` | `cratefield-oauth-client` | `cratefield::oauth_client` | OAuth 2.0 over the `HttpClient` port: authorize URLs, code exchange, refresh, revocation, PKCE, and token sealing |

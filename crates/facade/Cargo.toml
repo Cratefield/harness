@@ -78,6 +78,10 @@ kms = ["dep:cratefield-kms"]
 # does not need it to run; `fz` reads it, and so does anything generating a
 # composition from a manifest.
 manifest = ["dep:cratefield-manifest"]
+# The TypeScript client generator behind `fz client-ts` (issue #155).
+client-ts = ["dep:cratefield-client-ts"]
+# Reads a live database's catalog in cratefield-tables' vocabulary.
+introspect = ["dep:cratefield-introspect"]
 # Serves the tables a venture declares (issue #153). `fz build` turns it
 # on for a venture whose manifest has a `[tables]` section, and leaves it
 # off for one that does not — a venture with no declared tables has no use
@@ -138,6 +142,8 @@ cratefield-adapter-classifier-llm = { workspace = true, optional = true }
 cratefield-ui = { workspace = true, optional = true }
 cratefield-i18n = { workspace = true, optional = true }
 cratefield-manifest = { workspace = true, optional = true }
+cratefield-client-ts = { workspace = true, optional = true }
+cratefield-introspect = { workspace = true, optional = true }
 cratefield-tables-api = { path = "../tables-api", optional = true }
 cratefield-auth-client = { workspace = true, optional = true }
 cratefield-oauth-client = { workspace = true, optional = true }

@@ -93,6 +93,16 @@ pub use cratefield_i18n as i18n;
 #[cfg(feature = "manifest")]
 pub use cratefield_manifest as manifest;
 
+/// The TypeScript client generator behind `fz client-ts` (issue #155): a
+/// `/__surface` contract document in, a typed client package out.
+#[cfg(feature = "client-ts")]
+pub use cratefield_client_ts as client_ts;
+
+/// Reads a live database's own catalog over the Database port, in
+/// `cratefield-tables`' schema vocabulary.
+#[cfg(feature = "introspect")]
+pub use cratefield_introspect as introspect;
+
 /// The HTTP API over a venture's declared tables (issue #153). A
 /// generated venture's tables module calls `tables_api::router`.
 #[cfg(feature = "tables-api")]
