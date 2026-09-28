@@ -1,11 +1,18 @@
-# Parity matrix (issue #20): both modules' suites run against SQLite
-# and Postgres — one test definition, every engine. The `sqlite` leg
-# proves the suites pass without a Postgres; the `postgres` leg runs
-# against a postgres:16 service container (the same image CI uses for
-# the cratefield-adapter-postgres contract tests) with
-# FZ_TEST_POSTGRES_URL set, which also exercises the sqlite leg first —
-# `cratefield-testing::Dialect::available()` picks up every dialect the
-# environment provides.
+# Parity matrix (issue #20): every module whose suites loop dialects
+# runs them against SQLite and Postgres — one test definition, every
+# engine. The `sqlite` leg proves the suites pass without a Postgres;
+# the `postgres` leg runs against a postgres:16 service container (the
+# same image CI uses for the cratefield-adapter-postgres contract
+# tests) with FZ_TEST_POSTGRES_URL set, which also exercises the sqlite
+# leg first — `cratefield-testing::Dialect::available()` picks up every
+# dialect the environment provides.
+#
+# Two modules are not here: fz-module-linkedin (private,
+# `publish = false`) and cratefield-module-notifications. Both build
+# their harnesses through `TestHarness::with_ports`, which pins the
+# SQLite dialect, so on the postgres leg only their shared conformance
+# kit would reach Postgres — and CI's `cargo test --workspace` already
+# runs that with FZ_TEST_POSTGRES_URL set.
 #
 # Both legs are required checks; the README badge reflects the matrix.
 
@@ -52,11 +59,17 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Module suites on the matrix dialect
         run: |
-          cargo test -p cratefield-module-email-signup
-          cargo test -p cratefield-module-waitlist
           cargo test -p cratefield-module-changelog
+          cargo test -p cratefield-module-cms
+          cargo test -p cratefield-module-email-signup
+          cargo test -p cratefield-module-privacy
+          cargo test -p cratefield-module-telemetry
+          cargo test -p cratefield-module-waitlist
       - name: Conformance kit on the matrix dialect
         run: |
-          cargo test -p cratefield-module-email-signup --test conformance
-          cargo test -p cratefield-module-waitlist --test conformance
           cargo test -p cratefield-module-changelog --test conformance
+          cargo test -p cratefield-module-cms --test conformance
+          cargo test -p cratefield-module-email-signup --test conformance
+          cargo test -p cratefield-module-privacy --test conformance
+          cargo test -p cratefield-module-telemetry --test conformance
+          cargo test -p cratefield-module-waitlist --test conformance
