@@ -62,6 +62,7 @@ also switch on the extra features noted in their rows:
 | `manifest` | `cratefield-manifest` | `cratefield::manifest` | The venture manifest and its composition generator; `fz` reads it, a running venture does not need it |
 | `tables-api` | `cratefield-tables-api` | `cratefield::tables_api` | The HTTP API over a venture's declared tables; `fz build` turns it on for a manifest with a `[tables]` section |
 | `auth-client` | `cratefield-auth-client` | `cratefield::auth_client` | Verifies auth-service tokens: JWKS fetch and cache, ES256 verification and an axum extractor |
+| `oauth-client` | `cratefield-oauth-client` | `cratefield::oauth_client` | OAuth 2.0 over the `HttpClient` port: authorize URLs, code exchange, refresh, revocation, PKCE, and token sealing |
 | `email-signup` | `cratefield-module-email-signup` | `cratefield::email_signup` | Double opt-in email signup |
 | `privacy` | `cratefield-module-privacy` | `cratefield::privacy` | Subject access and erasure, over what every other module declares it holds |
 | `waitlist` | `cratefield-module-waitlist` | `cratefield::waitlist` | Per-product waitlist |

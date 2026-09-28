@@ -93,6 +93,10 @@ cratefield-module-telemetry = { path = "crates/module-telemetry", version = "0.1
 # dependency without one. It was invisible while both crates were
 # `publish = false`.
 cratefield-auth-client = { path = "crates/auth-client", version = "0.1.0" }
+# OAuth 2.0 once, over the `HttpClient` port (issue #531): authorize URLs,
+# code exchange, refresh, revocation, PKCE, and the token sealer
+# `fz-module-linkedin` stores its sealed blobs under.
+cratefield-oauth-client = { path = "crates/oauth-client", version = "0.1.0" }
 # Server-side localisation (issue #190): Fluent catalogs, BCP 47
 # negotiation and text direction. Nothing in it is notification-specific,
 # so `module-waitlist`'s mail templates can take it next.

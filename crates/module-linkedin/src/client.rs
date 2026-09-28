@@ -17,6 +17,7 @@
 
 use bytes::Bytes;
 use cratefield_core::{Clock, HttpClient, HttpError, retry_after};
+use cratefield_oauth_client::{OAuthClient, ProviderConfig};
 use http::{Method, Request, Response, StatusCode, header};
 use serde_json::Value;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -116,17 +117,11 @@ impl std::fmt::Display for ApiError {
     }
 }
 
-/// The token pair as LinkedIn returns it. `refresh_token_expires_in` is
+/// The token pair as the provider returns it, spoken by
+/// `cratefield-oauth-client` since #531. `refresh_token_expires_in` is
 /// carried through verbatim: the refresh TTL does not extend on use, so it
 /// must never be recomputed locally.
-#[derive(Debug, Clone)]
-pub(crate) struct TokenResponse {
-    pub access_token: String,
-    pub expires_in: i64,
-    pub refresh_token: Option<String>,
-    pub refresh_token_expires_in: Option<i64>,
-    pub scope: String,
-}
+pub(crate) use cratefield_oauth_client::TokenResponse;
 
 /// One `organizationAcls` element.
 #[derive(Debug, Clone)]
@@ -314,70 +309,53 @@ impl<'a> Client<'a> {
     }
 
     // -----------------------------------------------------------------------
-    // OAuth (issue #8, #9)
+    // OAuth (issue #8, #9; over cratefield-oauth-client since #531)
 
-    async fn token_call(&self, form: String) -> Result<TokenResponse, ApiError> {
-        let request = Request::builder()
-            .method(Method::POST)
-            .uri(OAUTH_TOKEN_URL)
-            .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
-            .body(Bytes::from(form))
-            .map_err(|err| ApiError::Transport(err.to_string()))?;
-        let response = self.send(request).await?;
-
-        // The token endpoint answers 400 with an `error` / `error_description`
-        // pair rather than the REST error shape, and the difference between
-        // "your refresh token is dead" and "you forgot a parameter" lives in
-        // that description. Callers need both, so it is carried through as a
-        // Client error with the code intact.
-        let status = response.status();
-        let body: Value = serde_json::from_slice(response.body()).unwrap_or(Value::Null);
-        if !status.is_success() {
-            let code = body
-                .get("error")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .to_owned();
-            let message = body
-                .get("error_description")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .to_owned();
-            return Err(match status {
-                StatusCode::TOO_MANY_REQUESTS => ApiError::RateLimited {
-                    retry_after: retry_after(response.headers(), self.clock),
-                },
-                other if other.is_server_error() => ApiError::Server {
-                    status: other.as_u16(),
-                    message,
-                },
+    /// Maps the OAuth crate's error onto [`ApiError`], so callers keep
+    /// branching on the same cases after the port. The token endpoint
+    /// answers 400 with an `error` / `error_description` pair rather than
+    /// the REST error shape, and the difference between "your refresh token
+    /// is dead" and "you forgot a parameter" lives in that description —
+    /// both are carried through as a `Client` error with the code intact.
+    /// The clock reads the HTTP-date form of a `Retry-After` (issue #278).
+    fn token_error(&self, error: cratefield_oauth_client::OAuthError) -> ApiError {
+        let cratefield_oauth_client::OAuthError::Provider(error) = error else {
+            return match error {
+                cratefield_oauth_client::OAuthError::Transport(detail) => {
+                    ApiError::Transport(detail.to_string())
+                }
+                cratefield_oauth_client::OAuthError::Decode(detail) => ApiError::Decode(detail),
+                // Unreachable through the configuration this module builds:
+                // credentials are validated at cold start and no revoke URL
+                // is configured, so no call is made to one.
                 other => ApiError::Client {
-                    status: other.as_u16(),
-                    code,
-                    message,
+                    status: 0,
+                    code: "config".to_owned(),
+                    message: other.to_string(),
                 },
-            });
+            };
+        };
+        let cratefield_oauth_client::ProviderError {
+            status,
+            code,
+            description,
+            headers,
+            ..
+        } = *error;
+        match status {
+            429 => ApiError::RateLimited {
+                retry_after: retry_after(&headers, self.clock),
+            },
+            other if other >= 500 => ApiError::Server {
+                status: other,
+                message: description,
+            },
+            other => ApiError::Client {
+                status: other,
+                code,
+                message: description,
+            },
         }
-
-        let access_token = body
-            .get("access_token")
-            .and_then(Value::as_str)
-            .ok_or_else(|| ApiError::Decode("token response has no access_token".to_owned()))?
-            .to_owned();
-        Ok(TokenResponse {
-            access_token,
-            expires_in: body.get("expires_in").and_then(Value::as_i64).unwrap_or(0),
-            refresh_token: body
-                .get("refresh_token")
-                .and_then(Value::as_str)
-                .map(str::to_owned),
-            refresh_token_expires_in: body.get("refresh_token_expires_in").and_then(Value::as_i64),
-            scope: body
-                .get("scope")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .to_owned(),
-        })
     }
 
     pub(crate) async fn exchange_code(
@@ -387,14 +365,12 @@ impl<'a> Client<'a> {
         client_id: &str,
         client_secret: &str,
     ) -> Result<TokenResponse, ApiError> {
-        let form = format!(
-            "grant_type=authorization_code&code={}&redirect_uri={}&client_id={}&client_secret={}",
-            form_encode(code),
-            form_encode(redirect_uri),
-            form_encode(client_id),
-            form_encode(client_secret),
-        );
-        self.token_call(form).await
+        self.spent.fetch_add(1, Ordering::Relaxed);
+        let config = oauth_config(client_id, Some(client_secret));
+        OAuthClient::new(self.http, &config)
+            .exchange_code(code, redirect_uri, None)
+            .await
+            .map_err(|error| self.token_error(error))
     }
 
     pub(crate) async fn refresh(
@@ -403,13 +379,12 @@ impl<'a> Client<'a> {
         client_id: &str,
         client_secret: &str,
     ) -> Result<TokenResponse, ApiError> {
-        let form = format!(
-            "grant_type=refresh_token&refresh_token={}&client_id={}&client_secret={}",
-            form_encode(refresh_token),
-            form_encode(client_id),
-            form_encode(client_secret),
-        );
-        self.token_call(form).await
+        self.spent.fetch_add(1, Ordering::Relaxed);
+        let config = oauth_config(client_id, Some(client_secret));
+        OAuthClient::new(self.http, &config)
+            .refresh(refresh_token)
+            .await
+            .map_err(|error| self.token_error(error))
     }
 
     // -----------------------------------------------------------------------
@@ -733,49 +708,40 @@ fn post_view_from(value: &Value) -> Option<PostView> {
     })
 }
 
-/// `application/x-www-form-urlencoded` escaping for the OAuth bodies. Small
-/// and explicit rather than a dependency: these are the only form bodies the
-/// module ever sends.
-fn form_encode(value: &str) -> String {
-    let mut out = String::with_capacity(value.len());
-    for byte in value.bytes() {
-        match byte {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
-                out.push(byte as char);
-            }
-            b' ' => out.push('+'),
-            other => {
-                const HEX: [u8; 16] = *b"0123456789ABCDEF";
-                out.push('%');
-                out.push(HEX[usize::from(other >> 4)] as char);
-                out.push(HEX[usize::from(other & 0x0f)] as char);
-            }
-        }
+/// The OAuth provider configuration the module speaks LinkedIn with: the
+/// two endpoints, credentials in the form body (LinkedIn's way), no PKCE
+/// (LinkedIn documents none), the compiled-in scopes, and no revocation
+/// endpoint — LinkedIn's docs have none to name. The secret is `None` only
+/// on the authorize path, which never presents credentials.
+fn oauth_config(client_id: &str, client_secret: Option<&str>) -> ProviderConfig {
+    ProviderConfig {
+        authorize_url: OAUTH_AUTHORIZE_URL.to_owned(),
+        token_url: OAUTH_TOKEN_URL.to_owned(),
+        revoke_url: None,
+        client_id: client_id.to_owned(),
+        client_secret: client_secret.map(str::to_owned),
+        scopes: crate::SCOPES
+            .iter()
+            .map(|scope| (*scope).to_owned())
+            .collect(),
+        scope_separator: " ",
+        client_auth: cratefield_oauth_client::ClientAuth::ClientSecretPost,
     }
-    out
 }
 
 /// The authorization URL a page administrator opens.
 pub(crate) fn authorize_url(client_id: &str, redirect_uri: &str, state: &str) -> String {
-    format!(
-        "{OAUTH_AUTHORIZE_URL}?response_type=code&client_id={}&redirect_uri={}&state={}&scope={}",
-        form_encode(client_id),
-        form_encode(redirect_uri),
-        form_encode(state),
-        form_encode(&crate::SCOPES.join(" ")),
+    cratefield_oauth_client::authorize_url(
+        &oauth_config(client_id, None),
+        redirect_uri,
+        state,
+        None,
     )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn form_encoding_escapes_what_matters() {
-        assert_eq!(form_encode("a b"), "a+b");
-        assert_eq!(form_encode("a/b?c=d&e"), "a%2Fb%3Fc%3Dd%26e");
-        assert_eq!(form_encode("plain-value_1.~"), "plain-value_1.~");
-    }
 
     #[test]
     fn authorize_url_carries_the_compiled_in_scopes() {

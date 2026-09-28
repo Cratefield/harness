@@ -91,6 +91,10 @@ tables-api = ["dep:cratefield-tables-api"]
 # notifications module pulls it in already; a feature of its own for a venture
 # that authenticates its own routes without mounting that module.
 auth-client = ["dep:cratefield-auth-client"]
+# OAuth 2.0 over the HttpClient port (issue #531). Not a dependency of any
+# shipped module yet — `fz-module-linkedin` is private — so a venture that
+# speaks to another OAuth provider turns it on itself.
+oauth-client = ["dep:cratefield-oauth-client"]
 
 # Modules shipped with the harness.
 email-signup = ["dep:cratefield-module-email-signup"]
@@ -145,6 +149,7 @@ cratefield-i18n = { workspace = true, optional = true }
 cratefield-manifest = { workspace = true, optional = true }
 cratefield-tables-api = { path = "../tables-api", optional = true }
 cratefield-auth-client = { workspace = true, optional = true }
+cratefield-oauth-client = { workspace = true, optional = true }
 cratefield-secrets = { workspace = true, optional = true }
 cratefield-kms = { workspace = true, optional = true }
 cratefield-module-email-signup = { workspace = true, optional = true }

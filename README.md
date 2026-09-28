@@ -183,6 +183,7 @@ convenience, not a layer.
 | `cratefield-module-telemetry` | Aggregate usage counts from clients, consent-first, in the venture's own database ([TELEMETRY.md](docs/TELEMETRY.md)) |
 | `cratefield-i18n` | Server-side localisation: Fluent catalogs, BCP 47 negotiation, text direction |
 | `cratefield-auth-client` | Verifies auth tokens in a consuming app: JWKS fetch and cache, ES256, an axum extractor |
+| `cratefield-oauth-client` | OAuth 2.0 over the `HttpClient` port: authorize URLs, code exchange, refresh, revocation, PKCE, and token sealing |
 | `cratefield-module-changelog` | A project's releases mirrored into the venture's own database and served over an API — the reads never call upstream |
 
 Everything else in the workspace is unpublished — `publish = false` is what
