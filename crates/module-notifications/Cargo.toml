@@ -40,15 +40,15 @@ ulid = { workspace = true }
 # The recipient hash that makes re-registration an upsert. Pure Rust,
 # wasm-safe, already in the tree.
 sha2 = { workspace = true }
-# Verifying the provider's Svix webhook signature (#233): HMAC-SHA256 over
-# the raw body, its base64 encoding, and a comparison that does not leak
-# how much of a wrong signature was right. All pure Rust and wasm-safe,
-# and the same three crates `cratefield-core`'s own signer uses.
-hmac = { workspace = true }
-base64 = { workspace = true }
-subtle = { workspace = true }
+# The provider's Svix webhook signature (#233) is verified by
+# `cratefield-core`'s `webhook_signature` module (issue #533), so the HMAC
+# crates themselves moved out of this crate's dependencies.
 
 [dev-dependencies]
+# Signing the fixture deliveries in tests/bounce.rs the way the provider
+# does (HMAC-SHA256, base64-encoded in `svix-signature`).
+hmac = { workspace = true }
+base64 = { workspace = true }
 http = { workspace = true }
 serde_json = { workspace = true }
 # The `postgres` feature unlocks the Postgres parity leg of the testing kit;

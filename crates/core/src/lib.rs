@@ -45,6 +45,7 @@ mod tenant;
 mod tenant_conn;
 mod tenant_lifecycle;
 mod venture;
+mod webhook_signature;
 
 // `Module::router` returns an `axum::Router` and `well_known` an
 // `Option<axum::Router>`, so a module author cannot implement the trait
@@ -123,10 +124,11 @@ pub use problem::Problem;
 pub use problems::{ProblemDef, SLUGS, Slugs, registry as problem_registry};
 pub use rate_limit::{RateLimit, RateLimitFailure, check_rate_limit, client_ip, rate_limit_keys};
 pub use route_policy::{
-    ALLOW_UNLIMITED_PUBLIC_ROUTES, ALLOW_UNPROTECTED_WRITES, RoutePolicy, WriteGuards,
-    captcha_effective, deployed_env, env_disagreement, payments_effective, production_readiness,
-    rate_limiter_effective, signer_effective, stated_reason, unlimited_public_routes_override,
-    unprotected_writes_override, verify_human_form,
+    ALLOW_UNLIMITED_PUBLIC_ROUTES, ALLOW_UNPROTECTED_WRITES, RoutePolicy, SignatureVerification,
+    WriteGuards, captcha_effective, deployed_env, env_disagreement, payments_effective,
+    production_readiness, rate_limiter_effective, signer_effective, stated_reason,
+    unlimited_public_routes_override, unprotected_writes_override, verify_human_form,
+    webhook_secret_readiness,
 };
 pub use scheduled::{ScheduledBudget, ScheduledLimits, ScheduledSplit};
 pub use scope::Scope;
@@ -156,3 +158,7 @@ pub use tenant_lifecycle::{
     ErasureStep, TenantLifecycle, TenantLifecycleError, TenantSummary, remaining_erasure,
 };
 pub use venture::{Brand, Venture, VentureEnv};
+pub use webhook_signature::{
+    DEFAULT_TOLERANCE_SECS, ProviderScheme, SignatureEncoding, SignatureScheme, SignedDelivery,
+    StripeStyle, Svix, WebhookVerifier, svix_secret_key,
+};

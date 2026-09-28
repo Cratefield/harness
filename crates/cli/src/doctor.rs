@@ -650,6 +650,16 @@ fn production_port_checks(
         });
     }
 
+    // The other half of the webhook rule (issue #533): the key is per
+    // module, so this check takes composed keys and a config rather than a
+    // `Configured` bool — still pure, the caller supplies `&EnvVars`.
+    if let Some(message) = hmac_webhook_failure(&guards.hmac_signature_secrets(), &EnvVars) {
+        failures.push(DoctorFailure {
+            code: &CODES.hmac_webhook_secret_missing,
+            message,
+        });
+    }
+
     // The limiter leg mirrors the captcha rule above, hatch and all: the
     // same two answers the boot gate (`production_readiness`) reads —
     // what the composition declares and whether the runtime's limiter is
@@ -770,6 +780,29 @@ fn payments_webhook_failure(
     }
 }
 
+/// The production webhook-secret rule for modules that verify through the
+/// core HMAC scheme (issue #533): a deployment missing one has a module
+/// whose handler refuses every delivery. Keys are named, never values; pure
+/// so the truth table is unit-tested, the caller supplies the config.
+fn hmac_webhook_failure(
+    hmac_modules: &[(String, String)],
+    config: &dyn cratefield_core::Config,
+) -> Option<String> {
+    let missing: Vec<String> = hmac_modules
+        .iter()
+        .filter(|(_, key)| config.get(key).is_none_or(|value| value.trim().is_empty()))
+        .map(|(_, key)| key.clone())
+        .collect();
+    (!missing.is_empty()).then(|| {
+        format!(
+            "production venture verifies webhook signatures with the webhook_signature HMAC \
+             scheme but {} is not set — those handlers refuse every delivery until the \
+             provider's signing secret is configured (issue #533)",
+            missing.join(", ")
+        )
+    })
+}
+
 /// The production rate-limiter rule (issue #437): a venture that takes
 /// public writes or admin routes needs a limiter the runtime can actually
 /// consult — an admin bearer token is guessed rather than submitted and has
@@ -817,8 +850,8 @@ fn admin_token_failure(admin_token_bytes: Option<usize>) -> Option<String> {
 mod tests {
     use super::{
         CODES, DoctorFailure, DoctorReport, Output, PushDeclaration, admin_token_failure,
-        captcha_production_failure, payments_webhook_failure, push_wiring_checks,
-        rate_limiter_production_failure,
+        captcha_production_failure, hmac_webhook_failure, payments_webhook_failure,
+        push_wiring_checks, rate_limiter_production_failure,
     };
     use cratefield_core::{
         Config, ConfigError, Harness, MapConfig, Migrations, Module, ModuleContext, Port, Runtime,
@@ -1027,6 +1060,26 @@ mod tests {
         assert!(payments_webhook_failure(true, false).is_some());
         assert!(payments_webhook_failure(true, true).is_none());
         assert!(payments_webhook_failure(false, false).is_none());
+
+        // The other half (issue #533): the module's own key, unset or
+        // blank, fails; set passes; no such module never fails.
+        let modules = vec![("pos".to_owned(), "POS_WEBHOOK_SECRET".to_owned())];
+        assert!(hmac_webhook_failure(&modules, &MapConfig::default()).is_some());
+        assert!(
+            hmac_webhook_failure(
+                &modules,
+                &MapConfig::from_pairs([("POS_WEBHOOK_SECRET", "   ")])
+            )
+            .is_some()
+        );
+        assert!(
+            hmac_webhook_failure(
+                &modules,
+                &MapConfig::from_pairs([("POS_WEBHOOK_SECRET", "x")])
+            )
+            .is_none()
+        );
+        assert!(hmac_webhook_failure(&[], &MapConfig::default()).is_none());
     }
 
     #[test]

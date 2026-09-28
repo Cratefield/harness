@@ -23,7 +23,9 @@ use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, post, put};
 use cratefield_auth_client::{AuthClient, AuthState, Authenticated, UNAUTHENTICATED};
-use cratefield_core::{Json, ModuleConfig, ModuleContext, Problem, ProblemDef, Recipient, Scope};
+use cratefield_core::{
+    Json, ModuleConfig, ModuleContext, Problem, ProblemDef, Recipient, Scope, Svix, WebhookVerifier,
+};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -1150,11 +1152,6 @@ struct TokenQuery {
 // ---------------------------------------------------------------------------
 // Bounce and complaint suppression (#233)
 
-/// The header names Svix — and so Resend — signs a delivery with.
-const SVIX_ID: &str = "svix-id";
-const SVIX_TIMESTAMP: &str = "svix-timestamp";
-const SVIX_SIGNATURE: &str = "svix-signature";
-
 /// The provider event that says the mailbox is gone for good.
 const EVENT_BOUNCED: &str = "email.bounced";
 /// The provider event that says the recipient reported the mail as spam.
@@ -1241,23 +1238,13 @@ async fn provider_webhook(
         return Err(unverified());
     };
 
-    let header = |name: &str| headers.get(name).and_then(|value| value.to_str().ok());
-    let (Some(id), Some(timestamp), Some(signatures)) = (
-        header(SVIX_ID),
-        header(SVIX_TIMESTAMP),
-        header(SVIX_SIGNATURE),
-    ) else {
-        return Err(unverified());
-    };
-
-    let delivery = crate::webhook::Delivery {
-        id,
-        timestamp,
-        signatures,
-    };
-    if !crate::webhook::is_signed(
+    // The Svix scheme itself lives in core now (issue #533), where a
+    // module's `RoutePolicy::Signature` routes can declare it as their
+    // verifier; this call site only hands over the raw body and headers.
+    let verifier = WebhookVerifier::new(Svix);
+    if !verifier.verify(
         &secret,
-        &delivery,
+        &headers,
         &body,
         clock::now_unix(state.ctx.ports.clock.as_ref()),
     ) {

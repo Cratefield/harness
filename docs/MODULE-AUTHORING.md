@@ -588,7 +588,25 @@ protection per route in `surface()` — `.captcha()` for a human form,
 legacy mirrors, kept honest by `Route::validate()` (issue #133).
 Handlers verify through `cratefield_core::verify_human_form`, which
 fails closed in production for a missing port, a missing token, or a
-provider/transport error. Rate limiting goes through `check_rate_limit`,
+provider/transport error. A `Signature` route does not have to be a
+payments webhook (issue #533): the module declares its verifier through
+`signature_verification()` — the default, `SignatureVerification::Payments`,
+means `Payments::verify_webhook` and requires the `Payments` port in
+production as before. A non-payment provider instead declares
+
+```rust,ignore
+fn signature_verification(&self) -> SignatureVerification {
+    SignatureVerification::Hmac { secret: "WEBHOOK_SECRET" }
+}
+```
+
+and verifies each delivery with `cratefield_core::WebhookVerifier` and the
+provider's scheme (`Svix`, `StripeStyle`, `ProviderScheme`) over the **raw
+body bytes**; production then requires `{MODULE}_WEBHOOK_SECRET` — the boot
+gate refuses without it, `fz doctor` reports `hmac-webhook-secret-missing` —
+instead of any `Payments` port. A `ProviderScheme` with `timestamp: None`
+has no replay protection, so the handler must lean on the Inbox dedup
+ledger. Rate limiting goes through `check_rate_limit`,
 keyed by IP and, for writes, by normalized email, with an EXPLICIT
 failure posture at every call site: `RateLimitFailure::FailClosed` for
 abuse-critical paths (password reset, login), `FailOpen` where blocking
@@ -1032,6 +1050,9 @@ Before opening a PR that adds or changes a module:
       write declares `.captcha()` and every provider webhook
       `.policy(RoutePolicy::Signature)` (issue #133); `public_writes()`
       reflects reality as the legacy fallback
+- [ ] every `Signature` route names its verifier via
+      `signature_verification()` — `Payments` (the default) or
+      `Hmac { secret }` (issue #533)
 - [ ] config keys prefixed, `validate_config` collects all problems
 - [ ] `tests/conformance.rs` passes locally
 - [ ] route tests cover the happy path and every problem response

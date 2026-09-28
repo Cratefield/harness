@@ -138,6 +138,11 @@ pub struct Codes {
     /// public writes or admin routes on a runtime whose `RateLimiter` port
     /// is not resolved, and no recorded acceptance.
     pub rate_limiter_not_effective: DoctorCodeDef,
+    /// The production webhook-secret rule (issue #533): a module that
+    /// verifies its signature routes with the core `webhook_signature`
+    /// HMAC scheme, in a deployment that has not set the secret key it
+    /// named.
+    pub hmac_webhook_secret_missing: DoctorCodeDef,
 }
 
 pub const CODES: Codes = Codes {
@@ -337,6 +342,11 @@ pub const CODES: Codes = Codes {
         title: "Rate limiter not effective",
         description: "A production venture takes public writes or admin routes but the RateLimiter port is not resolved; set HARNESS_ALLOW_UNLIMITED_PUBLIC_ROUTES to a reason to serve unlimited.",
     },
+    hmac_webhook_secret_missing: DoctorCodeDef {
+        code: "hmac-webhook-secret-missing",
+        title: "Webhook signing secret missing",
+        description: "A production venture has a module verifying its signature routes with the core webhook_signature HMAC scheme, but the module-scoped secret key it named is unset; its handler refuses every delivery.",
+    },
 };
 
 /// Every `fz` code definition, for tests and docs. Sorted by code.
@@ -355,6 +365,7 @@ pub fn registry() -> Vec<&'static DoctorCodeDef> {
         &CODES.destructive_change_unauthorized,
         &CODES.env_drift,
         &CODES.harness_api_mismatch,
+        &CODES.hmac_webhook_secret_missing,
         &CODES.locked_migration_edited,
         &CODES.locked_migration_missing,
         &CODES.lockfile_unreadable,
@@ -432,6 +443,7 @@ mod tests {
             CODES.admin_token_too_short.code,
             CODES.auth_not_configured.code,
             CODES.harness_api_mismatch.code,
+            CODES.hmac_webhook_secret_missing.code,
             CODES.lockfile_unreadable.code,
             CODES.migration_not_collected.code,
             CODES.locked_migration_missing.code,

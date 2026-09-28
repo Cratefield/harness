@@ -4,6 +4,18 @@ All notable changes to `cratefield-core` are documented here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions
 follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **`webhook_signature`**: a generic HMAC-SHA256 webhook verifier
+  (`WebhookVerifier`) with pluggable schemes (`Svix`, `StripeStyle`,
+  `ProviderScheme`), plus `SignatureVerification` and a defaulted
+  `Module::signature_verification()`, so a `RoutePolicy::Signature` route can
+  be proved by a `webhook_signature` scheme instead of the `Payments` port;
+  the boot gate then checks the module's secret key
+  (`webhook_secret_readiness`) in place of the `Payments` leg. (#533)
+
 ## [0.4.0] — 2026-09-12
 
 A major bump because it has to be: `cargo semver-checks` against the
