@@ -1,0 +1,25 @@
+{
+  "expand": "schema,names",
+  "startAt": 0,
+  "maxResults": 1,
+  "total": 1,
+  "issues": [
+    {
+      "key": "PROJ-7",
+      "self": "https://acme.atlassian.net/rest/api/3/issue/10002",
+      "fields": {
+        "summary": "Outbox: refund failed",
+        "status": {
+          "name": "In Progress",
+          "statusCategory": {
+            "key": "indeterminate",
+            "name": "In Progress"
+          }
+        },
+        "issuetype": {
+          "name": "Bug"
+        }
+      }
+    }
+  ]
+}

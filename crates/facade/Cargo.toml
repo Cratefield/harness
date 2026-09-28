@@ -33,10 +33,11 @@ apns = ["dep:cratefield-adapter-apns"]
 fcm = ["dep:cratefield-adapter-fcm"]
 stripe = ["dep:cratefield-adapter-stripe"]
 webpush = ["dep:cratefield-adapter-webpush"]
-# The Tracker port's two adapters (issue #432): GitHub Issues, and the
-# HMAC-signed webhook a tenant configures.
+# The Tracker port's three adapters: GitHub Issues and Jira Cloud (issue
+# #559), and the HMAC-signed webhook a tenant configures.
 github-issues = ["dep:cratefield-adapter-github-issues"]
 webhook-tracker = ["dep:cratefield-adapter-webhook-tracker"]
+jira = ["dep:cratefield-adapter-jira"]
 
 # The portable classifier adapters (issue #456). `Classifier` over the
 # operator's own TypeSafe API key (via `HttpClient`) and over the `TextModel`
@@ -128,10 +129,11 @@ cratefield-push-auth = { workspace = true, optional = true }
 cratefield-adapter-stripe = { workspace = true, optional = true }
 cratefield-push-wiring = { workspace = true, optional = true }
 cratefield-adapter-webpush = { workspace = true, optional = true }
-# The Tracker port's two adapters (issue #432), siblings under the port that
-# lives in core (ADR 0002: the port there, the vendor clients here).
+# The Tracker port's three adapters, siblings under the port that lives in
+# core (ADR 0002: the port there, the vendor clients here).
 cratefield-adapter-github-issues = { workspace = true, optional = true }
 cratefield-adapter-webhook-tracker = { workspace = true, optional = true }
+cratefield-adapter-jira = { workspace = true, optional = true }
 
 # The two portable classifier adapters (issue #456). `adapter-workers-ai` is
 # absent on purpose: it needs the `worker` crate and the `env.AI` binding, so

@@ -60,8 +60,9 @@ pub use text_model::{
     TextModelError, Turn,
 };
 pub use tracker::{
-    Credential, Destination, Filed, RoutingTracker, Severity, TicketDraft, TicketState,
-    TicketStatus, Tracker, TrackerError,
+    Credential, Destination, Filed, InboundStatusError, RoutingTracker, Severity, StatusUpdate,
+    StatusWebhook, TicketComment, TicketDraft, TicketState, TicketStatus, Tracker, TrackerError,
+    receive_status,
 };
 
 use crate::config::Config;

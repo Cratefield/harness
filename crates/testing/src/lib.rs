@@ -57,10 +57,11 @@ pub use conformance::{conformance, conformance_in_process_only, full_fake_ports,
 pub use dialect::Dialect;
 #[cfg(feature = "harness")]
 pub use fakes::{
-    Ask, AuthMode, ClassifierMode, EmptyDatabase, FakeAuth, FakeCaptcha, FakeClassifier, FakeDefer,
-    FakeDispatcher, FakeHttpClient, FakeMailer, FakePayments, FakePush, FakeRateLimiter,
-    FakeRealtime, FakeTextModel, FakeTracker, FiledCall, FixedClock, MailerMode, MemoryBlob,
-    MemoryKeyValue, PaymentsCall, PaymentsMode, PushMode, StatusedCall, TextModelMode, TrackerMode,
+    Ask, AuthMode, ClassifierMode, CommentedCall, EmptyDatabase, FakeAuth, FakeCaptcha,
+    FakeClassifier, FakeDefer, FakeDispatcher, FakeHttpClient, FakeMailer, FakePayments, FakePush,
+    FakeRateLimiter, FakeRealtime, FakeTextModel, FakeTracker, FiledCall, FixedClock, MailerMode,
+    MemoryBlob, MemoryKeyValue, PaymentsCall, PaymentsMode, PushMode, StatusedCall, TextModelMode,
+    TrackerMode,
 };
 #[cfg(feature = "harness")]
 pub use harness::TestHarness;

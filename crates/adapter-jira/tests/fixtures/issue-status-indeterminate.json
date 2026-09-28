@@ -1,0 +1,19 @@
+{
+  "expand": "renderedFields,names,schema,operations,editmeta,changelog,versionedRepresentations",
+  "id": "10002",
+  "self": "https://acme.atlassian.net/rest/api/3/issue/10002",
+  "key": "PROJ-7",
+  "fields": {
+    "summary": "Outbox: refund failed",
+    "status": {
+      "name": "In Progress",
+      "statusCategory": {
+        "key": "indeterminate",
+        "name": "In Progress"
+      }
+    },
+    "issuetype": {
+      "name": "Bug"
+    }
+  }
+}

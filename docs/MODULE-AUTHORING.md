@@ -763,6 +763,38 @@ Two rules to know before you read the code:
 - **The preference is read in the drain**, immediately before the send, so
   an opt-out that arrives after your commit still wins.
 
+### Filing a ticket into a customer's tracker
+
+Where notifications reach *your* users, the `Tracker` port files a ticket
+into *the customer company's own* tracker — a GitHub repo, a Jira site, a
+webhook — under the tenant's own credential, which is why the credential is
+a per-call argument rather than adapter construction state (ADR [0002](adr/0002-ports-and-adapters.md)).
+
+`Tracker::file` is idempotent on the draft's idempotency key — the outbox
+is at-least-once and one defect must be one ticket. Adapters that can
+search their destination do so before creating (GitHub looks for its
+invisible stamp, Jira for its derived idempotency label); the webhook
+tracker cannot search and leaves the dedupe to the receiver, which sees
+the same `idempotency_key` in every delivery of the same draft.
+`Tracker::comment` adds a
+note to an **existing** ticket — a duplicate report links to the ticket it
+duplicates, so the tracker holds one ticket per defect rather than one per
+report — and `StatusWebhook` with `receive_status` brings the ticket's
+state back the other way: verify the delivery's signature first, then parse
+the verified body. Adapters serve different slices of the port; the matrix
+is the whole truth:
+
+| Destination | Crate | file | status | comment | Inbound status webhook (signature scheme) | Notes |
+|---|---|---|---|---|---|---|
+| `Destination::GitHub` | `cratefield-adapter-github-issues` | yes | yes | no | — | dedupes by an invisible HTML comment stamped into the issue body |
+| `Destination::Webhook` | `cratefield-adapter-webhook-tracker` | yes | no (rejected) | no | — | signs outbound deliveries with `Cratefield-Signature` (HMAC-SHA256, Stripe-style) |
+| `Destination::Jira` | `cratefield-adapter-jira` | yes | yes | yes | `X-Hub-Signature` — sha256 hex over the body | Basic auth over the tenant's `email:api_token`; ADF bodies; dedupes by a derived idempotency label |
+| linear, zendesk, salesforce, hubspot, intercom, slack, freshdesk | not yet — tracked follow-up | | | | | |
+
+Freshdesk is a `Destination` variant with no adapter yet, like the rest of
+the last row: wire what your venture needs into `RoutingTracker`, whose
+unwired slots answer `NotConfigured`.
+
 ## Step 7 — Conformance
 
 `examples/module-hello/tests/conformance.rs` — the whole file:
