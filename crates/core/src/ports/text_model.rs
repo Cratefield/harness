@@ -203,6 +203,13 @@ impl Prompt {
 /// A completed completion: the text, the model that answered (a provider
 /// identifier, for the log line), and the token usage.
 ///
+/// The two token counts have a fixed relationship: [`Completion::input_tokens`]
+/// is the **total** prompt tokens the provider processed, and
+/// [`Completion::cached_input_tokens`] — where the provider reports one —
+/// is the subset of that total served from the provider's own prompt
+/// cache. A caller costing a completion never subtracts; the total already
+/// includes the cached part.
+///
 /// `#[non_exhaustive]` for the same reason [`Prompt`] is: what a provider
 /// reports back grows, and it should not break every caller.
 #[derive(Debug, Clone, PartialEq)]
@@ -215,8 +222,18 @@ pub struct Completion {
     /// came back.
     pub json: Option<Value>,
     pub model: String,
+    /// The total prompt tokens the provider processed, cached tokens
+    /// included — a provider that reports caching reports them alongside
+    /// the uncached remainder, not inside it. The discount question is
+    /// [`Completion::cached_input_tokens`], never a smaller total here.
     pub input_tokens: u64,
     pub output_tokens: u64,
+    /// The subset of [`Completion::input_tokens`] the provider served from
+    /// its own prompt cache, where the provider reports one. `None` when it
+    /// does not: an absent report and a reported zero mean different things
+    /// (a vendor that does not do caching versus a cache miss), so the
+    /// option is never collapsed.
+    pub cached_input_tokens: Option<u64>,
 }
 
 impl Completion {
@@ -230,6 +247,7 @@ impl Completion {
             model: model.into(),
             input_tokens: 0,
             output_tokens: 0,
+            cached_input_tokens: None,
         }
     }
 
@@ -245,6 +263,15 @@ impl Completion {
     pub fn usage(mut self, input_tokens: u64, output_tokens: u64) -> Self {
         self.input_tokens = input_tokens;
         self.output_tokens = output_tokens;
+        self
+    }
+
+    /// The subset of the input tokens the provider served from its own
+    /// prompt cache, where the provider reports one.
+    /// [`Completion::input_tokens`] stays the total, cached included.
+    #[must_use]
+    pub fn cached_input_tokens(mut self, cached_input_tokens: u64) -> Self {
+        self.cached_input_tokens = Some(cached_input_tokens);
         self
     }
 }
@@ -493,6 +520,23 @@ mod tests {
         );
         assert_eq!(completion.input_tokens, 12);
         assert_eq!(completion.output_tokens, 34);
+    }
+
+    #[test]
+    fn cached_input_tokens_defaults_to_absent_and_never_shrinks_the_total() {
+        // A vendor that says nothing about caching stays `None` — a
+        // reported zero (a cache miss) and an absent report (a vendor
+        // without caching) are different facts.
+        let completion = Completion::new("the answer", "vendor-1");
+        assert_eq!(completion.cached_input_tokens, None);
+
+        // The builder records the cache read without shrinking the total:
+        // `input_tokens` is what the vendor processed, cached included.
+        let completion = Completion::new("the answer", "vendor-1")
+            .usage(17, 5)
+            .cached_input_tokens(9);
+        assert_eq!(completion.input_tokens, 17);
+        assert_eq!(completion.cached_input_tokens, Some(9));
     }
 
     // -----------------------------------------------------------------

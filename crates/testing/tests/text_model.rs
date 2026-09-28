@@ -7,7 +7,11 @@ use std::time::Duration;
 use cratefield_core::{
     Completion, Config, ConfigError, Migrations, Module, ModuleContext, Port, TextModel,
 };
-use cratefield_testing::{FakeTextModel, TestHarness, TextModelMode, conformance, request};
+use cratefield_testing::{
+    FakeTextModel, TEXT_MODEL_CONFORMANCE_CACHED_INPUT_TOKENS, TEXT_MODEL_CONFORMANCE_INPUT_TOKENS,
+    TEXT_MODEL_CONFORMANCE_OUTPUT_TOKENS, TEXT_MODEL_CONFORMANCE_REPLY, TestHarness, TextModelMode,
+    conformance, request, text_model_conformance,
+};
 
 /// A module that drafts through the `TextModel` port — the smallest shape
 /// that declares it and really uses it: the route asks the fast tier for a
@@ -243,4 +247,22 @@ fn a_scripted_prompt_is_recorded_with_its_tier() {
     assert_eq!(prompts[1], fast);
     assert_eq!(model.last().unwrap(), fast);
     assert_eq!(prompts[0].tier, cratefield_core::ModelTier::Strong);
+}
+
+#[test]
+fn the_shared_text_model_conformance_suite_passes_over_the_fake() {
+    // The kit's own fake answers the canonical script through
+    // `TextModelMode::Complete` — the same suite every `TextModel`
+    // adapter runs (issue #560). `Reply` mode reports plausible counts
+    // but no cache read, which the suite (rightly) refuses; a fake that
+    // wants to pass it scripts the exact completion.
+    let completion = Completion::new(TEXT_MODEL_CONFORMANCE_REPLY, "fake-fast")
+        .usage(
+            TEXT_MODEL_CONFORMANCE_INPUT_TOKENS,
+            TEXT_MODEL_CONFORMANCE_OUTPUT_TOKENS,
+        )
+        .cached_input_tokens(TEXT_MODEL_CONFORMANCE_CACHED_INPUT_TOKENS);
+    let model = FakeTextModel::new(TextModelMode::Complete(completion));
+
+    pollster::block_on(text_model_conformance(&model));
 }

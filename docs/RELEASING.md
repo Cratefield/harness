@@ -192,6 +192,7 @@ crate exists**, so the very first release of each crate is manual:
    cargo publish -p cratefield-i18n           # before module-notifications
    cargo publish -p cratefield-kms
    cargo publish -p cratefield-adapter-anthropic
+   cargo publish -p cratefield-adapter-openai-compatible
    cargo publish -p cratefield-adapter-postgres
    cargo publish -p cratefield-module-email-signup
    cargo publish -p cratefield-adapter-sqlite

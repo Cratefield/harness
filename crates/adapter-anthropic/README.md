@@ -48,6 +48,13 @@ input schema is the caller's schema and forces it with
 [`Completion::json`]. Without it, no tools are sent and `json` stays
 `None`.
 
+Every completion reports token usage. The Messages API splits the prompt
+across `input_tokens`, `cache_creation_input_tokens` and
+`cache_read_input_tokens` when prompt caching is in play; the adapter sums
+them into the one `input_tokens` total the port carries, and reports the
+read half alone as `cached_input_tokens` — `None` when the answer carried
+no cache fields at all.
+
 Error mapping (to `cratefield_core::TextModelError`): 429 →
 `Transient { retry_after }` (from the `Retry-After` header, both RFC 9110
 forms), any 5xx — including Anthropic's 529 `overloaded_error` →

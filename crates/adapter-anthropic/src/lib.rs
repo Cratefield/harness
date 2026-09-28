@@ -224,12 +224,26 @@ enum ContentBlock {
     Other,
 }
 
-#[derive(serde::Deserialize, Default)]
+// The field names are the provider's wire names, kept verbatim so the
+// struct reads against the Messages API reference; the shared `_tokens`
+// postfix is theirs, not ours.
+#[allow(clippy::struct_field_names)]
+#[derive(serde::Deserialize, Default, Clone, Copy)]
 struct WireUsage {
     #[serde(default)]
     input_tokens: u32,
     #[serde(default)]
     output_tokens: u32,
+    /// Prompt tokens served from the provider's prompt cache (issue #560):
+    /// absent unless the call actually read one. Reported separately from
+    /// `input_tokens` — the wire's `input_tokens` counts only the
+    /// uncached remainder.
+    #[serde(default)]
+    cache_read_input_tokens: Option<u32>,
+    /// Prompt tokens the call wrote into the provider's cache, billed as
+    /// input: absent unless the call cached something new.
+    #[serde(default)]
+    cache_creation_input_tokens: Option<u32>,
 }
 
 #[derive(serde::Deserialize)]
@@ -254,6 +268,24 @@ fn provider_message(body: &str) -> String {
         },
         Err(_) => body.to_string(),
     }
+}
+
+/// The wire's split prompt — the uncached remainder, cache writes (billed
+/// as input) and cache reads — summed into the port's one total plus the
+/// cached subset (issue #560). The port wants every completion's
+/// `input_tokens` to be the total the provider processed; only the read
+/// half is `cached_input_tokens`, because only a read was *served* from
+/// the cache.
+fn reported_usage(usage: WireUsage) -> (u64, u64, Option<u64>) {
+    let input_tokens = usage
+        .input_tokens
+        .saturating_add(usage.cache_creation_input_tokens.unwrap_or_default())
+        .saturating_add(usage.cache_read_input_tokens.unwrap_or_default());
+    (
+        u64::from(input_tokens),
+        u64::from(usage.output_tokens),
+        usage.cache_read_input_tokens.map(u64::from),
+    )
 }
 
 #[async_trait]
@@ -373,11 +405,11 @@ impl TextModel for Anthropic {
             json = None;
         }
 
-        // `Completion` is non-exhaustive and carries the two counts flat,
-        // so the wire's usage block is unwrapped straight onto the builder
+        // `Completion` is non-exhaustive and carries the counts flat, so
+        // the wire's usage block is unwrapped straight onto the builder
         // rather than rebuilt as a struct of its own.
-        let wire_usage = parsed.usage.unwrap_or_default();
-        let (input_tokens, output_tokens) = (wire_usage.input_tokens, wire_usage.output_tokens);
+        let (input_tokens, output_tokens, cached_input_tokens) =
+            reported_usage(parsed.usage.unwrap_or_default());
         let model = if parsed.model.is_empty() {
             self.model.clone()
         } else {
@@ -392,8 +424,11 @@ impl TextModel for Anthropic {
             output_tokens,
             "text model outcome"
         );
-        let mut completion = Completion::new(completion_text, model)
-            .usage(u64::from(input_tokens), u64::from(output_tokens));
+        let mut completion =
+            Completion::new(completion_text, model).usage(input_tokens, output_tokens);
+        if let Some(cached_input_tokens) = cached_input_tokens {
+            completion = completion.cached_input_tokens(cached_input_tokens);
+        }
         if let Some(json) = json {
             completion = completion.json(json);
         }

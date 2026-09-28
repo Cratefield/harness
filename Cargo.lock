@@ -644,6 +644,7 @@ dependencies = [
  "cratefield-adapter-classifier-llm",
  "cratefield-adapter-fcm",
  "cratefield-adapter-github-issues",
+ "cratefield-adapter-openai-compatible",
  "cratefield-adapter-postgres",
  "cratefield-adapter-resend",
  "cratefield-adapter-sqlite",
@@ -774,6 +775,23 @@ dependencies = [
 [[package]]
 name = "cratefield-adapter-github-issues"
 version = "0.2.0"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "cratefield-core",
+ "cratefield-testing",
+ "getrandom 0.4.3",
+ "http",
+ "pollster",
+ "serde",
+ "serde_json",
+ "time",
+ "tracing",
+]
+
+[[package]]
+name = "cratefield-adapter-openai-compatible"
+version = "0.1.0"
 dependencies = [
  "async-trait",
  "bytes",

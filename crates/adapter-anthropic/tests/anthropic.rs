@@ -198,7 +198,39 @@ async fn success_maps_to_completion_with_text_model_and_usage() {
     assert_eq!(completion.model, "claude-opus-5");
     assert_eq!(completion.input_tokens, 12);
     assert_eq!(completion.output_tokens, 34);
+    // No cache fields in the answer: the provider said nothing about
+    // caching, so the subset stays absent rather than reading as zero.
+    assert_eq!(completion.cached_input_tokens, None);
     assert_eq!(completion.json, None);
+}
+
+#[pollster::test]
+async fn prompt_caching_sums_into_the_total_and_reports_the_read_subset() {
+    // A prompt-caching answer (issue #560): the wire splits the prompt
+    // across the uncached remainder, the tokens written to the cache and
+    // the tokens read from it. The port wants one total the provider
+    // processed plus the cached subset — only the read half is
+    // `cached_input_tokens`; a cache write is billed as input, and is not
+    // something that was *served* from the cache.
+    let body = r#"{
+        "id": "msg_05",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-opus-5",
+        "content": [{"type": "text", "text": "Hello."}],
+        "stop_reason": "end_turn",
+        "usage": {
+            "input_tokens": 259,
+            "output_tokens": 6,
+            "cache_creation_input_tokens": 2095,
+            "cache_read_input_tokens": 17
+        }
+    }"#;
+    let (http, _rx) = fixture(200, body, None);
+    let completion = adapter(http).complete(&prompt()).await.expect("completes");
+    assert_eq!(completion.input_tokens, 259 + 2095 + 17);
+    assert_eq!(completion.output_tokens, 6);
+    assert_eq!(completion.cached_input_tokens, Some(17));
 }
 
 #[pollster::test]
