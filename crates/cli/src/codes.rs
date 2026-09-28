@@ -86,9 +86,9 @@ pub struct Codes {
     pub deploy_plan_required: DoctorCodeDef,
     /// The `.harness-deploy.json` record could not be read or parsed.
     pub deploy_record_unreadable: DoctorCodeDef,
-    /// The plan removes modules from the served composition (their data
-    /// leaves the venture) without the explicit destructive-change
-    /// consent flag.
+    /// The plan removes modules from the served composition without the
+    /// explicit `--i-am-removing-modules` consent flag; they stop being
+    /// served and no data is deleted.
     pub destructive_change_unauthorized: DoctorCodeDef,
     /// `fz verify`: the resolved deployment environment changed since
     /// the recorded deployment.
@@ -265,7 +265,7 @@ pub const CODES: Codes = Codes {
     destructive_change_unauthorized: DoctorCodeDef {
         code: "destructive-change-unauthorized",
         title: "Destructive change unauthorized",
-        description: "The plan removes modules (their data leaves the venture) without the explicit consent flag.",
+        description: "The plan removes modules without the --i-am-removing-modules consent; they stop being served and no data is deleted.",
     },
     env_drift: DoctorCodeDef {
         code: "env-drift",
