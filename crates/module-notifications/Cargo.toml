@@ -22,7 +22,7 @@ cratefield-core = { workspace = true }
 # only for the parse of a crate it does not call.
 cratefield-i18n = { workspace = true }
 # The account comes from the auth extractor, never from a body field
-# (ADR 0016). Path-only: the crate is `publish = false`.
+# (ADR 0016).
 cratefield-auth-client = { workspace = true }
 axum = { workspace = true }
 http = { workspace = true }
