@@ -237,6 +237,14 @@ pub struct Answer {
     /// Probability of the label in `value`. See [`Calibration`] — not
     /// comparable across adapters.
     pub confidence: f32,
+    /// The vendor-reported model version that produced this answer, when
+    /// the adapter knows it. An alias (`jev-latest`) can move under an
+    /// unchanged request, and a threshold was tuned against a specific
+    /// version's numbers — the version that actually answered is how a
+    /// drifted answer is traced back to its cause. `None` when the adapter
+    /// does not know (or its port has no such report); set with
+    /// [`Answer::with_model`].
+    pub model: Option<String>,
 }
 
 impl Answer {
@@ -249,7 +257,18 @@ impl Answer {
             value,
             probabilities,
             confidence,
+            model: None,
         }
+    }
+
+    /// Records the vendor-reported model version that produced this
+    /// answer, for the adapters whose vendor reports one. Chainable on
+    /// any constructor:
+    /// `Answer::noul(..).with_model("jev-1.13.0")`.
+    #[must_use]
+    pub fn with_model(mut self, model: impl Into<String>) -> Self {
+        self.model = Some(model.into());
+        self
     }
 
     /// An answer to a [`Question::Choice`]: `label` is one of its
@@ -263,6 +282,7 @@ impl Answer {
             value: AnswerValue::Choice(label),
             probabilities,
             confidence,
+            model: None,
         }
     }
 
@@ -282,6 +302,7 @@ impl Answer {
             value: AnswerValue::Score(value),
             probabilities,
             confidence,
+            model: None,
         }
     }
 
@@ -296,6 +317,7 @@ impl Answer {
             value: AnswerValue::Noul(value),
             probabilities,
             confidence,
+            model: None,
         }
     }
 }
@@ -625,6 +647,25 @@ mod tests {
         // rather than looking it up by label.
         let answer = Answer::new(AnswerValue::Score(4.0), BTreeMap::new(), 0.5);
         assert!((answer.confidence - 0.5).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn with_model_records_the_reporting_version_and_defaults_to_none() {
+        // The constructors do not invent a vendor they do not have; only
+        // an adapter that knows sets it.
+        let answer = Answer::noul(true, BTreeMap::new());
+        assert_eq!(answer.model, None);
+        assert_eq!(
+            Answer::choice("spam", BTreeMap::new())
+                .with_model("jev-1.13.0")
+                .model
+                .as_deref(),
+            Some("jev-1.13.0")
+        );
+        assert_eq!(
+            Answer::score(3.0, BTreeMap::new()).with_model("v2").model,
+            Some("v2".to_owned())
+        );
     }
 
     // -----------------------------------------------------------------
