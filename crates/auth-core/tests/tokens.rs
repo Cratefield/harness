@@ -241,14 +241,14 @@ async fn unconfigured_keys_answer_the_stable_problem_on_both_documents() {
     assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
     assert_eq!(
         body["type"],
-        "https://factory0.ventures/problems/auth/tokens-unconfigured"
+        "https://test.example/problems/auth/tokens-unconfigured"
     );
 
     let (status, _, body, _) = get(&kit, "/.well-known/openid-configuration").await;
     assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
     assert_eq!(
         body["type"],
-        "https://factory0.ventures/problems/auth/tokens-unconfigured"
+        "https://test.example/problems/auth/tokens-unconfigured"
     );
 }
 

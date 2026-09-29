@@ -168,6 +168,15 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 /// Sends one request with the given `Host` and returns its status line.
 async fn status_for_host(addr: std::net::SocketAddr, host: &str) -> String {
+    let text = response_for_host(addr, host).await;
+    text.lines()
+        .next()
+        .expect("a response has a status line")
+        .to_owned()
+}
+
+/// The whole wire response for one `Host`, status line and body alike.
+async fn response_for_host(addr: std::net::SocketAddr, host: &str) -> String {
     for _ in 0..50 {
         let Ok(mut stream) = tokio::net::TcpStream::connect(addr).await else {
             tokio::time::sleep(std::time::Duration::from_millis(20)).await;
@@ -184,10 +193,7 @@ async fn status_for_host(addr: std::net::SocketAddr, host: &str) -> String {
             tokio::time::sleep(std::time::Duration::from_millis(20)).await;
             continue;
         }
-        let text = String::from_utf8_lossy(&answer);
-        if let Some(line) = text.lines().next() {
-            return line.to_owned();
-        }
+        return String::from_utf8_lossy(&answer).into_owned();
     }
     panic!("server never answered");
 }
@@ -239,6 +245,13 @@ async fn a_production_deployment_refuses_another_ventures_host() {
     assert!(
         foreign.contains("421"),
         "a neighbour's host must be refused: {foreign}"
+    );
+    // The refusal names *this* venture's base (issue #557): it is built
+    // outside the harness router, so it carries the base with it.
+    let foreign_body = response_for_host(addr, "tenant-b.example").await;
+    assert!(
+        foreign_body.contains("https://tenant-a.example/problems/not-found"),
+        "the 421 names the serving venture's base: {foreign_body}"
     );
 
     // A lookalike is not a match either.

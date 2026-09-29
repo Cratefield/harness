@@ -747,3 +747,34 @@ fn an_enum_dedupes_to_first_seen_order() {
         "the emitted union carries each literal once: {types}"
     );
 }
+
+/// The generated slug derivation does not strip one fixed base: a venture
+/// names its problems under its own base, and a `problem_base` override
+/// may end in anything (issue #557). Under the default base it keeps
+/// everything after `/problems/`, so a namespaced slug such as
+/// `auth/cross-site-request` is not cut to its last segment; under an
+/// override base without that segment it reads the last path segment.
+#[test]
+fn the_slug_survives_any_venture_base() {
+    let actions = json!([action("list-task", "GET", "/task", "public", None)]);
+    let package =
+        cratefield_client_ts::generate(&document(&actions)).expect("the contract must generate");
+    let runtime = &package
+        .files
+        .iter()
+        .find(|file| file.path == "src/runtime.ts")
+        .expect("the package carries src/runtime.ts")
+        .contents;
+    assert!(
+        runtime.contains("const last = type.slice(type.lastIndexOf(\"/\") + 1);"),
+        "an override base without `/problems/` still yields its last segment: {runtime}"
+    );
+    assert!(
+        runtime.contains("return type.slice(at + PROBLEMS_PATH.length);"),
+        "a namespaced slug under the default base survives whole: {runtime}"
+    );
+    assert!(
+        !runtime.contains("factory0.ventures"),
+        "no fixed venture base in the generated client: {runtime}"
+    );
+}

@@ -281,9 +281,15 @@ fn markdown(defs: &[Found]) -> String {
          errors-doc`, and checked in CI for drift and for slugs defined\n\
          twice: each slug is defined exactly once, and a module's slugs are\n\
          emitted only where that module is mounted. Responses are RFC 9457\n\
-         `application/problem+json` with `type` =\n\
-         `https://factory0.ventures/problems/<slug>` and `instance` = the\n\
-         request id.\n\n",
+         `application/problem+json` with `instance` = the request id, and\n\
+         `type` = `<public_url>/problems/<slug>`: the serving venture's own\n\
+         base, from its `Venture::public_url` (`Venture::problem_base`\n\
+         overrides it), so every venture names its problems under its own\n\
+         domain. A venture with no public URL — and any problem rendered\n\
+         outside a venture's context — carries the RFC 9457 §4.2.1 default\n\
+         `about:blank` instead of a URI that would name the wrong venture.\n\
+         The slug is the stable part to match on; a venture may also serve a\n\
+         human-readable page at each `<public_url>/problems/<slug>`.\n\n",
     );
     out.push_str("| Slug | Status | Title | Crate | Description |\n");
     out.push_str("|---|---|---|---|\n");

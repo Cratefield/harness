@@ -25,7 +25,7 @@ fn registration_needs_a_session() {
         assert_eq!(response.status, StatusCode::UNAUTHORIZED);
         assert_eq!(
             response.json()["type"],
-            "https://factory0.ventures/problems/auth/session-invalid"
+            "https://test.example/problems/auth/session-invalid"
         );
     });
 }
@@ -145,7 +145,7 @@ fn a_ceremony_from_another_origin_is_refused() {
         assert_eq!(response.status, StatusCode::UNAUTHORIZED);
         assert_eq!(
             response.json()["type"],
-            "https://factory0.ventures/problems/auth/passkey-ceremony-failed"
+            "https://test.example/problems/auth/passkey-ceremony-failed"
         );
     });
 }
@@ -374,7 +374,7 @@ fn the_last_login_method_cannot_be_deleted() {
         assert_eq!(refused.status, StatusCode::CONFLICT);
         assert_eq!(
             refused.json()["type"],
-            "https://factory0.ventures/problems/auth/last-login-method"
+            "https://test.example/problems/auth/last-login-method"
         );
     });
 }

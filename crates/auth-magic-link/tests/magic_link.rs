@@ -540,7 +540,7 @@ fn a_cross_site_confirm_cannot_spend_a_token_or_sign_anyone_in() {
         );
         assert_eq!(
             cross_site.json()["type"],
-            "https://factory0.ventures/problems/auth/cross-site-request"
+            "https://test.example/problems/auth/cross-site-request"
         );
         assert!(
             cross_site.cookie("__Host-fz_session").is_none(),

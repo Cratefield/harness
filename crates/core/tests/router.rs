@@ -62,7 +62,7 @@ async fn ready_503_without_database() {
         "application/problem+json"
     );
     let body = body_json(response).await;
-    assert_eq!(body["type"], "https://factory0.ventures/problems/not-ready");
+    assert_eq!(body["type"], "https://test.example/problems/not-ready");
 }
 
 #[pollster::test]
@@ -72,7 +72,7 @@ async fn ready_503_when_database_fails() {
     let response = request(&router, Method::GET, "/__ready", &[], None).await;
     assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
     let body = body_json(response).await;
-    assert_eq!(body["type"], "https://factory0.ventures/problems/not-ready");
+    assert_eq!(body["type"], "https://test.example/problems/not-ready");
 }
 
 #[pollster::test]
@@ -107,7 +107,7 @@ async fn ready_503_when_a_module_requires_an_unwired_vector_port() {
     let response = request(&router, Method::GET, "/__ready", &[], None).await;
     assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
     let body = body_json(response).await;
-    assert_eq!(body["type"], "https://factory0.ventures/problems/not-ready");
+    assert_eq!(body["type"], "https://test.example/problems/not-ready");
     let detail = body["detail"].as_str().unwrap_or_default();
     assert!(
         detail.contains("vector_index port is not configured"),
@@ -421,7 +421,7 @@ async fn invalid_json_is_a_validation_problem() {
     let body = body_json(missing_field).await;
     assert_eq!(
         body["type"],
-        "https://factory0.ventures/problems/validation-failed"
+        "https://test.example/problems/validation-failed"
     );
     assert_eq!(body["title"], "Request validation failed");
     assert_eq!(body["status"], 400);
@@ -441,7 +441,7 @@ async fn invalid_json_is_a_validation_problem() {
     assert_eq!(garbage.status(), StatusCode::BAD_REQUEST);
     assert_eq!(
         body_json(garbage).await["type"],
-        "https://factory0.ventures/problems/validation-failed"
+        "https://test.example/problems/validation-failed"
     );
 }
 
@@ -479,18 +479,20 @@ async fn valid_json_echoes() {
     assert_eq!(body_json(response).await["email"], "nick@example.com");
 }
 
-/// Every core slug definition has a unique slug and a stable type URI.
+/// Every core slug definition has a unique slug and a stable type URI
+/// under the serving venture's own base (issue #557).
 #[test]
 fn problem_slugs_are_unique() {
     let registry = cratefield_core::problem_registry();
+    let base = cratefield_core::Venture::new("test-venture", "test.example").problem_type_base();
     let mut seen = std::collections::HashSet::new();
     for def in registry {
         assert!(seen.insert(def.slug), "duplicate slug {}", def.slug);
         let problem = cratefield_core::Problem::new(def);
+        let uri = problem.type_uri(&base);
         assert!(
-            problem
-                .type_uri()
-                .starts_with("https://factory0.ventures/problems/")
+            uri.starts_with(&base) && uri.ends_with(def.slug),
+            "`type` is the venture's base plus the slug: {uri}"
         );
         assert_eq!(problem.status, def.status);
     }
@@ -592,7 +594,7 @@ async fn malformed_form_is_a_validation_problem() {
     let body = body_json(missing_field).await;
     assert_eq!(
         body["type"],
-        "https://factory0.ventures/problems/validation-failed"
+        "https://test.example/problems/validation-failed"
     );
     let detail = body["detail"].as_str().unwrap();
     assert!(detail.contains("state"), "detail names the field: {detail}");
@@ -613,7 +615,7 @@ async fn malformed_form_is_a_validation_problem() {
     assert_eq!(wrong_type.status(), StatusCode::BAD_REQUEST);
     assert_eq!(
         body_json(wrong_type).await["type"],
-        "https://factory0.ventures/problems/validation-failed"
+        "https://test.example/problems/validation-failed"
     );
 }
 
@@ -628,7 +630,7 @@ async fn oversized_form_body_rejected() {
     let body = body_json(response).await;
     assert_eq!(
         body["type"],
-        "https://factory0.ventures/problems/request-too-large"
+        "https://test.example/problems/request-too-large"
     );
 }
 

@@ -437,7 +437,7 @@ async fn the_confirmation_page_refuses_a_token_it_cannot_resolve() {
         assert_eq!(bad.status, StatusCode::BAD_REQUEST);
         assert_eq!(
             bad.json()["type"],
-            "https://factory0.ventures/problems/invalid-token"
+            "https://test.example/problems/invalid-token"
         );
     }
 }
@@ -548,7 +548,7 @@ async fn unsubscribe_post_returns_200_and_invalid_token_is_400() {
         assert_eq!(bad.status, StatusCode::BAD_REQUEST);
         assert_eq!(
             bad.json()["type"],
-            "https://factory0.ventures/problems/invalid-token"
+            "https://test.example/problems/invalid-token"
         );
     }
 }
@@ -566,7 +566,7 @@ async fn admin_routes_are_disabled_without_admin_token() {
         assert_eq!(response.status, StatusCode::UNAUTHORIZED);
         assert_eq!(
             response.json()["type"],
-            "https://factory0.ventures/problems/admin-unauthorized"
+            "https://test.example/problems/admin-unauthorized"
         );
     }
 }
@@ -826,7 +826,7 @@ async fn captcha_denial_is_400_captcha_failed() {
         assert_eq!(missing.status, StatusCode::BAD_REQUEST);
         assert_eq!(
             missing.json()["type"],
-            "https://factory0.ventures/problems/captcha-failed"
+            "https://test.example/problems/captcha-failed"
         );
 
         let rejected = request(
@@ -839,7 +839,7 @@ async fn captcha_denial_is_400_captcha_failed() {
         assert_eq!(rejected.status, StatusCode::BAD_REQUEST);
         assert_eq!(
             rejected.json()["type"],
-            "https://factory0.ventures/problems/captcha-failed"
+            "https://test.example/problems/captcha-failed"
         );
 
         let accepted = request(
@@ -874,7 +874,7 @@ async fn rate_limit_denial_is_429_with_retry_after() {
         assert_eq!(response.headers.get("retry-after").unwrap(), "42");
         assert_eq!(
             response.json()["type"],
-            "https://factory0.ventures/problems/rate-limited"
+            "https://test.example/problems/rate-limited"
         );
     }
 }
@@ -986,7 +986,7 @@ async fn invalid_email_is_a_validation_problem() {
         assert_eq!(response.status, StatusCode::BAD_REQUEST);
         assert_eq!(
             response.json()["type"],
-            "https://factory0.ventures/problems/validation-failed"
+            "https://test.example/problems/validation-failed"
         );
     }
 }

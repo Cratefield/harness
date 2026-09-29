@@ -1019,7 +1019,13 @@ pub fn init(
     let manifest = VentureManifest {
         name: name.to_owned(),
         host: host.to_owned(),
-        public_url: None,
+        // The venture's own URL, which its problem `type` URIs are named
+        // under (`<public_url>/problems/<slug>` — issue #557). Scaffolded
+        // for the same reason as `cors_origins` below: without it the
+        // harness falls back to `about:blank`, and a manifest that builds
+        // into an error vocabulary with no URI is a worse first step than
+        // one line the author rarely has to change.
+        public_url: Some(format!("https://{host}")),
         // The venture's own host, which is the origin a browser on its
         // site sends. Scaffolded rather than left empty because the
         // harness refuses a venture with none — `fz init` writing a
@@ -1681,6 +1687,13 @@ mod tests {
         let manifest = VentureManifest::from_json_str(&written).expect("it parses");
         manifest.validate().expect("and it is one fz build accepts");
         assert_eq!(manifest.cors_origins, ["https://acme.factory0.dev"]);
+        // The problem base (issue #557): `fz init` scaffolds the public URL
+        // so the venture's error `type`s are named under its own domain
+        // rather than falling back to `about:blank`.
+        assert_eq!(
+            manifest.public_url.as_deref(),
+            Some("https://acme.factory0.dev")
+        );
     }
 
     #[test]

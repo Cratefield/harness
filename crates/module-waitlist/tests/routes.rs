@@ -286,7 +286,7 @@ async fn unknown_product_is_a_400_problem() {
         assert_eq!(response.status, StatusCode::BAD_REQUEST);
         assert_eq!(
             response.json()["type"],
-            "https://factory0.ventures/problems/unknown-product"
+            "https://test.example/problems/unknown-product"
         );
         assert_eq!(kit.mailer.sent().len(), 0);
     }
@@ -336,7 +336,7 @@ async fn status_token_round_trip() {
         assert_eq!(invalid.status, StatusCode::BAD_REQUEST);
         assert_eq!(
             invalid.json()["type"],
-            "https://factory0.ventures/problems/invalid-token"
+            "https://test.example/problems/invalid-token"
         );
     }
 }
@@ -543,7 +543,7 @@ async fn answers_schema_is_enforced() {
         assert_eq!(bad.status, StatusCode::BAD_REQUEST);
         assert_eq!(
             bad.json()["type"],
-            "https://factory0.ventures/problems/validation-failed"
+            "https://test.example/problems/validation-failed"
         );
 
         let good = request(
@@ -587,7 +587,7 @@ async fn require_answers_is_enforced() {
             assert_eq!(missing.status, StatusCode::BAD_REQUEST);
             assert_eq!(
                 missing.json()["type"],
-                "https://factory0.ventures/problems/validation-failed"
+                "https://test.example/problems/validation-failed"
             );
         }
 
@@ -819,7 +819,7 @@ async fn captcha_denial_is_400() {
         assert_eq!(response.status, StatusCode::BAD_REQUEST);
         assert_eq!(
             response.json()["type"],
-            "https://factory0.ventures/problems/captcha-failed"
+            "https://test.example/problems/captcha-failed"
         );
     }
 }
@@ -1261,7 +1261,7 @@ async fn production_without_a_captcha_port_or_an_acceptance_refuses_the_join() {
         );
         assert_eq!(
             response.json()["type"],
-            "https://factory0.ventures/problems/captcha-failed"
+            "https://test.example/problems/captcha-failed"
         );
     }
 }

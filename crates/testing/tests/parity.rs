@@ -186,7 +186,7 @@ async fn a_problem_body_survives_byte_for_byte() {
         "instance must be the caller's request id, or an operator cannot find the log"
     );
     assert_eq!(
-        parsed["type"], "https://factory0.ventures/problems/validation-failed",
+        parsed["type"], "https://test.example/problems/validation-failed",
         "the problem type is the stable contract"
     );
 }
