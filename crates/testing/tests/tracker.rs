@@ -5,8 +5,8 @@
 use std::time::Duration;
 
 use cratefield_core::{
-    Credential, Destination, Severity, TicketDraft, TicketState, TicketStatus, Tracker,
-    TrackerError,
+    Credential, Destination, Severity, TicketComment, TicketDraft, TicketState, TicketStatus,
+    Tracker, TrackerError,
 };
 use cratefield_testing::{FakeTracker, TrackerMode};
 
@@ -204,4 +204,66 @@ fn one_unauthorized_destination_among_filing_ones() {
 
     tracker.clear_mode_for(&slack());
     assert_eq!(tracker.mode_for(&slack()), TrackerMode::FileOk);
+}
+
+/// A `comment` records the note, its ticket and a credential fingerprint —
+/// and honours the per-destination mode, the same script `file` answers
+/// with: one tenant's dead token cannot take notes either.
+#[test]
+fn a_comment_records_its_note_and_honours_the_per_destination_mode() {
+    let tracker = FakeTracker::new(TrackerMode::FileOk);
+    let note = TicketComment::new("outbox-43", "Duplicate of the checkout 500s.")
+        .with_link("https://reports.example.test/43");
+
+    pollster::block_on(tracker.comment(&github(), &the_secret(), "GH-7", &note)).expect("notes");
+    pollster::block_on(tracker.comment(&slack(), &the_secret(), "C-9", &note)).expect("notes");
+
+    let commented = tracker.commented();
+    assert_eq!(commented.len(), 2);
+    assert_eq!(commented[0].dest, github());
+    assert_eq!(commented[0].external_id, "GH-7");
+    assert_eq!(commented[1].external_id, "C-9");
+    assert_eq!(commented[0].comment, note);
+    assert_eq!(
+        commented[0].comment.link.as_deref(),
+        Some("https://reports.example.test/43")
+    );
+    assert_eq!(
+        commented[0].credential_fingerprint,
+        commented[1].credential_fingerprint
+    );
+
+    tracker.set_mode_for(&slack(), TrackerMode::NotConfigured);
+    assert_eq!(
+        pollster::block_on(tracker.comment(&slack(), &the_secret(), "C-9", &note)).unwrap_err(),
+        TrackerError::NotConfigured
+    );
+    assert_eq!(
+        tracker.commented().len(),
+        2,
+        "a call the mode answered with an error is not recorded"
+    );
+}
+
+/// The kit's re-export block is where `CommentedCall` (issue #559) met the
+/// fake embedder of issue #561; both must stay nameable from the crate
+/// root, and a recorded comment compares equal to one built by hand.
+#[test]
+fn commented_call_and_the_fake_embedder_are_both_exported() {
+    use cratefield_testing::{CommentedCall, FAKE_EMBEDDER_DIMENSIONS, FakeEmbedder};
+
+    const { assert!(FAKE_EMBEDDER_DIMENSIONS > 0) };
+    assert!(std::any::type_name::<FakeEmbedder>().contains("FakeEmbedder"));
+
+    let tracker = FakeTracker::new(TrackerMode::FileOk);
+    let note = TicketComment::new("outbox-44", "Same defect.");
+    pollster::block_on(tracker.comment(&github(), &the_secret(), "GH-8", &note)).expect("notes");
+    let recorded = tracker.commented().remove(0);
+    let expected = CommentedCall {
+        dest: github(),
+        external_id: "GH-8".to_owned(),
+        comment: note,
+        credential_fingerprint: recorded.credential_fingerprint.clone(),
+    };
+    assert_eq!(recorded, expected);
 }

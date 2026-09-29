@@ -1,0 +1,40 @@
+{
+  "timestamp": 1767225600000,
+  "webhookEvent": "jira:issue_updated",
+  "issue_event_type_name": "issue_generic",
+  "user": {
+    "self": "https://acme.atlassian.net/rest/api/3/user?accountId=5b10ac8d82e05b22cc7d4ef5",
+    "accountId": "5b10ac8d82e05b22cc7d4ef5",
+    "displayName": "Ada Ops"
+  },
+  "issue": {
+    "id": "10002",
+    "self": "https://acme.atlassian.net/rest/api/3/issue/10002",
+    "key": "PROJ-7",
+    "fields": {
+      "summary": "Checkout failing for card payments",
+      "issuetype": {
+        "name": "Bug"
+      },
+      "status": {
+        "name": "In Progress",
+        "statusCategory": {
+          "key": "indeterminate",
+          "name": "In Progress"
+        }
+      }
+    }
+  },
+  "changelog": {
+    "id": "10001",
+    "items": [
+      {
+        "field": "status",
+        "from": "10001",
+        "fromString": "To Do",
+        "to": "10002",
+        "toString": "In Progress"
+      }
+    ]
+  }
+}

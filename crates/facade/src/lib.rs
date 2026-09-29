@@ -69,6 +69,9 @@ pub use cratefield_adapter_github_issues as github_issues;
 #[cfg(feature = "webhook-tracker")]
 pub use cratefield_adapter_webhook_tracker as webhook_tracker;
 
+#[cfg(feature = "jira")]
+pub use cratefield_adapter_jira as jira;
+
 // The portable classifier adapters (issue #456). The third one,
 // `cratefield-adapter-workers-ai`, is deliberately not re-exported here: it
 // depends on the `worker` crate and the `env.AI` binding, so a venture on

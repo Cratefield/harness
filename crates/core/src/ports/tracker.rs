@@ -1,7 +1,8 @@
 //! The `Tracker` port (issue #431): filing a ticket into *someone else's*
 //! tracker — a GitHub repo, a Jira site, a Linear team, a Zendesk subdomain,
-//! Intercom, a Salesforce instance, `HubSpot`, a Slack channel, or a plain
-//! webhook — and asking how that ticket is doing afterwards.
+//! a Freshdesk portal, Intercom, a Salesforce instance, `HubSpot`, a Slack
+//! channel, or a plain webhook — and asking how that ticket is doing
+//! afterwards.
 //!
 //! The reason this is a port and not a module detail is the deployment
 //! shape: one hosted Worker serves many customer companies, and each
@@ -16,12 +17,15 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
+use http::HeaderMap;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use zeroize::Zeroizing;
 
+use crate::webhook_signature::WebhookVerifier;
+
 /// Where a ticket is filed. One variant per supported tracker, because the
-/// nine do not share a shape: a GitHub destination is an owner and repo, a
+/// ten do not share a shape: a GitHub destination is an owner and repo, a
 /// webhook is a URL, and Intercom and `HubSpot` address nothing but the
 /// credential — the workspace/portal the token belongs to *is* the
 /// destination, so those variants carry no fields at all.
@@ -55,7 +59,9 @@ pub enum Destination {
     },
     /// A project on a Jira site.
     Jira {
-        /// The Jira site's hostname prefix (`acme` for `acme.atlassian.net`).
+        /// The Jira site's bare hostname (`acme.atlassian.net`) — never a
+        /// scheme or path, so the Basic credential cannot be moved off the
+        /// host it names.
         site: String,
         /// The project key tickets are filed under (`PROJ`).
         project: String,
@@ -69,6 +75,11 @@ pub enum Destination {
     Zendesk {
         /// The subdomain (`acme` for `acme.zendesk.com`).
         subdomain: String,
+    },
+    /// A Freshdesk portal.
+    Freshdesk {
+        /// The portal's domain (`acme.freshdesk.com`).
+        domain: String,
     },
     /// Intercom. The workspace is identified by the credential.
     Intercom,
@@ -96,7 +107,8 @@ pub enum Destination {
 impl Destination {
     /// The kind of tracker this destination names, for logs, metrics and
     /// error messages: `"github"`, `"jira"`, `"linear"`, `"zendesk"`,
-    /// `"intercom"`, `"salesforce"`, `"hubspot"`, `"slack"`, `"webhook"`.
+    /// `"freshdesk"`, `"intercom"`, `"salesforce"`, `"hubspot"`, `"slack"`,
+    /// `"webhook"`.
     #[must_use]
     pub fn kind(&self) -> &'static str {
         match self {
@@ -104,6 +116,7 @@ impl Destination {
             Destination::Jira { .. } => "jira",
             Destination::Linear { .. } => "linear",
             Destination::Zendesk { .. } => "zendesk",
+            Destination::Freshdesk { .. } => "freshdesk",
             Destination::Intercom => "intercom",
             Destination::Salesforce { .. } => "salesforce",
             Destination::HubSpot => "hubspot",
@@ -132,6 +145,9 @@ impl std::fmt::Debug for Destination {
             }
             Destination::Zendesk { subdomain } => {
                 write!(f, "Destination::Zendesk {{ subdomain: {subdomain:?} }}")
+            }
+            Destination::Freshdesk { domain } => {
+                write!(f, "Destination::Freshdesk {{ domain: {domain:?} }}")
             }
             Destination::Intercom => f.write_str("Destination::Intercom"),
             Destination::Salesforce { instance } => {
@@ -303,12 +319,54 @@ pub struct Filed {
     pub url: String,
 }
 
+/// A note added to an existing ticket — e.g. linking a duplicate report to
+/// the ticket it duplicates. Adapters map the fields their tracker has and
+/// document what they drop; `body_markdown` is the only content every
+/// tracker takes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TicketComment {
+    /// Makes the note idempotent under retries; the caller owns its shape,
+    /// exactly as [`TicketDraft::idempotency_key`] does for the file.
+    pub idempotency_key: String,
+    /// The note's body, Markdown. Adapters translate or quote it verbatim
+    /// per their tracker's format and say which.
+    pub body_markdown: String,
+    /// A URL the note points at — typically the duplicate report this
+    /// comment links into the existing ticket.
+    pub link: Option<String>,
+}
+
+impl TicketComment {
+    /// A bare note: the idempotency key and a body. The link is added by
+    /// the chaining setter.
+    #[must_use]
+    pub fn new(idempotency_key: impl Into<String>, body_markdown: impl Into<String>) -> Self {
+        Self {
+            idempotency_key: idempotency_key.into(),
+            body_markdown: body_markdown.into(),
+            link: None,
+        }
+    }
+
+    /// Sets the URL the note links to.
+    #[must_use]
+    pub fn with_link(mut self, url: impl Into<String>) -> Self {
+        self.link = Some(url.into());
+        self
+    }
+}
+
 /// A ticket's state as the tracker last reported it. Adapters map their
 /// tracker's workflow states onto these five, and onto
 /// [`TicketState::Unknown`] anything they cannot name — they never invent
 /// a sixth state, and a caller that needs the tracker's own raw state name
 /// asks the tracker's API by `external_id`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+///
+/// `Serialize`/`Deserialize` (snake case, the [`Severity`] precedent):
+/// a state arriving on an inbound status webhook crosses the same wire a
+/// `Severity` does leaving it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum TicketState {
     /// Filed, nobody has picked it up.
     Open,
@@ -466,6 +524,32 @@ pub trait Tracker: Send + Sync {
         cred: &Credential,
         external_id: &str,
     ) -> Result<TicketStatus, TrackerError>;
+
+    /// Adds `comment` to the existing ticket `external_id` in `dest` —
+    /// e.g. linking a duplicate report to the ticket it duplicates, so the
+    /// tracker holds one ticket per defect rather than one per report.
+    ///
+    /// The default impl refuses: a tracker that cannot take notes says so
+    /// by name — the way the webhook tracker adapter refuses `status` —
+    /// rather than silently dropping the note. Adapters whose tracker has
+    /// a comment API override this.
+    ///
+    /// # Errors
+    ///
+    /// The same four as [`Tracker::file`], plus the default
+    /// [`TrackerError::Rejected`] when the adapter does not serve notes.
+    async fn comment(
+        &self,
+        dest: &Destination,
+        _cred: &Credential,
+        _external_id: &str,
+        _comment: &TicketComment,
+    ) -> Result<(), TrackerError> {
+        Err(TrackerError::Rejected(format!(
+            "this adapter does not support comments on {} tickets",
+            dest.kind()
+        )))
+    }
 }
 
 /// Dispatches by [`Destination`] variant to the adapter a venture
@@ -483,6 +567,7 @@ pub struct RoutingTracker {
     jira: Option<Arc<dyn Tracker>>,
     linear: Option<Arc<dyn Tracker>>,
     zendesk: Option<Arc<dyn Tracker>>,
+    freshdesk: Option<Arc<dyn Tracker>>,
     intercom: Option<Arc<dyn Tracker>>,
     salesforce: Option<Arc<dyn Tracker>>,
     hubspot: Option<Arc<dyn Tracker>>,
@@ -522,6 +607,13 @@ impl RoutingTracker {
     #[must_use]
     pub fn zendesk(mut self, tracker: Arc<dyn Tracker>) -> Self {
         self.zendesk = Some(tracker);
+        self
+    }
+
+    /// The adapter for [`Destination::Freshdesk`].
+    #[must_use]
+    pub fn freshdesk(mut self, tracker: Arc<dyn Tracker>) -> Self {
+        self.freshdesk = Some(tracker);
         self
     }
 
@@ -568,6 +660,7 @@ impl RoutingTracker {
             Destination::Jira { .. } => self.jira.as_ref(),
             Destination::Linear { .. } => self.linear.as_ref(),
             Destination::Zendesk { .. } => self.zendesk.as_ref(),
+            Destination::Freshdesk { .. } => self.freshdesk.as_ref(),
             Destination::Intercom => self.intercom.as_ref(),
             Destination::Salesforce { .. } => self.salesforce.as_ref(),
             Destination::HubSpot => self.hubspot.as_ref(),
@@ -584,6 +677,7 @@ impl std::fmt::Debug for RoutingTracker {
             .field("jira", &self.jira.is_some())
             .field("linear", &self.linear.is_some())
             .field("zendesk", &self.zendesk.is_some())
+            .field("freshdesk", &self.freshdesk.is_some())
             .field("intercom", &self.intercom.is_some())
             .field("salesforce", &self.salesforce.is_some())
             .field("hubspot", &self.hubspot.is_some())
@@ -618,11 +712,125 @@ impl Tracker for RoutingTracker {
             None => Err(TrackerError::NotConfigured),
         }
     }
+
+    async fn comment(
+        &self,
+        dest: &Destination,
+        cred: &Credential,
+        external_id: &str,
+        comment: &TicketComment,
+    ) -> Result<(), TrackerError> {
+        match self.route_for(dest) {
+            Some(tracker) => tracker.comment(dest, cred, external_id, comment).await,
+            None => Err(TrackerError::NotConfigured),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Inbound status webhooks: ticket state flowing back the other way.
+
+/// A ticket-state change a tracker reported on its inbound status webhook:
+/// the same shape [`Tracker::status`] answers with, pushed instead of
+/// pulled. `Ok(None)` from a parse means a verified event that carries no
+/// status change (a comment, a ping) — not an error.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StatusUpdate {
+    /// The ticket's id in the tracker it was filed into, as the vendor's
+    /// payload names it.
+    pub external_id: String,
+    /// The state the vendor reports, mapped onto the port's five.
+    pub state: TicketState,
+    /// The ticket's URL, when the vendor's payload carries one.
+    pub url: Option<String>,
+}
+
+/// A tracker's inbound status webhook, implemented per vendor by adapter
+/// crates: how to verify a delivery's signature and how to read a state
+/// change out of the verified body.
+///
+/// Verification is **not** reimplemented here: [`verifier`](Self::verifier)
+/// returns core's [`WebhookVerifier`] — constant-time compare, fail-closed
+/// on unreadable input and replay tolerance are inherited, never re-derived.
+/// The signature scheme a vendor signs with is expressed as one of core's
+/// [`SignatureScheme`](crate::SignatureScheme)s (`Svix`,
+/// [`StripeStyle`](crate::StripeStyle), or a configured
+/// [`ProviderScheme`](crate::ProviderScheme)); Jira Cloud, whose
+/// `X-Hub-Signature: sha256=<hex>` HMAC covers the raw body with no
+/// timestamp header, is
+/// `ProviderScheme { signature: "X-Hub-Signature", encoding: SignatureEncoding::Hex, prefix: Some("sha256="), timestamp: None }`.
+pub trait StatusWebhook: Send + Sync {
+    /// The vendor this webhook speaks for, for logs and metrics — the same
+    /// name [`Destination::kind`] uses for the outbound direction.
+    fn kind(&self) -> &'static str;
+
+    /// The verifier deliveries must pass before [`parse`](Self::parse) is
+    /// ever reached. Returned per call so an adapter may hold its config
+    /// without holding a verifier per tenant — the secret is a parameter
+    /// of [`receive_status`], never of the hook.
+    fn verifier(&self) -> WebhookVerifier;
+
+    /// Reads one **verified** body. `Ok(None)` for an event that carries
+    /// no status change; [`InboundStatusError::Malformed`] for one that
+    /// should have carried one and does not parse.
+    ///
+    /// # Errors
+    ///
+    /// [`InboundStatusError::Malformed`] when the verified body is not an
+    /// event this vendor sends. Never [`InboundStatusError::Signature`] —
+    /// that answer belongs to [`receive_status`], before bytes are parsed.
+    fn parse(&self, body: &[u8]) -> Result<Option<StatusUpdate>, InboundStatusError>;
+}
+
+/// A status-webhook failure. The `Signature` variant carries no provider
+/// text: [`WebhookVerifier::verify`] answers a boolean — fail closed with
+/// no detail to leak — and the port keeps that property rather than
+/// inventing prose a log could leak. `Malformed` carries the adapter's own
+/// description, scrubbed in `Display` the way [`TrackerError::Rejected`]
+/// scrubs the tracker's words.
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+pub enum InboundStatusError {
+    /// The delivery's signature did not verify (or could not be read). The
+    /// body is never parsed, and the caller should answer `4xx` without
+    /// saying which part failed.
+    #[error("status webhook signature verification failed")]
+    Signature,
+    /// The delivery verified, but its body is not an event this vendor
+    /// sends. `Display` scrubs the text — a payload can quote tenant data.
+    #[error("status webhook body is malformed: {scrubbed}", scrubbed = crate::logging::scrub_text(.0))]
+    Malformed(String),
+}
+
+/// Verifies a webhook delivery against `hook`'s verifier, and only then
+/// parses it: `parse` never sees unverified bytes. The parameter shapes are
+/// [`WebhookVerifier::verify`]'s — the endpoint's per-tenant `secret`, the
+/// request's `headers`, the **raw** `body` bytes (before anything parsed
+/// them) and the current `now_unix` for the replay tolerance, where the
+/// vendor's scheme carries a timestamp.
+///
+/// # Errors
+///
+/// [`InboundStatusError::Signature`] when the delivery does not verify;
+/// [`InboundStatusError::Malformed`] when it verifies but [`StatusWebhook::parse`]
+/// cannot read a status change out of it. `Ok(None)` is a verified event
+/// that carries no status change.
+pub fn receive_status(
+    hook: &dyn StatusWebhook,
+    secret: &str,
+    headers: &HeaderMap,
+    body: &[u8],
+    now_unix: i64,
+) -> Result<Option<StatusUpdate>, InboundStatusError> {
+    if !hook.verifier().verify(secret, headers, body, now_unix) {
+        return Err(InboundStatusError::Signature);
+    }
+    hook.parse(body)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::webhook_signature::{ProviderScheme, SignatureEncoding};
 
     // -----------------------------------------------------------------
     // Destination
@@ -636,7 +844,7 @@ mod tests {
         }
     }
 
-    /// Every variant, so a test that must cover all nine cannot forget one.
+    /// Every variant, so a test that must cover all ten cannot forget one.
     fn all_destinations() -> Vec<Destination> {
         vec![
             Destination::GitHub {
@@ -652,6 +860,9 @@ mod tests {
             },
             Destination::Zendesk {
                 subdomain: "acme".to_owned(),
+            },
+            Destination::Freshdesk {
+                domain: "acme.freshdesk.com".to_owned(),
             },
             Destination::Intercom,
             Destination::Salesforce {
@@ -677,6 +888,7 @@ mod tests {
                 "jira",
                 "linear",
                 "zendesk",
+                "freshdesk",
                 "intercom",
                 "salesforce",
                 "hubspot",
@@ -732,6 +944,15 @@ mod tests {
         assert_eq!(printed, "Destination::Intercom");
         let printed = format!("{:?}", Destination::HubSpot);
         assert_eq!(printed, "Destination::HubSpot");
+
+        // Freshdesk's domain is a routing fact, not a secret: it prints.
+        let printed = format!(
+            "{:?}",
+            Destination::Freshdesk {
+                domain: "acme.freshdesk.com".to_owned(),
+            }
+        );
+        assert!(printed.contains("acme.freshdesk.com"), "{printed}");
     }
 
     // -----------------------------------------------------------------
@@ -908,16 +1129,21 @@ mod tests {
 
     struct Recording {
         seen: std::sync::atomic::AtomicUsize,
+        noted: std::sync::atomic::AtomicUsize,
     }
 
     impl Recording {
         fn new() -> Arc<Self> {
             Arc::new(Self {
                 seen: std::sync::atomic::AtomicUsize::new(0),
+                noted: std::sync::atomic::AtomicUsize::new(0),
             })
         }
         fn count(&self) -> usize {
             self.seen.load(std::sync::atomic::Ordering::Relaxed)
+        }
+        fn note_count(&self) -> usize {
+            self.noted.load(std::sync::atomic::Ordering::Relaxed)
         }
     }
 
@@ -949,10 +1175,107 @@ mod tests {
                 url: None,
             })
         }
+
+        async fn comment(
+            &self,
+            _dest: &Destination,
+            _cred: &Credential,
+            _external_id: &str,
+            _comment: &TicketComment,
+        ) -> Result<(), TrackerError> {
+            self.noted
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            Ok(())
+        }
+    }
+
+    /// An adapter that serves `file`/`status` only and never overrides
+    /// `comment` — the shape the existing adapters compile with, so every
+    /// call reaches the trait's default impl.
+    struct FileOnly;
+
+    #[async_trait]
+    impl Tracker for FileOnly {
+        async fn file(
+            &self,
+            _: &Destination,
+            _: &Credential,
+            _: &TicketDraft,
+        ) -> Result<Filed, TrackerError> {
+            Err(TrackerError::NotConfigured)
+        }
+
+        async fn status(
+            &self,
+            _: &Destination,
+            _: &Credential,
+            _: &str,
+        ) -> Result<TicketStatus, TrackerError> {
+            Err(TrackerError::NotConfigured)
+        }
     }
 
     fn a_draft() -> TicketDraft {
         TicketDraft::new("k", "t", "b", Severity::Info)
+    }
+
+    fn a_comment() -> TicketComment {
+        TicketComment::new("outbox-43", "Duplicate of the checkout 500s.")
+            .with_link("https://reports.example.test/43")
+    }
+
+    fn a_freshdesk() -> Destination {
+        Destination::Freshdesk {
+            domain: "acme.freshdesk.com".to_owned(),
+        }
+    }
+
+    #[test]
+    fn the_default_comment_impl_refuses_by_name() {
+        let error = pollster::block_on(FileOnly.comment(
+            &a_freshdesk(),
+            &Credential::new("t"),
+            "PROJ-7",
+            &a_comment(),
+        ))
+        .unwrap_err();
+        assert!(matches!(error, TrackerError::Rejected(_)));
+        let text = error.to_string();
+        assert!(text.contains("does not support comments"), "{text}");
+        assert!(text.contains("freshdesk"), "{text}");
+    }
+
+    #[test]
+    fn a_wired_router_forwards_comment_and_an_empty_slot_refuses() {
+        let freshdesk = Recording::new();
+        let router = RoutingTracker::new().freshdesk(freshdesk.clone());
+        pollster::block_on(router.comment(
+            &a_freshdesk(),
+            &Credential::new("t"),
+            "PROJ-7",
+            &a_comment(),
+        ))
+        .expect("the wired adapter answers");
+        assert_eq!(freshdesk.note_count(), 1);
+
+        // A *different* destination on the same router is still
+        // NotConfigured, and reaches nothing.
+        let other = Destination::Zendesk {
+            subdomain: "acme".to_owned(),
+        };
+        let error = pollster::block_on(router.comment(
+            &other,
+            &Credential::new("t"),
+            "PROJ-7",
+            &a_comment(),
+        ))
+        .unwrap_err();
+        assert_eq!(error, TrackerError::NotConfigured);
+        assert_eq!(
+            freshdesk.note_count(),
+            1,
+            "the wired adapter was not called"
+        );
     }
 
     #[test]
@@ -963,6 +1286,13 @@ mod tests {
             assert_eq!(filed.unwrap_err(), TrackerError::NotConfigured, "{dest:?}");
             let status = pollster::block_on(router.status(&dest, &Credential::new("t"), "PROJ-7"));
             assert_eq!(status.unwrap_err(), TrackerError::NotConfigured, "{dest:?}");
+            let noted = pollster::block_on(router.comment(
+                &dest,
+                &Credential::new("t"),
+                "PROJ-7",
+                &a_comment(),
+            ));
+            assert_eq!(noted.unwrap_err(), TrackerError::NotConfigured, "{dest:?}");
             assert!(router.route_for(&dest).is_none());
         }
     }
@@ -1001,8 +1331,8 @@ mod tests {
     fn every_destination_dispatches_to_the_adapter_wired_for_its_slot() {
         // A transposition is the one bug the tests above cannot see: the
         // empty router answers NotConfigured under any permutation of
-        // `route_for`'s nine arms, and the wiring test pins a single arm.
-        // A hand-written nine-way match is exactly where a swapped arm
+        // `route_for`'s ten arms, and the wiring test pins a single arm.
+        // A hand-written ten-way match is exactly where a swapped arm
         // hides, so this wires a distinct adapter into every slot and
         // requires each destination to reach *its own* adapter — the
         // identity assert names the pair, and a swap shows up as one
@@ -1011,6 +1341,7 @@ mod tests {
         let jira = Recording::new();
         let linear = Recording::new();
         let zendesk = Recording::new();
+        let freshdesk = Recording::new();
         let intercom = Recording::new();
         let salesforce = Recording::new();
         let hubspot = Recording::new();
@@ -1022,6 +1353,7 @@ mod tests {
             .jira(jira.clone())
             .linear(linear.clone())
             .zendesk(zendesk.clone())
+            .freshdesk(freshdesk.clone())
             .intercom(intercom.clone())
             .salesforce(salesforce.clone())
             .hubspot(hubspot.clone())
@@ -1031,7 +1363,7 @@ mod tests {
         // In `all_destinations()`'s order; the identity assert below fails
         // loudly if that helper's order and this list ever drift apart.
         let slots = [
-            github, jira, linear, zendesk, intercom, salesforce, hubspot, slack, webhook,
+            github, jira, linear, zendesk, freshdesk, intercom, salesforce, hubspot, slack, webhook,
         ];
 
         for (dest, adapter) in all_destinations().into_iter().zip(slots) {
@@ -1061,5 +1393,174 @@ mod tests {
         assert!(printed.contains("jira: true"), "{printed}");
         assert!(printed.contains("github: false"), "{printed}");
         assert!(printed.contains("webhook: false"), "{printed}");
+    }
+
+    // -----------------------------------------------------------------
+    // Inbound status webhooks
+
+    /// A Jira-Cloud-shaped hook, written with a plain `ProviderScheme` to
+    /// prove a vendor whose signature needs **no timestamp header** is
+    /// expressible without any new scheme code: `X-Hub-Signature:
+    /// sha256=<hex>`, HMAC-SHA256 over the raw body.
+    struct JiraHook {
+        parse_saw_bytes: std::sync::atomic::AtomicBool,
+    }
+
+    impl StatusWebhook for JiraHook {
+        fn kind(&self) -> &'static str {
+            "jira"
+        }
+
+        fn verifier(&self) -> WebhookVerifier {
+            WebhookVerifier::new(ProviderScheme {
+                signature: "X-Hub-Signature",
+                encoding: SignatureEncoding::Hex,
+                prefix: Some("sha256="),
+                timestamp: None,
+            })
+        }
+
+        fn parse(&self, body: &[u8]) -> Result<Option<StatusUpdate>, InboundStatusError> {
+            self.parse_saw_bytes
+                .store(true, std::sync::atomic::Ordering::Relaxed);
+            let event: serde_json::Value = serde_json::from_slice(body)
+                .map_err(|error| InboundStatusError::Malformed(error.to_string()))?;
+            let Some(status) = event.get("status").and_then(serde_json::Value::as_str) else {
+                // A verified event with no status in it — a ping, a
+                // comment — is a no-op, not an error.
+                return Ok(None);
+            };
+            Ok(Some(StatusUpdate {
+                external_id: event["ticket"].as_str().unwrap_or_default().to_owned(),
+                state: if status == "done" {
+                    TicketState::Closed
+                } else {
+                    TicketState::Unknown
+                },
+                url: event["url"].as_str().map(ToOwned::to_owned),
+            }))
+        }
+    }
+
+    /// The `sha256=<hex>` signature Jira Cloud would send for this body.
+    fn jira_signature(secret: &str, body: &[u8]) -> String {
+        use hmac::{Hmac, KeyInit, Mac};
+        use sha2::Sha256;
+        use std::fmt::Write as _;
+
+        let mut mac =
+            <Hmac<Sha256> as KeyInit>::new_from_slice(secret.as_bytes()).expect("any key length");
+        mac.update(body);
+        mac.finalize()
+            .into_bytes()
+            .iter()
+            .fold(String::new(), |mut out, byte| {
+                let _ = write!(out, "{byte:02x}");
+                out
+            })
+    }
+
+    fn sig_headers(name: &str, value: &str) -> HeaderMap {
+        [(
+            name.parse::<http::header::HeaderName>()
+                .expect("test header name"),
+            value
+                .parse::<http::HeaderValue>()
+                .expect("test header value"),
+        )]
+        .into_iter()
+        .collect()
+    }
+
+    #[test]
+    fn receive_status_refuses_a_bad_signature_without_parsing() {
+        let hook = JiraHook {
+            parse_saw_bytes: std::sync::atomic::AtomicBool::new(false),
+        };
+        let body = br#"{"ticket":"PROJ-7","status":"done"}"#;
+        let signed = sig_headers(
+            "X-Hub-Signature",
+            &format!("sha256={}", jira_signature("right-secret", body)),
+        );
+
+        // A wrong secret, a tampered body, an unreadable header — all
+        // `Signature`, and `parse` never ran on any of them.
+        assert_eq!(
+            receive_status(&hook, "wrong-secret", &signed, body, 0).unwrap_err(),
+            InboundStatusError::Signature
+        );
+        let tampered = receive_status(&hook, "right-secret", &signed, b"{}", 0).unwrap_err();
+        assert_eq!(tampered, InboundStatusError::Signature);
+        let unsigned =
+            receive_status(&hook, "right-secret", &HeaderMap::new(), body, 0).unwrap_err();
+        assert_eq!(unsigned, InboundStatusError::Signature);
+        assert!(
+            !hook
+                .parse_saw_bytes
+                .load(std::sync::atomic::Ordering::Relaxed)
+        );
+    }
+
+    #[test]
+    fn receive_status_parses_a_verified_state_change() {
+        let hook = JiraHook {
+            parse_saw_bytes: std::sync::atomic::AtomicBool::new(false),
+        };
+        let body = br#"{"ticket":"PROJ-7","status":"done","url":"https://jira.example.test/browse/PROJ-7"}"#;
+        let signed = sig_headers(
+            "X-Hub-Signature",
+            &format!("sha256={}", jira_signature("right-secret", body)),
+        );
+        let update = receive_status(&hook, "right-secret", &signed, body, 0)
+            .expect("the signature verifies");
+        assert_eq!(
+            update,
+            Some(StatusUpdate {
+                external_id: "PROJ-7".to_owned(),
+                state: TicketState::Closed,
+                url: Some("https://jira.example.test/browse/PROJ-7".to_owned()),
+            })
+        );
+        assert!(
+            hook.parse_saw_bytes
+                .load(std::sync::atomic::Ordering::Relaxed)
+        );
+
+        // A verified event carrying no status change is `Ok(None)`.
+        let ping = br#"{"kind":"ping"}"#;
+        let pinged = sig_headers(
+            "X-Hub-Signature",
+            &format!("sha256={}", jira_signature("right-secret", ping)),
+        );
+        assert_eq!(
+            receive_status(&hook, "right-secret", &pinged, ping, 0).expect("verified"),
+            None
+        );
+    }
+
+    #[test]
+    fn receive_status_maps_a_verified_but_unreadable_body_to_malformed() {
+        let hook = JiraHook {
+            parse_saw_bytes: std::sync::atomic::AtomicBool::new(false),
+        };
+        let body = br"not json at all - https://hooks.example.test/TOKEN?token=SECRET";
+        let signed = sig_headers(
+            "X-Hub-Signature",
+            &format!("sha256={}", jira_signature("right-secret", body)),
+        );
+        let error = receive_status(&hook, "right-secret", &signed, body, 0).unwrap_err();
+        assert!(matches!(error, InboundStatusError::Malformed(_)));
+        assert!(error.to_string().contains("malformed"));
+
+        // The text an adapter wraps can quote the payload it could not
+        // read — a webhook URL's token, a tenant name — so `Display`
+        // scrubs it the way `TrackerError::Rejected` does, and `Debug`
+        // keeps the raw string for a failing test.
+        let error = InboundStatusError::Malformed(
+            "vendor said: https://hooks.example.test/TOKEN?token=SECRET".to_owned(),
+        );
+        let text = error.to_string();
+        assert!(!text.contains("SECRET"), "{text}");
+        assert!(format!("{error:?}").contains("SECRET"));
     }
 }

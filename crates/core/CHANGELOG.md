@@ -27,6 +27,32 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   included — never on the full URI. The
   slug list is unchanged (docs/ERRORS.md). (#557)
 
+A breaking change is pending here: `Destination` is an exhaustive enum and
+gained `Freshdesk`, so a `match` over it no longer compiles unchanged; the
+next release of core is therefore 0.7.0, not 0.6.1.
+
+### Added
+
+- **`Tracker::comment`** and **`TicketComment`**: add a note (optionally
+  linking a URL) to an existing ticket, so a duplicate report links into the
+  ticket it duplicates. The default impl refuses with
+  `TrackerError::Rejected` naming the tracker, so existing adapters compile
+  unchanged; `RoutingTracker` forwards it by destination. (#559)
+- **Inbound status webhooks**: the `StatusWebhook` trait, `StatusUpdate`,
+  `InboundStatusError` and `receive_status`, which verifies a delivery with
+  core's `WebhookVerifier` before the adapter ever parses it. (#559)
+- **`Destination::Freshdesk { domain }`** and `RoutingTracker::freshdesk`;
+  no adapter ships for it yet. (#559)
+- `TicketState` is now `Serialize`/`Deserialize` (snake case), so a state can
+  cross the inbound webhook wire. (#559)
+
+### Changed
+
+- `Destination::Jira { site }` is documented as the bare hostname
+  (`acme.atlassian.net`), not the hostname prefix: the new
+  `cratefield-adapter-jira` refuses anything else, so the Basic credential
+  cannot be sent to another host. (#559)
+
 ## [0.6.0] — 2026-09-28
 
 A breaking release: `Port` is an exhaustive enum and gained `TextModel`,

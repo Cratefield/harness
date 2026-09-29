@@ -46,6 +46,11 @@ cratefield-adapter-github-issues = { path = "crates/adapter-github-issues", vers
 # Its sibling: the `Tracker` port over a tenant-configured webhook, the body
 # HMAC-SHA256-signed so the receiver can trust it came from us.
 cratefield-adapter-webhook-tracker = { path = "crates/adapter-webhook-tracker", version = "0.2" }
+# The other sibling (issue #559): the `Tracker` port over the Jira Cloud REST
+# API v3 — Basic auth over the tenant's `email:api_token`, ADF bodies,
+# search-before-create by an idempotency label, and the inbound status
+# webhook.
+cratefield-adapter-jira = { path = "crates/adapter-jira", version = "0.1" }
 cratefield-adapter-turnstile = { path = "crates/adapter-turnstile", version = "0.2" }
 # The first `TextModel` adapter (issue #430): the Claude Messages API over
 # the `HttpClient` port, against the minimal `TextModel` trait module in core.

@@ -54,6 +54,7 @@ also switch on the extra features noted in their rows:
 | `push-wiring` | `cratefield-push-wiring` | `cratefield::push_wiring` | Assembles the `Push` port from the environment, with the one table of variable names that `serve()`, `fz push` and `fz doctor` share. Pulls all three push adapters, and also turns on `push` in whichever runtime is enabled, for `push_from_env()` |
 | `github-issues` | `cratefield-adapter-github-issues` | `cratefield::github_issues` | `Tracker` over the GitHub Issues REST API |
 | `webhook-tracker` | `cratefield-adapter-webhook-tracker` | `cratefield::webhook_tracker` | `Tracker` over an HMAC-signed webhook the tenant configures |
+| `jira` | `cratefield-adapter-jira` | `cratefield::jira` | `Tracker` over the Jira Cloud REST API v3 (Basic auth over `email:api_token`, ADF bodies, and the inbound status webhook) |
 | `typesafe` | `cratefield-adapter-typesafe` | `cratefield::typesafe` | `Classifier` over the operator's own `TypeSafe` API key, via the `HttpClient` port |
 | `classifier-llm` | `cratefield-adapter-classifier-llm` | `cratefield::classifier_llm` | `Classifier` over the `TextModel` port, JSON-schema output, no new vendor |
 | `ui` | `cratefield-ui` | `cratefield::ui` | Renders the module surface as HTML |
