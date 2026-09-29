@@ -437,6 +437,255 @@ pub async fn classifier_not_configured(classifier: &dyn Classifier) {
     );
 }
 
+// ---------------------------------------------------------------------------
+// The `VectorIndex` port suite (issue #561)
+
+/// How far a reported `score` may sit from the exact cosine similarity and
+/// still count as agreeing (`f32` arithmetic differs across adapters).
+const SCORE_TOLERANCE: f32 = 1.0e-3;
+
+use cratefield_core::{VectorFilter, VectorMatch, VectorNamespace, VectorRecord};
+
+/// Asserts the [`VectorIndex`](cratefield_core::VectorIndex) contract
+/// against an adapter, over small three-dimensional vectors (issue #561):
+///
+/// 1. ranking is cosine similarity descending, and a vector is most
+///    similar to itself;
+/// 2. `k` is a limit, not a target — at most `k` matches, none for `k = 0`;
+/// 3. an equality filter keeps only the records whose metadata equals it
+///    on **every** key, and metadata round-trips byte for byte;
+/// 4. namespaces are isolated: the same id upserted into two namespaces
+///    stays two records, and a delete in one cannot touch the other;
+/// 5. an upsert replaces the whole record — values and metadata, no merge;
+/// 6. a delete removes, and deleting a missing id answers `Ok`.
+///
+/// Writes into the namespaces `conformance` and `conformance-other` and
+/// deletes what it wrote, so run it against a fresh or disposable index.
+///
+/// # Panics
+///
+/// Panics naming the broken rule when the contract is violated.
+pub async fn vector_index_conformance(index: &dyn cratefield_core::VectorIndex) {
+    let ns = VectorNamespace::new("conformance").expect("the suite namespace is valid");
+    let other = VectorNamespace::new("conformance-other").expect("the other namespace is valid");
+    vector_orders_filters_and_limits(index, &ns).await;
+    vector_isolates_replaces_and_deletes(index, &ns, &other).await;
+}
+
+/// The suite's `query`, asserted to answer.
+async fn vector_matches(
+    index: &dyn cratefield_core::VectorIndex,
+    ns: &VectorNamespace,
+    vector: &[f32],
+    k: usize,
+    filter: &VectorFilter,
+) -> Vec<VectorMatch> {
+    index
+        .query(ns, vector, k, filter)
+        .await
+        .expect("the scripted query answers")
+}
+
+/// Rules 1-3: nearest-first ordering, `k` as a limit, the every-key
+/// equality filter, and a byte-for-byte metadata round trip.
+async fn vector_orders_filters_and_limits(
+    index: &dyn cratefield_core::VectorIndex,
+    ns: &VectorNamespace,
+) {
+    let all = VectorFilter::new();
+    index
+        .upsert(
+            ns,
+            &[
+                VectorRecord::new("east", vec![1.0, 0.0, 0.0]),
+                VectorRecord::new("north", vec![0.0, 1.0, 0.0]),
+                VectorRecord::new("diagonal", vec![1.0, 1.0, 0.0]),
+            ],
+        )
+        .await
+        .expect("the scripted upsert answers");
+    let ranked = vector_matches(index, ns, &[1.0, 0.0, 0.0], 3, &all).await;
+    assert_eq!(
+        ranked.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(),
+        ["east", "diagonal", "north"],
+        "rule 1 (nearest first): cosine similarity must rank descending"
+    );
+    assert!(
+        (ranked[0].score - 1.0).abs() < SCORE_TOLERANCE,
+        "rule 1 (a vector is most similar to itself): got {}",
+        ranked[0].score
+    );
+    assert_eq!(
+        vector_matches(index, ns, &[1.0, 0.0, 0.0], 1, &all)
+            .await
+            .len(),
+        1,
+        "rule 2 (at most k)"
+    );
+    assert!(
+        vector_matches(index, ns, &[1.0, 0.0, 0.0], 0, &all)
+            .await
+            .is_empty(),
+        "rule 2 (k = 0 answers nothing)"
+    );
+    // `chat` is the nearer neighbour, so only the filter keeps it out.
+    let doc = VectorRecord::new("doc", vec![0.9, 0.1, 0.0])
+        .with_metadata("kind", serde_json::json!("doc"))
+        .with_metadata("lang", serde_json::json!("en"));
+    index
+        .upsert(
+            ns,
+            &[
+                doc.clone(),
+                VectorRecord::new("chat", vec![0.95, 0.05, 0.0])
+                    .with_metadata("kind", serde_json::json!("chat")),
+            ],
+        )
+        .await
+        .expect("the scripted upsert answers");
+    let kind_doc = VectorFilter::new().eq("kind", serde_json::json!("doc"));
+    let filtered = vector_matches(index, ns, &[1.0, 0.0, 0.0], 5, &kind_doc).await;
+    assert_eq!(
+        filtered.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(),
+        ["doc"],
+        "rule 3 (the filter keeps only equality matches)"
+    );
+    assert_eq!(
+        filtered[0].metadata, doc.metadata,
+        "rule 3 (metadata round-trips byte for byte)"
+    );
+    assert_eq!(
+        vector_matches(
+            index,
+            ns,
+            &[1.0, 0.0, 0.0],
+            5,
+            &kind_doc.clone().eq("lang", serde_json::json!("en")),
+        )
+        .await
+        .len(),
+        1,
+        "rule 3 (every key of the filter must match)"
+    );
+    assert!(
+        vector_matches(
+            index,
+            ns,
+            &[1.0, 0.0, 0.0],
+            5,
+            &kind_doc.eq("lang", serde_json::json!("fr")),
+        )
+        .await
+        .is_empty(),
+        "rule 3 (one mismatching key keeps nothing)"
+    );
+}
+
+/// Rules 4-6: namespace isolation with the *same* id on both sides, an
+/// upsert that replaces instead of merging, and idempotent deletes.
+async fn vector_isolates_replaces_and_deletes(
+    index: &dyn cratefield_core::VectorIndex,
+    ns: &VectorNamespace,
+    other: &VectorNamespace,
+) {
+    let all = VectorFilter::new();
+    let theirs = VectorRecord::new("east", vec![0.0, 0.0, 1.0])
+        .with_metadata("owner", serde_json::json!("other"));
+    index
+        .upsert(other, &[theirs])
+        .await
+        .expect("the scripted upsert answers");
+    let owners_other = VectorFilter::new().eq("owner", serde_json::json!("other"));
+    assert_eq!(
+        vector_matches(index, other, &[0.0, 0.0, 1.0], 5, &owners_other)
+            .await
+            .iter()
+            .map(|m| m.id.as_str())
+            .collect::<Vec<_>>(),
+        ["east"],
+        "rule 4 (the other namespace holds its own `east`)"
+    );
+    assert!(
+        vector_matches(index, ns, &[0.0, 0.0, 1.0], 5, &owners_other)
+            .await
+            .is_empty(),
+        "rule 4 (a query never crosses namespaces)"
+    );
+    index
+        .upsert(
+            ns,
+            &[VectorRecord::new("swap", vec![1.0, 0.0, 0.0])
+                .with_metadata("version", serde_json::json!(1))],
+        )
+        .await
+        .expect("the scripted upsert answers");
+    index
+        .upsert(
+            ns,
+            &[VectorRecord::new("swap", vec![0.6, 0.8, 0.0])
+                .with_metadata("version", serde_json::json!(2))],
+        )
+        .await
+        .expect("the scripted upsert answers");
+    let swap = vector_matches(index, ns, &[0.6, 0.8, 0.0], 5, &all)
+        .await
+        .into_iter()
+        .find(|m| m.id == "swap")
+        .expect("rule 5 (the replaced record is still there)");
+    assert!(
+        (swap.score - 1.0).abs() < SCORE_TOLERANCE,
+        "rule 5 (the upsert replaced the values): got {}",
+        swap.score
+    );
+    assert_eq!(
+        swap.metadata["version"],
+        serde_json::json!(2),
+        "rule 5 (the upsert replaced the metadata)"
+    );
+    assert!(
+        vector_matches(
+            index,
+            ns,
+            &[1.0, 0.0, 0.0],
+            5,
+            &VectorFilter::new().eq("version", serde_json::json!(1)),
+        )
+        .await
+        .is_empty(),
+        "rule 5 (the old metadata is gone, not merged)"
+    );
+    index
+        .delete(other, &["east".to_owned(), "never-there".to_owned()])
+        .await
+        .expect("rule 6 (deleting a missing id answers Ok)");
+    assert!(
+        vector_matches(index, other, &[0.0, 0.0, 1.0], 5, &all)
+            .await
+            .is_empty(),
+        "rule 6 (the delete removed the record)"
+    );
+    assert!(
+        vector_matches(index, ns, &[1.0, 0.0, 0.0], 5, &all)
+            .await
+            .iter()
+            .any(|m| m.id == "east"),
+        "rule 4 (a delete in one namespace cannot touch the other)"
+    );
+    // The doc's promise: every id the suite wrote, in both namespaces,
+    // deleted — so a second run against a persistent index starts clean.
+    let ours: Vec<String> = ["east", "north", "diagonal", "doc", "chat", "swap"]
+        .into_iter()
+        .map(String::from)
+        .collect();
+    index
+        .delete(ns, &ours)
+        .await
+        .expect("the scripted cleanup answers");
+    index
+        .delete(other, &["east".to_owned()])
+        .await
+        .expect("the scripted cleanup answers");
+}
 /// Asserts that asking with a `state` longer than
 /// `profile().max_state_chars` still succeeds — truncation is the
 /// adapter's job, so an over-limit state must never surface as an error

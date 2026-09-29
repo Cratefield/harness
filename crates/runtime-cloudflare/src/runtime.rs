@@ -13,7 +13,7 @@ use worker::Env;
 use crate::config::EnvConfig;
 use crate::ports::{
     D1Database, D1RateLimiter, FetchClient, KvStorePort, Limit, R2Blob, RateLimitPolicy,
-    RateLimitPort, ServiceDispatcher, WorkersClock,
+    RateLimitPort, ServiceDispatcher, WorkersClock, vector_index_from_env,
 };
 
 pub(crate) fn warn_once(flag: &AtomicBool, message: &str) {
@@ -46,6 +46,7 @@ use rt_log;
 static WARNED_DB: AtomicBool = AtomicBool::new(false);
 static WARNED_KV: AtomicBool = AtomicBool::new(false);
 static WARNED_BLOB: AtomicBool = AtomicBool::new(false);
+static WARNED_VECTOR_INDEX: AtomicBool = AtomicBool::new(false);
 static WARNED_RATE_LIMIT: AtomicBool = AtomicBool::new(false);
 /// The missing-binding refusal (issue #562): logged once per isolate, the
 /// same `warn_once` discipline as the degraded-binding warning above.
@@ -68,6 +69,9 @@ pub struct Cloudflare {
     db_binding: Option<&'static str>,
     kv_binding: Option<&'static str>,
     blob_binding: Option<&'static str>,
+    /// The Vectorize index binding backing the `VectorIndex` port
+    /// (issue #561), resolved per event like KV and D1.
+    vector_index_binding: Option<&'static str>,
     rate_limiter_binding: Option<&'static str>,
     /// The D1-backed per-key limiter (issue #538): the binding it reads its
     /// counters from, plus the policy mapping a key to its budget. Fills
@@ -114,6 +118,7 @@ impl Cloudflare {
             db_binding: None,
             kv_binding: None,
             blob_binding: None,
+            vector_index_binding: None,
             rate_limiter_binding: None,
             d1_rate_limiter: None,
             mailer: None,
@@ -148,6 +153,15 @@ impl Cloudflare {
     #[must_use]
     pub fn blob(mut self, binding: &'static str) -> Self {
         self.blob_binding = Some(binding);
+        self
+    }
+
+    /// The Vectorize index binding backing the `VectorIndex` port (issue
+    /// #561): nearest-neighbour search, one namespace per tenant. A
+    /// deployment without the binding leaves the port unwired.
+    #[must_use]
+    pub fn vector_index(mut self, binding: &'static str) -> Self {
+        self.vector_index_binding = Some(binding);
         self
     }
 
@@ -448,6 +462,21 @@ impl Cloudflare {
         missing_limiter_detail(&named, resolved)
     }
 
+    /// The `VectorIndex` port over a Vectorize index binding (issue #561).
+    ///
+    /// Its own method because `ports` is at clippy's line limit.
+    fn vector_index_port(&self, env: &Env, ports: &mut Ports) {
+        if let Some(name) = self.vector_index_binding {
+            match vector_index_from_env(env, name) {
+                Some(index) => ports.vector_index = Some(index),
+                None => warn_once(
+                    &WARNED_VECTOR_INDEX,
+                    &format!("Vectorize index binding {name:?} not available"),
+                ),
+            }
+        }
+    }
+
     /// Assembles the `Auth` port from `AUTH_ISSUER` and `AUTH_CLIENT_ID`
     /// (issue #153), the way `push_from_env` assembles push.
     ///
@@ -505,6 +534,7 @@ impl Cloudflare {
             }
         }
         self.rate_limiter_port(env, &mut ports);
+        self.vector_index_port(env, &mut ports);
 
         match HarnessConfig::from_config(&EnvConfig(env.clone())) {
             Ok(config) => {
@@ -597,6 +627,9 @@ impl Runtime for Cloudflare {
         }
         if self.blob_binding.is_some() {
             provided.push(Port::Blob);
+        }
+        if self.vector_index_binding.is_some() {
+            provided.push(Port::VectorIndex);
         }
         if self.rate_limiter_binding.is_some() || self.d1_rate_limiter.is_some() {
             provided.push(Port::RateLimiter);
@@ -903,6 +936,19 @@ mod tests {
     #[test]
     fn a_runtime_with_no_classifier_provides_no_classifier_port() {
         assert!(!Cloudflare::new().provides().contains(&Port::Classifier));
+    }
+
+    #[test]
+    fn a_vector_index_binding_is_provided_by_name() {
+        // Like `.kv(..)`: the builder stores a binding name, resolved per
+        // event in `ports()`, which needs a live `Env`.
+        assert!(
+            Cloudflare::new()
+                .vector_index("VINDEX")
+                .provides()
+                .contains(&Port::VectorIndex)
+        );
+        assert!(!Cloudflare::new().provides().contains(&Port::VectorIndex));
     }
 
     #[test]

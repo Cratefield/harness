@@ -10,6 +10,7 @@ mod http;
 mod kv;
 mod rate_limit;
 mod realtime;
+mod vectorize;
 
 pub(crate) use blob::R2Blob;
 pub use clock::WorkersClock;
@@ -21,6 +22,7 @@ pub use http::FetchClient;
 pub use kv::KvStorePort;
 pub use rate_limit::RateLimitPort;
 pub use realtime::RoomDriver;
+pub(crate) use vectorize::vector_index_from_env;
 
 use axum::http::HeaderMap;
 

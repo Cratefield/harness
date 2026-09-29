@@ -29,6 +29,8 @@ cratefield-core = { workspace = true }
 cratefield-auth-client = { workspace = true }
 cratefield-push-wiring = { workspace = true, optional = true }
 worker = { workspace = true }
+# Declares the Vectorize index binding; `worker` 0.8.5 re-exports the same version.
+wasm-bindgen = { workspace = true }
 axum = { workspace = true }
 http = { workspace = true }
 tower = { workspace = true }
@@ -49,5 +51,11 @@ getrandom = { workspace = true }
 
 [dev-dependencies]
 # Drives the native `#[cfg(test)]` tests of the pure body-gate helpers
-# (`worker::Request` itself cannot be constructed outside wasm).
+# (`worker::Request` itself cannot be constructed outside wasm) and of the
+# Vectorize adapter's seam, incl. the shared conformance suite.
 pollster = { workspace = true }
+# `port-conformance` alone: the light feature carrying
+# `vector_index_conformance` (issue #561), as `cratefield-adapter-apns` takes.
+cratefield-testing = { path = "../testing", default-features = false, features = [
+    "port-conformance",
+] }

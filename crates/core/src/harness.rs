@@ -737,23 +737,17 @@ impl Harness {
         // (TENANT-ROUTING.md §3): `/__health`, `/__ready`, `/.well-known`
         // and `/ui` have no tenant, and resolving there would 404 every
         // liveness probe in production.
-        let api = api
-            .layer(from_fn_with_state(
-                ports.rate_limiter.clone(),
-                admin_rate_limit_layer,
-            ))
-            .layer(axum::middleware::from_fn_with_state(
-                tenant_layer,
-                resolve_tenant_layer,
-            ))
-            .layer(axum::middleware::from_fn(security_headers_layer))
-            .layer(DefaultBodyLimit::max(MAX_BODY_BYTES));
+        let api = with_abuse_floor(api, ports.rate_limiter.clone(), tenant_layer);
 
         let surface_source = self.merged_surface(mounted, &ports, gateway.clone(), env);
 
         let ui = self.ui_router(&api, &ports, &surface_source);
 
         let health_state = self.health_state(&ports, mounts_for_health);
+        // Readiness must know what the composition asked for but this
+        // bundle cannot answer, and it asks before `ports` is destructured
+        // below.
+        let missing_ports = missing_module_ports(&self.modules, &ports);
         let Ports {
             config,
             db,
@@ -770,6 +764,8 @@ impl Harness {
             realtime: _,
             text_model: _,
             classifier: _,
+            vector_index: _,
+            embedder: _,
             http: _,
             clock,
             id_gen,
@@ -788,6 +784,7 @@ impl Harness {
         let ready_state = ReadyState {
             db,
             clock: clock.unwrap_or_else(|| Arc::new(SystemClock)),
+            missing_ports,
         };
 
         let surface_state = SurfaceState {
@@ -840,6 +837,24 @@ impl Harness {
         .layer(axum::middleware::from_fn(token_response_layer))
         .layer(cors_layer(&self.venture.cors_origins))
     }
+}
+
+/// The outer four layers every request passes, innermost last in source
+/// order: the abuse floor (issue #437), tenant resolution, security
+/// headers, body limit. Extracted so `Harness::router` stays under
+/// clippy's line cap.
+fn with_abuse_floor(
+    api: Router,
+    rate_limiter: Option<Arc<dyn RateLimiter>>,
+    tenant_layer: Arc<TenantLayer>,
+) -> Router {
+    api.layer(from_fn_with_state(rate_limiter, admin_rate_limit_layer))
+        .layer(axum::middleware::from_fn_with_state(
+            tenant_layer,
+            resolve_tenant_layer,
+        ))
+        .layer(axum::middleware::from_fn(security_headers_layer))
+        .layer(DefaultBodyLimit::max(MAX_BODY_BYTES))
 }
 
 /// What one `/__health` sidecar fan-out produced: when it ran (epoch ms)
@@ -1168,12 +1183,43 @@ async fn resolve_tenant_layer(
 struct ReadyState {
     db: Option<Arc<dyn Database>>,
     clock: Arc<dyn Clock>,
+    /// Ports some composed module requires but this bundle did not resolve
+    /// — see [`missing_module_ports`]. A deployment whose module cannot
+    /// run is not ready, whatever the database says.
+    missing_ports: Vec<Port>,
 }
 
-/// `GET /__ready`: `SELECT 1` through the `Database` port with a 2 s
-/// timeout supplied by the runtime's clock; 503 problem on failure
+/// The probed ports ([`Port::VectorIndex`], [`Port::Embedder`]) some
+/// composed module requires but this bundle does not provide (issue #561):
+/// the DB has its own leg of the probe, and an unwired port here means a
+/// module that would answer every request with `NotConfigured`.
+fn missing_module_ports(modules: &[Arc<dyn Module>], ports: &Ports) -> Vec<Port> {
+    const PROBED: &[Port] = &[Port::VectorIndex, Port::Embedder];
+    PROBED
+        .iter()
+        .copied()
+        .filter(|port| {
+            modules
+                .iter()
+                .any(|module| module.requires().contains(port))
+                && !ports.has(*port)
+        })
+        .collect()
+}
+
+/// `GET /__ready`: every port a module requires must be resolved, then
+/// `SELECT 1` through the `Database` port; 503 problem on failure
 /// (architecture section 6).
 async fn ready_handler(State(state): State<ReadyState>) -> impl IntoResponse {
+    if !state.missing_ports.is_empty() {
+        let detail = state
+            .missing_ports
+            .iter()
+            .map(|port| format!("{} port is not configured", port.name()))
+            .collect::<Vec<_>>()
+            .join("; ");
+        return Problem::not_ready(detail).into_response();
+    }
     let Some(db) = state.db else {
         return Problem::not_ready("database port is not configured").into_response();
     };

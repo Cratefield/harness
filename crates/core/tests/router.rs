@@ -87,6 +87,60 @@ async fn ready_503_when_database_is_too_slow() {
     assert!(body.contains("did not answer within 2 s"), "body: {body}");
 }
 
+/// A module that requires [`Port::VectorIndex`] and [`Port::Embedder`] but
+/// was handed a bundle without them is not ready — before the database is
+/// even asked (issue #561), and every unwired requirement is named, so an
+/// operator fixes the deployment in one round trip. The database here
+/// answers `SELECT 1`; the ports are the reason.
+#[pollster::test]
+async fn ready_503_when_a_module_requires_an_unwired_vector_port() {
+    let harness = Harness::builder()
+        .venture(base_venture())
+        .module(SampleModule {
+            requires: &[Port::Db, Port::VectorIndex, Port::Embedder],
+            ..SampleModule::default()
+        })
+        .runtime(FakeRuntime(all_ports()))
+        .build()
+        .expect("sample harness builds");
+    let router = harness.router(ports_with(Some(Arc::new(SelectOneDb))));
+    let response = request(&router, Method::GET, "/__ready", &[], None).await;
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let body = body_json(response).await;
+    assert_eq!(body["type"], "https://factory0.ventures/problems/not-ready");
+    let detail = body["detail"].as_str().unwrap_or_default();
+    assert!(
+        detail.contains("vector_index port is not configured"),
+        "body: {body}"
+    );
+    assert!(
+        detail.contains("embedder port is not configured"),
+        "body: {body}"
+    );
+}
+
+/// Wiring [`ExactVectorIndex`] satisfies the requirement, so the same
+/// deployment is ready: the probe fails for the missing port, not for the
+/// module that names it.
+#[pollster::test]
+async fn ready_ok_when_a_module_requires_a_wired_vector_index() {
+    let harness = Harness::builder()
+        .venture(base_venture())
+        .module(SampleModule {
+            requires: &[Port::Db, Port::VectorIndex],
+            ..SampleModule::default()
+        })
+        .runtime(FakeRuntime(all_ports()))
+        .build()
+        .expect("sample harness builds");
+    let mut ports = ports_with(Some(Arc::new(SelectOneDb)));
+    ports.vector_index = Some(Arc::new(cratefield_core::ExactVectorIndex::new(2)));
+    let router = harness.router(ports);
+    let response = request(&router, Method::GET, "/__ready", &[], None).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(body_json(response).await["ok"], true);
+}
+
 /// The sample module from the acceptance list is reachable at
 /// `/v1/sample`, and its handler sees the request's own scope.
 #[pollster::test]
