@@ -24,7 +24,7 @@ use crate::module::Module;
 use crate::ports::{Captcha, Port};
 use crate::problem::Problem;
 use crate::problems::SLUGS;
-use crate::surface::{Audience, Surface};
+use crate::surface::{Action, Audience, Surface};
 use crate::venture::VentureEnv;
 
 /// How a request to a declared route proves it is legitimate.
@@ -181,6 +181,17 @@ pub struct WriteGuards {
     /// document carries no `requires()`/`optional()` to read, and its
     /// public writes and admin routes stay under the two legs above.
     pub rate_limiter_modules: Vec<(String, Vec<String>)>,
+    /// Every declared [`RoutePolicy::Signature`] route, named the way the
+    /// readiness error names it (`METHOD /v1/<module><path>`), with the
+    /// verifier it resolved to (issue #595) — the action's own
+    /// [`verification`](crate::surface::Action::verification) when it
+    /// names one, else the module's
+    /// [`signature_verification`](Module::signature_verification). The
+    /// production gate and `fz doctor` read this to name the exact route a
+    /// missing `Payments` port or HMAC secret blocks, instead of blaming
+    /// the whole module. A module that reached the signature gate through
+    /// the surface-less fallback declares no route and contributes none.
+    pub signature_routes: Vec<(String, String, SignatureVerification)>,
 }
 
 impl WriteGuards {
@@ -227,18 +238,57 @@ impl WriteGuards {
             }
             if signature {
                 guards.signature_modules.push(module.name().to_owned());
-                // Whichever verifier the module declared (issue #533).
-                match module.signature_verification() {
-                    SignatureVerification::Payments => {
-                        guards
-                            .payments_signature_modules
-                            .push(module.name().to_owned());
+                // Resolve each Signature route's verifier (issue #595): the
+                // action's own, else the module-level default. A module
+                // with no declared Signature route — the surface-less
+                // fallback above — resolves through the default alone and
+                // has no route to name.
+                let declared: Vec<(String, SignatureVerification)> = surface
+                    .actions
+                    .iter()
+                    .filter(|action| action.policy == RoutePolicy::Signature)
+                    .map(|action| {
+                        (
+                            Self::mounted_route(module.name(), action),
+                            action
+                                .verification
+                                .unwrap_or_else(|| module.signature_verification()),
+                        )
+                    })
+                    .collect();
+                let routes = if declared.is_empty() {
+                    vec![(String::new(), module.signature_verification())]
+                } else {
+                    declared
+                };
+                let mut wants_payments = false;
+                for (route, verifier) in routes {
+                    match verifier {
+                        SignatureVerification::Payments => wants_payments = true,
+                        // Dedupe on `(module, suffix)`: one module may
+                        // name the same secret on several routes.
+                        SignatureVerification::Hmac { secret } => {
+                            if !guards
+                                .hmac_signature_modules
+                                .iter()
+                                .any(|(m, s)| m == module.name() && *s == secret)
+                            {
+                                guards
+                                    .hmac_signature_modules
+                                    .push((module.name().to_owned(), secret));
+                            }
+                        }
                     }
-                    SignatureVerification::Hmac { secret } => {
+                    if !route.is_empty() {
                         guards
-                            .hmac_signature_modules
-                            .push((module.name().to_owned(), secret));
+                            .signature_routes
+                            .push((module.name().to_owned(), route, verifier));
                     }
+                }
+                if wants_payments {
+                    guards
+                        .payments_signature_modules
+                        .push(module.name().to_owned());
                 }
             }
             if signed_link {
@@ -282,9 +332,10 @@ impl WriteGuards {
     /// merged surface is not a [`Module`] this process can ask
     /// [`public_writes`](Module::public_writes) or
     /// [`signature_verification`](Module::signature_verification) of, so
-    /// whatever the document declares is exactly what it needs, and its
-    /// signature routes verify through `Payments`, the default (issue
-    /// #533). Same per-action reading as [`Self::collect`]
+    /// whatever the document declares is exactly what it needs, and a
+    /// signature route that names no verifier verifies through `Payments`,
+    /// the default (issues #533, #595). Same per-action reading as
+    /// [`Self::collect`]
     /// through the one [`Action::demands_captcha`] predicate and the one
     /// `declares_admin_routes` predicate — a sidecar's admin plane needs
     /// the limiter floor as much as an in-process module's.
@@ -297,11 +348,38 @@ impl WriteGuards {
             .actions
             .iter()
             .any(|action| action.policy == RoutePolicy::SignedLink);
+        // A sidecar cannot ask a module for its default, so an action that
+        // names no verifier verifies through `Payments` — the pre-#533
+        // behaviour, now resolved per route (issue #595).
+        let mut payments = false;
+        let mut hmac_signature_modules: Vec<(String, &'static str)> = Vec::new();
+        let mut signature_routes = Vec::new();
+        for action in &surface.actions {
+            if action.policy != RoutePolicy::Signature {
+                continue;
+            }
+            let verifier = action
+                .verification
+                .unwrap_or(SignatureVerification::Payments);
+            signature_routes.push((
+                module.to_owned(),
+                Self::mounted_route(module, action),
+                verifier,
+            ));
+            match verifier {
+                SignatureVerification::Payments => payments = true,
+                SignatureVerification::Hmac { secret } => {
+                    if !hmac_signature_modules.iter().any(|(_, s)| *s == secret) {
+                        hmac_signature_modules.push((module.to_owned(), secret));
+                    }
+                }
+            }
+        }
         Self {
             captcha_modules: form.then(|| module.to_owned()).into_iter().collect(),
             signature_modules: signature.then(|| module.to_owned()).into_iter().collect(),
-            payments_signature_modules: signature.then(|| module.to_owned()).into_iter().collect(),
-            hmac_signature_modules: Vec::new(),
+            payments_signature_modules: payments.then(|| module.to_owned()).into_iter().collect(),
+            hmac_signature_modules,
             signed_link_modules: signed_link.then(|| module.to_owned()).into_iter().collect(),
             has_public_writes: form || signature || signed_link,
             has_admin_routes: Self::declares_admin_routes(surface),
@@ -309,6 +387,7 @@ impl WriteGuards {
             // sidecar's public writes and admin routes stay under the
             // two legs above.
             rate_limiter_modules: Vec::new(),
+            signature_routes,
         }
     }
 
@@ -388,11 +467,72 @@ impl WriteGuards {
             .collect()
     }
 
-    /// The module's public routes, named the way the readiness error names
-    /// them: `METHOD /v1/<module><path>` (issue #562). The surface stores
+    /// The HMAC-verified signature modules, the **full** config key each
+    /// reads its secret from, and the `METHOD /v1/<module><path>` routes
+    /// that read it (issue #595) — the shape `webhook_secret_readiness`
+    /// and `fz doctor` name a missing secret by, so a module with a Stripe
+    /// route and a `RevenueCat` route says which one the unset key blocks.
+    #[must_use]
+    pub fn hmac_signature_routes(&self) -> Vec<(String, String, Vec<String>)> {
+        self.hmac_signature_secrets()
+            .into_iter()
+            .zip(&self.hmac_signature_modules)
+            .map(|((module, key), (_, secret))| {
+                let routes =
+                    self.signature_routes_for(&module, SignatureVerification::Hmac { secret });
+                (module, key, routes)
+            })
+            .collect()
+    }
+
+    /// The routes `module` verifies with `verifier`, named
+    /// `METHOD /v1/<module><path>` (issue #595), so a readiness error can
+    /// point at the route instead of the whole module. Empty when the
+    /// module declared no surface route (the surface-less fallback).
+    #[must_use]
+    pub fn signature_routes_for(
+        &self,
+        module: &str,
+        verifier: SignatureVerification,
+    ) -> Vec<String> {
+        self.signature_routes
+            .iter()
+            .filter(|(m, _, v)| m == module && *v == verifier)
+            .map(|(_, route, _)| route.clone())
+            .collect()
+    }
+
+    /// `module (METHOD /v1/<module><path>, ...)`, or the bare module name
+    /// when it declared no route (the surface-less fallback) — the way the boot
+    /// gate and `fz doctor` name a signature module in a message
+    /// (issue #595).
+    #[must_use]
+    pub fn signature_module_named(&self, module: &str, verifier: SignatureVerification) -> String {
+        let routes = self.signature_routes_for(module, verifier);
+        if routes.is_empty() {
+            module.to_owned()
+        } else {
+            format!("{module} ({})", routes.join(", "))
+        }
+    }
+
+    /// One action named the way a readiness error names it:
+    /// `METHOD /v1/<module><path>` (issues #562, #595). The surface stores
     /// paths relative to the module's mount, so the mount is composed back
-    /// on here — the error should name the URL that runs unlimited, not a
-    /// surface-internal fragment.
+    /// on here — an error should name the URL that runs, not a
+    /// surface-internal fragment. The index action is declared `/`, and the
+    /// mounted URL has no trailing slash to name.
+    fn mounted_route(module: &str, action: &Action) -> String {
+        let path = action.path.trim_end_matches('/');
+        if path.is_empty() {
+            format!("{} /v1/{module}", action.method)
+        } else {
+            format!("{} /v1/{module}{path}", action.method)
+        }
+    }
+
+    /// The module's public routes, named the way the readiness error names
+    /// them: `METHOD /v1/<module><path>` (issue #562).
     fn public_limiter_routes(module: &str, surface: &Surface) -> Vec<String> {
         surface
             .actions
@@ -403,16 +543,7 @@ impl WriteGuards {
                     && action.policy != RoutePolicy::Signature
                     && action.policy != RoutePolicy::ApiKey
             })
-            .map(|action| {
-                // The index action is declared `/`, and the mounted URL
-                // has no trailing slash to name.
-                let path = action.path.trim_end_matches('/');
-                if path.is_empty() {
-                    format!("{} /v1/{module}", action.method)
-                } else {
-                    format!("{} /v1/{module}{path}", action.method)
-                }
-            })
+            .map(|action| Self::mounted_route(module, action))
             .collect()
     }
 
@@ -475,14 +606,23 @@ pub fn webhook_secret_readiness(
         return Vec::new();
     }
     guards
-        .hmac_signature_secrets()
-        .iter()
-        .filter(|(_, key)| config.get(key).is_none_or(|value| value.trim().is_empty()))
-        .map(|(module, key)| {
+        .hmac_signature_routes()
+        .into_iter()
+        .filter(|(_, key, _)| config.get(key).is_none_or(|value| value.trim().is_empty()))
+        .map(|(module, key, routes)| {
+            // Name the route(s) the unset key blocks (issue #595): a
+            // module may verify one webhook with `Payments` and another
+            // with this secret, so blaming the whole module would not say
+            // which endpoint refuses every delivery.
+            let on = if routes.is_empty() {
+                String::new()
+            } else {
+                format!(" on {}", routes.join(", "))
+            };
             format!(
                 "production venture verifies `{module}` webhook signatures with the \
                  webhook_signature HMAC scheme but `{key}` is not set — its handler refuses \
-                 every delivery until the provider's signing secret is configured"
+                 every delivery{on} until the provider's signing secret is configured"
             )
         })
         .collect()
@@ -684,13 +824,22 @@ pub fn production_readiness(
         ));
     }
     if guards.needs_payments() && !payments_effective(runtime) {
+        // Name each module with the routes that verify through Payments
+        // (issue #595): a module may verify its Stripe webhook this way
+        // and another provider's with an HMAC secret, and the operator
+        // needs to see which endpoint the missing port blocks.
+        let named = guards
+            .payments_signature_modules
+            .iter()
+            .map(|module| guards.signature_module_named(module, SignatureVerification::Payments))
+            .collect::<Vec<_>>()
+            .join(", ");
         errors.push(format!(
-            "production venture has signature-guarded routes from [{}] that verify through \
+            "production venture has signature-guarded routes from [{named}] that verify through \
              Payments but the Payments port is not provided — those webhook deliveries cannot \
              be verified (see the Inbox dedup ledger and the STRIPE_WEBHOOK_SECRET doctor \
              rule; modules verifying with the webhook_signature HMAC scheme instead are \
              gated on their own secret key, not this port)",
-            guards.payments_signature_modules.join(", ")
         ));
     }
     if guards.needs_rate_limiter()
@@ -1215,6 +1364,127 @@ mod tests {
             errors[0].contains("billing") && !errors[0].contains("pos"),
             "{}",
             errors[0]
+        );
+    }
+
+    // ------------------------------------------------ issue #595
+
+    /// A billing module with two webhooks and two verifiers: the Stripe
+    /// route keeps the module default (`Payments`), the `RevenueCat` route
+    /// names its own HMAC secret.
+    fn two_verifier_billing() -> Arc<dyn Module> {
+        module(
+            "billing",
+            vec![
+                Action::post("webhook-stripe", "/webhooks/stripe").policy(RoutePolicy::Signature),
+                Action::post("webhook-revenuecat", "/webhooks/revenuecat")
+                    .policy(RoutePolicy::Signature)
+                    .verification(SignatureVerification::Hmac {
+                        secret: "REVENUECAT_WEBHOOK_SECRET",
+                    }),
+            ],
+            false,
+        )
+    }
+
+    #[test]
+    fn a_two_verifier_module_composes_and_gates_each_verifier_by_route() {
+        struct ProvidesPayments;
+        impl Runtime for ProvidesPayments {
+            fn provides(&self) -> Vec<Port> {
+                vec![Port::Payments]
+            }
+        }
+        let guards = WriteGuards::collect(&[two_verifier_billing()]);
+        // One module in both lists, each exactly once (issue #595).
+        assert_eq!(guards.signature_modules, ["billing"]);
+        assert_eq!(guards.payments_signature_modules, ["billing"]);
+        assert_eq!(
+            guards.hmac_signature_secrets(),
+            vec![(
+                "billing".to_owned(),
+                "BILLING_REVENUECAT_WEBHOOK_SECRET".to_owned()
+            )]
+        );
+
+        // The Payments leg fires for the Stripe route only, and names it.
+        let errors = production_readiness(
+            VentureEnv::Production,
+            &guards,
+            None,
+            true,
+            false,
+            None,
+            None,
+        );
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert!(
+            errors[0].contains("POST /v1/billing/webhooks/stripe"),
+            "{}",
+            errors[0]
+        );
+        assert!(
+            !errors[0].contains("POST /v1/billing/webhooks/revenuecat"),
+            "{}",
+            errors[0]
+        );
+
+        // The HMAC leg fires for the RevenueCat route only, naming the key
+        // and the route.
+        let missing =
+            webhook_secret_readiness(VentureEnv::Production, &guards, &MapConfig::default());
+        assert_eq!(missing.len(), 1, "{missing:?}");
+        assert!(
+            missing[0].contains("BILLING_REVENUECAT_WEBHOOK_SECRET")
+                && missing[0].contains("POST /v1/billing/webhooks/revenuecat"),
+            "{}",
+            missing[0]
+        );
+
+        // Both verifiers satisfied: a runtime with an effective Payments
+        // port and the secret set is clean.
+        let runtime: Arc<dyn Runtime> = Arc::new(ProvidesPayments);
+        let set = MapConfig::from_pairs([("BILLING_REVENUECAT_WEBHOOK_SECRET", "whsec-dummy")]);
+        assert!(
+            production_readiness(
+                VentureEnv::Production,
+                &guards,
+                Some(&runtime),
+                true,
+                false,
+                None,
+                None,
+            )
+            .is_empty()
+        );
+        assert!(webhook_secret_readiness(VentureEnv::Production, &guards, &set).is_empty());
+    }
+
+    #[test]
+    fn from_surface_honours_a_route_verifier_on_an_in_process_surface() {
+        // `verification` is `#[serde(skip)]`, so a sidecar document cannot
+        // carry it: this builds the `Surface` in process to exercise the
+        // `from_surface` branch. It cannot ask a module for its default, so
+        // a route that names `Hmac` gets it — the `Payments` default is the
+        // #533 test above (issue #595).
+        let surface = Surface {
+            actions: vec![
+                Action::post("revenuecat", "/webhooks/revenuecat")
+                    .policy(RoutePolicy::Signature)
+                    .verification(SignatureVerification::Hmac {
+                        secret: "REVENUECAT_WEBHOOK_SECRET",
+                    }),
+            ],
+            views: vec![],
+        };
+        let guards = WriteGuards::from_surface("billing", &surface);
+        assert!(!guards.needs_payments());
+        assert_eq!(
+            guards.hmac_signature_secrets(),
+            vec![(
+                "billing".to_owned(),
+                "BILLING_REVENUECAT_WEBHOOK_SECRET".to_owned()
+            )]
         );
     }
 

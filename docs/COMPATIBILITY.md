@@ -43,6 +43,7 @@ compatibility-doc` and checked in CI for drift. Do not edit by hand.
 | `cratefield-adapter-github-issues` | 0.2.0 | 1 | `^0.6` — `>=0.6.0, <0.7.0` |
 | `cratefield-adapter-jira` | 0.1.0 | 1 | `^0.6` — `>=0.6.0, <0.7.0` |
 | `cratefield-adapter-openai-compatible` | 0.1.0 | 1 | `^0.6` — `>=0.6.0, <0.7.0` |
+| `cratefield-adapter-owlpost` | 0.1.0 | 1 | `^0.6` — `>=0.6.0, <0.7.0` |
 | `cratefield-adapter-postgres` | 0.2.0 | 1 | `^0.6` — `>=0.6.0, <0.7.0` |
 | `cratefield-adapter-resend` | 0.3.0 | 1 | `^0.6` — `>=0.6.0, <0.7.0` |
 | `cratefield-adapter-sqlite` | 0.2.0 | 1 | `^0.6` — `>=0.6.0, <0.7.0` |

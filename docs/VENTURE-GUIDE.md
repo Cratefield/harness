@@ -453,6 +453,16 @@ sends fail; with no `RESEND_API_KEY` the adapter reports `NotConfigured`
 and mail-needing endpoints answer `503 mail-not-configured` (real output
 in step 2), so forms can show a direct address meanwhile.
 
+**Owlpost is the same step, a different provider.** Switching a venture
+is changing the adapter crate — the facade feature (`resend` →
+`owlpost`) and the mailer line in `src/lib.rs` — and two secrets:
+`OWLPOST_API_KEY`, and optionally `OWLPOST_BASE_URL` for a self-hosted or
+proxy deployment (default `https://api.owlpost.to`). Owlpost is
+Resend-compatible, so the verified-subdomain rule and the degraded
+`NotConfigured`/`503` behavior are unchanged. Use an `op_test_…` key in
+development (it never reaches a provider) and the venture's `op_live_…`
+key in production: `wrangler secret put OWLPOST_API_KEY`.
+
 ## 8. Custom domain
 
 **Human** (DNS + Cloudflare). Point `api.<your-domain>` at the Worker —

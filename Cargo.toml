@@ -40,6 +40,9 @@ cratefield-runtime-cloudflare = { path = "crates/runtime-cloudflare", version = 
 cratefield-runtime-native = { path = "crates/runtime-native", version = "0.2" }
 cratefield-runtime-browser = { path = "crates/runtime-browser", version = "0.1.0" }
 cratefield-adapter-resend = { path = "crates/adapter-resend", version = "0.3" }
+# The second mail provider (issue #591): the `Mailer` port over the
+# Resend-compatible Owlpost REST API, the same `POST /v1/emails` shape.
+cratefield-adapter-owlpost = { path = "crates/adapter-owlpost", version = "0.1" }
 # Issue tracker (issue #432): the `Tracker` port over the GitHub Issues REST
 # API — search-before-create so the at-least-once outbox files one ticket.
 cratefield-adapter-github-issues = { path = "crates/adapter-github-issues", version = "0.2" }
