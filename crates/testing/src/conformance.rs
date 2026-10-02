@@ -128,6 +128,9 @@ pub fn full_fake_ports() -> Ports {
         crate::fakes::FAKE_EMBEDDER_DIMENSIONS,
     )));
     ports.embedder = Some(Arc::new(crate::fakes::FakeEmbedder));
+    ports.custom_hostnames = Some(Arc::new(crate::fakes::FakeCustomHostnames::new(
+        "cratefield.app",
+    )));
     ports.http = Some(Arc::new(crate::fakes::FakeHttpClient::ok_json("{}")));
     ports.clock = Some(Arc::new(crate::fakes::FixedClock(
         time::OffsetDateTime::from_unix_timestamp(1_800_000_000).expect("fixed epoch"),

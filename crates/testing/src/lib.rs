@@ -58,10 +58,11 @@ pub use dialect::Dialect;
 #[cfg(feature = "harness")]
 pub use fakes::{
     Ask, AuthMode, ClassifierMode, CommentedCall, EmptyDatabase, FAKE_EMBEDDER_DIMENSIONS,
-    FAKE_EMBEDDER_MODEL, FakeAuth, FakeCaptcha, FakeClassifier, FakeDefer, FakeDispatcher,
-    FakeEmbedder, FakeHttpClient, FakeMailer, FakePayments, FakePush, FakeRateLimiter,
-    FakeRealtime, FakeTextModel, FakeTracker, FiledCall, FixedClock, MailerMode, MemoryBlob,
-    MemoryKeyValue, PaymentsCall, PaymentsMode, PushMode, StatusedCall, TextModelMode, TrackerMode,
+    FAKE_EMBEDDER_MODEL, FakeAuth, FakeCaptcha, FakeClassifier, FakeCustomHostnames, FakeDefer,
+    FakeDispatcher, FakeEmbedder, FakeHttpClient, FakeMailer, FakePayments, FakePush,
+    FakeRateLimiter, FakeRealtime, FakeTextModel, FakeTracker, FiledCall, FixedClock, MailerMode,
+    MemoryBlob, MemoryKeyValue, PaymentsCall, PaymentsMode, PushMode, StatusedCall, TextModelMode,
+    TrackerMode,
 };
 #[cfg(feature = "harness")]
 pub use harness::TestHarness;

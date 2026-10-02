@@ -25,10 +25,11 @@
 // showed until somebody built it, is gone with the last of them.
 //
 // The two built screens are `pub` because their ports are: a live
-// adapter that talks to Cloudflare or R2 will live in its own crate and
-// implement `domains::CustomHostnames` / `backups::BackupStore` there,
-// the same way the provisioning `Deployer` is pub for the adapter that
-// will one day implement it.
+// adapter that talks to Cloudflare or R2 will live in its own crate — the
+// custom-hostnames one is `cratefield-adapter-cloudflare-saas` — and
+// implement `cratefield_core::CustomHostnames` / `backups::BackupStore`
+// there, the same way the provisioning `Deployer` is pub for the adapter
+// that will one day implement it.
 /// The backups screen.
 pub mod backups;
 mod billing;

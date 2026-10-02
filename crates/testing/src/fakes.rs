@@ -14,12 +14,14 @@
 use async_trait::async_trait;
 use bytes::Bytes;
 use cratefield_core::{
-    Answer, AnswerValue, Calibration, Captcha, CaptchaError, Classifier, ClassifierError,
-    ClassifierProfile, Clock, Completion, Credential, Database, DbError, Decision, Defer,
-    Destination, Filed, HttpClient, HttpError, KeyValue, KvError, MailError, Mailer, Message,
-    ModelTier, Prompt, Question, RateLimitError, RateLimiter, Row, Rows, SendOutcome, Statement,
-    TextModel, TextModelError, TicketComment, TicketDraft, TicketState, TicketStatus, Tracker,
-    TrackerError, Verdict, validate_questions,
+    Answer, AnswerValue, Calibration, Captcha, CaptchaError, CertificateStatus, Classifier,
+    ClassifierError, ClassifierProfile, Clock, Completion, Credential, CustomHostname,
+    CustomHostnameError, CustomHostnames, Database, DbError, Decision, Defer, Destination,
+    DnsRecordType, Filed, HostnameClaim, HttpClient, HttpError, KeyValue, KvError, MailError,
+    Mailer, Message, ModelTier, Prompt, ProviderStatus, Question, RateLimitError, RateLimiter, Row,
+    Rows, SendOutcome, Statement, TextModel, TextModelError, TicketComment, TicketDraft,
+    TicketState, TicketStatus, Tracker, TrackerError, Validation, Verdict, check_hostname,
+    validate_questions,
 };
 use futures_core::future::BoxFuture;
 use http::{Request, Response};
@@ -1826,5 +1828,201 @@ impl cratefield_core::Auth for FakeAuth {
                 )),
             },
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// FakeCustomHostnames
+
+/// An in-memory [`cratefield_core::CustomHostnames`] for module tests:
+/// records every call, walks a claim from pending to live on demand, and
+/// scripts the error the next call answers with.
+///
+/// `create` runs [`cratefield_core::check_hostname`] first, exactly as a
+/// real adapter must, so a test can drive the `Refused` arm — the refusal
+/// never reaches a provider.
+#[derive(Clone)]
+pub struct FakeCustomHostnames {
+    inner: Arc<FakeCustomHostnamesInner>,
+}
+
+struct FakeCustomHostnamesInner {
+    own_zone: String,
+    hostnames: Mutex<BTreeMap<String, CustomHostname>>,
+    calls: Mutex<Vec<String>>,
+    /// The scripted answer for the next call, if any.
+    refusals: Mutex<VecDeque<CustomHostnameError>>,
+    next_id: AtomicUsize,
+}
+
+impl FakeCustomHostnames {
+    /// A fake serving hostnames outside `own_zone` — the zone whose names
+    /// are refused as the deployment's own.
+    #[must_use]
+    pub fn new(own_zone: impl Into<String>) -> Self {
+        Self {
+            inner: Arc::new(FakeCustomHostnamesInner {
+                own_zone: own_zone.into(),
+                hostnames: Mutex::new(BTreeMap::new()),
+                calls: Mutex::new(Vec::new()),
+                refusals: Mutex::new(VecDeque::new()),
+                next_id: AtomicUsize::new(0),
+            }),
+        }
+    }
+
+    /// Every call so far, in order, as `"create share.acme.com"`.
+    #[must_use]
+    pub fn calls(&self) -> Vec<String> {
+        self.inner
+            .calls
+            .lock()
+            .expect("custom hostnames lock")
+            .clone()
+    }
+
+    /// Walks a claim to `Active`/`Active` with no records left to publish.
+    ///
+    /// A hostname that was never claimed is a no-op rather than a panic:
+    /// a test's setup failing should fail on the assertion, not here.
+    pub fn activate(&self, hostname: &str) {
+        let key = self.key(hostname);
+        if let Some(claim) = self
+            .inner
+            .hostnames
+            .lock()
+            .expect("custom hostnames lock")
+            .get_mut(&key)
+        {
+            claim.status = ProviderStatus::Active;
+            claim.certificate = CertificateStatus::Active;
+            claim.validation.clear();
+        }
+    }
+
+    /// Records the claim as failed with the provider's own `reason`.
+    pub fn fail(&self, hostname: &str, reason: &str) {
+        let key = self.key(hostname);
+        if let Some(claim) = self
+            .inner
+            .hostnames
+            .lock()
+            .expect("custom hostnames lock")
+            .get_mut(&key)
+        {
+            claim.status = ProviderStatus::Failed {
+                reason: reason.to_owned(),
+            };
+        }
+    }
+
+    /// Makes the next call answer `error` instead of its normal answer.
+    /// Queue several to script a sequence.
+    pub fn refuse_next(&self, error: CustomHostnameError) {
+        self.inner
+            .refusals
+            .lock()
+            .expect("custom hostnames lock")
+            .push_back(error);
+    }
+
+    /// The key a hostname is stored under: the same normalisation the
+    /// adapter's `check_hostname` call produces.
+    fn key(&self, hostname: &str) -> String {
+        check_hostname(hostname, &self.inner.own_zone)
+            .unwrap_or_else(|_| hostname.trim().trim_end_matches('.').to_ascii_lowercase())
+    }
+
+    fn log(&self, call: String) {
+        self.inner
+            .calls
+            .lock()
+            .expect("custom hostnames lock")
+            .push(call);
+    }
+
+    fn take_refusal(&self) -> Option<CustomHostnameError> {
+        self.inner
+            .refusals
+            .lock()
+            .expect("custom hostnames lock")
+            .pop_front()
+    }
+}
+
+#[async_trait]
+impl CustomHostnames for FakeCustomHostnames {
+    async fn create(&self, claim: &HostnameClaim) -> Result<CustomHostname, CustomHostnameError> {
+        self.log(format!("create {}", claim.hostname));
+        if let Some(error) = self.take_refusal() {
+            return Err(error);
+        }
+        let hostname = check_hostname(&claim.hostname, &self.inner.own_zone)
+            .map_err(CustomHostnameError::Refused)?;
+        let mut hostnames = self.inner.hostnames.lock().expect("custom hostnames lock");
+        if hostnames.contains_key(&hostname) {
+            return Err(CustomHostnameError::AlreadyExists);
+        }
+        let id = format!(
+            "fake-{}",
+            self.inner.next_id.fetch_add(1, Ordering::Relaxed)
+        );
+        let created = CustomHostname {
+            id: id.clone(),
+            hostname: hostname.clone(),
+            status: ProviderStatus::Pending,
+            certificate: CertificateStatus::Pending,
+            validation: vec![Validation {
+                record_type: DnsRecordType::Txt,
+                name: format!("_cf-custom-hostname.{hostname}"),
+                value: id,
+            }],
+        };
+        hostnames.insert(hostname, created.clone());
+        Ok(created)
+    }
+
+    async fn get(&self, hostname: &str) -> Result<Option<CustomHostname>, CustomHostnameError> {
+        self.log(format!("get {hostname}"));
+        if let Some(error) = self.take_refusal() {
+            return Err(error);
+        }
+        let key = self.key(hostname);
+        Ok(self
+            .inner
+            .hostnames
+            .lock()
+            .expect("custom hostnames lock")
+            .get(&key)
+            .cloned())
+    }
+
+    async fn delete(&self, hostname: &str) -> Result<(), CustomHostnameError> {
+        self.log(format!("delete {hostname}"));
+        if let Some(error) = self.take_refusal() {
+            return Err(error);
+        }
+        let key = self.key(hostname);
+        self.inner
+            .hostnames
+            .lock()
+            .expect("custom hostnames lock")
+            .remove(&key);
+        Ok(())
+    }
+
+    async fn refresh(&self, hostname: &str) -> Result<CustomHostname, CustomHostnameError> {
+        self.log(format!("refresh {hostname}"));
+        if let Some(error) = self.take_refusal() {
+            return Err(error);
+        }
+        let key = self.key(hostname);
+        self.inner
+            .hostnames
+            .lock()
+            .expect("custom hostnames lock")
+            .get(&key)
+            .cloned()
+            .ok_or(CustomHostnameError::NotFound)
     }
 }

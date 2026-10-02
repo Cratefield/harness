@@ -570,6 +570,7 @@ mod tests {
             "api_token",
             "captchaToken",
             "HARNESS_SECRET",
+            "CF_SAAS_API_TOKEN",
             "kid_key",
             "password",
         ] {
@@ -579,6 +580,9 @@ mod tests {
         // Deliberately over-broad: `idempotency_key` matches too, so the
         // mailer-outcome logs name the field `idempotency` (issue #14).
         assert!(is_secret_field("idempotency_key"));
+        // And the field-name rule is what actually hides the value: a
+        // custom-hostnames API token field never reaches a sink.
+        assert_eq!(redacted_value("api_token", "cf-abcdef"), "[redacted]");
     }
 
     #[test]

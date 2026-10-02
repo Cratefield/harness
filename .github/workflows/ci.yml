@@ -386,6 +386,11 @@ jobs:
         run: cargo build --target wasm32-unknown-unknown -p cratefield-adapter-typesafe
       - name: Build cratefield-adapter-classifier-llm to wasm
         run: cargo build --target wasm32-unknown-unknown -p cratefield-adapter-classifier-llm
+      # The custom-hostnames adapter (issue #590) rides the `HttpClient`
+      # port, and no venture in this repo enables its facade feature yet,
+      # so nothing else would notice a dependency that cannot reach wasm32.
+      - name: Build cratefield-adapter-cloudflare-saas to wasm
+        run: cargo build --target wasm32-unknown-unknown -p cratefield-adapter-cloudflare-saas
       # And for workers-ai (issue #456) wasm32 is the whole point: it only
       # functions on an isolate, where the `env.AI` binding exists, so the
       # native build proves nothing and this leg is its only positive proof.

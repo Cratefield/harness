@@ -59,6 +59,9 @@ cratefield-adapter-anthropic = { path = "crates/adapter-anthropic", version = "0
 # wire at a configurable base URL — OpenAI, OpenRouter, Workers AI's
 # compatible endpoint, or a local vLLM/llama.cpp/Ollama server.
 cratefield-adapter-openai-compatible = { path = "crates/adapter-openai-compatible", version = "0.1" }
+# Its sibling (issue #590): the `CustomHostnames` port over Cloudflare for
+# SaaS custom hostnames — a customer's own hostname served by the venture.
+cratefield-adapter-cloudflare-saas = { path = "crates/adapter-cloudflare-saas", version = "0.1" }
 cratefield-adapter-apns = { path = "crates/adapter-apns", version = "0.2" }
 cratefield-adapter-fcm = { path = "crates/adapter-fcm", version = "0.2" }
 # The provider tokens the push adapters present (issue #178): ES256 for APNs

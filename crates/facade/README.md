@@ -46,6 +46,7 @@ also switch on the extra features noted in their rows:
 | `turnstile` | `cratefield-adapter-turnstile` | `cratefield::turnstile` | `Captcha` over Cloudflare Turnstile |
 | `anthropic` | `cratefield-adapter-anthropic` | `cratefield::anthropic` | `TextModel` over the Anthropic Messages API, via the `HttpClient` port |
 | `openai-compatible` | `cratefield-adapter-openai-compatible` | `cratefield::openai_compatible` | `TextModel` over the `OpenAI` chat-completions wire at any base URL, via the `HttpClient` port |
+| `cloudflare-saas` | `cratefield-adapter-cloudflare-saas` | `cratefield::cloudflare_saas` | `CustomHostnames` over Cloudflare for `SaaS` custom hostnames, via the `HttpClient` port |
 | `stripe` | `cratefield-adapter-stripe` | `cratefield::stripe` | `Payments` over the Stripe API |
 | `apns` | `cratefield-adapter-apns` | `cratefield::apns` | `Push` over Apple Push Notification service |
 | `fcm` | `cratefield-adapter-fcm` | `cratefield::fcm` | `Push` over Firebase Cloud Messaging (HTTP v1) |

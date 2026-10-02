@@ -39,6 +39,7 @@ compatibility-doc` and checked in CI for drift. Do not edit by hand.
 | `cratefield-adapter-anthropic` | 0.2.0 | 1 | `^0.6` — `>=0.6.0, <0.7.0` |
 | `cratefield-adapter-apns` | 0.2.0 | 1 | `^0.6` — `>=0.6.0, <0.7.0` |
 | `cratefield-adapter-classifier-llm` | 0.2.0 | 1 | `^0.6` — `>=0.6.0, <0.7.0` |
+| `cratefield-adapter-cloudflare-saas` | 0.1.0 | 1 | `^0.6` — `>=0.6.0, <0.7.0` |
 | `cratefield-adapter-fcm` | 0.2.0 | 1 | `^0.6` — `>=0.6.0, <0.7.0` |
 | `cratefield-adapter-github-issues` | 0.2.0 | 1 | `^0.6` — `>=0.6.0, <0.7.0` |
 | `cratefield-adapter-jira` | 0.1.0 | 1 | `^0.6` — `>=0.6.0, <0.7.0` |
