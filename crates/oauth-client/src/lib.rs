@@ -22,6 +22,7 @@
 
 mod client;
 mod config;
+pub mod device;
 mod pkce;
 mod refresh;
 mod seal;

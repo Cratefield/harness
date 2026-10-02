@@ -454,6 +454,68 @@
         ],
         "surface": null
       }
+    },
+    {
+      "slug": "device-auth",
+      "name": "Device sign-in",
+      "summary": "The OAuth 2.0 device authorization grant (RFC 8628): a client with no browser shows a code, a signed-in person approves it, and your issuer mints the credential.",
+      "tier": "optional",
+      "depends_on": [],
+      "releases": [
+        {
+          "version": "0.2.0",
+          "digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+          "review": {
+            "approved": {
+              "reviewer": "release-review",
+              "reviewed_at": "2026-09-01T00:00:00Z"
+            }
+          }
+        }
+      ],
+      "detail": {
+        "what_it_is": "The OAuth 2.0 device authorization grant (RFC 8628), for a client with no browser and no keyboard: a CLI, a TV app, an appliance. The client shows a short, look-alike-free code, a signed-in person approves it in a browser, and your own issuer mints the credential — the harness never decides what a credential is. Both codes are stored only as SHA-256 hashes, the one approved poll mints exactly once, and every route the public one touches is rate limited.",
+        "crate_name": "cratefield-module-device-auth",
+        "needs": [
+          "Database",
+          "RateLimiter"
+        ],
+        "optional": [
+          "Clock",
+          "Auth"
+        ],
+        "tables": [
+          "device_auth_codes"
+        ],
+        "routes": [
+          {
+            "method": "POST",
+            "path": "/v1/device-auth/code",
+            "note": "Start a device authorization: returns the device code, the user code and the verification URL."
+          },
+          {
+            "method": "POST",
+            "path": "/v1/device-auth/token",
+            "note": "Poll for the credential; answers authorization_pending, slow_down, or the issued credential."
+          },
+          {
+            "method": "GET",
+            "path": "/v1/device-auth",
+            "note": "The browser page: the code form, or the Approve/Deny decision."
+          },
+          {
+            "method": "POST",
+            "path": "/v1/device-auth/approve",
+            "note": "Approve the device shown for a user code."
+          },
+          {
+            "method": "POST",
+            "path": "/v1/device-auth/deny",
+            "note": "Deny the request a user code names."
+          }
+        ],
+        "surface": "The approval page at /v1/device-auth: a code form for a visitor, and the decision page showing the requesting device to a signed-in person."
+      }
     }
   ]
 }

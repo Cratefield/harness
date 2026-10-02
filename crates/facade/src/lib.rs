@@ -149,5 +149,8 @@ pub use cratefield_module_telemetry as telemetry;
 #[cfg(feature = "webhooks")]
 pub use cratefield_module_webhooks as webhooks;
 
+#[cfg(feature = "device-auth")]
+pub use cratefield_module_device_auth as device_auth;
+
 #[cfg(feature = "testing")]
 pub use cratefield_testing as testing;

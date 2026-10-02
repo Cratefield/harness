@@ -1,0 +1,58 @@
+[package]
+name = "cratefield-module-device-auth"
+description = "Cratefield module: the OAuth 2.0 device authorization grant (RFC 8628) — a client shows a code, a signed-in person approves it, and the venture's issuer mints the credential"
+readme = "README.md"
+keywords = ["cratefield", "oauth", "device", "rfc8628", "module"]
+categories = ["web-programming"]
+include = ["src/**/*", "migrations/**/*", "tests/**/*", "README.md"]
+version = "0.2.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+cratefield-core = { workspace = true }
+axum = { workspace = true }
+http = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+# The device endpoints take their parameters two ways — a JSON tool body
+# and an HTML form — so the same struct is parsed from either.
+serde_urlencoded = { workspace = true }
+sea-query = { workspace = true }
+tracing = { workspace = true }
+time = { workspace = true }
+# The codes are only ever stored as hashes: SHA-256 rendered as lowercase
+# hex, so a database dump holds nothing replayable.
+sha2 = { workspace = true }
+hex = { workspace = true }
+# `device_code` is 32 random bytes in the RFC 7636 base64url alphabet
+# without padding; the entropy itself comes from the builder's
+# `RandomBytes`, never from this crate (core has no CSPRNG).
+base64 = { workspace = true }
+thiserror = { workspace = true }
+async-trait = { workspace = true }
+schemars = { workspace = true }
+
+[dev-dependencies]
+# Dev-only, and only so `tests/privacy.rs` can prove the personal-data
+# declaration against the module that reads it (issue #265's pattern). A
+# declaration is a promise about another crate's behaviour, so asserting
+# the list against itself would prove none of it. Path-only, so it is
+# stripped from the packaged manifest.
+cratefield-module-privacy = { path = "../module-privacy" }
+# The in-memory SQLite adapter, so the store can be tested against real
+# SQL instead of against a mock of SQL.
+cratefield-adapter-sqlite = { path = "../adapter-sqlite" }
+# The `postgres` feature unlocks the Postgres parity leg of the testing
+# kit (issue #20); the leg itself only runs when FZ_TEST_POSTGRES_URL
+# names a server. Dev-only, so it never reaches a venture's wasm graph.
+cratefield-testing = { path = "../testing", features = ["postgres"] }
+serde_json = { workspace = true }
+pollster = { workspace = true }
+tower = { workspace = true }
+futures-util = { workspace = true }

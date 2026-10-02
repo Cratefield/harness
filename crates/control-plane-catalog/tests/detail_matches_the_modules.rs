@@ -29,6 +29,9 @@ fn pairs() -> Vec<(CatalogModule, Box<dyn Module>)> {
         Box::new(cratefield_module_notifications::Notifications::new()),
         Box::new(cratefield_module_privacy::Privacy::new()),
         Box::new(cratefield_module_telemetry::Telemetry::new()),
+        // Only the module's metadata is read here (ports, tables, surface),
+        // so the composition a venture would wire is not needed.
+        Box::new(cratefield_module_device_auth::DeviceAuth::new()),
     ];
     let catalog = curated();
     assert_eq!(
