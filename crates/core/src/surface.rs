@@ -143,6 +143,18 @@ pub struct Action {
     /// HumanForm` — the surface JSON keeps the `captcha` key for existing
     /// consumers; new code declares a `policy`.
     pub captcha: bool,
+    /// How this **route** proves a signature delivery (issue #595),
+    /// overriding the module-level
+    /// [`signature_verification`](Module::signature_verification) default.
+    /// Valid only on a [`Signature`] action — [`Surface::validate`]
+    /// refuses it anywhere else. Deliberately not serialized, like
+    /// [`policy`](Self::policy): the surface document's wire shape is
+    /// unchanged. A billing module can name `Payments` on
+    /// `POST /webhooks/stripe` and `Hmac` on `POST /webhooks/revenuecat`.
+    ///
+    /// [`Signature`]: crate::route_policy::RoutePolicy::Signature
+    #[serde(skip)]
+    pub verification: Option<crate::route_policy::SignatureVerification>,
 }
 
 impl Action {
@@ -184,6 +196,7 @@ impl Action {
             },
             policy: crate::route_policy::RoutePolicy::default(),
             captcha: false,
+            verification: None,
         }
     }
 
@@ -253,6 +266,23 @@ impl Action {
     pub fn policy(mut self, policy: crate::route_policy::RoutePolicy) -> Self {
         self.policy = policy;
         self.captcha = policy == crate::route_policy::RoutePolicy::HumanForm;
+        self
+    }
+
+    /// Names the verifier this route proves its signature deliveries with
+    /// (issue #595), overriding the module's
+    /// [`signature_verification`](Module::signature_verification). Only
+    /// meaningful on a [`Signature`] route — [`Surface::validate`] refuses
+    /// it on any other policy — so a module with one billing webhook per
+    /// provider can declare `Payments` for Stripe and `Hmac` for the rest.
+    ///
+    /// [`Signature`]: crate::route_policy::RoutePolicy::Signature
+    #[must_use]
+    pub fn verification(
+        mut self,
+        verification: crate::route_policy::SignatureVerification,
+    ) -> Self {
+        self.verification = Some(verification);
         self
     }
 
@@ -469,6 +499,7 @@ impl Surface {
                 // and an Open unprotected route is the default.
                 _ => {}
             }
+            validate_verifier(module, name, action, errors);
         }
         for view in &self.views {
             for referenced in view.action_names() {
@@ -821,6 +852,22 @@ fn is_object_schema(schema: &Schema) -> bool {
     }
 }
 
+/// A per-route verifier describes how a webhook proves a delivery, so it
+/// belongs only on a [`Signature`] policy route (issue #595).
+///
+/// [`Signature`]: crate::route_policy::RoutePolicy::Signature
+fn validate_verifier(module: &str, name: &str, action: &Action, errors: &mut ConfigError) {
+    if action.verification.is_some() && action.policy != crate::route_policy::RoutePolicy::Signature
+    {
+        errors.push(format!(
+            "module `{module}` surface action `{name}` names a signature verifier but its \
+             policy is not Signature; only a webhook route can say how it verifies deliveries \
+             — drop `.verification(..)` or declare `.policy(RoutePolicy::Signature)` \
+             (issue #595)",
+        ));
+    }
+}
+
 fn is_kebab(name: &str) -> bool {
     !name.is_empty()
         && name.split('-').all(|part| {
@@ -1061,5 +1108,40 @@ mod tests {
         let public = surface.public();
         assert!(public.actions.iter().all(|action| action.name != "sync"));
         assert!(public.actions.iter().any(|action| action.name == "join"));
+    }
+
+    #[test]
+    fn only_a_signature_action_may_name_a_verifier() {
+        // A per-route verifier says how a webhook proves a delivery. On
+        // any other policy it is a claim the gate cannot honour, so the
+        // validator refuses it (issue #595).
+        let stray = Action::post("join", "/").captcha().verification(
+            crate::route_policy::SignatureVerification::Hmac {
+                secret: "WEBHOOK_SECRET",
+            },
+        );
+        let errors = errors_of(&Surface::new().action(stray));
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("policy is not Signature")),
+            "{errors:?}"
+        );
+
+        // A Signature route accepts it — both the default and a per-route
+        // HMAC verifier.
+        let accepted = Surface::new()
+            .action(
+                Action::post("stripe", "/webhooks/stripe")
+                    .policy(crate::route_policy::RoutePolicy::Signature),
+            )
+            .action(
+                Action::post("revenuecat", "/webhooks/revenuecat")
+                    .policy(crate::route_policy::RoutePolicy::Signature)
+                    .verification(crate::route_policy::SignatureVerification::Hmac {
+                        secret: "REVENUECAT_WEBHOOK_SECRET",
+                    }),
+            );
+        assert!(errors_of(&accepted).is_empty());
     }
 }
