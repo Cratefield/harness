@@ -40,6 +40,7 @@ mod scheduled;
 mod scope;
 mod sidecar;
 mod signer;
+mod stream;
 mod surface;
 mod template;
 mod tenant;
@@ -150,6 +151,7 @@ pub use signer::{
     MIN_SECRET_BYTES, RingKey, STATUS_TOKEN_MAX_TTL_SECS, SignerError, TokenPolicy,
     UNSUBSCRIBE_ACTION,
 };
+pub use stream::{BoxStream, RequestStream, ResponseStream, StreamError, StreamRoute};
 pub use surface::{
     Action, Audience, Column, HINT_KEYWORDS, MAX_SIDECAR_ACTIONS, MAX_SIDECAR_SURFACE_BYTES,
     MAX_SIDECAR_VIEWS, ModuleSurface, Outcome, RenderedSurface, SURFACE_API, Surface,

@@ -75,7 +75,7 @@ pub use port::{
     text_model_conformance_not_configured, text_model_conformance_prompt, vector_index_conformance,
 };
 #[cfg(feature = "harness")]
-pub use request::{TestResponse, request, request_as};
+pub use request::{TestResponse, request, request_as, request_chunks};
 #[cfg(feature = "harness")]
 pub use sidecar::{FakeSidecar, Fault, shared as shared_sidecar};
 pub use tmp::TempDir;

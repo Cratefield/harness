@@ -14,7 +14,7 @@ use std::time::Duration;
 
 use axum::Router;
 use axum::extract::{DefaultBodyLimit, State};
-use axum::http::{HeaderMap, StatusCode, header};
+use axum::http::{HeaderMap, Method, StatusCode, header};
 use axum::middleware::{Next, from_fn_with_state};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
@@ -46,6 +46,7 @@ use crate::sidecar::{
     gateway_signer, mint_gateway, truthy,
 };
 use crate::signer::HmacSigner;
+use crate::stream::{RequestStream, StreamRoute};
 use crate::surface::{
     MAX_SIDECAR_SURFACE_BYTES, RenderedSurface, SurfaceDocument, SurfaceSource, UiContext, UiMount,
     sanitize_sidecar_document, strip_unguarded_captcha_actions,
@@ -219,17 +220,7 @@ impl Harness {
     /// trailing or doubled slash are collapsed; `/v1` with no module
     /// segment is simply the default ceiling.
     pub fn max_body_bytes(&self, path: &str, cfg: &dyn Config) -> usize {
-        // Cut at the first `?` or `#`; a caller passing a whole URL must
-        // not have the module misidentified from its tail.
-        let path = match path.split_once(['?', '#']) {
-            Some((path, _)) => path,
-            None => path,
-        };
-        let mut segments = path.split('/').filter(|segment| !segment.is_empty());
-        if segments.next() != Some("v1") {
-            return MAX_BODY_BYTES;
-        }
-        let Some(name) = segments.next() else {
+        let Some((name, _)) = module_and_segments(path) else {
             return MAX_BODY_BYTES;
         };
         self.modules
@@ -238,6 +229,29 @@ impl Harness {
             .map_or(MAX_BODY_BYTES, |module| {
                 MAX_BODY_BYTES.max(module.max_body_bytes(cfg))
             })
+    }
+
+    /// The streaming route that serves `method` at `path`, if the module
+    /// mounted there declared one — answering its own
+    /// [`StreamRoute::max_bytes`] ceiling (issue #585).
+    ///
+    /// The counterpart of [`Harness::max_body_bytes`] on the streaming side:
+    /// a runtime consults this **before** reading a body, to know whether
+    /// the route streams (and with what ceiling) or buffers, exactly as
+    /// `max_body_bytes` tells it how much a buffered route may hold. The
+    /// ceiling is returned verbatim — a streaming route's `max_bytes` is the
+    /// precise per-route limit, not a coarse pre-buffer guard, so it is not
+    /// floored at [`MAX_BODY_BYTES`].
+    ///
+    /// Path normalisation is exact, not [`Harness::max_body_bytes`]': a query
+    /// or fragment is ignored, but empty segments are **not** collapsed, so a
+    /// trailing or doubled slash matches no route — the request then keeps
+    /// its buffered body and axum's own 404, exactly as without streaming.
+    /// `path` is the URL path only; `method` is the request's.
+    pub fn streaming_route(&self, path: &str, method: &axum::http::Method) -> Option<usize> {
+        let (name, segments) = exact_module_and_segments(path)?;
+        let module = self.modules.iter().find(|module| module.name() == name)?;
+        match_streaming(module.streaming_routes(), method, &segments)
     }
 
     pub fn templates(&self) -> &Arc<TemplateRegistry> {
@@ -781,6 +795,14 @@ impl Harness {
         // (TENANT-ROUTING.md §3): `/__health`, `/__ready`, `/.well-known`
         // and `/ui` have no tenant, and resolving there would 404 every
         // liveness probe in production.
+        //
+        // The streaming request layer (issue #585) is applied first, so it
+        // is the innermost of all: the `413` a declared over-ceiling body
+        // earns still passes back out through security headers, tenant
+        // resolution and the request-id/CORS layers, and a streaming route
+        // gets the same abuse-floor budget every other route does.
+        let streaming = StreamingState::build(&self.modules);
+        let api = api.layer(from_fn_with_state(streaming, streaming_request_layer));
         let api = with_abuse_floor(api, ports.rate_limiter.clone(), tenant_layer);
 
         let surface_source = self.merged_surface(mounted, &ports, gateway.clone(), env);
@@ -864,6 +886,156 @@ impl Harness {
         // `/.well-known`, `/ui` and the fallback alike.
         .layer(from_fn_with_state(problem_type_base, problem_type_layer))
     }
+}
+
+/// The `/v1/<name>` module a path addresses, plus its remaining segments.
+/// `None` when the path is not under a module mount. A query or fragment is
+/// cut at the first `?`/`#` (a caller passing a whole URL must not have the
+/// module misidentified from its tail) and empty segments from a leading,
+/// trailing or doubled slash are collapsed — [`Harness::max_body_bytes`]'
+/// lenient normalisation, which tolerates a path a caller typed by hand.
+/// Streaming classification uses the stricter [`exact_module_and_segments`].
+fn module_and_segments(path: &str) -> Option<(&str, Vec<&str>)> {
+    let path = match path.split_once(['?', '#']) {
+        Some((path, _)) => path,
+        None => path,
+    };
+    let mut segments = path.split('/').filter(|segment| !segment.is_empty());
+    if segments.next() != Some("v1") {
+        return None;
+    }
+    let name = segments.next()?;
+    Some((name, segments.collect()))
+}
+
+/// The exact-segment counterpart of [`module_and_segments`], for classifying
+/// **streaming** routes. It collapses nothing: a trailing or doubled slash
+/// is a segment of its own, so `/upload/` and `//upload` match no route and
+/// are left to axum's own routing (a 404) — streaming must never claim a
+/// request axum would not serve. `path` must be a root-relative URL path (a
+/// leading `/`), which is what every request's `uri().path()` is.
+fn exact_module_and_segments(path: &str) -> Option<(&str, Vec<&str>)> {
+    let path = match path.split_once(['?', '#']) {
+        Some((path, _)) => path,
+        None => path,
+    };
+    let mut segments = path.split('/');
+    // The split before the leading slash is an empty segment.
+    if segments.next() != Some("") || segments.next() != Some("v1") {
+        return None;
+    }
+    let name = segments.next()?;
+    if name.is_empty() {
+        return None;
+    }
+    Some((name, segments.collect()))
+}
+
+/// Whether `method` + `segments` matches one of `routes`, returning the
+/// route's ceiling.
+fn match_streaming(routes: &[StreamRoute], method: &Method, segments: &[&str]) -> Option<usize> {
+    routes.iter().find_map(|route| {
+        (route.method == *method && pattern_matches(route.path, segments))
+            .then_some(route.max_bytes)
+    })
+}
+
+/// Matches one route pattern's segments against a request path's: a literal
+/// segment compares equal, `{param}` matches exactly one segment, and
+/// `{*rest}` matches the remaining one-or-more and must be last.
+fn pattern_matches(pattern: &str, segments: &[&str]) -> bool {
+    let mut pattern_segments = pattern.split('/').filter(|segment| !segment.is_empty());
+    let mut rest = segments.iter();
+    loop {
+        match pattern_segments.next() {
+            Some("{*rest}") => {
+                return pattern_segments.next().is_none() && rest.next().is_some();
+            }
+            Some(param) if param.starts_with('{') && param.ends_with('}') => {
+                if rest.next().is_none() {
+                    return false;
+                }
+            }
+            Some(literal) => {
+                if rest.next() != Some(&literal) {
+                    return false;
+                }
+            }
+            None => return rest.next().is_none(),
+        }
+    }
+}
+
+/// Every module's streaming routes, snapshotted once per router so the
+/// request layer can match without touching the module list.
+#[derive(Clone)]
+struct StreamingState {
+    modules: Arc<Vec<(&'static str, &'static [StreamRoute])>>,
+}
+
+impl StreamingState {
+    fn build(modules: &[Arc<dyn Module>]) -> Self {
+        // Only modules that declared a route are kept, so a deployment with
+        // no streaming routes short-circuits with an empty vec.
+        let routes = modules
+            .iter()
+            .filter(|module| !module.streaming_routes().is_empty())
+            .map(|module| (module.name(), module.streaming_routes()))
+            .collect();
+        Self {
+            modules: Arc::new(routes),
+        }
+    }
+
+    fn max_bytes(&self, path: &str, method: &Method) -> Option<usize> {
+        let (name, segments) = exact_module_and_segments(path)?;
+        let (_, routes) = self.modules.iter().find(|(module, _)| *module == name)?;
+        match_streaming(routes, method, &segments)
+    }
+}
+
+/// Turns the body of a declared streaming route into a [`RequestStream`]
+/// (issue #585): the innermost layer of the API stack, so request id, CORS,
+/// security headers, the abuse floor and the tenant gate all still apply,
+/// and the `413` a declared over-ceiling `content-length` earns is decorated
+/// by request id and CORS like any other problem.
+///
+/// A runtime that already broke the body into a stream — `runtime-cloudflare`
+/// — pre-inserts its own [`RequestStream`] and hands an empty body; this sees
+/// the extension and leaves the request untouched. Every route whose
+/// `(method, path)` names no declared route passes straight through with its
+/// buffered body and `DefaultBodyLimit` intact.
+async fn streaming_request_layer(
+    State(state): State<StreamingState>,
+    mut request: axum::extract::Request,
+    next: Next,
+) -> Response {
+    if state.modules.is_empty() {
+        return next.run(request).await;
+    }
+    let Some(max_bytes) = state.max_bytes(request.uri().path(), request.method()) else {
+        return next.run(request).await;
+    };
+    if request.extensions().get::<RequestStream>().is_some() {
+        return next.run(request).await;
+    }
+    // Refused before any byte is read: a declared length over the route's
+    // ceiling is the same `413 request-too-large` a buffered route answers.
+    if let Some(declared) = crate::ports::declared_content_length(request.headers())
+        && declared > max_bytes
+    {
+        let problem = Problem::request_too_large();
+        let problem = match request.extensions().get::<Scope>() {
+            Some(scope) => problem.instance(&scope.request_id),
+            None => problem,
+        };
+        return problem.into_response();
+    }
+    let body = std::mem::replace(request.body_mut(), axum::body::Body::empty());
+    request
+        .extensions_mut()
+        .insert(RequestStream::new(body.into_data_stream(), max_bytes));
+    next.run(request).await
 }
 
 /// The outer four layers every request passes, innermost last in source

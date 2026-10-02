@@ -40,10 +40,18 @@ pub use tracing_setup::install_tracing;
 
 use crate::body_limit::{BodyPlan, Capped, body_plan, read_capped};
 use crate::runtime::{WARNED_UNRESOLVED_LIMITER, warn_once};
-use cratefield_core::{Harness, Problem, RequestSummary, SLUGS, ScheduledLimits, ScheduledSplit};
+use cratefield_core::{
+    Harness, Problem, RequestStream, RequestSummary, ResponseStream, SLUGS, ScheduledLimits,
+    ScheduledSplit,
+};
+use futures_core::Stream;
+use futures_util::StreamExt;
+use std::pin::Pin;
 use std::sync::Arc;
+use std::task::{Context as TaskContext, Poll};
 use time::OffsetDateTime;
 use tower::ServiceExt;
+use worker::send::SendWrapper;
 use worker::{Context, Env, Request as WorkerRequest, Response as WorkerResponse};
 
 /// Runs every module's [`Module::validate_config`] against the live config
@@ -148,6 +156,20 @@ fn check_push_wiring_once(
 /// case is detected through `inner()` first (issue #440). Inside the
 /// router, `DefaultBodyLimit` stays the precise per-route enforcer.
 ///
+/// A route the owning module declared in
+/// [`Module::streaming_routes`](cratefield_core::Module::streaming_routes)
+/// is never buffered (issue #585): the runtime consults
+/// [`Harness::streaming_route`] for the route's own ceiling, and — for a
+/// body within it — breaks the request into a
+/// [`RequestStream`] and hands the router an
+/// empty axum body. The core streaming request layer sees that handle in the
+/// extensions and passes the request through untouched, so a handler reads
+/// the body chunk by chunk instead of resident. A declared `content-length`
+/// over the route ceiling is refused unread, exactly as the buffered path
+/// refuses one over the module's. On the way out, a handler that answered
+/// with a [`ResponseStream`] is bridged to
+/// the wire through `worker::Response::from_stream`, never buffered.
+///
 /// # Errors
 ///
 /// `worker::Error` on conversion/transport failures; problem+json
@@ -194,13 +216,30 @@ pub async fn serve(
         return response_to_worker(unresolved_limiter_response(detail, &problem_type_base)).await;
     }
     let router = harness.router(ports);
-    let limit = harness.max_body_bytes(url.path(), config.as_ref());
+
+    // The method is needed before the body is read: it decides whether the
+    // route streams (issue #585).
+    let method = http::Method::from_bytes(req.method().to_string().as_bytes())
+        .map_err(|err| worker::Error::RustError(err.to_string()))?;
+    // A streaming route's own ceiling replaces the module's coarse buffered
+    // one — the precise per-route enforcer, not a pre-buffer guard.
+    let streaming = harness.streaming_route(url.path(), &method);
+    let limit = streaming.unwrap_or_else(|| harness.max_body_bytes(url.path(), config.as_ref()));
+    // HEAD never carries a response body: axum serves it through the GET
+    // handler with an emptied body, so the streamed path must not bridge the
+    // (still present) `ResponseStream` handle to the wire.
+    let is_head = method == http::Method::HEAD;
 
     // Copied out so the header borrow ends before the body is read mutably.
     // `worker::Headers::get` already yields `Option<String>`; a lookup
     // failure is treated as no declaration at all, which earns the capped
     // stream rather than trust.
     let declared = req.headers().get("content-length").ok().flatten();
+
+    // When set, a `RequestStream` for a declared streaming route: the router
+    // gets an empty buffered body and this handle in its extensions, and the
+    // core streaming layer passes the request through untouched (issue #585).
+    let mut request_stream: Option<RequestStream> = None;
 
     let bytes = match body_plan(declared.as_deref(), limit) {
         BodyPlan::Refuse => {
@@ -211,6 +250,23 @@ pub async fn serve(
                 Problem::request_too_large().into_response_with_base(&problem_type_base),
             )
             .await;
+        }
+        // A streaming route: never buffer, whatever the declared length —
+        // a `content-length` at or under the ceiling earns the same
+        // streaming read a chunked body does. Probe `inner().body()` first,
+        // exactly as the buffered path below does and for the same reason
+        // (worker 0.8.5's `stream()` poisons a bodyless request).
+        BodyPlan::Stream | BodyPlan::Buffer if streaming.is_some() => {
+            request_stream = Some(match req.inner().body() {
+                None => RequestStream::empty(),
+                Some(_) => match req.stream() {
+                    Ok(stream) => RequestStream::new(send_stream(stream), limit),
+                    // Unreachable past the probe, as below: answer empty
+                    // rather than swallow a genuine transport error.
+                    Err(_) => RequestStream::empty(),
+                },
+            });
+            Vec::new()
         }
         BodyPlan::Buffer => req.bytes().await?,
         BodyPlan::Stream => {
@@ -259,8 +315,6 @@ pub async fn serve(
         }
     };
 
-    let method = http::Method::from_bytes(req.method().to_string().as_bytes())
-        .map_err(|err| worker::Error::RustError(err.to_string()))?;
     let mut builder = http::Request::builder().method(method).uri(url.to_string());
     {
         let headers = req.headers();
@@ -268,14 +322,26 @@ pub async fn serve(
             builder = builder.header(name.as_str(), value.as_str());
         }
     }
-    let buffered = builder
+    let mut buffered = builder
         .body(axum::body::Body::from(bytes))
         .map_err(|err| worker::Error::RustError(err.to_string()))?;
+    if let Some(stream) = request_stream {
+        // The core streaming layer reads this and leaves the empty body
+        // above alone (issue #585).
+        buffered.extensions_mut().insert(stream);
+    }
 
-    let response = router
+    let mut response = router
         .oneshot(buffered)
         .await
         .map_err(|err| worker::Error::RustError(err.to_string()))?;
+    if is_head {
+        // Drop the handle: axum has already emptied the body for HEAD, and
+        // the buffered path below reads that empty body, keeping status and
+        // headers — taking the stream instead would send the whole body a
+        // HEAD must not carry.
+        response.extensions_mut().remove::<ResponseStream>();
+    }
     if let Some(line) = response.extensions().get().and_then(summary_line) {
         // The request span is inert on Workers (no dispatcher, see
         // `tracing_setup`), so its fields reach Workers Logs as one JSON
@@ -299,29 +365,81 @@ async fn response_to_worker(
     response: http::Response<axum::body::Body>,
 ) -> worker::Result<WorkerResponse> {
     let (parts, body) = response.into_parts();
+
+    // A streamed response (issue #585): the handler answered with a
+    // `ResponseStream`, whose `IntoResponse` left a lazy axum body *and* the
+    // handle in the extensions. Polling that axum body on wasm is the hang
+    // this path exists to avoid, so take the stream and bridge it to a
+    // Worker response directly. Whoever takes first wins; if the body
+    // already consumed it (`take` answers `None`) fall through to the
+    // buffered read, which then sees the empty remainder.
+    if let Some(stream) = parts.extensions.get::<ResponseStream>()
+        && let Some(inner) = stream.take()
+    {
+        let mapped =
+            inner.map(|chunk| chunk.map_err(|err| worker::Error::RustError(err.to_string())));
+        let mut out = WorkerResponse::from_stream(mapped)?.with_status(parts.status.as_u16());
+        copy_headers(out.headers_mut(), &parts.headers);
+        return Ok(out);
+    }
+
     let bytes = axum::body::to_bytes(body, MAX_RESPONSE_BUFFER)
         .await
         .map_err(|err| worker::Error::RustError(err.to_string()))?;
     let mut out =
         WorkerResponse::from_bytes(bytes.as_ref().to_vec())?.with_status(parts.status.as_u16());
-    {
-        let worker_headers = out.headers_mut();
-        // Per name: drop what `from_bytes` pre-set (a default
-        // `content-type: application/octet-stream`), then `append` every
-        // value. `set` kept only the last value of a multi-valued header
-        // (`Vary` from the CORS layer plus the handler's own, later
-        // `Set-Cookie`; found by `GET /__surface` losing
-        // `Vary: Authorization`, issue #70), and a bare `append` stacked
-        // onto the pre-set default (found by `/ui` pages answering
-        // `content-type: application/octet-stream, text/html`, issue #72).
-        for name in parts.headers.keys() {
-            let _ = worker_headers.delete(name.as_str());
-            for value in parts.headers.get_all(name) {
-                let _ = worker_headers.append(name.as_str(), value.to_str().unwrap_or_default());
-            }
+    copy_headers(out.headers_mut(), &parts.headers);
+    Ok(out)
+}
+
+/// Copies every response header onto the Worker response, per name: drop what
+/// the `worker` builder pre-set (a default `content-type:
+/// application/octet-stream` from `from_bytes`), then `append` every value.
+/// `set` kept only the last value of a multi-valued header (`Vary` from the
+/// CORS layer plus the handler's own, later `Set-Cookie`; found by
+/// `GET /__surface` losing `Vary: Authorization`, issue #70), and a bare
+/// `append` stacked onto the pre-set default (found by `/ui` pages answering
+/// `content-type: application/octet-stream, text/html`, issue #72). Shared by
+/// the buffered and streamed paths so both carry the same headers.
+fn copy_headers(worker_headers: &mut worker::Headers, headers: &http::HeaderMap) {
+    for name in headers.keys() {
+        let _ = worker_headers.delete(name.as_str());
+        for value in headers.get_all(name) {
+            let _ = worker_headers.append(name.as_str(), value.to_str().unwrap_or_default());
         }
     }
-    Ok(out)
+}
+
+/// The boxed worker body stream [`SendStream`] holds.
+type BoxedWorkerBody = Pin<Box<dyn Stream<Item = Result<Vec<u8>, worker::Error>>>>;
+
+/// A `worker::ByteStream` is `!Send` — its `JsFuture` holds an `Rc` — but a
+/// Workers isolate is single-threaded (ADR 0002), which is exactly what
+/// `worker::send::SendWrapper` is for: the `worker` crate's own safe (mis)claim
+/// that a JS-backed type may cross a `Send` bound. Coercing the stream to a
+/// boxed trait object and wrapping that costs no `unsafe` of our own — the
+/// crate still `forbid`s it — and gives [`RequestStream::new`], which needs
+/// `Send + 'static`, a stream to hold.
+struct SendStream(SendWrapper<BoxedWorkerBody>);
+
+impl Stream for SendStream {
+    type Item = Result<Vec<u8>, worker::Error>;
+
+    fn poll_next(self: Pin<&mut Self>, cx: &mut TaskContext<'_>) -> Poll<Option<Self::Item>> {
+        // `Pin<Box<_>>` is `Unpin`, so the whole newtype is and `get_mut` is
+        // sound; the boxed stream stays pinned.
+        self.get_mut().0.0.as_mut().poll_next(cx)
+    }
+}
+
+/// [`SendStream`]s a worker body stream. `Box::new` before `Pin::from` so the
+/// unsizing coercion to the trait object is the well-worn one.
+fn send_stream<S>(stream: S) -> SendStream
+where
+    S: Stream<Item = Result<Vec<u8>, worker::Error>> + 'static,
+{
+    let boxed: Box<dyn Stream<Item = Result<Vec<u8>, worker::Error>>> = Box::new(stream);
+    SendStream(SendWrapper::new(Pin::from(boxed)))
 }
 
 /// Responses are JSON (small); 1 MiB is a generous ceiling.

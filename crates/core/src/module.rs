@@ -506,6 +506,28 @@ pub trait Module: Send + Sync + 'static {
     fn max_body_bytes(&self, _cfg: &dyn Config) -> usize {
         crate::http::MAX_BODY_BYTES
     }
+
+    /// Routes this module serves in **streaming** mode (issue #585), each
+    /// with its own [`StreamRoute::max_bytes`] ceiling. Opt-in: the default
+    /// is empty, and every existing route keeps the buffered behaviour it
+    /// always had.
+    ///
+    /// On a declared route the router reads the body as a stream instead of
+    /// buffering it: the handler extracts a [`RequestStream`], the route's
+    /// `max_bytes` replaces [`Module::max_body_bytes`] for the declared
+    /// `content-length` pre-check, and the handler may answer with a
+    /// [`ResponseStream`]. The paths are relative to the module's
+    /// `/v1/<name>` mount and use axum's pattern syntax (`/upload`,
+    /// `/files/{id}`, `/files/{*rest}`). A `(method, path)` that names no
+    /// declared route is untouched.
+    ///
+    /// [`RequestStream`]: crate::RequestStream
+    /// [`ResponseStream`]: crate::ResponseStream
+    /// [`StreamRoute::max_bytes`]: crate::StreamRoute::max_bytes
+    fn streaming_routes(&self) -> &'static [crate::StreamRoute] {
+        &[]
+    }
+
     /// Problems the module can find in **itself**, with no configuration
     /// and no environment: its own embedded data, checked against its own
     /// declarations.
