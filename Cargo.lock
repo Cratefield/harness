@@ -665,6 +665,7 @@ dependencies = [
  "cratefield-manifest",
  "cratefield-module-changelog",
  "cratefield-module-cms",
+ "cratefield-module-connections",
  "cratefield-module-device-auth",
  "cratefield-module-email-signup",
  "cratefield-module-notifications",
@@ -1431,6 +1432,35 @@ dependencies = [
  "tower",
  "tracing",
  "ulid",
+]
+
+[[package]]
+name = "cratefield-module-connections"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "axum",
+ "bytes",
+ "cratefield-adapter-sqlite",
+ "cratefield-core",
+ "cratefield-module-privacy",
+ "cratefield-oauth-client",
+ "cratefield-testing",
+ "futures-util",
+ "hex",
+ "http",
+ "pollster",
+ "schemars 1.2.2",
+ "sea-query",
+ "serde",
+ "serde_json",
+ "serde_urlencoded",
+ "sha2 0.11.0",
+ "thiserror 2.0.20",
+ "time",
+ "tower",
+ "tracing",
+ "zeroize",
 ]
 
 [[package]]

@@ -214,6 +214,7 @@ crate exists**, so the very first release of each crate is manual:
    cargo publish -p cratefield-adapter-jira
    cargo publish -p cratefield-auth-client    # before module-notifications and the runtimes
    cargo publish -p cratefield-oauth-client   # before module-linkedin (which is held back)
+   cargo publish -p cratefield-module-connections  # needs core and oauth-client
    cargo publish -p cratefield-adapter-workers-ai
    cargo publish -p cratefield-module-changelog
    cargo publish -p cratefield-module-cms

@@ -1,0 +1,66 @@
+[package]
+name = "cratefield-module-connections"
+description = "Cratefield module: per-subject third-party OAuth connections — authorize, sealed tokens, refresh, revoke, over the `HttpClient` port"
+readme = "README.md"
+keywords = ["cratefield", "oauth", "connections", "module", "tokens"]
+categories = ["web-programming"]
+include = ["src/**/*", "migrations/**/*", "tests/**/*", "README.md"]
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+cratefield-core = { workspace = true }
+# The protocol itself: authorize URLs, PKCE, `state`, code exchange, refresh,
+# revoke and the token sealer. This module is the venture-facing storage and
+# lifecycle around it; the wire shapes live there (issue #531).
+cratefield-oauth-client = { workspace = true }
+axum = { workspace = true }
+http = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_urlencoded = { workspace = true }
+sea-query = { workspace = true }
+tracing = { workspace = true }
+time = { workspace = true }
+# The `state` reaches the database only as a SHA-256 hash, so a dump or a query
+# log holds nothing that can be replayed as one.
+sha2 = { workspace = true }
+hex = { workspace = true }
+# Access tokens are handed back wrapped in `Zeroizing`, so a dropped one is
+# wiped rather than left in the allocator.
+zeroize = { workspace = true }
+thiserror = { workspace = true }
+async-trait = { workspace = true }
+schemars = { workspace = true }
+
+[dev-dependencies]
+# Dev-only, and only so `tests/privacy.rs` can prove the personal-data
+# declaration against the module that reads it (issue #265's pattern). A
+# declaration is a promise about another crate's behaviour, so asserting the
+# list against itself would prove none of it. Path-only, so it is stripped
+# from the packaged manifest.
+cratefield-module-privacy = { path = "../module-privacy" }
+# The in-memory SQLite adapter, so the store is tested against real SQL.
+cratefield-adapter-sqlite = { path = "../adapter-sqlite" }
+# The `postgres` feature unlocks the Postgres parity leg of the testing kit
+# (issue #20); the leg itself only runs when FZ_TEST_POSTGRES_URL names a
+# server. Dev-only, so it never reaches a venture's wasm graph.
+cratefield-testing = { path = "../testing", features = ["postgres"] }
+serde_json = { workspace = true }
+# The `HttpClient` port takes an `http::Request<Bytes>`, so the scripted
+# provider double in `tests/support` names `Bytes` directly.
+bytes = { workspace = true }
+# The redirect re-check is tested by planting a state row whose `return_to`
+# is off the allowed origins, which means the test has to compute the same
+# SHA-256 the module stores.
+sha2 = { workspace = true }
+hex = { workspace = true }
+pollster = { workspace = true }
+tower = { workspace = true }
+futures-util = { workspace = true }
