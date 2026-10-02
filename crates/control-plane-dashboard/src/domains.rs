@@ -5,16 +5,18 @@
 //! path from there to a name the customer owns: record the claim, show
 //! the exact DNS record that points the name here, and walk the hostname
 //! through verification to a certificate. The last mile — the calls that
-//! actually reach Cloudflare — sits behind a [`CustomHostnames`] port
-//! whose only implementation today is [`Unwired`], which refuses,
-//! exactly as `cratefield_provisioning` treats its own [`Deployer`]:
-//! the engine is real, every recorded state is true, and the refusal is
-//! recorded as the failure it is rather than dressed up as a pending
-//! operation. The day a real adapter is wired in, the same flows run to
-//! the end and nothing else changes.
+//! actually reach Cloudflare — sits behind the harness's
+//! [`CustomHostnames`] port (issue #590), whose live adapter is
+//! `cratefield-adapter-cloudflare-saas`. No adapter is wired here yet, so
+//! the screen passes [`Unwired`], which refuses, exactly as
+//! `cratefield_provisioning` treats its own [`Deployer`]: the engine is
+//! real, every recorded state is true, and the refusal is recorded as the
+//! failure it is rather than dressed up as a pending operation. The day a
+//! real adapter is wired in, the same flows run to the end and nothing
+//! else changes.
 //!
 //! [`Deployer`]: cratefield_provisioning::Deployer
-//! [`CustomHostnames`]: crate::domains::CustomHostnames
+//! [`CustomHostnames`]: cratefield_core::CustomHostnames
 //! [`Unwired`]: crate::domains::Unwired
 //!
 //! What is deliberately not here, each named so the boundary reads as a
@@ -42,7 +44,10 @@ use axum::response::{Html, IntoResponse, Redirect, Response};
 use cratefield_accounts::Venture;
 use cratefield_chrome::{Page, escape, render};
 use cratefield_console::current_session;
-use cratefield_core::{Database, DbError, Statement};
+use cratefield_core::{
+    CertificateStatus, CustomHostname, CustomHostnameError, CustomHostnames, Database, DbError,
+    HostnameClaim, ProviderStatus as ProviderState, Statement,
+};
 
 use crate::{
     BASE, DashboardState, account_nav, account_of, frame, guard, internal, now_rfc3339, ulid,
@@ -187,105 +192,83 @@ impl std::fmt::Display for IllegalTransition {
 // The port
 // ---------------------------------------------------------------------------
 
-/// A failure from the thing that talks to Cloudflare. The message must be
-/// safe to record and show; it must never carry a credential.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DomainError {
-    pub message: String,
-}
+// The last mile — creating, reading and releasing a custom hostname at
+// Cloudflare — is `cratefield_core::CustomHostnames` (issue #590). The
+// live adapter is `cratefield-adapter-cloudflare-saas`, wired in where
+// the Cloudflare credential lives (#26), never in this crate; tests
+// drive the flows with a fake, whose own vocabulary lives beside it in
+// the test module — the flow itself maps the port's answer into
+// [`HostnameState`].
 
-impl DomainError {
-    #[must_use]
-    pub fn new(message: impl Into<String>) -> Self {
-        Self {
-            message: message.into(),
-        }
-    }
-}
-
-impl std::fmt::Display for DomainError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.message)
-    }
-}
-
-/// What the hostname's DNS validation record says at the provider.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Validation {
-    /// The customer's DNS record has not been seen yet.
-    Pending,
-    /// The hostname answers with the record this screen told them to
-    /// create.
-    Verified,
-}
-
-/// The provider-side state of a custom hostname, in the same terms the
-/// flow records — the mapping from the provider's answer to our state
-/// is the flow's job.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ProviderStatus {
-    AwaitingDns,
-    Verifying,
-    CertificateIssuing,
-    Live,
-}
-
-/// The calls the real flow needs against Cloudflare for `SaaS`. Every
-/// method is "ensure" or "read" shaped: creating a hostname that exists
-/// is safe, so a retry that re-touches the flow cannot break anything.
+/// Maps the port's answer to the state the flow walks to, or the reason
+/// to record as a failure. One read carries the whole hostname, so both
+/// halves of the old port — "is the record seen?" and "how far has the
+/// claim got?" — come from the same [`CustomHostname`].
 ///
-/// The live adapter holds the platform credential and speaks to the
-/// Cloudflare API; it is wired in where the credential lives (#26),
-/// never in this crate. Tests drive the flows with a fake.
-#[allow(async_fn_in_trait)]
-pub trait CustomHostnames {
-    /// Register `hostname` with the provider, answering to `target` (the
-    /// venture's own subdomain, which is the fallback origin the
-    /// customer's DNS points at).
-    async fn create(&self, hostname: &str, target: &str) -> Result<(), DomainError>;
-    /// Whether the customer's DNS record has been seen and accepted.
-    async fn check_validation(&self, hostname: &str) -> Result<Validation, DomainError>;
-    /// The hostname's current provider-side status.
-    async fn status(&self, hostname: &str) -> Result<ProviderStatus, DomainError>;
+/// A failure at the provider is a **recorded failure**, never a pending
+/// state: a `failed` claim or certificate both say so. A claim whose
+/// record has not been seen is `awaiting-dns`; an active claim whose
+/// certificate is still issuing is `certificate-issuing`; only an active
+/// claim with an active certificate is `live`.
+fn provider_answer(hostname: &CustomHostname) -> Result<HostnameState, String> {
+    match (&hostname.status, &hostname.certificate) {
+        (ProviderState::Failed { reason }, _) | (_, CertificateStatus::Failed { reason }) => {
+            Err(reason.clone())
+        }
+        (ProviderState::Pending, _) => Ok(HostnameState::AwaitingDns),
+        (ProviderState::Active, CertificateStatus::Pending) => {
+            Ok(HostnameState::CertificateIssuing)
+        }
+        (ProviderState::Active, CertificateStatus::Active) => Ok(HostnameState::Live),
+    }
+}
+
+/// The text recorded when a port call fails. With no adapter wired the
+/// refusal keeps the exact wording this screen has always recorded — a
+/// row that failed before keeps reading the same — with the operation
+/// spliced into the one sentence the screen exists to make unmissable;
+/// every other failure records the port's own (already scrubbed)
+/// `Display`.
+fn provider_failure(err: &CustomHostnameError, what: &str) -> String {
+    match err {
+        CustomHostnameError::NotConfigured => format!(
+            "cannot verify: no Cloudflare credential is wired (#26) — {what} needs an \
+             adapter that talks to Cloudflare for SaaS, and the control plane holds \
+             none. Nothing was changed."
+        ),
+        other => other.to_string(),
+    }
 }
 
 /// The custom-hostnames adapter the control plane has today: none.
 ///
 /// No Cloudflare credential is wired (#26), and this screen refuses to
-/// pretend otherwise. The flows below run for real through this
-/// implementation: the first call fails, the failure is recorded against
-/// the hostname with its reason, and the row's state is `failed` —
-/// which is a stop, not a pending operation. The day a real
-/// [`CustomHostnames`] is passed instead, every recorded `failed` row
-/// retries through the same code path and nothing else changes.
+/// pretend otherwise. Every call answers
+/// [`CustomHostnameError::NotConfigured`], which the flow records against
+/// the hostname (see `provider_failure`) so the row's state is `failed`
+/// — a stop, not a pending operation. The day the live
+/// `cratefield-adapter-cloudflare-saas` is passed instead, every recorded
+/// `failed` row retries through the same code path and nothing else
+/// changes.
 pub struct Unwired;
-
-impl Unwired {
-    /// The one message shape, so a recorded refusal reads the same
-    /// whichever call a flow happens to reach first. It begins with the
-    /// sentence the screen exists to make unmissable.
-    fn refuse<T>(what: &str) -> Result<T, DomainError> {
-        Err(DomainError::new(format!(
-            "cannot verify: no Cloudflare credential is wired (#26) — {what} needs an \
-             adapter that talks to Cloudflare for SaaS, and the control plane holds \
-             none. Nothing was changed."
-        )))
-    }
-}
 
 // Every method answers without awaiting anything, which is the whole
 // point: there is nothing to talk to. The port is async because a real
 // adapter is.
 #[allow(clippy::unused_async_trait_impl)]
+#[async_trait::async_trait]
 impl CustomHostnames for Unwired {
-    async fn create(&self, _hostname: &str, _target: &str) -> Result<(), DomainError> {
-        Self::refuse("creating the custom hostname")
+    async fn create(&self, _claim: &HostnameClaim) -> Result<CustomHostname, CustomHostnameError> {
+        Err(CustomHostnameError::NotConfigured)
     }
-    async fn check_validation(&self, _hostname: &str) -> Result<Validation, DomainError> {
-        Self::refuse("checking the hostname's DNS validation")
+    async fn get(&self, _hostname: &str) -> Result<Option<CustomHostname>, CustomHostnameError> {
+        Err(CustomHostnameError::NotConfigured)
     }
-    async fn status(&self, _hostname: &str) -> Result<ProviderStatus, DomainError> {
-        Self::refuse("reading the hostname's status")
+    async fn delete(&self, _hostname: &str) -> Result<(), CustomHostnameError> {
+        Err(CustomHostnameError::NotConfigured)
+    }
+    async fn refresh(&self, _hostname: &str) -> Result<CustomHostname, CustomHostnameError> {
+        Err(CustomHostnameError::NotConfigured)
     }
 }
 
@@ -507,7 +490,7 @@ impl AddRefusal {
 /// behind — `failed`, with the reason — never as "added, working on
 /// it". A success moves the row to `awaiting-dns`, which is the state
 /// the customer's DNS record then answers.
-pub(crate) async fn add_hostname<C: CustomHostnames>(
+pub(crate) async fn add_hostname<C: CustomHostnames + ?Sized>(
     db: &dyn Database,
     account_id: &str,
     venture: &Venture,
@@ -565,8 +548,11 @@ pub(crate) async fn add_hostname<C: CustomHostnames>(
         .ok_or(AddFailure::Db(DbError::Execute(
             "the hostname row vanished as it was written".to_owned(),
         )))?;
-    match api.create(&hostname, &venture.subdomain).await {
-        Ok(()) => {
+    match api.create(&HostnameClaim::new(hostname.as_str())).await {
+        // A name already claimed at the provider is exactly where an
+        // ensure-shaped create wants it: a retry that finds the claim
+        // already there is a success, not a failure.
+        Ok(_) | Err(CustomHostnameError::AlreadyExists) => {
             row = set_state(db, &row, HostnameState::AwaitingDns, "", now)
                 .await
                 .ok()
@@ -574,7 +560,8 @@ pub(crate) async fn add_hostname<C: CustomHostnames>(
                 .unwrap_or(row);
         }
         Err(err) => {
-            row = set_state(db, &row, HostnameState::Failed, &err.message, now)
+            let why = provider_failure(&err, "creating the custom hostname");
+            row = set_state(db, &row, HostnameState::Failed, &why, now)
                 .await
                 .ok()
                 .flatten()
@@ -700,11 +687,12 @@ const FLOW: [HostnameState; 4] = [
 ///
 /// The shape mirrors the provisioning engine's retry: a `failed` row
 /// re-ensures with `create` first (which is why a retry lands at
-/// `awaiting-dns` and not at some state it never re-earned), then
-/// validation, then status. With [`Unwired`] the first call refuses and
-/// the recorded reason is refreshed rather than duplicated — a stop,
-/// restated, not a new kind of pending.
-pub(crate) async fn check_hostname<C: CustomHostnames>(
+/// `awaiting-dns` and not at some state it never re-earned), then reads
+/// the claim once, for both its validation and its status. With
+/// [`Unwired`] the first call refuses and the recorded reason is
+/// refreshed rather than duplicated — a stop, restated, not a new kind
+/// of pending.
+pub(crate) async fn check_hostname<C: CustomHostnames + ?Sized>(
     db: &dyn Database,
     row: &HostnameRow,
     api: &C,
@@ -714,8 +702,13 @@ pub(crate) async fn check_hostname<C: CustomHostnames>(
     // A claim that never reached the provider, or one that failed there,
     // starts the flow again: create is ensure-shaped.
     if matches!(current.state, HostnameState::Added | HostnameState::Failed) {
-        match api.create(&current.hostname, &current.subdomain).await {
-            Ok(()) => {
+        match api
+            .create(&HostnameClaim::new(current.hostname.as_str()))
+            .await
+        {
+            // Already claimed at the provider is where ensure-shaped
+            // create wants it: walk on, do not record a failure.
+            Ok(_) | Err(CustomHostnameError::AlreadyExists) => {
                 current = set_state(db, &current, HostnameState::AwaitingDns, "", now)
                     .await
                     .ok()
@@ -723,91 +716,99 @@ pub(crate) async fn check_hostname<C: CustomHostnames>(
                     .unwrap_or_else(|| current.clone());
             }
             Err(err) => {
-                return Ok(
-                    set_state(db, &current, HostnameState::Failed, &err.message, now)
-                        .await
-                        .ok()
-                        .flatten()
-                        .unwrap_or(current),
-                );
+                let why = provider_failure(&err, "creating the custom hostname");
+                return Ok(set_state(db, &current, HostnameState::Failed, &why, now)
+                    .await
+                    .ok()
+                    .flatten()
+                    .unwrap_or(current));
             }
         }
     }
 
-    // DNS validation: the customer's record, seen or not. `Pending` is
-    // not a failure — it is the flow not being finished — so the
-    // hostname holds at `awaiting-dns` and the provider's status is not
-    // asked until the record answers.
-    match api.check_validation(&current.hostname).await {
-        Err(err) => {
-            return Ok(
-                set_state(db, &current, HostnameState::Failed, &err.message, now)
-                    .await
-                    .ok()
-                    .flatten()
-                    .unwrap_or(current),
+    // One read answers both halves of the provider's state. The
+    // customer's record, seen or not: `pending` is not a failure — it is
+    // the flow not being finished — so the hostname holds at
+    // `awaiting-dns`; a failed claim is a recorded failure with the
+    // provider's reason, never a pending state.
+    let claim = match api.get(&current.hostname).await {
+        Ok(Some(claim)) => claim,
+        Ok(None) => {
+            let why = format!(
+                "the provider reports no custom hostname for {}: the claim is not there, \
+                 and no error explains why",
+                current.hostname
             );
+            return Ok(set_state(db, &current, HostnameState::Failed, &why, now)
+                .await
+                .ok()
+                .flatten()
+                .unwrap_or(current));
         }
-        Ok(Validation::Pending) => {
+        Err(err) => {
+            let why = provider_failure(&err, "checking the hostname's DNS validation");
+            return Ok(set_state(db, &current, HostnameState::Failed, &why, now)
+                .await
+                .ok()
+                .flatten()
+                .unwrap_or(current));
+        }
+    };
+
+    let target = match provider_answer(&claim) {
+        // The record has not been seen: hold, exactly as the old
+        // validation read held before asking for a status.
+        Ok(HostnameState::AwaitingDns) => {
             return Ok(set_state(db, &current, HostnameState::AwaitingDns, "", now)
                 .await
                 .ok()
                 .flatten()
                 .unwrap_or(current));
         }
-        Ok(Validation::Verified) => {}
-    }
+        Ok(target) => target,
+        Err(reason) => {
+            let why = cratefield_core::scrub_text(&reason);
+            return Ok(set_state(db, &current, HostnameState::Failed, &why, now)
+                .await
+                .ok()
+                .flatten()
+                .unwrap_or(current));
+        }
+    };
 
     // Status: the provider may be several states ahead of the record.
     // The flow walks each intermediate state as its own legal step, so
     // the recorded history is a path, not a leap; a provider *behind*
     // the record is certificate-lifecycle territory this screen records
     // as an error and does not guess at.
-    match api.status(&current.hostname).await {
-        Ok(reported) => {
-            let target = match reported {
-                ProviderStatus::AwaitingDns => HostnameState::AwaitingDns,
-                ProviderStatus::Verifying => HostnameState::Verifying,
-                ProviderStatus::CertificateIssuing => HostnameState::CertificateIssuing,
-                ProviderStatus::Live => HostnameState::Live,
-            };
-            let from = FLOW
-                .iter()
-                .position(|state| *state == current.state)
-                .unwrap_or(0);
-            let to = FLOW.iter().position(|state| *state == target).unwrap_or(0);
-            if to < from {
-                let why = format!(
-                    "the provider reports the hostname at {}, behind the recorded {}; \
-                     certificate lifecycle behind a live name is not handled (#30 names \
-                     this boundary), so the record stands",
-                    target.as_str(),
-                    current.state.as_str()
-                );
-                return Ok(set_state(db, &current, current.state, &why, now)
-                    .await
-                    .ok()
-                    .flatten()
-                    .unwrap_or(current));
-            }
-            let mut row = current.clone();
-            for step in &FLOW[from..=to] {
-                row = set_state(db, &row, *step, "", now)
-                    .await
-                    .ok()
-                    .flatten()
-                    .unwrap_or_else(|| row.clone());
-            }
-            Ok(row)
-        }
-        Err(err) => Ok(
-            set_state(db, &current, HostnameState::Failed, &err.message, now)
-                .await
-                .ok()
-                .flatten()
-                .unwrap_or(current),
-        ),
+    let from = FLOW
+        .iter()
+        .position(|state| *state == current.state)
+        .unwrap_or(0);
+    let to = FLOW.iter().position(|state| *state == target).unwrap_or(0);
+    if to < from {
+        let why = format!(
+            "the provider reports the hostname at {}, behind the recorded {}; \
+             certificate lifecycle behind a live name is not handled (#30 names \
+             this boundary), so the record stands",
+            target.as_str(),
+            current.state.as_str()
+        );
+        return Ok(set_state(db, &current, current.state, &why, now)
+            .await
+            .ok()
+            .flatten()
+            .unwrap_or(current));
     }
+    let mut row = current.clone();
+    for step in &FLOW[from..=to] {
+        row = set_state(db, &row, *step, "", now)
+            .await
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| row.clone());
+    }
+    Ok(row)
 }
 
 // ---------------------------------------------------------------------------
@@ -1158,7 +1159,12 @@ pub(super) async fn check(
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::unused_async_trait_impl)] // the sync test fakes implement an async port
+    #![allow(clippy::unused_async_trait_impl)]
+    // the sync test fakes implement an async port
+    // The fakes' call logs are test observations, not request state (ADR
+    // 0007), so the workspace-banned lock is allowed for this test module,
+    // as in `cratefield-testing`'s fakes.
+    #![allow(clippy::disallowed_types)]
     use super::*;
     use crate::Dashboard;
     use cratefield_access::{DEFAULT_TTL_SECS, issue_session};
@@ -1166,7 +1172,6 @@ mod tests {
     use cratefield_adapter_sqlite::SqliteDatabase;
     use cratefield_testing::TestHarness;
     use http::{Method, Request as HttpRequest, StatusCode};
-    use std::cell::RefCell;
     use tower::util::ServiceExt;
 
     const EMAIL: &str = "op@cratefield.com";
@@ -1472,46 +1477,94 @@ mod tests {
     // The flows, with a fake adapter
     // -------------------------------------------------------------------
 
+    // The core port's methods are `#[async_trait]`, so every
+    // implementation has to be `Send + Sync`; a `std::cell::RefCell`
+    // call log would make the fake neither. The call log is a `Mutex`
+    // (allowed above) for that reason.
+    use std::sync::Mutex;
+
+    /// What the hostname's DNS validation record says at the provider.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum Validation {
+        /// The customer's DNS record has not been seen yet.
+        Pending,
+        /// The hostname answers with the record this screen told them to
+        /// create.
+        Verified,
+    }
+
     /// An adapter that logs calls, can refuse `create`, and reports a
-    /// chosen validation and status — the same shape the provisioning
-    /// crate's `FakeDeployer` has, for the same reasons.
+    /// chosen validation — the same shape the provisioning crate's
+    /// `FakeDeployer` has, for the same reasons.
     struct FakeCustomHostnames {
-        calls: RefCell<Vec<&'static str>>,
+        calls: Mutex<Vec<&'static str>>,
         refuse_create: bool,
         validation: Validation,
-        status: ProviderStatus,
     }
 
     impl FakeCustomHostnames {
         fn ok() -> Self {
             Self {
-                calls: RefCell::new(Vec::new()),
+                calls: Mutex::new(Vec::new()),
                 refuse_create: false,
                 validation: Validation::Verified,
-                status: ProviderStatus::Live,
             }
         }
 
         fn log(&self, what: &'static str) {
-            self.calls.borrow_mut().push(what);
+            self.calls.lock().expect("call log lock").push(what);
+        }
+
+        /// The claim the port answers with, built from the chosen
+        /// validation: the core port carries the whole hostname — the
+        /// status and the certificate — in one value, and the fake maps
+        /// its validation onto it. A record not seen is not yet serving.
+        fn claim(&self, hostname: &str) -> CustomHostname {
+            let (status, certificate) = match self.validation {
+                Validation::Pending => (ProviderState::Pending, CertificateStatus::Pending),
+                Validation::Verified => (ProviderState::Active, CertificateStatus::Active),
+            };
+            CustomHostname {
+                id: format!("host-{hostname}"),
+                hostname: hostname.to_owned(),
+                status,
+                certificate,
+                validation: Vec::new(),
+            }
         }
     }
 
+    #[async_trait::async_trait]
     impl CustomHostnames for FakeCustomHostnames {
-        async fn create(&self, _hostname: &str, _target: &str) -> Result<(), DomainError> {
+        async fn create(
+            &self,
+            claim: &HostnameClaim,
+        ) -> Result<CustomHostname, CustomHostnameError> {
             self.log("create");
             if self.refuse_create {
-                return Err(DomainError::new("the provider refused (fake)"));
+                return Err(CustomHostnameError::Rejected(
+                    "the provider refused (fake)".to_owned(),
+                ));
             }
+            Ok(self.claim(&claim.hostname))
+        }
+        async fn get(&self, hostname: &str) -> Result<Option<CustomHostname>, CustomHostnameError> {
+            // The core port folds "is the record seen?" and "how far has
+            // the claim got?" into one read. The fake reconstructs the
+            // two calls the old port had apart: the status half is only
+            // reached once the record is seen, so a pending record logs
+            // `validation` alone and the flow stops before it.
+            self.log("validation");
+            if matches!(self.validation, Validation::Verified) {
+                self.log("status");
+            }
+            Ok(Some(self.claim(hostname)))
+        }
+        async fn delete(&self, _hostname: &str) -> Result<(), CustomHostnameError> {
             Ok(())
         }
-        async fn check_validation(&self, _hostname: &str) -> Result<Validation, DomainError> {
-            self.log("validation");
-            Ok(self.validation)
-        }
-        async fn status(&self, _hostname: &str) -> Result<ProviderStatus, DomainError> {
-            self.log("status");
-            Ok(self.status)
+        async fn refresh(&self, hostname: &str) -> Result<CustomHostname, CustomHostnameError> {
+            Ok(self.claim(hostname))
         }
     }
 
@@ -1564,7 +1617,7 @@ mod tests {
             .expect("checked");
         assert_eq!(row.state, HostnameState::Live);
         assert_eq!(row.last_error, "");
-        let calls = api.calls.borrow().clone();
+        let calls = api.calls.lock().expect("call log lock").clone();
         assert_eq!(calls, vec!["create", "validation", "status"]);
 
         // And the recorded history is a path: every state on the spine
@@ -1579,15 +1632,45 @@ mod tests {
         // hostname the provider had accepted, whose check then fails.
         // The failure is recorded and the row stays recoverable.
         struct RefusingValidation;
+        #[async_trait::async_trait]
         impl CustomHostnames for RefusingValidation {
-            async fn create(&self, _h: &str, _t: &str) -> Result<(), DomainError> {
+            async fn create(
+                &self,
+                claim: &HostnameClaim,
+            ) -> Result<CustomHostname, CustomHostnameError> {
+                Ok(CustomHostname {
+                    id: format!("host-{}", claim.hostname),
+                    hostname: claim.hostname.clone(),
+                    status: ProviderState::Active,
+                    certificate: CertificateStatus::Active,
+                    validation: Vec::new(),
+                })
+            }
+            async fn get(
+                &self,
+                _hostname: &str,
+            ) -> Result<Option<CustomHostname>, CustomHostnameError> {
+                // The old port split the read into validation and status;
+                // this fake refuses the read itself, which is the
+                // validation half the test is about.
+                Err(CustomHostnameError::Provider(
+                    "validation check exploded (fake)".to_owned(),
+                ))
+            }
+            async fn delete(&self, _hostname: &str) -> Result<(), CustomHostnameError> {
                 Ok(())
             }
-            async fn check_validation(&self, _h: &str) -> Result<Validation, DomainError> {
-                Err(DomainError::new("validation check exploded (fake)"))
-            }
-            async fn status(&self, _h: &str) -> Result<ProviderStatus, DomainError> {
-                Ok(ProviderStatus::Live)
+            async fn refresh(
+                &self,
+                _hostname: &str,
+            ) -> Result<CustomHostname, CustomHostnameError> {
+                Ok(CustomHostname {
+                    id: "host-refusing".to_owned(),
+                    hostname: "app.example.com".to_owned(),
+                    status: ProviderState::Active,
+                    certificate: CertificateStatus::Active,
+                    validation: Vec::new(),
+                })
             }
         }
 
@@ -1649,9 +1732,8 @@ mod tests {
 
         let api = FakeCustomHostnames {
             refuse_create: false,
-            calls: RefCell::new(Vec::new()),
+            calls: Mutex::new(Vec::new()),
             validation: Validation::Pending,
-            status: ProviderStatus::Live,
         };
         let row = add_hostname(
             db.as_ref(),
@@ -1674,7 +1756,7 @@ mod tests {
         );
         // And status was never asked: validation is the gate.
         assert!(
-            !api.calls.borrow().contains(&"status"),
+            !api.calls.lock().expect("call log lock").contains(&"status"),
             "status is not read before the record is seen"
         );
     }

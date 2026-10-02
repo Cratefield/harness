@@ -10,6 +10,7 @@ mod blob;
 mod captcha;
 mod classifier;
 mod clock;
+mod custom_hostnames;
 mod database;
 mod defer;
 mod dispatcher;
@@ -35,6 +36,10 @@ pub use classifier::{
     DEFAULT_MAX_STATE_CHARS, Question, validate_questions,
 };
 pub use clock::{Clock, SystemClock, timeout};
+pub use custom_hostnames::{
+    CertificateStatus, CustomHostname, CustomHostnameError, CustomHostnames, DnsRecordType,
+    HostnameClaim, HostnameRefusal, ProviderStatus, Validation, ValidationMethod, check_hostname,
+};
 pub use database::{Database, DbError, Row, Rows, Statement, TryFromValue};
 pub use defer::{Defer, NoopDefer};
 pub use dispatcher::{DispatchError, Dispatcher};
@@ -97,6 +102,7 @@ pub enum Port {
     Classifier,
     VectorIndex,
     Embedder,
+    CustomHostnames,
     HttpClient,
     Clock,
     IdGen,
@@ -150,6 +156,7 @@ ports!(
     Classifier,
     VectorIndex,
     Embedder,
+    CustomHostnames,
     HttpClient,
     Clock,
     IdGen,
@@ -175,6 +182,7 @@ impl Port {
             Port::Classifier => "Classifier",
             Port::VectorIndex => "vector_index",
             Port::Embedder => "embedder",
+            Port::CustomHostnames => "custom_hostnames",
             Port::HttpClient => "HttpClient",
             Port::Clock => "Clock",
             Port::IdGen => "IdGen",
@@ -218,6 +226,10 @@ pub struct Ports {
     /// Text into embedding vectors (issue #561), the input side of
     /// [`Ports::vector_index`].
     pub embedder: Option<Arc<dyn Embedder>>,
+    /// Custom hostnames a customer owns, served by a venture (issue
+    /// #590) — Cloudflare for `SaaS` behind the same trait on every
+    /// runtime.
+    pub custom_hostnames: Option<Arc<dyn CustomHostnames>>,
     pub http: Option<Arc<dyn HttpClient>>,
     pub clock: Option<Arc<dyn Clock>>,
     pub id_gen: Option<Arc<dyn IdGen>>,
@@ -264,6 +276,7 @@ impl Ports {
             classifier: None,
             vector_index: None,
             embedder: None,
+            custom_hostnames: None,
             http: None,
             clock: None,
             id_gen: None,
@@ -314,6 +327,7 @@ impl Ports {
             Port::Classifier => self.classifier.is_some(),
             Port::VectorIndex => self.vector_index.is_some(),
             Port::Embedder => self.embedder.is_some(),
+            Port::CustomHostnames => self.custom_hostnames.is_some(),
             Port::HttpClient => self.http.is_some(),
             Port::Clock => self.clock.is_some(),
             Port::IdGen => self.id_gen.is_some(),
@@ -386,6 +400,9 @@ impl Ports {
         }
         if allows(&declared, Port::Embedder) {
             view.embedder.clone_from(&self.embedder);
+        }
+        if allows(&declared, Port::CustomHostnames) {
+            view.custom_hostnames.clone_from(&self.custom_hostnames);
         }
         if allows(&declared, Port::HttpClient) {
             view.http.clone_from(&self.http);

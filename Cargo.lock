@@ -642,6 +642,7 @@ dependencies = [
  "cratefield-adapter-anthropic",
  "cratefield-adapter-apns",
  "cratefield-adapter-classifier-llm",
+ "cratefield-adapter-cloudflare-saas",
  "cratefield-adapter-fcm",
  "cratefield-adapter-github-issues",
  "cratefield-adapter-jira",
@@ -748,6 +749,21 @@ dependencies = [
  "cratefield-core",
  "cratefield-testing",
  "getrandom 0.4.3",
+ "pollster",
+ "serde",
+ "serde_json",
+ "tracing",
+]
+
+[[package]]
+name = "cratefield-adapter-cloudflare-saas"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "cratefield-core",
+ "getrandom 0.4.3",
+ "http",
  "pollster",
  "serde",
  "serde_json",

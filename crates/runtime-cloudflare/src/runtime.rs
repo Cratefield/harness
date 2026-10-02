@@ -5,8 +5,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use cratefield_core::{
-    Auth, BoundedHttpClient, Captcha, Classifier, Clock, Defer, HarnessConfig, Mailer, Payments,
-    Port, Ports, Push, Runtime, SidecarMounts, TextModel, Tracker, UlidIdGen,
+    Auth, BoundedHttpClient, Captcha, Classifier, Clock, CustomHostnames, Defer, HarnessConfig,
+    Mailer, Payments, Port, Ports, Push, Runtime, SidecarMounts, TextModel, Tracker, UlidIdGen,
 };
 use worker::Env;
 
@@ -90,6 +90,11 @@ pub struct Cloudflare {
     /// binding itself, so the wiring a venture writes is identical to the
     /// native runtime's.
     classifier: Option<Arc<dyn Classifier>>,
+    /// The `CustomHostnames` port (issue #590): like `mailer`, the adapter
+    /// is built from the venture's vendor keys and passed in — the
+    /// Cloudflare for `SaaS` adapter (`cratefield-adapter-cloudflare-saas`)
+    /// is portable over the `HttpClient` port.
+    custom_hostnames: Option<Arc<dyn CustomHostnames>>,
     captcha: Option<Arc<dyn Captcha>>,
     auth: Option<Arc<dyn Auth>>,
     /// Whether to assemble the `Auth` port from the environment.
@@ -126,6 +131,7 @@ impl Cloudflare {
             payments: None,
             text_model: None,
             classifier: None,
+            custom_hostnames: None,
             tracker: None,
             captcha: None,
             auth: None,
@@ -362,6 +368,23 @@ impl Cloudflare {
         self
     }
 
+    /// The `CustomHostnames` port (issue #590): a customer's own hostname
+    /// served by a venture, passed in like `mailer`. The Cloudflare for
+    /// `SaaS` adapter is `cratefield-adapter-cloudflare-saas`, portable over
+    /// the `HttpClient` port, so this is the same wiring on either runtime.
+    #[must_use]
+    pub fn custom_hostnames(mut self, custom_hostnames: impl CustomHostnames + 'static) -> Self {
+        self.custom_hostnames = Some(Arc::new(custom_hostnames));
+        self
+    }
+
+    /// `custom_hostnames` for an already-shared adapter.
+    #[must_use]
+    pub fn custom_hostnames_arc(mut self, custom_hostnames: Arc<dyn CustomHostnames>) -> Self {
+        self.custom_hostnames = Some(custom_hostnames);
+        self
+    }
+
     #[must_use]
     pub fn captcha(mut self, captcha: impl Captcha + 'static) -> Self {
         self.captcha = Some(Arc::new(captcha));
@@ -586,6 +609,7 @@ impl Cloudflare {
         ports.tracker.clone_from(&self.tracker);
         ports.text_model.clone_from(&self.text_model);
         ports.classifier.clone_from(&self.classifier);
+        ports.custom_hostnames.clone_from(&self.custom_hostnames);
         ports.captcha.clone_from(&self.captcha);
         // Only when set: `clock_http_and_auth` may already have assembled
         // `ports.auth` from `AUTH_ISSUER` + `AUTH_CLIENT_ID` under
@@ -667,6 +691,9 @@ impl Runtime for Cloudflare {
         }
         if self.classifier.is_some() {
             provided.push(Port::Classifier);
+        }
+        if self.custom_hostnames.is_some() {
+            provided.push(Port::CustomHostnames);
         }
         // Provided whatever the environment holds — see `auth_from_env`.
         if self.auth.is_some() || self.auth_from_env {

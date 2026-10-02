@@ -61,11 +61,14 @@ idna = { workspace = true }
 sha2 = { workspace = true }
 tracing = { workspace = true }
 time = { workspace = true }
+# The domains screen's `Unwired` implements the core `CustomHostnames`
+# port, whose methods are `#[async_trait]`; the macro belongs in the
+# normal dependency set, not only the test one.
+async-trait = { workspace = true }
 
 [dev-dependencies]
 cratefield-access = { path = "../control-plane-access" }
 cratefield-adapter-sqlite = { path = "../adapter-sqlite" }
 cratefield-testing = { path = "../testing", features = ["postgres"] }
-async-trait = { workspace = true }
 pollster = { workspace = true }
 tower = { workspace = true }

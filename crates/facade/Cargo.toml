@@ -31,6 +31,7 @@ owlpost = ["dep:cratefield-adapter-owlpost"]
 turnstile = ["dep:cratefield-adapter-turnstile"]
 anthropic = ["dep:cratefield-adapter-anthropic"]
 openai-compatible = ["dep:cratefield-adapter-openai-compatible"]
+cloudflare-saas = ["dep:cratefield-adapter-cloudflare-saas"]
 apns = ["dep:cratefield-adapter-apns"]
 fcm = ["dep:cratefield-adapter-fcm"]
 stripe = ["dep:cratefield-adapter-stripe"]
@@ -127,6 +128,7 @@ cratefield-adapter-owlpost = { workspace = true, optional = true }
 cratefield-adapter-turnstile = { workspace = true, optional = true }
 cratefield-adapter-anthropic = { workspace = true, optional = true }
 cratefield-adapter-openai-compatible = { workspace = true, optional = true }
+cratefield-adapter-cloudflare-saas = { workspace = true, optional = true }
 cratefield-adapter-apns = { workspace = true, optional = true }
 cratefield-adapter-fcm = { workspace = true, optional = true }
 cratefield-push-auth = { workspace = true, optional = true }

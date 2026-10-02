@@ -21,9 +21,9 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use cratefield_core::{
-    Auth, Blob, BoundedHttpClient, Captcha, Classifier, Clock, Database, Embedder, HarnessConfig,
-    KeyValue, Mailer, Payments, Port, Ports, Push, RateLimiter, Realtime, Runtime, TextModel,
-    Tracker, UlidIdGen, VectorIndex,
+    Auth, Blob, BoundedHttpClient, Captcha, Classifier, Clock, CustomHostnames, Database, Embedder,
+    HarnessConfig, KeyValue, Mailer, Payments, Port, Ports, Push, RateLimiter, Realtime, Runtime,
+    TextModel, Tracker, UlidIdGen, VectorIndex,
 };
 
 use crate::config::EnvConfig;
@@ -73,6 +73,11 @@ pub struct Native {
     vector_index: Option<Arc<dyn VectorIndex>>,
     /// The `Embedder` port (issue #561), the input side of `vector_index`.
     embedder: Option<Arc<dyn Embedder>>,
+    /// The `CustomHostnames` port (issue #590): like `mailer`, the adapter
+    /// is passed in — the Cloudflare for `SaaS` adapter
+    /// (`cratefield-adapter-cloudflare-saas`) is portable over the
+    /// `HttpClient` port and runs here unchanged.
+    custom_hostnames: Option<Arc<dyn CustomHostnames>>,
     mailer: Option<Arc<dyn Mailer>>,
     captcha: Option<Arc<dyn Captcha>>,
     auth: Option<Arc<dyn Auth>>,
@@ -307,6 +312,24 @@ impl Native {
         self
     }
 
+    /// The `CustomHostnames` port (issue #590): a customer's own hostname
+    /// served by a venture. Like `mailer`, the adapter is built from the
+    /// venture's vendor keys and passed in — the Cloudflare for `SaaS`
+    /// adapter is `cratefield-adapter-cloudflare-saas`, portable over the
+    /// `HttpClient` port.
+    #[must_use]
+    pub fn custom_hostnames(mut self, custom_hostnames: impl CustomHostnames + 'static) -> Self {
+        self.custom_hostnames = Some(Arc::new(custom_hostnames));
+        self
+    }
+
+    /// `custom_hostnames` for an already-shared adapter.
+    #[must_use]
+    pub fn custom_hostnames_arc(mut self, custom_hostnames: Arc<dyn CustomHostnames>) -> Self {
+        self.custom_hostnames = Some(custom_hostnames);
+        self
+    }
+
     #[must_use]
     pub fn mailer(mut self, mailer: impl Mailer + 'static) -> Self {
         self.mailer = Some(Arc::new(mailer));
@@ -387,6 +410,7 @@ impl Native {
         ports.classifier.clone_from(&self.classifier);
         ports.vector_index.clone_from(&self.vector_index);
         ports.embedder.clone_from(&self.embedder);
+        ports.custom_hostnames.clone_from(&self.custom_hostnames);
         ports.mailer.clone_from(&self.mailer);
         ports.captcha.clone_from(&self.captcha);
         ports.auth.clone_from(&self.auth);
@@ -499,6 +523,9 @@ impl Runtime for Native {
         if self.embedder.is_some() {
             provided.push(Port::Embedder);
         }
+        if self.custom_hostnames.is_some() {
+            provided.push(Port::CustomHostnames);
+        }
         if self.mailer.is_some() {
             provided.push(Port::Mailer);
         }
@@ -551,6 +578,9 @@ pub(crate) fn clone_ports(ports: &Ports) -> Ports {
     snapshot.classifier.clone_from(&ports.classifier);
     snapshot.vector_index.clone_from(&ports.vector_index);
     snapshot.embedder.clone_from(&ports.embedder);
+    snapshot
+        .custom_hostnames
+        .clone_from(&ports.custom_hostnames);
     snapshot.http.clone_from(&ports.http);
     snapshot.clock.clone_from(&ports.clock);
     snapshot.id_gen.clone_from(&ports.id_gen);
@@ -590,5 +620,15 @@ mod tests {
         let bare = super::Native::new();
         assert!(!bare.provides().contains(&Port::VectorIndex));
         assert!(!bare.provides().contains(&Port::Embedder));
+    }
+
+    #[test]
+    fn custom_hostnames_is_provided_only_when_wired() {
+        let wired = super::Native::new().custom_hostnames(
+            cratefield_testing::FakeCustomHostnames::new("cratefield.app"),
+        );
+        assert!(wired.provides().contains(&Port::CustomHostnames));
+        let bare = super::Native::new();
+        assert!(!bare.provides().contains(&Port::CustomHostnames));
     }
 }

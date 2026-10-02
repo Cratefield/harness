@@ -48,6 +48,9 @@ pub use cratefield_adapter_anthropic as anthropic;
 #[cfg(feature = "openai-compatible")]
 pub use cratefield_adapter_openai_compatible as openai_compatible;
 
+#[cfg(feature = "cloudflare-saas")]
+pub use cratefield_adapter_cloudflare_saas as cloudflare_saas;
+
 #[cfg(feature = "apns")]
 pub use cratefield_adapter_apns as apns;
 
