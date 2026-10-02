@@ -127,6 +127,28 @@ pub fn redacted_value(name: &str, value: &str) -> String {
 /// The marker [`scrub_text`] leaves in place of redacted material.
 const REDACTED: &str = "[redacted]";
 
+/// The parameter names whose value is an `AWS SigV4` credential (issue #622):
+/// the signature, credential scope and STS session token of a presigned URL's
+/// query, or the bare `Credential=`/`Signature=` of an
+/// `Authorization: AWS4-HMAC-SHA256 …` header. `X-Amz-Signature=` contains
+/// `Signature=`; the earliest match wins, so the longer name is the one
+/// redacted.
+const SIGV4_SECRET_NAMES: [&str; 5] = [
+    "X-Amz-Signature=",
+    "X-Amz-Credential=",
+    "X-Amz-Security-Token=",
+    "Credential=",
+    "Signature=",
+];
+
+/// Where a `SigV4` parameter's value ends: at the next `&` or `,` (query and
+/// header separators) or any whitespace. `[` is deliberately not one, so
+/// re-scrubbing `X-Amz-Signature=[redacted]` redacts `[redacted]` to itself
+/// and stays idempotent.
+fn sigv4_value_end(c: char) -> bool {
+    c.is_ascii_whitespace() || c == '&' || c == ','
+}
+
 /// Bytes that may appear inside a URL run in log text. Whitespace and the
 /// delimiters a URL is typically wrapped in (`"`, `'`, `(`, `<`, …) end
 /// the run, so a URL embedded in prose or `{:?}` output is matched whole.
@@ -199,6 +221,9 @@ fn email_domain_byte(b: u8) -> bool {
 /// - a signed token or JWT (`eyJ…`, dot-separated base64url runs) becomes
 ///   `[redacted]` — the signer's payload is base64url JSON, which always
 ///   starts with `eyJ`;
+/// - an `AWS SigV4` credential (`X-Amz-Signature=…`, `X-Amz-Credential=…`, or
+///   the `Authorization: AWS4-HMAC-SHA256 Credential=…, Signature=…` header
+///   form) becomes `…=[redacted]` (issue #622);
 /// - the query of a URL (`scheme://…?…`) or of a path-shaped value
 ///   (`/v1/…?…`) becomes `?[redacted]` — confirmation, unsubscribe and
 ///   status tokens ride in the query;
@@ -217,7 +242,8 @@ pub fn scrub_text(value: &str) -> String {
     let paths = scrub_path_queries(&urls);
     let tokens = scrub_dotted_tokens(&paths);
     let bearer = scrub_bearer(&tokens);
-    scrub_emails(&bearer)
+    let sigv4 = scrub_sigv4(&bearer);
+    scrub_emails(&sigv4)
 }
 
 /// Cuts one **known** request URL back to its origin everywhere it appears
@@ -456,6 +482,33 @@ fn scrub_bearer(value: &str) -> String {
     }
     out.push_str(&value[processed..]);
     out
+}
+
+/// The `SigV4` pass of [`scrub_text`]: the credential-bearing parameters of a
+/// presigned URL — or of the `Authorization: AWS4-HMAC-SHA256 …` header form
+/// — lose their values (issue #622). The URL pass already drops the whole
+/// query of an absolute URL; this catches a bare query string, or a header
+/// value, which have neither a scheme nor a secret field name around them.
+fn scrub_sigv4(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    let mut rest = value;
+    loop {
+        let found = SIGV4_SECRET_NAMES
+            .iter()
+            .filter_map(|name| rest.find(name).map(|at| (at, *name)))
+            .min_by_key(|(at, _)| *at);
+        let Some((at, name)) = found else {
+            out.push_str(rest);
+            return out;
+        };
+        let value_start = at + name.len();
+        out.push_str(&rest[..value_start]);
+        let end = rest[value_start..]
+            .find(sigv4_value_end)
+            .map_or(rest.len(), |offset| value_start + offset);
+        out.push_str(REDACTED);
+        rest = &rest[end..];
+    }
 }
 
 /// The email pass of [`scrub_text`]: RFC-ish local part, dotted domain
@@ -810,7 +863,10 @@ mod tests {
     #[test]
     fn scrub_text_is_idempotent() {
         let nasty = "failed for nick@example.com with Bearer abcdefgh12345 at \
-             https://x.example/v1/confirm?token=eyJ and postgres://u:p@h/db";
+             https://x.example/v1/confirm?token=eyJ and postgres://u:p@h/db; \
+             X-Amz-Credential=AKID%2F20260101%2Fauto%2Fs3%2Faws4_request \
+             Authorization: AWS4-HMAC-SHA256 Credential=AKID/20260101/auto/s3/aws4_request, \
+             Signature=abcdef";
         let once = scrub_text(nasty);
         assert_eq!(scrub_text(&once), once, "{once}");
     }
@@ -864,6 +920,72 @@ mod tests {
         // message worse and hide nothing.
         let safe = scrub_request_url("GET / failed at https://x.example/", "https://x.example/");
         assert_eq!(safe, "GET / failed at https://x.example");
+    }
+
+    /// A `SigV4` credential in any of the forms a value can carry it — a
+    /// presigned URL's query, a bare query string, or the
+    /// `Authorization: AWS4-HMAC-SHA256 …` header — loses its value
+    /// (issue #622).
+    #[test]
+    fn scrub_text_redacts_sigv4_credentials() {
+        // An absolute URL: the URL pass drops the whole query, and the same
+        // URL as a generic field value (a `uri`) is scrubbed before storage.
+        const URL: &str = "https://examplebucket.s3.amazonaws.com/test.txt\
+             ?X-Amz-Algorithm=AWS4-HMAC-SHA256\
+             &X-Amz-Credential=AKIAIOSFODNN7EXAMPLE%2F20130524%2Fus-east-1%2Fs3%2Faws4_request\
+             &X-Amz-Date=20130524T000000Z\
+             &X-Amz-Expires=86400\
+             &X-Amz-SignedHeaders=host\
+             &X-Amz-Signature=aeeed9bbccd4d02ee5c0109b86d86835f995330da4c265957d157751f604d404";
+        assert_eq!(
+            scrub_text(URL),
+            "https://examplebucket.s3.amazonaws.com/test.txt?[redacted]"
+        );
+        assert_eq!(redacted_value("uri", URL), scrub_text(URL));
+
+        // A bare query has no scheme for the URL pass to anchor on, so the
+        // `SigV4` names themselves are what the rule catches.
+        assert_eq!(
+            scrub_text(
+                "X-Amz-Algorithm=AWS4-HMAC-SHA256\
+                 &X-Amz-Credential=AKID%2F20260101%2Fauto%2Fs3%2Faws4_request\
+                 &X-Amz-Date=20260101T000000Z\
+                 &X-Amz-Signature=abcd0123456789abcdef0123456789abcdef0123456789abcdef0123456789ab"
+            ),
+            "X-Amz-Algorithm=AWS4-HMAC-SHA256\
+             &X-Amz-Credential=[redacted]\
+             &X-Amz-Date=20260101T000000Z\
+             &X-Amz-Signature=[redacted]"
+        );
+
+        // The `Authorization` header form, with no query around it.
+        assert_eq!(
+            scrub_text(
+                "Authorization: AWS4-HMAC-SHA256 \
+                 Credential=AKIDEXAMPLE/20150830/us-east-1/service/aws4_request, \
+                 SignedHeaders=host;x-amz-date, \
+                 Signature=5fa00fa31553b73ebf1942676e86291e8372ff2a2260956d9b8aae1d763fbf31"
+            ),
+            "Authorization: AWS4-HMAC-SHA256 \
+             Credential=[redacted], \
+             SignedHeaders=host;x-amz-date, \
+             Signature=[redacted]"
+        );
+
+        // An STS session token (`X-Amz-Security-Token=`) is a credential too:
+        // it accompanies temporary credentials, so it is redacted as well, and
+        // re-scrubbing the result is a no-op.
+        assert_eq!(
+            scrub_text(
+                "X-Amz-Security-Token=IQoJb3JpZ2luX2VjECTEMP\
+                 &X-Amz-Signature=abcd0123456789abcdef0123456789abcdef0123456789abcdef0123456789ab"
+            ),
+            "X-Amz-Security-Token=[redacted]&X-Amz-Signature=[redacted]"
+        );
+        assert_eq!(
+            scrub_text("X-Amz-Security-Token=[redacted]&X-Amz-Signature=[redacted]"),
+            "X-Amz-Security-Token=[redacted]&X-Amz-Signature=[redacted]"
+        );
     }
 }
 
