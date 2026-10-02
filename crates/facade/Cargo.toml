@@ -120,6 +120,7 @@ changelog = ["dep:cratefield-module-changelog"]
 notifications = ["dep:cratefield-module-notifications", "i18n"]
 telemetry = ["dep:cratefield-module-telemetry"]
 webhooks = ["dep:cratefield-module-webhooks"]
+device-auth = ["dep:cratefield-module-device-auth"]
 
 # The conformance kit. Belongs under [dev-dependencies] in a venture.
 testing = ["dep:cratefield-testing"]
@@ -173,6 +174,7 @@ cratefield-module-changelog = { workspace = true, optional = true }
 cratefield-module-notifications = { workspace = true, optional = true }
 cratefield-module-telemetry = { workspace = true, optional = true }
 cratefield-module-webhooks = { workspace = true, optional = true }
+cratefield-module-device-auth = { workspace = true, optional = true }
 cratefield-testing = { workspace = true, optional = true }
 
 [package.metadata.docs.rs]

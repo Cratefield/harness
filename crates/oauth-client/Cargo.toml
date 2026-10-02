@@ -36,4 +36,13 @@ getrandom = { version = "0.4", default-features = false, features = ["wasm_js"] 
 
 [dev-dependencies]
 async-trait = { workspace = true }
+futures-core = { workspace = true }
 pollster = { workspace = true }
+time = { workspace = true }
+# The RFC 8628 integration test drives the client against the real
+# `device-auth` module through the test kit's in-process router, so neither
+# dependency reaches the crate's own (wasm) graph.
+axum = { workspace = true }
+tower = { workspace = true }
+cratefield-testing = { workspace = true }
+cratefield-module-device-auth = { workspace = true }

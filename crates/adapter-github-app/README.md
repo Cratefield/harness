@@ -92,6 +92,11 @@ an upstream gets to choose, so a cross-origin link ends the walk instead.
 when it meets one: the call exists to grant access, so an unverifiable walk
 fails closed.
 
+`request` (and so `paginate`'s first URL) holds the same line for every
+request it authenticates: an absolute URL on another origin is refused with
+`GithubAppError::ForeignOrigin` before a token is minted. A caller that sets
+its own `Authorization` is not minted a token, so the check does not apply.
+
 ## User-to-server
 
 `exchange_user_code(client_id, client_secret, code, redirect_uri)` posts to

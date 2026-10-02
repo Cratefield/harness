@@ -503,6 +503,92 @@ jobs:
           COOKIE=$(grep -i '^set-cookie:' /tmp/login.headers | sed 's/^[^:]*: *//' | cut -d';' -f1)
           curl -sf -m 10 -H "cookie: $COOKIE" http://127.0.0.1:8787/ui/admin/waitlist/export \
             | grep -q '<table class="cf-table"'
+      - name: Streamed request and response bodies (issue #585)
+        # The streaming half of a route, on a live isolate. A 50 MB body is
+        # uploaded, hashed chunk by chunk and answered — never buffered — and
+        # a 50 MB response is generated and streamed out; the 128 MB isolate
+        # limit is less than either body, so these passing is the memory
+        # evidence the issue asks for (nothing near the body size is
+        # resident). The digests are compared against `sha256sum`, so a
+        # dropped, reordered or short body cannot pass.
+        run: |
+          set -euo pipefail
+          # The venture's CORS allowlist (examples/venture/src/lib.rs): the
+          # site origin, the one an in-browser cf.js caller has.
+          ORIGIN=http://127.0.0.1:8788
+
+          # A refused body is left unread, which trips wrangler dev's drain
+          # middleware (workers-sdk#4562): the NEXT local request is dropped
+          # once. Newer wrangler retries it inside ProxyWorker; older does
+          # not, so absorb it here rather than let a later assertion die.
+          recover() {
+            for _ in $(seq 1 5); do
+              code=$(curl -s -o /dev/null -m 5 -w '%{http_code}' \
+                http://127.0.0.1:8787/__health || true)
+              [ "$code" = "200" ] && return 0
+              sleep 2
+            done
+            echo "worker did not recover after a refused body"
+            return 1
+          }
+
+          echo "-- upload 50 MB, hashed as it streams"
+          head -c 50000000 /dev/urandom > /tmp/big
+          got=$(curl -sf -m 180 --data-binary @/tmp/big \
+            http://127.0.0.1:8787/v1/sample/upload)
+          echo "$got"
+          want=$(sha256sum /tmp/big | cut -d' ' -f1)
+          echo "$got" | grep -q "\"sha256\":\"$want\""
+          echo "$got" | grep -q '"bytes":50000000'
+
+          echo "-- download 50 MB, generated in 64 KiB chunks"
+          want=$(head -c 50000000 /dev/zero | sha256sum | cut -d' ' -f1)
+          got=$(curl -sf -m 180 'http://127.0.0.1:8787/v1/sample/download?bytes=50000000' \
+            | sha256sum | cut -d' ' -f1)
+          test "$want" = "$got"
+
+          echo "-- HEAD on a streamed GET route: status and headers, no body"
+          # axum serves HEAD via the GET handler and empties the body; the
+          # runtime must not bridge the ResponseStream handle to the wire.
+          head=$(curl -sI -m 30 -o /dev/null -w '%{http_code} %{size_download}' \
+            'http://127.0.0.1:8787/v1/sample/download?bytes=50000000')
+          code=${head% *}
+          size=${head#* }
+          test "$code" = "200" || { echo "HEAD answered $code"; exit 1; }
+          test "$size" = "0" || { echo "HEAD downloaded $size body bytes"; exit 1; }
+
+          echo "-- CORS and request-id on a streaming route"
+          curl -s -m 30 -D /tmp/stream.headers -H "origin: $ORIGIN" \
+            'http://127.0.0.1:8787/v1/sample/download?bytes=1024' -o /dev/null
+          grep -qi "^access-control-allow-origin: $ORIGIN" /tmp/stream.headers
+          grep -qi '^x-request-id:' /tmp/stream.headers
+
+          echo "-- a buffered route still fails above the 1 MiB response buffer"
+          code=$(curl -s -m 30 -o /dev/null -w '%{http_code}' \
+            http://127.0.0.1:8787/v1/sample/big-buffered)
+          test "$code" = "500" || { echo "buffered 2 MiB answered $code"; exit 1; }
+
+          echo "-- over-ceiling with no content-length: the mid-stream cap (413)"
+          # `-T -` reads stdin and curls it with `Transfer-Encoding: chunked`
+          # and NO content-length (not `--data-binary @file`, which sends
+          # one), so this can only be the stream's own chunk-by-chunk cap,
+          # not the header pre-check.
+          code=$(head -c 68000000 /dev/zero | curl -sS -m 180 -X POST -T - \
+            -o /tmp/over.json -w '%{http_code}' \
+            http://127.0.0.1:8787/v1/sample/upload)
+          test "$code" = "413" || { echo "over-ceiling stream answered $code"; exit 1; }
+          grep -q 'request-too-large' /tmp/over.json
+          recover
+
+          echo "-- over-ceiling with a declared content-length: the pre-check (413)"
+          head -c 68000000 /dev/zero > /tmp/over
+          code=$(curl -s -m 180 --data-binary @/tmp/over \
+            -o /tmp/over2.json -w '%{http_code}' \
+            http://127.0.0.1:8787/v1/sample/upload)
+          test "$code" = "413" || { echo "over-ceiling declared answered $code"; exit 1; }
+          grep -q 'request-too-large' /tmp/over2.json
+          recover
+          echo "streaming assertions passed"
       - name: A transport failure never quotes the request URL (issue #229)
         # The one thing a unit test cannot finish. It can build a
         # `worker::Error`, but only workerd produces the message a real

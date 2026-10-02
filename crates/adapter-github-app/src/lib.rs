@@ -360,7 +360,12 @@ impl GithubApp {
     ///
     /// The request's URI may be absolute (`https://api.github.com/repos/...`)
     /// or relative (`/repos/...`); a relative one is resolved against the
-    /// client's API base. `Authorization`, `Accept`,
+    /// client's API base. An absolute URI on another origin than the API base
+    /// is refused with [`GithubAppError::ForeignOrigin`] — before any token is
+    /// minted — whenever this method would attach the installation token: the
+    /// token never leaves the API's origin, whichever path the URL came by
+    /// (a caller-built one, [`GithubApp::paginate`]'s first page, a URL read
+    /// out of a payload). `Authorization`, `Accept`,
     /// `X-GitHub-Api-Version` and `User-Agent` are set unless the caller
     /// already set them — so a caller can pass their own credential and this
     /// method will not overwrite it (and will not mint an installation token
@@ -377,7 +382,8 @@ impl GithubApp {
     ///
     /// As [`GithubApp::installation_token`], plus
     /// [`GithubAppError::InvalidHeader`] if a token cannot be put on the wire
-    /// as a header value.
+    /// as a header value, and [`GithubAppError::ForeignOrigin`] for an
+    /// off-origin URI this method would have authenticated.
     pub async fn request(
         &self,
         installation_id: u64,
@@ -385,6 +391,18 @@ impl GithubApp {
     ) -> Result<GithubResponse, GithubAppError> {
         self.signer()?;
         let caller_authenticated = request.headers().contains_key(AUTHORIZATION);
+        if !caller_authenticated {
+            let target = resolve_uri(&self.api_base, request.uri())?;
+            if !same_origin(&self.api_base, &target.to_string()) {
+                tracing::warn!(
+                    provider = "github-app",
+                    installation = installation_id,
+                    outcome = "foreign-origin-refused",
+                    "github app request"
+                );
+                return Err(GithubAppError::ForeignOrigin);
+            }
+        }
 
         let mut credential = if caller_authenticated {
             None
@@ -459,7 +477,8 @@ impl GithubApp {
     ///
     /// # Errors
     ///
-    /// As [`GithubApp::request`].
+    /// As [`GithubApp::request`] — so a `first_url` on another origin is
+    /// [`GithubAppError::ForeignOrigin`].
     pub async fn paginate(
         &self,
         installation_id: u64,
@@ -1064,6 +1083,11 @@ pub enum GithubAppError {
     /// A value could not be put on the wire as an HTTP header.
     #[error("a request header value is not valid")]
     InvalidHeader,
+    /// [`GithubApp::request`] was asked to send the installation token to a
+    /// URI outside the API base's origin (scheme, host and port). Nothing was
+    /// minted or sent.
+    #[error("refusing to send the installation token outside the GitHub API origin")]
+    ForeignOrigin,
     /// The transport failed.
     #[error("github app request failed: {0}")]
     Http(#[from] HttpError),

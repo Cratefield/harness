@@ -112,6 +112,10 @@ cratefield-module-telemetry = { path = "crates/module-telemetry", version = "0.2
 # the core outbox, dead letters and replay. The Rust API is the surface —
 # the module ships no routes of its own.
 cratefield-module-webhooks = { path = "crates/module-webhooks", version = "0.2" }
+# The OAuth 2.0 device authorization grant (issue #587): a client with no
+# browser shows a code, a signed-in person approves it, and the venture's
+# own issuer mints the credential.
+cratefield-module-device-auth = { path = "crates/module-device-auth", version = "0.2" }
 # Declared here rather than by bare path in the one crate that uses it: a
 # path-only dependency has no version, and `cargo publish` refuses a
 # dependency without one. It was invisible while both crates were
@@ -222,6 +226,12 @@ chacha20poly1305 = { version = "0.11", default-features = false, features = [
 zeroize = { version = "1.8", features = ["zeroize_derive"] }
 hmac = "0.13.0"
 sha2 = "0.11.0"
+# SHA-1 for the HMAC core: Vercel signs webhooks with HMAC-SHA1 (issue
+# #625). The 0.11 line and not 0.10 for the same reason `hkdf` below is
+# 0.13: it is built on `digest` 0.11, the stack `hmac`/`sha2` above already
+# pull in, so `Hmac<Sha1>` composes with the same `hmac` — 0.10 would drag a
+# second digest stack (hmac 0.12 + digest 0.10) in beside it.
+sha1 = "0.11.0"
 base64 = "0.23.1"
 subtle = "2.6.1"
 hex = "0.4.3"

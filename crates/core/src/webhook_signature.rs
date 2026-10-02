@@ -1,16 +1,35 @@
-//! Generic webhook signature verification (issue #533).
+//! Generic webhook signature verification (issue #533, extended by #625).
 //!
 //! [`RoutePolicy::Signature`](crate::route_policy::RoutePolicy::Signature)
 //! used to mean exactly one verifier: `Payments::verify_webhook`, so a
 //! venture receiving **signed** webhooks from a provider that never takes a
 //! payment had no policy it could declare honestly. This module is the other
-//! half: one HMAC-SHA256 core ([`WebhookVerifier`]) with pluggable header
-//! schemes ([`SignatureScheme`]) — Svix ([`Svix`], also what Resend signs
-//! with), Stripe-style ([`StripeStyle`]), GitHub ([`Github`]) and a
-//! configured provider layout ([`ProviderScheme`]).
+//! half: one HMAC core ([`WebhookVerifier`]) with pluggable header schemes
+//! ([`SignatureScheme`]) — Svix ([`Svix`], also what Resend signs with),
+//! Stripe-style ([`StripeStyle`]), GitHub ([`Github`]), Vercel ([`Vercel`],
+//! HMAC-SHA1) and a configured provider layout ([`ProviderScheme`]) — plus a
+//! shared-**token** scheme ([`SharedTokenScheme`], and GitLab ([`Gitlab`]) in
+//! particular) whose header carries the secret itself rather than a signature
+//! of it.
 //!
 //! Verification always runs over the **raw body bytes** — the handler must
 //! read the body before anything parses it — and every path fails closed.
+//!
+//! # SHA-1 and replay
+//!
+//! A scheme picks its HMAC digest through [`SignatureScheme::digest`]:
+//! SHA-256 by default, or SHA-1, which Vercel signs with. SHA-1 is
+//! acceptable here because the construction is an **HMAC**, a message
+//! authentication code: its security rests on the secret key and the hash's
+//! behaviour as a PRF, not on collision resistance, so SHA-1's collisions
+//! are not exploitable against it. It is never used as a collision-sensitive
+//! hash. A shared-token scheme runs no hash at all.
+//!
+//! Neither [`Vercel`] nor the token schemes ([`SharedTokenScheme`],
+//! [`Gitlab`]) cover a timestamp — Vercel's header is a bare body MAC,
+//! GitLab's is the secret verbatim — so none of them stops a replay by
+//! itself. The handler must claim each delivery's event id through the
+//! [`Inbox`](crate::idempotency::Inbox) dedup ledger.
 
 use std::borrow::Cow;
 use std::sync::Arc;
@@ -19,10 +38,12 @@ use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 use hmac::{Hmac, KeyInit, Mac};
 use http::HeaderMap;
+use sha1::Sha1;
 use sha2::Sha256;
 use subtle::ConstantTimeEq;
 
 type HmacSha256 = Hmac<Sha256>;
+type HmacSha1 = Hmac<Sha1>;
 
 /// How far a delivery's timestamp may be from now, in seconds, either way —
 /// Svix's and Stripe's own tolerance, and the [`WebhookVerifier`] default.
@@ -34,7 +55,9 @@ pub const DEFAULT_TOLERANCE_SECS: i64 = 300;
 /// replay tolerance runs on.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SignedDelivery {
-    /// Exactly the bytes `HMAC-SHA256(secret, ·)` ran over.
+    /// Exactly the bytes the scheme's MAC ran over — the raw body, or a
+    /// `{timestamp}.{body}` / `{id}.{timestamp}.{body}` layout. Empty for a
+    /// shared-token scheme, which signs nothing.
     pub signed_payload: Vec<u8>,
     /// Every candidate the delivery carried, decoded; empty refuses.
     pub candidates: Vec<Vec<u8>>,
@@ -45,8 +68,8 @@ pub struct SignedDelivery {
 }
 
 /// How a provider puts its signature material on the wire. Implement this
-/// for a provider none of the built-in schemes speak; the HMAC core is
-/// [`WebhookVerifier`]'s either way. Fail closed: `None` for a delivery
+/// for a provider none of the built-in schemes speak; the verification core
+/// is [`WebhookVerifier`]'s either way. Fail closed: `None` for a delivery
 /// whose headers cannot be read in full, never a guess.
 pub trait SignatureScheme: Send + Sync {
     /// Reads one delivery's signature material out of the request headers
@@ -61,11 +84,66 @@ pub trait SignatureScheme: Send + Sync {
         let trimmed = secret.trim();
         (!trimmed.is_empty()).then_some(Cow::Borrowed(trimmed.as_bytes()))
     }
+
+    /// The digest the scheme's HMAC runs on. SHA-256 unless a provider
+    /// signs with SHA-1 (Vercel today). Ignored by a shared-token scheme,
+    /// which hashes nothing.
+    fn digest(&self) -> Digest {
+        Digest::Sha256
+    }
+
+    /// The signature bytes a matching delivery must carry, given the
+    /// derived `key` and the bytes the scheme signed. The default is
+    /// `HMAC(self.digest(), key, signed_payload)`; a **shared-token** scheme
+    /// overrides this to return the key's own bytes, because for it the
+    /// header *is* the secret and there is nothing to compute.
+    ///
+    /// The verifier compares the result against every candidate in constant
+    /// time — the one comparison both paths share.
+    fn expected_signature(&self, key: &[u8], signed_payload: &[u8]) -> Vec<u8> {
+        hmac_bytes(self.digest(), key, signed_payload)
+    }
 }
 
-/// The HMAC-SHA256 core every scheme shares: compute the expected tag over
-/// the scheme's signed payload, compare it against **every** candidate in
-/// constant time with no early exit, and hold the delivery to its timestamp.
+/// The hash an HMAC scheme runs on. SHA-256 everywhere it is not otherwise
+/// named; SHA-1 only where a provider signs with it ([`Vercel`]).
+///
+/// SHA-1 is safe in this position because HMAC is a **MAC**: its security
+/// depends on the secret key and the hash's PRF behaviour, not on collision
+/// resistance. It is not collision-sensitive use.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Digest {
+    /// HMAC-SHA256 — the default, and every scheme before Vercel.
+    #[default]
+    Sha256,
+    /// HMAC-SHA1 — Vercel's `x-vercel-signature`.
+    Sha1,
+}
+
+/// `HMAC(digest, key, payload)` as bytes. HMAC accepts a key of any length,
+/// so the constructor cannot fail.
+fn hmac_bytes(digest: Digest, key: &[u8], payload: &[u8]) -> Vec<u8> {
+    match digest {
+        Digest::Sha256 => {
+            let mut mac =
+                <HmacSha256 as KeyInit>::new_from_slice(key).expect("HMAC accepts any key length");
+            mac.update(payload);
+            mac.finalize().into_bytes().to_vec()
+        }
+        Digest::Sha1 => {
+            let mut mac =
+                <HmacSha1 as KeyInit>::new_from_slice(key).expect("HMAC accepts any key length");
+            mac.update(payload);
+            mac.finalize().into_bytes().to_vec()
+        }
+    }
+}
+
+/// The signature core every scheme shares: compute what a matching delivery
+/// must carry — an HMAC (SHA-256 or SHA-1) over the scheme's signed payload,
+/// or, for a token scheme, the secret itself — compare it against **every**
+/// candidate in constant time with no early exit, and hold the delivery to
+/// its timestamp.
 #[derive(Clone)]
 pub struct WebhookVerifier {
     scheme: Arc<dyn SignatureScheme>,
@@ -105,8 +183,8 @@ impl WebhookVerifier {
     ///
     /// # Panics
     ///
-    /// Only if `HMAC-SHA256` refused the derived key — which it cannot:
-    /// HMAC accepts keys of any length.
+    /// Only if the HMAC refused the derived key — which it cannot: HMAC
+    /// accepts keys of any length.
     #[must_use]
     pub fn verify(&self, secret: &str, headers: &HeaderMap, body: &[u8], now_unix: i64) -> bool {
         if secret.trim().is_empty() {
@@ -126,10 +204,13 @@ impl WebhookVerifier {
         let Some(key) = self.scheme.secret_key(secret) else {
             return false;
         };
-        let mut mac =
-            <HmacSha256 as KeyInit>::new_from_slice(&key).expect("HMAC accepts any key length");
-        mac.update(&delivery.signed_payload);
-        let expected = mac.finalize().into_bytes();
+        // The scheme says what a matching delivery must carry: an HMAC over
+        // the signed payload, or — for a shared-token scheme — the secret
+        // itself. Either way the comparison below is the only one, and it is
+        // constant time.
+        let expected = self
+            .scheme
+            .expected_signature(&key, &delivery.signed_payload);
         // No early exit: every candidate is compared and the results OR-ed,
         // so timing says nothing about how much of a wrong signature was
         // right — nor which candidate (if any) matched.
@@ -350,6 +431,98 @@ pub enum SignatureEncoding {
     Base64,
 }
 
+/// The `x-vercel-signature` header Vercel signs with.
+const VERCEL_SIGNATURE_HEADER: &str = "x-vercel-signature";
+/// An HMAC-SHA1 tag, the only length [`Vercel`] accepts.
+const SHA1_TAG_LEN: usize = 20;
+
+/// Vercel's scheme: header `x-vercel-signature`, a lowercase hex
+/// HMAC-SHA1 over the raw body — no prefix, no timestamp header. The digest
+/// is SHA-1 but the construction is HMAC, so SHA-1's collisions do not
+/// apply (see the module docs); with no timestamp, replay defence is the
+/// [`Inbox`](crate::idempotency::Inbox) dedup ledger's job.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Vercel;
+
+impl SignatureScheme for Vercel {
+    fn extract(&self, headers: &HeaderMap, body: &[u8]) -> Option<SignedDelivery> {
+        let raw = header(headers, VERCEL_SIGNATURE_HEADER)?;
+        let candidate = hex_decode(raw.trim())?;
+        // Not the 20 bytes of an HMAC-SHA1 tag: malformed, refuse rather
+        // than let a truncated or padded value near the comparison.
+        if candidate.len() != SHA1_TAG_LEN {
+            return None;
+        }
+        Some(SignedDelivery {
+            signed_payload: body.to_vec(),
+            candidates: vec![candidate],
+            timestamp: None,
+        })
+    }
+
+    fn digest(&self) -> Digest {
+        Digest::Sha1
+    }
+}
+
+/// GitLab's `X-Gitlab-Token` header, whose value is the shared secret.
+const GITLAB_TOKEN_HEADER: &str = "X-Gitlab-Token";
+
+/// A shared-**token** scheme: the header carries the secret itself, in the
+/// clear, and a value equal to the secret is what proves the delivery —
+/// there is no signature over the body, so `body` is ignored entirely. The
+/// comparison is the verifier's constant-time one (the same helper the HMAC
+/// path uses); a missing, empty or non-UTF-8 token refuses. Nothing here is
+/// bound to time, so a captured token replays: claim each delivery's event
+/// id through the [`Inbox`](crate::idempotency::Inbox) ledger.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SharedTokenScheme {
+    /// The header carrying the token.
+    pub header: &'static str,
+}
+
+impl SignatureScheme for SharedTokenScheme {
+    fn extract(&self, headers: &HeaderMap, body: &[u8]) -> Option<SignedDelivery> {
+        // `body` is deliberately unread: a token proves the sender, not the
+        // bytes.
+        let _ = body;
+        let token = header(headers, self.header)?;
+        if token.is_empty() {
+            return None; // an absent token cannot equal a non-empty secret
+        }
+        Some(SignedDelivery {
+            signed_payload: Vec::new(),
+            candidates: vec![token.as_bytes().to_vec()],
+            timestamp: None,
+        })
+    }
+
+    fn expected_signature(&self, key: &[u8], signed_payload: &[u8]) -> Vec<u8> {
+        let _ = signed_payload;
+        key.to_vec()
+    }
+}
+
+/// GitLab's scheme: header `X-Gitlab-Token` carrying the shared secret
+/// verbatim. Exactly [`SharedTokenScheme`] with that header fixed.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Gitlab;
+
+/// The one configured instance [`Gitlab`] delegates to.
+const GITLAB_TOKEN: SharedTokenScheme = SharedTokenScheme {
+    header: GITLAB_TOKEN_HEADER,
+};
+
+impl SignatureScheme for Gitlab {
+    fn extract(&self, headers: &HeaderMap, body: &[u8]) -> Option<SignedDelivery> {
+        GITLAB_TOKEN.extract(headers, body)
+    }
+
+    fn expected_signature(&self, key: &[u8], signed_payload: &[u8]) -> Vec<u8> {
+        GITLAB_TOKEN.expected_signature(key, signed_payload)
+    }
+}
+
 /// The first header value, as a string; non-UTF-8 is unreadable, and
 /// unreadable is refused.
 fn header<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
@@ -378,6 +551,22 @@ mod tests {
     const NOW: i64 = 1_800_000_000;
     const STRIPE_SECRET: &str = "stripe-endpoint-secret-dummy";
     const PROVIDER_SECRET: &str = "provider-endpoint-secret-dummy";
+    const VERCEL_SECRET: &str = "vercel-webhook-secret-dummy";
+    const GITLAB_SECRET: &str = "gitlab-shared-token-dummy";
+    /// A Vercel-shaped deployment webhook, the body the documented example
+    /// signs.
+    const VERCEL_BODY: &[u8] =
+        br#"{"type":"deployment.succeeded","payload":{"deployment":{"id":"dpl_1"}}}"#;
+
+    /// `HMAC-SHA1(key, parts)`, the tag Vercel sends.
+    fn mac_sha1(key: &[u8], parts: &[&[u8]]) -> Vec<u8> {
+        let mut mac =
+            <HmacSha1 as KeyInit>::new_from_slice(key).expect("HMAC accepts any key length");
+        for part in parts {
+            mac.update(part);
+        }
+        mac.finalize().into_bytes().to_vec()
+    }
 
     fn headers(pairs: &[(&str, &str)]) -> HeaderMap {
         pairs
@@ -680,6 +869,152 @@ mod tests {
             GITHUB_SECRET,
             &headers(&[("X-Hub-Signature-256", unprefixed)]),
             GITHUB_BODY,
+            NOW
+        ));
+    }
+
+    /// Whether a Vercel delivery with this header value verifies.
+    fn vercel_verifies(secret: &str, signature: &str, body: &[u8], now: i64) -> bool {
+        let got = headers(&[("x-vercel-signature", signature)]);
+        WebhookVerifier::new(Vercel).verify(secret, &got, body, now)
+    }
+
+    #[test]
+    fn hmac_sha1_matches_the_rfc_2202_vector() {
+        // RFC 2202, HMAC-SHA1 test case 2 — the same value `openssl dgst
+        // -sha1 -hmac Jefe` prints — anchors the SHA-1 path independently
+        // of anything this crate computes.
+        let tag = hex(&mac_sha1(b"Jefe", &[b"what do ya want for nothing?"]));
+        assert_eq!(tag, "effcdf6ae5eb2fa2d27416d5f184df9c259a7c79");
+    }
+
+    #[test]
+    fn a_vercel_delivery_verifies_and_tampered_ones_refuse() {
+        // The documented example: lowercase hex HMAC-SHA1 over a raw,
+        // Vercel-shaped deployment body.
+        let signature = hex(&mac_sha1(VERCEL_SECRET.as_bytes(), &[VERCEL_BODY]));
+        assert_eq!(signature, "d6543f159dfdf17c47130f1019ba14ed71bd4ca5");
+        assert!(vercel_verifies(VERCEL_SECRET, &signature, VERCEL_BODY, NOW));
+        // No timestamp, so "now" does not enter the answer.
+        assert!(vercel_verifies(
+            VERCEL_SECRET,
+            &signature,
+            VERCEL_BODY,
+            NOW + 10_000
+        ));
+        // One byte of the body changed; another endpoint's secret.
+        let tampered =
+            br#"{"type":"deployment.succeeded","payload":{"deployment":{"id":"dpl_2"}}}"#;
+        assert!(!vercel_verifies(VERCEL_SECRET, &signature, tampered, NOW));
+        assert!(!vercel_verifies(
+            "another-secret-dummy",
+            &signature,
+            VERCEL_BODY,
+            NOW
+        ));
+        // An empty secret is not a key.
+        assert!(!vercel_verifies("", &signature, VERCEL_BODY, NOW));
+    }
+
+    #[test]
+    fn unreadable_vercel_input_refuses() {
+        // Missing header entirely.
+        assert!(!WebhookVerifier::new(Vercel).verify(
+            VERCEL_SECRET,
+            &headers(&[]),
+            VERCEL_BODY,
+            NOW
+        ));
+        // An odd digit count, a non-hex pair, and an even but wrong length
+        // (not the 20 bytes of an HMAC-SHA1 tag) all refuse before the
+        // comparison — no truncated or padded value is ever compared.
+        assert!(!vercel_verifies(
+            VERCEL_SECRET,
+            &"a".repeat(39),
+            VERCEL_BODY,
+            NOW
+        ));
+        assert!(!vercel_verifies(
+            VERCEL_SECRET,
+            "not-hex!!",
+            VERCEL_BODY,
+            NOW
+        ));
+        assert!(!vercel_verifies(VERCEL_SECRET, "zzzz", VERCEL_BODY, NOW));
+        assert!(!vercel_verifies(VERCEL_SECRET, "abcd", VERCEL_BODY, NOW));
+        assert!(!vercel_verifies(
+            VERCEL_SECRET,
+            &"a".repeat(41),
+            VERCEL_BODY,
+            NOW
+        ));
+    }
+
+    /// Whether a GitLab delivery with this token header value verifies.
+    fn gitlab_verifies(secret: &str, token: &str, body: &[u8], now: i64) -> bool {
+        let got = headers(&[("X-Gitlab-Token", token)]);
+        WebhookVerifier::new(Gitlab).verify(secret, &got, body, now)
+    }
+
+    #[test]
+    fn a_gitlab_shared_token_verifies_and_ignores_the_body() {
+        let body = br#"{"object_kind":"push"}"#;
+        assert!(gitlab_verifies(GITLAB_SECRET, GITLAB_SECRET, body, NOW));
+        // The body plays no part: a different body, or none, still matches.
+        assert!(gitlab_verifies(GITLAB_SECRET, GITLAB_SECRET, b"", NOW));
+        assert!(gitlab_verifies(
+            GITLAB_SECRET,
+            GITLAB_SECRET,
+            b"a wholly different body",
+            NOW + 10_000
+        ));
+        // Header lookup is case-insensitive, as http::HeaderMap always is.
+        let lower = headers(&[("x-gitlab-token", GITLAB_SECRET)]);
+        assert!(WebhookVerifier::new(Gitlab).verify(GITLAB_SECRET, &lower, body, NOW));
+    }
+
+    #[test]
+    fn wrong_or_unreadable_gitlab_tokens_refuse() {
+        let body = b"{}";
+        // The wrong token, and one of a different length — the comparison
+        // fails either way, and length is not secret.
+        assert!(!gitlab_verifies(
+            GITLAB_SECRET,
+            "other-token-dummy",
+            body,
+            NOW
+        ));
+        assert!(!gitlab_verifies(
+            GITLAB_SECRET,
+            "gitlab-shared-token-dummy-plus",
+            body,
+            NOW
+        ));
+        // Missing header; empty token; empty secret.
+        assert!(!WebhookVerifier::new(Gitlab).verify(GITLAB_SECRET, &headers(&[]), body, NOW));
+        assert!(!gitlab_verifies(GITLAB_SECRET, "", body, NOW));
+        assert!(!gitlab_verifies("", GITLAB_SECRET, body, NOW));
+        // A non-UTF-8 header value is unreadable, and unreadable refuses.
+        let mut raw = HeaderMap::new();
+        raw.insert(
+            "X-Gitlab-Token",
+            http::HeaderValue::from_bytes(&[0xff, 0xfe, 0x80]).expect("opaque header value"),
+        );
+        assert!(!WebhookVerifier::new(Gitlab).verify(GITLAB_SECRET, &raw, body, NOW));
+        // The generic scheme honours its own header name.
+        let custom = WebhookVerifier::new(SharedTokenScheme {
+            header: "X-Custom-Token",
+        });
+        assert!(custom.verify(
+            GITLAB_SECRET,
+            &headers(&[("X-Custom-Token", GITLAB_SECRET)]),
+            body,
+            NOW
+        ));
+        assert!(!custom.verify(
+            GITLAB_SECRET,
+            &headers(&[("X-Gitlab-Token", GITLAB_SECRET)]),
+            body,
             NOW
         ));
     }

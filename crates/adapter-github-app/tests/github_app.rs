@@ -665,3 +665,54 @@ fn the_installation_token_fixture_parses() {
             .unix_timestamp()
     );
 }
+
+#[test]
+fn an_off_origin_request_is_refused_before_any_token_is_minted() {
+    let clock = Arc::new(StepClock::at(anchor()));
+    let http = RecordingHttp::scripted(vec![
+        ok_json(token_body("ghs_ONE")),
+        response(200, "{}", &[]),
+    ]);
+    let app = app(Arc::clone(&http), clock);
+
+    for url in [
+        "https://evil.example.com/repos/acme/widgets",
+        "http://api.github.test/repos/acme/widgets",
+        "https://api.github.test:8443/repos/acme/widgets",
+    ] {
+        assert!(
+            matches!(
+                pollster::block_on(app.request(1, get(url))),
+                Err(GithubAppError::ForeignOrigin)
+            ),
+            "{url} must be refused"
+        );
+        assert!(matches!(
+            pollster::block_on(app.paginate(1, url, 3)),
+            Err(GithubAppError::ForeignOrigin)
+        ));
+    }
+    assert_eq!(http.count(), 0, "nothing was minted or sent");
+
+    // An absolute URL on the API's own origin is still fine.
+    let answer =
+        pollster::block_on(app.request(1, get("https://api.github.test/repos/acme/widgets")))
+            .expect("answered");
+    assert_eq!(answer.status(), StatusCode::OK);
+}
+
+#[test]
+fn a_caller_credential_may_go_anywhere_the_caller_sends_it() {
+    // The guard protects the installation token only: a caller that sets its
+    // own Authorization is not minted a token, so its URL is its own call.
+    let clock = Arc::new(StepClock::at(anchor()));
+    let http = RecordingHttp::scripted(vec![response(200, "{}", &[])]);
+    let app = app(Arc::clone(&http), clock);
+    let request = Request::get("https://uploads.example.test/x")
+        .header("authorization", "Bearer ghu_CALLER")
+        .body(Bytes::new())
+        .expect("request");
+    let answer = pollster::block_on(app.request(1, request)).expect("answered");
+    assert_eq!(answer.status(), StatusCode::OK);
+    assert_eq!(http.count(), 1, "no installation token was minted");
+}

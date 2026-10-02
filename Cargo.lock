@@ -666,6 +666,7 @@ dependencies = [
  "cratefield-manifest",
  "cratefield-module-changelog",
  "cratefield-module-cms",
+ "cratefield-module-device-auth",
  "cratefield-module-email-signup",
  "cratefield-module-notifications",
  "cratefield-module-privacy",
@@ -1105,6 +1106,7 @@ dependencies = [
  "cratefield-manifest",
  "cratefield-module-changelog",
  "cratefield-module-cms",
+ "cratefield-module-device-auth",
  "cratefield-module-email-signup",
  "cratefield-module-notifications",
  "cratefield-module-privacy",
@@ -1287,6 +1289,7 @@ dependencies = [
  "sea-query",
  "serde",
  "serde_json",
+ "sha1 0.11.0",
  "sha2 0.11.0",
  "subtle",
  "syn 2.0.119",
@@ -1453,6 +1456,33 @@ dependencies = [
 ]
 
 [[package]]
+name = "cratefield-module-device-auth"
+version = "0.2.0"
+dependencies = [
+ "async-trait",
+ "axum",
+ "base64 0.23.1",
+ "cratefield-adapter-sqlite",
+ "cratefield-core",
+ "cratefield-module-privacy",
+ "cratefield-testing",
+ "futures-util",
+ "hex",
+ "http",
+ "pollster",
+ "schemars 1.2.2",
+ "sea-query",
+ "serde",
+ "serde_json",
+ "serde_urlencoded",
+ "sha2 0.11.0",
+ "thiserror 2.0.20",
+ "time",
+ "tower",
+ "tracing",
+]
+
+[[package]]
 name = "cratefield-module-email-signup"
 version = "0.2.0"
 dependencies = [
@@ -1613,10 +1643,14 @@ name = "cratefield-oauth-client"
 version = "0.2.0"
 dependencies = [
  "async-trait",
+ "axum",
  "base64 0.23.1",
  "bytes",
  "chacha20poly1305",
  "cratefield-core",
+ "cratefield-module-device-auth",
+ "cratefield-testing",
+ "futures-core",
  "getrandom 0.4.3",
  "http",
  "pollster",
@@ -1624,6 +1658,8 @@ dependencies = [
  "serde_json",
  "sha2 0.11.0",
  "thiserror 2.0.20",
+ "time",
+ "tower",
  "zeroize",
 ]
 
@@ -2576,7 +2612,7 @@ dependencies = [
  "pollster",
  "serde",
  "serde_json",
- "sha1",
+ "sha1 0.10.7",
  "time",
  "tower",
  "tracing",
@@ -4697,6 +4733,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "sha1"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "aacc4cc499359472b4abe1bf11d0b12e688af9a805fa5e3016f9a386dc2d0214"
+dependencies = [
+ "cfg-if",
+ "cpufeatures 0.3.1",
+ "digest 0.11.3",
+]
+
+[[package]]
 name = "sha1_smol"
 version = "1.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5594,12 +5641,14 @@ dependencies = [
  "axum",
  "bytes",
  "cratefield",
+ "futures-core",
  "getrandom 0.4.3",
  "http",
  "schemars 1.2.2",
  "sea-query",
  "serde",
  "serde_json",
+ "sha2 0.11.0",
  "time",
  "tower",
  "tracing",
