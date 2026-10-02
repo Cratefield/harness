@@ -94,6 +94,17 @@ These are empirical facts recorded while building this crate; see
   only answers `BodyUsed`. Declared lengths within the ceiling
   are still buffered via `Request::bytes()`; every streaming bridge
   between `worker::Body` and axum hangs.
+- A route a module declares in `streaming_routes()` is served opt-in in
+  streaming mode (issue #585). The request half turns `Request::stream()`
+  into a `RequestStream` (a `!Send` worker `ByteStream` behind
+  `worker::send::SendWrapper`, sound because an isolate is single-threaded
+  — ADR 0002) and hands the router an empty body plus the handle, so
+  nothing is buffered; a `content-length` over the route's own ceiling is
+  still refused unread. The response half takes the `ResponseStream` a
+  handler left in the response extensions and bridges it with
+  `worker::Response::from_stream` — never `to_bytes`, which is capped at
+  1 MiB and for a stream would be the hang above. Every non-streaming
+  response is still buffered under that 1 MiB ceiling.
 - `wrangler dev` only: refusing a body unread (issue #440) leaves the
   tail undrained, and the dev proxy's `middleware-ensure-req-body-drained`
   logs `Failed to drain the unused request body. Error: Network connection
