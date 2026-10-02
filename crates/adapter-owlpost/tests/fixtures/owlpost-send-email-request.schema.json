@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Cratefield/harness/crates/adapter-owlpost/tests/fixtures/owlpost-send-email-request.schema.json",
+  "$comment": "PROVENANCE (issue #591): the canonical Owlpost send-email request schema lives in the private repository Owlpost-to/backend:crates/owlpost-core, which is unreachable from this repository (raw.githubusercontent.com and api.github.com both 404 for it). This fixture is therefore AUTHORED FROM THE RESEND-COMPATIBLE SHAPE Owlpost documents and speaks, not copied from upstream. Refresh it against a real checkout with scripts/refresh-fixture.sh <path-to-Owlpost-to/backend>; that script overwrites this file with the upstream one and records the source commit in this comment.",
+  "title": "Owlpost send email request",
+  "description": "POST {base}/v1/emails. Resend-compatible: the same fields Resend accepts, an {id} response.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["from", "to", "subject", "html", "text"],
+  "properties": {
+    "from": {
+      "type": "string",
+      "description": "Sender, \"Name <local@domain>\" or a bare address."
+    },
+    "to": {
+      "type": "string",
+      "description": "Recipient. Owlpost takes a single address, like Resend's string form."
+    },
+    "reply_to": {
+      "type": "string",
+      "description": "Where replies go, when not `from`."
+    },
+    "subject": {
+      "type": "string"
+    },
+    "html": {
+      "type": "string"
+    },
+    "text": {
+      "type": "string"
+    },
+    "headers": {
+      "type": "object",
+      "description": "Extra RFC 5322 headers as a name -> value object. Order is preserved on the wire so List-Unsubscribe and List-Unsubscribe-Post stay paired (RFC 8058).",
+      "additionalProperties": {
+        "type": "string"
+      }
+    },
+    "tags": {
+      "type": "array",
+      "description": "Resend-compatible tags: {name, value} objects whose fields hold only ASCII letters, digits, '_' or '-'.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "value"],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "value": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  }
+}
