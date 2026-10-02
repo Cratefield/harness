@@ -1,0 +1,7 @@
+{
+  "access_token": "ghu_FIXTURE000000000000000000000000000000",
+  "expires_in": 28800,
+  "refresh_token": "ghr_FIXTURE000000000000000000000000000000",
+  "refresh_token_expires_in": 15811200,
+  "token_type": "bearer"
+}

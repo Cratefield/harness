@@ -58,6 +58,13 @@ classifier-llm = ["dep:cratefield-adapter-classifier-llm"]
 # without any of those adapters.
 push-auth = ["dep:cratefield-push-auth"]
 
+# GitHub App auth (issue #623): the RS256 app JWT, the installation tokens it
+# mints (cached, single-flight) and the user-to-server OAuth code exchange,
+# over the `HttpClient` and `Clock` ports. A sibling of `push-auth` — same
+# signer, same keyed cache — for a venture that acts as a GitHub App rather
+# than presenting a push provider's token.
+github-app = ["dep:cratefield-adapter-github-app"]
+
 # The runtime push wiring (issue #191): `build_push` and the one table of
 # environment-variable names, plus `push_from_env()` on whichever runtime is
 # enabled. Pulls all three push adapters, which is the point — the wiring
@@ -134,6 +141,7 @@ cratefield-adapter-cloudflare-saas = { workspace = true, optional = true }
 cratefield-adapter-apns = { workspace = true, optional = true }
 cratefield-adapter-fcm = { workspace = true, optional = true }
 cratefield-push-auth = { workspace = true, optional = true }
+cratefield-adapter-github-app = { workspace = true, optional = true }
 cratefield-adapter-stripe = { workspace = true, optional = true }
 cratefield-push-wiring = { workspace = true, optional = true }
 cratefield-adapter-webpush = { workspace = true, optional = true }

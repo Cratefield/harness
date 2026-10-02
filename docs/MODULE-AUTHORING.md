@@ -602,8 +602,8 @@ fn signature_verification(&self) -> SignatureVerification {
 ```
 
 and verifies each delivery with `cratefield_core::WebhookVerifier` and the
-provider's scheme (`Svix`, `StripeStyle`, `Vercel`, `ProviderScheme`) over
-the **raw body bytes**; production then requires
+provider's scheme (`Svix`, `StripeStyle`, `Github`, `Vercel`,
+`ProviderScheme`) over the **raw body bytes**; production then requires
 `{MODULE}_WEBHOOK_SECRET` — the boot gate refuses without it, `fz doctor`
 reports `hmac-webhook-secret-missing` — instead of any `Payments` port.
 `Vercel` signs with HMAC-**SHA1**, and that is acceptable here because the
@@ -616,8 +616,13 @@ hash.) A provider that sends the secret itself rather than a signature uses
 `Vercel` nor the token schemes sign a timestamp, and a `ProviderScheme`
 with `timestamp: None` covers none either — so none of them stops a replay
 on its own: the handler must claim each delivery's event id through the
-`Inbox` dedup ledger (`cratefield_core::Inbox`). `signature_verification()`
-is the module **default**; a route can
+`Inbox` dedup ledger (`cratefield_core::Inbox`). GitHub deliveries have a
+named scheme for this: `Github` (`cratefield_core::Github`) is
+`X-Hub-Signature-256`, `sha256=` prefix, hex, and no timestamp — GitHub
+signs the raw body alone — so replay protection is the `X-GitHub-Delivery`
+id claimed through `Inbox` (`crates/core/src/idempotency.rs`), exactly as
+for any `timestamp: None` scheme. `signature_verification()` is the module
+**default**; a route can
 override it with `.verification(..)` (issue #595), so one billing module
 verifies Stripe through `Payments` and RevenueCat with its own secret —
 both provers are demanded, each failure naming the mounted route it

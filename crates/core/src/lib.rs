@@ -174,6 +174,7 @@ pub use tenant_lifecycle::{
 pub use usage::{Consumed, Consumption, Exhausted, Months, Period, PeriodWindow, Usage};
 pub use venture::{Brand, Venture, VentureEnv};
 pub use webhook_signature::{
-    DEFAULT_TOLERANCE_SECS, Digest, Gitlab, ProviderScheme, SharedTokenScheme, SignatureEncoding,
-    SignatureScheme, SignedDelivery, StripeStyle, Svix, Vercel, WebhookVerifier, svix_secret_key,
+    DEFAULT_TOLERANCE_SECS, Digest, Github, Gitlab, ProviderScheme, SharedTokenScheme,
+    SignatureEncoding, SignatureScheme, SignedDelivery, StripeStyle, Svix, Vercel, WebhookVerifier,
+    svix_secret_key,
 };

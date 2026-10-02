@@ -644,6 +644,7 @@ dependencies = [
  "cratefield-adapter-classifier-llm",
  "cratefield-adapter-cloudflare-saas",
  "cratefield-adapter-fcm",
+ "cratefield-adapter-github-app",
  "cratefield-adapter-github-issues",
  "cratefield-adapter-jira",
  "cratefield-adapter-openai-compatible",
@@ -787,6 +788,27 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_urlencoded",
+ "thiserror 2.0.20",
+ "time",
+ "tracing",
+]
+
+[[package]]
+name = "cratefield-adapter-github-app"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "base64 0.23.1",
+ "bytes",
+ "cratefield-core",
+ "cratefield-push-auth",
+ "futures-util",
+ "getrandom 0.4.3",
+ "http",
+ "pollster",
+ "rsa",
+ "serde",
+ "serde_json",
  "thiserror 2.0.20",
  "time",
  "tracing",
