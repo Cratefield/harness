@@ -16,6 +16,7 @@ use crate::ports::{Decision, Defer, IdGen, Quota};
 use crate::problem::Problem;
 use crate::scope::Scope;
 use crate::sidecar::{X_HARNESS_API, X_HARNESS_MODULE};
+use crate::usage::Exhausted;
 use tracing::info_span;
 
 /// `x-request-id`: accepted from the client when it matches
@@ -391,6 +392,30 @@ pub fn rate_limited(decision: &Decision) -> AxumResponse {
     response
 }
 
+/// A `429 usage/allowance-exhausted` problem (issue #588): a metered
+/// allowance is spent for the current period. The body carries extension
+/// members a caller acts on — the `meter`, the `limit`, the `used` total and
+/// the `period_end` as RFC 3339 — and `Retry-After` is the delta-seconds to
+/// that reset, the same header [`rate_limited`] sets.
+pub fn allowance_exhausted(meter: &str, outcome: &Exhausted) -> AxumResponse {
+    let mut response = allowance_exhausted_problem(meter, outcome).into_response();
+    if let Ok(value) = HeaderValue::from_str(&delta_seconds(outcome.retry_after)) {
+        response.headers_mut().insert(header::RETRY_AFTER, value);
+    }
+    response
+}
+
+/// The problem behind [`allowance_exhausted`], without the header — built in
+/// one place so the response and the harness's re-render under the serving
+/// venture's base carry the same members.
+fn allowance_exhausted_problem(meter: &str, outcome: &Exhausted) -> Problem {
+    Problem::new(&crate::problems::SLUGS.allowance_exhausted)
+        .with_extension("meter", meter)
+        .with_extension("limit", outcome.limit)
+        .with_extension("used", outcome.used)
+        .with_extension("period_end", crate::usage::rfc3339(outcome.period_end))
+}
+
 /// The `RateLimit-*` headers for one quota, as `(name, value)` pairs with
 /// lowercase static names.
 fn quota_headers(quota: &Quota) -> [(&'static str, String); 3] {
@@ -512,5 +537,39 @@ mod tests {
         assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
         assert!(header(&response, "retry-after").is_none());
         assert!(header(&response, "ratelimit-limit").is_none());
+    }
+
+    fn exhausted() -> Exhausted {
+        Exhausted {
+            used: 100,
+            limit: 100,
+            period_end: time::OffsetDateTime::from_unix_timestamp(1_800_000_000).expect("in range"),
+            retry_after: Duration::from_secs(120),
+        }
+    }
+
+    #[test]
+    fn an_exhausted_allowance_is_a_429_with_a_retry_after() {
+        let response = allowance_exhausted("mail_sent", &exhausted());
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(header(&response, "retry-after").as_deref(), Some("120"));
+    }
+
+    #[test]
+    fn an_exhausted_allowance_carries_its_meter_limit_used_and_period_end() {
+        // Rendered under a venture base, the way the harness's outermost
+        // layer renders every problem: the type URI and the extension
+        // members must both survive (issue #588).
+        let body = allowance_exhausted_problem("mail_sent", &exhausted())
+            .body("https://api.test.example/problems/");
+        assert_eq!(
+            body["type"],
+            "https://api.test.example/problems/usage/allowance-exhausted"
+        );
+        assert_eq!(body["meter"], "mail_sent");
+        assert_eq!(body["limit"], 100);
+        assert_eq!(body["used"], 100);
+        assert_eq!(body["period_end"], "2027-01-15T08:00:00Z");
+        assert_eq!(body["status"], 429);
     }
 }

@@ -24,6 +24,15 @@ pub struct Problem {
     pub title: &'static str,
     pub detail: Option<String>,
     pub instance: Option<String>,
+    /// RFC 9457 §3.2 extension members, copied into the body beside the
+    /// standard fields. A slug that carries structured data a caller acts
+    /// on — a metered usage problem names its `meter`, `used` and
+    /// `limit` (issue #588) — keeps it here, so it survives the harness's
+    /// re-render under the serving venture's base, which rebuilds the body
+    /// from the problem and nothing else. Boxed: inlined, the map would
+    /// push `Problem` past clippy's 128-byte `result_large_err` limit and
+    /// every `Result<_, Problem>` in the workspace would grow with it.
+    extensions: Box<serde_json::Map<String, serde_json::Value>>,
 }
 
 impl Problem {
@@ -34,12 +43,24 @@ impl Problem {
             title: def.title,
             detail: None,
             instance: None,
+            extensions: Box::new(serde_json::Map::new()),
         }
     }
 
     #[must_use]
     pub fn with_detail(mut self, detail: impl Into<String>) -> Self {
         self.detail = Some(detail.into());
+        self
+    }
+
+    /// Adds an RFC 9457 §3.2 extension member to the body.
+    #[must_use]
+    pub fn with_extension(
+        mut self,
+        name: impl Into<String>,
+        value: impl Into<serde_json::Value>,
+    ) -> Self {
+        self.extensions.insert(name.into(), value.into());
         self
     }
 
@@ -99,6 +120,15 @@ impl Problem {
         }
         if let Some(instance) = &self.instance {
             body["instance"] = json!(instance);
+        }
+        // Extension members ride the body last, so they cannot be mistaken
+        // for (or overwrite) a standard field: the four above are the only
+        // keys this crate writes, and a name colliding with one is the
+        // caller's to avoid (RFC 9457 §3.2 keeps them disjoint).
+        if let Some(object) = body.as_object_mut() {
+            for (name, value) in self.extensions.iter() {
+                object.insert(name.clone(), value.clone());
+            }
         }
         body
     }
