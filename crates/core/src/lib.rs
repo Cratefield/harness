@@ -124,10 +124,10 @@ pub use ports::{
     Row, Rows, ScopedBlob, SendOutcome, Severity, SignatureError, Signer, Statement, StatusUpdate,
     StatusWebhook, Subject, SubscriptionCheckoutRequest, SystemClock, TextModel, TextModelError,
     TicketComment, TicketDraft, TicketState, TicketStatus, Tracker, TrackerError, TransferCharge,
-    TryFromValue, Turn, UlidIdGen, Unconfigured, Validation, ValidationMethod, VectorFilter,
-    VectorIndex, VectorIndexError, VectorMatch, VectorNamespace, VectorRecord, Verdict,
-    WebhookEvent, check_blob_size, check_hostname, declared_content_length, receive_status,
-    retry_after, timeout, ttl_secs, validate_questions,
+    TryFromValue, Turn, UlidIdGen, Unconfigured, UsageReport, UsageReported, Validation,
+    ValidationMethod, VectorFilter, VectorIndex, VectorIndexError, VectorMatch, VectorNamespace,
+    VectorRecord, Verdict, WebhookEvent, check_blob_size, check_hostname, declared_content_length,
+    receive_status, retry_after, timeout, ttl_secs, validate_questions,
 };
 pub use problem::{ABOUT_BLANK, Problem};
 // `Slugs` is exported beside the `SLUGS` value it types. Without it a
