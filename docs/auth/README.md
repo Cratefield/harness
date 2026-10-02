@@ -48,6 +48,8 @@ validated before the issues were written, and what is deferred.
    single-use refresh token.
 4. Verify tokens locally with `cratefield-auth-client`, which fetches and caches
    the published JWKS and checks the audience so nobody has to remember to.
+   TypeScript web apps do the same with `@cratefield/auth`; see
+   [WEB-APPS.md](WEB-APPS.md).
 
 ## Modules
 
