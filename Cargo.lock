@@ -1268,6 +1268,7 @@ dependencies = [
  "sea-query",
  "serde",
  "serde_json",
+ "sha1 0.11.0",
  "sha2 0.11.0",
  "subtle",
  "syn 2.0.119",
@@ -2619,7 +2620,7 @@ dependencies = [
  "pollster",
  "serde",
  "serde_json",
- "sha1",
+ "sha1 0.10.7",
  "time",
  "tower",
  "tracing",
@@ -4740,6 +4741,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "sha1"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "aacc4cc499359472b4abe1bf11d0b12e688af9a805fa5e3016f9a386dc2d0214"
+dependencies = [
+ "cfg-if",
+ "cpufeatures 0.3.1",
+ "digest 0.11.3",
+]
+
+[[package]]
 name = "sha1_smol"
 version = "1.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5637,12 +5649,14 @@ dependencies = [
  "axum",
  "bytes",
  "cratefield",
+ "futures-core",
  "getrandom 0.4.3",
  "http",
  "schemars 1.2.2",
  "sea-query",
  "serde",
  "serde_json",
+ "sha2 0.11.0",
  "time",
  "tower",
  "tracing",

@@ -5,7 +5,10 @@ use axum::body::Body;
 use axum::http::{HeaderValue, Method, Request, StatusCode, header};
 use axum::response::Response;
 use bytes::Bytes;
+use futures_core::Stream;
 use serde_json::Value;
+use std::pin::Pin;
+use std::task::{Context, Poll};
 
 /// The same, carrying `Authorization: Bearer <token>`.
 ///
@@ -81,6 +84,57 @@ pub async fn request(
         .await
         .expect("router answers");
     TestResponse::from(response).await
+}
+
+/// Sends a request whose body is the given chunks, as a chunked
+/// (no `content-length`) transfer — what a client uploading a stream
+/// produces, and the only shape that exercises a route's
+/// [`cratefield_core::RequestStream`] mid-stream ceiling rather than the
+/// declared-length pre-check. `content-type` is set to
+/// `application/octet-stream`.
+///
+/// # Panics
+///
+/// Panics when the router itself fails (never for ordinary responses).
+pub async fn request_chunks(
+    router: &axum::Router,
+    method: Method,
+    path: &str,
+    chunks: Vec<Bytes>,
+) -> TestResponse {
+    use tower::ServiceExt;
+    let body = Body::from_stream(Chunks {
+        items: chunks.into_iter(),
+    });
+    let request = Request::builder()
+        .method(method)
+        .uri(path)
+        .header(
+            header::CONTENT_TYPE,
+            HeaderValue::from_static("application/octet-stream"),
+        )
+        .body(body)
+        .expect("request builds");
+    let response = router
+        .clone()
+        .oneshot(request)
+        .await
+        .expect("router answers");
+    TestResponse::from(response).await
+}
+
+/// A chunked request body: a `Vec<Bytes>` drained one chunk per poll. Written
+/// out because the kit depends on `futures-core` only, not `futures-util`.
+struct Chunks {
+    items: std::vec::IntoIter<Bytes>,
+}
+
+impl Stream for Chunks {
+    type Item = Result<Bytes, std::convert::Infallible>;
+
+    fn poll_next(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        Poll::Ready(self.get_mut().items.next().map(Ok))
+    }
 }
 
 /// A fully-buffered test response.

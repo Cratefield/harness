@@ -60,6 +60,11 @@ sea-query = { workspace = true }
 worker = { workspace = true }
 tracing = { workspace = true }
 time = { workspace = true }
+# The streaming canary (issue #585): `POST /upload` hashes the body as it
+# streams past, and `GET /download` yields chunks from a hand-written
+# `Stream`, so the example names the hash and the trait directly.
+sha2 = { workspace = true }
+futures-core = { workspace = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 getrandom = { workspace = true }

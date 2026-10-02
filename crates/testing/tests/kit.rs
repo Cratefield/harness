@@ -6,6 +6,7 @@ use cratefield_core::{
 use cratefield_testing::{
     FakeCaptcha, FakeDefer, FakeHttpClient, FakeMailer, FakeRateLimiter, MailerMode,
     MemoryKeyValue, TestHarness, assert_wasm_safe_deps, conformance, full_fake_ports, request,
+    request_chunks,
 };
 use std::sync::Arc;
 use std::time::Duration;
@@ -590,4 +591,75 @@ fn a_module_that_used_to_be_exempt_is_not_shielded_any_more() {
         !message.contains("exempt"),
         "cms is exempt from the personal-data rule again: {message}"
     );
+}
+
+// ------------------------------------------------------------------ #585
+
+/// The streaming fixture: a module that reads one route's body as a
+/// [`cratefield_core::RequestStream`] and counts it, so a test can drive a
+/// chunked (no `content-length`) upload through the kit's `request_chunks`.
+pub struct StreamingModule;
+
+impl Module for StreamingModule {
+    fn name(&self) -> &'static str {
+        "streamer"
+    }
+    fn version(&self) -> &'static str {
+        env!("CARGO_PKG_VERSION")
+    }
+    fn requires(&self) -> &'static [Port] {
+        &[]
+    }
+    fn migrations(&self) -> Migrations {
+        Migrations::default()
+    }
+    fn validate_config(&self, _cfg: &dyn Config) -> Result<(), ConfigError> {
+        Ok(())
+    }
+    fn streaming_routes(&self) -> &'static [cratefield_core::StreamRoute] {
+        static ROUTES: &[cratefield_core::StreamRoute] =
+            &[cratefield_core::StreamRoute::post("/echo", 1024 * 1024)];
+        ROUTES
+    }
+    fn router(&self, _ctx: ModuleContext) -> axum::Router {
+        axum::Router::new().route(
+            "/echo",
+            axum::routing::post(|mut stream: cratefield_core::RequestStream| async move {
+                let mut total = 0usize;
+                while let Some(item) = stream.next_chunk().await {
+                    match item {
+                        Ok(chunk) => total += chunk.len(),
+                        Err(error) => {
+                            return axum::response::IntoResponse::into_response(
+                                cratefield_core::Problem::from(error),
+                            );
+                        }
+                    }
+                }
+                axum::response::IntoResponse::into_response(cratefield_core::Json(
+                    serde_json::json!({ "bytes": total }),
+                ))
+            }),
+        )
+    }
+}
+
+#[pollster::test]
+async fn request_chunks_drives_a_streaming_route_past_the_buffered_ceiling() {
+    // The whole point of the helper: a module test can send a body larger
+    // than the 64 KiB buffered ceiling, chunk by chunk, and see the route's
+    // `RequestStream` receive every byte.
+    let kit = TestHarness::new(vec![Box::new(StreamingModule)]);
+    let chunks: Vec<bytes::Bytes> = (0..4)
+        .map(|_| bytes::Bytes::from(vec![0u8; 32_768]))
+        .collect();
+    let response = request_chunks(
+        &kit.router,
+        axum::http::Method::POST,
+        "/v1/streamer/echo",
+        chunks,
+    )
+    .await;
+    assert_eq!(response.status, axum::http::StatusCode::OK);
+    assert_eq!(response.json()["bytes"], 4 * 32_768);
 }
