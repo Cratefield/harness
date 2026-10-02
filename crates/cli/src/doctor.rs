@@ -213,7 +213,14 @@ fn run_checks(
         eprintln!("fz: warning: {note}");
     }
     if env == VentureEnv::Production {
-        production_port_checks(harness, configured, allow_no_captcha, output, &mut failures);
+        production_port_checks(
+            harness,
+            configured,
+            &EnvVars,
+            allow_no_captcha,
+            output,
+            &mut failures,
+        );
     }
 
     // The admin-token floor (issue #437) is deliberately *not*
@@ -584,6 +591,7 @@ impl Configured {
 fn production_port_checks(
     harness: &Harness,
     configured: Configured,
+    config: &dyn cratefield_core::Config,
     allow_no_captcha: Option<&str>,
     output: Output,
     failures: &mut Vec<DoctorFailure>,
@@ -641,19 +649,29 @@ fn production_port_checks(
         });
     }
 
-    if let Some(message) =
-        payments_webhook_failure(guards.needs_payments(), configured.stripe_webhook_secret)
-    {
+    // Name each Payments-verifying module with the routes it guards
+    // (issue #595): a module may verify one webhook through Payments and
+    // another with an HMAC secret, so the operator should see which route
+    // the missing `STRIPE_WEBHOOK_SECRET` blocks.
+    let payments: Vec<String> = guards
+        .payments_signature_modules
+        .iter()
+        .map(|module| {
+            guards.signature_module_named(module, cratefield_core::SignatureVerification::Payments)
+        })
+        .collect();
+    if let Some(message) = payments_webhook_failure(&payments, configured.stripe_webhook_secret) {
         failures.push(DoctorFailure {
             code: &CODES.payments_webhook_secret_missing,
             message,
         });
     }
 
-    // The other half of the webhook rule (issue #533): the key is per
-    // module, so this check takes composed keys and a config rather than a
-    // `Configured` bool — still pure, the caller supplies `&EnvVars`.
-    if let Some(message) = hmac_webhook_failure(&guards.hmac_signature_secrets(), &EnvVars) {
+    // The other half of the webhook rule (issues #533, #595): the key is
+    // per module, so this check takes composed keys and routes and a
+    // config rather than a `Configured` bool — still pure, the caller
+    // supplies the deployment config.
+    if let Some(message) = hmac_webhook_failure(&guards.hmac_signature_routes(), config) {
         failures.push(DoctorFailure {
             code: &CODES.hmac_webhook_secret_missing,
             message,
@@ -676,7 +694,7 @@ fn production_port_checks(
             .map(|(module, routes)| format!("{module} ({})", routes.join(", ")))
             .collect::<Vec<_>>(),
     ) {
-        match cratefield_core::unlimited_public_routes_override(&EnvVars) {
+        match cratefield_core::unlimited_public_routes_override(config) {
             Some(reason) => {
                 tracing::warn!(
                     control = "rate-limiter",
@@ -766,37 +784,45 @@ fn captcha_production_failure(
 /// The production-payments rule: a production venture that declares
 /// [`Signature`]-guarded routes without a webhook signing secret cannot
 /// verify Stripe webhooks, so it would process forged events. Pure so the
-/// truth table is unit-tested; the caller supplies the env-derived booleans.
+/// truth table is unit-tested; the caller supplies the routes (naming each
+/// module and the `METHOD /path` it verifies through Payments, issue #595)
+/// and the env-derived boolean.
 ///
 /// [`Signature`]: cratefield_core::RoutePolicy::Signature
 fn payments_webhook_failure(
-    signature_routes_present: bool,
+    payments_routes: &[String],
     webhook_secret_present: bool,
 ) -> Option<String> {
-    if signature_routes_present && !webhook_secret_present {
-        Some(
-            "production venture has signature-guarded routes but STRIPE_WEBHOOK_SECRET is unset \
-             — webhook signatures cannot be verified and forged events would be trusted \
-             (issue #102)"
-                .to_owned(),
+    (!payments_routes.is_empty() && !webhook_secret_present).then(|| {
+        format!(
+            "production venture has signature-guarded routes [{}] but STRIPE_WEBHOOK_SECRET is \
+             unset — webhook signatures cannot be verified and forged events would be trusted \
+             (issue #102)",
+            payments_routes.join(", ")
         )
-    } else {
-        None
-    }
+    })
 }
 
 /// The production webhook-secret rule for modules that verify through the
-/// core HMAC scheme (issue #533): a deployment missing one has a module
-/// whose handler refuses every delivery. Keys are named, never values; pure
-/// so the truth table is unit-tested, the caller supplies the config.
+/// core HMAC scheme (issues #533, #595): a deployment missing one has a
+/// module whose handler refuses every delivery, and the message names the
+/// route that reads the key so a two-verifier module says which endpoint
+/// is blocked. Keys are named, never values; pure so the truth table is
+/// unit-tested, the caller supplies the config.
 fn hmac_webhook_failure(
-    hmac_modules: &[(String, String)],
+    hmac_modules: &[(String, String, Vec<String>)],
     config: &dyn cratefield_core::Config,
 ) -> Option<String> {
     let missing: Vec<String> = hmac_modules
         .iter()
-        .filter(|(_, key)| config.get(key).is_none_or(|value| value.trim().is_empty()))
-        .map(|(_, key)| key.clone())
+        .filter(|(_, key, _)| config.get(key).is_none_or(|value| value.trim().is_empty()))
+        .map(|(_, key, routes)| {
+            if routes.is_empty() {
+                key.clone()
+            } else {
+                format!("{key} on {}", routes.join(", "))
+            }
+        })
         .collect();
     (!missing.is_empty()).then(|| {
         format!(
@@ -959,6 +985,55 @@ mod tests {
         }
     }
 
+    /// A billing module with two webhooks and two verifiers (issue #595):
+    /// `POST /webhooks/stripe` verifies through `Payments`, and
+    /// `POST /webhooks/revenuecat` names its own HMAC secret — so the two
+    /// production webhook rules must name the route each one blocks.
+    pub(super) struct TwoVerifiers;
+
+    impl Module for TwoVerifiers {
+        fn name(&self) -> &'static str {
+            "billing"
+        }
+        fn version(&self) -> &'static str {
+            "0.0.0"
+        }
+        fn requires(&self) -> &'static [Port] {
+            &[Port::Payments]
+        }
+        fn migrations(&self) -> Migrations {
+            Migrations::default()
+        }
+        fn validate_config(&self, _cfg: &dyn Config) -> Result<(), ConfigError> {
+            Ok(())
+        }
+        fn surface(&self) -> cratefield_core::Surface {
+            Self::surface()
+        }
+        fn router(&self, _ctx: ModuleContext) -> cratefield_core::axum::Router {
+            cratefield_core::axum::Router::new()
+        }
+    }
+
+    impl TwoVerifiers {
+        fn surface() -> cratefield_core::Surface {
+            cratefield_core::Surface::new()
+                .action(
+                    cratefield_core::Action::post("webhook-stripe", "/webhooks/stripe")
+                        .policy(cratefield_core::RoutePolicy::Signature)
+                        .outcome(cratefield_core::Outcome::Json),
+                )
+                .action(
+                    cratefield_core::Action::post("webhook-revenuecat", "/webhooks/revenuecat")
+                        .policy(cratefield_core::RoutePolicy::Signature)
+                        .verification(cratefield_core::SignatureVerification::Hmac {
+                            secret: "REVENUECAT_WEBHOOK_SECRET",
+                        })
+                        .outcome(cratefield_core::Outcome::Json),
+                )
+        }
+    }
+
     /// A runtime that provides everything, so composition succeeds and the
     /// production checks are what the test is about.
     struct AllPorts;
@@ -1084,14 +1159,28 @@ mod tests {
 
     #[test]
     fn payments_in_production_needs_a_webhook_secret() {
-        assert!(payments_webhook_failure(true, false).is_some());
-        assert!(payments_webhook_failure(true, true).is_none());
-        assert!(payments_webhook_failure(false, false).is_none());
+        // The route is named, so a module with two verifiers says which
+        // endpoint the missing secret blocks (issue #595).
+        let payments = vec!["billing (POST /v1/billing/webhooks/stripe)".to_owned()];
+        let failure = payments_webhook_failure(&payments, false).expect("no secret fails");
+        assert!(
+            failure.contains("POST /v1/billing/webhooks/stripe"),
+            "{failure}"
+        );
+        assert!(payments_webhook_failure(&payments, true).is_none());
+        assert!(payments_webhook_failure(&[], false).is_none());
 
         // The other half (issue #533): the module's own key, unset or
-        // blank, fails; set passes; no such module never fails.
-        let modules = vec![("pos".to_owned(), "POS_WEBHOOK_SECRET".to_owned())];
-        assert!(hmac_webhook_failure(&modules, &MapConfig::default()).is_some());
+        // blank, fails; set passes; no such module never fails. The route
+        // that reads the key is named too (issue #595).
+        let modules = vec![(
+            "pos".to_owned(),
+            "POS_WEBHOOK_SECRET".to_owned(),
+            vec!["POST /webhook".to_owned()],
+        )];
+        let failure = hmac_webhook_failure(&modules, &MapConfig::default()).expect("unset fails");
+        assert!(failure.contains("POS_WEBHOOK_SECRET"), "{failure}");
+        assert!(failure.contains("POST /webhook"), "{failure}");
         assert!(
             hmac_webhook_failure(
                 &modules,
@@ -1414,9 +1503,31 @@ mod production_wiring {
     ) -> Vec<String> {
         let harness = harness_of(module);
         let mut out = Vec::new();
-        production_port_checks(&harness, configured, None, Output::Json, &mut out);
+        production_port_checks(
+            &harness,
+            configured,
+            &cratefield_core::MapConfig::default(),
+            None,
+            Output::Json,
+            &mut out,
+        );
         out.iter()
             .map(|failure: &DoctorFailure| failure.code.code.to_owned())
+            .collect()
+    }
+
+    /// The `(code, message)` pairs, so a test can assert a message names
+    /// the route a missing secret blocks (issue #595).
+    fn messages(
+        module: std::sync::Arc<dyn cratefield_core::Module>,
+        configured: Configured,
+        config: &dyn cratefield_core::Config,
+    ) -> Vec<(String, String)> {
+        let harness = harness_of(module);
+        let mut out = Vec::new();
+        production_port_checks(&harness, configured, config, None, Output::Json, &mut out);
+        out.iter()
+            .map(|failure| (failure.code.code.to_owned(), failure.message.clone()))
             .collect()
     }
 
@@ -1479,6 +1590,54 @@ mod production_wiring {
             !failures(std::sync::Arc::new(Nothing), NONE_SET)
                 .contains(&CODES.auth_not_configured.code.to_owned())
         );
+    }
+
+    #[test]
+    fn a_two_verifier_module_names_the_route_each_webhook_rule_blocks() {
+        // Issue #595: `billing` verifies `POST /webhooks/stripe` through
+        // `Payments` and `POST /webhooks/revenuecat` with its own HMAC
+        // secret, so each missing secret must name the mounted route it
+        // blocks — `POST /v1/billing/webhooks/...`.
+        use cratefield_core::MapConfig;
+        let message = |pairs: &[(String, String)], code: &str| -> Option<String> {
+            pairs
+                .iter()
+                .find(|(found, _)| found == code)
+                .map(|(_, message)| message.clone())
+        };
+        let two = || std::sync::Arc::new(super::tests::TwoVerifiers);
+        let stripe_set = Configured {
+            stripe_webhook_secret: true,
+            ..NONE_SET
+        };
+        let secret = MapConfig::from_pairs([("BILLING_REVENUECAT_WEBHOOK_SECRET", "whsec-dummy")]);
+
+        // Both secrets present: neither webhook rule fires.
+        let both = messages(two(), stripe_set, &secret);
+        assert!(message(&both, "payments-webhook-secret-missing").is_none());
+        assert!(message(&both, "hmac-webhook-secret-missing").is_none());
+
+        // Stripe's secret missing: the payments rule names its route and
+        // says nothing about the HMAC one.
+        let no_stripe = messages(two(), NONE_SET, &secret);
+        let payment = message(&no_stripe, "payments-webhook-secret-missing").expect("fires");
+        assert!(
+            payment.contains("POST /v1/billing/webhooks/stripe"),
+            "{payment}"
+        );
+        assert!(
+            !payment.contains("POST /v1/billing/webhooks/revenuecat"),
+            "{payment}"
+        );
+
+        // RevenueCat's secret missing: the HMAC rule names its route.
+        let no_revenuecat = messages(two(), stripe_set, &MapConfig::default());
+        let hmac = message(&no_revenuecat, "hmac-webhook-secret-missing").expect("fires");
+        assert!(
+            hmac.contains("POST /v1/billing/webhooks/revenuecat"),
+            "{hmac}"
+        );
+        assert!(!hmac.contains("POST /v1/billing/webhooks/stripe"), "{hmac}");
     }
 
     /// Runs the whole doctor — the path `fz doctor` actually takes — so a

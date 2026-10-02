@@ -607,7 +607,21 @@ body bytes**; production then requires `{MODULE}_WEBHOOK_SECRET` — the boot
 gate refuses without it, `fz doctor` reports `hmac-webhook-secret-missing` —
 instead of any `Payments` port. A `ProviderScheme` with `timestamp: None`
 has no replay protection, so the handler must lean on the Inbox dedup
-ledger. Rate limiting goes through `check_rate_limit`,
+ledger. `signature_verification()` is the module **default**; a route can
+override it with `.verification(..)` (issue #595), so one billing module
+verifies Stripe through `Payments` and RevenueCat with its own secret —
+both provers are demanded, each failure naming the mounted route it
+blocks, `POST /v1/billing/webhooks/stripe` or `.../revenuecat`:
+
+```rust,ignore
+Action::post("webhook-stripe", "/webhooks/stripe").policy(RoutePolicy::Signature)
+Action::post("webhook-revenuecat", "/webhooks/revenuecat")
+    .policy(RoutePolicy::Signature)
+    .verification(SignatureVerification::Hmac { secret: "REVENUECAT_WEBHOOK_SECRET" })
+```
+
+`.verification(..)` is valid only on a `Signature` route — `Surface::validate`
+refuses it elsewhere. Rate limiting goes through `check_rate_limit`,
 keyed by IP and, for writes, by normalized email, with an EXPLICIT
 failure posture at every call site: `RateLimitFailure::FailClosed` for
 abuse-critical paths (password reset, login), `FailOpen` where blocking
@@ -1096,9 +1110,9 @@ Before opening a PR that adds or changes a module:
       write declares `.captcha()` and every provider webhook
       `.policy(RoutePolicy::Signature)` (issue #133); `public_writes()`
       reflects reality as the legacy fallback
-- [ ] every `Signature` route names its verifier via
-      `signature_verification()` — `Payments` (the default) or
-      `Hmac { secret }` (issue #533)
+- [ ] every `Signature` route names its verifier — `signature_verification()`
+      for the module default (`Payments`) or `Hmac { secret }`, and
+      `.verification(..)` on a route that differs (issues #533, #595)
 - [ ] config keys prefixed, `validate_config` collects all problems
 - [ ] `tests/conformance.rs` passes locally
 - [ ] route tests cover the happy path and every problem response
