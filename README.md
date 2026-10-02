@@ -177,6 +177,7 @@ convenience, not a layer.
 | `cratefield-adapter-fcm` | `Push` over Firebase Cloud Messaging (HTTP v1), the same shape as APNs |
 | `cratefield-adapter-webpush` | `Push` over Web Push (RFC 8030/8188/8291): browsers and UnifiedPush |
 | `cratefield-push-auth` | The provider tokens the push adapters present: ES256 for APNs and VAPID, RS256 for Google service accounts |
+| `cratefield-adapter-github-app` | GitHub App auth: the RS256 app JWT, installation tokens (cached, single-flight, one re-mint on `401`) and the user-to-server OAuth code exchange |
 | `cratefield-push-wiring` | Assembles the `Push` port from the environment: one env-variable table shared by `serve()`, `fz push` and `fz doctor` |
 | `cratefield-adapter-stripe` | `Payments` over the Stripe REST API |
 | `cratefield-module-cms` | A small content store with an editor: typed collections, versioned, in the venture's own database |

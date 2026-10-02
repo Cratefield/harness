@@ -60,6 +60,9 @@ pub use cratefield_adapter_fcm as fcm;
 #[cfg(feature = "push-auth")]
 pub use cratefield_push_auth as push_auth;
 
+#[cfg(feature = "github-app")]
+pub use cratefield_adapter_github_app as github_app;
+
 #[cfg(feature = "push-wiring")]
 pub use cratefield_push_wiring as push_wiring;
 

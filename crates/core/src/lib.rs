@@ -169,6 +169,6 @@ pub use tenant_lifecycle::{
 };
 pub use venture::{Brand, Venture, VentureEnv};
 pub use webhook_signature::{
-    DEFAULT_TOLERANCE_SECS, ProviderScheme, SignatureEncoding, SignatureScheme, SignedDelivery,
-    StripeStyle, Svix, WebhookVerifier, svix_secret_key,
+    DEFAULT_TOLERANCE_SECS, Github, ProviderScheme, SignatureEncoding, SignatureScheme,
+    SignedDelivery, StripeStyle, Svix, WebhookVerifier, svix_secret_key,
 };

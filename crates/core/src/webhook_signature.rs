@@ -6,8 +6,8 @@
 //! payment had no policy it could declare honestly. This module is the other
 //! half: one HMAC-SHA256 core ([`WebhookVerifier`]) with pluggable header
 //! schemes ([`SignatureScheme`]) — Svix ([`Svix`], also what Resend signs
-//! with), Stripe-style ([`StripeStyle`]) and a configured provider layout
-//! ([`ProviderScheme`]).
+//! with), Stripe-style ([`StripeStyle`]), GitHub ([`Github`]) and a
+//! configured provider layout ([`ProviderScheme`]).
 //!
 //! Verification always runs over the **raw body bytes** — the handler must
 //! read the body before anything parses it — and every path fails closed.
@@ -312,6 +312,35 @@ impl SignatureScheme for ProviderScheme {
     }
 }
 
+/// GitHub's scheme (`X-Hub-Signature-256`), the shape GitHub App and
+/// repository webhook deliveries carry: one header, `sha256=<hex>`, over the
+/// **raw body alone**. A named scheme so ventures declaring a GitHub
+/// delivery do not re-type the equivalent [`ProviderScheme`] fields.
+///
+/// GitHub deliveries carry **no timestamp** — only the HMAC — so this
+/// scheme offers no replay protection of its own, and
+/// [`WebhookVerifier::verify`]'s tolerance never applies. A replayed
+/// delivery is rejected by claiming the `X-GitHub-Delivery` id through the
+/// [`Inbox`](crate::idempotency::Inbox) dedup ledger, which is what makes
+/// each delivery apply its effects exactly once.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Github;
+
+/// The [`ProviderScheme`] GitHub's header layout expands to — kept beside
+/// [`Github`]'s [`SignatureScheme`] impl so the two cannot drift.
+const GITHUB_SCHEME: ProviderScheme = ProviderScheme {
+    signature: "X-Hub-Signature-256",
+    encoding: SignatureEncoding::Hex,
+    prefix: Some("sha256="),
+    timestamp: None,
+};
+
+impl SignatureScheme for Github {
+    fn extract(&self, headers: &HeaderMap, body: &[u8]) -> Option<SignedDelivery> {
+        GITHUB_SCHEME.extract(headers, body)
+    }
+}
+
 /// How a provider encodes signature bytes in its header.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SignatureEncoding {
@@ -589,5 +618,69 @@ mod tests {
         assert!(b64.verify(PROVIDER_SECRET, &b64hdr, body, NOW));
         let junk = headers(&[("X-Signature", "!!!!")]);
         assert!(!b64.verify(PROVIDER_SECRET, &junk, body, NOW));
+    }
+
+    /// GitHub's own example from "Validating webhook deliveries": secret
+    /// `It's a Secret to Everybody`, body `Hello, World!`, and the
+    /// `sha256=` header GitHub documents.
+    #[test]
+    fn a_github_delivery_verifies() {
+        const GITHUB_SECRET: &str = "It's a Secret to Everybody";
+        const GITHUB_BODY: &[u8] = b"Hello, World!";
+        const GITHUB_SIGNATURE: &str =
+            "sha256=757107ea0eb2509fc211221cce984b8a37570b6d7586c22c46f4379c8b043e17";
+        let got = headers(&[("X-Hub-Signature-256", GITHUB_SIGNATURE)]);
+        let verifier = WebhookVerifier::new(Github);
+        // No timestamp rides the delivery, so the tolerance never applies:
+        // "now" is whatever the caller says.
+        assert!(verifier.verify(GITHUB_SECRET, &got, GITHUB_BODY, NOW));
+        assert!(verifier.verify(GITHUB_SECRET, &got, GITHUB_BODY, NOW + 10_000));
+    }
+
+    #[test]
+    fn a_tampered_github_delivery_or_wrong_secret_refuses() {
+        const GITHUB_SECRET: &str = "It's a Secret to Everybody";
+        const GITHUB_BODY: &[u8] = b"Hello, World!";
+        const GITHUB_SIGNATURE: &str =
+            "sha256=757107ea0eb2509fc211221cce984b8a37570b6d7586c22c46f4379c8b043e17";
+        let verifier = WebhookVerifier::new(Github);
+        let got = headers(&[("X-Hub-Signature-256", GITHUB_SIGNATURE)]);
+        assert!(!verifier.verify(GITHUB_SECRET, &got, b"Hello, World?", NOW));
+        assert!(!verifier.verify("another-secret-dummy", &got, GITHUB_BODY, NOW));
+        assert!(
+            !verifier.verify("", &got, GITHUB_BODY, NOW),
+            "an empty secret is not a key"
+        );
+    }
+
+    #[test]
+    fn unreadable_github_input_refuses() {
+        const GITHUB_SECRET: &str = "It's a Secret to Everybody";
+        const GITHUB_BODY: &[u8] = b"Hello, World!";
+        const GITHUB_SIGNATURE: &str =
+            "sha256=757107ea0eb2509fc211221cce984b8a37570b6d7586c22c46f4379c8b043e17";
+        let verifier = WebhookVerifier::new(Github);
+        // No header at all; the legacy sha1 header; a header with no
+        // `sha256=` prefix; and a prefix with a body that is not hex.
+        assert!(!verifier.verify(GITHUB_SECRET, &headers(&[]), GITHUB_BODY, NOW));
+        assert!(!verifier.verify(
+            GITHUB_SECRET,
+            &headers(&[("X-Hub-Signature", "sha1=deadbeef")]),
+            GITHUB_BODY,
+            NOW
+        ));
+        assert!(!verifier.verify(
+            GITHUB_SECRET,
+            &headers(&[("X-Hub-Signature-256", "deadbeef")]),
+            GITHUB_BODY,
+            NOW
+        ));
+        let unprefixed = GITHUB_SIGNATURE.strip_prefix("sha256=").expect("prefixed");
+        assert!(!verifier.verify(
+            GITHUB_SECRET,
+            &headers(&[("X-Hub-Signature-256", unprefixed)]),
+            GITHUB_BODY,
+            NOW
+        ));
     }
 }

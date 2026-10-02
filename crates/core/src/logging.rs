@@ -199,6 +199,11 @@ fn email_domain_byte(b: u8) -> bool {
 /// - a signed token or JWT (`eyJ…`, dot-separated base64url runs) becomes
 ///   `[redacted]` — the signer's payload is base64url JSON, which always
 ///   starts with `eyJ`;
+/// - a GitHub token (`ghs_…`, `ghu_…`, `gho_…`, `ghp_…`, `ghr_…` or a
+///   `github_pat_…` fine-grained PAT) becomes `[redacted]` — a leaked
+///   token grants API access for its whole lifetime;
+/// - a PEM private-key block (`-----BEGIN … PRIVATE KEY-----` through
+///   `-----END … PRIVATE KEY-----`) becomes `[redacted]` whole;
 /// - the query of a URL (`scheme://…?…`) or of a path-shaped value
 ///   (`/v1/…?…`) becomes `?[redacted]` — confirmation, unsubscribe and
 ///   status tokens ride in the query;
@@ -213,10 +218,12 @@ fn email_domain_byte(b: u8) -> bool {
 /// already-scrubbed text changes nothing. Never panics.
 #[must_use]
 pub fn scrub_text(value: &str) -> String {
-    let urls = scrub_urls(value);
+    let pem = scrub_pem_private_keys(value);
+    let urls = scrub_urls(&pem);
     let paths = scrub_path_queries(&urls);
     let tokens = scrub_dotted_tokens(&paths);
-    let bearer = scrub_bearer(&tokens);
+    let github = scrub_github_tokens(&tokens);
+    let bearer = scrub_bearer(&github);
     scrub_emails(&bearer)
 }
 
@@ -456,6 +463,151 @@ fn scrub_bearer(value: &str) -> String {
     }
     out.push_str(&value[processed..]);
     out
+}
+
+/// The GitHub-token pass of [`scrub_text`] (issue #623): a GitHub token —
+/// installation (`ghs_`), user-to-server (`ghu_`), OAuth (`gho_`),
+/// personal (`ghp_`), refresh (`ghr_`), or a `github_pat_` fine-grained
+/// PAT — becomes `[redacted]` wherever it appears.
+///
+/// A GitHub token is opaque and high-entropy, with no internal structure
+/// beyond its prefix and body alphabet; a leaked one grants API access for
+/// its whole lifetime, and it turns up in a log line as readily as in a
+/// `uri` or an `error` (a request that echoed `Authorization: token
+/// ghp_…`). The body must be at least [`MIN_GITHUB_TOKEN_BODY`] chars — a
+/// real token's is 36 or more — so ordinary values that merely begin with
+/// the prefix's letters (`ghost_town`, a bare `ghs`) survive, and a prefix
+/// only counted when it starts a token (the `ghs_` in `highs_levels` does
+/// not).
+fn scrub_github_tokens(value: &str) -> String {
+    let bytes = value.as_bytes();
+    let mut out = String::with_capacity(value.len());
+    let mut processed = 0;
+    let mut search = 0;
+    while let Some((start, body_start)) = github_token_at(bytes, search) {
+        let mut end = body_start;
+        while end < bytes.len() && token_body_byte(bytes[end]) {
+            end += 1;
+        }
+        if end - body_start >= MIN_GITHUB_TOKEN_BODY {
+            out.push_str(&value[processed..start]);
+            out.push_str(REDACTED);
+            processed = end;
+            search = end;
+        } else {
+            // Too short to be a token: resume after the prefix rather than
+            // the body, so a later, real token cannot be skipped.
+            search = body_start;
+        }
+    }
+    out.push_str(&value[processed..]);
+    out
+}
+
+/// The prefixes GitHub puts on its tokens, longest first so a prefix that
+/// is a tail of a longer one cannot shadow it.
+const GITHUB_TOKEN_PREFIXES: [&str; 6] = ["github_pat_", "ghs_", "ghu_", "gho_", "ghp_", "ghr_"];
+
+/// Shortest body the scrubber will call a GitHub token. Real bodies are 36
+/// chars and up; the floor keeps ordinary words out of the redactor.
+const MIN_GITHUB_TOKEN_BODY: usize = 20;
+
+/// A byte GitHub's token body alphabet allows: `[A-Za-z0-9_]`.
+fn token_body_byte(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || b == b'_'
+}
+
+/// The first GitHub token prefix at or after `from`, as `(prefix_start,
+/// body_start)`; `None` when there is none. A prefix is only counted when
+/// it starts a token, and the left boundary is **alphanumeric**, not the
+/// whole token-body alphabet: `_` ends a word as a space does, so
+/// `prefix_ghp_…` is a token while the `ghs_` inside `highs_levels` is not
+/// (the `i` before it is alphanumeric).
+fn github_token_at(bytes: &[u8], from: usize) -> Option<(usize, usize)> {
+    let mut at = from;
+    while at < bytes.len() {
+        let starts_token = at == 0 || !bytes[at - 1].is_ascii_alphanumeric();
+        if starts_token {
+            for prefix in GITHUB_TOKEN_PREFIXES {
+                if bytes[at..].starts_with(prefix.as_bytes()) {
+                    return Some((at, at + prefix.len()));
+                }
+            }
+        }
+        at += 1;
+    }
+    None
+}
+
+/// The PEM private-key pass of [`scrub_text`] (issue #623): a
+/// `-----BEGIN … PRIVATE KEY-----` … `-----END … PRIVATE KEY-----` block
+/// becomes `[redacted]` whole.
+///
+/// A private key pasted into a config error or a `message` is the most
+/// damaging value a log can carry; headers, base64 body and footer are
+/// replaced together, so no partial key survives. Public-key and
+/// certificate blocks (`BEGIN PUBLIC KEY`, `BEGIN CERTIFICATE`) do not
+/// carry `PRIVATE KEY` and are left alone. A block with no readable
+/// footer runs to the end of the value and is redacted in full rather
+/// than half.
+fn scrub_pem_private_keys(value: &str) -> String {
+    const BEGIN: &str = "-----BEGIN ";
+    const END: &str = "-----END ";
+    const PRIVATE_KEY: &str = " PRIVATE KEY-----";
+    // Longest PEM header lookahead. A `-----BEGIN …-----` line is well
+    // under this; bounding the scan keeps the pass linear when one long
+    // line holds many `-----BEGIN ` candidates — searching to the newline
+    // (or the end) for each would rescan the tail and go quadratic.
+    const MAX_HEADER_LEN: usize = 128;
+    let mut out = String::with_capacity(value.len());
+    let mut processed = 0;
+    let mut search = 0;
+    while let Some(relative) = value[search..].find(BEGIN) {
+        let start = search + relative;
+        // The `-----BEGIN …-----` line ends at the next newline, within
+        // the bound.
+        let header_end = header_line_end(value, start, MAX_HEADER_LEN);
+        if !value[start..header_end].contains(PRIVATE_KEY) {
+            search = start + BEGIN.len();
+            continue;
+        }
+        let block_end = value[header_end..]
+            .find(END)
+            .and_then(|rel| {
+                let at = header_end + rel;
+                let line_end = header_line_end(value, at, MAX_HEADER_LEN);
+                let line = &value[at..line_end];
+                if !line.contains(PRIVATE_KEY) {
+                    return None;
+                }
+                // Stop after the footer's closing `-----`, not at the end
+                // of the line: text may follow the footer on the same line
+                // and is not part of the key.
+                Some(line.rfind("-----").map_or(line_end, |o| at + o + 5))
+            })
+            .unwrap_or(value.len());
+        out.push_str(&value[processed..start]);
+        out.push_str(REDACTED);
+        processed = block_end;
+        search = block_end;
+    }
+    out.push_str(&value[processed..]);
+    out
+}
+
+/// Where the line beginning at `start` ends — the next newline, or the end
+/// of the value — looked at over at most `max_len` bytes, snapped forward
+/// to a char boundary. The bound is what keeps [`scrub_pem_private_keys`]
+/// linear: a line that never ends is read once per candidate, not once per
+/// candidate to the end of the value.
+fn header_line_end(value: &str, start: usize, max_len: usize) -> usize {
+    let mut window_end = start.saturating_add(max_len).min(value.len());
+    while window_end < value.len() && !value.is_char_boundary(window_end) {
+        window_end += 1;
+    }
+    value[start..window_end]
+        .find('\n')
+        .map_or(window_end, |offset| start + offset)
 }
 
 /// The email pass of [`scrub_text`]: RFC-ish local part, dotted domain
@@ -789,6 +941,115 @@ mod tests {
         let scrubbed = scrub_text("request carried Authorization: Bearer 01Jsupersecretvalue");
         assert!(!scrubbed.contains("01Jsupersecretvalue"), "{scrubbed}");
         assert!(scrubbed.contains("Bearer [redacted]"), "{scrubbed}");
+    }
+
+    #[test]
+    fn scrub_text_redacts_every_github_token_shape() {
+        // One body long enough for the token floor, per prefix.
+        let body = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"; // 36 chars
+        for prefix in ["ghs_", "ghu_", "gho_", "ghp_", "ghr_", "github_pat_"] {
+            let token = format!("{prefix}{body}");
+            let scrubbed = scrub_text(&format!(
+                "request failed: sent Authorization: token {token}"
+            ));
+            assert!(!scrubbed.contains(&token), "{prefix}: {scrubbed}");
+            assert!(
+                !scrubbed.contains(body),
+                "{prefix}: token body survived: {scrubbed}"
+            );
+            assert!(scrubbed.contains(REDACTED), "{prefix}: {scrubbed}");
+            assert!(
+                scrubbed.contains("request failed") && scrubbed.contains("Authorization"),
+                "{prefix}: surrounding words should survive: {scrubbed}"
+            );
+            // Idempotent.
+            assert_eq!(scrub_text(&scrubbed), scrubbed, "{prefix}");
+        }
+        // The token can be the whole value, and one value may hold several.
+        assert_eq!(scrub_text(&format!("ghp_{body}")), REDACTED);
+        let two = scrub_text(&format!("ghp_{body} and ghs_{body}"));
+        assert!(!two.contains(body), "{two}");
+
+        // A token glued after an underscore is still a token: `_` ends a
+        // word just as a space does, so the `_` before the prefix must not
+        // shield it (issue #623 review).
+        for (glued, leading) in [
+            (format!("prefix_ghp_{body}"), "prefix_"),
+            (format!("x_ghs_{body}"), "x_"),
+            (format!("KEY_github_pat_{body}"), "KEY_"),
+        ] {
+            let scrubbed = scrub_text(&glued);
+            assert!(!scrubbed.contains(body), "glued: {scrubbed}");
+            assert!(scrubbed.contains(REDACTED), "glued: {scrubbed}");
+            assert!(
+                scrubbed.contains(leading),
+                "leading word survives: {scrubbed}"
+            );
+            assert!(
+                !scrubbed.contains("ghp_")
+                    && !scrubbed.contains("ghs_")
+                    && !scrubbed.contains("github_pat_"),
+                "no prefix survives: {scrubbed}"
+            );
+        }
+    }
+
+    #[test]
+    fn scrub_text_leaves_github_prefix_lookalikes_alone() {
+        for value in [
+            // The prefix's letters, but no `_` after them.
+            "ghost_town",
+            "ghs",
+            "ghp",
+            // `ghs_` inside a longer word is not the start of a token.
+            "highs_levels_of_the_thing",
+            // Prefixed, but far too short to be a token.
+            "ghp_short",
+            "ghs_1234",
+            "github_pat_shortish",
+        ] {
+            assert_eq!(scrub_text(value), value, "over-redacted: {value}");
+        }
+    }
+
+    #[test]
+    fn scrub_text_redacts_pem_private_key_blocks() {
+        let block = "-----BEGIN RSA PRIVATE KEY-----\n\
+             MIIEpAIBAAKCAQEAtqo1ZXcvbnmlkjihgfedcba0987654321\n\
+             c2FtcGxlLXNlY3JldC1rZXktbWF0ZXJpYWwtZ29lcy1oZXJl\n\
+             -----END RSA PRIVATE KEY-----";
+        let message = format!("failed to load signing key: {block} (from /etc/key.pem)");
+        let scrubbed = scrub_text(&message);
+        assert!(!scrubbed.contains("-----BEGIN"), "{scrubbed}");
+        assert!(!scrubbed.contains("PRIVATE KEY"), "{scrubbed}");
+        assert!(!scrubbed.contains("c2FtcGxlLXNlY3JldC"), "{scrubbed}");
+        assert!(scrubbed.contains(REDACTED), "{scrubbed}");
+        assert!(
+            scrubbed.contains("failed to load signing key")
+                && scrubbed.contains("(from /etc/key.pem)"),
+            "surrounding words survive: {scrubbed}"
+        );
+        assert_eq!(scrub_text(&scrubbed), scrubbed, "idempotent");
+
+        // A public key is not a private key and is left alone.
+        let public = "-----BEGIN PUBLIC KEY-----\nAAAA\n-----END PUBLIC KEY-----";
+        assert_eq!(scrub_text(public), public);
+
+        // A block with no readable footer is redacted whole, not half.
+        let unterminated = "-----BEGIN PRIVATE KEY-----\nc2VjcmV0LWJvZHk=\nmore";
+        let half = scrub_text(unterminated);
+        assert!(!half.contains("c2VjcmV0LWJvZHk="), "{half}");
+        assert!(half.contains(REDACTED), "{half}");
+    }
+
+    #[test]
+    fn scrub_text_handles_a_very_long_line_of_begin_markers() {
+        // A single line holding many `-----BEGIN ` candidates, none a
+        // `PRIVATE KEY` header: the pass must leave it untouched. The bound
+        // on the header lookahead is what keeps this from rescanning the
+        // tail once per candidate (issue #623 review).
+        let value = "-----BEGIN ".repeat(10_000);
+        assert_eq!(scrub_text(&value), value);
     }
 
     #[test]

@@ -607,7 +607,12 @@ body bytes**; production then requires `{MODULE}_WEBHOOK_SECRET` — the boot
 gate refuses without it, `fz doctor` reports `hmac-webhook-secret-missing` —
 instead of any `Payments` port. A `ProviderScheme` with `timestamp: None`
 has no replay protection, so the handler must lean on the Inbox dedup
-ledger. `signature_verification()` is the module **default**; a route can
+ledger. GitHub deliveries have a named scheme for this: `Github`
+(`cratefield_core::Github`) is `X-Hub-Signature-256`, `sha256=` prefix,
+hex, and no timestamp — GitHub signs the raw body alone — so replay
+protection is the `X-GitHub-Delivery` id claimed through `Inbox`
+(`crates/core/src/idempotency.rs`), exactly as for any `timestamp: None`
+scheme. `signature_verification()` is the module **default**; a route can
 override it with `.verification(..)` (issue #595), so one billing module
 verifies Stripe through `Payments` and RevenueCat with its own secret —
 both provers are demanded, each failure naming the mounted route it
