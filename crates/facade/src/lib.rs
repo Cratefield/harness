@@ -152,5 +152,8 @@ pub use cratefield_module_webhooks as webhooks;
 #[cfg(feature = "device-auth")]
 pub use cratefield_module_device_auth as device_auth;
 
+#[cfg(feature = "connections")]
+pub use cratefield_module_connections as connections;
+
 #[cfg(feature = "testing")]
 pub use cratefield_testing as testing;

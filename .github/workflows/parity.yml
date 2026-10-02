@@ -61,6 +61,7 @@ jobs:
         run: |
           cargo test -p cratefield-module-changelog
           cargo test -p cratefield-module-cms
+          cargo test -p cratefield-module-connections
           cargo test -p cratefield-module-device-auth
           cargo test -p cratefield-module-email-signup
           cargo test -p cratefield-module-privacy
@@ -71,6 +72,7 @@ jobs:
         run: |
           cargo test -p cratefield-module-changelog --test conformance
           cargo test -p cratefield-module-cms --test conformance
+          cargo test -p cratefield-module-connections --test conformance
           cargo test -p cratefield-module-device-auth --test conformance
           cargo test -p cratefield-module-email-signup --test conformance
           cargo test -p cratefield-module-privacy --test conformance
