@@ -35,11 +35,13 @@ defines no compliance program.
    `transfer_data[destination]` (the coach's Connect account) and
    `application_fee_amount` (the platform's cut — an 80/20 split that a venture
    can shift to ~88/12 on repeat bookings by lowering the fee it passes).
-3. **App Store subscriptions** — not Stripe at all. Apple's App Store Server
-   Notifications are a separate inbound webhook a **venture module** verifies
-   (JWS/ES256 against Apple's certificate chain); they are out of scope for this
-   port and this adapter. They must land in the same entitlement the Stripe
-   subscription does, but that reconciliation is venture code.
+3. **App Store subscriptions** — not Stripe at all, and not this port.
+   Apple's App Store Server Notifications and Google Play's notifications are
+   aggregated by RevenueCat and reach the harness through the separate
+   `InAppPurchases` port and `cratefield-module-billing` (ADR 0025); they are
+   out of scope for `Payments` and the Stripe adapter. They land in the same
+   entitlement the Stripe subscription does, and that reconciliation is the
+   module's job, not the venture's (ADR 0025).
 
 ## Webhooks
 
@@ -111,6 +113,10 @@ and runs without Stripe.
 
 ## Not in scope
 
-Billing-module logic — trials, entitlements, payout schedules, the 80/20 → 88/12
-split policy — is venture code. Apple JWS verification is a venture module. This
-port names only what a module needs to reach Stripe.
+The billing *lifecycle* — trials, entitlements, renewals, disputes and the
+revenue ledger — is not this port's; it lives in the published
+`cratefield-module-billing` module (ADR 0025), which reads store purchases
+through the `InAppPurchases` port. What stays venture code is policy: what an
+entitlement unlocks, its prices, and the payout-split policy (the 80/20 →
+88/12 example above). This port names only what a module needs to reach
+Stripe.
