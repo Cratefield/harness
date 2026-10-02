@@ -65,6 +65,7 @@ jobs:
           cargo test -p cratefield-module-privacy
           cargo test -p cratefield-module-telemetry
           cargo test -p cratefield-module-waitlist
+          cargo test -p cratefield-testing --features postgres
       - name: Conformance kit on the matrix dialect
         run: |
           cargo test -p cratefield-module-changelog --test conformance

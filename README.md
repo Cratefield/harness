@@ -53,7 +53,8 @@ core: [docs/COMPATIBILITY.md](https://github.com/Cratefield/harness/blob/main/do
 drift-checked in CI. How crates reach crates.io:
 [docs/RELEASING.md](https://github.com/Cratefield/harness/blob/main/docs/RELEASING.md).
 Driving the venture CLI from an AI agent over MCP:
-[docs/MCP.md](https://github.com/Cratefield/harness/blob/main/docs/MCP.md).
+[docs/MCP.md](https://github.com/Cratefield/harness/blob/main/docs/MCP.md). Metering an allowance
+per subject: [docs/USAGE-METERING.md](https://github.com/Cratefield/harness/blob/main/docs/USAGE-METERING.md).
 
 ## How a venture uses it
 

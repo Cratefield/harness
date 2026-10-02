@@ -87,6 +87,7 @@ human-readable page at each `<public_url>/problems/<slug>`.
 | `unknown-category` | 400 | Unknown notification category | `cratefield-module-notifications` | The named category is not declared by this venture. |
 | `unknown-product` | 400 | Unknown product | `cratefield-core` | The named product is not on this waitlist. |
 | `unknown-tenant` | 404 | Unknown tenant | `cratefield-core` | The request's host resolves to no tenant in the registry. |
+| `usage/allowance-exhausted` | 429 | Usage allowance exhausted | `cratefield-core` | The subject's metered allowance is spent for the current period; retry after the period resets. |
 | `validation-failed` | 400 | Request validation failed | `cratefield-core` | The request body or query did not deserialize into a valid request. |
 | `verifier-unavailable` | 503 | Cannot check the credential | `cratefield-tables-api` | The service that verifies credentials could not answer. Try again shortly. |
 | `webhook-unverified` | 401 | Unverified webhook delivery | `cratefield-module-notifications` | The delivery did not carry a signature this deployment could verify. |

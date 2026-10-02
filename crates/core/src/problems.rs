@@ -60,6 +60,10 @@ pub struct Slugs {
     pub request_too_large: ProblemDef,
     /// 429: the rate limit for this IP or address was exceeded.
     pub rate_limited: ProblemDef,
+    /// 429: a metered allowance is spent for the current period (issue
+    /// #588). A quota, not a throttle: the subject must wait for the
+    /// period to roll over, which `Retry-After` names.
+    pub allowance_exhausted: ProblemDef,
     /// 404: no route matched.
     pub not_found: ProblemDef,
     /// 500: unhandled error; body carries no internals.
@@ -167,6 +171,12 @@ pub const SLUGS: Slugs = Slugs {
         title: "Rate limit exceeded",
         description: "Too many requests from this IP or address; retry after the pause.",
     },
+    allowance_exhausted: ProblemDef {
+        slug: "usage/allowance-exhausted",
+        status: StatusCode::TOO_MANY_REQUESTS,
+        title: "Usage allowance exhausted",
+        description: "The subject's metered allowance is spent for the current period; retry after the period resets.",
+    },
     not_found: ProblemDef {
         slug: "not-found",
         status: StatusCode::NOT_FOUND,
@@ -233,6 +243,7 @@ pub fn registry() -> Vec<&'static ProblemDef> {
         &SLUGS.not_production_ready,
         &SLUGS.request_too_large,
         &SLUGS.rate_limited,
+        &SLUGS.allowance_exhausted,
         &SLUGS.not_found,
         &SLUGS.unknown_tenant,
         &SLUGS.internal,

@@ -45,6 +45,7 @@ mod template;
 mod tenant;
 mod tenant_conn;
 mod tenant_lifecycle;
+mod usage;
 mod venture;
 mod webhook_signature;
 
@@ -83,7 +84,8 @@ pub use email::{
 pub use events::{AnyError, EventBus, EventHandler, EventName};
 pub use harness::{Harness, HarnessBuilder, Runtime};
 pub use http::{
-    Form, Json, MAX_BODY_BYTES, RequestSummary, X_REQUEST_ID, rate_limited, request_id_is_valid,
+    Form, Json, MAX_BODY_BYTES, RequestSummary, X_REQUEST_ID, allowance_exhausted, rate_limited,
+    request_id_is_valid,
 };
 pub use idempotency::Inbox;
 pub use lint::{CARD_DATA, card_data_hit, created_tables, lint_card_data, lint_portable_sql};
@@ -165,6 +167,7 @@ pub use tenant_conn::TenantConn;
 pub use tenant_lifecycle::{
     ErasureStep, TenantLifecycle, TenantLifecycleError, TenantSummary, remaining_erasure,
 };
+pub use usage::{Consumed, Consumption, Exhausted, Months, Period, PeriodWindow, Usage};
 pub use venture::{Brand, Venture, VentureEnv};
 pub use webhook_signature::{
     DEFAULT_TOLERANCE_SECS, ProviderScheme, SignatureEncoding, SignatureScheme, SignedDelivery,
