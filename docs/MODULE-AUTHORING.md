@@ -602,12 +602,22 @@ fn signature_verification(&self) -> SignatureVerification {
 ```
 
 and verifies each delivery with `cratefield_core::WebhookVerifier` and the
-provider's scheme (`Svix`, `StripeStyle`, `ProviderScheme`) over the **raw
-body bytes**; production then requires `{MODULE}_WEBHOOK_SECRET` — the boot
-gate refuses without it, `fz doctor` reports `hmac-webhook-secret-missing` —
-instead of any `Payments` port. A `ProviderScheme` with `timestamp: None`
-has no replay protection, so the handler must lean on the Inbox dedup
-ledger. `signature_verification()` is the module **default**; a route can
+provider's scheme (`Svix`, `StripeStyle`, `Vercel`, `ProviderScheme`) over
+the **raw body bytes**; production then requires
+`{MODULE}_WEBHOOK_SECRET` — the boot gate refuses without it, `fz doctor`
+reports `hmac-webhook-secret-missing` — instead of any `Payments` port.
+`Vercel` signs with HMAC-**SHA1**, and that is acceptable here because the
+construction is a *MAC*: an HMAC's security rests on the secret key and the
+hash's PRF behaviour, not on SHA-1's collision resistance, so SHA-1's
+collisions are no attack on it. (It is never used as a collision-sensitive
+hash.) A provider that sends the secret itself rather than a signature uses
+`SharedTokenScheme { header }`, or the named `Gitlab` (header
+`X-Gitlab-Token`); a token scheme ignores the body entirely. Neither
+`Vercel` nor the token schemes sign a timestamp, and a `ProviderScheme`
+with `timestamp: None` covers none either — so none of them stops a replay
+on its own: the handler must claim each delivery's event id through the
+`Inbox` dedup ledger (`cratefield_core::Inbox`). `signature_verification()`
+is the module **default**; a route can
 override it with `.verification(..)` (issue #595), so one billing module
 verifies Stripe through `Payments` and RevenueCat with its own secret —
 both provers are demanded, each failure naming the mounted route it
