@@ -108,6 +108,18 @@ drain_within` is the "N due items per tick" drain, and `reschedule` is
 the per-item cursor for recurring polling. Cloudflare Queues fan-out is
 left for a follow-up.
 
+ADR 0025 moves the billing lifecycle out of venture code and into a
+module (#592). RevenueCat is not a `Payments` adapter — it moves no money
+— so store purchases get their own `InAppPurchases` port
+(`Port::InAppPurchases`, first adapter `cratefield-adapter-revenuecat`);
+provider-neutral lifecycle events, states and a revenue ledger live in
+a new `billing` module of `cratefield-core`; and one published module
+(`cratefield-module-billing`) owns the subscriptions, grants, disputes,
+flags and the two webhook routes. A webhook is a trigger and the REST
+API is the truth; Stripe stays the authority for Stripe money. What an
+entitlement unlocks, its prices, and a flagged account's fate beyond the
+configured default stay venture code.
+
 [0102](0102-crypto-crate.md) chose the crypto crate: RustCrypto's
 `chacha20poly1305`.
 

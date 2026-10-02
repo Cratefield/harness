@@ -7,9 +7,14 @@
 //! The card details are entered on Stripe's own hosted pages; the harness only
 //! ever holds Stripe's identifiers for them (see `docs/PAYMENTS.md`).
 //!
-//! The trait names only what a billing module needs. Interpreting events
-//! (trials, entitlements, payout schedules) is venture code: [`verify_webhook`]
+//! The trait names only what a billing module needs. [`verify_webhook`]
 //! returns a verified [`WebhookEvent`] and the module decides what it means.
+//! The billing *lifecycle* — trials, entitlements, renewals, disputes — is
+//! no longer venture code: it lives in `cratefield-module-billing` (ADR
+//! 0025). A store-billing aggregator such as `RevenueCat` is the separate
+//! `InAppPurchases` port, not this one, because it reports purchases the
+//! stores made rather than moving money. Payout schedules stay venture
+//! code where they are a venture's own policy.
 //!
 //! [`verify_webhook`]: Payments::verify_webhook
 
