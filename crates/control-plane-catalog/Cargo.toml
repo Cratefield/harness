@@ -37,3 +37,4 @@ cratefield-module-privacy = { workspace = true }
 # manifest — the rule `docs/RELEASING.md` states for every internal
 # dev-dependency in this workspace.
 cratefield-module-telemetry = { path = "../module-telemetry" }
+cratefield-module-device-auth = { path = "../module-device-auth" }

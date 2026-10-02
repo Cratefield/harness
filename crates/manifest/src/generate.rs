@@ -163,6 +163,20 @@ pub(crate) const REGISTRY: &[ModuleCodegen] = &[
         needs_mailer: false,
         needs_push: false,
     },
+    ModuleCodegen {
+        slug: "device-auth",
+        name: "Device sign-in",
+        summary: "The OAuth 2.0 device authorization grant (RFC 8628): a client with no \
+                  browser shows a code, a signed-in person approves it, and your issuer mints \
+                  the credential.",
+        version: "0.2.0",
+        feature: "device-auth",
+        module: "device_auth",
+        type_name: "DeviceAuth",
+        has_templates: false,
+        needs_mailer: false,
+        needs_push: false,
+    },
 ];
 
 fn codegen_for(slug: &str) -> Option<&'static ModuleCodegen> {

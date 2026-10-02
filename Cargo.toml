@@ -102,6 +102,10 @@ cratefield-module-telemetry = { path = "crates/module-telemetry", version = "0.2
 # the core outbox, dead letters and replay. The Rust API is the surface —
 # the module ships no routes of its own.
 cratefield-module-webhooks = { path = "crates/module-webhooks", version = "0.2" }
+# The OAuth 2.0 device authorization grant (issue #587): a client with no
+# browser shows a code, a signed-in person approves it, and the venture's
+# own issuer mints the credential.
+cratefield-module-device-auth = { path = "crates/module-device-auth", version = "0.2" }
 # Declared here rather than by bare path in the one crate that uses it: a
 # path-only dependency has no version, and `cargo publish` refuses a
 # dependency without one. It was invisible while both crates were

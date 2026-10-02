@@ -1017,6 +1017,54 @@ fn telemetry() -> ModuleDetail {
     )
 }
 
+/// The `device-auth` detail.
+fn device_auth() -> ModuleDetail {
+    detail(
+        "The OAuth 2.0 device authorization grant (RFC 8628), for a client with no \
+                 browser and no keyboard: a CLI, a TV app, an appliance. The client shows a \
+                 short, look-alike-free code, a signed-in person approves it in a browser, and \
+                 your own issuer mints the credential — the harness never decides what a \
+                 credential is. Both codes are stored only as SHA-256 hashes, the one approved \
+                 poll mints exactly once, and every route the public one touches is rate \
+                 limited.",
+        "cratefield-module-device-auth",
+        &["Database", "RateLimiter"],
+        &["Clock", "Auth"],
+        &["device_auth_codes"],
+        vec![
+            route(
+                "POST",
+                "/v1/device-auth/code",
+                "Start a device authorization: returns the device code, the user code and the verification URL.",
+            ),
+            route(
+                "POST",
+                "/v1/device-auth/token",
+                "Poll for the credential; answers authorization_pending, slow_down, or the issued credential.",
+            ),
+            route(
+                "GET",
+                "/v1/device-auth",
+                "The browser page: the code form, or the Approve/Deny decision.",
+            ),
+            route(
+                "POST",
+                "/v1/device-auth/approve",
+                "Approve the device shown for a user code.",
+            ),
+            route(
+                "POST",
+                "/v1/device-auth/deny",
+                "Deny the request a user code names.",
+            ),
+        ],
+        Some(
+            "The approval page at /v1/device-auth: a code form for a visitor, and the \
+             decision page showing the requesting device to a signed-in person.",
+        ),
+    )
+}
+
 /// The curated catalog the control plane ships with: the manifest crate's
 /// `builtin()` catalog — the one list of the harness modules, with their
 /// tiers, dependency edges and pinned releases — with each entry's
@@ -1060,6 +1108,7 @@ fn detail_for(slug: &str) -> ModuleDetail {
         "notifications" => notifications(),
         "privacy" => privacy(),
         "telemetry" => telemetry(),
+        "device-auth" => device_auth(),
         _ => ModuleDetail::default(),
     }
 }

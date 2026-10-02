@@ -20,11 +20,28 @@ the provider's three URLs are configuration.
   per encryption, the ciphertext bound to its row and column.
 - **`send_with_refresh`** is the whole 401 policy: one refresh, one replay,
   never a loop.
+- **`device`** speaks RFC 8628 device authorization: `request_code` gets a
+  `user_code` the human types at the verification URI, and `poll` waits out
+  the interval (honouring `slow_down`) until the venture issues its
+  credential. The credential is the venture's own contract, so `poll`
+  returns the raw JSON — `poll_as::<T>` when the caller has a type.
 
 ```ignore
 let client = OAuthClient::new(http, &config);
 let tokens = client.exchange_code(&code, &redirect_uri, None).await?;
 let kept = tokens.rotated_refresh_token(&previous_refresh_token);
+```
+
+Device authorization (RFC 8628), for the client that has no browser — a CLI
+or a screen. The human approves on another device; the poll runs on `clock`,
+so it obeys the server's interval without a timer of its own:
+
+```ignore
+let auth = request_code(http, "https://api.example.com/v1/device-auth/code",
+                       "client-1", Some("read"), Some("My CLI")).await?;
+println!("Go to {} and enter {}", auth.verification_uri, auth.user_code);
+let credential: Credential = poll_as(http, clock, "https://api.example.com/v1/device-auth/token",
+                                     "client-1", &auth).await?;
 ```
 
 wasm-safe: randomness comes from `getrandom` (wasm backend enabled on
