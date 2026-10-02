@@ -381,7 +381,8 @@ impl AccessToken {
         &self.token
     }
 
-    /// Takes the token out, to hand to an [`HttpClient`] header and drop.
+    /// Takes the token out, to hand to an
+    /// [`HttpClient`](cratefield_core::HttpClient) header and drop.
     #[must_use]
     pub fn into_secret(self) -> Zeroizing<String> {
         self.token
