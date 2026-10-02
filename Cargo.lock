@@ -646,6 +646,7 @@ dependencies = [
  "cratefield-adapter-github-issues",
  "cratefield-adapter-jira",
  "cratefield-adapter-openai-compatible",
+ "cratefield-adapter-owlpost",
  "cratefield-adapter-postgres",
  "cratefield-adapter-resend",
  "cratefield-adapter-sqlite",
@@ -818,6 +819,22 @@ dependencies = [
  "bytes",
  "cratefield-core",
  "cratefield-testing",
+ "getrandom 0.4.3",
+ "http",
+ "pollster",
+ "serde",
+ "serde_json",
+ "time",
+ "tracing",
+]
+
+[[package]]
+name = "cratefield-adapter-owlpost"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "cratefield-core",
  "getrandom 0.4.3",
  "http",
  "pollster",

@@ -43,6 +43,7 @@ also switch on the extra features noted in their rows:
 | `sqlite` | `cratefield-adapter-sqlite` | `cratefield::sqlite` | `Database` over rusqlite |
 | `postgres` | `cratefield-adapter-postgres` | `cratefield::postgres` | `Database` over sqlx |
 | `resend` | `cratefield-adapter-resend` | `cratefield::resend` | `Mailer` over the Resend API |
+| `owlpost` | `cratefield-adapter-owlpost` | `cratefield::owlpost` | `Mailer` over the Resend-compatible Owlpost API |
 | `turnstile` | `cratefield-adapter-turnstile` | `cratefield::turnstile` | `Captcha` over Cloudflare Turnstile |
 | `anthropic` | `cratefield-adapter-anthropic` | `cratefield::anthropic` | `TextModel` over the Anthropic Messages API, via the `HttpClient` port |
 | `openai-compatible` | `cratefield-adapter-openai-compatible` | `cratefield::openai_compatible` | `TextModel` over the `OpenAI` chat-completions wire at any base URL, via the `HttpClient` port |
