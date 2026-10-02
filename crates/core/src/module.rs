@@ -434,9 +434,16 @@ pub trait Module: Send + Sync + 'static {
     /// deliveries (issue #533): how a webhook handler checks a machine
     /// signature before acting.
     ///
+    /// This is the **default** for the module's signature routes. A route
+    /// that declares its own verifier — `.verification(..)` on the
+    /// [`Action`](crate::surface::Action) (issue #595) — overrides it, so
+    /// one module can verify a Stripe webhook through `Payments` and a
+    /// `RevenueCat` webhook with its own HMAC secret.
+    ///
     /// Consulted only when the module actually has signature-guarded
-    /// routes — [`WriteGuards::collect`] reads it per signature module and
-    /// the production gate demands exactly what was declared:
+    /// routes — [`WriteGuards::collect`] resolves each route's verifier
+    /// (its own, else this) and the production gate demands exactly what
+    /// was declared:
     ///
     /// - [`SignatureVerification::Payments`](crate::route_policy::SignatureVerification::Payments)
     ///   (the default): the handler

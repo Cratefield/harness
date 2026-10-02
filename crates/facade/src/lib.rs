@@ -36,6 +36,9 @@ pub use cratefield_adapter_postgres as postgres;
 #[cfg(feature = "resend")]
 pub use cratefield_adapter_resend as resend;
 
+#[cfg(feature = "owlpost")]
+pub use cratefield_adapter_owlpost as owlpost;
+
 #[cfg(feature = "turnstile")]
 pub use cratefield_adapter_turnstile as turnstile;
 
