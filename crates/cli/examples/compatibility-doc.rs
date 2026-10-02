@@ -130,7 +130,14 @@ fn markdown(rows: &[Consumer]) -> String {
          \x20 0.1.x only), so a new core minor can never silently mix with older\n\
          \x20 modules. From 1.0 the range is `\"^1\"`-style: compatible within the\n\
          \x20 major. Ventures pin exact versions; the supported range per release\n\
-         \x20 is the table below.\n\n"
+         \x20 is the table below.\n\
+         - **Problem `type` URIs (cratefield-core 0.7.0):** every venture now\n\
+         \x20 names its problem types under its own base —\n\
+         \x20 `<public_url>/problems/<slug>`, `about:blank` when it has no public\n\
+         \x20 URL — instead of one fixed base. Clients must match on the slug,\n\
+         \x20 the part after `/problems/` (`auth/…` namespaces included), never\n\
+         \x20 on the full URI: the URI names whichever venture served the\n\
+         \x20 answer. docs/ERRORS.md is the slug list.\n\n"
     );
 
     out.push_str("## Supported core ranges\n\n");

@@ -40,7 +40,6 @@ pub use tracing_setup::install_tracing;
 
 use crate::body_limit::{BodyPlan, Capped, body_plan, read_capped};
 use crate::runtime::{WARNED_UNRESOLVED_LIMITER, warn_once};
-use axum::response::IntoResponse;
 use cratefield_core::{Harness, Problem, RequestSummary, SLUGS, ScheduledLimits, ScheduledSplit};
 use std::sync::Arc;
 use time::OffsetDateTime;
@@ -170,6 +169,11 @@ pub async fn serve(
     // out first.
     let config = Arc::clone(&ports.config);
     let url = req.url()?;
+    // The short-circuits below — the unresolved-limiter `503` and the
+    // `413` — answer before the router runs, so no layer stands behind
+    // them to name the venture (issue #557): name it here, the same way
+    // the router's outermost layer would.
+    let problem_type_base = harness.venture().problem_type_base();
     // Fail closed when the composition named a limiter binding that did
     // not resolve (issue #562): those routes were written to be throttled,
     // and a missing binding used to degrade to serving them unlimited with
@@ -187,12 +191,7 @@ pub async fn serve(
         // This short-circuits before the router, so the 503 carries no
         // CORS headers and an OPTIONS preflight is refused like any other
         // request — accepted: a Worker that cannot throttle is down.
-        return response_to_worker(
-            Problem::new(&SLUGS.not_production_ready)
-                .with_detail(detail)
-                .into_response(),
-        )
-        .await;
+        return response_to_worker(unresolved_limiter_response(detail, &problem_type_base)).await;
     }
     let router = harness.router(ports);
     let limit = harness.max_body_bytes(url.path(), config.as_ref());
@@ -208,7 +207,10 @@ pub async fn serve(
             // The tail left unread here trips `wrangler dev`'s drain
             // middleware — a dev-only artefact, recorded in this README's
             // wasm notes.
-            return response_to_worker(Problem::request_too_large().into_response()).await;
+            return response_to_worker(
+                Problem::request_too_large().into_response_with_base(&problem_type_base),
+            )
+            .await;
         }
         BodyPlan::Buffer => req.bytes().await?,
         BodyPlan::Stream => {
@@ -235,7 +237,8 @@ pub async fn serve(
                         Ok(Capped::Within(bytes)) => bytes,
                         Ok(Capped::TooLarge) => {
                             return response_to_worker(
-                                Problem::request_too_large().into_response(),
+                                Problem::request_too_large()
+                                    .into_response_with_base(&problem_type_base),
                             )
                             .await;
                         }
@@ -424,9 +427,68 @@ pub async fn serve_scheduled_with_limits(
     }
 }
 
+/// The unresolved-limiter refusal (issue #562), named under the serving
+/// venture's problem base (issue #557): it short-circuits before the
+/// router, whose outermost layer would otherwise have named it.
+fn unresolved_limiter_response(
+    detail: String,
+    problem_type_base: &str,
+) -> axum::response::Response {
+    Problem::new(&SLUGS.not_production_ready)
+        .with_detail(detail)
+        .into_response_with_base(problem_type_base)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    async fn body_json(response: axum::response::Response) -> serde_json::Value {
+        let bytes = axum::body::to_bytes(response.into_body(), 64 * 1024)
+            .await
+            .expect("the body reads");
+        serde_json::from_slice(&bytes).expect("the body is JSON")
+    }
+
+    #[test]
+    fn unresolved_limiter_refusal_names_the_serving_venture() {
+        // Issues #557 and #562 meet here: the fail-closed 503 answers
+        // before the router, so it must name the venture itself.
+        let venture = cratefield_core::Venture::new("acme", "acme.example")
+            .public_url("https://acme.example");
+        let response = unresolved_limiter_response(
+            "limiter binding RATE_LIMITER did not resolve".to_owned(),
+            &venture.problem_type_base(),
+        );
+        assert_eq!(response.status(), 503);
+        assert_eq!(
+            response.headers()[axum::http::header::CONTENT_TYPE],
+            "application/problem+json"
+        );
+        let body = pollster::block_on(body_json(response));
+        assert_eq!(
+            body["type"],
+            "https://acme.example/problems/not-production-ready"
+        );
+        assert!(
+            !body.to_string().contains("factory0.ventures"),
+            "no other venture's domain: {body}"
+        );
+    }
+
+    #[test]
+    fn unresolved_limiter_refusal_without_public_url_is_about_blank() {
+        // `Venture::new` defaults the public URL to the domain; clear it.
+        let venture = cratefield_core::Venture::new("acme", "acme.example").public_url("");
+        let response = unresolved_limiter_response(
+            "limiter binding RATE_LIMITER did not resolve".to_owned(),
+            &venture.problem_type_base(),
+        );
+        assert_eq!(
+            pollster::block_on(body_json(response))["type"],
+            cratefield_core::ABOUT_BLANK
+        );
+    }
 
     #[test]
     fn summary_line_is_one_json_object_carrying_the_request_id() {

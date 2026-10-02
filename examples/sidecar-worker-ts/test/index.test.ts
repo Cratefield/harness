@@ -82,7 +82,7 @@ describe("the module mount", () => {
 		// forwarded errors too.
 		expect(res.headers.get("x-harness-module")).toBe(MODULE_NAME);
 		const json = await body(res);
-		expect(json["type"]).toBe("https://factory0.ventures/problems/validation-failed");
+		expect(json["type"]).toBe("https://sidecar.test/problems/validation-failed");
 	});
 
 	it("404s sensibly inside, beside, and at the root of the prefix", async () => {
@@ -93,7 +93,7 @@ describe("the module mount", () => {
 			expect(res.headers.get("x-harness-module")).toBe(MODULE_NAME);
 			expect(res.headers.get("x-request-id")).toBe("req-404");
 			const json = await body(res);
-			expect(json["type"]).toBe("https://factory0.ventures/problems/not-found");
+			expect(json["type"]).toBe("https://sidecar.test/problems/not-found");
 		}
 	});
 });
@@ -209,7 +209,7 @@ describe("/__events", () => {
 			const res = await response;
 			expect(res.status).toBe(400);
 			const json = await body(res);
-			expect(json["type"]).toBe("https://factory0.ventures/problems/validation-failed");
+			expect(json["type"]).toBe("https://sidecar.test/problems/validation-failed");
 		}
 	});
 
@@ -225,7 +225,7 @@ describe("/__events", () => {
 		const res = await response;
 		expect(res.status).toBe(401);
 		const json = await body(res);
-		expect(json["type"]).toBe("https://factory0.ventures/problems/sidecar-unauthorized");
+		expect(json["type"]).toBe("https://sidecar.test/problems/sidecar-unauthorized");
 	});
 
 	it("404s an event forward when no usable secret is configured", async () => {
@@ -238,7 +238,7 @@ describe("/__events", () => {
 		const res = await response;
 		expect(res.status).toBe(404);
 		const json = await body(res);
-		expect(json["type"]).toBe("https://factory0.ventures/problems/not-found");
+		expect(json["type"]).toBe("https://sidecar.test/problems/not-found");
 	});
 });
 
@@ -273,7 +273,7 @@ describe("the gateway guard", () => {
 			const res = await response;
 			expect(res.status).toBe(401);
 			const json = await body(res);
-			expect(json["type"]).toBe("https://factory0.ventures/problems/sidecar-unauthorized");
+			expect(json["type"]).toBe("https://sidecar.test/problems/sidecar-unauthorized");
 		}
 	});
 
@@ -333,7 +333,7 @@ describe("the gateway guard", () => {
 			const res = await response;
 			expect(res.status).toBe(503);
 			const json = await body(res);
-			expect(json["type"]).toBe("https://factory0.ventures/problems/sidecar-unavailable");
+			expect(json["type"]).toBe("https://sidecar.test/problems/sidecar-unavailable");
 		}
 	});
 

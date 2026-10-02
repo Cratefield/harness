@@ -724,7 +724,7 @@ fn an_unconfigured_deployment_says_so() {
         let body: Value = serde_json::from_slice(&response.body).unwrap_or(Value::Null);
         assert_eq!(
             body["type"],
-            "https://factory0.ventures/problems/auth/meta-not-configured"
+            "https://test.example/problems/auth/meta-not-configured"
         );
     });
 }

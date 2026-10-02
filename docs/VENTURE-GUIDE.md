@@ -211,7 +211,7 @@ $ curl -sS -X POST http://127.0.0.1:8792/v1/waitlist \
     -H 'content-type: application/json' \
     -d '{"email":"guide@example.com","product":"kontinuum"}'
 {"instance":"01M1V346ASH01J0M70K5K1T60K","status":503,"title":"Mail is not configured",
- "type":"https://factory0.ventures/problems/mail-not-configured"}
+ "type":"https://cratefield.com/problems/mail-not-configured"}
 ```
 
 …and without `HARNESS_SECRET` in `.dev.vars` the same call is a `500

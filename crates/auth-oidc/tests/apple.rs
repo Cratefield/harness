@@ -640,7 +640,7 @@ fn a_deployment_with_no_apple_settings_says_the_provider_is_unconfigured() {
         assert_eq!(response.status, StatusCode::SERVICE_UNAVAILABLE);
         assert_eq!(
             response.json()["type"],
-            "https://factory0.ventures/problems/auth/oidc-provider-unconfigured"
+            "https://test.example/problems/auth/oidc-provider-unconfigured"
         );
     });
 }

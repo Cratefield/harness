@@ -395,7 +395,7 @@ async fn the_extractor_answers_one_401_for_every_signed_out_shape() {
     assert_eq!(signed_out.0, StatusCode::UNAUTHORIZED);
     assert_eq!(
         signed_out.1["type"],
-        "https://factory0.ventures/problems/auth/session-invalid"
+        "https://test.example/problems/auth/session-invalid"
     );
 
     let unknown = route(
@@ -407,7 +407,7 @@ async fn the_extractor_answers_one_401_for_every_signed_out_shape() {
     .await;
     assert_eq!(unknown.0, StatusCode::UNAUTHORIZED);
     assert_eq!(
-        unknown.1["type"], "https://factory0.ventures/problems/auth/session-invalid",
+        unknown.1["type"], "https://test.example/problems/auth/session-invalid",
         "unknown cookie: same problem as no cookie"
     );
 
@@ -425,7 +425,7 @@ async fn the_extractor_answers_one_401_for_every_signed_out_shape() {
     assert_eq!(revoked.0, StatusCode::UNAUTHORIZED);
     assert_eq!(
         revoked.1["type"],
-        "https://factory0.ventures/problems/auth/session-invalid"
+        "https://test.example/problems/auth/session-invalid"
     );
 }
 
@@ -459,7 +459,7 @@ async fn the_expired_shape_through_the_router_is_the_same_401() {
     assert_eq!(status, StatusCode::UNAUTHORIZED);
     assert_eq!(
         json["type"],
-        "https://factory0.ventures/problems/auth/session-invalid"
+        "https://test.example/problems/auth/session-invalid"
     );
 }
 

@@ -104,7 +104,7 @@ fn a_dead_refresh_token_blocks_writes_with_a_reconnect_problem() {
         assert_eq!(refused.status, StatusCode::CONFLICT);
         assert_eq!(
             refused.json()["type"],
-            "https://factory0.ventures/problems/linkedin-reconnect-required"
+            "https://test.example/problems/linkedin-reconnect-required"
         );
 
         // Flipping happens once, not on every pass.
@@ -252,7 +252,7 @@ fn work_before_a_connection_answers_not_connected() {
         assert_eq!(synced.status, StatusCode::CONFLICT);
         assert_eq!(
             synced.json()["type"],
-            "https://factory0.ventures/problems/linkedin-not-connected"
+            "https://test.example/problems/linkedin-not-connected"
         );
     });
 }

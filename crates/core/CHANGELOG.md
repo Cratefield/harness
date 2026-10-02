@@ -6,6 +6,27 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- **Breaking — problem `type` URIs are named under the serving venture's
+  own base.** `Problem::type_uri` now takes the venture's base as its
+  argument, so the next release is 0.7.0 (a breaking change is a minor
+  bump under 0.x): `type` is `<public_url>/problems/<slug>` — derived
+  from the venture's `public_url`, overridable with the new
+  `Venture::problem_base(..)` — and `about:blank` (RFC 9457 §4.2.1) for a
+  venture with no public URL, instead of one hard-coded
+  `https://factory0.ventures/problems/` base for every venture.
+  `Problem::into_response` renders the context-free `about:blank` and
+  stores the problem in the response extensions; the harness's outermost
+  layer re-renders the body under the venture's base, so every path that
+  serves a problem — module handlers, the tenant and readiness gates,
+  rejections, 429s — names the venture it served for; the runtimes'
+  pre-router refusals (native `421`, Worker `413` and unresolved-limiter
+  `503`) name it through the new `Problem::into_response_with_base`. Clients must match
+  on the slug — the part after `/problems/`, `auth/…` namespaces
+  included — never on the full URI. The
+  slug list is unchanged (docs/ERRORS.md). (#557)
+
 ## [0.6.0] — 2026-09-28
 
 A breaking release: `Port` is an exhaustive enum and gained `TextModel`,
