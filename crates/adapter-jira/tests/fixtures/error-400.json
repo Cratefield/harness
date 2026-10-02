@@ -1,0 +1,7 @@
+{
+  "errorMessages": [],
+  "errors": {
+    "issuetype": "The issue type selected is invalid.",
+    "project": "project is required"
+  }
+}

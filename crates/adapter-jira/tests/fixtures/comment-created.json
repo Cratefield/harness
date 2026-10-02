@@ -1,0 +1,25 @@
+{
+  "id": "10001",
+  "self": "https://acme.atlassian.net/rest/api/3/issue/10002/comment/10001",
+  "body": {
+    "type": "doc",
+    "version": 1,
+    "content": [
+      {
+        "type": "paragraph",
+        "content": [
+          {
+            "type": "text",
+            "text": "Duplicate of the checkout 500s."
+          }
+        ]
+      }
+    ]
+  },
+  "properties": [
+    {
+      "key": "cratefield-idem",
+      "value": "outbox-43"
+    }
+  ]
+}

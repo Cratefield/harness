@@ -63,8 +63,9 @@ pub use text_model::{
     TextModelError, Turn,
 };
 pub use tracker::{
-    Credential, Destination, Filed, RoutingTracker, Severity, TicketDraft, TicketState,
-    TicketStatus, Tracker, TrackerError,
+    Credential, Destination, Filed, InboundStatusError, RoutingTracker, Severity, StatusUpdate,
+    StatusWebhook, TicketComment, TicketDraft, TicketState, TicketStatus, Tracker, TrackerError,
+    receive_status,
 };
 pub use vector_index::{
     ExactVectorIndex, MAX_NAMESPACE_BYTES, VectorFilter, VectorIndex, VectorIndexError,

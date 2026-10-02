@@ -18,8 +18,8 @@ use cratefield_core::{
     ClassifierProfile, Clock, Completion, Credential, Database, DbError, Decision, Defer,
     Destination, Filed, HttpClient, HttpError, KeyValue, KvError, MailError, Mailer, Message,
     ModelTier, Prompt, Question, RateLimitError, RateLimiter, Row, Rows, SendOutcome, Statement,
-    TextModel, TextModelError, TicketDraft, TicketState, TicketStatus, Tracker, TrackerError,
-    Verdict, validate_questions,
+    TextModel, TextModelError, TicketComment, TicketDraft, TicketState, TicketStatus, Tracker,
+    TrackerError, Verdict, validate_questions,
 };
 use futures_core::future::BoxFuture;
 use http::{Request, Response};
@@ -1440,8 +1440,22 @@ pub struct StatusedCall {
     pub credential_fingerprint: String,
 }
 
+/// One `Tracker::comment` a [`FakeTracker`] accepted, for assertions.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CommentedCall {
+    /// Where the ticket lives.
+    pub dest: Destination,
+    /// The ticket the note was added to.
+    pub external_id: String,
+    /// The note as the caller handed it over.
+    pub comment: TicketComment,
+    /// A fingerprint of the credential the caller passed.
+    pub credential_fingerprint: String,
+}
+
 /// An in-memory [`Tracker`] for module tests: records every accepted
-/// `file`/`status` call and answers according to its [`TrackerMode`]. A
+/// `file`/`status`/`comment` call and answers according to its
+/// [`TrackerMode`]. A
 /// call the mode answered with an error is not recorded, as [`FakePush`]
 /// does not record a failed send.
 ///
@@ -1462,6 +1476,7 @@ struct FakeTrackerInner {
     per_destination: Mutex<HashMap<Destination, TrackerMode>>,
     filed: Mutex<Vec<FiledCall>>,
     statused: Mutex<Vec<StatusedCall>>,
+    commented: Mutex<Vec<CommentedCall>>,
     state: Mutex<TicketState>,
 }
 
@@ -1474,6 +1489,7 @@ impl FakeTracker {
                 per_destination: Mutex::new(HashMap::new()),
                 filed: Mutex::new(Vec::new()),
                 statused: Mutex::new(Vec::new()),
+                commented: Mutex::new(Vec::new()),
                 state: Mutex::new(TicketState::Open),
             }),
         }
@@ -1500,6 +1516,12 @@ impl FakeTracker {
     #[must_use]
     pub fn statused(&self) -> Vec<StatusedCall> {
         self.inner.statused.lock().expect("tracker lock").clone()
+    }
+
+    /// Every `comment` accepted so far, in order.
+    #[must_use]
+    pub fn commented(&self) -> Vec<CommentedCall> {
+        self.inner.commented.lock().expect("tracker lock").clone()
     }
 
     /// Switches the mode every destination without an override answers
@@ -1551,9 +1573,9 @@ impl FakeTracker {
         *self.inner.state.lock().expect("tracker lock")
     }
 
-    /// The error arms shared by `file` and `status`: the same fixed modes
-    /// script both, the way a real adapter answers the one `TrackerError`
-    /// vocabulary on both methods.
+    /// The error arms shared by `file`, `status` and `comment`: the same
+    /// fixed modes script all three, the way a real adapter answers the
+    /// one `TrackerError` vocabulary on every method.
     fn error_for(mode: &TrackerMode) -> Option<TrackerError> {
         match mode {
             TrackerMode::FileOk => None,
@@ -1627,6 +1649,29 @@ impl Tracker for FakeTracker {
             state: self.state(),
             url: None,
         })
+    }
+
+    async fn comment(
+        &self,
+        dest: &Destination,
+        cred: &Credential,
+        external_id: &str,
+        comment: &TicketComment,
+    ) -> Result<(), TrackerError> {
+        if let Some(error) = Self::error_for(&self.mode_for(dest)) {
+            return Err(error);
+        }
+        self.inner
+            .commented
+            .lock()
+            .expect("tracker lock")
+            .push(CommentedCall {
+                dest: dest.clone(),
+                external_id: external_id.to_owned(),
+                comment: comment.clone(),
+                credential_fingerprint: fingerprint(cred),
+            });
+        Ok(())
     }
 }
 
