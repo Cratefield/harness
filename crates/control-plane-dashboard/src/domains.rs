@@ -245,7 +245,7 @@ fn provider_failure(err: &CustomHostnameError, what: &str) -> String {
 /// No Cloudflare credential is wired (#26), and this screen refuses to
 /// pretend otherwise. Every call answers
 /// [`CustomHostnameError::NotConfigured`], which the flow records against
-/// the hostname (see [`provider_failure`]) so the row's state is `failed`
+/// the hostname (see `provider_failure`) so the row's state is `failed`
 /// — a stop, not a pending operation. The day the live
 /// `cratefield-adapter-cloudflare-saas` is passed instead, every recorded
 /// `failed` row retries through the same code path and nothing else
