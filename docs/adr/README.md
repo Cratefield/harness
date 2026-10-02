@@ -113,7 +113,7 @@ module (#592). RevenueCat is not a `Payments` adapter — it moves no money
 — so store purchases get their own `InAppPurchases` port
 (`Port::InAppPurchases`, first adapter `cratefield-adapter-revenuecat`);
 provider-neutral lifecycle events, states and a revenue ledger live in
-`crates/core/src/billing/`; and one published module
+a new `billing` module of `cratefield-core`; and one published module
 (`cratefield-module-billing`) owns the subscriptions, grants, disputes,
 flags and the two webhook routes. A webhook is a trigger and the REST
 API is the truth; Stripe stays the authority for Stripe money. What an

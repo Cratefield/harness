@@ -55,8 +55,8 @@ adapter is `cratefield-adapter-revenuecat`. Another aggregator, or a
 direct App Store Server API or Play Developer API adapter, can implement
 the same port later without the module changing.
 
-**2. Core gains provider-neutral billing types, with no I/O.** A
-`crates/core/src/billing/` module defines `LifecycleEvent` (what
+**2. Core gains provider-neutral billing types, with no I/O.** A new
+`billing` module in `cratefield-core` defines `LifecycleEvent` (what
 happened), `SubscriptionState` (where a subscription now is) and the
 pure transition function between states, `EntitlementGrant` (what a
 customer is entitled to, and until when) and `LedgerEntry` (one revenue
@@ -292,7 +292,7 @@ Lifecycle, money and policy:
 Downstream:
 - #618 — privacy: export and erasure for billing data, including deleting
   the RevenueCat customer.
-- #619 — docs: `docs/BILLING.md` and a venture setup guide.
+- #619 — docs: a new `BILLING.md` under `docs/` and a venture setup guide.
 - #620 — example venture mounting billing on Workers and on the native
   runtime.
 - #621 — facade features, `fz doctor` rules and the publish set.

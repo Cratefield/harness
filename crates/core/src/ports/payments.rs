@@ -11,7 +11,7 @@
 //! returns a verified [`WebhookEvent`] and the module decides what it means.
 //! The billing *lifecycle* — trials, entitlements, renewals, disputes — is
 //! no longer venture code: it lives in `cratefield-module-billing` (ADR
-//! 0025). A store-billing aggregator such as RevenueCat is the separate
+//! 0025). A store-billing aggregator such as `RevenueCat` is the separate
 //! `InAppPurchases` port, not this one, because it reports purchases the
 //! stores made rather than moving money. Payout schedules stay venture
 //! code where they are a venture's own policy.
