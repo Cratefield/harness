@@ -36,6 +36,10 @@ it holds Stripe identifiers only. See `docs/PAYMENTS.md`.
   `transfer_data[destination]` and `application_fee_amount`): the platform keeps
   its fee, the rest goes to the connected account.
 - `refund` — a full or partial refund of a prior payment.
+- `report_usage` — reports one metered usage amount to a Stripe Billing Meter
+  (`POST /v1/billing/meter_events`). The `identifier` is the exactly-once key
+  and also the `Idempotency-Key`, so a retry is safe; Stripe's
+  `duplicate_meter_event` is returned as `already_reported: true`, not an error.
 - `verify_webhook` — verifies the `Stripe-Signature` HMAC-SHA256 and its
   timestamp (5-minute tolerance) over the raw body, then returns the event.
 

@@ -54,7 +54,7 @@ pub use mailer::{MailError, Mailer, Message, SendOutcome};
 pub use payments::{
     Charge, CheckoutRequest, CheckoutSession, ConnectAccountLink, ConnectAccountLinkRequest,
     LineItem, Money, Payments, PaymentsError, Refund, RefundRequest, SubscriptionCheckoutRequest,
-    TransferCharge, WebhookEvent,
+    TransferCharge, UsageReport, UsageReported, WebhookEvent,
 };
 pub use push::{
     LocKeys, Notification, Platform, Priority, Push, PushError, PushOutcome, Recipient,
