@@ -181,6 +181,7 @@ convenience, not a layer.
 | `cratefield-adapter-github-app` | GitHub App auth: the RS256 app JWT, installation tokens (cached, single-flight, one re-mint on `401`) and the user-to-server OAuth code exchange |
 | `cratefield-push-wiring` | Assembles the `Push` port from the environment: one env-variable table shared by `serve()`, `fz push` and `fz doctor` |
 | `cratefield-adapter-stripe` | `Payments` over the Stripe REST API |
+| `cratefield-adapter-polar` | `Payments` over Polar, a Merchant of Record: hosted checkout, usage meters through event ingestion, the customer portal, refunds, disputes and Standard Webhooks verification, through the `HttpClient` port |
 | `cratefield-module-cms` | A small content store with an editor: typed collections, versioned, in the venture's own database |
 | `cratefield-module-privacy` | Subject access and erasure, assembled from what every other module declares it holds |
 | `cratefield-module-notifications` | Push, an in-app inbox and email from one `notify()`, with per-account per-category preferences ([NOTIFICATIONS.md](docs/NOTIFICATIONS.md)) |
