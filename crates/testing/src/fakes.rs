@@ -24,7 +24,8 @@ use cratefield_core::{
     validate_questions,
 };
 use futures_core::future::BoxFuture;
-use http::{Request, Response};
+use http::header::{CONTENT_TYPE, RETRY_AFTER};
+use http::{HeaderValue, Request, Response, StatusCode};
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -328,11 +329,89 @@ impl FakeHttpClient {
         ])
     }
 
+    /// One Owlpost-shaped `application/problem+json` error (issue #666).
+    #[must_use]
+    pub fn owlpost_problem(status: StatusCode, title: &str, detail: &str) -> Self {
+        Self::scripted(vec![Ok(problem_json(status, title, detail))])
+    }
+
+    /// Owlpost's 429: a problem body carrying `Retry-After: <secs>`, which
+    /// the adapter maps to `MailError::RateLimited` with that delay.
+    #[must_use]
+    pub fn owlpost_rate_limited(retry_after_secs: u64) -> Self {
+        Self::scripted(vec![Ok(with_retry_after(
+            problem_json(
+                StatusCode::TOO_MANY_REQUESTS,
+                "Too Many Requests",
+                "slow down",
+            ),
+            retry_after_secs,
+        ))])
+    }
+
+    /// One Colonizer-shaped error: `{"error": message}`.
+    #[must_use]
+    pub fn colonizer_error(status: StatusCode, message: &str) -> Self {
+        Self::scripted(vec![Ok(error_json(status, message))])
+    }
+
+    /// Colonizer's 429: an `{"error": …}` body carrying `Retry-After`.
+    #[must_use]
+    pub fn colonizer_rate_limited(retry_after_secs: u64) -> Self {
+        Self::scripted(vec![Ok(with_retry_after(
+            error_json(StatusCode::TOO_MANY_REQUESTS, "rate limited"),
+            retry_after_secs,
+        ))])
+    }
+
     /// Every captured request as `(method, uri, body)`.
     #[must_use]
     pub fn captured(&self) -> Vec<(String, String, String)> {
         self.inner.captured.lock().expect("http lock").clone()
     }
+}
+
+/// An RFC 9457 `application/problem+json` response — the shape Owlpost
+/// answers errors with: `type`, `title`, `status` and `detail`, the
+/// `status` both the HTTP status and the body's own field. Build one for
+/// a [`scripted`](FakeHttpClient::scripted) sequence, or take it from a
+/// preset like [`FakeHttpClient::owlpost_problem`].
+#[must_use]
+pub fn problem_json(status: StatusCode, title: &str, detail: &str) -> Response<Bytes> {
+    let body = serde_json::json!({
+        "type": "about:blank",
+        "title": title,
+        "status": status.as_u16(),
+        "detail": detail,
+    })
+    .to_string();
+    Response::builder()
+        .status(status)
+        .header(CONTENT_TYPE, "application/problem+json")
+        .body(Bytes::from(body))
+        .expect("a problem+json response builds")
+}
+
+/// A Colonizer-shaped error body, `{"error": message}` under
+/// `application/json`.
+#[must_use]
+pub fn error_json(status: StatusCode, message: &str) -> Response<Bytes> {
+    let body = serde_json::json!({ "error": message }).to_string();
+    Response::builder()
+        .status(status)
+        .header(CONTENT_TYPE, "application/json")
+        .body(Bytes::from(body))
+        .expect("an error response builds")
+}
+
+/// Adds `Retry-After: <retry_after_secs>` to a response in seconds — the
+/// header a 429 carries and the adapters read as a retry hint.
+#[must_use]
+pub fn with_retry_after(mut response: Response<Bytes>, retry_after_secs: u64) -> Response<Bytes> {
+    response
+        .headers_mut()
+        .insert(RETRY_AFTER, HeaderValue::from(retry_after_secs));
+    response
 }
 
 #[async_trait]
@@ -2024,5 +2103,58 @@ impl CustomHostnames for FakeCustomHostnames {
             .get(&key)
             .cloned()
             .ok_or(CustomHostnameError::NotFound)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn json_body(response: &Response<Bytes>) -> serde_json::Value {
+        serde_json::from_slice(response.body()).expect("the body is json")
+    }
+
+    #[test]
+    fn problem_json_carries_the_problem_fields_and_media_type() {
+        let response = problem_json(
+            StatusCode::TOO_MANY_REQUESTS,
+            "Too Many Requests",
+            "slow down",
+        );
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(response.headers()[CONTENT_TYPE], "application/problem+json");
+        let body = json_body(&response);
+        assert_eq!(body["type"], "about:blank");
+        assert_eq!(body["title"], "Too Many Requests");
+        assert_eq!(body["status"], 429);
+        assert_eq!(body["detail"], "slow down");
+    }
+
+    #[test]
+    fn error_json_is_the_colonizer_shape() {
+        let response = error_json(StatusCode::BAD_REQUEST, "bad request");
+        assert_eq!(response.headers()[CONTENT_TYPE], "application/json");
+        assert_eq!(json_body(&response)["error"], "bad request");
+    }
+
+    #[test]
+    fn with_retry_after_sets_the_header_in_seconds() {
+        let response = with_retry_after(error_json(StatusCode::TOO_MANY_REQUESTS, "slow"), 42);
+        assert_eq!(response.headers()[RETRY_AFTER], "42");
+    }
+
+    #[test]
+    fn a_preset_answers_through_the_port() {
+        // Drive a preset end to end: it must be wired into `scripted`, not
+        // merely build a body.
+        let http = FakeHttpClient::owlpost_rate_limited(7);
+        let request = Request::builder()
+            .uri("https://api.owlpost.fake/v1/emails")
+            .body(Bytes::new())
+            .expect("the request builds");
+        let response = pollster::block_on(http.send(request)).expect("the preset answers");
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(response.headers()[RETRY_AFTER], "7");
+        assert_eq!(json_body(&response)["detail"], "slow down");
     }
 }

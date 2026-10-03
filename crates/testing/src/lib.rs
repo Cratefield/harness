@@ -46,6 +46,11 @@ mod port;
 mod request;
 #[cfg(feature = "harness")]
 mod sidecar;
+// Webhook request signers (issue #666): mint the headers a provider
+// sends, for a test to feed `WebhookVerifier`. Like `batch` and `blob`
+// it is ungated — it needs only `cratefield-core` and the `http`/HMAC
+// crates core already carries, none of the harness graph.
+mod signing;
 mod tmp;
 pub mod vectors;
 
@@ -62,7 +67,7 @@ pub use fakes::{
     FakeDispatcher, FakeEmbedder, FakeHttpClient, FakeMailer, FakePayments, FakePush,
     FakeRateLimiter, FakeRealtime, FakeTextModel, FakeTracker, FiledCall, FixedClock, MailerMode,
     MemoryBlob, MemoryKeyValue, PaymentsCall, PaymentsMode, PushMode, StatusedCall, TextModelMode,
-    TrackerMode,
+    TrackerMode, error_json, problem_json, with_retry_after,
 };
 #[cfg(feature = "harness")]
 pub use harness::TestHarness;
@@ -79,6 +84,7 @@ pub use port::{
 pub use request::{TestResponse, request, request_as, request_chunks};
 #[cfg(feature = "harness")]
 pub use sidecar::{FakeSidecar, Fault, shared as shared_sidecar};
+pub use signing::{sign_provider_scheme, sign_stripe_style};
 pub use tmp::TempDir;
 
 // The fixed test secret for the kit's Signer — an obvious dummy, never real.

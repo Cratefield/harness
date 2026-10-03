@@ -37,7 +37,6 @@ harness = [
     "dep:bytes",
     "dep:cratefield-adapter-sqlite",
     "dep:futures-core",
-    "dep:http",
     "dep:pollster",
     "dep:sea-query",
     "dep:serde",
@@ -65,11 +64,18 @@ postgres = ["harness", "dep:cratefield-adapter-postgres", "dep:tokio"]
 
 [dependencies]
 cratefield-core = { workspace = true }
+# The webhook signers (issue #666) are ungated, so `http` and the HMAC
+# stack are always present. All three are already in core's own tree —
+# `http` and HMAC are core's webhook-verification deps — so making them
+# unconditional adds no crate to a consumer's build.
+http = { workspace = true }
+hmac = { workspace = true }
+sha2 = { workspace = true }
+base64 = { workspace = true }
 cratefield-adapter-sqlite = { workspace = true, optional = true }
 cratefield-adapter-postgres = { workspace = true, optional = true }
 tokio = { workspace = true, optional = true }
 axum = { workspace = true, optional = true }
-http = { workspace = true, optional = true }
 tower = { workspace = true, optional = true }
 bytes = { workspace = true, optional = true }
 serde = { workspace = true, optional = true }
