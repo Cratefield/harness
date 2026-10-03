@@ -31,6 +31,7 @@ pub mod codes;
 mod collect;
 pub mod data;
 pub mod doctor;
+pub mod import;
 pub mod lint;
 mod lock;
 pub mod push;
@@ -300,6 +301,73 @@ enum Command {
     Push {
         #[command(subcommand)]
         command: PushCommand,
+    },
+    /// Moves a project from another platform onto the harness (ADR 0026).
+    /// Supabase first; step one is a read-only inspection and its report.
+    ///
+    /// Needs no compiled-in harness, so it runs from the standalone `fz`
+    /// too. The network leg needs the `import-supabase` feature.
+    Import {
+        #[command(subcommand)]
+        command: ImportCommand,
+    },
+}
+
+#[derive(Subcommand)]
+enum ImportCommand {
+    /// A Supabase project (ADR 0026, issue #658).
+    Supabase {
+        #[command(subcommand)]
+        command: SupabaseCommand,
+    },
+}
+
+#[derive(Subcommand)]
+enum SupabaseCommand {
+    /// Connects read-only to the project's Postgres (and, with a token,
+    /// the Management API) and writes the migration report: every item
+    /// automatic, needs work or a blocker, with size and transfer
+    /// estimates. Never writes to the project. The exit code is non-zero
+    /// for a refused input, a connection or a permission error — never
+    /// for a blocker, which is part of the report.
+    Inspect {
+        /// The Supabase project ref (the `<ref>` in
+        /// `https://<ref>.supabase.co`).
+        #[arg(long, value_name = "REF")]
+        project: String,
+        /// The database URL of a read-only role. Prefer the
+        /// `SUPABASE_DB_URL` environment variable: a flag lands in the
+        /// shell history and the process list.
+        #[arg(long, value_name = "URL")]
+        db_url: Option<String>,
+        /// A Supabase Management API personal access token, for Edge
+        /// Functions and the auth configuration. Prefer
+        /// `SUPABASE_ACCESS_TOKEN`. Without one those are reported as not
+        /// inspected (unknown, not none).
+        #[arg(long, value_name = "TOKEN")]
+        management_token: Option<String>,
+        /// Write the JSON report (the format later steps read).
+        #[arg(long, conflicts_with = "md")]
+        json: bool,
+        /// Write the Markdown report (the default).
+        #[arg(long)]
+        md: bool,
+        /// Write the report to this file instead of stdout.
+        #[arg(long, value_name = "FILE")]
+        out: Option<PathBuf>,
+        /// The throughput the transfer estimate assumes, in Mbit/s.
+        #[arg(long, default_value_t = 100, value_name = "MBPS")]
+        transfer_mbps: u32,
+        /// Ask the `TypeSafe` classifier (Jev; `TYPESAFE_API_KEY`) about the
+        /// RLS policies no rule placed. Advisory only: it labels a
+        /// policy, it never writes a check. Sends policy SQL and table and
+        /// column names, never a row.
+        #[arg(long)]
+        classify: bool,
+        /// The confidence a classifier label needs; below it the policy
+        /// stays `needs_review`. Per adapter: it is `TypeSafe`'s number.
+        #[arg(long, default_value_t = 0.8, value_name = "0..1")]
+        classify_threshold: f32,
     },
 }
 
@@ -612,7 +680,8 @@ pub fn run(build: impl Fn() -> Harness, args: impl IntoIterator<Item = String>) 
         | Command::Add { .. }
         | Command::Init { .. }
         | Command::Verify { .. }
-        | Command::Push { .. } => unreachable!("dispatched before the harness is built"),
+        | Command::Push { .. }
+        | Command::Import { .. } => unreachable!("dispatched before the harness is built"),
     };
     finish(result)
 }
@@ -657,6 +726,36 @@ fn harness_free(command: &Command) -> Option<ExitCode> {
             finish(client_ts::run(surface, out))
         }),
         Command::Push { command } => Some(finish(run_push(command))),
+        Command::Import {
+            command:
+                ImportCommand::Supabase {
+                    command:
+                        SupabaseCommand::Inspect {
+                            project,
+                            db_url,
+                            management_token,
+                            json,
+                            md: _,
+                            out,
+                            transfer_mbps,
+                            classify,
+                            classify_threshold,
+                        },
+                },
+        } => Some(finish(import::inspect(&import::InspectArgs {
+            project: project.clone(),
+            db_url: db_url.clone(),
+            management_token: management_token.clone(),
+            format: if *json {
+                import::Format::Json
+            } else {
+                import::Format::Markdown
+            },
+            out: out.clone(),
+            transfer_mbps: *transfer_mbps,
+            classify: *classify,
+            classify_threshold: *classify_threshold,
+        }))),
         _ => workflow::dispatch(command),
     }
 }
@@ -753,8 +852,8 @@ pub fn run_standalone(args: impl IntoIterator<Item = String>) -> ExitCode {
         eprintln!(
             "fz: this command must run inside a venture (it needs the compiled-in harness — see \
              the cratefield-cli README). Only `fz build <manifest>`, `fz client-ts`, the manifest \
-             workflow (`fz plan` / `deploy` / `add` / `init` / `verify`) and `fz push` run \
-             standalone."
+             workflow (`fz plan` / `deploy` / `add` / `init` / `verify`), `fz push` and \
+             `fz import` run standalone."
         );
         return ExitCode::FAILURE;
     };

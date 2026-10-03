@@ -7,6 +7,7 @@ cratefield-runtime-cloudflare	CRATEFIELD · RUNTIME · CLOUDFLARE	One stateless 
 cratefield-runtime-native	CRATEFIELD · RUNTIME · NATIVE	The same harness, as a binary.	axum on a TCP listener, reqwest over rustls, Redis ports and in-process cron.	TOKIO · AXUM · REDIS · CRON	./acme-backend
 cratefield-adapter-sqlite	CRATEFIELD · ADAPTER · SQLITE	Every test runs on it.	The Database port over rusqlite: the whole suite, and single-node self-hosting.	RUSQLITE · TESTS · SELF-HOSTING	acme.db
 cratefield-adapter-postgres	CRATEFIELD · ADAPTER · POSTGRES	Database, at size.	The Database port over sqlx Postgres 16. Native only, and it says so at compile time.	SQLX · POSTGRES 16 · NATIVE ONLY	postgres://
+cratefield-import-supabase	CRATEFIELD · IMPORT · SUPABASE	What a Supabase move takes.	A read-only inspection of a Supabase project: every table, policy, bucket and function, each automatic, needs work or a blocker.	READ-ONLY · RLS · REPORT	fz import supabase inspect
 cratefield-adapter-resend	CRATEFIELD · ADAPTER · RESEND	Mail that goes out.	The Mailer port over the Resend API, through the runtime's HttpClient — no reqwest, no OpenSSL.	MAILER · REST · NOTCONFIGURED MODE	mail.send()
 cratefield-adapter-turnstile	CRATEFIELD · ADAPTER · TURNSTILE	Fail closed.	The Captcha port over Cloudflare Turnstile siteverify, on the runtime's own HttpClient.	CAPTCHA · SITEVERIFY · FAIL-CLOSED	verify()
 cratefield-adapter-stripe	CRATEFIELD · ADAPTER · STRIPE	Payments port.	The Payments port over the Stripe REST API, same shape on Workers and native.	PAYMENTS · REST · IDEMPOTENT	charge()

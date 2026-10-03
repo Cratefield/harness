@@ -1,0 +1,509 @@
+//! `inspect` against the fixture project (issue #658), on the Postgres
+//! named by `FZ_TEST_POSTGRES_URL` — CI's `postgres:16` service container.
+//! Every test skips, saying why, when the variable is unset.
+//!
+//! Regenerate the snapshots with `INSTA_UPDATE=always cargo test -p
+//! cratefield-import-supabase` (or `cargo insta review`), and write the
+//! Markdown sample the docs and the PR quote with
+//! `FZ_WRITE_SAMPLE_REPORT=1`.
+
+use std::collections::BTreeMap;
+use std::sync::Arc;
+
+use async_trait::async_trait;
+use bytes::Bytes;
+use cratefield_adapter_postgres::testing::{TempDb, base_url, skip_reason};
+use cratefield_core::{
+    Answer, Calibration, Classifier, ClassifierError, ClassifierProfile, HttpClient, HttpError,
+    Question,
+};
+use cratefield_import_supabase::{
+    Classification, InspectError, InspectOptions, ManagementApi, PolicyPattern, PolicySource,
+    ReadOnlySession, Report, Secret, SourceStatus, inspect,
+};
+
+const FIXTURE: &str = include_str!("fixtures/supabase-project.sql");
+const PROJECT_REF: &str = "fixtureprojectref000";
+const MANAGEMENT_TOKEN: &str = "sbp_fixture0token0do0not0print0000000000";
+const AUTH_CONFIG_SECRET: &str = "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reported";
+const SMTP_PASSWORD: &str = "smtp-fixture-password-never-reported";
+
+/// A throwaway database with the fixture loaded, or `None` (and the skip
+/// reason printed) without a server.
+async fn fixture_db(tag: &str) -> Option<TempDb> {
+    let Some(base) = base_url() else {
+        eprintln!("skipping: {}", skip_reason());
+        return None;
+    };
+    let db = TempDb::create(&base, tag).await?;
+    db.assert_postgres_16().await;
+    let pool = sqlx::PgPool::connect(&db.url).await.expect("connect");
+    sqlx::raw_sql(FIXTURE)
+        .execute(&pool)
+        .await
+        .expect("the fixture loads");
+    pool.close().await;
+    Some(db)
+}
+
+/// A role that can read and nothing else, the one the docs tell a user to
+/// create, and the URL that logs in as it.
+async fn read_only_role(db: &TempDb, tag: &str) -> (String, String, String) {
+    let role = format!("fz_inspect_{tag}_{}", std::process::id());
+    let password = format!("ro-fixture-password-{tag}-{}", std::process::id());
+    let pool = sqlx::PgPool::connect(&db.url).await.expect("connect");
+    let database = db.url.rsplit('/').next().expect("a database").to_owned();
+    sqlx::raw_sql(&format!(
+        "DROP ROLE IF EXISTS {role}; \
+         CREATE ROLE {role} LOGIN PASSWORD '{password}'; \
+         ALTER ROLE {role} SET default_transaction_read_only = on; \
+         GRANT CONNECT ON DATABASE \"{database}\" TO {role}; \
+         GRANT USAGE ON SCHEMA public, auth, storage, extensions TO {role}; \
+         GRANT SELECT ON ALL TABLES IN SCHEMA public, auth, storage TO {role};"
+    ))
+    .execute(&pool)
+    .await
+    .expect("create the read-only role");
+    pool.close().await;
+    // postgres://postgres:postgres@host:port/db -> postgres://role:password@host:port/db
+    let (scheme, rest) = db.url.split_once("://").expect("a scheme");
+    let (_, host_and_path) = rest.split_once('@').expect("userinfo");
+    let url = format!("{scheme}://{role}:{password}@{host_and_path}");
+    (role, password, url)
+}
+
+async fn drop_role(role: &str) {
+    let pool = sqlx::PgPool::connect(&base_url().expect("set"))
+        .await
+        .expect("connect");
+    let _ = sqlx::raw_sql(&format!("DROP ROLE IF EXISTS {role}"))
+        .execute(&pool)
+        .await;
+    pool.close().await;
+}
+
+/// What varies between machines and runs: the throwaway database's name,
+/// the server's minor version, and on-disk sizes. Everything else is
+/// compared byte for byte.
+// Plain assignments read better in a test's normalization than `clone_into`.
+#[allow(clippy::assigning_clones)]
+fn normalized(report: &Report) -> Report {
+    let mut report = report.clone();
+    let role = format!("`{}`", report.read_only.role);
+    report.project.host = "<host>".to_owned();
+    report.project.port = 5432;
+    report.project.database = "<database>".to_owned();
+    report.project.server_version = report
+        .project
+        .server_version
+        .split('.')
+        .next()
+        .unwrap_or_default()
+        .to_owned();
+    report.read_only.role = "<role>".to_owned();
+    for table in &mut report.tables {
+        table.data_bytes = 0;
+        table.index_bytes = 0;
+    }
+    report.summary.data_bytes = 0;
+    report.summary.index_bytes = 0;
+    report.summary.estimated_transfer_seconds = 0;
+    report.warnings = report
+        .warnings
+        .iter()
+        .map(|warning| warning.replace(&role, "`<role>`"))
+        .collect();
+    report
+}
+
+#[tokio::test]
+async fn the_fixture_report_matches_its_snapshot() {
+    let Some(db) = fixture_db("supabase_snapshot").await else {
+        return;
+    };
+    let report = inspect(&InspectOptions::new(
+        PROJECT_REF,
+        Secret::new(db.url.clone()),
+    ))
+    .await
+    .expect("inspect succeeds");
+
+    // Sizes are normalized out of the snapshot, so they are checked here.
+    assert!(report.summary.data_bytes > 0);
+    assert!(report.summary.estimated_transfer_seconds >= 1);
+    assert_eq!(report.summary.storage_bytes, 20_480 + 31_744 + 12_582_912);
+
+    // The blockers the fixture plants, and only those.
+    let blockers: Vec<&str> = report
+        .findings
+        .iter()
+        .filter(|finding| finding.classification == Classification::Blocker)
+        .map(|finding| finding.id.as_str())
+        .collect();
+    assert_eq!(
+        blockers,
+        [
+            "extension:dblink",
+            "foreign_key:public.attachments.attachments_object_id_fkey"
+        ]
+    );
+    assert!(!report.summary.ready);
+    // Nothing is guessed: without a token Edge Functions are unknown.
+    assert_eq!(report.edge_functions.status, SourceStatus::NotInspected);
+    assert_eq!(report.auth.enabled_providers, None);
+    // Without a classifier, what no rule placed is left for review.
+    let review: Vec<&str> = report
+        .policies
+        .iter()
+        .filter(|policy| policy.pattern == PolicyPattern::NeedsReview)
+        .map(|policy| policy.name.as_str())
+        .collect();
+    assert_eq!(
+        review,
+        [
+            "Archived projects stay visible for a grace period",
+            "Avatar images are publicly accessible",
+            "Users upload their own avatar",
+        ]
+    );
+
+    let normalized = normalized(&report);
+    insta::assert_snapshot!("fixture-report.json", normalized.to_json());
+    insta::assert_snapshot!("fixture-report.md", normalized.to_markdown());
+
+    if std::env::var_os("FZ_WRITE_SAMPLE_REPORT").is_some() {
+        let mut sample = report.clone();
+        sample.project.host = "db.fixtureprojectref000.supabase.co".to_owned();
+        sample.project.port = 5432;
+        sample.project.database = "postgres".to_owned();
+        // `16.4 (Debian 16.4-1.pgdg120+1)` -> `16.4`.
+        sample.project.server_version = sample
+            .project
+            .server_version
+            .split(' ')
+            .next()
+            .unwrap_or_default()
+            .to_owned();
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../docs/import/supabase-report.sample.md"
+        );
+        std::fs::write(path, sample.to_markdown()).expect("write the sample");
+    }
+    db.finish().await;
+}
+
+#[tokio::test]
+async fn a_read_only_role_is_enough_and_is_recorded() {
+    let Some(db) = fixture_db("supabase_role").await else {
+        return;
+    };
+    let (role, password, url) = read_only_role(&db, "role").await;
+    let report = inspect(&InspectOptions::new(PROJECT_REF, Secret::new(url)))
+        .await
+        .expect("a role with SELECT alone can inspect");
+    assert!(report.read_only.transaction_read_only);
+    assert!(report.read_only.session_read_only);
+    assert!(report.read_only.no_transaction_id_assigned);
+    assert!(!report.read_only.role_is_superuser);
+    assert!(!report.read_only.role_can_write, "the role can write");
+    assert_eq!(report.read_only.role, role);
+    // RLS on storage.objects hides rows from a role without BYPASSRLS, and
+    // the report says so instead of reporting low numbers as exact.
+    assert!(!report.storage.counts_exact);
+    assert!(
+        report.warnings.iter().any(|w| w.contains("BYPASSRLS")),
+        "{:?}",
+        report.warnings
+    );
+    let out = format!("{}{}", report.to_json(), report.to_markdown());
+    assert!(!out.contains(&password));
+    db.finish().await;
+    drop_role(&role).await;
+}
+
+#[tokio::test]
+async fn a_write_through_the_session_is_refused_and_nothing_changes() {
+    let Some(db) = fixture_db("supabase_write").await else {
+        return;
+    };
+    // Even as the superuser: the guards are the session's, not the role's.
+    let mut session = ReadOnlySession::open(&Secret::new(db.url.clone()))
+        .await
+        .expect("open");
+    let refused = session
+        .execute_for_test("INSERT INTO public.audit_log (message) VALUES ('written')")
+        .await
+        .expect_err("a write is refused");
+    assert!(
+        refused.to_string().contains("read-only transaction"),
+        "{refused}"
+    );
+    drop(session);
+
+    let mut session = ReadOnlySession::open(&Secret::new(db.url.clone()))
+        .await
+        .expect("open");
+    let refused = session
+        .execute_for_test("CREATE TABLE public.created_by_inspect (id int)")
+        .await
+        .expect_err("DDL is refused");
+    assert!(
+        refused.to_string().contains("read-only transaction"),
+        "{refused}"
+    );
+    drop(session);
+
+    let pool = sqlx::PgPool::connect(&db.url).await.expect("connect");
+    let rows: i64 = sqlx::query_scalar("SELECT count(*) FROM public.audit_log")
+        .fetch_one(&pool)
+        .await
+        .expect("count");
+    assert_eq!(rows, 2);
+    let created: bool =
+        sqlx::query_scalar("SELECT to_regclass('public.created_by_inspect') IS NOT NULL")
+            .fetch_one(&pool)
+            .await
+            .expect("lookup");
+    assert!(!created);
+    pool.close().await;
+
+    // And a full inspection leaves the evidence that it never wrote.
+    let report = inspect(&InspectOptions::new(
+        PROJECT_REF,
+        Secret::new(db.url.clone()),
+    ))
+    .await
+    .expect("inspect");
+    assert!(report.read_only.no_transaction_id_assigned);
+    assert!(report.read_only.transaction_read_only);
+    // The superuser can write, and the report says so.
+    assert!(report.read_only.role_can_write);
+    assert!(report.warnings.iter().any(|w| w.contains("superuser")));
+    db.finish().await;
+}
+
+/// The Management API, answering by path.
+struct FakeManagement;
+
+#[async_trait]
+impl HttpClient for FakeManagement {
+    async fn send(
+        &self,
+        request: http::Request<Bytes>,
+    ) -> Result<http::Response<Bytes>, HttpError> {
+        let authorized = request
+            .headers()
+            .get(http::header::AUTHORIZATION)
+            .is_some_and(|value| value == format!("Bearer {MANAGEMENT_TOKEN}").as_str());
+        let path = request.uri().path().to_owned();
+        let (status, body) = if !authorized {
+            (401, r#"{"message":"Unauthorized"}"#.to_owned())
+        } else if path == format!("/v1/projects/{PROJECT_REF}/functions") {
+            (
+                200,
+                r#"[{"id":"f2","slug":"stripe-webhook","name":"stripe-webhook","status":"ACTIVE","version":7,"verify_jwt":false},
+                    {"id":"f1","slug":"send-welcome","name":"send-welcome","status":"ACTIVE","version":3,"verify_jwt":true}]"#
+                    .to_owned(),
+            )
+        } else if path == format!("/v1/projects/{PROJECT_REF}/config/auth") {
+            (
+                200,
+                format!(
+                    r#"{{"external_email_enabled":true,"external_google_enabled":true,
+                        "external_google_secret":"{AUTH_CONFIG_SECRET}","external_github_enabled":true,
+                        "external_apple_enabled":false,"external_phone_enabled":false,
+                        "mfa_totp_enroll_enabled":true,"smtp_pass":"{SMTP_PASSWORD}","jwt_exp":3600}}"#
+                ),
+            )
+        } else {
+            (404, "{}".to_owned())
+        };
+        Ok(http::Response::builder()
+            .status(status)
+            .body(Bytes::from(body))
+            .expect("a response"))
+    }
+}
+
+#[tokio::test]
+async fn credentials_and_secrets_never_reach_the_report() {
+    let Some(db) = fixture_db("supabase_secrets").await else {
+        return;
+    };
+    let (role, password, url) = read_only_role(&db, "secrets").await;
+    let mut options = InspectOptions::new(PROJECT_REF, Secret::new(url.clone()));
+    options.management = Some(ManagementApi::new(
+        Arc::new(FakeManagement),
+        "https://api.supabase.test",
+        Secret::new(MANAGEMENT_TOKEN),
+    ));
+    let report = inspect(&options).await.expect("inspect");
+
+    assert_eq!(report.coverage.management_api, SourceStatus::Inspected);
+    let slugs: Vec<&str> = report
+        .edge_functions
+        .functions
+        .iter()
+        .map(|function| function.slug.as_str())
+        .collect();
+    assert_eq!(slugs, ["send-welcome", "stripe-webhook"]);
+    assert_eq!(
+        report.auth.enabled_providers.as_deref(),
+        Some(["email", "github", "google"].map(str::to_owned).as_slice())
+    );
+    assert_eq!(
+        report.auth.enabled_mfa.as_deref(),
+        Some(["totp".to_owned()].as_slice())
+    );
+
+    let out = format!("{}\n{}\n{report:?}", report.to_json(), report.to_markdown());
+    for secret in [
+        password.as_str(),
+        url.as_str(),
+        MANAGEMENT_TOKEN,
+        AUTH_CONFIG_SECRET,
+        SMTP_PASSWORD,
+        // No email and no password hash, either.
+        "@example.test",
+        "$2a$10$",
+    ] {
+        assert!(!out.contains(secret), "the output contains {secret:?}");
+    }
+    // The connection appears as host and database only.
+    assert_eq!(report.project.database, db.url.rsplit('/').next().unwrap());
+
+    // A wrong token is an access error, and its message quotes no token.
+    let mut options = InspectOptions::new(PROJECT_REF, Secret::new(url));
+    options.management = Some(ManagementApi::new(
+        Arc::new(FakeManagement),
+        "https://api.supabase.test",
+        Secret::new("sbp_wrong_token_also_never_printed"),
+    ));
+    let error = inspect(&options).await.expect_err("refused");
+    assert!(error.is_access());
+    assert!(!error.to_string().contains("sbp_"), "{error}");
+    db.finish().await;
+    drop_role(&role).await;
+}
+
+#[tokio::test]
+async fn a_connection_failure_never_quotes_the_url() {
+    let url = "postgres://inspect:hunter2-fixture-password@127.0.0.1:1/postgres";
+    let error = inspect(&InspectOptions::new(PROJECT_REF, Secret::new(url)))
+        .await
+        .expect_err("nothing listens on port 1");
+    assert!(matches!(error, InspectError::Connect(_)), "{error:?}");
+    assert!(error.is_access());
+    assert!(!error.to_string().contains("hunter2"), "{error}");
+    assert!(!format!("{error:?}").contains("hunter2"));
+}
+
+/// A classifier with a fixed answer per expression, recording what it was
+/// sent.
+struct FakeJudge {
+    seen: std::sync::Arc<tokio::sync::Mutex<Vec<String>>>,
+}
+
+#[async_trait]
+impl Classifier for FakeJudge {
+    fn profile(&self) -> ClassifierProfile {
+        ClassifierProfile::new(Calibration::Classifier, 96_000)
+    }
+
+    async fn ask(
+        &self,
+        state: &str,
+        questions: &BTreeMap<String, Question>,
+    ) -> Result<BTreeMap<String, Answer>, ClassifierError> {
+        cratefield_core::validate_questions(questions)?;
+        self.seen.lock().await.push(state.to_owned());
+        let (label, confidence) = if state.contains("interval") {
+            ("custom_logic", 0.93)
+        } else if state.contains("auth.uid()") {
+            ("owner_only", 0.85)
+        } else {
+            ("public_read", 0.6)
+        };
+        let probabilities = BTreeMap::from([(label.to_owned(), confidence)]);
+        Ok(questions
+            .keys()
+            .map(|id| (id.clone(), Answer::choice(label, probabilities.clone())))
+            .collect())
+    }
+}
+
+async fn classified(db: &TempDb, threshold: f32) -> (Report, Vec<String>) {
+    let seen = std::sync::Arc::new(tokio::sync::Mutex::new(Vec::new()));
+    let mut options = InspectOptions::new(PROJECT_REF, Secret::new(db.url.clone()));
+    options.classifier = Some(Arc::new(FakeJudge { seen: seen.clone() }));
+    options.classify_threshold = threshold;
+    let report = inspect(&options).await.expect("inspect");
+    let states = seen.lock().await.clone();
+    (report, states)
+}
+
+#[tokio::test]
+async fn the_classifier_places_only_what_the_rules_left_and_respects_the_threshold() {
+    let Some(db) = fixture_db("supabase_judge").await else {
+        return;
+    };
+    let (report, states) = classified(&db, 0.8).await;
+    assert_eq!(report.coverage.policy_classifier, SourceStatus::Inspected);
+    // Asked about the three unplaced policies only.
+    assert_eq!(states.len(), 3);
+    let by_name = |name: &str| {
+        report
+            .policies
+            .iter()
+            .find(|policy| policy.name == name)
+            .expect("the policy")
+    };
+    let grace = by_name("Archived projects stay visible for a grace period");
+    assert_eq!(grace.pattern, PolicyPattern::CustomLogic);
+    assert_eq!(grace.source, PolicySource::Classifier);
+    assert!((grace.confidence - 0.93).abs() < 1e-6);
+    let upload = by_name("Users upload their own avatar");
+    assert_eq!(upload.pattern, PolicyPattern::OwnerOnly);
+    let public = by_name("Avatar images are publicly accessible");
+    assert_eq!(public.pattern, PolicyPattern::NeedsReview);
+    assert_eq!(public.classifier_label.as_deref(), Some("public_read"));
+    // A rule match is never sent and keeps confidence 1.0.
+    let own = by_name("Users can update own profile.");
+    assert_eq!(own.source, PolicySource::Rule);
+    assert!((own.confidence - 1.0).abs() < f32::EPSILON);
+    // Advisory only: every policy still needs its own disposition, and its
+    // stub fails until someone writes the test.
+    for policy in &report.policies {
+        assert_eq!(
+            policy.disposition,
+            cratefield_import_supabase::Disposition::Undecided
+        );
+        assert!(policy.test_stub.contains("todo!("), "{}", policy.test_stub);
+        let finding = report
+            .findings
+            .iter()
+            .find(|finding| {
+                finding.id == format!("policy:{}.{}.{}", policy.schema, policy.table, policy.name)
+            })
+            .expect("a finding per policy");
+        assert_eq!(finding.classification, Classification::NeedsWork);
+    }
+    // SQL and names only: no row value from the fixture reached it.
+    for state in &states {
+        for row_value in ["example.test", "Difference engine", "ada.png", "Analytical"] {
+            assert!(!state.contains(row_value), "{state}");
+        }
+    }
+
+    // A higher threshold sends the 0.85 answer back to review.
+    let (report, _) = classified(&db, 0.9).await;
+    let upload = report
+        .policies
+        .iter()
+        .find(|policy| policy.name == "Users upload their own avatar")
+        .expect("the policy");
+    assert_eq!(upload.pattern, PolicyPattern::NeedsReview);
+    assert_eq!(upload.classifier_label.as_deref(), Some("owner_only"));
+    db.finish().await;
+}
