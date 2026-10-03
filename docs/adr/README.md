@@ -120,6 +120,19 @@ API is the truth; Stripe stays the authority for Stripe money. What an
 entitlement unlocks, its prices, and a flagged account's fate beyond the
 configured default stay venture code.
 
+ADR 0026 moves a Supabase project onto the harness (#657): one
+native-only phase engine (`cratefield-import-supabase`, not yet written)
+drives both `fz import supabase` and a dashboard button, and both produce
+the same plan and the same report. The Supabase `public` schema becomes a
+per-venture `app` schema that harness migrations do not manage, so ADR
+0008's no-RLS and no-search_path rules hold; data streams through COPY
+with a checksum per table, auth users move through #650's import path
+(bcrypt kept for verify-and-upgrade, the Supabase id kept as the external
+id), and objects go to R2. RLS policies and everything else the database
+cannot carry are reported, never guessed, and each needs a disposition
+before a cutover that is the DATA-MOVE switch — with a rollback window
+and a generated decommission checklist.
+
 [0102](0102-crypto-crate.md) chose the crypto crate: RustCrypto's
 `chacha20poly1305`.
 

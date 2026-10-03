@@ -1251,6 +1251,7 @@ name = "cratefield-control-plane"
 version = "0.1.1"
 dependencies = [
  "axum",
+ "cratefield-adapter-resend",
  "cratefield-chrome",
  "cratefield-console",
  "cratefield-core",
@@ -2656,10 +2657,14 @@ name = "factory0-auth-worker"
 version = "0.1.1"
 dependencies = [
  "async-trait",
+ "axum",
+ "cratefield-adapter-owlpost",
  "cratefield-adapter-resend",
+ "cratefield-adapter-sqlite",
  "cratefield-adapter-turnstile",
  "cratefield-core",
  "cratefield-runtime-cloudflare",
+ "cratefield-testing",
  "factory0-auth-core",
  "factory0-auth-magic-link",
  "factory0-auth-meta",
@@ -2667,6 +2672,11 @@ dependencies = [
  "factory0-auth-passkeys",
  "factory0-auth-password",
  "getrandom 0.4.3",
+ "http",
+ "pollster",
+ "serde_json",
+ "tower",
+ "url",
  "worker",
 ]
 

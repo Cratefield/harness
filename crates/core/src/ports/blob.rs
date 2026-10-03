@@ -22,6 +22,31 @@ use thiserror::Error;
 /// self-hosted process or an isolate that buffers the bytes.
 pub const MAX_BLOB_BYTES: usize = 10 * 1024 * 1024;
 
+/// The longest presign lifetime a store accepts: seven days, the S3 maximum.
+/// [`ScopedBlob`] refuses a longer one before any adapter sees it
+/// (issue #622).
+pub const MAX_PRESIGN_TTL: Duration = Duration::from_hours(7 * 24);
+
+/// The presign lifetime a caller gets when it does not choose one: one hour —
+/// long enough for a browser to fetch or upload, short enough that a leaked
+/// URL ages out (issue #622).
+pub const DEFAULT_PRESIGN_TTL: Duration = Duration::from_hours(1);
+
+/// Rejects a presign lifetime outside `1 s ..= MAX_PRESIGN_TTL` before any
+/// store sees it (issue #622): a sub-second TTL truncates to `X-Amz-Expires=0`
+/// — an already-dead URL — and [`BlobError`] is not `#[non_exhaustive]`, so
+/// this reuses [`BlobError::Operation`] rather than adding a variant.
+fn check_presign_ttl(ttl: Duration) -> Result<(), BlobError> {
+    if ttl < Duration::from_secs(1) || ttl > MAX_PRESIGN_TTL {
+        return Err(BlobError::Operation(format!(
+            "presign ttl must be between 1 and {} seconds, got {}",
+            MAX_PRESIGN_TTL.as_secs(),
+            ttl.as_secs(),
+        )));
+    }
+    Ok(())
+}
+
 /// Rejects a write whose payload exceeds [`MAX_BLOB_BYTES`] (issue #136).
 /// Every [`Blob::put`] implementation MUST call this before touching
 /// storage; [`ScopedBlob`] (the module-facing wrapper) already does, so
@@ -66,6 +91,21 @@ pub enum BlobError {
     Unsupported(String),
 }
 
+/// A presigned upload: the URL to `PUT` to, the method, and the headers the
+/// client must send **exactly** — the signature covers each signed header, so
+/// a different value is refused by the store (issue #622).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PresignedPut {
+    /// The `https://…` URL, query string and all. A bearer credential until
+    /// it expires: never log it.
+    pub url: String,
+    /// Always `"PUT"`; carried so a caller need not hard-code it.
+    pub method: &'static str,
+    /// Headers the client must send with exactly these values (e.g.
+    /// `Content-Type`, `Content-Length`).
+    pub headers: Vec<(String, String)>,
+}
+
 /// A blob store. Keys are module-prefixed; the harness wraps this in a
 /// [`ScopedBlob`] per module so a module cannot name another's objects.
 #[async_trait]
@@ -79,11 +119,32 @@ pub trait Blob: Send + Sync {
     async fn get(&self, key: &str) -> Result<Option<BlobObject>, BlobError>;
     /// Removes the object at `key`. Idempotent: removing a missing key is `Ok`.
     async fn delete(&self, key: &str) -> Result<(), BlobError>;
-    /// A URL that serves the object directly for `ttl`, skipping the Worker.
-    /// Adapters without presigned URLs (a directory store) return
-    /// [`BlobError::Unsupported`]; callers then serve the bytes through
-    /// [`get`](Blob::get).
+    /// A presigned `GET` for `key`, valid for `ttl`: a URL that serves the
+    /// object directly, skipping the Worker. Adapters without presigned URLs
+    /// (a directory store) return [`BlobError::Unsupported`]; callers then
+    /// serve the bytes through [`get`](Blob::get). The URL's query string is
+    /// a bearer credential: never log it.
     async fn signed_url(&self, key: &str, ttl: Duration) -> Result<String, BlobError>;
+    /// A presigned `PUT` for `key` with `content_type`, valid for `ttl`.
+    ///
+    /// The signature cannot cover the body, but when `content_length` is
+    /// `Some` adapters sign `Content-Length` for that value, so a store that
+    /// honours it rejects any other size. The returned [`PresignedPut`] names
+    /// the headers the client must send exactly. Adapters without presigned
+    /// URLs return [`BlobError::Unsupported`] (the default). The URL's query
+    /// string is a bearer credential: never log it.
+    async fn signed_put_url(
+        &self,
+        key: &str,
+        content_type: &str,
+        content_length: Option<u64>,
+        ttl: Duration,
+    ) -> Result<PresignedPut, BlobError> {
+        let _ = (key, content_type, content_length, ttl);
+        Err(BlobError::Unsupported(
+            "this blob store has no presigned uploads".to_owned(),
+        ))
+    }
 }
 
 /// Wraps a [`Blob`] so every key is prefixed with `<module>/` and no key can
@@ -138,7 +199,22 @@ impl Blob for ScopedBlob {
         self.inner.delete(&self.scope(key)?).await
     }
     async fn signed_url(&self, key: &str, ttl: Duration) -> Result<String, BlobError> {
-        self.inner.signed_url(&self.scope(key)?, ttl).await
+        let key = self.scope(key)?;
+        check_presign_ttl(ttl)?;
+        self.inner.signed_url(&key, ttl).await
+    }
+    async fn signed_put_url(
+        &self,
+        key: &str,
+        content_type: &str,
+        content_length: Option<u64>,
+        ttl: Duration,
+    ) -> Result<PresignedPut, BlobError> {
+        let key = self.scope(key)?;
+        check_presign_ttl(ttl)?;
+        self.inner
+            .signed_put_url(&key, content_type, content_length, ttl)
+            .await
     }
 }
 
@@ -156,6 +232,9 @@ mod tests {
     #[derive(Default)]
     struct MemBlob {
         objects: Mutex<std::collections::HashMap<String, BlobObject>>,
+        /// The keys the presign methods were reached with, so a test can prove
+        /// a refused call never arrived.
+        presigned: Mutex<Vec<String>>,
     }
 
     #[async_trait]
@@ -175,6 +254,46 @@ mod tests {
         }
         async fn delete(&self, key: &str) -> Result<(), BlobError> {
             self.objects.lock().unwrap().remove(key);
+            Ok(())
+        }
+        async fn signed_url(&self, key: &str, _ttl: Duration) -> Result<String, BlobError> {
+            self.presigned.lock().unwrap().push(key.to_owned());
+            Ok(format!("mem://{key}"))
+        }
+        async fn signed_put_url(
+            &self,
+            key: &str,
+            content_type: &str,
+            _content_length: Option<u64>,
+            _ttl: Duration,
+        ) -> Result<PresignedPut, BlobError> {
+            self.presigned.lock().unwrap().push(key.to_owned());
+            Ok(PresignedPut {
+                url: format!("mem://{key}"),
+                method: "PUT",
+                headers: vec![("content-type".to_owned(), content_type.to_owned())],
+            })
+        }
+    }
+
+    /// Implements only the required [`Blob`] methods, so the provided
+    /// [`Blob::signed_put_url`] default is what a test exercises.
+    struct BareBlob;
+
+    #[async_trait]
+    impl Blob for BareBlob {
+        async fn put(
+            &self,
+            _key: &str,
+            _bytes: &[u8],
+            _content_type: &str,
+        ) -> Result<(), BlobError> {
+            Ok(())
+        }
+        async fn get(&self, _key: &str) -> Result<Option<BlobObject>, BlobError> {
+            Ok(None)
+        }
+        async fn delete(&self, _key: &str) -> Result<(), BlobError> {
             Ok(())
         }
         async fn signed_url(&self, _key: &str, _ttl: Duration) -> Result<String, BlobError> {
@@ -235,5 +354,96 @@ mod tests {
             .put("edge.bin", &exact, "application/octet-stream")
             .await
             .expect("the bound itself is allowed");
+    }
+
+    #[pollster::test]
+    async fn a_scoped_blob_prefixes_both_presign_keys() {
+        let mem = Arc::new(MemBlob::default());
+        let scoped = ScopedBlob::new(mem.clone(), "cms");
+        let get = scoped
+            .signed_url("clip.mp3", Duration::from_secs(60))
+            .await
+            .unwrap();
+        assert_eq!(get, "mem://cms/clip.mp3");
+        let put = scoped
+            .signed_put_url("clip.mp3", "audio/mpeg", Some(3), Duration::from_secs(60))
+            .await
+            .unwrap();
+        assert_eq!(put.url, "mem://cms/clip.mp3");
+        assert_eq!(
+            *mem.presigned.lock().unwrap(),
+            vec!["cms/clip.mp3".to_owned(), "cms/clip.mp3".to_owned()],
+        );
+    }
+
+    #[pollster::test]
+    async fn a_scoped_blob_refuses_an_escaping_presign_key_before_the_store() {
+        let mem = Arc::new(MemBlob::default());
+        let scoped = ScopedBlob::new(mem.clone(), "cms");
+        for bad in ["", "/etc/passwd", "../secrets/x"] {
+            assert!(
+                matches!(
+                    scoped
+                        .signed_url(bad, Duration::from_secs(60))
+                        .await
+                        .unwrap_err(),
+                    BlobError::BadKey(_)
+                ),
+                "key `{bad}` should be refused"
+            );
+            assert!(
+                matches!(
+                    scoped
+                        .signed_put_url(bad, "image/png", None, Duration::from_secs(60))
+                        .await
+                        .unwrap_err(),
+                    BlobError::BadKey(_)
+                ),
+                "key `{bad}` should be refused"
+            );
+        }
+        assert!(
+            mem.presigned.lock().unwrap().is_empty(),
+            "the store never saw a key"
+        );
+    }
+
+    #[pollster::test]
+    async fn a_scoped_blob_refuses_a_presign_ttl_outside_the_bound() {
+        let mem = Arc::new(MemBlob::default());
+        let scoped = ScopedBlob::new(mem.clone(), "cms");
+        for bad in [
+            // A sub-second TTL truncates to `X-Amz-Expires=0`, so it is
+            // refused alongside zero and over-long ones.
+            Duration::from_millis(500),
+            Duration::ZERO,
+            MAX_PRESIGN_TTL + Duration::from_secs(1),
+        ] {
+            assert!(
+                matches!(
+                    scoped.signed_url("clip.mp3", bad).await.unwrap_err(),
+                    BlobError::Operation(_)
+                ),
+                "ttl {bad:?} should be refused"
+            );
+        }
+        // The bound itself is allowed, and the store is reached.
+        scoped
+            .signed_url("clip.mp3", MAX_PRESIGN_TTL)
+            .await
+            .unwrap();
+        assert_eq!(mem.presigned.lock().unwrap().len(), 1);
+    }
+
+    #[pollster::test]
+    async fn the_default_signed_put_url_is_unsupported() {
+        let scoped = ScopedBlob::new(Arc::new(BareBlob), "cms");
+        assert!(matches!(
+            scoped
+                .signed_put_url("clip.mp3", "audio/mpeg", None, Duration::from_secs(60))
+                .await
+                .unwrap_err(),
+            BlobError::Unsupported(_)
+        ));
     }
 }

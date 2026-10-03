@@ -1,0 +1,80 @@
+# npm publish pipeline for @cratefield/auth (packages/auth-ts).
+#
+# Publishing uses npm trusted publishing: GitHub OIDC (`id-token: write`)
+# authenticates to npmjs.com, so no NPM_TOKEN lives in this repo — the shape
+# release.yml uses for crates.io. Before the first publish, configure this
+# repo and this workflow file as the package's trusted publisher on npmjs.com,
+# or npm refuses the OIDC publish. Trusted publishing also attaches a
+# provenance attestation automatically, so the publish needs no --provenance.
+#
+# This workflow is also the package's CI: a pull request touching the package
+# (or the workspace manifest/lockfile) runs the same typecheck/test/build and
+# a `--dry-run` publish, so ci.yml stays Rust-only.
+#
+# Triggers: a `push` tag `auth-ts-v*` publishes for real; `workflow_dispatch`
+# runs by hand with `dry_run` defaulting to true; a `pull_request` dry-runs.
+
+name: Publish @cratefield/auth
+
+on:
+  push:
+    tags:
+      - 'auth-ts-v*'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Add --dry-run to npm publish (leave on to rehearse)"
+        type: boolean
+        default: true
+  pull_request:
+    paths:
+      - 'packages/auth-ts/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - '.github/workflows/publish-auth-ts.yml'
+
+jobs:
+  publish:
+    # No `#` in the name: GitHub truncates a check-run name there (issue #34).
+    name: publish @cratefield/auth from packages/auth-ts
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # npm trusted publishing (OIDC) and provenance
+    steps:
+      - uses: actions/checkout@v4
+      # Node 24, not the 22 the other JS jobs use: trusted publishing needs
+      # npm >= 11.5, which ships with Node 24. registry-url so npm resolves
+      # the registry for both the publish and the OIDC handshake.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+      - run: npm ci
+      # The workerd test leg carries its linux-x64 binary in the npm package.
+      - run: npm run typecheck -w @cratefield/auth
+      - run: npm test -w @cratefield/auth
+      - run: npm run build -w @cratefield/auth
+      # Only a tag authorises a real publish, so it must name the version.
+      - name: Tag version must match packages/auth-ts/package.json
+        if: startsWith(github.ref, 'refs/tags/auth-ts-v')
+        run: |
+          tag="${GITHUB_REF_NAME#auth-ts-v}"
+          pkg="$(node -p "require('./packages/auth-ts/package.json').version")"
+          if [ "$tag" != "$pkg" ]; then
+            echo "::error::tag auth-ts-v$tag does not match package.json version $pkg"
+            exit 1
+          fi
+      # A tag publishes; a dispatch publishes only when dry_run is unticked; a
+      # pull_request always dry-runs. `--provenance` is only for the real
+      # publish: trusted publishing generates it automatically, and a dry run
+      # has nothing to attest to.
+      - name: Publish
+        env:
+          DRY_RUN: ${{ github.event_name == 'pull_request' || inputs.dry_run }}
+        run: |
+          if [ "$DRY_RUN" = "true" ]; then
+            npm publish -w @cratefield/auth --dry-run
+          else
+            npm publish -w @cratefield/auth --provenance --access public
+          fi

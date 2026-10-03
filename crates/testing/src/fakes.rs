@@ -13,6 +13,7 @@
 
 use async_trait::async_trait;
 use bytes::Bytes;
+use cratefield_core::sigv4::{self, Credentials, SigV4Error, SignableRequest};
 use cratefield_core::{
     Answer, AnswerValue, Calibration, Captcha, CaptchaError, CertificateStatus, Classifier,
     ClassifierError, ClassifierProfile, Clock, Completion, Credential, CustomHostname,
@@ -608,18 +609,38 @@ impl cratefield_core::Dispatcher for FakeDispatcher {
     }
 }
 
-/// An in-memory [`cratefield_core::Blob`] store for module tests: keeps objects
-/// in a map, and has no presigned URLs (so `signed_url` reports `Unsupported`,
-/// as a directory store does).
+/// An in-memory [`cratefield_core::Blob`] store for module tests.
+/// [`MemoryBlob::new`] has no presigned URLs (`signed_url` reports
+/// `Unsupported`, as a directory store does); [`MemoryBlob::with_presign`] signs
+/// real `SigV4` URLs that [`MemoryBlob::verify_presigned`] checks back.
 #[derive(Clone, Default)]
 pub struct MemoryBlob {
     objects: Arc<std::sync::Mutex<std::collections::HashMap<String, cratefield_core::BlobObject>>>,
+    /// The clock presigning stamps from; `Some` once `with_presign` is called.
+    presign_clock: Option<Arc<dyn Clock>>,
 }
+
+/// The fixed, obviously fake presigning identity, stable so a test can assert
+/// on the URL text. `blob.test` is reserved for documentation (RFC 2606).
+const PRESIGN_ACCESS_KEY_ID: &str = "AKIATESTACCESSKEY000000";
+const PRESIGN_SECRET_ACCESS_KEY: &str = "memory-blob-presign-test-secret";
+const PRESIGN_HOST: &str = "blob.test";
 
 impl MemoryBlob {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Opts the store into presigning: `signed_url` and `signed_put_url` sign
+    /// real `SigV4` URLs stamped from `clock`, checked back by
+    /// [`verify_presigned`](Self::verify_presigned).
+    #[must_use]
+    pub fn with_presign(clock: Arc<dyn Clock>) -> Self {
+        Self {
+            presign_clock: Some(clock),
+            ..Self::default()
+        }
     }
 
     /// How many objects are stored, for assertions.
@@ -632,6 +653,70 @@ impl MemoryBlob {
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.len() == 0
+    }
+
+    /// Signs `method` on `key` (used verbatim as the URL path — keep test keys
+    /// URL-safe) with `headers`, or `Unsupported` without `with_presign`.
+    fn presign(
+        &self,
+        method: &str,
+        key: &str,
+        headers: &[(String, String)],
+        ttl: Duration,
+    ) -> Result<String, cratefield_core::BlobError> {
+        let clock = self
+            .presign_clock
+            .as_ref()
+            .ok_or_else(|| cratefield_core::BlobError::Unsupported("no presigner".to_owned()))?;
+        let path = format!("/{key}");
+        let request = SignableRequest {
+            method,
+            host: PRESIGN_HOST,
+            path: &path,
+            query: &[],
+            headers,
+        };
+        Ok(sigv4::presign(
+            &Credentials::new(PRESIGN_ACCESS_KEY_ID, PRESIGN_SECRET_ACCESS_KEY),
+            "auto",
+            "s3",
+            &request,
+            ttl.as_secs(),
+            clock.now(),
+        ))
+    }
+
+    /// Verifies a URL this store minted, at its clock's current time, and
+    /// returns the key it names.
+    ///
+    /// # Errors
+    ///
+    /// As [`sigv4::verify_presigned`](cratefield_core::sigv4::verify_presigned),
+    /// or [`SigV4Error::Malformed`] without a clock or a URL path.
+    pub fn verify_presigned(
+        &self,
+        url: &str,
+        method: &str,
+        headers: &[(String, String)],
+    ) -> Result<String, SigV4Error> {
+        let clock = self
+            .presign_clock
+            .as_ref()
+            .ok_or_else(|| SigV4Error::Malformed("no presigning clock".to_owned()))?;
+        let credentials = Credentials::new(PRESIGN_ACCESS_KEY_ID, PRESIGN_SECRET_ACCESS_KEY);
+        sigv4::verify_presigned(
+            url,
+            method,
+            headers,
+            &credentials,
+            "auto",
+            "s3",
+            clock.now(),
+        )?;
+        url.split_once("://")
+            .and_then(|(_, rest)| rest.split_once('/'))
+            .map(|(_, path)| path.split(['?', '#']).next().unwrap_or(path).to_owned())
+            .ok_or_else(|| SigV4Error::Malformed("not an absolute URL".to_owned()))
     }
 }
 
@@ -665,12 +750,27 @@ impl cratefield_core::Blob for MemoryBlob {
     }
     async fn signed_url(
         &self,
-        _key: &str,
-        _ttl: std::time::Duration,
+        key: &str,
+        ttl: std::time::Duration,
     ) -> Result<String, cratefield_core::BlobError> {
-        Err(cratefield_core::BlobError::Unsupported(
-            "in-memory store has no presigned URLs".to_owned(),
-        ))
+        self.presign("GET", key, &[], ttl)
+    }
+    async fn signed_put_url(
+        &self,
+        key: &str,
+        content_type: &str,
+        content_length: Option<u64>,
+        ttl: std::time::Duration,
+    ) -> Result<cratefield_core::PresignedPut, cratefield_core::BlobError> {
+        let mut headers = vec![("content-type".to_owned(), content_type.to_owned())];
+        if let Some(length) = content_length {
+            headers.push(("content-length".to_owned(), length.to_string()));
+        }
+        Ok(cratefield_core::PresignedPut {
+            url: self.presign("PUT", key, &headers, ttl)?,
+            method: "PUT",
+            headers,
+        })
     }
 }
 
@@ -2109,6 +2209,7 @@ impl CustomHostnames for FakeCustomHostnames {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use cratefield_core::Blob as _;
 
     fn json_body(response: &Response<Bytes>) -> serde_json::Value {
         serde_json::from_slice(response.body()).expect("the body is json")
@@ -2156,5 +2257,36 @@ mod tests {
         assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
         assert_eq!(response.headers()[RETRY_AFTER], "7");
         assert_eq!(json_body(&response)["detail"], "slow down");
+    }
+
+    #[pollster::test]
+    async fn memory_blob_presigns_and_verifies_back() {
+        // A clock dated in the past: a URL it stamps is expired if verification
+        // reads the wall clock instead of the store's.
+        let at = time::OffsetDateTime::from_unix_timestamp(1_577_836_800).expect("a valid epoch");
+        let blob = MemoryBlob::with_presign(Arc::new(FixedClock(at)));
+        let ttl = Duration::from_secs(3600);
+
+        let get = blob.signed_url("cms/clip.mp3", ttl).await.unwrap();
+        assert!(get.starts_with("https://blob.test/cms/clip.mp3?"), "{get}");
+        assert_eq!(
+            blob.verify_presigned(&get, "GET", &[]).unwrap(),
+            "cms/clip.mp3"
+        );
+
+        let put = blob
+            .signed_put_url("cms/clip.mp3", "audio/mpeg", Some(3), ttl)
+            .await
+            .unwrap();
+        assert_eq!((put.method, put.headers.len()), ("PUT", 2));
+        assert!(blob.verify_presigned(&put.url, "PUT", &put.headers).is_ok());
+        // A header the URL was not signed for is refused.
+        assert!(blob.verify_presigned(&put.url, "PUT", &[]).is_err());
+
+        // Without presigning, the Unsupported default stands.
+        assert!(matches!(
+            MemoryBlob::new().signed_url("k", ttl).await.unwrap_err(),
+            cratefield_core::BlobError::Unsupported(_)
+        ));
     }
 }
