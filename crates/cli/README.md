@@ -14,7 +14,7 @@
 
 The venture CLI: `fz migrations collect`, `fz migrations apply`, `fz
 data export` / `fz data import`, `fz doctor`, `fz modules`, `fz push`,
-the TypeScript client generator `fz client-ts` (issue #155), and the
+`fz import supabase inspect` (issue #658), the TypeScript client generator `fz client-ts` (issue #155), and the
 agent-safe manifest workflow — `fz plan`, `fz deploy --plan`, `fz add`,
 `fz init`, `fz verify` (harness #140).
 
@@ -363,6 +363,31 @@ subscription's path, because a path-bearing `aud` is the commonest cause of
 a VAPID `401`. Catches an endpoint that is not an absolute http(s) URL, a
 `p256dh` that is not a 65-byte uncompressed P-256 point on the curve, and an
 `auth` that is not 16 bytes.
+
+## `fz import supabase inspect --project <ref> [--json|--md] [--out FILE]` (issue #658)
+
+Step one of moving a Supabase project onto the harness (ADR 0026): connects
+**read-only** to the project's Postgres — and, with a token, the Supabase
+Management API — and writes the migration report, every item automatic,
+needs work or a blocker, with sizes and a transfer estimate. Markdown by
+default, `--json` for the later steps and the dashboard. The database URL
+comes from `SUPABASE_DB_URL` (or `--db-url`), the token from
+`SUPABASE_ACCESS_TOKEN` (or `--management-token`); `fz` never prompts, never
+prints them, and the report names the database by host and database only.
+`--classify` asks the `TypeSafe` classifier (`TYPESAFE_API_KEY`) to label the
+RLS policies no rule placed, advisory only. The exit code is non-zero for a
+refused input, a connection or a permission error — never for a blocker.
+
+The engine reads Postgres through sqlx, so it is behind a feature, for the
+reason `push-send` is:
+
+```sh
+cargo install cratefield-cli --features import-supabase
+```
+
+Without it the command parses and says what to install. The whole guide —
+the read-only role to create, how to read the report — is
+`docs/import/supabase.md`.
 
 ## `fz build-key <manifest> [--catalog PATH]` (issue #59)
 

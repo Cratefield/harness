@@ -36,7 +36,9 @@ crates (`cratefield-core` and friends on crates.io), not on a git revision.
 Its own crates stay `factory0-auth-*` and are never published: they are
 Factory Zero's service, not part of the harness (harness ADR 0011). Read
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for how it fits, what was
-validated before the issues were written, and what is deferred.
+validated before the issues were written, and what is deferred. Deploying your
+own instance, and rotating signing keys or client secrets, is
+[docs/auth/DEPLOYING.md](docs/auth/DEPLOYING.md).
 
 ## How a venture uses it
 
@@ -48,6 +50,8 @@ validated before the issues were written, and what is deferred.
    single-use refresh token.
 4. Verify tokens locally with `cratefield-auth-client`, which fetches and caches
    the published JWKS and checks the audience so nobody has to remember to.
+   TypeScript web apps do the same with `@cratefield/auth`; see
+   [WEB-APPS.md](WEB-APPS.md).
 
 ## Modules
 

@@ -40,6 +40,9 @@ mod scheduled;
 mod scope;
 mod sidecar;
 mod signer;
+// The `Blob` port's presigned URLs (issue #622); pure `SigV4`, public so
+// adapters and tests share one implementation.
+pub mod sigv4;
 mod stream;
 mod surface;
 mod template;
@@ -129,6 +132,13 @@ pub use ports::{
     VectorRecord, Verdict, WebhookEvent, check_blob_size, check_hostname, declared_content_length,
     receive_status, retry_after, timeout, ttl_secs, validate_questions,
 };
+// The dispute and portal types on `Payments` (issues #589, #602, #690).
+pub use ports::{
+    Dispute, DisputeListRequest, DisputePage, DisputePhase, DisputeStatus, PortalSession,
+    PortalSessionRequest,
+};
+// The Blob presign API (issue #622), kept out of the wholesale block above.
+pub use ports::{DEFAULT_PRESIGN_TTL, MAX_PRESIGN_TTL, PresignedPut};
 pub use problem::{ABOUT_BLANK, Problem};
 // `Slugs` is exported beside the `SLUGS` value it types. Without it a
 // caller can read `SLUGS.validation_failed` and cannot write a function

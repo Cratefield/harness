@@ -1,0 +1,52 @@
+[package]
+name = "cratefield-import-supabase"
+description = "Read-only inspection of a Supabase project and the migration report the Supabase importer is planned from (ADR 0026)"
+readme = "README.md"
+keywords = ["cratefield", "supabase", "postgres", "migration", "import"]
+categories = ["database", "command-line-utilities"]
+include = ["src/**/*", "README.md"]
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+# The `HttpClient` port the Management API is reached through, the
+# `Classifier` port the RLS policies the rules cannot place are asked
+# about, and `scrub_text`, which every free-text SQL fragment in the report
+# passes through (ADR 0026, Decision 2).
+cratefield-core = { workspace = true }
+bytes = { workspace = true }
+http = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+# The database URL and the Management API token are cleared on drop.
+zeroize = { workspace = true }
+# Parses the connection string so the report can name its host and
+# database and nothing else.
+url = { workspace = true, features = ["std"] }
+
+# Native only, like the adapter it reads the same way (ADR 0026, Decision
+# 1): the sqlx driver does not compile to wasm, and an importer is a
+# command an operator runs, never something a Worker serves. The version
+# and features are the ones `cratefield-adapter-postgres` pins.
+[target.'cfg(not(any(target_arch = "wasm32", target_arch = "wasm64")))'.dependencies]
+sqlx = { version = "0.8.6", default-features = false, features = [
+    "postgres",
+    "runtime-tokio",
+    "tls-rustls",
+] }
+
+[dev-dependencies]
+# The per-test throwaway databases on `FZ_TEST_POSTGRES_URL` every other
+# Postgres test in the workspace uses. Path-only: a dev-dependency is
+# stripped from the packaged manifest (see the root manifest).
+cratefield-adapter-postgres = { path = "../adapter-postgres" }
+tokio = { workspace = true, features = ["sync"] }
+async-trait = { workspace = true }
+insta = { workspace = true }

@@ -1,8 +1,8 @@
 //! The `Tracker` port (issue #431): filing a ticket into *someone else's*
 //! tracker — a GitHub repo, a Jira site, a Linear team, a Zendesk subdomain,
 //! a Freshdesk portal, Intercom, a Salesforce instance, `HubSpot`, a Slack
-//! channel, or a plain webhook — and asking how that ticket is doing
-//! afterwards.
+//! channel, a Colonizer repository, or a plain webhook — and asking how that
+//! ticket is doing afterwards.
 //!
 //! The reason this is a port and not a module detail is the deployment
 //! shape: one hosted Worker serves many customer companies, and each
@@ -25,7 +25,7 @@ use zeroize::Zeroizing;
 use crate::webhook_signature::WebhookVerifier;
 
 /// Where a ticket is filed. One variant per supported tracker, because the
-/// ten do not share a shape: a GitHub destination is an owner and repo, a
+/// eleven do not share a shape: a GitHub destination is an owner and repo, a
 /// webhook is a URL, and Intercom and `HubSpot` address nothing but the
 /// credential — the workspace/portal the token belongs to *is* the
 /// destination, so those variants carry no fields at all.
@@ -102,13 +102,20 @@ pub enum Destination {
         /// The URL to `POST` the ticket to.
         url: String,
     },
+    /// A repository on the Colonizer automation. The repository is a routing
+    /// fact, not a secret — it names where tickets land — so it prints in
+    /// `Debug`, exactly as a GitHub repository does.
+    Colonizer {
+        /// The repository to file into.
+        repo: String,
+    },
 }
 
 impl Destination {
     /// The kind of tracker this destination names, for logs, metrics and
     /// error messages: `"github"`, `"jira"`, `"linear"`, `"zendesk"`,
     /// `"freshdesk"`, `"intercom"`, `"salesforce"`, `"hubspot"`, `"slack"`,
-    /// `"webhook"`.
+    /// `"webhook"`, `"colonizer"`.
     #[must_use]
     pub fn kind(&self) -> &'static str {
         match self {
@@ -122,6 +129,7 @@ impl Destination {
             Destination::HubSpot => "hubspot",
             Destination::Slack { .. } => "slack",
             Destination::Webhook { .. } => "webhook",
+            Destination::Colonizer { .. } => "colonizer",
         }
     }
 }
@@ -160,6 +168,9 @@ impl std::fmt::Debug for Destination {
             // The whole URL is withheld, host included: a webhook endpoint
             // is itself the capability.
             Destination::Webhook { .. } => f.write_str("Destination::Webhook { url: [redacted] }"),
+            Destination::Colonizer { repo } => {
+                write!(f, "Destination::Colonizer {{ repo: {repo:?} }}")
+            }
         }
     }
 }
@@ -573,6 +584,7 @@ pub struct RoutingTracker {
     hubspot: Option<Arc<dyn Tracker>>,
     slack: Option<Arc<dyn Tracker>>,
     webhook: Option<Arc<dyn Tracker>>,
+    colonizer: Option<Arc<dyn Tracker>>,
 }
 
 impl RoutingTracker {
@@ -652,6 +664,13 @@ impl RoutingTracker {
         self
     }
 
+    /// The adapter for [`Destination::Colonizer`].
+    #[must_use]
+    pub fn colonizer(mut self, tracker: Arc<dyn Tracker>) -> Self {
+        self.colonizer = Some(tracker);
+        self
+    }
+
     /// The adapter that serves `destination`, if one is configured.
     #[must_use]
     pub fn route_for(&self, destination: &Destination) -> Option<&Arc<dyn Tracker>> {
@@ -666,6 +685,7 @@ impl RoutingTracker {
             Destination::HubSpot => self.hubspot.as_ref(),
             Destination::Slack { .. } => self.slack.as_ref(),
             Destination::Webhook { .. } => self.webhook.as_ref(),
+            Destination::Colonizer { .. } => self.colonizer.as_ref(),
         }
     }
 }
@@ -683,6 +703,7 @@ impl std::fmt::Debug for RoutingTracker {
             .field("hubspot", &self.hubspot.is_some())
             .field("slack", &self.slack.is_some())
             .field("webhook", &self.webhook.is_some())
+            .field("colonizer", &self.colonizer.is_some())
             .finish()
     }
 }
@@ -844,7 +865,7 @@ mod tests {
         }
     }
 
-    /// Every variant, so a test that must cover all ten cannot forget one.
+    /// Every variant, so a test that must cover all eleven cannot forget one.
     fn all_destinations() -> Vec<Destination> {
         vec![
             Destination::GitHub {
@@ -875,6 +896,9 @@ mod tests {
             Destination::Webhook {
                 url: "https://hooks.example.test/services/TOKEN/SECRET".to_owned(),
             },
+            Destination::Colonizer {
+                repo: "acme/owlpost".to_owned(),
+            },
         ]
     }
 
@@ -894,6 +918,7 @@ mod tests {
                 "hubspot",
                 "slack",
                 "webhook",
+                "colonizer",
             ]
         );
     }
@@ -953,6 +978,31 @@ mod tests {
             }
         );
         assert!(printed.contains("acme.freshdesk.com"), "{printed}");
+    }
+
+    #[test]
+    fn a_colonizer_destination_round_trips_and_prints_its_repo() {
+        // The repo is a routing fact, not a secret: it survives a serde
+        // round-trip under the snake_case `colonizer` key, names its kind,
+        // and — like a GitHub repo — prints in `Debug`, so "which repo did
+        // this go to" stays answerable.
+        let dest = Destination::Colonizer {
+            repo: "acme/owlpost".to_owned(),
+        };
+
+        let json = serde_json::to_value(&dest).expect("serialises");
+        assert_eq!(
+            json,
+            serde_json::json!({ "colonizer": { "repo": "acme/owlpost" } })
+        );
+        let back: Destination = serde_json::from_value(json).expect("deserialises");
+        assert_eq!(back, dest);
+
+        assert_eq!(dest.kind(), "colonizer");
+        assert_eq!(
+            format!("{dest:?}"),
+            r#"Destination::Colonizer { repo: "acme/owlpost" }"#
+        );
     }
 
     // -----------------------------------------------------------------
@@ -1331,8 +1381,8 @@ mod tests {
     fn every_destination_dispatches_to_the_adapter_wired_for_its_slot() {
         // A transposition is the one bug the tests above cannot see: the
         // empty router answers NotConfigured under any permutation of
-        // `route_for`'s ten arms, and the wiring test pins a single arm.
-        // A hand-written ten-way match is exactly where a swapped arm
+        // `route_for`'s eleven arms, and the wiring test pins a single arm.
+        // A hand-written eleven-way match is exactly where a swapped arm
         // hides, so this wires a distinct adapter into every slot and
         // requires each destination to reach *its own* adapter — the
         // identity assert names the pair, and a swap shows up as one
@@ -1347,6 +1397,7 @@ mod tests {
         let hubspot = Recording::new();
         let slack = Recording::new();
         let webhook = Recording::new();
+        let colonizer = Recording::new();
 
         let router = RoutingTracker::new()
             .github(github.clone())
@@ -1358,12 +1409,14 @@ mod tests {
             .salesforce(salesforce.clone())
             .hubspot(hubspot.clone())
             .slack(slack.clone())
-            .webhook(webhook.clone());
+            .webhook(webhook.clone())
+            .colonizer(colonizer.clone());
 
         // In `all_destinations()`'s order; the identity assert below fails
         // loudly if that helper's order and this list ever drift apart.
         let slots = [
-            github, jira, linear, zendesk, freshdesk, intercom, salesforce, hubspot, slack, webhook,
+            github, jira, linear, zendesk, freshdesk, intercom, salesforce, hubspot, slack,
+            webhook, colonizer,
         ];
 
         for (dest, adapter) in all_destinations().into_iter().zip(slots) {

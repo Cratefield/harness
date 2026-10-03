@@ -649,6 +649,7 @@ dependencies = [
  "cratefield-adapter-jira",
  "cratefield-adapter-openai-compatible",
  "cratefield-adapter-owlpost",
+ "cratefield-adapter-polar",
  "cratefield-adapter-postgres",
  "cratefield-adapter-resend",
  "cratefield-adapter-sqlite",
@@ -661,6 +662,7 @@ dependencies = [
  "cratefield-client-ts",
  "cratefield-core",
  "cratefield-i18n",
+ "cratefield-import-supabase",
  "cratefield-introspect",
  "cratefield-kms",
  "cratefield-manifest",
@@ -710,7 +712,7 @@ dependencies = [
 
 [[package]]
 name = "cratefield-adapter-anthropic"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "async-trait",
  "bytes",
@@ -727,7 +729,7 @@ dependencies = [
 
 [[package]]
 name = "cratefield-adapter-apns"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "async-trait",
  "base64 0.23.1",
@@ -746,7 +748,7 @@ dependencies = [
 
 [[package]]
 name = "cratefield-adapter-classifier-llm"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "async-trait",
  "cratefield-core",
@@ -775,7 +777,7 @@ dependencies = [
 
 [[package]]
 name = "cratefield-adapter-fcm"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "async-trait",
  "base64 0.23.1",
@@ -816,7 +818,7 @@ dependencies = [
 
 [[package]]
 name = "cratefield-adapter-github-issues"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "async-trait",
  "bytes",
@@ -885,8 +887,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "cratefield-adapter-polar"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "base64 0.23.1",
+ "bytes",
+ "cratefield-adapter-sqlite",
+ "cratefield-adapter-stripe",
+ "cratefield-core",
+ "getrandom 0.4.3",
+ "hmac 0.13.0",
+ "http",
+ "pollster",
+ "serde_json",
+ "sha2 0.11.0",
+ "time",
+ "tracing",
+]
+
+[[package]]
 name = "cratefield-adapter-postgres"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "async-trait",
  "axum",
@@ -904,7 +926,7 @@ dependencies = [
 
 [[package]]
 name = "cratefield-adapter-resend"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "async-trait",
  "bytes",
@@ -919,7 +941,7 @@ dependencies = [
 
 [[package]]
 name = "cratefield-adapter-sqlite"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "async-trait",
  "cratefield-core",
@@ -950,7 +972,7 @@ dependencies = [
 
 [[package]]
 name = "cratefield-adapter-stripe"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "async-trait",
  "bytes",
@@ -969,7 +991,7 @@ dependencies = [
 
 [[package]]
 name = "cratefield-adapter-turnstile"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "async-trait",
  "bytes",
@@ -985,7 +1007,7 @@ dependencies = [
 
 [[package]]
 name = "cratefield-adapter-typesafe"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "async-trait",
  "bytes",
@@ -1002,7 +1024,7 @@ dependencies = [
 
 [[package]]
 name = "cratefield-adapter-webhook-tracker"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "async-trait",
  "bytes",
@@ -1021,7 +1043,7 @@ dependencies = [
 
 [[package]]
 name = "cratefield-adapter-webpush"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "aes-gcm",
  "async-trait",
@@ -1046,7 +1068,7 @@ dependencies = [
 
 [[package]]
 name = "cratefield-adapter-workers-ai"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "async-trait",
  "cratefield-core",
@@ -1061,7 +1083,7 @@ dependencies = [
 
 [[package]]
 name = "cratefield-auth-client"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "async-trait",
  "axum",
@@ -1131,15 +1153,17 @@ dependencies = [
 
 [[package]]
 name = "cratefield-cli"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "base64 0.23.1",
  "clap",
  "cratefield-adapter-postgres",
  "cratefield-adapter-sqlite",
+ "cratefield-adapter-typesafe",
  "cratefield-adapter-webpush",
  "cratefield-client-ts",
  "cratefield-core",
+ "cratefield-import-supabase",
  "cratefield-introspect",
  "cratefield-manifest",
  "cratefield-push-auth",
@@ -1184,7 +1208,7 @@ dependencies = [
 
 [[package]]
 name = "cratefield-client-ts"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "cratefield-core",
  "cratefield-tables",
@@ -1251,6 +1275,7 @@ name = "cratefield-control-plane"
 version = "0.1.1"
 dependencies = [
  "axum",
+ "cratefield-adapter-resend",
  "cratefield-chrome",
  "cratefield-console",
  "cratefield-core",
@@ -1271,7 +1296,7 @@ dependencies = [
 
 [[package]]
 name = "cratefield-core"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "async-trait",
  "axum",
@@ -1353,8 +1378,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "cratefield-import-supabase"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "cratefield-adapter-postgres",
+ "cratefield-core",
+ "http",
+ "insta",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "thiserror 2.0.20",
+ "tokio",
+ "url",
+ "zeroize",
+]
+
+[[package]]
 name = "cratefield-introspect"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "async-trait",
  "cratefield-adapter-postgres",
@@ -1395,7 +1439,7 @@ dependencies = [
 
 [[package]]
 name = "cratefield-manifest"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "cratefield-tables",
  "serde",
@@ -1415,7 +1459,7 @@ dependencies = [
 
 [[package]]
 name = "cratefield-module-changelog"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "async-trait",
  "axum",
@@ -1438,7 +1482,7 @@ dependencies = [
 
 [[package]]
 name = "cratefield-module-cms"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "axum",
  "cratefield-adapter-sqlite",
@@ -1514,7 +1558,7 @@ dependencies = [
 
 [[package]]
 name = "cratefield-module-email-signup"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "askama",
  "async-trait",
@@ -1556,7 +1600,7 @@ dependencies = [
 
 [[package]]
 name = "cratefield-module-notifications"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "async-trait",
  "axum",
@@ -1588,23 +1632,27 @@ dependencies = [
 
 [[package]]
 name = "cratefield-module-privacy"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "axum",
+ "bytes",
  "cratefield-core",
  "cratefield-testing",
+ "hex",
+ "hmac 0.13.0",
  "http",
  "pollster",
  "sea-query",
  "serde",
  "serde_json",
+ "sha2 0.11.0",
  "tower",
  "tracing",
 ]
 
 [[package]]
 name = "cratefield-module-telemetry"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "axum",
  "cratefield-adapter-sqlite",
@@ -1624,7 +1672,7 @@ dependencies = [
 
 [[package]]
 name = "cratefield-module-waitlist"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "askama",
  "async-trait",
@@ -1648,7 +1696,7 @@ dependencies = [
 
 [[package]]
 name = "cratefield-module-webhooks"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "async-trait",
  "axum",
@@ -1670,7 +1718,7 @@ dependencies = [
 
 [[package]]
 name = "cratefield-oauth-client"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "async-trait",
  "axum",
@@ -1711,7 +1759,7 @@ dependencies = [
 
 [[package]]
 name = "cratefield-push-auth"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "async-trait",
  "base64 0.23.1",
@@ -1726,7 +1774,7 @@ dependencies = [
 
 [[package]]
 name = "cratefield-push-wiring"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "async-trait",
  "bytes",
@@ -1784,7 +1832,7 @@ dependencies = [
 
 [[package]]
 name = "cratefield-runtime-cloudflare"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "async-trait",
  "axum",
@@ -1811,7 +1859,7 @@ dependencies = [
 
 [[package]]
 name = "cratefield-runtime-native"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "async-trait",
  "axum",
@@ -1838,7 +1886,7 @@ dependencies = [
 
 [[package]]
 name = "cratefield-secrets"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "async-trait",
  "chacha20poly1305",
@@ -1859,7 +1907,7 @@ dependencies = [
 
 [[package]]
 name = "cratefield-tables"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "cratefield-core",
  "sea-query",
@@ -1892,20 +1940,23 @@ dependencies = [
 
 [[package]]
 name = "cratefield-testing"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "async-trait",
  "axum",
+ "base64 0.23.1",
  "bytes",
  "cratefield-adapter-postgres",
  "cratefield-adapter-sqlite",
  "cratefield-core",
  "futures-core",
+ "hmac 0.13.0",
  "http",
  "pollster",
  "sea-query",
  "serde",
  "serde_json",
+ "sha2 0.11.0",
  "time",
  "tokio",
  "tower",
@@ -1914,7 +1965,7 @@ dependencies = [
 
 [[package]]
 name = "cratefield-ui"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "async-trait",
  "axum",
@@ -2655,10 +2706,14 @@ name = "factory0-auth-worker"
 version = "0.1.1"
 dependencies = [
  "async-trait",
+ "axum",
+ "cratefield-adapter-owlpost",
  "cratefield-adapter-resend",
+ "cratefield-adapter-sqlite",
  "cratefield-adapter-turnstile",
  "cratefield-core",
  "cratefield-runtime-cloudflare",
+ "cratefield-testing",
  "factory0-auth-core",
  "factory0-auth-magic-link",
  "factory0-auth-meta",
@@ -2666,6 +2721,11 @@ dependencies = [
  "factory0-auth-passkeys",
  "factory0-auth-password",
  "getrandom 0.4.3",
+ "http",
+ "pollster",
+ "serde_json",
+ "tower",
+ "url",
  "worker",
 ]
 

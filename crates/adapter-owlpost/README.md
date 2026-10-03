@@ -41,23 +41,46 @@ deployment or proxy points the adapter at its own host with
 adapter read the HTTP-date form of `Retry-After` (issue #278); without it a
 date-form 429 would read as "retry now".
 
+## Operations
+
+Beyond the [`Mailer`] port (one message at `POST {base}/v1/emails`), each
+call delegates to `OwlpostClient`, which owns the wire:
+
+| Operation | Endpoint |
+|---|---|
+| `Owlpost::send_with(message, SendOptions)` — adds `stream`, `topic`, `cc`, `bcc`, `scheduled_at` | `POST {base}/v1/emails` |
+| `Owlpost::batch(emails, idempotency_key)` — ≤ `MAX_BATCH` (100), the key is the batch's `Idempotency-Key`, returns the ids in order | `POST {base}/v1/emails/batch` |
+| `Owlpost::get_email(id)` — returns an `Email`; `id` is validated to `[A-Za-z0-9_-]` first | `GET {base}/v1/emails/{id}` |
+
+`SendOptions` and `Stream` are `#[non_exhaustive]`: build with
+`SendOptions::default()` and set fields, not a struct literal. Unset fields
+are omitted, so a plain `send` body is unchanged. A `topic` with
+`Stream::Transactional`, an empty or oversized batch, and an empty or
+path-like id are refused locally, with no request — the refusals are checked
+before the key, so a programming error surfaces even in keyless dev.
+
 ## Error mapping
 
-Owlpost answers RFC 9457 `application/problem+json` (`type`, `title`,
-`status`, `detail`). Mapped to `cratefield_core::MailError`:
+Owlpost answers RFC 9457 `application/problem+json`. `OwlpostError` is
+either `NotConfigured` or a wrapped `cratefield_core::MailError`, so the
+[`Mailer`] port and the extra operations share one mapping:
 
 | Status | Variant |
 |---|---|
-| 401 | `Unauthorized` |
-| 403 (domain/verify wording) | `DomainNotVerified { domain }` |
-| 403 (otherwise) | `Unauthorized` |
-| 400, 422, other 4xx | `Invalid { detail }` (`title: detail`) |
-| 429 | `RateLimited { retry_after }` from the `Retry-After` header |
-| 5xx | `Upstream(detail)`, with the `Retry-After` hint appended when present |
+| *(no API key)* | `OwlpostError::NotConfigured`; `Mailer::send` reports `Ok(SendOutcome::NotConfigured)` instead |
+| *(local refusal)* | `MailError::Invalid { detail }` — empty/oversized batch, topic on a transactional message, bad id |
+| 401 | `MailError::Unauthorized` |
+| 403 (domain/verify wording) | `MailError::DomainNotVerified { domain }` |
+| 403 (otherwise) | `MailError::Unauthorized` |
+| 400, 404, 422, other 4xx | `MailError::Invalid { detail }` |
+| 429 | `MailError::RateLimited { retry_after }` from the `Retry-After` header |
+| 5xx | `MailError::Upstream(detail)`, with the `Retry-After` hint appended when present |
 
-No error `Display` or `Debug` ever includes the API key. `text` is always
+No error `Display` or `Debug` ever includes the API key: provider and
+transport text is key-redacted when the error is built, and `Display`
+additionally runs it through `cratefield_core::scrub_text`. `text` is always
 sent alongside `html`; the `Idempotency-Key` header is set from
-`Message::idempotency_key`.
+`Message::idempotency_key` (for a batch, from the batch's own key).
 
 ## Keys
 
