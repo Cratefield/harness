@@ -1,0 +1,47 @@
+[package]
+name = "cratefield-adapter-polar"
+description = "Payments port over Polar, a Merchant of Record, for the Cratefield harness"
+readme = "README.md"
+keywords = ["cratefield", "polar", "payments", "merchant-of-record", "adapter"]
+categories = ["api-bindings"]
+include = ["src/**/*", "README.md"]
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+cratefield-core = { workspace = true }
+async-trait = { workspace = true }
+http = { workspace = true }
+bytes = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+# RFC 3339 timestamps on the wire: ingested events, dispute deadlines,
+# subscription periods.
+time = { workspace = true }
+# Nothing here draws randomness, but `cratefield-core`'s `ulid` reaches
+# `getrandom` through `rand`, and picking `getrandom`'s `wasm_js` backend is
+# the final crate's job in this workspace, so `cargo build --target
+# wasm32-unknown-unknown -p cratefield-adapter-polar` stands on its own.
+getrandom = { workspace = true }
+
+[dev-dependencies]
+pollster = { workspace = true }
+async-trait = { workspace = true }
+# Signing webhook fixtures the way Polar does (Standard Webhooks and the
+# older Polar HMAC key), so verification is tested against real signatures.
+hmac = { workspace = true }
+sha2 = { workspace = true }
+base64 = { workspace = true }
+# Webhook replay idempotency end to end: the core `Inbox` over a real
+# database, the way a venture dedups webhook deliveries. Path-only, so it is
+# stripped from the packaged manifest rather than resolved from crates.io.
+cratefield-adapter-sqlite = { path = "../adapter-sqlite" }
+# The composition test: the same venture code over Stripe and over Polar.
+# Path-only for the same reason.
+cratefield-adapter-stripe = { path = "../adapter-stripe" }

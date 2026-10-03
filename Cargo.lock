@@ -649,6 +649,7 @@ dependencies = [
  "cratefield-adapter-jira",
  "cratefield-adapter-openai-compatible",
  "cratefield-adapter-owlpost",
+ "cratefield-adapter-polar",
  "cratefield-adapter-postgres",
  "cratefield-adapter-resend",
  "cratefield-adapter-sqlite",
@@ -880,6 +881,26 @@ dependencies = [
  "pollster",
  "serde",
  "serde_json",
+ "time",
+ "tracing",
+]
+
+[[package]]
+name = "cratefield-adapter-polar"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "base64 0.23.1",
+ "bytes",
+ "cratefield-adapter-sqlite",
+ "cratefield-adapter-stripe",
+ "cratefield-core",
+ "getrandom 0.4.3",
+ "hmac 0.13.0",
+ "http",
+ "pollster",
+ "serde_json",
+ "sha2 0.11.0",
  "time",
  "tracing",
 ]

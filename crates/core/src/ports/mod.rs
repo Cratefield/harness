@@ -56,8 +56,9 @@ pub use kv::{KeyValue, KvError};
 pub use mailer::{MailError, Mailer, Message, SendOutcome};
 pub use payments::{
     Charge, CheckoutRequest, CheckoutSession, ConnectAccountLink, ConnectAccountLinkRequest,
-    LineItem, Money, Payments, PaymentsError, Refund, RefundRequest, SubscriptionCheckoutRequest,
-    TransferCharge, UsageReport, UsageReported, WebhookEvent,
+    Dispute, DisputeListRequest, DisputePage, DisputePhase, DisputeStatus, LineItem, Money,
+    Payments, PaymentsError, PortalSession, PortalSessionRequest, Refund, RefundRequest,
+    SubscriptionCheckoutRequest, TransferCharge, UsageReport, UsageReported, WebhookEvent,
 };
 pub use push::{
     LocKeys, Notification, Platform, Priority, Push, PushError, PushOutcome, Recipient,

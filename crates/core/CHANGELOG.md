@@ -56,6 +56,19 @@ unchanged; the next release of core is therefore 0.7.0, not 0.6.1.
 
 ### Added
 
+- **`Payments` carries a Merchant of Record (ADR 0027).** New optional
+  methods, each with a default, so every existing adapter compiles
+  unchanged and `HARNESS_API` stays 1:
+  `verify_webhook_request(&HeaderMap, body)` for providers that sign over
+  several headers (Standard Webhooks; the default reads
+  `Stripe-Signature`); `create_portal_session` with
+  `PortalSessionRequest`/`PortalSession` in issue #589's shape; and
+  `get_dispute`, `list_disputes` and `close_dispute` with `Dispute`,
+  `DisputeStatus`, `DisputePhase`, `DisputeListRequest` and `DisputePage`
+  in issue #602's shape. `DisputeStatus::phase()` folds a provider status
+  into `Open`/`Won`/`Lost`/`Closed`; `Dispute::event_key()` is the `Inbox`
+  key for one transition. The defaults answer
+  `PaymentsError::Unsupported`. (#690)
 - **`Tracker::comment`** and **`TicketComment`**: add a note (optionally
   linking a URL) to an existing ticket, so a duplicate report links into the
   ticket it duplicates. The default impl refuses with
