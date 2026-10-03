@@ -68,8 +68,8 @@ pub use rate_limiter::{Decision, Quota, RateLimitError, RateLimiter};
 pub use realtime::{Member, Realtime, RealtimeError, RoomContext, RoomHandler};
 pub use signer::{Kid, MAX_KID_NAME, Payload, SignatureError, Signer};
 pub use text_model::{
-    Completion, DEFAULT_MAX_TOKENS, ModelTier, Prompt, Role, RoutingTextModel, TextModel,
-    TextModelError, Turn,
+    Capability, Completion, DEFAULT_MAX_TOKENS, ModelTier, Prompt, Role, RoutingTextModel,
+    TextModel, TextModelError, ToolCall, ToolChoice, ToolResult, ToolSpec, Turn,
 };
 pub use tracker::{
     Credential, Destination, Filed, InboundStatusError, RoutingTracker, Severity, StatusUpdate,

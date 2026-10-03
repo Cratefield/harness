@@ -15,8 +15,8 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use cratefield_core::sigv4::{self, Credentials, SigV4Error, SignableRequest};
 use cratefield_core::{
-    Answer, AnswerValue, Calibration, Captcha, CaptchaError, CertificateStatus, Classifier,
-    ClassifierError, ClassifierProfile, Clock, Completion, Credential, CustomHostname,
+    Answer, AnswerValue, Calibration, Capability, Captcha, CaptchaError, CertificateStatus,
+    Classifier, ClassifierError, ClassifierProfile, Clock, Completion, Credential, CustomHostname,
     CustomHostnameError, CustomHostnames, Database, DbError, Decision, Defer, Destination,
     DnsRecordType, Filed, HostnameClaim, HttpClient, HttpError, KeyValue, KvError, MailError,
     Mailer, Message, ModelTier, Prompt, ProviderStatus, Question, RateLimitError, RateLimiter, Row,
@@ -1132,6 +1132,13 @@ impl Default for FakeTextModel {
 #[async_trait]
 impl TextModel for FakeTextModel {
     async fn complete(&self, prompt: &Prompt) -> Result<Completion, TextModelError> {
+        // The fake answers plain completions; a prompt carrying tools would
+        // otherwise be answered as if none were offered. Refuse it the way
+        // a real adapter without the capability does, so a caller is told
+        // rather than silently misled.
+        if !prompt.tools.is_empty() {
+            return Err(TextModelError::Unsupported(Capability::Tools));
+        }
         match self.mode_for(prompt.tier) {
             TextModelMode::Reply(text) => {
                 self.record(prompt);

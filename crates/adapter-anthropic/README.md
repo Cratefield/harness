@@ -48,6 +48,21 @@ input schema is the caller's schema and forces it with
 [`Completion::json`]. Without it, no tools are sent and `json` stays
 `None`.
 
+With `Prompt::tools` set (issue #665), the request carries a `tools` array
+— each spec's `parameters` as the tool's `input_schema` — and, when the
+caller steered it, a `tool_choice` (`Auto` → `{type: "auto"}`, `None` →
+`{type: "none"}`, `Required` → `{type: "any"}`, `Tool(n)` →
+`{type: "tool", name: n}`; omitted when unset). The answer's `tool_use`
+blocks come back as [`Completion::tool_calls`], and a turn built with
+`Turn::assistant_tool_calls` or `Turn::tool_results` is sent as the
+content-block array the Messages API expects — every other turn keeps the
+bare-string content it always sent. The model's text may be empty when it
+only calls tools, and that is not an error. A tool call cut off by
+`max_tokens` is refused as `Rejected` rather than handed on with partial
+arguments. A prompt that sets both `json_schema` and `tools` is refused as
+`Rejected` before any request: the schema path already declares its own
+forced tool, so the two would collide.
+
 Every completion reports token usage. The Messages API splits the prompt
 across `input_tokens`, `cache_creation_input_tokens` and
 `cache_read_input_tokens` when prompt caching is in play; the adapter sums

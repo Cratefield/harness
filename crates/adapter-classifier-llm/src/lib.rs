@@ -152,12 +152,28 @@ impl Classifier for ClassifierLlm {
 /// vendor wired" surfaces when the tier underneath is unwired — and the
 /// provider text on `Rejected`/`Transport` rides inside variants whose
 /// `Display` scrubs it, never bypassing the error types' own hygiene.
+///
+/// `Unsupported` maps to `NotConfigured`: it says the model behind the
+/// tier cannot serve a capability the caller asked for — a wiring gap, not
+/// a refusal of the questions — and a caller that degrades on
+/// `NotConfigured` degrades on it the same way. This adapter sends no
+/// tools, so a `TextModel` that reports no `Capability::Tools` is never
+/// the cause here; the arm exists so the match stays exhaustive under
+/// `TextModelError`'s `#[non_exhaustive]`.
 fn model_error(error: TextModelError) -> ClassifierError {
+    // `NotConfigured`, `Unsupported` and the non-`#[non_exhaustive]`
+    // wildcard all degrade to the same wiring gap; the arms stay written
+    // out so the mapping is explicit rather than left to the fallback.
+    #[allow(clippy::match_same_arms)]
     match error {
         TextModelError::NotConfigured => ClassifierError::NotConfigured,
         TextModelError::Rejected(message) => ClassifierError::Rejected(message),
         TextModelError::Transient { retry_after } => ClassifierError::Transient { retry_after },
         TextModelError::Transport(message) => ClassifierError::Transport(message),
+        TextModelError::Unsupported(_) => ClassifierError::NotConfigured,
+        // `TextModelError` is `#[non_exhaustive]`: a future variant this
+        // adapter does not know is the same wiring gap, not a decision.
+        _ => ClassifierError::NotConfigured,
     }
 }
 
@@ -455,6 +471,14 @@ mod tests {
         assert_eq!(
             model_error(TextModelError::Transport("boom".to_owned())),
             ClassifierError::Transport("boom".to_owned())
+        );
+        // A model that cannot carry tools is a wiring gap, not a refusal:
+        // it degrades as `NotConfigured`, the same as an unwired tier.
+        assert_eq!(
+            model_error(TextModelError::Unsupported(
+                cratefield_core::Capability::Tools
+            )),
+            ClassifierError::NotConfigured
         );
     }
 

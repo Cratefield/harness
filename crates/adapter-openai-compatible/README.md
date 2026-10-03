@@ -81,6 +81,45 @@ server that omits the `usage` block altogether completes with 0/0 counts
 and a warning in the log — a missing report never silently reads as a
 free completion.
 
+## Tools
+
+The wire speaks [function calling](https://platform.openai.com/docs/guides/function-calling),
+so the adapter carries it by default (issue #665). With `Prompt::tools`
+set, the request adds a `tools` array of
+`{"type": "function", "function": {name, description, parameters}}`, and
+`Prompt::tool_choice` steers the choice: `Auto` → `"auto"`, `None` →
+`"none"`, `Required` → `"required"`, `Tool(name)` →
+`{"type": "function", "function": {"name": "..."}}`. A `response_format`
+and tools may be combined. A prompt with no tools serialises exactly as it
+did before tools existed — no `tools`, no `tool_choice` — so a caller that
+never asks for a tool sees no change.
+
+The answer's `message.tool_calls` parse into `Completion::tool_calls`; the
+arguments arrive as a JSON **string**, and the adapter parses them into an
+object. A string that does not parse is kept as-is (a `Value::String`), so
+`run_tool_loop` refuses the call — tool arguments must be a JSON object —
+and feeds the error back to the model rather than the whole response
+failing. `content` may be `null` on a call-only answer; that is not an
+error. A `finish_reason` of `length` beside tool calls is `Rejected` —
+truncated arguments must never reach an executor.
+
+A conversation that quotes a tool call and its result goes back out as an
+assistant message carrying `tool_calls` (`content` `null` when the turn
+has no text, `arguments` re-serialised as a JSON string, or replayed
+verbatim when it is the raw text of a call that did not parse) followed by
+one `{"role": "tool", "tool_call_id", "content"}` message per result. The
+wire has no `is_error` field on a tool message, so a failed result's text
+is prefixed with `Error: ` for the model to read.
+
+**Not every server behind this wire speaks tools.** A model that does not
+may ignore the array or reject the request, so
+`OpenAiCompatible::without_tools()` turns the capability off for one
+deployment: `TextModel::supports` then reports `false` for
+`Capability::Tools`, and a tools-bearing prompt is refused with
+`TextModelError::Unsupported` before any request — never a completion that
+silently ignored the tools. Use it for a server or model behind the wire
+that does not do function calling. The default leaves tools on.
+
 Error mapping (to `cratefield_core::TextModelError`): 429 →
 `Transient { retry_after }` (from the `Retry-After` header, both RFC 9110
 forms), any 5xx → `Transient { retry_after: None }`, 400/422 → `Rejected`
