@@ -13,9 +13,10 @@ use axum::routing::{get, post};
 use cratefield_core::{Json, Problem, Scope};
 use factory0_auth_core::{
     CREDENTIAL_PASSWORD, CredentialRow, IssuedSession, Login, PROVIDER_PASSWORD, STATUS_ACTIVE,
-    SessionError, cookie_value as session_cookie_value, hash_password, insert_credential,
-    insert_identity, issue as issue_session, password_credential, set_cookie, set_password_hash,
-    set_password_lockout, user_by_id, user_by_primary_email, verify_password,
+    SessionError, TOKEN_PASSWORD_RESET, cookie_value as session_cookie_value, hash_password,
+    insert_credential, insert_identity, issue as issue_session, password_credential,
+    retire_unconsumed_tokens, set_cookie, set_password_hash, set_password_lockout, user_by_id,
+    user_by_primary_email, verify_password,
 };
 use http::{HeaderMap, StatusCode, Uri, header};
 use serde::Deserialize;
@@ -50,11 +51,22 @@ const DUMMY_HASH: &str = "$argon2id$v=19$m=19456,t=2,p=1$\
 Kr9MypcBcrKQhCA8Kk+auQ$zjwKC0g9HxLO1hfYduVa2r+tjokQEWUTbRcg/Ml2S64";
 
 pub(crate) fn router() -> axum::Router<Arc<ModuleState>> {
+    use crate::recovery;
     axum::Router::new()
         .route("/register", post(register))
         .route("/login", post(login))
         .route("/start", get(start).post(start_submit))
         .route("/change", post(change))
+        // Verification (#19) and password reset (#20). The GETs render a
+        // hosted form and never touch the token; only the same-origin
+        // POSTs spend anything.
+        .route("/verify", get(recovery::verify_form).post(recovery::verify))
+        .route("/verify/resend", post(recovery::resend))
+        .route("/reset", get(recovery::reset_form).post(recovery::reset))
+        .route(
+            "/reset/request",
+            get(recovery::request_form).post(recovery::request_reset),
+        )
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -91,7 +103,7 @@ fn accepted() -> Response {
 
 /// The refusal as a pause rather than a rendered response, so the JSON
 /// route and the page route each render it in their own content type.
-async fn limit_pause(
+pub(crate) async fn limit_pause(
     state: &ModuleState,
     headers: &HeaderMap,
     email: Option<&str>,
@@ -125,7 +137,11 @@ async fn limit(state: &ModuleState, headers: &HeaderMap, email: Option<&str>) ->
 /// Absent, this is a no-op: `fz doctor` is what refuses a production
 /// venture with public writes and no captcha, and a module that refused to
 /// start without one would take the service down instead.
-async fn captcha_ok(state: &ModuleState, token: Option<&str>, headers: &HeaderMap) -> bool {
+pub(crate) async fn captcha_ok(
+    state: &ModuleState,
+    token: Option<&str>,
+    headers: &HeaderMap,
+) -> bool {
     let Some(captcha) = state.ctx.ports.captcha.as_deref() else {
         return true;
     };
@@ -151,14 +167,14 @@ async fn captcha_ok(state: &ModuleState, token: Option<&str>, headers: &HeaderMa
 /// Deliberately not a validator. Anything stricter rejects addresses that
 /// work, and the real check is that a magic link to it arrives (#21).
 /// This exists only so a bare `@` does not become an account.
-fn looks_like_an_address(email: &str) -> bool {
+pub(crate) fn looks_like_an_address(email: &str) -> bool {
     let Some((local, domain)) = email.split_once('@') else {
         return false;
     };
     !local.is_empty() && domain.contains('.') && !domain.starts_with('.') && !domain.ends_with('.')
 }
 
-fn body_of(raw: &[u8]) -> Value {
+pub(crate) fn body_of(raw: &[u8]) -> Value {
     serde_json::from_slice(raw).unwrap_or(Value::Null)
 }
 
@@ -174,15 +190,20 @@ async fn register(
     headers: HeaderMap,
     raw: bytes::Bytes,
 ) -> Result<Response, Problem> {
-    if let Some(limited) = limit(&state, &headers, None).await {
-        return Ok(limited);
-    }
     let body = body_of(&raw);
     let credentials: Credentials = serde_json::from_value(body.clone()).unwrap_or_default();
+    // The address is normalised before the limit so the limit is keyed the
+    // same way `/login` keys it: registration now mails this address, so it
+    // is worth the same protection.
+    let email = cratefield_core::normalize_email(&credentials.email);
+    if let Some(limited) = limit(&state, &headers, Some(&email)).await {
+        return Ok(limited);
+    }
     let captcha_token = body
         .get("captchaToken")
         .and_then(Value::as_str)
         .or_else(|| body.get("captcha_token").and_then(Value::as_str));
+    let locale = crate::recovery::sanitize_locale(body.get("locale").and_then(Value::as_str));
     if !captcha_ok(&state, captcha_token, &headers).await {
         return Err(refused(&scope));
     }
@@ -209,7 +230,6 @@ async fn register(
         return Err(Problem::new(&PASSWORD_UNSUITABLE).instance(&scope.request_id));
     }
 
-    let email = cratefield_core::normalize_email(&credentials.email);
     if !looks_like_an_address(&email) {
         // Not an address. Answered like everything else here, because
         // "that is not an email" and "that email is taken" must not be
@@ -243,6 +263,16 @@ async fn register(
                 EVENT_DUPLICATE_REGISTRATION,
                 json!({ "user_id": existing.id }),
             );
+            // Tell the person who owns the address, by mail, so a
+            // stranger cannot register it and the owner learns somebody
+            // tried. Sent to any existing account (including one that
+            // only ever signed in by magic link), so the mail is the
+            // whole of the duplicate path's usefulness.
+            scope.defer.wait_until(crate::recovery::send_duplicate_mail(
+                Arc::clone(&state),
+                &existing,
+                &locale,
+            ));
             return Ok(accepted());
         }
         Ok(None) => {}
@@ -256,6 +286,15 @@ async fn register(
         Ok(user_id) => {
             ctx.events
                 .emit_in(&scope, EVENT_REGISTERED, json!({ "user_id": user_id }));
+            // Prove the address before anything trusts it (#19). A
+            // deployment with no mailer still answers `202` and simply
+            // sends nothing.
+            scope.defer.wait_until(crate::recovery::send_verify_mail(
+                Arc::clone(&state),
+                &user_id,
+                &email,
+                &locale,
+            ));
             Ok(accepted())
         }
         Err(err) => {
@@ -454,7 +493,7 @@ padding:0 1rem\">{body}</body></html>"
 
 /// Only a path on this service: an absolute URL here is an open redirect,
 /// and this one is followed with a session cookie attached.
-fn safe_return_to(candidate: Option<&str>) -> Option<String> {
+pub(crate) fn safe_return_to(candidate: Option<&str>) -> Option<String> {
     let value = candidate?.trim();
     if value.is_empty() || value.len() > 4096 || !value.starts_with('/') {
         return None;
@@ -468,7 +507,7 @@ fn safe_return_to(candidate: Option<&str>) -> Option<String> {
 
 /// Escapes the five characters that can leave an HTML attribute or a text
 /// node. `return_to` is caller-supplied and lands in a `value=`.
-fn html_escape(value: &str) -> String {
+pub(crate) fn html_escape(value: &str) -> String {
     value
         .replace('&', "&amp;")
         .replace('<', "&lt;")
@@ -819,11 +858,18 @@ async fn change(
         return Err(Problem::internal().instance(&scope.request_id));
     }
 
+    let now = lockout::iso(clock.now());
+    // A reset link this account still has out does not survive the
+    // change. The point of changing a password is that the old way in is
+    // gone; an unconsumed reset link somebody else asked for would put one
+    // back, and would undo exactly the remediation the person just made.
+    if let Err(err) = retire_unconsumed_tokens(db, TOKEN_PASSWORD_RESET, &user.id, &now).await {
+        tracing::warn!(error = %err, "could not retire reset tokens after a password change");
+    }
+
     // Every other session goes. Then a fresh one, so the person changing
     // their password is not signed out by their own action.
-    if let Err(err) =
-        factory0_auth_core::revoke_all_sessions(db, &user.id, &lockout::iso(clock.now())).await
-    {
+    if let Err(err) = factory0_auth_core::revoke_all_sessions(db, &user.id, &now).await {
         tracing::error!(error = %err, "could not revoke sessions after a password change");
         return Err(Problem::internal().instance(&scope.request_id));
     }

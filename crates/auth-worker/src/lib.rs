@@ -140,8 +140,10 @@ fn instance(env: &Env) -> &'static (Harness, Cloudflare) {
                         "https://yoginini.us",
                     ]),
             )
-            // Magic-link renders its mail through the shared registry.
+            // Magic-link and password render their mail through the
+            // shared registry.
             .templates(factory0_auth_magic_link::default_templates())
+            .templates(factory0_auth_password::default_templates())
             .module(factory0_auth_core::AuthCore::new())
             .module(factory0_auth_oidc::Oidc::new())
             .module(factory0_auth_passkeys::Passkeys::new())

@@ -25,6 +25,7 @@ fn harness() -> Harness {
                 .cors_origins(["https://app.cratefield.com"]),
         )
         .templates(factory0_auth_magic_link::default_templates())
+        .templates(factory0_auth_password::default_templates())
         .module(factory0_auth_core::AuthCore::new())
         .module(factory0_auth_oidc::Oidc::new())
         .module(factory0_auth_passkeys::Passkeys::new())

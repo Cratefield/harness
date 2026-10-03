@@ -24,10 +24,18 @@ than not having them.
 | `GET /start?return_to=/path` | The form, for the login chooser |
 | `POST /start` | The form's own target. Same decision as `/login`, answered with a page |
 | `POST /change` | `{ current_password, new_password }`, for a signed-in person |
+| `GET /verify?token=…` | The confirm-address page a verification link opens. Never reads the token |
+| `POST /verify` | `{ token }` (JSON) or the page's own form. Sets `primary_email_verified`. Answer: `200`, or one refusal |
+| `POST /verify/resend` | `{ email }`. Always `202`, always the same body. Mails a link only to an existing, unverified account |
+| `GET /reset?token=…` | The choose-a-new-password page a reset link opens. Never reads the token |
+| `POST /reset` | `{ token, new_password }` (JSON) or the page's own form. Sets the password, clears the lockout, revokes every session and refresh token |
+| `GET /reset/request` | The "forgot your password" form, the page a duplicate-registration mail points at |
+| `POST /reset/request` | `{ email }`. Always `202`, always the same body. Mails a link only to an account that has a password |
 
-The three sign-in routes — `POST /start`, `POST /login` and
-`POST /change` — refuse a cross-site request: a `sec-fetch-site` or
-`Origin` naming another site answers `403` (`auth/cross-site-request`)
+The sign-in and recovery routes — `POST /start`, `POST /login`,
+`POST /change`, `POST /verify`, `POST /reset`, `POST /verify/resend` and
+`POST /reset/request` — refuse a cross-site request: a `sec-fetch-site`
+or `Origin` naming another site answers `403` (`auth/cross-site-request`)
 before anything else happens. Signing in sets a session cookie, and
 `SameSite=Lax` stops a cross-site POST from *carrying* our cookie, not
 from *setting* one (issue #439). `POST /register` issues no session, so
@@ -68,6 +76,16 @@ Enable it with `password` in `AUTH_CORE_LOGIN_METHODS`.
 | `AUTH_PASSWORD_LOCKOUT_THRESHOLD` | `10` | Failures in the window before the password locks |
 | `AUTH_PASSWORD_LOCKOUT_WINDOW_SECS` | `3600` | The window failures are counted in |
 | `AUTH_PASSWORD_LOCKOUT_SECS` | `900` | How long a lock lasts |
+| `AUTH_PASSWORD_PUBLIC_BASE` | *(unset)* | The origin a mailed link points at. Unset means this deployment sends no recovery mail |
+| `AUTH_PASSWORD_MAIL_FROM` | *(unset)* | The `From` address on that mail. Unset means the same |
+
+`PUBLIC_BASE` and `MAIL_FROM` are both optional, and so is the `Mailer`
+port — a venture that mounts `Password` on its own keeps booting with no
+mail configured. `register`, `login` and `change` work exactly as before;
+only the verification and reset mail is switched off, and those endpoints
+still answer `202`. Setting `PUBLIC_BASE` to something that is not `https`
+(a `http://localhost` link is allowed for `wrangler dev`) is a
+`validate_config` failure rather than a link that points nowhere.
 
 Ten failures is far above a person mistyping and far below a useful
 guessing rate. Fifteen minutes is long enough to make guessing pointless
@@ -135,6 +153,76 @@ only ever about the password in front of it: too short, too long, or in a
 breach corpus. Refusing silently would leave somebody unable to sign in
 later, and none of it reveals anything about anybody else.
 
+## Verifying an address, and getting back in
+
+Two single-use bearer credentials go out by mail — a verification link
+(24 hours) and a reset link (30 minutes). Both are stored the way a magic
+link is: only the SHA-256 digest is written down, so a leaked
+`single_use_tokens` row is not a way in, and the token itself is never
+logged. Issuing a second link retires the first, so the newest one wins.
+
+**The link asks; only the button acts.** A mail scanner fetches every URL
+in a message, so `GET /verify` and `GET /reset` never read or spend the
+token — they render a form whose same-origin `POST` does the work. The
+`POST` accepts JSON (the API) or the form (the hosted page), and answers
+in the shape it was asked for. Missing, expired, already-used,
+never-issued and wrong-kind tokens all answer with one refusal
+(`auth/password-token-refused`), and the refusal says nothing about which
+account, if any, a token was for.
+
+`POST /verify/resend` and `POST /reset/request` are rate-limited and
+captcha-guarded like `/login`, and answer `202` with the same body
+whether the address has an account or not — a reset mail goes out only
+when the account has a password credential, and a verification mail only
+when the address exists and is unverified. Both take the same two body
+shapes as the token endpoints: JSON from an API caller, and
+`application/x-www-form-urlencoded` from the hosted `/reset/request`
+form, which is what that page posts. `/register` mails the
+verification link to a new address and a duplicate-registration notice to
+an existing one — including a magic-link-only account — and the body it
+returns is identical either way.
+
+The mail itself is handed to the request's `Defer` port and sent after
+the response, the way every other module that mails does it, so a caller
+never waits on a delivery to be told `202`. An address
+`cratefield_core::is_valid` refuses — control characters, spaces, no `@` —
+is still answered `202`, and simply has no mail sent to it.
+
+A reset is what somebody does when they think their password is known to
+others, so it changes the hash and revokes **every** session and refresh
+token the account has; it also clears the lockout, because proving the
+reset is proving the credential. The person is not signed in afterwards.
+A password the policy refuses is rejected before the token is spent, so a
+too-short attempt does not cost them the link. `POST /change` does the
+same for a signed-in person, and retires any reset link their account has
+out as well — otherwise a link somebody else had asked for would undo the
+change they just made.
+
+Every page here — the confirm page, the reset form, the request form and
+the page a form `POST` answers with — carries `Cache-Control: no-store`
+and `Referrer-Policy: no-referrer`. A token arrives in a URL, and a URL
+must not sit in a shared cache or ride along as a `Referer`.
+
+### Mail templates
+
+Rendered through the shared template registry, overridable per locale like
+any other module's mail:
+
+| Id | Sent when |
+|---|---|
+| `auth-password/verify` | A new address needs confirming |
+| `auth-password/duplicate` | Somebody tried to register an address that already has an account |
+| `auth-password/reset` | An account with a password asked to reset it |
+
+The request body may carry a `locale` (a BCP 47 tag such as `en-GB`;
+anything else falls back to `en`).
+
+### Events
+
+`auth-password.email_verified` and `auth-password.reset` each carry
+`user_id` and nothing else — never an address, the same rule every other
+event in the stack follows.
+
 ## The breach check
 
 Pwned Passwords k-anonymity: the first five hex characters of the SHA-1 go
@@ -155,20 +243,14 @@ rehashing on the strength of an unreadable value would be guessing.
 
 ## Known gaps
 
-- **The address is never verified here.** A new account is
-  `primary_email_verified = 0`, and only a magic link (#21) can change
-  that. The linking rules only auto-link a verified address, so registering
-  must not be a way to claim one.
-- **No account recovery.** Somebody who forgets their password has no way
-  back in through this module; that is the magic link's job. The form at
-  `/start` does not link to it either: this module cannot know whether
-  `auth-magic-link` is mounted, and a "forgot your password?" link to a
-  404 is worse than none.
-- The `auth-password.duplicate_registration` event says a mail should be
-  sent. **Nothing sends it yet** — no mail module subscribes, so today the
-  owner of an already-registered address is told nothing at all.
-- A subscriber, when there is one, **has to look the address up** from the
-  `user_id` in the payload. That is deliberate: see below.
+- A subscriber that needs the address behind an event **has to look it up**
+  from the `user_id` in the payload. That is deliberate: see below. An
+  address can change, and the copy in an old event would be the stale one.
+- Mail is rendered in the locale the request names, defaulting to `en`.
+  There is no negotiation from `Accept-Language`: the hosted page's form
+  and the JSON API both pass the locale they want, and a locale only
+  changes the mail if a corresponding `<id>@<locale>` override is
+  registered.
 
 ---
 
