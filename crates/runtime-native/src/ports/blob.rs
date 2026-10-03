@@ -1,7 +1,8 @@
 //! A directory-backed [`Blob`] adapter (issue #105): small media on the local
 //! filesystem for a self-hosted deployment. Each object is a file under a base
 //! directory, and its content type is a sibling `.__ct` file. There are no
-//! presigned URLs, so `signed_url` reports [`BlobError::Unsupported`] — serve
+//! presigned URLs, so `signed_url` reports [`BlobError::Unsupported`] and
+//! `signed_put_url` inherits the trait default, which reports the same — serve
 //! the bytes through the harness with [`Blob::get`], or reach for an
 //! S3-compatible adapter when direct downloads matter.
 
@@ -107,6 +108,8 @@ impl Blob for DirBlob {
         Ok(())
     }
 
+    /// A directory store has no presigned URLs: neither a `GET` nor (through
+    /// the trait default) a `PUT`.
     async fn signed_url(&self, _key: &str, _ttl: Duration) -> Result<String, BlobError> {
         Err(BlobError::Unsupported(
             "a directory store has no presigned URLs; serve the bytes through the harness \

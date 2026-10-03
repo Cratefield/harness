@@ -1,0 +1,11 @@
+{
+  "name": "cratefield-harness-js",
+  "private": true,
+  "description": "JavaScript/TypeScript packages published from the Cratefield harness monorepo.",
+  "workspaces": [
+    "packages/*"
+  ],
+  "engines": {
+    "node": ">=20"
+  }
+}

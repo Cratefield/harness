@@ -1,0 +1,1405 @@
+---
+source: crates/import-supabase/tests/inspect.rs
+expression: normalized.to_json()
+---
+{
+  "report_version": 1,
+  "tool": {
+    "name": "cratefield-import-supabase",
+    "version": "0.1.0"
+  },
+  "project": {
+    "ref": "fixtureprojectref000",
+    "host": "<host>",
+    "port": 5432,
+    "database": "<database>",
+    "server_version": "16"
+  },
+  "read_only": {
+    "transaction_read_only": true,
+    "session_read_only": true,
+    "no_transaction_id_assigned": true,
+    "role": "<role>",
+    "role_is_superuser": true,
+    "role_can_write": true
+  },
+  "coverage": {
+    "database": "inspected",
+    "management_api": "not_inspected",
+    "policy_classifier": "not_inspected"
+  },
+  "summary": {
+    "automatic": 22,
+    "needs_work": 26,
+    "blockers": 2,
+    "ready": false,
+    "tables": 6,
+    "estimated_rows": 14,
+    "data_bytes": 0,
+    "index_bytes": 0,
+    "storage_objects": 3,
+    "storage_bytes": 12635136,
+    "transfer_assumed_mbps": 100,
+    "estimated_transfer_seconds": 0
+  },
+  "schemas": [
+    {
+      "name": "auth",
+      "kind": "supabase_managed",
+      "target": null,
+      "tables": 3
+    },
+    {
+      "name": "extensions",
+      "kind": "supabase_managed",
+      "target": null,
+      "tables": 0
+    },
+    {
+      "name": "public",
+      "kind": "user",
+      "target": "app",
+      "tables": 6
+    },
+    {
+      "name": "realtime",
+      "kind": "supabase_managed",
+      "target": null,
+      "tables": 0
+    },
+    {
+      "name": "storage",
+      "kind": "supabase_managed",
+      "target": null,
+      "tables": 2
+    }
+  ],
+  "tables": [
+    {
+      "schema": "public",
+      "name": "attachments",
+      "kind": "table",
+      "estimated_rows": 1,
+      "data_bytes": 0,
+      "index_bytes": 0,
+      "rls_enabled": true,
+      "rls_forced": false,
+      "primary_key": [
+        "id"
+      ],
+      "columns": [
+        {
+          "name": "id",
+          "data_type": "uuid",
+          "nullable": false,
+          "default": "extensions.gen_random_uuid()",
+          "identity": null,
+          "generated": null
+        },
+        {
+          "name": "project_id",
+          "data_type": "bigint",
+          "nullable": false,
+          "default": null,
+          "identity": null,
+          "generated": null
+        },
+        {
+          "name": "object_id",
+          "data_type": "uuid",
+          "nullable": false,
+          "default": null,
+          "identity": null,
+          "generated": null
+        }
+      ],
+      "constraints": [
+        {
+          "name": "attachments_object_id_fkey",
+          "kind": "foreign_key",
+          "definition": "FOREIGN KEY (object_id) REFERENCES storage.objects(id)",
+          "references": "storage.objects"
+        },
+        {
+          "name": "attachments_pkey",
+          "kind": "primary_key",
+          "definition": "PRIMARY KEY (id)",
+          "references": null
+        },
+        {
+          "name": "attachments_project_id_fkey",
+          "kind": "foreign_key",
+          "definition": "FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE",
+          "references": "public.projects"
+        }
+      ],
+      "indexes": [
+        {
+          "name": "attachments_pkey",
+          "unique": true,
+          "primary": true,
+          "definition": "CREATE UNIQUE INDEX attachments_pkey ON public.attachments USING btree (id)"
+        }
+      ]
+    },
+    {
+      "schema": "public",
+      "name": "audit_log",
+      "kind": "table",
+      "estimated_rows": 2,
+      "data_bytes": 0,
+      "index_bytes": 0,
+      "rls_enabled": true,
+      "rls_forced": false,
+      "primary_key": [],
+      "columns": [
+        {
+          "name": "at",
+          "data_type": "timestamp with time zone",
+          "nullable": false,
+          "default": "now()",
+          "identity": null,
+          "generated": null
+        },
+        {
+          "name": "message",
+          "data_type": "text",
+          "nullable": false,
+          "default": null,
+          "identity": null,
+          "generated": null
+        }
+      ],
+      "constraints": [],
+      "indexes": []
+    },
+    {
+      "schema": "public",
+      "name": "profiles",
+      "kind": "table",
+      "estimated_rows": 2,
+      "data_bytes": 0,
+      "index_bytes": 0,
+      "rls_enabled": true,
+      "rls_forced": false,
+      "primary_key": [
+        "id"
+      ],
+      "columns": [
+        {
+          "name": "id",
+          "data_type": "uuid",
+          "nullable": false,
+          "default": null,
+          "identity": null,
+          "generated": null
+        },
+        {
+          "name": "username",
+          "data_type": "extensions.citext",
+          "nullable": true,
+          "default": null,
+          "identity": null,
+          "generated": null
+        },
+        {
+          "name": "avatar_url",
+          "data_type": "text",
+          "nullable": true,
+          "default": null,
+          "identity": null,
+          "generated": null
+        },
+        {
+          "name": "updated_at",
+          "data_type": "timestamp with time zone",
+          "nullable": true,
+          "default": null,
+          "identity": null,
+          "generated": null
+        }
+      ],
+      "constraints": [
+        {
+          "name": "profiles_id_fkey",
+          "kind": "foreign_key",
+          "definition": "FOREIGN KEY (id) REFERENCES auth.users(id) ON DELETE CASCADE",
+          "references": "auth.users"
+        },
+        {
+          "name": "profiles_pkey",
+          "kind": "primary_key",
+          "definition": "PRIMARY KEY (id)",
+          "references": null
+        },
+        {
+          "name": "profiles_username_key",
+          "kind": "unique",
+          "definition": "UNIQUE (username)",
+          "references": null
+        },
+        {
+          "name": "username_length",
+          "kind": "check",
+          "definition": "CHECK ((char_length((username)::text) >= 3))",
+          "references": null
+        }
+      ],
+      "indexes": [
+        {
+          "name": "profiles_pkey",
+          "unique": true,
+          "primary": true,
+          "definition": "CREATE UNIQUE INDEX profiles_pkey ON public.profiles USING btree (id)"
+        },
+        {
+          "name": "profiles_username_key",
+          "unique": true,
+          "primary": false,
+          "definition": "CREATE UNIQUE INDEX profiles_username_key ON public.profiles USING btree (username)"
+        }
+      ]
+    },
+    {
+      "schema": "public",
+      "name": "projects",
+      "kind": "table",
+      "estimated_rows": 4,
+      "data_bytes": 0,
+      "index_bytes": 0,
+      "rls_enabled": true,
+      "rls_forced": false,
+      "primary_key": [
+        "id"
+      ],
+      "columns": [
+        {
+          "name": "id",
+          "data_type": "bigint",
+          "nullable": false,
+          "default": "nextval('projects_id_seq'::regclass)",
+          "identity": null,
+          "generated": null
+        },
+        {
+          "name": "team_id",
+          "data_type": "bigint",
+          "nullable": false,
+          "default": null,
+          "identity": null,
+          "generated": null
+        },
+        {
+          "name": "name",
+          "data_type": "text",
+          "nullable": false,
+          "default": null,
+          "identity": null,
+          "generated": null
+        },
+        {
+          "name": "status",
+          "data_type": "project_status",
+          "nullable": false,
+          "default": "'draft'::project_status",
+          "identity": null,
+          "generated": null
+        },
+        {
+          "name": "created_at",
+          "data_type": "timestamp with time zone",
+          "nullable": false,
+          "default": "now()",
+          "identity": null,
+          "generated": null
+        }
+      ],
+      "constraints": [
+        {
+          "name": "projects_pkey",
+          "kind": "primary_key",
+          "definition": "PRIMARY KEY (id)",
+          "references": null
+        },
+        {
+          "name": "projects_team_id_fkey",
+          "kind": "foreign_key",
+          "definition": "FOREIGN KEY (team_id) REFERENCES teams(id)",
+          "references": "public.teams"
+        }
+      ],
+      "indexes": [
+        {
+          "name": "projects_pkey",
+          "unique": true,
+          "primary": true,
+          "definition": "CREATE UNIQUE INDEX projects_pkey ON public.projects USING btree (id)"
+        },
+        {
+          "name": "projects_team_id_idx",
+          "unique": false,
+          "primary": false,
+          "definition": "CREATE INDEX projects_team_id_idx ON public.projects USING btree (team_id)"
+        }
+      ]
+    },
+    {
+      "schema": "public",
+      "name": "team_members",
+      "kind": "table",
+      "estimated_rows": 3,
+      "data_bytes": 0,
+      "index_bytes": 0,
+      "rls_enabled": true,
+      "rls_forced": false,
+      "primary_key": [
+        "team_id",
+        "user_id"
+      ],
+      "columns": [
+        {
+          "name": "team_id",
+          "data_type": "bigint",
+          "nullable": false,
+          "default": null,
+          "identity": null,
+          "generated": null
+        },
+        {
+          "name": "user_id",
+          "data_type": "uuid",
+          "nullable": false,
+          "default": null,
+          "identity": null,
+          "generated": null
+        },
+        {
+          "name": "role",
+          "data_type": "text",
+          "nullable": false,
+          "default": "'member'::text",
+          "identity": null,
+          "generated": null
+        }
+      ],
+      "constraints": [
+        {
+          "name": "team_members_pkey",
+          "kind": "primary_key",
+          "definition": "PRIMARY KEY (team_id, user_id)",
+          "references": null
+        },
+        {
+          "name": "team_members_role_check",
+          "kind": "check",
+          "definition": "CHECK ((role = ANY (ARRAY['owner'::text, 'member'::text])))",
+          "references": null
+        },
+        {
+          "name": "team_members_team_id_fkey",
+          "kind": "foreign_key",
+          "definition": "FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE CASCADE",
+          "references": "public.teams"
+        },
+        {
+          "name": "team_members_user_id_fkey",
+          "kind": "foreign_key",
+          "definition": "FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE",
+          "references": "auth.users"
+        }
+      ],
+      "indexes": [
+        {
+          "name": "team_members_pkey",
+          "unique": true,
+          "primary": true,
+          "definition": "CREATE UNIQUE INDEX team_members_pkey ON public.team_members USING btree (team_id, user_id)"
+        }
+      ]
+    },
+    {
+      "schema": "public",
+      "name": "teams",
+      "kind": "table",
+      "estimated_rows": 2,
+      "data_bytes": 0,
+      "index_bytes": 0,
+      "rls_enabled": true,
+      "rls_forced": false,
+      "primary_key": [
+        "id"
+      ],
+      "columns": [
+        {
+          "name": "id",
+          "data_type": "bigint",
+          "nullable": false,
+          "default": null,
+          "identity": "always",
+          "generated": null
+        },
+        {
+          "name": "name",
+          "data_type": "text",
+          "nullable": false,
+          "default": null,
+          "identity": null,
+          "generated": null
+        }
+      ],
+      "constraints": [
+        {
+          "name": "teams_pkey",
+          "kind": "primary_key",
+          "definition": "PRIMARY KEY (id)",
+          "references": null
+        }
+      ],
+      "indexes": [
+        {
+          "name": "teams_pkey",
+          "unique": true,
+          "primary": true,
+          "definition": "CREATE UNIQUE INDEX teams_pkey ON public.teams USING btree (id)"
+        }
+      ]
+    }
+  ],
+  "views": [
+    {
+      "schema": "public",
+      "name": "active_projects",
+      "materialized": false,
+      "references_auth": false,
+      "references_storage": false
+    },
+    {
+      "schema": "public",
+      "name": "my_projects",
+      "materialized": false,
+      "references_auth": true,
+      "references_storage": false
+    }
+  ],
+  "sequences": [
+    {
+      "schema": "public",
+      "name": "invoice_number_seq",
+      "owned_by": null,
+      "data_type": "bigint"
+    },
+    {
+      "schema": "public",
+      "name": "projects_id_seq",
+      "owned_by": "projects.id",
+      "data_type": "bigint"
+    },
+    {
+      "schema": "public",
+      "name": "teams_id_seq",
+      "owned_by": "teams.id",
+      "data_type": "bigint"
+    }
+  ],
+  "enums": [
+    {
+      "schema": "public",
+      "name": "project_status",
+      "labels": [
+        "draft",
+        "active",
+        "archived"
+      ]
+    }
+  ],
+  "extensions": [
+    {
+      "name": "citext",
+      "version": "1.6",
+      "schema": "extensions",
+      "support": "supported"
+    },
+    {
+      "name": "dblink",
+      "version": "1.2",
+      "schema": "extensions",
+      "support": "unsupported"
+    },
+    {
+      "name": "pgcrypto",
+      "version": "1.3",
+      "schema": "extensions",
+      "support": "supported"
+    },
+    {
+      "name": "plpgsql",
+      "version": "1.0",
+      "schema": "pg_catalog",
+      "support": "supported"
+    },
+    {
+      "name": "uuid-ossp",
+      "version": "1.1",
+      "schema": "extensions",
+      "support": "supported"
+    }
+  ],
+  "functions": [
+    {
+      "schema": "public",
+      "name": "handle_new_user",
+      "arguments": "",
+      "kind": "function",
+      "language": "plpgsql",
+      "returns": "trigger",
+      "security_definer": true,
+      "references_auth": false,
+      "references_storage": false,
+      "references_net": false
+    },
+    {
+      "schema": "public",
+      "name": "project_count",
+      "arguments": "team bigint",
+      "kind": "function",
+      "language": "sql",
+      "returns": "integer",
+      "security_definer": false,
+      "references_auth": false,
+      "references_storage": false,
+      "references_net": false
+    },
+    {
+      "schema": "public",
+      "name": "set_updated_at",
+      "arguments": "",
+      "kind": "function",
+      "language": "plpgsql",
+      "returns": "trigger",
+      "security_definer": false,
+      "references_auth": false,
+      "references_storage": false,
+      "references_net": false
+    }
+  ],
+  "triggers": [
+    {
+      "schema": "auth",
+      "table": "users",
+      "name": "on_auth_user_created",
+      "function": "public.handle_new_user",
+      "definition": "CREATE TRIGGER on_auth_user_created AFTER INSERT ON auth.users FOR EACH ROW EXECUTE FUNCTION handle_new_user()",
+      "enabled": true
+    },
+    {
+      "schema": "public",
+      "table": "profiles",
+      "name": "profiles_set_updated_at",
+      "function": "public.set_updated_at",
+      "definition": "CREATE TRIGGER profiles_set_updated_at BEFORE UPDATE ON public.profiles FOR EACH ROW EXECUTE FUNCTION set_updated_at()",
+      "enabled": true
+    }
+  ],
+  "policies": [
+    {
+      "schema": "public",
+      "table": "attachments",
+      "name": "Anyone can file an attachment",
+      "command": "INSERT",
+      "permissive": true,
+      "roles": [
+        "anon"
+      ],
+      "using": null,
+      "with_check": "true",
+      "pattern": "public_write",
+      "confidence": 1.0,
+      "source": "rule",
+      "classifier_label": null,
+      "suggested_equivalent": "a public write route: rate-limit it and put the Captcha port in front; confirm it is meant to be open",
+      "test_stub": "#[tokio::test]\nasync fn rls_public_attachments_anyone_can_file_an_attachment() {\n    // Supabase RLS policy \"Anyone can file an attachment\" on public.attachments (INSERT, roles: anon).\n    // WITH CHECK:\n    //   true\n    // Suggested check (advice, not a translation): a public write route: rate-limit it and put the Captcha port in front; confirm it is meant to be open\n    todo!(\"prove the route refuses what this policy refused, then record the policy as covered\");\n}\n",
+      "disposition": "undecided"
+    },
+    {
+      "schema": "public",
+      "table": "profiles",
+      "name": "Public profiles are viewable by everyone.",
+      "command": "SELECT",
+      "permissive": true,
+      "roles": [
+        "public"
+      ],
+      "using": "true",
+      "with_check": null,
+      "pattern": "public_read",
+      "confidence": 1.0,
+      "source": "rule",
+      "classifier_label": null,
+      "suggested_equivalent": "a public read route with no subject check; confirm every column is meant to be public",
+      "test_stub": "#[tokio::test]\nasync fn rls_public_profiles_public_profiles_are_viewable_by_everyone() {\n    // Supabase RLS policy \"Public profiles are viewable by everyone.\" on public.profiles (SELECT, roles: public).\n    // USING:\n    //   true\n    // Suggested check (advice, not a translation): a public read route with no subject check; confirm every column is meant to be public\n    todo!(\"prove the route refuses what this policy refused, then record the policy as covered\");\n}\n",
+      "disposition": "undecided"
+    },
+    {
+      "schema": "public",
+      "table": "profiles",
+      "name": "Users can insert their own profile.",
+      "command": "INSERT",
+      "permissive": true,
+      "roles": [
+        "public"
+      ],
+      "using": null,
+      "with_check": "(( SELECT auth.uid() AS uid) = id)",
+      "pattern": "owner_only",
+      "confidence": 1.0,
+      "source": "rule",
+      "classifier_label": null,
+      "suggested_equivalent": "owner check in the route: the request's subject must equal `id` (filter reads and refuse writes by it)",
+      "test_stub": "#[tokio::test]\nasync fn rls_public_profiles_users_can_insert_their_own_profile() {\n    // Supabase RLS policy \"Users can insert their own profile.\" on public.profiles (INSERT, roles: public).\n    // WITH CHECK:\n    //   (( SELECT auth.uid() AS uid) = id)\n    // Suggested check (advice, not a translation): owner check in the route: the request's subject must equal `id` (filter reads and refuse writes by it)\n    todo!(\"prove the route refuses what this policy refused, then record the policy as covered\");\n}\n",
+      "disposition": "undecided"
+    },
+    {
+      "schema": "public",
+      "table": "profiles",
+      "name": "Users can update own profile.",
+      "command": "UPDATE",
+      "permissive": true,
+      "roles": [
+        "public"
+      ],
+      "using": "(auth.uid() = id)",
+      "with_check": null,
+      "pattern": "owner_only",
+      "confidence": 1.0,
+      "source": "rule",
+      "classifier_label": null,
+      "suggested_equivalent": "owner check in the route: the request's subject must equal `id` (filter reads and refuse writes by it)",
+      "test_stub": "#[tokio::test]\nasync fn rls_public_profiles_users_can_update_own_profile() {\n    // Supabase RLS policy \"Users can update own profile.\" on public.profiles (UPDATE, roles: public).\n    // USING:\n    //   (auth.uid() = id)\n    // Suggested check (advice, not a translation): owner check in the route: the request's subject must equal `id` (filter reads and refuse writes by it)\n    todo!(\"prove the route refuses what this policy refused, then record the policy as covered\");\n}\n",
+      "disposition": "undecided"
+    },
+    {
+      "schema": "public",
+      "table": "projects",
+      "name": "Admins can delete projects",
+      "command": "DELETE",
+      "permissive": true,
+      "roles": [
+        "public"
+      ],
+      "using": "(((auth.jwt() -> 'app_metadata'::text) ->> 'role'::text) = 'admin'::text)",
+      "with_check": null,
+      "pattern": "role_based",
+      "confidence": 1.0,
+      "source": "rule",
+      "classifier_label": null,
+      "suggested_equivalent": "a role or claim check in the route on the request's subject (signed in, or holding the role)",
+      "test_stub": "#[tokio::test]\nasync fn rls_public_projects_admins_can_delete_projects() {\n    // Supabase RLS policy \"Admins can delete projects\" on public.projects (DELETE, roles: public).\n    // USING:\n    //   (((auth.jwt() -> 'app_metadata'::text) ->> 'role'::text) = 'admin'::text)\n    // Suggested check (advice, not a translation): a role or claim check in the route on the request's subject (signed in, or holding the role)\n    todo!(\"prove the route refuses what this policy refused, then record the policy as covered\");\n}\n",
+      "disposition": "undecided"
+    },
+    {
+      "schema": "public",
+      "table": "projects",
+      "name": "Archived projects stay visible for a grace period",
+      "command": "SELECT",
+      "permissive": true,
+      "roles": [
+        "public"
+      ],
+      "using": "((status <> 'archived'::project_status) OR (created_at > (now() - '30 days'::interval)))",
+      "with_check": null,
+      "pattern": "needs_review",
+      "confidence": 0.0,
+      "source": "rule",
+      "classifier_label": null,
+      "suggested_equivalent": "read the expression and write the equivalent route check, with a failing test first",
+      "test_stub": "#[tokio::test]\nasync fn rls_public_projects_archived_projects_stay_visible_for_a_grace_period() {\n    // Supabase RLS policy \"Archived projects stay visible for a grace period\" on public.projects (SELECT, roles: public).\n    // USING:\n    //   ((status <> 'archived'::project_status) OR (created_at > (now() - '30 days'::interval)))\n    // Suggested check (advice, not a translation): read the expression and write the equivalent route check, with a failing test first\n    todo!(\"prove the route refuses what this policy refused, then record the policy as covered\");\n}\n",
+      "disposition": "undecided"
+    },
+    {
+      "schema": "public",
+      "table": "projects",
+      "name": "Team members can view projects",
+      "command": "SELECT",
+      "permissive": true,
+      "roles": [
+        "authenticated"
+      ],
+      "using": "(EXISTS ( SELECT 1\n   FROM team_members m\n  WHERE ((m.team_id = projects.team_id) AND (m.user_id = auth.uid()))))",
+      "with_check": null,
+      "pattern": "tenant_scoped",
+      "confidence": 1.0,
+      "source": "rule",
+      "classifier_label": null,
+      "suggested_equivalent": "membership check in the route: the request's subject must be a member, looked up in `team_members`, of the row's tenant",
+      "test_stub": "#[tokio::test]\nasync fn rls_public_projects_team_members_can_view_projects() {\n    // Supabase RLS policy \"Team members can view projects\" on public.projects (SELECT, roles: authenticated).\n    // USING:\n    //   (EXISTS ( SELECT 1\n    //      FROM team_members m\n    //     WHERE ((m.team_id = projects.team_id) AND (m.user_id = auth.uid()))))\n    // Suggested check (advice, not a translation): membership check in the route: the request's subject must be a member, looked up in `team_members`, of the row's tenant\n    todo!(\"prove the route refuses what this policy refused, then record the policy as covered\");\n}\n",
+      "disposition": "undecided"
+    },
+    {
+      "schema": "public",
+      "table": "team_members",
+      "name": "Members see their memberships",
+      "command": "SELECT",
+      "permissive": true,
+      "roles": [
+        "public"
+      ],
+      "using": "(user_id = auth.uid())",
+      "with_check": null,
+      "pattern": "owner_only",
+      "confidence": 1.0,
+      "source": "rule",
+      "classifier_label": null,
+      "suggested_equivalent": "owner check in the route: the request's subject must equal `user_id` (filter reads and refuse writes by it)",
+      "test_stub": "#[tokio::test]\nasync fn rls_public_team_members_members_see_their_memberships() {\n    // Supabase RLS policy \"Members see their memberships\" on public.team_members (SELECT, roles: public).\n    // USING:\n    //   (user_id = auth.uid())\n    // Suggested check (advice, not a translation): owner check in the route: the request's subject must equal `user_id` (filter reads and refuse writes by it)\n    todo!(\"prove the route refuses what this policy refused, then record the policy as covered\");\n}\n",
+      "disposition": "undecided"
+    },
+    {
+      "schema": "public",
+      "table": "teams",
+      "name": "Service role manages teams",
+      "command": "ALL",
+      "permissive": true,
+      "roles": [
+        "service_role"
+      ],
+      "using": "true",
+      "with_check": "true",
+      "pattern": "service_role_only",
+      "confidence": 1.0,
+      "source": "rule",
+      "classifier_label": null,
+      "suggested_equivalent": "server-side only: no route exposes it; module code reads and writes it directly",
+      "test_stub": "#[tokio::test]\nasync fn rls_public_teams_service_role_manages_teams() {\n    // Supabase RLS policy \"Service role manages teams\" on public.teams (ALL, roles: service_role).\n    // USING:\n    //   true\n    // WITH CHECK:\n    //   true\n    // Suggested check (advice, not a translation): server-side only: no route exposes it; module code reads and writes it directly\n    todo!(\"prove the route refuses what this policy refused, then record the policy as covered\");\n}\n",
+      "disposition": "undecided"
+    },
+    {
+      "schema": "public",
+      "table": "teams",
+      "name": "Signed-in users can list teams",
+      "command": "SELECT",
+      "permissive": true,
+      "roles": [
+        "authenticated"
+      ],
+      "using": "true",
+      "with_check": null,
+      "pattern": "role_based",
+      "confidence": 1.0,
+      "source": "rule",
+      "classifier_label": null,
+      "suggested_equivalent": "a role or claim check in the route on the request's subject (signed in, or holding the role)",
+      "test_stub": "#[tokio::test]\nasync fn rls_public_teams_signed_in_users_can_list_teams() {\n    // Supabase RLS policy \"Signed-in users can list teams\" on public.teams (SELECT, roles: authenticated).\n    // USING:\n    //   true\n    // Suggested check (advice, not a translation): a role or claim check in the route on the request's subject (signed in, or holding the role)\n    todo!(\"prove the route refuses what this policy refused, then record the policy as covered\");\n}\n",
+      "disposition": "undecided"
+    },
+    {
+      "schema": "storage",
+      "table": "objects",
+      "name": "Avatar images are publicly accessible",
+      "command": "SELECT",
+      "permissive": true,
+      "roles": [
+        "public"
+      ],
+      "using": "(bucket_id = 'avatars'::text)",
+      "with_check": null,
+      "pattern": "needs_review",
+      "confidence": 0.0,
+      "source": "rule",
+      "classifier_label": null,
+      "suggested_equivalent": "read the expression and write the equivalent route check, with a failing test first",
+      "test_stub": "#[tokio::test]\nasync fn rls_storage_objects_avatar_images_are_publicly_accessible() {\n    // Supabase RLS policy \"Avatar images are publicly accessible\" on storage.objects (SELECT, roles: public).\n    // USING:\n    //   (bucket_id = 'avatars'::text)\n    // Suggested check (advice, not a translation): read the expression and write the equivalent route check, with a failing test first\n    todo!(\"prove the route refuses what this policy refused, then record the policy as covered\");\n}\n",
+      "disposition": "undecided"
+    },
+    {
+      "schema": "storage",
+      "table": "objects",
+      "name": "Users upload their own avatar",
+      "command": "INSERT",
+      "permissive": true,
+      "roles": [
+        "authenticated"
+      ],
+      "using": null,
+      "with_check": "((bucket_id = 'avatars'::text) AND (( SELECT auth.uid() AS uid) = owner))",
+      "pattern": "needs_review",
+      "confidence": 0.0,
+      "source": "rule",
+      "classifier_label": null,
+      "suggested_equivalent": "read the expression and write the equivalent route check, with a failing test first",
+      "test_stub": "#[tokio::test]\nasync fn rls_storage_objects_users_upload_their_own_avatar() {\n    // Supabase RLS policy \"Users upload their own avatar\" on storage.objects (INSERT, roles: authenticated).\n    // WITH CHECK:\n    //   ((bucket_id = 'avatars'::text) AND (( SELECT auth.uid() AS uid) = owner))\n    // Suggested check (advice, not a translation): read the expression and write the equivalent route check, with a failing test first\n    todo!(\"prove the route refuses what this policy refused, then record the policy as covered\");\n}\n",
+      "disposition": "undecided"
+    }
+  ],
+  "api_role_grants": [
+    {
+      "role": "anon",
+      "tables": [
+        "public.active_projects",
+        "public.attachments",
+        "public.audit_log",
+        "public.my_projects",
+        "public.profiles",
+        "public.projects",
+        "public.team_members",
+        "public.teams"
+      ]
+    },
+    {
+      "role": "authenticated",
+      "tables": [
+        "public.active_projects",
+        "public.attachments",
+        "public.audit_log",
+        "public.my_projects",
+        "public.profiles",
+        "public.projects",
+        "public.team_members",
+        "public.teams"
+      ]
+    },
+    {
+      "role": "service_role",
+      "tables": [
+        "public.active_projects",
+        "public.attachments",
+        "public.audit_log",
+        "public.my_projects",
+        "public.profiles",
+        "public.projects",
+        "public.team_members",
+        "public.teams"
+      ]
+    }
+  ],
+  "auth": {
+    "present": true,
+    "users": 3,
+    "users_without_password": 2,
+    "users_unconfirmed": 1,
+    "anonymous_users": 0,
+    "identities_by_provider": [
+      {
+        "provider": "email",
+        "identities": 1
+      },
+      {
+        "provider": "github",
+        "identities": 1
+      },
+      {
+        "provider": "google",
+        "identities": 1
+      }
+    ],
+    "mfa_factors": 1,
+    "sso_providers": 0,
+    "enabled_providers": null,
+    "enabled_mfa": null
+  },
+  "storage": {
+    "present": true,
+    "counts_exact": true,
+    "buckets": [
+      {
+        "id": "avatars",
+        "name": "avatars",
+        "public": true,
+        "file_size_limit": 1048576,
+        "allowed_mime_types": [
+          "image/jpeg",
+          "image/png"
+        ],
+        "objects": 2,
+        "bytes": 52224,
+        "objects_over_blob_cap": 0
+      },
+      {
+        "id": "documents",
+        "name": "documents",
+        "public": false,
+        "file_size_limit": null,
+        "allowed_mime_types": [],
+        "objects": 1,
+        "bytes": 12582912,
+        "objects_over_blob_cap": 1
+      }
+    ]
+  },
+  "edge_functions": {
+    "status": "not_inspected",
+    "functions": []
+  },
+  "realtime": {
+    "publications": [
+      {
+        "name": "supabase_realtime",
+        "all_tables": false,
+        "operations": [
+          "delete",
+          "insert",
+          "truncate",
+          "update"
+        ],
+        "tables": [
+          "public.projects"
+        ]
+      }
+    ]
+  },
+  "cron_jobs": [],
+  "findings": [
+    {
+      "id": "auth:mfa_factors",
+      "kind": "auth",
+      "object": "mfa_factors",
+      "classification": "needs_work",
+      "phase": "auth",
+      "reason": "MFA factors are not imported; enrolled users lose their second factor",
+      "cratefield_equivalent": "re-enrolment (passkeys, auth-passkeys) after the move"
+    },
+    {
+      "id": "auth:users",
+      "kind": "auth",
+      "object": "users",
+      "classification": "automatic",
+      "phase": "auth",
+      "reason": "3 user(s): email, verified flag, bcrypt hash and created_at move through the harness's user import; passwords keep working",
+      "cratefield_equivalent": "harness users (auth-password, auth-magic-link)"
+    },
+    {
+      "id": "auth_provider:email",
+      "kind": "auth_provider",
+      "object": "email",
+      "classification": "automatic",
+      "phase": "auth",
+      "reason": "email and password, or magic link",
+      "cratefield_equivalent": "auth-password and auth-magic-link"
+    },
+    {
+      "id": "auth_provider:github",
+      "kind": "auth_provider",
+      "object": "github",
+      "classification": "needs_work",
+      "phase": "auth",
+      "reason": "github sign-in has no harness provider",
+      "cratefield_equivalent": "its users sign in by magic link until a provider is added"
+    },
+    {
+      "id": "auth_provider:google",
+      "kind": "auth_provider",
+      "object": "google",
+      "classification": "needs_work",
+      "phase": "auth",
+      "reason": "google sign-in: identities map once the provider is configured",
+      "cratefield_equivalent": "auth-oidc's `google` provider"
+    },
+    {
+      "id": "bucket:avatars",
+      "kind": "bucket",
+      "object": "avatars",
+      "classification": "automatic",
+      "phase": "storage",
+      "reason": "objects copied through the Storage API and verified by count, size and checksum",
+      "cratefield_equivalent": "R2 under the same keys, served by a public route"
+    },
+    {
+      "id": "bucket:documents",
+      "kind": "bucket",
+      "object": "documents",
+      "classification": "needs_work",
+      "phase": "storage",
+      "reason": "1 object(s) over the Blob port's 10 MiB put cap: copied and readable, but module code cannot replace them through the port",
+      "cratefield_equivalent": "R2 under the same keys"
+    },
+    {
+      "id": "edge_function:unknown",
+      "kind": "edge_function",
+      "object": "unknown",
+      "classification": "needs_work",
+      "phase": "code",
+      "reason": "Edge Functions are only visible through the Management API, which was not read: unknown, not none",
+      "cratefield_equivalent": "re-run with a Management API token"
+    },
+    {
+      "id": "enum:public.project_status",
+      "kind": "enum",
+      "object": "public.project_status",
+      "classification": "automatic",
+      "phase": "schema",
+      "reason": "recreated with the same labels in the same order",
+      "cratefield_equivalent": "app.project_status"
+    },
+    {
+      "id": "extension:citext",
+      "kind": "extension",
+      "object": "citext",
+      "classification": "automatic",
+      "phase": "schema",
+      "reason": "created on the target before the schema",
+      "cratefield_equivalent": "created on the target"
+    },
+    {
+      "id": "extension:dblink",
+      "kind": "extension",
+      "object": "dblink",
+      "classification": "blocker",
+      "phase": "schema",
+      "reason": "cross-database queries: the harness is one database per tenant (ADR 0008) and reaches other systems through ports, not through SQL",
+      "cratefield_equivalent": "none"
+    },
+    {
+      "id": "extension:pgcrypto",
+      "kind": "extension",
+      "object": "pgcrypto",
+      "classification": "automatic",
+      "phase": "schema",
+      "reason": "created on the target before the schema",
+      "cratefield_equivalent": "created on the target"
+    },
+    {
+      "id": "extension:plpgsql",
+      "kind": "extension",
+      "object": "plpgsql",
+      "classification": "automatic",
+      "phase": "schema",
+      "reason": "created on the target before the schema",
+      "cratefield_equivalent": "created on the target"
+    },
+    {
+      "id": "extension:uuid-ossp",
+      "kind": "extension",
+      "object": "uuid-ossp",
+      "classification": "automatic",
+      "phase": "schema",
+      "reason": "created on the target before the schema",
+      "cratefield_equivalent": "created on the target"
+    },
+    {
+      "id": "foreign_key:public.attachments.attachments_object_id_fkey",
+      "kind": "foreign_key",
+      "object": "public.attachments.attachments_object_id_fkey",
+      "classification": "blocker",
+      "phase": "schema",
+      "reason": "points into storage.objects, which no phase recreates as a table (storage objects become R2 keys, auth rows become harness users)",
+      "cratefield_equivalent": "drop the constraint on the source or decide what the column holds after the move (an object key, a user id) before the schema phase"
+    },
+    {
+      "id": "foreign_key:public.profiles.profiles_id_fkey",
+      "kind": "foreign_key",
+      "object": "public.profiles.profiles_id_fkey",
+      "classification": "needs_work",
+      "phase": "schema",
+      "reason": "points into auth.users: dropped on load, its values kept and checked against the imported users in verify",
+      "cratefield_equivalent": "the imported user's id, mapped through the auth-users step's id table"
+    },
+    {
+      "id": "foreign_key:public.team_members.team_members_user_id_fkey",
+      "kind": "foreign_key",
+      "object": "public.team_members.team_members_user_id_fkey",
+      "classification": "needs_work",
+      "phase": "schema",
+      "reason": "points into auth.users: dropped on load, its values kept and checked against the imported users in verify",
+      "cratefield_equivalent": "the imported user's id, mapped through the auth-users step's id table"
+    },
+    {
+      "id": "function:public.handle_new_user()",
+      "kind": "function",
+      "object": "public.handle_new_user()",
+      "classification": "needs_work",
+      "phase": "code",
+      "reason": "SECURITY DEFINER: it bypasses the caller's privileges",
+      "cratefield_equivalent": "module code over the request's subject (and the `HttpClient` port for HTTP); or copy it once it no longer reaches into Supabase"
+    },
+    {
+      "id": "function:public.project_count(team bigint)",
+      "kind": "function",
+      "object": "public.project_count(team bigint)",
+      "classification": "automatic",
+      "phase": "schema",
+      "reason": "copied verbatim, its search_path pinned to the target schema",
+      "cratefield_equivalent": "app.project_count"
+    },
+    {
+      "id": "function:public.set_updated_at()",
+      "kind": "function",
+      "object": "public.set_updated_at()",
+      "classification": "automatic",
+      "phase": "schema",
+      "reason": "copied verbatim, its search_path pinned to the target schema",
+      "cratefield_equivalent": "app.set_updated_at"
+    },
+    {
+      "id": "grant:anon (8 tables)",
+      "kind": "grant",
+      "object": "anon (8 tables)",
+      "classification": "needs_work",
+      "phase": "code",
+      "reason": "a PostgREST role: the harness exposes no table directly, so what this role could reach is reachable only through a route someone writes",
+      "cratefield_equivalent": "a route per access path, with its check"
+    },
+    {
+      "id": "grant:authenticated (8 tables)",
+      "kind": "grant",
+      "object": "authenticated (8 tables)",
+      "classification": "needs_work",
+      "phase": "code",
+      "reason": "a PostgREST role: the harness exposes no table directly, so what this role could reach is reachable only through a route someone writes",
+      "cratefield_equivalent": "a route per access path, with its check"
+    },
+    {
+      "id": "grant:service_role (8 tables)",
+      "kind": "grant",
+      "object": "service_role (8 tables)",
+      "classification": "automatic",
+      "phase": "code",
+      "reason": "the server-side role; module code has the same reach",
+      "cratefield_equivalent": "module code"
+    },
+    {
+      "id": "policy:public.attachments.Anyone can file an attachment",
+      "kind": "policy",
+      "object": "public.attachments.Anyone can file an attachment",
+      "classification": "needs_work",
+      "phase": "code",
+      "reason": "RLS is neither copied nor translated (ADR 0026); public_write by rule at confidence 1.00; needs a covered or waived disposition before cutover",
+      "cratefield_equivalent": "a public write route: rate-limit it and put the Captcha port in front; confirm it is meant to be open"
+    },
+    {
+      "id": "policy:public.profiles.Public profiles are viewable by everyone.",
+      "kind": "policy",
+      "object": "public.profiles.Public profiles are viewable by everyone.",
+      "classification": "needs_work",
+      "phase": "code",
+      "reason": "RLS is neither copied nor translated (ADR 0026); public_read by rule at confidence 1.00; needs a covered or waived disposition before cutover",
+      "cratefield_equivalent": "a public read route with no subject check; confirm every column is meant to be public"
+    },
+    {
+      "id": "policy:public.profiles.Users can insert their own profile.",
+      "kind": "policy",
+      "object": "public.profiles.Users can insert their own profile.",
+      "classification": "needs_work",
+      "phase": "code",
+      "reason": "RLS is neither copied nor translated (ADR 0026); owner_only by rule at confidence 1.00; needs a covered or waived disposition before cutover",
+      "cratefield_equivalent": "owner check in the route: the request's subject must equal `id` (filter reads and refuse writes by it)"
+    },
+    {
+      "id": "policy:public.profiles.Users can update own profile.",
+      "kind": "policy",
+      "object": "public.profiles.Users can update own profile.",
+      "classification": "needs_work",
+      "phase": "code",
+      "reason": "RLS is neither copied nor translated (ADR 0026); owner_only by rule at confidence 1.00; needs a covered or waived disposition before cutover",
+      "cratefield_equivalent": "owner check in the route: the request's subject must equal `id` (filter reads and refuse writes by it)"
+    },
+    {
+      "id": "policy:public.projects.Admins can delete projects",
+      "kind": "policy",
+      "object": "public.projects.Admins can delete projects",
+      "classification": "needs_work",
+      "phase": "code",
+      "reason": "RLS is neither copied nor translated (ADR 0026); role_based by rule at confidence 1.00; needs a covered or waived disposition before cutover",
+      "cratefield_equivalent": "a role or claim check in the route on the request's subject (signed in, or holding the role)"
+    },
+    {
+      "id": "policy:public.projects.Archived projects stay visible for a grace period",
+      "kind": "policy",
+      "object": "public.projects.Archived projects stay visible for a grace period",
+      "classification": "needs_work",
+      "phase": "code",
+      "reason": "RLS is neither copied nor translated (ADR 0026); needs_review by rule at confidence 0.00; needs a covered or waived disposition before cutover",
+      "cratefield_equivalent": "read the expression and write the equivalent route check, with a failing test first"
+    },
+    {
+      "id": "policy:public.projects.Team members can view projects",
+      "kind": "policy",
+      "object": "public.projects.Team members can view projects",
+      "classification": "needs_work",
+      "phase": "code",
+      "reason": "RLS is neither copied nor translated (ADR 0026); tenant_scoped by rule at confidence 1.00; needs a covered or waived disposition before cutover",
+      "cratefield_equivalent": "membership check in the route: the request's subject must be a member, looked up in `team_members`, of the row's tenant"
+    },
+    {
+      "id": "policy:public.team_members.Members see their memberships",
+      "kind": "policy",
+      "object": "public.team_members.Members see their memberships",
+      "classification": "needs_work",
+      "phase": "code",
+      "reason": "RLS is neither copied nor translated (ADR 0026); owner_only by rule at confidence 1.00; needs a covered or waived disposition before cutover",
+      "cratefield_equivalent": "owner check in the route: the request's subject must equal `user_id` (filter reads and refuse writes by it)"
+    },
+    {
+      "id": "policy:public.teams.Service role manages teams",
+      "kind": "policy",
+      "object": "public.teams.Service role manages teams",
+      "classification": "needs_work",
+      "phase": "code",
+      "reason": "RLS is neither copied nor translated (ADR 0026); service_role_only by rule at confidence 1.00; needs a covered or waived disposition before cutover",
+      "cratefield_equivalent": "server-side only: no route exposes it; module code reads and writes it directly"
+    },
+    {
+      "id": "policy:public.teams.Signed-in users can list teams",
+      "kind": "policy",
+      "object": "public.teams.Signed-in users can list teams",
+      "classification": "needs_work",
+      "phase": "code",
+      "reason": "RLS is neither copied nor translated (ADR 0026); role_based by rule at confidence 1.00; needs a covered or waived disposition before cutover",
+      "cratefield_equivalent": "a role or claim check in the route on the request's subject (signed in, or holding the role)"
+    },
+    {
+      "id": "policy:storage.objects.Avatar images are publicly accessible",
+      "kind": "policy",
+      "object": "storage.objects.Avatar images are publicly accessible",
+      "classification": "needs_work",
+      "phase": "code",
+      "reason": "RLS is neither copied nor translated (ADR 0026); needs_review by rule at confidence 0.00; needs a covered or waived disposition before cutover",
+      "cratefield_equivalent": "read the expression and write the equivalent route check, with a failing test first"
+    },
+    {
+      "id": "policy:storage.objects.Users upload their own avatar",
+      "kind": "policy",
+      "object": "storage.objects.Users upload their own avatar",
+      "classification": "needs_work",
+      "phase": "code",
+      "reason": "RLS is neither copied nor translated (ADR 0026); needs_review by rule at confidence 0.00; needs a covered or waived disposition before cutover",
+      "cratefield_equivalent": "read the expression and write the equivalent route check, with a failing test first"
+    },
+    {
+      "id": "publication:supabase_realtime",
+      "kind": "publication",
+      "object": "supabase_realtime",
+      "classification": "needs_work",
+      "phase": "code",
+      "reason": "Realtime streams changes to these tables to clients",
+      "cratefield_equivalent": "the `Realtime` port: a room the owning module broadcasts to after each write"
+    },
+    {
+      "id": "schema:public",
+      "kind": "schema",
+      "object": "public",
+      "classification": "automatic",
+      "phase": "schema",
+      "reason": "a user schema; owned by the venture, not tracked by harness migrations",
+      "cratefield_equivalent": "the Postgres schema `app` in the venture's database"
+    },
+    {
+      "id": "sequence:public.invoice_number_seq",
+      "kind": "sequence",
+      "object": "public.invoice_number_seq",
+      "classification": "automatic",
+      "phase": "schema",
+      "reason": "recreated, and set to at least the source's value in verify",
+      "cratefield_equivalent": "app.invoice_number_seq"
+    },
+    {
+      "id": "sequence:public.projects_id_seq",
+      "kind": "sequence",
+      "object": "public.projects_id_seq",
+      "classification": "automatic",
+      "phase": "schema",
+      "reason": "recreated, and set to at least the source's value in verify",
+      "cratefield_equivalent": "app.projects_id_seq"
+    },
+    {
+      "id": "sequence:public.teams_id_seq",
+      "kind": "sequence",
+      "object": "public.teams_id_seq",
+      "classification": "automatic",
+      "phase": "schema",
+      "reason": "recreated, and set to at least the source's value in verify",
+      "cratefield_equivalent": "app.teams_id_seq"
+    },
+    {
+      "id": "table:public.attachments",
+      "kind": "table",
+      "object": "public.attachments",
+      "classification": "automatic",
+      "phase": "data",
+      "reason": "columns, constraints and indexes recreated; rows copied with COPY and verified by count and checksum",
+      "cratefield_equivalent": "app.attachments"
+    },
+    {
+      "id": "table:public.audit_log",
+      "kind": "table",
+      "object": "public.audit_log",
+      "classification": "needs_work",
+      "phase": "data",
+      "reason": "no primary key: copied in one piece and checksummed over its sorted rows, so an interrupted copy restarts the table; add a key for chunked, resumable copy",
+      "cratefield_equivalent": "app.audit_log"
+    },
+    {
+      "id": "table:public.profiles",
+      "kind": "table",
+      "object": "public.profiles",
+      "classification": "automatic",
+      "phase": "data",
+      "reason": "columns, constraints and indexes recreated; rows copied with COPY and verified by count and checksum",
+      "cratefield_equivalent": "app.profiles"
+    },
+    {
+      "id": "table:public.projects",
+      "kind": "table",
+      "object": "public.projects",
+      "classification": "automatic",
+      "phase": "data",
+      "reason": "columns, constraints and indexes recreated; rows copied with COPY and verified by count and checksum",
+      "cratefield_equivalent": "app.projects"
+    },
+    {
+      "id": "table:public.team_members",
+      "kind": "table",
+      "object": "public.team_members",
+      "classification": "automatic",
+      "phase": "data",
+      "reason": "columns, constraints and indexes recreated; rows copied with COPY and verified by count and checksum",
+      "cratefield_equivalent": "app.team_members"
+    },
+    {
+      "id": "table:public.teams",
+      "kind": "table",
+      "object": "public.teams",
+      "classification": "automatic",
+      "phase": "data",
+      "reason": "columns, constraints and indexes recreated; rows copied with COPY and verified by count and checksum",
+      "cratefield_equivalent": "app.teams"
+    },
+    {
+      "id": "trigger:auth.users.on_auth_user_created",
+      "kind": "trigger",
+      "object": "auth.users.on_auth_user_created",
+      "classification": "needs_work",
+      "phase": "code",
+      "reason": "fires on auth.users, which the harness replaces: it will never fire",
+      "cratefield_equivalent": "a module reacting to the harness's account events (sign-up, deletion)"
+    },
+    {
+      "id": "trigger:public.profiles.profiles_set_updated_at",
+      "kind": "trigger",
+      "object": "public.profiles.profiles_set_updated_at",
+      "classification": "automatic",
+      "phase": "schema",
+      "reason": "copied verbatim with its function",
+      "cratefield_equivalent": "on app.profiles"
+    },
+    {
+      "id": "view:public.active_projects",
+      "kind": "view",
+      "object": "public.active_projects",
+      "classification": "automatic",
+      "phase": "schema",
+      "reason": "copied verbatim",
+      "cratefield_equivalent": "app.active_projects"
+    },
+    {
+      "id": "view:public.my_projects",
+      "kind": "view",
+      "object": "public.my_projects",
+      "classification": "needs_work",
+      "phase": "code",
+      "reason": "reads auth.* or storage.*, which do not exist on the target; not copied",
+      "cratefield_equivalent": "a module query that takes the request's subject as a parameter"
+    }
+  ],
+  "warnings": [
+    "inspected as the superuser `<role>`: the session was read-only, but use the read-only role from docs/import/supabase.md for the real run"
+  ]
+}

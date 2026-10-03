@@ -95,6 +95,8 @@ jobs:
       # import`'s is behind `auth-import` (issue #650), for the same reason.
       - name: fz push send and fz auth import, with their optional transports
         run: cargo clippy -p cratefield-cli --all-targets --features push-send,auth-import -- -D warnings
+      - name: fz import supabase, with its optional engine (issue #658)
+        run: cargo clippy -p cratefield-cli --all-targets --features import-supabase -- -D warnings
       - name: core dependency boundary (ADR 0001)
         run: |
           if cargo tree -p cratefield-core --edges normal | grep -qE '(worker|wasm-bindgen|tokio|reqwest|sqlx|rusqlite) v'; then
@@ -136,6 +138,12 @@ jobs:
       # the *other* build prints in its place.
       - name: fz push send, with its optional transport (issue #184)
         run: cargo test -p cratefield-cli --features push-send
+      # The workspace run builds `fz import supabase` without its engine, so
+      # the CLI's half of the inspect tests (a connection error quotes no
+      # secret) only runs here. The engine's own fixture tests run in the
+      # workspace run, against the service container above.
+      - name: fz import supabase, with its optional engine (issue #658)
+        run: cargo test -p cratefield-cli --features import-supabase
       - name: fz migrations apply against the service container (issue #18)
         run: cargo test -p cratefield-cli-acceptance --features postgres
       # `push` is off by default, and `tests/push_wiring.rs` is gated on it
@@ -398,6 +406,11 @@ jobs:
       # dependency that cannot reach wasm32.
       - name: Build cratefield-adapter-github-app to wasm
         run: cargo build --target wasm32-unknown-unknown -p cratefield-adapter-github-app
+      # The Polar adapter (issue #690) rides the `HttpClient` and `Clock`
+      # ports, and no venture in this repo enables its facade feature yet,
+      # so nothing else would notice a dependency that cannot reach wasm32.
+      - name: Build cratefield-adapter-polar to wasm
+        run: cargo build --target wasm32-unknown-unknown -p cratefield-adapter-polar
       # And for workers-ai (issue #456) wasm32 is the whole point: it only
       # functions on an isolate, where the `env.AI` binding exists, so the
       # native build proves nothing and this leg is its only positive proof.
