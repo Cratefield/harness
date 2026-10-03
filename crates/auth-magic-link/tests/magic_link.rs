@@ -119,6 +119,67 @@ fn kit_with(extra: &[(&str, &str)]) -> Kit {
     }
 }
 
+/// The sign-in mail as a German deployment would write it, so a test can
+/// see which locale was chosen without reading the compiled default's
+/// wording.
+struct GermanMail;
+
+impl cratefield_core::Template for GermanMail {
+    fn render(
+        &self,
+        _data: &Value,
+        _locale: &str,
+    ) -> Result<cratefield_core::Rendered, cratefield_core::TemplateError> {
+        Ok(cratefield_core::Rendered {
+            subject: "Bei Factory Zero anmelden".to_owned(),
+            html: "<p>Melde dich an.</p>".to_owned(),
+            text: "Melde dich bei Factory Zero an.".to_owned(),
+        })
+    }
+}
+
+/// A kit whose deployment lists `en,de` and registers a German override of
+/// the sign-in mail (issue #649). The default is still `en`: the compiled
+/// template, since only `<id>@de` is registered.
+fn kit_localized() -> Kit {
+    let pairs = vec![
+        ("AUTH_MAGIC_LINK_PUBLIC_BASE".to_owned(), BASE.to_owned()),
+        (
+            "AUTH_MAGIC_LINK_MAIL_FROM".to_owned(),
+            "sign-in@factory0.ventures".to_owned(),
+        ),
+        ("AUTH_LOCALES".to_owned(), "en,de".to_owned()),
+    ];
+    let outbox = Outbox::default();
+    let clock = Arc::new(TestClock(AtomicI64::new(1_788_775_200)));
+    let config: Arc<dyn Config> = Arc::new(MapConfig::from_pairs(pairs));
+
+    let mailer = outbox.clone();
+    let clock_for_ports = clock.clone();
+    let config_for_ports = config.clone();
+    let harness = TestHarness::with_builder(
+        vec![Box::new(AuthCore::new()), Box::new(MagicLink::new())],
+        |builder| {
+            builder.template(
+                "auth-magic-link/sign-in@de",
+                Box::new(GermanMail) as Box<dyn cratefield_core::Template>,
+            )
+        },
+        move |ports| {
+            ports.mailer = Some(Arc::new(mailer));
+            ports.clock = Some(clock_for_ports);
+            ports.config = config_for_ports;
+        },
+    );
+    let db = harness.db.clone();
+    Kit {
+        harness,
+        outbox,
+        clock,
+        db,
+    }
+}
+
 struct Res {
     status: StatusCode,
     headers: HeaderMap,
@@ -181,6 +242,22 @@ async fn request_link(kit: &Kit, email: &str) -> Res {
         .body(axum::body::Body::from(
             json!({ "email": email }).to_string(),
         ))
+        .expect("request");
+    send(kit, request).await
+}
+
+/// `POST /request` with a JSON body and extra headers, for the locale
+/// signals that arrive as headers (issue #649).
+async fn request_link_with(kit: &Kit, body: Value, extra: &[(&str, &str)]) -> Res {
+    let mut builder = Request::builder()
+        .method(Method::POST)
+        .uri(REQUEST)
+        .header(header::CONTENT_TYPE, "application/json");
+    for (name, value) in extra {
+        builder = builder.header(*name, *value);
+    }
+    let request = builder
+        .body(axum::body::Body::from(body.to_string()))
         .expect("request");
     send(kit, request).await
 }
@@ -267,6 +344,7 @@ async fn seed(kit: &Kit, email: &str, verified: bool) -> String {
             display_name: None,
             primary_email: Some(email.to_owned()),
             primary_email_verified: verified,
+            locale: None,
             status: STATUS_ACTIVE.to_owned(),
             created_at: "2026-09-07T10:00:00Z".to_owned(),
             updated_at: "2026-09-07T10:00:00Z".to_owned(),
@@ -1113,5 +1191,113 @@ fn an_empty_box_is_the_one_thing_the_page_will_say() {
         );
         assert!(answer.text().contains("<form"), "the form comes back");
         assert_eq!(kit.outbox.count(), 0);
+    });
+}
+
+// ---------------------------------------------------------------------
+// Issue #649: the mail is written in a locale the request chose, from the
+// signals it carries, and never in a tag no template is registered under.
+
+/// The caller names the locale outright, and the deployment has a template
+/// for it.
+#[test]
+fn a_named_locale_renders_the_localized_mail() {
+    pollster::block_on(async {
+        let kit = kit_localized();
+        seed(&kit, "ada@example.com", false).await;
+
+        let response = request_link_with(
+            &kit,
+            json!({ "email": "ada@example.com", "locale": "de" }),
+            &[],
+        )
+        .await;
+        assert_eq!(response.status, StatusCode::ACCEPTED);
+        assert_eq!(
+            kit.outbox.last().expect("a mail").subject,
+            "Bei Factory Zero anmelden"
+        );
+    });
+}
+
+/// No explicit field: the header the browser sends decides, including a
+/// regional tag that matches the deployment's `de` by language.
+#[test]
+fn accept_language_picks_a_localized_template() {
+    pollster::block_on(async {
+        let kit = kit_localized();
+        seed(&kit, "ada@example.com", false).await;
+
+        let response = request_link_with(
+            &kit,
+            json!({ "email": "ada@example.com" }),
+            &[("accept-language", "de-DE,de;q=0.9,en;q=0.5")],
+        )
+        .await;
+        assert_eq!(response.status, StatusCode::ACCEPTED);
+        assert_eq!(
+            kit.outbox.last().expect("a mail").subject,
+            "Bei Factory Zero anmelden"
+        );
+    });
+}
+
+/// A locale the deployment does not support is not invented: the request
+/// falls through to the deployment default, and the compiled `en`
+/// template answers.
+#[test]
+fn an_unsupported_locale_falls_back_to_the_deployment_default() {
+    pollster::block_on(async {
+        let kit = kit_localized();
+        seed(&kit, "ada@example.com", false).await;
+
+        let response = request_link_with(
+            &kit,
+            json!({ "email": "ada@example.com", "locale": "xx" }),
+            &[],
+        )
+        .await;
+        assert_eq!(response.status, StatusCode::ACCEPTED);
+        let subject = kit.outbox.last().expect("a mail").subject;
+        assert!(subject.contains("Sign in to"), "{subject}");
+    });
+}
+
+/// An account created by link records the locale the caller named, when the
+/// deployment supports it — and never one it does not.
+#[test]
+fn registering_by_link_stores_a_supported_locale() {
+    pollster::block_on(async {
+        let kit = kit_with(&[
+            ("AUTH_MAGIC_LINK_ALLOW_REGISTRATION", "true"),
+            ("AUTH_LOCALES", "en,de"),
+        ]);
+
+        request_link_with(
+            &kit,
+            json!({ "email": "ada@example.com", "locale": "de" }),
+            &[],
+        )
+        .await;
+        let user = user_by_primary_email(&*kit.db, "ada@example.com")
+            .await
+            .expect("query")
+            .expect("a user");
+        assert_eq!(user.locale.as_deref(), Some("de"));
+
+        // Past the send cooldown, and a locale the deployment does not
+        // support leaves the column null rather than storing the string.
+        kit.clock.0.fetch_add(61, Ordering::SeqCst);
+        request_link_with(
+            &kit,
+            json!({ "email": "grace@example.com", "locale": "xx" }),
+            &[],
+        )
+        .await;
+        let user = user_by_primary_email(&*kit.db, "grace@example.com")
+            .await
+            .expect("query")
+            .expect("a user");
+        assert_eq!(user.locale, None);
     });
 }

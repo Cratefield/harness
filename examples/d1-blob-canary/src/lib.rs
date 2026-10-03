@@ -251,6 +251,7 @@ async fn session(env: Env) -> Result<Json, Json> {
         display_name: None,
         primary_email: Some("canary@d1-blob-canary.invalid".to_owned()),
         primary_email_verified: true,
+        locale: None,
         status: STATUS_ACTIVE.to_owned(),
         created_at: "2026-09-19T00:00:00Z".to_owned(),
         updated_at: "2026-09-19T00:00:00Z".to_owned(),
