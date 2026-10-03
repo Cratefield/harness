@@ -11,6 +11,18 @@
 //! Scope is unchanged: registration and assertion. Attestation statements
 //! other than `none` are stored but not verified, which is the ordinary
 //! consumer relying-party position.
+//!
+//! **A library as well as this module's engine.** [`verify_registration`]
+//! and [`verify_assertion`] are public so a venture that keeps its own
+//! users, sessions and challenge storage (one whose site calls its API
+//! cross-origin, say, which `auth-core`'s same-origin session model does
+//! not serve) can still verify ceremonies with exactly these checks rather
+//! than writing its own. Everything around them stays the caller's job and
+//! is what this crate's `register` and `login` modules show: issue a fresh
+//! random challenge per ceremony, store it so it can be spent once (a
+//! conditional update, never read-then-write), pass only the configured
+//! RP id and origins, persist `cose_key_raw` verbatim, and store the
+//! returned `sign_count` after every successful assertion.
 
 use std::io::Cursor;
 
@@ -67,7 +79,7 @@ impl UserVerification {
 /// the same answer on the wire, because telling a caller which check failed
 /// tells an attacker where to aim.
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
-pub(crate) enum WebauthnError {
+pub enum WebauthnError {
     #[error("credential type is {0:?}, not public-key")]
     CredentialType(String),
     #[error("clientDataJSON is not valid JSON: {0}")]
@@ -129,7 +141,7 @@ impl AuthData {
 }
 
 /// What a successful registration produced.
-pub(crate) struct RegisteredCredential {
+pub struct RegisteredCredential {
     pub credential_id: Vec<u8>,
     pub cose_key_raw: Vec<u8>,
     pub sign_count: u32,
@@ -142,7 +154,7 @@ pub(crate) struct RegisteredCredential {
 }
 
 /// What a successful assertion established.
-pub(crate) struct VerifiedAssertion {
+pub struct VerifiedAssertion {
     pub sign_count: u32,
     pub user_verified: bool,
     pub user_handle: Option<Vec<u8>>,
@@ -327,7 +339,18 @@ impl AttestationObject {
     }
 }
 
-pub(crate) fn verify_registration(
+/// Checks a registration (`navigator.credentials.create`) against the
+/// challenge issued for it: credential type, client data (`webauthn.create`,
+/// the challenge, an allowed origin), the attestation object, the rpId hash,
+/// user presence and, under [`UserVerification::Required`], verification;
+/// and that the public key is one [`verify_assertion`] can later use
+/// (ES256, RS256 or EdDSA).
+///
+/// # Errors
+///
+/// A [`WebauthnError`] naming the failed check. Log it; answer the caller
+/// with one undifferentiated refusal.
+pub fn verify_registration(
     rp_id: &str,
     allowed_origins: &[url::Url],
     expected_challenge: &[u8],
@@ -392,13 +415,24 @@ pub(crate) fn verify_registration(
 
 /// The credential as the database holds it, which is what an assertion is
 /// checked against.
-pub(crate) struct StoredPasskey<'a> {
+pub struct StoredPasskey<'a> {
     pub credential_id: &'a [u8],
     pub cose_key: &'a [u8],
     pub sign_count: u32,
 }
 
-pub(crate) fn verify_assertion(
+/// Checks a sign-in (`navigator.credentials.get`) against the challenge
+/// issued for it and the stored credential: client data (`webauthn.get`,
+/// the challenge, an allowed origin), the rpId hash, presence and
+/// verification policy, that the assertion is for `stored`, the signature
+/// over `authenticatorData || SHA-256(clientDataJSON)`, and then the sign
+/// counter (a non-zero counter must advance).
+///
+/// # Errors
+///
+/// A [`WebauthnError`] naming the failed check. Log it; answer the caller
+/// with one undifferentiated refusal.
+pub fn verify_assertion(
     rp_id: &str,
     allowed_origins: &[url::Url],
     expected_challenge: &[u8],
