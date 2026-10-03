@@ -86,7 +86,7 @@ app's cookies and redirects to `end_session_endpoint`, where the IdP ends the br
 When the user still has a live IdP session, the IdP's `GET /logout` shows a
 "Sign out of this device?" confirmation page and only revokes the session after
 the user confirms, then redirects to the registered `post_logout_redirect_uri`
-(`crates/auth-core/src/authorize.rs:569-591`).
+(`logout` and `logout_confirm` in `crates/auth-core/src/authorize.rs`).
 
 ```ts
 if (url.pathname === '/auth/sign-out' && request.method === 'POST') {
