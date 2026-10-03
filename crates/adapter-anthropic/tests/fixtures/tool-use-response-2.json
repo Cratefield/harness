@@ -1,0 +1,15 @@
+{
+  "id": "msg_014p7gG3wDgGV9EUtLvnow3U",
+  "type": "message",
+  "role": "assistant",
+  "model": "claude-opus-5",
+  "content": [
+    {
+      "type": "text",
+      "text": "The current weather in San Francisco is 15 degrees Celsius with partly cloudy skies."
+    }
+  ],
+  "stop_reason": "end_turn",
+  "stop_sequence": null,
+  "usage": { "input_tokens": 710, "output_tokens": 28 }
+}

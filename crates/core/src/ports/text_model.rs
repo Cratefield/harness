@@ -5,14 +5,23 @@
 //! and invisible to the module (ADR 0002). [`RoutingTextModel`] is the seam,
 //! the way [`RoutingPush`](crate::RoutingPush) is for transports.
 //!
-//! **No tools, no streaming, no embeddings in v1.** A completion is one
-//! request and one buffered answer. Streaming is the deliberate omission,
-//! not a gap: `response_to_worker` buffers a whole harness response to
+//! **Tools arrived in issue #665; streaming stays out of scope.** A
+//! [`Prompt`] may carry [`ToolSpec`]s and a [`ToolChoice`]; a
+//! [`Completion`] may carry the [`ToolCall`]s the model asked for; and a
+//! [`Turn`] can quote an assistant's requested calls and the
+//! [`ToolResult`]s a user turn carries back. An adapter that can carry
+//! tools says so through [`TextModel::supports`]; one that cannot is never
+//! asked — [`RoutingTextModel`] and [`run_tool_loop`](crate::run_tool_loop)
+//! refuse a tools-bearing prompt up front with
+//! [`TextModelError::Unsupported`]. Embeddings live on the separate
+//! [`Embedder`](crate::Embedder) port (issue #561), never here.
+//!
+//! Streaming is the deliberate omission, not a gap:
+//! `response_to_worker` buffers a whole harness response to
 //! `MAX_RESPONSE_BUFFER` (1 MiB, `crates/runtime-cloudflare/src/lib.rs`),
 //! so a streamed completion has nowhere to arrive on this runtime — a port
 //! that promised deltas would be a port the Workers twin could not keep.
-//! Tools and embeddings change the shape of the call and the answer, and
-//! nothing in the tree needs either yet.
+//! A tool loop still is one request and one buffered answer per step.
 //!
 //! There is no outcome enum on this port, unlike [`Mailer`](crate::Mailer)
 //! and [`Push`](crate::Push), and that is deliberate: a completion has no
@@ -92,11 +101,167 @@ impl std::fmt::Display for Role {
     }
 }
 
-/// One message of the conversation a [`Prompt`] carries.
+/// Something a [`TextModel`] adapter may or may not be able to do beyond a
+/// plain completion. A port whose shape grows over time needs a way for the
+/// router to ask "can the model behind this tier actually do this" before a
+/// caller wastes a request on one that cannot.
+///
+/// `#[non_exhaustive]`: today the only capability is [`Self::Tools`], and
+/// the next one — a provider-native structured output, image input — should
+/// not be a breaking change for every `match` a caller writes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum Capability {
+    /// The adapter carries tools: a prompt's [`Prompt::tools`] reach the
+    /// provider, and the answer may carry [`Completion::tool_calls`]. An
+    /// adapter that does not implement this is never asked to.
+    Tools,
+}
+
+impl Capability {
+    /// The name used in errors and logs.
+    pub fn name(&self) -> &'static str {
+        match self {
+            Capability::Tools => "tools",
+        }
+    }
+}
+
+impl std::fmt::Display for Capability {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.name())
+    }
+}
+
+/// A tool the model is offered: a name, the instruction a model reads when
+/// deciding whether to call it, and the JSON Schema of the arguments object
+/// the call must carry (issue #665).
+///
+/// `#[non_exhaustive]`: build one with [`ToolSpec::new`] rather than a
+/// struct literal, the same rule [`Prompt`] and [`Completion`] follow —
+/// what a tool declares grows, and it should not break every caller.
+#[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
+pub struct ToolSpec {
+    pub name: String,
+    pub description: String,
+    /// A JSON Schema (draft 2020-12) of the arguments object a call must
+    /// provide. [`run_tool_loop`](crate::run_tool_loop) validates it up
+    /// front and then validates every call's arguments against it, and
+    /// refuses a schema using a keyword it cannot honour rather than
+    /// silently skipping the check.
+    pub parameters: Value,
+}
+
+impl ToolSpec {
+    /// A tool named `name`, described by `description`, taking arguments
+    /// conforming to `parameters`.
+    #[must_use]
+    pub fn new(name: impl Into<String>, description: impl Into<String>, parameters: Value) -> Self {
+        Self {
+            name: name.into(),
+            description: description.into(),
+            parameters,
+        }
+    }
+}
+
+/// How the model should choose among a prompt's [`Prompt::tools`]: freely,
+/// not at all, mandatorily, or pinned to one named tool (issue #665).
+///
+/// `#[non_exhaustive]`: the wire protocols have more ways to steer this
+/// ("any tool but this one", a per-tool probability), and adding one must
+/// not break every caller.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ToolChoice {
+    /// The model decides whether to call a tool or answer directly.
+    Auto,
+    /// The model must answer without calling a tool.
+    None,
+    /// The model must call some tool, whichever it picks.
+    Required,
+    /// The model must call the tool with this name.
+    Tool(String),
+}
+
+/// One tool call the model asked for: which call it is, which tool, and the
+/// arguments the model produced (issue #665). The arguments are exactly
+/// what the model sent — [`run_tool_loop`](crate::run_tool_loop) validates
+/// them against the tool's schema before any executor sees them.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ToolCall {
+    pub id: String,
+    pub name: String,
+    pub arguments: Value,
+}
+
+impl ToolCall {
+    /// A call identified by `id` asking for the tool named `name` with
+    /// `arguments`.
+    #[must_use]
+    pub fn new(id: impl Into<String>, name: impl Into<String>, arguments: Value) -> Self {
+        Self {
+            id: id.into(),
+            name: name.into(),
+            arguments,
+        }
+    }
+}
+
+/// The result of running one [`ToolCall`], fed back to the model as
+/// context (issue #665). A tool-level failure is a [`ToolResult::error`],
+/// not a failed loop: the model is given the error text and may try again.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ToolResult {
+    /// The [`ToolCall::id`] this answers.
+    pub tool_call_id: String,
+    pub content: String,
+    /// Whether `content` is a tool error the model should see rather than a
+    /// successful result.
+    pub is_error: bool,
+}
+
+impl ToolResult {
+    /// A successful result for the call `tool_call_id`.
+    #[must_use]
+    pub fn ok(tool_call_id: impl Into<String>, content: impl Into<String>) -> Self {
+        Self {
+            tool_call_id: tool_call_id.into(),
+            content: content.into(),
+            is_error: false,
+        }
+    }
+
+    /// A failed result for the call `tool_call_id`: `content` is the error
+    /// the model is shown so it can recover.
+    #[must_use]
+    pub fn error(tool_call_id: impl Into<String>, content: impl Into<String>) -> Self {
+        Self {
+            tool_call_id: tool_call_id.into(),
+            content: content.into(),
+            is_error: true,
+        }
+    }
+}
+
+/// One message of the conversation a [`Prompt`] carries.
+///
+/// `#[non_exhaustive]`: a turn grew its tool fields in issue #665 and will
+/// grow again, so it is built with [`Turn::user`], [`Turn::assistant`],
+/// [`Turn::assistant_tool_calls`] or [`Turn::tool_results`] rather than a
+/// struct literal.
+#[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct Turn {
     pub role: Role,
     pub content: String,
+    /// The calls an assistant turn asked for. Carried on a
+    /// [`Role::Assistant`] turn; empty on every other turn.
+    pub tool_calls: Vec<ToolCall>,
+    /// The results a user turn carries back for the previous assistant
+    /// turn's calls. Carried on a [`Role::User`] turn; empty otherwise.
+    pub tool_results: Vec<ToolResult>,
 }
 
 impl Turn {
@@ -106,6 +271,8 @@ impl Turn {
         Turn {
             role: Role::User,
             content: content.into(),
+            tool_calls: Vec::new(),
+            tool_results: Vec::new(),
         }
     }
 
@@ -116,6 +283,32 @@ impl Turn {
         Turn {
             role: Role::Assistant,
             content: content.into(),
+            tool_calls: Vec::new(),
+            tool_results: Vec::new(),
+        }
+    }
+
+    /// An assistant turn that asked to call `calls`. `content` is the text
+    /// the model wrote alongside the calls (often empty).
+    #[must_use]
+    pub fn assistant_tool_calls(content: impl Into<String>, calls: Vec<ToolCall>) -> Self {
+        Turn {
+            role: Role::Assistant,
+            content: content.into(),
+            tool_calls: calls,
+            tool_results: Vec::new(),
+        }
+    }
+
+    /// A user turn carrying the `results` of the previous assistant turn's
+    /// tool calls — the shape a provider expects the tool answers back in.
+    #[must_use]
+    pub fn tool_results(results: Vec<ToolResult>) -> Self {
+        Turn {
+            role: Role::User,
+            content: String::new(),
+            tool_calls: Vec::new(),
+            tool_results: results,
         }
     }
 }
@@ -139,12 +332,19 @@ pub struct Prompt {
     /// [`Completion::json`].
     pub json_schema: Option<Value>,
     pub max_tokens: u32,
+    /// The tools the model may call. Empty by default: a prompt that sends
+    /// no tools behaves exactly as it did before tools existed, and an
+    /// adapter is never asked to carry tools it was not given.
+    pub tools: Vec<ToolSpec>,
+    /// How the model should choose among [`Prompt::tools`]. `None` leaves
+    /// the choice to the provider's own default; the builder sets it.
+    pub tool_choice: Option<ToolChoice>,
 }
 
 impl Prompt {
     /// An empty prompt for `tier`: no system prompt, no messages, no
-    /// schema, and [`DEFAULT_MAX_TOKENS`] as the ceiling. Everything else
-    /// is a builder method.
+    /// schema, no tools, and [`DEFAULT_MAX_TOKENS`] as the ceiling.
+    /// Everything else is a builder method.
     #[must_use]
     pub fn new(tier: ModelTier) -> Self {
         Self {
@@ -153,7 +353,30 @@ impl Prompt {
             messages: Vec::new(),
             json_schema: None,
             max_tokens: DEFAULT_MAX_TOKENS,
+            tools: Vec::new(),
+            tool_choice: None,
         }
+    }
+
+    /// Offers the model one more tool it may call.
+    #[must_use]
+    pub fn tool(mut self, tool: ToolSpec) -> Self {
+        self.tools.push(tool);
+        self
+    }
+
+    /// Offers the model every tool in `tools`.
+    #[must_use]
+    pub fn tools(mut self, tools: impl IntoIterator<Item = ToolSpec>) -> Self {
+        self.tools.extend(tools);
+        self
+    }
+
+    /// Steers how the model chooses among the offered tools.
+    #[must_use]
+    pub fn tool_choice(mut self, tool_choice: ToolChoice) -> Self {
+        self.tool_choice = Some(tool_choice);
+        self
     }
 
     /// The standing instruction the model answers under.
@@ -234,11 +457,14 @@ pub struct Completion {
     /// (a vendor that does not do caching versus a cache miss), so the
     /// option is never collapsed.
     pub cached_input_tokens: Option<u64>,
+    /// The tools the model asked to call. Empty for a plain answer, and
+    /// empty for a prompt that offered no tools.
+    pub tool_calls: Vec<ToolCall>,
 }
 
 impl Completion {
     /// A completion with just the text and the model that wrote it; the
-    /// usage and parsed JSON are builder methods.
+    /// usage, parsed JSON and tool calls are builder methods.
     #[must_use]
     pub fn new(text: impl Into<String>, model: impl Into<String>) -> Self {
         Self {
@@ -248,7 +474,15 @@ impl Completion {
             input_tokens: 0,
             output_tokens: 0,
             cached_input_tokens: None,
+            tool_calls: Vec::new(),
         }
+    }
+
+    /// The tools the model asked to call, in the order it named them.
+    #[must_use]
+    pub fn tool_calls(mut self, tool_calls: Vec<ToolCall>) -> Self {
+        self.tool_calls = tool_calls;
+        self
     }
 
     /// The parsed structured answer, for a prompt that asked for one.
@@ -297,7 +531,13 @@ impl Completion {
 /// the provider's `4xx` quotes it straight back. `Display` therefore runs it
 /// through [`crate::logging::scrub_text`]; `Debug` still shows the raw
 /// string for tests.
+///
+/// `#[non_exhaustive]`: a port's failure set grows with its shape, and
+/// [`Unsupported`](Self::Unsupported) is exactly such a growth — a caller
+/// that matches the variants it knows and treats anything else as a
+/// transport failure should not have to recompile when one is added.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum TextModelError {
     /// The tier asked for has no adapter — the venture did not wire it.
     /// Nothing is wrong with the prompt: a module may degrade, the way it
@@ -316,6 +556,12 @@ pub enum TextModelError {
     /// The request never completed as a conversation — the adapter could
     /// not reach the provider, or the answer did not survive the hop.
     Transport(String),
+    /// The model behind this tier cannot do what the prompt asked for —
+    /// today, a prompt carrying [`Prompt::tools`] reached an adapter whose
+    /// [`TextModel::supports`] is false for [`Capability::Tools`], so the
+    /// adapter was never called. A fixed sentence, never provider text, so
+    /// there is nothing to scrub.
+    Unsupported(Capability),
 }
 
 impl std::fmt::Display for TextModelError {
@@ -328,6 +574,9 @@ impl std::fmt::Display for TextModelError {
             Self::Transport(message) => {
                 write!(f, "completion transport failed: {}", scrub(message))
             }
+            Self::Unsupported(capability) => {
+                write!(f, "the text model does not support {capability}")
+            }
         }
     }
 }
@@ -335,7 +584,9 @@ impl std::fmt::Display for TextModelError {
 impl std::error::Error for TextModelError {}
 
 impl TextModelError {
-    /// How long the provider asked the caller to wait, where it said.
+    /// How long the provider asked the caller to wait, where it said. An
+    /// [`Unsupported`](Self::Unsupported) capability is not a back-off: no
+    /// wait makes a model grow a capability it lacks.
     pub fn retry_after(&self) -> Option<Duration> {
         match self {
             TextModelError::Transient { retry_after } => *retry_after,
@@ -357,6 +608,24 @@ pub trait TextModel: Send + Sync {
     /// [`Completion::text`] and `None` in [`Completion::json`], rather than
     /// failing the call.
     async fn complete(&self, prompt: &Prompt) -> Result<Completion, TextModelError>;
+
+    /// Whether this adapter can do `capability` for a prompt routed to
+    /// `tier`. Defaults to `false`: a model that has not opted in is
+    /// refused a tools-bearing prompt by [`RoutingTextModel`] and
+    /// [`run_tool_loop`](crate::run_tool_loop) before it is ever called,
+    /// rather than sent a request it would silently drop the tools from.
+    /// An adapter that carries [`Capability::Tools`] overrides this to
+    /// answer `true` for it.
+    ///
+    /// `tier` is the router's own routing key, not the adapter's: an
+    /// adapter serves whatever tier it was wired for and is free to ignore
+    /// it — an adapter only honours `tier` if the same deployment could be
+    /// wired for two tiers with different capabilities. The parameter is
+    /// on the method so a caller never has to ask the router which model a
+    /// tier holds just to ask what it can do.
+    fn supports(&self, _tier: ModelTier, _capability: Capability) -> bool {
+        false
+    }
 }
 
 /// Dispatches by [`Prompt::tier`] to the adapter a venture configured for
@@ -372,6 +641,19 @@ pub trait TextModel: Send + Sync {
 /// A tier with no adapter is [`TextModelError::NotConfigured`] —
 /// deliberately not [`TextModelError::Rejected`]: nothing is wrong with the
 /// prompt, the venture simply did not wire that tier.
+///
+/// The router also enforces capability agreement (issue #665): a prompt
+/// that carries [`Prompt::tools`] is refused with
+/// [`TextModelError::Unsupported`] before a tier that does not report
+/// [`Capability::Tools`] for that tier is called, so a venture can assert
+/// once at compose time — `router.supports(ModelTier::Strong,
+/// Capability::Tools)` — that the tier it routed tools to can carry them.
+/// [`RoutingTextModel::supports`] answers for the single routed tier: the
+/// adapter wired for `tier`, or `false` when that tier is unwired. It is
+/// deliberately **not** an aggregate over every wired tier: a prompt goes
+/// to exactly one tier, so what matters is that tier's answer, and a
+/// strong-tier judge that cannot carry tools must not make a fast-tier
+/// drafting model look incapable.
 #[derive(Default, Clone)]
 pub struct RoutingTextModel {
     fast: Option<Arc<dyn TextModel>>,
@@ -422,9 +704,27 @@ impl std::fmt::Debug for RoutingTextModel {
 impl TextModel for RoutingTextModel {
     async fn complete(&self, prompt: &Prompt) -> Result<Completion, TextModelError> {
         match self.route_for(prompt.tier) {
-            Some(model) => model.complete(prompt).await,
+            Some(model) => {
+                // A tools-bearing prompt to a model that cannot carry tools
+                // is refused here, not silently sent with the tools
+                // dropped: the caller asked for something the wiring cannot
+                // honour, and a fabricated plain answer would hide that.
+                if !prompt.tools.is_empty() && !model.supports(prompt.tier, Capability::Tools) {
+                    return Err(TextModelError::Unsupported(Capability::Tools));
+                }
+                model.complete(prompt).await
+            }
             None => Err(TextModelError::NotConfigured),
         }
+    }
+
+    fn supports(&self, tier: ModelTier, capability: Capability) -> bool {
+        // The routed tier's own answer, and `false` for an unwired tier:
+        // nothing is wired to do anything. A prompt goes to one tier, so
+        // this is the tier that must be able to carry the capability — not
+        // an aggregate over the tiers the router happens to hold.
+        self.route_for(tier)
+            .is_some_and(|model| model.supports(tier, capability))
     }
 }
 
@@ -609,16 +909,30 @@ mod tests {
 
     struct Recording {
         label: &'static str,
+        tools: bool,
         seen: std::sync::atomic::AtomicUsize,
     }
 
     impl Recording {
+        /// A model that reports no capability — the default for an adapter
+        /// that has not opted into tools.
         fn new(label: &'static str) -> Arc<Self> {
             Arc::new(Self {
                 label,
+                tools: false,
                 seen: std::sync::atomic::AtomicUsize::new(0),
             })
         }
+
+        /// A model that reports [`Capability::Tools`].
+        fn tool_capable(label: &'static str) -> Arc<Self> {
+            Arc::new(Self {
+                label,
+                tools: true,
+                seen: std::sync::atomic::AtomicUsize::new(0),
+            })
+        }
+
         fn count(&self) -> usize {
             self.seen.load(std::sync::atomic::Ordering::Relaxed)
         }
@@ -629,6 +943,10 @@ mod tests {
         async fn complete(&self, _prompt: &Prompt) -> Result<Completion, TextModelError> {
             self.seen.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             Ok(Completion::new("recorded", self.label))
+        }
+
+        fn supports(&self, _tier: ModelTier, capability: Capability) -> bool {
+            self.tools && capability == Capability::Tools
         }
     }
 
@@ -686,5 +1004,184 @@ mod tests {
         assert!(printed.contains("RoutingTextModel"), "{printed}");
         assert!(printed.contains("fast: true"), "{printed}");
         assert!(printed.contains("strong: false"), "{printed}");
+    }
+
+    // -----------------------------------------------------------------
+    // Tools (issue #665)
+
+    #[test]
+    fn a_capability_names_itself_for_logs_and_errors() {
+        assert_eq!(Capability::Tools.name(), "tools");
+        assert_eq!(Capability::Tools.to_string(), "tools");
+    }
+
+    #[test]
+    fn a_tool_spec_carries_its_name_description_and_schema() {
+        let tool = ToolSpec::new(
+            "lookup",
+            "Look a thing up.",
+            serde_json::json!({ "type": "object" }),
+        );
+        assert_eq!(tool.name, "lookup");
+        assert_eq!(tool.description, "Look a thing up.");
+        assert_eq!(tool.parameters, serde_json::json!({ "type": "object" }));
+    }
+
+    #[test]
+    fn a_tool_call_and_result_round_trip_their_fields() {
+        let call = ToolCall::new("call-1", "lookup", serde_json::json!({ "q": "x" }));
+        assert_eq!(call.id, "call-1");
+        assert_eq!(call.name, "lookup");
+        assert_eq!(call.arguments, serde_json::json!({ "q": "x" }));
+
+        let ok = ToolResult::ok("call-1", "the answer");
+        assert_eq!(ok.tool_call_id, "call-1");
+        assert_eq!(ok.content, "the answer");
+        assert!(!ok.is_error);
+
+        let error = ToolResult::error("call-1", "it broke");
+        assert!(error.is_error);
+        assert_eq!(error.content, "it broke");
+    }
+
+    #[test]
+    fn a_turn_can_quote_tool_calls_and_carry_results_back() {
+        let call = ToolCall::new("call-1", "lookup", serde_json::json!({}));
+        let assistant = Turn::assistant_tool_calls("thinking", vec![call.clone()]);
+        assert_eq!(assistant.role, Role::Assistant);
+        assert_eq!(assistant.content, "thinking");
+        assert_eq!(assistant.tool_calls, vec![call]);
+        assert!(assistant.tool_results.is_empty());
+
+        let results = Turn::tool_results(vec![ToolResult::ok("call-1", "fine")]);
+        assert_eq!(results.role, Role::User);
+        assert_eq!(results.content, "");
+        assert!(results.tool_calls.is_empty());
+        assert_eq!(results.tool_results.len(), 1);
+
+        // The plain constructors still carry neither list, so an existing
+        // caller that builds a prompt with them is unaffected.
+        assert!(Turn::user("hi").tool_calls.is_empty());
+        assert!(Turn::assistant("hi").tool_results.is_empty());
+    }
+
+    #[test]
+    fn a_prompt_starts_without_tools_and_builds_them_up() {
+        let prompt = Prompt::new(ModelTier::Fast);
+        assert!(prompt.tools.is_empty());
+        assert_eq!(prompt.tool_choice, None);
+
+        let prompt = prompt
+            .tool(ToolSpec::new("a", "A", serde_json::json!({})))
+            .tools(vec![
+                ToolSpec::new("b", "B", serde_json::json!({})),
+                ToolSpec::new("c", "C", serde_json::json!({})),
+            ])
+            .tool_choice(ToolChoice::Required);
+        assert_eq!(prompt.tools.len(), 3);
+        assert_eq!(
+            prompt
+                .tools
+                .iter()
+                .map(|tool| tool.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["a", "b", "c"]
+        );
+        assert_eq!(prompt.tool_choice, Some(ToolChoice::Required));
+    }
+
+    #[test]
+    fn a_completion_starts_without_tool_calls_and_builds_them_up() {
+        let completion = Completion::new("the answer", "vendor-1");
+        assert!(completion.tool_calls.is_empty());
+        let completion = completion.tool_calls(vec![ToolCall::new(
+            "call-1",
+            "lookup",
+            serde_json::json!({}),
+        )]);
+        assert_eq!(completion.tool_calls.len(), 1);
+    }
+
+    #[test]
+    fn an_unsupported_capability_names_what_is_missing_and_never_backs_off() {
+        let error = TextModelError::Unsupported(Capability::Tools);
+        assert_eq!(error.to_string(), "the text model does not support tools");
+        assert_eq!(error.retry_after(), None);
+    }
+
+    #[test]
+    fn the_default_capability_answer_is_no() {
+        // An adapter that has not opted into tools reports none, so the
+        // router and the tool loop refuse a tools-bearing prompt before it
+        // is called. An adapter ignores the tier it is asked about.
+        assert!(!Recording::new("plain").supports(ModelTier::Fast, Capability::Tools));
+        assert!(Recording::tool_capable("capable").supports(ModelTier::Strong, Capability::Tools));
+    }
+
+    #[test]
+    fn tools_to_a_tier_that_cannot_carry_them_are_refused_before_the_call() {
+        let fast = Recording::new("fast-vendor");
+        let router = RoutingTextModel::new().fast(fast.clone());
+        let prompt = Prompt::new(ModelTier::Fast).user("hi").tool(ToolSpec::new(
+            "lookup",
+            "Look up.",
+            serde_json::json!({}),
+        ));
+
+        let error = pollster::block_on(router.complete(&prompt)).unwrap_err();
+        assert_eq!(error, TextModelError::Unsupported(Capability::Tools));
+        assert_eq!(
+            fast.count(),
+            0,
+            "the adapter was never called, tools and all"
+        );
+    }
+
+    #[test]
+    fn tools_to_a_capable_tier_pass_through_untouched() {
+        let fast = Recording::tool_capable("fast-vendor");
+        let router = RoutingTextModel::new().fast(fast.clone());
+        let prompt = Prompt::new(ModelTier::Fast).tool(ToolSpec::new(
+            "lookup",
+            "Look up.",
+            serde_json::json!({}),
+        ));
+
+        let completion = pollster::block_on(router.complete(&prompt)).unwrap();
+        assert_eq!(completion.model, "fast-vendor");
+        assert_eq!(fast.count(), 1);
+    }
+
+    #[test]
+    fn a_prompt_without_tools_reaches_a_plain_model_as_before() {
+        // The capability gate is only for tools: a prompt carrying none is
+        // served by a model that reports no capabilities, unchanged.
+        let fast = Recording::new("fast-vendor");
+        let router = RoutingTextModel::new().fast(fast.clone());
+        let completion =
+            pollster::block_on(router.complete(&Prompt::new(ModelTier::Fast).user("hi"))).unwrap();
+        assert_eq!(completion.model, "fast-vendor");
+        assert_eq!(fast.count(), 1);
+    }
+
+    #[test]
+    fn the_router_answers_a_capability_per_tier_and_false_when_unwired() {
+        let capable = Recording::tool_capable("capable");
+        let plain = Recording::new("plain");
+        let router = RoutingTextModel::new()
+            .fast(capable.clone())
+            .strong(plain.clone());
+
+        // The routed tier's own answer: a prompt goes to one tier, so a
+        // capable fast tier reads capable even when the strong tier is not,
+        // and vice versa.
+        assert!(router.supports(ModelTier::Fast, Capability::Tools));
+        assert!(!router.supports(ModelTier::Strong, Capability::Tools));
+
+        // Nothing wired for a tier: no capability, whatever the other tier
+        // holds.
+        let unwired = RoutingTextModel::new();
+        assert!(!unwired.supports(ModelTier::Fast, Capability::Tools));
+        assert!(!unwired.supports(ModelTier::Strong, Capability::Tools));
     }
 }

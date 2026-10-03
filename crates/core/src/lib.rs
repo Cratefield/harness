@@ -46,6 +46,7 @@ mod template;
 mod tenant;
 mod tenant_conn;
 mod tenant_lifecycle;
+mod tool_loop;
 mod usage;
 mod venture;
 mod webhook_signature;
@@ -108,9 +109,9 @@ pub use personal_data::{
 };
 pub use ports::{
     Answer, AnswerValue, Auth, AuthError, Blob, BlobError, BlobObject, BoundedHttpClient,
-    Calibration, Caller, Captcha, CaptchaBinding, CaptchaError, CertificateStatus, Charge,
-    CheckoutRequest, CheckoutSession, Classifier, ClassifierError, ClassifierProfile, Clock,
-    Completion, ConnectAccountLink, ConnectAccountLinkRequest, Credential, CustomHostname,
+    Calibration, Caller, Capability, Captcha, CaptchaBinding, CaptchaError, CertificateStatus,
+    Charge, CheckoutRequest, CheckoutSession, Classifier, ClassifierError, ClassifierProfile,
+    Clock, Completion, ConnectAccountLink, ConnectAccountLinkRequest, Credential, CustomHostname,
     CustomHostnameError, CustomHostnames, DEFAULT_MAX_STATE_CHARS, DEFAULT_MAX_TOKENS,
     DEFAULT_RESPONSE_TIMEOUT, Database, DbError, Decision, Defer, Destination, DispatchError,
     Dispatcher, DnsRecordType, EmbedError, Embedder, Embeddings, ExactVectorIndex, Filed,
@@ -123,11 +124,12 @@ pub use ports::{
     RefundRequest, Role, RoomContext, RoomHandler, RoutingPush, RoutingTextModel, RoutingTracker,
     Row, Rows, ScopedBlob, SendOutcome, Severity, SignatureError, Signer, Statement, StatusUpdate,
     StatusWebhook, Subject, SubscriptionCheckoutRequest, SystemClock, TextModel, TextModelError,
-    TicketComment, TicketDraft, TicketState, TicketStatus, Tracker, TrackerError, TransferCharge,
-    TryFromValue, Turn, UlidIdGen, Unconfigured, UsageReport, UsageReported, Validation,
-    ValidationMethod, VectorFilter, VectorIndex, VectorIndexError, VectorMatch, VectorNamespace,
-    VectorRecord, Verdict, WebhookEvent, check_blob_size, check_hostname, declared_content_length,
-    receive_status, retry_after, timeout, ttl_secs, validate_questions,
+    TicketComment, TicketDraft, TicketState, TicketStatus, ToolCall, ToolChoice, ToolResult,
+    ToolSpec, Tracker, TrackerError, TransferCharge, TryFromValue, Turn, UlidIdGen, Unconfigured,
+    UsageReport, UsageReported, Validation, ValidationMethod, VectorFilter, VectorIndex,
+    VectorIndexError, VectorMatch, VectorNamespace, VectorRecord, Verdict, WebhookEvent,
+    check_blob_size, check_hostname, declared_content_length, receive_status, retry_after, timeout,
+    ttl_secs, validate_questions,
 };
 pub use problem::{ABOUT_BLANK, Problem};
 // `Slugs` is exported beside the `SLUGS` value it types. Without it a
@@ -170,6 +172,9 @@ pub use tenant::{
 pub use tenant_conn::TenantConn;
 pub use tenant_lifecycle::{
     ErasureStep, TenantLifecycle, TenantLifecycleError, TenantSummary, remaining_erasure,
+};
+pub use tool_loop::{
+    StepUsage, ToolBudget, ToolExecutor, ToolLoopError, ToolLoopOutcome, run_tool_loop,
 };
 pub use usage::{Consumed, Consumption, Exhausted, Months, Period, PeriodWindow, Usage};
 pub use venture::{Brand, Venture, VentureEnv};

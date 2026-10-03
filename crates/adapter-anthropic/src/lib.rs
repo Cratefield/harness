@@ -7,6 +7,16 @@
 //! **Degraded mode.** When the API key is absent the adapter answers
 //! [`TextModelError::NotConfigured`] without any network call, so a
 //! pipeline stage can degrade instead of breaking.
+//!
+//! **Tools** (issue #665): [`Prompt::tools`] travel as the Messages API's
+//! `tools` array, [`Prompt::tool_choice`] as its `tool_choice`, and the
+//! answer's `tool_use` blocks come back as [`Completion::tool_calls`]. A
+//! turn built with [`Turn::assistant_tool_calls`] or
+//! [`Turn::tool_results`] is sent as the content-block array the API
+//! requires; every other turn keeps the bare-string content it always sent.
+//! [`Anthropic::supports`] reports [`Capability::Tools`]. A prompt that
+//! carries both [`Prompt::json_schema`] and its own tools is refused with
+//! [`TextModelError::Rejected`] before any request.
 
 #![doc = include_str!("../README.md")]
 #![forbid(unsafe_code)]
@@ -14,8 +24,9 @@
 use async_trait::async_trait;
 use bytes::Bytes;
 use cratefield_core::{
-    Clock, Completion, HttpClient, HttpError, HttpPolicy, MAX_RESPONSE_BYTES, MAX_RESPONSE_TIMEOUT,
-    Prompt, Role, TextModel, TextModelError, retry_after,
+    Capability, Clock, Completion, HttpClient, HttpError, HttpPolicy, MAX_RESPONSE_BYTES,
+    MAX_RESPONSE_TIMEOUT, ModelTier, Prompt, Role, TextModel, TextModelError, ToolCall, ToolChoice,
+    Turn, retry_after,
 };
 use http::header::CONTENT_TYPE;
 use http::{Request, StatusCode};
@@ -138,61 +149,191 @@ struct MessagesRequest<'a> {
     tool_choice: Option<WireToolChoice<'a>>,
 }
 
+/// One message on the wire. `content` is the bare string the adapter has
+/// always sent for a turn that carries neither tool calls nor tool results,
+/// and the content-block array the Messages API needs for the tool turns
+/// (issue #665).
 #[derive(serde::Serialize)]
 struct WireTurn<'a> {
     role: &'static str,
-    content: &'a str,
+    content: WireContent<'a>,
+}
+
+/// A turn's content: a bare string, or the block array a tool turn needs.
+/// `untagged` so the plain form stays exactly the string it was before
+/// tools existed — no existing request shape changes.
+#[derive(serde::Serialize)]
+#[serde(untagged)]
+enum WireContent<'a> {
+    Text(&'a str),
+    Blocks(Vec<WireBlock<'a>>),
+}
+
+/// One content block of a tool turn.
+#[derive(serde::Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum WireBlock<'a> {
+    /// The model's own words alongside (or answering) tool calls.
+    Text { text: &'a str },
+    /// A call the assistant asked for, read back as a previous turn.
+    ToolUse {
+        id: &'a str,
+        name: &'a str,
+        input: &'a serde_json::Value,
+    },
+    /// The result a user turn carries back for one call.
+    ToolResult {
+        tool_use_id: &'a str,
+        content: &'a str,
+        // A successful result omits `is_error`, matching the documented
+        // shape; only a tool-level failure carries it.
+        #[serde(skip_serializing_if = "is_false")]
+        is_error: bool,
+    },
+}
+
+/// `skip_serializing_if` for the `is_error` flag. Serde passes the field by
+/// reference, so the signature is fixed even though a `bool` is `Copy`.
+#[allow(clippy::trivially_copy_pass_by_ref)]
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 #[derive(serde::Serialize)]
 struct WireTool<'a> {
-    name: &'static str,
-    description: &'static str,
+    name: &'a str,
+    description: &'a str,
     input_schema: &'a serde_json::Value,
 }
 
+/// The `tool_choice` wire shape: a `type` always, a `name` only for the
+/// `tool` form that pins one tool.
 #[derive(serde::Serialize)]
 struct WireToolChoice<'a> {
     #[serde(rename = "type")]
     kind: &'static str,
-    name: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    name: Option<&'a str>,
 }
 
-/// Builds the wire body: plain text when no schema was asked for; a single
-/// forced tool — input schema = the caller's — when one was. Hand-rolling
-/// this JSON would be a second escaping bug waiting to happen; the prompt
-/// is user content.
-fn wire_request<'a>(model: &'a str, prompt: &'a Prompt) -> MessagesRequest<'a> {
-    let tools = prompt
-        .json_schema
-        .as_ref()
-        .map(|schema| {
-            vec![WireTool {
-                name: JSON_TOOL_NAME,
-                description: JSON_TOOL_DESCRIPTION,
-                input_schema: schema,
-            }]
-        })
-        .unwrap_or_default();
-    let tool_choice = tools.first().map(|tool| WireToolChoice {
-        kind: "tool",
-        name: tool.name,
-    });
-    MessagesRequest {
+/// Maps the port's [`ToolChoice`] onto the Messages wire. The port's enum
+/// is `#[non_exhaustive]`; a choice this adapter does not know falls back
+/// to the provider's own default, `auto`.
+fn wire_tool_choice(choice: &ToolChoice) -> WireToolChoice<'_> {
+    let (kind, name) = match choice {
+        ToolChoice::None => ("none", None),
+        ToolChoice::Required => ("any", None),
+        ToolChoice::Tool(name) => ("tool", Some(name.as_str())),
+        // `Auto`, and any future variant this adapter does not know: the
+        // provider's own default.
+        _ => ("auto", None),
+    };
+    WireToolChoice { kind, name }
+}
+
+/// Serialises one turn. A turn carrying neither tool calls nor tool results
+/// keeps its old shape exactly — `content` as a bare string. A turn carrying
+/// them becomes the content-block array the Messages API requires: for an
+/// assistant turn the text block (only when non-empty) then the `tool_use`
+/// blocks; for a user turn the `tool_result` blocks then any trailing text.
+fn wire_turn(turn: &Turn) -> WireTurn<'_> {
+    let role = wire_role(turn.role);
+    if turn.tool_calls.is_empty() && turn.tool_results.is_empty() {
+        return WireTurn {
+            role,
+            content: WireContent::Text(turn.content.as_str()),
+        };
+    }
+
+    let mut blocks = Vec::with_capacity(turn.tool_calls.len() + turn.tool_results.len() + 1);
+    if !turn.tool_calls.is_empty() && !turn.content.is_empty() {
+        blocks.push(WireBlock::Text {
+            text: turn.content.as_str(),
+        });
+    }
+    for call in &turn.tool_calls {
+        blocks.push(WireBlock::ToolUse {
+            id: call.id.as_str(),
+            name: call.name.as_str(),
+            input: &call.arguments,
+        });
+    }
+    for result in &turn.tool_results {
+        blocks.push(WireBlock::ToolResult {
+            tool_use_id: result.tool_call_id.as_str(),
+            content: result.content.as_str(),
+            is_error: result.is_error,
+        });
+    }
+    if !turn.tool_results.is_empty() && !turn.content.is_empty() {
+        blocks.push(WireBlock::Text {
+            text: turn.content.as_str(),
+        });
+    }
+
+    WireTurn {
+        role,
+        content: WireContent::Blocks(blocks),
+    }
+}
+
+/// Builds the wire body: a single forced tool — input schema = the caller's
+/// — when a schema was asked for; the caller's own `tools` and `tool_choice`
+/// when tools were offered; plain text otherwise. Hand-rolling this JSON
+/// would be a second escaping bug waiting to happen; the prompt is user
+/// content.
+///
+/// A prompt that carries both a [`Prompt::json_schema`] and its own
+/// [`Prompt::tools`] is [`TextModelError::Rejected`]: the schema path
+/// already declares a synthetic forced tool of its own, so the two would
+/// collide on the same request (issue #665).
+fn wire_request<'a>(
+    model: &'a str,
+    prompt: &'a Prompt,
+) -> Result<MessagesRequest<'a>, TextModelError> {
+    if prompt.json_schema.is_some() && !prompt.tools.is_empty() {
+        return Err(TextModelError::Rejected(
+            "a prompt cannot carry both json_schema and tools: the json_schema path already \
+             declares a forced tool of its own, so the two would collide"
+                .to_owned(),
+        ));
+    }
+
+    let (tools, tool_choice): (Vec<WireTool<'a>>, Option<WireToolChoice<'a>>) =
+        match prompt.json_schema.as_ref() {
+            Some(schema) => (
+                vec![WireTool {
+                    name: JSON_TOOL_NAME,
+                    description: JSON_TOOL_DESCRIPTION,
+                    input_schema: schema,
+                }],
+                Some(WireToolChoice {
+                    kind: "tool",
+                    name: Some(JSON_TOOL_NAME),
+                }),
+            ),
+            None => (
+                prompt
+                    .tools
+                    .iter()
+                    .map(|tool| WireTool {
+                        name: tool.name.as_str(),
+                        description: tool.description.as_str(),
+                        input_schema: &tool.parameters,
+                    })
+                    .collect(),
+                prompt.tool_choice.as_ref().map(wire_tool_choice),
+            ),
+        };
+
+    Ok(MessagesRequest {
         model,
         max_tokens: prompt.max_tokens,
         system: prompt.system.as_deref(),
-        messages: prompt
-            .messages
-            .iter()
-            .map(|turn| WireTurn {
-                role: wire_role(turn.role),
-                content: turn.content.as_str(),
-            })
-            .collect(),
+        messages: prompt.messages.iter().map(wire_turn).collect(),
         tools,
         tool_choice,
-    }
+    })
 }
 
 #[derive(serde::Deserialize)]
@@ -218,6 +359,8 @@ enum ContentBlock {
         text: String,
     },
     ToolUse {
+        id: String,
+        name: String,
         input: serde_json::Value,
     },
     #[serde(other)]
@@ -288,6 +431,85 @@ fn reported_usage(usage: WireUsage) -> (u64, u64, Option<u64>) {
     )
 }
 
+/// Reads a parsed answer into the port's three content shapes: the joined
+/// text, the forced tool's input on the schema path, and the calls the model
+/// asked for on every other path (issue #665). The schema path's truncation
+/// and missing-block guards live here because they depend on what the blocks
+/// turned out to be.
+///
+/// The text may be empty when the model only calls tools, and that is not an
+/// error.
+fn interpret_content(
+    prompt: &Prompt,
+    parsed: &MessagesResponse,
+) -> Result<(String, Option<serde_json::Value>, Vec<ToolCall>), TextModelError> {
+    let mut text = String::new();
+    let mut json = None;
+    let mut tool_calls = Vec::new();
+    for block in &parsed.content {
+        match block {
+            ContentBlock::Text { text: block_text } => text.push_str(block_text),
+            // On the schema path the forced tool's input is the answer; on
+            // every other path a `tool_use` block is a call the model asked
+            // for, collected in the order the model named them. A response
+            // the adapter never asked for tools on can still carry one, and
+            // it is a call either way.
+            ContentBlock::ToolUse { id, name, input } => {
+                if prompt.json_schema.is_some() {
+                    json = Some(input.clone());
+                } else {
+                    tool_calls.push(ToolCall::new(id.clone(), name.clone(), input.clone()));
+                }
+            }
+            ContentBlock::Other => {}
+        }
+    }
+
+    if prompt.json_schema.is_some() {
+        // `max_tokens` can cut the forced tool call off mid-JSON, leaving
+        // `input` empty or partial (a JSON `null` parses to `Value::Null`
+        // here) — returning that as a schema-shaped success would be a lie.
+        // `Rejected`, not `Transient`: retrying the identical request
+        // truncates identically; only a larger `max_tokens` changes the
+        // outcome.
+        if parsed.stop_reason.as_deref() == Some("max_tokens") {
+            return Err(TextModelError::Rejected(
+                "the response was truncated at max_tokens before the schema-shaped \
+                 result was complete; a larger max_tokens is needed"
+                    .to_owned(),
+            ));
+        }
+        // Forced tool use was the whole point of the call. A response without
+        // the tool block is not a refusal (that would have been a 4xx) and
+        // not an empty answer — the JSON path broke between provider and
+        // here, which is a transport failure.
+        if json.is_none() {
+            return Err(TextModelError::Transport(
+                "forced tool call came back without a tool_use block".to_owned(),
+            ));
+        }
+    } else {
+        // No schema was requested; `json` stays `None` even if the provider
+        // somehow answered with a tool block — on this path a tool block is a
+        // call, not a structured answer. A text completion cut off by
+        // `max_tokens` is still a useful answer, so it is returned as-is. A
+        // *tool* call cut off at `max_tokens` is not: its `input` may be
+        // partial, and handing that to an executor is exactly what the schema
+        // check downstream exists to prevent. `Rejected`, not `Transient`:
+        // retrying the identical request truncates identically.
+        json = None;
+        if parsed.stop_reason.as_deref() == Some("max_tokens") && !tool_calls.is_empty() {
+            return Err(TextModelError::Rejected(
+                "the response was truncated at max_tokens before the tool call's arguments \
+                 were complete; a larger max_tokens is needed"
+                    .to_owned(),
+            ));
+        }
+    }
+
+    Ok((text, json, tool_calls))
+}
+
 #[async_trait]
 impl TextModel for Anthropic {
     async fn complete(&self, prompt: &Prompt) -> Result<Completion, TextModelError> {
@@ -305,7 +527,7 @@ impl TextModel for Anthropic {
             return Err(TextModelError::NotConfigured);
         };
 
-        let payload = wire_request(&self.model, prompt);
+        let payload = wire_request(&self.model, prompt)?;
         let body = serde_json::to_vec(&payload)
             .map_err(|err| TextModelError::Transport(err.to_string()))?;
 
@@ -365,45 +587,7 @@ impl TextModel for Anthropic {
             TextModelError::Transport(format!("model response did not parse: {err}"))
         })?;
 
-        let mut completion_text = String::new();
-        let mut json = None;
-        for block in parsed.content {
-            match block {
-                ContentBlock::Text { text } => completion_text.push_str(&text),
-                ContentBlock::ToolUse { input } => json = Some(input),
-                ContentBlock::Other => {}
-            }
-        }
-        if prompt.json_schema.is_some() {
-            // `max_tokens` can cut the forced tool call off mid-JSON, leaving
-            // `input` empty or partial (a JSON `null` parses to `Value::Null`
-            // here) — returning that as a schema-shaped success would be a
-            // lie. `Rejected`, not `Transient`: retrying the identical
-            // request truncates identically; only a larger `max_tokens`
-            // changes the outcome.
-            if parsed.stop_reason.as_deref() == Some("max_tokens") {
-                return Err(TextModelError::Rejected(
-                    "the response was truncated at max_tokens before the schema-shaped \
-                     result was complete; a larger max_tokens is needed"
-                        .to_owned(),
-                ));
-            }
-            // Forced tool use was the whole point of the call. A response
-            // without the tool block is not a refusal (that would have been
-            // a 4xx) and not an empty answer — the JSON path broke between
-            // provider and here, which is a transport failure.
-            if json.is_none() {
-                return Err(TextModelError::Transport(
-                    "forced tool call came back without a tool_use block".to_owned(),
-                ));
-            }
-        } else {
-            // No schema was requested and no tools were sent; `json` stays
-            // `None` even if the provider somehow answered with one. A text
-            // completion cut off by `max_tokens` is still a useful answer,
-            // so it is returned as-is — only the schema path guards above.
-            json = None;
-        }
+        let (completion_text, json, tool_calls) = interpret_content(prompt, &parsed)?;
 
         // `Completion` is non-exhaustive and carries the counts flat, so
         // the wire's usage block is unwrapped straight onto the builder
@@ -432,6 +616,18 @@ impl TextModel for Anthropic {
         if let Some(json) = json {
             completion = completion.json(json);
         }
+        if !tool_calls.is_empty() {
+            completion = completion.tool_calls(tool_calls);
+        }
         Ok(completion)
+    }
+
+    fn supports(&self, _tier: ModelTier, capability: Capability) -> bool {
+        // The Messages API carries tools, so this adapter does — and nothing
+        // else. `Capability` is `#[non_exhaustive]`: a capability this
+        // adapter has not opted into stays "no" until it implements it. The
+        // tier is the router's routing key; this adapter serves whatever
+        // tier it is wired for, so it is ignored.
+        matches!(capability, Capability::Tools)
     }
 }

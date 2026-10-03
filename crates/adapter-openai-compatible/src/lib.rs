@@ -14,6 +14,20 @@
 //! pipeline stage can degrade instead of breaking. A keyless local server
 //! takes any placeholder key: the adapter always sends the
 //! `Authorization` header, and a server that never checks it ignores it.
+//!
+//! **Tools (issue #665).** The adapter carries `OpenAI`'s function-calling
+//! shape by default: a [`Prompt`]'s tools ride in the request's `tools`
+//! array, the assistant message's `tool_calls` parse into
+//! [`Completion::tool_calls`], and a conversation quoting a tool call and
+//! its result goes back out as an assistant message with `tool_calls` and
+//! one `role: "tool"` message per result. Every server behind this wire is
+//! not equally capable — a model that does not speak tools either ignores
+//! the array or rejects the request — so
+//! [`OpenAiCompatible::without_tools`] turns the capability off for one
+//! deployment: [`TextModel::supports`] then reports
+//! [`Capability::Tools`](cratefield_core::Capability) as `false`, and a
+//! tools-bearing prompt is refused with [`TextModelError::Unsupported`]
+//! before any request reaches the server.
 
 #![doc = include_str!("../README.md")]
 #![forbid(unsafe_code)]
@@ -21,11 +35,13 @@
 use async_trait::async_trait;
 use bytes::Bytes;
 use cratefield_core::{
-    Clock, Completion, HttpClient, HttpError, HttpPolicy, MAX_RESPONSE_BYTES, MAX_RESPONSE_TIMEOUT,
-    Prompt, Role, TextModel, TextModelError, retry_after,
+    Capability, Clock, Completion, HttpClient, HttpError, HttpPolicy, MAX_RESPONSE_BYTES,
+    MAX_RESPONSE_TIMEOUT, ModelTier, Prompt, Role, TextModel, TextModelError, ToolCall, ToolChoice,
+    ToolResult, Turn, retry_after,
 };
 use http::header::{AUTHORIZATION, CONTENT_TYPE};
 use http::{Request, StatusCode};
+use serde_json::{Value, json};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -62,6 +78,11 @@ pub struct OpenAiCompatible {
     api_key: Option<String>,
     model: String,
     base_url: String,
+    /// Whether this deployment carries tools. `true` by default — the wire
+    /// speaks function calling — and turned off with
+    /// [`OpenAiCompatible::without_tools`] for a server or model behind it
+    /// that does not.
+    tools: bool,
 }
 
 impl OpenAiCompatible {
@@ -80,7 +101,22 @@ impl OpenAiCompatible {
             api_key,
             model: model.into(),
             base_url: DEFAULT_ENDPOINT.to_owned(),
+            tools: true,
         }
+    }
+
+    /// Turns tools off for this deployment: the adapter then sends no
+    /// `tools` and reports [`Capability::Tools`] as unsupported, so a
+    /// tools-bearing prompt is refused with
+    /// [`TextModelError::Unsupported`] before any request is made. The
+    /// wire itself speaks function calling — [`OpenAiCompatible::new`]
+    /// keeps it on — so this is for a server or model behind the wire that
+    /// does not: one that would silently drop the array and answer as if no
+    /// tool was offered.
+    #[must_use]
+    pub fn without_tools(mut self) -> Self {
+        self.tools = false;
+        self
     }
 
     /// Points the adapter at a different chat-completions server —
@@ -164,15 +200,74 @@ struct ChatCompletionsRequest<'a> {
     /// outright (see [`DEFAULT_MODEL`]); every compatible server this
     /// adapter targets accepts `max_tokens`, and most speak nothing else.
     max_tokens: u32,
-    messages: Vec<WireMessage<'a>>,
+    messages: Vec<WireMessage>,
     #[serde(skip_serializing_if = "Option::is_none")]
     response_format: Option<WireResponseFormat<'a>>,
+    /// Absent when the prompt offered no tools, so a tool-free request
+    /// serialises exactly as it did before tools existed.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    tools: Vec<WireTool<'a>>,
+    /// Absent when the prompt left the choice to the provider's default.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tool_choice: Option<Value>,
+}
+
+/// One message of the request. Owned rather than borrowed because a tool
+/// result may need to prefix its content (see [`wire_tool_result`]), so the
+/// content is not always a slice of the prompt.
+#[derive(serde::Serialize)]
+struct WireMessage {
+    role: &'static str,
+    /// `Some` for every plain message; `None` (an explicit `null`) only for
+    /// an assistant turn that carried no text and only tool calls — the
+    /// shape `OpenAI` documents for a call-only turn.
+    content: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tool_calls: Option<Vec<WireToolCall>>,
+    /// Set on a `role: "tool"` message: which call it answers.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tool_call_id: Option<String>,
+}
+
+/// One tool offered to the model: the `{"type":"function","function":…}`
+/// envelope `OpenAI` defines for the request's `tools` array.
+#[derive(serde::Serialize)]
+struct WireTool<'a> {
+    #[serde(rename = "type")]
+    kind: &'static str,
+    function: WireToolFunction<'a>,
 }
 
 #[derive(serde::Serialize)]
-struct WireMessage<'a> {
-    role: &'static str,
-    content: &'a str,
+struct WireToolFunction<'a> {
+    name: &'a str,
+    description: &'a str,
+    parameters: &'a Value,
+}
+
+/// One tool call, in the shape the request and the answer share: the
+/// assistant message the caller sends back and the assistant message the
+/// server returns are the same object.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct WireToolCall {
+    #[serde(default)]
+    id: String,
+    #[serde(rename = "type", default)]
+    kind: Option<String>,
+    #[serde(default)]
+    function: Option<WireFunctionCall>,
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct WireFunctionCall {
+    #[serde(default)]
+    name: String,
+    /// A JSON **string** on the wire — the model's arguments serialised —
+    /// not an object. It is re-serialised from [`ToolCall::arguments`] on
+    /// the way out — except a [`Value::String`], which is already the raw
+    /// text and is emitted verbatim — and parsed back on the way in.
+    #[serde(default)]
+    arguments: String,
 }
 
 #[derive(serde::Serialize)]
@@ -189,9 +284,104 @@ struct WireJsonSchema<'a> {
     strict: bool,
 }
 
-/// Builds the wire body: plain messages, or the same messages plus a
-/// `response_format` carrying the caller's schema when one was asked
-/// for. Hand-rolling this JSON would be a second escaping bug
+/// The wire's `tool_choice` for a port [`ToolChoice`]: a bare string for the
+/// three prose choices, an object pinning one function for
+/// [`ToolChoice::Tool`]. `None` for a variant this adapter does not know —
+/// [`ToolChoice`] is `#[non_exhaustive]`, and a choice it cannot express is
+/// left to the provider's default rather than sent as something wrong.
+fn wire_tool_choice(choice: &ToolChoice) -> Option<Value> {
+    match choice {
+        ToolChoice::Auto => Some(json!("auto")),
+        ToolChoice::None => Some(json!("none")),
+        ToolChoice::Required => Some(json!("required")),
+        ToolChoice::Tool(name) => Some(json!({
+            "type": "function",
+            "function": {"name": name},
+        })),
+        _ => None,
+    }
+}
+
+/// One tool call on the way out: the arguments object the port holds becomes
+/// the JSON *string* the wire carries. `Value`'s own `Display` is exactly
+/// that compact JSON and cannot fail.
+///
+/// A `Value::String` is the exception: it is arguments this adapter already
+/// failed to parse out of a previous answer and kept verbatim (see
+/// [`parse_tool_call`]). Re-serialising it would double-encode the raw text
+/// into a quoted JSON string — replaying `{"location":` as `"{\"location\":"`
+/// — so it is emitted exactly as it arrived.
+fn wire_tool_call(call: &ToolCall) -> WireToolCall {
+    WireToolCall {
+        id: call.id.clone(),
+        kind: Some("function".to_owned()),
+        function: Some(WireFunctionCall {
+            name: call.name.clone(),
+            arguments: match &call.arguments {
+                Value::String(raw) => raw.clone(),
+                other => other.to_string(),
+            },
+        }),
+    }
+}
+
+/// The content of a `role: "tool"` message. The wire has no `is_error` field
+/// on a tool message, so a failed result's text is prefixed with `Error: ` —
+/// the model reads the failure in the text, which is all the wire offers.
+fn wire_tool_result(result: &ToolResult) -> String {
+    if result.is_error {
+        format!("Error: {}", result.content)
+    } else {
+        result.content.clone()
+    }
+}
+
+/// Appends the wire message(s) one [`Turn`] becomes: a plain message, an
+/// assistant message that quotes its `tool_calls`, or one `role: "tool"`
+/// message per result — followed by a user message when a tool-results turn
+/// also carries text of its own.
+fn push_turn(messages: &mut Vec<WireMessage>, turn: &Turn) {
+    match turn.role {
+        Role::Assistant if !turn.tool_calls.is_empty() => {
+            messages.push(WireMessage {
+                role: "assistant",
+                // A call-only turn has no text; the wire wants `null` for it,
+                // not an empty string.
+                content: (!turn.content.is_empty()).then(|| turn.content.clone()),
+                tool_calls: Some(turn.tool_calls.iter().map(wire_tool_call).collect()),
+                tool_call_id: None,
+            });
+        }
+        Role::User if !turn.tool_results.is_empty() => {
+            for result in &turn.tool_results {
+                messages.push(WireMessage {
+                    role: "tool",
+                    content: Some(wire_tool_result(result)),
+                    tool_calls: None,
+                    tool_call_id: Some(result.tool_call_id.clone()),
+                });
+            }
+            if !turn.content.is_empty() {
+                messages.push(WireMessage {
+                    role: "user",
+                    content: Some(turn.content.clone()),
+                    tool_calls: None,
+                    tool_call_id: None,
+                });
+            }
+        }
+        _ => messages.push(WireMessage {
+            role: wire_role(turn.role),
+            content: Some(turn.content.clone()),
+            tool_calls: None,
+            tool_call_id: None,
+        }),
+    }
+}
+
+/// Builds the wire body: the messages plus, when the prompt asked for them,
+/// a `response_format` carrying the caller's schema, the `tools` array and
+/// the `tool_choice`. Hand-rolling this JSON would be a second escaping bug
 /// waiting to happen; the prompt is user content.
 fn wire_request<'a>(model: &'a str, prompt: &'a Prompt) -> ChatCompletionsRequest<'a> {
     let response_format = prompt
@@ -218,18 +408,33 @@ fn wire_request<'a>(model: &'a str, prompt: &'a Prompt) -> ChatCompletionsReques
     if let Some(system) = prompt.system.as_deref() {
         messages.push(WireMessage {
             role: "system",
-            content: system,
+            content: Some(system.to_owned()),
+            tool_calls: None,
+            tool_call_id: None,
         });
     }
-    messages.extend(prompt.messages.iter().map(|turn| WireMessage {
-        role: wire_role(turn.role),
-        content: turn.content.as_str(),
-    }));
+    for turn in &prompt.messages {
+        push_turn(&mut messages, turn);
+    }
+    let tools = prompt
+        .tools
+        .iter()
+        .map(|tool| WireTool {
+            kind: "function",
+            function: WireToolFunction {
+                name: &tool.name,
+                description: &tool.description,
+                parameters: &tool.parameters,
+            },
+        })
+        .collect();
     ChatCompletionsRequest {
         model,
         max_tokens: prompt.max_tokens,
         messages,
         response_format,
+        tools,
+        tool_choice: prompt.tool_choice.as_ref().and_then(wire_tool_choice),
     }
 }
 
@@ -262,6 +467,10 @@ struct WireAnswer {
     content: Option<String>,
     #[serde(default)]
     refusal: Option<String>,
+    /// The calls the model asked for. Empty for a plain answer, and for a
+    /// server that does not speak function calling.
+    #[serde(default)]
+    tool_calls: Vec<WireToolCall>,
 }
 
 #[derive(serde::Deserialize, Default)]
@@ -364,6 +573,37 @@ fn reported_usage(usage: Option<WireUsage>, model: &str) -> WireUsage {
     })
 }
 
+/// The model's tool calls, parsed from the wire. Only function calls exist
+/// on this wire; an entry naming another `type` is skipped rather than
+/// misread as one.
+fn parse_tool_calls(message: Option<&WireAnswer>) -> Vec<ToolCall> {
+    let Some(calls) = message.map(|message| message.tool_calls.as_slice()) else {
+        return Vec::new();
+    };
+    calls.iter().filter_map(parse_tool_call).collect()
+}
+
+fn parse_tool_call(call: &WireToolCall) -> Option<ToolCall> {
+    match call.kind.as_deref() {
+        None | Some("function") => {}
+        Some(_) => return None,
+    }
+    let function = call.function.as_ref()?;
+    // The arguments arrive as a JSON *string*. One that parses becomes the
+    // object the port holds; one that does not is kept as that raw string,
+    // so `run_tool_loop` refuses the call — tool arguments must be a JSON
+    // object — and feeds the error back to the model. A truncated or
+    // malformed call never reaches an executor, and never becomes a parse
+    // failure of the whole response.
+    let arguments = serde_json::from_str(&function.arguments)
+        .unwrap_or_else(|_| Value::String(function.arguments.clone()));
+    Some(ToolCall::new(
+        call.id.clone(),
+        function.name.clone(),
+        arguments,
+    ))
+}
+
 #[async_trait]
 impl TextModel for OpenAiCompatible {
     async fn complete(&self, prompt: &Prompt) -> Result<Completion, TextModelError> {
@@ -381,6 +621,22 @@ impl TextModel for OpenAiCompatible {
             );
             return Err(TextModelError::NotConfigured);
         };
+
+        // A tools-bearing prompt to an adapter whose deployment turned
+        // tools off is refused here, before any request: sending the tools
+        // anyway and letting the model ignore them would answer as if none
+        // had been offered, hiding the mismatch. The router and
+        // `run_tool_loop` refuse this up front too; this is the adapter's
+        // own guard for a direct caller.
+        if !self.tools && !prompt.tools.is_empty() {
+            tracing::warn!(
+                provider = "openai-compatible",
+                outcome = "unsupported",
+                model = %self.model,
+                "text model outcome"
+            );
+            return Err(TextModelError::Unsupported(Capability::Tools));
+        }
 
         let payload = wire_request(&self.model, prompt);
         let body = serde_json::to_vec(&payload)
@@ -432,7 +688,42 @@ impl TextModel for OpenAiCompatible {
         let parsed: ChatCompletionsResponse = serde_json::from_str(&text).map_err(|err| {
             TextModelError::Transport(format!("model response did not parse: {err}"))
         })?;
+        let completion = self.completion_from_response(parsed, prompt)?;
 
+        tracing::info!(
+            provider = "openai-compatible",
+            code = status.as_u16(),
+            outcome = "completed",
+            model = %completion.model,
+            input_tokens = completion.input_tokens,
+            output_tokens = completion.output_tokens,
+            tool_calls = completion.tool_calls.len(),
+            "text model outcome"
+        );
+        Ok(completion)
+    }
+
+    fn supports(&self, _tier: ModelTier, capability: Capability) -> bool {
+        // The wire speaks function calling, so tools are on unless the
+        // deployment turned them off. `Capability` is `#[non_exhaustive]`:
+        // an unknown capability is one this adapter does not claim. The tier
+        // is the router's routing key; this adapter serves whatever tier it
+        // is wired for, so it is ignored.
+        capability == Capability::Tools && self.tools
+    }
+}
+
+impl OpenAiCompatible {
+    /// Turns a parsed success body into a [`Completion`]: the first choice's
+    /// text, its tool calls, the parsed schema-shaped JSON where the prompt
+    /// asked for it, and the usage. Every refusal that arrives inside a 200
+    /// — the model's own, the content filter, a truncated tool call — is a
+    /// `Rejected` error, decided here.
+    fn completion_from_response(
+        &self,
+        parsed: ChatCompletionsResponse,
+        prompt: &Prompt,
+    ) -> Result<Completion, TextModelError> {
         // One choice per completion — the port sends no `n`. A well-formed
         // envelope with no choice is the JSON path breaking between the
         // server and here, not a refusal (that would have been a 4xx).
@@ -447,9 +738,26 @@ impl TextModel for OpenAiCompatible {
             .as_ref()
             .and_then(|message| message.content.clone())
             .unwrap_or_default();
+        let tool_calls = parse_tool_calls(choice.message.as_ref());
+
+        // `finish_reason: "length"` with tool calls means the arguments were
+        // cut off mid-string; such a call must never reach an executor.
+        // `Rejected`, not `Transient`: retrying the identical request
+        // truncates identically.
+        if !tool_calls.is_empty() && choice.finish_reason.as_deref() == Some("length") {
+            return Err(TextModelError::Rejected(
+                "the response was truncated at max_tokens before the tool call arguments were \
+                 complete; a larger max_tokens is needed"
+                    .to_owned(),
+            ));
+        }
 
         let mut json = None;
-        if prompt.json_schema.is_some() {
+        // A tool-calling answer is not the schema-shaped answer a
+        // `response_format` asked for — its content is `null` — so the JSON
+        // path stands down while the model is still choosing a tool. The
+        // final, tool-free answer is parsed as before.
+        if prompt.json_schema.is_some() && tool_calls.is_empty() {
             // `finish_reason: "length"` cut the schema-shaped JSON off
             // mid-string — returning the fragment as a schema-shaped
             // success would be a lie. `Rejected`, not `Transient`: retrying
@@ -476,23 +784,18 @@ impl TextModel for OpenAiCompatible {
         // A server that answers without a `usage` block still completes,
         // with the counts defaulting to zero — said out loud, not silent.
         let usage = reported_usage(parsed.usage, &self.model);
-        let input_tokens = u64::from(usage.prompt_tokens);
-        let output_tokens = u64::from(usage.completion_tokens);
         let model = if parsed.model.is_empty() {
             self.model.clone()
         } else {
             parsed.model
         };
-        tracing::info!(
-            provider = "openai-compatible",
-            code = status.as_u16(),
-            outcome = "completed",
-            model = %model,
-            input_tokens,
-            output_tokens,
-            "text model outcome"
+        let mut completion = Completion::new(content, model).usage(
+            u64::from(usage.prompt_tokens),
+            u64::from(usage.completion_tokens),
         );
-        let mut completion = Completion::new(content, model).usage(input_tokens, output_tokens);
+        if !tool_calls.is_empty() {
+            completion = completion.tool_calls(tool_calls);
+        }
         if let Some(cached) = usage.prompt_tokens_details {
             completion = completion.cached_input_tokens(u64::from(cached.cached_tokens));
         }
