@@ -219,6 +219,7 @@ fn a_reset_link_goes_only_to_an_account_with_a_password() {
                 status: STATUS_ACTIVE.to_owned(),
                 created_at: "2026-01-01T00:00:00Z".to_owned(),
                 updated_at: "2026-01-01T00:00:00Z".to_owned(),
+                locale: None,
             };
             insert_user(&*kit.db, &passwordless).await.expect("insert");
 

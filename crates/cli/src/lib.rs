@@ -24,6 +24,7 @@
 #![forbid(unsafe_code)]
 
 pub mod apply;
+pub mod auth_import;
 pub mod build;
 pub mod build_key;
 pub mod client_ts;
@@ -31,6 +32,7 @@ pub mod codes;
 mod collect;
 pub mod data;
 pub mod doctor;
+pub mod import;
 pub mod lint;
 mod lock;
 pub mod push;
@@ -300,6 +302,115 @@ enum Command {
     Push {
         #[command(subcommand)]
         command: PushCommand,
+    },
+    /// Loads users into a running venture's `auth-core` module over its
+    /// admin API (issue #650). Needs no compiled-in harness: it talks to
+    /// a URL, so the standalone `fz` runs it.
+    Auth {
+        #[command(subcommand)]
+        command: AuthCommand,
+    },
+    /// Moves a project from another platform onto the harness (ADR 0026).
+    /// Supabase first; step one is a read-only inspection and its report.
+    ///
+    /// Needs no compiled-in harness, so it runs from the standalone `fz`
+    /// too. The network leg needs the `import-supabase` feature.
+    Import {
+        #[command(subcommand)]
+        command: ImportCommand,
+    },
+}
+
+#[derive(Subcommand)]
+enum AuthCommand {
+    /// Imports a JSONL file of users into `auth-core` — one JSON object
+    /// per line, blank lines skipped — through
+    /// `POST <target>/v1/auth-core/admin/users/import`.
+    ///
+    /// A dry run by default: the server validates every user and reports
+    /// a verdict without writing. `--apply` is the run that writes.
+    Import {
+        /// The venture's base URL, e.g. `https://venture.example`.
+        #[arg(long, value_name = "URL")]
+        target: String,
+        /// The environment variable holding the `ADMIN_TOKEN` to present.
+        /// Required; the value is never printed.
+        #[arg(long, value_name = "VAR")]
+        admin_token_env: String,
+        /// Actually write. Without it the run is a dry run.
+        #[arg(long)]
+        apply: bool,
+        /// Let the server merge a user into an existing account that
+        /// shares the email, instead of reporting a conflict.
+        #[arg(long)]
+        merge_by_email: bool,
+        /// Where the report JSONL goes (default `<file>.report.jsonl`).
+        #[arg(long, value_name = "PATH")]
+        report: Option<PathBuf>,
+        /// Users per request (default 500, max 1000).
+        #[arg(long, default_value_t = auth_import::DEFAULT_BATCH_SIZE, value_name = "N")]
+        batch_size: usize,
+        /// The JSONL file of user objects.
+        #[arg(value_name = "FILE")]
+        file: PathBuf,
+    },
+}
+
+#[derive(Subcommand)]
+enum ImportCommand {
+    /// A Supabase project (ADR 0026, issue #658).
+    Supabase {
+        #[command(subcommand)]
+        command: SupabaseCommand,
+    },
+}
+
+#[derive(Subcommand)]
+enum SupabaseCommand {
+    /// Connects read-only to the project's Postgres (and, with a token,
+    /// the Management API) and writes the migration report: every item
+    /// automatic, needs work or a blocker, with size and transfer
+    /// estimates. Never writes to the project. The exit code is non-zero
+    /// for a refused input, a connection or a permission error — never
+    /// for a blocker, which is part of the report.
+    Inspect {
+        /// The Supabase project ref (the `<ref>` in
+        /// `https://<ref>.supabase.co`).
+        #[arg(long, value_name = "REF")]
+        project: String,
+        /// The database URL of a read-only role. Prefer the
+        /// `SUPABASE_DB_URL` environment variable: a flag lands in the
+        /// shell history and the process list.
+        #[arg(long, value_name = "URL")]
+        db_url: Option<String>,
+        /// A Supabase Management API personal access token, for Edge
+        /// Functions and the auth configuration. Prefer
+        /// `SUPABASE_ACCESS_TOKEN`. Without one those are reported as not
+        /// inspected (unknown, not none).
+        #[arg(long, value_name = "TOKEN")]
+        management_token: Option<String>,
+        /// Write the JSON report (the format later steps read).
+        #[arg(long, conflicts_with = "md")]
+        json: bool,
+        /// Write the Markdown report (the default).
+        #[arg(long)]
+        md: bool,
+        /// Write the report to this file instead of stdout.
+        #[arg(long, value_name = "FILE")]
+        out: Option<PathBuf>,
+        /// The throughput the transfer estimate assumes, in Mbit/s.
+        #[arg(long, default_value_t = 100, value_name = "MBPS")]
+        transfer_mbps: u32,
+        /// Ask the `TypeSafe` classifier (Jev; `TYPESAFE_API_KEY`) about the
+        /// RLS policies no rule placed. Advisory only: it labels a
+        /// policy, it never writes a check. Sends policy SQL and table and
+        /// column names, never a row.
+        #[arg(long)]
+        classify: bool,
+        /// The confidence a classifier label needs; below it the policy
+        /// stays `needs_review`. Per adapter: it is `TypeSafe`'s number.
+        #[arg(long, default_value_t = 0.8, value_name = "0..1")]
+        classify_threshold: f32,
     },
 }
 
@@ -612,7 +723,9 @@ pub fn run(build: impl Fn() -> Harness, args: impl IntoIterator<Item = String>) 
         | Command::Add { .. }
         | Command::Init { .. }
         | Command::Verify { .. }
-        | Command::Push { .. } => unreachable!("dispatched before the harness is built"),
+        | Command::Push { .. }
+        | Command::Auth { .. }
+        | Command::Import { .. } => unreachable!("dispatched before the harness is built"),
     };
     finish(result)
 }
@@ -624,8 +737,9 @@ pub fn run(build: impl Fn() -> Harness, args: impl IntoIterator<Item = String>) 
 /// `fz build` **generates** a harness, so it cannot have one; the manifest
 /// workflow — `fz plan` / `deploy` / `add` / `init` / `verify`, routed by
 /// [`workflow::dispatch`] — works on the manifest and its on-disk records
-/// rather than the compiled-in modules; and `fz push` reads the venture's
-/// *environment* rather than its modules. `None` for every other command,
+/// rather than the compiled-in modules; `fz push` reads the venture's
+/// *environment* rather than its modules; and `fz auth import` talks to a
+/// URL. `None` for every other command,
 /// which is what sends [`run_standalone`] to its refusal and [`run`] on to
 /// `build()`.
 fn harness_free(command: &Command) -> Option<ExitCode> {
@@ -657,6 +771,37 @@ fn harness_free(command: &Command) -> Option<ExitCode> {
             finish(client_ts::run(surface, out))
         }),
         Command::Push { command } => Some(finish(run_push(command))),
+        Command::Auth { command } => Some(finish(run_auth(command))),
+        Command::Import {
+            command:
+                ImportCommand::Supabase {
+                    command:
+                        SupabaseCommand::Inspect {
+                            project,
+                            db_url,
+                            management_token,
+                            json,
+                            md: _,
+                            out,
+                            transfer_mbps,
+                            classify,
+                            classify_threshold,
+                        },
+                },
+        } => Some(finish(import::inspect(&import::InspectArgs {
+            project: project.clone(),
+            db_url: db_url.clone(),
+            management_token: management_token.clone(),
+            format: if *json {
+                import::Format::Json
+            } else {
+                import::Format::Markdown
+            },
+            out: out.clone(),
+            transfer_mbps: *transfer_mbps,
+            classify: *classify,
+            classify_threshold: *classify_threshold,
+        }))),
         _ => workflow::dispatch(command),
     }
 }
@@ -735,14 +880,49 @@ fn run_push(command: &PushCommand) -> Result<(), String> {
     }
 }
 
+/// `fz auth` (issue #650). The admin token is read from the environment
+/// here — by the name `--admin-token-env` gives, through the same
+/// [`EnvVars`] the rest of `fz` reads config with — and handed to the
+/// import as a value, so it never becomes a flag in a shell history.
+fn run_auth(command: &AuthCommand) -> Result<(), String> {
+    match command {
+        AuthCommand::Import {
+            target,
+            admin_token_env,
+            apply,
+            merge_by_email,
+            report,
+            batch_size,
+            file,
+        } => {
+            let Some(admin_token) = EnvVars.get(admin_token_env) else {
+                return Err(format!(
+                    "the environment variable `{admin_token_env}` is not set or is empty (it \
+                     must hold the auth-core admin token — the value the venture has as \
+                     `ADMIN_TOKEN`)"
+                ));
+            };
+            auth_import::run(&auth_import::ImportOptions {
+                file: file.clone(),
+                target: target.clone(),
+                admin_token,
+                apply: *apply,
+                merge_by_email: *merge_by_email,
+                report: report.clone(),
+                batch_size: *batch_size,
+            })
+        }
+    }
+}
+
 /// Runs the harness-free `fz` commands from a standalone binary (no
 /// compiled-in venture): `fz build <manifest>`, which generates a harness;
 /// `fz client-ts`, which generates the typed TypeScript client from the
 /// contract a venture serves; the manifest workflow — `fz plan` /
 /// `deploy` / `add` / `init` / `verify` — which works on the manifest and
-/// its records, not on compiled-in modules; and `fz push`, which reads
-/// the venture's environment. Every other command needs the venture's
-/// harness and says so.
+/// its records, not on compiled-in modules; `fz push`, which reads the
+/// venture's environment; and `fz auth`, which talks to a URL. Every
+/// other command needs the venture's harness and says so.
 #[must_use = "call process::exit with the returned ExitCode"]
 pub fn run_standalone(args: impl IntoIterator<Item = String>) -> ExitCode {
     let mut full_argv: Vec<String> = Vec::with_capacity(8);
@@ -753,8 +933,8 @@ pub fn run_standalone(args: impl IntoIterator<Item = String>) -> ExitCode {
         eprintln!(
             "fz: this command must run inside a venture (it needs the compiled-in harness — see \
              the cratefield-cli README). Only `fz build <manifest>`, `fz client-ts`, the manifest \
-             workflow (`fz plan` / `deploy` / `add` / `init` / `verify`) and `fz push` run \
-             standalone."
+             workflow (`fz plan` / `deploy` / `add` / `init` / `verify`), `fz push`, `fz auth` \
+             and `fz import` run standalone."
         );
         return ExitCode::FAILURE;
     };

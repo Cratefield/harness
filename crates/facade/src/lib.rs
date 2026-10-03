@@ -69,6 +69,9 @@ pub use cratefield_push_wiring as push_wiring;
 #[cfg(feature = "stripe")]
 pub use cratefield_adapter_stripe as stripe;
 
+#[cfg(feature = "polar")]
+pub use cratefield_adapter_polar as polar;
+
 #[cfg(feature = "webpush")]
 pub use cratefield_adapter_webpush as webpush;
 
@@ -118,6 +121,11 @@ pub use cratefield_client_ts as client_ts;
 #[cfg(feature = "introspect")]
 pub use cratefield_introspect as introspect;
 
+/// The Supabase importer's engine: a read-only inspection of a Supabase
+/// project and its migration report (ADR 0026). Native only.
+#[cfg(feature = "import-supabase")]
+pub use cratefield_import_supabase as import_supabase;
+
 /// The HTTP API over a venture's declared tables (issue #153). A
 /// generated venture's tables module calls `tables_api::router`.
 #[cfg(feature = "tables-api")]
@@ -154,6 +162,9 @@ pub use cratefield_module_webhooks as webhooks;
 
 #[cfg(feature = "device-auth")]
 pub use cratefield_module_device_auth as device_auth;
+
+#[cfg(feature = "orgs")]
+pub use cratefield_module_orgs as orgs;
 
 #[cfg(feature = "connections")]
 pub use cratefield_module_connections as connections;

@@ -98,6 +98,20 @@ production boot path calls `validate_config`
 ([Cratefield/harness#101](https://github.com/Cratefield/harness/issues/101)),
 so today that means `cargo test` catches it.
 
+## The locale a registration records
+
+`POST /register` accepts an optional `locale` alongside `email` and
+`password`. When it names a tag the deployment supports it is stored on the
+account; when it does not, the column stays null and the account inherits
+whatever a later request resolves. A regional tag matches by language, so a
+supported `de` takes `de-AT` and stores the canonical `de`.
+
+`AUTH_LOCALES` lists the supported tags, comma-separated in BCP 47 form,
+the first being the default (`AUTH_LOCALES=de,en`). It is a deployment-wide
+key rather than an `AUTH_PASSWORD_` one: every auth module reads it, and
+the same list is what `factory0-auth-magic-link` resolves its sign-in mail
+from. Unset, the deployment supports `en`.
+
 ## Three defences, and they are not the same defence
 
 **The `RateLimiter` port** is keyed on the request. It slows one attacker

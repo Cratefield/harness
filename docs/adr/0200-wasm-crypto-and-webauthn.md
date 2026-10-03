@@ -161,6 +161,33 @@ on staging during auth-password and keep a config knob. **The free
 tier's 10 ms CPU cannot fit even one Argon2id verify at any sane
 parameters — password login requires the paid plan.**
 
+### Addendum (2026-10-03): bcrypt cost, for imported hashes
+
+Issue #650 lets a deployment verify bcrypt hashes imported from another
+service, capped at cost 14, and rehashes each to Argon2id on first
+successful login. Why 14, in numbers. `bcrypt` crate v0.19.3, release
+build, one `bcrypt::verify` per cost (median of three runs, AMD EPYC host,
+no Cloudflare):
+
+| cost | native x86_64 | wasm32-wasip1 (Node WASI) |
+|---|---|---|
+| 10 | 43 ms | 47 ms |
+| 12 | 171 ms | 188 ms |
+| 14 | 686 ms | 746 ms |
+
+Each +1 doubles the work, so cost 14 is ~16× cost 10. bcrypt is integer
+(Blowfish) work with no large memory block, so the wasm penalty is small —
+~10% here — unlike memory-bound Argon2id. These are **local** numbers on one
+host, not `wrangler dev`; the Argon2id table above is, so a Workers bcrypt
+figure is an **estimate**: if it scales like the wasm column, cost 10 sits
+near an Argon2id verify (~20 ms above) and cost 14 near a second.
+
+That is why the import route caps cost at 14 — cost 14 is already sixteen
+times cost 10, and the format's maximum of 31 would be a denial-of-service
+vector dressed as a login — and why every imported bcrypt user is rehashed
+on first sign-in: the flag that accepts bcrypt (`AUTH_LEGACY_HASHES`) exists
+to be turned off again, and the rehash is what lets it be.
+
 ## Hard-constraint proof
 
 `cargo tree --target wasm32-unknown-unknown`: `openssl`, `openssl-sys`,

@@ -26,7 +26,10 @@ COPY . .
 # runtime into its wasm build); the send-capable `fz` is this separately
 # built binary. `crates/cli-acceptance/tests/push_send_feature.rs` fails
 # the build if this line and that promise drift apart.
-RUN cargo build --release -p cratefield-cli --bin cratefield-cli --features push-send \
+# `import-supabase` (issue #658) rides the same client and runtime and adds
+# sqlx, so `fz import supabase inspect` works from the image as the docs
+# say (docs/import/supabase.md) — the same reasoning, the same exception.
+RUN cargo build --release -p cratefield-cli --bin cratefield-cli --features push-send,import-supabase \
  && cp target/release/cratefield-cli /usr/local/bin/fz
 
 # ---- a working Rust toolchain that can compile a generated venture ----

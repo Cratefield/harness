@@ -36,7 +36,9 @@ crates (`cratefield-core` and friends on crates.io), not on a git revision.
 Its own crates stay `factory0-auth-*` and are never published: they are
 Factory Zero's service, not part of the harness (harness ADR 0011). Read
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for how it fits, what was
-validated before the issues were written, and what is deferred.
+validated before the issues were written, and what is deferred. Deploying your
+own instance, and rotating signing keys or client secrets, is
+[docs/auth/DEPLOYING.md](docs/auth/DEPLOYING.md).
 
 ## How a venture uses it
 
@@ -48,6 +50,8 @@ validated before the issues were written, and what is deferred.
    single-use refresh token.
 4. Verify tokens locally with `cratefield-auth-client`, which fetches and caches
    the published JWKS and checks the audience so nobody has to remember to.
+   TypeScript web apps do the same with `@cratefield/auth`; see
+   [WEB-APPS.md](WEB-APPS.md).
 
 ## Modules
 
@@ -59,6 +63,12 @@ validated before the issues were written, and what is deferred.
 | `auth-meta` | Facebook Login: OAuth 2.0 plus a Graph profile call, with no OpenID Connect anywhere. The data deletion callback is #18 |
 | `auth-password` | Email and password: argon2id, a per-account lockout, a breach check, and answers that reveal nothing about who has an account. **Needs the paid Workers plan** (ADR 0200) |
 | `auth-magic-link` | Sign in by email: a single-use bearer credential, the way an address gets verified, and the way back in for a locked or passwordless account |
+
+## Bringing an existing userbase
+
+Running on another auth service today? [MIGRATING.md](MIGRATING.md) walks a
+Supabase export through `fz auth import`, keeping each user's password and
+verified email.
 
 ## The login chooser
 

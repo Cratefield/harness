@@ -177,6 +177,22 @@ pub(crate) const REGISTRY: &[ModuleCodegen] = &[
         needs_mailer: false,
         needs_push: false,
     },
+    ModuleCodegen {
+        slug: "orgs",
+        name: "Organizations",
+        summary: "Organizations, memberships, roles and email invitations: a person creates \
+                  an organization and is its owner, invites people by address, and everyone \
+                  who belongs holds a role the venture configured.",
+        version: "0.1.0",
+        feature: "orgs",
+        module: "orgs",
+        type_name: "Orgs",
+        has_templates: false,
+        // `Mailer` is optional: an invitation is refused with `503` rather
+        // than stored when no mailer is configured.
+        needs_mailer: false,
+        needs_push: false,
+    },
 ];
 
 fn codegen_for(slug: &str) -> Option<&'static ModuleCodegen> {

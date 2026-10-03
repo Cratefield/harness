@@ -173,6 +173,7 @@ convenience, not a layer.
 | `cratefield-cli` | Binary `fz`: `migrations collect`, `doctor`, `modules` |
 | `cratefield-testing` | Conformance kit every module, public or private, must pass |
 | `cratefield-adapter-postgres` | `Database` over sqlx for the native runtime (`.github/workflows/parity.yml` runs module suites against both SQLite and Postgres) |
+| `cratefield-import-supabase` | Step one of moving a Supabase project onto the harness (ADR 0026): a read-only inspection and a migration report — every item automatic, needs work or a blocker — behind `fz import supabase inspect` |
 | `cratefield-runtime-native` | The same harness as a single binary on tokio: axum on a TCP listener, Redis `RateLimiter`, in-process cron |
 | `cratefield-adapter-apns` | `Push` over Apple Push Notification service, HTTP/2 through the `HttpClient` port — no vendor SDK |
 | `cratefield-adapter-fcm` | `Push` over Firebase Cloud Messaging (HTTP v1), the same shape as APNs |
@@ -181,6 +182,7 @@ convenience, not a layer.
 | `cratefield-adapter-github-app` | GitHub App auth: the RS256 app JWT, installation tokens (cached, single-flight, one re-mint on `401`) and the user-to-server OAuth code exchange |
 | `cratefield-push-wiring` | Assembles the `Push` port from the environment: one env-variable table shared by `serve()`, `fz push` and `fz doctor` |
 | `cratefield-adapter-stripe` | `Payments` over the Stripe REST API |
+| `cratefield-adapter-polar` | `Payments` over Polar, a Merchant of Record: hosted checkout, usage meters through event ingestion, the customer portal, refunds, disputes and Standard Webhooks verification, through the `HttpClient` port |
 | `cratefield-module-cms` | A small content store with an editor: typed collections, versioned, in the venture's own database |
 | `cratefield-module-privacy` | Subject access and erasure, assembled from what every other module declares it holds |
 | `cratefield-module-notifications` | Push, an in-app inbox and email from one `notify()`, with per-account per-category preferences ([NOTIFICATIONS.md](docs/NOTIFICATIONS.md)) |

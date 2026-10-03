@@ -1,0 +1,152 @@
+# Supabase migration report: `fixtureprojectref000`
+
+Source `db.fixtureprojectref000.supabase.co:5432/postgres`, PostgreSQL 16.11. Report version 1, written by cratefield-import-supabase 0.1.0. Read-only: nothing was written to the project.
+
+## Summary
+
+| | |
+|---|---|
+| Ready (no blockers) | **no** |
+| Automatic | 22 |
+| Needs work | 26 |
+| Blockers | 2 |
+| Tables | 6 (~14 rows) |
+| Data | 88 KiB (plus 112 KiB of indexes, rebuilt on the target) |
+| Storage | 3 objects, 12 MiB |
+| Estimated transfer | about 2 s at 100 Mbit/s (data and storage only; index builds and verification are extra) |
+
+**Read-only evidence:** read-only transaction yes, read-only session yes, no transaction id assigned yes; role `postgres` (superuser yes, holds write privileges yes).
+
+**Coverage:** database inspected, Management API not inspected, policy classifier not inspected.
+
+## Blockers (2)
+
+Each stops a later step until it is resolved.
+
+| Kind | Object | Phase | Why | Cratefield equivalent |
+|---|---|---|---|---|
+| extension | `dblink` | schema | cross-database queries: the harness is one database per tenant (ADR 0008) and reaches other systems through ports, not through SQL | none |
+| foreign_key | `public.attachments.attachments_object_id_fkey` | schema | points into storage.objects, which no phase recreates as a table (storage objects become R2 keys, auth rows become harness users) | drop the constraint on the source or decide what the column holds after the move (an object key, a user id) before the schema phase |
+
+## Needs work (26)
+
+Moved or reported, but the venture writes or decides something. Each needs a `covered` or `waived` disposition before cutover.
+
+| Kind | Object | Phase | Why | Cratefield equivalent |
+|---|---|---|---|---|
+| auth | `mfa_factors` | auth | MFA factors are not imported; enrolled users lose their second factor | re-enrolment (passkeys, auth-passkeys) after the move |
+| auth_provider | `github` | auth | github sign-in has no harness provider | its users sign in by magic link until a provider is added |
+| auth_provider | `google` | auth | google sign-in: identities map once the provider is configured | auth-oidc's `google` provider |
+| bucket | `documents` | storage | 1 object(s) over the Blob port's 10 MiB put cap: copied and readable, but module code cannot replace them through the port | R2 under the same keys |
+| edge_function | `unknown` | code | Edge Functions are only visible through the Management API, which was not read: unknown, not none | re-run with a Management API token |
+| foreign_key | `public.profiles.profiles_id_fkey` | schema | points into auth.users: dropped on load, its values kept and checked against the imported users in verify | the imported user's id, mapped through the auth-users step's id table |
+| foreign_key | `public.team_members.team_members_user_id_fkey` | schema | points into auth.users: dropped on load, its values kept and checked against the imported users in verify | the imported user's id, mapped through the auth-users step's id table |
+| function | `public.handle_new_user()` | code | SECURITY DEFINER: it bypasses the caller's privileges | module code over the request's subject (and the `HttpClient` port for HTTP); or copy it once it no longer reaches into Supabase |
+| grant | `anon (8 tables)` | code | a PostgREST role: the harness exposes no table directly, so what this role could reach is reachable only through a route someone writes | a route per access path, with its check |
+| grant | `authenticated (8 tables)` | code | a PostgREST role: the harness exposes no table directly, so what this role could reach is reachable only through a route someone writes | a route per access path, with its check |
+| policy | `public.attachments.Anyone can file an attachment` | code | RLS is neither copied nor translated (ADR 0026); public_write by rule at confidence 1.00; needs a covered or waived disposition before cutover | a public write route: rate-limit it and put the Captcha port in front; confirm it is meant to be open |
+| policy | `public.profiles.Public profiles are viewable by everyone.` | code | RLS is neither copied nor translated (ADR 0026); public_read by rule at confidence 1.00; needs a covered or waived disposition before cutover | a public read route with no subject check; confirm every column is meant to be public |
+| policy | `public.profiles.Users can insert their own profile.` | code | RLS is neither copied nor translated (ADR 0026); owner_only by rule at confidence 1.00; needs a covered or waived disposition before cutover | owner check in the route: the request's subject must equal `id` (filter reads and refuse writes by it) |
+| policy | `public.profiles.Users can update own profile.` | code | RLS is neither copied nor translated (ADR 0026); owner_only by rule at confidence 1.00; needs a covered or waived disposition before cutover | owner check in the route: the request's subject must equal `id` (filter reads and refuse writes by it) |
+| policy | `public.projects.Admins can delete projects` | code | RLS is neither copied nor translated (ADR 0026); role_based by rule at confidence 1.00; needs a covered or waived disposition before cutover | a role or claim check in the route on the request's subject (signed in, or holding the role) |
+| policy | `public.projects.Archived projects stay visible for a grace period` | code | RLS is neither copied nor translated (ADR 0026); needs_review by rule at confidence 0.00; needs a covered or waived disposition before cutover | read the expression and write the equivalent route check, with a failing test first |
+| policy | `public.projects.Team members can view projects` | code | RLS is neither copied nor translated (ADR 0026); tenant_scoped by rule at confidence 1.00; needs a covered or waived disposition before cutover | membership check in the route: the request's subject must be a member, looked up in `team_members`, of the row's tenant |
+| policy | `public.team_members.Members see their memberships` | code | RLS is neither copied nor translated (ADR 0026); owner_only by rule at confidence 1.00; needs a covered or waived disposition before cutover | owner check in the route: the request's subject must equal `user_id` (filter reads and refuse writes by it) |
+| policy | `public.teams.Service role manages teams` | code | RLS is neither copied nor translated (ADR 0026); service_role_only by rule at confidence 1.00; needs a covered or waived disposition before cutover | server-side only: no route exposes it; module code reads and writes it directly |
+| policy | `public.teams.Signed-in users can list teams` | code | RLS is neither copied nor translated (ADR 0026); role_based by rule at confidence 1.00; needs a covered or waived disposition before cutover | a role or claim check in the route on the request's subject (signed in, or holding the role) |
+| policy | `storage.objects.Avatar images are publicly accessible` | code | RLS is neither copied nor translated (ADR 0026); needs_review by rule at confidence 0.00; needs a covered or waived disposition before cutover | read the expression and write the equivalent route check, with a failing test first |
+| policy | `storage.objects.Users upload their own avatar` | code | RLS is neither copied nor translated (ADR 0026); needs_review by rule at confidence 0.00; needs a covered or waived disposition before cutover | read the expression and write the equivalent route check, with a failing test first |
+| publication | `supabase_realtime` | code | Realtime streams changes to these tables to clients | the `Realtime` port: a room the owning module broadcasts to after each write |
+| table | `public.audit_log` | data | no primary key: copied in one piece and checksummed over its sorted rows, so an interrupted copy restarts the table; add a key for chunked, resumable copy | app.audit_log |
+| trigger | `auth.users.on_auth_user_created` | code | fires on auth.users, which the harness replaces: it will never fire | a module reacting to the harness's account events (sign-up, deletion) |
+| view | `public.my_projects` | code | reads auth.* or storage.*, which do not exist on the target; not copied | a module query that takes the request's subject as a parameter |
+
+## Automatic (22)
+
+Moved by the importer with nothing to decide.
+
+| Kind | Object | Phase | Why | Cratefield equivalent |
+|---|---|---|---|---|
+| auth | `users` | auth | 3 user(s): email, verified flag, bcrypt hash and created_at move through the harness's user import; passwords keep working | harness users (auth-password, auth-magic-link) |
+| auth_provider | `email` | auth | email and password, or magic link | auth-password and auth-magic-link |
+| bucket | `avatars` | storage | objects copied through the Storage API and verified by count, size and checksum | R2 under the same keys, served by a public route |
+| enum | `public.project_status` | schema | recreated with the same labels in the same order | app.project_status |
+| extension | `citext` | schema | created on the target before the schema | created on the target |
+| extension | `pgcrypto` | schema | created on the target before the schema | created on the target |
+| extension | `plpgsql` | schema | created on the target before the schema | created on the target |
+| extension | `uuid-ossp` | schema | created on the target before the schema | created on the target |
+| function | `public.project_count(team bigint)` | schema | copied verbatim, its search_path pinned to the target schema | app.project_count |
+| function | `public.set_updated_at()` | schema | copied verbatim, its search_path pinned to the target schema | app.set_updated_at |
+| grant | `service_role (8 tables)` | code | the server-side role; module code has the same reach | module code |
+| schema | `public` | schema | a user schema; owned by the venture, not tracked by harness migrations | the Postgres schema `app` in the venture's database |
+| sequence | `public.invoice_number_seq` | schema | recreated, and set to at least the source's value in verify | app.invoice_number_seq |
+| sequence | `public.projects_id_seq` | schema | recreated, and set to at least the source's value in verify | app.projects_id_seq |
+| sequence | `public.teams_id_seq` | schema | recreated, and set to at least the source's value in verify | app.teams_id_seq |
+| table | `public.attachments` | data | columns, constraints and indexes recreated; rows copied with COPY and verified by count and checksum | app.attachments |
+| table | `public.profiles` | data | columns, constraints and indexes recreated; rows copied with COPY and verified by count and checksum | app.profiles |
+| table | `public.projects` | data | columns, constraints and indexes recreated; rows copied with COPY and verified by count and checksum | app.projects |
+| table | `public.team_members` | data | columns, constraints and indexes recreated; rows copied with COPY and verified by count and checksum | app.team_members |
+| table | `public.teams` | data | columns, constraints and indexes recreated; rows copied with COPY and verified by count and checksum | app.teams |
+| trigger | `public.profiles.profiles_set_updated_at` | schema | copied verbatim with its function | on app.profiles |
+| view | `public.active_projects` | schema | copied verbatim | app.active_projects |
+
+## Row-level security (12 policies)
+
+RLS is neither copied nor translated (ADR 0026). The pattern and the suggested check are advice: a person writes the check, turns the policy's test stub (in the JSON report) into a passing test, and records the policy as covered or waived.
+
+| Table | Policy | Command | Roles | USING | WITH CHECK | Pattern | Confidence | Source | Suggested check |
+|---|---|---|---|---|---|---|---|---|---|
+| `public.attachments` | Anyone can file an attachment | INSERT | anon | — | `true` | public_write | 1.00 | rule | a public write route: rate-limit it and put the Captcha port in front; confirm it is meant to be open |
+| `public.profiles` | Public profiles are viewable by everyone. | SELECT | public | `true` | — | public_read | 1.00 | rule | a public read route with no subject check; confirm every column is meant to be public |
+| `public.profiles` | Users can insert their own profile. | INSERT | public | — | `(( SELECT auth.uid() AS uid) = id)` | owner_only | 1.00 | rule | owner check in the route: the request's subject must equal `id` (filter reads and refuse writes by it) |
+| `public.profiles` | Users can update own profile. | UPDATE | public | `(auth.uid() = id)` | — | owner_only | 1.00 | rule | owner check in the route: the request's subject must equal `id` (filter reads and refuse writes by it) |
+| `public.projects` | Admins can delete projects | DELETE | public | `(((auth.jwt() -> 'app_metadata'::text) ->> 'role'::text) = 'admin'::text)` | — | role_based | 1.00 | rule | a role or claim check in the route on the request's subject (signed in, or holding the role) |
+| `public.projects` | Archived projects stay visible for a grace period | SELECT | public | `((status <> 'archived'::project_status) OR (created_at > (now() - '30 days'::interval)))` | — | needs_review | 0.00 | rule | read the expression and write the equivalent route check, with a failing test first |
+| `public.projects` | Team members can view projects | SELECT | authenticated | `(EXISTS ( SELECT 1 FROM team_members m WHERE ((m.team_id = projects.team_id) AND (m.user_id = auth.uid()))))` | — | tenant_scoped | 1.00 | rule | membership check in the route: the request's subject must be a member, looked up in `team_members`, of the row's tenant |
+| `public.team_members` | Members see their memberships | SELECT | public | `(user_id = auth.uid())` | — | owner_only | 1.00 | rule | owner check in the route: the request's subject must equal `user_id` (filter reads and refuse writes by it) |
+| `public.teams` | Service role manages teams | ALL | service_role | `true` | `true` | service_role_only | 1.00 | rule | server-side only: no route exposes it; module code reads and writes it directly |
+| `public.teams` | Signed-in users can list teams | SELECT | authenticated | `true` | — | role_based | 1.00 | rule | a role or claim check in the route on the request's subject (signed in, or holding the role) |
+| `storage.objects` | Avatar images are publicly accessible | SELECT | public | `(bucket_id = 'avatars'::text)` | — | needs_review | 0.00 | rule | read the expression and write the equivalent route check, with a failing test first |
+| `storage.objects` | Users upload their own avatar | INSERT | authenticated | — | `((bucket_id = 'avatars'::text) AND (( SELECT auth.uid() AS uid) = owner))` | needs_review | 0.00 | rule | read the expression and write the equivalent route check, with a failing test first |
+
+## Tables (6)
+
+| Table | Rows (est.) | Data | Indexes | RLS | Primary key |
+|---|---|---|---|---|---|
+| `public.attachments` | 1 | 8.0 KiB | 16 KiB | yes | id |
+| `public.audit_log` | 2 | 16 KiB | 0 B | yes | none |
+| `public.profiles` | 2 | 16 KiB | 32 KiB | yes | id |
+| `public.projects` | 4 | 16 KiB | 32 KiB | yes | id |
+| `public.team_members` | 3 | 16 KiB | 16 KiB | yes | team_id, user_id |
+| `public.teams` | 2 | 16 KiB | 16 KiB | yes | id |
+
+## Auth
+
+3 users (2 without a password, 1 unconfirmed, 0 anonymous); 1 MFA factors; 0 SSO providers.
+
+Identities by provider: email (1), github (1), google (1).
+
+The auth configuration was not read (no Management API token).
+
+## Storage
+
+| Bucket | Public | Objects | Size | Over 10 MiB |
+|---|---|---|---|---|
+| `avatars` | yes | 2 | 51 KiB | 0 |
+| `documents` | no | 1 | 12 MiB | 1 |
+
+## Edge Functions
+
+Not inspected: unknown, not none. Pass a Management API token to list them.
+
+## Realtime and cron
+
+- Publication `supabase_realtime`: public.projects.
+
+## Warnings
+
+- inspected as the superuser `postgres`: the session was read-only, but use the read-only role from docs/import/supabase.md for the real run
+
+## Next
+
+Resolve the blockers, decide each needs-work item, then run the later steps (docs/import/supabase.md): auth users, schema and data into `app`, storage into R2, verify, cut over.

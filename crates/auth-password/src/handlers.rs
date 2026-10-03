@@ -12,11 +12,11 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use cratefield_core::{Json, Problem, Scope};
 use factory0_auth_core::{
-    CREDENTIAL_PASSWORD, CredentialRow, IssuedSession, Login, PROVIDER_PASSWORD, STATUS_ACTIVE,
-    SessionError, TOKEN_PASSWORD_RESET, cookie_value as session_cookie_value, hash_password,
-    insert_credential, insert_identity, issue as issue_session, password_credential,
+    CREDENTIAL_PASSWORD, CredentialRow, IssuedSession, LegacyHashes, Login, PROVIDER_PASSWORD,
+    STATUS_ACTIVE, SessionError, TOKEN_PASSWORD_RESET, cookie_value as session_cookie_value,
+    hash_password, insert_credential, insert_identity, issue as issue_session, password_credential,
     retire_unconsumed_tokens, set_cookie, set_password_hash, set_password_lockout, user_by_id,
-    user_by_primary_email, verify_password,
+    user_by_primary_email, verify_password_with,
 };
 use http::{HeaderMap, StatusCode, Uri, header};
 use serde::Deserialize;
@@ -75,6 +75,10 @@ struct Credentials {
     email: String,
     #[serde(default)]
     password: String,
+    /// The locale the person registering asked for (issue #649). Stored
+    /// only when the deployment supports it.
+    #[serde(default)]
+    locale: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -282,7 +286,25 @@ async fn register(
         }
     }
 
-    match create_account(db, clock, id_gen, &email, &password_hash).await {
+    // The locale the person named, if the deployment supports one by that
+    // name. Anything else leaves the column null and the account inherits
+    // whatever a later request resolves (issue #649).
+    // Distinct from `locale` above, which only picks the mail's language.
+    let account_locale = credentials
+        .locale
+        .as_deref()
+        .and_then(|raw| state.settings.supported.canonicalize(raw));
+
+    match create_account(
+        db,
+        clock,
+        id_gen,
+        &email,
+        &password_hash,
+        account_locale.as_deref(),
+    )
+    .await
+    {
         Ok(user_id) => {
             ctx.events
                 .emit_in(&scope, EVENT_REGISTERED, json!({ "user_id": user_id }));
@@ -316,6 +338,7 @@ async fn create_account(
     id_gen: &dyn cratefield_core::IdGen,
     email: &str,
     password_hash: &str,
+    locale: Option<&str>,
 ) -> Result<String, cratefield_core::DbError> {
     let now = lockout::iso(clock.now());
     let user_id = id_gen.ulid();
@@ -327,6 +350,8 @@ async fn create_account(
         // rules only ever auto-link a verified address, so registering
         // must not be a way to claim one.
         primary_email_verified: false,
+        // Set only when the caller named a locale the deployment supports.
+        locale: locale.map(str::to_owned),
         status: STATUS_ACTIVE.to_owned(),
         created_at: now.clone(),
         updated_at: now.clone(),
@@ -599,7 +624,15 @@ async fn sign_in(
     };
     let now = clock.now();
 
-    let attempt = attempt(db, &email, password, now, scope).await?;
+    let attempt = attempt(
+        db,
+        &email,
+        password,
+        now,
+        scope,
+        state.settings.legacy_hashes,
+    )
+    .await?;
     let Attempt {
         user,
         credential,
@@ -736,6 +769,7 @@ async fn attempt(
     password: &str,
     now: time::OffsetDateTime,
     scope: &Scope,
+    legacy: LegacyHashes,
 ) -> Result<Attempt, Problem> {
     // Find the account, the credential, and whether either is usable.
     // Nothing below returns early on a *different* answer: every failure
@@ -770,7 +804,8 @@ async fn attempt(
     // The dummy verify. An unknown address, an account with no password,
     // and a locked one all still pay for one Argon2id verify, because the
     // *time* the answer takes must not tell an attacker which it was.
-    let presented_ok = verify_password(password, stored.as_deref().unwrap_or(DUMMY_HASH));
+    let presented_ok =
+        verify_password_with(password, stored.as_deref().unwrap_or(DUMMY_HASH), legacy);
 
     let active = user
         .as_ref()
@@ -846,7 +881,11 @@ async fn change(
         .as_ref()
         .map(|hash| hash.0.clone())
         .unwrap_or_default();
-    if !verify_password(&body.current_password, &stored) {
+    if !verify_password_with(
+        &body.current_password,
+        &stored,
+        state.settings.legacy_hashes,
+    ) {
         return Err(refused(&scope));
     }
 
@@ -930,7 +969,10 @@ mod tests {
         // password, which proves the parser accepts this shape. The dummy
         // then has to be indistinguishable from it except in its digest.
         let real = factory0_auth_core::hash_password("a known password").expect("hash");
-        assert!(verify_password("a known password", &real));
+        assert!(factory0_auth_core::verify_password(
+            "a known password",
+            &real
+        ));
         let params = |phc: &str| phc.rsplitn(3, '$').last().map(str::to_owned);
         assert_eq!(
             params(DUMMY_HASH),
@@ -939,8 +981,11 @@ mod tests {
         );
 
         // And it must not verify against anything.
-        assert!(!verify_password("anything at all", DUMMY_HASH));
-        assert!(!verify_password("", DUMMY_HASH));
+        assert!(!factory0_auth_core::verify_password(
+            "anything at all",
+            DUMMY_HASH
+        ));
+        assert!(!factory0_auth_core::verify_password("", DUMMY_HASH));
     }
 
     #[test]

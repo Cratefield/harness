@@ -16,7 +16,10 @@ use cratefield_core::{
     RateLimiter, Statement,
 };
 use cratefield_testing::TestHarness;
-use factory0_auth_core::{AuthCore, STATUS_ACTIVE, UserRow, insert_user, user_by_primary_email};
+use factory0_auth_core::{
+    AuthCore, STATUS_ACTIVE, UserRow, insert_user, password_credential, set_password_hash,
+    user_by_primary_email,
+};
 use factory0_auth_password::Password;
 use http::{Method, Request, Response, StatusCode, header};
 use serde_json::{Value, json};
@@ -202,6 +205,48 @@ fn registering_creates_an_account_an_identity_and_a_credential() {
             .expect("a user");
         assert!(!user.primary_email_verified);
         assert_eq!(user.status, STATUS_ACTIVE);
+    });
+}
+
+/// Issue #649: a locale named at registration is stored when the
+/// deployment supports it, matched by language for a regional tag, and
+/// ignored when it names nothing the deployment has.
+#[test]
+fn registering_stores_a_supported_locale() {
+    pollster::block_on(async {
+        let kit = kit_with(
+            vec![("AUTH_LOCALES".to_owned(), "en,de".to_owned())],
+            i64::MAX,
+        );
+        let register_locale = |email: &str, locale: &str| {
+            let kit = &kit;
+            let body = json!({ "email": email, "password": GOOD, "locale": locale });
+            async move { post(kit, REGISTER, body, None).await }
+        };
+
+        register_locale("ada@example.com", "de").await;
+        let user = user_by_primary_email(&*kit.db, "ada@example.com")
+            .await
+            .expect("query")
+            .expect("a user");
+        assert_eq!(user.locale.as_deref(), Some("de"));
+
+        // `de-AT` names `de`, which is supported, and is stored
+        // canonicalised rather than as it was typed.
+        register_locale("grace@example.com", "de-AT").await;
+        let user = user_by_primary_email(&*kit.db, "grace@example.com")
+            .await
+            .expect("query")
+            .expect("a user");
+        assert_eq!(user.locale.as_deref(), Some("de"));
+
+        // A locale the deployment does not support is not stored.
+        register_locale("alan@example.com", "xx").await;
+        let user = user_by_primary_email(&*kit.db, "alan@example.com")
+            .await
+            .expect("query")
+            .expect("a user");
+        assert_eq!(user.locale, None);
     });
 }
 
@@ -622,6 +667,7 @@ fn a_hash_at_old_parameters_is_upgraded_on_login() {
                 display_name: None,
                 primary_email: Some("ada@example.com".to_owned()),
                 primary_email_verified: false,
+                locale: None,
                 status: STATUS_ACTIVE.to_owned(),
                 created_at: now.to_owned(),
                 updated_at: now.to_owned(),
@@ -1190,6 +1236,155 @@ fn a_same_origin_password_change_still_works() {
                 .await
                 .status,
             StatusCode::OK
+        );
+    });
+}
+
+// ---------------------------------------------------------------------
+// Legacy bcrypt hashes (issue #650)
+
+/// A deterministic cost-4 bcrypt hash of `LEGACY_PASSWORD`, generated once
+/// with the bcrypt crate. Obviously fake test material.
+const LEGACY_PASSWORD: &str = "legacy-password-1";
+const LEGACY_BCRYPT: &str = "$2b$04$.OGB/.SE/ueHAeqKBO2NC.Idt9kRB2ygG15erMmtNyb.8scW/Kmw2";
+
+/// The admin token and route an import is driven through (issue #650
+/// part B), the same pair `auth-core`'s own tests use.
+const ADMIN: &str = "test-admin-token-0123456789abcdef";
+const IMPORT: &str = "/v1/auth-core/admin/users/import";
+
+/// The password hash an account's credential currently holds.
+async fn credential_hash(kit: &Kit, email: &str) -> String {
+    let user = user_by_primary_email(&*kit.db, email)
+        .await
+        .expect("query")
+        .expect("a user");
+    let credential = password_credential(&*kit.db, &user.id)
+        .await
+        .expect("query")
+        .expect("a credential");
+    credential
+        .password_hash
+        .map(|hash| hash.0)
+        .unwrap_or_default()
+}
+
+/// Replaces an account's stored hash with a legacy one, the way an import
+/// would have left it.
+async fn set_stored_hash(kit: &Kit, email: &str, hash: &str) {
+    let user = user_by_primary_email(&*kit.db, email)
+        .await
+        .expect("query")
+        .expect("a user");
+    let credential = password_credential(&*kit.db, &user.id)
+        .await
+        .expect("query")
+        .expect("a credential");
+    set_password_hash(&*kit.db, &credential.id, hash)
+        .await
+        .expect("set the hash");
+}
+
+#[test]
+fn a_legacy_bcrypt_password_signs_in_and_is_upgraded() {
+    pollster::block_on(async {
+        let kit = kit_with(
+            vec![("AUTH_LEGACY_HASHES".to_owned(), "bcrypt".to_owned())],
+            i64::MAX,
+        );
+        register(&kit, "ada@example.com", GOOD).await;
+        set_stored_hash(&kit, "ada@example.com", LEGACY_BCRYPT).await;
+
+        let response = login(&kit, "ada@example.com", LEGACY_PASSWORD).await;
+        assert_eq!(response.status, StatusCode::OK, "{}", response.text());
+        assert!(
+            credential_hash(&kit, "ada@example.com")
+                .await
+                .starts_with("$argon2id$"),
+            "the legacy hash was not upgraded to argon2id"
+        );
+        // The upgrade took the presented password with it.
+        assert_eq!(
+            login(&kit, "ada@example.com", LEGACY_PASSWORD).await.status,
+            StatusCode::OK
+        );
+    });
+}
+
+#[test]
+fn without_the_flag_a_legacy_bcrypt_password_is_refused() {
+    pollster::block_on(async {
+        let kit = kit();
+        register(&kit, "ada@example.com", GOOD).await;
+        set_stored_hash(&kit, "ada@example.com", LEGACY_BCRYPT).await;
+
+        let response = login(&kit, "ada@example.com", LEGACY_PASSWORD).await;
+        assert_eq!(
+            response.status,
+            StatusCode::UNAUTHORIZED,
+            "{}",
+            response.text()
+        );
+        assert_eq!(
+            credential_hash(&kit, "ada@example.com").await,
+            LEGACY_BCRYPT,
+            "a refused login must not rewrite the hash"
+        );
+    });
+}
+
+/// The issue #650 acceptance criterion end to end: a user arrives through
+/// the admin import API carrying a legacy bcrypt hash, signs in with the
+/// password they already had, and that first login upgrades the stored
+/// hash to argon2id. Nothing here writes the account by hand — the import
+/// route does, and password login then finds it.
+#[test]
+fn an_imported_bcrypt_user_signs_in_and_is_upgraded() {
+    pollster::block_on(async {
+        let kit = kit_with(
+            vec![
+                ("AUTH_LEGACY_HASHES".to_owned(), "bcrypt".to_owned()),
+                ("ADMIN_TOKEN".to_owned(), ADMIN.to_owned()),
+            ],
+            i64::MAX,
+        );
+
+        let authorization = format!("Bearer {ADMIN}");
+        let response = post_with(
+            &kit,
+            IMPORT,
+            json!({
+                "dry_run": false,
+                "merge_by_email": false,
+                "users": [{
+                    "external_provider": "legacy",
+                    "external_id": "42",
+                    "email": "ada@example.com",
+                    "email_verified": true,
+                    "password_hash": LEGACY_BCRYPT,
+                }],
+            }),
+            None,
+            &[("authorization", authorization.as_str())],
+        )
+        .await;
+        assert_eq!(response.status, StatusCode::OK, "{}", response.text());
+        assert_eq!(response.json()["results"][0]["status"], "created");
+        assert_eq!(count(&kit, "users"), 1, "the import created the account");
+        // The import stored the legacy hash verbatim; the upgrade is the
+        // login path's job, not the import's.
+        assert_eq!(
+            credential_hash(&kit, "ada@example.com").await,
+            LEGACY_BCRYPT
+        );
+
+        let signin = login(&kit, "ada@example.com", LEGACY_PASSWORD).await;
+        assert_eq!(signin.status, StatusCode::OK, "{}", signin.text());
+        assert!(
+            credential_hash(&kit, "ada@example.com")
+                .await
+                .starts_with("$argon2id$"),
+            "the imported legacy hash was not upgraded to argon2id on login"
         );
     });
 }
