@@ -925,6 +925,42 @@ Freshdesk is a `Destination` variant with no adapter yet, like the rest of
 the last row: wire what your venture needs into `RoutingTracker`, whose
 unwired slots answer `NotConfigured`.
 
+### Storing and serving media
+
+The `Blob` port keeps small media — a coach's voice clip, an avatar — out
+of the database, and the harness hands your module a `ScopedBlob` that
+prefixes every key with your module's name. Reach for a **presigned URL**
+when the bytes should not pass through the Worker at all: an upload body
+can be larger than the Worker will buffer (an isolate holds at most 1 MiB
+in memory), a download should stream straight from the bucket to the
+browser, or one of your own workers must write into your module's prefix
+without being handed a bucket-wide credential.
+
+`Blob::signed_url(key, ttl)` returns a presigned `GET`; `Blob::signed_put_url(key,
+content_type, content_length, ttl)` returns a presigned `PUT` (a
+`PresignedPut` carrying the URL, the method and the headers to send).
+Both answer `Unsupported` on a runtime with no presign credentials — a
+directory store, or R2 without `blob_presign` configured on the venture —
+so a caller falls back to `get`/`put` through the Worker. Handle that
+arm; do not assume you always get a URL.
+
+Keep the TTL the shortest that works — one hour (`DEFAULT_PRESIGN_TTL`)
+covers a browser round trip, seven days (`MAX_PRESIGN_TTL`) is the S3
+ceiling, and the floor is one second (a sub-second TTL would sign
+`X-Amz-Expires=0`) — because the URL **is** the credential until it expires. A
+presigned PUT cannot cap the body size: the signature covers headers, not
+the payload. Pass `content_length` when the size is known, so the store
+signs `Content-Length` and refuses any other; then send the returned
+`PresignedPut::headers` with exactly those values, because a different
+`Content-Type` or `Content-Length` fails the signature. Keys stay inside
+your module's prefix — an empty, absolute or `..` key is a
+`BlobError::BadKey`, refused before the store is reached.
+
+A presigned URL's query string is a bearer credential. Never log it: put
+it in a response body or a redirect, not a log line. The log scrubber
+redacts `X-Amz-Signature` and the rest of the query string, but treat
+that as a backstop, not a licence to log it.
+
 ## Step 7 — Conformance
 
 `examples/module-hello/tests/conformance.rs` — the whole file:

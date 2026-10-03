@@ -12,7 +12,7 @@ mod rate_limit;
 mod realtime;
 mod vectorize;
 
-pub(crate) use blob::R2Blob;
+pub(crate) use blob::{R2Blob, R2Presigner};
 pub use clock::WorkersClock;
 pub use d1::D1Database;
 pub use d1_rate_limit::{D1RateLimiter, Limit, RATE_LIMIT_COUNTERS_SQL, RateLimitPolicy};
