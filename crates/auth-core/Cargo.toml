@@ -55,7 +55,15 @@ factory0-auth-magic-link = { path = "../auth-magic-link" }
 factory0-auth-password = { path = "../auth-password" }
 factory0-auth-oidc = { path = "../auth-oidc" }
 factory0-auth-meta = { path = "../auth-meta" }
-cratefield-testing = { workspace = true }
+cratefield-testing = { workspace = true, features = ["postgres"] }
 cratefield-adapter-sqlite = { workspace = true }
 pollster = { workspace = true }
 tower = { workspace = true }
+# Only so the refresh-reuse grace tests (issue #655) can drive two
+# exchanges at the same instant and prove the race is graced, not of the
+# two-futures-at-once kind `pollster` alone cannot express.
+futures-util = { workspace = true }
+# The same tests wrap the harness database so a call yields to the
+# executor once: the SQLite adapter answers on the first poll, which would
+# otherwise serialize the two racing legs instead of interleaving them.
+async-trait = { workspace = true }

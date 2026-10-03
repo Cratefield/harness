@@ -26,7 +26,11 @@
 //! 2. **Refresh tokens are single-use, and reuse is an alarm**: a
 //!    presented refresh token whose row is already consumed revokes
 //!    the session it was bound to before the request is refused
-//!    (reuse detection).
+//!    (reuse detection). A short [`RefreshReuseGrace`] forgoes the
+//!    alarm for the *same client* re-presenting a token within seconds
+//!    of a legitimate rotation — separate Worker isolates racing a
+//!    page's parallel refreshes — handing each claimant its own sibling
+//!    successor instead of revoking (issue #655).
 //! 3. **Every timestamp comes from the `Clock` port** (ADR 0200) and
 //!    every token value is 32 random bytes, base64url — the same
 //!    shape as session values and client secrets.
@@ -37,7 +41,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use base64ct::{Base64UrlUnpadded, Encoding};
 use cratefield_core::{
-    Clock, Config, Database, DbError, IdGen, Json, ModuleConfig, Problem, Scope,
+    Clock, Config, Database, DbError, IdGen, Json, ModuleConfig, Problem, Scope, subject_hash,
 };
 use p256::ecdsa::{self, signature::Signer};
 use serde::Serialize;
@@ -56,6 +60,23 @@ pub const ACCESS_TOKEN_SECS: i64 = 600;
 /// window — a refresh token can never outlive a session that stays
 /// live, and a session that goes quiet expires them both.
 pub const REFRESH_TOKEN_DAYS: i64 = crate::sessions::SLIDE_WINDOW_DAYS;
+
+/// Default cap on how many grace uses a consumed refresh token may grant
+/// inside its grace window (issue #655), used when
+/// `AUTH_CORE_REFRESH_REUSE_GRACE_MAX_USES` is unset.
+pub const DEFAULT_REFRESH_REUSE_GRACE_MAX_USES: u32 = 3;
+
+/// The largest `AUTH_CORE_REFRESH_REUSE_GRACE_SECONDS` accepted. The
+/// grace exists for a page firing several refreshes from separate
+/// Worker isolates at once; it is not a second lifetime for a token
+/// whose reuse should revoke.
+pub const MAX_REFRESH_REUSE_GRACE_SECS: u32 = 300;
+
+/// The largest `AUTH_CORE_REFRESH_REUSE_GRACE_MAX_USES` accepted: a
+/// graced reuse absorbs a race, and a page cannot lose more than a
+/// handful of parallel refreshes; a bigger cap is a mistake, not a
+/// setting.
+pub const MAX_REFRESH_REUSE_GRACE_USES: u32 = 10;
 
 /// `Cache-Control` on the JWKS endpoint: keys rotate rarely, consumers
 /// may cache for five minutes.
@@ -425,33 +446,105 @@ pub async fn mint_refresh_token(
     user_id: &str,
     client_id: &str,
 ) -> Result<String, TokenError> {
+    let (_, value) =
+        insert_refresh_row(db, clock, id_gen, session_id, user_id, client_id, None).await?;
+    Ok(value)
+}
+
+/// [`mint_refresh_token`] that also returns the new row's id, so the
+/// caller can name it among the successors of the row it consumes.
+/// `parent` is the row this token succeeds, recorded in the payload so a
+/// later rotation can find its siblings (issue #655); the code grant
+/// mints a root with none.
+async fn insert_refresh_row(
+    db: &dyn Database,
+    clock: &dyn Clock,
+    id_gen: &dyn IdGen,
+    session_id: &str,
+    user_id: &str,
+    client_id: &str,
+    parent: Option<&str>,
+) -> Result<(String, String), TokenError> {
     let value = random_value()?;
     let now = clock.now().replace_nanosecond(0).expect("in range");
+    let id = id_gen.ulid();
+    let payload = match parent {
+        Some(parent) => json!({ "sid": session_id, "parent": parent }),
+        None => json!({ "sid": session_id }),
+    };
     store::insert_single_use_token(
         db,
         &store::SingleUseTokenRow {
-            id: id_gen.ulid(),
+            id: id.clone(),
             kind: TOKEN_REFRESH.to_owned(),
             token_hash: store::Redacted(sha256(value.as_bytes())),
             user_id: Some(user_id.to_owned()),
             client_id: Some(client_id.to_owned()),
-            payload: Some(json!({ "sid": session_id }).to_string()),
+            payload: Some(payload.to_string()),
             expires_at: iso(now.saturating_add(time::Duration::days(REFRESH_TOKEN_DAYS))),
             consumed_at: None,
         },
     )
     .await?;
-    Ok(value)
+    Ok((id, value))
+}
+
+/// The refresh-reuse grace (issue #655): how long after a refresh token is
+/// first rotated a second presentation of it, by the same client, still
+/// succeeds instead of revoking the session.
+///
+/// A browser page can fire several requests at once, and on Workers each
+/// lands in its own isolate holding the same refresh cookie; without a
+/// grace the loser of that race presents an already-consumed token and
+/// revokes a session nobody compromised. The window is short on purpose —
+/// see [`MAX_REFRESH_REUSE_GRACE_SECS`] — and measured from the original
+/// rotation, so grace claims never extend it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RefreshReuseGrace {
+    /// `AUTH_CORE_REFRESH_REUSE_GRACE_SECONDS`; `0` (the default) keeps
+    /// today's behaviour exactly: any reuse revokes.
+    pub seconds: u32,
+    /// `AUTH_CORE_REFRESH_REUSE_GRACE_MAX_USES`: how many grace uses one
+    /// consumed token may grant before reuse revokes again, in
+    /// `1..=`[`MAX_REFRESH_REUSE_GRACE_USES`].
+    pub max_uses: u32,
+}
+
+impl RefreshReuseGrace {
+    /// Reads both keys through the module prefix. Malformed values are
+    /// left to [`validate_config`](crate::AuthCore::validate_config),
+    /// which reports them at doctor time; here a bad value falls back to
+    /// the default, the same way the other auth-core keys resolve.
+    #[must_use]
+    pub fn from_config(config: &dyn Config) -> Self {
+        let module = ModuleConfig::new("auth-core", config);
+        Self {
+            seconds: module.get_u32("REFRESH_REUSE_GRACE_SECONDS", 0),
+            max_uses: module.get_u32(
+                "REFRESH_REUSE_GRACE_MAX_USES",
+                DEFAULT_REFRESH_REUSE_GRACE_MAX_USES,
+            ),
+        }
+    }
+
+    /// Whether the grace can ever apply: a zero window or a zero cap is
+    /// disabled, whatever the other key says.
+    fn enabled(self) -> bool {
+        self.seconds > 0 && self.max_uses > 0
+    }
 }
 
 /// What a successfully exchanged refresh token grants: the session and
-/// client it is bound to. The caller still checks the session is live
-/// and mints the next pair.
+/// client it is bound to, plus the plaintext of the refresh token that
+/// succeeds the one presented. The exchange mints that successor itself
+/// (issue #655) so it can record the rotation in the consumed row in the
+/// same guarded update; the caller mints only the access token.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RefreshGrant {
     pub session_id: String,
     pub user_id: String,
     pub client_id: String,
+    pub refresh_token: String,
 }
 
 /// The outcome of presenting a refresh token: granted, or refused
@@ -462,72 +555,322 @@ pub enum RefreshOutcome {
     Refused,
 }
 
+/// Is `now` inside `seconds` of the instant `consumed_at` names? A
+/// negative elapsed (a clock that went backwards) is outside, so the
+/// grace never fires on a value it cannot read.
+fn within_grace(now: OffsetDateTime, consumed_at: &str, seconds: u32) -> bool {
+    if seconds == 0 {
+        return false;
+    }
+    match OffsetDateTime::parse(consumed_at, &Rfc3339) {
+        Ok(consumed) => (0..=i64::from(seconds)).contains(&(now - consumed).whole_seconds()),
+        Err(_) => false,
+    }
+}
+
+/// Is the row's `expires_at` at or before `now`? An expiry the module
+/// cannot parse is treated as expired: a row this code did not write is
+/// not one to mint a successor for.
+fn is_expired(expires_at: &str, now: OffsetDateTime) -> bool {
+    match OffsetDateTime::parse(expires_at, &Rfc3339) {
+        Ok(expires) => expires <= now,
+        Err(_) => true,
+    }
+}
+
 /// Exchanges one refresh token, enforcing the two refresh rules of
 /// issue #9: single use (the guarded consume decides the winner), and
 /// **reuse detection** — a token whose row is already consumed revokes
 /// the session it was bound to before the request is refused. A token
 /// presented for the wrong client is refused *without* being consumed,
 /// so a wrong-client presentation cannot burn the rightful client's
-/// token.
+/// token. A token past its expiry, or one that merely lost the guarded
+/// consume, is refused without revoking and without minting anything.
+///
+/// The exchange mints the successor refresh token itself and records it
+/// in the *same* guarded update that consumes the presented row, so the
+/// successor's plaintext is returned **only** to the request that won the
+/// race. A configured [`RefreshReuseGrace`] lets a *second* presentation
+/// of the same token, by the same client and inside the window, claim a
+/// grace use instead of revoking: it mints another **sibling** successor
+/// and appends it to the consumed row's `kids`, so parallel refreshes
+/// each hold a usable token. Siblings stay valid until one of them is
+/// used, whereupon its rotation retires the rest — first use wins, and
+/// the family converges on the chain the cookie actually kept (issue
+/// #655).
 ///
 /// # Errors
 ///
-/// [`DbError`] when a read, the consume or the revocation write fails.
+/// [`DbError`] when a read, a mint's write, the consume, the payload
+/// swap or the revocation write fails.
 ///
 /// # Panics
 ///
 /// Never in practice: the documented panics are the `time` crate's
 /// nanosecond truncation and RFC 3339 formatting, both infallible on
 /// this path.
+// One request's whole refresh state machine — the kind/client checks, the
+// guarded consume and its lost-race fallback, and the grace claim — read
+// top to bottom. Splitting it into fragments would scatter the invariants
+// (what is consumed when, and what a granted request may return) that the
+// ordering above depends on.
+#[allow(clippy::too_many_lines)]
 pub async fn exchange_refresh_token(
     db: &dyn Database,
     clock: &dyn Clock,
+    id_gen: &dyn IdGen,
+    grace: RefreshReuseGrace,
     presented: &str,
     client_id: &str,
 ) -> Result<(RefreshOutcome, Option<RefreshGrant>), DbError> {
-    let now = iso(clock.now().replace_nanosecond(0).expect("in range"));
+    let now = clock.now().replace_nanosecond(0).expect("in range");
+    let now_iso = iso(now);
     let Some(row) = store::single_use_token_by_hash(db, &sha256(presented.as_bytes())).await?
     else {
         return Ok((RefreshOutcome::Refused, None));
     };
+    // Kind, client and user are checked *before* the consume and the
+    // reuse path: a token presented for the wrong client is neither
+    // consumed nor treated as reuse, so a stranger cannot burn the
+    // rightful client's token or trip the alarm.
     if row.kind != TOKEN_REFRESH
         || row.client_id.as_deref() != Some(client_id)
         || row.user_id.is_none()
     {
         return Ok((RefreshOutcome::Refused, None));
     }
-    let Some(payload) = row.payload.as_deref() else {
+    let Some(payload_text) = row.payload.as_deref() else {
         return Ok((RefreshOutcome::Refused, None));
     };
-    let Ok(payload) = serde_json::from_str::<Value>(payload) else {
+    let Ok(payload) = serde_json::from_str::<Value>(payload_text) else {
         return Ok((RefreshOutcome::Refused, None));
     };
     let Some(session_id) = payload.get("sid").and_then(Value::as_str) else {
         return Ok((RefreshOutcome::Refused, None));
     };
-    if row.consumed_at.is_some() {
-        // Reuse of a consumed refresh token: revoke the session, then
-        // refuse. The revocation is the alarm; the refusal is uniform.
-        store::revoke_session(db, session_id, &now).await?;
+    let session_id = session_id.to_owned();
+    let user_id = row.user_id.clone().unwrap_or_default();
+    // A successor records its parent so a rotation can retire its
+    // siblings; a root from the code grant has none.
+    let parent = payload
+        .get("parent")
+        .and_then(Value::as_str)
+        .map(str::to_owned);
+    // A token past its expiry is stale, not reuse: refuse before minting
+    // anything, so replaying an expired token cannot grow the table with
+    // a successor that could never be presented.
+    if is_expired(&row.expires_at, now) {
+        return Ok((RefreshOutcome::Refused, None));
+    }
+    // Only a row already consumed when we first read it is the reuse the
+    // alarm is for. Losing the guarded consume below is a race, and the
+    // loser must be refused without revoking (issue #655).
+    let consumed_before = row.consumed_at.is_some();
+    let mut row = row;
+
+    if row.consumed_at.is_none() {
+        // Normal rotation: mint the successor first, then consume the
+        // presented row and record the successor in one guarded update.
+        // The consume decides the winner of any race.
+        let (successor_id, successor_value) = insert_refresh_row(
+            db,
+            clock,
+            id_gen,
+            &session_id,
+            &user_id,
+            client_id,
+            Some(row.id.as_str()),
+        )
+        .await
+        .map_err(|err| db_error("minting a refresh token failed", err))?;
+        let next_payload =
+            json!({ "sid": session_id, "kids": [successor_id], "grace": 0 }).to_string();
+        let consumed =
+            store::consume_single_use_token_with_payload(db, &row.id, &now_iso, &next_payload)
+                .await?;
+        if let Some(consumed) = consumed {
+            // First use wins: retire this token's siblings so the ones the
+            // browser cookie lost are no longer live.
+            if let Some(parent_id) = &parent {
+                retire_siblings(db, parent_id, &row.id, &now_iso).await?;
+            }
+            return Ok((
+                RefreshOutcome::Granted,
+                Some(RefreshGrant {
+                    session_id,
+                    user_id: consumed.user_id.unwrap_or_default(),
+                    client_id: consumed.client_id.unwrap_or_default(),
+                    refresh_token: successor_value,
+                }),
+            ));
+        }
+        // Lost the race: the winner consumed the row and recorded its own
+        // successor. Retire the successor we minted (its plaintext was
+        // never returned, so it can never be presented — consuming it just
+        // stops the row lingering) and continue with the freshest row.
+        store::consume_single_use_token(db, &successor_id, &now_iso).await?;
+        let Some(fresh) = store::single_use_token_by_id(db, &row.id).await? else {
+            return Ok((RefreshOutcome::Refused, None));
+        };
+        // Should the row have expired between the two reads, the re-read
+        // shows it still unconsumed: a stale token, refused as before.
+        if fresh.consumed_at.is_none() {
+            return Ok((RefreshOutcome::Refused, None));
+        }
+        row = fresh;
+    }
+
+    // The presented row is consumed: grace a concurrent refresh, or fall
+    // through to the reuse decision. Each attempt re-reads the row so a
+    // concurrent claim's window and count are seen; a lost swap means
+    // another claim won, so the count runs out within the cap — at most
+    // `max_uses + 1` attempts are ever needed.
+    if grace.enabled() {
+        for _ in 0..=grace.max_uses {
+            let Some(consumed_at) = row.consumed_at.as_deref() else {
+                break;
+            };
+            if !within_grace(now, consumed_at, grace.seconds) {
+                break;
+            }
+            let Some(old_payload) = row.payload.clone() else {
+                break;
+            };
+            let Ok(state) = serde_json::from_str::<Value>(&old_payload) else {
+                break;
+            };
+            let Some(kids) = state.get("kids").and_then(Value::as_array) else {
+                break;
+            };
+            let claims = state.get("grace").and_then(Value::as_u64).unwrap_or(0);
+            if claims >= u64::from(grace.max_uses) {
+                break;
+            }
+            // If any sibling has already been consumed its own chain moved
+            // on, so this presentation is the replay the alarm is for.
+            let mut moved_on = false;
+            for kid in kids {
+                if let Some(kid_id) = kid.as_str()
+                    && store::single_use_token_by_id(db, kid_id)
+                        .await?
+                        .is_some_and(|kid| kid.consumed_at.is_some())
+                {
+                    moved_on = true;
+                    break;
+                }
+            }
+            if moved_on {
+                break;
+            }
+            let (new_id, new_value) = insert_refresh_row(
+                db,
+                clock,
+                id_gen,
+                &session_id,
+                &user_id,
+                client_id,
+                Some(row.id.as_str()),
+            )
+            .await
+            .map_err(|err| db_error("minting a refresh token failed", err))?;
+            let mut kids = kids.clone();
+            kids.push(Value::String(new_id.clone()));
+            let new_payload =
+                json!({ "sid": session_id, "kids": kids, "grace": claims + 1 }).to_string();
+            let swapped =
+                store::compare_and_swap_payload(db, &row.id, &old_payload, &new_payload).await?;
+            if swapped == 0 {
+                // Another claim appended first: retire the sibling we
+                // minted (never returned, so never presentable) and retry
+                // so ours is added after it, not over it.
+                store::consume_single_use_token(db, &new_id, &now_iso).await?;
+                let Some(fresh) = store::single_use_token_by_id(db, &row.id).await? else {
+                    break;
+                };
+                row = fresh;
+                continue;
+            }
+            // A sibling's rotation racing this append can leave one extra
+            // live sibling; accepted, the next rotation converges the family.
+            tracing::info!(
+                audit = true,
+                action = "token.refresh-grace",
+                client_id,
+                subject_hash = %subject_hash(&user_id),
+                grace_uses = claims + 1,
+                "refresh token reused inside the grace window; sibling minted"
+            );
+            return Ok((
+                RefreshOutcome::Granted,
+                Some(RefreshGrant {
+                    session_id,
+                    user_id,
+                    client_id: client_id.to_owned(),
+                    refresh_token: new_value,
+                }),
+            ));
+        }
+    }
+
+    // The reuse alarm fires only for a token already consumed when we
+    // first read it. A request that merely lost the guarded consume race
+    // is refused without revoking, exactly as before the grace existed:
+    // it is a race, not a compromise.
+    if consumed_before {
+        store::revoke_session(db, &session_id, &now_iso).await?;
         tracing::warn!(
             audit = true,
             action = "token.refresh-reuse",
             client_id,
             "refresh-token reuse detected; session revoked"
         );
-        return Ok((RefreshOutcome::Refused, None));
     }
-    let Some(consumed) = store::consume_single_use_token(db, &row.id, &now).await? else {
-        return Ok((RefreshOutcome::Refused, None));
+    Ok((RefreshOutcome::Refused, None))
+}
+
+/// Maps a [`TokenError`] from the exchange's own minting onto the
+/// [`DbError`] the exchange returns: entropy and unconfigured are not
+/// expected on this path (signing keys are checked at the router), so
+/// only the wrapped database error can arise.
+fn db_error(what: &'static str, err: TokenError) -> DbError {
+    match err {
+        TokenError::Db(err) => err,
+        other => {
+            tracing::error!(error = %other, "{what}");
+            DbError::Execute(other.to_string())
+        }
+    }
+}
+
+/// Retires the other live successors of `parent` once `winner` has
+/// rotated: the family converges on the chain the request actually used,
+/// so a sibling the browser cookie lost is no longer live. Its later
+/// presentation then finds no `kids` and is ordinary reuse (issue #655).
+async fn retire_siblings(
+    db: &dyn Database,
+    parent_id: &str,
+    winner_id: &str,
+    now: &str,
+) -> Result<(), DbError> {
+    let Some(parent) = store::single_use_token_by_id(db, parent_id).await? else {
+        return Ok(());
     };
-    Ok((
-        RefreshOutcome::Granted,
-        Some(RefreshGrant {
-            session_id: session_id.to_owned(),
-            user_id: consumed.user_id.unwrap_or_default(),
-            client_id: consumed.client_id.unwrap_or_default(),
-        }),
-    ))
+    let kids = parent
+        .payload
+        .as_deref()
+        .and_then(|text| serde_json::from_str::<Value>(text).ok())
+        .and_then(|state| state.get("kids").cloned());
+    let Some(kids) = kids.as_ref().and_then(Value::as_array) else {
+        return Ok(());
+    };
+    for kid in kids {
+        if let Some(kid_id) = kid.as_str()
+            && kid_id != winner_id
+        {
+            store::consume_single_use_token(db, kid_id, now).await?;
+        }
+    }
+    Ok(())
 }
 
 /// The cell `router()` fills and the `/.well-known` handlers read:
