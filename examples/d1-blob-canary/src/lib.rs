@@ -13,7 +13,8 @@
 //!   ciphertext and the wrapped DEK all bind as bytes.
 //!
 //! The migrations applied here are the real ones (`crates/auth-core/
-//! migrations/sqlite/0001_init.sql` plus `0003_token_issuing.sql`;
+//! migrations/sqlite/0001_init.sql` plus `0003_token_issuing.sql` and
+//! `0007_user_locale.sql`;
 //! `crates/secrets/migrations/sqlite/0001_init.sql` plus the audit chain
 //! from `0002_audit.sql`, its store attribution from
 //! `0003_audit_store.sql`, and the store-attribution rebuild from
@@ -96,7 +97,7 @@ fn statements(sql: &str) -> Vec<Statement> {
 }
 
 /// The auth-core schema (0001 plus 0003's `amr` column and token-table
-/// rebuild) and the secrets schema (0001, the audit chain from 0002 plus
+/// rebuild, and 0007's `users.locale` column) and the secrets schema (0001, the audit chain from 0002 plus
 /// its store attribution from 0003, and the store-attribution rebuild
 /// from 0004) — applied once per isolate through the adapter's own atomic
 /// batch. `Secrets::put`/`get` refuse without the audit chain
@@ -112,6 +113,9 @@ async fn migrate(db: &dyn Database) -> Result<(), Json> {
     )));
     stmts.extend(statements(include_str!(
         "../../../crates/auth-core/migrations/sqlite/0003_token_issuing.sql"
+    )));
+    stmts.extend(statements(include_str!(
+        "../../../crates/auth-core/migrations/sqlite/0007_user_locale.sql"
     )));
     stmts.extend(statements(include_str!(
         "../../../crates/secrets/migrations/sqlite/0001_init.sql"
