@@ -146,6 +146,10 @@ cratefield-cli = { path = "crates/cli", version = "0.4" }
 cratefield-tables = { path = "crates/tables", version = "0.3" }
 cratefield-client-ts = { path = "crates/client-ts", version = "0.3" }
 cratefield-introspect = { path = "crates/introspect", version = "0.2" }
+# The Supabase importer's engine (ADR 0026, issue #658): read-only
+# inspection and the migration report. Native only; reached from `fz` behind
+# the CLI's `import-supabase` feature.
+cratefield-import-supabase = { path = "crates/import-supabase", version = "0.1" }
 # The venture manifest + deterministic composition generator (issue #138).
 # Depends only on serde/serde_json so both engines can consume it: the
 # native compile engine (fz build) and, later, the wasm compose engine.

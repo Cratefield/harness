@@ -94,6 +94,8 @@ jobs:
       # proofs (issue #186) would be the first thing to find out.
       - name: fz push send, with its optional transport (issue #184)
         run: cargo clippy -p cratefield-cli --all-targets --features push-send -- -D warnings
+      - name: fz import supabase, with its optional engine (issue #658)
+        run: cargo clippy -p cratefield-cli --all-targets --features import-supabase -- -D warnings
       - name: core dependency boundary (ADR 0001)
         run: |
           if cargo tree -p cratefield-core --edges normal | grep -qE '(worker|wasm-bindgen|tokio|reqwest|sqlx|rusqlite) v'; then
@@ -135,6 +137,12 @@ jobs:
       # the *other* build prints in its place.
       - name: fz push send, with its optional transport (issue #184)
         run: cargo test -p cratefield-cli --features push-send
+      # The workspace run builds `fz import supabase` without its engine, so
+      # the CLI's half of the inspect tests (a connection error quotes no
+      # secret) only runs here. The engine's own fixture tests run in the
+      # workspace run, against the service container above.
+      - name: fz import supabase, with its optional engine (issue #658)
+        run: cargo test -p cratefield-cli --features import-supabase
       - name: fz migrations apply against the service container (issue #18)
         run: cargo test -p cratefield-cli-acceptance --features postgres
       # `push` is off by default, and `tests/push_wiring.rs` is gated on it

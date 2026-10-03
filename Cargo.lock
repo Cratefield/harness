@@ -662,6 +662,7 @@ dependencies = [
  "cratefield-client-ts",
  "cratefield-core",
  "cratefield-i18n",
+ "cratefield-import-supabase",
  "cratefield-introspect",
  "cratefield-kms",
  "cratefield-manifest",
@@ -1158,9 +1159,11 @@ dependencies = [
  "clap",
  "cratefield-adapter-postgres",
  "cratefield-adapter-sqlite",
+ "cratefield-adapter-typesafe",
  "cratefield-adapter-webpush",
  "cratefield-client-ts",
  "cratefield-core",
+ "cratefield-import-supabase",
  "cratefield-introspect",
  "cratefield-manifest",
  "cratefield-push-auth",
@@ -1372,6 +1375,25 @@ dependencies = [
  "serde",
  "serde_json",
  "unic-langid",
+]
+
+[[package]]
+name = "cratefield-import-supabase"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "cratefield-adapter-postgres",
+ "cratefield-core",
+ "http",
+ "insta",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "thiserror 2.0.20",
+ "tokio",
+ "url",
+ "zeroize",
 ]
 
 [[package]]

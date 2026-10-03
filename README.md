@@ -173,6 +173,7 @@ convenience, not a layer.
 | `cratefield-cli` | Binary `fz`: `migrations collect`, `doctor`, `modules` |
 | `cratefield-testing` | Conformance kit every module, public or private, must pass |
 | `cratefield-adapter-postgres` | `Database` over sqlx for the native runtime (`.github/workflows/parity.yml` runs module suites against both SQLite and Postgres) |
+| `cratefield-import-supabase` | Step one of moving a Supabase project onto the harness (ADR 0026): a read-only inspection and a migration report — every item automatic, needs work or a blocker — behind `fz import supabase inspect` |
 | `cratefield-runtime-native` | The same harness as a single binary on tokio: axum on a TCP listener, Redis `RateLimiter`, in-process cron |
 | `cratefield-adapter-apns` | `Push` over Apple Push Notification service, HTTP/2 through the `HttpClient` port — no vendor SDK |
 | `cratefield-adapter-fcm` | `Push` over Firebase Cloud Messaging (HTTP v1), the same shape as APNs |

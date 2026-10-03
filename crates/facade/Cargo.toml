@@ -94,6 +94,10 @@ manifest = ["dep:cratefield-manifest"]
 client-ts = ["dep:cratefield-client-ts"]
 # Reads a live database's catalog in cratefield-tables' vocabulary.
 introspect = ["dep:cratefield-introspect"]
+# The Supabase importer's engine (ADR 0026, issue #658): read-only
+# inspection and the migration report. Native only — it reads Postgres
+# through sqlx — so never a feature for a Worker build.
+import-supabase = ["dep:cratefield-import-supabase"]
 # Serves the tables a venture declares (issue #153). `fz build` turns it
 # on for a venture whose manifest has a `[tables]` section, and leaves it
 # off for one that does not — a venture with no declared tables has no use
@@ -164,6 +168,7 @@ cratefield-i18n = { workspace = true, optional = true }
 cratefield-manifest = { workspace = true, optional = true }
 cratefield-client-ts = { workspace = true, optional = true }
 cratefield-introspect = { workspace = true, optional = true }
+cratefield-import-supabase = { workspace = true, optional = true }
 cratefield-tables-api = { path = "../tables-api", optional = true }
 cratefield-auth-client = { workspace = true, optional = true }
 cratefield-oauth-client = { workspace = true, optional = true }
