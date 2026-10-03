@@ -5,7 +5,9 @@
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use cratefield_adapter_owlpost::{DEFAULT_BASE_URL, Owlpost};
+use cratefield_adapter_owlpost::{
+    DEFAULT_BASE_URL, MAX_BATCH, Owlpost, OwlpostError, SendOptions, Stream,
+};
 use cratefield_core::{Clock, HttpClient, HttpError, MailError, Mailer, Message, SendOutcome};
 use http::{HeaderMap, Request, Response, StatusCode};
 use serde_json::Value;
@@ -77,6 +79,7 @@ impl HttpClient for FakeHttp {
 
 struct FailingHttp {
     tx: mpsc::Sender<CapturedRequest>,
+    message: String,
 }
 
 #[async_trait]
@@ -91,7 +94,7 @@ impl HttpClient for FailingHttp {
                 body: String::from_utf8_lossy(&body).to_string(),
             })
             .expect("test channel open");
-        Err(HttpError::Transport("dns is down".to_string()))
+        Err(HttpError::Transport(self.message.clone()))
     }
 }
 
@@ -254,13 +257,13 @@ async fn custom_base_url_is_used() {
 }
 
 /// One send against a stored status/body, returning the mapped error.
-fn error_for(status: u16, body: &'static str, retry_after: Option<&str>) -> MailError {
+async fn error_for(status: u16, body: &'static str, retry_after: Option<&str>) -> MailError {
     let (http, _rx) = fixture(status, body, retry_after);
-    pollster::block_on(adapter(http).send(message())).expect_err("must fail")
+    adapter(http).send(message()).await.expect_err("must fail")
 }
 
-#[test]
-fn statuses_map_to_their_mail_error_variant() {
+#[pollster::test]
+async fn statuses_map_to_their_mail_error_variant() {
     // (status, problem body, Retry-After, expected). One row per acceptance
     // criterion and per branch of `map_status`.
     let cases: &[(u16, &str, Option<&str>, MailError)] = &[
@@ -323,7 +326,7 @@ fn statuses_map_to_their_mail_error_variant() {
         (500, "boom", None, MailError::Upstream("boom".into())),
     ];
     for (status, body, retry_after, expected) in cases {
-        let err = error_for(*status, body, *retry_after);
+        let err = error_for(*status, body, *retry_after).await;
         assert_eq!(&err, expected, "status {status}");
         // The API key never reaches a rendered or debugged error.
         assert!(
@@ -341,7 +344,10 @@ fn statuses_map_to_their_mail_error_variant() {
 async fn transport_error_maps_to_transport() {
     let (tx, _rx) = mpsc::channel();
     let err = Owlpost::new(
-        Arc::new(FailingHttp { tx }),
+        Arc::new(FailingHttp {
+            tx,
+            message: "dns is down".to_owned(),
+        }),
         clock_at(0),
         Some(DUMMY_KEY.into()),
         "from@x.dev",
@@ -474,4 +480,200 @@ async fn recorded_requests_conform_to_the_schema_fixture() {
         serde_json::from_str(&rx.try_recv().expect("one request").body).expect("recorded body");
     assert_conforms(&body, &schema, "request");
     assert!(body.get("reply_to").is_none(), "{body}");
+}
+
+// --- Beyond the Mailer port: send_with, batch, get_email. -----------------
+
+/// A broadcast with a topic and every addressing field set. `SendOptions` is
+/// `#[non_exhaustive]`, so fields are set on a `Default`, not a literal.
+fn broadcast_options() -> SendOptions {
+    let mut options = SendOptions::default();
+    options.stream = Some(Stream::Broadcast);
+    options.topic = Some("launch".to_owned());
+    options.cc = vec!["a@example.com".to_owned(), "b@example.com".to_owned()];
+    options.bcc = vec!["c@example.com".to_owned()];
+    options.scheduled_at = Some("2026-10-04T09:00:00Z".to_owned());
+    options
+}
+
+#[pollster::test]
+async fn send_with_records_broadcast_options_in_the_body() {
+    let (http, rx) = fixture(200, r#"{"id":"bc-1"}"#, None);
+    let outcome = adapter(http)
+        .send_with(message(), broadcast_options())
+        .await
+        .expect("send ok");
+    assert_eq!(outcome, SendOutcome::Sent { id: "bc-1".into() });
+
+    let body: Value = serde_json::from_str(&rx.try_recv().expect("one request").body).unwrap();
+    assert_eq!(body["stream"], "broadcast");
+    assert_eq!(body["topic"], "launch");
+    assert_eq!(
+        body["cc"],
+        serde_json::json!(["a@example.com", "b@example.com"])
+    );
+    assert_eq!(body["bcc"], serde_json::json!(["c@example.com"]));
+    assert_eq!(body["scheduled_at"], "2026-10-04T09:00:00Z");
+}
+
+#[pollster::test]
+async fn a_topic_on_a_transactional_stream_is_refused_locally() {
+    let (http, _rx) = fixture(200, "{}", None);
+    let mut bad = SendOptions::default();
+    bad.stream = Some(Stream::Transactional);
+    bad.topic = Some("launch".to_owned());
+    let err = adapter(http.clone())
+        .send_with(message(), bad.clone())
+        .await
+        .unwrap_err();
+    assert!(matches!(err, MailError::Invalid { .. }), "{err:?}");
+    let err = adapter(http.clone())
+        .batch(vec![(message(), bad)], None)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(err, OwlpostError::Mail(MailError::Invalid { .. })),
+        "{err:?}"
+    );
+    assert_eq!(http.calls.load(Ordering::SeqCst), 0, "refusals are local");
+}
+
+#[pollster::test]
+async fn local_refusals_precede_the_not_configured_check() {
+    // A keyless adapter still refuses a programming error locally, in all
+    // three operations: the refusal is not a provider outcome.
+    let (http, _rx) = fixture(200, "{}", None);
+    let keyless = Owlpost::new(http.clone(), clock_at(0), None, "from@x.dev", None);
+    let mut options = SendOptions::default();
+    options.stream = Some(Stream::Transactional);
+    options.topic = Some("launch".to_owned());
+    let err = keyless.send_with(message(), options).await.unwrap_err();
+    assert!(matches!(err, MailError::Invalid { .. }), "{err:?}");
+    let err = keyless.get_email("../x").await.unwrap_err();
+    assert!(
+        matches!(err, OwlpostError::Mail(MailError::Invalid { .. })),
+        "{err:?}"
+    );
+    let err = keyless.batch(Vec::new(), None).await.unwrap_err();
+    assert!(
+        matches!(err, OwlpostError::Mail(MailError::Invalid { .. })),
+        "{err:?}"
+    );
+    assert_eq!(
+        http.calls.load(Ordering::SeqCst),
+        0,
+        "nothing reached the network"
+    );
+}
+
+#[pollster::test]
+async fn batch_posts_an_array_and_returns_the_ids() {
+    let (http, rx) = fixture(200, r#"{"data":[{"id":"b-1"},{"id":"b-2"}]}"#, None);
+    let ids = adapter(http)
+        .batch(
+            vec![
+                (message(), SendOptions::default()),
+                (message(), SendOptions::default()),
+            ],
+            Some("batch-idem".to_owned()),
+        )
+        .await
+        .expect("batch ok");
+    assert_eq!(ids, ["b-1", "b-2"]);
+
+    let captured = rx.try_recv().expect("one request");
+    assert_eq!(captured.method, "POST");
+    assert_eq!(captured.uri, format!("{DEFAULT_BASE_URL}/v1/emails/batch"));
+    assert_eq!(
+        captured.headers.get("idempotency-key").unwrap(),
+        "batch-idem"
+    );
+    // The body is a JSON array of two per-email objects.
+    let body: Value = serde_json::from_str(&captured.body).unwrap();
+    let items = body.as_array().expect("a JSON array");
+    assert_eq!(items.len(), 2);
+    assert!(items.iter().all(Value::is_object));
+}
+
+#[pollster::test]
+async fn batch_refuses_empty_and_oversized_locally() {
+    let (http, _rx) = fixture(200, r#"{"data":[]}"#, None);
+    let too_many: Vec<_> = (0..=MAX_BATCH)
+        .map(|_| (message(), SendOptions::default()))
+        .collect();
+    for batch in [Vec::new(), too_many] {
+        let err = adapter(http.clone()).batch(batch, None).await.unwrap_err();
+        assert!(
+            matches!(err, OwlpostError::Mail(MailError::Invalid { .. })),
+            "{err:?}"
+        );
+    }
+    assert_eq!(http.calls.load(Ordering::SeqCst), 0, "refusals are local");
+}
+
+#[pollster::test]
+async fn get_email_reads_one_and_refuses_bad_ids() {
+    let (http, rx) = fixture(
+        200,
+        r#"{"id":"e-1","from":"from@x.dev","to":["to@y.dev"],"subject":"Hi","created_at":"2026-10-01T00:00:00Z","last_event":"delivered"}"#,
+        None,
+    );
+    let email = adapter(http).get_email("e-1").await.expect("get ok");
+    assert_eq!(email.id, "e-1");
+    assert_eq!(email.to, ["to@y.dev"]);
+    assert_eq!(email.last_event.as_deref(), Some("delivered"));
+
+    let captured = rx.try_recv().expect("one request");
+    assert_eq!(captured.method, "GET");
+    assert_eq!(captured.uri, format!("{DEFAULT_BASE_URL}/v1/emails/e-1"));
+    assert!(captured.body.is_empty(), "a GET carries no body");
+
+    // A path-like id never reaches the network.
+    let (http, _rx) = fixture(200, "{}", None);
+    for id in ["", "../x", "a/b", "e%2f"] {
+        let err = adapter(http.clone()).get_email(id).await.unwrap_err();
+        assert!(
+            matches!(err, OwlpostError::Mail(MailError::Invalid { .. })),
+            "{id:?}: {err:?}"
+        );
+    }
+    assert_eq!(http.calls.load(Ordering::SeqCst), 0);
+}
+
+#[pollster::test]
+async fn the_key_never_leaks_in_debug_or_a_provider_echo() {
+    // Kept in sync with DUMMY_KEY by asserting the literal names it.
+    const ECHO: &str =
+        r#"{"title":"Bad Request","detail":"the key op_test_dummy_key_000000000000 is invalid"}"#;
+    assert!(ECHO.contains(DUMMY_KEY));
+
+    // A provider echoing the key back must not smuggle it into an error,
+    // through either surface.
+    let (http, _rx) = fixture(400, ECHO, None);
+    let err = adapter(http).get_email("e-1").await.unwrap_err();
+    assert!(
+        !err.to_string().contains(DUMMY_KEY) && !format!("{err:?}").contains(DUMMY_KEY),
+        "{err}"
+    );
+    assert!(err.to_string().contains("[redacted]"), "{err}");
+
+    // A transport error whose own text names the key is redacted too.
+    let (tx, _rx) = mpsc::channel();
+    let err = Owlpost::new(
+        Arc::new(FailingHttp {
+            tx,
+            message: format!("connect failed for {DUMMY_KEY}"),
+        }),
+        clock_at(0),
+        Some(DUMMY_KEY.into()),
+        "from@x.dev",
+        None,
+    )
+    .send(message())
+    .await
+    .unwrap_err();
+    assert!(
+        !err.to_string().contains(DUMMY_KEY) && !format!("{err:?}").contains(DUMMY_KEY),
+        "{err:?}"
+    );
 }
