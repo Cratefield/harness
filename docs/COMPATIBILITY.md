@@ -73,6 +73,7 @@ compatibility-doc` and checked in CI for drift. Do not edit by hand.
 | `cratefield-module-email-signup` | 0.2.0 | 1 | `^0.6` — `>=0.6.0, <0.7.0` |
 | `cratefield-module-hello` *(not published)* | 0.1.1 | 1 | `^0.6` — `>=0.6.0, <0.7.0` |
 | `cratefield-module-notifications` | 0.2.0 | 1 | `^0.6` — `>=0.6.0, <0.7.0` |
+| `cratefield-module-orgs` | 0.1.0 | 1 | `^0.6` — `>=0.6.0, <0.7.0` |
 | `cratefield-module-privacy` | 0.2.0 | 1 | `^0.6` — `>=0.6.0, <0.7.0` |
 | `cratefield-module-telemetry` | 0.2.0 | 1 | `^0.6` — `>=0.6.0, <0.7.0` |
 | `cratefield-module-waitlist` | 0.2.0 | 1 | `^0.6` — `>=0.6.0, <0.7.0` |

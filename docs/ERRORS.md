@@ -81,6 +81,17 @@ human-readable page at each `<public_url>/problems/<slug>`.
 | `not-production-ready` | 503 | Not ready for production traffic | `cratefield-core` | This deployment declares production but cannot satisfy the abuse controls its routes declare. |
 | `not-ready` | 503 | Service not ready | `cratefield-core` | Readiness probe failed: the database is missing, erroring or too slow. |
 | `not-yours-to-give` | 403 | That row would not be yours | `cratefield-tables-api` | The subject column names a different caller; a row written here is your own. |
+| `orgs-already-member` | 409 | Already a member | `cratefield-module-orgs` | That account already belongs to this organization. |
+| `orgs-email-unverified` | 403 | Your email address is not verified | `cratefield-module-orgs` | Accepting an invitation matches the caller's verified address against the one invited, and the credential this request carried proved none. |
+| `orgs-forbidden` | 403 | Your role does not allow this | `cratefield-module-orgs` | The caller's role in this organization does not permit the change they asked for — only owners, and the manager roles the venture named, may manage members and invitations, and only an owner may grant or change the owner role. |
+| `orgs-invalid-email` | 422 | That is not an email address | `cratefield-module-orgs` | The address to invite could not be normalized and validated as one. |
+| `orgs-invalid-name` | 422 | An organization needs a name | `cratefield-module-orgs` | The name was empty or whitespace only. |
+| `orgs-invitation-for-someone-else` | 403 | That invitation is for another address | `cratefield-module-orgs` | The signed-in account's verified address is not the one the invitation was sent to. The invitation has not been spent. |
+| `orgs-invitation-gone` | 410 | That invitation is no longer valid | `cratefield-module-orgs` | The invitation token is unknown, has lapsed, or has already been accepted. An invitation is single-use, so a second acceptance is refused. |
+| `orgs-last-owner` | 409 | An organization keeps an owner | `cratefield-module-orgs` | This is the organization's only owner, so it cannot be removed or demoted. Grant the owner role to somebody else first. |
+| `orgs-mail-failed` | 502 | The invitation could not be sent | `cratefield-module-orgs` | The mailing provider refused the invitation message, so no invitation was created. Nothing is left behind to accept; try again. |
+| `orgs-not-found` | 404 | No such organization | `cratefield-module-orgs` | No organization the caller is a member of carries that id. An organization the caller is not in answers the same way, so its existence is not disclosed. |
+| `orgs-unknown-role` | 422 | Unknown role | `cratefield-module-orgs` | The role is not one of the roles this venture configured for its organizations. The configured set is fixed at build. |
 | `partial-key` | 400 | The key is not complete | `cratefield-tables-api` | Name every primary-key column of the table once: a row is addressed by its whole key. `after` and `sort` are the page's parameters on this route and cannot name a key column, so a table whose key uses one of those names has no address here. |
 | `rate-limited` | 429 | Rate limit exceeded | `cratefield-core` | Too many requests from this IP or address; retry after the pause. |
 | `request-too-large` | 413 | Request body too large | `cratefield-core` | The request body exceeded the 64 KiB limit for /v1 endpoints. |

@@ -1065,6 +1065,90 @@ fn device_auth() -> ModuleDetail {
     )
 }
 
+/// The `orgs` detail.
+fn orgs() -> ModuleDetail {
+    detail(
+        "Organizations, memberships, roles and email invitations. A person creates an \
+                 organization and is its owner, invites people by address, and everyone who \
+                 belongs holds a role the venture configured. An organization always keeps at \
+                 least one owner, an invitation stores only the SHA-256 of its token and of \
+                 the invitee's address, and a caller who is not a member gets the same answer \
+                 as one asking about an organization that does not exist — so organizations \
+                 cannot be enumerated.",
+        "cratefield-module-orgs",
+        &["Database", "Auth"],
+        &["Clock", "IdGen", "Mailer"],
+        &["orgs", "org_members", "org_invitations"],
+        vec![
+            route(
+                "POST",
+                "/v1/orgs/",
+                "Create an organization; the caller becomes its owner.",
+            ),
+            route(
+                "GET",
+                "/v1/orgs/",
+                "List the organizations the caller is a member of.",
+            ),
+            route(
+                "GET",
+                "/v1/orgs/{org_id}",
+                "One organization the caller is a member of.",
+            ),
+            route(
+                "GET",
+                "/v1/orgs/{org_id}/members",
+                "List an organization's members.",
+            ),
+            route(
+                "POST",
+                "/v1/orgs/{org_id}/members",
+                "Add a member directly by subject.",
+            ),
+            route(
+                "GET",
+                "/v1/orgs/{org_id}/members/me",
+                "The caller's own membership and role.",
+            ),
+            route(
+                "PATCH",
+                "/v1/orgs/{org_id}/members/{sub}",
+                "Change a member's role; only an owner may grant or change the owner role.",
+            ),
+            route(
+                "DELETE",
+                "/v1/orgs/{org_id}/members/{sub}",
+                "Remove a member; the last owner cannot be removed.",
+            ),
+            route(
+                "POST",
+                "/v1/orgs/{org_id}/leave",
+                "Leave an organization; the last owner cannot leave.",
+            ),
+            route(
+                "POST",
+                "/v1/orgs/{org_id}/invitations",
+                "Invite somebody by email address.",
+            ),
+            route(
+                "POST",
+                "/v1/orgs/invitations/accept",
+                "Accept an invitation with the token that was mailed.",
+            ),
+            route(
+                "GET",
+                "/v1/orgs/admin/orgs",
+                "Admin token, or a member of the staff organization: every organization.",
+            ),
+        ],
+        Some(
+            "Every route as a declared JSON action — organizations, memberships, roles and \
+             invitations — with no HTML page of its own; the admin listing is the one action \
+             gated on the admin token or a staff-organization member.",
+        ),
+    )
+}
+
 /// The curated catalog the control plane ships with: the manifest crate's
 /// `builtin()` catalog — the one list of the harness modules, with their
 /// tiers, dependency edges and pinned releases — with each entry's
@@ -1109,6 +1193,7 @@ fn detail_for(slug: &str) -> ModuleDetail {
         "privacy" => privacy(),
         "telemetry" => telemetry(),
         "device-auth" => device_auth(),
+        "orgs" => orgs(),
         _ => ModuleDetail::default(),
     }
 }

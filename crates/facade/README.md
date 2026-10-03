@@ -79,6 +79,7 @@ also switch on the extra features noted in their rows:
 | `telemetry` | `cratefield-module-telemetry` | `cratefield::telemetry` | Aggregate usage counts from clients, consent-first, in the venture's own database |
 | `webhooks` | `cratefield-module-webhooks` | `cratefield::webhooks` | Outbound webhooks: per-subject signed POSTs over the core outbox, with dead letters and replay |
 | `device-auth` | `cratefield-module-device-auth` | `cratefield::device_auth` | The OAuth 2.0 device authorization grant (RFC 8628): a client with no browser shows a code, a signed-in person approves it, and the venture's issuer mints the credential |
+| `orgs` | `cratefield-module-orgs` | `cratefield::orgs` | Organizations, memberships, roles and email invitations: a person creates an organization and is its owner, invites people by address, and everyone who belongs holds a role the venture configured |
 | `connections` | `cratefield-module-connections` | `cratefield::connections` | Per-subject third-party OAuth connections: authorize, sealed access and refresh tokens, guarded refresh, revoke, over the `HttpClient` port |
 | `testing` | `cratefield-testing` | `cratefield::testing` | The conformance kit; belongs under `[dev-dependencies]` |
 

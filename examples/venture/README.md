@@ -1,8 +1,13 @@
 # venture (example)
 
 The smallest complete Factory Zero venture: `cratefield-core` +
-`cratefield-runtime-cloudflare`, three modules (`sample` row round-trip,
-`email-signup`, `waitlist`), one Worker, one local D1.
+`cratefield-runtime-cloudflare`, modules (`sample` row round-trip,
+`email-signup`, `waitlist`, and `orgs` — organizations, memberships, roles
+and invitations), one Worker, one local D1.
+
+`orgs` is mounted with the roles `owner`, `manager`, `staff` and a staff
+organization; `src/admin.rs` adds `GET /v1/admin/ping` behind its staff guard
+(a staff member, or a machine holding `ADMIN_TOKEN`).
 
 CI builds it to wasm with `worker-build --release` so a native-only
 dependency can never slip into a module, then boots it under

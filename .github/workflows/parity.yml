@@ -64,6 +64,7 @@ jobs:
           cargo test -p cratefield-module-connections
           cargo test -p cratefield-module-device-auth
           cargo test -p cratefield-module-email-signup
+          cargo test -p cratefield-module-orgs
           cargo test -p cratefield-module-privacy
           cargo test -p cratefield-module-telemetry
           cargo test -p cratefield-module-waitlist
@@ -75,6 +76,7 @@ jobs:
           cargo test -p cratefield-module-connections --test conformance
           cargo test -p cratefield-module-device-auth --test conformance
           cargo test -p cratefield-module-email-signup --test conformance
+          cargo test -p cratefield-module-orgs --test conformance
           cargo test -p cratefield-module-privacy --test conformance
           cargo test -p cratefield-module-telemetry --test conformance
           cargo test -p cratefield-module-waitlist --test conformance

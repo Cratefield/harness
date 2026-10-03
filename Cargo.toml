@@ -119,6 +119,9 @@ cratefield-module-device-auth = { path = "crates/module-device-auth", version = 
 # Per-subject third-party OAuth connections (issue #624): authorize, sealed
 # tokens, refresh and revoke, built on `cratefield-oauth-client`.
 cratefield-module-connections = { path = "crates/module-connections", version = "0.1" }
+# Organizations, memberships, roles and email invitations (issue #652), with
+# the staff-organization path that lets people retire `ADMIN_TOKEN`.
+cratefield-module-orgs = { path = "crates/module-orgs", version = "0.1" }
 # Declared here rather than by bare path in the one crate that uses it: a
 # path-only dependency has no version, and `cargo publish` refuses a
 # dependency without one. It was invisible while both crates were
