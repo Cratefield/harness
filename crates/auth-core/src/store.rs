@@ -144,6 +144,10 @@ pub struct UserRow {
     pub display_name: Option<String>,
     pub primary_email: Option<String>,
     pub primary_email_verified: bool,
+    /// The locale this account asked to be written to in (issue #649), one
+    /// of the deployment's `AUTH_LOCALES`. `None` until the person chooses
+    /// one; a request without it resolves per request instead.
+    pub locale: Option<String>,
     pub status: String,
     pub created_at: String,
     pub updated_at: String,
@@ -155,6 +159,7 @@ fn user_from(row: &Row) -> UserRow {
         display_name: row.get::<Option<String>>("display_name").flatten(),
         primary_email: row.get::<Option<String>>("primary_email").flatten(),
         primary_email_verified: boolean(row, "primary_email_verified"),
+        locale: row.get::<Option<String>>("locale").flatten(),
         status: row.get::<String>("status").unwrap_or_default(),
         created_at: row.get::<String>("created_at").unwrap_or_default(),
         updated_at: row.get::<String>("updated_at").unwrap_or_default(),
@@ -169,6 +174,7 @@ fn select_users() -> sea_query::SelectStatement {
             "display_name",
             "primary_email",
             "primary_email_verified",
+            "locale",
             "status",
             "created_at",
             "updated_at",
@@ -191,6 +197,7 @@ pub async fn insert_user(db: &dyn Database, row: &UserRow) -> Result<(), DbError
             "display_name",
             "primary_email",
             "primary_email_verified",
+            "locale",
             "status",
             "created_at",
             "updated_at",
@@ -200,6 +207,7 @@ pub async fn insert_user(db: &dyn Database, row: &UserRow) -> Result<(), DbError
             row.display_name.clone().into(),
             row.primary_email.clone().into(),
             row.primary_email_verified.into(),
+            row.locale.clone().into(),
             row.status.as_str().into(),
             row.created_at.clone().into(),
             row.updated_at.clone().into(),

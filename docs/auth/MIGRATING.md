@@ -116,7 +116,7 @@ present and non-empty; unknown fields are ignored.
 | `email_verified` | required | Whether the source vouched for the address. |
 | `password_hash` | optional | A verifier — bcrypt or argon2id. Omit for a passwordless user. |
 | `created_at` | optional | RFC 3339; the account's creation time (defaults to import time). |
-| `locale` | optional | Accepted and ignored — the store keeps no locale. |
+| `locale` | optional | Accepted and ignored — an imported account starts with no stored locale, and mail resolves one per request (issue #649). |
 
 `(external_provider, external_id)` is the key: importing the same pair twice
 is `unchanged`, never a second account. A pair repeated inside one file, or a

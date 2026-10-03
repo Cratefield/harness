@@ -121,8 +121,10 @@ struct ImportBody {
 }
 
 /// One user to import. `locale` and any other field a caller sends are
-/// ignored: the `users` table holds no locale, and the store's shape is
-/// the contract — an unknown field is not an error.
+/// ignored: an imported account starts with no stored locale (issue #649
+/// stores one only when it is a tag the deployment lists in
+/// `AUTH_LOCALES`, which the import does not check), and the store's shape
+/// is the contract — an unknown field is not an error.
 #[derive(Deserialize)]
 struct ImportUser {
     external_provider: String,
@@ -335,6 +337,9 @@ async fn create_imported_user(
             // verified address, so an import that says "verified" says so
             // about an address the source system already proved.
             primary_email_verified: user.email_verified,
+            // Not carried over (see `ImportUser`): the request resolves
+            // one per mail until the person picks one.
+            locale: None,
             status: STATUS_ACTIVE.to_owned(),
             created_at: created_at.to_owned(),
             updated_at: now.to_owned(),

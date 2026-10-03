@@ -43,6 +43,7 @@ async fn user(kit: &TestHarness, id: &str) {
             display_name: None,
             primary_email: Some(format!("{id}@example.com")),
             primary_email_verified: true,
+            locale: None,
             status: "active".to_owned(),
             created_at: iso(EPOCH),
             updated_at: iso(EPOCH),

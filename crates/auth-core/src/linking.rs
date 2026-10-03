@@ -245,6 +245,9 @@ pub async fn create_user(
         display_name: incoming.name.map(str::to_owned),
         primary_email: incoming.email.map(str::to_owned),
         primary_email_verified: incoming.email.is_some() && incoming.email_verified,
+        // A first sign-in through a provider writes no locale; the request
+        // that carried it resolves one per request instead (issue #649).
+        locale: None,
         status: "active".to_owned(),
         created_at: now.clone(),
         updated_at: now,

@@ -126,6 +126,7 @@ notifications = ["dep:cratefield-module-notifications", "i18n"]
 telemetry = ["dep:cratefield-module-telemetry"]
 webhooks = ["dep:cratefield-module-webhooks"]
 device-auth = ["dep:cratefield-module-device-auth"]
+orgs = ["dep:cratefield-module-orgs"]
 connections = ["dep:cratefield-module-connections"]
 
 # The conformance kit. Belongs under [dev-dependencies] in a venture.
@@ -183,6 +184,7 @@ cratefield-module-notifications = { workspace = true, optional = true }
 cratefield-module-telemetry = { workspace = true, optional = true }
 cratefield-module-webhooks = { workspace = true, optional = true }
 cratefield-module-device-auth = { workspace = true, optional = true }
+cratefield-module-orgs = { workspace = true, optional = true }
 cratefield-module-connections = { workspace = true, optional = true }
 cratefield-testing = { workspace = true, optional = true }
 

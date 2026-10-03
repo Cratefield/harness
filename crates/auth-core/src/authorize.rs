@@ -700,9 +700,14 @@ fn confirm_action(path: &str) -> String {
     format!("{}/confirm", path.trim_end_matches('/'))
 }
 
+/// The authorize endpoint's path under this module's mount prefix. Named so
+/// `locale` can recognise the endpoint whose query carries `ui_locales`
+/// without a second copy of the route.
+pub(crate) const AUTHORIZE_ROUTE: &str = "/authorize";
+
 pub(crate) fn router() -> axum::Router<Arc<ModuleState>> {
     axum::Router::new()
-        .route("/authorize", get(authorize))
+        .route(AUTHORIZE_ROUTE, get(authorize))
         .route("/logout", get(logout))
         .route("/logout/confirm", post(logout_confirm))
 }

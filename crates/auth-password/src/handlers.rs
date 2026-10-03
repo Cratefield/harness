@@ -64,6 +64,10 @@ struct Credentials {
     email: String,
     #[serde(default)]
     password: String,
+    /// The locale the person registering asked for (issue #649). Stored
+    /// only when the deployment supports it.
+    #[serde(default)]
+    locale: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -253,7 +257,15 @@ async fn register(
         }
     }
 
-    match create_account(db, clock, id_gen, &email, &password_hash).await {
+    // The locale the person named, if the deployment supports one by that
+    // name. Anything else leaves the column null and the account inherits
+    // whatever a later request resolves (issue #649).
+    let locale = credentials
+        .locale
+        .as_deref()
+        .and_then(|raw| state.settings.supported.canonicalize(raw));
+
+    match create_account(db, clock, id_gen, &email, &password_hash, locale.as_deref()).await {
         Ok(user_id) => {
             ctx.events
                 .emit_in(&scope, EVENT_REGISTERED, json!({ "user_id": user_id }));
@@ -278,6 +290,7 @@ async fn create_account(
     id_gen: &dyn cratefield_core::IdGen,
     email: &str,
     password_hash: &str,
+    locale: Option<&str>,
 ) -> Result<String, cratefield_core::DbError> {
     let now = lockout::iso(clock.now());
     let user_id = id_gen.ulid();
@@ -289,6 +302,8 @@ async fn create_account(
         // rules only ever auto-link a verified address, so registering
         // must not be a way to claim one.
         primary_email_verified: false,
+        // Set only when the caller named a locale the deployment supports.
+        locale: locale.map(str::to_owned),
         status: STATUS_ACTIVE.to_owned(),
         created_at: now.clone(),
         updated_at: now.clone(),

@@ -40,6 +40,7 @@ fn user(id: &str) -> UserRow {
         display_name: Some(format!("User {id}")),
         primary_email: Some(format!("{id}@example.com")),
         primary_email_verified: true,
+        locale: None,
         status: "active".to_owned(),
         created_at: iso(NOW_SECS),
         updated_at: iso(NOW_SECS),

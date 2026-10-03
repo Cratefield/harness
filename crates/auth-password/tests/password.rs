@@ -247,6 +247,48 @@ fn registering_creates_an_account_an_identity_and_a_credential() {
     });
 }
 
+/// Issue #649: a locale named at registration is stored when the
+/// deployment supports it, matched by language for a regional tag, and
+/// ignored when it names nothing the deployment has.
+#[test]
+fn registering_stores_a_supported_locale() {
+    pollster::block_on(async {
+        let kit = kit_with(
+            vec![("AUTH_LOCALES".to_owned(), "en,de".to_owned())],
+            i64::MAX,
+        );
+        let register_locale = |email: &str, locale: &str| {
+            let kit = &kit;
+            let body = json!({ "email": email, "password": GOOD, "locale": locale });
+            async move { post(kit, REGISTER, body, None).await }
+        };
+
+        register_locale("ada@example.com", "de").await;
+        let user = user_by_primary_email(&*kit.db, "ada@example.com")
+            .await
+            .expect("query")
+            .expect("a user");
+        assert_eq!(user.locale.as_deref(), Some("de"));
+
+        // `de-AT` names `de`, which is supported, and is stored
+        // canonicalised rather than as it was typed.
+        register_locale("grace@example.com", "de-AT").await;
+        let user = user_by_primary_email(&*kit.db, "grace@example.com")
+            .await
+            .expect("query")
+            .expect("a user");
+        assert_eq!(user.locale.as_deref(), Some("de"));
+
+        // A locale the deployment does not support is not stored.
+        register_locale("alan@example.com", "xx").await;
+        let user = user_by_primary_email(&*kit.db, "alan@example.com")
+            .await
+            .expect("query")
+            .expect("a user");
+        assert_eq!(user.locale, None);
+    });
+}
+
 /// The acceptance criterion, tested byte for byte: a taken address and a
 /// free one are indistinguishable.
 #[test]
@@ -664,6 +706,7 @@ fn a_hash_at_old_parameters_is_upgraded_on_login() {
                 display_name: None,
                 primary_email: Some("ada@example.com".to_owned()),
                 primary_email_verified: false,
+                locale: None,
                 status: STATUS_ACTIVE.to_owned(),
                 created_at: now.to_owned(),
                 updated_at: now.to_owned(),

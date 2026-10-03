@@ -38,3 +38,4 @@ cratefield-module-privacy = { workspace = true }
 # dev-dependency in this workspace.
 cratefield-module-telemetry = { path = "../module-telemetry" }
 cratefield-module-device-auth = { path = "../module-device-auth" }
+cratefield-module-orgs = { path = "../module-orgs" }

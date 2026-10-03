@@ -15,6 +15,7 @@
 // `pub` + the `rlib` crate type in `Cargo.toml` so the native example
 // (`examples/venture-native`) reuses this exact module — one source of
 // truth for the wasm and native canaries.
+pub mod admin;
 pub mod rooms;
 pub mod sample;
 
@@ -58,7 +59,13 @@ fn instance() -> &'static (Harness, Cloudflare) {
                 None,
                 "example@factory0.dev",
                 None,
-            ));
+            ))
+            // The orgs module (issue #652) requires the `Auth` port, so the
+            // runtime must provide one. `auth_from_env` assembles it from
+            // `AUTH_ISSUER`/`AUTH_CLIENT_ID`; with neither set it is an
+            // `Unconfigured` verifier — the port exists, and a credential
+            // buys nothing until a deployment sets the issuer.
+            .auth_from_env();
         let mut templates = cratefield::email_signup::default_templates();
         templates.extend(cratefield::waitlist::default_templates());
         let harness = Harness::builder()
@@ -128,6 +135,21 @@ fn instance() -> &'static (Harness, Cloudflare) {
                     // renders as "this site does not do this".
                     .vapid_public_key(cratefield::push_wiring::vapid_public_key),
             )
+            // Organizations, memberships, roles and invitations (issue #652):
+            // `owner` is always in the set and is the creator's role, `manager`
+            // may manage members and invitations, and `staff` is the role of
+            // the staff organization. `src/admin.rs` mounts the venture's own
+            // route behind the same guard, which accepts a staff member or a
+            // machine holding `ADMIN_TOKEN`.
+            .module(
+                cratefield::orgs::Orgs::builder()
+                    .roles(["owner", "manager", "staff"])
+                    .managers(["manager"])
+                    .staff_org(admin::STAFF_ORG)
+                    .staff_roles([admin::STAFF_ROLE])
+                    .build(),
+            )
+            .module(admin::AdminModule)
             .templates(templates)
             // The UI renderer (ADR 0010): pages at /ui/<module>/<action>,
             // copy and theme from ui.json (validated by build()).

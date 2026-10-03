@@ -61,6 +61,7 @@ async fn seed_user(kit: &TestHarness, id: &str, email: Option<&str>, verified: b
             display_name: None,
             primary_email: email.map(str::to_owned),
             primary_email_verified: verified,
+            locale: None,
             status: "active".to_owned(),
             created_at: iso(),
             updated_at: iso(),

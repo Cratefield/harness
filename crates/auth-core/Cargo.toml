@@ -14,6 +14,10 @@ workspace = true
 [dependencies]
 askama = { workspace = true }
 cratefield-core = { workspace = true }
+# `AUTH_LOCALES`/`Accept-Language`/`ui_locales` parsing and BCP 47 matching
+# live in the i18n crate (issue #649). Pure Rust, wasm-safe, the same crate
+# the template registry's negotiation is built around.
+cratefield-i18n = { workspace = true }
 axum = { workspace = true }
 http = { workspace = true }
 sea-query = { workspace = true }
@@ -25,6 +29,8 @@ argon2 = { workspace = true }
 base64ct = { workspace = true }
 bcrypt = { workspace = true }
 getrandom = { workspace = true }
+# Percent-decoding the `ui_locales` out of a pending `/authorize` query.
+url = { workspace = true }
 # Pinned here, not workspace-inherited: the workspace `p256` is 0.13.2 for
 # `cratefield-adapter-apns`, and the login stack is a major ahead (ADR 0013).
 p256 = { version = "0.14.0", default-features = false, features = [

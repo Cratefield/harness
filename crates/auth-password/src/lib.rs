@@ -41,7 +41,7 @@ mod lockout;
 use cratefield_core::{
     Config, ConfigError, Migrations, Module, ModuleConfig, ModuleContext, Port, ProblemDef,
 };
-use factory0_auth_core::LegacyHashes;
+use factory0_auth_core::{LegacyHashes, SupportedLocales};
 use http::StatusCode;
 use std::sync::Arc;
 
@@ -102,6 +102,10 @@ pub(crate) struct Settings {
     /// Legacy hash formats login still accepts (issue #650), from
     /// `AUTH_LEGACY_HASHES`. Empty unless a deployment opts in.
     pub legacy_hashes: LegacyHashes,
+    /// The locales the deployment supports (issue #649), from
+    /// `AUTH_LOCALES`. Registration stores a locale only when it is one of
+    /// these.
+    pub supported: SupportedLocales,
 }
 
 impl Default for Settings {
@@ -117,6 +121,7 @@ impl Default for Settings {
             lockout_window_secs: 3600,
             lockout_secs: 900,
             legacy_hashes: LegacyHashes::default(),
+            supported: SupportedLocales::default(),
         }
     }
 }
@@ -179,6 +184,7 @@ fn resolve_settings(cfg: &dyn Config) -> Result<Settings, Vec<String>> {
             lockout_window_secs,
             lockout_secs,
             legacy_hashes,
+            supported: SupportedLocales::from_config(cfg),
         })
     } else {
         Err(problems)
