@@ -34,6 +34,10 @@ mod clients;
 /// runs before it acts, and the 403 problem it answers with.
 pub mod csrf;
 pub mod federated;
+// The server half of `fz auth import` (issue #650, part B): the admin
+// routes that move a system of record's users in, preserving the verifier
+// and the verified address.
+mod import;
 pub mod linking;
 mod secrets;
 mod sessions;
@@ -50,9 +54,10 @@ pub mod redirect_uri;
 pub mod tokens;
 
 pub use secrets::{
-    CLIENT_DISABLED, SECRET_BYTES, SecretError, ensure_client_usable, generate_secret,
-    hash_password, hash_secret, kind_allows_secret, password_needs_rehash, verify_client_secret,
-    verify_password, verify_secret,
+    BCRYPT_MAX_COST, CLIENT_DISABLED, LEGACY_HASHES_KEY, LegacyHashes, SECRET_BYTES, SecretError,
+    bcrypt_cost, ensure_client_usable, generate_secret, hash_password, hash_secret,
+    is_argon2id_phc, kind_allows_secret, password_needs_rehash, verify_client_secret,
+    verify_password, verify_password_with, verify_secret,
 };
 pub use sessions::{
     ABSOLUTE_CAP_DAYS, COOKIE_NAME, IssuedSession, Login, SESSION_INVALID, SESSION_VALUE_BYTES,
@@ -63,21 +68,21 @@ pub use store::{
     Bytes, CLIENT_CONFIDENTIAL, CLIENT_PUBLIC, CREDENTIAL_PASSKEY, CREDENTIAL_PASSWORD,
     ClientRedirectUriRow, ClientRow, CredentialRow, DELETION_DELETED_USER, DELETION_DONE,
     DELETION_NOTHING_TO_DO, DELETION_PENDING, DELETION_UNLINKED, DeletionJobRow, IdentityRow,
-    PROVIDER_APPLE, PROVIDER_GOOGLE, PROVIDER_MAGIC_LINK, PROVIDER_META, PROVIDER_PASSKEY,
-    PROVIDER_PASSWORD, Redacted, STATUS_ACTIVE, STATUS_DISABLED, SessionRow, SingleUseTokenRow,
-    TOKEN_AUTHORIZATION_CODE, TOKEN_MAGIC_LINK, TOKEN_REFRESH, TOKEN_WEBAUTHN_CHALLENGE, UserRow,
-    client_by_id, complete_deletion_job, consume_single_use_token, credentials_by_user,
-    delete_credential, delete_identity, delete_user, deletion_job_by_code, identities_by_user,
-    identity_by_provider_subject, insert_client, insert_credential, insert_deletion_job,
-    insert_identity, insert_redirect_uri, insert_session, insert_single_use_token, insert_user,
-    list_clients, mark_passkey_suspect, passkey_by_credential_id, password_credential,
-    pending_deletion_jobs, purge_expired_sessions, purge_expired_single_use_tokens, purge_user,
-    redirect_uris_for_client, replace_redirect_uris, retire_unconsumed_tokens, revoke_all_sessions,
-    revoke_session, rotate_client_secret, session_by_id, session_by_token_hash, sessions_by_user,
-    set_password_hash, set_password_lockout, set_primary_email_verified, single_use_token_by_hash,
-    slide_session, touch_credential_used, touch_identity_login, touch_session_seen,
-    update_client_name, update_client_status, update_passkey_sign_count, user_by_id,
-    user_by_primary_email,
+    PROVIDER_APPLE, PROVIDER_GOOGLE, PROVIDER_IMPORT, PROVIDER_MAGIC_LINK, PROVIDER_META,
+    PROVIDER_PASSKEY, PROVIDER_PASSWORD, Redacted, STATUS_ACTIVE, STATUS_DISABLED, SessionRow,
+    SingleUseTokenRow, TOKEN_AUTHORIZATION_CODE, TOKEN_MAGIC_LINK, TOKEN_REFRESH,
+    TOKEN_WEBAUTHN_CHALLENGE, UserRow, client_by_id, complete_deletion_job,
+    consume_single_use_token, credentials_by_user, delete_credential, delete_identity, delete_user,
+    deletion_job_by_code, identities_by_user, identity_by_provider_subject, insert_client,
+    insert_credential, insert_deletion_job, insert_identity, insert_redirect_uri, insert_session,
+    insert_single_use_token, insert_user, list_clients, mark_passkey_suspect,
+    passkey_by_credential_id, password_credential, pending_deletion_jobs, purge_expired_sessions,
+    purge_expired_single_use_tokens, purge_user, redirect_uris_for_client, replace_redirect_uris,
+    retire_unconsumed_tokens, revoke_all_sessions, revoke_session, rotate_client_secret,
+    session_by_id, session_by_token_hash, sessions_by_user, set_password_hash,
+    set_password_lockout, set_primary_email_verified, single_use_token_by_hash, slide_session,
+    touch_credential_used, touch_identity_login, touch_session_seen, update_client_name,
+    update_client_status, update_passkey_sign_count, user_by_id, user_by_primary_email,
 };
 pub use tokens::{
     ACCESS_TOKEN_SECS, JWKS_CACHE_CONTROL, OIDC_CACHE_CONTROL, REFRESH_TOKEN_DAYS, RefreshGrant,
@@ -143,6 +148,15 @@ const MIGRATION_TOKENS: SqlMigration = SqlMigration::new(
     include_str!("../migrations/sqlite/0003_token_issuing.sql"),
 );
 
+/// The user-import migration of issue #650, part B: the identities
+/// provider CHECK widens to admit `import`, so an imported person's link
+/// back to their system of record is an ordinary identity row.
+const MIGRATION_IMPORT_PROVIDER: SqlMigration = SqlMigration::new(
+    "0007",
+    "import_provider",
+    include_str!("../migrations/sqlite/0007_import_provider.sql"),
+);
+
 /// The Postgres form of the init migration: the same DDL with `BYTEA`
 /// where SQLite has `BLOB` (harness issue #18, ADR 0004). The `id` is
 /// identical to the sqlite one so the tracking key `<module>/<id>` — and
@@ -160,6 +174,14 @@ const MIGRATION_TOKENS_POSTGRES: SqlMigration = SqlMigration::new(
     "0003",
     "token_issuing",
     include_str!("../migrations/postgres/0003_token_issuing.sql"),
+);
+
+/// The Postgres form of the import migration: Postgres alters the named
+/// CHECK in place rather than rebuilding the table.
+const MIGRATION_IMPORT_PROVIDER_POSTGRES: SqlMigration = SqlMigration::new(
+    "0007",
+    "import_provider",
+    include_str!("../migrations/postgres/0007_import_provider.sql"),
 );
 
 /// Router state: the module context and the resolved rotation overlap.
@@ -413,28 +435,31 @@ impl Module for AuthCore {
     }
 
     fn migrations(&self) -> cratefield_core::Migrations {
-        const MIGRATIONS: [SqlMigration; 6] = [
+        const MIGRATIONS: [SqlMigration; 7] = [
             MIGRATION_INIT,
             MIGRATION_ROTATION,
             MIGRATION_TOKENS,
             MIGRATION_SUSPECT,
             MIGRATION_DELETION_JOBS,
             MIGRATION_PASSWORD_LOCKOUT,
+            MIGRATION_IMPORT_PROVIDER,
         ];
         // The array is the apply order; this refuses a gap, a duplicate
         // or an entry out of order at build time (issue #27).
         const _: () = cratefield_core::assert_migration_set(&MIGRATIONS);
         // The runner selects one set wholesale (harness issue #18), so the
-        // Postgres list carries all six: the two whose SQL truly differs
-        // (BYTEA for the byte columns) and the four portable ones reused
-        // from the sqlite files unchanged (ADR 0004).
-        const MIGRATIONS_POSTGRES: [SqlMigration; 6] = [
+        // Postgres list carries all seven: the three whose SQL truly differs
+        // (BYTEA for the byte columns in two, and the in-place CHECK rename
+        // in the import) and the four portable ones reused from the sqlite
+        // files unchanged (ADR 0004).
+        const MIGRATIONS_POSTGRES: [SqlMigration; 7] = [
             MIGRATION_INIT_POSTGRES,
             MIGRATION_ROTATION,
             MIGRATION_TOKENS_POSTGRES,
             MIGRATION_SUSPECT,
             MIGRATION_DELETION_JOBS,
             MIGRATION_PASSWORD_LOCKOUT,
+            MIGRATION_IMPORT_PROVIDER_POSTGRES,
         ];
         // The array is the apply order; this refuses a gap, a duplicate
         // or an entry out of order at build time (issue #27).
@@ -508,7 +533,16 @@ impl Module for AuthCore {
         clients::router(Arc::clone(&state))
             .merge(sessions::router().with_state(Arc::clone(&state)))
             .merge(authorize::router().with_state(Arc::clone(&state)))
+            .merge(import::router(Arc::clone(&state)))
             .merge(token_endpoint::router().with_state(state))
+    }
+
+    /// An import carries up to a thousand users, so this module raises
+    /// core's 64 KiB `/v1/*` cap for it (issue #440). The import route's
+    /// own `DefaultBodyLimit` is the precise per-route enforcer; this is
+    /// the ceiling a runtime refuses at before buffering.
+    fn max_body_bytes(&self, _cfg: &dyn Config) -> usize {
+        import::MAX_IMPORT_BYTES
     }
 
     fn well_known(&self) -> Option<axum::Router> {
@@ -582,7 +616,7 @@ mod tests {
     #[test]
     fn migrations_are_the_embedded_set_in_order() {
         let migrations = AuthCore::new().migrations();
-        assert_eq!(migrations.sqlite.len(), 6);
+        assert_eq!(migrations.sqlite.len(), 7);
         assert_eq!(migrations.sqlite[0].id, "0001");
         assert_eq!(migrations.sqlite[0].name, "init");
         assert_eq!(migrations.sqlite[1].id, "0002");
@@ -595,10 +629,12 @@ mod tests {
         assert_eq!(migrations.sqlite[4].name, "deletion_jobs");
         assert_eq!(migrations.sqlite[5].id, "0006");
         assert_eq!(migrations.sqlite[5].name, "password_lockout");
+        assert_eq!(migrations.sqlite[6].id, "0007");
+        assert_eq!(migrations.sqlite[6].name, "import_provider");
         // The Postgres set is selected wholesale (harness issue #18), so it
-        // must mirror the sqlite one id-for-id: only the two files whose SQL
-        // truly differs carry BYTEA overrides, the rest are the same const.
-        assert_eq!(migrations.postgres.len(), 6);
+        // must mirror the sqlite one id-for-id: only the files whose SQL
+        // truly differs carry an override, the rest are the same const.
+        assert_eq!(migrations.postgres.len(), 7);
         for (pg, sqlite) in migrations.postgres.iter().zip(migrations.sqlite) {
             assert_eq!(pg.id, sqlite.id);
             assert_eq!(pg.name, sqlite.name);
@@ -616,6 +652,10 @@ mod tests {
             migrations.postgres[2].sql,
             include_str!("../migrations/postgres/0003_token_issuing.sql")
         );
+        assert_eq!(
+            migrations.postgres[6].sql,
+            include_str!("../migrations/postgres/0007_import_provider.sql")
+        );
         assert_eq!(migrations.postgres[1].sql, migrations.sqlite[1].sql);
         assert_eq!(
             migrations.sqlite[0].sql,
@@ -632,6 +672,10 @@ mod tests {
         assert_eq!(
             migrations.sqlite[4].sql,
             include_str!("../migrations/sqlite/0005_deletion_jobs.sql")
+        );
+        assert_eq!(
+            migrations.sqlite[6].sql,
+            include_str!("../migrations/sqlite/0007_import_provider.sql")
         );
     }
 

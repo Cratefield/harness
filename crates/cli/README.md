@@ -14,6 +14,7 @@
 
 The venture CLI: `fz migrations collect`, `fz migrations apply`, `fz
 data export` / `fz data import`, `fz doctor`, `fz modules`, `fz push`,
+`fz auth import` (issue #650),
 the TypeScript client generator `fz client-ts` (issue #155), and the
 agent-safe manifest workflow — `fz plan`, `fz deploy --plan`, `fz add`,
 `fz init`, `fz verify` (harness #140).
@@ -363,6 +364,37 @@ subscription's path, because a path-bearing `aud` is the commonest cause of
 a VAPID `401`. Catches an endpoint that is not an absolute http(s) URL, a
 `p256dh` that is not a 65-byte uncompressed P-256 point on the curve, and an
 `auth` that is not 16 bytes.
+
+## `fz auth import --target <URL> --admin-token-env <VAR> [--apply] [--merge-by-email] [--report <PATH>] [--batch-size N] <FILE.jsonl>` (issue #650)
+
+Loads users into a running venture's `auth-core` module over its admin API:
+one JSON object per line — `external_provider`, `external_id`, `email`,
+`email_verified`, and optionally `password_hash`, `created_at`, `locale` —
+blank lines skipped. The objects are passed through unchanged and sent to
+`POST <target>/v1/auth-core/admin/users/import` in batches of `--batch-size`
+(default 500, max 1000), behind `Authorization: Bearer <ADMIN_TOKEN>`: the
+token is read from the environment variable `--admin-token-env` names, never
+printed, and never a flag.
+
+A **dry run by default**: the server validates every user and reports a
+verdict without writing, and only `--apply` writes. A line that is not a JSON
+object, or that misses a required field, and a duplicate
+`(external_provider, external_id)` in the file are local errors reported with
+their line number — the command aborts before sending anything.
+
+It writes a report JSONL (default `<FILE>.report.jsonl`, or `--report`) with
+one `{"external_provider","external_id","status","sub","reason"}` line per
+user — never an email or a password hash — and prints a count per status. A
+batch that cannot be sent, or a non-2xx reply, exits non-zero; a completed run
+that reports `conflict` or `invalid` still exits zero, those being answers to
+act on rather than transport failures.
+
+Like `fz push send`, the network leg is behind an opt-in feature — a
+send-capable `fz` is installed with `cargo install cratefield-cli --features
+auth-import` — and without it the command says exactly that, because the
+default `fz` graph carries no HTTP client and the feature pulls
+`cratefield-runtime-native`, which `compile_error!`s on wasm32. `fz auth
+import` needs no compiled-in harness, so the standalone `fz` runs it.
 
 ## `fz build-key <manifest> [--catalog PATH]` (issue #59)
 

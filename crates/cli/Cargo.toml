@@ -65,6 +65,12 @@ postgres = ["dep:cratefield-adapter-postgres", "dep:tokio", "dep:cratefield-intr
 # Revisit it if a second consumer wants the same thing, which is when the
 # split stops being a change made for one caller.
 push-send = ["dep:cratefield-runtime-native", "dep:tokio"]
+# `fz auth import`'s network leg (issue #650): the same native runtime
+# client `push-send` reaches, for the same reason — the default `fz` graph
+# carries no HTTP client, and `cratefield-runtime-native` `compile_error!`s
+# on wasm32, so a venture must never turn this on. Without it the command
+# says exactly what to rebuild (the `push-send` rule above, issue #191).
+auth-import = ["dep:cratefield-runtime-native", "dep:tokio"]
 
 [dependencies]
 cratefield-core = { workspace = true }
@@ -107,6 +113,12 @@ toml = { workspace = true }
 sha2 = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+# `fz auth import` builds its request (`http::Request<Bytes>`) directly
+# against the `HttpClient` port's own types, the same vocabulary the
+# adapters and `fz push` speak. Pure types, no client: the network leg
+# stays behind `auth-import`.
+http = { workspace = true }
+bytes = { workspace = true }
 tracing = { workspace = true }
 pollster = { workspace = true }
 sea-query = { workspace = true }

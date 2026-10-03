@@ -403,6 +403,17 @@ argon2 = { version = "0.6.0", default-features = false, features = [
 
 base64ct = { version = "1.8.3", default-features = false, features = ["alloc"] }
 
+# Legacy password verification (issue #650): the hashes this service used to
+# write before argon2id. `verify` is behind `alloc`, and `alloc` is the only
+# feature that carries it — `std` and `zeroize` stay off so the wasm bundle
+# does not grow for a path that never hashes, only checks. `alloc` also
+# enables bcrypt's optional `getrandom`, which nothing on this path calls but
+# the crate does not unbundle; the workspace's own `wasm_js` pin supplies its
+# backend on wasm32.
+bcrypt = { version = "0.19.3", default-features = false, features = [
+    "alloc",
+] }
+
 [workspace.lints.rust]
 unsafe_code = "forbid"
 # A `pub` item in a private module can be named by nobody: it reads as API

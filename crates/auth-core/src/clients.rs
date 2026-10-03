@@ -32,7 +32,7 @@ const MAX_REDIRECT_URI_BYTES: usize = 2048;
 /// The harness `admin_auth` layer: `Authorization: Bearer <ADMIN_TOKEN>`
 /// is checked before any body parsing, so an unauthenticated request
 /// can never reach a handler — not even to be told its body was invalid.
-async fn admin_guard(
+pub(crate) async fn admin_guard(
     State(state): State<Arc<ModuleState>>,
     request: Request,
     next: Next,
@@ -59,7 +59,7 @@ pub(crate) fn router(state: Arc<ModuleState>) -> axum::Router {
         ))
         .with_state(state)
 }
-fn now_iso(clock: &dyn Clock) -> String {
+pub(crate) fn now_iso(clock: &dyn Clock) -> String {
     clock
         .now()
         .replace_nanosecond(0)
