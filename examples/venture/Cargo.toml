@@ -42,6 +42,9 @@ cratefield = { path = "../../crates/facade", version = "0.2", features = [
     # and the `wrangler dev` smoke should cover: the module boots, its
     # migrations apply, and it says so rather than pretending.
     "notifications",
+    # The organizations module (issue #652): mounted below with a staff
+    # organization and a guarded admin route, through `cratefield::orgs`.
+    "orgs",
 ] }
 async-trait = { workspace = true }
 # The `#[durable_object]` macro expands to a `wasm_bindgen` export, so the
@@ -65,6 +68,13 @@ time = { workspace = true }
 # `Stream`, so the example names the hash and the trait directly.
 sha2 = { workspace = true }
 futures-core = { workspace = true }
+
+[dev-dependencies]
+# The admin-route test (`tests/admin_route.rs`) drives the router over the
+# kit's fake ports and runs every dialect the environment offers: SQLite
+# always, Postgres when `FZ_TEST_POSTGRES_URL` is set.
+cratefield-testing = { workspace = true, features = ["postgres"] }
+pollster = { workspace = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 getrandom = { workspace = true }

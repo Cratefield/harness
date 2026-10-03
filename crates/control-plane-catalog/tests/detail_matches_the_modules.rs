@@ -32,6 +32,10 @@ fn pairs() -> Vec<(CatalogModule, Box<dyn Module>)> {
         // Only the module's metadata is read here (ports, tables, surface),
         // so the composition a venture would wire is not needed.
         Box::new(cratefield_module_device_auth::DeviceAuth::new()),
+        // `Orgs` has no `new()`: the module is composed through its builder,
+        // so its defaults stand in for the metadata (ports, tables, surface),
+        // which do not depend on the settings.
+        Box::new(cratefield_module_orgs::Orgs::default()),
     ];
     let catalog = curated();
     assert_eq!(

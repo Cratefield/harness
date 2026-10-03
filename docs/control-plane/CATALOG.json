@@ -516,6 +516,106 @@
         ],
         "surface": "The approval page at /v1/device-auth: a code form for a visitor, and the decision page showing the requesting device to a signed-in person."
       }
+    },
+    {
+      "slug": "orgs",
+      "name": "Organizations",
+      "summary": "Organizations, memberships, roles and email invitations: a person creates an organization and is its owner, invites people by address, and everyone who belongs holds a role the venture configured.",
+      "tier": "optional",
+      "depends_on": [],
+      "releases": [
+        {
+          "version": "0.1.0",
+          "digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+          "review": {
+            "approved": {
+              "reviewer": "release-review",
+              "reviewed_at": "2026-09-01T00:00:00Z"
+            }
+          }
+        }
+      ],
+      "detail": {
+        "what_it_is": "Organizations, memberships, roles and email invitations. A person creates an organization and is its owner, invites people by address, and everyone who belongs holds a role the venture configured. An organization always keeps at least one owner, an invitation stores only the SHA-256 of its token and of the invitee's address, and a caller who is not a member gets the same answer as one asking about an organization that does not exist — so organizations cannot be enumerated.",
+        "crate_name": "cratefield-module-orgs",
+        "needs": [
+          "Database",
+          "Auth"
+        ],
+        "optional": [
+          "Clock",
+          "IdGen",
+          "Mailer"
+        ],
+        "tables": [
+          "orgs",
+          "org_members",
+          "org_invitations"
+        ],
+        "routes": [
+          {
+            "method": "POST",
+            "path": "/v1/orgs/",
+            "note": "Create an organization; the caller becomes its owner."
+          },
+          {
+            "method": "GET",
+            "path": "/v1/orgs/",
+            "note": "List the organizations the caller is a member of."
+          },
+          {
+            "method": "GET",
+            "path": "/v1/orgs/{org_id}",
+            "note": "One organization the caller is a member of."
+          },
+          {
+            "method": "GET",
+            "path": "/v1/orgs/{org_id}/members",
+            "note": "List an organization's members."
+          },
+          {
+            "method": "POST",
+            "path": "/v1/orgs/{org_id}/members",
+            "note": "Add a member directly by subject."
+          },
+          {
+            "method": "GET",
+            "path": "/v1/orgs/{org_id}/members/me",
+            "note": "The caller's own membership and role."
+          },
+          {
+            "method": "PATCH",
+            "path": "/v1/orgs/{org_id}/members/{sub}",
+            "note": "Change a member's role; only an owner may grant or change the owner role."
+          },
+          {
+            "method": "DELETE",
+            "path": "/v1/orgs/{org_id}/members/{sub}",
+            "note": "Remove a member; the last owner cannot be removed."
+          },
+          {
+            "method": "POST",
+            "path": "/v1/orgs/{org_id}/leave",
+            "note": "Leave an organization; the last owner cannot leave."
+          },
+          {
+            "method": "POST",
+            "path": "/v1/orgs/{org_id}/invitations",
+            "note": "Invite somebody by email address."
+          },
+          {
+            "method": "POST",
+            "path": "/v1/orgs/invitations/accept",
+            "note": "Accept an invitation with the token that was mailed."
+          },
+          {
+            "method": "GET",
+            "path": "/v1/orgs/admin/orgs",
+            "note": "Admin token, or a member of the staff organization: every organization."
+          }
+        ],
+        "surface": "Every route as a declared JSON action — organizations, memberships, roles and invitations — with no HTML page of its own; the admin listing is the one action gated on the admin token or a staff-organization member."
+      }
     }
   ]
 }

@@ -672,6 +672,7 @@ dependencies = [
  "cratefield-module-device-auth",
  "cratefield-module-email-signup",
  "cratefield-module-notifications",
+ "cratefield-module-orgs",
  "cratefield-module-privacy",
  "cratefield-module-telemetry",
  "cratefield-module-waitlist",
@@ -1132,6 +1133,7 @@ dependencies = [
  "cratefield-module-device-auth",
  "cratefield-module-email-signup",
  "cratefield-module-notifications",
+ "cratefield-module-orgs",
  "cratefield-module-privacy",
  "cratefield-module-telemetry",
  "cratefield-module-waitlist",
@@ -1628,6 +1630,29 @@ dependencies = [
  "tower",
  "tracing",
  "ulid",
+]
+
+[[package]]
+name = "cratefield-module-orgs"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "axum",
+ "cratefield-core",
+ "cratefield-module-privacy",
+ "cratefield-testing",
+ "hex",
+ "http",
+ "pollster",
+ "schemars 1.2.2",
+ "sea-query",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "thiserror 2.0.20",
+ "time",
+ "tower",
+ "tracing",
 ]
 
 [[package]]
@@ -5731,9 +5756,11 @@ dependencies = [
  "axum",
  "bytes",
  "cratefield",
+ "cratefield-testing",
  "futures-core",
  "getrandom 0.4.3",
  "http",
+ "pollster",
  "schemars 1.2.2",
  "sea-query",
  "serde",
