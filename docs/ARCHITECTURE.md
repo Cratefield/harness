@@ -240,6 +240,48 @@ ergonomic for trait objects.
 - Admin endpoints (`/v1/<module>/admin/*`) require `Authorization: Bearer <ADMIN_TOKEN>` and are disabled when the token is unset.
 - Sidecar modules (ADR 0009) are mounted from `HARNESS_SIDECARS`, a JSON object of `{"<module name>": "<service binding>"}` read from configuration, never from the composition, so the same artifact serves ventures with and without them. A mount whose name collides with an in-process module is ignored and logged; the in-process module keeps its prefix. A mount with no dispatcher, no binding or no answer returns `503 sidecar-unavailable` on **that prefix only**, and a sidecar answering a different `HARNESS_API` returns `503 sidecar-contract-mismatch`. The contract is checked per response, not at cold start (issue #61): an isolate can outlive a sidecar redeploy for hours, so a cached cold-start verdict would keep serving a contract that no longer holds, and Workers forbid the global-scope I/O a true cold-start probe would need. Instead every harness response is stamped with `x-harness-api` (and `x-harness-module` when the deployment serves exactly one module — the sidecar shape), and the host reads the stamp back on every forwarded response, refusing the prefix on a wrong number. The stamp costs one header insert and catches a redeploy within one request; no `/__harness` identity endpoint exists and none is needed. The mount is a trust boundary (issue #131, ADR 0009 amendment): the forwarded request carries an allowlist — `content-type`, `content-length`, `accept`, `accept-language`, `user-agent`, the host's `x-request-id`, a `cf-connecting-ip` the host resolved itself, and a short-lived `x-harness-gateway` token when `SIDECAR_GATEWAY_SECRET` is configured; `authorization` and `cookie` never cross, and a response returns through an allowlist that drops `set-cookie`. Admin paths under a mount are authorized by the host before forwarding. Forwarded writes pass the host's rate limiter and fail closed. A sidecar that sets `SIDECAR_REQUIRE_GATEWAY` answers `401 sidecar-unauthorized` for `/v1/*` and `/__surface` requests whose token it cannot verify, and fails closed (`503`) if the secret is missing. A truthy `HARNESS_ONE_WORKER` with a non-empty mount table is rejected where the table is read.
 
+### Bodies and memory
+
+Bodies are **buffered by default**, in both directions. A buffered request body
+is capped at 64 KiB (`MAX_BODY_BYTES`), raised per module by
+`Module::max_body_bytes` and enforced by axum's `DefaultBodyLimit` once resident;
+a declared `content-length` over it is refused **before any byte is read** — the
+`413 request-too-large` pre-check of issue #440. A buffered response is read into
+the Workers runtime's 1 MiB response buffer (a const private to
+`cratefield-runtime-cloudflare`) before it becomes a Worker `Response`. That
+default lets a route answer problem+json before doing any work, but nothing it
+carries may be larger than memory.
+
+A Workers isolate has **128 MB**, so a body that fits in neither direction
+cannot ride that path. A module opts a route out by naming it in
+`Module::streaming_routes()` — one `StreamRoute` per route (a `const`
+`post`/`put`/`get`) with its own `max_bytes` ceiling. There the handler extracts
+a `RequestStream` and reads it chunk by chunk, and the route's ceiling replaces
+`Module::max_body_bytes` **for that route only**. The declaration governs the
+**request** body and its ceiling; a `ResponseStream` is honoured on **any**
+route, declared or not, because the marker rides on the response. A `HEAD` to a
+streaming `GET` route answers headers only, with no body read.
+
+Each runtime carries the stream its own way. On Workers, `serve()` does not read
+a declared route's body: it hands the router an empty body plus a `RequestStream`
+over the worker-native `Request::stream()`, carried in the request's extensions
+(bridging a `worker::Body` through axum hangs the isolate), and
+`response_to_worker` builds the Worker `Response` from the `ResponseStream` with
+`Response::from_stream` instead of the 1 MiB buffer. On native and in the test
+kit, core's own request layer converts the buffered hyper/axum body into a
+`RequestStream`. Either way the request still passes **through** the router, so
+the request id, CORS, security headers, the rate limiter and `RoutePolicy` all
+apply — unlike the `Realtime` route ([REALTIME.md](REALTIME.md)), which bypasses
+it.
+
+Mid-stream, a chunk that crosses the ceiling is refused the moment it arrives
+(the stream fuses); a declared over-ceiling `content-length` is the same `413
+request-too-large`, answered before the handler. Cloudflare itself caps the
+request before it reaches the Worker: **100 MB on Free and Pro; 200 MB Business,
+500 MB Enterprise** by default. A body over the account's limit cannot be
+streamed at any ceiling — it must be uploaded in parts (multipart objects, issue
+#586, not yet available).
+
 ### Email signup module
 
 | Route | Behaviour |

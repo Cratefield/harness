@@ -51,6 +51,17 @@ human-readable page at each `<public_url>/problems/<slug>`.
 | `changelog-source-not-found` | 404 | No such source | `cratefield-module-changelog` | The configured repository has no releases, or does not exist. Check CHANGELOG_REPO. |
 | `changelog-upstream` | 502 | The source could not be fetched | `cratefield-module-changelog` | The upstream source failed; nothing stored was changed. The detail carries what upstream answered. |
 | `composite-key` | 400 | A composite key does not fit in one path segment | `cratefield-tables-api` | The table's primary key is more than one column, so `/{table}/{key}` cannot name a row; name the key in the query at `/{table}/__by?<column>=<value>` instead. |
+| `connections-bad-state` | 400 | That connection link is no longer valid | `cratefield-module-connections` | The connect state was never issued, has already been used, or has expired. Start the connection again. |
+| `connections-not-found` | 404 | No such connection | `cratefield-module-connections` | No connection the venture holds has that id. |
+| `connections-oauth-denied` | 400 | The provider did not grant access | `cratefield-module-connections` | The provider sent the browser back with an error instead of a code, so no connection was stored. |
+| `connections-reconnect-required` | 409 | This connection needs to be reconnected | `cratefield-module-connections` | The provider rejected the stored refresh token, so the person must authorize the connection again before an access token can be issued. |
+| `connections-revoked` | 409 | This connection was revoked | `cratefield-module-connections` | The connection was revoked and its tokens were cleared, so there is nothing left to use or refresh. |
+| `connections-unknown-provider` | 404 | Unknown provider | `cratefield-module-connections` | The callback names a provider key the venture has not configured, so there is no client to exchange the code with. |
+| `connections-upstream` | 502 | The provider could not complete the connection | `cratefield-module-connections` | Talking to the provider's token endpoint failed, or it answered with a body that is not a token response. |
+| `device-auth/approver-required` | 401 | Sign in to approve a device | `cratefield-module-device-auth` | The device page is served only to a signed-in person; no subject was identified. |
+| `device-auth/cross-site-request` | 403 | A same-origin request is required | `cratefield-module-device-auth` | The approval form accepts only a request a browser reports as coming from this venture's own origin. |
+| `device-auth/too-many-attempts` | 429 | Too many attempts | `cratefield-module-device-auth` | One approver has entered wrong user codes more often than the configured allowance. |
+| `device-auth/unknown-user-code` | 404 | Unknown or expired code | `cratefield-module-device-auth` | No pending, unexpired device request carries that user code. |
 | `device-rehome-limit` | 429 | Too many devices taken over | `cratefield-module-notifications` | This account has claimed too many devices that belonged to other accounts. |
 | `internal` | 500 | Internal error | `cratefield-core` | Unhandled error; no internals are exposed in the body. |
 | `invalid-token` | 400 | Invalid or expired token | `cratefield-core` | A signed link or token is malformed, tampered with, or expired. |
@@ -87,6 +98,7 @@ human-readable page at each `<public_url>/problems/<slug>`.
 | `unknown-category` | 400 | Unknown notification category | `cratefield-module-notifications` | The named category is not declared by this venture. |
 | `unknown-product` | 400 | Unknown product | `cratefield-core` | The named product is not on this waitlist. |
 | `unknown-tenant` | 404 | Unknown tenant | `cratefield-core` | The request's host resolves to no tenant in the registry. |
+| `usage/allowance-exhausted` | 429 | Usage allowance exhausted | `cratefield-core` | The subject's metered allowance is spent for the current period; retry after the period resets. |
 | `validation-failed` | 400 | Request validation failed | `cratefield-core` | The request body or query did not deserialize into a valid request. |
 | `verifier-unavailable` | 503 | Cannot check the credential | `cratefield-tables-api` | The service that verifies credentials could not answer. Try again shortly. |
 | `webhook-unverified` | 401 | Unverified webhook delivery | `cratefield-module-notifications` | The delivery did not carry a signature this deployment could verify. |

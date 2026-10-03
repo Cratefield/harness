@@ -60,6 +60,9 @@ pub use cratefield_adapter_fcm as fcm;
 #[cfg(feature = "push-auth")]
 pub use cratefield_push_auth as push_auth;
 
+#[cfg(feature = "github-app")]
+pub use cratefield_adapter_github_app as github_app;
+
 #[cfg(feature = "push-wiring")]
 pub use cratefield_push_wiring as push_wiring;
 
@@ -148,6 +151,12 @@ pub use cratefield_module_telemetry as telemetry;
 
 #[cfg(feature = "webhooks")]
 pub use cratefield_module_webhooks as webhooks;
+
+#[cfg(feature = "device-auth")]
+pub use cratefield_module_device_auth as device_auth;
+
+#[cfg(feature = "connections")]
+pub use cratefield_module_connections as connections;
 
 #[cfg(feature = "testing")]
 pub use cratefield_testing as testing;

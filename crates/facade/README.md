@@ -53,6 +53,7 @@ also switch on the extra features noted in their rows:
 | `fcm` | `cratefield-adapter-fcm` | `cratefield::fcm` | `Push` over Firebase Cloud Messaging (HTTP v1) |
 | `webpush` | `cratefield-adapter-webpush` | `cratefield::webpush` | `Push` over Web Push (RFC 8030), browsers and UnifiedPush |
 | `push-auth` | `cratefield-push-auth` | `cratefield::push_auth` | Provider-JWT signing for the push adapters (ES256 for APNs and VAPID, RS256 for Google service accounts) with a keyed token cache. Pulled in by `apns`, `fcm` and `webpush` already; a feature of its own for using it directly |
+| `github-app` | `cratefield-adapter-github-app` | `cratefield::github_app` | GitHub App auth: the RS256 app JWT, installation tokens (cached, single-flight, one re-mint on `401`) and the user-to-server OAuth code exchange, over the `HttpClient` and `Clock` ports. Builds on `push-auth`'s signer and token cache |
 | `push-wiring` | `cratefield-push-wiring` | `cratefield::push_wiring` | Assembles the `Push` port from the environment, with the one table of variable names that `serve()`, `fz push` and `fz doctor` share. Pulls all three push adapters, and also turns on `push` in whichever runtime is enabled, for `push_from_env()` |
 | `github-issues` | `cratefield-adapter-github-issues` | `cratefield::github_issues` | `Tracker` over the GitHub Issues REST API |
 | `webhook-tracker` | `cratefield-adapter-webhook-tracker` | `cratefield::webhook_tracker` | `Tracker` over an HMAC-signed webhook the tenant configures |
@@ -77,6 +78,8 @@ also switch on the extra features noted in their rows:
 | `notifications` | `cratefield-module-notifications` | `cratefield::notifications` | Push subscriptions, per-account per-category preferences, fan-out, prune and retry. Also turns on `i18n` |
 | `telemetry` | `cratefield-module-telemetry` | `cratefield::telemetry` | Aggregate usage counts from clients, consent-first, in the venture's own database |
 | `webhooks` | `cratefield-module-webhooks` | `cratefield::webhooks` | Outbound webhooks: per-subject signed POSTs over the core outbox, with dead letters and replay |
+| `device-auth` | `cratefield-module-device-auth` | `cratefield::device_auth` | The OAuth 2.0 device authorization grant (RFC 8628): a client with no browser shows a code, a signed-in person approves it, and the venture's issuer mints the credential |
+| `connections` | `cratefield-module-connections` | `cratefield::connections` | Per-subject third-party OAuth connections: authorize, sealed access and refresh tokens, guarded refresh, revoke, over the `HttpClient` port |
 | `testing` | `cratefield-testing` | `cratefield::testing` | The conformance kit; belongs under `[dev-dependencies]` |
 
 The third classifier adapter, `cratefield-adapter-workers-ai`, has no

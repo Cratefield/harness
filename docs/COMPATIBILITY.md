@@ -41,6 +41,7 @@ compatibility-doc` and checked in CI for drift. Do not edit by hand.
 | `cratefield-adapter-classifier-llm` | 0.2.0 | 1 | `^0.6` — `>=0.6.0, <0.7.0` |
 | `cratefield-adapter-cloudflare-saas` | 0.1.0 | 1 | `^0.6` — `>=0.6.0, <0.7.0` |
 | `cratefield-adapter-fcm` | 0.2.0 | 1 | `^0.6` — `>=0.6.0, <0.7.0` |
+| `cratefield-adapter-github-app` | 0.1.0 | 1 | `^0.6` — `>=0.6.0, <0.7.0` |
 | `cratefield-adapter-github-issues` | 0.2.0 | 1 | `^0.6` — `>=0.6.0, <0.7.0` |
 | `cratefield-adapter-jira` | 0.1.0 | 1 | `^0.6` — `>=0.6.0, <0.7.0` |
 | `cratefield-adapter-openai-compatible` | 0.1.0 | 1 | `^0.6` — `>=0.6.0, <0.7.0` |
@@ -67,6 +68,8 @@ compatibility-doc` and checked in CI for drift. Do not edit by hand.
 | `cratefield-introspect` | 0.2.0 | 1 | `^0.6` — `>=0.6.0, <0.7.0` |
 | `cratefield-module-changelog` | 0.2.0 | 1 | `^0.6` — `>=0.6.0, <0.7.0` |
 | `cratefield-module-cms` | 0.2.0 | 1 | `^0.6` — `>=0.6.0, <0.7.0` |
+| `cratefield-module-connections` | 0.1.0 | 1 | `^0.6` — `>=0.6.0, <0.7.0` |
+| `cratefield-module-device-auth` | 0.2.0 | 1 | `^0.6` — `>=0.6.0, <0.7.0` |
 | `cratefield-module-email-signup` | 0.2.0 | 1 | `^0.6` — `>=0.6.0, <0.7.0` |
 | `cratefield-module-hello` *(not published)* | 0.1.1 | 1 | `^0.6` — `>=0.6.0, <0.7.0` |
 | `cratefield-module-notifications` | 0.2.0 | 1 | `^0.6` — `>=0.6.0, <0.7.0` |

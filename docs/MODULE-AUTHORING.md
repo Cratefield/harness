@@ -602,12 +602,27 @@ fn signature_verification(&self) -> SignatureVerification {
 ```
 
 and verifies each delivery with `cratefield_core::WebhookVerifier` and the
-provider's scheme (`Svix`, `StripeStyle`, `ProviderScheme`) over the **raw
-body bytes**; production then requires `{MODULE}_WEBHOOK_SECRET` — the boot
-gate refuses without it, `fz doctor` reports `hmac-webhook-secret-missing` —
-instead of any `Payments` port. A `ProviderScheme` with `timestamp: None`
-has no replay protection, so the handler must lean on the Inbox dedup
-ledger. `signature_verification()` is the module **default**; a route can
+provider's scheme (`Svix`, `StripeStyle`, `Github`, `Vercel`,
+`ProviderScheme`) over the **raw body bytes**; production then requires
+`{MODULE}_WEBHOOK_SECRET` — the boot gate refuses without it, `fz doctor`
+reports `hmac-webhook-secret-missing` — instead of any `Payments` port.
+`Vercel` signs with HMAC-**SHA1**, and that is acceptable here because the
+construction is a *MAC*: an HMAC's security rests on the secret key and the
+hash's PRF behaviour, not on SHA-1's collision resistance, so SHA-1's
+collisions are no attack on it. (It is never used as a collision-sensitive
+hash.) A provider that sends the secret itself rather than a signature uses
+`SharedTokenScheme { header }`, or the named `Gitlab` (header
+`X-Gitlab-Token`); a token scheme ignores the body entirely. Neither
+`Vercel` nor the token schemes sign a timestamp, and a `ProviderScheme`
+with `timestamp: None` covers none either — so none of them stops a replay
+on its own: the handler must claim each delivery's event id through the
+`Inbox` dedup ledger (`cratefield_core::Inbox`). GitHub deliveries have a
+named scheme for this: `Github` (`cratefield_core::Github`) is
+`X-Hub-Signature-256`, `sha256=` prefix, hex, and no timestamp — GitHub
+signs the raw body alone — so replay protection is the `X-GitHub-Delivery`
+id claimed through `Inbox` (`crates/core/src/idempotency.rs`), exactly as
+for any `timestamp: None` scheme. `signature_verification()` is the module
+**default**; a route can
 override it with `.verification(..)` (issue #595), so one billing module
 verifies Stripe through `Payments` and RevenueCat with its own secret —
 both provers are demanded, each failure naming the mounted route it
@@ -650,6 +665,106 @@ into the same `check_rate_limit` loop as the `ip:`/`email:` keys, so a
 `D1RateLimiter` policy can give each key its own budget. This is auth,
 not routing: [TENANT-ROUTING.md](TENANT-ROUTING.md) §3 rejected API
 keys for host→tenant selection, and that rejection stands.
+
+### Streaming a body
+
+A route that must carry a body larger than memory — or answer with one — opts
+out of buffering by naming itself in `Module::streaming_routes()`: one
+`StreamRoute` per route (a `const` `post`/`put`/`get`), a path relative to the
+module's `/v1/<name>` mount, and the **route's own ceiling** in bytes.
+
+```rust
+use cratefield_core::{Json, Module, Problem, RequestStream, ResponseStream, StreamRoute};
+
+const STREAMING: &[StreamRoute] = &[
+    StreamRoute::post("/upload", 32 * 1024 * 1024), // 32 MiB in
+    StreamRoute::get("/download", 2 * 1024 * 1024), // streamed out, no body
+];
+
+impl Module for Files {
+    fn streaming_routes(&self) -> &'static [StreamRoute] { STREAMING }
+    // ... name(), router(), the rest of the impl ...
+}
+```
+
+The handler extracts a `RequestStream` and reads it with `next_chunk()`. A
+`StreamError` converts into a `Problem` (`TooLarge` → `413 request-too-large`, a
+transport error → `500 internal`), so `?` is the whole story; nothing is stored
+until the stream ends, so a body refused mid-way leaves no side effect:
+
+```rust
+async fn upload(
+    State(state): State<Arc<ModuleState>>,
+    mut body: RequestStream,
+) -> Result<Json<Value>, Problem> {
+    let mut total = 0usize;
+    while let Some(chunk) = body.next_chunk().await {
+        total += chunk.map_err(Problem::from)?.len();
+    }
+    state.store.record(total).await?; // act only now, past the ceiling
+    Ok(Json(json!({ "bytes": total })))
+}
+```
+
+A handler streams its answer the same way, over an owned `'static` source (it
+outlives the handler's stack, so it cannot borrow request state). The
+declaration governs the **request** body and its ceiling: a `ResponseStream` is
+honoured on **any** route, declared or not (the marker rides on the response),
+and a `HEAD` to a streaming `GET` route answers headers only, with no body read:
+
+```rust
+async fn download(State(state): State<Arc<ModuleState>>) -> ResponseStream {
+    // `pending_chunks()` returns an owned `Stream<Item = Result<Vec<u8>, _>>`.
+    ResponseStream::new(state.pending_chunks())
+}
+```
+
+What changes on a streaming route, and what does not:
+
+- **The per-route ceiling replaces `max_body_bytes` for that route only** — it
+  may go above or below a buffered route's, and method and path match exactly
+  (`{param}`/`{*rest}` included), so one declaration never widens another.
+- **The ceiling is enforced the moment it is crossed**: a chunk that would pass
+  it is refused and the stream fuses, and a declared `content-length` over it is
+  a `413` before the handler runs. Do side effects **only after** the stream
+  completes, or make them undoable.
+- **The stream is `'static` and owned** — `RequestStream::new` and
+  `ResponseStream::new` take `Send + 'static` sources.
+- **`RequestStream` on an undeclared route is a `500`** — a missing declaration
+  in your module, never a client fault; a `Json`/`Form` extractor on a streaming
+  route sees an empty body instead.
+- **Everything else still applies**: request id, CORS, security headers,
+  `RoutePolicy`, captcha and the rate limiter all run, so a guard refuses before
+  a byte is read, and a streamed response has no ceiling of its own.
+- **Cloudflare caps the request before it reaches the Worker**: the plan limit
+  (**100 MB Free/Pro; 200 MB Business, 500 MB Enterprise** by default) is
+  enforced at the edge, so a body over it must be uploaded in parts (multipart
+  objects — issue #586, not yet available). Your ceiling is yours; the plan
+  limit is the account's.
+
+Test with the kit (step 8): `request` for a small body (it carries a
+`content-length`, so the declared-length pre-check fires) and `request_chunks`
+for a chunked body with **no** `content-length` — the only shape that exercises
+the mid-stream ceiling. `bytes` is a dev-dependency for the chunks:
+
+```rust
+use cratefield_testing::{request, request_chunks};
+use bytes::Bytes;
+use http::{Method, StatusCode};
+
+// A small body with a content-length: the declared-length pre-check fires.
+let res = request(&kit.router, Method::POST, "/v1/files/upload", Some(r#"{"name":"x"}"#)).await;
+assert_eq!(res.status, StatusCode::OK);
+
+// 1 MiB, chunked: a buffered route would refuse it; the streaming route
+// accepts it. A chunk crossing the ceiling answers 413 instead.
+let res = request_chunks(&kit.router, Method::POST, "/v1/files/upload",
+    vec![Bytes::from(vec![0u8; 1 << 20])]).await;
+assert_eq!(res.status, StatusCode::OK);
+```
+
+A streaming route keeps the request id, its CORS headers and any guard, exactly
+as a buffered one does — assert those too.
 
 ## Step 5 — Config keys
 

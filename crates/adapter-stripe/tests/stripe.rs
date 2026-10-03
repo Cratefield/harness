@@ -11,6 +11,7 @@ use cratefield_adapter_stripe::Stripe;
 use cratefield_core::{
     CheckoutRequest, Clock, ConnectAccountLinkRequest, HttpClient, HttpError, LineItem, Money,
     Payments, PaymentsError, RefundRequest, SubscriptionCheckoutRequest, TransferCharge,
+    UsageReport,
 };
 use hmac::{Hmac, KeyInit, Mac};
 use sha2::Sha256;
@@ -288,6 +289,142 @@ fn not_configured_never_calls_the_network() {
     }))
     .unwrap_err();
     assert!(matches!(err, PaymentsError::NotConfigured));
+}
+
+// ---------------------------------------------------------------------------
+// Metered usage reporting
+
+/// A realistic `billing.meter_event` response body (the fields Stripe
+/// documents); the success path does not read it, but the fixture keeps the
+/// exchange honest.
+const METER_EVENT_BODY: &str = r#"{"object":"billing.meter_event","created":1704824589,"event_name":"extra_avatar_minutes","identifier":"sub_1:extra_avatar_minutes:1711998000","livemode":false,"payload":{"value":"3","stripe_customer_id":"cus_NciAYcXfLnqBoz"},"timestamp":1711998000}"#;
+
+/// One hourly report, at a non-aligned instant so the truncation is exercised.
+fn usage_report() -> UsageReport {
+    UsageReport::hourly(
+        "sub_1",
+        "extra_avatar_minutes",
+        "cus_NciAYcXfLnqBoz",
+        3,
+        time::OffsetDateTime::from_unix_timestamp(1_712_000_000).unwrap(),
+    )
+}
+
+#[test]
+fn report_usage_posts_the_documented_meter_event_form() {
+    let http = ScriptedHttp::ok(METER_EVENT_BODY);
+    let s = stripe(http.clone());
+    let report = usage_report();
+    let reported = pollster::block_on(s.report_usage(&report)).unwrap();
+
+    assert!(!reported.already_reported);
+    assert_eq!(reported.identifier, report.identifier);
+
+    assert!(http.last_uri().ends_with("/v1/billing/meter_events"));
+    // The identifier doubles as the Idempotency-Key, unencoded (a header).
+    assert_eq!(http.last_header("Idempotency-Key"), report.identifier);
+    assert_eq!(http.last_header("authorization"), "Bearer sk_test_x");
+
+    let body = http.last_body();
+    assert!(body.contains("event_name=extra_avatar_minutes"));
+    assert!(body.contains("payload%5Bstripe_customer_id%5D=cus_NciAYcXfLnqBoz"));
+    assert!(body.contains("payload%5Bvalue%5D=3"));
+    // In a form value the identifier's colons are percent-encoded.
+    let encoded_id = report.identifier.replace(':', "%3A");
+    assert!(body.contains(&format!("identifier={encoded_id}")));
+    assert!(body.contains(&format!("timestamp={}", report.timestamp.unix_timestamp())));
+    // The window is the top of the hour, from the truncation.
+    assert_eq!(report.timestamp.unix_timestamp() % 3600, 0);
+}
+
+#[test]
+fn report_usage_treats_a_duplicate_identifier_as_success() {
+    // The documented `duplicate_meter_event` code, and the message-only body
+    // some Stripe responses carry for the same refusal.
+    for body in [
+        r#"{"error":{"code":"duplicate_meter_event","message":"A meter event with a duplicate identifier has already been submitted."}}"#,
+        r#"{"error":{"message":"A meter event with a duplicate identifier has already been submitted."}}"#,
+    ] {
+        let report = usage_report();
+        let reported =
+            pollster::block_on(stripe(ScriptedHttp::replying(400, body)).report_usage(&report))
+                .unwrap();
+        assert!(reported.already_reported, "a duplicate is success");
+        assert_eq!(reported.identifier, report.identifier);
+    }
+}
+
+#[test]
+fn report_usage_does_not_treat_an_unrelated_400_as_a_duplicate() {
+    // "duplicate" without "identifier" is some other complaint: it must stay
+    // a rejection, never a silent success. Same for a message with neither.
+    for message in ["This duplicate request was rejected.", "Something else."] {
+        let body = format!(r#"{{"error":{{"message":"{message}"}}}}"#);
+        let http = ScriptedHttp::replying(400, &body);
+        let err = pollster::block_on(stripe(http).report_usage(&usage_report())).unwrap_err();
+        assert!(
+            matches!(err, PaymentsError::Rejected(_)),
+            "message {message:?}"
+        );
+    }
+}
+
+#[test]
+fn report_usage_maps_a_concurrent_conflict_to_transient() {
+    let http = ScriptedHttp::replying(
+        409,
+        r#"{"error":{"code":"too_many_concurrent_requests","message":"Cannot create multiple usage events for the same customer, meter concurrently."}}"#,
+    );
+    let err = pollster::block_on(stripe(http).report_usage(&usage_report())).unwrap_err();
+    assert!(matches!(err, PaymentsError::Transient(_)));
+}
+
+#[test]
+fn report_usage_maps_an_inactive_meter_to_rejected() {
+    let http = ScriptedHttp::replying(
+        400,
+        r#"{"error":{"code":"no_meter","message":"No meter found for the given event name."}}"#,
+    );
+    let err = pollster::block_on(stripe(http).report_usage(&usage_report())).unwrap_err();
+    assert!(
+        matches!(err, PaymentsError::Rejected(m) if m.contains("no_meter") && m.contains("No meter found")),
+        "Stripe's code and message must both survive"
+    );
+}
+
+#[test]
+fn report_usage_maps_5xx_and_429_to_transient() {
+    for status in [500u16, 429] {
+        let http = ScriptedHttp::replying(status, r#"{"error":{"message":"try later"}}"#);
+        let err = pollster::block_on(stripe(http).report_usage(&usage_report())).unwrap_err();
+        assert!(
+            matches!(err, PaymentsError::Transient(_)),
+            "status {status}"
+        );
+    }
+}
+
+#[test]
+fn report_usage_not_configured_never_calls_the_network() {
+    let err =
+        pollster::block_on(Stripe::not_configured().report_usage(&usage_report())).unwrap_err();
+    assert!(matches!(err, PaymentsError::NotConfigured));
+}
+
+#[test]
+fn report_usage_rejects_an_empty_identifier_without_a_request() {
+    let http = ScriptedHttp::ok(METER_EVENT_BODY);
+    let s = stripe(http.clone());
+    let report = UsageReport {
+        identifier: String::new(),
+        ..usage_report()
+    };
+    let err = pollster::block_on(s.report_usage(&report)).unwrap_err();
+    assert!(matches!(err, PaymentsError::Rejected(_)));
+    assert!(
+        http.bodies().is_empty(),
+        "a malformed report must not reach Stripe"
+    );
 }
 
 // ---------------------------------------------------------------------------

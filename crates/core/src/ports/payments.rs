@@ -22,6 +22,7 @@ use async_trait::async_trait;
 use serde_json::Value;
 use std::collections::BTreeMap;
 use thiserror::Error;
+use time::{OffsetDateTime, UtcOffset};
 
 /// An amount in a currency's minor units (cents), the way Stripe takes and
 /// reports money. `currency` is a lowercase ISO-4217 code (`"usd"`).
@@ -141,6 +142,65 @@ pub struct Refund {
     pub id: String,
 }
 
+/// A metered usage amount to report to the billing provider (Stripe Billing
+/// Meters). `meter_event_name` names a meter the venture configured;
+/// `customer_ref` is the provider customer id the meter maps the event to;
+/// `value` is the amount counted, in the meter's own unit; `identifier` is the
+/// caller-chosen exactly-once key; `timestamp` is when the usage happened.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UsageReport {
+    pub meter_event_name: String,
+    pub customer_ref: String,
+    pub value: u64,
+    pub identifier: String,
+    pub timestamp: OffsetDateTime,
+}
+
+impl UsageReport {
+    /// A report for one **UTC hour**: `timestamp` is the start of the hour
+    /// containing `at`, and `identifier` is
+    /// `{subject}:{meter_event_name}:{start unix seconds}`. Every report for
+    /// the same subject, meter and hour therefore carries the same identifier,
+    /// so a retry, a re-delivery, or a concurrent drainer reports that window
+    /// once. The identifier is only safe when the window's `value` is **final**
+    /// — report a window once it has closed (see `docs/PAYMENTS.md`); two
+    /// reports for the same open hour with different values would collide, and
+    /// the provider would count only the first. The next hour is a new window
+    /// and a new identifier.
+    #[must_use]
+    pub fn hourly(
+        subject: &str,
+        meter_event_name: &str,
+        customer_ref: &str,
+        value: u64,
+        at: OffsetDateTime,
+    ) -> Self {
+        let at = at.to_offset(UtcOffset::UTC);
+        let start = at
+            .replace_minute(0)
+            .and_then(|t| t.replace_second(0))
+            .and_then(|t| t.replace_nanosecond(0))
+            .unwrap_or(at);
+        Self {
+            meter_event_name: meter_event_name.to_owned(),
+            customer_ref: customer_ref.to_owned(),
+            value,
+            identifier: format!("{subject}:{meter_event_name}:{}", start.unix_timestamp()),
+            timestamp: start,
+        }
+    }
+}
+
+/// The outcome of a [`report_usage`](Payments::report_usage): the identifier
+/// that was reported and whether the provider said it had **already** been
+/// reported. A duplicate is success, not failure — the window was counted
+/// exactly once — so a caller completes the work either way.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UsageReported {
+    pub identifier: String,
+    pub already_reported: bool,
+}
+
 /// A webhook event the adapter has **verified** (signature + timestamp) before
 /// returning. `kind` is Stripe's event type (`"checkout.session.completed"`);
 /// `data` is the event's `data.object` for the module to interpret.
@@ -171,6 +231,11 @@ pub enum PaymentsError {
     /// A transient failure (a `5xx`, a transport error): retry later.
     #[error("payments request failed, retryable: {0}")]
     Transient(String),
+    /// This adapter does not implement the operation — e.g. usage reporting
+    /// on an adapter that does not do metered billing. Not retryable: a
+    /// caller that needs it must select an adapter that supports it.
+    #[error("not supported by this payments adapter: {0}")]
+    Unsupported(&'static str),
 }
 
 /// Moves money for a venture. Stripe today; the trait names only Stripe
@@ -211,4 +276,79 @@ pub trait Payments: Send + Sync {
         signature_header: &str,
         body: &[u8],
     ) -> Result<WebhookEvent, PaymentsError>;
+
+    /// Reports a metered usage amount to the billing provider (Stripe Billing
+    /// Meters) **idempotently**: the [`UsageReport::identifier`] makes a
+    /// repeated report a no-op at the provider, so retrying is safe and a
+    /// second report of the same window comes back as
+    /// [`UsageReported::already_reported`] rather than an error.
+    ///
+    /// The default reports [`PaymentsError::Unsupported`], so an adapter that
+    /// does not do metered billing compiles and runs unchanged.
+    async fn report_usage(&self, _report: &UsageReport) -> Result<UsageReported, PaymentsError> {
+        Err(PaymentsError::Unsupported("usage reporting"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use time::format_description::well_known::Rfc3339;
+
+    fn at(text: &str) -> OffsetDateTime {
+        OffsetDateTime::parse(text, &Rfc3339).expect("test instant parses")
+    }
+
+    #[test]
+    fn hourly_identifier_names_the_utc_hour() {
+        let report = UsageReport::hourly(
+            "sub_1",
+            "extra_avatar_minutes",
+            "cus_1",
+            5,
+            at("2026-05-04T13:59:59Z"),
+        );
+        assert_eq!(report.timestamp, at("2026-05-04T13:00:00Z"));
+        assert_eq!(
+            report.identifier,
+            format!(
+                "sub_1:extra_avatar_minutes:{}",
+                report.timestamp.unix_timestamp()
+            )
+        );
+
+        // Any instant in the hour, and any value, name the same window.
+        let same_hour = UsageReport::hourly(
+            "sub_1",
+            "extra_avatar_minutes",
+            "cus_1",
+            9,
+            at("2026-05-04T13:00:01Z"),
+        );
+        assert_eq!(report.identifier, same_hour.identifier);
+        assert_eq!(report.timestamp, same_hour.timestamp);
+
+        // A non-UTC spelling of an instant names the same UTC hour:
+        // 18:45 +05:30 is 13:15 UTC, the same window as 13:59:59Z above.
+        let local = UsageReport::hourly(
+            "sub_1",
+            "extra_avatar_minutes",
+            "cus_1",
+            5,
+            at("2026-05-04T18:45:00+05:30"),
+        );
+        assert_eq!(report.timestamp, local.timestamp);
+        assert_eq!(report.identifier, local.identifier);
+
+        // The next hour is a new window and a new identifier.
+        let next_hour = UsageReport::hourly(
+            "sub_1",
+            "extra_avatar_minutes",
+            "cus_1",
+            5,
+            at("2026-05-04T14:00:00Z"),
+        );
+        assert_ne!(report.identifier, next_hour.identifier);
+        assert_ne!(report.timestamp, next_hour.timestamp);
+    }
 }

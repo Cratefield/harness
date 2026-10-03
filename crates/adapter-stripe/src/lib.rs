@@ -27,7 +27,7 @@ use bytes::Bytes;
 use cratefield_core::{
     Charge, CheckoutRequest, CheckoutSession, Clock, ConnectAccountLink, ConnectAccountLinkRequest,
     HttpClient, Money, Payments, PaymentsError, Refund, RefundRequest, SubscriptionCheckoutRequest,
-    TransferCharge, WebhookEvent,
+    TransferCharge, UsageReport, UsageReported, WebhookEvent,
 };
 use hmac::{Hmac, KeyInit, Mac};
 use http::header::{AUTHORIZATION, CONTENT_TYPE};
@@ -175,6 +175,24 @@ impl Live {
         idempotency_key: &str,
         form: &Form,
     ) -> Result<Value, PaymentsError> {
+        let (status, body) = self.post_raw(path, idempotency_key, form).await?;
+        if status.is_success() {
+            return serde_json::from_slice(&body).map_err(|err| {
+                PaymentsError::Rejected(format!("unparseable Stripe response: {err}"))
+            });
+        }
+        Err(map_error(status, &body))
+    }
+
+    /// The raw `POST` above with no error mapping: the caller inspects the
+    /// status and body itself. Used where a specific non-`2xx` is not an
+    /// error — Stripe's duplicate meter event is a success in disguise.
+    async fn post_raw(
+        &self,
+        path: &str,
+        idempotency_key: &str,
+        form: &Form,
+    ) -> Result<(StatusCode, Bytes), PaymentsError> {
         let url = format!("{}/v1/{path}", self.base_url);
         let request = Request::builder()
             .method("POST")
@@ -192,30 +210,37 @@ impl Live {
             .await
             .map_err(|err| PaymentsError::Transient(err.to_string()))?;
 
-        let status = response.status();
-        let body = response.into_body();
-        if status.is_success() {
-            return serde_json::from_slice(&body).map_err(|err| {
-                PaymentsError::Rejected(format!("unparseable Stripe response: {err}"))
-            });
-        }
-        Err(map_error(status, &body))
+        Ok((response.status(), response.into_body()))
     }
+}
+
+/// Stripe's `error.code` and `error.message` from an error body, either of
+/// which may be absent.
+fn error_fields(body: &[u8]) -> (Option<String>, Option<String>) {
+    let Ok(value) = serde_json::from_slice::<Value>(body) else {
+        return (None, None);
+    };
+    let error = value.get("error");
+    let string = |key: &str| {
+        error
+            .and_then(|error| error.get(key))
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+    };
+    (string("code"), string("message"))
 }
 
 /// Maps a non-2xx Stripe response to a [`PaymentsError`]: `429`/`5xx` are
 /// retryable, everything else is a request that will not succeed unchanged.
+/// The detail carries Stripe's `error.code` and `error.message` when present.
 fn map_error(status: StatusCode, body: &[u8]) -> PaymentsError {
-    let detail = serde_json::from_slice::<Value>(body)
-        .ok()
-        .and_then(|value| {
-            value
-                .get("error")
-                .and_then(|error| error.get("message"))
-                .and_then(Value::as_str)
-                .map(str::to_owned)
-        })
-        .unwrap_or_else(|| status.as_u16().to_string());
+    let (code, message) = error_fields(body);
+    let detail = match (code, message) {
+        (Some(code), Some(message)) => format!("{code}: {message}"),
+        (Some(code), None) => code,
+        (None, Some(message)) => message,
+        (None, None) => status.as_u16().to_string(),
+    };
 
     if status == StatusCode::TOO_MANY_REQUESTS || status.is_server_error() {
         PaymentsError::Transient(format!("stripe {}: {detail}", status.as_u16()))
@@ -436,6 +461,74 @@ impl Payments for Stripe {
                 .cloned()
                 .unwrap_or(Value::Null),
         })
+    }
+
+    async fn report_usage(&self, report: &UsageReport) -> Result<UsageReported, PaymentsError> {
+        let live = self.live()?;
+        // A shape error is the caller's, not Stripe's: reject before any
+        // network call, so a misconfigured tick cannot spray requests.
+        if report.identifier.is_empty()
+            || report.meter_event_name.is_empty()
+            || report.customer_ref.is_empty()
+        {
+            return Err(PaymentsError::Rejected(
+                "usage report needs a non-empty identifier, meter event name and customer"
+                    .to_owned(),
+            ));
+        }
+
+        let mut form = Form::default();
+        form.field("event_name", report.meter_event_name.clone())
+            .field("payload[stripe_customer_id]", report.customer_ref.clone())
+            .field("payload[value]", report.value.to_string())
+            .field("identifier", report.identifier.clone())
+            .field("timestamp", report.timestamp.unix_timestamp().to_string());
+
+        // The identifier is also the Idempotency-Key: an exact retry within
+        // Stripe's 24-hour idempotency window returns the first response.
+        let (status, body) = live
+            .post_raw("billing/meter_events", &report.identifier, &form)
+            .await?;
+
+        if status.is_success() {
+            return Ok(UsageReported {
+                identifier: report.identifier.clone(),
+                already_reported: false,
+            });
+        }
+
+        let (code, message) = error_fields(&body);
+
+        // Stripe documents a duplicate identifier as `400 duplicate_meter_event`
+        // only; `409` is never a duplicate, just a concurrency conflict on the
+        // customer+meter, so a retry is safe rather than dead-lettering.
+        if status == StatusCode::CONFLICT {
+            return Err(PaymentsError::Transient(format!(
+                "stripe 409: {}",
+                message.as_deref().unwrap_or("too many concurrent requests")
+            )));
+        }
+
+        // A duplicate identifier is success, not failure: the window is
+        // already counted. Stripe answers `400 duplicate_meter_event`; when
+        // the body carries no code, fall back to a message that names both a
+        // duplicate and an identifier, so an unrelated `400` never becomes a
+        // silent success.
+        let duplicate = match code.as_deref() {
+            Some(code) => code == "duplicate_meter_event",
+            None => message.as_deref().is_some_and(|message| {
+                let message = message.to_ascii_lowercase();
+                message.contains("duplicate") && message.contains("identifier")
+            }),
+        };
+        if status == StatusCode::BAD_REQUEST && duplicate {
+            return Ok(UsageReported {
+                identifier: report.identifier.clone(),
+                already_reported: true,
+            });
+        }
+
+        Err(map_error(status, &body))
     }
 }
 

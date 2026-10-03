@@ -1,12 +1,12 @@
 //! Sample module for the venture example: one table, one write endpoint,
 //! one read endpoint — the sea-query/D1 round-trip canary (issue #5).
 
-use axum::extract::State;
+use axum::extract::{Query, State};
 use axum::routing::{get, post};
 use cratefield::{
     Action, Audience, Clock, Config, ConfigError, DataKind, Disposition, IdGen, Json, Migrations,
-    Module, ModuleContext, Outcome, PersonalDataSet, Port, Problem, Scope, SqlMigration, Statement,
-    Surface, SystemClock, UlidIdGen, View,
+    Module, ModuleContext, Outcome, PersonalDataSet, Port, Problem, RequestStream, ResponseStream,
+    Scope, SqlMigration, Statement, StreamRoute, Surface, SystemClock, UlidIdGen, View,
 };
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -100,6 +100,27 @@ impl Module for SampleRowModule {
                 "/sidecar-probe",
                 get(sidecar_probe).with_state(Arc::clone(&state)),
             )
+            // The streaming half (issue #585): `/upload` reads its body in
+            // chunks and never buffers it, `/download` answers with a
+            // generated stream, and `/big-buffered` is the buffered
+            // counter-example CI watches fail.
+            .route("/upload", post(upload))
+            .route("/download", get(download))
+            .route("/big-buffered", get(big_buffered))
+    }
+
+    /// `POST /upload` and `GET /download` are served in streaming mode
+    /// (issue #585): the runtime hands each body in as a
+    /// [`RequestStream`] and bridges a [`ResponseStream`] straight to the
+    /// wire, so neither direction holds the whole body resident. The
+    /// ceilings (64 MiB each) are this route's own — `content-length` over
+    /// one is refused `413` before a byte is read.
+    fn streaming_routes(&self) -> &'static [StreamRoute] {
+        const ROUTES: &[StreamRoute] = &[
+            StreamRoute::post("/upload", STREAM_CEILING),
+            StreamRoute::get("/download", STREAM_CEILING),
+        ];
+        ROUTES
     }
 
     /// The UI surface (ADR 0010): the insert as a public form, the read as
@@ -378,4 +399,107 @@ async fn latest_row(
         }))),
         None => Ok(Json(json!(null))),
     }
+}
+
+/// The streaming routes' own ceiling (issue #585): 64 MiB, far past the
+/// 64 KiB buffered default, and the number CI's oversized-chunked test
+/// crosses.
+const STREAM_CEILING: usize = 64 * 1024 * 1024;
+
+/// The `/download` chunk size: an isolate holds one of these at a time, so a
+/// response many times the isolate's memory still streams.
+const DOWNLOAD_CHUNK: usize = 64 * 1024;
+
+/// Streams a `POST /upload` body through SHA-256 without buffering it (issue
+/// #585): [`RequestStream::next_chunk`] hands over the route's chunks, the
+/// hasher folds each as it arrives, and only the 32-byte digest is ever held
+/// whole. The answer is what the caller can check against `sha256sum` of the
+/// file it sent, so a dropped, reordered or short body cannot pass the CI
+/// assertion.
+///
+/// A body over the route ceiling ends the stream with
+/// [`StreamError::TooLarge`](cratefield::StreamError::TooLarge), which maps
+/// to the same `413 request-too-large` every other route gives — and because
+/// the handler returns there, nothing it would have done on success happens
+/// after the refusal point. That no side effect can run after a mid-stream
+/// refusal is proved directly in `cratefield_core::stream`'s own tests (the
+/// stream fuses and its source is dropped), so this route carries no extra
+/// state to make the point twice.
+async fn upload(mut body: RequestStream) -> Result<Json<serde_json::Value>, Problem> {
+    use sha2::{Digest as _, Sha256};
+    use std::fmt::Write as _;
+
+    let mut hasher = Sha256::new();
+    let mut bytes: u64 = 0;
+    while let Some(chunk) = body.next_chunk().await {
+        match chunk {
+            Ok(chunk) => {
+                hasher.update(&chunk);
+                bytes += chunk.len() as u64;
+            }
+            // `TooLarge` becomes the route's `413`, `Transport` the generic
+            // `500` — the core mapping, applied here so the client sees the
+            // problem JSON rather than a bare isolate error.
+            Err(err) => return Err(Problem::from(err)),
+        }
+    }
+    let mut sha256 = String::with_capacity(64);
+    for byte in hasher.finalize() {
+        let _ = write!(sha256, "{byte:02x}");
+    }
+    Ok(Json(json!({ "bytes": bytes, "sha256": sha256 })))
+}
+
+#[derive(Deserialize)]
+struct DownloadParams {
+    /// How many bytes to generate; absent means none, and it is clamped to
+    /// the route ceiling so the example cannot be asked to stream forever.
+    bytes: Option<usize>,
+}
+
+/// Answers `GET /download?bytes=N` with a [`ResponseStream`] that generates
+/// `N` zero bytes in 64 KiB chunks (issue #585): the runtime bridges it
+/// straight to the wire, so nothing near `N` is ever resident, and the
+/// deterministic content means CI can compare `curl | sha256sum` against
+/// `head -c N /dev/zero | sha256sum`.
+async fn download(Query(params): Query<DownloadParams>) -> ResponseStream {
+    let total = params.bytes.unwrap_or(0).min(STREAM_CEILING);
+    ResponseStream::new(ZeroChunks::new(total))
+}
+
+/// Yields a fixed count of zero bytes as 64 KiB chunks, holding at most one
+/// chunk at a time. `Infallible` because generation cannot fail.
+struct ZeroChunks {
+    remaining: usize,
+}
+
+impl ZeroChunks {
+    fn new(total: usize) -> Self {
+        Self { remaining: total }
+    }
+}
+
+impl futures_core::Stream for ZeroChunks {
+    type Item = Result<Vec<u8>, std::convert::Infallible>;
+
+    fn poll_next(
+        self: std::pin::Pin<&mut Self>,
+        _cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
+        let this = self.get_mut();
+        if this.remaining == 0 {
+            return std::task::Poll::Ready(None);
+        }
+        let n = this.remaining.min(DOWNLOAD_CHUNK);
+        this.remaining -= n;
+        std::task::Poll::Ready(Some(Ok(vec![0u8; n])))
+    }
+}
+
+/// The counter-example: a route that is **not** declared streaming, trying to
+/// answer with 2 MiB. `response_to_worker` still buffers every non-streaming
+/// response under its 1 MiB `MAX_RESPONSE_BUFFER`, so this fails rather than
+/// silently switching to a stream — which is the CI assertion.
+async fn big_buffered() -> axum::response::Response {
+    axum::response::Response::new(axum::body::Body::from(vec![0u8; 2 * 1024 * 1024]))
 }

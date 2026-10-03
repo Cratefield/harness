@@ -43,11 +43,13 @@ mod signer;
 // The `Blob` port's presigned URLs (issue #622); pure `SigV4`, public so
 // adapters and tests share one implementation.
 pub mod sigv4;
+mod stream;
 mod surface;
 mod template;
 mod tenant;
 mod tenant_conn;
 mod tenant_lifecycle;
+mod usage;
 mod venture;
 mod webhook_signature;
 
@@ -86,7 +88,8 @@ pub use email::{
 pub use events::{AnyError, EventBus, EventHandler, EventName};
 pub use harness::{Harness, HarnessBuilder, Runtime};
 pub use http::{
-    Form, Json, MAX_BODY_BYTES, RequestSummary, X_REQUEST_ID, rate_limited, request_id_is_valid,
+    Form, Json, MAX_BODY_BYTES, RequestSummary, X_REQUEST_ID, allowance_exhausted, rate_limited,
+    request_id_is_valid,
 };
 pub use idempotency::Inbox;
 pub use lint::{CARD_DATA, card_data_hit, created_tables, lint_card_data, lint_portable_sql};
@@ -124,10 +127,10 @@ pub use ports::{
     Row, Rows, ScopedBlob, SendOutcome, Severity, SignatureError, Signer, Statement, StatusUpdate,
     StatusWebhook, Subject, SubscriptionCheckoutRequest, SystemClock, TextModel, TextModelError,
     TicketComment, TicketDraft, TicketState, TicketStatus, Tracker, TrackerError, TransferCharge,
-    TryFromValue, Turn, UlidIdGen, Unconfigured, Validation, ValidationMethod, VectorFilter,
-    VectorIndex, VectorIndexError, VectorMatch, VectorNamespace, VectorRecord, Verdict,
-    WebhookEvent, check_blob_size, check_hostname, declared_content_length, receive_status,
-    retry_after, timeout, ttl_secs, validate_questions,
+    TryFromValue, Turn, UlidIdGen, Unconfigured, UsageReport, UsageReported, Validation,
+    ValidationMethod, VectorFilter, VectorIndex, VectorIndexError, VectorMatch, VectorNamespace,
+    VectorRecord, Verdict, WebhookEvent, check_blob_size, check_hostname, declared_content_length,
+    receive_status, retry_after, timeout, ttl_secs, validate_questions,
 };
 // The Blob presign API (issue #622), kept out of the wholesale block above.
 pub use ports::{DEFAULT_PRESIGN_TTL, MAX_PRESIGN_TTL, PresignedPut};
@@ -157,6 +160,7 @@ pub use signer::{
     MIN_SECRET_BYTES, RingKey, STATUS_TOKEN_MAX_TTL_SECS, SignerError, TokenPolicy,
     UNSUBSCRIBE_ACTION,
 };
+pub use stream::{BoxStream, RequestStream, ResponseStream, StreamError, StreamRoute};
 pub use surface::{
     Action, Audience, Column, HINT_KEYWORDS, MAX_SIDECAR_ACTIONS, MAX_SIDECAR_SURFACE_BYTES,
     MAX_SIDECAR_VIEWS, ModuleSurface, Outcome, RenderedSurface, SURFACE_API, Surface,
@@ -172,8 +176,10 @@ pub use tenant_conn::TenantConn;
 pub use tenant_lifecycle::{
     ErasureStep, TenantLifecycle, TenantLifecycleError, TenantSummary, remaining_erasure,
 };
+pub use usage::{Consumed, Consumption, Exhausted, Months, Period, PeriodWindow, Usage};
 pub use venture::{Brand, Venture, VentureEnv};
 pub use webhook_signature::{
-    DEFAULT_TOLERANCE_SECS, ProviderScheme, SignatureEncoding, SignatureScheme, SignedDelivery,
-    StripeStyle, Svix, WebhookVerifier, svix_secret_key,
+    DEFAULT_TOLERANCE_SECS, Digest, Github, Gitlab, ProviderScheme, SharedTokenScheme,
+    SignatureEncoding, SignatureScheme, SignedDelivery, StripeStyle, Svix, Vercel, WebhookVerifier,
+    svix_secret_key,
 };

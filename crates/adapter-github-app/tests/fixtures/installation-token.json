@@ -1,0 +1,6 @@
+{
+  "token": "ghs_FIXTURE000000000000000000000000000000",
+  "expires_at": "2030-01-01T00:00:00Z",
+  "permissions": { "contents": "read", "issues": "write" },
+  "repository_selection": "all"
+}

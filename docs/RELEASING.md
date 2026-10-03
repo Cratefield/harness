@@ -186,6 +186,7 @@ crate exists**, so the very first release of each crate is manual:
    ```sh
    export CARGO_REGISTRY_TOKEN=...   # the scoped token from step 1
    cargo publish --dry-run -p cratefield-core   # then without --dry-run
+   cargo publish -p cratefield-module-device-auth  # needs only core
    cargo publish -p cratefield-tables         # before the manifest and the CLI
    cargo publish -p cratefield-introspect     # before the CLI (its `postgres` feature)
    cargo publish -p cratefield-manifest       # before the CLI and the facade
@@ -202,6 +203,7 @@ crate exists**, so the very first release of each crate is manual:
    cargo publish -p cratefield-module-waitlist
    cargo publish -p cratefield-module-webhooks  # before the facade
    cargo publish -p cratefield-push-auth      # before adapter-apns, -fcm, -webpush and the CLI
+   cargo publish -p cratefield-adapter-github-app  # after push-auth; before the facade
    cargo publish -p cratefield-adapter-classifier-llm
    cargo publish -p cratefield-adapter-github-issues
    cargo publish -p cratefield-adapter-owlpost
@@ -213,6 +215,7 @@ crate exists**, so the very first release of each crate is manual:
    cargo publish -p cratefield-adapter-jira
    cargo publish -p cratefield-auth-client    # before module-notifications and the runtimes
    cargo publish -p cratefield-oauth-client   # before module-linkedin (which is held back)
+   cargo publish -p cratefield-module-connections  # needs core and oauth-client
    cargo publish -p cratefield-adapter-workers-ai
    cargo publish -p cratefield-module-changelog
    cargo publish -p cratefield-module-cms
@@ -231,7 +234,7 @@ crate exists**, so the very first release of each crate is manual:
    cargo publish -p cratefield            # the facade; cannot package yet: path-only dep, see tools/package-check.sh
    ```
 
-   Forty-two crates, and the order is the dependency order: `--dry-run`
+   Forty-six crates, and the order is the dependency order: `--dry-run`
    for a crate whose upstream `cratefield-*` dependencies are not on
    crates.io yet resolves against the registry and fails until those are
    published. The `package` CI job (`tools/package-check.sh`) fails if this

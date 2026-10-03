@@ -58,6 +58,13 @@ classifier-llm = ["dep:cratefield-adapter-classifier-llm"]
 # without any of those adapters.
 push-auth = ["dep:cratefield-push-auth"]
 
+# GitHub App auth (issue #623): the RS256 app JWT, the installation tokens it
+# mints (cached, single-flight) and the user-to-server OAuth code exchange,
+# over the `HttpClient` and `Clock` ports. A sibling of `push-auth` — same
+# signer, same keyed cache — for a venture that acts as a GitHub App rather
+# than presenting a push provider's token.
+github-app = ["dep:cratefield-adapter-github-app"]
+
 # The runtime push wiring (issue #191): `build_push` and the one table of
 # environment-variable names, plus `push_from_env()` on whichever runtime is
 # enabled. Pulls all three push adapters, which is the point — the wiring
@@ -113,6 +120,8 @@ changelog = ["dep:cratefield-module-changelog"]
 notifications = ["dep:cratefield-module-notifications", "i18n"]
 telemetry = ["dep:cratefield-module-telemetry"]
 webhooks = ["dep:cratefield-module-webhooks"]
+device-auth = ["dep:cratefield-module-device-auth"]
+connections = ["dep:cratefield-module-connections"]
 
 # The conformance kit. Belongs under [dev-dependencies] in a venture.
 testing = ["dep:cratefield-testing"]
@@ -132,6 +141,7 @@ cratefield-adapter-cloudflare-saas = { workspace = true, optional = true }
 cratefield-adapter-apns = { workspace = true, optional = true }
 cratefield-adapter-fcm = { workspace = true, optional = true }
 cratefield-push-auth = { workspace = true, optional = true }
+cratefield-adapter-github-app = { workspace = true, optional = true }
 cratefield-adapter-stripe = { workspace = true, optional = true }
 cratefield-push-wiring = { workspace = true, optional = true }
 cratefield-adapter-webpush = { workspace = true, optional = true }
@@ -165,6 +175,8 @@ cratefield-module-changelog = { workspace = true, optional = true }
 cratefield-module-notifications = { workspace = true, optional = true }
 cratefield-module-telemetry = { workspace = true, optional = true }
 cratefield-module-webhooks = { workspace = true, optional = true }
+cratefield-module-device-auth = { workspace = true, optional = true }
+cratefield-module-connections = { workspace = true, optional = true }
 cratefield-testing = { workspace = true, optional = true }
 
 [package.metadata.docs.rs]
