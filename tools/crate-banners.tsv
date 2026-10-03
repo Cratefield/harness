@@ -10,6 +10,7 @@ cratefield-adapter-postgres	CRATEFIELD · ADAPTER · POSTGRES	Database, at size.
 cratefield-import-supabase	CRATEFIELD · IMPORT · SUPABASE	What a Supabase move takes.	A read-only inspection of a Supabase project: every table, policy, bucket and function, each automatic, needs work or a blocker.	READ-ONLY · RLS · REPORT	fz import supabase inspect
 cratefield-adapter-resend	CRATEFIELD · ADAPTER · RESEND	Mail that goes out.	The Mailer port over the Resend API, through the runtime's HttpClient — no reqwest, no OpenSSL.	MAILER · REST · NOTCONFIGURED MODE	mail.send()
 cratefield-adapter-turnstile	CRATEFIELD · ADAPTER · TURNSTILE	Fail closed.	The Captcha port over Cloudflare Turnstile siteverify, on the runtime's own HttpClient.	CAPTCHA · SITEVERIFY · FAIL-CLOSED	verify()
+cratefield-adapter-polar	CRATEFIELD · ADAPTER · POLAR	Merchant of Record.	The Payments port over Polar: checkout, usage meters, refunds and disputes, with tax handled for you.	PAYMENTS · MOR · STANDARD WEBHOOKS	checkout()
 cratefield-adapter-stripe	CRATEFIELD · ADAPTER · STRIPE	Payments port.	The Payments port over the Stripe REST API, same shape on Workers and native.	PAYMENTS · REST · IDEMPOTENT	charge()
 cratefield-adapter-apns	CRATEFIELD · ADAPTER · APNS	Push, to phones.	The Push port over Apple Push Notification service, HTTP/2 through the HttpClient port.	HTTP/2 · ES256 · NO VENDOR SDK	apns.push()
 cratefield-adapter-fcm	CRATEFIELD · ADAPTER · FCM	Push, to Android.	The Push port over Firebase Cloud Messaging HTTP v1, the same shape as APNs.	FCM HTTP V1 · RS256 · ONE SHAPE	fcm.push()

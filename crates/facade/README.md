@@ -49,6 +49,7 @@ also switch on the extra features noted in their rows:
 | `openai-compatible` | `cratefield-adapter-openai-compatible` | `cratefield::openai_compatible` | `TextModel` over the `OpenAI` chat-completions wire at any base URL, via the `HttpClient` port |
 | `cloudflare-saas` | `cratefield-adapter-cloudflare-saas` | `cratefield::cloudflare_saas` | `CustomHostnames` over Cloudflare for `SaaS` custom hostnames, via the `HttpClient` port |
 | `stripe` | `cratefield-adapter-stripe` | `cratefield::stripe` | `Payments` over the Stripe API |
+| `polar` | `cratefield-adapter-polar` | `cratefield::polar` | `Payments` over Polar, a Merchant of Record: checkout, usage meters, portal, refunds and disputes |
 | `apns` | `cratefield-adapter-apns` | `cratefield::apns` | `Push` over Apple Push Notification service |
 | `fcm` | `cratefield-adapter-fcm` | `cratefield::fcm` | `Push` over Firebase Cloud Messaging (HTTP v1) |
 | `webpush` | `cratefield-adapter-webpush` | `cratefield::webpush` | `Push` over Web Push (RFC 8030), browsers and UnifiedPush |

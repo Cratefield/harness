@@ -35,6 +35,7 @@ cloudflare-saas = ["dep:cratefield-adapter-cloudflare-saas"]
 apns = ["dep:cratefield-adapter-apns"]
 fcm = ["dep:cratefield-adapter-fcm"]
 stripe = ["dep:cratefield-adapter-stripe"]
+polar = ["dep:cratefield-adapter-polar"]
 webpush = ["dep:cratefield-adapter-webpush"]
 # The Tracker port's three adapters: GitHub Issues and Jira Cloud (issue
 # #559), and the HMAC-signed webhook a tenant configures.
@@ -147,6 +148,7 @@ cratefield-adapter-fcm = { workspace = true, optional = true }
 cratefield-push-auth = { workspace = true, optional = true }
 cratefield-adapter-github-app = { workspace = true, optional = true }
 cratefield-adapter-stripe = { workspace = true, optional = true }
+cratefield-adapter-polar = { workspace = true, optional = true }
 cratefield-push-wiring = { workspace = true, optional = true }
 cratefield-adapter-webpush = { workspace = true, optional = true }
 # The Tracker port's three adapters, siblings under the port that lives in

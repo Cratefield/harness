@@ -5,7 +5,7 @@ readme = "README.md"
 keywords = ["cratefield", "privacy", "gdpr", "export", "erasure"]
 categories = ["web-programming"]
 include = ["src/**/*", "migrations/**/*", "tests/**/*", "README.md"]
-version = "0.2.0"
+version = "0.2.1"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -18,10 +18,19 @@ workspace = true
 cratefield-core = { workspace = true }
 axum = { workspace = true }
 http = { workspace = true }
+# The `HttpClient` port takes an `http::Request<Bytes>`; a provider call
+# builds one and signs its body.
+bytes = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 sea-query = { workspace = true }
 tracing = { workspace = true }
+# External providers (issue #653): every call carries a Stripe-style
+# HMAC-SHA256 signature — the same idiom `module-webhooks` signs deliveries
+# with, so one receiver-side verifier covers both. Pure Rust, wasm-safe.
+hmac = { workspace = true }
+sha2 = { workspace = true }
+hex = { workspace = true }
 
 [dev-dependencies]
 # The `postgres` feature unlocks the Postgres parity leg of the testing

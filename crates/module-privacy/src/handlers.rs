@@ -2,6 +2,7 @@
 //! share.
 
 use crate::erase;
+use crate::provider::{self, HttpProvider, ProviderError};
 use axum::extract::{Query, State};
 use axum::routing::{get, post};
 use cratefield_core::{
@@ -9,7 +10,7 @@ use cratefield_core::{
     is_plain_identifier, require_admin,
 };
 use cratefield_core::{Clock, SystemClock};
-use http::HeaderMap;
+use http::{HeaderMap, StatusCode};
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 use std::sync::Arc;
@@ -20,7 +21,7 @@ use std::sync::Arc;
 /// token minted against a test fixture's frozen clock would be born expired —
 /// and the failure looks like a bad signature, which is a long way from the
 /// cause. The same reason `module-email-signup` does this.
-fn unix_now() -> u64 {
+pub(crate) fn unix_now() -> u64 {
     u64::try_from(SystemClock.now().unix_timestamp().max(0)).unwrap_or(0)
 }
 
@@ -36,10 +37,13 @@ const MAX_ROWS_PER_TABLE: usize = 10_000;
 #[derive(Clone)]
 struct PrivacyState {
     ctx: Arc<ModuleContext>,
+    /// Registered in `Privacy::provider`; empty for the common deployment
+    /// that holds everything in the harness's own tables.
+    providers: Arc<Vec<HttpProvider>>,
 }
 
-pub(crate) fn router(ctx: Arc<ModuleContext>) -> axum::Router {
-    let state = PrivacyState { ctx };
+pub(crate) fn router(ctx: Arc<ModuleContext>, providers: Arc<Vec<HttpProvider>>) -> axum::Router {
+    let state = PrivacyState { ctx, providers };
     axum::Router::new()
         .route("/manifest", get(manifest))
         .route("/export", get(export))
@@ -210,10 +214,65 @@ async fn export(
         }));
     }
 
+    let (providers, complete) = export_providers(&state, subject).await;
+
     Ok(Json(json!({
         "subject": subject,
         "tables": tables,
+        // External systems holding the same subject, and whether every one
+        // answered. A deployment with none reports `[]` and `complete: true`.
+        "providers": providers,
+        "complete": complete,
     })))
+}
+
+/// Calls every registered provider's `/export` and reports each one. A
+/// provider failure is one word (`unavailable`, `rejected`,
+/// `invalid_response`, `not_configured`) — never its status text or body,
+/// which may quote the subject's data.
+async fn export_providers(state: &PrivacyState, subject: &str) -> (Vec<Value>, bool) {
+    let request_id = provider::export_request_id(subject, unix_now());
+    let mut report = Vec::new();
+    let mut complete = true;
+    for provider in state.providers.iter() {
+        let result = match http_port(state) {
+            Ok(http) => {
+                provider
+                    .export(&http, &*state.ctx.config, subject, &request_id)
+                    .await
+            }
+            Err(error) => Err(error),
+        };
+        match result {
+            Ok(sections) => report.push(json!({
+                "provider": provider.name(),
+                "status": "ok",
+                "sections": sections,
+            })),
+            Err(error) => {
+                complete = false;
+                report.push(failed(provider.name(), error));
+            }
+        }
+    }
+    (report, complete)
+}
+
+/// The outbound client this module declared in `requires()`. A port view
+/// without it is a runtime disagreement, reported as an outage rather than a
+/// panic.
+fn http_port(state: &PrivacyState) -> Result<Arc<dyn cratefield_core::HttpClient>, ProviderError> {
+    state
+        .ctx
+        .ports
+        .http
+        .clone()
+        .ok_or(ProviderError::Unavailable)
+}
+
+/// One provider's failure line: the two words a caller renders, nothing else.
+fn failed(name: &str, error: ProviderError) -> Value {
+    json!({ "provider": name, "status": "failed", "error": error.as_str() })
 }
 
 /// `Some(…)` when a declaration reaches its subject through another table:
@@ -365,12 +424,46 @@ async fn erase(
             Problem::internal().instance(&scope.request_id)
         })?;
 
+    let token = erase::mint(&signer, subject, unix_now());
+    // The plan, the confirm and every retry derive the same id from the
+    // token, so a provider need not correlate them by a stored table.
+    let request_id = provider::erase_request_id(&token);
+    let providers = plan_providers(&state, subject, &request_id).await;
+
     Ok(Json(json!({
         "subject": subject,
         "plan": erase::render(&planned),
-        "confirm_token": erase::mint(&signer, subject, unix_now()),
+        "confirm_token": token,
         "expires_in_seconds": erase::CONFIRM_TTL_SECS,
+        "request_id": request_id,
+        "providers": providers,
     })))
+}
+
+/// Calls every registered provider's `/erase/plan`, preview only: the same
+/// per-section action list the local plan carries, for the data a provider
+/// holds. Nothing is erased here.
+async fn plan_providers(state: &PrivacyState, subject: &str, request_id: &str) -> Vec<Value> {
+    let mut report = Vec::new();
+    for provider in state.providers.iter() {
+        let result = match http_port(state) {
+            Ok(http) => {
+                provider
+                    .erase_plan(&http, &*state.ctx.config, subject, request_id)
+                    .await
+            }
+            Err(error) => Err(error),
+        };
+        report.push(match result {
+            Ok(sections) => json!({
+                "provider": provider.name(),
+                "status": "ok",
+                "sections": sections,
+            }),
+            Err(error) => failed(provider.name(), error),
+        });
+    }
+    report
 }
 
 #[derive(Deserialize)]
@@ -388,12 +481,13 @@ async fn erase_confirm(
     scope: Scope,
     headers: HeaderMap,
     Json(body): Json<ConfirmRequest>,
-) -> Result<Json<Value>, Problem> {
+) -> Result<(StatusCode, Json<Value>), Problem> {
     require_admin(&*state.ctx.config, &headers)
         .map_err(|problem| problem.instance(&scope.request_id))?;
     let (db, signer) = ports(&state, &scope)?;
 
-    let Some(subject) = erase::subject_of(&signer, body.token.trim()) else {
+    let token = body.token.trim();
+    let Some(subject) = erase::subject_of(&signer, token) else {
         return Err(Problem::validation_failed(
             "the confirmation token is not valid for erasure, or has expired",
         )
@@ -427,11 +521,112 @@ async fn erase_confirm(
         return Err(erase::not_verified(&remaining).instance(&scope.request_id));
     }
 
-    Ok(Json(json!({
-        "subject": subject,
-        "erased": erase::render(&planned),
-        "verified": true,
-    })))
+    // The local erasure is proved above before any provider is called: a
+    // provider that is down must not make the harness's own rows look
+    // un-erased, and re-POSTing this token retries it safely because the
+    // local half is a no-op the second time and the id is the same.
+    let request_id = provider::erase_request_id(token);
+    let (providers, complete) = apply_providers(&state, &scope, &subject, &request_id).await;
+    let status = if complete {
+        StatusCode::OK
+    } else {
+        // 202: the request is accepted and the erase is in flight for at
+        // least one provider, which a re-POST or a deferred retry completes.
+        StatusCode::ACCEPTED
+    };
+
+    Ok((
+        status,
+        Json(json!({
+            "subject": subject,
+            "erased": erase::render(&planned),
+            "verified": true,
+            "request_id": request_id,
+            "providers": providers,
+            "complete": complete,
+        })),
+    ))
+}
+
+/// Calls every registered provider's `/erase/apply` with the shared request
+/// id, then schedules a short background retry for each one that did not
+/// apply. Returns each provider's outcome and whether all applied.
+///
+/// A retry is up to two further attempts, back to back — no timer, because
+/// there is no way to sleep on wasm. A provider that is still down is left
+/// `pending`; re-POSTing the same confirm token is the durable retry, since
+/// the derived request id is unchanged and the local half is already done.
+async fn apply_providers(
+    state: &PrivacyState,
+    scope: &Scope,
+    subject: &str,
+    request_id: &str,
+) -> (Vec<Value>, bool) {
+    let mut report = Vec::new();
+    let mut complete = true;
+    for provider in state.providers.iter() {
+        let http = match http_port(state) {
+            Ok(http) => http,
+            Err(error) => {
+                complete = false;
+                report.push(pending(provider.name(), error));
+                continue;
+            }
+        };
+        // A provider with no resolvable secret cannot be signed for, so
+        // there is nothing a retry would do: it is reported pending and left
+        // for the next confirm, once the binding exists.
+        let secret = match provider.secret(&*state.ctx.config) {
+            Ok(secret) => secret,
+            Err(error) => {
+                complete = false;
+                report.push(pending(provider.name(), error));
+                continue;
+            }
+        };
+        let body = provider::request_body(subject, request_id);
+        match provider.apply_signed(&http, &secret, &body).await {
+            Ok(()) => report.push(json!({
+                "provider": provider.name(),
+                "status": "applied",
+            })),
+            Err(error) => {
+                complete = false;
+                report.push(pending(provider.name(), error));
+                schedule_retry(scope, provider, &http, secret, body);
+            }
+        }
+    }
+    (report, complete)
+}
+
+/// One provider's pending line, the shape a confirm reports when an erasure
+/// has not reached the provider yet.
+fn pending(name: &str, error: ProviderError) -> Value {
+    json!({ "provider": name, "status": "pending", "error": error.as_str() })
+}
+
+/// Defers up to two further `/erase/apply` attempts for one provider. The
+/// future owns everything it needs (`'static`): the client, a clone of the
+/// provider's config, the resolved secret and the signed body.
+fn schedule_retry(
+    scope: &Scope,
+    provider: &HttpProvider,
+    http: &Arc<dyn cratefield_core::HttpClient>,
+    secret: String,
+    body: bytes::Bytes,
+) {
+    let provider = provider.clone();
+    let http = Arc::clone(http);
+    let name = provider.name().to_owned();
+    scope.defer.wait_until(Box::pin(async move {
+        for _ in 0..2 {
+            if provider.apply_signed(&http, &secret, &body).await.is_ok() {
+                return;
+            }
+        }
+        tracing::warn!(provider = %name, "privacy provider erasure retries exhausted");
+    }));
 }
 
 /// The database and the signer, which erasure needs together: without the

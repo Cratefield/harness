@@ -69,6 +69,9 @@ pub use cratefield_push_wiring as push_wiring;
 #[cfg(feature = "stripe")]
 pub use cratefield_adapter_stripe as stripe;
 
+#[cfg(feature = "polar")]
+pub use cratefield_adapter_polar as polar;
+
 #[cfg(feature = "webpush")]
 pub use cratefield_adapter_webpush as webpush;
 

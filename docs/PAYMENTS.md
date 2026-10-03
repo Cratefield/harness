@@ -1,9 +1,11 @@
 # Payments
 
-The `Payments` port (issue #102) is how a venture moves money. Stripe is the
-first and only adapter (`cratefield-adapter-stripe`); like every adapter it runs
-over the runtime's `HttpClient` port, so the same code serves on Cloudflare
-Workers and on the native runtime.
+The `Payments` port (issue #102) is how a venture moves money. Two adapters
+implement it: Stripe (`cratefield-adapter-stripe`), and Polar
+(`cratefield-adapter-polar`, issue #690), a Merchant of Record. Like every
+adapter they run over the runtime's `HttpClient` port, so the same code serves
+on Cloudflare Workers and on the native runtime. Switching between them is a
+change of composition (ADR 0027); see [Polar](#polar-merchant-of-record) below.
 
 ## Card data never reaches the harness
 
@@ -440,6 +442,63 @@ The 5-minute grace is not Stripe clock skew: an hour-start `timestamp` is always
 in the past. It exists so a consume for that hour either commits or fails and
 retries before the tick freezes it. Buckets older than 35 days simply stop being
 scanned — they can no longer be reported, so an operator must reconcile them.
+
+## Polar (Merchant of Record)
+
+`cratefield-adapter-polar` is for a venture that sells before it has a
+company. Polar is the legal seller: it collects the payment, handles VAT, GST
+and sales tax, and pays the founder out. A venture moves to Stripe later by
+swapping the adapter and the secrets; its code only ever names `Payments`.
+
+What differs from Stripe:
+
+- **Products, not prices.** A Polar product has one recurring interval, so a
+  monthly and an annual plan are two products, and `price_ref` is the product
+  id. A one-off `create_checkout` needs a product configured with
+  `with_one_off_product`; the line's amount becomes an ad-hoc price on it.
+  Without one it is `Unsupported`.
+- **No Connect.** `create_connect_account_link` and `charge_with_transfer`
+  are `Unsupported`: Polar pays the seller out itself.
+- **Refunds are net of tax**, and Polar refunds the tax on top. Polar takes no
+  idempotency key, so the adapter keeps the request's key in the refund's
+  metadata and looks it up before creating one.
+- **Usage** goes through Polar's event ingestion: one event per
+  `UsageReport`, `external_id` = the identifier, the value under a metadata
+  key the Polar meter sums (`value` by default). Polar counts a repeated
+  `external_id` as a duplicate, which comes back as `already_reported`. The
+  hourly flush above works unchanged. Polar bills late events in the
+  **current** cycle; it never reissues a closed invoice.
+- **Webhooks** are Standard Webhooks (`webhook-id`, `webhook-timestamp`,
+  `webhook-signature`). Verify them with `verify_webhook_request(&headers,
+  body)`, which every adapter implements. The event id is `webhook-id`, the
+  `Inbox` key. Polar secrets made before 2026-09-08 use a different key
+  derivation; the adapter accepts both.
+- **Customers** can be named by the venture's own account id
+  (`CustomerIds::External`, Polar's `external_customer_id`), so the venture
+  never stores a Polar id.
+
+Configuration: `POLAR_ACCESS_TOKEN` (an organization access token),
+`POLAR_WEBHOOK_SECRET`, and `POLAR_ENVIRONMENT` (`sandbox`, the default, or
+`production`). Meters, products and the portal's settings are Polar
+dashboard state, **needs-human**, as with Stripe.
+
+## Disputes
+
+A dispute (a chargeback, or the inquiry before one) is read through the port:
+`get_dispute`, `list_disputes` and `close_dispute` (concede it) return a
+`Dispute` whose `status.phase()` is `Open`, `Won`, `Lost` or `Closed`. The
+default policy (ADR 0025, Decision 9) is to flag the account while a dispute is
+open, restore it when the dispute is won or closed without a chargeback, and
+revoke what the payment funded when it is lost. Claim `dispute.event_key()`
+through the `Inbox` so each transition is acted on once.
+
+Polar sends **no dispute webhook**, so a venture on Polar runs a scheduled
+`list_disputes(&DisputeListRequest { open_only: true, .. })` poll and re-reads
+the disputes it tracks until they close. A refund Polar issues to head off a
+chargeback arrives as `refund.created` with reason `dispute_prevention`;
+`cratefield_adapter_polar::normalize` yields it as both a refund and a
+`Prevented` dispute. Polar charges $15 per dispute whatever the outcome. On
+Stripe the same port methods are issue #602.
 
 ## Not in scope
 
