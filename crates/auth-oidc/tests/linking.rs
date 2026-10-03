@@ -17,6 +17,7 @@ async fn seed_user(kit: &Kit, email: &str, verified: bool) -> String {
             display_name: None,
             primary_email: Some(email.to_owned()),
             primary_email_verified: verified,
+            locale: None,
             status: "active".to_owned(),
             created_at: "2026-09-07T10:00:00Z".to_owned(),
             updated_at: "2026-09-07T10:00:00Z".to_owned(),

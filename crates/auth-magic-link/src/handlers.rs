@@ -6,10 +6,10 @@ use axum::routing::{get, post};
 use base64ct::{Base64UrlUnpadded, Encoding as _};
 use cratefield_core::{Json, Message, Problem, Scope, SendOutcome};
 use factory0_auth_core::{
-    Redacted, STATUS_ACTIVE, SingleUseTokenRow, TOKEN_MAGIC_LINK, UserRow,
+    Hints, Redacted, STATUS_ACTIVE, SingleUseTokenRow, TOKEN_MAGIC_LINK, UserRow,
     consume_single_use_token, cookie_value as session_cookie_value, insert_single_use_token,
-    insert_user, retire_unconsumed_tokens, set_cookie, single_use_token_by_hash, user_by_id,
-    user_by_primary_email,
+    insert_user, resolve, retire_unconsumed_tokens, set_cookie, single_use_token_by_hash,
+    ui_locales_from_return_to, user_by_id, user_by_primary_email,
 };
 use http::{HeaderMap, StatusCode, Uri, header};
 use serde::Deserialize;
@@ -64,6 +64,11 @@ struct RequestBody {
     email: String,
     #[serde(default)]
     return_to: Option<String>,
+    /// The locale to write the mail in, when the caller names one (issue
+    /// #649). One of the deployment's `AUTH_LOCALES`; anything else falls
+    /// through to the next signal.
+    #[serde(default)]
+    locale: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -183,16 +188,25 @@ struct StartForm {
     email: String,
     #[serde(default)]
     return_to: Option<String>,
+    /// The locale the chooser asked for, carried through the form so the
+    /// page and the JSON route resolve identically (issue #649).
+    #[serde(default)]
+    locale: Option<String>,
 }
 
 /// `GET /start?return_to=/path` — the form.
 async fn start(Query(query): Query<StartQuery>) -> Response {
-    form_page(safe_return_to(query.return_to.as_deref()).as_deref(), None)
+    form_page(
+        safe_return_to(query.return_to.as_deref()).as_deref(),
+        query.locale.as_deref(),
+        None,
+    )
 }
 
 #[derive(Debug, Deserialize)]
 struct StartQuery {
     return_to: Option<String>,
+    locale: Option<String>,
 }
 
 /// `POST /start` — the same decision as `POST /request`, answered with a
@@ -209,6 +223,7 @@ async fn start_submit(
     if form.email.trim().is_empty() {
         return Ok(form_page(
             return_to.as_deref(),
+            form.locale.as_deref(),
             Some("Enter your email address."),
         ));
     }
@@ -218,6 +233,7 @@ async fn start_submit(
         &headers,
         &form.email,
         return_to.as_deref(),
+        form.locale.as_deref(),
         None,
     )
     .await?
@@ -231,16 +247,22 @@ async fn start_submit(
         )),
         Verdict::RateLimited(_) => Ok(form_page(
             return_to.as_deref(),
+            form.locale.as_deref(),
             Some("Too many attempts just now. Try again in a minute."),
         )),
     }
 }
 
 /// The form itself, with an optional message above it.
-fn form_page(return_to: Option<&str>, message: Option<&str>) -> Response {
+fn form_page(return_to: Option<&str>, locale: Option<&str>, message: Option<&str>) -> Response {
     let hidden = return_to.map_or_else(String::new, |value| {
         format!(
             "<input type=\"hidden\" name=\"return_to\" value=\"{}\">",
+            html_escape(value)
+        )
+    }) + &locale.map_or_else(String::new, |value| {
+        format!(
+            "<input type=\"hidden\" name=\"locale\" value=\"{}\">",
             html_escape(value)
         )
     });
@@ -306,6 +328,7 @@ async fn request(
         &headers,
         &parsed.email,
         parsed.return_to.as_deref(),
+        parsed.locale.as_deref(),
         captcha_token,
     )
     .await?
@@ -326,6 +349,7 @@ async fn decide(
     headers: &HeaderMap,
     raw_email: &str,
     return_to: Option<&str>,
+    explicit_locale: Option<&str>,
     captcha_token: Option<&str>,
 ) -> Result<Verdict, Problem> {
     let email = cratefield_core::normalize_email(raw_email);
@@ -365,6 +389,29 @@ async fn decide(
         }
     };
 
+    // Which language the mail is written in (issue #649). Every signal the
+    // request carries is offered to `resolve`, which returns one the
+    // deployment actually registers templates for; `TemplateRegistry` itself
+    // negotiates nothing. The stored locale is the account's, so it only
+    // applies to a known address.
+    let stored_locale = user.as_ref().and_then(|user| user.locale.clone());
+    let ui_locales = ui_locales_from_return_to(return_to.unwrap_or_default());
+    let accept_language = headers
+        .get(http::header::ACCEPT_LANGUAGE)
+        .and_then(|value| value.to_str().ok());
+    let locale = resolve(
+        &settings.supported,
+        &Hints {
+            explicit: explicit_locale,
+            ui_locales: ui_locales.as_deref(),
+            stored: stored_locale.as_deref(),
+            accept_language,
+        },
+    );
+    // A locale is worth storing only when the person named one and the
+    // deployment supports it; a fallback nobody chose is not a preference.
+    let store_on_create = explicit_locale.and_then(|raw| settings.supported.canonicalize(raw));
+
     let user_id = match (user, settings.allow_registration) {
         (Some(user), _) => {
             // A disabled account gets no link. Answered like everything
@@ -375,13 +422,15 @@ async fn decide(
             }
             user.id
         }
-        (None, true) => match create_account(db, clock, id_gen, &email).await {
-            Ok(id) => id,
-            Err(err) => {
-                tracing::error!(error = %err, "could not create an account for a magic link");
-                return Err(Problem::internal().instance(&scope.request_id));
+        (None, true) => {
+            match create_account(db, clock, id_gen, &email, store_on_create.as_deref()).await {
+                Ok(id) => id,
+                Err(err) => {
+                    tracing::error!(error = %err, "could not create an account for a magic link");
+                    return Err(Problem::internal().instance(&scope.request_id));
+                }
             }
-        },
+        }
         // No account, and this venture does not register by link.
         (None, false) => return Ok(Verdict::Accepted),
     };
@@ -409,7 +458,7 @@ async fn decide(
     }
 
     if let Err(err) = issue_link(
-        db, clock, id_gen, mailer, ctx, settings, &user_id, &email, return_to,
+        db, clock, id_gen, mailer, ctx, settings, &user_id, &email, return_to, &locale,
     )
     .await
     {
@@ -438,6 +487,7 @@ async fn issue_link(
     user_id: &str,
     email: &str,
     return_to: Option<&str>,
+    locale: &str,
 ) -> Result<(), cratefield_core::DbError> {
     let Some(token) = random_token() else {
         return Err(cratefield_core::DbError::Query(
@@ -481,7 +531,7 @@ async fn issue_link(
             link,
             minutes: settings.ttl_secs / 60,
         },
-        "en",
+        locale,
     ) {
         Ok(rendered) => rendered,
         Err(err) => {
@@ -550,6 +600,7 @@ async fn create_account(
     clock: &dyn cratefield_core::Clock,
     id_gen: &dyn cratefield_core::IdGen,
     email: &str,
+    locale: Option<&str>,
 ) -> Result<String, cratefield_core::DbError> {
     let now = iso(clock.now());
     let id = id_gen.ulid();
@@ -562,6 +613,9 @@ async fn create_account(
             // Unverified until the link is consumed. Creating the row is
             // not proof of anything; opening the mail is.
             primary_email_verified: false,
+            // Set only when the caller named a supported locale: the
+            // address has no preference of its own to inherit.
+            locale: locale.map(str::to_owned),
             status: STATUS_ACTIVE.to_owned(),
             created_at: now.clone(),
             updated_at: now,

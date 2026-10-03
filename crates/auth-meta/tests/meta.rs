@@ -436,6 +436,7 @@ fn an_existing_account_on_the_same_address_is_not_taken_over() {
                 primary_email: Some("ada@example.com".to_owned()),
                 // Verified on our side. Meta's is not, so no auto-link.
                 primary_email_verified: true,
+                locale: None,
                 status: "active".to_owned(),
                 created_at: "2026-09-07T10:00:00Z".to_owned(),
                 updated_at: "2026-09-07T10:00:00Z".to_owned(),
@@ -483,6 +484,7 @@ fn a_differently_cased_address_is_not_a_second_account() {
                 display_name: None,
                 primary_email: Some("ada@example.com".to_owned()),
                 primary_email_verified: true,
+                locale: None,
                 status: "active".to_owned(),
                 created_at: "2026-09-07T10:00:00Z".to_owned(),
                 updated_at: "2026-09-07T10:00:00Z".to_owned(),

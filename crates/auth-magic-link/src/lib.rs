@@ -42,6 +42,7 @@ use cratefield_core::{
     Config, ConfigError, DataKind, Disposition, Migrations, Module, ModuleConfig, ModuleContext,
     PersonalDataSet, Port, ProblemDef, SqlMigration, SubjectVia,
 };
+use factory0_auth_core::SupportedLocales;
 
 /// The durable send-cooldown table behind the one-mail-per-window claim
 /// (issue #133). Name must match `handlers::SEND_COOLDOWN_TABLE`.
@@ -95,6 +96,9 @@ pub(crate) struct Settings {
     /// The `From` address. Mail from an unverified domain is refused by
     /// the adapter, which is why this is configuration and not a guess.
     pub mail_from: String,
+    /// The deployment's locales, from `AUTH_LOCALES` (issue #649). Read
+    /// once here, and used to resolve the locale of every sign-in mail.
+    pub supported: SupportedLocales,
 }
 
 fn resolve_settings(cfg: &dyn Config) -> Result<Settings, Vec<String>> {
@@ -172,6 +176,7 @@ fn resolve_settings(cfg: &dyn Config) -> Result<Settings, Vec<String>> {
             ttl_secs,
             allow_registration,
             mail_from: mail_from.trim().to_owned(),
+            supported: SupportedLocales::from_config(cfg),
         })
     } else {
         Err(problems)

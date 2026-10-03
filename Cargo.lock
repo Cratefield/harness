@@ -2565,6 +2565,7 @@ dependencies = [
  "base64ct",
  "cratefield-adapter-sqlite",
  "cratefield-core",
+ "cratefield-i18n",
  "cratefield-module-privacy",
  "cratefield-testing",
  "factory0-auth-magic-link",
@@ -2583,6 +2584,7 @@ dependencies = [
  "time",
  "tower",
  "tracing",
+ "url",
 ]
 
 [[package]]

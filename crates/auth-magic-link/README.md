@@ -84,6 +84,35 @@ minute does not survive a slow mail queue. Hence the range.
 anyone can create an account for any address they can type. A venture that
 wants passwordless sign-up turns it on knowing that.
 
+## Which language the mail is written in
+
+`AUTH_LOCALES` lists the tags the deployment supports, comma-separated in
+BCP 47 form, the first being the default — `AUTH_LOCALES=de,en` supports
+both and makes German the fallback. Unset, the deployment supports `en`.
+It is a deployment-wide key, not an `AUTH_MAGIC_LINK_` one: every auth
+module reads it, and it describes the venture rather than any one module.
+
+The sign-in mail renders `<id>@<locale>` when the venture has registered
+that template and `<id>` otherwise, so a German deployment overrides
+`auth-magic-link/sign-in@de` and leaves the compiled default for `en`. The
+locale is resolved per request, most specific signal first:
+
+1. an explicit `locale` field in the request (or the `locale` query on
+   `GET /start`, carried through the form as a hidden field);
+2. `ui_locales` from an OIDC `return_to`, when the return path is the
+   authorize endpoint — a space-separated preference list, walked best
+   first;
+3. the account's stored `locale`, if it has one;
+4. the request's `Accept-Language` header, in the browser's own quality
+   order;
+5. `AUTH_LOCALES`' first entry.
+
+A candidate the deployment does not support falls through to the next: a
+`de-AT` matches a supported `de` by language, and anything unknown or
+malformed is skipped rather than handed to a registry that has no template
+under it. Registering by link stores the locale only when the caller named
+one and the deployment supports it.
+
 ## The link asks; the button acts
 
 `GET /consume` **never signs anybody in**. Every token-shaped link lands on

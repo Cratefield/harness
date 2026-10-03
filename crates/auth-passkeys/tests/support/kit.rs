@@ -129,6 +129,7 @@ impl Kit {
                 display_name: None,
                 primary_email: Some(email.to_owned()),
                 primary_email_verified: true,
+                locale: None,
                 status: "active".to_owned(),
                 created_at: now.clone(),
                 updated_at: now,

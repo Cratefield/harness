@@ -75,8 +75,10 @@ pub const TOKENS_UNCONFIGURED: cratefield_core::ProblemDef = cratefield_core::Pr
 };
 
 /// Where this module's routers mount (the discovery documents advertise
-/// absolute URLs built on the configured issuer).
-const MODULE_PREFIX: &str = "/v1/auth-core";
+/// absolute URLs built on the configured issuer). `locale` reads it too:
+/// the `ui_locales` a login method must honour only counts when the
+/// `return_to` is this module's `/authorize`.
+pub(crate) const MODULE_PREFIX: &str = "/v1/auth-core";
 
 /// A signing-key configuration problem: malformed keys, a missing
 /// active key id, a missing issuer. Collected by `validate_config`

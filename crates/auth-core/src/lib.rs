@@ -35,6 +35,7 @@ mod clients;
 pub mod csrf;
 pub mod federated;
 pub mod linking;
+mod locale;
 mod secrets;
 mod sessions;
 mod store;
@@ -49,6 +50,7 @@ pub mod redirect_uri;
 /// reuse detection.
 pub mod tokens;
 
+pub use locale::{Hints, SupportedLocales, resolve, ui_locales_from_return_to};
 pub use secrets::{
     CLIENT_DISABLED, SECRET_BYTES, SecretError, ensure_client_usable, generate_secret,
     hash_password, hash_secret, kind_allows_secret, password_needs_rehash, verify_client_secret,
@@ -133,6 +135,15 @@ const MIGRATION_SUSPECT: SqlMigration = SqlMigration::new(
     "0004",
     "passkey_suspect",
     include_str!("../migrations/sqlite/0004_passkey_suspect.sql"),
+);
+
+/// The account locale of issue #649: `users.locale`, the language an
+/// account asked to be written to in. Portable DDL, so the Postgres set
+/// reuses this file (ADR 0004).
+const MIGRATION_USER_LOCALE: SqlMigration = SqlMigration::new(
+    "0007",
+    "user_locale",
+    include_str!("../migrations/sqlite/0007_user_locale.sql"),
 );
 
 /// The token-issuing migration of issue #9: the sessions `amr` column
@@ -235,7 +246,8 @@ impl Module for AuthCore {
         &[Port::Db, Port::Clock, Port::IdGen]
     }
 
-    /// The eight tables migrations `0001`–`0006` leave behind.
+    /// The eight tables migrations `0001`–`0007` leave behind. `0007`
+    /// adds a column rather than a table, so this list is unchanged.
     ///
     /// `deletion_jobs` was missing from this list for as long as it has
     /// existed (issue #272). Its migration created it, the module read and
@@ -413,28 +425,30 @@ impl Module for AuthCore {
     }
 
     fn migrations(&self) -> cratefield_core::Migrations {
-        const MIGRATIONS: [SqlMigration; 6] = [
+        const MIGRATIONS: [SqlMigration; 7] = [
             MIGRATION_INIT,
             MIGRATION_ROTATION,
             MIGRATION_TOKENS,
             MIGRATION_SUSPECT,
             MIGRATION_DELETION_JOBS,
             MIGRATION_PASSWORD_LOCKOUT,
+            MIGRATION_USER_LOCALE,
         ];
         // The array is the apply order; this refuses a gap, a duplicate
         // or an entry out of order at build time (issue #27).
         const _: () = cratefield_core::assert_migration_set(&MIGRATIONS);
         // The runner selects one set wholesale (harness issue #18), so the
-        // Postgres list carries all six: the two whose SQL truly differs
-        // (BYTEA for the byte columns) and the four portable ones reused
+        // Postgres list carries all seven: the two whose SQL truly differs
+        // (BYTEA for the byte columns) and the five portable ones reused
         // from the sqlite files unchanged (ADR 0004).
-        const MIGRATIONS_POSTGRES: [SqlMigration; 6] = [
+        const MIGRATIONS_POSTGRES: [SqlMigration; 7] = [
             MIGRATION_INIT_POSTGRES,
             MIGRATION_ROTATION,
             MIGRATION_TOKENS_POSTGRES,
             MIGRATION_SUSPECT,
             MIGRATION_DELETION_JOBS,
             MIGRATION_PASSWORD_LOCKOUT,
+            MIGRATION_USER_LOCALE,
         ];
         // The array is the apply order; this refuses a gap, a duplicate
         // or an entry out of order at build time (issue #27).
@@ -582,7 +596,7 @@ mod tests {
     #[test]
     fn migrations_are_the_embedded_set_in_order() {
         let migrations = AuthCore::new().migrations();
-        assert_eq!(migrations.sqlite.len(), 6);
+        assert_eq!(migrations.sqlite.len(), 7);
         assert_eq!(migrations.sqlite[0].id, "0001");
         assert_eq!(migrations.sqlite[0].name, "init");
         assert_eq!(migrations.sqlite[1].id, "0002");
@@ -595,10 +609,12 @@ mod tests {
         assert_eq!(migrations.sqlite[4].name, "deletion_jobs");
         assert_eq!(migrations.sqlite[5].id, "0006");
         assert_eq!(migrations.sqlite[5].name, "password_lockout");
+        assert_eq!(migrations.sqlite[6].id, "0007");
+        assert_eq!(migrations.sqlite[6].name, "user_locale");
         // The Postgres set is selected wholesale (harness issue #18), so it
         // must mirror the sqlite one id-for-id: only the two files whose SQL
         // truly differs carry BYTEA overrides, the rest are the same const.
-        assert_eq!(migrations.postgres.len(), 6);
+        assert_eq!(migrations.postgres.len(), 7);
         for (pg, sqlite) in migrations.postgres.iter().zip(migrations.sqlite) {
             assert_eq!(pg.id, sqlite.id);
             assert_eq!(pg.name, sqlite.name);
@@ -618,6 +634,10 @@ mod tests {
         );
         assert_eq!(migrations.postgres[1].sql, migrations.sqlite[1].sql);
         assert_eq!(
+            migrations.postgres[6].sql, migrations.sqlite[6].sql,
+            "the locale column is portable DDL, so Postgres reuses the sqlite file"
+        );
+        assert_eq!(
             migrations.sqlite[0].sql,
             include_str!("../migrations/sqlite/0001_init.sql")
         );
@@ -632,6 +652,10 @@ mod tests {
         assert_eq!(
             migrations.sqlite[4].sql,
             include_str!("../migrations/sqlite/0005_deletion_jobs.sql")
+        );
+        assert_eq!(
+            migrations.sqlite[6].sql,
+            include_str!("../migrations/sqlite/0007_user_locale.sql")
         );
     }
 

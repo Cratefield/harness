@@ -41,6 +41,7 @@ mod lockout;
 use cratefield_core::{
     Config, ConfigError, Migrations, Module, ModuleConfig, ModuleContext, Port, ProblemDef,
 };
+use factory0_auth_core::SupportedLocales;
 use http::StatusCode;
 use std::sync::Arc;
 
@@ -98,6 +99,10 @@ pub(crate) struct Settings {
     pub lockout_window_secs: i64,
     /// How long a lock lasts, in seconds.
     pub lockout_secs: i64,
+    /// The locales the deployment supports (issue #649), from
+    /// `AUTH_LOCALES`. Registration stores a locale only when it is one of
+    /// these.
+    pub supported: SupportedLocales,
 }
 
 impl Default for Settings {
@@ -112,6 +117,7 @@ impl Default for Settings {
             lockout_threshold: 10,
             lockout_window_secs: 3600,
             lockout_secs: 900,
+            supported: SupportedLocales::default(),
         }
     }
 }
@@ -162,6 +168,7 @@ fn resolve_settings(cfg: &dyn Config) -> Result<Settings, Vec<String>> {
             lockout_threshold,
             lockout_window_secs,
             lockout_secs,
+            supported: SupportedLocales::from_config(cfg),
         })
     } else {
         Err(problems)
