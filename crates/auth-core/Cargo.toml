@@ -27,6 +27,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 argon2 = { workspace = true }
 base64ct = { workspace = true }
+bcrypt = { workspace = true }
 getrandom = { workspace = true }
 # Percent-decoding the `ui_locales` out of a pending `/authorize` query.
 url = { workspace = true }

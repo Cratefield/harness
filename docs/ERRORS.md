@@ -25,6 +25,7 @@ human-readable page at each `<public_url>/problems/<slug>`.
 | `api-key-unauthorized` | 401 | API key unauthorized | `cratefield-core` | The request's API key was missing, malformed, unknown, revoked or invalid; one uniform answer for all five. |
 | `auth/client-disabled` | 403 | Client is disabled | `factory0-auth-core` | A disabled client is refused by every flow |
 | `auth/cross-site-request` | 403 | A same-origin request is required | `factory0-auth-core` | Fetch metadata or the origin header reports another site; a request that can change state is accepted only from this venture's own origin |
+| `auth/import-too-large` | 413 | Too many users to import | `factory0-auth-core` | An import may carry at most 1000 users in one request; nothing was written. |
 | `auth/last-login-method` | 409 | That is the account's only login method | `factory0-auth-passkeys` | Add another passkey or link a provider before removing this one |
 | `auth/magic-link-not-ready` | 503 | Email sign-in is not available | `factory0-auth-magic-link` | The module is missing a port it requires |
 | `auth/magic-link-refused` | 400 | That sign-in link is no longer valid | `factory0-auth-magic-link` | Missing, expired, already used, or never issued |

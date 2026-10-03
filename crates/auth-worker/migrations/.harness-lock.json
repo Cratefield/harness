@@ -26,5 +26,9 @@
   "auth-core/0007": {
     "file": "0007_auth-core_0007_user_locale.sql",
     "sha256": "41ec8c0a7836bb34be5df2c92f91c4801a1a1292dc64f191e4b56a796c71ac6f"
+  },
+  "auth-core/0008": {
+    "file": "0008_auth-core_0008_import_provider.sql",
+    "sha256": "3a431aa60ea63914b011a0e4422e57d447754e511024712a90290d4fc8f50179"
   }
 }

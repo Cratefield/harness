@@ -12,10 +12,11 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use cratefield_core::{Json, Problem, Scope};
 use factory0_auth_core::{
-    CREDENTIAL_PASSWORD, CredentialRow, IssuedSession, Login, PROVIDER_PASSWORD, STATUS_ACTIVE,
-    SessionError, cookie_value as session_cookie_value, hash_password, insert_credential,
-    insert_identity, issue as issue_session, password_credential, set_cookie, set_password_hash,
-    set_password_lockout, user_by_id, user_by_primary_email, verify_password,
+    CREDENTIAL_PASSWORD, CredentialRow, IssuedSession, LegacyHashes, Login, PROVIDER_PASSWORD,
+    STATUS_ACTIVE, SessionError, cookie_value as session_cookie_value, hash_password,
+    insert_credential, insert_identity, issue as issue_session, password_credential, set_cookie,
+    set_password_hash, set_password_lockout, user_by_id, user_by_primary_email,
+    verify_password_with,
 };
 use http::{HeaderMap, StatusCode, Uri, header};
 use serde::Deserialize;
@@ -575,7 +576,15 @@ async fn sign_in(
     };
     let now = clock.now();
 
-    let attempt = attempt(db, &email, password, now, scope).await?;
+    let attempt = attempt(
+        db,
+        &email,
+        password,
+        now,
+        scope,
+        state.settings.legacy_hashes,
+    )
+    .await?;
     let Attempt {
         user,
         credential,
@@ -712,6 +721,7 @@ async fn attempt(
     password: &str,
     now: time::OffsetDateTime,
     scope: &Scope,
+    legacy: LegacyHashes,
 ) -> Result<Attempt, Problem> {
     // Find the account, the credential, and whether either is usable.
     // Nothing below returns early on a *different* answer: every failure
@@ -746,7 +756,8 @@ async fn attempt(
     // The dummy verify. An unknown address, an account with no password,
     // and a locked one all still pay for one Argon2id verify, because the
     // *time* the answer takes must not tell an attacker which it was.
-    let presented_ok = verify_password(password, stored.as_deref().unwrap_or(DUMMY_HASH));
+    let presented_ok =
+        verify_password_with(password, stored.as_deref().unwrap_or(DUMMY_HASH), legacy);
 
     let active = user
         .as_ref()
@@ -822,7 +833,11 @@ async fn change(
         .as_ref()
         .map(|hash| hash.0.clone())
         .unwrap_or_default();
-    if !verify_password(&body.current_password, &stored) {
+    if !verify_password_with(
+        &body.current_password,
+        &stored,
+        state.settings.legacy_hashes,
+    ) {
         return Err(refused(&scope));
     }
 
@@ -899,7 +914,10 @@ mod tests {
         // password, which proves the parser accepts this shape. The dummy
         // then has to be indistinguishable from it except in its digest.
         let real = factory0_auth_core::hash_password("a known password").expect("hash");
-        assert!(verify_password("a known password", &real));
+        assert!(factory0_auth_core::verify_password(
+            "a known password",
+            &real
+        ));
         let params = |phc: &str| phc.rsplitn(3, '$').last().map(str::to_owned);
         assert_eq!(
             params(DUMMY_HASH),
@@ -908,8 +926,11 @@ mod tests {
         );
 
         // And it must not verify against anything.
-        assert!(!verify_password("anything at all", DUMMY_HASH));
-        assert!(!verify_password("", DUMMY_HASH));
+        assert!(!factory0_auth_core::verify_password(
+            "anything at all",
+            DUMMY_HASH
+        ));
+        assert!(!factory0_auth_core::verify_password("", DUMMY_HASH));
     }
 
     #[test]

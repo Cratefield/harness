@@ -41,7 +41,7 @@ mod lockout;
 use cratefield_core::{
     Config, ConfigError, Migrations, Module, ModuleConfig, ModuleContext, Port, ProblemDef,
 };
-use factory0_auth_core::SupportedLocales;
+use factory0_auth_core::{LegacyHashes, SupportedLocales};
 use http::StatusCode;
 use std::sync::Arc;
 
@@ -99,6 +99,9 @@ pub(crate) struct Settings {
     pub lockout_window_secs: i64,
     /// How long a lock lasts, in seconds.
     pub lockout_secs: i64,
+    /// Legacy hash formats login still accepts (issue #650), from
+    /// `AUTH_LEGACY_HASHES`. Empty unless a deployment opts in.
+    pub legacy_hashes: LegacyHashes,
     /// The locales the deployment supports (issue #649), from
     /// `AUTH_LOCALES`. Registration stores a locale only when it is one of
     /// these.
@@ -117,6 +120,7 @@ impl Default for Settings {
             lockout_threshold: 10,
             lockout_window_secs: 3600,
             lockout_secs: 900,
+            legacy_hashes: LegacyHashes::default(),
             supported: SupportedLocales::default(),
         }
     }
@@ -162,12 +166,24 @@ fn resolve_settings(cfg: &dyn Config) -> Result<Settings, Vec<String>> {
         },
     };
 
+    // The legacy hash formats, read straight from the config (issue #650):
+    // the key is unprefixed, a statement about imported hashes rather than a
+    // module knob. A typo here is a configuration error like any other.
+    let legacy_hashes = match LegacyHashes::from_config(cfg) {
+        Ok(legacy) => legacy,
+        Err(problem) => {
+            problems.push(problem);
+            LegacyHashes::default()
+        }
+    };
+
     if problems.is_empty() {
         Ok(Settings {
             breach_check,
             lockout_threshold,
             lockout_window_secs,
             lockout_secs,
+            legacy_hashes,
             supported: SupportedLocales::from_config(cfg),
         })
     } else {
@@ -328,6 +344,8 @@ mod tests {
             ("AUTH_PASSWORD_LOCKOUT_WINDOW_SECS", "-1"),
             ("AUTH_PASSWORD_LOCKOUT_SECS", ""),
             ("AUTH_PASSWORD_BREACH_CHECK", "yes"),
+            // Issue #650: a format the auth stack does not know.
+            ("AUTH_LEGACY_HASHES", "sha1"),
         ] {
             assert!(
                 resolve_settings(&config(&[(key, value)])).is_err(),
@@ -341,6 +359,19 @@ mod tests {
         let settings =
             resolve_settings(&config(&[("AUTH_PASSWORD_BREACH_CHECK", "false")])).expect("valid");
         assert!(!settings.breach_check);
+    }
+
+    #[test]
+    fn legacy_hashes_are_off_unless_configured() {
+        let settings = resolve_settings(&config(&[])).expect("valid");
+        assert_eq!(
+            settings.legacy_hashes,
+            LegacyHashes::default(),
+            "no key means no legacy formats"
+        );
+        let settings =
+            resolve_settings(&config(&[("AUTH_LEGACY_HASHES", "bcrypt")])).expect("valid");
+        assert_ne!(settings.legacy_hashes, LegacyHashes::default());
     }
 
     #[test]

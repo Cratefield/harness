@@ -64,6 +64,12 @@ own instance, and rotating signing keys or client secrets, is
 | `auth-password` | Email and password: argon2id, a per-account lockout, a breach check, and answers that reveal nothing about who has an account. **Needs the paid Workers plan** (ADR 0200) |
 | `auth-magic-link` | Sign in by email: a single-use bearer credential, the way an address gets verified, and the way back in for a locked or passwordless account |
 
+## Bringing an existing userbase
+
+Running on another auth service today? [MIGRATING.md](MIGRATING.md) walks a
+Supabase export through `fz auth import`, keeping each user's password and
+verified email.
+
 ## The login chooser
 
 `/v1/auth-core/authorize` renders a sign-in page whenever there is no session.

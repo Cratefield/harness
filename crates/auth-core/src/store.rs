@@ -20,6 +20,10 @@ pub const PROVIDER_META: &str = "meta";
 pub const PROVIDER_PASSWORD: &str = "password";
 pub const PROVIDER_MAGIC_LINK: &str = "magic_link";
 pub const PROVIDER_PASSKEY: &str = "passkey";
+/// A person moved in from a system of record (issue #650, part B). The
+/// `provider_subject` is `<external_provider>:<external_id>`, so a re-run
+/// of the same import finds the row it wrote and changes nothing.
+pub const PROVIDER_IMPORT: &str = "import";
 
 pub const CREDENTIAL_PASSKEY: &str = "passkey";
 pub const CREDENTIAL_PASSWORD: &str = "password";

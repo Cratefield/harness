@@ -91,9 +91,10 @@ jobs:
       - run: cargo clippy --workspace --all-targets -- -D warnings
       # `fz push send`'s network leg is behind an opt-in feature (issue
       # #184), so the workspace run above never compiles it — and the live
-      # proofs (issue #186) would be the first thing to find out.
-      - name: fz push send, with its optional transport (issue #184)
-        run: cargo clippy -p cratefield-cli --all-targets --features push-send -- -D warnings
+      # proofs (issue #186) would be the first thing to find out. `fz auth
+      # import`'s is behind `auth-import` (issue #650), for the same reason.
+      - name: fz push send and fz auth import, with their optional transports
+        run: cargo clippy -p cratefield-cli --all-targets --features push-send,auth-import -- -D warnings
       - name: fz import supabase, with its optional engine (issue #658)
         run: cargo clippy -p cratefield-cli --all-targets --features import-supabase -- -D warnings
       - name: core dependency boundary (ADR 0001)
