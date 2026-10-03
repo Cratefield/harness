@@ -59,6 +59,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Module suites on the matrix dialect
         run: |
+          cargo test -p factory0-auth-password
           cargo test -p cratefield-module-changelog
           cargo test -p cratefield-module-cms
           cargo test -p cratefield-module-connections
@@ -71,6 +72,7 @@ jobs:
           cargo test -p cratefield-testing --features postgres
       - name: Conformance kit on the matrix dialect
         run: |
+          cargo test -p factory0-auth-password --test conformance
           cargo test -p cratefield-module-changelog --test conformance
           cargo test -p cratefield-module-cms --test conformance
           cargo test -p cratefield-module-connections --test conformance

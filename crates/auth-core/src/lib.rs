@@ -72,19 +72,20 @@ pub use store::{
     DELETION_NOTHING_TO_DO, DELETION_PENDING, DELETION_UNLINKED, DeletionJobRow, IdentityRow,
     PROVIDER_APPLE, PROVIDER_GOOGLE, PROVIDER_IMPORT, PROVIDER_MAGIC_LINK, PROVIDER_META,
     PROVIDER_PASSKEY, PROVIDER_PASSWORD, Redacted, STATUS_ACTIVE, STATUS_DISABLED, SessionRow,
-    SingleUseTokenRow, TOKEN_AUTHORIZATION_CODE, TOKEN_MAGIC_LINK, TOKEN_REFRESH,
-    TOKEN_WEBAUTHN_CHALLENGE, UserRow, client_by_id, complete_deletion_job,
-    consume_single_use_token, credentials_by_user, delete_credential, delete_identity, delete_user,
-    deletion_job_by_code, identities_by_user, identity_by_provider_subject, insert_client,
-    insert_credential, insert_deletion_job, insert_identity, insert_redirect_uri, insert_session,
-    insert_single_use_token, insert_user, list_clients, mark_passkey_suspect,
-    passkey_by_credential_id, password_credential, pending_deletion_jobs, purge_expired_sessions,
-    purge_expired_single_use_tokens, purge_user, redirect_uris_for_client, replace_redirect_uris,
-    retire_unconsumed_tokens, revoke_all_sessions, revoke_session, rotate_client_secret,
-    session_by_id, session_by_token_hash, sessions_by_user, set_password_hash,
-    set_password_lockout, set_primary_email_verified, single_use_token_by_hash, slide_session,
-    touch_credential_used, touch_identity_login, touch_session_seen, update_client_name,
-    update_client_status, update_passkey_sign_count, user_by_id, user_by_primary_email,
+    SingleUseTokenRow, TOKEN_AUTHORIZATION_CODE, TOKEN_EMAIL_VERIFICATION, TOKEN_MAGIC_LINK,
+    TOKEN_PASSWORD_RESET, TOKEN_REFRESH, TOKEN_WEBAUTHN_CHALLENGE, UserRow, client_by_id,
+    complete_deletion_job, consume_single_use_token, credentials_by_user, delete_credential,
+    delete_identity, delete_user, deletion_job_by_code, identities_by_user,
+    identity_by_provider_subject, insert_client, insert_credential, insert_deletion_job,
+    insert_identity, insert_redirect_uri, insert_session, insert_single_use_token, insert_user,
+    list_clients, mark_passkey_suspect, passkey_by_credential_id, password_credential,
+    pending_deletion_jobs, purge_expired_sessions, purge_expired_single_use_tokens, purge_user,
+    redirect_uris_for_client, replace_redirect_uris, retire_unconsumed_tokens, revoke_all_sessions,
+    revoke_session, rotate_client_secret, session_by_id, session_by_token_hash, sessions_by_user,
+    set_password_hash, set_password_lockout, set_primary_email_verified, single_use_token_by_hash,
+    slide_session, touch_credential_used, touch_identity_login, touch_session_seen,
+    update_client_name, update_client_status, update_passkey_sign_count, user_by_id,
+    user_by_primary_email,
 };
 pub use tokens::{
     ACCESS_TOKEN_SECS, JWKS_CACHE_CONTROL, OIDC_CACHE_CONTROL, REFRESH_TOKEN_DAYS, RefreshGrant,
@@ -149,6 +150,22 @@ const MIGRATION_USER_LOCALE: SqlMigration = SqlMigration::new(
     "0007",
     "user_locale",
     include_str!("../migrations/sqlite/0007_user_locale.sql"),
+);
+
+/// The recovery-token kinds of issues #19/#20: `email_verification` and
+/// `password_reset` joined the `single_use_tokens` kind CHECK.
+const MIGRATION_TOKEN_KINDS_RECOVERY: SqlMigration = SqlMigration::new(
+    "0009",
+    "token_kinds_recovery",
+    include_str!("../migrations/sqlite/0009_token_kinds_recovery.sql"),
+);
+
+/// The Postgres form of the recovery-token-kinds migration: the rebuild
+/// applies as written; only the byte column type differs.
+const MIGRATION_TOKEN_KINDS_RECOVERY_POSTGRES: SqlMigration = SqlMigration::new(
+    "0009",
+    "token_kinds_recovery",
+    include_str!("../migrations/postgres/0009_token_kinds_recovery.sql"),
 );
 
 /// The token-issuing migration of issue #9: the sessions `amr` column
@@ -447,7 +464,7 @@ impl Module for AuthCore {
     }
 
     fn migrations(&self) -> cratefield_core::Migrations {
-        const MIGRATIONS: [SqlMigration; 8] = [
+        const MIGRATIONS: [SqlMigration; 9] = [
             MIGRATION_INIT,
             MIGRATION_ROTATION,
             MIGRATION_TOKENS,
@@ -456,16 +473,17 @@ impl Module for AuthCore {
             MIGRATION_PASSWORD_LOCKOUT,
             MIGRATION_USER_LOCALE,
             MIGRATION_IMPORT_PROVIDER,
+            MIGRATION_TOKEN_KINDS_RECOVERY,
         ];
         // The array is the apply order; this refuses a gap, a duplicate
         // or an entry out of order at build time (issue #27).
         const _: () = cratefield_core::assert_migration_set(&MIGRATIONS);
         // The runner selects one set wholesale (harness issue #18), so the
-        // Postgres list carries all eight: the three whose SQL truly differs
-        // (BYTEA for the byte columns in two, and the in-place CHECK rename
+        // Postgres list carries all nine: the four whose SQL truly differs
+        // (BYTEA for the byte columns in three, and the in-place CHECK rename
         // in the import) and the five portable ones reused from the sqlite
         // files unchanged (ADR 0004).
-        const MIGRATIONS_POSTGRES: [SqlMigration; 8] = [
+        const MIGRATIONS_POSTGRES: [SqlMigration; 9] = [
             MIGRATION_INIT_POSTGRES,
             MIGRATION_ROTATION,
             MIGRATION_TOKENS_POSTGRES,
@@ -474,6 +492,7 @@ impl Module for AuthCore {
             MIGRATION_PASSWORD_LOCKOUT,
             MIGRATION_USER_LOCALE,
             MIGRATION_IMPORT_PROVIDER_POSTGRES,
+            MIGRATION_TOKEN_KINDS_RECOVERY_POSTGRES,
         ];
         // The array is the apply order; this refuses a gap, a duplicate
         // or an entry out of order at build time (issue #27).
@@ -630,7 +649,7 @@ mod tests {
     #[test]
     fn migrations_are_the_embedded_set_in_order() {
         let migrations = AuthCore::new().migrations();
-        assert_eq!(migrations.sqlite.len(), 8);
+        assert_eq!(migrations.sqlite.len(), 9);
         assert_eq!(migrations.sqlite[0].id, "0001");
         assert_eq!(migrations.sqlite[0].name, "init");
         assert_eq!(migrations.sqlite[1].id, "0002");
@@ -647,10 +666,12 @@ mod tests {
         assert_eq!(migrations.sqlite[6].name, "user_locale");
         assert_eq!(migrations.sqlite[7].id, "0008");
         assert_eq!(migrations.sqlite[7].name, "import_provider");
+        assert_eq!(migrations.sqlite[8].id, "0009");
+        assert_eq!(migrations.sqlite[8].name, "token_kinds_recovery");
         // The Postgres set is selected wholesale (harness issue #18), so it
         // must mirror the sqlite one id-for-id: only the files whose SQL
         // truly differs carry an override, the rest are the same const.
-        assert_eq!(migrations.postgres.len(), 8);
+        assert_eq!(migrations.postgres.len(), 9);
         for (pg, sqlite) in migrations.postgres.iter().zip(migrations.sqlite) {
             assert_eq!(pg.id, sqlite.id);
             assert_eq!(pg.name, sqlite.name);
@@ -671,6 +692,10 @@ mod tests {
         assert_eq!(
             migrations.postgres[7].sql,
             include_str!("../migrations/postgres/0008_import_provider.sql")
+        );
+        assert_eq!(
+            migrations.postgres[8].sql,
+            include_str!("../migrations/postgres/0009_token_kinds_recovery.sql")
         );
         assert_eq!(migrations.postgres[1].sql, migrations.sqlite[1].sql);
         assert_eq!(
@@ -700,6 +725,10 @@ mod tests {
         assert_eq!(
             migrations.sqlite[7].sql,
             include_str!("../migrations/sqlite/0008_import_provider.sql")
+        );
+        assert_eq!(
+            migrations.sqlite[8].sql,
+            include_str!("../migrations/sqlite/0009_token_kinds_recovery.sql")
         );
     }
 

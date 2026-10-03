@@ -81,15 +81,17 @@ impl AuthWorker {
         self.config.venture()
     }
 
-    /// The composition: the venture, the magic-link default templates, any
-    /// overrides, and the six auth modules — no runtime, so the caller (a
+    /// The composition: the venture, the magic-link and password default
+    /// templates, any overrides, and the six auth modules — no runtime, so the caller (a
     /// wrapper venture, or this crate's boot path) chooses one.
     #[must_use]
     pub fn builder(self) -> HarnessBuilder {
         let mut builder = Harness::builder()
             .venture(self.config.venture())
-            // Magic-link renders its mail through the shared registry.
+            // Magic-link and password render their mail through the
+            // shared registry.
             .templates(auth_magic_link::default_templates())
+            .templates(auth_password::default_templates())
             .module(AuthCore::new())
             .module(Oidc::new())
             .module(Passkeys::new())

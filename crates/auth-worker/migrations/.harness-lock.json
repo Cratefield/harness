@@ -30,5 +30,9 @@
   "auth-core/0008": {
     "file": "0008_auth-core_0008_import_provider.sql",
     "sha256": "3a431aa60ea63914b011a0e4422e57d447754e511024712a90290d4fc8f50179"
+  },
+  "auth-core/0009": {
+    "file": "0009_auth-core_0009_token_kinds_recovery.sql",
+    "sha256": "f5966de2c264ec030ea03b2b70bfed021ed4280da256270eaef86b07aa52cda9"
   }
 }

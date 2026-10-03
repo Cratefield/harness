@@ -37,6 +37,8 @@
 mod breach;
 mod handlers;
 mod lockout;
+mod mail;
+mod recovery;
 
 use cratefield_core::{
     Config, ConfigError, Migrations, Module, ModuleConfig, ModuleContext, Port, ProblemDef,
@@ -44,6 +46,29 @@ use cratefield_core::{
 use factory0_auth_core::{LegacyHashes, SupportedLocales};
 use http::StatusCode;
 use std::sync::Arc;
+
+pub use mail::{
+    DuplicateMail, ResetMail, TEMPLATE_DUPLICATE, TEMPLATE_RESET, TEMPLATE_VERIFY, VerifyMail,
+    default_templates,
+};
+
+/// How long a verification link lasts (issue #19). A day: long enough to
+/// survive a slow mail queue and an inbox opened a morning later, short
+/// enough that a link forwarded by mistake stops working.
+pub const VERIFY_TTL_SECS: i64 = 24 * 60 * 60;
+
+/// How long a password-reset link lasts (issue #20). Thirty minutes: it
+/// is a way past the password, so it does not sit in an inbox for a day.
+pub const RESET_TTL_SECS: i64 = 30 * 60;
+
+/// The one refusal every invalid recovery token answers with, whatever
+/// went wrong with it: missing, expired, already used, or never issued.
+pub const TOKEN_REFUSED: ProblemDef = ProblemDef {
+    slug: "auth/password-token-refused",
+    status: StatusCode::BAD_REQUEST,
+    title: "That link is no longer valid",
+    description: "Missing, expired, already used, or never issued",
+};
 
 /// The one refusal every failed login answers with.
 ///
@@ -106,6 +131,27 @@ pub(crate) struct Settings {
     /// `AUTH_LOCALES`. Registration stores a locale only when it is one of
     /// these.
     pub supported: SupportedLocales,
+    /// The public origin a mailed link points at. Empty when unset, which
+    /// — with no `mail_from` either — is what says "this deployment sends
+    /// no recovery mail", rather than being an error: the mailer is
+    /// optional here, so a venture that mounts `Password` on its own
+    /// keeps working and simply sends nothing.
+    pub public_base: String,
+    /// The `From` address. Empty when unset; see [`Settings::public_base`].
+    pub mail_from: String,
+}
+
+impl Settings {
+    /// The `public_base`/`mail_from` pair when both are set, or `None`
+    /// when this deployment cannot send recovery mail. A send with either
+    /// missing is skipped and warned about, never an error to the caller:
+    /// the answer must not depend on whether mail is configured.
+    pub(crate) fn mail_ready(&self) -> Option<(&str, &str)> {
+        if self.public_base.is_empty() || self.mail_from.is_empty() {
+            return None;
+        }
+        Some((self.public_base.as_str(), self.mail_from.as_str()))
+    }
 }
 
 impl Default for Settings {
@@ -120,6 +166,8 @@ impl Default for Settings {
             lockout_threshold: 10,
             lockout_window_secs: 3600,
             lockout_secs: 900,
+            public_base: String::new(),
+            mail_from: String::new(),
             legacy_hashes: LegacyHashes::default(),
             supported: SupportedLocales::default(),
         }
@@ -166,6 +214,29 @@ fn resolve_settings(cfg: &dyn Config) -> Result<Settings, Vec<String>> {
         },
     };
 
+    // Both are optional: without a mailer there is no mail to send, and a
+    // deployment that mounts only `Password` must keep booting. When one
+    // is set it is checked the way `auth-magic-link` checks its own, so a
+    // half-configured origin is a build failure rather than a link that
+    // points nowhere.
+    let public_base = module.get_opt("PUBLIC_BASE").unwrap_or_default();
+    let public_base = public_base.trim().trim_end_matches('/').to_owned();
+    // `http` is allowed only where https does not reach a mail client: a
+    // loopback host, for `wrangler dev`.
+    let reachable = public_base.starts_with("https://")
+        || public_base.starts_with("http://localhost")
+        || public_base.starts_with("http://127.0.0.1");
+    if !public_base.is_empty() && !reachable {
+        problems.push(format!(
+            "{} must be https (localhost may be http), got {public_base:?}",
+            module.key("PUBLIC_BASE")
+        ));
+    }
+    let mail_from = module
+        .get_opt("MAIL_FROM")
+        .unwrap_or_default()
+        .trim()
+        .to_owned();
     // The legacy hash formats, read straight from the config (issue #650):
     // the key is unprefixed, a statement about imported hashes rather than a
     // module knob. A typo here is a configuration error like any other.
@@ -183,6 +254,8 @@ fn resolve_settings(cfg: &dyn Config) -> Result<Settings, Vec<String>> {
             lockout_threshold,
             lockout_window_secs,
             lockout_secs,
+            public_base,
+            mail_from,
             legacy_hashes,
             supported: SupportedLocales::from_config(cfg),
         })
@@ -226,12 +299,22 @@ impl Module for Password {
     }
 
     /// `RateLimiter` and `Captcha` are the two defences a deployment can
-    /// leave out, and `HttpClient` is only the breach check. None of them
-    /// is required, because a module that refuses to start without a
-    /// captcha would take the whole service down with it — the harness's
-    /// own production rule (`fz doctor`) is what insists on one.
+    /// leave out, and `HttpClient` is only the breach check. `Mailer` is
+    /// optional too, and that is a deliberate difference from
+    /// `auth-magic-link`: password sign-in works without any mail at all,
+    /// so mounting this module without a mailer keeps `register`/`login`
+    /// working and turns only the verification and reset mail off (the
+    /// endpoints still answer `202`). None of these is required, because a
+    /// module that refused to start without a captcha would take the whole
+    /// service down with it — the harness's own production rule
+    /// (`fz doctor`) is what insists on one.
     fn optional(&self) -> &'static [Port] {
-        &[Port::RateLimiter, Port::Captcha, Port::HttpClient]
+        &[
+            Port::RateLimiter,
+            Port::Captcha,
+            Port::HttpClient,
+            Port::Mailer,
+        ]
     }
 
     /// None. `auth-core` owns every table this module touches, including
@@ -247,6 +330,8 @@ impl Module for Password {
             handlers::EVENT_LOCKED,
             handlers::EVENT_CHANGED,
             handlers::EVENT_DUPLICATE_REGISTRATION,
+            recovery::EVENT_EMAIL_VERIFIED,
+            recovery::EVENT_RESET,
         ]
     }
 

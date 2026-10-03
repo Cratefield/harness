@@ -31,6 +31,14 @@ pub const CREDENTIAL_PASSWORD: &str = "password";
 pub const TOKEN_MAGIC_LINK: &str = "magic_link";
 pub const TOKEN_WEBAUTHN_CHALLENGE: &str = "webauthn_challenge";
 pub const TOKEN_AUTHORIZATION_CODE: &str = "authorization_code";
+/// The link that proves an address belongs to whoever opened the mail
+/// (issue #19): a row of `single_use_tokens` like a magic link, but it
+/// spends nothing but the claim over the address.
+pub const TOKEN_EMAIL_VERIFICATION: &str = "email_verification";
+/// The link that lets somebody set a new password without the old one
+/// (issue #20). Bearer, single-use and short-lived, because it is a way
+/// past the password rather than a way to present it.
+pub const TOKEN_PASSWORD_RESET: &str = "password_reset";
 /// Opaque single-use refresh tokens (issue #9): rows of
 /// `single_use_tokens` bound to a session; reuse of a consumed one
 /// revokes the session.

@@ -40,6 +40,7 @@ human-readable page at each `<public_url>/problems/<slug>`.
 | `auth/passkeys-unconfigured` | 503 | Passkeys are not configured | `factory0-auth-passkeys` | AUTH_PASSKEYS_RP_ID and AUTH_PASSKEYS_ORIGINS must be set |
 | `auth/password-login-refused` | 401 | That email address and password do not match | `factory0-auth-password` | Wrong password, unknown address, or the account cannot sign in this way |
 | `auth/password-not-ready` | 503 | Password sign-in is not available | `factory0-auth-password` | The module is missing a port it requires |
+| `auth/password-token-refused` | 400 | That link is no longer valid | `factory0-auth-password` | Missing, expired, already used, or never issued |
 | `auth/password-unsuitable` | 400 | That password cannot be used | `factory0-auth-password` | Too short, too long, or found in a public breach corpus |
 | `auth/session-invalid` | 401 | A valid session is required | `factory0-auth-core` | Missing, unknown, revoked or expired session — not distinguished |
 | `auth/token-request-refused` | 400 | Token request refused | `factory0-auth-core` | Unknown client, wrong secret, or an invalid grant — deliberately not distinguished |

@@ -17,6 +17,7 @@ cratefield-core = { workspace = true }
 # auth-core owns the schema, the linking rules, the argon2 parameters and
 # the step that turns a verified identity into a session.
 factory0-auth-core = { path = "../auth-core" }
+askama = { workspace = true }
 axum = { workspace = true }
 http = { workspace = true }
 bytes = { workspace = true }
@@ -24,11 +25,18 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 time = { workspace = true }
 tracing = { workspace = true }
+base64ct = { workspace = true }
+getrandom = { workspace = true }
+sha2 = { workspace = true }
+url = { workspace = true }
 sha1 = "0.10"
 base16ct = { version = "0.2", default-features = false, features = ["alloc"] }
 
 [dev-dependencies]
-cratefield-testing = { workspace = true }
+# `postgres` so the recovery suite can run its assertions on both
+# dialects (issue #20); the parity workflow drives this by setting
+# FZ_TEST_POSTGRES_URL.
+cratefield-testing = { workspace = true, features = ["postgres"] }
 cratefield-adapter-sqlite = { workspace = true }
 pollster = { workspace = true }
 tower = { workspace = true }

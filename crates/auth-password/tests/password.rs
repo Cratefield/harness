@@ -5,6 +5,10 @@
 //! password endpoint, and it is the one a refactor breaks without any test
 //! that only checks the happy path noticing.
 
+mod common;
+
+use common::{EventSpy, Res};
+
 use async_trait::async_trait;
 use bytes::Bytes;
 use cratefield_core::{
@@ -121,33 +125,14 @@ fn kit_with(pairs: Vec<(String, String)>, allowed_requests: i64) -> Kit {
     }
 }
 
-struct Res {
-    status: StatusCode,
-    headers: http::HeaderMap,
-    body: Vec<u8>,
-}
-
-impl Res {
-    fn text(&self) -> String {
-        String::from_utf8_lossy(&self.body).to_string()
-    }
-
-    fn json(&self) -> Value {
-        serde_json::from_slice(&self.body).unwrap_or(Value::Null)
-    }
-
-    fn cookie(&self, name: &str) -> Option<String> {
-        self.headers
-            .get_all(header::SET_COOKIE)
-            .iter()
-            .filter_map(|value| value.to_str().ok())
-            .find_map(|header| {
-                let value = header.strip_prefix(&format!("{name}="))?;
-                let value = value.split(';').next()?.trim();
-                (!value.is_empty()).then(|| value.to_owned())
-            })
-    }
-}
+/// The events this suite subscribes to.
+const EVENTS: &[&str] = &[
+    "auth-password.registered",
+    "auth-password.duplicate_registration",
+    "auth-password.logged_in",
+    "auth-password.changed",
+    "auth-password.locked",
+];
 
 async fn post(kit: &Kit, uri: &str, body: Value, cookie: Option<&str>) -> Res {
     post_with(kit, uri, body, cookie, &[]).await
@@ -162,36 +147,12 @@ async fn post_with(
     cookie: Option<&str>,
     extra: &[(&str, &str)],
 ) -> Res {
-    let mut builder = Request::builder()
-        .method(Method::POST)
-        .uri(uri)
-        .header(header::CONTENT_TYPE, "application/json");
-    if let Some(cookie) = cookie {
-        builder = builder.header(header::COOKIE, format!("__Host-fz_session={cookie}"));
+    let cookie = cookie.map(|value| format!("__Host-fz_session={value}"));
+    let mut headers: Vec<(&str, &str)> = extra.to_vec();
+    if let Some(cookie) = cookie.as_deref() {
+        headers.push(("cookie", cookie));
     }
-    for (name, value) in extra {
-        builder = builder.header(*name, *value);
-    }
-    let response = kit
-        .harness
-        .router
-        .clone()
-        .oneshot(
-            builder
-                .body(axum::body::Body::from(body.to_string()))
-                .expect("request"),
-        )
-        .await
-        .expect("router answers");
-    let (parts, body) = response.into_parts();
-    let body = axum::body::to_bytes(body, 1024 * 1024)
-        .await
-        .expect("body reads");
-    Res {
-        status: parts.status,
-        headers: parts.headers,
-        body: body.to_vec(),
-    }
+    common::post_json_with(&kit.harness, uri, body, &headers).await
 }
 
 fn count(kit: &Kit, table: &str) -> i64 {
@@ -774,61 +735,6 @@ fn weak_hash(password: &str) -> String {
     )
 }
 
-/// A module that subscribes to this one's events and keeps every payload,
-/// so a test can assert on what actually leaves the service.
-#[derive(Clone, Default)]
-struct EventSpy {
-    seen: Arc<RwLock<Vec<(String, Value)>>>,
-}
-
-impl cratefield_core::Module for EventSpy {
-    fn name(&self) -> &'static str {
-        "event-spy"
-    }
-    fn version(&self) -> &'static str {
-        "0.0.0"
-    }
-    fn requires(&self) -> &'static [cratefield_core::Port] {
-        &[]
-    }
-    fn migrations(&self) -> cratefield_core::Migrations {
-        cratefield_core::Migrations::EMPTY
-    }
-    fn validate_config(&self, _cfg: &dyn Config) -> Result<(), cratefield_core::ConfigError> {
-        Ok(())
-    }
-    fn router(&self, _ctx: cratefield_core::ModuleContext) -> axum::Router {
-        axum::Router::new()
-    }
-    fn events(&self) -> Vec<(cratefield_core::EventName, cratefield_core::EventHandler)> {
-        [
-            "auth-password.registered",
-            "auth-password.duplicate_registration",
-            "auth-password.logged_in",
-            "auth-password.changed",
-            "auth-password.locked",
-        ]
-        .into_iter()
-        .map(|name| {
-            let seen = Arc::clone(&self.seen);
-            let event = name.to_owned();
-            let handler: cratefield_core::EventHandler = Arc::new(
-                move |_scope: &cratefield_core::Scope,
-                      payload: Value|
-                      -> cratefield_core::BoxFuture<
-                    'static,
-                    Result<(), cratefield_core::AnyError>,
-                > {
-                    seen.write().expect("lock").push((event.clone(), payload));
-                    Box::pin(async { Ok(()) })
-                },
-            );
-            (name.to_owned(), handler)
-        })
-        .collect()
-    }
-}
-
 #[test]
 fn no_event_this_module_emits_carries_an_address() {
     pollster::block_on(async {
@@ -840,7 +746,7 @@ fn no_event_this_module_emits_carries_an_address() {
         // "this address has an account" — the exact fact the 202 from
         // `/register` is built not to reveal — was leaving attached to the
         // address it is about.
-        let spy = EventSpy::default();
+        let spy = EventSpy::new(EVENTS);
         let clock = Arc::new(TestClock(AtomicI64::new(1_788_775_200)));
         let config: Arc<dyn Config> =
             Arc::new(MapConfig::from_pairs(Vec::<(String, String)>::new()));
@@ -911,32 +817,8 @@ fn no_event_this_module_emits_carries_an_address() {
 
 const START: &str = "/v1/auth-password/start";
 
-async fn drive(kit: &Kit, request: Request<axum::body::Body>) -> Res {
-    let response = kit
-        .harness
-        .router
-        .clone()
-        .oneshot(request)
-        .await
-        .expect("router answers");
-    let (parts, body) = response.into_parts();
-    let body = axum::body::to_bytes(body, 1024 * 1024)
-        .await
-        .expect("body reads");
-    Res {
-        status: parts.status,
-        headers: parts.headers,
-        body: body.to_vec(),
-    }
-}
-
 async fn get_page(kit: &Kit, uri: &str) -> Res {
-    let request = Request::builder()
-        .method(Method::GET)
-        .uri(uri)
-        .body(axum::body::Body::empty())
-        .expect("request");
-    drive(kit, request).await
+    common::get(&kit.harness, uri).await
 }
 
 async fn post_form(kit: &Kit, uri: &str, body: &str) -> Res {
@@ -945,17 +827,7 @@ async fn post_form(kit: &Kit, uri: &str, body: &str) -> Res {
 
 /// `post_form` with extra headers, for the same reason `post_with` exists.
 async fn post_form_with(kit: &Kit, uri: &str, body: &str, extra: &[(&str, &str)]) -> Res {
-    let mut builder = Request::builder()
-        .method(Method::POST)
-        .uri(uri)
-        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded");
-    for (name, value) in extra {
-        builder = builder.header(*name, *value);
-    }
-    let request = builder
-        .body(axum::body::Body::from(body.to_owned()))
-        .expect("request");
-    drive(kit, request).await
+    common::post_form_with(&kit.harness, uri, body, extra).await
 }
 
 #[test]

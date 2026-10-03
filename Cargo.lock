@@ -2732,6 +2732,7 @@ name = "factory0-auth-password"
 version = "0.1.1"
 dependencies = [
  "argon2",
+ "askama",
  "async-trait",
  "axum",
  "base16ct 0.2.0",
@@ -2741,14 +2742,17 @@ dependencies = [
  "cratefield-core",
  "cratefield-testing",
  "factory0-auth-core",
+ "getrandom 0.4.3",
  "http",
  "pollster",
  "serde",
  "serde_json",
  "sha1 0.10.7",
+ "sha2 0.11.0",
  "time",
  "tower",
  "tracing",
+ "url",
 ]
 
 [[package]]
