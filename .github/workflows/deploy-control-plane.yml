@@ -1,0 +1,148 @@
+name: deploy control plane
+
+# The hosted control plane (`crates/control-plane`) -> production at
+# https://console.cratefield.com, on every `main` push that touches it and
+# on demand. Owner steps and rollback: docs/control-plane/DEPLOY.md.
+#
+# Shaped after deploy-auth.yml (same toolchain, same actions, wrangler run
+# from the crate directory), with three differences:
+#
+# - Until the Cloudflare secrets exist the deploy job is skipped, not
+#   failed, so `main` stays green before the account is wired.
+# - No D1 id is committed: the `cratefield-control-plane` database is
+#   resolved by name (created on the first run) and its id substituted
+#   into wrangler.toml in the runner's checkout only.
+# - HARNESS_SECRET and ADMIN_TOKEN are generated on the first deploy if
+#   absent and never touched again; the values go from `openssl` straight
+#   into `wrangler secret put` and are never printed.
+#
+# `paths` keeps an unrelated harness change from redeploying the console;
+# a change to a shared crate (core, runtime) reaches production on the
+# next control-plane change or a manual dispatch.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "crates/control-plane/**"
+      - "crates/control-plane-*/**"
+      - ".github/workflows/deploy-control-plane.yml"
+  workflow_dispatch:
+
+# One deploy at a time, and never cancel one half-way (a migration or a
+# secret write interrupted is worse than a queued deploy).
+concurrency:
+  group: deploy-control-plane
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CONSOLE_URL: https://console.cratefield.com
+  D1_NAME: cratefield-control-plane
+  WRANGLER_VERSION: "4.147.0"
+
+jobs:
+  preflight:
+    # Outside the `production` environment on purpose: if the owner adds
+    # required reviewers there, a push with no credentials must not sit
+    # waiting for an approval it can never use.
+    name: check Cloudflare credentials
+    runs-on: ubuntu-latest
+    outputs:
+      configured: ${{ steps.check.outputs.configured }}
+    steps:
+      - id: check
+        env:
+          HAS_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN != '' }}
+          HAS_ACCOUNT: ${{ secrets.CLOUDFLARE_ACCOUNT_ID != '' }}
+        run: |
+          if [ "$HAS_TOKEN" = "true" ] && [ "$HAS_ACCOUNT" = "true" ]; then
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice title=Control plane deploy skipped::CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID are not both set as repository secrets; see docs/control-plane/DEPLOY.md."
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  production:
+    name: deploy production
+    needs: preflight
+    if: needs.preflight.outputs.configured == 'true'
+    runs-on: ubuntu-latest
+    environment:
+      name: production
+      url: https://console.cratefield.com
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+    defaults:
+      run:
+        working-directory: crates/control-plane
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.98.1"
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Resolve (or create) the D1 database
+        run: |
+          set -euo pipefail
+          api="https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/d1/database"
+          auth=(-H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}")
+          lookup() {
+            curl -fsS "${auth[@]}" --get --data-urlencode "name=${D1_NAME}" "$api" \
+              | jq -r --arg name "$D1_NAME" '[.result[] | select(.name == $name)][0].uuid // empty'
+          }
+          id="$(lookup)"
+          if [ -z "$id" ]; then
+            echo "::notice title=D1 created::${D1_NAME} did not exist; creating it."
+            curl -fsS "${auth[@]}" -H "Content-Type: application/json" \
+              -X POST --data "{\"name\":\"${D1_NAME}\"}" "$api" > /dev/null
+            id="$(lookup)"
+          fi
+          if ! [[ "$id" =~ ^[0-9a-f-]{36}$ ]]; then
+            echo "::error::could not resolve the ${D1_NAME} D1 database id"
+            exit 1
+          fi
+          # The database id is an identifier, not a credential.
+          echo "D1 ${D1_NAME} = ${id}"
+          sed -i "s/REPLACED_AT_DEPLOY_BY_WORKFLOW/${id}/" wrangler.toml
+          grep -q "database_id = \"${id}\"" wrangler.toml
+
+      - name: Apply D1 migrations (remote)
+        run: npx --yes "wrangler@${WRANGLER_VERSION}" d1 migrations apply DB --env production --remote
+
+      - name: Build + deploy
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          wranglerVersion: ${{ env.WRANGLER_VERSION }}
+          workingDirectory: crates/control-plane
+          command: deploy --env production
+          preCommands: cargo install -q worker-build
+
+      - name: Generate first-deploy secrets if missing
+        # After the deploy, because a secret can only be put on a Worker
+        # that exists. Only an absent secret is written: an existing one
+        # (including a value the owner set by hand) is never replaced.
+        run: |
+          set -euo pipefail
+          existing="$(npx --yes "wrangler@${WRANGLER_VERSION}" secret list --env production --format json | jq -r '.[].name')"
+          for name in HARNESS_SECRET ADMIN_TOKEN; do
+            if grep -qx "$name" <<< "$existing"; then
+              echo "keep ${name} (already set)"
+            else
+              openssl rand -hex 32 | npx --yes "wrangler@${WRANGLER_VERSION}" secret put "$name" --env production > /dev/null
+              echo "set  ${name} (generated, not shown)"
+            fi
+          done
+
+      - name: Smoke production
+        run: ./smoke.sh "$CONSOLE_URL"

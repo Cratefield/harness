@@ -23,6 +23,7 @@ cratefield-kms = { workspace = true }
 cratefield-chrome = { workspace = true }
 cratefield-console = { path = "../control-plane-console" }
 cratefield-dashboard = { path = "../control-plane-dashboard" }
+cratefield-adapter-resend = { workspace = true }
 axum = { workspace = true }
 http = { workspace = true }
 serde = { workspace = true }
