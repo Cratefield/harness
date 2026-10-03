@@ -919,7 +919,7 @@ is the whole truth:
 | `Destination::GitHub` | `cratefield-adapter-github-issues` | yes | yes | no | — | dedupes by an invisible HTML comment stamped into the issue body |
 | `Destination::Webhook` | `cratefield-adapter-webhook-tracker` | yes | no (rejected) | no | — | signs outbound deliveries with `Cratefield-Signature` (HMAC-SHA256, Stripe-style) |
 | `Destination::Jira` | `cratefield-adapter-jira` | yes | yes | yes | `X-Hub-Signature` — sha256 hex over the body | Basic auth over the tenant's `email:api_token`; ADF bodies; dedupes by a derived idempotency label |
-| linear, zendesk, salesforce, hubspot, intercom, slack, freshdesk | not yet — tracked follow-up | | | | | |
+| linear, zendesk, salesforce, hubspot, intercom, slack, freshdesk, colonizer | not yet — tracked follow-up | | | | | |
 
 Freshdesk is a `Destination` variant with no adapter yet, like the rest of
 the last row: wire what your venture needs into `RoutingTracker`, whose

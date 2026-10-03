@@ -28,8 +28,8 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   slug list is unchanged (docs/ERRORS.md). (#557)
 
 A breaking change is pending here: `Destination` is an exhaustive enum and
-gained `Freshdesk`, so a `match` over it no longer compiles unchanged; the
-next release of core is therefore 0.7.0, not 0.6.1.
+gained `Freshdesk` and `Colonizer`, so a `match` over it no longer compiles
+unchanged; the next release of core is therefore 0.7.0, not 0.6.1.
 
 ### Added
 
@@ -43,6 +43,8 @@ next release of core is therefore 0.7.0, not 0.6.1.
   core's `WebhookVerifier` before the adapter ever parses it. (#559)
 - **`Destination::Freshdesk { domain }`** and `RoutingTracker::freshdesk`;
   no adapter ships for it yet. (#559)
+- **`Destination::Colonizer { repo }`** and `RoutingTracker::colonizer`;
+  no adapter ships for it yet. (#676)
 - `TicketState` is now `Serialize`/`Deserialize` (snake case), so a state can
   cross the inbound webhook wire. (#559)
 
