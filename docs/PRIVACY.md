@@ -150,13 +150,162 @@ still accepts `{"token":…}` as a JSON body for API callers.
 
 ## Subject access and erasure
 
-- `GET /v1/<module>/admin/export.csv` (Bearer `ADMIN_TOKEN`) exports
-  every stored column for the subject's records.
-- `DELETE /v1/email-signup/admin/subscribers/{id}` hard-deletes the
-  subscriber row. The path carries the opaque row id, never the email
-  (issue #135): URLs outlive requests in access logs, proxies and
-  browser history. Waitlist rows are removed by direct database access or
-  a scheduled purge; an admin route for waitlist deletion is future work
-  (see PROGRESS.md, deviations).
-- Deletion invalidates outstanding links (tokens name the deleted row
-  id; confirmation then redirects to the expired page).
+`cratefield-module-privacy` answers all four questions over whatever the
+venture composed. Three of its routes are admin-guarded through the
+deployment's `ADMIN_TOKEN` (`cratefield_core::require_admin`): an unset
+token leaves them disabled rather than open.
+
+- `GET /v1/privacy/manifest` — unauthenticated. Per table: the kind, what
+  erasure would do (`erase` | `anonymise` | `retain`, with a retained
+  table's reason), and the columns an export names but does not copy.
+- `GET /v1/privacy/export?subject=<id>` — every row every module holds for
+  one subject; a column declared `redacted` is named but printed
+  `[redacted]`. A table contributing more than 10 000 rows is truncated, and
+  says so (`truncated`).
+- `POST /v1/privacy/erase` — the preview: per table the action and the rows
+  it matches (retained tables included, with their reasons), plus a signed
+  `confirm_token` that lives 15 minutes. Writes nothing.
+- `POST /v1/privacy/erase/confirm` — carries out the previewed erasure: the
+  local statements run in one atomic batch (`batch_atomic`), then every
+  `erase` table is re-counted and a non-zero count fails the request rather
+  than report a success it did not achieve. The subject comes from the
+  token, never the body.
+
+The modules that predate it keep their own admin routes (issue #265):
+`GET /v1/<module>/admin/export.csv` (Bearer `ADMIN_TOKEN`) exports every
+stored column, and `DELETE /v1/email-signup/admin/subscribers/{id}`
+hard-deletes the subscriber row. That path carries the opaque row id, never
+the email (issue #135), because URLs outlive requests in access logs, proxies
+and browser history; deletion invalidates outstanding links. Waitlist rows
+are removed by direct database access or a scheduled purge — an admin route
+for waitlist deletion is future work (see PROGRESS.md, deviations).
+
+## External providers
+
+Everything above reaches what the composed modules declared. An app also
+holds personal data the harness never sees — its own Postgres, a CRM — and an
+access request that stops at the harness is a partial answer. A **provider**
+lets the same three routes cover that data (issue #653):
+
+```rust
+Privacy::new().provider(
+    HttpProvider::new("app-db", "https://app.example.com/privacy")
+        // The variable holding the shared HMAC secret, read via the
+        // deployment's config; the value never lives in code.
+        .secret_env("PRIVACY_PROVIDER_SECRET"),
+)
+```
+
+`.timeout(Duration)` is the per-call timeout (default 10 s, capped by the
+harness's 30 s outbound maximum); `.max_response_bytes(usize)` caps the body
+(default 1 MiB, capped at 4 MiB) — an over-long one is `invalid_response`.
+
+**The calls.** The module POSTs `{url}/export`, `{url}/erase/plan` or
+`{url}/erase/apply` with `Content-Type: application/json` and a body
+`{"subject": "<subject>", "request_id": "<id>"}`, and
+
+```
+Cratefield-Signature: t=<unix seconds>,v1=<lowercase hex HMAC-SHA256(secret, "<t>.<raw body>")>
+```
+
+the scheme the webhooks engine signs deliveries with
+(`cratefield-module-webhooks`). A provider must verify it in constant time
+and reject a `t` more than 300 s from now; the timestamp is bound into the
+MAC, so a captured call cannot be replayed under a fresh one. The module
+never forwards a provider's body or status text to the caller — only an
+error kind.
+
+**What a provider returns.** `export` and `erase/plan` answer 2xx with a
+`sections` array; `erase/apply` answers any 2xx, which means applied.
+
+- `export`: `{"sections":[{"name":"orders","description":"…","data": <any JSON>}]}`.
+- `erase/plan`: `{"sections":[{"name":"orders","action":"delete" | "anonymise"
+  | "retain","reason":"…"}]}` — `reason` required for `retain`.
+- `erase/apply`: must be **idempotent on `request_id`** — repeated calls with
+  the same id neither fail nor apply twice.
+
+**`request_id`.** For erasure it is derived from the confirm token, so a plan
+and every apply attempt for one confirmation carry the same id — what makes
+a retry safe. Export gets an `export_…` id derived from the subject and the
+moment it ran.
+
+**What the routes return.** Each carries the local answer unchanged, plus
+the providers':
+
+- export: `{subject, tables}` as before, plus `"providers":[{"provider":
+  "app-db","status":"ok","sections":[…]}, {"provider":"crm","status":
+  "failed","error":"unavailable"}]` and `"complete": bool` (200).
+- erase plan: the existing fields, plus `"request_id"` and a `providers`
+  array of that `ok`/`failed` shape.
+- confirm: local erasure runs first, atomically and verified as before, then
+  each provider's apply. Adds `"request_id"`, `"providers":[{"provider",
+  "status":"applied"} | {"provider","status":"pending","error"}]` and
+  `"complete"`. **200** when every provider applied, **202** when any is
+  pending. Pending providers are retried in the background (the request's
+  `Defer`/`wait_until`), and re-POSTing confirm with the same token inside
+  its 15 minutes retries them idempotently; after it expires, start a new
+  erase plan — apply is idempotent, so applying again is safe. A failure is
+  reported, never silently dropped.
+
+**Error kinds** (`error`, never a provider's own words): `unavailable`
+(network error, timeout, 5xx), `rejected` (4xx — a bad signature, a refused
+subject), `invalid_response` (too large, malformed, wrong schema) and
+`not_configured` (the secret variable is missing). Serving this protocol
+*from* another harness deployment is out of scope here and tracked as CF14;
+`FakePrivacyProvider` in `cratefield-testing` stands in for a real provider
+in tests.
+
+### A reference provider (TypeScript)
+
+A Worker or Node 18+ fetch handler; fill in the three data-access stubs.
+`applied` — a durable record of ids — is what makes `apply` idempotent.
+
+```ts
+const encoder = new TextEncoder();
+const hexToBytes = (hex: string) =>
+  new Uint8Array((hex.match(/../g) ?? []).map((b) => parseInt(b, 16)));
+
+async function verify(secret: string, header: string | null, raw: string) {
+  const parts = Object.fromEntries(
+    (header ?? "").split(",").map((p) => {
+      const i = p.indexOf("=");
+      return [p.slice(0, i), p.slice(i + 1)];
+    }),
+  );
+  const t = Number(parts.t);
+  if (!Number.isFinite(t) || Math.abs(Date.now() / 1000 - t) > 300) return false;
+  const key = await crypto.subtle.importKey(
+    "raw", encoder.encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["verify"],
+  );
+  // crypto.subtle.verify is the constant-time MAC check.
+  return crypto.subtle.verify(
+    "HMAC", key, hexToBytes(parts.v1 ?? ""), encoder.encode(`${t}.${raw}`),
+  );
+}
+
+export async function handle(
+  request: Request, secret: string, applied: Set<string>,
+): Promise<Response> {
+  const raw = await request.text();
+  if (!(await verify(secret, request.headers.get("Cratefield-Signature"), raw))) {
+    return new Response("bad signature", { status: 401 });
+  }
+  const { subject, request_id } = JSON.parse(raw);
+  const path = new URL(request.url).pathname;
+  if (path.endsWith("/export")) return Response.json({ sections: await exportSections(subject) });
+  if (path.endsWith("/erase/plan")) return Response.json({ sections: await planErasure(subject) });
+  if (path.endsWith("/erase/apply")) {
+    if (!applied.has(request_id)) { // idempotent on request_id
+      await applyErasure(subject);
+      applied.add(request_id); // a table, in production
+    }
+    return new Response(null, { status: 204 });
+  }
+  return new Response("not found", { status: 404 });
+}
+
+// The venture fills these in against its own store.
+async function exportSections(_subject: string) { return []; }
+async function planErasure(_subject: string) { return [{ name: "orders", action: "delete" }]; }
+async function applyErasure(_subject: string) { /* delete or anonymise */ }
+```

@@ -1,3 +1,15 @@
+# The hosted control plane, served at https://console.cratefield.com.
+#
+# Two shapes in one file, the auth Worker's convention:
+#
+# - The top level is local development (`wrangler dev`): a local D1 whose
+#   id is a placeholder, no route, no `ENV` (development), so nothing here
+#   reaches a real account.
+# - `[env.production]` is what `.github/workflows/deploy-control-plane.yml`
+#   deploys (`wrangler deploy --env production`). Its D1 id is a
+#   placeholder the workflow substitutes at deploy time with the id of the
+#   `cratefield-control-plane` database, resolved (or created) by name —
+#   no real id is committed. Owner steps: docs/control-plane/DEPLOY.md.
 name = "cratefield-control-plane"
 main = "build/worker/shim.mjs"
 compatibility_date = "2026-09-01"
@@ -23,8 +35,57 @@ enabled = true
 [triggers]
 crons = ["41 2 * * *"]
 
+# Workers Rate Limiting backs the harness's throttle: the `admin:ip:*`
+# floor on the allowlist invite and the console's magic-link budget both
+# consult it, and in production readiness refuses every `/v1` route unless
+# a limiter resolves (issue #437). `simple` allows 30 `limit()` calls per
+# key per 60s window. Bindings are not inherited by environments, so
+# production declares its own, with its own namespace id.
+[[ratelimits]]
+name = "RATE_LIMITER"
+namespace_id = "2001"
+
+[ratelimits.simple]
+limit = 30
+period = 60
+
 [[d1_databases]]
 binding = "DB"
 database_name = "cratefield-control-plane"
 database_id = "local-control-plane"
+migrations_dir = "migrations"
+
+# --- Production (deployed from `main` by deploy-control-plane.yml) ---
+[env.production]
+# The same script name as the top level, not wrangler's default
+# `cratefield-control-plane-production`: there is one deployed control
+# plane, and its name is the one the docs and the dashboard use.
+name = "cratefield-control-plane"
+workers_dev = false
+# A Custom Domain, not a zone route: Cloudflare creates the proxied DNS
+# record and the certificate for it, so the name resolves the moment the
+# deploy lands. The `cratefield.com` zone must be on the same account.
+routes = [{ pattern = "console.cratefield.com", custom_domain = true }]
+
+[[env.production.ratelimits]]
+name = "RATE_LIMITER"
+namespace_id = "2002"
+
+[env.production.ratelimits.simple]
+limit = 30
+period = 60
+
+# `ENV` is what the harness enforces its production rules against (issue
+# #143) — it also forbids `CONSOLE_DEV_LOGIN`. `CONSOLE_BASE_URL` is the
+# public origin the magic link and the OAuth redirect URIs are built from.
+# Secrets (HARNESS_SECRET, ADMIN_TOKEN, RESEND_API_KEY, the OAuth client
+# secrets) are never vars: `wrangler secret put --env production`.
+[env.production.vars]
+ENV = "production"
+CONSOLE_BASE_URL = "https://console.cratefield.com"
+
+[[env.production.d1_databases]]
+binding = "DB"
+database_name = "cratefield-control-plane"
+database_id = "REPLACED_AT_DEPLOY_BY_WORKFLOW"
 migrations_dir = "migrations"

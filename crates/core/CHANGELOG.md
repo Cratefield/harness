@@ -6,6 +6,29 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.7.0](https://github.com/Cratefield/harness/compare/cratefield-core-v0.6.0...cratefield-core-v0.7.0) - 2026-10-03
+
+### Added
+
+- *(core)* [**breaking**] add Destination::Colonizer { repo } and RoutingTracker::colonizer ([#676](https://github.com/Cratefield/harness/pull/676)) ([#687](https://github.com/Cratefield/harness/pull/687))
+- *(core)* [**breaking**] name problem `type` URIs under the venture's own base ([#557](https://github.com/Cratefield/harness/pull/557)) ([#581](https://github.com/Cratefield/harness/pull/581))
+
+### Other
+
+- Blob port: presigned GET and PUT URLs for R2 through the S3 API (SigV4) ([#622](https://github.com/Cratefield/harness/pull/622)) ([#663](https://github.com/Cratefield/harness/pull/663))
+- report metered usage to Stripe Billing Meters, idempotently ([#662](https://github.com/Cratefield/harness/pull/662))
+- App JWTs, cached installation tokens, and a named GitHub webhook scheme ([#623](https://github.com/Cratefield/harness/pull/623)) ([#637](https://github.com/Cratefield/harness/pull/637))
+- Webhook verification: Vercel (HMAC-SHA1) and GitLab (shared-token) schemes ([#636](https://github.com/Cratefield/harness/pull/636))
+- Stream request and response bodies for routes a module declares ([#585](https://github.com/Cratefield/harness/pull/585)) ([#635](https://github.com/Cratefield/harness/pull/635))
+- Usage metering: per-subject, per-period counters with an atomic check-and-increment ([#588](https://github.com/Cratefield/harness/pull/588)) ([#634](https://github.com/Cratefield/harness/pull/634))
+- CustomHostnames port in core, with a Cloudflare for SaaS adapter ([#590](https://github.com/Cratefield/harness/pull/590)) ([#630](https://github.com/Cratefield/harness/pull/630))
+- ADR 0025: provider-neutral billing lifecycle, entitlements and revenue ledger, fed by Stripe and RevenueCat ([#592](https://github.com/Cratefield/harness/pull/592)) ([#631](https://github.com/Cratefield/harness/pull/631))
+- Route policy: let one module declare a signature verifier per webhook route ([#595](https://github.com/Cratefield/harness/pull/595)) ([#632](https://github.com/Cratefield/harness/pull/632))
+- comment op, inbound status webhooks, Freshdesk destination and the Jira Cloud adapter (#559, part 1) ([#582](https://github.com/Cratefield/harness/pull/582))
+- VectorIndex and Embedder ports, with Cloudflare Vectorize and exact in-process adapters ([#561](https://github.com/Cratefield/harness/pull/561)) ([#568](https://github.com/Cratefield/harness/pull/568))
+- OpenAI-compatible adapter, cached-token usage on every completion, shared TextModel conformance suite ([#560](https://github.com/Cratefield/harness/pull/560)) ([#567](https://github.com/Cratefield/harness/pull/567))
+- Production readiness fails when a module declares RateLimiter and none is mounted; a missing Workers limiter binding fails closed ([#562](https://github.com/Cratefield/harness/pull/562)) ([#569](https://github.com/Cratefield/harness/pull/569))
+
 ### Changed
 
 - **Breaking — problem `type` URIs are named under the serving venture's
@@ -28,11 +51,24 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   slug list is unchanged (docs/ERRORS.md). (#557)
 
 A breaking change is pending here: `Destination` is an exhaustive enum and
-gained `Freshdesk`, so a `match` over it no longer compiles unchanged; the
-next release of core is therefore 0.7.0, not 0.6.1.
+gained `Freshdesk` and `Colonizer`, so a `match` over it no longer compiles
+unchanged; the next release of core is therefore 0.7.0, not 0.6.1.
 
 ### Added
 
+- **`Payments` carries a Merchant of Record (ADR 0027).** New optional
+  methods, each with a default, so every existing adapter compiles
+  unchanged and `HARNESS_API` stays 1:
+  `verify_webhook_request(&HeaderMap, body)` for providers that sign over
+  several headers (Standard Webhooks; the default reads
+  `Stripe-Signature`); `create_portal_session` with
+  `PortalSessionRequest`/`PortalSession` in issue #589's shape; and
+  `get_dispute`, `list_disputes` and `close_dispute` with `Dispute`,
+  `DisputeStatus`, `DisputePhase`, `DisputeListRequest` and `DisputePage`
+  in issue #602's shape. `DisputeStatus::phase()` folds a provider status
+  into `Open`/`Won`/`Lost`/`Closed`; `Dispute::event_key()` is the `Inbox`
+  key for one transition. The defaults answer
+  `PaymentsError::Unsupported`. (#690)
 - **`Tracker::comment`** and **`TicketComment`**: add a note (optionally
   linking a URL) to an existing ticket, so a duplicate report links into the
   ticket it duplicates. The default impl refuses with
@@ -43,6 +79,8 @@ next release of core is therefore 0.7.0, not 0.6.1.
   core's `WebhookVerifier` before the adapter ever parses it. (#559)
 - **`Destination::Freshdesk { domain }`** and `RoutingTracker::freshdesk`;
   no adapter ships for it yet. (#559)
+- **`Destination::Colonizer { repo }`** and `RoutingTracker::colonizer`;
+  no adapter ships for it yet. (#676)
 - `TicketState` is now `Serialize`/`Deserialize` (snake case), so a state can
   cross the inbound webhook wire. (#559)
 

@@ -49,6 +49,7 @@ also switch on the extra features noted in their rows:
 | `openai-compatible` | `cratefield-adapter-openai-compatible` | `cratefield::openai_compatible` | `TextModel` over the `OpenAI` chat-completions wire at any base URL, via the `HttpClient` port |
 | `cloudflare-saas` | `cratefield-adapter-cloudflare-saas` | `cratefield::cloudflare_saas` | `CustomHostnames` over Cloudflare for `SaaS` custom hostnames, via the `HttpClient` port |
 | `stripe` | `cratefield-adapter-stripe` | `cratefield::stripe` | `Payments` over the Stripe API |
+| `polar` | `cratefield-adapter-polar` | `cratefield::polar` | `Payments` over Polar, a Merchant of Record: checkout, usage meters, portal, refunds and disputes |
 | `apns` | `cratefield-adapter-apns` | `cratefield::apns` | `Push` over Apple Push Notification service |
 | `fcm` | `cratefield-adapter-fcm` | `cratefield::fcm` | `Push` over Firebase Cloud Messaging (HTTP v1) |
 | `webpush` | `cratefield-adapter-webpush` | `cratefield::webpush` | `Push` over Web Push (RFC 8030), browsers and UnifiedPush |
@@ -67,6 +68,7 @@ also switch on the extra features noted in their rows:
 | `manifest` | `cratefield-manifest` | `cratefield::manifest` | The venture manifest and its composition generator; `fz` reads it, a running venture does not need it |
 | `client-ts` | `cratefield-client-ts` | `cratefield::client_ts` | The TypeScript client generator behind `fz client-ts`: a `/__surface` document in, a typed client package out |
 | `introspect` | `cratefield-introspect` | `cratefield::introspect` | Reads a live database's catalog over the Database port, in `cratefield-tables`' schema vocabulary |
+| `import-supabase` | `cratefield-import-supabase` | `cratefield::import_supabase` | Inspects a Supabase project read-only and writes the migration report (ADR 0026); native only |
 | `tables-api` | `cratefield-tables-api` | `cratefield::tables_api` | The HTTP API over a venture's declared tables; `fz build` turns it on for a manifest with a `[tables]` section |
 | `auth-client` | `cratefield-auth-client` | `cratefield::auth_client` | Verifies auth-service tokens: JWKS fetch and cache, ES256 verification and an axum extractor |
 | `oauth-client` | `cratefield-oauth-client` | `cratefield::oauth_client` | OAuth 2.0 over the `HttpClient` port: authorize URLs, code exchange, refresh, revocation, PKCE, and token sealing |

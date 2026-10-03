@@ -208,6 +208,7 @@ crate exists**, so the very first release of each crate is manual:
    cargo publish -p cratefield-adapter-classifier-llm
    cargo publish -p cratefield-adapter-github-issues
    cargo publish -p cratefield-adapter-owlpost
+   cargo publish -p cratefield-adapter-polar
    cargo publish -p cratefield-adapter-resend
    cargo publish -p cratefield-adapter-stripe
    cargo publish -p cratefield-adapter-turnstile
@@ -229,13 +230,14 @@ crate exists**, so the very first release of each crate is manual:
    cargo publish -p cratefield-module-notifications  # needs i18n and auth-client
    cargo publish -p cratefield-push-wiring    # before the runtimes and the CLI
    cargo publish -p cratefield-client-ts      # before the CLI (`fz client-ts`)
+   cargo publish -p cratefield-import-supabase  # before the CLI (its `import-supabase` feature) and the facade
    cargo publish -p cratefield-runtime-native
    cargo publish -p cratefield-runtime-cloudflare
    cargo publish -p cratefield-cli
    cargo publish -p cratefield            # the facade; cannot package yet: path-only dep, see tools/package-check.sh
    ```
 
-   Forty-six crates, and the order is the dependency order: `--dry-run`
+   Forty-eight crates, and the order is the dependency order: `--dry-run`
    for a crate whose upstream `cratefield-*` dependencies are not on
    crates.io yet resolves against the registry and fails until those are
    published. The `package` CI job (`tools/package-check.sh`) fails if this

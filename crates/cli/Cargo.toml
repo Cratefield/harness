@@ -5,7 +5,7 @@ readme = "README.md"
 keywords = ["cratefield", "cli", "migrations", "wrangler", "d1"]
 categories = ["command-line-utilities", "development-tools"]
 include = ["src/**/*", "examples/**/*", "README.md"]
-version = "0.3.0"
+version = "0.4.0"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -65,6 +65,20 @@ postgres = ["dep:cratefield-adapter-postgres", "dep:tokio", "dep:cratefield-intr
 # Revisit it if a second consumer wants the same thing, which is when the
 # split stops being a change made for one caller.
 push-send = ["dep:cratefield-runtime-native", "dep:tokio"]
+# `fz import supabase inspect` (issue #658, ADR 0026): the Supabase
+# importer's engine reads Postgres through sqlx, and its Management API and
+# `--classify` legs go through the native runtime's reqwest client — the
+# same client `push-send` uses, for the same reasons. Off by default for the
+# reason `postgres` and `push-send` are: a venture's wasm build must never
+# see sqlx, tokio or reqwest. An importing `fz` is installed separately
+# (`cargo install cratefield-cli --features import-supabase`); without the
+# feature the command still parses and says exactly that.
+import-supabase = [
+    "dep:cratefield-import-supabase",
+    "dep:cratefield-runtime-native",
+    "dep:cratefield-adapter-typesafe",
+    "dep:tokio",
+]
 
 [dependencies]
 cratefield-core = { workspace = true }
@@ -129,6 +143,10 @@ cratefield-client-ts = { workspace = true }
 # policy. Native-only by construction (the crate refuses to compile on wasm),
 # which is why it is optional and off by default.
 cratefield-runtime-native = { workspace = true, optional = true }
+# `import-supabase` only: the engine, and the TypeSafe `Classifier` adapter
+# `--classify` builds through its own `from_env`.
+cratefield-import-supabase = { workspace = true, optional = true }
+cratefield-adapter-typesafe = { workspace = true, optional = true }
 # `net` and `time` on top of the workspace pin: reqwest needs the IO and
 # timer drivers enabled, and `enable_all()` silently enables neither without
 # them — a runtime that then panics on the first request.

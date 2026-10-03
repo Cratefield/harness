@@ -29,7 +29,10 @@ mod tracker;
 mod vector_index;
 
 pub use auth::{Auth, AuthError, Caller, Subject, Unconfigured};
-pub use blob::{Blob, BlobError, BlobObject, MAX_BLOB_BYTES, ScopedBlob, check_blob_size};
+pub use blob::{
+    Blob, BlobError, BlobObject, DEFAULT_PRESIGN_TTL, MAX_BLOB_BYTES, MAX_PRESIGN_TTL,
+    PresignedPut, ScopedBlob, check_blob_size,
+};
 pub use captcha::{Captcha, CaptchaBinding, CaptchaError, Verdict};
 pub use classifier::{
     Answer, AnswerValue, Calibration, Classifier, ClassifierError, ClassifierProfile,
@@ -53,8 +56,9 @@ pub use kv::{KeyValue, KvError};
 pub use mailer::{MailError, Mailer, Message, SendOutcome};
 pub use payments::{
     Charge, CheckoutRequest, CheckoutSession, ConnectAccountLink, ConnectAccountLinkRequest,
-    LineItem, Money, Payments, PaymentsError, Refund, RefundRequest, SubscriptionCheckoutRequest,
-    TransferCharge, UsageReport, UsageReported, WebhookEvent,
+    Dispute, DisputeListRequest, DisputePage, DisputePhase, DisputeStatus, LineItem, Money,
+    Payments, PaymentsError, PortalSession, PortalSessionRequest, Refund, RefundRequest,
+    SubscriptionCheckoutRequest, TransferCharge, UsageReport, UsageReported, WebhookEvent,
 };
 pub use push::{
     LocKeys, Notification, Platform, Priority, Push, PushError, PushOutcome, Recipient,

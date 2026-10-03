@@ -4,16 +4,18 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use cratefield_core::sigv4::Credentials;
 use cratefield_core::{
-    Auth, BoundedHttpClient, Captcha, Classifier, Clock, CustomHostnames, Defer, HarnessConfig,
-    Mailer, Payments, Port, Ports, Push, Runtime, SidecarMounts, TextModel, Tracker, UlidIdGen,
+    Auth, BoundedHttpClient, Captcha, Classifier, Clock, Config, CustomHostnames, Defer,
+    HarnessConfig, Mailer, Payments, Port, Ports, Push, Runtime, SidecarMounts, TextModel, Tracker,
+    UlidIdGen,
 };
 use worker::Env;
 
 use crate::config::EnvConfig;
 use crate::ports::{
-    D1Database, D1RateLimiter, FetchClient, KvStorePort, Limit, R2Blob, RateLimitPolicy,
-    RateLimitPort, ServiceDispatcher, WorkersClock, vector_index_from_env,
+    D1Database, D1RateLimiter, FetchClient, KvStorePort, Limit, R2Blob, R2Presigner,
+    RateLimitPolicy, RateLimitPort, ServiceDispatcher, WorkersClock, vector_index_from_env,
 };
 
 pub(crate) fn warn_once(flag: &AtomicBool, message: &str) {
@@ -46,6 +48,7 @@ use rt_log;
 static WARNED_DB: AtomicBool = AtomicBool::new(false);
 static WARNED_KV: AtomicBool = AtomicBool::new(false);
 static WARNED_BLOB: AtomicBool = AtomicBool::new(false);
+static WARNED_BLOB_PRESIGN: AtomicBool = AtomicBool::new(false);
 static WARNED_VECTOR_INDEX: AtomicBool = AtomicBool::new(false);
 static WARNED_RATE_LIMIT: AtomicBool = AtomicBool::new(false);
 /// The missing-binding refusal (issue #562): logged once per isolate, the
@@ -69,6 +72,11 @@ pub struct Cloudflare {
     db_binding: Option<&'static str>,
     kv_binding: Option<&'static str>,
     blob_binding: Option<&'static str>,
+    /// The four Worker var/secret names presigned R2 URLs read (issue #622):
+    /// account id, access key id, secret access key, bucket. Resolved in
+    /// `ports()` where the `Blob` port is assembled; `None` leaves
+    /// presigning off.
+    blob_presign: Option<(&'static str, &'static str, &'static str, &'static str)>,
     /// The Vectorize index binding backing the `VectorIndex` port
     /// (issue #561), resolved per event like KV and D1.
     vector_index_binding: Option<&'static str>,
@@ -123,6 +131,7 @@ impl Cloudflare {
             db_binding: None,
             kv_binding: None,
             blob_binding: None,
+            blob_presign: None,
             vector_index_binding: None,
             rate_limiter_binding: None,
             d1_rate_limiter: None,
@@ -159,6 +168,34 @@ impl Cloudflare {
     #[must_use]
     pub fn blob(mut self, binding: &'static str) -> Self {
         self.blob_binding = Some(binding);
+        self
+    }
+
+    /// Presigned R2 URLs on the `Blob` port (issue #622): a `GET` a browser
+    /// can fetch directly from R2, skipping the Worker, and a `PUT` it can
+    /// upload to — both through R2's S3-compatible API, which the binding
+    /// alone cannot reach.
+    ///
+    /// Each argument names a Worker var or secret — the account id (the R2
+    /// endpoint's subdomain), an R2 API token's access key id and secret
+    /// access key, and the bucket (the endpoint's first path segment) — read
+    /// from the request's `Env` (secrets first, then vars). The `Env` exists
+    /// only per request, so the values cannot be resolved at compose time.
+    /// Scope the R2 token to the one bucket this port serves: a token that
+    /// reaches every bucket in the account reads every tenant's media.
+    ///
+    /// Without this call, or with any value missing or empty at request time,
+    /// presigning stays off and both presign methods answer
+    /// [`BlobError::Unsupported`](cratefield_core::BlobError::Unsupported).
+    #[must_use]
+    pub fn blob_presign(
+        mut self,
+        account_id: &'static str,
+        access_key_id: &'static str,
+        secret_access_key: &'static str,
+        bucket: &'static str,
+    ) -> Self {
+        self.blob_presign = Some((account_id, access_key_id, secret_access_key, bucket));
         self
     }
 
@@ -500,6 +537,40 @@ impl Cloudflare {
         }
     }
 
+    /// The R2 presigning seam (issue #622): the four names
+    /// [`blob_presign`](Self::blob_presign) stored, resolved from this
+    /// request's `Env`.
+    ///
+    /// `None` — presigning off — when the venture never called `blob_presign`
+    /// (silently: it did not ask for it) or when any value is missing or empty
+    /// (logged once per isolate, by name, never by value).
+    fn r2_presigner(&self, env: &Env) -> Option<R2Presigner> {
+        let (account_id_name, access_key_name, secret_name, bucket_name) = self.blob_presign?;
+        let config = EnvConfig(env.clone());
+        let read =
+            |name: &'static str| Config::get(&config, name).filter(|value| !value.is_empty());
+        let (Some(account_id), Some(access_key_id), Some(secret_access_key), Some(bucket)) = (
+            read(account_id_name),
+            read(access_key_name),
+            read(secret_name),
+            read(bucket_name),
+        ) else {
+            warn_once(
+                &WARNED_BLOB_PRESIGN,
+                "blob_presign is wired but a value it named is missing or empty in this \
+                 deployment's environment: R2 presigning stays off, and the bytes are served \
+                 through the harness",
+            );
+            return None;
+        };
+        Some(R2Presigner::new(
+            account_id,
+            bucket,
+            Credentials::new(access_key_id, secret_access_key),
+            Arc::new(WorkersClock),
+        ))
+    }
+
     /// Assembles the `Auth` port from `AUTH_ISSUER` and `AUTH_CLIENT_ID`
     /// (issue #153), the way `push_from_env` assembles push.
     ///
@@ -540,7 +611,9 @@ impl Cloudflare {
         }
         if let Some(name) = self.blob_binding {
             match env.bucket(name) {
-                Ok(bucket) => ports.blob = Some(Arc::new(R2Blob(bucket))),
+                Ok(bucket) => {
+                    ports.blob = Some(Arc::new(R2Blob::new(bucket, self.r2_presigner(env))));
+                }
                 Err(err) => warn_once(
                     &WARNED_BLOB,
                     &format!("R2 bucket binding {name:?} not available: {err}"),

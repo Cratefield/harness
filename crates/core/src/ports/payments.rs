@@ -1,5 +1,6 @@
 //! The `Payments` port (issue #102): the first thing in the harness that moves
-//! money. Stripe today, over the runtime's `HttpClient`.
+//! money. Stripe, and Polar as a Merchant of Record (issue #690, ADR 0027),
+//! both over the runtime's `HttpClient`.
 //!
 //! **Card data never crosses the harness.** Every method here names a Stripe
 //! identifier or a hosted URL — a checkout session the browser is redirected
@@ -211,6 +212,170 @@ pub struct WebhookEvent {
     pub data: Value,
 }
 
+/// A hosted customer-portal session (issue #589): the page where a customer
+/// changes plan, updates the payment method, reads invoices and cancels.
+/// `customer_ref` is the provider customer the adapter is configured to name
+/// (a provider id, or the venture's own id where the adapter maps it).
+#[derive(Debug, Clone)]
+pub struct PortalSessionRequest {
+    pub customer_ref: String,
+    /// Where the portal's back link returns to.
+    pub return_url: String,
+    pub idempotency_key: String,
+}
+
+/// The hosted portal URL to send the customer to. Short-lived: create one per
+/// visit, never store it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PortalSession {
+    pub url: String,
+}
+
+/// Where a dispute (a chargeback, or the inquiry before one) stands, in the
+/// shape issue #602 set out, plus the two states a Merchant of Record reports
+/// around it. The provider's own spelling is kept on
+/// [`Dispute::provider_status`]; [`DisputeStatus::phase`] is the coarse
+/// lifecycle a venture reacts to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum DisputeStatus {
+    /// A pre-dispute signal from the card network (Polar `early_warning`); no
+    /// chargeback has been filed yet.
+    EarlyWarning,
+    /// An inquiry that wants a response (Stripe `warning_needs_response`).
+    WarningNeedsResponse,
+    /// An inquiry under review (Stripe `warning_under_review`).
+    WarningUnderReview,
+    /// An inquiry that closed without becoming a chargeback (Stripe
+    /// `warning_closed`).
+    WarningClosed,
+    /// A chargeback that wants evidence (`needs_response`).
+    NeedsResponse,
+    /// Evidence submitted, the issuer is deciding (`under_review`).
+    UnderReview,
+    /// Decided for the merchant: the funds come back.
+    Won,
+    /// Decided for the cardholder: the funds stay withdrawn.
+    Lost,
+    /// Headed off by a refund before it escalated (`prevented`): no
+    /// chargeback, and no dispute fee.
+    Prevented,
+    /// A status this version does not know; the raw value is kept.
+    Other(String),
+}
+
+/// The coarse dispute lifecycle a venture acts on: flag an account while a
+/// dispute is [`Open`](DisputePhase::Open), restore it when the dispute is
+/// [`Won`](DisputePhase::Won) or [`Closed`](DisputePhase::Closed) without a
+/// chargeback, and act on a [`Lost`](DisputePhase::Lost) one (revoke what the
+/// payment funded).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DisputePhase {
+    Open,
+    Won,
+    Lost,
+    /// Closed without a decision against either side: an inquiry that went
+    /// nowhere, or a dispute prevented by a refund.
+    Closed,
+}
+
+impl DisputeStatus {
+    /// Maps a provider status string (Polar's and Stripe's spellings) to a
+    /// status; anything unknown is kept as [`DisputeStatus::Other`].
+    #[must_use]
+    pub fn from_provider(status: &str) -> Self {
+        match status {
+            "early_warning" => Self::EarlyWarning,
+            "warning_needs_response" => Self::WarningNeedsResponse,
+            "warning_under_review" => Self::WarningUnderReview,
+            "warning_closed" => Self::WarningClosed,
+            "needs_response" => Self::NeedsResponse,
+            "under_review" => Self::UnderReview,
+            "won" => Self::Won,
+            "lost" => Self::Lost,
+            "prevented" => Self::Prevented,
+            other => Self::Other(other.to_owned()),
+        }
+    }
+
+    /// The lifecycle phase this status is in. An unknown status counts as
+    /// [`DisputePhase::Open`]: the cautious reading, since a venture that
+    /// flags on open keeps the flag until a known terminal status arrives.
+    #[must_use]
+    pub fn phase(&self) -> DisputePhase {
+        match self {
+            Self::EarlyWarning
+            | Self::WarningNeedsResponse
+            | Self::WarningUnderReview
+            | Self::NeedsResponse
+            | Self::UnderReview
+            | Self::Other(_) => DisputePhase::Open,
+            Self::Won => DisputePhase::Won,
+            Self::Lost => DisputePhase::Lost,
+            Self::WarningClosed | Self::Prevented => DisputePhase::Closed,
+        }
+    }
+}
+
+/// A dispute against one payment (issue #602's shape). `payment_ref` is the
+/// id [`RefundRequest::payment_ref`] takes for the same provider (a Stripe
+/// payment-intent, a Polar order), so a venture can tie the dispute to what
+/// it sold; `charge_ref` is the provider's underlying charge or payment id.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Dispute {
+    pub id: String,
+    pub charge_ref: Option<String>,
+    pub payment_ref: String,
+    /// The customer charged, named the way the adapter is configured to name
+    /// customers (a provider id, or the venture's own id where the adapter
+    /// maps it), when the provider reports one.
+    pub customer_ref: Option<String>,
+    /// The disputed amount.
+    pub amount: Money,
+    /// The card network's reason (`fraudulent`, `product_not_received`, …),
+    /// once the provider reports it.
+    pub reason: Option<String>,
+    pub status: DisputeStatus,
+    /// The provider's status string, verbatim.
+    pub provider_status: String,
+    /// The evidence deadline, when a response is wanted.
+    pub evidence_due_by: Option<OffsetDateTime>,
+    /// Whether the disputed charge can still be refunded, when the provider
+    /// says (Stripe does; Polar does not).
+    pub is_charge_refundable: Option<bool>,
+    /// The provider's balance-transaction ids for the dispute, where it
+    /// exposes them (Stripe); empty otherwise.
+    pub balance_transactions: Vec<String>,
+}
+
+impl Dispute {
+    /// The dedup key for "this dispute reached this status". Claim it through
+    /// the [`Inbox`](crate::Inbox) and each transition is acted on once,
+    /// whether it arrived by webhook, by a poll of
+    /// [`Payments::list_disputes`], or both.
+    #[must_use]
+    pub fn event_key(&self) -> String {
+        format!("dispute:{}:{}", self.id, self.provider_status)
+    }
+}
+
+/// Which disputes [`Payments::list_disputes`] returns.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct DisputeListRequest {
+    /// Only disputes still in [`DisputePhase::Open`].
+    pub open_only: bool,
+    /// The cursor from a previous [`DisputePage::next`], or `None` for the
+    /// first page.
+    pub cursor: Option<String>,
+}
+
+/// One page of disputes, newest first, and the cursor for the next page.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DisputePage {
+    pub disputes: Vec<Dispute>,
+    pub next: Option<String>,
+}
+
 /// Payment failures. `NotConfigured` lets a venture build and run without
 /// Stripe (the port reports it rather than erroring); the rest map an upstream
 /// failure. `SignatureInvalid` is separated so a webhook handler answers `400`
@@ -288,6 +453,65 @@ pub trait Payments: Send + Sync {
     async fn report_usage(&self, _report: &UsageReport) -> Result<UsageReported, PaymentsError> {
         Err(PaymentsError::Unsupported("usage reporting"))
     }
+
+    /// Verifies a webhook from its **request headers** and raw body. It
+    /// exists because some providers sign over more than one header:
+    /// Standard Webhooks (Polar, Svix) sends `webhook-id`,
+    /// `webhook-timestamp` and `webhook-signature`, which one
+    /// `signature_header` string cannot carry. A handler that calls this
+    /// instead of [`verify_webhook`](Payments::verify_webhook) stays the same
+    /// whichever adapter is composed in.
+    ///
+    /// The default reads `Stripe-Signature` and delegates to
+    /// [`verify_webhook`](Payments::verify_webhook); a missing header is
+    /// [`PaymentsError::SignatureInvalid`].
+    async fn verify_webhook_request(
+        &self,
+        headers: &http::HeaderMap,
+        body: &[u8],
+    ) -> Result<WebhookEvent, PaymentsError> {
+        let signature = headers
+            .get("stripe-signature")
+            .and_then(|value| value.to_str().ok())
+            .ok_or_else(|| PaymentsError::SignatureInvalid("no signature header".to_owned()))?;
+        self.verify_webhook(signature, body).await
+    }
+
+    /// A hosted customer-portal session (issue #589). The default reports
+    /// [`PaymentsError::Unsupported`].
+    async fn create_portal_session(
+        &self,
+        _request: &PortalSessionRequest,
+    ) -> Result<PortalSession, PaymentsError> {
+        Err(PaymentsError::Unsupported("customer portal sessions"))
+    }
+
+    /// Reads one dispute (issue #602). The default reports
+    /// [`PaymentsError::Unsupported`].
+    async fn get_dispute(&self, _dispute_ref: &str) -> Result<Dispute, PaymentsError> {
+        Err(PaymentsError::Unsupported("disputes"))
+    }
+
+    /// Lists disputes, newest first: the poll a venture runs on a schedule
+    /// when its provider sends no dispute webhooks (Polar), or to reconcile
+    /// missed ones. Dedup each result through [`Dispute::event_key`]. The
+    /// default reports [`PaymentsError::Unsupported`].
+    async fn list_disputes(
+        &self,
+        _request: &DisputeListRequest,
+    ) -> Result<DisputePage, PaymentsError> {
+        Err(PaymentsError::Unsupported("disputes"))
+    }
+
+    /// Accepts a dispute, conceding the chargeback, which settles it as lost
+    /// (issue #602). The default reports [`PaymentsError::Unsupported`].
+    async fn close_dispute(
+        &self,
+        _dispute_ref: &str,
+        _idempotency_key: &str,
+    ) -> Result<Dispute, PaymentsError> {
+        Err(PaymentsError::Unsupported("disputes"))
+    }
 }
 
 #[cfg(test)]
@@ -297,6 +521,122 @@ mod tests {
 
     fn at(text: &str) -> OffsetDateTime {
         OffsetDateTime::parse(text, &Rfc3339).expect("test instant parses")
+    }
+
+    /// An adapter that implements only the required methods: every new
+    /// optional method must answer with its default.
+    struct Minimal;
+
+    #[async_trait]
+    impl Payments for Minimal {
+        async fn create_checkout(
+            &self,
+            _: &CheckoutRequest,
+        ) -> Result<CheckoutSession, PaymentsError> {
+            Err(PaymentsError::NotConfigured)
+        }
+        async fn create_subscription_checkout(
+            &self,
+            _: &SubscriptionCheckoutRequest,
+        ) -> Result<CheckoutSession, PaymentsError> {
+            Err(PaymentsError::NotConfigured)
+        }
+        async fn create_connect_account_link(
+            &self,
+            _: &ConnectAccountLinkRequest,
+        ) -> Result<ConnectAccountLink, PaymentsError> {
+            Err(PaymentsError::NotConfigured)
+        }
+        async fn charge_with_transfer(&self, _: &TransferCharge) -> Result<Charge, PaymentsError> {
+            Err(PaymentsError::NotConfigured)
+        }
+        async fn refund(&self, _: &RefundRequest) -> Result<Refund, PaymentsError> {
+            Err(PaymentsError::NotConfigured)
+        }
+        async fn verify_webhook(
+            &self,
+            signature_header: &str,
+            _: &[u8],
+        ) -> Result<WebhookEvent, PaymentsError> {
+            Ok(WebhookEvent {
+                id: signature_header.to_owned(),
+                kind: "seen".to_owned(),
+                data: Value::Null,
+            })
+        }
+    }
+
+    #[test]
+    fn new_optional_methods_default_without_breaking_an_adapter() {
+        let mut headers = http::HeaderMap::new();
+        headers.insert("stripe-signature", "t=1,v1=ab".parse().unwrap());
+        // The request-level verifier reads `Stripe-Signature` by default.
+        let event = pollster::block_on(Minimal.verify_webhook_request(&headers, b"{}")).unwrap();
+        assert_eq!(event.id, "t=1,v1=ab");
+        assert!(matches!(
+            pollster::block_on(Minimal.verify_webhook_request(&http::HeaderMap::new(), b"{}")),
+            Err(PaymentsError::SignatureInvalid(_))
+        ));
+        let portal = PortalSessionRequest {
+            customer_ref: "c".to_owned(),
+            return_url: "https://x".to_owned(),
+            idempotency_key: "k".to_owned(),
+        };
+        assert!(matches!(
+            pollster::block_on(Minimal.create_portal_session(&portal)),
+            Err(PaymentsError::Unsupported(_))
+        ));
+        assert!(matches!(
+            pollster::block_on(Minimal.get_dispute("d")),
+            Err(PaymentsError::Unsupported(_))
+        ));
+        assert!(matches!(
+            pollster::block_on(Minimal.list_disputes(&DisputeListRequest::default())),
+            Err(PaymentsError::Unsupported(_))
+        ));
+        assert!(matches!(
+            pollster::block_on(Minimal.close_dispute("d", "k")),
+            Err(PaymentsError::Unsupported(_))
+        ));
+    }
+
+    #[test]
+    fn dispute_phases_and_keys() {
+        assert_eq!(
+            DisputeStatus::from_provider("needs_response").phase(),
+            DisputePhase::Open
+        );
+        assert_eq!(
+            DisputeStatus::from_provider("won").phase(),
+            DisputePhase::Won
+        );
+        assert_eq!(
+            DisputeStatus::from_provider("lost").phase(),
+            DisputePhase::Lost
+        );
+        assert_eq!(
+            DisputeStatus::from_provider("prevented").phase(),
+            DisputePhase::Closed
+        );
+        // An unknown status is read cautiously: still open.
+        assert_eq!(
+            DisputeStatus::from_provider("new_thing").phase(),
+            DisputePhase::Open
+        );
+        let dispute = Dispute {
+            id: "dp_1".to_owned(),
+            charge_ref: None,
+            payment_ref: "pi_1".to_owned(),
+            customer_ref: None,
+            amount: Money::new(100, "usd"),
+            reason: None,
+            status: DisputeStatus::Won,
+            provider_status: "won".to_owned(),
+            evidence_due_by: None,
+            is_charge_refundable: None,
+            balance_transactions: Vec::new(),
+        };
+        assert_eq!(dispute.event_key(), "dispute:dp_1:won");
     }
 
     #[test]
