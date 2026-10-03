@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.1](https://github.com/Cratefield/harness/compare/cratefield-cli-v0.4.0...cratefield-cli-v0.4.1) - 2026-10-03
+
+### Added
+
+- *(import-supabase)* inspect a Supabase project read-only and write the migration report ([#658](https://github.com/Cratefield/harness/pull/658)) ([#697](https://github.com/Cratefield/harness/pull/697))
+
+### Other
+
+- Import users from another provider: bcrypt verified and upgraded on login, `import` identities, `fz auth import` ([#650](https://github.com/Cratefield/harness/pull/650)) ([#700](https://github.com/Cratefield/harness/pull/700))
+
 ## [0.4.0](https://github.com/Cratefield/harness/compare/cratefield-cli-v0.3.0...cratefield-cli-v0.4.0) - 2026-10-03
 
 ### Added
