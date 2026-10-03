@@ -12,12 +12,18 @@
 
 # cratefield-module-privacy
 
-Subject access over whatever a venture composed.
+Subject access and erasure over whatever a venture composed.
 
 The module knows no venture's schema. Every table it reads is one another
 module declared through `Module::personal_data`, composed at build into a
 catalog. Compose it and a deployment can answer "what do you hold about me"
-with no per-venture wiring.
+— and erase it — with no per-venture wiring.
+
+An app's own Postgres or CRM is outside that catalog, so the routes also
+reach **external providers**: HTTP endpoints the venture registers with
+`Privacy::new().provider(…)` and that hold personal data the harness never
+sees. The protocol, a TypeScript reference provider and the error kinds are
+in [docs/PRIVACY.md](../../docs/PRIVACY.md#external-providers).
 
 - `GET /v1/privacy/manifest` — what this deployment holds, per table: the kind,
   what erasure would do, and the sentence the owning module wrote.
@@ -33,9 +39,10 @@ with no per-venture wiring.
   the rows again afterwards rather than trusting the statements. The subject
   comes from the token, never from the body.
 
-What it can reach is exactly what the composed modules declared. A module that
-owns a table and declares nothing about it is outside all four routes, which is
-why `cratefield_testing::conformance` fails one that does (issue #244).
+What it can reach locally is exactly what the composed modules declared — plus
+any external providers registered on it. A module that owns a table and
+declares nothing about it is outside the routes, which is why
+`cratefield_testing::conformance` fails one that does (issue #244).
 
 ---
 

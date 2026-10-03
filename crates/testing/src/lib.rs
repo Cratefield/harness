@@ -43,6 +43,8 @@ mod pg;
 #[cfg(feature = "port-conformance")]
 mod port;
 #[cfg(feature = "harness")]
+mod privacy_provider;
+#[cfg(feature = "harness")]
 mod request;
 #[cfg(feature = "harness")]
 mod sidecar;
@@ -80,6 +82,8 @@ pub use port::{
     classifier_truncates_long_state, push_recipient_conformance, text_model_conformance,
     text_model_conformance_not_configured, text_model_conformance_prompt, vector_index_conformance,
 };
+#[cfg(feature = "harness")]
+pub use privacy_provider::{FakePrivacyProvider, ProviderCall};
 #[cfg(feature = "harness")]
 pub use request::{TestResponse, request, request_as, request_chunks};
 #[cfg(feature = "harness")]
