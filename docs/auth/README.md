@@ -92,6 +92,38 @@ registered here works on this service's own pages and nowhere else. That is why
 the chooser ships one small inline script, and why it ships it only when a
 passkey is enabled. See [ADR 0203](docs/adr/0203-the-login-chooser-and-browser-side-methods.md).
 
+## Refresh tokens and the reuse grace
+
+Refresh tokens are single-use. Presenting an already-consumed one is treated as
+a compromise: the session is revoked before the request is refused.
+
+That rule is right, but it has a false positive. A browser page can fire
+several requests at once, and on Workers each lands in its own isolate holding
+the same refresh cookie. If two of them refresh together, the loser presents a
+token the winner has just consumed — and a session nobody attacked is revoked.
+A short grace closes that hole:
+
+```
+AUTH_CORE_REFRESH_REUSE_GRACE_SECONDS=20   # default 0: off, today's behaviour
+AUTH_CORE_REFRESH_REUSE_GRACE_MAX_USES=3   # graced reuses one token gets (1..=10)
+```
+
+Inside the window (measured from the original rotation, never extended by a
+graced reuse) a second presentation by the **same client id** succeeds: the
+consumed token gains a **sibling** successor instead of revoking, so each
+racing request holds a usable token. Siblings stay live until one is used;
+that first use retires the rest, and the family converges on the chain the
+browser actually kept. A graced reuse past `MAX_USES` in the window, or one
+arriving after another sibling's chain has moved on, revokes as before. The
+window must be `0..=300` seconds and `MAX_USES` must be `1..=10`; a value
+outside either range fails `validate_config`.
+
+For a browser client, 10–30 seconds is the recommendation: long enough to cover
+a page's parallel requests, short enough that a token stolen and replayed later
+still trips the alarm. The trade-off is explicit — a stolen token used within
+seconds of the legitimate refresh, **by the same client id**, is not detected.
+Set the window to `0` where that risk outweighs the false positive.
+
 ## Status
 
 Design adopted 2026-09-06. Three spikes come first; everything else is
