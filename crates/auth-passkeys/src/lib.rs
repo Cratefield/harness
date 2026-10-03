@@ -31,7 +31,7 @@ mod challenge;
 mod login;
 mod register;
 mod request;
-mod webauthn;
+pub mod webauthn;
 
 use cratefield_core::{
     AnyError, BoxFuture, Config, ConfigError, DataKind, Disposition, Migrations, Module,
