@@ -62,7 +62,7 @@ impl ProviderError {
 }
 
 /// One external system holding data about a subject; built with
-/// [`HttpProvider::new`] and registered with [`Privacy::provider`].
+/// [`HttpProvider::new`] and registered with [`Privacy::provider`](crate::Privacy::provider).
 #[derive(Debug, Clone)]
 pub struct HttpProvider {
     name: String,
