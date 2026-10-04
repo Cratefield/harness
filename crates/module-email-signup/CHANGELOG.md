@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.3.1](https://github.com/Cratefield/harness/compare/cratefield-module-email-signup-v0.3.0...cratefield-module-email-signup-v0.3.1) - 2026-10-04
+## [0.4.0](https://github.com/Cratefield/harness/compare/cratefield-module-email-signup-v0.3.0...cratefield-module-email-signup-v0.4.0) - 2026-10-04
 
 ### Added
 
@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Breaking:** requires `cratefield-core` 0.8 (was 0.7), and so a minor rather than a patch bump: a venture still on core 0.7 does not pick this release up through a caret requirement and end up with two copies of core ([#712](https://github.com/Cratefield/harness/issues/712)).
 - The confirmation and welcome mails render through `cratefield-mail-templates`
   in the venture's theme (layout, dark variant, preheader, text twin),
   replacing the askama templates; subjects are unchanged and the unsubscribe

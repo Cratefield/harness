@@ -7,7 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.2.2](https://github.com/Cratefield/harness/compare/cratefield-manifest-v0.2.1...cratefield-manifest-v0.2.2) - 2026-10-04
+## [0.3.0](https://github.com/Cratefield/harness/compare/cratefield-manifest-v0.2.1...cratefield-manifest-v0.3.0) - 2026-10-04
+
+### Changed
+
+- **Breaking:** requires `cratefield-tables` 0.4 (was 0.3), which moved to core 0.8, and so a minor rather than a patch bump ([#712](https://github.com/Cratefield/harness/issues/712)).
 
 ### Other
 
