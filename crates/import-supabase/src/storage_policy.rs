@@ -24,15 +24,16 @@ pub(crate) fn is_bucket_table(schema: &str, table: &str) -> bool {
 /// bucket's `policies`. With no buckets at all they go to
 /// `storage.unattached_policies` so they stay discoverable.
 pub(crate) fn attach(storage: &mut Storage, policies: &[RawPolicy]) {
-    if storage.buckets.is_empty() {
+    // No buckets, or a bucket list the role cannot see (issue #723): the
+    // policies cannot be attached, so they stay discoverable here.
+    let Some(buckets) = storage.buckets.as_mut().filter(|buckets| !buckets.is_empty()) else {
         storage.unattached_policies = policies
             .iter()
             .map(|raw| policy_for(raw, true, false))
             .collect();
         return;
-    }
-    let ids: Vec<String> = storage
-        .buckets
+    };
+    let ids: Vec<String> = buckets
         .iter()
         .map(|bucket| bucket.id.clone())
         .collect();
@@ -59,7 +60,7 @@ pub(crate) fn attach(storage: &mut Storage, policies: &[RawPolicy]) {
             .filter(|name| ids.contains(name))
             .collect();
         let all_buckets = matched.is_empty();
-        for bucket in &mut storage.buckets {
+        for bucket in buckets.iter_mut() {
             if all_buckets || matched.contains(&bucket.id) {
                 bucket
                     .policies
@@ -277,9 +278,9 @@ mod tests {
             public,
             file_size_limit: None,
             allowed_mime_types: Vec::new(),
-            objects: 0,
-            bytes: 0,
-            objects_over_blob_cap: 0,
+            objects: Some(0),
+            bytes: Some(0),
+            objects_over_blob_cap: Some(0),
             policies: Vec::new(),
         }
     }
@@ -287,11 +288,12 @@ mod tests {
     fn storage_of(buckets: &[(&str, bool)]) -> Storage {
         Storage {
             present: true,
-            counts_exact: true,
-            buckets: buckets
-                .iter()
-                .map(|(id, public)| bucket(id, *public))
-                .collect(),
+            buckets: Some(
+                buckets
+                    .iter()
+                    .map(|(id, public)| bucket(id, *public))
+                    .collect(),
+            ),
             unattached_policies: Vec::new(),
         }
     }
@@ -343,9 +345,9 @@ mod tests {
                 None,
             )],
         );
-        assert_eq!(named.buckets[0].policies.len(), 1);
-        assert!(!named.buckets[0].policies[0].all_buckets);
-        assert!(named.buckets[1].policies.is_empty());
+        assert_eq!(named.buckets.as_ref().expect("buckets")[0].policies.len(), 1);
+        assert!(!named.buckets.as_ref().expect("buckets")[0].policies[0].all_buckets);
+        assert!(named.buckets.as_ref().expect("buckets")[1].policies.is_empty());
 
         // Mixed: an unknown name drops out, the rest still attach.
         let mut mixed = storage_of(&[("receipts", false)]);
@@ -358,8 +360,8 @@ mod tests {
                 None,
             )],
         );
-        assert_eq!(mixed.buckets[0].policies.len(), 1);
-        assert!(!mixed.buckets[0].policies[0].all_buckets);
+        assert_eq!(mixed.buckets.as_ref().expect("buckets")[0].policies.len(), 1);
+        assert!(!mixed.buckets.as_ref().expect("buckets")[0].policies[0].all_buckets);
 
         // Unparsed, or no existing bucket named: every bucket, flagged.
         for expression in ["true", "(bucket_id = 'gone')"] {
@@ -368,6 +370,7 @@ mod tests {
             assert!(
                 all.buckets
                     .iter()
+                    .flatten()
                     .all(|b| b.policies.len() == 1 && b.policies[0].all_buckets),
                 "{expression}"
             );

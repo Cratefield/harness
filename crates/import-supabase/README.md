@@ -57,7 +57,7 @@ configuration, over the `HttpClient` port) and an optional `Classifier`
 - **RLS is advice, not translation.** Each policy gets a pattern (rules
   first, then optionally the classifier, above a threshold), a suggested
   check, a failing test stub and `disposition: undecided`.
-- **A stable JSON.** `report_version` 1, sorted lists, no timestamp —
+- **A stable JSON.** `report_version` 2, sorted lists, no timestamp —
   documented in [`docs/import/supabase-report.md`](https://github.com/Cratefield/harness/blob/main/docs/import/supabase-report.md).
 
 ## Tests

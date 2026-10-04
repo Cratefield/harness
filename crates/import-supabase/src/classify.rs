@@ -399,27 +399,37 @@ pub(crate) fn findings(
 
     storage_policy_findings(&mut out, storage);
 
-    for bucket in &storage.buckets {
+    for bucket in storage.buckets.iter().flatten() {
         let target = if bucket.public {
             "R2 under the same keys, served by a public route"
         } else {
             "R2 under the same keys"
         };
-        if bucket.objects_over_blob_cap > 0 {
-            out.push(
+        // The counts are `None` only when `storage.objects` is not visible:
+        // then the objects cannot be verified by count, size and checksum,
+        // so no automatic claim is made.
+        match bucket.objects_over_blob_cap {
+            None => out.push(
+                "bucket",
+                &bucket.id,
+                NeedsWork,
+                "storage",
+                "`storage.objects` is not visible to the role, so the objects cannot be verified \
+                 by count, size and checksum",
+                target,
+            ),
+            Some(over_cap) if over_cap > 0 => out.push(
                 "bucket",
                 &bucket.id,
                 NeedsWork,
                 "storage",
                 format!(
-                    "{} object(s) over the Blob port's 10 MiB put cap: copied and readable, but \
-                     module code cannot replace them through the port",
-                    bucket.objects_over_blob_cap
+                    "{over_cap} object(s) over the Blob port's 10 MiB put cap: copied and \
+                     readable, but module code cannot replace them through the port"
                 ),
                 target,
-            );
-        } else {
-            out.push(
+            ),
+            Some(_) => out.push(
                 "bucket",
                 &bucket.id,
                 Automatic,
@@ -427,7 +437,7 @@ pub(crate) fn findings(
                 "objects copied through the Storage API and verified by count, size and \
                  checksum",
                 target,
-            );
+            ),
         }
     }
 
@@ -444,7 +454,7 @@ pub(crate) fn findings(
                 );
             }
         }
-        SourceStatus::NotInspected | SourceStatus::Failed => out.push(
+        SourceStatus::NotInspected | SourceStatus::NotVisible | SourceStatus::Failed => out.push(
             "edge_function",
             "unknown",
             NeedsWork,
@@ -487,7 +497,7 @@ pub(crate) fn findings(
         }
     }
 
-    for job in &catalog.cron_jobs {
+    for job in catalog.cron_jobs.iter().flatten() {
         out.push(
             "cron_job",
             &job.name,
@@ -495,6 +505,26 @@ pub(crate) fn findings(
             "code",
             format!("pg_cron job on `{}`", job.schedule),
             "a module's scheduled handler (ADR 0023)",
+        );
+    }
+
+    // A section the role cannot fully read is a blocker: its data is
+    // unknown, never zero, and the preflight recorded the SQL that fixes
+    // it (issue #723).
+    for section in &catalog.visibility.sections {
+        if section.coverage != SourceStatus::NotVisible {
+            continue;
+        }
+        out.push(
+            "visibility",
+            &section.section,
+            Blocker,
+            "schema",
+            format!(
+                "inspect cannot see this section, so its data is unknown, not zero: {}",
+                section.reason
+            ),
+            section.fix.clone(),
         );
     }
 
@@ -511,7 +541,7 @@ fn storage_policy_findings(out: &mut Findings, storage: &Storage) {
     // buckets, and its suggested check.
     type Scope = (Vec<String>, bool, String);
     let mut groups: BTreeMap<(String, String), Scope> = BTreeMap::new();
-    for bucket in &storage.buckets {
+    for bucket in storage.buckets.iter().flatten() {
         for policy in &bucket.policies {
             record(&mut groups, policy, Some(&bucket.id));
         }
@@ -573,20 +603,25 @@ fn auth_findings(out: &mut Findings, auth: &Auth) {
     if !auth.present {
         return;
     }
-    out.push(
-        "auth",
-        "users",
-        Automatic,
-        "auth",
-        format!(
-            "{} user(s): email, verified flag, bcrypt hash and created_at move through the \
-             harness's user import; passwords keep working",
-            auth.users
-        ),
-        "harness users (auth-password, auth-magic-link)",
-    );
+    // A count is `None` when the role cannot see it; then the section's
+    // visibility blocker stands in for it, and no count is invented.
+    if let Some(users) = auth.users {
+        out.push(
+            "auth",
+            "users",
+            Automatic,
+            "auth",
+            format!(
+                "{users} user(s): email, verified flag, bcrypt hash and created_at move through \
+                 the harness's user import; passwords keep working"
+            ),
+            "harness users (auth-password, auth-magic-link)",
+        );
+    }
     let mut providers: Vec<String> = auth
         .identities_by_provider
+        .as_deref()
+        .unwrap_or_default()
         .iter()
         .map(|count| count.provider.clone())
         .collect();
@@ -657,7 +692,7 @@ fn auth_findings(out: &mut Findings, auth: &Auth) {
             "an OIDC provider per identity provider",
         ),
     ] {
-        if count > 0 {
+        if count.is_some_and(|count| count > 0) {
             out.push("auth", object, NeedsWork, "auth", reason, equivalent);
         }
     }

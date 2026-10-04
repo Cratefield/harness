@@ -1,6 +1,6 @@
 # Supabase migration report: `fixtureprojectref000`
 
-Source `db.fixtureprojectref000.supabase.co:5432/postgres`, PostgreSQL 16.15. Report version 1, written by cratefield-import-supabase 0.1.0. Read-only: nothing was written to the project.
+Source `db.fixtureprojectref000.supabase.co:5432/postgres`, PostgreSQL 16.15. Report version 2, written by cratefield-import-supabase 0.1.0. Read-only: nothing was written to the project.
 
 ## Summary
 

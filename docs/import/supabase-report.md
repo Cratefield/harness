@@ -1,4 +1,4 @@
-# The Supabase migration report (JSON), version 1
+# The Supabase migration report (JSON), version 2
 
 `fz import supabase inspect --json` writes this document; the later importer
 steps (#659, #660, #661) and the dashboard read it. The Rust types are
@@ -9,9 +9,11 @@ command.
 
 ## Stability rules
 
-- `report_version` is `1`. It changes when a field is removed or renamed,
-  or changes meaning. **Adding a field does not change it**: a reader
-  ignores fields it does not know.
+- `report_version` is `2`. It changes when a field is removed or renamed,
+  or changes meaning — `1` → `2` (issue #723) because a section the role
+  cannot see is `null` where it used to be `0`, and `storage.counts_exact`
+  is gone. **Adding a field does not change it**: a reader ignores fields
+  it does not know.
 - Every list is sorted — by schema, then name, then whatever makes the key
   unique; findings by `id` — so two inspections of an unchanged project
   produce the same bytes. There is **no timestamp**: when it ran is the
@@ -22,18 +24,19 @@ command.
   alone, and every free-text SQL fragment (policy expressions, column
   defaults, check constraints, cron commands) has passed through the
   harness's log scrubber.
-- An optional fact is `null` when it was not inspected — never an empty
-  list, which would claim "none".
+- An optional fact is `null` when it was not inspected or the role cannot
+  see it — never a `0` or an empty list, which would claim a fact the
+  report does not have.
 
 ## Top level
 
 | Field | Type | Meaning |
 |---|---|---|
-| `report_version` | integer | `1` |
+| `report_version` | integer | `2` |
 | `tool` | object | `name`, `version` of the crate that wrote it |
 | `project` | object | `ref`, `host`, `port`, `database`, `server_version` |
 | `read_only` | object | what kept the inspection from writing, as observed (below) |
-| `coverage` | object | `database`, `management_api`, `policy_classifier`: each `inspected`, `not_inspected` or `failed` |
+| `coverage` | object | `database`, `management_api`, `policy_classifier` (each `inspected`, `not_inspected`, `not_visible` or `failed`) and `sections` (below) |
 | `summary` | object | counts and estimates (below) |
 | `dispositions` | object | the decisions applied to the needs-work and blocker items (below) |
 | `schemas` | array | `name`, `kind` (`user` or `supabase_managed`), `target` (`app` for `public`, the same name for another user schema, `null` for a managed one), `tables` |
@@ -48,10 +51,10 @@ command.
 | `managed_policies` | array | policies on Supabase-managed schemas (`auth`, `cron`, `vault`, `storage` tables other than `objects`/`buckets`), for audit only (below) |
 | `api_role_grants` | array | `role` (`anon`, `authenticated`, `service_role`) and the `tables` it holds a privilege on |
 | `auth` | object | Supabase Auth as counts (below) |
-| `storage` | object | `present`, `counts_exact`, `buckets` (below) |
+| `storage` | object | `present`, `buckets` (below) |
 | `edge_functions` | object | `status` and `functions` (`slug`, `name`, `status`, `verify_jwt`) |
 | `realtime` | object | `publications`: `name`, `all_tables`, `operations`, `tables` |
-| `cron_jobs` | array | `name`, `schedule`, `command` (scrubbed), `active` |
+| `cron_jobs` | array | `name`, `schedule`, `command` (scrubbed), `active`; `null` when `cron.job` is not visible, `[]` only when there is none |
 | `findings` | array | every item classified (below) |
 | `warnings` | array of strings | what the reader should know that is not a finding |
 
@@ -66,19 +69,38 @@ command.
 | `role_is_superuser` | it is a superuser |
 | `role_can_write` | it holds `INSERT`/`UPDATE`/`DELETE`/`TRUNCATE` on a user, `auth` or `storage` table, or `CREATE` on one of those schemas |
 
+## `coverage.sections[]`
+
+One entry per row-read section: `auth`, `storage.buckets`,
+`storage.objects`, `cron` (only when `cron.job` exists) and `schema:<name>`
+for each user schema.
+
+| Field | Meaning |
+|---|---|
+| `section` | `auth`, `storage.buckets`, `storage.objects`, `cron` or `schema:<name>` |
+| `coverage` | `inspected` or `not_visible` |
+| `reason` | why it is not visible, `; `-joined; omitted from the JSON when empty |
+| `fix` | the SQL that would make it visible, one line each, `--`-commented alternatives included; omitted when there is none |
+
+`not_visible` means the role lacks a privilege the read needs — `USAGE`,
+`SELECT`, or a way past row-level security. The section's data is then
+`null`, never `0` or `[]`: a wrong zero would be believed, an absent fact
+cannot. Each `not_visible` section also adds a `visibility` blocker finding
+carrying the same reason and fix, so `ready` is `false`.
+
 ## `summary`
 
 | Field | Meaning |
 |---|---|
 | `automatic`, `needs_work`, `blockers` | finding counts |
 | `decided`, `undecided` | needs-work and blocker items with, and without, a disposition; cutover refuses while `undecided` is non-zero (#661) |
-| `ready` | no blockers |
+| `ready` | no blockers; since a `not_visible` section adds one, `false` while any section is `not_visible` |
 | `tables`, `estimated_rows` | user tables and the sum of their planner estimates |
 | `data_bytes` | heap and TOAST bytes of the user tables: what the data step moves |
 | `index_bytes` | their index bytes: rebuilt on the target, not moved |
-| `storage_objects`, `storage_bytes` | from `storage.objects` and each object's recorded size |
+| `storage_objects`, `storage_bytes` | from `storage.objects` and each object's recorded size; `null` when the buckets or their object counts are not visible |
 | `transfer_assumed_mbps` | the throughput the estimate assumes |
-| `estimated_transfer_seconds` | `(data_bytes + storage_bytes)` at that throughput, rounded up; index builds and verification are not in it |
+| `estimated_transfer_seconds` | `(data_bytes + storage_bytes)` at that throughput, rounded up, or data-only when `storage_bytes` is `null`; index builds and verification are not in it |
 
 ## `tables[]`
 
@@ -140,15 +162,18 @@ never classified, copied or a finding — so never in `summary.needs_work`.
 `present`, `users`, `users_without_password`, `users_unconfirmed`,
 `anonymous_users`, `identities_by_provider` (`provider`, `identities`),
 `mfa_factors`, `sso_providers`, and from the Management API
-`enabled_providers` and `enabled_mfa` (`null` when not inspected).
+`enabled_providers` and `enabled_mfa` (`null` when not inspected). A count
+is `null`, never `0`, when the role cannot see `auth.users` or
+`auth.identities`.
 
 ## `storage`
 
-`present`; `counts_exact` (false when `storage.objects` has RLS the role
-cannot bypass, so counts may be low); `buckets`: `id`, `name`, `public`,
+`present`; `buckets`: `id`, `name`, `public`,
 `file_size_limit`, `allowed_mime_types`, `objects`, `bytes`,
 `objects_over_blob_cap` (objects over the Blob port's 10 MiB put cap), and
-`policies`; plus `unattached_policies`.
+`policies`; plus `unattached_policies`. `buckets` is `null`, never `[]`, and
+a bucket's `objects`, `bytes` and `objects_over_blob_cap` are each `null`,
+when the role cannot see `storage.buckets` or `storage.objects`.
 
 Each bucket's `policies` holds the `storage.objects`/`storage.buckets`
 policies that name it (or, with `all_buckets`, apply to every bucket):
@@ -162,14 +187,15 @@ Decision 5). Bucket ids are parsed as `pg_policies` renders them
 (`bucket_id = 'x'`, `'x'::text = bucket_id`, or
 `bucket_id = ANY (ARRAY['a', 'b'])`; on `storage.buckets` the column is `id`
 or `name`). `unattached_policies` holds the same shape when the project has no
-buckets at all, where there is nothing to attach them to.
+buckets at all, or the bucket list is not visible, where there is nothing to
+attach them to.
 
 ## `findings[]`
 
 | Field | Meaning |
 |---|---|
 | `id` | `<kind>:<object>`, stable across runs; the sort key |
-| `kind` | `schema`, `table`, `rls_no_policy`, `foreign_key`, `view`, `materialized_view`, `sequence`, `enum`, `extension`, `function`, `trigger`, `policy`, `storage_policy`, `grant`, `auth`, `auth_provider`, `bucket`, `edge_function`, `publication`, `cron_job` |
+| `kind` | `schema`, `table`, `rls_no_policy`, `foreign_key`, `view`, `materialized_view`, `sequence`, `enum`, `extension`, `function`, `trigger`, `policy`, `storage_policy`, `grant`, `auth`, `auth_provider`, `bucket`, `edge_function`, `publication`, `cron_job`, `visibility` |
 | `object` | the qualified name |
 | `classification` | `automatic`, `needs_work` or `blocker` |
 | `phase` | the step that handles it — `schema`, `data`, `auth`, `storage` — or `code` when the venture's own code has to |

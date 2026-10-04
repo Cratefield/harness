@@ -19,7 +19,7 @@ use cratefield_core::{
 };
 use cratefield_import_supabase::{
     Classification, Disposition, InspectError, InspectOptions, ManagementApi, PolicyPattern,
-    PolicySource, ReadOnlySession, Report, Secret, SourceStatus, inspect,
+    PolicySource, ReadOnlySession, Report, Secret, SectionCoverage, SourceStatus, inspect,
 };
 
 const FIXTURE: &str = include_str!("fixtures/supabase-project.sql");
@@ -46,8 +46,11 @@ async fn fixture_db(tag: &str) -> Option<TempDb> {
     Some(db)
 }
 
-/// A role that can read and nothing else, the one the docs tell a user to
-/// create, and the URL that logs in as it.
+/// The role the docs tell a user to create — `BYPASSRLS` plus
+/// `pg_read_all_data`, which on Supabase the project's `postgres` role can
+/// grant even though it is not a superuser and owns no `auth`/`storage`/
+/// `cron` object — and the URL that logs in as it. `BYPASSRLS` is what lets
+/// it read `storage.objects` despite its RLS.
 async fn read_only_role(db: &TempDb, tag: &str) -> (String, String, String) {
     let role = format!("fz_inspect_{tag}_{}", std::process::id());
     let password = format!("ro-fixture-password-{tag}-{}", std::process::id());
@@ -55,11 +58,10 @@ async fn read_only_role(db: &TempDb, tag: &str) -> (String, String, String) {
     let database = db.url.rsplit('/').next().expect("a database").to_owned();
     sqlx::raw_sql(&format!(
         "DROP ROLE IF EXISTS {role}; \
-         CREATE ROLE {role} LOGIN PASSWORD '{password}'; \
+         CREATE ROLE {role} LOGIN PASSWORD '{password}' BYPASSRLS; \
          ALTER ROLE {role} SET default_transaction_read_only = on; \
          GRANT CONNECT ON DATABASE \"{database}\" TO {role}; \
-         GRANT USAGE ON SCHEMA public, auth, storage, extensions TO {role}; \
-         GRANT SELECT ON ALL TABLES IN SCHEMA public, auth, storage TO {role};"
+         GRANT pg_read_all_data TO {role};"
     ))
     .execute(&pool)
     .await
@@ -79,6 +81,33 @@ async fn drop_role(role: &str) {
     let _ = sqlx::raw_sql(&format!("DROP ROLE IF EXISTS {role}"))
         .execute(&pool)
         .await;
+    pool.close().await;
+}
+
+/// One section's coverage entry, if present.
+fn coverage_of<'a>(report: &'a Report, section: &str) -> Option<&'a SectionCoverage> {
+    report
+        .coverage
+        .sections
+        .iter()
+        .find(|entry| entry.section == section)
+}
+
+/// The section was reported `not_visible`.
+fn not_visible(report: &Report, section: &str) -> bool {
+    coverage_of(report, section).is_some_and(|entry| entry.coverage == SourceStatus::NotVisible)
+}
+
+/// Drops the role that owns `auth`/`storage` and the inspecting role,
+/// removing their grants first so the drop succeeds on a shared server.
+async fn drop_roles(url: &str, owner: &str, role: &str) {
+    let pool = sqlx::PgPool::connect(url).await.expect("connect");
+    let _ = sqlx::raw_sql(&format!(
+        "REASSIGN OWNED BY {owner} TO postgres; DROP OWNED BY {owner}; DROP OWNED BY {role}; \
+         DROP ROLE IF EXISTS {owner}; DROP ROLE IF EXISTS {role};"
+    ))
+    .execute(&pool)
+    .await;
     pool.close().await;
 }
 
@@ -134,7 +163,10 @@ async fn the_fixture_report_matches_its_snapshot() {
     // Sizes are normalized out of the snapshot, so they are checked here.
     assert!(report.summary.data_bytes > 0);
     assert!(report.summary.estimated_transfer_seconds >= 1);
-    assert_eq!(report.summary.storage_bytes, 20_480 + 31_744 + 12_582_912);
+    assert_eq!(
+        report.summary.storage_bytes,
+        Some(20_480 + 31_744 + 12_582_912)
+    );
 
     // The blockers the fixture plants, and only those.
     let blockers: Vec<&str> = report
@@ -217,18 +249,452 @@ async fn a_read_only_role_is_enough_and_is_recorded() {
     assert!(!report.read_only.role_is_superuser);
     assert!(!report.read_only.role_can_write, "the role can write");
     assert_eq!(report.read_only.role, role);
-    // RLS on storage.objects hides rows from a role without BYPASSRLS, and
-    // the report says so instead of reporting low numbers as exact.
-    assert!(!report.storage.counts_exact);
-    assert!(
-        report.warnings.iter().any(|w| w.contains("BYPASSRLS")),
-        "{:?}",
-        report.warnings
+    // The docs role reads every section in full: `pg_read_all_data` for
+    // USAGE/SELECT, `BYPASSRLS` past storage.objects' RLS. Nothing is
+    // `not_visible`, and the real object counts are there.
+    let not_visible: Vec<&str> = report
+        .coverage
+        .sections
+        .iter()
+        .filter(|section| section.coverage == SourceStatus::NotVisible)
+        .map(|section| section.section.as_str())
+        .collect();
+    assert!(not_visible.is_empty(), "{not_visible:?}");
+    assert_eq!(report.summary.storage_objects, Some(3));
+    assert_eq!(
+        report.summary.storage_bytes,
+        Some(20_480 + 31_744 + 12_582_912)
     );
     let out = format!("{}{}", report.to_json(), report.to_markdown());
     assert!(!out.contains(&password));
     db.finish().await;
     drop_role(&role).await;
+}
+
+/// The `postgres`-role URL of a Supabase stack (`supabase start`), for
+/// issue #723's acceptance criterion: the role SQL the docs tell a user to
+/// run, executed as `postgres`, yields a report identical to the `postgres`
+/// run apart from `read_only` and warnings. Skips when unset.
+fn supabase_db_url() -> Option<String> {
+    std::env::var("FZ_TEST_SUPABASE_DB_URL")
+        .ok()
+        .map(|url| url.trim().to_owned())
+        .filter(|url| !url.is_empty())
+}
+
+/// The role SQL from `docs/import/supabase.md`, embedded at compile time so
+/// the document and this test cannot drift: the first fenced `sql` block
+/// under the "Read-only, twice" heading.
+fn documented_role_sql() -> &'static str {
+    const DOC: &str = include_str!("../../../docs/import/supabase.md");
+    DOC.split_once("## Read-only, twice")
+        .expect("the read-only section of docs/import/supabase.md")
+        .1
+        .split_once("```sql")
+        .expect("the role SQL block in the read-only section")
+        .1
+        .split_once("```")
+        .expect("the role SQL block's closing fence")
+        .0
+}
+
+/// The rows the stack needs for RLS and the counts to mean something: a
+/// couple of `auth.users` and their identities, two buckets with objects
+/// and a `pg_cron` job. `supabase start` ships `pg_cron` preloaded but not
+/// created, so the seed creates it first. Idempotent, so a reused stack
+/// stays stable.
+const SEED: &str = "\
+CREATE EXTENSION IF NOT EXISTS pg_cron WITH SCHEMA pg_catalog; \
+INSERT INTO auth.users (id, email) VALUES \
+  ('11111111-1111-1111-1111-111111111111', 'acceptance-one@example.test'), \
+  ('22222222-2222-2222-2222-222222222222', 'acceptance-two@example.test') \
+ON CONFLICT (id) DO NOTHING; \
+INSERT INTO auth.identities (provider_id, user_id, identity_data, provider) VALUES \
+  ('acceptance-one', '11111111-1111-1111-1111-111111111111', '{}'::jsonb, 'email'), \
+  ('acceptance-two', '22222222-2222-2222-2222-222222222222', '{}'::jsonb, 'google') \
+ON CONFLICT (provider_id, provider) DO NOTHING; \
+INSERT INTO storage.buckets (id, name) VALUES \
+  ('acceptance-bucket-one', 'acceptance-bucket-one'), \
+  ('acceptance-bucket-two', 'acceptance-bucket-two') \
+ON CONFLICT (id) DO NOTHING; \
+INSERT INTO storage.objects (id, bucket_id, name, metadata) VALUES \
+  ('33333333-3333-3333-3333-333333333333', 'acceptance-bucket-one', 'one.txt', \
+   '{\"size\": 1024}'::jsonb), \
+  ('44444444-4444-4444-4444-444444444444', 'acceptance-bucket-two', 'two.txt', \
+   '{\"size\": 2048}'::jsonb) \
+ON CONFLICT (id) DO NOTHING; \
+SELECT cron.unschedule(jobid) FROM cron.job WHERE jobname = 'cratefield_acceptance'; \
+SELECT cron.schedule('cratefield_acceptance', '0 3 * * *', 'SELECT 1');";
+
+/// Loads [`SEED`] through `url`.
+async fn seed(url: &str) {
+    let pool = sqlx::PgPool::connect(url).await.expect("seed connect");
+    sqlx::raw_sql(SEED)
+        .execute(&pool)
+        .await
+        .expect("seed loads");
+    pool.close().await;
+}
+
+/// The stack's owner (`supabase_admin`, password `postgres`) at the same
+/// host and port as `base`, which owns `auth`, `storage` and `cron`; falls
+/// back to `base` when that role cannot connect.
+async fn seed_url(base: &str) -> String {
+    let (scheme, rest) = base.split_once("://").expect("a URL scheme");
+    let (_, host_and_path) = rest.split_once('@').expect("userinfo in the URL");
+    let admin = format!("{scheme}://supabase_admin:postgres@{host_and_path}");
+    match sqlx::PgPool::connect(&admin).await {
+        Ok(pool) => {
+            pool.close().await;
+            admin
+        }
+        Err(_) => base.to_owned(),
+    }
+}
+
+/// Drops the documented role however the test ends, panics included: a
+/// `Drop` cannot await, so this runs on its own thread and runtime. The
+/// role's name is unique, so a leaked one can never collide with a run's.
+struct DropRoleGuard {
+    url: String,
+    role: String,
+}
+
+impl Drop for DropRoleGuard {
+    fn drop(&mut self) {
+        let (url, role) = (self.url.clone(), self.role.clone());
+        let _ = std::thread::spawn(move || {
+            let Ok(runtime) = tokio::runtime::Runtime::new() else {
+                return;
+            };
+            runtime.block_on(async {
+                let Ok(pool) = sqlx::PgPool::connect(&url).await else {
+                    return;
+                };
+                let _ = sqlx::raw_sql(&format!("REVOKE pg_read_all_data FROM {role}"))
+                    .execute(&pool)
+                    .await;
+                let _ = sqlx::raw_sql(&format!("DROP ROLE IF EXISTS {role}"))
+                    .execute(&pool)
+                    .await;
+                pool.close().await;
+            });
+        })
+        .join();
+    }
+}
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)] // the whole scenario, in order
+async fn the_documented_role_sql_yields_the_postgres_report_on_supabase() {
+    let Some(base) = supabase_db_url() else {
+        eprintln!(
+            "skipping: FZ_TEST_SUPABASE_DB_URL is not set — start a Supabase stack \
+             (supabase start) and set it to \
+             postgresql://postgres:postgres@127.0.0.1:54322/postgres"
+        );
+        return;
+    };
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("the clock is past 1970")
+        .as_nanos();
+    let role = format!("fz_inspect_acceptance_{}_{nanos}", std::process::id());
+    let password = format!("acceptance-password-{nanos}");
+    // Cleanup runs even when an assertion below panics.
+    let _guard = DropRoleGuard {
+        url: base.clone(),
+        role: role.clone(),
+    };
+
+    seed(&seed_url(&base).await).await;
+
+    // The documented SQL, run as `postgres` — what the Supabase SQL editor
+    // does — with a unique role name and a random password.
+    let sql = documented_role_sql()
+        .replace("cratefield_inspect", &role)
+        .replace("<a long random password>", &password);
+    let pool = sqlx::PgPool::connect(&base)
+        .await
+        .expect("connect as postgres");
+    sqlx::raw_sql(&sql)
+        .execute(&pool)
+        .await
+        .expect("the documented role SQL runs as postgres");
+    pool.close().await;
+
+    // postgres://user:pass@host:port/db -> the same, logging in as the role.
+    let (scheme, rest) = base.split_once("://").expect("a URL scheme");
+    let (_, host_and_path) = rest.split_once('@').expect("userinfo in the URL");
+    let role_url = format!("{scheme}://{role}:{password}@{host_and_path}");
+
+    let as_postgres = inspect(&InspectOptions::new(PROJECT_REF, Secret::new(base)))
+        .await
+        .expect("inspect as postgres");
+    let as_role = inspect(&InspectOptions::new(PROJECT_REF, Secret::new(role_url)))
+        .await
+        .expect("inspect as the documented role");
+
+    // The documented role (`pg_read_all_data` plus `BYPASSRLS`) reads every
+    // section: nothing is unknown, and it cannot write.
+    let not_visible: Vec<&str> = as_role
+        .coverage
+        .sections
+        .iter()
+        .filter(|section| section.coverage == SourceStatus::NotVisible)
+        .map(|section| section.section.as_str())
+        .collect();
+    assert!(not_visible.is_empty(), "{not_visible:?}");
+    assert_eq!(as_role.read_only.role, role);
+    assert!(as_role.read_only.transaction_read_only);
+    assert!(!as_role.read_only.role_can_write);
+
+    // Identical apart from what is genuinely about the connection:
+    // `read_only` and `warnings`. The report carries no timestamp.
+    let comparable = |report: &Report| {
+        let mut value: serde_json::Value =
+            serde_json::from_str(&report.to_json()).expect("the report round-trips");
+        let object = value.as_object_mut().expect("the report is an object");
+        object.remove("read_only");
+        object.remove("warnings");
+        value
+    };
+    assert_eq!(comparable(&as_postgres), comparable(&as_role));
+    // A marker only a run prints, never a skip: the E2E job greps for it,
+    // so a stack that is not reached fails the job rather than passing it.
+    println!("supabase acceptance: the documented role matched the postgres run");
+}
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)] // the whole scenario, in order
+async fn a_role_that_cannot_see_a_section_gets_not_visible_not_zero() {
+    let Some(db) = fixture_db("supabase_visibility").await else {
+        return;
+    };
+    let pool = sqlx::PgPool::connect(&db.url).await.expect("connect");
+    let pid = std::process::id();
+    let owner = format!("fixture_supabase_admin_{pid}");
+    let role = format!("fz_visibility_{pid}");
+    let password = format!("visibility-password-{pid}");
+    let database = db.url.rsplit('/').next().expect("a database").to_owned();
+
+    // As on Supabase: auth/storage owned by a non-superuser other role,
+    // RLS on their tables and on cron.job, a user schema, and an inspect
+    // role that lacks BYPASSRLS, cron USAGE and newsletter USAGE.
+    let setup = format!(
+        "DROP ROLE IF EXISTS {owner}; CREATE ROLE {owner} NOLOGIN; \
+         ALTER SCHEMA auth OWNER TO {owner}; ALTER SCHEMA storage OWNER TO {owner}; \
+         ALTER TABLE auth.users OWNER TO {owner}; \
+         ALTER TABLE auth.identities OWNER TO {owner}; \
+         ALTER TABLE auth.mfa_factors OWNER TO {owner}; \
+         ALTER TABLE storage.buckets OWNER TO {owner}; \
+         ALTER TABLE storage.objects OWNER TO {owner}; \
+         CREATE SCHEMA cron; \
+         CREATE TABLE cron.job (jobid bigint, jobname text, schedule text, command text, \
+         active bool); \
+         INSERT INTO cron.job VALUES (1, 'nightly', '0 3 * * *', 'select 1', true); \
+         ALTER TABLE cron.job ENABLE ROW LEVEL SECURITY; \
+         CREATE SCHEMA newsletter; \
+         CREATE TABLE newsletter.subscribers (id bigint PRIMARY KEY, email text); \
+         ALTER TABLE auth.users ENABLE ROW LEVEL SECURITY; \
+         ALTER TABLE auth.identities ENABLE ROW LEVEL SECURITY; \
+         ALTER TABLE storage.buckets ENABLE ROW LEVEL SECURITY; \
+         ALTER TABLE storage.objects ENABLE ROW LEVEL SECURITY; \
+         CREATE ROLE {role} LOGIN PASSWORD '{password}' NOBYPASSRLS; \
+         ALTER ROLE {role} SET default_transaction_read_only = on; \
+         GRANT CONNECT ON DATABASE \"{database}\" TO {role}; \
+         GRANT USAGE ON SCHEMA public, auth, storage, extensions TO {role}; \
+         GRANT SELECT ON ALL TABLES IN SCHEMA public, auth, storage TO {role};"
+    );
+    sqlx::raw_sql(&setup).execute(&pool).await.expect("setup");
+    pool.close().await;
+
+    let (scheme, rest) = db.url.split_once("://").expect("a scheme");
+    let (_, host_and_path) = rest.split_once('@').expect("userinfo");
+    let url = format!("{scheme}://{role}:{password}@{host_and_path}");
+    let options = InspectOptions::new(PROJECT_REF, Secret::new(url));
+
+    // One run, no abort: every section it cannot see is named.
+    let report = inspect(&options).await.expect("inspect does not abort");
+    for name in [
+        "auth",
+        "storage.buckets",
+        "storage.objects",
+        "cron",
+        "schema:newsletter",
+    ] {
+        assert!(
+            not_visible(&report, name),
+            "{name}: {:?}",
+            report.coverage.sections
+        );
+    }
+    assert!(!not_visible(&report, "schema:public"));
+    assert_eq!(
+        coverage_of(&report, "schema:public").map(|entry| entry.coverage),
+        Some(SourceStatus::Inspected)
+    );
+    // The reasons name RLS where RLS is what hides, USAGE where it is not.
+    assert!(
+        coverage_of(&report, "auth")
+            .unwrap()
+            .reason
+            .contains("row-level security"),
+        "{}",
+        coverage_of(&report, "auth").unwrap().reason
+    );
+    assert!(
+        coverage_of(&report, "cron")
+            .unwrap()
+            .reason
+            .contains("USAGE"),
+        "{}",
+        coverage_of(&report, "cron").unwrap().reason
+    );
+
+    assert!(!report.summary.ready);
+    for name in [
+        "auth",
+        "storage.buckets",
+        "storage.objects",
+        "cron",
+        "schema:newsletter",
+    ] {
+        let finding = report
+            .findings
+            .iter()
+            .find(|finding| finding.id == format!("visibility:{name}"))
+            .unwrap_or_else(|| panic!("a blocker for {name}"));
+        assert_eq!(finding.classification, Classification::Blocker);
+    }
+    let fixes = report
+        .findings
+        .iter()
+        .filter(|finding| finding.kind == "visibility")
+        .map(|finding| finding.cratefield_equivalent.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    // The fix leads with what the source's postgres can run, and keeps the
+    // specific grants as the alternative.
+    assert!(
+        fixes.contains("ALTER ROLE") && fixes.contains("BYPASSRLS"),
+        "{fixes}"
+    );
+    assert!(fixes.contains("GRANT pg_read_all_data"), "{fixes}");
+    assert!(fixes.contains("GRANT USAGE ON SCHEMA \"cron\""), "{fixes}");
+    assert!(
+        fixes.contains("GRANT USAGE ON SCHEMA \"newsletter\""),
+        "{fixes}"
+    );
+    assert!(fixes.contains("CREATE POLICY"), "{fixes}");
+    // A user schema keeps its tables listed; only their rows are unknown,
+    // so the reason counts the tables the role cannot SELECT.
+    assert!(
+        coverage_of(&report, "schema:newsletter")
+            .unwrap()
+            .reason
+            .contains("lacks SELECT on 1 table"),
+        "{}",
+        coverage_of(&report, "schema:newsletter").unwrap().reason
+    );
+
+    // A section it cannot see is absent, never zero.
+    assert_eq!(report.auth.users, None);
+    assert_eq!(report.auth.identities_by_provider, None);
+    assert_eq!(report.storage.buckets, None);
+    assert_eq!(report.cron_jobs, None);
+    assert_eq!(report.summary.storage_objects, None);
+    let json = report.to_json();
+    for forbidden in [
+        "\"users\": 0",
+        "\"users\":0",
+        "\"buckets\": []",
+        "\"cron_jobs\": []",
+        "\"identities_by_provider\": []",
+    ] {
+        assert!(!json.contains(forbidden), "the JSON contains {forbidden}");
+    }
+    // Read-only throughout, as before.
+    assert!(report.read_only.transaction_read_only);
+    assert!(report.read_only.session_read_only);
+    assert!(report.read_only.no_transaction_id_assigned);
+    assert_eq!(report.read_only.role, role);
+
+    // Now fix it exactly as the blocked sections asked, and every section
+    // becomes inspected with the real counts.
+    let grant = format!(
+        "GRANT USAGE ON SCHEMA cron, newsletter TO {role}; \
+         GRANT SELECT ON ALL TABLES IN SCHEMA cron, newsletter TO {role}; \
+         CREATE POLICY cratefield_inspect_read ON auth.users FOR SELECT TO {role} USING (true); \
+         CREATE POLICY cratefield_inspect_read ON auth.identities FOR SELECT TO {role} USING \
+         (true); \
+         CREATE POLICY cratefield_inspect_read ON storage.buckets FOR SELECT TO {role} USING \
+         (true); \
+         CREATE POLICY cratefield_inspect_read ON storage.objects FOR SELECT TO {role} USING \
+         (true); \
+         CREATE POLICY cratefield_inspect_read ON cron.job FOR SELECT TO {role} USING (true);"
+    );
+    let pool = sqlx::PgPool::connect(&db.url).await.expect("connect");
+    sqlx::raw_sql(&grant).execute(&pool).await.expect("grants");
+    pool.close().await;
+
+    let report = inspect(&options).await.expect("inspect after grants");
+    for name in [
+        "auth",
+        "storage.buckets",
+        "storage.objects",
+        "cron",
+        "schema:newsletter",
+    ] {
+        assert_eq!(
+            coverage_of(&report, name).map(|entry| entry.coverage),
+            Some(SourceStatus::Inspected),
+            "{name}: {:?}",
+            report.coverage.sections
+        );
+    }
+    assert_eq!(report.auth.users, Some(3));
+    assert_eq!(
+        report.auth.identities_by_provider.as_ref().map(Vec::len),
+        Some(3)
+    );
+    assert_eq!(report.storage.buckets.as_ref().map(Vec::len), Some(2));
+    assert_eq!(report.summary.storage_objects, Some(3));
+    assert_eq!(report.cron_jobs.as_ref().map(Vec::len), Some(1));
+    assert!(
+        !report
+            .findings
+            .iter()
+            .any(|finding| finding.kind == "visibility"),
+        "no visibility blocker once every section is visible"
+    );
+
+    // A restrictive policy on top of the permissive `USING (true)`
+    // policies hides the rows again: rows are visible through policies only
+    // if every applicable restrictive SELECT/ALL policy also lets every row
+    // through (issue #723).
+    let pool = sqlx::PgPool::connect(&db.url).await.expect("connect");
+    sqlx::raw_sql(&format!(
+        "CREATE POLICY cratefield_inspect_deny ON auth.users AS RESTRICTIVE FOR SELECT TO {role} \
+         USING (false);"
+    ))
+    .execute(&pool)
+    .await
+    .expect("a restrictive policy");
+    pool.close().await;
+
+    let report = inspect(&options)
+        .await
+        .expect("inspect with a restrictive policy");
+    assert!(
+        not_visible(&report, "auth"),
+        "a restrictive policy hides the rows again: {:?}",
+        report.coverage.sections
+    );
+    assert_eq!(report.auth.users, None);
+
+    drop_roles(&db.url, &owner, &role).await;
+    db.finish().await;
 }
 
 #[tokio::test]
@@ -601,12 +1067,14 @@ async fn storage_policies_and_rls_without_a_policy_are_reported() {
         .storage
         .buckets
         .iter()
+        .flatten()
         .find(|bucket| bucket.id == "avatars")
         .expect("the avatars bucket");
     let documents = report
         .storage
         .buckets
         .iter()
+        .flatten()
         .find(|bucket| bucket.id == "documents")
         .expect("the documents bucket");
     let names: Vec<&str> = avatars

@@ -69,6 +69,7 @@ fn fixture() -> Report {
             database: SourceStatus::Inspected,
             management_api: SourceStatus::NotInspected,
             policy_classifier: SourceStatus::NotInspected,
+            sections: Vec::new(),
         },
         summary: Summary {
             automatic: 1,
@@ -81,8 +82,8 @@ fn fixture() -> Report {
             estimated_rows: 0,
             data_bytes: 0,
             index_bytes: 0,
-            storage_objects: 0,
-            storage_bytes: 0,
+            storage_objects: Some(0),
+            storage_bytes: Some(0),
             transfer_assumed_mbps: 100,
             estimated_transfer_seconds: 0,
         },
@@ -110,7 +111,7 @@ fn fixture() -> Report {
         realtime: Realtime {
             publications: Vec::new(),
         },
-        cron_jobs: Vec::new(),
+        cron_jobs: Some(Vec::new()),
         findings: vec![
             finding("extension:dblink", "extension", Classification::Blocker),
             finding(

@@ -39,29 +39,62 @@ booleans are read; its client secrets and SMTP password are never looked at.
    rolled back, never committed. Before the rollback, inspect checks that
    Postgres never assigned the transaction an id, which any write would
    have done, and records that in the report.
-2. Connect as a role that cannot write at all. In the Supabase SQL editor:
+2. Connect as a role that cannot write at all. In the Supabase SQL editor,
+   which runs as `postgres`:
 
 ```sql
-create role cratefield_inspect login password '<a long random password>';
+create role cratefield_inspect login password '<a long random password>' bypassrls;
 alter role cratefield_inspect set default_transaction_read_only = on;
-grant usage on schema public, auth, storage, extensions to cratefield_inspect;
-grant select on all tables in schema public, auth, storage to cratefield_inspect;
--- Other schemas of your own, too: grant usage + select on them the same way.
+grant pg_read_all_data to cratefield_inspect;
 ```
+
+`pg_read_all_data` (Postgres 14+) is the whole role in one grant: `SELECT`
+on every table, view and sequence, and `USAGE` on every schema, current and
+future — `auth`, `storage`, `cron` and your own included — with no write.
+The old `grant usage on schema auth` warned (`no privileges were granted`)
+and granted nothing, because `postgres` does not own `auth`; this does not.
+`BYPASSRLS` is needed too: Supabase enables row-level security on
+`auth.users`, `auth.identities`, `storage.buckets`, `storage.objects` and
+`cron.job`, and a role without it reads zero rows there — which inspect now
+reports as `not_visible` (unknown, not zero), never as a silent `0`.
+Supabase's `postgres` holds both attributes, so it can grant them.
+
+If the grant is refused (an older image where `postgres` lacks admin on
+`pg_read_all_data`), grant the pieces by hand: `grant usage on schema
+public, storage, extensions, cron, <your schemas> to cratefield_inspect;`
+and, the same way, `grant select on all tables in schema <...> to
+cratefield_inspect;`. `auth` is the exception: its `USAGE` can only come
+from its owner, `supabase_admin` — `psql
+postgresql://supabase_admin:postgres@127.0.0.1:54322/postgres` on a local
+CLI stack, and not available to you on a hosted project. Where `bypassrls`
+is refused as well, the table's owner can instead run `create policy
+cratefield_inspect_read on <table> for select to cratefield_inspect using
+(true);` — which `postgres` cannot do on Supabase's managed tables.
 
 The report's `read_only` block says what was observed: the read-only
 transaction and session, the absence of a transaction id, and whether the
 role holds any write privilege. A run as a superuser or as a role that can
-write still works, with a warning.
+write still works, with a warning. Writes are refused by privilege
+(`permission denied for table …`), not only by the read-only GUC, which the
+role could switch off itself — the grant is the guard that matters.
 
-`storage.objects` has row-level security, and this role does not bypass it,
-so object counts may be low; the report then says `counts_exact: false` and
-warns. For exact storage numbers run as a role with `BYPASSRLS` or as the table's
-owner — the transaction is read-only either way.
+Any section the role cannot fully see — `auth`, `storage.buckets`,
+`storage.objects`, `cron`, or a schema without `USAGE`/`SELECT` — is
+reported as `coverage.sections[].coverage: not_visible` (unknown, not
+zero), makes `ready: false`, and adds a blocker naming the grant or
+`BYPASSRLS` it needs; the Markdown report prints a "Grants needed" SQL
+block.
 
-Revoke the role when the migration is done (`drop owned by
-cratefield_inspect; drop role cratefield_inspect;`); the decommission
-checklist will say so too.
+The role can read everything, including `auth` password hashes and storage
+metadata, so drop it when the migration is done: `revoke pg_read_all_data
+from cratefield_inspect; drop role cratefield_inspect;` (or `drop owned by
+cratefield_inspect; drop role cratefield_inspect;` if you granted by hand).
+The decommission checklist will say so too.
+
+This was verified against Supabase's own init scripts and migrations on
+Postgres 16 locally, not on a hosted project: the same roles and grants are
+expected there, but if `grant pg_read_all_data` or `bypassrls` is refused,
+use the fallback above and the report will name what is missing.
 
 ## Running it
 
