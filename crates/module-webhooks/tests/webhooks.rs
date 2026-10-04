@@ -114,6 +114,16 @@ impl Kit {
         }
     }
 
+    /// The context a scheduled invocation would carry with `budget` as its
+    /// `ctx.scheduled` — the same wiring as [`Kit::context`], with the
+    /// budget the runtime would hand this module for the tick.
+    fn context_with_budget(&self, budget: Arc<ScheduledBudget>) -> ModuleContext {
+        let config = Kit::config();
+        let mut ctx = self.context_over(self.wired_ports(&config), config);
+        ctx.scheduled = budget;
+        ctx
+    }
+
     fn config() -> Arc<dyn Config> {
         Arc::new(MapConfig::default())
     }
@@ -145,6 +155,15 @@ impl Kit {
     async fn drain(&self) -> DrainReport {
         self.module
             .drain_with(&self.context(Kit::config()))
+            .await
+            .expect("the drain runs")
+    }
+
+    /// A pass under an explicit budget, the way a scheduled invocation
+    /// runs: `budget` is the module's `ctx.scheduled`.
+    async fn drain_within(&self, budget: &Arc<ScheduledBudget>) -> DrainReport {
+        self.module
+            .drain_with(&self.context_with_budget(Arc::clone(budget)))
             .await
             .expect("the drain runs")
     }
@@ -731,6 +750,101 @@ async fn the_config_override_tightens_the_attempt_budget() {
         .await
         .expect("read");
     assert_eq!(letters[0].attempts, 1);
+}
+
+/// A backlog larger than one tick's allowance is delivered across ticks,
+/// each tick spending no more subrequests than its budget allows — the
+/// "N due items per tick" contract of ADR 0023, charged one per outbound
+/// `POST`.
+#[pollster::test]
+async fn a_backlog_drains_across_ticks_within_the_subrequest_budget() {
+    const QUEUED: usize = 10;
+    /// Delivery attempts (subrequests) one tick's budget allows.
+    const PER_TICK: u32 = 3;
+    let per_tick = usize::try_from(PER_TICK).expect("three fits a usize");
+
+    let kit = Kit::mount(5, &[]);
+    kit.create_endpoint(ALICE, URL_A, &[]).await;
+    for n in 0..QUEUED {
+        kit.publish(ALICE, "order.paid", json!({ "n": n })).await;
+    }
+
+    // A fresh budget per tick, the runtime's contract. ceil(10 / 3) = 4
+    // ticks deliver the lot.
+    let mut delivered = 0;
+    for tick in 0..QUEUED.div_ceil(per_tick) {
+        let budget = Arc::new(ScheduledBudget::new(None, Some(PER_TICK)));
+        let before = kit.http.captured().len();
+        let report = kit.drain_within(&budget).await;
+        let sent = kit.http.captured().len() - before;
+        assert!(sent <= per_tick, "tick {tick} sent {sent} POSTs");
+        assert!(report.claimed <= per_tick, "tick {tick}: {report:?}");
+        assert_eq!(
+            budget.spent(),
+            u32::try_from(report.claimed).expect("small"),
+            "one subrequest per attempt, and never an overdraft"
+        );
+        assert_eq!(report.delivered, report.claimed, "every answer was a 200");
+        assert_eq!(
+            report.deferred, 0,
+            "the budget capped the claim, nothing else"
+        );
+        delivered += report.delivered;
+    }
+
+    // Everything went out, exactly once: one POST per queued delivery, one
+    // log row each, all first attempts.
+    assert_eq!(delivered, QUEUED);
+    assert_eq!(kit.http.captured().len(), QUEUED, "one POST per delivery");
+    let log = kit.deliveries(ALICE).await;
+    assert_eq!(log.len(), QUEUED);
+    assert!(
+        log.iter().all(|d| d.attempt == 1),
+        "each row was delivered on its first attempt"
+    );
+
+    // Nothing waits behind the budget any more: a fresh tick finds nothing.
+    let budget = Arc::new(ScheduledBudget::new(None, Some(PER_TICK)));
+    let report = kit.drain_within(&budget).await;
+    assert_eq!(report.claimed, 0);
+    assert_eq!(report.deferred, 0);
+}
+
+/// A budget with nothing left delivers nothing and leaves the queue for
+/// the next tick — whichever bound exhausted it — rather than draining it
+/// anyway.
+#[pollster::test]
+async fn an_exhausted_budget_delivers_nothing_and_leaves_the_queue_intact() {
+    let kit = Kit::mount(5, &[]);
+    kit.create_endpoint(ALICE, URL_A, &[]).await;
+    kit.publish(ALICE, "order.paid", json!({ "n": 1 })).await;
+
+    // No subrequests to spend.
+    let empty = Arc::new(ScheduledBudget::new(None, Some(0)));
+    let report = kit.drain_within(&empty).await;
+    assert_eq!(report.claimed, 0);
+    assert_eq!(
+        report.deferred, 0,
+        "nothing was claimed, so nothing was released"
+    );
+    assert_eq!(kit.http.captured().len(), 0, "not one POST was made");
+    assert_eq!(empty.spent(), 0);
+
+    // The deadline already passed: the other way to arrive exhausted.
+    let expired = Arc::new(ScheduledBudget::new(
+        Some(OffsetDateTime::from_unix_timestamp(NOW_UNIX - 1).expect("in range")),
+        None,
+    ));
+    assert_eq!(kit.drain_within(&expired).await.claimed, 0);
+    assert_eq!(kit.http.captured().len(), 0);
+
+    // Neither pass leased the row out from under the next: it is still due,
+    // and a fresh budget delivers it exactly once.
+    let budget = Arc::new(ScheduledBudget::new(None, Some(3)));
+    let report = kit.drain_within(&budget).await;
+    assert_eq!(report.claimed, 1);
+    assert_eq!(report.delivered, 1);
+    assert_eq!(kit.deliveries(ALICE).await.len(), 1, "logged exactly once");
 }
 
 /// The module needs a database, an HTTP client and a clock; a context
