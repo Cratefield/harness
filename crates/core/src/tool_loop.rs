@@ -21,6 +21,11 @@
 //! an error naming the keyword, never a check silently skipped: a tool
 //! that reached an executor on arguments its schema forbade would be
 //! exactly the failure the schema was there to prevent.
+//!
+//! The same walk is the schema check behind
+//! [`TextModelExt::complete_json`](crate::TextModelExt::complete_json), so
+//! structured output refuses an unsupported keyword before the model is
+//! asked, on exactly the subset a tool argument schema is held to.
 
 use async_trait::async_trait;
 use serde_json::{Map, Value};
@@ -356,129 +361,111 @@ fn invalid_schema(tool: &str, reason: impl Into<String>) -> ToolLoopError {
 /// keyword this validator does not implement is an error naming it, never a
 /// check silently skipped. Recurses into every subschema.
 fn validate_tool_schema(tool: &str, schema: &Value) -> Result<(), ToolLoopError> {
+    validate_schema(schema).map_err(|reason| invalid_schema(tool, reason))
+}
+
+/// The walk behind [`validate_tool_schema`], returning the reason as a
+/// plain string so the structured-output extension
+/// ([`crate::TextModelExt::complete_json`]) can share it and wrap the same
+/// reason in its own error. Recurses into every subschema.
+pub(crate) fn validate_schema(schema: &Value) -> Result<(), String> {
     let Some(object) = schema.as_object() else {
-        return Err(invalid_schema(tool, "the schema is not a JSON object"));
+        return Err("the schema is not a JSON object".to_owned());
     };
     for (keyword, value) in object {
         match keyword.as_str() {
-            "type" => check_type_keyword(tool, value)?,
-            "properties" => check_properties(tool, value)?,
-            "required" => check_required(tool, value)?,
-            "additionalProperties" => check_additional_properties(tool, value)?,
-            "items" => validate_tool_schema(tool, value)?,
+            "type" => check_type_keyword(value)?,
+            "properties" => check_properties(value)?,
+            "required" => check_required(value)?,
+            "additionalProperties" => check_additional_properties(value)?,
+            "items" => validate_schema(value)?,
             "enum" => {
                 if !value.is_array() {
-                    return Err(invalid_schema(tool, "`enum` must be an array"));
+                    return Err("`enum` must be an array".to_owned());
                 }
             }
             "const" => {}
             "minimum" | "maximum" | "exclusiveMinimum" | "exclusiveMaximum" => {
                 if !value.is_number() {
-                    return Err(invalid_schema(
-                        tool,
-                        format!("`{keyword}` must be a number"),
-                    ));
+                    return Err(format!("`{keyword}` must be a number"));
                 }
             }
             "minLength" | "maxLength" | "minItems" | "maxItems" => {
                 if value.as_u64().is_none() {
-                    return Err(invalid_schema(
-                        tool,
-                        format!("`{keyword}` must be a non-negative integer"),
-                    ));
+                    return Err(format!("`{keyword}` must be a non-negative integer"));
                 }
             }
-            "anyOf" | "oneOf" | "allOf" => check_schema_list(tool, keyword, value)?,
+            "anyOf" | "oneOf" | "allOf" => check_schema_list(keyword, value)?,
             other if ANNOTATIONS.contains(&other) => {}
-            other => {
-                return Err(invalid_schema(
-                    tool,
-                    format!("the `{other}` keyword is not supported"),
-                ));
-            }
+            other => return Err(format!("the `{other}` keyword is not supported")),
         }
     }
     Ok(())
 }
 
-fn check_type_keyword(tool: &str, value: &Value) -> Result<(), ToolLoopError> {
+fn check_type_keyword(value: &Value) -> Result<(), String> {
     let names: Vec<&str> = match value {
         Value::String(name) => vec![name.as_str()],
         Value::Array(items) => {
             if !items.iter().all(Value::is_string) {
-                return Err(invalid_schema(
-                    tool,
-                    "`type` must name strings when given as an array",
-                ));
+                return Err("`type` must name strings when given as an array".to_owned());
             }
             items.iter().filter_map(Value::as_str).collect()
         }
-        _ => {
-            return Err(invalid_schema(
-                tool,
-                "`type` must be a string or an array of strings",
-            ));
-        }
+        _ => return Err("`type` must be a string or an array of strings".to_owned()),
     };
     if names.is_empty() || !names.iter().all(|name| TYPE_NAMES.contains(name)) {
-        return Err(invalid_schema(tool, "`type` names an unknown JSON type"));
+        return Err("`type` names an unknown JSON type".to_owned());
     }
     Ok(())
 }
 
-fn check_properties(tool: &str, value: &Value) -> Result<(), ToolLoopError> {
+fn check_properties(value: &Value) -> Result<(), String> {
     let Some(properties) = value.as_object() else {
-        return Err(invalid_schema(tool, "`properties` must be an object"));
+        return Err("`properties` must be an object".to_owned());
     };
     for subschema in properties.values() {
-        validate_tool_schema(tool, subschema)?;
+        validate_schema(subschema)?;
     }
     Ok(())
 }
 
-fn check_required(tool: &str, value: &Value) -> Result<(), ToolLoopError> {
+fn check_required(value: &Value) -> Result<(), String> {
     let Some(names) = value.as_array() else {
-        return Err(invalid_schema(tool, "`required` must be an array"));
+        return Err("`required` must be an array".to_owned());
     };
     if !names.iter().all(Value::is_string) {
-        return Err(invalid_schema(tool, "`required` must name strings"));
+        return Err("`required` must name strings".to_owned());
     }
     Ok(())
 }
 
-fn check_additional_properties(tool: &str, value: &Value) -> Result<(), ToolLoopError> {
+fn check_additional_properties(value: &Value) -> Result<(), String> {
     match value {
         Value::Bool(_) => Ok(()),
-        Value::Object(_) => validate_tool_schema(tool, value),
-        _ => Err(invalid_schema(
-            tool,
-            "`additionalProperties` must be a boolean or a schema",
-        )),
+        Value::Object(_) => validate_schema(value),
+        _ => Err("`additionalProperties` must be a boolean or a schema".to_owned()),
     }
 }
 
-fn check_schema_list(tool: &str, keyword: &str, value: &Value) -> Result<(), ToolLoopError> {
+fn check_schema_list(keyword: &str, value: &Value) -> Result<(), String> {
     let Some(schemas) = value.as_array() else {
-        return Err(invalid_schema(
-            tool,
-            format!("`{keyword}` must be an array of schemas"),
-        ));
+        return Err(format!("`{keyword}` must be an array of schemas"));
     };
     if schemas.is_empty() {
-        return Err(invalid_schema(
-            tool,
-            format!("`{keyword}` must not be empty"),
-        ));
+        return Err(format!("`{keyword}` must not be empty"));
     }
     for subschema in schemas {
-        validate_tool_schema(tool, subschema)?;
+        validate_schema(subschema)?;
     }
     Ok(())
 }
 
 /// Validates `instance` against a schema already accepted by
-/// [`validate_tool_schema`], returning the first violation it finds.
-fn validate_instance(schema: &Value, instance: &Value) -> Result<(), String> {
+/// [`validate_schema`], returning the first violation it finds. Shared with
+/// the structured-output extension, which reports the reason as a
+/// [`TextModelError::SchemaViolation`](crate::TextModelError::SchemaViolation).
+pub(crate) fn validate_instance(schema: &Value, instance: &Value) -> Result<(), String> {
     let Some(object) = schema.as_object() else {
         return Err("the schema is not an object".to_owned());
     };
@@ -538,29 +525,25 @@ fn check_number_bounds(object: &Map<String, Value>, instance: &Value) -> Result<
     if let Some(minimum) = object.get("minimum").and_then(Value::as_f64)
         && number < minimum
     {
-        return Err(format!(
-            "the value {number} is below the `minimum` {minimum}"
-        ));
+        return Err(format!("the number is below the `minimum` {minimum}"));
     }
     if let Some(minimum) = object.get("exclusiveMinimum").and_then(Value::as_f64)
         && number <= minimum
     {
         return Err(format!(
-            "the value {number} is not above the `exclusiveMinimum` {minimum}"
+            "the number is not above the `exclusiveMinimum` {minimum}"
         ));
     }
     if let Some(maximum) = object.get("maximum").and_then(Value::as_f64)
         && number > maximum
     {
-        return Err(format!(
-            "the value {number} is above the `maximum` {maximum}"
-        ));
+        return Err(format!("the number is above the `maximum` {maximum}"));
     }
     if let Some(maximum) = object.get("exclusiveMaximum").and_then(Value::as_f64)
         && number >= maximum
     {
         return Err(format!(
-            "the value {number} is not below the `exclusiveMaximum` {maximum}"
+            "the number is not below the `exclusiveMaximum` {maximum}"
         ));
     }
     Ok(())
