@@ -2084,6 +2084,7 @@ name = "cratefield-waitlist"
 version = "0.1.1"
 dependencies = [
  "async-trait",
+ "cratefield-adapter-owlpost",
  "cratefield-adapter-resend",
  "cratefield-adapter-turnstile",
  "cratefield-core",
@@ -2091,6 +2092,8 @@ dependencies = [
  "cratefield-module-waitlist",
  "cratefield-runtime-cloudflare",
  "getrandom 0.4.3",
+ "insta",
+ "serde_json",
  "worker",
 ]
 
