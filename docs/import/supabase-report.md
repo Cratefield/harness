@@ -124,7 +124,7 @@ are not listed.
 | `permissive` | permissive or restrictive |
 | `roles` | sorted |
 | `using`, `with_check` | the expressions as Postgres renders them, scrubbed; `null` when absent |
-| `pattern` | `owner_only`, `tenant_scoped`, `public_read`, `public_write`, `role_based`, `service_role_only`, `custom_logic` or `needs_review` |
+| `pattern` | `owner_only`, `tenant_scoped`, `public_read`, `public_write`, `role_based`, `service_role_only`, `owner_via_parent`, `tenant_via_parent`, `public_read_filtered`, `deny_all`, `composite`, `custom_logic` or `needs_review` |
 | `confidence` | 1.0 for a rule match, the classifier's own number for a classifier label, 0.0 when unplaced |
 | `source` | `rule` or `classifier` |
 | `classifier_label` | the label the classifier gave below the threshold (the policy is then `needs_review`); otherwise `null` |

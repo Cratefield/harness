@@ -9,7 +9,10 @@
 //! the common Supabase shapes: owner-only (`auth.uid() = user_id`),
 //! tenant-scoped through a membership lookup, public read (`true`),
 //! role- or claim-based (`auth.role()`, `auth.jwt()`), and service-role
-//! only. A match has confidence 1.0.
+//! only. Then the shapes those miss: ownership or membership reached
+//! through a parent row, a public read bounded by a column filter, a
+//! policy that refuses everything (`false`), and a disjunction of any of
+//! these. A match has confidence 1.0.
 //!
 //! **A classifier for the rest, optionally.** When a [`Classifier`] is
 //! configured (Jev, `TypeSafe`'s calibrated judge, through
@@ -81,6 +84,25 @@ enum RuleMatch {
     PublicWrite,
     Role,
     ServiceRole,
+    OwnerViaParent {
+        parent: String,
+        fk: String,
+        owner: String,
+    },
+    TenantViaParent {
+        parent: String,
+        fk: String,
+        membership: String,
+        tenant_column: String,
+        roles: Vec<String>,
+    },
+    PublicReadFiltered {
+        columns: Vec<String>,
+        parent: Option<(String, String)>,
+        signed_in: bool,
+    },
+    DenyAll,
+    Composite(Vec<Self>),
 }
 
 impl RuleMatch {
@@ -92,6 +114,11 @@ impl RuleMatch {
             Self::PublicWrite => PolicyPattern::PublicWrite,
             Self::Role => PolicyPattern::RoleBased,
             Self::ServiceRole => PolicyPattern::ServiceRoleOnly,
+            Self::OwnerViaParent { .. } => PolicyPattern::OwnerViaParent,
+            Self::TenantViaParent { .. } => PolicyPattern::TenantViaParent,
+            Self::PublicReadFiltered { .. } => PolicyPattern::PublicReadFiltered,
+            Self::DenyAll => PolicyPattern::DenyAll,
+            Self::Composite(_) => PolicyPattern::Composite,
         }
     }
 
@@ -105,9 +132,97 @@ impl RuleMatch {
                 "membership check in the route: the request's subject must be a member, looked \
                  up in `{table}`, of the row's tenant"
             ),
+            Self::OwnerViaParent { parent, fk, owner } => format!(
+                "owner check through the parent row in the route: load the `{parent}` row `{fk}` \
+                 points at; the request's subject must equal its `{owner}` (filter reads and \
+                 refuse writes by it)"
+            ),
+            Self::TenantViaParent {
+                parent,
+                fk,
+                membership,
+                tenant_column,
+                roles,
+            } => {
+                let mut text = format!(
+                    "membership check through the parent row in the route: load the `{parent}` \
+                     row `{fk}` points at; the request's subject must be a member, looked up in \
+                     `{membership}`, of its `{tenant_column}`"
+                );
+                if !roles.is_empty() {
+                    let listed = roles
+                        .iter()
+                        .map(|role| format!("'{role}'"))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    let _ = write!(text, ", holding one of the roles {listed}");
+                }
+                text
+            }
+            Self::PublicReadFiltered {
+                columns,
+                parent,
+                signed_in,
+            } => public_read_filtered_suggestion(columns, parent.as_ref(), *signed_in),
+            Self::DenyAll => "no route: the policy refuses every request it covers; keep the \
+                              table server-side and test that clients are refused"
+                .to_owned(),
+            Self::Composite(parts) => {
+                let mut text = String::from(
+                    "any one of these checks grants access, so the route must accept a request \
+                     that passes any of them:",
+                );
+                for (index, part) in parts.iter().enumerate() {
+                    let _ = write!(
+                        text,
+                        " ({}) {}: {};",
+                        index + 1,
+                        pattern_name(part.pattern()),
+                        part.suggestion()
+                    );
+                }
+                text
+            }
             other => suggestion(other.pattern()),
         }
     }
+}
+
+/// The suggestion for a filtered public read.
+fn public_read_filtered_suggestion(
+    columns: &[String],
+    parent: Option<&(String, String)>,
+    signed_in: bool,
+) -> String {
+    let listed = columns
+        .iter()
+        .map(|column| format!("`{column}`"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let subject = if signed_in {
+        "for signed-in subjects only, with no per-row subject check"
+    } else {
+        "with no subject check"
+    };
+    match parent {
+        Some((parent, fk)) => format!(
+            "a public read route {subject}, returning only rows whose `{parent}` row (through \
+             `{fk}`) passes the filter on {listed}; confirm every column of those rows is meant \
+             to be public"
+        ),
+        None => format!(
+            "a public read route {subject}, returning only rows where {listed} match the \
+             policy's filter; confirm every column of those rows is meant to be public"
+        ),
+    }
+}
+
+/// The `serde` name of a pattern, taken from the type so it cannot drift.
+fn pattern_name(pattern: PolicyPattern) -> String {
+    serde_json::to_value(pattern)
+        .ok()
+        .and_then(|value| value.as_str().map(str::to_owned))
+        .unwrap_or_default()
 }
 
 /// The generic suggestion for a pattern.
@@ -134,6 +249,27 @@ pub fn suggestion(pattern: PolicyPattern) -> String {
         PolicyPattern::ServiceRoleOnly => "server-side only: no route exposes it; module code \
                                            reads and writes it directly"
             .to_owned(),
+        PolicyPattern::OwnerViaParent => "owner check through the parent row in the route: load \
+                                          the parent row the foreign key points at; the \
+                                          request's subject must equal its owner column (filter \
+                                          reads and refuse writes by it)"
+            .to_owned(),
+        PolicyPattern::TenantViaParent => "membership check through the parent row in the route: \
+                                           load the parent row the foreign key points at; the \
+                                           request's subject must be a member, looked up in the \
+                                           membership table, of its tenant"
+            .to_owned(),
+        PolicyPattern::PublicReadFiltered => "a public read route with no subject check, \
+                                              returning only the rows the policy's filter allows; \
+                                              confirm every column of those rows is meant to be \
+                                              public"
+            .to_owned(),
+        PolicyPattern::DenyAll => "no route: the policy refuses every request it covers; keep the \
+                                   table server-side and test that clients are refused"
+            .to_owned(),
+        PolicyPattern::Composite => "any one of the policy's checks grants access, so the route \
+                                     must accept a request that passes any of them"
+            .to_owned(),
         PolicyPattern::CustomLogic => "a hand-written check in the route reproducing the \
                                        expression; write its failing test first"
             .to_owned(),
@@ -144,6 +280,7 @@ pub fn suggestion(pattern: PolicyPattern) -> String {
 }
 
 /// Places a policy by rule alone. `None` when no rule matched.
+///
 #[must_use]
 pub fn match_rules(input: &PolicyInput<'_>) -> Option<(PolicyPattern, String)> {
     let roles: Vec<&str> = input.roles.iter().map(String::as_str).collect();
@@ -155,6 +292,8 @@ pub fn match_rules(input: &PolicyInput<'_>) -> Option<(PolicyPattern, String)> {
     }
     let using = input.using.map(|expr| match_expression(expr, input));
     let check = input.with_check.map(|expr| match_expression(expr, input));
+    // A side the rules cannot read vetoes the other: an unplaced or
+    // unrecognised expression is never labelled by the side that placed.
     let placed = match (using, check) {
         (Some(Some(a)), Some(Some(b))) if a.pattern() == b.pattern() => a,
         (Some(Some(a)), None) | (None, Some(Some(a))) => a,
@@ -165,6 +304,28 @@ pub fn match_rules(input: &PolicyInput<'_>) -> Option<(PolicyPattern, String)> {
 
 fn match_expression(expr: &str, input: &PolicyInput<'_>) -> Option<RuleMatch> {
     let expr = normalize(expr);
+    if let Some(matched) = match_old_rules(&expr, input) {
+        return Some(matched);
+    }
+    if !input.permissive {
+        return None;
+    }
+    // The rules below cover shapes the rules above miss. They run only once
+    // every rule above has failed, so a policy the rules already placed
+    // never changes.
+    if let Some(matched) = parent_match(&expr, input) {
+        return Some(matched);
+    }
+    if let Some(matched) = public_read_filtered(&expr, input) {
+        return Some(matched);
+    }
+    if expr == "false" {
+        return Some(RuleMatch::DenyAll);
+    }
+    composite(&expr, input)
+}
+
+fn match_old_rules(expr: &str, input: &PolicyInput<'_>) -> Option<RuleMatch> {
     let anonymous = input.roles.is_empty()
         || input
             .roles
@@ -181,11 +342,11 @@ fn match_expression(expr: &str, input: &PolicyInput<'_>) -> Option<RuleMatch> {
             RuleMatch::PublicWrite
         });
     }
-    if let Some(column) = owner_column(&expr) {
+    if let Some(column) = owner_column(expr) {
         return Some(RuleMatch::Owner(column));
     }
     if expr.contains("auth.uid()")
-        && let Some(table) = membership_table(&expr)
+        && let Some(table) = membership_table(expr)
     {
         return Some(RuleMatch::Tenant(table));
     }
@@ -197,6 +358,11 @@ fn match_expression(expr: &str, input: &PolicyInput<'_>) -> Option<RuleMatch> {
         return Some(RuleMatch::Role);
     }
     None
+}
+
+/// The bare table name of `schema.table`, as `pg_get_expr` renders it.
+fn bare_table(table: &str) -> &str {
+    table.rsplit('.').next().unwrap_or(table)
 }
 
 /// Lower-cases, collapses whitespace, unwraps `(select auth.x() as x)`,
@@ -288,19 +454,28 @@ fn owner_column(expr: &str) -> Option<String> {
     identifier.then(|| column.to_owned())
 }
 
+/// The words in a table name that say it holds memberships.
+const MEMBERSHIP_WORDS: &[&str] = &[
+    "member",
+    "team",
+    "org",
+    "tenant",
+    "workspace",
+    "group",
+    "account",
+    "collaborator",
+];
+
+/// Whether a table's name says it holds memberships.
+fn is_membership_table(name: &str) -> bool {
+    MEMBERSHIP_WORDS
+        .iter()
+        .any(|word| name.to_lowercase().contains(word))
+}
+
 /// The table a subquery reads from, when its name says it holds
 /// memberships.
 fn membership_table(expr: &str) -> Option<String> {
-    const MEMBERSHIP_WORDS: &[&str] = &[
-        "member",
-        "team",
-        "org",
-        "tenant",
-        "workspace",
-        "group",
-        "account",
-        "collaborator",
-    ];
     if !expr.contains("select ") {
         return None;
     }
@@ -312,11 +487,378 @@ fn membership_table(expr: &str) -> Option<String> {
             .take_while(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '"'))
             .collect();
         let bare = table.rsplit('.').next().unwrap_or(&table).trim_matches('"');
-        if MEMBERSHIP_WORDS.iter().any(|word| bare.contains(word)) {
+        if is_membership_table(bare) {
             return Some(bare.to_owned());
         }
     }
     None
+}
+
+/// Splits `text` on ` sep ` at parenthesis depth 0, outside single-quoted
+/// strings; each piece is trimmed and stripped of redundant outer parens.
+fn split_top_level(text: &str, sep: &str) -> Vec<String> {
+    let chars: Vec<char> = text.chars().collect();
+    let separator: Vec<char> = format!(" {sep} ").chars().collect();
+    let mut pieces = Vec::new();
+    let (mut start, mut depth, mut in_string, mut index) = (0usize, 0i32, false, 0usize);
+    while index < chars.len() {
+        let c = chars[index];
+        if in_string {
+            if c == '\'' {
+                if chars.get(index + 1) == Some(&'\'') {
+                    index += 2;
+                    continue;
+                }
+                in_string = false;
+            }
+            index += 1;
+            continue;
+        }
+        match c {
+            '\'' => in_string = true,
+            '(' => depth += 1,
+            ')' => depth = depth.saturating_sub(1),
+            _ => {}
+        }
+        if depth == 0 && chars.get(index..index + separator.len()) == Some(separator.as_slice()) {
+            pieces.push(strip_outer_parens(
+                chars[start..index].iter().collect::<String>().trim(),
+            ));
+            index += separator.len();
+            start = index;
+            continue;
+        }
+        index += 1;
+    }
+    pieces.push(strip_outer_parens(
+        chars[start..].iter().collect::<String>().trim(),
+    ));
+    pieces
+}
+
+/// A bare identifier (`[a-z0-9_]`, optionally double-quoted); literals are
+/// refused.
+fn identifier(text: &str) -> Option<String> {
+    let text = text.trim();
+    let inner = text
+        .strip_prefix('"')
+        .and_then(|rest| rest.strip_suffix('"'))
+        .unwrap_or(text);
+    (!inner.is_empty()
+        && !matches!(inner, "true" | "false" | "null")
+        && inner.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'))
+    .then(|| inner.to_owned())
+}
+
+/// `qualifier.column`, or a bare `column`; a `schema.table` reads as its table.
+fn column_ref(text: &str) -> Option<(Option<String>, String)> {
+    let text = strip_outer_parens(text.trim());
+    let (qualifier, column) = match text.rsplit_once('.') {
+        Some((qualifier, column)) => (Some(identifier(qualifier)?), column),
+        None => (None, text.as_str()),
+    };
+    Some((qualifier, identifier(column)?))
+}
+
+/// The column of `text`, its qualifier being `name` (or, if `or_bare`, absent).
+/// A bare SQL session keyword is not a column.
+fn column_of(text: &str, name: &str, or_bare: bool) -> Option<String> {
+    let (qualifier, column) = column_ref(text)?;
+    match qualifier.as_deref() {
+        Some(found) if found == name => Some(column),
+        None if or_bare && !is_session_keyword(&column) => Some(column),
+        _ => None,
+    }
+}
+
+/// A SQL keyword that names the session, not a column of the row.
+fn is_session_keyword(name: &str) -> bool {
+    matches!(
+        name,
+        "current_user"
+            | "session_user"
+            | "current_role"
+            | "user"
+            | "current_schema"
+            | "current_catalog"
+    )
+}
+
+/// `<table> [<alias>]`; the qualifier is the alias, or the table's own name.
+fn from_qualifier(from: &str) -> Option<(String, String)> {
+    let tokens: Vec<&str> = from.split_whitespace().collect();
+    let table = column_ref(tokens.first()?)?.1;
+    match tokens.as_slice() {
+        [_] => Some((table.clone(), table)),
+        [_, alias] => Some((table, identifier(alias)?)),
+        _ => None,
+    }
+}
+
+/// `exists ( select 1 from <from> where <and-conjuncts> )`.
+fn exists_parts(expr: &str) -> Option<(String, Vec<String>)> {
+    let inner = expr.strip_prefix("exists (")?.strip_suffix(')')?;
+    let select = inner.trim().strip_prefix("select 1 from ")?;
+    let mut parts = split_top_level(select, "where").into_iter();
+    let from = parts.next()?;
+    let cond = parts.next()?;
+    parts
+        .next()
+        .is_none()
+        .then(|| (from, split_top_level(&cond, "and")))
+}
+
+/// The join `<alias>.id = <table>.<fk>` (either order); the fk column on the
+/// policy's own table, which must not be that table's `id`.
+fn parent_join(conjunct: &str, qualifier: &str, table: &str) -> Option<String> {
+    let text = strip_outer_parens(conjunct.trim());
+    let (left, right) = text.split_once(" = ")?;
+    [(left, right), (right, left)]
+        .into_iter()
+        .find_map(|(fk, parent)| {
+            let fk = column_of(fk, table, false)?;
+            (fk != "id" && column_of(parent, qualifier, false).as_deref() == Some("id"))
+                .then_some(fk)
+        })
+}
+
+/// `<alias>.<column> = auth.uid()` (either order); the column.
+fn uid_column(conjunct: &str, qualifier: &str) -> Option<String> {
+    let text = strip_outer_parens(conjunct.trim());
+    let (left, right) = text.split_once(" = ")?;
+    if strip_outer_parens(right.trim()) == "auth.uid()" {
+        return column_of(left, qualifier, false);
+    }
+    if strip_outer_parens(left.trim()) == "auth.uid()" {
+        return column_of(right, qualifier, false);
+    }
+    None
+}
+
+/// `<column> = any (array['a', 'b'])` on the qualifier; the roles.
+fn roles_in(conjunct: &str, qualifier: &str) -> Option<Vec<String>> {
+    let text = strip_outer_parens(conjunct.trim());
+    let (left, right) = text.split_once("= any")?;
+    column_of(left, qualifier, false)?;
+    let inner = strip_outer_parens(right.trim());
+    let inner = strip_outer_parens(inner.trim());
+    let inner = inner.strip_prefix("array[")?.strip_suffix(']')?;
+    let roles: Option<Vec<String>> = inner
+        .split(',')
+        .map(|part| {
+            part.trim()
+                .strip_prefix('\'')
+                .and_then(|rest| rest.strip_suffix('\''))
+                .map(str::to_owned)
+        })
+        .collect();
+    roles.filter(|roles| !roles.is_empty())
+}
+
+/// The parent's table, the fk into it, its qualifier and the conjuncts other
+/// than the `<parent>.id = <table>.<fk>` join.
+fn parent_parts(
+    from: &str,
+    conjuncts: &[String],
+    table: &str,
+) -> Option<(String, String, String, Vec<String>)> {
+    let (parent, qualifier) = from_qualifier(from)?;
+    let index = conjuncts
+        .iter()
+        .position(|conjunct| parent_join(conjunct, &qualifier, table).is_some())?;
+    let fk = parent_join(&conjuncts[index], &qualifier, table)?;
+    let rest = conjuncts
+        .iter()
+        .enumerate()
+        .filter(|(at, _)| *at != index)
+        .map(|(_, conjunct)| conjunct.clone())
+        .collect();
+    Some((parent, fk, qualifier, rest))
+}
+
+/// Ownership (`<alias>.<owner> = auth.uid()`) or membership through a parent
+/// row, sharing the `exists ( select 1 from … )` parse.
+fn parent_match(expr: &str, input: &PolicyInput<'_>) -> Option<RuleMatch> {
+    let table = bare_table(input.table);
+    let (from, conjuncts) = exists_parts(expr)?;
+    if let Some((parent, fk, qualifier, rest)) = parent_parts(&from, &conjuncts, table)
+        && let [only] = rest.as_slice()
+        && let Some(owner) = uid_column(only, &qualifier)
+    {
+        return Some(RuleMatch::OwnerViaParent { parent, fk, owner });
+    }
+    let mut joins = split_top_level(&from, "join").into_iter();
+    let (parent_part, membership_on) = (joins.next()?, joins.next()?);
+    if joins.next().is_some() {
+        return None;
+    }
+    let mut on = split_top_level(&membership_on, "on").into_iter();
+    let (membership_part, on_cond) = (on.next()?, on.next()?);
+    if on.next().is_some() {
+        return None;
+    }
+    let (parent, parent_qualifier) = from_qualifier(&parent_part)?;
+    let (membership, membership_qualifier) = from_qualifier(&membership_part)?;
+    if !is_membership_table(&membership) || !(2..=3).contains(&conjuncts.len()) {
+        return None;
+    }
+    let on_cond = strip_outer_parens(&on_cond);
+    let (left, right) = on_cond.split_once(" = ")?;
+    let tenant_column = column_of(left, &membership_qualifier, false)
+        .filter(|_| column_of(right, &parent_qualifier, false).is_some())
+        .or_else(|| {
+            column_of(right, &membership_qualifier, false)
+                .filter(|_| column_of(left, &parent_qualifier, false).is_some())
+        })?;
+    let mut fk = None;
+    let mut uid = false;
+    let mut roles = Vec::new();
+    for conjunct in &conjuncts {
+        if fk.is_none()
+            && let Some(found) = parent_join(conjunct, &parent_qualifier, table)
+        {
+            fk = Some(found);
+            continue;
+        }
+        if !uid && uid_column(conjunct, &membership_qualifier).is_some() {
+            uid = true;
+            continue;
+        }
+        if roles.is_empty()
+            && let Some(found) = roles_in(conjunct, &membership_qualifier)
+        {
+            roles = found;
+            continue;
+        }
+        return None;
+    }
+    Some(RuleMatch::TenantViaParent {
+        parent,
+        fk: fk?,
+        membership,
+        tenant_column,
+        roles,
+    })
+}
+
+/// A literal: a well-formed quoted string, a number, `true`/`false`, an
+/// `array[…]` of literals, or a comma-separated list of them.
+fn literal(text: &str) -> bool {
+    let text = strip_outer_parens(text.trim());
+    if quoted(&text)
+        || matches!(text.as_str(), "true" | "false")
+        || (text.starts_with(|c: char| c.is_ascii_digit() || c == '-' || c == '.')
+            && text.parse::<f64>().is_ok())
+    {
+        return true;
+    }
+    if let Some(inner) = text
+        .strip_prefix("array[")
+        .and_then(|rest| rest.strip_suffix(']'))
+    {
+        return !inner.trim().is_empty() && inner.split(',').all(literal);
+    }
+    text.contains(',') && text.split(',').all(literal)
+}
+
+/// A single quoted literal: `''` is an escape, any other interior quote ends
+/// it early (so a surrounding quote pair does not make text a literal).
+fn quoted(text: &str) -> bool {
+    let Some(inner) = text.strip_prefix('\'').and_then(|t| t.strip_suffix('\'')) else {
+        return false;
+    };
+    let chars: Vec<char> = inner.chars().collect();
+    let mut index = 0;
+    while index < chars.len() {
+        if chars[index] == '\'' {
+            if chars.get(index + 1) == Some(&'\'') {
+                index += 2;
+                continue;
+            }
+            return false;
+        }
+        index += 1;
+    }
+    true
+}
+
+/// One column predicate (`col` bool, `not col`, `col is [not] null`,
+/// `col = <> / in / = any` a literal); the column name.
+fn simple_predicate(conjunct: &str, qualifier: &str) -> Option<String> {
+    let text = strip_outer_parens(conjunct.trim());
+    if let Some(column) = text
+        .strip_suffix(" is not null")
+        .or_else(|| text.strip_suffix(" is null"))
+    {
+        return column_of(column, qualifier, true);
+    }
+    if let Some(column) = text.strip_prefix("not ") {
+        return column_of(column, qualifier, true);
+    }
+    if let Some((left, right)) = text.split_once("= any") {
+        let column = column_of(left, qualifier, true)?;
+        return literal(right).then_some(column);
+    }
+    for operator in [" = ", " <> ", " in "] {
+        if let Some((left, right)) = text.split_once(operator) {
+            let column = column_of(left, qualifier, true)?;
+            return literal(right).then_some(column);
+        }
+    }
+    column_of(&text, qualifier, true)
+}
+
+/// A public read bounded by simple column predicates, optionally through a
+/// parent row's filter.
+fn public_read_filtered(expr: &str, input: &PolicyInput<'_>) -> Option<RuleMatch> {
+    if !input.command.eq_ignore_ascii_case("select") || expr.contains("auth.") {
+        return None;
+    }
+    let table = bare_table(input.table);
+    let signed_in = input.roles.len() == 1 && input.roles[0] == "authenticated";
+    if let Some((from, conjuncts)) = exists_parts(expr) {
+        if conjuncts.len() < 2 {
+            return None;
+        }
+        let (parent, fk, qualifier, rest) = parent_parts(&from, &conjuncts, table)?;
+        let columns = rest
+            .iter()
+            .map(|conjunct| simple_predicate(conjunct, &qualifier))
+            .collect::<Option<Vec<_>>>()?;
+        return Some(RuleMatch::PublicReadFiltered {
+            columns,
+            parent: Some((parent, fk)),
+            signed_in,
+        });
+    }
+    let columns = split_top_level(expr, "and")
+        .iter()
+        .map(|conjunct| simple_predicate(conjunct, table))
+        .collect::<Option<Vec<_>>>()?;
+    Some(RuleMatch::PublicReadFiltered {
+        columns,
+        parent: None,
+        signed_in,
+    })
+}
+
+/// A top-level `or` whose every disjunct some rule places; one unplaced,
+/// refusing or nested disjunct leaves the whole policy for review.
+fn composite(expr: &str, input: &PolicyInput<'_>) -> Option<RuleMatch> {
+    let disjuncts = split_top_level(expr, "or");
+    if disjuncts.len() < 2 {
+        return None;
+    }
+    let mut parts = Vec::with_capacity(disjuncts.len());
+    for disjunct in &disjuncts {
+        match match_expression(disjunct, input) {
+            Some(matched) if !matches!(matched, RuleMatch::Composite(_) | RuleMatch::DenyAll) => {
+                parts.push(matched);
+            }
+            _ => return None,
+        }
+    }
+    Some(RuleMatch::Composite(parts))
 }
 
 /// The classifier's question: one choice over the patterns a person would
@@ -529,6 +1071,14 @@ mod tests {
         match_rules(&input(command, &roles, using, check)).map(|(pattern, _)| pattern)
     }
 
+    fn authed(command: &str, expr: &str) -> Option<PolicyPattern> {
+        pattern(command, &["authenticated"], Some(expr), None)
+    }
+
+    fn public_read(command: &str, expr: &str) -> Option<PolicyPattern> {
+        pattern(command, &["public"], Some(expr), None)
+    }
+
     #[test]
     fn owner_only_in_every_rendering() {
         for expr in [
@@ -634,5 +1184,181 @@ mod tests {
     #[test]
     fn the_question_is_valid_for_every_adapter() {
         cratefield_core::validate_questions(&question()).expect("valid question set");
+    }
+
+    #[test]
+    fn the_new_shapes_and_their_edges() {
+        // Renderings the fixture lacks: the parent's own name as the
+        // qualifier, and a single-element role array.
+        let bare = "(EXISTS ( SELECT 1 FROM parents WHERE ((parents.id = t.parent_id) AND (parents.owner_id = auth.uid()))))";
+        assert_eq!(authed("SELECT", bare), Some(PolicyPattern::OwnerViaParent));
+        let one = "(visibility = ANY (ARRAY['public'::text]))";
+        assert_eq!(
+            public_read("SELECT", one),
+            Some(PolicyPattern::PublicReadFiltered)
+        );
+        // A filtered write, a function-call predicate, and storage's bucket
+        // filter paired with an owner check are not filtered reads.
+        assert_eq!(
+            pattern("UPDATE", &["public"], Some("(is_active = true)"), None),
+            None
+        );
+        assert_eq!(
+            pattern("INSERT", &["public"], None, Some("(is_active = true)")),
+            None
+        );
+        assert_eq!(public_read("SELECT", "(created_at > now())"), None);
+        let storage = "((bucket_id = 'avatars'::text) AND (( SELECT auth.uid() AS uid) = owner))";
+        assert_eq!(
+            pattern("INSERT", &["authenticated"], None, Some(storage)),
+            None
+        );
+        // `false` with `WITH CHECK (true)` disagrees: still for review.
+        assert_eq!(
+            pattern("UPDATE", &["public"], Some("false"), Some("true")),
+            None
+        );
+        // An unplaced or refusing disjunct leaves the whole policy for review.
+        let loose =
+            "((status <> 'archived'::text) OR (created_at > (now() - '30 days'::interval)))";
+        assert_eq!(public_read("SELECT", loose), None);
+        assert_eq!(authed("SELECT", "(false OR (auth.uid() = user_id))"), None);
+        // A quote pair does not straddle an `or` into one literal: the `or`
+        // is nested, so no rule places the policy.
+        let nested = "((a = 'x' or b = 'y') AND (c = 'z'))";
+        assert_eq!(public_read("SELECT", nested), None);
+        // SQL session keywords are not columns, bare or compared, in the
+        // policy or in a parent's filter.
+        for expr in [
+            "(current_user = 'admin')",
+            "(current_user)",
+            "(session_user = 'x')",
+            "(user = 'x')",
+            "(current_role = 'x')",
+            "(EXISTS ( SELECT 1 FROM parents p WHERE ((p.id = t.parent_id) AND (current_user = 'x'))))",
+        ] {
+            assert_eq!(public_read("SELECT", expr), None, "{expr}");
+        }
+        let roles = roles(&["authenticated"]);
+        // The join must run `parent.id` -> this table's fk, not the reverse.
+        let inverted = "(EXISTS ( SELECT 1 FROM acls a WHERE ((a.user_id = auth.uid()) AND (a.project_id = projects.id))))";
+        let projects = PolicyInput {
+            table: "public.projects",
+            ..input("SELECT", &roles, Some(inverted), None)
+        };
+        assert_eq!(match_rules(&projects).map(|(pattern, _)| pattern), None);
+        // The new rules do not place restrictive policies.
+        let restrictive = PolicyInput {
+            permissive: false,
+            ..input("SELECT", &roles, Some("(is_active = true)"), None)
+        };
+        assert_eq!(match_rules(&restrictive).map(|(pattern, _)| pattern), None);
+    }
+
+    #[test]
+    fn one_readable_side_does_not_carry_an_unreadable_one() {
+        // USING is owner-only and WITH CHECK a shape only the new rules read:
+        // the two sides disagree, so neither labels the policy.
+        let owner = "(auth.uid() = user_id)";
+        let parent = "(EXISTS ( SELECT 1 FROM parents p WHERE ((p.id = t.parent_id) AND (p.owner_id = auth.uid()))))";
+        assert_eq!(
+            pattern("INSERT", &["authenticated"], Some(owner), Some(parent)),
+            None
+        );
+    }
+
+    #[test]
+    fn the_new_suggestions_name_their_specifics() {
+        let role_names = roles(&["authenticated"]);
+        let owner = "(EXISTS ( SELECT 1 FROM api_clients c WHERE ((c.id = api_keys.api_client_id) AND (c.owner_user_id = auth.uid()))))";
+        let input = PolicyInput {
+            table: "public.api_keys",
+            columns: &[],
+            command: "SELECT",
+            roles: &role_names,
+            permissive: true,
+            using: Some(owner),
+            with_check: None,
+        };
+        let (pattern, suggestion) = match_rules(&input).expect("placed");
+        assert_eq!(pattern, PolicyPattern::OwnerViaParent);
+        for needle in ["api_clients", "api_client_id", "owner_user_id"] {
+            assert!(
+                suggestion.contains(needle),
+                "{needle} missing: {suggestion}"
+            );
+        }
+        let input = PolicyInput {
+            table: "public.courses",
+            using: Some("(is_active = true)"),
+            ..input
+        };
+        let (_, suggestion) = match_rules(&input).expect("placed");
+        assert!(
+            suggestion.contains("signed-in subjects only"),
+            "{suggestion}"
+        );
+    }
+
+    #[test]
+    fn the_earthos_fixture_places_the_unplaced() {
+        let fixture = include_str!("../tests/fixtures/earthos-policies.tsv");
+        let mut unplaced_before = 0usize;
+        let mut unplaced_after = 0usize;
+        for line in fixture.lines() {
+            let line = line.trim_end();
+            if line.is_empty() || line.starts_with('#') || line.starts_with("table\t") {
+                continue;
+            }
+            let cells: Vec<&str> = line.split('\t').collect();
+            assert_eq!(
+                cells.len(),
+                8,
+                "fixture row has {} cells: {line}",
+                cells.len()
+            );
+            let roles: Vec<String> = if cells[3].is_empty() {
+                Vec::new()
+            } else {
+                cells[3]
+                    .split(',')
+                    .map(|role| role.trim().to_owned())
+                    .collect()
+            };
+            let table = format!("public.{}", cells[0]);
+            let input = PolicyInput {
+                table: &table,
+                columns: &[],
+                command: cells[2],
+                roles: &roles,
+                permissive: true,
+                using: (!cells[4].is_empty()).then_some(cells[4]),
+                with_check: (!cells[5].is_empty()).then_some(cells[5]),
+            };
+            let actual = match_rules(&input).map_or_else(
+                || "needs_review".to_owned(),
+                |(pattern, _)| pattern_name(pattern),
+            );
+            // The column under test: `before` while the change is developed,
+            // `after` once the new rules are in.
+            assert_eq!(actual, cells[7], "{} on {table}", cells[1]);
+            if cells[6] == "needs_review" {
+                unplaced_before += 1;
+            } else {
+                assert_eq!(
+                    cells[6], cells[7],
+                    "an already-placed row changed: {} on {table}",
+                    cells[1]
+                );
+            }
+            if cells[7] == "needs_review" {
+                unplaced_after += 1;
+            }
+        }
+        assert_eq!(unplaced_before, 66, "needs_review rows before the change");
+        assert!(
+            unplaced_after <= 6,
+            "needs_review rows after the change: {unplaced_after}"
+        );
     }
 }
