@@ -164,7 +164,117 @@ The client does not either, because the issuer does not:
   stops immediately, but local verification is good for up to 10 minutes, the
   gap ADR [0201](../adr/0201-token-issuing.md) accepts so apps stay up when the IdP is down.
 
-Next.js route helpers and a runnable example app are out of scope (CF12).
+## Next.js
+
+The `@cratefield/auth/next` subpath adapts the client to the Next.js app
+router. `next` is an optional peer dependency (`>=14`): an app that imports
+only `@cratefield/auth` never installs it. The middleware and the route
+handlers take and return the Web `Request`/`Response` types — nothing in the
+subpath imports `next/server`, and a middleware may return a `Response` or
+`undefined` to continue. The subpath does statically import `next/headers` (for
+`getSession()`), so it loads only inside a Next.js app — but under any Next
+runtime: `next dev`, `next start`, and OpenNext on Cloudflare Workers.
+
+```ts
+// lib/auth.ts — one per process, at module scope: the JWKS cache and the
+// refresh single-flight live on this object.
+import { createNextAuth } from '@cratefield/auth/next';
+
+export const nextAuth = createNextAuth({
+  issuer: 'https://auth.factory0.ventures', // exact, no trailing slash
+  clientId: 'client_abc',
+  redirectUri: 'https://app.example/api/auth/callback',
+  cookieSecret: process.env.COOKIE_SECRET!, // >= 32 chars
+  postLogoutRedirectUri: 'https://app.example/',
+});
+```
+
+Pass an existing `createAuth(...)` instead of the config if the app already has
+one; `createNextAuth` accepts either.
+
+**`middleware.ts`.**
+
+```ts
+import { nextAuth } from '@/lib/auth';
+
+export const middleware = nextAuth.authMiddleware({
+  protect: ['/dashboard'],
+  signInPath: '/api/auth/start',
+});
+
+// Let the route handlers through untouched; only app pages are guarded.
+export const config = { matcher: ['/((?!api/auth).*)'] };
+```
+
+`protect` is a list of path prefixes. A prefix matches itself and its children
+only: `/app` covers `/app` and `/app/x` but not `/apple`; a trailing slash is
+normalised away, and `/` covers everything. `signInPath` must not fall under
+any prefix — the middleware always lets that exact path through, so listing it
+cannot create a redirect loop.
+
+For a protected path the middleware verifies the access cookie at the edge. A
+valid session continues. If the access cookie is gone or expired but the
+refresh cookie is present and the method is `GET` or `HEAD`, it renews the
+session in place: a `307` back to the same URL carrying the rotated
+`Set-Cookie` headers, so the browser's next request is already authenticated (a
+form `POST` is never replayed against a fresh session this way). Otherwise it
+`302`s to `signInPath` with the original path and query as `return_to`.
+
+**Route handlers.** Four files, one line each, under `app/api/auth/`:
+
+```ts
+// app/api/auth/start/route.ts — 302 to the IdP, sets the sealed state cookie.
+export const GET = nextAuth.handlers.start;
+// app/api/auth/callback/route.ts — redeems the code, sets the session cookies.
+export const GET = nextAuth.handlers.callback;
+// app/api/auth/refresh/route.ts — 204 rotated / 401 ended / 403 / 502.
+export const POST = nextAuth.handlers.refresh;
+// app/api/auth/logout/route.ts — ends the browser's session.
+export const POST = nextAuth.handlers.logout;
+```
+
+`return_to` is sanitised before it is sealed into the state cookie, so only a
+same-site relative path survives. `sanitizeReturnTo` keeps a value only if it
+starts with a single `/` (never `//` or `/\`), contains no backslash and no
+control character or whitespace, and — after `new URL` has resolved any dot
+segments — still starts with a single `/`. `/foo/..//evil.com`, an absolute
+`https://evil.com`, `//evil.com`, `javascript:…` and a leading space all
+collapse to `/`; the callback can never be an open redirect.
+
+**Same-origin.** `refresh` and `logout` are state-changing, so each checks the
+origin before touching cookies (`isSameOrigin`). When the request carries an
+`Origin`, it must equal the request's own origin — or the `origin` passed to
+`createNextAuth(auth, { origin })`, for a proxy that rewrites the host. With no
+`Origin`, only `Sec-Fetch-Site: same-origin` is accepted; anything else is
+`403`. Set `origin` behind a proxy or OpenNext, where
+`new URL(request.url).origin` is the internal host, not the public one; it is
+used only by this check. The middleware's redirects (the in-place-refresh `307`
+and the sign-in `302`) use a `Location` absolute and same-origin with the
+request — Next rejects a relative one — which Next rewrites to a
+request-relative location on the wire, so the browser stays on whatever origin
+it used.
+
+**Responses.** `refresh` answers `204` on rotation, `401` with cookie-clearing
+headers when the refresh token is refused or absent, `403` cross-origin, and
+`502` when the IdP is unreachable (it never clears the session over an outage).
+`logout` returns `signOut()`'s response — a `302` that clears the app's cookies
+and sends the browser to the IdP's `end_session_endpoint`. Because it is a
+`POST`, drive it with a plain `<form method="post" action="/api/auth/logout">`
+rather than a link, so a cross-site `GET` cannot end the session.
+
+**`getSession()`.** In server components and route handlers it returns the
+verified access-token claims or `null`. It reads the cookie through
+`next/headers` and verifies it. A server component cannot set cookies, so an
+expired access token is not refreshed there — renewal happens in the middleware
+(for `GET`/`HEAD`) or through `POST /api/auth/refresh`.
+
+[`examples/next-auth/`](../../examples/next-auth/) is a minimal app (a home
+page, a protected page, sign-in and sign-out) run end to end in CI by a
+Playwright test (`.github/workflows/next-auth-e2e.yml`) against a local
+auth-worker under `wrangler dev`. Register the client as `kind: "public"` (no
+secret) for the `http://localhost` redirect URIs, and register
+`http://localhost:3000/` as a post-logout redirect URI too: the IdP refuses a
+post-logout URL it does not hold.
 
 ## Publishing
 

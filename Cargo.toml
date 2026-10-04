@@ -13,6 +13,10 @@ exclude = [
     "crates/control-plane-fz",
     "crates/control-plane-dev",
     "examples/sidecar-worker-ts",
+    # A Next.js/TypeScript example with no Rust crate; `examples/*` is a
+    # workspace member glob, so it must be named here or `cargo metadata`
+    # fails looking for a Cargo.toml that never exists.
+    "examples/next-auth",
 ]
 
 [workspace.package]
