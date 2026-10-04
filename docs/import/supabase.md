@@ -332,14 +332,73 @@ re-plan"), or a blocker the plan still carries. When it matches it prints
 the hash and writes nothing to the target — the auth-users and data phases
 land with #659/#660.
 
+## Step 2: auth users
+
+`fz import supabase users` moves the people. It reads `auth.users` and
+`auth.identities` from the same read-only snapshot (the same
+`SUPABASE_DB_URL`) and sends each account to a running venture's
+`auth-core` over the same admin import `fz auth import` uses
+(`POST <target>/v1/auth-core/admin/users/import`):
+
+```sh
+export SUPABASE_DB_URL='postgresql://cratefield_inspect:<password>@db.<ref>.supabase.co:5432/postgres'
+export VENTURE_ADMIN_TOKEN='…'          # the deployment's ADMIN_TOKEN
+export HARNESS_DB_URL='postgresql://…'  # the target's Postgres, for --apply
+cratefield-cli import supabase users \
+  --target https://venture.example \
+  --admin-token-env VENTURE_ADMIN_TOKEN \
+  --map-db-url-env HARNESS_DB_URL \
+  --oidc-provider google --oidc-provider apple \
+  --apply --report users.json
+```
+
+- **What moves.** Each user's address and whether the source confirmed it,
+  its bcrypt hash verbatim (the login path upgrades it to argon2id on the
+  first sign-in), and the identities of the providers given
+  `--oidc-provider` (Supabase's `facebook` maps to the harness `meta`).
+  The source's metadata (`raw_user_meta_data`, `raw_app_meta_data`) is
+  carried to the mapping table, not to auth: harness accounts have no
+  metadata column yet.
+- **The mapping table.** With `--apply`, `import_supabase_users` (created
+  if absent) gets a row per imported user: `supabase_id`, its new
+  `account_id` (the admin import's `sub`), and the metadata. **The data
+  step rewrites every reference to an old `auth.users.id` through this
+  table**, so it is per the owner's decision the thing that keeps a user's
+  rows attached to the same person. If a `supabase_id` already maps to a
+  *different* account, or an account is already taken, the run stops with a
+  `Drift` error rather than move somebody's data to the wrong person.
+- **Skipped and unmapped.** A phone-only or anonymous account is skipped
+  (the report names its id and why: `no-email` / `anonymous`). An identity
+  whose provider is not listed with `--oidc-provider` (or has no harness
+  slug, like GitHub) is reported unmapped with its ids — **these users sign
+  in with a magic link**, then link the provider from their account.
+- **Flags.** `--batch-size` is users per request (default 500, max 1000);
+  `--merge-by-email` lets the server merge into an existing account that
+  shares the email; `--report` writes the JSON report (stdout by default).
+  A dry run unless `--apply`, and `--apply` requires `--map-db-url-env`.
+- **RLS.** `auth.users` and `auth.identities` have row-level security; a
+  role that cannot bypass it is refused before a row is read (the silent-
+  zero trap), so this step needs a role with `BYPASSRLS` or the tables'
+  owner — the read-only `cratefield_inspect` role above works if its
+  `create role` also carries `bypassrls`.
+- **Exit code.** Non-zero for a refused input, a connection or permission
+  error, a failed batch, drift on the mapping write, or a completed run
+  that reported any `conflict` or `invalid`. The report's counts and ids
+  are printed either way; it never holds an email or a hash.
+
+Like `inspect`, the network leg needs the feature:
+
+```sh
+cargo install cratefield-cli --features import-supabase
+```
+
 ## What comes next
 
 Inspect is step 1. The later steps read its JSON report:
 
-2. **Auth users** (#659, after #650): users with their bcrypt hashes
-   (verified and upgraded on next sign-in), verified flags and metadata,
-   identities mapped to configured providers, and the id mapping the data
-   step uses to rewrite `auth.users` foreign keys.
+2. **Auth users** (#659, after #650): done — `fz import supabase users`
+   above, plus the `import_supabase_users` map the data step rewrites
+   `auth.users` foreign keys through.
 3. **Schema and data** (#660): the schema into `app`, rows copied with COPY
    in resumable chunks, then foreign keys validated, sequences set, and
    per-table counts and checksums compared with the source.

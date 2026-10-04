@@ -79,11 +79,17 @@ auth-import = ["dep:cratefield-runtime-native", "dep:tokio"]
 # see sqlx, tokio or reqwest. An importing `fz` is installed separately
 # (`cargo install cratefield-cli --features import-supabase`); without the
 # feature the command still parses and says exactly that.
+#
+# It also enables `auth-import`: `fz import supabase users` (issue #659)
+# sends the users it reads through `fz auth import`'s own batch seam, so the
+# feature that pulls sqlx also needs the HTTP client and the tokio runtime
+# that seam uses (both already in this list).
 import-supabase = [
     "dep:cratefield-import-supabase",
     "dep:cratefield-runtime-native",
     "dep:cratefield-adapter-typesafe",
     "dep:tokio",
+    "auth-import",
 ]
 
 [dependencies]

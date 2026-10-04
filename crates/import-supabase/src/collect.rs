@@ -577,10 +577,24 @@ pub(crate) async fn read(session: &mut ReadOnlySession) -> Result<Catalog, Inspe
     Ok(catalog)
 }
 
+/// Whether a relation exists, by `to_regclass`. Only `fz import supabase
+/// users` uses it, on `auth` tables its role must already be able to read;
+/// `inspect` checks visibility by catalog OID instead (issue #723).
+pub(crate) async fn relation_exists(
+    session: &mut ReadOnlySession,
+    name: &str,
+) -> Result<bool, InspectError> {
+    Ok(
+        fetch!(session, (bool,), "SELECT to_regclass($1) IS NOT NULL", name)?
+            .remove(0)
+            .0,
+    )
+}
+
 /// Whether a table has a column, by catalog lookup (`pg_attribute` joined
 /// to `pg_class`/`pg_namespace` on the name text): never `to_regclass` on a
 /// name, which resolves it and can error without USAGE on its schema.
-async fn column_exists(
+pub(crate) async fn column_exists(
     session: &mut ReadOnlySession,
     schema: &str,
     table: &str,
@@ -620,12 +634,19 @@ async fn read_auth(
     } else {
         "0::bigint"
     };
+    // A user is confirmed when either address is: a phone-only user has no
+    // `email_confirmed_at`, and `phone_confirmed_at` is not on every stack.
+    let confirmed = if column_exists(session, "auth.users", "phone_confirmed_at").await? {
+        "(email_confirmed_at IS NOT NULL OR phone_confirmed_at IS NOT NULL)"
+    } else {
+        "email_confirmed_at IS NOT NULL"
+    };
     let (users, without_password, unconfirmed, anonymous): (i64, i64, i64, i64) = fetch!(
         session,
         (i64, i64, i64, i64),
         &format!(
             "SELECT count(*), count(*) FILTER (WHERE encrypted_password IS NULL OR \
-             encrypted_password = ''), count(*) FILTER (WHERE email_confirmed_at IS NULL), \
+             encrypted_password = ''), count(*) FILTER (WHERE NOT {confirmed}), \
              {anonymous} FROM auth.users"
         )
     )?

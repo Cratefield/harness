@@ -92,8 +92,8 @@ rehashed to argon2id on the first successful login.
 
 ## What is not carried
 
-- **OAuth identities.** The import brings an address, not a Google/Apple/
-  Meta link; those re-form on first sign-in. Linking
+- **OAuth identities.** A link the source already holds is carried only when
+  listed as `identities`; anything else re-forms on first sign-in. Linking
   (`crates/auth-core/src/linking.rs`) auto-links a provider to an existing
   account when it reports the same email **and both sides are verified**,
   refuses rather than guess otherwise, and never matches an Apple relay
@@ -120,6 +120,7 @@ present and non-empty; unknown fields are ignored.
 | `email_verified` | required | Whether the source vouched for the address. |
 | `password_hash` | optional | A verifier — bcrypt or argon2id. Omit for a passwordless user. |
 | `created_at` | optional | RFC 3339; the account's creation time (defaults to import time). |
+| `identities` | optional | OAuth links to pre-attach, e.g. `[{"provider":"google","subject":"<sub>"}]`. `provider` is `google`, `apple` or `meta`, and `subject` is that provider's OIDC `sub`, stored verbatim. A subject already linked to another account makes the user `conflict`/`identity-taken`. |
 | `locale` | optional | Accepted and ignored — an imported account starts with no stored locale, and mail resolves one per request (issue #649). |
 
 `(external_provider, external_id)` is the key: importing the same pair twice
@@ -134,7 +135,7 @@ provider `import` with subject `<external_provider>:<external_id>`.
 | `created` | A new account and its imported identity were written. `sub` is its id. |
 | `unchanged` | This `(external_provider, external_id)` was imported before; nothing changed. |
 | `merged` | Folded into an existing account sharing the email (with `--merge-by-email`); an account that already has a password keeps it. |
-| `conflict` | The email matches an existing account and merging was not allowed. |
+| `conflict` | The email matches an existing account and merging was not allowed (`email-exists`), or an `identities` subject is already linked to another account (`identity-taken`). |
 | `invalid` | The user was refused — a malformed or over-cost hash, an unsupported format, or a value the server cannot use. |
 
 In a dry run a `created` row carries no `sub`; the apply is where the ids

@@ -41,6 +41,22 @@ println!("{}", report.to_markdown());
 configuration, over the `HttpClient` port) and an optional `Classifier`
 (for RLS policies no rule places) with its threshold.
 
+## Auth users (issue #659)
+
+`read_users` and `record_mapping` are step two: moving the people. Inside
+the same read-only snapshot `inspect` takes, `read_users` reads
+`auth.users` and `auth.identities` and plans each account for the harness
+admin import (`POST /v1/auth-core/admin/users/import`) — its address,
+whether the source confirmed it, its bcrypt hash verbatim (upgraded to
+argon2id on the first sign-in), and the OIDC links the harness can hold.
+A phone-only or anonymous account is skipped, an OAuth provider the
+harness has no slug for is reported unmapped, and each user's metadata
+goes to the `import_supabase_users` mapping table `record_mapping` writes
+in the target database, which the data step rewrites references through.
+A role that cannot bypass row-level security on `auth.users` or
+`auth.identities` is refused before a row is read, rather than silently
+reading nothing.
+
 ## Guarantees
 
 - **Read-only, checked.** One connection, its session default read-only,

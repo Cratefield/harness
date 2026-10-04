@@ -10,6 +10,10 @@
 //! cutover) read the report's JSON; `docs/import/supabase-report.md`
 //! documents it.
 //!
+//! Step two (issue #659) is [`read_users`]: the same read-only snapshot,
+//! but rows — the auth users as the admin import contract, plus the map
+//! [`record_mapping`] writes so the data step can rewrite their references.
+//!
 //! ```no_run
 //! # async fn demo() -> Result<(), cratefield_import_supabase::InspectError> {
 //! use cratefield_import_supabase::{InspectOptions, Secret, inspect};
@@ -47,6 +51,7 @@ mod secret;
 mod session;
 mod storage_policy;
 mod visibility;
+mod users;
 
 use std::sync::Arc;
 
@@ -63,6 +68,11 @@ pub use plan::{
 pub use report::*;
 pub use secret::{Secret, SourceName, source_name};
 pub use session::{InspectError, ReadOnlySession};
+pub use users::{
+    DEFAULT_BATCH_SIZE, EXTERNAL_PROVIDER, ImportIdentity, ImportPlan, ImportRecord, MappedUser,
+    MappingCounts, MappingError, SkipReason, SkippedUser, UnmappedProvider, UserMetadata,
+    UsersOptions, connect_mapping, read_users, record_mapping,
+};
 
 /// The throughput the transfer estimate assumes when none is given, in
 /// megabits per second.
