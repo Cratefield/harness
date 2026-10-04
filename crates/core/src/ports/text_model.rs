@@ -16,6 +16,13 @@
 //! [`TextModelError::Unsupported`]. Embeddings live on the separate
 //! [`Embedder`](crate::Embedder) port (issue #561), never here.
 //!
+//! **Structured output builds on the schema a prompt already carries.**
+//! [`TextModelExt`](crate::TextModelExt) wraps `complete` with
+//! `complete_json`/`complete_as`: it checks the schema on the tool loop's
+//! subset, asks for it through [`Prompt::json_schema`], validates the
+//! answer, and allows one repair retry — so a caller holds a value that
+//! conforms or a [`TextModelError::SchemaViolation`], never a partial one.
+//!
 //! Streaming is the deliberate omission, not a gap:
 //! `response_to_worker` buffers a whole harness response to
 //! `MAX_RESPONSE_BUFFER` (1 MiB, `crates/runtime-cloudflare/src/lib.rs`),
@@ -326,10 +333,11 @@ pub struct Prompt {
     pub tier: ModelTier,
     pub system: Option<String>,
     pub messages: Vec<Turn>,
-    /// A JSON Schema (draft 2020-12) the answer must conform to. When set,
-    /// the adapter asks its provider for structured output and a
-    /// successful [`Completion`] carries the parsed value in
-    /// [`Completion::json`].
+    /// A JSON Schema (draft 2020-12) the answer should conform to. When set,
+    /// the adapter asks its provider for structured output; a provider that
+    /// honours it fills [`Completion::json`], and one that cannot leaves the
+    /// raw answer in [`Completion::text`] with `json` `None`, rather than
+    /// failing the call.
     pub json_schema: Option<Value>,
     pub max_tokens: u32,
     /// The tools the model may call. Empty by default: a prompt that sends
@@ -562,6 +570,22 @@ pub enum TextModelError {
     /// adapter was never called. A fixed sentence, never provider text, so
     /// there is nothing to scrub.
     Unsupported(Capability),
+    /// The schema itself cannot be honoured: it uses a JSON Schema keyword
+    /// the built-in validator does not implement (a `$ref`, a `pattern`,
+    /// an `if`), or is malformed. This is a **caller bug** — the schema was
+    /// written by the caller, not the model — so the model was never
+    /// called. Raised by
+    /// [`TextModelExt::complete_json`](crate::TextModelExt::complete_json)
+    /// before the first request.
+    InvalidSchema(String),
+    /// The model's answer did not conform to the required schema, after the
+    /// one repair retry
+    /// [`TextModelExt::complete_json`](crate::TextModelExt::complete_json)
+    /// allows. Carries only the schema path and reason the answer failed
+    /// (for example `the property "price" is invalid: …`) — **never the
+    /// model's own output**, which may hold the personal data the schema
+    /// was there to structure.
+    SchemaViolation(String),
 }
 
 impl std::fmt::Display for TextModelError {
@@ -577,6 +601,14 @@ impl std::fmt::Display for TextModelError {
             Self::Unsupported(capability) => {
                 write!(f, "the text model does not support {capability}")
             }
+            Self::InvalidSchema(reason) => {
+                write!(f, "the JSON schema cannot be honoured: {}", scrub(reason))
+            }
+            Self::SchemaViolation(reason) => write!(
+                f,
+                "the model's answer did not match the schema: {}",
+                scrub(reason)
+            ),
         }
     }
 }
@@ -902,6 +934,24 @@ mod tests {
             TextModelError::NotConfigured.to_string(),
             "no text model is wired for this tier"
         );
+    }
+
+    #[test]
+    fn the_structured_output_failures_name_themselves_and_never_back_off() {
+        let invalid =
+            TextModelError::InvalidSchema("the `pattern` keyword is not supported".to_owned());
+        assert_eq!(
+            invalid.to_string(),
+            "the JSON schema cannot be honoured: the `pattern` keyword is not supported"
+        );
+        let violation =
+            TextModelError::SchemaViolation("the property \"price\" is invalid".to_owned());
+        assert!(
+            violation.to_string().contains("did not match the schema"),
+            "{violation}"
+        );
+        assert_eq!(invalid.retry_after(), None);
+        assert_eq!(violation.retry_after(), None);
     }
 
     // -----------------------------------------------------------------

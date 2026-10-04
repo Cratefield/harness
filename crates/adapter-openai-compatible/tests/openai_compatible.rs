@@ -302,10 +302,12 @@ async fn a_schema_answer_cut_off_at_max_tokens_is_rejected() {
 }
 
 #[pollster::test]
-async fn a_schema_answer_that_is_not_json_maps_to_transport() {
-    // The server ignored the `response_format` and answered in prose.
-    // Not `Rejected`: nothing about the prompt was refused — the answer
-    // just never arrived in the asked-for form.
+async fn a_schema_answer_that_is_not_json_stays_text_for_the_port_to_repair() {
+    // The server ignored the `response_format` and answered in prose (a
+    // local server, a fenced reply). The adapter does not fail the call:
+    // the raw content rides in `text` with no parsed value, and the port's
+    // `complete_json` parses, validates and repairs it — the same fallback
+    // a provider without native structured output takes.
     let body = r#"{
         "model": "gpt-4o-mini",
         "choices": [
@@ -316,11 +318,9 @@ async fn a_schema_answer_that_is_not_json_maps_to_transport() {
     }"#;
     let (http, _rx) = fixture(200, body, None);
     let prompt = prompt().json_schema(serde_json::json!({"type": "object"}));
-    let err = adapter(http).complete(&prompt).await.unwrap_err();
-    assert!(
-        matches!(&err, TextModelError::Transport(message) if message.contains("did not parse")),
-        "got {err}"
-    );
+    let completion = adapter(http).complete(&prompt).await.expect("completes");
+    assert_eq!(completion.text, "I will not be boxed.");
+    assert_eq!(completion.json, None);
 }
 
 #[pollster::test]

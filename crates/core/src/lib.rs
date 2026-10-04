@@ -44,6 +44,7 @@ mod signer;
 // adapters and tests share one implementation.
 pub mod sigv4;
 mod stream;
+mod structured_output;
 mod surface;
 mod template;
 mod tenant;
@@ -168,6 +169,7 @@ pub use signer::{
     UNSUBSCRIBE_ACTION,
 };
 pub use stream::{BoxStream, RequestStream, ResponseStream, StreamError, StreamRoute};
+pub use structured_output::TextModelExt;
 pub use surface::{
     Action, Audience, Column, HINT_KEYWORDS, MAX_SIDECAR_ACTIONS, MAX_SIDECAR_SURFACE_BYTES,
     MAX_SIDECAR_VIEWS, ModuleSurface, Outcome, RenderedSurface, SURFACE_API, Surface,
