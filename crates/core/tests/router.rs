@@ -257,6 +257,47 @@ async fn cors_allows_listed_origin_only() {
     );
 }
 
+/// A browser-extension origin is echoed like any other allowlisted one
+/// (issue #579): `cors_layer` feeds the origin straight to
+/// `HeaderValue`/`AllowOrigin::list`, which match on the bytes, so a
+/// hyphenated scheme round-trips without being re-parsed as a URL.
+#[pollster::test]
+async fn cors_allows_browser_extension_origin() {
+    let extension = "chrome-extension://abcdefghijklmnopabcdefghijklmnop";
+    let harness = Harness::builder()
+        .venture(
+            cratefield_core::Venture::new("test-venture", "test.example").cors_origins([extension]),
+        )
+        .module(SampleModule::default())
+        .runtime(FakeRuntime(all_ports()))
+        .build()
+        .expect("sample harness builds");
+    let router = harness.router(Ports::empty());
+
+    let response = request(
+        &router,
+        Method::GET,
+        "/v1/sample/hello",
+        &[("origin", extension)],
+        None,
+    )
+    .await;
+    assert_eq!(
+        response
+            .headers()
+            .get("access-control-allow-origin")
+            .unwrap(),
+        extension
+    );
+    // Credentials stay off: no `access-control-allow-credentials`.
+    assert!(
+        response
+            .headers()
+            .get("access-control-allow-credentials")
+            .is_none()
+    );
+}
+
 /// The preflight a browser client actually sends (issue #183).
 ///
 /// `cf.js` is served from the API origin and runs on the venture's site,

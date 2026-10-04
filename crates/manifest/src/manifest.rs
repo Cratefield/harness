@@ -332,19 +332,37 @@ fn is_hostport(host: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-' || c == ':')
 }
 
-/// `scheme://host[:port]`, with no path, query or fragment.
+/// `scheme://host[:port]`, with no path, query or fragment, plus the three
+/// browser-extension origins (issue #579).
 ///
 /// The same shape `cratefield_core`'s `is_valid_origin` enforces at boot,
 /// written again rather than shared: this crate deliberately does not
 /// depend on the harness, and a manifest that passed here and was refused
 /// at boot is the failure `cors_origins` already taught once. Stricter or
 /// equal is the safe direction for a copy — it refuses while building
-/// rather than while serving.
+/// rather than while serving. The extension arms are kept in step with
+/// core by hand for the same reason.
 fn is_origin(origin: &str) -> bool {
     let Some((scheme, rest)) = origin.split_once("://") else {
         return false;
     };
-    if scheme.is_empty() || !scheme.chars().all(|c| c.is_ascii_alphanumeric()) {
+    if scheme.is_empty() {
+        return false;
+    }
+    // A browser extension's origin carries a hyphen in the scheme, so the
+    // alphanumeric-scheme rule below rejects it (issue #579). Exactly these
+    // three schemes, as exact-match origins: no wildcard, bare scheme,
+    // port, path or trailing slash. Any other hyphenated scheme still falls
+    // through to the alphanumeric check and is rejected.
+    match scheme {
+        "chrome-extension" => return is_chrome_extension_id(rest),
+        // Firefox emits lowercase ids.
+        "moz-extension" => return is_extension_uuid(rest, false),
+        // Safari emits uppercase ids; either case is accepted for this one.
+        "safari-web-extension" => return is_extension_uuid(rest, true),
+        _ => {}
+    }
+    if !scheme.chars().all(|c| c.is_ascii_alphanumeric()) {
         return false;
     }
     if rest.contains(['/', '?', '#']) {
@@ -352,4 +370,22 @@ fn is_origin(origin: &str) -> bool {
     }
     let host = rest.split_once(':').map_or(rest, |(host, _port)| host);
     is_hostport(host)
+}
+
+/// A Chrome extension id: exactly 32 characters, each `a`–`p`.
+fn is_chrome_extension_id(id: &str) -> bool {
+    id.len() == 32 && id.chars().all(|c| ('a'..='p').contains(&c))
+}
+
+/// A canonical RFC 4122 UUID, `8-4-4-4-12` hex. `any_case` also admits
+/// uppercase hex, which Safari emits and Firefox does not.
+fn is_extension_uuid(id: &str, any_case: bool) -> bool {
+    let bytes = id.as_bytes();
+    if bytes.len() != 36 {
+        return false;
+    }
+    bytes.iter().enumerate().all(|(i, &b)| match i {
+        8 | 13 | 18 | 23 => b == b'-',
+        _ => b.is_ascii_hexdigit() && (any_case || !b.is_ascii_uppercase()),
+    })
 }
