@@ -512,7 +512,7 @@ pub struct RefreshReuseGrace {
 
 impl RefreshReuseGrace {
     /// Reads both keys through the module prefix. Malformed values are
-    /// left to [`validate_config`](crate::AuthCore::validate_config),
+    /// left to `validate_config`,
     /// which reports them at doctor time; here a bad value falls back to
     /// the default, the same way the other auth-core keys resolve.
     #[must_use]
