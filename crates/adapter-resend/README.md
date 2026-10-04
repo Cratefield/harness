@@ -17,6 +17,14 @@ Cratefield harness. Uses the runtime's `HttpClient` port — no `reqwest`,
 no vendor SDK — so it runs unchanged on Workers (`worker::Fetch`) and
 natively.
 
+It also carries the inbound direction: `ResendInbound` verifies Resend's
+`email.received` webhook with the Svix scheme and parses it into an
+`InboundMessage`, ready to hand to a module. The webhook is metadata only
+— the message body is a separate Received-emails API call the caller
+makes, not this crate. Configure the signing secret with
+`ResendInbound::new(secret)` or `RESEND_WEBHOOK_SECRET` via
+`ResendInbound::from_env()`.
+
 ## Usage
 
 ```rust,ignore

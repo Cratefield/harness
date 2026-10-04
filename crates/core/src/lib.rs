@@ -141,6 +141,9 @@ pub use ports::{
 };
 // The Blob presign API (issue #622), kept out of the wholesale block above.
 pub use ports::{DEFAULT_PRESIGN_TTL, MAX_PRESIGN_TTL, PresignedPut};
+// The inbound mail source (issue #563), kept out of the wholesale block
+// above so that block stays untouched.
+pub use ports::{InboundMailError, InboundMailSource, InboundMessage, receive_mail};
 pub use problem::{ABOUT_BLANK, Problem};
 // `Slugs` is exported beside the `SLUGS` value it types. Without it a
 // caller can read `SLUGS.validation_failed` and cannot write a function
