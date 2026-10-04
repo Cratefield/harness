@@ -263,10 +263,7 @@ pub(crate) async fn magic_request(
             base = settings.base_url.trim_end_matches('/'),
             console = crate::BASE,
         );
-        match mailer
-            .send(mail(settings.mail_from.as_str(), &email, &link))
-            .await
-        {
+        match mailer.send(mail(&settings, &email, &link)).await {
             Ok(SendOutcome::Sent { .. }) => {}
             // The page cannot say this — "the mailer is broken" is an
             // answer only the operator can act on, and naming it to the
@@ -421,26 +418,37 @@ fn confirm_page(token: &str) -> Response {
         .into_response()
 }
 
-/// The mail: the text part carries the raw link, because a client that
-/// shows only text must still be usable; the HTML part carries it twice —
-/// a button and copyable text — for clients that strip anchors.
-fn mail(from: &str, to: &str, link: &str) -> Message {
+/// The mail, in Cratefield's own theme: the text part carries the raw link,
+/// because a client that shows only text must still be usable; the HTML part
+/// carries it twice — a button and copyable text — for clients that strip
+/// anchors. The layout escapes the link like every other value.
+fn mail(settings: &MagicSettings, to: &str, link: &str) -> Message {
+    let minutes = settings.ttl_secs / 60;
+    let email = cratefield_mail_templates::Message::new(
+        "Your Cratefield sign-in link",
+        "Sign in to Cratefield",
+    )
+    .preheader(format!(
+        "This link works once and expires in {minutes} minutes. If you did not ask for it, \
+         ignore this mail."
+    ))
+    .paragraph(format!(
+        "Sign in to Cratefield by opening this link. It works once and expires in {minutes} \
+         minutes."
+    ))
+    .button("Sign in", link)
+    .fallback_link()
+    .link_intro("Or copy this link:")
+    .note("If you did not ask for it, ignore this mail; nothing happens.")
+    .recipient(to)
+    .why("someone asked to sign in to the Cratefield console with this address")
+    .render(&cratefield_mail_templates::MailTheme::cratefield());
     Message::new(
         to,
-        from,
-        "Your Cratefield sign-in link",
-        format!(
-            "Sign in to Cratefield by opening this link. It works once and \
-             expires shortly:\n\n{link}\n\nIf you did not ask for it, ignore \
-             this mail; nothing happens."
-        ),
-        format!(
-            "<p>Sign in to Cratefield by opening this link. It works once and \
-             expires shortly.</p>\
-             <p style=\"margin:1.5rem 0\"><a class=\"btn\" href=\"{link}\">Sign in</a></p>\
-             <p>Or copy this link: <code>{link}</code></p>\
-             <p>If you did not ask for it, ignore this mail; nothing happens.</p>"
-        ),
+        settings.mail_from.as_str(),
+        email.subject,
+        email.text,
+        email.html,
     )
     .tags(["console-magic-link"])
 }

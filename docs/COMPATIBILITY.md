@@ -68,6 +68,8 @@ compatibility-doc` and checked in CI for drift. Do not edit by hand.
 | `cratefield-dashboard` *(not published)* | 0.1.1 | 1 | `^0.7` — `>=0.7.0, <0.8.0` |
 | `cratefield-import-supabase` | 0.1.0 | 1 | `^0.7` — `>=0.7.0, <0.8.0` |
 | `cratefield-introspect` | 0.2.1 | 1 | `^0.7` — `>=0.7.0, <0.8.0` |
+| `cratefield-mail-previews` *(not published)* | 0.1.1 | 1 | `^0.7` — `>=0.7.0, <0.8.0` |
+| `cratefield-mail-templates` | 0.1.0 | 1 | `^0.7` — `>=0.7.0, <0.8.0` |
 | `cratefield-module-changelog` | 0.2.1 | 1 | `^0.7` — `>=0.7.0, <0.8.0` |
 | `cratefield-module-cms` | 0.2.1 | 1 | `^0.7` — `>=0.7.0, <0.8.0` |
 | `cratefield-module-connections` | 0.1.0 | 1 | `^0.7` — `>=0.7.0, <0.8.0` |

@@ -1,8 +1,0 @@
-Confirm your address for {{ venture }}
-
-Open this link to confirm this address. It works once and expires in {{ hours }} hours.
-
-{{ link }}
-
-If you did not create an account, you can ignore this message. Nobody can
-use the link without opening it, and it will expire on its own.

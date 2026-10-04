@@ -36,14 +36,21 @@ let module = EmailSignup::new().subscribe_on_waitlist_confirm(true);
 adds confirmed waitlist addresses to the signup list through the
 `waitlist.confirmed` event — no crate dependency between the modules.
 
-Register the default mail templates in the venture's `src/lib.rs`:
+Register the mail templates in the venture's `src/lib.rs`, in the
+venture's own style: they render through `cratefield-mail-templates`
+(ADR 0028) with the `MailTheme` you give them. `default_templates()` renders
+in a theme built from the venture's core `Brand` and its `MAIL_THEME` config
+instead; either way, venture overrides registered later win.
 
 ```rust
 use cratefield_core::Harness;
-use cratefield_module_email_signup::default_templates;
+use cratefield_mail_templates::{MailTheme, Palette};
+use cratefield_module_email_signup::themed_templates;
 
-// module defaults; venture overrides registered later win
-let builder = Harness::builder().templates(default_templates());
+let theme = MailTheme::new("Acme", "https://acme.test")
+    .logo("https://acme.test/assets/email/logo-64.png", "Acme")
+    .light(Palette::neutral_light().button("#0E1526"));
+let builder = Harness::builder().templates(themed_templates(&theme));
 ```
 
 See `docs/ARCHITECTURE.md` section 6 (Email signup) and section 11

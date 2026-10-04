@@ -532,6 +532,8 @@ async fn issue_link(
             minutes: settings.ttl_secs / 60,
         },
         locale,
+        &ctx.venture,
+        &*ctx.config,
     ) {
         Ok(rendered) => rendered,
         Err(err) => {

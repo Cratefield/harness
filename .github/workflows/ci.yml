@@ -411,6 +411,10 @@ jobs:
       # so nothing else would notice a dependency that cannot reach wasm32.
       - name: Build cratefield-adapter-polar to wasm
         run: cargo build --target wasm32-unknown-unknown -p cratefield-adapter-polar
+      # The mail layout every mail-sending module renders through: string
+      # building over core, so it must reach wasm32 on its own too.
+      - name: Build cratefield-mail-templates to wasm
+        run: cargo build --target wasm32-unknown-unknown -p cratefield-mail-templates
       # And for workers-ai (issue #456) wasm32 is the whole point: it only
       # functions on an isolate, where the `env.AI` binding exists, so the
       # native build proves nothing and this leg is its only positive proof.
