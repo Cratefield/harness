@@ -58,7 +58,8 @@ pub use payments::{
     Charge, CheckoutRequest, CheckoutSession, ConnectAccountLink, ConnectAccountLinkRequest,
     Dispute, DisputeListRequest, DisputePage, DisputePhase, DisputeStatus, LineItem, Money,
     Payments, PaymentsError, PortalSession, PortalSessionRequest, Refund, RefundRequest,
-    SubscriptionCheckoutRequest, TransferCharge, UsageReport, UsageReported, WebhookEvent,
+    Subscription, SubscriptionCheckoutRequest, SubscriptionStatus, TransferCharge, UsageReport,
+    UsageReported, WebhookEvent,
 };
 pub use push::{
     LocKeys, Notification, Platform, Priority, Push, PushError, PushOutcome, Recipient,

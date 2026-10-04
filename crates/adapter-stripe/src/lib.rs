@@ -19,6 +19,7 @@
 #![doc = include_str!("../README.md")]
 #![forbid(unsafe_code)]
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -26,8 +27,9 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use cratefield_core::{
     Charge, CheckoutRequest, CheckoutSession, Clock, ConnectAccountLink, ConnectAccountLinkRequest,
-    HttpClient, Money, Payments, PaymentsError, Refund, RefundRequest, SubscriptionCheckoutRequest,
-    TransferCharge, UsageReport, UsageReported, WebhookEvent,
+    HttpClient, Money, Payments, PaymentsError, PortalSession, PortalSessionRequest, Refund,
+    RefundRequest, Subscription, SubscriptionCheckoutRequest, SubscriptionStatus, TransferCharge,
+    UsageReport, UsageReported, WebhookEvent,
 };
 use hmac::{Hmac, KeyInit, Mac};
 use http::header::{AUTHORIZATION, CONTENT_TYPE};
@@ -35,6 +37,7 @@ use http::{Request, StatusCode};
 use serde_json::Value;
 use sha2::Sha256;
 use subtle::{Choice, ConstantTimeEq};
+use time::OffsetDateTime;
 
 const STRIPE_API_BASE: &str = "https://api.stripe.com";
 
@@ -212,6 +215,42 @@ impl Live {
 
         Ok((response.status(), response.into_body()))
     }
+
+    /// `GET {base}/v1/{path}` with the API key and any query parameters; the
+    /// query values are percent-encoded. Returns the parsed JSON on `2xx`,
+    /// else a mapped error.
+    async fn get(&self, path: &str, query: &[(&str, String)]) -> Result<Value, PaymentsError> {
+        let mut url = format!("{}/v1/{path}", self.base_url);
+        for (index, (key, value)) in query.iter().enumerate() {
+            url.push(if index == 0 { '?' } else { '&' });
+            url.push_str(&percent_encode(key));
+            url.push('=');
+            url.push_str(&percent_encode(value));
+        }
+
+        let request = Request::builder()
+            .method("GET")
+            .uri(&url)
+            .header(AUTHORIZATION, format!("Bearer {}", self.secret_key))
+            .header("Stripe-Version", "2024-06-20")
+            .body(Bytes::new())
+            .map_err(|err| PaymentsError::Rejected(format!("could not build request: {err}")))?;
+
+        let response = self
+            .http
+            .send(request)
+            .await
+            .map_err(|err| PaymentsError::Transient(err.to_string()))?;
+
+        let status = response.status();
+        let body = response.into_body();
+        if status.is_success() {
+            return serde_json::from_slice(&body).map_err(|err| {
+                PaymentsError::Rejected(format!("unparseable Stripe response: {err}"))
+            });
+        }
+        Err(map_error(status, &body))
+    }
 }
 
 /// Stripe's `error.code` and `error.message` from an error body, either of
@@ -255,6 +294,101 @@ fn field<'a>(object: &'a Value, key: &str) -> Result<&'a str, PaymentsError> {
         .get(key)
         .and_then(Value::as_str)
         .ok_or_else(|| PaymentsError::Rejected(format!("Stripe response missing `{key}`")))
+}
+
+/// A Stripe id used as a URL path segment (a `sub_...`/`cus_...` id: ASCII
+/// alphanumerics and `_`). Anything else — an empty string, a `/`, `?`, `#`,
+/// whitespace — is refused rather than allowed to change the path.
+fn path_segment(id: &str) -> Result<&str, PaymentsError> {
+    if !id.is_empty() && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_') {
+        Ok(id)
+    } else {
+        Err(PaymentsError::Rejected("not a Stripe id".to_owned()))
+    }
+}
+
+/// The customer id from a subscription's `customer` field, which Stripe
+/// returns as a bare id string unless it was expanded into an object.
+fn customer_ref(object: &Value) -> Result<String, PaymentsError> {
+    match object.get("customer") {
+        Some(Value::String(id)) => Ok(id.clone()),
+        Some(customer) => customer
+            .get("id")
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+            .ok_or_else(|| {
+                PaymentsError::Rejected("Stripe customer object missing `id`".to_owned())
+            }),
+        None => Err(PaymentsError::Rejected(
+            "Stripe response missing `customer`".to_owned(),
+        )),
+    }
+}
+
+/// The string metadata a Stripe object carries, as a `BTreeMap`; absent
+/// metadata is empty, and a non-string value is skipped rather than failing
+/// the whole object.
+fn metadata_from(object: &Value) -> BTreeMap<String, String> {
+    object
+        .get("metadata")
+        .and_then(Value::as_object)
+        .map(|metadata| {
+            metadata
+                .iter()
+                .filter_map(|(key, value)| {
+                    value.as_str().map(|value| (key.clone(), value.to_owned()))
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Reads a Stripe `subscription` object into the port's [`Subscription`].
+fn subscription_from(object: &Value) -> Result<Subscription, PaymentsError> {
+    let item = object
+        .get("items")
+        .and_then(|items| items.get("data"))
+        .and_then(Value::as_array)
+        .and_then(|items| items.first());
+
+    let price_ref = item
+        .and_then(|item| item.get("price"))
+        .and_then(|price| match price {
+            Value::String(id) => Some(id.clone()),
+            price => price.get("id").and_then(Value::as_str).map(str::to_owned),
+        });
+
+    let quantity = item
+        .and_then(|item| item.get("quantity"))
+        .and_then(Value::as_u64)
+        .and_then(|quantity| u32::try_from(quantity).ok())
+        .unwrap_or(1);
+
+    // Stripe moved `current_period_end` from the subscription onto its items
+    // in API version 2025-03-31 ("basil"). Read the top level first and fall
+    // back to the first item, so either shape parses without repinning.
+    let current_period_end = object
+        .get("current_period_end")
+        .and_then(Value::as_i64)
+        .or_else(|| {
+            item.and_then(|item| item.get("current_period_end"))
+                .and_then(Value::as_i64)
+        })
+        .and_then(|unix| OffsetDateTime::from_unix_timestamp(unix).ok());
+
+    Ok(Subscription {
+        id: field(object, "id")?.to_owned(),
+        customer_ref: customer_ref(object)?,
+        status: SubscriptionStatus::from_provider(field(object, "status")?),
+        price_ref,
+        quantity,
+        current_period_end,
+        cancel_at_period_end: object
+            .get("cancel_at_period_end")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        metadata: metadata_from(object),
+    })
 }
 
 #[async_trait]
@@ -319,6 +453,77 @@ impl Payments for Stripe {
             id: field(&object, "id")?.to_owned(),
             url: field(&object, "url")?.to_owned(),
         })
+    }
+
+    async fn create_portal_session(
+        &self,
+        request: &PortalSessionRequest,
+    ) -> Result<PortalSession, PaymentsError> {
+        let live = self.live()?;
+        let mut form = Form::default();
+        form.field("customer", request.customer_ref.clone())
+            .field("return_url", request.return_url.clone());
+
+        let object = live
+            .post("billing_portal/sessions", &request.idempotency_key, &form)
+            .await?;
+        Ok(PortalSession {
+            url: field(&object, "url")?.to_owned(),
+        })
+    }
+
+    async fn get_subscription(
+        &self,
+        subscription_ref: &str,
+    ) -> Result<Subscription, PaymentsError> {
+        let live = self.live()?;
+        let id = path_segment(subscription_ref)?;
+        let object = live.get(&format!("subscriptions/{id}"), &[]).await?;
+        subscription_from(&object)
+    }
+
+    async fn list_subscriptions(
+        &self,
+        customer_ref: &str,
+    ) -> Result<Vec<Subscription>, PaymentsError> {
+        let live = self.live()?;
+        // `status=all` includes canceled subscriptions, which Stripe's list
+        // omits by default — a reconciliation poll must see ended ones too.
+        // `limit=100` is Stripe's maximum page; follow `has_more` with
+        // `starting_after` until the list is exhausted.
+        let mut subscriptions = Vec::new();
+        let mut starting_after: Option<String> = None;
+        loop {
+            let mut query = vec![
+                ("customer", customer_ref.to_owned()),
+                ("status", "all".to_owned()),
+                ("limit", "100".to_owned()),
+            ];
+            if let Some(after) = &starting_after {
+                query.push(("starting_after", after.clone()));
+            }
+            let page = live.get("subscriptions", &query).await?;
+            let data = page.get("data").and_then(Value::as_array).ok_or_else(|| {
+                PaymentsError::Rejected("Stripe response missing `data`".to_owned())
+            })?;
+            for object in data {
+                subscriptions.push(subscription_from(object)?);
+            }
+
+            let has_more = page
+                .get("has_more")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            let last_id = data
+                .last()
+                .and_then(|object| object.get("id"))
+                .and_then(Value::as_str);
+            match (has_more, last_id) {
+                (true, Some(id)) => starting_after = Some(id.to_owned()),
+                _ => break,
+            }
+        }
+        Ok(subscriptions)
     }
 
     async fn create_connect_account_link(

@@ -443,6 +443,56 @@ in the past. It exists so a consume for that hour either commits or fails and
 retries before the tick freezes it. Buckets older than 35 days simply stop being
 scanned — they can no longer be reported, so an operator must reconcile them.
 
+## Subscriptions and the customer portal
+
+A recurring subscription is provider state; the port reads it and never owns
+it (the lifecycle is `cratefield-module-billing`'s, ADR 0025).
+
+**Reconcile from webhooks first.** Subscribe to Stripe's `customer.subscription.*`
+events (`created`, `updated`, `deleted`, `trial_will_end`, `paused`,
+`resumed`) and drive entitlements from them, claiming each event id through the
+`Inbox` as for any other webhook. The event's `data.object` is the Stripe
+subscription; the module reads the fields it needs.
+
+**Look the subscription up on doubt.** When a webhook was missed, arrived out
+of order, or left the module unsure of the current state, read the truth from
+the provider rather than guessing:
+
+- `get_subscription(subscription_ref)` — `GET /v1/subscriptions/{id}` returns
+  one [`Subscription`], or the usual `NotConfigured` / `Rejected` / `Transient`.
+- `list_subscriptions(customer_ref)` — `GET /v1/subscriptions?customer=…&status=all`
+  returns every subscription for a customer. The adapter sends `status=all`
+  because Stripe's list **omits canceled subscriptions by default**, and a
+  reconciliation poll must see an ended subscription to revoke what it granted.
+  A customer with none is an empty list, not an error.
+
+A [`Subscription`]'s `status` is the provider's word ([`SubscriptionStatus`],
+with `Other` for one this version does not know); `current_period_end` is
+`None` when the provider does not say. On Stripe the price is
+`items.data[0].price.id`, and `current_period_end` moved from the subscription
+onto its items in API version `2025-03-31` ("basil") — the adapter reads the
+top level first and falls back to the first item, so either shape parses.
+
+### The customer portal (**needs-human**)
+
+`create_portal_session({ customer_ref, return_url, idempotency_key })` —
+`POST /v1/billing_portal/sessions` — returns the short-lived hosted URL to send
+the customer to (`PortalSession { url }`): the page where they change plan,
+update the payment method, read invoices and cancel. Create one per visit and
+never store the URL.
+
+The portal is **configuration, not code**, and must be set up per venture in
+the Stripe dashboard before the URL is useful:
+
+1. **Activate the customer portal** (Settings → Billing → Customer portal).
+2. **Choose what customers may do** — switch plans, cancel, update the payment
+   method, download invoices — and which prices they may switch between.
+3. **Set the business information and the redirect behaviour** the portal shows.
+
+Until this is done a session is created but lands on a portal Stripe has not
+configured. Card data never crosses the harness: the customer enters it on
+Stripe's own page.
+
 ## Polar (Merchant of Record)
 
 `cratefield-adapter-polar` is for a venture that sells before it has a
