@@ -146,6 +146,13 @@ pub use ports::{DEFAULT_PRESIGN_TTL, MAX_PRESIGN_TTL, PresignedPut};
 // The inbound mail source (issue #563), kept out of the wholesale block
 // above so that block stays untouched.
 pub use ports::{InboundMailError, InboundMailSource, InboundMessage, receive_mail};
+// The Blob streamed reads/writes and multipart API (issue #586), kept out
+// of the wholesale block above for the same reason.
+pub use ports::{
+    BlobMeta, BlobPage, BlobStream, MAX_LARGE_BLOB_BYTES, MAX_LIST_LIMIT, MAX_MULTIPART_PARTS,
+    MIN_MULTIPART_PART_BYTES, PartReceipt, PendingUpload, UploadId, blob_error_from_stream,
+    check_part_number, limit_stream,
+};
 pub use problem::{ABOUT_BLANK, Problem};
 // `Slugs` is exported beside the `SLUGS` value it types. Without it a
 // caller can read `SLUGS.validation_failed` and cannot write a function

@@ -59,6 +59,10 @@ tracing = { workspace = true }
 #   (rules in cratefield-core) and does not need the `json` feature.
 [target.'cfg(not(any(target_arch = "wasm32", target_arch = "wasm64")))'.dependencies]
 tokio = { workspace = true, features = ["time", "net", "signal", "fs", "sync"] }
+# `tokio_util::io::ReaderStream` turns a `tokio::fs::File` into the chunked
+# body `Blob::get_stream` returns (issue #586) without buffering it whole.
+# The `io` feature only; already in the workspace lockfile through redis.
+tokio-util = { version = "0.7.19", features = ["io"] }
 reqwest = { version = "0.12.28", default-features = false, features = [
     "rustls-tls",
 ] }

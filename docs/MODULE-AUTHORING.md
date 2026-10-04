@@ -738,9 +738,10 @@ What changes on a streaming route, and what does not:
   a byte is read, and a streamed response has no ceiling of its own.
 - **Cloudflare caps the request before it reaches the Worker**: the plan limit
   (**100 MB Free/Pro; 200 MB Business, 500 MB Enterprise** by default) is
-  enforced at the edge, so a body over it must be uploaded in parts (multipart
-  objects — issue #586, not yet available). Your ceiling is yours; the plan
-  limit is the account's.
+  enforced at the edge, so a body over it never reaches you however high your
+  streaming ceiling is — upload it in parts instead, as
+  [Storing and serving media](#large-objects) describes. Your ceiling is yours;
+  the plan limit is the account's.
 
 Test with the kit (step 8): `request` for a small body (it carries a
 `content-length`, so the declared-length pre-check fires) and `request_chunks`
@@ -960,6 +961,83 @@ A presigned URL's query string is a bearer credential. Never log it: put
 it in a response body or a redirect, not a log line. The log scrubber
 redacts `X-Amz-Signature` and the rest of the query string, but treat
 that as a backstop, not a licence to log it.
+
+#### Large objects
+
+Small media keep the buffered path: `Blob::put` / `Blob::get`, still capped at
+`MAX_BLOB_BYTES` (10 MiB). Anything above that takes a separate, explicitly
+opted-in route (issue #586), and it starts with a declaration:
+`Module::max_blob_object_bytes()` is the ceiling for your **streamed** and
+**multipart** writes, clamped to `MAX_LARGE_BLOB_BYTES` (5 GiB — R2's
+single-object maximum). The buffered `put` stays at 10 MiB whatever it says.
+
+```rust
+impl Module for Files {
+    // Stream and multipart writes may reach 2 GiB; `put` stays capped at 10 MiB.
+    fn max_blob_object_bytes(&self) -> u64 { 2 * 1024 * 1024 * 1024 }
+    // A streamed response still needs its route declared (step 4).
+    fn streaming_routes(&self) -> &'static [StreamRoute] {
+        &[StreamRoute::get("/files/{key}", 0)] // no request body
+    }
+}
+```
+
+Then move the bytes without buffering. `put_stream(key, body, content_type,
+max_bytes)` writes the route's `RequestStream` straight through and returns the
+count; `get_stream(key)` returns a `BlobStream` whose `size` and `content_type`
+are known before the body is read, so a handler sets headers and answers with
+`into_response_stream()` on a route it declared.
+
+```rust
+// Write: a bad key or a body past the declared ceiling fails, leaving nothing.
+let written = blob
+    .put_stream("clips/interview.m4v", Box::pin(body), "video/mp4", 2 * 1024 * 1024 * 1024)
+    .await?;
+
+// Read: headers first, body streamed — no buffering.
+let stream = blob
+    .get_stream("clips/interview.m4v")
+    .await?
+    .ok_or_else(Problem::not_found)?;
+Ok(stream.into_response_stream())
+```
+
+Use `head` and `list` to answer metadata without reading bytes. `head(key)`
+returns a `BlobMeta` (`size`, `content_type`) or `None`; `list(prefix, cursor,
+limit)` pages your module's own keys — the harness strips its prefix and hides
+other modules' — with `limit` clamped to `MAX_LIST_LIMIT` (1000), and the
+returned `cursor` goes straight back for the next page (`None` on the last).
+
+**Multipart is for objects near or past Cloudflare's request cap.**
+`create_multipart(key, content_type)` mints an `UploadId`; `upload_part(key,
+id, n, body, max)` writes part `n` and returns its `PartReceipt`;
+`complete_multipart(key, id, &[receipts])` assembles them into the visible
+object. The store's rules: part numbers are `1 ..= 10_000`
+(`MAX_MULTIPART_PARTS`); every part but the last listed is at least 5 MiB
+(`MIN_MULTIPART_PART_BYTES`), and **R2 requires all non-last parts to be the
+same size**; the R2 Worker binding buffers each part in the isolate's memory,
+so keep parts modest rather than at the floor; and `complete_multipart`
+re-checks the finished size against your ceiling and deletes an oversized
+object, because no single part knows the total.
+
+**Clean up what you abandon.** Parts of an aborted or abandoned upload linger
+(and bill) until removed. Abort your own failures with `abort_multipart(key,
+id)`, and track the `UploadId`s you issue so a request that dies mid-upload
+leaves one to abort. `list_multipart_uploads(prefix)` finds the ones in flight
+so a sweeper can abort them — but the **R2 Worker binding cannot list
+incomplete uploads** (it answers `Unsupported`), so on Cloudflare configure an
+R2 **lifecycle rule for incomplete multipart uploads** instead. `list` finds
+orphaned completed objects the same way: a stored key nothing references is
+bytes you can `delete`.
+
+| Store | streamed put/get | `head`/`list` | multipart | `list_multipart_uploads` |
+|---|---|---|---|---|
+| `MemoryBlob` (test kit) | yes | yes | yes | yes |
+| `DirBlob` (native) | yes | yes | yes | yes |
+| `R2Blob` (Cloudflare) | yes | yes | yes | no (`Unsupported`) |
+
+`DirBlob` streams a `put_stream` or a part to a temporary file and renames it
+into place once it completes, so a refused or abandoned write leaves no object.
 
 ## Step 7 — Conformance
 
