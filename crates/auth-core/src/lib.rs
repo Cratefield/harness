@@ -88,9 +88,11 @@ pub use store::{
     user_by_primary_email,
 };
 pub use tokens::{
-    ACCESS_TOKEN_SECS, JWKS_CACHE_CONTROL, OIDC_CACHE_CONTROL, REFRESH_TOKEN_DAYS, RefreshGrant,
-    RefreshOutcome, SigningKey, SigningKeys, TOKENS_UNCONFIGURED, TokenConfigError, TokenError,
-    exchange_refresh_token, mint_access_token, mint_refresh_token,
+    ACCESS_TOKEN_SECS, DEFAULT_REFRESH_REUSE_GRACE_MAX_USES, JWKS_CACHE_CONTROL,
+    MAX_REFRESH_REUSE_GRACE_SECS, MAX_REFRESH_REUSE_GRACE_USES, OIDC_CACHE_CONTROL,
+    REFRESH_TOKEN_DAYS, RefreshGrant, RefreshOutcome, RefreshReuseGrace, SigningKey, SigningKeys,
+    TOKENS_UNCONFIGURED, TokenConfigError, TokenError, exchange_refresh_token, mint_access_token,
+    mint_refresh_token,
 };
 
 use cratefield_core::{
@@ -216,6 +218,10 @@ const MIGRATION_IMPORT_PROVIDER_POSTGRES: SqlMigration = SqlMigration::new(
 pub(crate) struct ModuleState {
     pub(crate) ctx: Arc<ModuleContext>,
     pub(crate) secret_overlap_secs: u64,
+    /// The resolved refresh-reuse grace (issue #655): the short window in
+    /// which a second presentation of a just-rotated refresh token, by
+    /// the same client, is graced instead of revoking the session.
+    pub(crate) refresh_grace: tokens::RefreshReuseGrace,
     /// The same signing-key cell the `/.well-known` router reads, so
     /// `/token` mints with the key JWKS publishes (issue #9).
     pub(crate) tokens: tokens::SigningKeysCell,
@@ -515,6 +521,36 @@ impl Module for AuthCore {
             ));
             return Err(errors);
         }
+        // The refresh-reuse grace (issue #655): both keys must be
+        // non-negative integers, and the window is bounded — a grace
+        // long enough to be a second token lifetime is a configuration
+        // mistake, not a setting.
+        if let Some(raw) = cfg.get(&module.key("REFRESH_REUSE_GRACE_SECONDS"))
+            && !raw
+                .parse::<u32>()
+                .is_ok_and(|secs| secs <= tokens::MAX_REFRESH_REUSE_GRACE_SECS)
+        {
+            let mut errors = ConfigError::default();
+            errors.push(format!(
+                "auth-core: {} must be an integer in 0..={}, got {raw:?}",
+                module.key("REFRESH_REUSE_GRACE_SECONDS"),
+                tokens::MAX_REFRESH_REUSE_GRACE_SECS
+            ));
+            return Err(errors);
+        }
+        if let Some(raw) = cfg.get(&module.key("REFRESH_REUSE_GRACE_MAX_USES"))
+            && !raw
+                .parse::<u32>()
+                .is_ok_and(|uses| (1..=tokens::MAX_REFRESH_REUSE_GRACE_USES).contains(&uses))
+        {
+            let mut errors = ConfigError::default();
+            errors.push(format!(
+                "auth-core: {} must be an integer in 1..={}, got {raw:?}",
+                module.key("REFRESH_REUSE_GRACE_MAX_USES"),
+                tokens::MAX_REFRESH_REUSE_GRACE_USES
+            ));
+            return Err(errors);
+        }
         // A slug the chooser does not know would render a button that
         // 404s, and the operator would have no way to tell that from a
         // method that is simply switched off.
@@ -560,6 +596,7 @@ impl Module for AuthCore {
         *self.signing.write().expect("signing cell uncontended") = keys;
         let state = Arc::new(ModuleState {
             secret_overlap_secs: self.resolved_overlap(&*ctx.config),
+            refresh_grace: tokens::RefreshReuseGrace::from_config(&*ctx.config),
             ctx: Arc::new(ctx),
             tokens: Arc::clone(&self.signing),
         });
@@ -758,6 +795,72 @@ mod tests {
                 .validate_config(&MapConfig::default())
                 .is_ok()
         );
+    }
+
+    #[test]
+    fn refresh_reuse_grace_resolves_from_config_with_defaults() {
+        // Default: no grace, any reuse revokes; the cap still has its
+        // documented default.
+        let default = tokens::RefreshReuseGrace::from_config(&MapConfig::default());
+        assert_eq!(default.seconds, 0, "the default grace is off");
+        assert_eq!(default.max_uses, DEFAULT_REFRESH_REUSE_GRACE_MAX_USES);
+
+        let set = tokens::RefreshReuseGrace::from_config(&MapConfig::from_pairs([
+            ("AUTH_CORE_REFRESH_REUSE_GRACE_SECONDS", "20"),
+            ("AUTH_CORE_REFRESH_REUSE_GRACE_MAX_USES", "5"),
+        ]));
+        assert_eq!(set.seconds, 20);
+        assert_eq!(set.max_uses, 5);
+    }
+
+    #[test]
+    fn refresh_reuse_grace_config_is_validated() {
+        assert!(
+            AuthCore::new()
+                .validate_config(&MapConfig::from_pairs([(
+                    "AUTH_CORE_REFRESH_REUSE_GRACE_SECONDS",
+                    "30",
+                )]))
+                .is_ok()
+        );
+        for bad in ["soon", "-1", "301"] {
+            assert!(
+                AuthCore::new()
+                    .validate_config(&MapConfig::from_pairs([(
+                        "AUTH_CORE_REFRESH_REUSE_GRACE_SECONDS",
+                        bad,
+                    )]))
+                    .is_err(),
+                "REFRESH_REUSE_GRACE_SECONDS={bad:?} must be rejected"
+            );
+        }
+        // MAX_USES is bounded to 1..=cap: not an integer, zero or a
+        // value past the cap all fail; both ends of the range pass.
+        let cap = tokens::MAX_REFRESH_REUSE_GRACE_USES;
+        let over = (cap + 1).to_string();
+        for bad in ["many", "0", over.as_str()] {
+            assert!(
+                AuthCore::new()
+                    .validate_config(&MapConfig::from_pairs([(
+                        "AUTH_CORE_REFRESH_REUSE_GRACE_MAX_USES",
+                        bad,
+                    )]))
+                    .is_err(),
+                "REFRESH_REUSE_GRACE_MAX_USES={bad:?} must be rejected"
+            );
+        }
+        let top = cap.to_string();
+        for good in ["1", top.as_str()] {
+            assert!(
+                AuthCore::new()
+                    .validate_config(&MapConfig::from_pairs([(
+                        "AUTH_CORE_REFRESH_REUSE_GRACE_MAX_USES",
+                        good,
+                    )]))
+                    .is_ok(),
+                "REFRESH_REUSE_GRACE_MAX_USES={good:?} must be accepted"
+            );
+        }
     }
 
     #[test]

@@ -2617,6 +2617,7 @@ version = "0.1.1"
 dependencies = [
  "argon2",
  "askama",
+ "async-trait",
  "axum",
  "base64ct",
  "bcrypt",
@@ -2629,6 +2630,7 @@ dependencies = [
  "factory0-auth-meta",
  "factory0-auth-oidc",
  "factory0-auth-password",
+ "futures-util",
  "getrandom 0.4.3",
  "http",
  "p256 0.14.0",

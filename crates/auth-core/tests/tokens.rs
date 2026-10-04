@@ -9,10 +9,11 @@
 
 use axum::http::{Method, StatusCode, header};
 use base64ct::{Base64UrlUnpadded, Encoding};
-use cratefield_core::{MapConfig, UlidIdGen};
+use cratefield_core::{Database, DbError, MapConfig, Rows, Statement, UlidIdGen};
 use cratefield_testing::{FixedClock, TestHarness};
 use factory0_auth_core::{
-    AuthCore, Login, RefreshOutcome, SLIDE_WINDOW_DAYS, SigningKeys, UserRow,
+    AuthCore, DEFAULT_REFRESH_REUSE_GRACE_MAX_USES, Login, REFRESH_TOKEN_DAYS, RefreshGrant,
+    RefreshOutcome, RefreshReuseGrace, SLIDE_WINDOW_DAYS, SigningKeys, UserRow,
     exchange_refresh_token, issue, mint_access_token, mint_refresh_token, session_by_token_hash,
 };
 use p256::ecdsa::{self, signature::Verifier};
@@ -38,6 +39,36 @@ fn iso(secs: i64) -> String {
 
 fn at(secs: i64) -> FixedClock {
     FixedClock(OffsetDateTime::from_unix_timestamp(secs).expect("epoch in range"))
+}
+
+/// The default configuration: no grace, any reuse revokes (issue #655).
+const NO_GRACE: RefreshReuseGrace = RefreshReuseGrace {
+    seconds: 0,
+    max_uses: DEFAULT_REFRESH_REUSE_GRACE_MAX_USES,
+};
+
+fn grace(seconds: u32, max_uses: u32) -> RefreshReuseGrace {
+    RefreshReuseGrace { seconds, max_uses }
+}
+
+/// Is the session behind `value` (the raw session cookie value) revoked?
+async fn session_revoked(kit: &TestHarness, value: &str) -> bool {
+    session_by_token_hash(&*kit.db, &Sha256::digest(value.as_bytes()))
+        .await
+        .expect("query")
+        .expect("session")
+        .revoked_at
+        .is_some()
+}
+
+/// How many `single_use_tokens` rows name `session_id`: the presented token
+/// plus any successor minted for it (issue #655).
+async fn rows_for_session(kit: &TestHarness, session_id: &str) -> usize {
+    let statement = Statement::new(format!(
+        "SELECT id FROM single_use_tokens WHERE payload LIKE '%{session_id}%'"
+    ));
+    let rows: Rows = kit.db.query(&statement).await.expect("count");
+    rows.len()
 }
 
 /// A throwaway P-256 keypair generated in the test: the private JWK
@@ -335,26 +366,44 @@ async fn refresh_tokens_are_single_use_and_reuse_revokes_the_session() {
     assert_eq!(row.expires_at, iso(EPOCH + SLIDE_WINDOW_DAYS * DAY));
 
     // First exchange wins.
-    let (outcome, grant) = exchange_refresh_token(&*kit.db, &at(EPOCH + 10), &value, "client_1")
-        .await
-        .expect("exchange");
+    let (outcome, grant) = exchange_refresh_token(
+        &*kit.db,
+        &at(EPOCH + 10),
+        &UlidIdGen,
+        NO_GRACE,
+        &value,
+        "client_1",
+    )
+    .await
+    .expect("exchange");
     assert_eq!(outcome, RefreshOutcome::Granted);
     let grant = grant.expect("grant");
     assert_eq!(grant.session_id, session.session_id);
     assert_eq!(grant.user_id, "u1");
     assert_eq!(grant.client_id, "client_1");
+    assert_eq!(
+        grant.refresh_token.len(),
+        43,
+        "the exchange mints the successor"
+    );
 
     // Reuse: refused, and the session is revoked.
-    let (outcome, grant) = exchange_refresh_token(&*kit.db, &at(EPOCH + 20), &value, "client_1")
-        .await
-        .expect("exchange");
+    let (outcome, grant) = exchange_refresh_token(
+        &*kit.db,
+        &at(EPOCH + 20),
+        &UlidIdGen,
+        NO_GRACE,
+        &value,
+        "client_1",
+    )
+    .await
+    .expect("exchange");
     assert_eq!(outcome, RefreshOutcome::Refused);
     assert!(grant.is_none());
-    let revoked = session_by_token_hash(&*kit.db, &Sha256::digest(session.value.as_bytes()))
-        .await
-        .expect("query")
-        .expect("session");
-    assert!(revoked.revoked_at.is_some(), "reuse revoked the session");
+    assert!(
+        session_revoked(&kit, &session.value).await,
+        "reuse revoked the session"
+    );
 }
 
 #[pollster::test]
@@ -374,21 +423,31 @@ async fn a_refresh_token_presented_for_the_wrong_client_is_not_consumed() {
     .await
     .expect("mint");
 
-    let (outcome, _) = exchange_refresh_token(&*kit.db, &at(EPOCH), &value, "client_other")
-        .await
-        .expect("exchange");
+    let (outcome, _) = exchange_refresh_token(
+        &*kit.db,
+        &at(EPOCH),
+        &UlidIdGen,
+        NO_GRACE,
+        &value,
+        "client_other",
+    )
+    .await
+    .expect("exchange");
     assert_eq!(outcome, RefreshOutcome::Refused);
 
     // The rightful client can still use it, and the session lives on.
-    let (outcome, _) = exchange_refresh_token(&*kit.db, &at(EPOCH), &value, "client_1")
-        .await
-        .expect("exchange");
+    let (outcome, _) = exchange_refresh_token(
+        &*kit.db,
+        &at(EPOCH),
+        &UlidIdGen,
+        NO_GRACE,
+        &value,
+        "client_1",
+    )
+    .await
+    .expect("exchange");
     assert_eq!(outcome, RefreshOutcome::Granted);
-    let live = session_by_token_hash(&*kit.db, &Sha256::digest(session.value.as_bytes()))
-        .await
-        .expect("query")
-        .expect("session");
-    assert!(live.revoked_at.is_none());
+    assert!(!session_revoked(&kit, &session.value).await);
 }
 
 #[pollster::test]
@@ -397,6 +456,8 @@ async fn an_unknown_refresh_token_is_refused_without_side_effects() {
     let (outcome, grant) = exchange_refresh_token(
         &*kit.db,
         &at(EPOCH),
+        &UlidIdGen,
+        NO_GRACE,
         "not-a-real-token-at-all-just-43-chars-xxxx",
         "client_1",
     )
@@ -404,4 +465,360 @@ async fn an_unknown_refresh_token_is_refused_without_side_effects() {
     .expect("exchange");
     assert_eq!(outcome, RefreshOutcome::Refused);
     assert!(grant.is_none());
+}
+
+/// Issues a fresh session and a refresh token bound to it: the shared
+/// setup of the grace tests (issue #655).
+async fn mint_for_session(
+    kit: &TestHarness,
+    client_id: &str,
+) -> (factory0_auth_core::IssuedSession, String) {
+    seed_user(kit, "u1", None, false).await;
+    let session = seed_session(kit, "u1", &[]).await;
+    let value = mint_refresh_token(
+        &*kit.db,
+        &at(EPOCH),
+        &UlidIdGen,
+        &session.session_id,
+        "u1",
+        client_id,
+    )
+    .await
+    .expect("mint");
+    (session, value)
+}
+
+/// One kit per available dialect — SQLite always, Postgres when
+/// `FZ_TEST_POSTGRES_URL` names a server — so the sibling bookkeeping and
+/// its compare-and-swap run on both engines.
+fn grace_kits() -> Vec<TestHarness> {
+    TestHarness::all_dialects(|| vec![Box::new(AuthCore::new())])
+}
+
+/// One exchange of `value` at `secs`, asserted to have answered.
+async fn exchange(
+    kit: &TestHarness,
+    secs: i64,
+    grace: RefreshReuseGrace,
+    value: &str,
+    client: &str,
+) -> (RefreshOutcome, Option<RefreshGrant>) {
+    exchange_refresh_token(&*kit.db, &at(secs), &UlidIdGen, grace, value, client)
+        .await
+        .expect("exchange")
+}
+
+/// A `Database` that yields to the executor once per call, so two
+/// exchanges driven together genuinely interleave: each reads the row
+/// before either consumes it — the guarded-consume race of issue #655.
+/// The SQLite adapter answers on the first poll, so without this the two
+/// legs serialize and the loser reads an already-consumed row (the reuse
+/// path) rather than losing the consume.
+struct YieldingDatabase {
+    inner: Arc<dyn Database>,
+}
+
+#[async_trait::async_trait]
+impl Database for YieldingDatabase {
+    async fn execute(&self, statement: &Statement) -> Result<u64, DbError> {
+        yield_once().await;
+        self.inner.execute(statement).await
+    }
+
+    async fn query(&self, statement: &Statement) -> Result<Rows, DbError> {
+        yield_once().await;
+        self.inner.query(statement).await
+    }
+
+    async fn batch_atomic(&self, statements: &[Statement]) -> Result<(), DbError> {
+        yield_once().await;
+        self.inner.batch_atomic(statements).await
+    }
+}
+
+/// Gives the executor exactly one turn: `Pending` once (after waking),
+/// then `Ready`.
+async fn yield_once() {
+    struct YieldOnce(bool);
+    impl std::future::Future for YieldOnce {
+        type Output = ();
+        fn poll(
+            mut self: std::pin::Pin<&mut Self>,
+            cx: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<()> {
+            if self.0 {
+                std::task::Poll::Ready(())
+            } else {
+                self.0 = true;
+                cx.waker().wake_by_ref();
+                std::task::Poll::Pending
+            }
+        }
+    }
+    YieldOnce(false).await;
+}
+
+/// The cookie race set up: P rotates to S1, a graced re-presentation at
+/// +20s mints the sibling S2, and both live until one is used.
+async fn two_siblings(kit: &TestHarness) -> (factory0_auth_core::IssuedSession, String, String) {
+    let (session, value) = mint_for_session(kit, "client_1").await;
+    let grace = grace(30, 3);
+    let (outcome, grant) = exchange(kit, EPOCH + 10, grace, &value, "client_1").await;
+    assert_eq!(outcome, RefreshOutcome::Granted, "rotation");
+    let first = grant.expect("grant").refresh_token;
+    let (outcome, grant) = exchange(kit, EPOCH + 20, grace, &value, "client_1").await;
+    assert_eq!(outcome, RefreshOutcome::Granted, "graced sibling");
+    let second = grant.expect("grant").refresh_token;
+    assert_ne!(first, second, "a distinct sibling");
+    (session, first, second)
+}
+
+/// First use wins — S1 used first retires S2, whose later presentation is
+/// plain reuse; the session survives.
+#[pollster::test]
+async fn first_use_wins_between_siblings() {
+    for kit in grace_kits() {
+        let dialect = kit.dialect;
+        let (session, first, second) = two_siblings(&kit).await;
+        let (outcome, _) = exchange(&kit, EPOCH + 41, grace(30, 3), &first, "client_1").await;
+        assert_eq!(outcome, RefreshOutcome::Granted, "{dialect}: first use");
+        assert!(
+            !session_revoked(&kit, &session.value).await,
+            "{dialect}: the session lives"
+        );
+        let (outcome, _) = exchange(&kit, EPOCH + 42, grace(30, 3), &second, "client_1").await;
+        assert_eq!(
+            outcome,
+            RefreshOutcome::Refused,
+            "{dialect}: retired sibling"
+        );
+    }
+}
+
+/// The mirror: S2 used first retires S1.
+#[pollster::test]
+async fn the_second_sibling_used_first_retires_the_first() {
+    for kit in grace_kits() {
+        let dialect = kit.dialect;
+        let (_session, first, second) = two_siblings(&kit).await;
+        let (outcome, _) = exchange(&kit, EPOCH + 25, grace(30, 3), &second, "client_1").await;
+        assert_eq!(outcome, RefreshOutcome::Granted, "{dialect}: sibling use");
+        let (outcome, _) = exchange(&kit, EPOCH + 26, grace(30, 3), &first, "client_1").await;
+        assert_eq!(
+            outcome,
+            RefreshOutcome::Refused,
+            "{dialect}: retired sibling"
+        );
+    }
+}
+
+/// The harness database wrapped so every call yields to the executor: two
+/// exchanges driven together then genuinely interleave (see
+/// [`YieldingDatabase`]).
+fn yielding(kit: &TestHarness) -> YieldingDatabase {
+    YieldingDatabase {
+        inner: Arc::clone(&kit.db),
+    }
+}
+
+/// Two exchanges of the same token at the same instant: both Granted,
+/// each with its own sibling, and the session survives.
+#[pollster::test]
+async fn concurrent_refreshes_inside_the_grace_window_both_succeed() {
+    for kit in grace_kits() {
+        let dialect = kit.dialect;
+        let (session, value) = mint_for_session(&kit, "client_1").await;
+        let db = yielding(&kit);
+
+        let (a, b) = pollster::block_on(futures_util::future::join(
+            exchange_refresh_token(
+                &db,
+                &at(EPOCH + 5),
+                &UlidIdGen,
+                grace(30, 3),
+                &value,
+                "client_1",
+            ),
+            exchange_refresh_token(
+                &db,
+                &at(EPOCH + 5),
+                &UlidIdGen,
+                grace(30, 3),
+                &value,
+                "client_1",
+            ),
+        ));
+        let (a, a_grant) = a.expect("exchange");
+        let (b, b_grant) = b.expect("exchange");
+        assert_eq!(a, RefreshOutcome::Granted, "{dialect}: first leg");
+        assert_eq!(b, RefreshOutcome::Granted, "{dialect}: second leg");
+        assert_ne!(
+            a_grant.expect("grant").refresh_token,
+            b_grant.expect("grant").refresh_token,
+            "{dialect}: each leg gets its own sibling"
+        );
+        assert!(
+            !session_revoked(&kit, &session.value).await,
+            "{dialect}: the race did not revoke the session"
+        );
+    }
+}
+
+/// The default (grace off) race: two exchanges of the same token at once,
+/// one wins and one is refused, and — because the loser lost the guarded
+/// consume rather than presenting a consumed token — its refusal does NOT
+/// revoke the session, and the winner's refresh token still works.
+#[pollster::test]
+async fn concurrent_refreshes_without_grace_refuse_without_revoking() {
+    for kit in grace_kits() {
+        let dialect = kit.dialect;
+        let (session, value) = mint_for_session(&kit, "client_1").await;
+        let db = yielding(&kit);
+
+        let (a, b) = pollster::block_on(futures_util::future::join(
+            exchange_refresh_token(
+                &db,
+                &at(EPOCH + 5),
+                &UlidIdGen,
+                NO_GRACE,
+                &value,
+                "client_1",
+            ),
+            exchange_refresh_token(
+                &db,
+                &at(EPOCH + 5),
+                &UlidIdGen,
+                NO_GRACE,
+                &value,
+                "client_1",
+            ),
+        ));
+        let (a, a_grant) = a.expect("exchange");
+        let (b, b_grant) = b.expect("exchange");
+        let winner = match (a, b) {
+            (RefreshOutcome::Granted, RefreshOutcome::Refused) => a_grant,
+            (RefreshOutcome::Refused, RefreshOutcome::Granted) => b_grant,
+            (a, b) => panic!("{dialect}: exactly one leg wins, got {a:?}/{b:?}"),
+        };
+        assert!(
+            !session_revoked(&kit, &session.value).await,
+            "{dialect}: losing the race must not revoke the session"
+        );
+        let (outcome, _) = exchange(
+            &kit,
+            EPOCH + 10,
+            NO_GRACE,
+            &winner.expect("grant").refresh_token,
+            "client_1",
+        )
+        .await;
+        assert_eq!(
+            outcome,
+            RefreshOutcome::Granted,
+            "{dialect}: the winner's refresh token still works"
+        );
+    }
+}
+
+/// Reuse after the window is the ordinary alarm.
+#[pollster::test]
+async fn reuse_after_the_grace_window_revokes_the_session() {
+    for kit in grace_kits() {
+        let dialect = kit.dialect;
+        let (session, value) = mint_for_session(&kit, "client_1").await;
+
+        let (outcome, _) = exchange(&kit, EPOCH + 1, grace(30, 3), &value, "client_1").await;
+        assert_eq!(outcome, RefreshOutcome::Granted, "{dialect}: rotation");
+        let (outcome, _) = exchange(&kit, EPOCH + 41, grace(30, 3), &value, "client_1").await;
+        assert_eq!(
+            outcome,
+            RefreshOutcome::Refused,
+            "{dialect}: past the window"
+        );
+        assert!(
+            session_revoked(&kit, &session.value).await,
+            "{dialect}: reuse after the window is not graced"
+        );
+    }
+}
+
+/// A consumed token presented by another client is refused at the client
+/// check, gets no grace, and — as today — does not revoke the session.
+#[pollster::test]
+async fn a_consumed_token_for_another_client_gets_no_grace() {
+    for kit in grace_kits() {
+        let dialect = kit.dialect;
+        let (session, value) = mint_for_session(&kit, "client_1").await;
+        let grace = grace(30, 3);
+
+        let (outcome, _) = exchange(&kit, EPOCH + 1, grace, &value, "client_1").await;
+        assert_eq!(outcome, RefreshOutcome::Granted, "{dialect}: rotation");
+        let (outcome, grant) = exchange(&kit, EPOCH + 2, grace, &value, "client_other").await;
+        assert_eq!(outcome, RefreshOutcome::Refused, "{dialect}: wrong client");
+        assert!(grant.is_none());
+        assert!(
+            !session_revoked(&kit, &session.value).await,
+            "{dialect}: the wrong client neither burned the token nor revoked the session"
+        );
+    }
+}
+
+/// The grace count is enforced: the `max_uses + 1`-th reuse revokes.
+#[pollster::test]
+async fn the_grace_use_count_is_enforced() {
+    for kit in grace_kits() {
+        let dialect = kit.dialect;
+        let (session, value) = mint_for_session(&kit, "client_1").await;
+        let grace = grace(60, 2);
+
+        let (outcome, _) = exchange(&kit, EPOCH + 1, grace, &value, "client_1").await;
+        assert_eq!(outcome, RefreshOutcome::Granted, "{dialect}: rotation");
+        for step in 2..=3 {
+            let (outcome, _) = exchange(&kit, EPOCH + step, grace, &value, "client_1").await;
+            assert_eq!(
+                outcome,
+                RefreshOutcome::Granted,
+                "{dialect}: grace use {step} is within the cap"
+            );
+        }
+        assert!(!session_revoked(&kit, &session.value).await);
+        let (outcome, _) = exchange(&kit, EPOCH + 4, grace, &value, "client_1").await;
+        assert_eq!(outcome, RefreshOutcome::Refused, "{dialect}: count cap");
+        assert!(
+            session_revoked(&kit, &session.value).await,
+            "{dialect}: the max_uses + 1-th reuse revokes"
+        );
+    }
+}
+
+/// A refresh token whose row has expired is refused like any stale
+/// token, not treated as reuse: it is refused before anything is minted,
+/// so replaying an expired token cannot grow the table.
+#[pollster::test]
+async fn an_expired_refresh_token_is_refused_without_revoking() {
+    for kit in grace_kits() {
+        let dialect = kit.dialect;
+        let (session, value) = mint_for_session(&kit, "client_1").await;
+        let rows_before = rows_for_session(&kit, &session.session_id).await;
+
+        let (outcome, grant) = exchange(
+            &kit,
+            EPOCH + REFRESH_TOKEN_DAYS * DAY + 1,
+            NO_GRACE,
+            &value,
+            "client_1",
+        )
+        .await;
+        assert_eq!(outcome, RefreshOutcome::Refused, "{dialect}: expired token");
+        assert!(grant.is_none());
+        assert!(
+            !session_revoked(&kit, &session.value).await,
+            "{dialect}: an expired token does not revoke the session"
+        );
+        assert_eq!(
+            rows_for_session(&kit, &session.session_id).await,
+            rows_before,
+            "{dialect}: refusing an expired token mints no successor"
+        );
+    }
 }
