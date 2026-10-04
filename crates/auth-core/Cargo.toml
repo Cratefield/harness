@@ -43,6 +43,13 @@ p256 = { version = "0.14.0", default-features = false, features = [
 ] }
 sha2 = { workspace = true }
 thiserror = { workspace = true }
+# An SSO connection's OIDC client secret is stored sealed with the harness's
+# XChaCha20-Poly1305 sealer (ADR 0102), the same one `module-connections`
+# uses for its provider tokens — never in the clear.
+cratefield-oauth-client = { workspace = true }
+# And the plaintext is held in a `Zeroizing` buffer for the short walk from
+# the sealer to the token endpoint, so a rotated secret does not linger.
+zeroize = { workspace = true }
 
 [dev-dependencies]
 # Dev-only, and only so `tests/privacy.rs` can prove the personal-data

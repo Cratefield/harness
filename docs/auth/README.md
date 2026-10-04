@@ -151,6 +151,13 @@ still trips the alarm. The trade-off is explicit — a stolen token used within
 seconds of the legitimate refresh, **by the same client id**, is not detected.
 Set the window to `0` where that risk outweighs the false positive.
 
+## Enterprise SSO
+
+A venture can point one organization at its own OpenID Connect provider: a
+connection per organization, a domain per connection, and a session that says
+it came in that way. Creating one, what the customer's IT admin configures, and
+how to require it for an organization are in [SSO.md](SSO.md).
+
 ## Status
 
 Design adopted 2026-09-06; per-instance model adopted 2026-10-05 (issue
@@ -159,7 +166,9 @@ instance per app. `instances/alphahunt` and `instances/yoginini` are live on
 staging only (`auth-staging.alphahunt.ing`, `auth-staging.yoginini.us`);
 their production deploys and `instances/cratefield` wait on the steps in
 [MANAGED-INSTANCES.md](MANAGED-INSTANCES.md) (secrets, Owlpost, Turnstile,
-first `auth-v*` tag). Enterprise SAML SSO is deliberately deferred.
+first `auth-v*` tag). Per-organization enterprise SSO over OpenID
+Connect has shipped ([SSO.md](SSO.md)); enterprise SAML SSO is deliberately
+deferred.
 
 ## License
 

@@ -120,6 +120,7 @@ The runtime hands each module the raw `Env`, so these keys do **not** default fr
 | `AUTH_MAGIC_LINK_PUBLIC_BASE` | Required. The origin the mailed link points at. |
 | `AUTH_MAGIC_LINK_MAIL_FROM` | Required. Magic-link mail is sent **From this**, not `MAIL_FROM` — the module sets the message's own `From`, overriding the adapter default. Domain verified. |
 | `AUTH_MAGIC_LINK_ALLOW_REGISTRATION` | Default `false`. When `true`, a magic-link request for an address with no account **creates one** — passwordless sign-up, open to anyone who can type an address. |
+| `AUTH_CORE_SSO_TOKEN_KEY` | 32 bytes of base64 (standard or URL-safe, padded or not). Seals each enterprise SSO connection's OIDC client secret at rest; set it as a **secret**. Without it, creating a connection or rotating its secret answers `503 auth/sso-unconfigured`; the optional `AUTH_CORE_SSO_TOKEN_KEY_ID` (integer, default `1`) is the key id for rotation. See [SSO.md](SSO.md). |
 
 ## Rotating signing keys
 

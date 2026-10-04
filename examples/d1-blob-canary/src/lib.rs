@@ -275,6 +275,8 @@ async fn session(env: Env) -> Result<Json, Json> {
         ip_hash: None,
         ua_family: Some("canary".to_owned()),
         amr: Some(r#"["password"]"#.to_owned()),
+        // Not an SSO login; the column exists (issue #627) and stays NULL.
+        sso_connection: None,
     };
     insert_session(&db, &row).await.map_err(
         |err| json!({ "ok": false, "stage": "insert_session", "error": err.to_string() }),

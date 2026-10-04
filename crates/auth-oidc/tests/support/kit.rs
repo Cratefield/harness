@@ -20,6 +20,16 @@ pub const START: &str = "/v1/auth-oidc/google/start";
 pub const CALLBACK: &str = "/v1/auth-oidc/google/callback";
 pub const APPLE_START: &str = "/v1/auth-oidc/apple/start";
 pub const APPLE_CALLBACK: &str = "/v1/auth-oidc/apple/callback";
+/// The one SSO callback every organization registers (#627).
+pub const SSO_CALLBACK: &str = "/v1/auth-oidc/sso/callback";
+/// The redirect URI a test client registers, and so the one `/authorize`
+/// accepts.
+pub const APP_REDIRECT: &str = "https://app.example/auth/callback";
+/// The admin token the client-registration API takes (issue #6).
+pub const ADMIN: &str = "test-admin-token-0123456789abcdef";
+/// 32 bytes of `A`, base64: the key an `sso_connections` secret is sealed
+/// under. Fixed, because the only thing under test is the round trip.
+pub const SEAL_KEY: &str = "QUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUE=";
 
 /// A throwaway P-256 key in the PKCS#8 PEM shape Apple issues as a `.p8`.
 ///
@@ -99,6 +109,38 @@ pub fn config_pairs_with_apple() -> Vec<(String, String)> {
 
 pub fn apple_kit() -> Kit {
     kit_with(config_pairs_with_apple())
+}
+
+/// A throwaway P-256 key in the JSON shape `AUTH_CORE_SIGNING_KEYS` takes,
+/// so the auth-core half of the kit can mint a code and a token.
+pub fn signing_keys_json() -> String {
+    use base64ct::{Base64UrlUnpadded, Encoding as _};
+    let secret = p256::SecretKey::from_slice(&[7u8; 32]).expect("a valid scalar");
+    let d = Base64UrlUnpadded::encode_string(&secret.to_bytes());
+    serde_json::to_string(&vec![
+        serde_json::json!({ "kty": "EC", "crv": "P-256", "kid": "k1", "d": d }),
+    ])
+    .expect("keys json")
+}
+
+/// Google's settings plus everything an enterprise SSO sign-in needs
+/// (#627): a sealing key for the connection's client secret, a signing key
+/// so `/authorize` and `/token` are live, and the admin token that
+/// registers the client whose credentials the admin API takes.
+pub fn sso_config_pairs() -> Vec<(String, String)> {
+    let mut pairs = config_pairs();
+    pairs.extend([
+        ("ADMIN_TOKEN".to_owned(), ADMIN.to_owned()),
+        ("AUTH_CORE_SSO_TOKEN_KEY".to_owned(), SEAL_KEY.to_owned()),
+        ("AUTH_CORE_SIGNING_KEYS".to_owned(), signing_keys_json()),
+        ("AUTH_CORE_SIGNING_KEY_ACTIVE".to_owned(), "k1".to_owned()),
+        ("AUTH_CORE_ISSUER".to_owned(), REDIRECT_BASE.to_owned()),
+    ]);
+    pairs
+}
+
+pub fn sso_kit() -> Kit {
+    kit_with(sso_config_pairs())
 }
 
 pub fn kit() -> Kit {
@@ -204,6 +246,103 @@ pub async fn get(kit: &Kit, path: &str, cookies: &[(&str, &str)]) -> Res {
     }
 }
 
+/// Any method, with an optional `Authorization` header and JSON body. The
+/// admin API (#6, #627) is not a `GET` and not form-encoded.
+pub async fn send(
+    kit: &Kit,
+    method: http::Method,
+    path: &str,
+    authorization: Option<&str>,
+    json: Option<&str>,
+) -> Res {
+    use tower::ServiceExt;
+    let mut builder = axum::http::Request::builder().method(method).uri(path);
+    if let Some(value) = authorization {
+        builder = builder.header(http::header::AUTHORIZATION, value);
+    }
+    let body = match json {
+        Some(payload) => {
+            builder = builder.header(
+                http::header::CONTENT_TYPE,
+                http::HeaderValue::from_static("application/json"),
+            );
+            axum::body::Body::from(payload.to_owned())
+        }
+        None => axum::body::Body::empty(),
+    };
+    let response = kit
+        .harness
+        .router
+        .clone()
+        .oneshot(builder.body(body).expect("request"))
+        .await
+        .expect("router answers");
+    let (parts, body) = response.into_parts();
+    let body = axum::body::to_bytes(body, 4 * 1024 * 1024)
+        .await
+        .expect("body reads");
+    Res {
+        status: parts.status,
+        headers: parts.headers,
+        body: body.to_vec(),
+    }
+}
+
+/// `Authorization: Basic base64(id:secret)`, the credential the SSO admin
+/// API takes (#627).
+pub fn auth_basic(client_id: &str, secret: &str) -> String {
+    use base64ct::{Base64, Encoding as _};
+    format!(
+        "Basic {}",
+        Base64::encode_string(format!("{client_id}:{secret}").as_bytes())
+    )
+}
+
+/// Registers a confidential client through the admin API and returns the
+/// id and the secret that is handed over exactly once.
+pub async fn create_client(kit: &Kit, name: &str) -> (String, String) {
+    let body = serde_json::json!({
+        "name": name,
+        "kind": "confidential",
+        "redirect_uris": [APP_REDIRECT],
+    })
+    .to_string();
+    let response = send(
+        kit,
+        http::Method::POST,
+        "/v1/auth-core/admin/clients",
+        Some(&format!("Bearer {ADMIN}")),
+        Some(&body),
+    )
+    .await;
+    assert_eq!(response.status, StatusCode::CREATED, "{}", response.text());
+    let json = response.json();
+    (
+        json["id"].as_str().expect("a client id").to_owned(),
+        json["client_secret"]
+            .as_str()
+            .expect("the secret once")
+            .to_owned(),
+    )
+}
+
+/// Registers an enterprise SSO connection for that client.
+pub async fn create_connection(
+    kit: &Kit,
+    client_id: &str,
+    secret: &str,
+    body: &serde_json::Value,
+) -> Res {
+    send(
+        kit,
+        http::Method::POST,
+        "/v1/auth-core/sso/connections",
+        Some(&auth_basic(client_id, secret)),
+        Some(&body.to_string()),
+    )
+    .await
+}
+
 /// A form-encoded `POST`, which is how Apple delivers its authorization
 /// response (#16). Cross-site in life; here it is just a POST with a body.
 pub async fn post_form(kit: &Kit, path: &str, body: &str) -> Res {
@@ -266,6 +405,32 @@ pub async fn start(kit: &Kit, query: &str) -> Started {
 /// `/start` for whichever provider the path names.
 pub async fn start_at(kit: &Kit, path: &str, query: &str) -> Started {
     let response = get(kit, &format!("{path}{query}"), &[]).await;
+    started_from(kit, &response)
+}
+
+/// The `start` of one enterprise SSO connection (#627).
+pub async fn sso_start(kit: &Kit, connection_id: &str, query: &str) -> Started {
+    start_at(
+        kit,
+        &format!("/v1/auth-oidc/sso/{connection_id}/start"),
+        query,
+    )
+    .await
+}
+
+/// Follows the SSO callback the `IdP` would send the browser to.
+pub async fn sso_callback(kit: &Kit, started: &Started, code: &str, state: &str) -> Res {
+    get(
+        kit,
+        &format!("{SSO_CALLBACK}?code={code}&state={state}"),
+        &[("__Host-fz_oidc", &started.flow_cookie)],
+    )
+    .await
+}
+
+/// Reads a `302` to a provider as the things a test needs from it: the
+/// flow cookie, and the state and nonce the module put in the URL.
+fn started_from(kit: &Kit, response: &Res) -> Started {
     assert_eq!(
         response.status,
         StatusCode::FOUND,

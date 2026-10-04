@@ -31,6 +31,9 @@ getrandom = { workspace = true }
 url = { workspace = true }
 openidconnect = { workspace = true }
 chrono = { workspace = true }
+# An enterprise connection's client secret (issue #627) is unsealed into a
+# `ProviderConfig`, and the copy there is zeroized when it drops.
+zeroize = { workspace = true }
 # Apple's client secret is an ES256 JWT this module mints from a PKCS#8
 # key, not a string an operator pastes (#16).
 # Pinned here, not workspace-inherited: the workspace `p256` is 0.13.2 for

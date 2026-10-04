@@ -34,5 +34,9 @@
   "auth-core/0009": {
     "file": "0009_auth-core_0009_token_kinds_recovery.sql",
     "sha256": "f5966de2c264ec030ea03b2b70bfed021ed4280da256270eaef86b07aa52cda9"
+  },
+  "auth-core/0010": {
+    "file": "0010_auth-core_0010_sso_connections.sql",
+    "sha256": "4cfb30bcd158b896940386493bb141d40709f7828c6c9cd4a4fef559465bade4"
   }
 }

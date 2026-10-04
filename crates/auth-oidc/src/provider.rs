@@ -4,9 +4,16 @@
 //! this descriptor rather than against Google, so Apple (#16) and any other
 //! compliant provider arrive as data plus whatever quirk they insist on.
 
-use cratefield_auth_core::{PROVIDER_APPLE, PROVIDER_GOOGLE};
+use std::borrow::Cow;
+
+use cratefield_auth_core::{PROVIDER_APPLE, PROVIDER_GOOGLE, SSO_PROVIDER};
 use openidconnect::AuthType;
-use openidconnect::core::CoreJwsSigningAlgorithm;
+use openidconnect::core::{CoreClientAuthMethod, CoreJwsSigningAlgorithm, CoreProviderMetadata};
+
+/// The `identities.provider` value an enterprise SSO sign-in writes, and
+/// the route segment `/{provider}/...` must never answer for it: an SSO
+/// flow is addressed by connection id, not by provider.
+pub(crate) const SSO_SLUG: &str = SSO_PROVIDER;
 
 /// How the provider delivers the authorization response.
 ///
@@ -29,16 +36,28 @@ pub enum SecretSource {
     /// Minted per request as an ES256 JWT over the configured `.p8`
     /// (`crate::apple`). There is no secret to store and none to rotate.
     AppleMinted,
+    /// Neither: the credentials belong to one `sso_connections` row
+    /// (issue #627) and are read from it, so nothing in the environment
+    /// names this provider's secret.
+    Connection,
 }
 
 /// One OpenID Connect provider.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// Not `Copy`, because [`Provider::issuer`] is an organization's rather
+/// than a constant for an SSO connection (issue #627) and so is owned.
+/// Everything else about a provider is still a compile-time decision.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Provider {
     /// The path segment and the `identities.provider` value. These are the
     /// same string on purpose: a route that says `google` writes `google`.
+    ///
+    /// Still `'static`: every provider this service serves has a slug of
+    /// our own choosing, and an SSO connection's is the fixed `sso`.
     pub slug: &'static str,
-    /// The issuer, from which discovery finds everything else.
-    pub issuer: &'static str,
+    /// The issuer, from which discovery finds everything else. Owned for
+    /// an SSO connection, borrowed for Google and Apple.
+    pub issuer: Cow<'static, str>,
     /// Requested scopes beyond `openid`, which openidconnect always sends.
     pub scopes: &'static [&'static str],
     /// Config-key infix: `AUTH_OIDC_<CONFIG>_CLIENT_ID`.
@@ -91,7 +110,7 @@ impl Provider {
 
 pub const GOOGLE: Provider = Provider {
     slug: PROVIDER_GOOGLE,
-    issuer: "https://accounts.google.com",
+    issuer: Cow::Borrowed("https://accounts.google.com"),
     scopes: &["email", "profile"],
     config: "GOOGLE",
     label: "Google",
@@ -108,7 +127,7 @@ pub const GOOGLE: Provider = Provider {
 /// Apple documents that as the only supported mode for those scopes.
 pub const APPLE: Provider = Provider {
     slug: PROVIDER_APPLE,
-    issuer: "https://appleid.apple.com",
+    issuer: Cow::Borrowed("https://appleid.apple.com"),
     scopes: &["name", "email"],
     config: "APPLE",
     label: "Apple",
@@ -126,8 +145,77 @@ pub const PROVIDERS: &[Provider] = &[GOOGLE, APPLE];
 
 /// The provider a request names, or `None` when the path segment is not one
 /// we serve.
+///
+/// Never `sso`: an enterprise connection is addressed by its id, and
+/// `/{provider}/...` must not answer for the flow that carries one.
 pub(crate) fn by_slug(slug: &str) -> Option<&'static Provider> {
     PROVIDERS.iter().find(|provider| provider.slug == slug)
+}
+
+/// The descriptor for one enterprise SSO connection (issue #627).
+///
+/// The flow is the same flow; what differs is where the facts come from.
+/// The issuer is the organization's, so it is owned rather than borrowed,
+/// and the client id and secret come from the connection's own row — which
+/// is what [`SecretSource::Connection`] means, and why nothing in the
+/// environment names them.
+///
+/// `auth_type` here is provisional. The descriptor carries a value because
+/// every client this module builds reads one, and Basic is the OIDC
+/// default; [`with_auth_type`] replaces it with what the organization's
+/// discovery document actually says before any request is made.
+pub(crate) fn sso(issuer: &str) -> Provider {
+    Provider {
+        slug: SSO_SLUG,
+        issuer: Cow::Owned(issuer.to_owned()),
+        // The same two Google asks for, minus `openid`, which
+        // openidconnect always sends.
+        scopes: &["email", "profile"],
+        // Unused: there is no `AUTH_OIDC_<CONFIG>_*` for an SSO
+        // connection, and `provider_credentials` returns nothing for one.
+        config: "",
+        label: "SSO",
+        // RS256 only, pinned for the same reason Google's is: this version
+        // of openidconnect cannot verify ES256 at all, so a document that
+        // listed it would be believed and then fail opaquely.
+        signing_algorithms: &[CoreJwsSigningAlgorithm::RsaSsaPkcs1V15Sha256],
+        // The callback is a single fixed redirect, so the response must
+        // arrive as a query string and the flow cookie stays `SameSite=Lax`.
+        response_mode: ResponseMode::Query,
+        secret: SecretSource::Connection,
+        auth_type: TokenAuth::Basic,
+    }
+}
+
+/// The descriptor with the client authentication the discovery document
+/// asks for, wherever the descriptor does not already pin it.
+///
+/// Google and Apple pin theirs deliberately — Apple refuses HTTP Basic
+/// with an `invalid_client` that names nothing — so this changes nothing
+/// for them. An SSO connection is an arbitrary compliant `IdP`, and RFC
+/// 8414 says `client_secret_basic` when the document lists neither.
+pub(crate) fn with_auth_type(provider: &Provider, metadata: &CoreProviderMetadata) -> Provider {
+    let mut provider = provider.clone();
+    if provider.secret == SecretSource::Connection {
+        provider.auth_type = auth_type_from_metadata(metadata);
+    }
+    provider
+}
+
+fn auth_type_from_metadata(metadata: &CoreProviderMetadata) -> TokenAuth {
+    let Some(methods) = metadata.token_endpoint_auth_methods_supported() else {
+        return TokenAuth::Basic;
+    };
+    if methods.contains(&CoreClientAuthMethod::ClientSecretBasic) {
+        TokenAuth::Basic
+    } else if methods.contains(&CoreClientAuthMethod::ClientSecretPost) {
+        TokenAuth::RequestBody
+    } else {
+        // An empty or unknown list is not a licence to guess: the spec's
+        // default applies, and a provider that wanted `client_secret_post`
+        // says so.
+        TokenAuth::Basic
+    }
 }
 
 #[cfg(test)]
@@ -203,6 +291,81 @@ mod tests {
         assert_eq!(
             GOOGLE.signing_algorithms,
             [CoreJwsSigningAlgorithm::RsaSsaPkcs1V15Sha256]
+        );
+    }
+
+    /// A discovery document, minimal but complete enough for
+    /// `CoreProviderMetadata` to parse. `methods` is the
+    /// `token_endpoint_auth_methods_supported` array, verbatim.
+    fn metadata(methods: Option<&str>) -> CoreProviderMetadata {
+        let extra = methods.map_or(String::new(), |methods| {
+            format!(r#","token_endpoint_auth_methods_supported":[{methods}]"#)
+        });
+        serde_json::from_str(&format!(
+            r#"{{"issuer":"https://idp.example",
+                 "authorization_endpoint":"https://idp.example/authorize",
+                 "token_endpoint":"https://idp.example/token",
+                 "jwks_uri":"https://idp.example/jwks",
+                 "response_types_supported":["code"],
+                 "subject_types_supported":["public"],
+                 "id_token_signing_alg_values_supported":["RS256"]{extra}}}"#
+        ))
+        .expect("a well-formed discovery document")
+    }
+
+    #[test]
+    fn an_sso_connection_is_addressed_by_id_and_never_by_slug() {
+        // `/v1/auth-oidc/sso/start` must not exist: an SSO flow is begun
+        // through `sso/{connection_id}/start`, and a slug here would make
+        // the module answer for a provider it cannot configure.
+        assert!(by_slug(SSO_SLUG).is_none());
+        let provider = sso("https://idp.example");
+        assert_eq!(provider.slug, SSO_PROVIDER);
+        assert_eq!(provider.issuer, "https://idp.example");
+        assert_eq!(provider.secret, SecretSource::Connection);
+        assert_eq!(provider.response_mode, ResponseMode::Query);
+        assert!(!provider.scopes.contains(&"openid"));
+    }
+
+    #[test]
+    fn an_sso_connection_takes_its_client_authentication_from_the_document() {
+        let provider = sso("https://idp.example");
+        assert_eq!(
+            with_auth_type(&provider, &metadata(Some(r#""client_secret_post""#))).auth_type,
+            TokenAuth::RequestBody,
+        );
+        // Basic wins when both are offered: it is the spec's default and
+        // the better-kept secret (a form body is far likelier to be logged).
+        assert_eq!(
+            with_auth_type(
+                &provider,
+                &metadata(Some(r#""client_secret_post","client_secret_basic""#))
+            )
+            .auth_type,
+            TokenAuth::Basic,
+        );
+        // A document that says nothing gets the spec default, and so does
+        // one that lists only methods we cannot use.
+        for methods in [None, Some(r#""private_key_jwt""#)] {
+            assert_eq!(
+                with_auth_type(&provider, &metadata(methods)).auth_type,
+                TokenAuth::Basic,
+                "{methods:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_pinned_provider_never_re_reads_its_auth_type_from_a_document() {
+        // Apple refuses HTTP Basic with an `invalid_client` that names
+        // nothing, so a document claiming otherwise must not be believed.
+        assert_eq!(
+            with_auth_type(&APPLE, &metadata(Some(r#""client_secret_basic""#))).auth_type,
+            TokenAuth::RequestBody,
+        );
+        assert_eq!(
+            with_auth_type(&GOOGLE, &metadata(Some(r#""client_secret_post""#))).auth_type,
+            TokenAuth::Basic,
         );
     }
 

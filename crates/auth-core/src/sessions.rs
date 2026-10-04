@@ -75,6 +75,10 @@ pub enum SessionError {
 pub struct ValidSession {
     pub id: String,
     pub user_id: String,
+    /// The SSO connection this session was signed in through (issue #627),
+    /// `None` for every other way in. Carried on the session so the token
+    /// endpoint can derive the `sso_connection` claim without a second read.
+    pub sso_connection: Option<String>,
 }
 
 pub(crate) fn iso(t: OffsetDateTime) -> String {
@@ -256,6 +260,36 @@ pub async fn issue(
     id_gen: &dyn IdGen,
     login: Login<'_>,
 ) -> Result<IssuedSession, SessionError> {
+    issue_for(db, clock, id_gen, login, None).await
+}
+
+/// [`issue`] for a sign-in that came through an enterprise SSO connection
+/// (issue #627): the same session, with `sso_connections.id` recorded on it.
+///
+/// A sibling rather than a field on [`Login`] because [`Login`] is built by
+/// every login method in the workspace, and the connection is the one thing
+/// only this path has to say.
+///
+/// # Errors
+///
+/// As [`issue`].
+pub async fn issue_sso(
+    db: &dyn Database,
+    clock: &dyn Clock,
+    id_gen: &dyn IdGen,
+    login: Login<'_>,
+    connection_id: &str,
+) -> Result<IssuedSession, SessionError> {
+    issue_for(db, clock, id_gen, login, Some(connection_id)).await
+}
+
+async fn issue_for(
+    db: &dyn Database,
+    clock: &dyn Clock,
+    id_gen: &dyn IdGen,
+    login: Login<'_>,
+    sso_connection: Option<&str>,
+) -> Result<IssuedSession, SessionError> {
     // Before anything else: a disabled account gets no session, whichever
     // login method asked. One read, and the kill switch means something.
     match store::user_by_id(db, login.user_id).await? {
@@ -302,6 +336,7 @@ pub async fn issue(
             ua_family: ua_family(login.user_agent),
             amr: (!login.amr.is_empty())
                 .then(|| serde_json::to_string(login.amr).unwrap_or_default()),
+            sso_connection: sso_connection.map(str::to_owned),
         },
     )
     .await?;
@@ -360,6 +395,7 @@ pub async fn validate(
     Ok(Some(ValidSession {
         id: row.id,
         user_id: row.user_id,
+        sso_connection: row.sso_connection,
     }))
 }
 
@@ -386,6 +422,8 @@ pub async fn revoke_all(
 pub struct Session {
     pub id: String,
     pub user_id: String,
+    /// See [`ValidSession::sso_connection`].
+    pub sso_connection: Option<String>,
 }
 
 impl FromRequestParts<Arc<ModuleState>> for Session {
@@ -414,6 +452,7 @@ impl FromRequestParts<Arc<ModuleState>> for Session {
             Ok(Some(session)) => Ok(Session {
                 id: session.id,
                 user_id: session.user_id,
+                sso_connection: session.sso_connection,
             }),
             Ok(None) => Err(denied()),
             Err(err) => {

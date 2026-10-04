@@ -144,7 +144,8 @@ fn amr_of(session: &store::SessionRow) -> Vec<String> {
 /// because the two grants mint it in different places: the code grant
 /// here (via [`mint_pair`]), the refresh grant inside the exchange,
 /// which must record the successor in the consumed row (issue #655).
-fn minted_response(
+async fn minted_response(
+    db: &dyn Database,
     clock: &dyn Clock,
     keys: &SigningKeys,
     session: &store::SessionRow,
@@ -157,9 +158,33 @@ fn minted_response(
         .as_deref()
         .map(|email| (email, user.primary_email_verified));
     let amr = amr_of(session);
-    let access = mint_access_token(keys, clock, &session.id, &user.id, email, client_id, &amr)
-        .map_err(|err| {
-            tracing::error!(error = %err, "access-token mint failed");
+    // The session's SSO connection (issue #627), named in the token only
+    // while it still belongs to the client the token is for and is still
+    // active: a connection is a fact about one venture's organization, so
+    // another client's token must not learn its id, and a connection that
+    // has been disabled must not keep vouching for a sign-in it can no
+    // longer perform.
+    let sso_connection = match session.sso_connection.as_deref() {
+        Some(id) => store::sso_connection_by_id(db, id)
+            .await?
+            .filter(|connection| {
+                connection.client_id == client_id && connection.status == store::STATUS_ACTIVE
+            })
+            .map(|_| id),
+        None => None,
+    };
+    let access = mint_access_token(
+        keys,
+        clock,
+        &session.id,
+        &user.id,
+        email,
+        client_id,
+        sso_connection,
+        &amr,
+    )
+    .map_err(|err| {
+        tracing::error!(error = %err, "access-token mint failed");
             Problem::internal()
         })?;
     Ok(Json(json!({
@@ -188,7 +213,7 @@ async fn mint_pair(
             tracing::error!(error = %err, "minting a refresh token failed");
             Problem::internal()
         })?;
-    minted_response(clock, keys, session, user, client_id, &refresh)
+    minted_response(db, clock, keys, session, user, client_id, &refresh).await
 }
 
 async fn token(
@@ -362,6 +387,7 @@ async fn refresh_grant(grant: &GrantContext<'_>, form: &TokenForm) -> Result<Res
     // recorded the rotation; only the access token is minted here, so a
     // refresh grant never mints two refresh tokens (issue #655).
     minted_response(
+        db,
         clock,
         grant.keys,
         &session,
@@ -369,6 +395,7 @@ async fn refresh_grant(grant: &GrantContext<'_>, form: &TokenForm) -> Result<Res
         client_id,
         &granted.refresh_token,
     )
+    .await
 }
 
 pub(crate) fn router() -> axum::Router<Arc<ModuleState>> {

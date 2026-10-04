@@ -47,6 +47,7 @@ use crate::brand::Brand;
 use crate::redirect_uri::matches_any;
 use crate::secrets;
 use crate::sessions;
+use crate::sso;
 use crate::store::{self, TOKEN_AUTHORIZATION_CODE};
 
 /// Authorization-code lifetime: 60 seconds, single-use.
@@ -336,6 +337,27 @@ fn oauth_error_redirect(uri: &str, error: &str, state: Option<&str>) -> Response
         .into_response()
 }
 
+/// Where an `/authorize` that named an SSO connection — or that a
+/// `login_hint` routed to one — sends the browser: that connection's
+/// start, carrying this request back as `return_to` exactly as the
+/// chooser's buttons do, so the person returns to the pending
+/// authorization with nothing lost.
+///
+/// The path is another module's route, spelled here the same way the
+/// `CATALOGUE` rows spell theirs: a path is data, not a dependency, and
+/// auth-core links no login-method crate.
+fn sso_start_redirect(connection_id: &str, return_to: &str) -> Response {
+    let encoded = encode_query_component(return_to);
+    (
+        StatusCode::FOUND,
+        [(
+            header::LOCATION,
+            format!("/v1/auth-oidc/sso/{connection_id}/start?return_to={encoded}"),
+        )],
+    )
+        .into_response()
+}
+
 fn is_base64url_43(value: &str) -> bool {
     value.len() == 43
         && value
@@ -351,6 +373,13 @@ struct AuthorizeQuery {
     code_challenge: Option<String>,
     code_challenge_method: Option<String>,
     state: Option<String>,
+    /// An enterprise SSO connection to sign in through (issue #627). Only
+    /// one of *this* client's own active connections is routable.
+    connection: Option<String>,
+    /// An address whose domain may name the connection to sign in
+    /// through, for a caller that knows the person's address but not the
+    /// connection. A hint, never an instruction.
+    login_hint: Option<String>,
 }
 
 /// Validates the client and the exact redirect URI. `Err` renders the
@@ -451,21 +480,79 @@ async fn authorize(
     // `/v1/auth-core`, and a nested handler sees the URI with the prefix
     // already stripped, so `Uri` alone would send people to `/authorize`,
     // which does not exist.
-    let chooser = || {
-        // Path and query, never `to_string()`. On Workers the runtime
-        // builds the request from `req.url()`, so the URI is **absolute**:
-        // `https://auth.example/v1/auth-core/authorize?...`. Every
-        // provider's `safe_return_to` refuses anything not starting with
-        // `/`, so an absolute value is silently replaced by the default
-        // and the person lands on `/` with their authorization request
-        // gone — which is the exact thing this page exists to prevent.
-        // On the native runtime the same URI arrives in origin form, so
-        // the bug only appears in production, which is why the tests were
-        // green. See the test that sends an absolute-form target.
-        let return_to = original_uri.path_and_query().map_or_else(
+    //
+    // Path and query, never `to_string()`: on Workers the runtime builds
+    // the request from `req.url()`, so the URI is **absolute**:
+    // `https://auth.example/v1/auth-core/authorize?...`. Every provider's
+    // `safe_return_to` refuses anything not starting with `/`, so an
+    // absolute value is silently replaced by the default and the person
+    // lands on `/` with their authorization request gone — which is the
+    // exact thing the chooser and the SSO start both exist to prevent. On
+    // the native runtime the same URI arrives in origin form, so the bug
+    // only appears in production, which is why the tests were green. See
+    // the test that sends an absolute-form target.
+    let return_to = || {
+        original_uri.path_and_query().map_or_else(
             || DEFAULT_CHOOSER_RETURN_TO.to_owned(),
             |path_and_query| path_and_query.as_str().to_owned(),
+        )
+    };
+
+    // The session, read once: the SSO routing below and the code minting
+    // further down both decide on it.
+    let session = match sessions::cookie_value(&headers) {
+        Some(cookie) => sessions::validate(&*db, &*clock, &cookie)
+            .await
+            .map_err(|_| Problem::internal())?,
+        None => None,
+    };
+
+    // A connection named outright (issue #627). Only this client's own
+    // active connections are routable: another client's id, an id that
+    // does not exist and a disabled one are refused *identically*, with
+    // the generic page and no redirect — to the IdP or anywhere else — so
+    // a probe learns nothing and an attacker is never walked to someone
+    // else's identity provider.
+    if let Some(connection_id) = query.connection.as_deref() {
+        let own_active = matches!(
+            store::sso_connection_by_id(&*db, connection_id)
+                .await
+                .map_err(|_| Problem::internal())?,
+            Some(connection)
+                if connection.client_id == query.client_id
+                    && connection.status == store::STATUS_ACTIVE
         );
+        if !own_active {
+            return Ok(error_page(&scope));
+        }
+        // Already signed in through this very connection: the request
+        // proceeds to a code like any other session's. Anything else —
+        // no session, or a session from another way in, or from another
+        // connection — has to go and become one first.
+        let on_this_connection =
+            session.as_ref().and_then(|s| s.sso_connection.as_deref()) == Some(connection_id);
+        if !on_this_connection {
+            return Ok(sso_start_redirect(connection_id, &return_to()));
+        }
+    } else if session.is_none()
+        && let Some(domain) = query.login_hint.as_deref().and_then(sso::domain_of_email)
+    {
+        // A hint, and only a hint: it routes when its domain is one of
+        // this client's own active connections claims, and otherwise
+        // falls through to the chooser rather than refusing. It can
+        // neither probe nor steer any other client's organization.
+        let connections = store::sso_connections_for_client(&*db, &query.client_id, None)
+            .await
+            .map_err(|_| Problem::internal())?;
+        if let Some(connection) = connections.iter().find(|connection| {
+            connection.status == store::STATUS_ACTIVE && connection.domains.contains(&domain)
+        }) {
+            return Ok(sso_start_redirect(&connection.id, &return_to()));
+        }
+    }
+
+    let chooser = || {
+        let return_to = return_to();
         let methods = enabled_login_methods(&*state.ctx.config, &return_to);
         html(&LoginChooserTemplate {
             brand: brand_of(&state),
@@ -474,12 +561,6 @@ async fn authorize(
             return_to,
         })
     };
-    let Some(cookie) = sessions::cookie_value(&headers) else {
-        return Ok(chooser());
-    };
-    let session = sessions::validate(&*db, &*clock, &cookie)
-        .await
-        .map_err(|_| Problem::internal())?;
     let Some(session) = session else {
         return Ok(chooser());
     };

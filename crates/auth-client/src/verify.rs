@@ -63,6 +63,30 @@ pub struct Claims {
     /// Authentication methods used at login (RFC 8176).
     #[serde(default)]
     pub amr: Vec<String>,
+    /// The enterprise SSO connection this session was signed in through
+    /// (issue #627), present only while that connection belongs to the
+    /// client the token was minted for — which is this one, or the
+    /// audience check above would already have refused the token.
+    ///
+    /// `None` for every other way in, and for a token minted before the
+    /// claim existed.
+    #[serde(default)]
+    pub sso_connection: Option<String>,
+}
+
+impl Claims {
+    /// Whether this token came through one specific enterprise SSO
+    /// connection, as opposed to any other way in.
+    ///
+    /// Both halves are required. A token that named the connection without
+    /// `sso` in `amr` would be one from before the claim existed, or one
+    /// minted by something that did not go through the SSO flow, and a
+    /// caller that gates on enterprise membership should refuse both.
+    #[must_use]
+    pub fn signed_in_via_sso(&self, connection_id: &str) -> bool {
+        self.sso_connection.as_deref() == Some(connection_id)
+            && self.amr.iter().any(|method| method == "sso")
+    }
 }
 
 #[derive(Deserialize)]

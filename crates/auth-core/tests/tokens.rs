@@ -297,6 +297,7 @@ async fn access_tokens_carry_the_recommended_claims_and_verify() {
         "u1",
         Some(("u1@example.com", true)),
         "client_1",
+        None,
         &["user".to_owned(), "passkey".to_owned()],
     )
     .expect("mint");
@@ -332,7 +333,7 @@ async fn rotation_overlaps_both_keys_and_signs_with_the_active_one() {
 
     assert_eq!(signed.keys.active_kid(), "k-new");
     let token =
-        mint_access_token(&signed.keys, &at(EPOCH), "s", "u", None, "c", &[]).expect("mint");
+        mint_access_token(&signed.keys, &at(EPOCH), "s", "u", None, "c", None, &[]).expect("mint");
     assert_eq!(header_of(&token)["kid"], "k-new");
     verify_signature(&token, &signed.signers[1]);
 }

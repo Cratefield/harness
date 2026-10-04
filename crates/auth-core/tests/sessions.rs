@@ -203,7 +203,8 @@ async fn issue_stores_only_the_hash_and_builds_the_host_cookie() {
         ok,
         Some(cratefield_auth_core::ValidSession {
             id: issued.session_id.clone(),
-            user_id: "u1".to_owned()
+            user_id: "u1".to_owned(),
+            sso_connection: None,
         })
     );
     assert!(

@@ -115,6 +115,7 @@ fn session(id: &str, user_id: &str, hash: &[u8], expires_in_secs: i64) -> Sessio
         ip_hash: Some(Redacted("9f86d081884c7d659a2feaa0c55ad015".to_owned())),
         ua_family: Some("chrome".to_owned()),
         amr: None,
+        sso_connection: None,
     }
 }
 

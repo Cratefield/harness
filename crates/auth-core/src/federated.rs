@@ -20,7 +20,7 @@
 use cratefield_core::{Clock, Database, IdGen};
 
 use crate::linking::{IncomingIdentity, Outcome, create_user, link, resolve};
-use crate::sessions::{IssuedSession, Login, SessionError, issue};
+use crate::sessions::{IssuedSession, Login, SessionError, issue, issue_sso};
 use crate::store::{
     STATUS_ACTIVE, delete_user, identity_by_provider_subject, touch_identity_login, user_by_id,
 };
@@ -131,6 +131,47 @@ pub async fn complete(
     caller: &Caller<'_>,
     amr: &[&str],
 ) -> Result<Completed, CompleteError> {
+    complete_for(ports, identity, caller, amr, None).await
+}
+
+/// [`complete`] for an enterprise SSO sign-in (issue #627): the same rules
+/// and the same session, with the connection the person came through
+/// recorded on it, so the access token can carry `sso_connection` while that
+/// connection still belongs to the token's own client.
+///
+/// # Errors
+///
+/// As [`complete`].
+pub async fn complete_sso(
+    ports: &Ports<'_>,
+    identity: &FederatedIdentity<'_>,
+    caller: &Caller<'_>,
+    amr: &[&str],
+    connection_id: &str,
+) -> Result<Completed, CompleteError> {
+    complete_for(ports, identity, caller, amr, Some(connection_id)).await
+}
+
+/// What the linking rules said, once they have run.
+enum Account {
+    /// A user to sign in, and the address to tell when the identity was
+    /// linked to their account automatically.
+    User {
+        user_id: String,
+        auto_linked_notify: Option<String>,
+    },
+    /// The rules need a person to decide something: this is the page to
+    /// show them, and no session is issued.
+    NeedsPerson { message: &'static str },
+}
+
+/// Resolves which account an incoming identity belongs to, and carries out
+/// whatever the outcome implies.
+async fn resolve_account(
+    ports: &Ports<'_>,
+    identity: &FederatedIdentity<'_>,
+    caller: &Caller<'_>,
+) -> Result<Account, CompleteError> {
     let Ports { db, clock, id_gen } = *ports;
     let incoming = IncomingIdentity {
         provider: identity.provider,
@@ -180,13 +221,13 @@ pub async fn complete(
         // that would let them does not exist yet (#22 owns the confirm
         // step). Say so plainly rather than guessing an account.
         Outcome::ConfirmLink { .. } => {
-            return Ok(Completed::NeedsPerson {
+            return Ok(Account::NeedsPerson {
                 message: "That account is already signed in here. Linking this provider needs \
                           confirming from your account page, which is not built yet.",
             });
         }
         Outcome::ExistingAccountUnverified => {
-            return Ok(Completed::NeedsPerson {
+            return Ok(Account::NeedsPerson {
                 message: "An account already uses that email address, and neither side has \
                           verified it. Sign in the way you already can, then link this provider \
                           from there.",
@@ -194,20 +235,43 @@ pub async fn complete(
         }
     };
 
-    let session = issue(
-        db,
-        clock,
-        id_gen,
-        Login {
-            user_id: &user_id,
-            ip: caller.ip,
-            user_agent: caller.user_agent,
-            presented_cookie: caller.presented_cookie,
-            presented_session_id: caller.presented_session_id,
-            amr,
-        },
-    )
-    .await
+    Ok(Account::User {
+        user_id,
+        auto_linked_notify,
+    })
+}
+
+async fn complete_for(
+    ports: &Ports<'_>,
+    identity: &FederatedIdentity<'_>,
+    caller: &Caller<'_>,
+    amr: &[&str],
+    sso_connection: Option<&str>,
+) -> Result<Completed, CompleteError> {
+    let Ports { db, clock, id_gen } = *ports;
+    let (user_id, auto_linked_notify) = match resolve_account(ports, identity, caller).await? {
+        Account::User {
+            user_id,
+            auto_linked_notify,
+        } => (user_id, auto_linked_notify),
+        Account::NeedsPerson { message } => return Ok(Completed::NeedsPerson { message }),
+    };
+
+    let login = Login {
+        user_id: &user_id,
+        ip: caller.ip,
+        user_agent: caller.user_agent,
+        presented_cookie: caller.presented_cookie,
+        presented_session_id: caller.presented_session_id,
+        amr,
+    };
+    // One session, two ways in: `issue_sso` also records the connection the
+    // person came through, so the access token can carry `sso_connection`
+    // while that connection still belongs to the token's own client.
+    let session = match sso_connection {
+        Some(connection_id) => issue_sso(db, clock, id_gen, login, connection_id).await,
+        None => issue(db, clock, id_gen, login).await,
+    }
     .map_err(|err| match err {
         SessionError::NotActive => {
             tracing::warn!(user = %user_id, "a disabled account signed in through a provider");

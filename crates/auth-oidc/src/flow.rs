@@ -65,6 +65,16 @@ pub(crate) struct Flow {
     /// second cookie.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub signed_in_session_id: Option<String>,
+    /// The `sso_connections.id` this flow belongs to (issue #627), for an
+    /// enterprise SSO sign-in.
+    ///
+    /// The connection rides here because the callback is *one fixed
+    /// redirect*: every organization's `IdP` is registered against
+    /// `/v1/auth-oidc/sso/callback`, so the connection cannot be recovered
+    /// from the path. It is inside a payload this service signed, so a
+    /// callback can only ever complete the connection its own flow began.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sso_connection: Option<String>,
 }
 
 impl Flow {
@@ -218,6 +228,7 @@ mod tests {
             expires_at,
             signed_in_user: None,
             signed_in_session_id: None,
+            sso_connection: None,
         }
     }
 
@@ -227,6 +238,34 @@ mod tests {
         let sealed = flow(1_000).seal(&signer);
         let opened = Flow::open(&signer, &FixedClock(500), "google", &sealed).expect("opens");
         assert_eq!(opened, flow(1_000));
+    }
+
+    #[test]
+    fn a_flow_carries_the_connection_it_belongs_to() {
+        // The one fixed SSO callback recovers the connection from the flow
+        // rather than from the path (#627), so the field has to survive the
+        // seal — and a flow that carries none must still open.
+        let signer = signer();
+        let bound = Flow {
+            provider: "sso".to_owned(),
+            sso_connection: Some("ssoc_1".to_owned()),
+            ..flow(1_000)
+        };
+        let sealed = bound.seal(&signer);
+        assert_eq!(
+            Flow::open(&signer, &FixedClock(500), "sso", &sealed)
+                .expect("opens")
+                .sso_connection
+                .as_deref(),
+            Some("ssoc_1")
+        );
+
+        // The provider the flow names is checked on open, so a cookie signed
+        // for an SSO flow is not a Google flow.
+        assert_eq!(
+            Flow::open(&signer, &FixedClock(500), "google", &sealed),
+            None
+        );
     }
 
     #[test]
