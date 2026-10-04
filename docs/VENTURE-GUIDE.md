@@ -489,6 +489,24 @@ a routes/custom-domain entry in `wrangler.toml` or the dashboard.
 in `venture.json` and re-run `fz build` — and they must list the real
 origin: the harness rejects a wildcard CORS origin outright.
 
+A venture whose client is a browser extension lists that extension's
+origin the same way (issue #579). Three schemes are accepted, each as an
+exact-match origin — no wildcard, port, path or trailing slash:
+
+- `chrome-extension://<id>`, the id exactly 32 characters, each `a`–`p`;
+- `moz-extension://<uuid>`, a canonical lowercase RFC 4122 UUID
+  (`8-4-4-4-12`); Firefox emits lowercase;
+- `safari-web-extension://<uuid>`, the same UUID shape but accepting
+  uppercase hex too, because Safari emits it.
+
+Any other hyphenated scheme is still rejected. CORS credentials stay
+**off** (bearer tokens only), which is what an extension driving the
+PKCE flow wants: it holds an `auth-client` token and the browser never
+attaches a cookie it could be tricked into lending out. The login
+redirect Chrome's `launchWebAuthFlow` lands on is a plain `https` URL,
+`https://<extension-id>.chromiumapp.org/`, registered as a client
+redirect URI — see `crates/auth-core/src/redirect_uri.rs`.
+
 ## 8b. Add the forms to your site
 
 With `cratefield-ui` mounted, every module's forms are served by the API
