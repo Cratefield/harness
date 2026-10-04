@@ -26,6 +26,10 @@
 // `tmp`: a light consumer can assert the batch contract without the
 // harness graph (issues #126, #201).
 mod batch;
+// The `Actors` contract (issue #583): gated with the harness because it
+// drives a host with the kit's handler and needs `async-trait`.
+#[cfg(feature = "harness")]
+mod actor;
 // Byte round-trips (issue #39): ungated for the same reason as `batch`
 // — it binds through sea-query's `From` impls without naming the crate,
 // so it needs nothing beyond `cratefield-core`.
@@ -56,6 +60,10 @@ mod signing;
 mod tmp;
 pub mod vectors;
 
+#[cfg(feature = "harness")]
+pub use actor::{
+    CONTRACT_ACTOR_KIND, assert_actor_contract, contract_actor_handler, contract_actor_handlers,
+};
 pub use batch::assert_batch_is_atomic;
 pub use blob::{assert_blob_large_round_trips, assert_blob_round_trips};
 #[cfg(feature = "harness")]
@@ -68,8 +76,8 @@ pub use fakes::{
     FAKE_EMBEDDER_MODEL, FakeAuth, FakeCaptcha, FakeClassifier, FakeCustomHostnames, FakeDefer,
     FakeDispatcher, FakeEmbedder, FakeHttpClient, FakeMailer, FakePayments, FakePush,
     FakeRateLimiter, FakeRealtime, FakeTextModel, FakeTracker, FiledCall, FixedClock, MailerMode,
-    MemoryBlob, MemoryKeyValue, PaymentsCall, PaymentsMode, PushMode, StatusedCall, TextModelMode,
-    TrackerMode, error_json, problem_json, with_retry_after,
+    ManualClock, MemoryActors, MemoryBlob, MemoryKeyValue, PaymentsCall, PaymentsMode, PushMode,
+    StatusedCall, TextModelMode, TrackerMode, error_json, problem_json, with_retry_after,
 };
 #[cfg(feature = "harness")]
 pub use harness::TestHarness;

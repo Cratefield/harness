@@ -31,7 +31,7 @@ mod tracing_setup;
 
 pub use config::EnvConfig;
 pub use ports::{
-    ContextDefer, D1Database, D1RateLimiter, FetchClient, KvStorePort, Limit,
+    ActorDriver, ContextDefer, D1Database, D1RateLimiter, FetchClient, KvStorePort, Limit,
     RATE_LIMIT_COUNTERS_SQL, RateLimitPolicy, RateLimitPort, RoomDriver, ScheduleDefer,
     WorkersClock, client_ip,
 };

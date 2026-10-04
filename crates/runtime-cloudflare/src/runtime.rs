@@ -14,7 +14,7 @@ use worker::Env;
 
 use crate::config::EnvConfig;
 use crate::ports::{
-    D1Database, D1RateLimiter, FetchClient, KvStorePort, Limit, R2Blob, R2Presigner,
+    D1Database, D1RateLimiter, DurableActors, FetchClient, KvStorePort, Limit, R2Blob, R2Presigner,
     RateLimitPolicy, RateLimitPort, ServiceDispatcher, WorkersClock, vector_index_from_env,
 };
 
@@ -56,6 +56,7 @@ static WARNED_RATE_LIMIT: AtomicBool = AtomicBool::new(false);
 pub(crate) static WARNED_UNRESOLVED_LIMITER: AtomicBool = AtomicBool::new(false);
 static WARNED_SIGNER: AtomicBool = AtomicBool::new(false);
 static WARNED_SIDECAR: AtomicBool = AtomicBool::new(false);
+static WARNED_ACTORS: AtomicBool = AtomicBool::new(false);
 
 /// The Workers runtime. Binding names are static; `.mailer()`/`.captcha()`
 /// take adapter instances (`cratefield-adapter-resend`,
@@ -81,6 +82,10 @@ pub struct Cloudflare {
     /// (issue #561), resolved per event like KV and D1.
     vector_index_binding: Option<&'static str>,
     rate_limiter_binding: Option<&'static str>,
+    /// The Durable Object namespace binding backing the `Actor` port
+    /// (issue #583), resolved per event like KV and D1. One object per
+    /// `<kind>:<key>`, addressed by `DurableActors`.
+    actors_binding: Option<&'static str>,
     /// The D1-backed per-key limiter (issue #538): the binding it reads its
     /// counters from, plus the policy mapping a key to its budget. Fills
     /// the same `RateLimiter` slot as `rate_limiter_binding`.
@@ -134,6 +139,7 @@ impl Cloudflare {
             blob_presign: None,
             vector_index_binding: None,
             rate_limiter_binding: None,
+            actors_binding: None,
             d1_rate_limiter: None,
             mailer: None,
             push: None,
@@ -211,6 +217,22 @@ impl Cloudflare {
     #[must_use]
     pub fn rate_limiter(mut self, binding: &'static str) -> Self {
         self.rate_limiter_binding = Some(binding);
+        self
+    }
+
+    /// The Durable Object namespace binding backing the `Actor` port
+    /// (issue #583): per-key serialized state with transactional storage and
+    /// an alarm. The venture declares the `#[durable_object]` class and
+    /// forwards it to [`ActorDriver`](crate::ActorDriver); this names the
+    /// binding that class is bound under (`ACTORS` in the example). The
+    /// object is addressed by `<kind>:<key>`, so every call for one key lands
+    /// on the same object, which the runtime then serializes.
+    ///
+    /// The binding is resolved per event in `ports()`, where the harness
+    /// secret the frames are signed with is read from the same `Env`.
+    #[must_use]
+    pub fn actors(mut self, binding: &'static str) -> Self {
+        self.actors_binding = Some(binding);
         self
     }
 
@@ -537,6 +559,25 @@ impl Cloudflare {
         }
     }
 
+    /// The `Actor` port over a Durable Object namespace binding (issue
+    /// #583): each `<kind>:<key>` names one object. Its own method because
+    /// `ports` is at clippy's line limit, and because it is only reachable
+    /// once the harness secret (the frame signing key) has been parsed.
+    fn actors_port(&self, env: &Env, config: &HarnessConfig, ports: &mut Ports) {
+        let Some(name) = self.actors_binding else {
+            return;
+        };
+        match env.durable_object(name) {
+            Ok(namespace) => {
+                ports.actors = Some(Arc::new(DurableActors::new(namespace, config)));
+            }
+            Err(err) => warn_once(
+                &WARNED_ACTORS,
+                &format!("Durable Object binding {name:?} not available: {err}"),
+            ),
+        }
+    }
+
     /// The R2 presigning seam (issue #622): the four names
     /// [`blob_presign`](Self::blob_presign) stored, resolved from this
     /// request's `Env`.
@@ -637,6 +678,9 @@ impl Cloudflare {
                 // Key logged email pseudonyms from the harness secret (#135).
                 cratefield_core::set_log_pseudonym_key(config.harness_secret.as_bytes());
                 ports.signer = Some(Arc::new(config.signer()));
+                // The actor frames are signed with a key derived from the same
+                // secret, so the port is assembled here where the secret is.
+                self.actors_port(env, &config, &mut ports);
             }
             Err(err) => warn_once(&WARNED_SIGNER, &format!("Signer port not provided: {err}")),
         }
@@ -730,6 +774,9 @@ impl Runtime for Cloudflare {
         }
         if self.rate_limiter_binding.is_some() || self.d1_rate_limiter.is_some() {
             provided.push(Port::RateLimiter);
+        }
+        if self.actors_binding.is_some() {
+            provided.push(Port::Actor);
         }
         if self.mailer.is_some() {
             provided.push(Port::Mailer);
@@ -926,6 +973,19 @@ mod tests {
     #[test]
     fn a_runtime_with_no_tracker_provides_no_tracker_port() {
         assert!(!Cloudflare::new().provides().contains(&Port::Tracker));
+    }
+
+    #[test]
+    fn an_actors_binding_is_provided_by_name() {
+        // Like `.kv(..)` and `.vector_index(..)`: the builder stores a binding
+        // name, resolved per event in `ports()`, which needs a live `Env`.
+        assert!(
+            Cloudflare::new()
+                .actors("ACTORS")
+                .provides()
+                .contains(&Port::Actor)
+        );
+        assert!(!Cloudflare::new().provides().contains(&Port::Actor));
     }
 
     /// A public read published by a module that declares the limiter port

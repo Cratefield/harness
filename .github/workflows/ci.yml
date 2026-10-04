@@ -781,6 +781,13 @@ jobs:
         # issue asks for two sockets because everything that matters here is
         # what one sees when the other acts.
         run: node rooms-smoke.mjs
+      - name: Actors against the ACTORS Durable Object (issue #583)
+        working-directory: examples/venture
+        # Fifty concurrent calls, an alarm that really fires, and a call the
+        # object refuses for want of a signature. None of the three can happen
+        # in `cargo test`: a Durable Object is a runtime object, so only a live
+        # isolate can show the calls serialising and the alarm firing.
+        run: node actors-smoke.mjs
       - name: cf.js embed against the running worker (issue #73)
         working-directory: tools/cfjs
         run: |

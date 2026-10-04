@@ -8,6 +8,7 @@
 
 use std::collections::BTreeSet;
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -33,7 +34,8 @@ use crate::http::{
 use crate::module::{HARNESS_API, Module, ModuleContext, harness_api_mismatch};
 use crate::ports::Dispatcher;
 use crate::ports::{
-    Clock, Database, Port, Ports, RateLimiter, Statement, SystemClock, warn_undeclared_ports,
+    ActorHandler, ActorHandlers, Clock, Database, Port, Ports, RateLimiter, Statement, SystemClock,
+    validate_actor_kind, warn_undeclared_ports,
 };
 use crate::problem::Problem;
 use crate::problems::SLUGS;
@@ -98,6 +100,70 @@ fn check_tables(
     }
 }
 
+/// The checks about actors (issue #583) and the registry they validate: that
+/// every handler registration and every kind a module declares is
+/// well-formed, that a kind is owned by one module and backed by one handler,
+/// and that a module declaring kinds also declares the port. Returns the
+/// [`ActorHandlers`] a valid composition registered.
+fn collect_actors(
+    handlers: &[(String, Arc<dyn ActorHandler>)],
+    modules: &[Arc<dyn Module>],
+    errors: &mut ConfigError,
+) -> ActorHandlers {
+    let mut registered: HashSet<&str> = HashSet::new();
+    let mut registry = ActorHandlers::new();
+    for (kind, handler) in handlers {
+        if let Err(err) = validate_actor_kind(kind) {
+            errors.push(format!(
+                "actor handler registered for invalid kind `{kind}`: {err}"
+            ));
+        }
+        if !registered.insert(kind.as_str()) {
+            errors.push(format!(
+                "duplicate actor handler registered for kind `{kind}`"
+            ));
+        }
+        registry = registry.with(kind, Arc::clone(handler));
+    }
+
+    let mut declared: HashMap<&'static str, &'static str> = HashMap::new();
+    for module in modules {
+        let name = module.name();
+        let kinds = module.actor_kinds();
+        if !kinds.is_empty()
+            && !module.requires().contains(&Port::Actor)
+            && !module.optional().contains(&Port::Actor)
+        {
+            errors.push(format!(
+                "module `{name}` declares actor kinds but lists port {} in neither requires() nor optional()",
+                Port::Actor.name(),
+            ));
+        }
+        for kind in kinds {
+            if let Err(err) = validate_actor_kind(kind) {
+                errors.push(format!(
+                    "module `{name}` declares invalid actor kind `{kind}`: {err}"
+                ));
+            }
+            match declared.get(kind) {
+                Some(owner) => errors.push(format!(
+                    "duplicate actor kind `{kind}` declared by modules `{owner}` and `{name}`"
+                )),
+                None => {
+                    declared.insert(kind, name);
+                }
+            }
+            if !registered.contains(kind) {
+                errors.push(format!(
+                    "module `{name}` declares actor kind `{kind}` with no registered handler"
+                ));
+            }
+        }
+    }
+
+    registry
+}
+
 /// A runtime resolves environment bindings into [`Ports`] and declares
 /// statically which ports it can provide, so `Harness::build` can reject a
 /// module that requires something the runtime will never hand it
@@ -127,6 +193,9 @@ pub struct Harness {
     /// The composed UI surface (ADR 0010), rendered once for
     /// `GET /__surface`: the admin variant and the public subset.
     surface: Arc<SurfaceVariants>,
+    /// The actor handlers registered at build (issue #583), so an
+    /// in-process host can dispatch to them.
+    actor_handlers: ActorHandlers,
     /// The renderer mounted at `/ui`, if the venture chose one.
     ui: Option<Arc<dyn UiMount>>,
     /// Every module's personal-data declarations, composed once at build so a
@@ -195,6 +264,12 @@ impl Harness {
 
     pub fn modules(&self) -> &[Arc<dyn Module>] {
         &self.modules
+    }
+
+    /// The actor handlers registered at build (issue #583), by kind, so an
+    /// in-process actor host can be built from the registrations.
+    pub fn actor_handlers(&self) -> &ActorHandlers {
+        &self.actor_handlers
     }
 
     /// The largest body a runtime may buffer for the route at `path`,
@@ -837,6 +912,7 @@ impl Harness {
             clock,
             id_gen,
             defer,
+            actors: _,
             dispatcher: _,
             tenants: _,
         } = ports;
@@ -1667,6 +1743,7 @@ pub struct HarnessBuilder {
     module_templates: Vec<(String, Box<dyn Template>)>,
     overrides: Vec<(String, Box<dyn Template>)>,
     ui: Option<Arc<dyn UiMount>>,
+    actor_handlers: Vec<(String, Arc<dyn ActorHandler>)>,
 }
 
 impl HarnessBuilder {
@@ -1730,6 +1807,16 @@ impl HarnessBuilder {
         self
     }
 
+    /// Registers the handler for one actor kind (issue #583). A module that
+    /// declares `kind` in `actor_kinds()` reaches it through the `actor`
+    /// port; registering a kind twice, or declaring one with no handler, is a
+    /// build error.
+    #[must_use]
+    pub fn actor(mut self, kind: &str, handler: Arc<dyn ActorHandler>) -> Self {
+        self.actor_handlers.push((kind.to_owned(), handler));
+        self
+    }
+
     /// Validates everything, collecting **all** problems before failing
     /// (issue #2).
     ///
@@ -1790,6 +1877,8 @@ impl HarnessBuilder {
 
             check_tables(module.as_ref(), &mut tables, &mut errors);
         }
+
+        let actor_handlers = collect_actors(&self.actor_handlers, &self.modules, &mut errors);
 
         let well_known = collect_well_known(&self.modules, &mut errors);
 
@@ -1857,6 +1946,7 @@ impl HarnessBuilder {
             well_known,
             surface,
             ui: self.ui,
+            actor_handlers,
         })
     }
 }

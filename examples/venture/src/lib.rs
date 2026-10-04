@@ -15,6 +15,7 @@
 // `pub` + the `rlib` crate type in `Cargo.toml` so the native example
 // (`examples/venture-native`) reuses this exact module — one source of
 // truth for the wasm and native canaries.
+pub mod actors;
 pub mod admin;
 pub mod rooms;
 pub mod sample;
@@ -65,10 +66,15 @@ fn instance() -> &'static (Harness, Cloudflare) {
             // `AUTH_ISSUER`/`AUTH_CLIENT_ID`; with neither set it is an
             // `Unconfigured` verifier — the port exists, and a credential
             // buys nothing until a deployment sets the issuer.
-            .auth_from_env();
+            .auth_from_env()
+            // The Actor port over the ACTORS Durable Object namespace
+            // (issue #583). One class serves every kind; `ActorDriver` signs
+            // and verifies each call, and the smoke drives a counter, an
+            // expiring value and an unsigned call the object refuses.
+            .actors("ACTORS");
         let mut templates = cratefield::email_signup::default_templates();
         templates.extend(cratefield::waitlist::default_templates());
-        let harness = Harness::builder()
+        let harness = actors::register(Harness::builder())
             .venture(
                 cratefield::Venture::new("venture-example", "example.factory0.dev")
                     .public_url("https://example.factory0.dev")
@@ -150,6 +156,10 @@ fn instance() -> &'static (Harness, Cloudflare) {
                     .build(),
             )
             .module(admin::AdminModule)
+            // The Actor port's demo kinds (issue #583): registered from the
+            // same `actor_handlers()` the `Actors` object serves with, so a
+            // kind answers the same in a Worker and on native.
+            .module(actors::ActorModule)
             .templates(templates)
             // The UI renderer (ADR 0010): pages at /ui/<module>/<action>,
             // copy and theme from ui.json (validated by build()).
@@ -220,6 +230,18 @@ pub async fn fetch(req: Request, env: Env, ctx: Context) -> worker::Result<Respo
     let prefix = format!("{}/", rooms::route());
     if let Some(room) = req.path().strip_prefix(&prefix).map(str::to_owned) {
         return rooms::route_upgrade(&room, req, &env).await;
+    }
+    // **The unsigned probe goes to the object too** (issue #583), for the
+    // same reason the upgrade does: naming the `ACTORS` binding needs the
+    // `Env`, and a module is handed a `ModuleContext` and never one. The
+    // object answers `403`, because the driver checks the signature before
+    // it reads the frame.
+    if let Some(key) = req
+        .path()
+        .strip_prefix("/actors/unsigned/")
+        .map(str::to_owned)
+    {
+        return actors::route_unsigned(&key, req, &env).await;
     }
     let (harness, runtime) = instance();
     serve(harness, runtime, req, env, ctx).await

@@ -15,13 +15,14 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use cratefield_core::sigv4::{self, Credentials, SigV4Error, SignableRequest};
 use cratefield_core::{
-    Answer, AnswerValue, Calibration, Capability, Captcha, CaptchaError, CertificateStatus,
-    Classifier, ClassifierError, ClassifierProfile, Clock, Completion, Credential, CustomHostname,
-    CustomHostnameError, CustomHostnames, Database, DbError, Decision, Defer, Destination,
-    DnsRecordType, Filed, HostnameClaim, HttpClient, HttpError, KeyValue, KvError, MailError,
-    Mailer, Message, ModelTier, Prompt, ProviderStatus, Question, RateLimitError, RateLimiter, Row,
-    Rows, SendOutcome, Statement, TextModel, TextModelError, TicketComment, TicketDraft,
-    TicketState, TicketStatus, Tracker, TrackerError, Validation, Verdict, check_hostname,
+    ActorError, ActorHandlers, ActorStore, ActorWrites, Actors, Answer, AnswerValue, Calibration,
+    Capability, Captcha, CaptchaError, CertificateStatus, Classifier, ClassifierError,
+    ClassifierProfile, Clock, Completion, Credential, CustomHostname, CustomHostnameError,
+    CustomHostnames, Database, DbError, Decision, Defer, Destination, DnsRecordType, Filed,
+    HostnameClaim, HttpClient, HttpError, KeyValue, KvError, MailError, Mailer, Message, ModelTier,
+    Prompt, ProviderStatus, Question, RateLimitError, RateLimiter, Row, Rows, SendOutcome,
+    Statement, TextModel, TextModelError, TicketComment, TicketDraft, TicketState, TicketStatus,
+    Tracker, TrackerError, Validation, Verdict, check_hostname, run_actor_alarm, run_actor_message,
     validate_questions,
 };
 use futures_core::Stream;
@@ -248,6 +249,42 @@ pub struct FixedClock(pub time::OffsetDateTime);
 impl Clock for FixedClock {
     fn now(&self) -> time::OffsetDateTime {
         self.0
+    }
+}
+
+// ---------------------------------------------------------------------------
+// ManualClock
+
+/// A [`Clock`] a test moves by hand (issue #583), for a fake whose behaviour
+/// depends on time — [`MemoryActors`] fires an alarm once the clock reaches
+/// it. Every clone shares the one instant, so the host and the test that
+/// advances it never diverge.
+#[derive(Debug, Clone)]
+pub struct ManualClock {
+    at: Arc<Mutex<time::OffsetDateTime>>,
+}
+
+impl ManualClock {
+    /// A clock stopped at `at`.
+    #[must_use]
+    pub fn new(at: time::OffsetDateTime) -> Self {
+        Self {
+            at: Arc::new(Mutex::new(at)),
+        }
+    }
+
+    /// Moves the clock forward by `by`. Panics if `by` is too large for
+    /// `time`'s `Duration`.
+    pub fn advance(&self, by: Duration) {
+        let span = time::Duration::try_from(by).expect("a representable span");
+        *self.at.lock().expect("clock lock") += span;
+    }
+}
+
+#[async_trait]
+impl Clock for ManualClock {
+    fn now(&self) -> time::OffsetDateTime {
+        *self.at.lock().expect("clock lock")
     }
 }
 
@@ -1069,6 +1106,197 @@ impl cratefield_core::Blob for MemoryBlob {
             .collect();
         pending.sort_by(|a, b| a.key.cmp(&b.key));
         Ok(pending)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// MemoryActors
+
+/// How many times one actor's alarm may fire inside a single
+/// [`MemoryActors::advance`] before the fake stops. A handler that re-arms
+/// its alarm into the past would otherwise never let the advance return.
+const MAX_ALARMS_PER_ADVANCE: usize = 4;
+
+/// An in-process [`Actors`] host for module tests (issue #583): one
+/// serialized actor per `(kind, key)`, its values in memory, its one alarm
+/// driven by a [`ManualClock`] the test advances.
+///
+/// It dispatches to the [`ActorHandlers`] a venture registered and owns the
+/// serialization core leaves to the host: a call takes its actor's async lock
+/// for the whole of [`run_actor_message`], so two calls to one actor run one
+/// at a time, and an unknown kind is [`ActorError::NotConfigured`], as a host
+/// with no handler is.
+#[derive(Clone)]
+pub struct MemoryActors {
+    inner: Arc<MemoryActorsInner>,
+}
+
+struct MemoryActorsInner {
+    handlers: ActorHandlers,
+    clock: ManualClock,
+    /// One entry per `(kind, key)` seen so far; created on first use under
+    /// the lock, so concurrent first calls share one actor.
+    actors: Mutex<HashMap<(String, String), Arc<ActorState>>>,
+}
+
+/// One actor instance: its store and the lock that serializes every call and
+/// alarm run for it.
+#[derive(Default)]
+struct ActorState {
+    store: MemoryActorStore,
+    lock: futures_util::lock::Mutex<()>,
+}
+
+/// The backing store for one [`MemoryActors`] actor: a sorted map of values
+/// plus the one alarm. `commit` applies a whole [`ActorWrites`] set under a
+/// single lock, so a handler's writes land all-or-nothing.
+#[derive(Default)]
+struct MemoryActorStore {
+    state: Mutex<MemoryActorState>,
+}
+
+#[derive(Default)]
+struct MemoryActorState {
+    values: BTreeMap<String, Vec<u8>>,
+    alarm: Option<time::OffsetDateTime>,
+}
+
+#[async_trait]
+impl ActorStore for MemoryActorStore {
+    async fn get(&self, key: &str) -> Result<Option<Vec<u8>>, ActorError> {
+        Ok(self
+            .state
+            .lock()
+            .expect("store lock")
+            .values
+            .get(key)
+            .cloned())
+    }
+
+    async fn list_prefix(&self, prefix: &str) -> Result<Vec<(String, Vec<u8>)>, ActorError> {
+        Ok(self
+            .state
+            .lock()
+            .expect("store lock")
+            .values
+            .iter()
+            .filter(|(key, _)| key.starts_with(prefix))
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect())
+    }
+
+    async fn alarm(&self) -> Result<Option<time::OffsetDateTime>, ActorError> {
+        Ok(self.state.lock().expect("store lock").alarm)
+    }
+
+    async fn commit(&self, writes: ActorWrites) -> Result<(), ActorError> {
+        let mut state = self.state.lock().expect("store lock");
+        if writes.clear_all {
+            state.values.clear();
+        }
+        for (key, value) in writes.entries {
+            match value {
+                Some(value) => {
+                    state.values.insert(key, value);
+                }
+                None => {
+                    state.values.remove(&key);
+                }
+            }
+        }
+        if let Some(alarm) = writes.alarm {
+            state.alarm = alarm;
+        }
+        Ok(())
+    }
+}
+
+impl MemoryActors {
+    /// A host that dispatches to `handlers` and reads `clock`, which its
+    /// alarms are measured against.
+    #[must_use]
+    pub fn new(handlers: ActorHandlers, clock: ManualClock) -> Self {
+        Self {
+            inner: Arc::new(MemoryActorsInner {
+                handlers,
+                clock,
+                actors: Mutex::new(HashMap::new()),
+            }),
+        }
+    }
+
+    /// The actor for `(kind, key)`, creating it on first use.
+    fn actor(&self, kind: &str, key: &str) -> Arc<ActorState> {
+        self.inner
+            .actors
+            .lock()
+            .expect("actors lock")
+            .entry((kind.to_owned(), key.to_owned()))
+            .or_default()
+            .clone()
+    }
+
+    /// Moves the clock forward by `by`, then runs every alarm due at the new
+    /// instant under its actor's lock — the way a real host wakes a Durable
+    /// Object when its alarm passes.
+    ///
+    /// An alarm a handler re-arms into the past or now fires again in the
+    /// same call, up to `MAX_ALARMS_PER_ADVANCE`; one whose handler fails
+    /// stays armed for the next advance.
+    pub async fn advance(&self, by: Duration) {
+        self.inner.clock.advance(by);
+        let now = self.inner.clock.now();
+        let actors: Vec<(String, String, Arc<ActorState>)> = {
+            let registry = self.inner.actors.lock().expect("actors lock");
+            registry
+                .iter()
+                .map(|((kind, key), state)| (kind.clone(), key.clone(), Arc::clone(state)))
+                .collect()
+        };
+        for (kind, key, state) in actors {
+            let Some(handler) = self.inner.handlers.get(&kind) else {
+                continue;
+            };
+            for _ in 0..MAX_ALARMS_PER_ADVANCE {
+                let _held = state.lock.lock().await;
+                let due = matches!(state.store.alarm().await, Ok(Some(at)) if at <= now);
+                if !due {
+                    break;
+                }
+                if run_actor_alarm(
+                    handler.as_ref(),
+                    &state.store,
+                    &self.inner.clock,
+                    &kind,
+                    &key,
+                )
+                .await
+                .is_err()
+                {
+                    break;
+                }
+            }
+        }
+    }
+}
+
+#[async_trait]
+impl Actors for MemoryActors {
+    async fn call(&self, kind: &str, key: &str, message: &[u8]) -> Result<Vec<u8>, ActorError> {
+        let Some(handler) = self.inner.handlers.get(kind) else {
+            return Err(ActorError::NotConfigured);
+        };
+        let state = self.actor(kind, key);
+        let _held = state.lock.lock().await;
+        run_actor_message(
+            handler.as_ref(),
+            &state.store,
+            &self.inner.clock,
+            kind,
+            key,
+            message,
+        )
+        .await
     }
 }
 

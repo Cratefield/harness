@@ -137,6 +137,16 @@ pub fn full_fake_ports() -> Ports {
     )));
     ports.id_gen = Some(Arc::new(UlidIdGen));
     ports.defer = Some(Arc::new(crate::fakes::FakeDefer::new()));
+    // The actor host gets its own clock: the ports' `FixedClock` is
+    // immutable, while a test that fires an alarm advances this one. An
+    // empty handler registry is enough — a module only ever reaches a
+    // `ScopedActors` over it, and nothing here declares an actor kind.
+    ports.actors = Some(Arc::new(crate::fakes::MemoryActors::new(
+        cratefield_core::ActorHandlers::new(),
+        crate::fakes::ManualClock::new(
+            time::OffsetDateTime::from_unix_timestamp(1_800_000_000).expect("fixed epoch"),
+        ),
+    )));
     ports
 }
 

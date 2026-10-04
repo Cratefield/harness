@@ -371,6 +371,176 @@ fn all_problems_reported_together() {
     );
 }
 
+/// A trivial actor handler for the build-validation tests: the registrations
+/// matter here, not the protocol (which `ports::actor`'s own tests cover).
+struct EchoActor;
+
+#[async_trait::async_trait]
+impl cratefield_core::ActorHandler for EchoActor {
+    async fn on_message(
+        &self,
+        _ctx: &mut dyn cratefield_core::ActorContext,
+        message: &[u8],
+    ) -> Result<Vec<u8>, cratefield_core::ActorError> {
+        Ok(message.to_vec())
+    }
+
+    async fn on_alarm(
+        &self,
+        _ctx: &mut dyn cratefield_core::ActorContext,
+    ) -> Result<(), cratefield_core::ActorError> {
+        Ok(())
+    }
+}
+
+fn echo_actor() -> std::sync::Arc<dyn cratefield_core::ActorHandler> {
+    std::sync::Arc::new(EchoActor)
+}
+
+#[test]
+fn a_module_that_uses_actors_will_not_boot_without_the_actor_port() {
+    let problems = failure_lines(
+        Harness::builder()
+            .venture(base_venture())
+            .module(SampleModule {
+                requires: &[cratefield_core::Port::Actor],
+                actor_kinds: &["counter"],
+                ..SampleModule::default()
+            })
+            .actor("counter", echo_actor())
+            .runtime(FakeRuntime(vec![cratefield_core::Port::Db])),
+    );
+    assert!(
+        problems.iter().any(|p| p
+            .contains("requires port actor which the runtime does not provide")
+            && p.contains("sample")),
+        "problems: {problems:?}"
+    );
+}
+
+#[test]
+fn duplicate_actor_handlers_are_reported() {
+    let problems = failure_lines(
+        Harness::builder()
+            .venture(base_venture())
+            .actor("counter", echo_actor())
+            .actor("counter", echo_actor())
+            .runtime(FakeRuntime(all_ports())),
+    );
+    assert!(
+        problems
+            .iter()
+            .any(|p| p.contains("duplicate actor handler registered for kind `counter`")),
+        "problems: {problems:?}"
+    );
+}
+
+#[test]
+fn an_invalid_actor_kind_is_reported() {
+    let problems = failure_lines(
+        Harness::builder()
+            .venture(base_venture())
+            .module(SampleModule {
+                optional: &[cratefield_core::Port::Actor],
+                actor_kinds: &["Counter"],
+                ..SampleModule::default()
+            })
+            .actor("Counter", echo_actor())
+            .runtime(FakeRuntime(all_ports())),
+    );
+    let joined = problems.join("\n");
+    assert!(joined.contains("invalid kind `Counter`"), "{joined}");
+    assert!(
+        joined.contains("declares invalid actor kind `Counter`"),
+        "{joined}"
+    );
+}
+
+#[test]
+fn a_declared_kind_with_no_handler_is_reported() {
+    let problems = failure_lines(
+        Harness::builder()
+            .venture(base_venture())
+            .module(SampleModule {
+                optional: &[cratefield_core::Port::Actor],
+                actor_kinds: &["counter"],
+                ..SampleModule::default()
+            })
+            .runtime(FakeRuntime(all_ports())),
+    );
+    assert!(
+        problems.iter().any(|p| p
+            .contains("module `sample` declares actor kind `counter` with no registered handler")),
+        "problems: {problems:?}"
+    );
+}
+
+#[test]
+fn a_kind_declared_by_two_modules_is_reported() {
+    let problems = failure_lines(
+        Harness::builder()
+            .venture(base_venture())
+            .module(SampleModule {
+                optional: &[cratefield_core::Port::Actor],
+                actor_kinds: &["counter"],
+                ..SampleModule::default()
+            })
+            .module(SampleModule {
+                name: "other",
+                optional: &[cratefield_core::Port::Actor],
+                actor_kinds: &["counter"],
+                ..SampleModule::default()
+            })
+            .actor("counter", echo_actor())
+            .runtime(FakeRuntime(all_ports())),
+    );
+    assert!(
+        problems.iter().any(|p| p
+            .contains("duplicate actor kind `counter` declared by modules `sample` and `other`")),
+        "problems: {problems:?}"
+    );
+}
+
+#[test]
+fn declaring_actor_kinds_without_the_port_is_reported() {
+    let problems = failure_lines(
+        Harness::builder()
+            .venture(base_venture())
+            .module(SampleModule {
+                actor_kinds: &["counter"],
+                ..SampleModule::default()
+            })
+            .actor("counter", echo_actor())
+            .runtime(FakeRuntime(all_ports())),
+    );
+    assert!(
+        problems.iter().any(|p| p.contains(
+            "module `sample` declares actor kinds but lists port actor in neither requires() nor optional()"
+        )),
+        "problems: {problems:?}"
+    );
+}
+
+#[test]
+fn a_valid_actor_configuration_builds_and_exposes_its_handlers() {
+    let harness = Harness::builder()
+        .venture(base_venture())
+        .module(SampleModule {
+            optional: &[cratefield_core::Port::Actor],
+            actor_kinds: &["counter"],
+            ..SampleModule::default()
+        })
+        .actor("counter", echo_actor())
+        .runtime(FakeRuntime(all_ports()))
+        .build()
+        .expect("a valid actor configuration builds");
+    assert!(harness.actor_handlers().get("counter").is_some());
+    assert_eq!(
+        harness.actor_handlers().kinds().collect::<Vec<_>>(),
+        vec!["counter"]
+    );
+}
+
 struct StaticTemplate;
 
 impl cratefield_core::Template for StaticTemplate {

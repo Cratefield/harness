@@ -1,5 +1,6 @@
 //! Port adapters over Workers bindings (ADR 0002).
 
+mod actor;
 mod blob;
 mod clock;
 mod d1;
@@ -12,6 +13,8 @@ mod rate_limit;
 mod realtime;
 mod vectorize;
 
+pub use actor::ActorDriver;
+pub(crate) use actor::DurableActors;
 pub(crate) use blob::{R2Blob, R2Presigner};
 pub use clock::WorkersClock;
 pub use d1::D1Database;
