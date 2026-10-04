@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.2](https://github.com/Cratefield/harness/compare/cratefield-manifest-v0.2.1...cratefield-manifest-v0.2.2) - 2026-10-04
+
+### Other
+
+- organizations, memberships, roles and invitations, with a membership check for modules, ventures and external apps ([#698](https://github.com/Cratefield/harness/pull/698))
+
 ## [0.2.1](https://github.com/Cratefield/harness/compare/cratefield-manifest-v0.2.0...cratefield-manifest-v0.2.1) - 2026-10-03
 
 ### Other

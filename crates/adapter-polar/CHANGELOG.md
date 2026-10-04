@@ -7,13 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.3.2](https://github.com/Cratefield/harness/compare/cratefield-secrets-v0.3.1...cratefield-secrets-v0.3.2) - 2026-10-04
-
-### Other
-
-- updated the following local packages: cratefield-core
-
-## [0.3.1](https://github.com/Cratefield/harness/compare/cratefield-secrets-v0.3.0...cratefield-secrets-v0.3.1) - 2026-10-03
+## [0.1.1](https://github.com/Cratefield/harness/compare/cratefield-adapter-polar-v0.1.0...cratefield-adapter-polar-v0.1.1) - 2026-10-04
 
 ### Other
 
