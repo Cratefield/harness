@@ -33,98 +33,98 @@ repository = "https://github.com/Cratefield/harness"
 # requirement by hand ahead of a core release suppresses release-plz's
 # dependent release round — see the note in release-plz.toml (issue #462).
 cratefield-core = { path = "crates/core", version = "0.8" }
-cratefield-ui = { path = "crates/ui", version = "0.3" }
+cratefield-ui = { path = "crates/ui", version = "0.4" }
 cratefield-kms = { path = "crates/kms", version = "0.2" }
-cratefield-secrets = { path = "crates/secrets", version = "0.3" }
-cratefield-runtime-cloudflare = { path = "crates/runtime-cloudflare", version = "0.3" }
-cratefield-runtime-native = { path = "crates/runtime-native", version = "0.3" }
+cratefield-secrets = { path = "crates/secrets", version = "0.4" }
+cratefield-runtime-cloudflare = { path = "crates/runtime-cloudflare", version = "0.4" }
+cratefield-runtime-native = { path = "crates/runtime-native", version = "0.4" }
 cratefield-runtime-browser = { path = "crates/runtime-browser", version = "0.1.0" }
-cratefield-adapter-resend = { path = "crates/adapter-resend", version = "0.3" }
+cratefield-adapter-resend = { path = "crates/adapter-resend", version = "0.4" }
 # The second mail provider (issue #591): the `Mailer` port over the
 # Resend-compatible Owlpost REST API, the same `POST /v1/emails` shape.
-cratefield-adapter-owlpost = { path = "crates/adapter-owlpost", version = "0.1" }
+cratefield-adapter-owlpost = { path = "crates/adapter-owlpost", version = "0.2" }
 # Branded transactional mail (one email-client-safe layout and a text twin per
 # message), themed per venture. Every mail-sending module renders through it.
 cratefield-mail-templates = { path = "crates/mail-templates", version = "0.1" }
 # Issue tracker (issue #432): the `Tracker` port over the GitHub Issues REST
 # API — search-before-create so the at-least-once outbox files one ticket.
-cratefield-adapter-github-issues = { path = "crates/adapter-github-issues", version = "0.2" }
+cratefield-adapter-github-issues = { path = "crates/adapter-github-issues", version = "0.3" }
 # Its sibling: the `Tracker` port over a tenant-configured webhook, the body
 # HMAC-SHA256-signed so the receiver can trust it came from us.
-cratefield-adapter-webhook-tracker = { path = "crates/adapter-webhook-tracker", version = "0.2" }
+cratefield-adapter-webhook-tracker = { path = "crates/adapter-webhook-tracker", version = "0.3" }
 # The other sibling (issue #559): the `Tracker` port over the Jira Cloud REST
 # API v3 — Basic auth over the tenant's `email:api_token`, ADF bodies,
 # search-before-create by an idempotency label, and the inbound status
 # webhook.
-cratefield-adapter-jira = { path = "crates/adapter-jira", version = "0.1" }
-cratefield-adapter-turnstile = { path = "crates/adapter-turnstile", version = "0.2" }
+cratefield-adapter-jira = { path = "crates/adapter-jira", version = "0.2" }
+cratefield-adapter-turnstile = { path = "crates/adapter-turnstile", version = "0.3" }
 # The first `TextModel` adapter (issue #430): the Claude Messages API over
 # the `HttpClient` port, against the minimal `TextModel` trait module in core.
-cratefield-adapter-anthropic = { path = "crates/adapter-anthropic", version = "0.2" }
+cratefield-adapter-anthropic = { path = "crates/adapter-anthropic", version = "0.3" }
 # Its sibling (issue #560): the same port over the OpenAI chat-completions
 # wire at a configurable base URL — OpenAI, OpenRouter, Workers AI's
 # compatible endpoint, or a local vLLM/llama.cpp/Ollama server.
-cratefield-adapter-openai-compatible = { path = "crates/adapter-openai-compatible", version = "0.1" }
+cratefield-adapter-openai-compatible = { path = "crates/adapter-openai-compatible", version = "0.2" }
 # Its sibling (issue #590): the `CustomHostnames` port over Cloudflare for
 # SaaS custom hostnames — a customer's own hostname served by the venture.
-cratefield-adapter-cloudflare-saas = { path = "crates/adapter-cloudflare-saas", version = "0.1" }
-cratefield-adapter-apns = { path = "crates/adapter-apns", version = "0.2" }
-cratefield-adapter-fcm = { path = "crates/adapter-fcm", version = "0.2" }
+cratefield-adapter-cloudflare-saas = { path = "crates/adapter-cloudflare-saas", version = "0.2" }
+cratefield-adapter-apns = { path = "crates/adapter-apns", version = "0.3" }
+cratefield-adapter-fcm = { path = "crates/adapter-fcm", version = "0.3" }
 # The provider tokens the push adapters present (issue #178): ES256 for APNs
 # and VAPID, RS256 for Google service accounts, one keyed cache for all three.
-cratefield-push-auth = { path = "crates/push-auth", version = "0.2" }
+cratefield-push-auth = { path = "crates/push-auth", version = "0.3" }
 # GitHub App auth (issue #623): the RS256 app JWT, the installation tokens it
 # mints (cached, single-flight) and the user-to-server OAuth code exchange,
 # over the HttpClient port. Builds on push-auth's signer and token cache.
-cratefield-adapter-github-app = { path = "crates/adapter-github-app", version = "0.1" }
-cratefield-adapter-stripe = { path = "crates/adapter-stripe", version = "0.2" }
+cratefield-adapter-github-app = { path = "crates/adapter-github-app", version = "0.2" }
+cratefield-adapter-stripe = { path = "crates/adapter-stripe", version = "0.3" }
 # The second payments provider (issue #690): `Payments` over Polar, a
 # Merchant of Record, so a founder with no company can sell worldwide.
-cratefield-adapter-polar = { path = "crates/adapter-polar", version = "0.1" }
+cratefield-adapter-polar = { path = "crates/adapter-polar", version = "0.2" }
 # Web Push (issue #180): RFC 8030/8188/8291/8292 over the HttpClient port, for
 # browsers and for the UnifiedPush distributors that speak the same protocol.
-cratefield-adapter-webpush = { path = "crates/adapter-webpush", version = "0.2" }
+cratefield-adapter-webpush = { path = "crates/adapter-webpush", version = "0.3" }
 # The runtime wiring for those three (issue #191): one table of environment
 # variable names, one `build_push`, shared by `serve()`, `fz push` and
 # `fz doctor` so they cannot drift on a name.
-cratefield-push-wiring = { path = "crates/push-wiring", version = "0.2" }
-cratefield-adapter-sqlite = { path = "crates/adapter-sqlite", version = "0.2" }
+cratefield-push-wiring = { path = "crates/push-wiring", version = "0.3" }
+cratefield-adapter-sqlite = { path = "crates/adapter-sqlite", version = "0.3" }
 cratefield-adapter-sqlite-wasm = { path = "crates/adapter-sqlite-wasm", version = "0.1.0" }
 # Phase 3 (issue #18): native-only Postgres adapter. Never a dependency of
 # anything on the wasm path — CI asserts the venture wasm graph stays
 # sqlx-free.
-cratefield-adapter-postgres = { path = "crates/adapter-postgres", version = "0.2" }
+cratefield-adapter-postgres = { path = "crates/adapter-postgres", version = "0.3" }
 # The classifier adapters (issue #456): `Classifier` over the operator's
 # TypeSafe API key, over the `TextModel` port, and over the Workers `env.AI`
 # binding. The first two are portable; workers-ai only functions on wasm.
-cratefield-adapter-typesafe = { path = "crates/adapter-typesafe", version = "0.2" }
-cratefield-adapter-classifier-llm = { path = "crates/adapter-classifier-llm", version = "0.2" }
-cratefield-adapter-workers-ai = { path = "crates/adapter-workers-ai", version = "0.2" }
-cratefield-module-email-signup = { path = "crates/module-email-signup", version = "0.3" }
-cratefield-module-privacy = { path = "crates/module-privacy", version = "0.2" }
-cratefield-module-waitlist = { path = "crates/module-waitlist", version = "0.3" }
-cratefield-module-cms = { path = "crates/module-cms", version = "0.2" }
+cratefield-adapter-typesafe = { path = "crates/adapter-typesafe", version = "0.3" }
+cratefield-adapter-classifier-llm = { path = "crates/adapter-classifier-llm", version = "0.3" }
+cratefield-adapter-workers-ai = { path = "crates/adapter-workers-ai", version = "0.3" }
+cratefield-module-email-signup = { path = "crates/module-email-signup", version = "0.4" }
+cratefield-module-privacy = { path = "crates/module-privacy", version = "0.3" }
+cratefield-module-waitlist = { path = "crates/module-waitlist", version = "0.4" }
+cratefield-module-cms = { path = "crates/module-cms", version = "0.3" }
 # The changelog module mirrors a project's GitHub releases (or its
 # CHANGELOG.md) into the venture's own database; its reads never call
 # upstream, so the changelog survives an outage of the thing it mirrors.
-cratefield-module-changelog = { path = "crates/module-changelog", version = "0.2" }
+cratefield-module-changelog = { path = "crates/module-changelog", version = "0.3" }
 # The notifications module is the first to depend on the auth client, because
 # the account a route acts for comes from the auth extractor (ADR 0016).
-cratefield-module-notifications = { path = "crates/module-notifications", version = "0.2" }
+cratefield-module-notifications = { path = "crates/module-notifications", version = "0.3" }
 # Aggregate usage telemetry (issue #413): counted events behind a closed
 # grammar, with the consent model built into the crate.
-cratefield-module-telemetry = { path = "crates/module-telemetry", version = "0.2" }
+cratefield-module-telemetry = { path = "crates/module-telemetry", version = "0.3" }
 # Outbound webhooks (issue #536): per-subject endpoints, signed POSTs over
 # the core outbox, dead letters and replay. The Rust API is the surface —
 # the module ships no routes of its own.
-cratefield-module-webhooks = { path = "crates/module-webhooks", version = "0.2" }
+cratefield-module-webhooks = { path = "crates/module-webhooks", version = "0.3" }
 # The OAuth 2.0 device authorization grant (issue #587): a client with no
 # browser shows a code, a signed-in person approves it, and the venture's
 # own issuer mints the credential.
-cratefield-module-device-auth = { path = "crates/module-device-auth", version = "0.2" }
+cratefield-module-device-auth = { path = "crates/module-device-auth", version = "0.3" }
 # Per-subject third-party OAuth connections (issue #624): authorize, sealed
 # tokens, refresh and revoke, built on `cratefield-oauth-client`.
-cratefield-module-connections = { path = "crates/module-connections", version = "0.1" }
+cratefield-module-connections = { path = "crates/module-connections", version = "0.2" }
 # Organizations, memberships, roles and email invitations (issue #652), with
 # the staff-organization path that lets people retire `ADMIN_TOKEN`.
 cratefield-module-orgs = { path = "crates/module-orgs", version = "0.1" }
@@ -132,26 +132,26 @@ cratefield-module-orgs = { path = "crates/module-orgs", version = "0.1" }
 # path-only dependency has no version, and `cargo publish` refuses a
 # dependency without one. It was invisible while both crates were
 # `publish = false`.
-cratefield-auth-client = { path = "crates/auth-client", version = "0.2" }
+cratefield-auth-client = { path = "crates/auth-client", version = "0.3" }
 # OAuth 2.0 once, over the `HttpClient` port (issue #531): authorize URLs,
 # code exchange, refresh, revocation, PKCE, and the token sealer
 # `fz-module-linkedin` stores its sealed blobs under.
-cratefield-oauth-client = { path = "crates/oauth-client", version = "0.2" }
+cratefield-oauth-client = { path = "crates/oauth-client", version = "0.3" }
 # Server-side localisation (issue #190): Fluent catalogs, BCP 47
 # negotiation and text direction. Nothing in it is notification-specific,
 # so `module-waitlist`'s mail templates can take it next.
 cratefield-i18n = { path = "crates/i18n", version = "0.2" }
-cratefield-testing = { path = "crates/testing", version = "0.4" }
+cratefield-testing = { path = "crates/testing", version = "0.5" }
 # The control plane's shared page chrome (cratefield.com's look, one copy).
 cratefield-chrome = { path = "crates/control-plane-chrome", version = "0.1.0" }
-cratefield-cli = { path = "crates/cli", version = "0.4" }
+cratefield-cli = { path = "crates/cli", version = "0.5" }
 # Declared tables (issue #153): the schema type, its DDL and row validation.
 # Here rather than by bare path in its dependents for the reason
 # `cratefield-auth-client` is: the manifest and the CLI are published, and
 # `cargo publish` refuses a dependency without a version.
-cratefield-tables = { path = "crates/tables", version = "0.3" }
-cratefield-client-ts = { path = "crates/client-ts", version = "0.3" }
-cratefield-introspect = { path = "crates/introspect", version = "0.2" }
+cratefield-tables = { path = "crates/tables", version = "0.4" }
+cratefield-client-ts = { path = "crates/client-ts", version = "0.4" }
+cratefield-introspect = { path = "crates/introspect", version = "0.3" }
 # The Supabase importer's engine (ADR 0026, issue #658): read-only
 # inspection and the migration report. Native only; reached from `fz` behind
 # the CLI's `import-supabase` feature.
@@ -159,7 +159,7 @@ cratefield-import-supabase = { path = "crates/import-supabase", version = "0.1" 
 # The venture manifest + deterministic composition generator (issue #138).
 # Depends only on serde/serde_json so both engines can consume it: the
 # native compile engine (fz build) and, later, the wasm compose engine.
-cratefield-manifest = { path = "crates/manifest", version = "0.2" }
+cratefield-manifest = { path = "crates/manifest", version = "0.3" }
 
 # These entries carry a `version`, which is what makes them publishable as
 # real dependencies. Internal **dev**-dependencies deliberately do NOT use
