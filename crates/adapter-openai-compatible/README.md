@@ -120,6 +120,25 @@ deployment: `TextModel::supports` then reports `false` for
 silently ignored the tools. Use it for a server or model behind the wire
 that does not do function calling. The default leaves tools on.
 
+## Images
+
+A turn built with `Prompt::user_parts` serialises its ordered parts as a
+`content` array — each `{"type": "text", "text": …}` or
+`{"type": "image_url", "image_url": {"url": "data:<media-type>;base64,…"}}`
+— the image inline as a base64 `data:` URL. A text-only turn still
+serialises `content` as a plain string, byte for byte as before images
+existed.
+
+**Not every model behind this wire has vision**, so image input is
+**opt-in** — the mirror of `without_tools`. `OpenAiCompatible::with_images()`
+turns it on; `TextModel::supports` then reports `Capability::Images`, and an
+image-bearing prompt to a deployment that did not opt in is refused with
+`TextModelError::Unsupported` before any request.
+
+Bounds are enforced locally first: `Prompt::check_images` refuses more than
+`MAX_PROMPT_IMAGES` images, one over `MAX_IMAGE_ENCODED_BYTES`, or a total
+over `MAX_PROMPT_IMAGE_ENCODED_BYTES`, each with `TextModelError::ImageLimit`.
+
 Error mapping (to `cratefield_core::TextModelError`): 429 →
 `Transient { retry_after }` (from the `Retry-After` header, both RFC 9110
 forms), any 5xx → `Transient { retry_after: None }`, 400/422 → `Rejected`

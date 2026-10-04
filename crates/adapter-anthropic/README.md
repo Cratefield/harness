@@ -63,6 +63,13 @@ arguments. A prompt that sets both `json_schema` and `tools` is refused as
 `Rejected` before any request: the schema path already declares its own
 forced tool, so the two would collide.
 
+With a `Turn::user_parts` message (issue #628), the turn goes as the
+Messages API content-block array: each `Part::Text` as a `text` block and
+each `Part::Image` as an inline `image` block, in order. `supports` reports
+`Capability::Images` for every current Claude model, and the port's bounds
+are enforced locally before any request, an over-limit prompt refused as
+`TextModelError::ImageLimit` rather than paid for.
+
 Every completion reports token usage. The Messages API splits the prompt
 across `input_tokens`, `cache_creation_input_tokens` and
 `cache_read_input_tokens` when prompt caching is in play; the adapter sums

@@ -16,6 +16,7 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   and no vendor payload parsing (that stays in the adapters, issues #600
   and #601). Additive: no existing API changed and `HARNESS_API` is
   untouched.
+- TextModel image inputs (issue [#628](https://github.com/Cratefield/harness/issues/628)): `Part` (`Text`/`Image`), `Turn::user_parts`, `Prompt::user_parts`, `Prompt::has_images`, `Prompt::check_images`, `Capability::Images`, `TextModelError::ImageLimit`, the `encode_image`/`encoded_image_len` helpers, and the `MAX_PROMPT_IMAGES`/`MAX_IMAGE_ENCODED_BYTES`/`MAX_PROMPT_IMAGE_ENCODED_BYTES` bounds. The router and `run_tool_loop` gate `Capability::Images` like `Capability::Tools`.
 
 ## [0.8.1](https://github.com/Cratefield/harness/compare/cratefield-core-v0.8.0...cratefield-core-v0.8.1) - 2026-10-05
 

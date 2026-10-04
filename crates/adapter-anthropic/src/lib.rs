@@ -17,6 +17,13 @@
 //! [`Anthropic::supports`] reports [`Capability::Tools`]. A prompt that
 //! carries both [`Prompt::json_schema`] and its own tools is refused with
 //! [`TextModelError::Rejected`] before any request.
+//!
+//! **Images** (issue #628): a turn built with [`Turn::user_parts`] is sent
+//! as the content-block array the Messages API requires — each [`Part`] as
+//! a `text` block or an inline base64 `image` block, in order — and
+//! [`Anthropic::supports`] reports [`Capability::Images`], because every
+//! current Claude model accepts image input. An over-limit prompt is
+//! refused by [`Prompt::check_images`] before any network call.
 
 #![doc = include_str!("../README.md")]
 #![forbid(unsafe_code)]
@@ -25,8 +32,8 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use cratefield_core::{
     Capability, Clock, Completion, HttpClient, HttpError, HttpPolicy, MAX_RESPONSE_BYTES,
-    MAX_RESPONSE_TIMEOUT, ModelTier, Prompt, Role, TextModel, TextModelError, ToolCall, ToolChoice,
-    Turn, retry_after,
+    MAX_RESPONSE_TIMEOUT, ModelTier, Part, Prompt, Role, TextModel, TextModelError, ToolCall,
+    ToolChoice, Turn, encode_image, retry_after,
 };
 use http::header::CONTENT_TYPE;
 use http::{Request, StatusCode};
@@ -169,12 +176,16 @@ enum WireContent<'a> {
     Blocks(Vec<WireBlock<'a>>),
 }
 
-/// One content block of a tool turn.
+/// One content block of a tool or image turn.
 #[derive(serde::Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum WireBlock<'a> {
-    /// The model's own words alongside (or answering) tool calls.
+    /// The model's own words alongside (or answering) tool calls, or one
+    /// text [`Part`] of a parts-bearing turn (issue #628).
     Text { text: &'a str },
+    /// An inline image [`Part`] (issue #628): the base64 source the
+    /// Messages API expects.
+    Image { source: WireImageSource },
     /// A call the assistant asked for, read back as a previous turn.
     ToolUse {
         id: &'a str,
@@ -190,6 +201,17 @@ enum WireBlock<'a> {
         #[serde(skip_serializing_if = "is_false")]
         is_error: bool,
     },
+}
+
+/// The `source` of an inline image block (issue #628): the base64 payload
+/// and media type the Messages API documents for an inline image. `data` is
+/// owned because the encoding is built here from the part's raw bytes.
+#[derive(serde::Serialize)]
+struct WireImageSource {
+    #[serde(rename = "type")]
+    kind: &'static str,
+    media_type: &'static str,
+    data: String,
 }
 
 /// `skip_serializing_if` for the `is_error` flag. Serde passes the field by
@@ -231,21 +253,54 @@ fn wire_tool_choice(choice: &ToolChoice) -> WireToolChoice<'_> {
     WireToolChoice { kind, name }
 }
 
-/// Serialises one turn. A turn carrying neither tool calls nor tool results
-/// keeps its old shape exactly — `content` as a bare string. A turn carrying
-/// them becomes the content-block array the Messages API requires: for an
-/// assistant turn the text block (only when non-empty) then the `tool_use`
-/// blocks; for a user turn the `tool_result` blocks then any trailing text.
-fn wire_turn(turn: &Turn) -> WireTurn<'_> {
+/// Serialises one turn. A turn carrying no parts, no tool calls and no tool
+/// results keeps its old shape exactly — `content` as a bare string. Every
+/// other turn becomes the content-block array the Messages API requires:
+/// the turn's [`Part`]s in order (issue #628), then, for a tool turn, the
+/// text block (only when non-empty) and the `tool_use`/`tool_result` blocks.
+///
+/// # Errors
+///
+/// [`TextModelError::Rejected`] when a part is a variant this adapter was
+/// never taught to send: [`Part`] is `#[non_exhaustive]`, and a prompt is
+/// refused rather than sent with a part silently dropped.
+fn wire_turn(turn: &Turn) -> Result<WireTurn<'_>, TextModelError> {
     let role = wire_role(turn.role);
-    if turn.tool_calls.is_empty() && turn.tool_results.is_empty() {
-        return WireTurn {
+    if turn.parts.is_empty() && turn.tool_calls.is_empty() && turn.tool_results.is_empty() {
+        return Ok(WireTurn {
             role,
             content: WireContent::Text(turn.content.as_str()),
-        };
+        });
     }
 
-    let mut blocks = Vec::with_capacity(turn.tool_calls.len() + turn.tool_results.len() + 1);
+    let mut blocks =
+        Vec::with_capacity(turn.parts.len() + turn.tool_calls.len() + turn.tool_results.len() + 1);
+    // The parts a caller built with `Turn::user_parts` travel in order —
+    // text and image interleaved exactly as given.
+    for part in &turn.parts {
+        match part {
+            Part::Text(text) => blocks.push(WireBlock::Text {
+                text: text.as_str(),
+            }),
+            Part::Image { media_type, bytes } => blocks.push(WireBlock::Image {
+                source: WireImageSource {
+                    kind: "base64",
+                    media_type: media_type.as_str(),
+                    data: encode_image(bytes),
+                },
+            }),
+            // `Part` is `#[non_exhaustive]`: a variant this adapter has not
+            // been taught to serialise is refused rather than dropped, the
+            // same "never silently drop" rule. Not `Unsupported`: no
+            // capability names an unknown content kind.
+            _ => {
+                return Err(TextModelError::Rejected(
+                    "the prompt carries a content part this adapter does not know how to send"
+                        .to_owned(),
+                ));
+            }
+        }
+    }
     if !turn.tool_calls.is_empty() && !turn.content.is_empty() {
         blocks.push(WireBlock::Text {
             text: turn.content.as_str(),
@@ -271,10 +326,10 @@ fn wire_turn(turn: &Turn) -> WireTurn<'_> {
         });
     }
 
-    WireTurn {
+    Ok(WireTurn {
         role,
         content: WireContent::Blocks(blocks),
-    }
+    })
 }
 
 /// Builds the wire body: a single forced tool — input schema = the caller's
@@ -286,7 +341,9 @@ fn wire_turn(turn: &Turn) -> WireTurn<'_> {
 /// A prompt that carries both a [`Prompt::json_schema`] and its own
 /// [`Prompt::tools`] is [`TextModelError::Rejected`]: the schema path
 /// already declares a synthetic forced tool of its own, so the two would
-/// collide on the same request (issue #665).
+/// collide on the same request (issue #665). A turn carrying a [`Part`]
+/// this adapter cannot serialise is refused the same way, by
+/// [`wire_turn`].
 fn wire_request<'a>(
     model: &'a str,
     prompt: &'a Prompt,
@@ -330,7 +387,11 @@ fn wire_request<'a>(
         model,
         max_tokens: prompt.max_tokens,
         system: prompt.system.as_deref(),
-        messages: prompt.messages.iter().map(wire_turn).collect(),
+        messages: prompt
+            .messages
+            .iter()
+            .map(wire_turn)
+            .collect::<Result<Vec<_>, _>>()?,
         tools,
         tool_choice,
     })
@@ -513,6 +574,11 @@ fn interpret_content(
 #[async_trait]
 impl TextModel for Anthropic {
     async fn complete(&self, prompt: &Prompt) -> Result<Completion, TextModelError> {
+        // An over-limit image prompt is refused before anything is built or
+        // sent: the limits are about the request a provider would be handed
+        // (issue #628).
+        prompt.check_images()?;
+
         // Outcome logging in the resend adapter's shape: provider, status,
         // outcome, model, token counts. The API key is never logged, and
         // neither is the prompt nor the completion — a prompt is user
@@ -623,11 +689,12 @@ impl TextModel for Anthropic {
     }
 
     fn supports(&self, _tier: ModelTier, capability: Capability) -> bool {
-        // The Messages API carries tools, so this adapter does — and nothing
-        // else. `Capability` is `#[non_exhaustive]`: a capability this
-        // adapter has not opted into stays "no" until it implements it. The
-        // tier is the router's routing key; this adapter serves whatever
-        // tier it is wired for, so it is ignored.
-        matches!(capability, Capability::Tools)
+        // The Messages API carries tools and inline images, so this adapter
+        // does both — and nothing else. Every current Claude model accepts
+        // image input, so `Images` is reported for whatever model id this
+        // adapter was constructed with. The tier is the router's routing key
+        // and is ignored; `Capability` is `#[non_exhaustive]`, so an
+        // unclaimed capability stays "no".
+        matches!(capability, Capability::Tools | Capability::Images)
     }
 }

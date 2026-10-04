@@ -10,7 +10,7 @@ use cratefield_core::{
 use cratefield_testing::{
     FakeTextModel, TEXT_MODEL_CONFORMANCE_CACHED_INPUT_TOKENS, TEXT_MODEL_CONFORMANCE_INPUT_TOKENS,
     TEXT_MODEL_CONFORMANCE_OUTPUT_TOKENS, TEXT_MODEL_CONFORMANCE_REPLY, TestHarness, TextModelMode,
-    conformance, request, text_model_conformance,
+    conformance, request, text_model_conformance, text_model_image_bounds_conformance,
 };
 
 /// A module that drafts through the `TextModel` port — the smallest shape
@@ -265,4 +265,38 @@ fn the_shared_text_model_conformance_suite_passes_over_the_fake() {
     let model = FakeTextModel::new(TextModelMode::Complete(completion));
 
     pollster::block_on(text_model_conformance(&model));
+}
+
+#[test]
+fn the_shared_image_bounds_conformance_suite_passes_over_the_fake() {
+    // The fake refuses an over-limit prompt in `complete` before it records
+    // or answers, exactly as a real adapter must before its first call.
+    let model = FakeTextModel::default();
+    pollster::block_on(text_model_image_bounds_conformance(&model));
+    assert!(
+        model.prompts().is_empty(),
+        "a refused image prompt is never recorded"
+    );
+}
+
+#[test]
+fn an_image_prompt_is_answered_and_recorded_with_its_parts() {
+    let model = FakeTextModel::default();
+    let prompt = cratefield_core::Prompt::new(cratefield_core::ModelTier::Fast).user_parts([
+        cratefield_core::Part::text("what is this?"),
+        cratefield_core::Part::image(cratefield_core::ImageMediaType::Png, vec![1, 2, 3]),
+        cratefield_core::Part::image(cratefield_core::ImageMediaType::Jpeg, vec![4, 5, 6]),
+    ]);
+
+    let completion = pollster::block_on(model.complete(&prompt)).unwrap();
+    assert_eq!(completion.text, "fake completion");
+
+    let recorded = model
+        .last()
+        .expect("the image prompt was answered, so recorded");
+    assert_eq!(recorded.messages.len(), 1);
+    assert_eq!(
+        recorded.messages[0].parts, prompt.messages[0].parts,
+        "the recorded prompt carries the text and both images, in order"
+    );
 }

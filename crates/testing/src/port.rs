@@ -11,8 +11,9 @@
 use std::collections::BTreeMap;
 
 use cratefield_core::{
-    Answer, AnswerValue, Classifier, ClassifierError, ModelTier, Prompt, PushError, Question,
-    TextModel, TextModelError, validate_questions,
+    Answer, AnswerValue, Classifier, ClassifierError, ImageLimit, ImageMediaType,
+    MAX_IMAGE_ENCODED_BYTES, MAX_PROMPT_IMAGE_ENCODED_BYTES, MAX_PROMPT_IMAGES, ModelTier, Part,
+    Prompt, PushError, Question, TextModel, TextModelError, encoded_image_len, validate_questions,
 };
 
 /// The three recipients an adapter can be handed, one per transport.
@@ -851,4 +852,74 @@ pub async fn text_model_conformance_not_configured(model: &dyn TextModel) {
         Some(TextModelError::NotConfigured),
         "an adapter with no key answers NotConfigured"
     );
+}
+
+/// Asserts a [`TextModel`] adapter refuses an over-limit image prompt
+/// (issue #628) **before any network call**: too many images, one image
+/// over [`MAX_IMAGE_ENCODED_BYTES`], or images together over
+/// [`MAX_PROMPT_IMAGE_ENCODED_BYTES`], each refused with the matching
+/// [`TextModelError::ImageLimit`].
+///
+/// Run it over a transport that answers nothing, so a pass proves the
+/// refusal happened locally rather than at the provider.
+///
+/// ```rust,ignore
+/// text_model_image_bounds_conformance(&model).await;
+/// ```
+///
+/// # Panics
+///
+/// Panics, naming the rule it caught, when a prompt over a bound is not
+/// refused with exactly the expected [`ImageLimit`].
+pub async fn text_model_image_bounds_conformance(model: &dyn TextModel) {
+    // More images than a prompt may carry.
+    let too_many = Prompt::new(ModelTier::Fast)
+        .user_parts((0..=MAX_PROMPT_IMAGES).map(|_| Part::image(ImageMediaType::Png, vec![0u8])));
+    assert_eq!(
+        model.complete(&too_many).await.err(),
+        Some(TextModelError::ImageLimit(ImageLimit::TooMany {
+            count: MAX_PROMPT_IMAGES + 1,
+        })),
+        "more than {MAX_PROMPT_IMAGES} images is refused with TooMany, before any network call"
+    );
+
+    // One image encoding to one base64 group over the per-image ceiling.
+    let over = MAX_IMAGE_ENCODED_BYTES + 4;
+    let over_raw = raw_len_for_encoded(over);
+    assert_eq!(encoded_image_len(over_raw), over);
+    let too_large = Prompt::new(ModelTier::Fast).user_parts([
+        Part::text("a caption"),
+        Part::image(ImageMediaType::Png, vec![0u8; over_raw]),
+    ]);
+    assert_eq!(
+        model.complete(&too_large).await.err(),
+        Some(TextModelError::ImageLimit(ImageLimit::ImageTooLarge {
+            index: 0,
+            encoded_bytes: over,
+        })),
+        "an image over the per-image ceiling is refused with ImageTooLarge, before any network call"
+    );
+
+    // Two images just under the per-image ceiling, together over the total.
+    let each = MAX_IMAGE_ENCODED_BYTES - 4;
+    let each_raw = raw_len_for_encoded(each);
+    assert!(2 * each > MAX_PROMPT_IMAGE_ENCODED_BYTES);
+    let too_total = Prompt::new(ModelTier::Fast).user_parts([
+        Part::image(ImageMediaType::Png, vec![0u8; each_raw]),
+        Part::image(ImageMediaType::Jpeg, vec![0u8; each_raw]),
+    ]);
+    assert_eq!(
+        model.complete(&too_total).await.err(),
+        Some(TextModelError::ImageLimit(ImageLimit::TotalTooLarge {
+            encoded_bytes: 2 * each,
+        })),
+        "images together over the prompt total are refused with TotalTooLarge, before any network \
+         call"
+    );
+}
+
+/// A raw byte length whose standard, padded base64 encoding is exactly
+/// `encoded`, for `encoded` a multiple of four.
+fn raw_len_for_encoded(encoded: usize) -> usize {
+    (encoded / 4) * 3
 }

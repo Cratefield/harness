@@ -9,9 +9,9 @@
 //! its tool's own schema forbids.
 //!
 //! The loop is also where [`TextModel::supports`] is enforced: a prompt
-//! carrying [`ToolSpec`]s to a model that reports no [`Capability::Tools`]
-//! is refused before the first call, not sent with its tools silently
-//! dropped.
+//! carrying [`ToolSpec`]s — or an image [`Part`](crate::Part) — to a model
+//! that reports no [`Capability::Tools`] (resp. [`Capability::Images`]) is
+//! refused before the first call, not sent with them silently dropped.
 //!
 //! **The schema validator is deliberately small.** JSON Schema 2020-12 is
 //! enormous and no validator crate is in this workspace's tree. Tool
@@ -195,8 +195,9 @@ impl std::error::Error for ToolLoopError {
 ///
 /// # Errors
 ///
-/// - [`ToolLoopError::Model`] if the model is asked to carry tools it does
-///   not support, or a call to it fails.
+/// - [`ToolLoopError::Model`] if the prompt's images cross a
+///   [`Prompt::check_images`] bound, if the model is asked to carry tools or
+///   images it does not support, or a call to it fails.
 /// - [`ToolLoopError::InvalidToolSchema`] if an offered tool's schema uses
 ///   a keyword this validator cannot honour; the check runs before the
 ///   first model call.
@@ -214,6 +215,10 @@ pub async fn run_tool_loop(
     executor: &dyn ToolExecutor,
     budget: ToolBudget,
 ) -> Result<ToolLoopOutcome, ToolLoopError> {
+    // An over-limit image prompt is refused before the first call, the same
+    // rule the router applies.
+    prompt.check_images().map_err(ToolLoopError::Model)?;
+
     // Refuse up front rather than send a tools-bearing prompt a model will
     // drop the tools from and then answer as if none were offered. The
     // tier is the prompt's own: the router answers for the tier it would
@@ -221,6 +226,13 @@ pub async fn run_tool_loop(
     if !prompt.tools.is_empty() && !model.supports(prompt.tier, Capability::Tools) {
         return Err(ToolLoopError::Model(TextModelError::Unsupported(
             Capability::Tools,
+        )));
+    }
+    // The same rule for an image prompt to a model without vision: refuse
+    // it here rather than send it and have the image silently dropped.
+    if prompt.has_images() && !model.supports(prompt.tier, Capability::Images) {
+        return Err(ToolLoopError::Model(TextModelError::Unsupported(
+            Capability::Images,
         )));
     }
     for tool in &prompt.tools {

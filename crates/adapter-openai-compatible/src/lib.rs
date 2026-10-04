@@ -28,6 +28,17 @@
 //! [`Capability::Tools`](cratefield_core::Capability) as `false`, and a
 //! tools-bearing prompt is refused with [`TextModelError::Unsupported`]
 //! before any request reaches the server.
+//!
+//! **Images (issue #628).** The wire carries images in the same `content`
+//! array text does, but not every server behind it has a vision model, so
+//! image input is **opt-in**, the mirror of tools' opt-out: a deployment
+//! calls [`OpenAiCompatible::with_images`] and [`TextModel::supports`] then
+//! reports [`Capability::Images`](cratefield_core::Capability) as `true`;
+//! off by default, an image-bearing prompt is refused with
+//! [`TextModelError::Unsupported`] before any request. Every call runs
+//! [`Prompt::check_images`] first — before the network and before the
+//! capability gate — so an over-limit prompt is refused locally rather than
+//! paid for, whatever the deployment is configured for.
 
 #![doc = include_str!("../README.md")]
 #![forbid(unsafe_code)]
@@ -36,8 +47,8 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use cratefield_core::{
     Capability, Clock, Completion, HttpClient, HttpError, HttpPolicy, MAX_RESPONSE_BYTES,
-    MAX_RESPONSE_TIMEOUT, ModelTier, Prompt, Role, TextModel, TextModelError, ToolCall, ToolChoice,
-    ToolResult, Turn, retry_after,
+    MAX_RESPONSE_TIMEOUT, ModelTier, Part, Prompt, Role, TextModel, TextModelError, ToolCall,
+    ToolChoice, ToolResult, Turn, encode_image, retry_after,
 };
 use http::header::{AUTHORIZATION, CONTENT_TYPE};
 use http::{Request, StatusCode};
@@ -83,6 +94,10 @@ pub struct OpenAiCompatible {
     /// [`OpenAiCompatible::without_tools`] for a server or model behind it
     /// that does not.
     tools: bool,
+    /// Whether this deployment carries image input (issue #628). `false` by
+    /// default — the wire speaks images but not every model behind it has
+    /// vision — and turned on with [`OpenAiCompatible::with_images`].
+    images: bool,
 }
 
 impl OpenAiCompatible {
@@ -102,6 +117,7 @@ impl OpenAiCompatible {
             model: model.into(),
             base_url: DEFAULT_ENDPOINT.to_owned(),
             tools: true,
+            images: false,
         }
     }
 
@@ -116,6 +132,18 @@ impl OpenAiCompatible {
     #[must_use]
     pub fn without_tools(mut self) -> Self {
         self.tools = false;
+        self
+    }
+
+    /// Turns image input on for this deployment (issue #628): the adapter
+    /// then reports [`Capability::Images`] and serialises a prompt's
+    /// [`Part::Image`]s into the wire's `content` array. Off by default —
+    /// the wire speaks images but not every model behind it has vision. The
+    /// mirror of [`OpenAiCompatible::without_tools`]: there the wire spoke
+    /// the feature and a deployment opted out; here a deployment opts in.
+    #[must_use]
+    pub fn with_images(mut self) -> Self {
+        self.images = true;
         self
     }
 
@@ -221,12 +249,43 @@ struct WireMessage {
     /// `Some` for every plain message; `None` (an explicit `null`) only for
     /// an assistant turn that carried no text and only tool calls — the
     /// shape `OpenAI` documents for a call-only turn.
-    content: Option<String>,
+    content: Option<WireContent>,
     #[serde(skip_serializing_if = "Option::is_none")]
     tool_calls: Option<Vec<WireToolCall>>,
     /// Set on a `role: "tool"` message: which call it answers.
     #[serde(skip_serializing_if = "Option::is_none")]
     tool_call_id: Option<String>,
+}
+
+/// A message's content: a plain string for a text-only turn, an ordered
+/// array of parts once the turn carries any (issue #628). Untagged, so a
+/// text-only message serialises byte-for-byte as it did before images
+/// existed.
+#[derive(serde::Serialize)]
+#[serde(untagged)]
+enum WireContent {
+    /// A text-only message's content.
+    Text(String),
+    /// A message that carries [`Part`]s, in order.
+    Parts(Vec<WirePart>),
+}
+
+/// One part of a message's `content` array, in the `OpenAI` shape: a text
+/// object or an `image_url` object with a `data:` URL.
+#[derive(serde::Serialize)]
+#[serde(tag = "type")]
+enum WirePart {
+    #[serde(rename = "text")]
+    Text { text: String },
+    #[serde(rename = "image_url")]
+    ImageUrl { image_url: WireImageUrl },
+}
+
+/// The `image_url` envelope of an image part: a single `url`, carrying the
+/// image inline as a base64 `data:` URL.
+#[derive(serde::Serialize)]
+struct WireImageUrl {
+    url: String,
 }
 
 /// One tool offered to the model: the `{"type":"function","function":…}`
@@ -336,18 +395,75 @@ fn wire_tool_result(result: &ToolResult) -> String {
     }
 }
 
+/// One part on the wire. An image becomes an `image_url` part whose URL is
+/// the inline `data:` form — media type and base64 bytes.
+///
+/// # Errors
+///
+/// [`TextModelError::Rejected`] for a [`Part`] variant this adapter does
+/// not know: `Part` is `#[non_exhaustive]`, so a future file reference or
+/// provider-hosted URL is refused rather than silently dropped — the same
+/// rule the Anthropic adapter's `wire_turn` applies. (Unreachable today:
+/// [`Part::Text`] and [`Part::Image`] are the only variants, and the
+/// capability gate admits no others.)
+fn wire_part(part: &Part) -> Result<WirePart, TextModelError> {
+    match part {
+        Part::Text(text) => Ok(WirePart::Text { text: text.clone() }),
+        Part::Image { media_type, bytes } => Ok(WirePart::ImageUrl {
+            image_url: WireImageUrl {
+                url: format!(
+                    "data:{};base64,{}",
+                    media_type.as_str(),
+                    encode_image(bytes)
+                ),
+            },
+        }),
+        _ => Err(TextModelError::Rejected(
+            "the prompt carries a content part this adapter does not know how to send".to_owned(),
+        )),
+    }
+}
+
+/// A turn's content for the wire: its ordered [`Part`]s as an array when it
+/// carries any (issue #628), otherwise its text as a plain string, exactly
+/// as it serialised before images existed.
+///
+/// # Errors
+///
+/// Propagates [`wire_part`]'s refusal of a [`Part`] that cannot be
+/// serialised, so no part is ever silently dropped.
+fn wire_content(turn: &Turn) -> Result<WireContent, TextModelError> {
+    if turn.parts.is_empty() {
+        Ok(WireContent::Text(turn.content.clone()))
+    } else {
+        Ok(WireContent::Parts(
+            turn.parts
+                .iter()
+                .map(wire_part)
+                .collect::<Result<Vec<_>, _>>()?,
+        ))
+    }
+}
+
 /// Appends the wire message(s) one [`Turn`] becomes: a plain message, an
 /// assistant message that quotes its `tool_calls`, or one `role: "tool"`
 /// message per result — followed by a user message when a tool-results turn
 /// also carries text of its own.
-fn push_turn(messages: &mut Vec<WireMessage>, turn: &Turn) {
+///
+/// # Errors
+///
+/// Propagates [`wire_content`]'s refusal of a [`Part`] this adapter cannot
+/// serialise.
+fn push_turn(messages: &mut Vec<WireMessage>, turn: &Turn) -> Result<(), TextModelError> {
     match turn.role {
         Role::Assistant if !turn.tool_calls.is_empty() => {
             messages.push(WireMessage {
                 role: "assistant",
                 // A call-only turn has no text; the wire wants `null` for it,
                 // not an empty string.
-                content: (!turn.content.is_empty()).then(|| turn.content.clone()),
+                content: (!turn.content.is_empty() || !turn.parts.is_empty())
+                    .then(|| wire_content(turn))
+                    .transpose()?,
                 tool_calls: Some(turn.tool_calls.iter().map(wire_tool_call).collect()),
                 tool_call_id: None,
             });
@@ -356,7 +472,7 @@ fn push_turn(messages: &mut Vec<WireMessage>, turn: &Turn) {
             for result in &turn.tool_results {
                 messages.push(WireMessage {
                     role: "tool",
-                    content: Some(wire_tool_result(result)),
+                    content: Some(WireContent::Text(wire_tool_result(result))),
                     tool_calls: None,
                     tool_call_id: Some(result.tool_call_id.clone()),
                 });
@@ -364,7 +480,7 @@ fn push_turn(messages: &mut Vec<WireMessage>, turn: &Turn) {
             if !turn.content.is_empty() {
                 messages.push(WireMessage {
                     role: "user",
-                    content: Some(turn.content.clone()),
+                    content: Some(WireContent::Text(turn.content.clone())),
                     tool_calls: None,
                     tool_call_id: None,
                 });
@@ -372,18 +488,27 @@ fn push_turn(messages: &mut Vec<WireMessage>, turn: &Turn) {
         }
         _ => messages.push(WireMessage {
             role: wire_role(turn.role),
-            content: Some(turn.content.clone()),
+            content: Some(wire_content(turn)?),
             tool_calls: None,
             tool_call_id: None,
         }),
     }
+    Ok(())
 }
 
 /// Builds the wire body: the messages plus, when the prompt asked for them,
 /// a `response_format` carrying the caller's schema, the `tools` array and
 /// the `tool_choice`. Hand-rolling this JSON would be a second escaping bug
 /// waiting to happen; the prompt is user content.
-fn wire_request<'a>(model: &'a str, prompt: &'a Prompt) -> ChatCompletionsRequest<'a> {
+///
+/// # Errors
+///
+/// Propagates [`push_turn`]'s refusal of a [`Part`] this adapter cannot
+/// serialise.
+fn wire_request<'a>(
+    model: &'a str,
+    prompt: &'a Prompt,
+) -> Result<ChatCompletionsRequest<'a>, TextModelError> {
     let response_format = prompt
         .json_schema
         .as_ref()
@@ -408,13 +533,13 @@ fn wire_request<'a>(model: &'a str, prompt: &'a Prompt) -> ChatCompletionsReques
     if let Some(system) = prompt.system.as_deref() {
         messages.push(WireMessage {
             role: "system",
-            content: Some(system.to_owned()),
+            content: Some(WireContent::Text(system.to_owned())),
             tool_calls: None,
             tool_call_id: None,
         });
     }
     for turn in &prompt.messages {
-        push_turn(&mut messages, turn);
+        push_turn(&mut messages, turn)?;
     }
     let tools = prompt
         .tools
@@ -428,14 +553,14 @@ fn wire_request<'a>(model: &'a str, prompt: &'a Prompt) -> ChatCompletionsReques
             },
         })
         .collect();
-    ChatCompletionsRequest {
+    Ok(ChatCompletionsRequest {
         model,
         max_tokens: prompt.max_tokens,
         messages,
         response_format,
         tools,
         tool_choice: prompt.tool_choice.as_ref().and_then(wire_tool_choice),
-    }
+    })
 }
 
 #[derive(serde::Deserialize)]
@@ -612,6 +737,11 @@ impl TextModel for OpenAiCompatible {
         // logged, and neither is the prompt nor the completion — a prompt
         // is user content, and the operator needs none of it to see what
         // happened.
+        //
+        // An over-limit image prompt is refused first, before any request:
+        // the bounds hold whatever this deployment is configured for.
+        prompt.check_images()?;
+
         let Some(api_key) = &self.api_key else {
             tracing::info!(
                 provider = "openai-compatible",
@@ -638,7 +768,20 @@ impl TextModel for OpenAiCompatible {
             return Err(TextModelError::Unsupported(Capability::Tools));
         }
 
-        let payload = wire_request(&self.model, prompt);
+        // The same guard for images (issue #628): a deployment that did not
+        // opt into vision is refused an image-bearing prompt before any
+        // request.
+        if !self.images && prompt.has_images() {
+            tracing::warn!(
+                provider = "openai-compatible",
+                outcome = "unsupported",
+                model = %self.model,
+                "text model outcome"
+            );
+            return Err(TextModelError::Unsupported(Capability::Images));
+        }
+
+        let payload = wire_request(&self.model, prompt)?;
         let body = serde_json::to_vec(&payload)
             .map_err(|err| TextModelError::Transport(err.to_string()))?;
 
@@ -705,11 +848,14 @@ impl TextModel for OpenAiCompatible {
 
     fn supports(&self, _tier: ModelTier, capability: Capability) -> bool {
         // The wire speaks function calling, so tools are on unless the
-        // deployment turned them off. `Capability` is `#[non_exhaustive]`:
-        // an unknown capability is one this adapter does not claim. The tier
-        // is the router's routing key; this adapter serves whatever tier it
-        // is wired for, so it is ignored.
-        capability == Capability::Tools && self.tools
+        // deployment turned them off; it speaks images too, but a model
+        // behind it may not have vision, so images are off until the
+        // deployment opts in. `Capability` is `#[non_exhaustive]`: an
+        // unknown capability is one this adapter does not claim. The tier is
+        // the router's routing key; this adapter serves whatever tier it is
+        // wired for, so it is ignored.
+        (capability == Capability::Tools && self.tools)
+            || (capability == Capability::Images && self.images)
     }
 }
 
