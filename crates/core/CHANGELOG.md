@@ -6,6 +6,17 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **A provider-neutral billing lifecycle, in `billing`** (issue #593,
+  ADR 0025). New pure types and functions — `LifecycleEvent` and its
+  `LifecycleKind`, `Status`, `SubscriptionState`, `LifecyclePolicy`,
+  `transition` and `gives_access` — that map a Stripe or RevenueCat
+  webhook onto a state and answer whether it grants access, with no I/O
+  and no vendor payload parsing (that stays in the adapters, issues #600
+  and #601). Additive: no existing API changed and `HARNESS_API` is
+  untouched.
+
 ## [0.8.1](https://github.com/Cratefield/harness/compare/cratefield-core-v0.8.0...cratefield-core-v0.8.1) - 2026-10-05
 
 ### Other
