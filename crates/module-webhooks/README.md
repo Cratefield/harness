@@ -78,8 +78,11 @@ both.
 ## Delivery policy
 
 One outbox row per (event, endpoint), so each endpoint retries
-independently. The drain leases what is due (a five-minute lease, 16 rows a
-pass) and files each row:
+independently. The drain leases what is due (a five-minute lease, at most 16
+rows a pass, and no more delivery attempts than the invocation's
+`ctx.scheduled` budget allows — one row processed is one subrequest (at
+most one outbound `POST`), ADR
+[0023](../../docs/adr/0023-scheduled-budget.md)) and files each row:
 
 | Outcome | What happens |
 |---|---|
@@ -93,7 +96,9 @@ pass) and files each row:
 A per-row failure never aborts the pass. Every attempt lands in
 `webhooks_deliveries` — the log a customer support conversation reads:
 which endpoint, which event, which attempt, what status came back, and
-when.
+when. When the budget runs out mid-pass, the rows the drain never reached
+are released untouched — still queued, due immediately — and delivered on
+the next tick; `DrainReport::deferred` counts them.
 
 ## Replay
 

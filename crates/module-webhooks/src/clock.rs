@@ -19,13 +19,6 @@ pub(crate) fn iso(at: OffsetDateTime) -> String {
         .unwrap_or_default()
 }
 
-/// `now` shifted by `secs` (negative for the past), in the stored spelling.
-#[must_use]
-pub(crate) fn plus_secs(now: &str, secs: i64) -> String {
-    let parsed = OffsetDateTime::parse(now, &Rfc3339).unwrap_or(OffsetDateTime::UNIX_EPOCH);
-    iso(parsed.saturating_add(time::Duration::seconds(secs)))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -37,23 +30,5 @@ mod tests {
             iso(datetime!(2026-09-27 12:00:00.5 UTC)),
             "2026-09-27T12:00:00Z"
         );
-    }
-
-    #[test]
-    fn plus_secs_shifts_and_keeps_the_spelling() {
-        assert_eq!(
-            plus_secs("2026-09-27T12:00:00Z", 30),
-            "2026-09-27T12:00:30Z"
-        );
-        assert_eq!(
-            plus_secs("2026-09-27T12:00:00Z", -3_600),
-            "2026-09-27T11:00:00Z"
-        );
-    }
-
-    #[test]
-    fn an_unparsable_timestamp_is_treated_as_the_epoch() {
-        // Due immediately rather than stranded in the future.
-        assert!(plus_secs("not a timestamp", 30).starts_with("1970-01-01"));
     }
 }
