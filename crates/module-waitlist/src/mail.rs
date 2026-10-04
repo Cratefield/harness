@@ -50,6 +50,28 @@ fn parse_failed(id: &str) -> TemplateError {
     }
 }
 
+/// How the mails name the list: `(list, members, on)` — the list in the
+/// subject, who is admitted, and the list in a sentence. A single-product
+/// venture whose product slug is its own name reads "the `FindsYou`
+/// waitlist", not "the `FindsYou` `findsyou` waitlist".
+fn wording(venture: &str, product: &str) -> (String, String, String) {
+    let squash = |s: &str| {
+        s.chars()
+            .filter(char::is_ascii_alphanumeric)
+            .map(|c| c.to_ascii_lowercase())
+            .collect::<String>()
+    };
+    if squash(venture) == squash(product) {
+        (venture.to_owned(), "members".to_owned(), venture.to_owned())
+    } else {
+        (
+            product.to_owned(),
+            format!("{product} members"),
+            format!("{venture} {product}"),
+        )
+    }
+}
+
 struct ConfirmTemplate {
     theme: Option<MailTheme>,
 }
@@ -60,17 +82,17 @@ impl Template for ConfirmTemplate {
         let data: ConfirmMailData =
             serde_json::from_value(data.clone()).map_err(|_| parse_failed(TEMPLATE_CONFIRM))?;
         let venture = theme.name_or(&data.venture);
-        let product = &data.product;
+        let (list, members, on) = wording(venture, &data.product);
         Ok(mt::Message::new(
-            format!("Confirm your spot on the {product} waitlist"),
+            format!("Confirm your spot on the {list} waitlist"),
             "Hold your spot",
         )
         .preheader(format!(
-            "Confirm your address to hold your place on the {product} waitlist."
+            "Confirm your address to hold your place on the {list} waitlist."
         ))
         .paragraph(format!(
-            "{venture} is admitting {product} members in join order. Confirm your address to \
-             hold your place on the waitlist."
+            "{venture} is admitting {members} in join order. Confirm your address to hold \
+             your place on the waitlist."
         ))
         .button("Confirm my spot", &data.confirm_url)
         .fallback_link()
@@ -80,9 +102,7 @@ impl Template for ConfirmTemplate {
              link is opened.",
         )
         .recipient(&data.email)
-        .why(format!(
-            "this address was entered on the {venture} {product} waitlist"
-        ))
+        .why(format!("this address was entered on the {on} waitlist"))
         .render(&theme)
         .into())
     }
@@ -98,25 +118,23 @@ impl Template for ConfirmedTemplate {
         let data: ConfirmedMailData =
             serde_json::from_value(data.clone()).map_err(|_| parse_failed(TEMPLATE_CONFIRMED))?;
         let venture = theme.name_or(&data.venture);
-        let (product, position) = (&data.product, data.position);
+        let (list, _, on) = wording(venture, &data.product);
+        let position = data.position;
         Ok(mt::Message::new(
-            format!("You are #{position} on the {product} waitlist"),
+            format!("You are #{position} on the {list} waitlist"),
             format!("You are #{position}"),
         )
         .preheader(format!(
             "Your spot is confirmed. You are number {position} in line."
         ))
         .paragraph(format!(
-            "Your spot on the {venture} {product} waitlist is confirmed. You are number \
-             {position} in line."
+            "Your spot on the {on} waitlist is confirmed. You are number {position} in line."
         ))
         .button("Check my place", &data.status_url)
         .fallback_link()
         .link_intro("Check your place any time:")
         .recipient(&data.email)
-        .why(format!(
-            "you confirmed your spot on the {venture} {product} waitlist"
-        ))
+        .why(format!("you confirmed your spot on the {on} waitlist"))
         .render(&theme)
         .into())
     }

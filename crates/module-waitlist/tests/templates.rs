@@ -114,14 +114,18 @@ fn a_composed_theme_reaches_the_mail() {
         "{}",
         rendered.html
     );
+    // The product is the venture itself, so the mail names it once, as the
+    // venture writes it.
     assert!(
         rendered
             .text
-            .contains("Kontinuum is admitting kontinuum members")
+            .contains("Kontinuum is admitting members in join order"),
+        "{}",
+        rendered.text
     );
     assert_eq!(
         rendered.subject,
-        "Confirm your spot on the kontinuum waitlist"
+        "Confirm your spot on the Kontinuum waitlist"
     );
 }
 
