@@ -692,6 +692,7 @@ dependencies = [
  "cratefield-module-changelog",
  "cratefield-module-cms",
  "cratefield-module-connections",
+ "cratefield-module-crm",
  "cratefield-module-device-auth",
  "cratefield-module-email-signup",
  "cratefield-module-notifications",
@@ -1795,6 +1796,24 @@ dependencies = [
  "tower",
  "tracing",
  "zeroize",
+]
+
+[[package]]
+name = "cratefield-module-crm"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "cratefield-core",
+ "cratefield-module-privacy",
+ "cratefield-testing",
+ "pollster",
+ "schemars 1.2.2",
+ "sea-query",
+ "serde",
+ "serde_json",
+ "time",
+ "tower",
+ "tracing",
 ]
 
 [[package]]

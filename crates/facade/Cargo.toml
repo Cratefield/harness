@@ -125,6 +125,7 @@ email-signup = ["dep:cratefield-module-email-signup", "mail-templates"]
 privacy = ["dep:cratefield-module-privacy"]
 waitlist = ["dep:cratefield-module-waitlist", "mail-templates"]
 cms = ["dep:cratefield-module-cms"]
+crm = ["dep:cratefield-module-crm"]
 changelog = ["dep:cratefield-module-changelog"]
 notifications = ["dep:cratefield-module-notifications", "i18n", "mail-templates"]
 telemetry = ["dep:cratefield-module-telemetry"]
@@ -184,6 +185,7 @@ cratefield-module-email-signup = { workspace = true, optional = true }
 cratefield-module-privacy = { workspace = true, optional = true }
 cratefield-module-waitlist = { workspace = true, optional = true }
 cratefield-module-cms = { workspace = true, optional = true }
+cratefield-module-crm = { workspace = true, optional = true }
 cratefield-module-changelog = { workspace = true, optional = true }
 cratefield-module-notifications = { workspace = true, optional = true }
 cratefield-module-telemetry = { workspace = true, optional = true }

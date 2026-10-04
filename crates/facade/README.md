@@ -77,6 +77,7 @@ also switch on the extra features noted in their rows:
 | `privacy` | `cratefield-module-privacy` | `cratefield::privacy` | Subject access and erasure, over what every other module declares it holds |
 | `waitlist` | `cratefield-module-waitlist` | `cratefield::waitlist` | Per-product waitlist |
 | `cms` | `cratefield-module-cms` | `cratefield::cms` | Small content store |
+| `crm` | `cratefield-module-crm` | `cratefield::crm` | Contacts, organisations and tags, filed idempotently by natural key |
 | `changelog` | `cratefield-module-changelog` | `cratefield::changelog` | A project's releases, mirrored into your own database |
 | `notifications` | `cratefield-module-notifications` | `cratefield::notifications` | Push subscriptions, per-account per-category preferences, fan-out, prune and retry. Also turns on `i18n` |
 | `telemetry` | `cratefield-module-telemetry` | `cratefield::telemetry` | Aggregate usage counts from clients, consent-first, in the venture's own database |
