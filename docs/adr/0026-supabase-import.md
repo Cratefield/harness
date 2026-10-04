@@ -275,16 +275,17 @@ from the dashboard and are written to the run directory by the CLI.
 
 ## Implementing issues
 
-#657's plan ids map s2 = #658, s3 = #659, s4 = #660 and s5 = #661. The
+#657's plan ids map s2 = #658, s3 = #660, s4 = #659 and s5 = #661. The
 scopes, in order:
 
 1. #658 (s2) — the engine crate, the run ledger, inspect + plan/report
    (dry run) and non-interactive `fz import supabase`, including every
    "reported" item and the test stubs. This alone is useful to EarthOS.
-2. #659 (s3) — schema + data + verify into `app`.
-3. #660 (s4) — auth users and identities (after #650) and storage → R2.
-4. #661 (s5) — cutover, the rollback window, the decommission checklist,
-   `--guided` TUI, the dashboard button and the progress view.
+2. #660 (s3) — schema + data + verify into `app`.
+3. #659 (s4) — auth users and identities (after #650).
+4. #661 (s5) — storage → R2, cutover, the rollback window, the
+   decommission checklist, `--guided` TUI, the dashboard button and the
+   progress view.
 
 ## References
 
