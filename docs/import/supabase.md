@@ -171,7 +171,3 @@ Inspect is step 1. The later steps read its JSON report:
 5. **Cutover and rollback** (#661): the switch, a rollback window and a
    decommission checklist, and the dashboard's "Migrate from Supabase"
    button over the same engine.
-
-ADR 0026's own "Implementing issues" list numbers the auth-users and the
-schema-and-data steps the other way round; the issue titles above are the
-ones being followed.
