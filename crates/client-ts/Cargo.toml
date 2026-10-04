@@ -5,11 +5,9 @@ readme = "README.md"
 keywords = ["cratefield", "typescript", "codegen", "client"]
 categories = ["development-tools", "web-programming"]
 include = ["src/**/*", "README.md"]
-# New and unproven: the public surface is still moving, so it is held out
-# of the release run (release-plz.toml carries the matching entry). The
-# CLI now consumes it — `fz client-ts` (issue #155) — but that does not
-# lift the hold: its first publish is manual (docs/RELEASING.md) either
-# way.
+# No longer held back: it is on crates.io and named in the ordered list
+# in docs/RELEASING.md, and release-plz.toml carries no entry for it. The
+# CLI consumes it — `fz client-ts` (issue #155).
 version = "0.4.0"
 edition.workspace = true
 rust-version.workspace = true
