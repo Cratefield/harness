@@ -952,12 +952,15 @@ name = "cratefield-adapter-resend"
 version = "0.3.1"
 dependencies = [
  "async-trait",
+ "base64 0.23.1",
  "bytes",
  "cratefield-core",
+ "hmac 0.13.0",
  "http",
  "pollster",
  "serde",
  "serde_json",
+ "sha2 0.11.0",
  "time",
  "tracing",
 ]

@@ -10,6 +10,10 @@
 #![doc = include_str!("../README.md")]
 #![forbid(unsafe_code)]
 
+mod inbound;
+
+pub use inbound::ResendInbound;
+
 use async_trait::async_trait;
 use bytes::Bytes;
 use cratefield_core::{
