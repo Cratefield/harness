@@ -35,6 +35,7 @@ command.
 | `read_only` | object | what kept the inspection from writing, as observed (below) |
 | `coverage` | object | `database`, `management_api`, `policy_classifier`: each `inspected`, `not_inspected` or `failed` |
 | `summary` | object | counts and estimates (below) |
+| `dispositions` | object | the decisions applied to the needs-work and blocker items (below) |
 | `schemas` | array | `name`, `kind` (`user` or `supabase_managed`), `target` (`app` for `public`, the same name for another user schema, `null` for a managed one), `tables` |
 | `tables` | array | user tables (below) |
 | `views` | array | `schema`, `name`, `materialized`, `references_auth`, `references_storage` |
@@ -69,6 +70,7 @@ command.
 | Field | Meaning |
 |---|---|
 | `automatic`, `needs_work`, `blockers` | finding counts |
+| `decided`, `undecided` | needs-work and blocker items with, and without, a disposition; cutover refuses while `undecided` is non-zero (#661) |
 | `ready` | no blockers |
 | `tables`, `estimated_rows` | user tables and the sum of their planner estimates |
 | `data_bytes` | heap and TOAST bytes of the user tables: what the data step moves |
@@ -105,7 +107,20 @@ are not listed.
 | `classifier_label` | the label the classifier gave below the threshold (the policy is then `needs_review`); otherwise `null` |
 | `suggested_equivalent` | the check to write in a route — advice, never enforcement code |
 | `test_stub` | a failing Rust test (`todo!()`) naming the policy and quoting its SQL, to become the test that proves the replacement |
-| `disposition` | `undecided` in an inspect report; later `covered` or `waived`, per policy, before cutover |
+| `disposition` | `covered`, `waived` or `undecided`: this item's entry in the dispositions file (ADR 0026, Decision 5); `undecided` in an inspect report with no file |
+
+## `dispositions`
+
+`fz import supabase inspect --dispositions <FILE>` applies a TOML file of
+per-item decisions (ADR 0026, Decision 5; `docs/import/supabase.md`). Without
+one, every needs-work and blocker item is undecided: `decided` and `stale`
+are empty and `by_kind` lists them all as `undecided`.
+
+| Field | Meaning |
+|---|---|
+| `by_kind` | per finding `kind`: `covered`, `waived` and `undecided` counts; only kinds with an item, sorted by `kind` |
+| `decided` | one entry per decided item — `id`, `status` (`covered` or `waived`), and `ref` (covered only) or `reason` (waived only) — sorted by `id` |
+| `stale` | entry ids from the file that match no needs-work or blocker item, sorted |
 
 ## `auth`
 

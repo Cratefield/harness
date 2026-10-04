@@ -1,0 +1,50 @@
+---
+source: crates/import-supabase/tests/dispositions.rs
+expression: "serde_json::to_string_pretty(&snapshot).expect(\"serializes\")"
+---
+{
+  "summary": {
+    "decided": 2,
+    "undecided": 2
+  },
+  "by_kind": [
+    {
+      "kind": "extension",
+      "covered": 0,
+      "waived": 0,
+      "undecided": 1
+    },
+    {
+      "kind": "function",
+      "covered": 0,
+      "waived": 0,
+      "undecided": 1
+    },
+    {
+      "kind": "policy",
+      "covered": 1,
+      "waived": 1,
+      "undecided": 0
+    }
+  ],
+  "decided": [
+    {
+      "id": "policy:public.posts.Anyone can read posts",
+      "status": "covered",
+      "ref": "src/posts/read.rs#list"
+    },
+    {
+      "id": "policy:public.posts.Old policy",
+      "status": "waived",
+      "reason": "superseded by the admin route"
+    }
+  ],
+  "stale": [
+    "cron_job:nightly",
+    "policy:public.posts.Gone"
+  ],
+  "policy_dispositions": [
+    "covered",
+    "waived"
+  ]
+}

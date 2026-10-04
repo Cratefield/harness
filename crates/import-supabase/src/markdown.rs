@@ -116,7 +116,8 @@ impl Report {
         let _ = writeln!(
             out,
             "| | |\n|---|---|\n| Ready (no blockers) | **{}** |\n| Automatic | {} |\n| Needs \
-             work | {} |\n| Blockers | {} |\n| Tables | {} (~{} rows) |\n| Data | {} (plus {} of \
+             work | {} |\n| Blockers | {} |\n| Decided | {} |\n| Undecided | {} |\n| Tables | {} \
+             (~{} rows) |\n| Data | {} (plus {} of \
              indexes, rebuilt on the target) |\n| Storage | {} objects, {} |\n| Estimated \
              transfer | about {} at {} Mbit/s (data and storage only; index builds and \
              verification are extra) |\n",
@@ -124,6 +125,8 @@ impl Report {
             s.automatic,
             s.needs_work,
             s.blockers,
+            s.decided,
+            s.undecided,
             s.tables,
             s.estimated_rows,
             human_bytes(s.data_bytes),
@@ -187,6 +190,34 @@ impl Report {
             }
             let _ = writeln!(out, "{blurb}\n");
             findings_table(&mut out, &findings, with_equivalent);
+        }
+
+        let d = &self.dispositions;
+        out.push_str("## Dispositions\n\n");
+        if d.by_kind.is_empty() {
+            out.push_str("Nothing needs a disposition.\n\n");
+        } else {
+            out.push_str(
+                "Every needs-work item needs its own `covered` or `waived` entry (ADR 0026, \
+                 Decision 5): `fz import supabase inspect --dispositions <FILE>`. Cutover \
+                 refuses while `Undecided` is non-zero.\n\n| Kind | Covered | Waived | Undecided \
+                 |\n|---|---|---|---|\n",
+            );
+            for kind in &d.by_kind {
+                let _ = writeln!(
+                    out,
+                    "| {} | {} | {} | {} |",
+                    kind.kind, kind.covered, kind.waived, kind.undecided
+                );
+            }
+            out.push('\n');
+            if !d.stale.is_empty() {
+                out.push_str("**Stale entries** (they match no item that needs work):\n\n");
+                for id in &d.stale {
+                    let _ = writeln!(out, "- {}", code(id));
+                }
+                out.push('\n');
+            }
         }
 
         let _ = writeln!(
