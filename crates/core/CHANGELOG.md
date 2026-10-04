@@ -6,6 +6,21 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.8.0](https://github.com/Cratefield/harness/compare/cratefield-core-v0.7.0...cratefield-core-v0.8.0) - 2026-10-04
+
+### Added
+
+- `TextModel` tool calling (`ToolSpec`, `tool_calls`, `run_tool_loop`) across the Anthropic and OpenAI-compatible adapters ([#665](https://github.com/Cratefield/harness/pull/665)) ([#705](https://github.com/Cratefield/harness/pull/705))
+
+### Changed
+
+- **Breaking** (found by cargo-semver-checks): `ports::text_model::Turn` is
+  now `#[non_exhaustive]` and no longer derives `Eq`, so it is built with
+  `Turn::user`, `Turn::assistant`, `Turn::assistant_tool_calls` or
+  `Turn::tool_results` rather than a struct literal; `TextModelError` is now
+  `#[non_exhaustive]`, so a `match` on it outside core needs a wildcard arm
+  ([#705](https://github.com/Cratefield/harness/pull/705)).
+
 ## [0.7.0](https://github.com/Cratefield/harness/compare/cratefield-core-v0.6.0...cratefield-core-v0.7.0) - 2026-10-03
 
 ### Added

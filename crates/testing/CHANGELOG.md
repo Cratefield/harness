@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.1](https://github.com/Cratefield/harness/compare/cratefield-testing-v0.4.0...cratefield-testing-v0.4.1) - 2026-10-04
+
+### Other
+
+- tool calling (ToolSpec, tool_calls, run_tool_loop) across the Anthropic and OpenAI-compatible adapters ([#665](https://github.com/Cratefield/harness/pull/665)) ([#705](https://github.com/Cratefield/harness/pull/705))
+
 ## [0.4.0](https://github.com/Cratefield/harness/compare/cratefield-testing-v0.3.0...cratefield-testing-v0.4.0) - 2026-10-03
 
 ### Added

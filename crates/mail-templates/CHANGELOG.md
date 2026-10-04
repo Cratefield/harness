@@ -7,8 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0](https://github.com/Cratefield/harness/releases/tag/cratefield-mail-templates-v0.1.0) - 2026-10-04
+
 ### Added
 
+- *(mail-templates)* branded mail in each venture's own style for every module that sends mail ([#715](https://github.com/Cratefield/harness/pull/715)) ([#716](https://github.com/Cratefield/harness/pull/716))
 - `MailTheme` (brand name, wordmark, hosted logo and alt text, light and dark
   `Palette`s, font stacks, radii, footer lines, contact), resolved from the
   venture's composition, its `MAIL_THEME` config, or its core `Brand`; and
