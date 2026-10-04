@@ -1,0 +1,25 @@
+---
+source: crates/mail-templates/tests/templates.rs
+expression: "format!(\"Subject: {}\\nPreheader: {}\\n\\n{}\", email.subject, email.preheader,\nemail.text)"
+---
+Subject: You have been invited to join Analytical Engines
+Preheader: Join Analytical Engines on Acme as admin.
+
+You're invited
+
+You have been invited to join an organization on Acme.
+
+Organization: Analytical Engines
+Role: admin
+
+Accept the invitation:
+https://api.acme.test/v1/orgs/invitations/accept?token=01J9ZQ4M8K2D7X3B
+
+Or paste this token into the accept page:
+01J9ZQ4M8K2D7X3B6N5R0T1V2W
+
+This invitation expires in 7 days.
+
+--
+Sent to ada@example.com because someone invited this address to an organization on Acme.
+Acme · https://acme.test

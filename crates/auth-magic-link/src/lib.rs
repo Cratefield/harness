@@ -54,7 +54,7 @@ const MIGRATION_SEND_COOLDOWN: SqlMigration = SqlMigration::new(
 use http::StatusCode;
 use std::sync::Arc;
 
-pub use mail::{MagicLinkMail, TEMPLATE_MAGIC_LINK, default_templates};
+pub use mail::{MagicLinkMail, TEMPLATE_MAGIC_LINK, default_templates, themed_templates};
 
 /// The one answer a request gives, whatever it found.
 pub const REQUEST_REFUSED: ProblemDef = ProblemDef {

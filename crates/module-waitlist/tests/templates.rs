@@ -1,5 +1,6 @@
-//! Issue #12 acceptance for `waitlist`: askama snapshot tests per
-//! template, links equal between text and html, and `<script>` escaping.
+//! Issue #12 acceptance for `waitlist`: snapshot tests per template, the
+//! same links in the text and the html, `<script>` escaping, and the
+//! venture's composed theme reaching the mail.
 
 use cratefield_core::{Brand, Rendered};
 use cratefield_module_waitlist::{ConfirmMailData, ConfirmedMailData, default_templates};
@@ -87,10 +88,45 @@ fn text_links_equal_html_links() {
             .into_iter()
             .map(str::to_owned)
             .collect();
-        let html_links: std::collections::BTreeSet<String> =
-            hrefs_from_html(&rendered.html).into_iter().collect();
+        // The header and footer link the venture's site; the rest are the
+        // mail's own links, and those must be the same in both parts.
+        let html_links: std::collections::BTreeSet<String> = hrefs_from_html(&rendered.html)
+            .into_iter()
+            .filter(|href| href.contains("/v1/"))
+            .collect();
         assert_eq!(text_links, html_links, "{id}: same link set");
     }
+}
+
+#[test]
+fn a_composed_theme_reaches_the_mail() {
+    let theme = cratefield_mail_templates::MailTheme::new("Kontinuum", "https://kontinuum.test")
+        .light(cratefield_mail_templates::Palette::neutral_light().button("#123456"));
+    let rendered = cratefield_module_waitlist::themed_templates(&theme)
+        .into_iter()
+        .find(|(id, _)| id == "waitlist/confirm")
+        .expect("registered")
+        .1
+        .render(&confirm_data(), "en")
+        .expect("renders");
+    assert!(
+        rendered.html.contains("background:#123456"),
+        "{}",
+        rendered.html
+    );
+    // The product is the venture itself, so the mail names it once, as the
+    // venture writes it.
+    assert!(
+        rendered
+            .text
+            .contains("Kontinuum is admitting members in join order"),
+        "{}",
+        rendered.text
+    );
+    assert_eq!(
+        rendered.subject,
+        "Confirm your spot on the Kontinuum waitlist"
+    );
 }
 
 #[test]
@@ -102,7 +138,6 @@ fn script_in_email_is_escaped() {
         !rendered.html.contains("<script>"),
         "raw <script> must not survive"
     );
-    // askama escapes to numeric character references (&#60;script&#62;).
     assert!(
         rendered.html.contains("&#60;script") || rendered.html.contains("&lt;script"),
         "escaped form present: {}",

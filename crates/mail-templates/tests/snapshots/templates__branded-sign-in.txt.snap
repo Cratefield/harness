@@ -1,0 +1,22 @@
+---
+source: crates/mail-templates/tests/templates.rs
+expression: "format!(\"Subject: {}\\nPreheader: {}\\n\\n{}\", email.subject, email.preheader,\nemail.text)"
+---
+Subject: Sign in to Acme
+Preheader: This link works once, for 15 minutes. If you didn't ask for it, ignore this email.
+
+Sign in to Acme
+
+Use the button below to sign in to Acme.
+
+Sign in:
+https://api.acme.test/v1/auth-magic-link/consume?token=Jx3mQ9vT0cWb8nL2kPz7rY5sHd1fGa4e
+
+This link works once and expires in 15 minutes.
+
+If you didn't ask to sign in, ignore this email: nobody can use the link without opening it, and it expires on its own.
+
+--
+Sent to ada@example.com because someone asked to sign in to Acme with this address.
+Acme Ltd, 1 Example Road, Testville
+Acme · https://acme.test · hello@acme.test

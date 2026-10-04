@@ -1,0 +1,20 @@
+---
+source: crates/mail-templates/tests/templates.rs
+expression: "format!(\"Subject: {}\\nPreheader: {}\\n\\n{}\", email.subject, email.preheader,\nemail.text)"
+---
+Subject: Your export is ready
+Preheader: The CSV of your March orders is ready to download.
+
+Your export is ready
+
+The CSV of your March orders is ready to download.
+
+Open:
+https://acme.test/exports/42
+
+--
+Stop receiving these:
+https://api.acme.test/v1/notifications/unsubscribe?t=abc
+stop all notification email:
+https://api.acme.test/v1/notifications/unsubscribe?t=all
+Acme · https://acme.test

@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+# Writes every harness module's mail (cratefield-mail-templates, with sample
+# values) in one venture's theme to HTML and text files, and optionally
+# screenshots them.
+#
+#     tools/render-emails [--theme theme.json] [--product slug] [out-dir]
+#         default theme MailTheme::cratefield(), default out target/email-previews
+#     tools/render-emails ... --screenshots [--logo logo-64.png]
+#         also PNGs at 600/360px, light/dark, under <out-dir>/screenshots
+#         (needs Chrome); --logo serves a local file for the logo URL
+#
+# Open <out-dir>/index.html to browse them.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+out="target/email-previews"
+shots=0
+pass=()
+logo=()
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --screenshots) shots=1 ;;
+    --logo) logo=(--logo "$2"); shift ;;
+    --theme|--product) pass+=("$1" "$2"); shift ;;
+    -h|--help) sed -n '2,13p' "$0"; exit 0 ;;
+    *) out="$1" ;;
+  esac
+  shift
+done
+
+cargo run --quiet -p cratefield-mail-previews -- ${pass[@]+"${pass[@]}"} "$out"
+
+if [[ $shots == 1 ]]; then
+  node tools/screenshot-emails.mjs "$out" "$out/screenshots" ${logo[@]+"${logo[@]}"}
+fi

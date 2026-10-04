@@ -31,3 +31,4 @@ cratefield-secrets	CRATEFIELD · SECRETS	Never read back.	Envelope encryption ov
 cratefield-kms	CRATEFIELD · KMS PORT	Wrap and unwrap.	The KMS port for data keys, with a local-file provider that refuses to run in production.	WRAP · UNWRAP · LOCAL DEV	kms.wrap()
 cratefield-i18n	CRATEFIELD · I18N	In their own language.	Fluent catalogs, BCP 47 negotiation and text direction. No I/O, nothing notification-specific.	FLUENT · BCP 47 · DIRECTION	t("booked")
 cratefield-manifest	CRATEFIELD · MANIFEST	What a backend is.	The venture manifest and the deterministic composition generator it produces.	DECLARATIVE · DETERMINISTIC	venture.toml
+cratefield-mail-templates	CRATEFIELD · MAIL TEMPLATES	Mail that looks like the venture.	One email-safe layout and a text twin, themed with the site's colours, logo and fonts.	600PX · DARK MODE · TEXT TWIN · ESCAPED	Message::render(&theme)

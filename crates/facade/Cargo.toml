@@ -115,18 +115,22 @@ auth-client = ["dep:cratefield-auth-client"]
 # shipped module yet — `fz-module-linkedin` is private — so a venture that
 # speaks to another OAuth provider turns it on itself.
 oauth-client = ["dep:cratefield-oauth-client"]
+# Branded mail (issue #715): the `MailTheme` a venture composes into each
+# mail-sending module's `themed_templates`. Every module that sends mail
+# turns it on, so the theme type is always nameable beside the module.
+mail-templates = ["dep:cratefield-mail-templates"]
 
 # Modules shipped with the harness.
-email-signup = ["dep:cratefield-module-email-signup"]
+email-signup = ["dep:cratefield-module-email-signup", "mail-templates"]
 privacy = ["dep:cratefield-module-privacy"]
-waitlist = ["dep:cratefield-module-waitlist"]
+waitlist = ["dep:cratefield-module-waitlist", "mail-templates"]
 cms = ["dep:cratefield-module-cms"]
 changelog = ["dep:cratefield-module-changelog"]
-notifications = ["dep:cratefield-module-notifications", "i18n"]
+notifications = ["dep:cratefield-module-notifications", "i18n", "mail-templates"]
 telemetry = ["dep:cratefield-module-telemetry"]
 webhooks = ["dep:cratefield-module-webhooks"]
 device-auth = ["dep:cratefield-module-device-auth"]
-orgs = ["dep:cratefield-module-orgs"]
+orgs = ["dep:cratefield-module-orgs", "mail-templates"]
 connections = ["dep:cratefield-module-connections"]
 
 # The conformance kit. Belongs under [dev-dependencies] in a venture.
@@ -175,6 +179,7 @@ cratefield-auth-client = { workspace = true, optional = true }
 cratefield-oauth-client = { workspace = true, optional = true }
 cratefield-secrets = { workspace = true, optional = true }
 cratefield-kms = { workspace = true, optional = true }
+cratefield-mail-templates = { workspace = true, optional = true }
 cratefield-module-email-signup = { workspace = true, optional = true }
 cratefield-module-privacy = { workspace = true, optional = true }
 cratefield-module-waitlist = { workspace = true, optional = true }

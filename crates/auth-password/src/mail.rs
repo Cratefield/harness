@@ -10,8 +10,8 @@
 //! messages, and a venture that wants to reword one should not have to
 //! reword the others.
 
-use askama::Template as _;
-use cratefield_core::{Rendered, Template, TemplateError, TemplateRegistry};
+use cratefield_core::{Config, Rendered, Template, TemplateError, TemplateRegistry, Venture};
+use cratefield_mail_templates::{self as mt, MailTheme};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -21,52 +21,10 @@ pub const TEMPLATE_VERIFY: &str = "auth-password/verify";
 pub const TEMPLATE_DUPLICATE: &str = "auth-password/duplicate";
 pub const TEMPLATE_RESET: &str = "auth-password/reset";
 
-/// The value for one askama field, taken from the parsed data: a text
-/// field is borrowed, a number is copied.
-macro_rules! mail_value {
-    (str, $data:ident, $field:ident) => {
-        &$data.$field
-    };
-    (int, $data:ident, $field:ident) => {
-        $data.$field
-    };
-}
-
-/// The three defaults are one shape: parse the wire data, render the html
-/// and text parts from the same fields, prefix the subject. Written once
-/// here; each id keeps its own template structs, so a venture can still
-/// override one and leave the others alone.
-macro_rules! default_mail {
-    (
-        $id:expr, $data:ident, $prefix:literal, $default:ident, $html:ident, $text:ident,
-        { $($field:ident: $kind:ident),* $(,)? }
-    ) => {
-        pub(crate) struct $default;
-
-        impl Template for $default {
-            fn render(&self, data: &Value, _locale: &str) -> Result<Rendered, TemplateError> {
-                let data: $data =
-                    serde_json::from_value(data.clone()).map_err(|_| parse_failed($id))?;
-                Ok(Rendered {
-                    subject: format!("{} {}", $prefix, data.venture),
-                    html: $html { $($field: mail_value!($kind, data, $field)),* }
-                        .render()
-                        .map_err(|err| askama_failed($id, &err))?,
-                    text: $text { $($field: mail_value!($kind, data, $field)),* }
-                        .render()
-                        .map_err(|err| askama_failed($id, &err))?,
-                })
-            }
-        }
-    };
-}
-
-// ---------------------------------------------------------------------------
-// verify
-
 /// What the verification template is given. Serialized through the
 /// registry, so it is a wire format: adding a field is fine, renaming one
-/// breaks overrides.
+/// breaks overrides. Every mail's data also carries the resolved theme
+/// under `theme` (see [`mt::attach_theme`]).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VerifyMail {
     pub venture: String,
@@ -76,30 +34,6 @@ pub struct VerifyMail {
     pub hours: i64,
 }
 
-#[derive(askama::Template)]
-#[template(path = "verify.html")]
-struct VerifyHtml<'a> {
-    venture: &'a str,
-    link: &'a str,
-    hours: i64,
-}
-
-#[derive(askama::Template)]
-#[template(path = "verify.txt")]
-struct VerifyText<'a> {
-    venture: &'a str,
-    link: &'a str,
-    hours: i64,
-}
-
-default_mail! {
-    TEMPLATE_VERIFY, VerifyMail, "Confirm your address for", VerifyDefault, VerifyHtml, VerifyText,
-    { venture: str, link: str, hours: int }
-}
-
-// ---------------------------------------------------------------------------
-// duplicate
-
 /// What the duplicate-registration template is given.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DuplicateMail {
@@ -108,29 +42,6 @@ pub struct DuplicateMail {
     /// has no hosted page to point at.
     pub reset_link: String,
 }
-
-#[derive(askama::Template)]
-#[template(path = "duplicate.html")]
-struct DuplicateHtml<'a> {
-    venture: &'a str,
-    reset_link: &'a str,
-}
-
-#[derive(askama::Template)]
-#[template(path = "duplicate.txt")]
-struct DuplicateText<'a> {
-    venture: &'a str,
-    reset_link: &'a str,
-}
-
-default_mail! {
-    TEMPLATE_DUPLICATE, DuplicateMail, "Somebody tried to create an account with",
-    DuplicateDefault, DuplicateHtml, DuplicateText,
-    { venture: str, reset_link: str }
-}
-
-// ---------------------------------------------------------------------------
-// reset
 
 /// What the password-reset template is given.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -142,25 +53,145 @@ pub struct ResetMail {
     pub minutes: i64,
 }
 
-#[derive(askama::Template)]
-#[template(path = "reset.html")]
-struct ResetHtml<'a> {
-    venture: &'a str,
-    link: &'a str,
-    minutes: i64,
+#[derive(Debug, Clone, Copy)]
+enum Kind {
+    Verify,
+    Duplicate,
+    Reset,
 }
 
-#[derive(askama::Template)]
-#[template(path = "reset.txt")]
-struct ResetText<'a> {
-    venture: &'a str,
-    link: &'a str,
-    minutes: i64,
+/// One of the three default mails, in a composed theme or (`None`) the one
+/// the module attached to the data.
+pub(crate) struct PasswordTemplate {
+    kind: Kind,
+    theme: Option<MailTheme>,
 }
 
-default_mail! {
-    TEMPLATE_RESET, ResetMail, "Reset your password for", ResetDefault, ResetHtml, ResetText,
-    { venture: str, link: str, minutes: int }
+pub(crate) const VERIFY_DEFAULT: PasswordTemplate = PasswordTemplate {
+    kind: Kind::Verify,
+    theme: None,
+};
+pub(crate) const DUPLICATE_DEFAULT: PasswordTemplate = PasswordTemplate {
+    kind: Kind::Duplicate,
+    theme: None,
+};
+pub(crate) const RESET_DEFAULT: PasswordTemplate = PasswordTemplate {
+    kind: Kind::Reset,
+    theme: None,
+};
+
+impl PasswordTemplate {
+    fn id(&self) -> &'static str {
+        match self.kind {
+            Kind::Verify => TEMPLATE_VERIFY,
+            Kind::Duplicate => TEMPLATE_DUPLICATE,
+            Kind::Reset => TEMPLATE_RESET,
+        }
+    }
+}
+
+fn parse<T: serde::de::DeserializeOwned>(id: &str, data: &Value) -> Result<T, TemplateError> {
+    serde_json::from_value(data.clone()).map_err(|_| parse_failed(id))
+}
+
+impl Template for PasswordTemplate {
+    fn render(&self, data: &Value, _locale: &str) -> Result<Rendered, TemplateError> {
+        let theme = mt::theme_for_template(self.theme.as_ref(), data);
+        let id = self.id();
+        let message = match self.kind {
+            Kind::Verify => {
+                let data: VerifyMail = parse(id, data)?;
+                let venture = theme.name_or(&data.venture);
+                let hours = data.hours;
+                mt::Message::new(
+                    format!("Confirm your address for {venture}"),
+                    format!("Confirm your address for {venture}"),
+                )
+                .preheader(format!(
+                    "This link works once and expires in {hours} hours. If you did not create \
+                     an account, ignore this message."
+                ))
+                .paragraph(format!(
+                    "Open this link to confirm this address. It works once and expires in \
+                     {hours} hours."
+                ))
+                .button("Confirm this address", &data.link)
+                .fallback_link()
+                .link_intro("If the button does not work, copy this address into your browser:")
+                .note(
+                    "If you did not create an account, you can ignore this message. Nobody can \
+                     use the link without opening it, and it will expire on its own.",
+                )
+                .why(format!(
+                    "someone created a {venture} account with this address"
+                ))
+            }
+            Kind::Duplicate => {
+                let data: DuplicateMail = parse(id, data)?;
+                let venture = theme.name_or(&data.venture);
+                let lead = if data.reset_link.is_empty() {
+                    "Somebody just tried to create an account with this email address, and it \
+                     already has one. If that was you, sign in instead."
+                        .to_owned()
+                } else {
+                    "Somebody just tried to create an account with this email address, and it \
+                     already has one. If that was you, sign in instead \u{2014} or reset your \
+                     password if you have forgotten it."
+                        .to_owned()
+                };
+                let mut message = mt::Message::new(
+                    format!("Somebody tried to create an account with {venture}"),
+                    format!("You already have an account with {venture}"),
+                )
+                .preheader("Somebody tried to create an account with this address.")
+                .paragraph(lead);
+                if !data.reset_link.is_empty() {
+                    message = message
+                        .button("Reset your password", &data.reset_link)
+                        .fallback_link()
+                        .link_intro(
+                            "If the button does not work, copy this address into your browser:",
+                        );
+                }
+                message
+                    .note(
+                        "If it was not you, you can ignore this message. Nothing has changed on \
+                         your account.",
+                    )
+                    .why(format!(
+                        "someone tried to create a {venture} account with this address"
+                    ))
+            }
+            Kind::Reset => {
+                let data: ResetMail = parse(id, data)?;
+                let venture = theme.name_or(&data.venture);
+                let minutes = data.minutes;
+                mt::Message::new(
+                    format!("Reset your password for {venture}"),
+                    format!("Reset your password for {venture}"),
+                )
+                .preheader(format!(
+                    "This link works once and expires in {minutes} minutes. If you did not ask \
+                     for it, ignore this message."
+                ))
+                .paragraph(format!(
+                    "Open this link to choose a new password. It works once and expires in \
+                     {minutes} minutes."
+                ))
+                .button("Choose a new password", &data.link)
+                .fallback_link()
+                .link_intro("If the button does not work, copy this address into your browser:")
+                .note(
+                    "If you did not ask to reset your password, you can ignore this message. \
+                     Your password has not changed, and the link will expire on its own.",
+                )
+                .why(format!(
+                    "someone asked to reset the {venture} password for this address"
+                ))
+            }
+        };
+        Ok(message.render(&theme).into())
+    }
 }
 
 fn parse_failed(id: &str) -> TemplateError {
@@ -170,36 +201,43 @@ fn parse_failed(id: &str) -> TemplateError {
     }
 }
 
-fn askama_failed(id: &str, err: &askama::Error) -> TemplateError {
-    TemplateError::RenderFailed {
-        id: id.to_owned(),
-        reason: err.to_string(),
-    }
-}
-
 /// The module's default templates, for
 /// `Harness::builder().templates(..)` — register these alongside
-/// `auth-magic-link`'s so both modules' mail resolves.
+/// `auth-magic-link`'s so both modules' mail resolves. They render in the
+/// theme the module resolves for each mail (the venture's core `Brand`,
+/// with the deployment's `MAIL_THEME` config on top); use
+/// [`themed_templates`] to compose the venture's own theme.
 #[must_use]
 pub fn default_templates() -> Vec<(String, Box<dyn Template>)> {
-    vec![
-        (
-            TEMPLATE_VERIFY.to_owned(),
-            Box::new(VerifyDefault) as Box<dyn Template>,
-        ),
-        (
-            TEMPLATE_DUPLICATE.to_owned(),
-            Box::new(DuplicateDefault) as Box<dyn Template>,
-        ),
-        (
-            TEMPLATE_RESET.to_owned(),
-            Box::new(ResetDefault) as Box<dyn Template>,
-        ),
-    ]
+    templates(None)
+}
+
+/// The module's templates in `theme`, the venture's own style. The
+/// deployment's `MAIL_THEME` config still applies on top.
+#[must_use]
+pub fn themed_templates(theme: &MailTheme) -> Vec<(String, Box<dyn Template>)> {
+    templates(Some(theme))
+}
+
+fn templates(theme: Option<&MailTheme>) -> Vec<(String, Box<dyn Template>)> {
+    [Kind::Verify, Kind::Duplicate, Kind::Reset]
+        .into_iter()
+        .map(|kind| {
+            let template = PasswordTemplate {
+                kind,
+                theme: theme.cloned(),
+            };
+            (
+                template.id().to_owned(),
+                Box::new(template) as Box<dyn Template>,
+            )
+        })
+        .collect()
 }
 
 /// Renders through the venture's registry, falling back to the compiled
-/// default when the registry misses.
+/// default when the registry misses. The theme the venture and its config
+/// resolve to rides along in the data.
 ///
 /// # Errors
 ///
@@ -210,11 +248,14 @@ pub(crate) fn render<T: Serialize>(
     default: &dyn Template,
     data: &T,
     locale: &str,
+    venture: &Venture,
+    config: &dyn Config,
 ) -> Result<Rendered, TemplateError> {
-    let value = serde_json::to_value(data).map_err(|err| TemplateError::RenderFailed {
+    let mut value = serde_json::to_value(data).map_err(|err| TemplateError::RenderFailed {
         id: id.to_owned(),
         reason: err.to_string(),
     })?;
+    mt::attach_theme(&mut value, venture, config);
     match registry.render(id, &value, locale) {
         Err(TemplateError::UnknownTemplate { .. }) => default.render(&value, locale),
         other => other,
@@ -224,6 +265,11 @@ pub(crate) fn render<T: Serialize>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use cratefield_core::EmptyConfig;
+
+    fn venture() -> Venture {
+        Venture::new("Factory Zero", "factory0.ventures")
+    }
 
     #[test]
     fn the_text_part_carries_the_raw_link() {
@@ -238,17 +284,25 @@ mod tests {
         let rendered = render(
             &TemplateRegistry::new(),
             TEMPLATE_VERIFY,
-            &VerifyDefault,
+            &VERIFY_DEFAULT,
             &data,
             "en",
+            &venture(),
+            &EmptyConfig,
         )
         .expect("renders");
         assert!(rendered.text.contains(&data.link), "{}", rendered.text);
         assert!(rendered.subject.contains("Factory Zero"));
         assert!(rendered.text.contains("24 hours"));
         assert!(!rendered.text.contains('<'), "{}", rendered.text);
-        // Once as the button, once as copyable text.
-        assert_eq!(rendered.html.matches(&data.link).count(), 2);
+        // Once as the button, once as the copyable link.
+        assert_eq!(
+            rendered
+                .html
+                .matches(&format!("href=\"{}\"", data.link))
+                .count(),
+            2
+        );
     }
 
     #[test]
@@ -260,12 +314,25 @@ mod tests {
         let rendered = render(
             &TemplateRegistry::new(),
             TEMPLATE_DUPLICATE,
-            &DuplicateDefault,
+            &DUPLICATE_DEFAULT,
             &data,
             "en",
+            &venture(),
+            &EmptyConfig,
         )
         .expect("renders");
-        assert!(!rendered.text.contains("http"), "{}", rendered.text);
+        // No button and no link but the venture's own site in the footer.
+        assert!(
+            !rendered.text.contains("Reset your password"),
+            "{}",
+            rendered.text
+        );
+        assert!(
+            !rendered.html.contains("class=\"cf-btn\""),
+            "{}",
+            rendered.html
+        );
+        assert!(!rendered.text.contains("/v1/"), "{}", rendered.text);
         assert!(rendered.text.contains("already has one"));
     }
 
@@ -289,21 +356,31 @@ mod tests {
             link: "https://auth.example/v1/auth-password/reset?token=abc".to_owned(),
             minutes: 30,
         };
-        let overridden =
-            render(&registry, TEMPLATE_RESET, &ResetDefault, &data, "en").expect("renders");
+        let overridden = render(
+            &registry,
+            TEMPLATE_RESET,
+            &RESET_DEFAULT,
+            &data,
+            "en",
+            &venture(),
+            &EmptyConfig,
+        )
+        .expect("renders");
         assert_eq!(overridden.subject, "the venture's own subject");
 
         // The other two ids are untouched and still fall back.
         let verify = render(
             &registry,
             TEMPLATE_VERIFY,
-            &VerifyDefault,
+            &VERIFY_DEFAULT,
             &VerifyMail {
                 venture: "Factory Zero".to_owned(),
                 link: "https://auth.example/v1/auth-password/verify?token=abc".to_owned(),
                 hours: 24,
             },
             "en",
+            &venture(),
+            &EmptyConfig,
         )
         .expect("falls back");
         assert!(verify.subject.contains("Factory Zero"));
@@ -311,8 +388,8 @@ mod tests {
 
     #[test]
     fn nothing_from_the_link_can_break_out_of_the_html() {
-        // The link is built by this service, not by a caller, but askama
-        // escapes it anyway and this asserts that it does.
+        // The link is built by this service, not by a caller, but the
+        // layout escapes it anyway and this asserts that it does.
         let hostile = ResetMail {
             venture: "Factory Zero".to_owned(),
             link: "https://auth.example/x?t=a\"><script>alert(1)</script>".to_owned(),
@@ -321,9 +398,11 @@ mod tests {
         let rendered = render(
             &TemplateRegistry::new(),
             TEMPLATE_RESET,
-            &ResetDefault,
+            &RESET_DEFAULT,
             &hostile,
             "en",
+            &venture(),
+            &EmptyConfig,
         )
         .expect("renders");
         assert!(

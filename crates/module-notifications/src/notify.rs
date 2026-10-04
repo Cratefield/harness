@@ -1629,38 +1629,47 @@ impl Notifier {
             .or_else(|| category.subject_template.clone())
             .unwrap_or_else(|| notification.title.clone());
 
-        let action = notification
-            .url
-            .as_deref()
-            .map_or_else(String::new, |url| format!("\n{url}\n"));
-        let text = format!(
-            "{}\n\n{}\n{}\nTo stop receiving these, open:\n{}\n\nTo stop every \
-             notification email:\n{}\n",
-            notification.title, notification.body, action, unsubscribe, unsubscribe_all
-        );
-        // `lang` and `dir` on a wrapper, not on a `<html>` element this
-        // fragment does not have. Both matter and they are different
-        // questions: `lang` is what a screen reader pronounces it as, and
-        // `dir` is what stops an Arabic paragraph being laid out left to
-        // right with its punctuation in the wrong place. Direction comes
-        // from `cratefield-i18n`'s explicit list — `unic-langid` carries
-        // no directionality data at all.
-        let html = format!(
-            "<div lang=\"{}\" dir=\"{}\"><p><strong>{}</strong></p><p>{}</p>{}<hr><p><a \
-             href=\"{}\">Stop receiving these</a> &middot; <a href=\"{}\">stop all notification \
-             email</a></p></div>",
-            escape(&locale.to_string()),
-            direction(locale).as_str(),
-            escape(&notification.title),
-            escape(&notification.body),
-            notification.url.as_deref().map_or_else(String::new, |url| {
-                format!("<p><a href=\"{}\">Open</a></p>", escape(url))
-            }),
-            escape(&unsubscribe),
-            escape(&unsubscribe_all),
-        );
+        // `lang` and `dir` on the document. Both matter and they are
+        // different questions: `lang` is what a screen reader pronounces it
+        // as, and `dir` is what stops an Arabic paragraph being laid out
+        // left to right with its punctuation in the wrong place. Direction
+        // comes from `cratefield-i18n`'s explicit list — `unic-langid`
+        // carries no directionality data at all.
+        let mut data = serde_json::to_value(crate::mail::EmailMail {
+            venture: ctx.venture.name.clone(),
+            subject: subject.clone(),
+            title: notification.title.clone(),
+            body: notification.body.clone(),
+            url: notification.url.clone(),
+            lang: locale.to_string(),
+            dir: direction(locale).as_str().to_owned(),
+            unsubscribe: unsubscribe.clone(),
+            unsubscribe_all: unsubscribe_all.clone(),
+        })
+        .unwrap_or_else(|_| json!({}));
+        cratefield_mail_templates::attach_theme(&mut data, &ctx.venture, &*ctx.config);
+        let rendered = crate::mail::render(&ctx.templates, &data, &locale.to_string())
+            .unwrap_or_else(|error| {
+                // A venture override that fails must not cost the
+                // recipient the notification: the plain parts still go.
+                tracing::error!(%error, "notification email template failed; sending plain");
+                cratefield_core::Rendered {
+                    subject: subject.clone(),
+                    html: format!(
+                        "<p>{}</p><p>{}</p><p><a href=\"{}\">Stop receiving these</a></p>",
+                        escape(&notification.title),
+                        escape(&notification.body),
+                        escape(&unsubscribe),
+                    ),
+                    text: format!(
+                        "{}\n\n{}\n\nTo stop receiving these, open:\n{}\n\nTo stop every \
+                         notification email:\n{}\n",
+                        notification.title, notification.body, unsubscribe, unsubscribe_all
+                    ),
+                }
+            });
 
-        let mut message = Mail::new(to, from, subject, text, html)
+        let mut message = Mail::new(to, from, rendered.subject, rendered.text, rendered.html)
             // RFC 3282: what language this mail is in. A filing rule, a
             // screen reader and a translation prompt all read it, and a
             // mail sent in Indonesian that claims nothing is a mail every
