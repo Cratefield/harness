@@ -384,7 +384,15 @@ fn render<T: serde::Serialize>(
     data: &T,
     locale: &str,
 ) -> Option<Rendered> {
-    match mail::render(&ctx.templates, id, default, data, locale) {
+    match mail::render(
+        &ctx.templates,
+        id,
+        default,
+        data,
+        locale,
+        &ctx.venture,
+        &*ctx.config,
+    ) {
         Ok(rendered) => Some(rendered),
         Err(err) => {
             tracing::error!(error = %err, "could not render auth-password mail");
@@ -465,7 +473,7 @@ pub(crate) fn send_verify_mail(
         if let Some(rendered) = render(
             ctx,
             mail::TEMPLATE_VERIFY,
-            &mail::VerifyDefault,
+            &mail::VERIFY_DEFAULT,
             &data,
             &locale,
         ) {
@@ -528,7 +536,7 @@ pub(crate) fn send_reset_mail(
         if let Some(rendered) = render(
             ctx,
             mail::TEMPLATE_RESET,
-            &mail::ResetDefault,
+            &mail::RESET_DEFAULT,
             &data,
             &locale,
         ) {
@@ -573,7 +581,7 @@ pub(crate) fn send_duplicate_mail(
         if let Some(rendered) = render(
             ctx,
             mail::TEMPLATE_DUPLICATE,
-            &mail::DuplicateDefault,
+            &mail::DUPLICATE_DEFAULT,
             &data,
             &locale,
         ) {

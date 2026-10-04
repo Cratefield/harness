@@ -687,6 +687,7 @@ dependencies = [
  "cratefield-import-supabase",
  "cratefield-introspect",
  "cratefield-kms",
+ "cratefield-mail-templates",
  "cratefield-manifest",
  "cratefield-module-changelog",
  "cratefield-module-cms",
@@ -1277,6 +1278,7 @@ dependencies = [
  "cratefield-catalog",
  "cratefield-chrome",
  "cratefield-core",
+ "cratefield-mail-templates",
  "cratefield-module-privacy",
  "cratefield-provisioning",
  "cratefield-testing",
@@ -1464,6 +1466,33 @@ dependencies = [
 ]
 
 [[package]]
+name = "cratefield-mail-previews"
+version = "0.1.1"
+dependencies = [
+ "cratefield-core",
+ "cratefield-mail-templates",
+ "cratefield-module-email-signup",
+ "cratefield-module-notifications",
+ "cratefield-module-orgs",
+ "cratefield-module-waitlist",
+ "factory0-auth-magic-link",
+ "factory0-auth-password",
+ "serde_json",
+]
+
+[[package]]
+name = "cratefield-mail-templates"
+version = "0.1.0"
+dependencies = [
+ "cratefield-core",
+ "getrandom 0.4.3",
+ "insta",
+ "serde",
+ "serde_json",
+ "tracing",
+]
+
+[[package]]
 name = "cratefield-manifest"
 version = "0.2.1"
 dependencies = [
@@ -1586,12 +1615,12 @@ dependencies = [
 name = "cratefield-module-email-signup"
 version = "0.3.0"
 dependencies = [
- "askama",
  "async-trait",
  "axum",
  "bytes",
  "cratefield-adapter-sqlite",
  "cratefield-core",
+ "cratefield-mail-templates",
  "cratefield-module-privacy",
  "cratefield-testing",
  "http",
@@ -1637,6 +1666,7 @@ dependencies = [
  "cratefield-auth-client",
  "cratefield-core",
  "cratefield-i18n",
+ "cratefield-mail-templates",
  "cratefield-module-privacy",
  "cratefield-push-wiring",
  "cratefield-testing",
@@ -1663,6 +1693,7 @@ dependencies = [
  "async-trait",
  "axum",
  "cratefield-core",
+ "cratefield-mail-templates",
  "cratefield-module-privacy",
  "cratefield-testing",
  "hex",
@@ -1723,11 +1754,11 @@ dependencies = [
 name = "cratefield-module-waitlist"
 version = "0.3.0"
 dependencies = [
- "askama",
  "async-trait",
  "axum",
  "cratefield-adapter-sqlite",
  "cratefield-core",
+ "cratefield-mail-templates",
  "cratefield-module-privacy",
  "cratefield-testing",
  "http",
@@ -2053,6 +2084,7 @@ dependencies = [
  "cratefield-adapter-resend",
  "cratefield-adapter-turnstile",
  "cratefield-core",
+ "cratefield-mail-templates",
  "cratefield-module-waitlist",
  "cratefield-runtime-cloudflare",
  "getrandom 0.4.3",
@@ -2616,13 +2648,13 @@ dependencies = [
 name = "factory0-auth-magic-link"
 version = "0.1.1"
 dependencies = [
- "askama",
  "async-trait",
  "axum",
  "base64ct",
  "bytes",
  "cratefield-adapter-sqlite",
  "cratefield-core",
+ "cratefield-mail-templates",
  "cratefield-testing",
  "factory0-auth-core",
  "futures-lite",
@@ -2732,7 +2764,6 @@ name = "factory0-auth-password"
 version = "0.1.1"
 dependencies = [
  "argon2",
- "askama",
  "async-trait",
  "axum",
  "base16ct 0.2.0",
@@ -2740,6 +2771,7 @@ dependencies = [
  "bytes",
  "cratefield-adapter-sqlite",
  "cratefield-core",
+ "cratefield-mail-templates",
  "cratefield-testing",
  "factory0-auth-core",
  "getrandom 0.4.3",

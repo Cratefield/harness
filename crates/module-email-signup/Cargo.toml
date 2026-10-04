@@ -4,7 +4,7 @@ description = "Cratefield module: email signup with double opt-in, unsubscribe, 
 readme = "README.md"
 keywords = ["cratefield", "signup", "email", "newsletter", "opt-in"]
 categories = ["email"]
-include = ["src/**/*", "migrations/**/*", "templates/**/*", "examples/**/*", "tests/**/*", "README.md"]
+include = ["src/**/*", "migrations/**/*", "examples/**/*", "tests/**/*", "README.md"]
 version = "0.3.0"
 edition.workspace = true
 rust-version.workspace = true
@@ -25,7 +25,7 @@ sea-query = { workspace = true }
 tracing = { workspace = true }
 time = { workspace = true }
 ulid = { workspace = true }
-askama = { workspace = true }
+cratefield-mail-templates = { workspace = true }
 
 [dev-dependencies]
 # Dev-only, and only so `tests/privacy.rs` can prove the personal-data

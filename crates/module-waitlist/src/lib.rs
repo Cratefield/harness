@@ -34,7 +34,7 @@ mod handlers;
 mod mail;
 mod store;
 
-pub use mail::{ConfirmMailData, ConfirmedMailData, default_templates};
+pub use mail::{ConfirmMailData, ConfirmedMailData, default_templates, themed_templates};
 
 use cratefield_core::{
     AnyError, BoxFuture, Config, ConfigError, DataKind, Disposition, Migrations, Module,

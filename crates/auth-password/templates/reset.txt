@@ -1,8 +1,0 @@
-Reset your password for {{ venture }}
-
-Open this link to choose a new password. It works once and expires in {{ minutes }} minutes.
-
-{{ link }}
-
-If you did not ask to reset your password, you can ignore this message.
-Your password has not changed, and the link will expire on its own.

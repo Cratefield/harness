@@ -2,14 +2,18 @@
 source: crates/module-email-signup/tests/templates.rs
 expression: rendered.text
 ---
-Welcome to factory0!
+Confirm your email
 
-This mail was sent to nick@example.com.
+Welcome to factory0. Confirm your address to finish signing up.
 
-Confirm your email address:
+Confirm email:
 https://api.factory0.ventures/v1/email-signup/confirm?token=abc
 
-Or unsubscribe:
-https://api.factory0.ventures/v1/email-signup/unsubscribe?token=def
+If you did not sign up, ignore this email: nothing happens until the link is opened.
 
+--
+Sent to nick@example.com because this address was used to sign up for factory0.
+Unsubscribe:
+https://api.factory0.ventures/v1/email-signup/unsubscribe?token=def
 Factory Zero · factory0.ventures
+factory0

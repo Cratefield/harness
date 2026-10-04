@@ -1,17 +1,19 @@
 //! Mail rendering and sending for `email-signup`. The default templates
-//! are askama templates compiled into the crate (issue #12), exported via
-//! [`default_templates`] and used directly as the fallback when the
-//! venture registered no override.
+//! render through `cratefield-mail-templates` in the venture's
+//! [`MailTheme`] (issue #12), exported via [`default_templates`] (the theme
+//! the module resolves from the venture and its `MAIL_THEME` config) and
+//! [`themed_templates`] (a theme the venture composed), and used directly
+//! as the fallback when the venture registered neither.
 //!
 //! Locale: `en` is shipped; ventures register overrides under
 //! `email-signup/confirm@<locale>` (e.g. `@nl`, `@is`) and the registry
 //! resolves them per request locale.
 
-use askama::Template as _;
 use cratefield_core::{
     Brand, MailError, Message, ModuleConfig, ModuleContext, Rendered, SendOutcome, Template,
     TemplateError, TemplateRegistry,
 };
+use cratefield_mail_templates::{self as mt, MailTheme};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::sync::Arc;
@@ -19,9 +21,9 @@ use std::sync::Arc;
 pub(crate) const TEMPLATE_CONFIRM: &str = "email-signup/confirm";
 pub(crate) const TEMPLATE_WELCOME: &str = "email-signup/welcome";
 
-/// Typed data for `email-signup/confirm`; askama templates in ventures
-/// deserialize the same shape, so overrides are type-checked at compile
-/// time.
+/// Typed data for `email-signup/confirm`; templates in ventures
+/// deserialize the same shape. The module also puts the resolved theme
+/// under `theme` (see [`mt::attach_theme`]).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConfirmMailData {
     pub venture: String,
@@ -49,80 +51,95 @@ fn parse_failed(id: &str) -> TemplateError {
     }
 }
 
-fn askama_failed(id: &str, err: &askama::Error) -> TemplateError {
-    TemplateError::RenderFailed {
-        id: id.to_owned(),
-        reason: err.to_string(),
-    }
+struct ConfirmTemplate {
+    theme: Option<MailTheme>,
 }
-
-#[derive(askama::Template)]
-#[template(path = "email_confirm.html")]
-struct ConfirmHtml<'a> {
-    data: &'a ConfirmMailData,
-}
-
-#[derive(askama::Template)]
-#[template(path = "email_confirm.txt")]
-struct ConfirmText<'a> {
-    data: &'a ConfirmMailData,
-}
-
-#[derive(askama::Template)]
-#[template(path = "email_welcome.html")]
-struct WelcomeHtml<'a> {
-    data: &'a WelcomeMailData,
-}
-
-#[derive(askama::Template)]
-#[template(path = "email_welcome.txt")]
-struct WelcomeText<'a> {
-    data: &'a WelcomeMailData,
-}
-
-struct ConfirmTemplate;
 
 impl Template for ConfirmTemplate {
     fn render(&self, data: &Value, _locale: &str) -> Result<Rendered, TemplateError> {
+        let theme = mt::theme_for_template(self.theme.as_ref(), data);
         let data: ConfirmMailData =
             serde_json::from_value(data.clone()).map_err(|_| parse_failed(TEMPLATE_CONFIRM))?;
-        Ok(Rendered {
-            subject: format!("Confirm your email for {}", data.venture),
-            html: ConfirmHtml { data: &data }
-                .render()
-                .map_err(|err| askama_failed(TEMPLATE_CONFIRM, &err))?,
-            text: ConfirmText { data: &data }
-                .render()
-                .map_err(|err| askama_failed(TEMPLATE_CONFIRM, &err))?,
-        })
+        let venture = theme.name_or(&data.venture);
+        Ok(mt::Message::new(
+            format!("Confirm your email for {venture}"),
+            "Confirm your email",
+        )
+        .preheader(format!(
+            "Confirm your address to finish signing up for {venture}."
+        ))
+        .paragraph(format!(
+            "Welcome to {venture}. Confirm your address to finish signing up."
+        ))
+        .button("Confirm email", &data.confirm_url)
+        .fallback_link()
+        .link_intro("If the button does not work, open this link:")
+        .note(
+            "If you did not sign up, ignore this email: nothing happens until the link \
+                     is opened.",
+        )
+        .recipient(&data.email)
+        .why(format!("this address was used to sign up for {venture}"))
+        .footer_link("Unsubscribe", &data.unsubscribe_url)
+        .render(&theme)
+        .into())
     }
 }
 
-struct WelcomeTemplate;
+struct WelcomeTemplate {
+    theme: Option<MailTheme>,
+}
 
 impl Template for WelcomeTemplate {
     fn render(&self, data: &Value, _locale: &str) -> Result<Rendered, TemplateError> {
+        let theme = mt::theme_for_template(self.theme.as_ref(), data);
         let data: WelcomeMailData =
             serde_json::from_value(data.clone()).map_err(|_| parse_failed(TEMPLATE_WELCOME))?;
-        Ok(Rendered {
-            subject: format!("Welcome to {}", data.venture),
-            html: WelcomeHtml { data: &data }
-                .render()
-                .map_err(|err| askama_failed(TEMPLATE_WELCOME, &err))?,
-            text: WelcomeText { data: &data }
-                .render()
-                .map_err(|err| askama_failed(TEMPLATE_WELCOME, &err))?,
-        })
+        let venture = theme.name_or(&data.venture);
+        Ok(
+            mt::Message::new(format!("Welcome to {venture}"), "You are on the list")
+                .preheader(format!("Your email address is confirmed for {venture}."))
+                .paragraph(format!(
+                    "Welcome to {venture} \u{2014} your email address is confirmed."
+                ))
+                .recipient(&data.email)
+                .why(format!("you signed up for {venture}"))
+                .footer_link("Unsubscribe", &data.unsubscribe_url)
+                .render(&theme)
+                .into(),
+        )
     }
 }
 
-/// The module's default askama templates, for
-/// `Harness::builder().templates(..)`. Ventures register them first and
-/// their overrides second.
+/// The module's default templates, for `Harness::builder().templates(..)`.
+/// Ventures register them first and their overrides second. They render
+/// in the theme the module resolves for each mail (the venture's core
+/// `Brand`, with the deployment's `MAIL_THEME` config on top); use
+/// [`themed_templates`] to compose the venture's own theme.
 pub fn default_templates() -> Vec<(String, Box<dyn Template>)> {
+    templates(None)
+}
+
+/// The module's templates in `theme`, the venture's own style. The
+/// deployment's `MAIL_THEME` config still applies on top.
+pub fn themed_templates(theme: &MailTheme) -> Vec<(String, Box<dyn Template>)> {
+    templates(Some(theme))
+}
+
+fn templates(theme: Option<&MailTheme>) -> Vec<(String, Box<dyn Template>)> {
     vec![
-        (TEMPLATE_CONFIRM.to_owned(), Box::new(ConfirmTemplate)),
-        (TEMPLATE_WELCOME.to_owned(), Box::new(WelcomeTemplate)),
+        (
+            TEMPLATE_CONFIRM.to_owned(),
+            Box::new(ConfirmTemplate {
+                theme: theme.cloned(),
+            }),
+        ),
+        (
+            TEMPLATE_WELCOME.to_owned(),
+            Box::new(WelcomeTemplate {
+                theme: theme.cloned(),
+            }),
+        ),
     ]
 }
 
@@ -138,8 +155,8 @@ pub(crate) fn render(
     match registry.render(id, data, locale) {
         Ok(rendered) => Ok(rendered),
         Err(TemplateError::UnknownTemplate { .. }) => match id {
-            TEMPLATE_CONFIRM => ConfirmTemplate.render(data, locale),
-            TEMPLATE_WELCOME => WelcomeTemplate.render(data, locale),
+            TEMPLATE_CONFIRM => ConfirmTemplate { theme: None }.render(data, locale),
+            TEMPLATE_WELCOME => WelcomeTemplate { theme: None }.render(data, locale),
             other => Err(TemplateError::UnknownTemplate {
                 id: other.to_owned(),
                 locale: locale.to_owned(),
@@ -163,8 +180,10 @@ pub(crate) async fn send(
     ctx: &ModuleContext,
     mail: &OutgoingMail,
 ) -> Result<SendOutcome, MailError> {
+    let mut data = mail.data.clone();
+    mt::attach_theme(&mut data, &ctx.venture, &*ctx.config);
     let rendered =
-        render(&ctx.templates, mail.template_id, &mail.data, &mail.locale).map_err(|err| {
+        render(&ctx.templates, mail.template_id, &data, &mail.locale).map_err(|err| {
             MailError::Invalid {
                 detail: err.to_string(),
             }

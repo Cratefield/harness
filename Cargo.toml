@@ -43,6 +43,9 @@ cratefield-adapter-resend = { path = "crates/adapter-resend", version = "0.3" }
 # The second mail provider (issue #591): the `Mailer` port over the
 # Resend-compatible Owlpost REST API, the same `POST /v1/emails` shape.
 cratefield-adapter-owlpost = { path = "crates/adapter-owlpost", version = "0.1" }
+# Branded transactional mail (one email-client-safe layout and a text twin per
+# message), themed per venture. Every mail-sending module renders through it.
+cratefield-mail-templates = { path = "crates/mail-templates", version = "0.1" }
 # Issue tracker (issue #432): the `Tracker` port over the GitHub Issues REST
 # API — search-before-create so the at-least-once outbox files one ticket.
 cratefield-adapter-github-issues = { path = "crates/adapter-github-issues", version = "0.2" }

@@ -107,7 +107,10 @@ fn instance(env: &Env) -> &'static (Harness, Cloudflare) {
                     // says loudly what it is missing.
                     .cors_origins(["https://cratefield.com", "https://www.cratefield.com"]),
             )
-            .templates(cratefield_module_waitlist::default_templates())
+            // Cratefield's own mail theme (cratefield.com's tokens and mark).
+            .templates(cratefield_module_waitlist::themed_templates(
+                &cratefield_mail_templates::MailTheme::cratefield(),
+            ))
             .module(
                 Waitlist::new()
                     .products(["cratefield"])

@@ -49,7 +49,7 @@ use std::sync::Arc;
 
 pub use mail::{
     DuplicateMail, ResetMail, TEMPLATE_DUPLICATE, TEMPLATE_RESET, TEMPLATE_VERIFY, VerifyMail,
-    default_templates,
+    default_templates, themed_templates,
 };
 
 /// How long a verification link lasts (issue #19). A day: long enough to

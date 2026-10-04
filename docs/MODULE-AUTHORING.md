@@ -1192,11 +1192,18 @@ Everything else a module can do, with the module that does it:
   [0006](adr/0006-signed-tokens-for-opt-in.md)).
 - **Atomic multi-statement writes** (`Database::batch_atomic`) and **positions**:
   `crates/module-waitlist/src/store.rs`.
-- **Mail templates**: `crates/module-email-signup/src/mail.rs` — askama
-  templates shipped as `pub fn default_templates()`, registered by the
-  venture with `Harness::builder().templates(..)`, overridable per
-  venture with `.template("<module>/<id>", ..)`; the id's module part
-  must name a registered module.
+- **Mail templates**: `crates/module-email-signup/src/mail.rs` — templates
+  that build a `cratefield_mail_templates::Message` and render it in the
+  venture's `MailTheme`, shipped as `pub fn default_templates()` and
+  `pub fn themed_templates(&MailTheme)`, registered by the venture with
+  `Harness::builder().templates(..)`, overridable per venture with
+  `.template("<module>/<id>", ..)`; the id's module part must name a
+  registered module. Before rendering, call
+  `cratefield_mail_templates::attach_theme(&mut data, &ctx.venture, &*ctx.config)`
+  and resolve the theme in the template with `theme_for_template`, so a
+  composed theme, the `MAIL_THEME` config and the venture default apply in
+  that order (ADR [0028](adr/0028-mail-renders-through-one-themed-layout.md)).
+  Never write mail markup by hand.
 - **Scheduled work** (cron): `Module::scheduled` — see waitlist's pending
   purge in `crates/module-waitlist/src/lib.rs`. Use the `ModuleContext`
   the runtime hands in and nothing else. A scheduled invocation never
