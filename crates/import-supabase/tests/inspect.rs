@@ -18,8 +18,8 @@ use cratefield_core::{
     Question,
 };
 use cratefield_import_supabase::{
-    Classification, InspectError, InspectOptions, ManagementApi, PolicyPattern, PolicySource,
-    ReadOnlySession, Report, Secret, SourceStatus, inspect,
+    Classification, Disposition, InspectError, InspectOptions, ManagementApi, PolicyPattern,
+    PolicySource, ReadOnlySession, Report, Secret, SourceStatus, inspect,
 };
 
 const FIXTURE: &str = include_str!("fixtures/supabase-project.sql");
@@ -151,7 +151,10 @@ async fn the_fixture_report_matches_its_snapshot() {
     // Nothing is guessed: without a token Edge Functions are unknown.
     assert_eq!(report.edge_functions.status, SourceStatus::NotInspected);
     assert_eq!(report.auth.enabled_providers, None);
-    // Without a classifier, what no rule placed is left for review.
+    // Without a classifier, what no rule placed is left for review. The three
+    // are the bespoke interval and the two policies its expression cannot
+    // classify without a judge; the storage policies belong to the storage
+    // phase, not here.
     let review: Vec<&str> = report
         .policies
         .iter()
@@ -162,8 +165,8 @@ async fn the_fixture_report_matches_its_snapshot() {
         review,
         [
             "Archived projects stay visible for a grace period",
-            "Avatar images are publicly accessible",
-            "Users upload their own avatar",
+            "Members can read their team's rows",
+            "Members can leave unless they own the team",
         ]
     );
 
@@ -450,7 +453,8 @@ async fn the_classifier_places_only_what_the_rules_left_and_respects_the_thresho
     };
     let (report, states) = classified(&db, 0.8).await;
     assert_eq!(report.coverage.policy_classifier, SourceStatus::Inspected);
-    // Asked about the three unplaced policies only.
+    // Asked about exactly the policies no rule placed; the storage policies
+    // belong to the storage phase, never the classifier.
     assert_eq!(states.len(), 3);
     let by_name = |name: &str| {
         report
@@ -459,15 +463,18 @@ async fn the_classifier_places_only_what_the_rules_left_and_respects_the_thresho
             .find(|policy| policy.name == name)
             .expect("the policy")
     };
+    // At or above the 0.8 threshold: placed at the classifier's confidence.
     let grace = by_name("Archived projects stay visible for a grace period");
     assert_eq!(grace.pattern, PolicyPattern::CustomLogic);
     assert_eq!(grace.source, PolicySource::Classifier);
     assert!((grace.confidence - 0.93).abs() < 1e-6);
-    let upload = by_name("Users upload their own avatar");
-    assert_eq!(upload.pattern, PolicyPattern::OwnerOnly);
-    let public = by_name("Avatar images are publicly accessible");
-    assert_eq!(public.pattern, PolicyPattern::NeedsReview);
-    assert_eq!(public.classifier_label.as_deref(), Some("public_read"));
+    let leave = by_name("Members can leave unless they own the team");
+    assert_eq!(leave.pattern, PolicyPattern::OwnerOnly);
+    assert!((leave.confidence - 0.85).abs() < 1e-6);
+    // Below it: sent back to review with the classifier's label.
+    let rows = by_name("Members can read their team's rows");
+    assert_eq!(rows.pattern, PolicyPattern::NeedsReview);
+    assert_eq!(rows.classifier_label.as_deref(), Some("public_read"));
     // A rule match is never sent and keeps confidence 1.0.
     let own = by_name("Users can update own profile.");
     assert_eq!(own.source, PolicySource::Rule);
@@ -475,10 +482,7 @@ async fn the_classifier_places_only_what_the_rules_left_and_respects_the_thresho
     // Advisory only: every policy still needs its own disposition, and its
     // stub fails until someone writes the test.
     for policy in &report.policies {
-        assert_eq!(
-            policy.disposition,
-            cratefield_import_supabase::Disposition::Undecided
-        );
+        assert_eq!(policy.disposition, Disposition::Undecided);
         assert!(policy.test_stub.contains("todo!("), "{}", policy.test_stub);
         let finding = report
             .findings
@@ -496,14 +500,176 @@ async fn the_classifier_places_only_what_the_rules_left_and_respects_the_thresho
         }
     }
 
-    // A higher threshold sends the 0.85 answer back to review.
+    // A higher threshold (0.9) sends the 0.85 answer back to review; the
+    // 0.93 answer stays placed.
     let (report, _) = classified(&db, 0.9).await;
-    let upload = report
+    let leave = report
         .policies
         .iter()
-        .find(|policy| policy.name == "Users upload their own avatar")
+        .find(|policy| policy.name == "Members can leave unless they own the team")
         .expect("the policy");
-    assert_eq!(upload.pattern, PolicyPattern::NeedsReview);
-    assert_eq!(upload.classifier_label.as_deref(), Some("owner_only"));
+    assert_eq!(leave.pattern, PolicyPattern::NeedsReview);
+    assert_eq!(leave.classifier_label.as_deref(), Some("owner_only"));
+    let grace = report
+        .policies
+        .iter()
+        .find(|policy| policy.name == "Archived projects stay visible for a grace period")
+        .expect("the policy");
+    assert_eq!(grace.pattern, PolicyPattern::CustomLogic);
+    db.finish().await;
+}
+
+/// A cron-shaped schema for the managed-policy test, created in its own
+/// database so the shared fixture and the read-only-role grants stay
+/// untouched (sibling PR #723 owns those grants).
+const MANAGED_FIXTURE: &str = "\
+    CREATE SCHEMA cron; \
+    CREATE TABLE cron.job (jobid bigint PRIMARY KEY, jobname text, schedule text NOT NULL, \
+     command text NOT NULL, username text DEFAULT CURRENT_USER, active boolean NOT NULL DEFAULT \
+     true); \
+    ALTER TABLE cron.job ENABLE ROW LEVEL SECURITY; \
+    CREATE POLICY \"cron jobs are visible to their owner\" ON cron.job \
+     FOR SELECT USING (username = CURRENT_USER);";
+
+/// Issue #726: a policy on a Supabase-managed schema is audited but is never
+/// a policy, a finding, or needs work.
+#[tokio::test]
+async fn a_managed_schema_policy_is_audited_but_never_a_finding() {
+    let Some(db) = fixture_db("supabase_managed").await else {
+        return;
+    };
+    let pool = sqlx::PgPool::connect(&db.url).await.expect("connect");
+    sqlx::raw_sql(MANAGED_FIXTURE)
+        .execute(&pool)
+        .await
+        .expect("the cron fixture loads");
+    pool.close().await;
+    let report = inspect(&InspectOptions::new(
+        PROJECT_REF,
+        Secret::new(db.url.clone()),
+    ))
+    .await
+    .expect("inspect succeeds");
+
+    let managed: Vec<String> = report
+        .managed_policies
+        .iter()
+        .map(|policy| format!("{}.{}.{}", policy.schema, policy.table, policy.name))
+        .collect();
+    assert_eq!(managed, ["cron.job.cron jobs are visible to their owner"]);
+    assert!(!report.policies.iter().any(|policy| policy.schema == "cron"));
+    assert!(
+        !report
+            .findings
+            .iter()
+            .any(|finding| finding.object.contains("cron."))
+    );
+    // Still consistent: needs work counts exactly the needs-work findings.
+    assert_eq!(
+        report.summary.needs_work,
+        report
+            .findings
+            .iter()
+            .filter(|finding| finding.classification == Classification::NeedsWork)
+            .count()
+    );
+    db.finish().await;
+}
+
+/// Issue #726: a storage policy attaches to the one bucket it names, in the
+/// storage phase — never in `policies`, never a phase-`code` finding — and a
+/// table with RLS and no policy is one informational (automatic) fact.
+#[tokio::test]
+async fn storage_policies_and_rls_without_a_policy_are_reported() {
+    let Some(db) = fixture_db("supabase_storage").await else {
+        return;
+    };
+    let report = inspect(&InspectOptions::new(
+        PROJECT_REF,
+        Secret::new(db.url.clone()),
+    ))
+    .await
+    .expect("inspect succeeds");
+
+    let avatars = report
+        .storage
+        .buckets
+        .iter()
+        .find(|bucket| bucket.id == "avatars")
+        .expect("the avatars bucket");
+    let documents = report
+        .storage
+        .buckets
+        .iter()
+        .find(|bucket| bucket.id == "documents")
+        .expect("the documents bucket");
+    let names: Vec<&str> = avatars
+        .policies
+        .iter()
+        .map(|policy| policy.name.as_str())
+        .collect();
+    assert_eq!(
+        names,
+        [
+            "Avatar images are publicly accessible",
+            "Users upload their own avatar",
+        ]
+    );
+    assert!(documents.policies.is_empty());
+    for policy in &avatars.policies {
+        assert!(!policy.all_buckets);
+        assert_eq!(policy.disposition, Disposition::Undecided);
+        assert_eq!(policy.table, "storage.objects");
+    }
+    assert!(
+        !report
+            .policies
+            .iter()
+            .any(|policy| policy.schema == "storage")
+    );
+    assert!(
+        !report
+            .findings
+            .iter()
+            .any(|finding| finding.kind == "policy" && finding.object.starts_with("storage."))
+    );
+    let storage_findings: Vec<&str> = report
+        .findings
+        .iter()
+        .filter(|finding| finding.kind == "storage_policy")
+        .map(|finding| finding.id.as_str())
+        .collect();
+    assert_eq!(
+        storage_findings,
+        [
+            "storage_policy:storage.objects.Avatar images are publicly accessible",
+            "storage_policy:storage.objects.Users upload their own avatar",
+        ]
+    );
+    for id in &storage_findings {
+        let finding = report
+            .findings
+            .iter()
+            .find(|finding| finding.id == *id)
+            .expect("the finding");
+        assert_eq!(finding.phase, "storage");
+        assert_eq!(finding.classification, Classification::NeedsWork);
+    }
+
+    let no_policy: Vec<&str> = report
+        .findings
+        .iter()
+        .filter(|finding| finding.kind == "rls_no_policy")
+        .map(|finding| finding.object.as_str())
+        .collect();
+    assert_eq!(no_policy, ["public.audit_log"]);
+    let finding = report
+        .findings
+        .iter()
+        .find(|finding| finding.kind == "rls_no_policy")
+        .expect("the finding");
+    assert_eq!(finding.classification, Classification::Automatic);
+    assert_eq!(finding.phase, "code");
+    assert!(finding.cratefield_equivalent.contains("service_role_only"));
     db.finish().await;
 }
