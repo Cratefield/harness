@@ -31,8 +31,10 @@ mod vector_index;
 
 pub use auth::{Auth, AuthError, Caller, Subject, Unconfigured};
 pub use blob::{
-    Blob, BlobError, BlobObject, DEFAULT_PRESIGN_TTL, MAX_BLOB_BYTES, MAX_PRESIGN_TTL,
-    PresignedPut, ScopedBlob, check_blob_size,
+    Blob, BlobError, BlobMeta, BlobObject, BlobPage, BlobStream, DEFAULT_PRESIGN_TTL,
+    MAX_BLOB_BYTES, MAX_LARGE_BLOB_BYTES, MAX_LIST_LIMIT, MAX_MULTIPART_PARTS, MAX_PRESIGN_TTL,
+    MIN_MULTIPART_PART_BYTES, PartReceipt, PendingUpload, PresignedPut, ScopedBlob, UploadId,
+    blob_error_from_stream, check_blob_size, check_part_number, limit_stream,
 };
 pub use captcha::{Captcha, CaptchaBinding, CaptchaError, Verdict};
 pub use classifier::{
@@ -380,8 +382,13 @@ impl Ports {
         if allows(&declared, Port::Blob) {
             // Scope the store to this module's prefix, the blob equivalent of
             // the table-ownership rule: a module cannot name another's objects.
+            // The module's declared large-object ceiling rides along, enforced
+            // on the streamed and multipart writes (issue #586).
             view.blob = self.blob.as_ref().map(|blob| {
-                Arc::new(ScopedBlob::new(Arc::clone(blob), module.name())) as Arc<dyn Blob>
+                Arc::new(
+                    ScopedBlob::new(Arc::clone(blob), module.name())
+                        .with_max_object_bytes(module.max_blob_object_bytes()),
+                ) as Arc<dyn Blob>
             });
         }
         if allows(&declared, Port::Push) {

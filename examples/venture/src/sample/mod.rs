@@ -1,12 +1,13 @@
 //! Sample module for the venture example: one table, one write endpoint,
 //! one read endpoint — the sea-query/D1 round-trip canary (issue #5).
 
-use axum::extract::{Query, State};
-use axum::routing::{get, post};
+use axum::extract::{Path, Query, State};
+use axum::routing::{get, post, put};
 use cratefield::{
     Action, Audience, Clock, Config, ConfigError, DataKind, Disposition, IdGen, Json, Migrations,
-    Module, ModuleContext, Outcome, PersonalDataSet, Port, Problem, RequestStream, ResponseStream,
-    Scope, SqlMigration, Statement, StreamRoute, Surface, SystemClock, UlidIdGen, View,
+    Module, ModuleContext, Outcome, PartReceipt, PersonalDataSet, Port, Problem, RequestStream,
+    ResponseStream, Scope, SqlMigration, Statement, StreamRoute, Surface, SystemClock, UlidIdGen,
+    UploadId, View,
 };
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -107,6 +108,29 @@ impl Module for SampleRowModule {
             .route("/upload", post(upload))
             .route("/download", get(download))
             .route("/big-buffered", get(big_buffered))
+            // The large-object half (issue #586): a multipart upload in
+            // three legs — create, upload each 40 MB part, complete — then a
+            // streamed read back, and a delete. The 120 MB object is far
+            // past the isolate's 128 MB memory, so the parts (not the whole
+            // object) are what is ever resident.
+            .route(
+                "/blob-large/{key}/uploads",
+                post(create_large_upload).with_state(Arc::clone(&state)),
+            )
+            .route(
+                "/blob-large/{key}/uploads/{id}/parts/{n}",
+                put(upload_large_part).with_state(Arc::clone(&state)),
+            )
+            .route(
+                "/blob-large/{key}/uploads/{id}/complete",
+                post(complete_large_upload).with_state(Arc::clone(&state)),
+            )
+            .route(
+                "/blob-large/{key}",
+                get(download_large)
+                    .delete(delete_large)
+                    .with_state(Arc::clone(&state)),
+            )
     }
 
     /// `POST /upload` and `GET /download` are served in streaming mode
@@ -119,8 +143,25 @@ impl Module for SampleRowModule {
         const ROUTES: &[StreamRoute] = &[
             StreamRoute::post("/upload", STREAM_CEILING),
             StreamRoute::get("/download", STREAM_CEILING),
+            // The multipart part's body streams in (issue #586): 40 MB parts
+            // need a route ceiling above that, and 64 MiB keeps the example
+            // under Cloudflare's 100 MB request cap. The large GET streams
+            // the object back out.
+            StreamRoute::put(
+                "/blob-large/{key}/uploads/{id}/parts/{n}",
+                LARGE_PART_CEILING,
+            ),
+            StreamRoute::get("/blob-large/{key}", LARGE_PART_CEILING),
         ];
         ROUTES
+    }
+
+    /// The large-object ceiling the sample declares (issue #586): 256 MiB,
+    /// so CI's 120 MB multipart upload passes and the harness's `ScopedBlob`
+    /// enforces the bound on the streamed and multipart writes. Far below
+    /// the harness-wide [`MAX_LARGE_BLOB_BYTES`](cratefield::MAX_LARGE_BLOB_BYTES).
+    fn max_blob_object_bytes(&self) -> u64 {
+        LARGE_BLOB_OBJECT_BYTES
     }
 
     /// The UI surface (ADR 0010): the insert as a public form, the read as
@@ -502,4 +543,146 @@ impl futures_core::Stream for ZeroChunks {
 /// silently switching to a stream — which is the CI assertion.
 async fn big_buffered() -> axum::response::Response {
     axum::response::Response::new(axum::body::Body::from(vec![0u8; 2 * 1024 * 1024]))
+}
+
+/// The largest object the sample's large-blob routes accept (issue #586):
+/// 256 MiB. Declared through `max_blob_object_bytes`, so the harness's
+/// `ScopedBlob` enforces it on the streamed and multipart writes; CI uploads
+/// 120 MB through the multipart routes below.
+const LARGE_BLOB_OBJECT_BYTES: u64 = 256 * 1024 * 1024;
+
+/// The large-blob routes' own streaming ceiling (issue #585): 64 MiB,
+/// comfortably above the 40 MB parts CI sends and below Cloudflare's 100 MB
+/// request cap.
+const LARGE_PART_CEILING: usize = 64 * 1024 * 1024;
+
+/// The content type every large-blob route stores and serves with.
+const LARGE_CONTENT_TYPE: &str = "application/octet-stream";
+
+/// Starts a multipart upload for `key` (issue #586), the first of the three
+/// large-object legs, and answers the opaque upload id the part and complete
+/// routes take. The blob port is scoped to `sample/`, so the key never
+/// escapes the module.
+async fn create_large_upload(
+    scope: Scope,
+    State(ctx): State<Arc<ModuleContext>>,
+    Path(key): Path<String>,
+) -> Result<Json<serde_json::Value>, Problem> {
+    let Some(blob) = ctx.ports.blob.clone() else {
+        return Err(internal(&scope));
+    };
+    let upload_id = blob
+        .create_multipart(&key, LARGE_CONTENT_TYPE)
+        .await
+        .map_err(|err| {
+            tracing::error!(error = %err, "large blob create failed");
+            internal(&scope)
+        })?;
+    Ok(Json(json!({ "upload_id": upload_id.as_str() })))
+}
+
+/// Uploads one part of a multipart upload (issue #586), its body streamed in
+/// by the runtime (`RequestStream`) and handed straight to the port, which
+/// buffers the part bounded by the route ceiling. Answers the part number
+/// and the `ETag` the client must replay at complete.
+async fn upload_large_part(
+    scope: Scope,
+    State(ctx): State<Arc<ModuleContext>>,
+    Path((key, upload_id, part_number)): Path<(String, String, u16)>,
+    body: RequestStream,
+) -> Result<Json<serde_json::Value>, Problem> {
+    let Some(blob) = ctx.ports.blob.clone() else {
+        return Err(internal(&scope));
+    };
+    let receipt = blob
+        .upload_part(
+            &key,
+            &UploadId::new(upload_id),
+            part_number,
+            Box::pin(body),
+            LARGE_PART_CEILING as u64,
+        )
+        .await
+        .map_err(|err| {
+            tracing::error!(error = %err, "large blob part failed");
+            internal(&scope)
+        })?;
+    Ok(Json(json!({
+        "part_number": receipt.part_number,
+        "etag": receipt.etag,
+    })))
+}
+
+/// One part as the client reports it back: the receipt shape the part route
+/// answered with.
+#[derive(Deserialize)]
+struct PartJson {
+    part_number: u16,
+    etag: String,
+}
+
+/// Completes a multipart upload from the client's receipts (issue #586): the
+/// object becomes visible at `key` in one step, and the port refuses a part
+/// whose `ETag` no longer matches.
+async fn complete_large_upload(
+    scope: Scope,
+    State(ctx): State<Arc<ModuleContext>>,
+    Path((key, upload_id)): Path<(String, String)>,
+    Json(parts): Json<Vec<PartJson>>,
+) -> Result<Json<serde_json::Value>, Problem> {
+    let Some(blob) = ctx.ports.blob.clone() else {
+        return Err(internal(&scope));
+    };
+    let receipts: Vec<PartReceipt> = parts
+        .into_iter()
+        .map(|part| PartReceipt {
+            part_number: part.part_number,
+            etag: part.etag,
+        })
+        .collect();
+    blob.complete_multipart(&key, &UploadId::new(upload_id), &receipts)
+        .await
+        .map_err(|err| {
+            tracing::error!(error = %err, "large blob complete failed");
+            internal(&scope)
+        })?;
+    Ok(Json(json!({ "completed": true, "key": key })))
+}
+
+/// Streams the object at `key` back through `BlobStream::into_response_stream`
+/// (issue #586): a 120 MB object is answered without ever holding it whole,
+/// because the runtime bridges the port's stream straight to the wire.
+async fn download_large(
+    scope: Scope,
+    State(ctx): State<Arc<ModuleContext>>,
+    Path(key): Path<String>,
+) -> Result<ResponseStream, Problem> {
+    let Some(blob) = ctx.ports.blob.clone() else {
+        return Err(internal(&scope));
+    };
+    match blob.get_stream(&key).await {
+        Ok(Some(stream)) => Ok(stream.into_response_stream()),
+        Ok(None) => Err(Problem::not_found().instance(&scope.request_id)),
+        Err(err) => {
+            tracing::error!(error = %err, "large blob get failed");
+            Err(internal(&scope))
+        }
+    }
+}
+
+/// Removes the object at `key` (issue #586): the last leg, so the smoke run
+/// leaves no large object behind in the bucket.
+async fn delete_large(
+    scope: Scope,
+    State(ctx): State<Arc<ModuleContext>>,
+    Path(key): Path<String>,
+) -> Result<Json<serde_json::Value>, Problem> {
+    let Some(blob) = ctx.ports.blob.clone() else {
+        return Err(internal(&scope));
+    };
+    blob.delete(&key).await.map_err(|err| {
+        tracing::error!(error = %err, "large blob delete failed");
+        internal(&scope)
+    })?;
+    Ok(Json(json!({ "deleted": true, "key": key })))
 }

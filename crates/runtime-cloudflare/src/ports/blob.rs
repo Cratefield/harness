@@ -20,13 +20,22 @@
 //! trusted (issue #105 acceptance) — cargo tests never touch R2.
 
 use async_trait::async_trait;
+use bytes::Bytes;
 use cratefield_core::sigv4::{self, Credentials, SignableRequest};
-use cratefield_core::{Blob, BlobError, BlobObject, Clock, PresignedPut, check_blob_size};
+use cratefield_core::{
+    Blob, BlobError, BlobMeta, BlobObject, BlobPage, BlobStream, BoxStream, Clock, MAX_LIST_LIMIT,
+    MAX_MULTIPART_PARTS, PartReceipt, PendingUpload, PresignedPut, StreamError, UploadId,
+    check_blob_size, check_part_number, limit_stream,
+};
+use futures_core::Stream;
+use futures_util::StreamExt;
 use std::fmt;
+use std::pin::Pin;
 use std::sync::Arc;
+use std::task::{Context as TaskContext, Poll};
 use std::time::Duration;
-use worker::send::IntoSendFuture;
-use worker::{Bucket, HttpMetadata};
+use worker::send::{IntoSendFuture, SendWrapper};
+use worker::{Bucket, Data, HttpMetadata, Include};
 
 /// R2's S3-compatible API signs for the `auto` region and the `s3` service.
 const R2_REGION: &str = "auto";
@@ -151,6 +160,210 @@ impl R2Blob {
     pub(crate) fn new(bucket: Bucket, presigner: Option<R2Presigner>) -> Self {
         Self { bucket, presigner }
     }
+
+    /// A plain R2 `put` of an in-hand buffer, with no [`check_blob_size`]:
+    /// the streamed path ([`Blob::put_stream`]) is bounded by its caller's
+    /// ceiling, not the buffered [`MAX_BLOB_BYTES`] one (issue #586).
+    async fn put_bytes(
+        &self,
+        key: &str,
+        bytes: &[u8],
+        content_type: &str,
+    ) -> Result<(), BlobError> {
+        self.bucket
+            .put(key, bytes.to_vec())
+            .http_metadata(HttpMetadata {
+                content_type: Some(content_type.to_owned()),
+                ..Default::default()
+            })
+            .execute()
+            .into_send()
+            .await
+            .map(|_| ())
+            .map_err(|err| op_err(&err))
+    }
+
+    /// Creates a multipart upload for `key`, `content_type` stamped as the
+    /// object's HTTP metadata (issue #586).
+    async fn create_upload(
+        &self,
+        key: &str,
+        content_type: &str,
+    ) -> Result<worker::MultipartUpload, BlobError> {
+        self.bucket
+            .create_multipart_upload(key)
+            .http_metadata(HttpMetadata {
+                content_type: Some(content_type.to_owned()),
+                ..Default::default()
+            })
+            .execute()
+            .into_send()
+            .await
+            .map_err(|err| op_err(&err))
+    }
+
+    /// Buffers `body` through [`limit_stream`] into Worker memory, refusing
+    /// the chunk that would cross `max_part_bytes` with
+    /// [`BlobError::TooLarge`] (issue #586). R2 rejects a part whose length
+    /// it does not know up front, so a part must be held whole before it is
+    /// uploaded; the ceiling is what keeps that from being unbounded.
+    async fn read_part(
+        &self,
+        body: BoxStream<'static, Result<Bytes, StreamError>>,
+        max_part_bytes: u64,
+    ) -> Result<Vec<u8>, BlobError> {
+        let mut limited = limit_stream(body, max_part_bytes);
+        let mut buffered = Vec::new();
+        while let Some(chunk) = limited.next().await {
+            buffered.extend_from_slice(&chunk.map_err(BlobError::from)?);
+        }
+        Ok(buffered)
+    }
+
+    /// Uploads one already-buffered part, appending its receipt and
+    /// advancing the part number. A number past [`MAX_MULTIPART_PARTS`] is
+    /// the wrong shape (a size the store would refuse anyway), refused with
+    /// [`BlobError::TooLarge`] by the caller's convention.
+    async fn upload_one_part(
+        &self,
+        upload: &worker::MultipartUpload,
+        parts: &mut Vec<worker::UploadedPart>,
+        part_number: &mut u16,
+        part: Vec<u8>,
+    ) -> Result<(), BlobError> {
+        if u64::from(*part_number) > u64::from(MAX_MULTIPART_PARTS) {
+            return Err(BlobError::TooLarge(format!(
+                "streamed object needs more than {MAX_MULTIPART_PARTS} parts"
+            )));
+        }
+        let uploaded = upload
+            .upload_part(*part_number, Data::Bytes(part))
+            .into_send()
+            .await
+            .map_err(|err| op_err(&err))?;
+        parts.push(uploaded);
+        *part_number = part_number.saturating_add(1);
+        Ok(())
+    }
+
+    /// The multipart half of [`Blob::put_stream`]: `buffered` already holds
+    /// at least [`PUT_STREAM_PART_BYTES`] and `limited` the unread tail.
+    /// Flushes equal [`PUT_STREAM_PART_BYTES`] parts and a final remainder,
+    /// aborting the upload on any failure so nothing lingers (issue #586).
+    async fn put_stream_multipart(
+        &self,
+        key: &str,
+        content_type: &str,
+        mut limited: BoxStream<'static, Result<Bytes, StreamError>>,
+        mut buffered: Vec<u8>,
+    ) -> Result<u64, BlobError> {
+        let upload = self.create_upload(key, content_type).await?;
+        let mut parts: Vec<worker::UploadedPart> = Vec::new();
+        let mut part_number: u16 = 1;
+        let mut written: u64 = 0;
+        loop {
+            while buffered.len() >= PUT_STREAM_PART_BYTES {
+                let part: Vec<u8> = buffered.drain(..PUT_STREAM_PART_BYTES).collect();
+                written += part.len() as u64;
+                if let Err(err) = self
+                    .upload_one_part(&upload, &mut parts, &mut part_number, part)
+                    .await
+                {
+                    let _ = upload.abort().into_send().await;
+                    return Err(err);
+                }
+            }
+            match limited.next().await {
+                Some(Ok(chunk)) => buffered.extend_from_slice(&chunk),
+                Some(Err(err)) => {
+                    let _ = upload.abort().into_send().await;
+                    return Err(BlobError::from(err));
+                }
+                None => break,
+            }
+        }
+        if !buffered.is_empty() {
+            let part = std::mem::take(&mut buffered);
+            written += part.len() as u64;
+            if let Err(err) = self
+                .upload_one_part(&upload, &mut parts, &mut part_number, part)
+                .await
+            {
+                let _ = upload.abort().into_send().await;
+                return Err(err);
+            }
+        }
+        let upload_id = upload.upload_id().into_send().await;
+        if let Err(err) = upload.complete(parts).into_send().await {
+            // `complete` consumed the upload, so resume it by id to abort
+            // and leave nothing pending. The abort's own error is ignored —
+            // the completion error is the one the caller needs.
+            if let Ok(resumed) = self.bucket.resume_multipart_upload(key, upload_id.as_str()) {
+                let _ = resumed.abort().into_send().await;
+            }
+            return Err(op_err(&err));
+        }
+        Ok(written)
+    }
+}
+
+/// The content type an object with none reports. R2 lets an object carry no
+/// HTTP metadata; the port's [`BlobMeta`] and [`BlobStream`] always name one.
+fn content_type_or_default(metadata: &HttpMetadata) -> String {
+    metadata
+        .content_type
+        .clone()
+        .unwrap_or_else(|| "application/octet-stream".to_owned())
+}
+
+/// The fixed size [`Blob::put_stream`] buffers and uploads per multipart
+/// part (issue #586): 8 MiB, comfortably above
+/// [`MIN_MULTIPART_PART_BYTES`](cratefield_core::MIN_MULTIPART_PART_BYTES)
+/// so every non-final part is valid, and far enough below the isolate's
+/// memory that a part plus its copy is never a large fraction of the budget.
+const PUT_STREAM_PART_BYTES: usize = 8 * 1024 * 1024;
+
+/// A worker object body stream is `!Send` — its `JsFuture` holds an `Rc` —
+/// but a Workers isolate is single-threaded (ADR 0002), which is exactly
+/// what `worker::send::SendWrapper` is for: the `worker` crate's own safe
+/// (mis)claim that a JS-backed type may cross a `Send` bound. Coercing the
+/// stream to a boxed trait object and wrapping that costs no `unsafe` of
+/// our own — this crate still `forbid`s it — and gives [`BlobStream`]'s
+/// `Send` body stream something to hold.
+/// The boxed worker body stream [`SendBlobStream`] wraps.
+type BoxedWorkerStream = Pin<Box<dyn Stream<Item = Result<Vec<u8>, worker::Error>>>>;
+
+struct SendBlobStream(SendWrapper<BoxedWorkerStream>);
+
+impl Stream for SendBlobStream {
+    type Item = Result<Bytes, StreamError>;
+
+    fn poll_next(self: Pin<&mut Self>, cx: &mut TaskContext<'_>) -> Poll<Option<Self::Item>> {
+        // `Pin<Box<_>>` is `Unpin`, so the newtype is and `get_mut` is sound;
+        // the boxed stream stays pinned.
+        match self.get_mut().0.0.as_mut().poll_next(cx) {
+            Poll::Ready(Some(Ok(chunk))) => Poll::Ready(Some(Ok(Bytes::from(chunk)))),
+            Poll::Ready(Some(Err(err))) => {
+                Poll::Ready(Some(Err(StreamError::Transport(err.to_string()))))
+            }
+            Poll::Ready(None) => Poll::Ready(None),
+            Poll::Pending => Poll::Pending,
+        }
+    }
+}
+
+/// [`SendBlobStream`]s a worker `ByteStream`. `Box::new` before `Pin::from`
+/// so the unsizing coercion to the trait object is the well-worn one.
+fn blob_body_stream(stream: worker::ByteStream) -> BoxStream<'static, Result<Bytes, StreamError>> {
+    let boxed: Box<dyn Stream<Item = Result<Vec<u8>, worker::Error>>> = Box::new(stream);
+    Box::pin(SendBlobStream(SendWrapper::new(Pin::from(boxed))))
+}
+
+/// An empty body, for an object whose bytes R2 reports it cannot serve (a
+/// failed conditional read): the port still answers a stream, just an empty
+/// one, matching [`Blob::get`]'s empty buffer.
+fn empty_body_stream() -> BoxStream<'static, Result<Bytes, StreamError>> {
+    Box::pin(futures_util::stream::empty::<Result<Bytes, StreamError>>())
 }
 
 #[async_trait]
@@ -219,6 +432,221 @@ impl Blob for R2Blob {
             content_type,
             content_length,
             ttl,
+        ))
+    }
+
+    async fn put_stream(
+        &self,
+        key: &str,
+        body: BoxStream<'static, Result<Bytes, StreamError>>,
+        content_type: &str,
+        max_bytes: u64,
+    ) -> Result<u64, BlobError> {
+        // Buffer up to one part. An object that ends inside the first part
+        // is a plain put (no multipart machinery); anything larger streams
+        // through a multipart upload. The fill loop never holds more than
+        // `PUT_STREAM_PART_BYTES` plus the chunk that crossed it, so peak
+        // memory is a couple of parts regardless of object size.
+        let mut limited = limit_stream(body, max_bytes);
+        let mut buffered: Vec<u8> = Vec::new();
+        let mut ended = false;
+        while buffered.len() < PUT_STREAM_PART_BYTES {
+            match limited.next().await {
+                Some(Ok(chunk)) => buffered.extend_from_slice(&chunk),
+                Some(Err(err)) => return Err(BlobError::from(err)),
+                None => {
+                    ended = true;
+                    break;
+                }
+            }
+        }
+        if ended {
+            let written = buffered.len() as u64;
+            self.put_bytes(key, &buffered, content_type).await?;
+            return Ok(written);
+        }
+        self.put_stream_multipart(key, content_type, limited, buffered)
+            .await
+    }
+
+    async fn get_stream(&self, key: &str) -> Result<Option<BlobStream>, BlobError> {
+        let Some(object) = self
+            .bucket
+            .get(key)
+            .execute()
+            .into_send()
+            .await
+            .map_err(|err| op_err(&err))?
+        else {
+            return Ok(None);
+        };
+        let size = object.size();
+        let content_type = content_type_or_default(&object.http_metadata());
+        // `stream()` hands back a `!Send` JS-backed stream; `blob_body_stream`
+        // wraps it for the port's `Send` body (ADR 0002, single-threaded).
+        let body = match object.body() {
+            Some(body) => blob_body_stream(body.stream().map_err(|err| op_err(&err))?),
+            None => empty_body_stream(),
+        };
+        Ok(Some(BlobStream {
+            content_type,
+            size,
+            body,
+        }))
+    }
+
+    async fn head(&self, key: &str) -> Result<Option<BlobMeta>, BlobError> {
+        let Some(object) = self
+            .bucket
+            .head(key)
+            .into_send()
+            .await
+            .map_err(|err| op_err(&err))?
+        else {
+            return Ok(None);
+        };
+        Ok(Some(BlobMeta {
+            key: object.key(),
+            size: object.size(),
+            content_type: content_type_or_default(&object.http_metadata()),
+        }))
+    }
+
+    async fn list(
+        &self,
+        prefix: &str,
+        cursor: Option<&str>,
+        limit: usize,
+    ) -> Result<BlobPage, BlobError> {
+        // The `ScopedBlob` clamps this already; the adapter clamps again so a
+        // direct user cannot ask R2 for more than its own page cap. The value
+        // is `1 ..= MAX_LIST_LIMIT`, so it always fits R2's `u32` limit.
+        let limit =
+            u32::try_from(limit.clamp(1, MAX_LIST_LIMIT)).expect("MAX_LIST_LIMIT fits a u32");
+        // `include(httpMetadata)` so each listed object carries the content
+        // type the module stored, rather than an empty one.
+        let mut builder = self
+            .bucket
+            .list()
+            .prefix(prefix)
+            .limit(limit)
+            .include(vec![Include::HttpMetadata]);
+        if let Some(cursor) = cursor {
+            builder = builder.cursor(cursor);
+        }
+        let objects = builder
+            .execute()
+            .into_send()
+            .await
+            .map_err(|err| op_err(&err))?;
+        let page = objects
+            .objects()
+            .iter()
+            .map(|object| BlobMeta {
+                key: object.key(),
+                size: object.size(),
+                content_type: content_type_or_default(&object.http_metadata()),
+            })
+            .collect();
+        // R2's cursor is only meaningful while truncated; a `None` here is the
+        // port's "last page" signal.
+        let cursor = if objects.truncated() {
+            objects.cursor()
+        } else {
+            None
+        };
+        Ok(BlobPage {
+            objects: page,
+            cursor,
+        })
+    }
+
+    async fn create_multipart(&self, key: &str, content_type: &str) -> Result<UploadId, BlobError> {
+        let upload = self.create_upload(key, content_type).await?;
+        let id = upload.upload_id().into_send().await;
+        Ok(UploadId::new(id))
+    }
+
+    async fn upload_part(
+        &self,
+        key: &str,
+        upload_id: &UploadId,
+        part_number: u16,
+        body: BoxStream<'static, Result<Bytes, StreamError>>,
+        max_part_bytes: u64,
+    ) -> Result<PartReceipt, BlobError> {
+        check_part_number(part_number)?;
+        // R2 refuses a part whose length it does not know, so the part is
+        // buffered whole first — bounded by the caller's ceiling, which
+        // `limit_stream` enforces as it goes. Parts should be well under the
+        // isolate's memory (issue #586); this is the adapter's own second
+        // gate.
+        let buffered = self.read_part(body, max_part_bytes).await?;
+        let upload = self
+            .bucket
+            .resume_multipart_upload(key, upload_id.as_str())
+            .map_err(|err| op_err(&err))?;
+        let uploaded = upload
+            .upload_part(part_number, Data::Bytes(buffered))
+            .into_send()
+            .await
+            .map_err(|err| op_err(&err))?;
+        Ok(PartReceipt {
+            part_number,
+            etag: uploaded.etag(),
+        })
+    }
+
+    async fn complete_multipart(
+        &self,
+        key: &str,
+        upload_id: &UploadId,
+        parts: &[PartReceipt],
+    ) -> Result<(), BlobError> {
+        if parts.is_empty() {
+            return Err(BlobError::Operation(
+                "a multipart upload needs at least one part".to_owned(),
+            ));
+        }
+        let upload = self
+            .bucket
+            .resume_multipart_upload(key, upload_id.as_str())
+            .map_err(|err| op_err(&err))?;
+        // R2 takes the ETag each part reported; the receipts carry them back,
+        // so a part whose ETag no longer matches is refused by the store.
+        // `UploadedPart::new` reconstructs one from the number and ETag.
+        let uploaded: Vec<worker::UploadedPart> = parts
+            .iter()
+            .map(|receipt| worker::UploadedPart::new(receipt.part_number, receipt.etag.clone()))
+            .collect();
+        upload
+            .complete(uploaded)
+            .into_send()
+            .await
+            .map_err(|err| op_err(&err))?;
+        Ok(())
+    }
+
+    async fn abort_multipart(&self, key: &str, upload_id: &UploadId) -> Result<(), BlobError> {
+        let upload = self
+            .bucket
+            .resume_multipart_upload(key, upload_id.as_str())
+            .map_err(|err| op_err(&err))?;
+        upload.abort().into_send().await.map_err(|err| op_err(&err))
+    }
+
+    async fn list_multipart_uploads(&self, _prefix: &str) -> Result<Vec<PendingUpload>, BlobError> {
+        // The Worker R2 binding exposes no way to enumerate in-flight
+        // multipart uploads. worker 0.8.5's `r2` module has per-upload
+        // operations (resume/abort/complete/upload_part) but no
+        // `list_multipart_uploads`, and Cloudflare's binding docs match: the
+        // S3 API has it, the binding does not. An R2 lifecycle rule that
+        // aborts incomplete multipart uploads after a few days is the
+        // supported reclaim path (issue #586).
+        Err(BlobError::Unsupported(
+            "the Workers R2 binding cannot list multipart uploads; configure an R2 \
+             lifecycle rule that aborts incomplete multipart uploads"
+                .to_owned(),
         ))
     }
 }

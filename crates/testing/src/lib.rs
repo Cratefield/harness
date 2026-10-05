@@ -57,7 +57,7 @@ mod tmp;
 pub mod vectors;
 
 pub use batch::assert_batch_is_atomic;
-pub use blob::assert_blob_round_trips;
+pub use blob::{assert_blob_large_round_trips, assert_blob_round_trips};
 #[cfg(feature = "harness")]
 pub use conformance::{conformance, conformance_in_process_only, full_fake_ports, sidecar_parity};
 #[cfg(feature = "harness")]

@@ -661,6 +661,68 @@ jobs:
           cat /tmp/blob-probe.json
           grep -q '"round_trip":"ok"' /tmp/blob-probe.json
           grep -q '"key":"probe/' /tmp/blob-probe.json
+      - name: A 120 MB multipart blob round-trips through the Blob port (issue #586)
+        # The large-object half of the Blob port, end to end on a live
+        # isolate. `cargo test` never touches R2, so this is the only place
+        # the multipart path runs: a 120 MB object is uploaded as three
+        # 40 MB parts through the streaming multipart routes, completed,
+        # streamed back, hashed and compared, then deleted. The 128 MB
+        # isolate cannot hold the object whole, so a passing run is the
+        # memory evidence the issue asks for; the digest is compared against
+        # `sha256sum`, so a dropped, reordered or short body cannot pass.
+        run: |
+          set -euo pipefail
+          base=http://127.0.0.1:8787/v1/sample/blob-large
+          key=ci-120mb.bin
+          # A deterministic 120 MiB file: a fixed 64 KiB block repeated 1920
+          # times, so the digest is stable and the split boundaries are exact.
+          python3 -c "import sys; sys.stdout.buffer.write((b'cratefield-blob-large-586!'*4096)[:65536]*1920)" > /tmp/blob-large.bin
+          test "$(wc -c < /tmp/blob-large.bin)" = "125829120"
+          split -b 41943040 -d /tmp/blob-large.bin /tmp/blob-part-
+
+          echo "-- create the multipart upload"
+          created=$(curl -sf -m 30 -X POST "$base/$key/uploads")
+          echo "$created"
+          id=$(printf '%s' "$created" | python3 -c 'import sys,json;print(json.load(sys.stdin)["upload_id"])')
+          test -n "$id"
+
+          echo "-- upload three 40 MB parts"
+          # One receipt per line: the route answers a compact JSON object with
+          # no trailing newline, so the newline is added here — otherwise all
+          # three receipts land on one line and the per-line parse below fails.
+          : > /tmp/blob-parts.jsonl
+          for i in 0 1 2; do
+            n=$((i + 1))
+            receipt=$(curl -sf -m 180 -X PUT --data-binary @"/tmp/blob-part-0$i" \
+              "$base/$key/uploads/$id/parts/$n")
+            printf '%s\n' "$receipt" >> /tmp/blob-parts.jsonl
+          done
+          cat /tmp/blob-parts.jsonl
+          test "$(wc -l < /tmp/blob-parts.jsonl)" = "3"
+
+          echo "-- complete from the receipts the parts answered with"
+          python3 -c 'import json;print(json.dumps([json.loads(l) for l in open("/tmp/blob-parts.jsonl") if l.strip()]))' > /tmp/blob-complete.json
+          curl -sf -m 30 -X POST -H 'content-type: application/json' \
+            --data @/tmp/blob-complete.json "$base/$key/uploads/$id/complete"
+
+          echo "-- stream the 120 MB object back and compare its digest"
+          want=$(sha256sum /tmp/blob-large.bin | cut -d' ' -f1)
+          got=$(curl -sf -m 180 "$base/$key" | sha256sum | cut -d' ' -f1)
+          test "$want" = "$got" || { echo "digest mismatch: want $want got $got"; exit 1; }
+
+          echo "-- clean up"
+          curl -sf -m 30 -X DELETE "$base/$key"
+
+          echo "-- a part over the route ceiling is refused (413)"
+          # A declared content-length above the route's 64 MiB ceiling is
+          # refused before any byte is read, exactly as the buffered route
+          # does. Last, because a refused body is left unread and trips
+          # wrangler dev's drain middleware (workers-sdk#4562).
+          head -c 68000000 /dev/zero > /tmp/blob-over
+          code=$(curl -s -m 180 -X PUT --data-binary @/tmp/blob-over -o /dev/null -w '%{http_code}' \
+            "$base/$key/uploads/$id/parts/9")
+          test "$code" = "413" || { echo "over-ceiling part answered $code"; exit 1; }
+          echo "large-blob assertions passed"
       - name: Two sockets against the room Durable Object (issue #103)
         working-directory: examples/venture
         # Not curl: a WebSocket upgrade is the one thing it cannot do, and the

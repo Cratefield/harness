@@ -24,12 +24,15 @@ use cratefield_core::{
     TicketState, TicketStatus, Tracker, TrackerError, Validation, Verdict, check_hostname,
     validate_questions,
 };
+use futures_core::Stream;
 use futures_core::future::BoxFuture;
 use http::header::{CONTENT_TYPE, RETRY_AFTER};
 use http::{HeaderValue, Request, Response, StatusCode};
 use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::task::{Context, Poll};
 use std::time::Duration;
 
 // Recording fixtures, not request state (see module docs).
@@ -616,8 +619,75 @@ impl cratefield_core::Dispatcher for FakeDispatcher {
 #[derive(Clone, Default)]
 pub struct MemoryBlob {
     objects: Arc<std::sync::Mutex<std::collections::HashMap<String, cratefield_core::BlobObject>>>,
+    /// Multipart uploads in flight, by upload id (issue #586).
+    uploads: Arc<std::sync::Mutex<std::collections::HashMap<String, MemoryUpload>>>,
+    /// Hands out upload ids. Shared across clones so two handles never mint
+    /// the same id.
+    next_upload_id: Arc<AtomicUsize>,
     /// The clock presigning stamps from; `Some` once `with_presign` is called.
     presign_clock: Option<Arc<dyn Clock>>,
+}
+
+/// One multipart upload in flight in [`MemoryBlob`] (issue #586): its
+/// target key, content type, and the parts uploaded so far, by part
+/// number, each with the `ETag` the store handed back.
+struct MemoryUpload {
+    key: String,
+    content_type: String,
+    parts: BTreeMap<u16, (String, Vec<u8>)>,
+}
+
+/// Consumes a body stream, refusing once it passes `max_bytes`: the chunk
+/// that would cross the bound is not delivered, and the caller sees
+/// [`cratefield_core::BlobError::TooLarge`] (issue #586). Because nothing
+/// is stored until the whole body is in hand, an over-limit write leaves
+/// no object behind.
+async fn collect_capped(
+    mut body: cratefield_core::BoxStream<'static, Result<Bytes, cratefield_core::StreamError>>,
+    max_bytes: u64,
+) -> Result<(u64, Vec<u8>), cratefield_core::BlobError> {
+    let mut written: u64 = 0;
+    let mut out = Vec::new();
+    while let Some(chunk) = std::future::poll_fn(|cx| body.as_mut().poll_next(cx)).await {
+        let chunk = chunk.map_err(cratefield_core::blob_error_from_stream)?;
+        written = written.saturating_add(chunk.len() as u64);
+        if written > max_bytes {
+            return Err(cratefield_core::BlobError::TooLarge(format!(
+                "streamed body of {written} bytes passed the {max_bytes}-byte bound"
+            )));
+        }
+        out.extend_from_slice(&chunk);
+    }
+    Ok((written, out))
+}
+
+/// The read side of [`MemoryBlob`]: `bytes` split into a few fixed-size
+/// chunks, so a streamed get is genuinely a stream (issue #586).
+fn stored_body_stream(
+    bytes: &[u8],
+) -> cratefield_core::BoxStream<'static, Result<Bytes, cratefield_core::StreamError>> {
+    const CHUNK: usize = 1 << 20;
+    let chunks: Vec<Result<Bytes, cratefield_core::StreamError>> = bytes
+        .chunks(CHUNK)
+        .map(|chunk| Ok(Bytes::copy_from_slice(chunk)))
+        .collect();
+    Box::pin(ChunkStream {
+        chunks: chunks.into_iter(),
+    })
+}
+
+/// A `Stream` over pre-built chunks. Written out because the kit has no
+/// `futures-util`.
+struct ChunkStream {
+    chunks: std::vec::IntoIter<Result<Bytes, cratefield_core::StreamError>>,
+}
+
+impl Stream for ChunkStream {
+    type Item = Result<Bytes, cratefield_core::StreamError>;
+
+    fn poll_next(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        Poll::Ready(self.get_mut().chunks.next())
+    }
 }
 
 /// The fixed, obviously fake presigning identity, stable so a test can assert
@@ -771,6 +841,234 @@ impl cratefield_core::Blob for MemoryBlob {
             method: "PUT",
             headers,
         })
+    }
+    async fn put_stream(
+        &self,
+        key: &str,
+        body: cratefield_core::BoxStream<'static, Result<Bytes, cratefield_core::StreamError>>,
+        content_type: &str,
+        max_bytes: u64,
+    ) -> Result<u64, cratefield_core::BlobError> {
+        let (written, bytes) = collect_capped(body, max_bytes).await?;
+        self.objects.lock().unwrap().insert(
+            key.to_owned(),
+            cratefield_core::BlobObject {
+                bytes,
+                content_type: content_type.to_owned(),
+            },
+        );
+        Ok(written)
+    }
+    async fn get_stream(
+        &self,
+        key: &str,
+    ) -> Result<Option<cratefield_core::BlobStream>, cratefield_core::BlobError> {
+        let Some(object) = self.objects.lock().unwrap().get(key).cloned() else {
+            return Ok(None);
+        };
+        let size = object.bytes.len() as u64;
+        Ok(Some(cratefield_core::BlobStream {
+            content_type: object.content_type,
+            size,
+            body: stored_body_stream(&object.bytes),
+        }))
+    }
+    async fn head(
+        &self,
+        key: &str,
+    ) -> Result<Option<cratefield_core::BlobMeta>, cratefield_core::BlobError> {
+        Ok(self
+            .objects
+            .lock()
+            .unwrap()
+            .get(key)
+            .map(|object| cratefield_core::BlobMeta {
+                key: key.to_owned(),
+                size: object.bytes.len() as u64,
+                content_type: object.content_type.clone(),
+            }))
+    }
+    async fn list(
+        &self,
+        prefix: &str,
+        cursor: Option<&str>,
+        limit: usize,
+    ) -> Result<cratefield_core::BlobPage, cratefield_core::BlobError> {
+        let objects = self.objects.lock().unwrap();
+        let mut keys: Vec<String> = objects
+            .keys()
+            .filter(|key| key.starts_with(prefix))
+            .cloned()
+            .collect();
+        keys.sort();
+        let start = cursor.map_or(0, |cursor| {
+            keys.partition_point(|key| key.as_str() <= cursor)
+        });
+        let take = (keys.len() - start).min(limit);
+        let selected = &keys[start..start + take];
+        let page = selected
+            .iter()
+            .map(|key| {
+                let object = &objects[key];
+                cratefield_core::BlobMeta {
+                    key: key.clone(),
+                    size: object.bytes.len() as u64,
+                    content_type: object.content_type.clone(),
+                }
+            })
+            .collect();
+        let cursor = if start + take < keys.len() {
+            selected.last().cloned()
+        } else {
+            None
+        };
+        Ok(cratefield_core::BlobPage {
+            objects: page,
+            cursor,
+        })
+    }
+    async fn create_multipart(
+        &self,
+        key: &str,
+        content_type: &str,
+    ) -> Result<cratefield_core::UploadId, cratefield_core::BlobError> {
+        let id = self.next_upload_id.fetch_add(1, Ordering::Relaxed) + 1;
+        let upload_id = cratefield_core::UploadId::new(format!("upload-{id}"));
+        self.uploads.lock().unwrap().insert(
+            upload_id.as_str().to_owned(),
+            MemoryUpload {
+                key: key.to_owned(),
+                content_type: content_type.to_owned(),
+                parts: BTreeMap::new(),
+            },
+        );
+        Ok(upload_id)
+    }
+    async fn upload_part(
+        &self,
+        key: &str,
+        upload_id: &cratefield_core::UploadId,
+        part_number: u16,
+        body: cratefield_core::BoxStream<'static, Result<Bytes, cratefield_core::StreamError>>,
+        max_part_bytes: u64,
+    ) -> Result<cratefield_core::PartReceipt, cratefield_core::BlobError> {
+        cratefield_core::check_part_number(part_number)?;
+        let (_, bytes) = collect_capped(body, max_part_bytes).await?;
+        let mut uploads = self.uploads.lock().unwrap();
+        let upload = uploads.get_mut(upload_id.as_str()).ok_or_else(|| {
+            cratefield_core::BlobError::Operation(format!(
+                "no multipart upload `{}`",
+                upload_id.as_str()
+            ))
+        })?;
+        if upload.key != key {
+            return Err(cratefield_core::BlobError::Operation(
+                "multipart upload belongs to a different key".to_owned(),
+            ));
+        }
+        let etag = format!("part-{part_number}-{}", bytes.len());
+        upload.parts.insert(part_number, (etag.clone(), bytes));
+        Ok(cratefield_core::PartReceipt { part_number, etag })
+    }
+    async fn complete_multipart(
+        &self,
+        key: &str,
+        upload_id: &cratefield_core::UploadId,
+        parts: &[cratefield_core::PartReceipt],
+    ) -> Result<(), cratefield_core::BlobError> {
+        let mut uploads = self.uploads.lock().unwrap();
+        // Validate against the stored upload **without** removing it, so a
+        // refused complete leaves the upload intact for a retry, as a real
+        // store does.
+        let assembled = {
+            let upload = uploads.get(upload_id.as_str()).ok_or_else(|| {
+                cratefield_core::BlobError::Operation(format!(
+                    "no multipart upload `{}`",
+                    upload_id.as_str()
+                ))
+            })?;
+            if upload.key != key {
+                return Err(cratefield_core::BlobError::Operation(
+                    "multipart upload belongs to a different key".to_owned(),
+                ));
+            }
+            let mut ordered = parts.to_vec();
+            ordered.sort_by_key(|receipt| receipt.part_number);
+            let mut assembled = Vec::new();
+            for (index, receipt) in ordered.iter().enumerate() {
+                let (etag, bytes) = upload.parts.get(&receipt.part_number).ok_or_else(|| {
+                    cratefield_core::BlobError::Operation(format!(
+                        "part {} was never uploaded",
+                        receipt.part_number
+                    ))
+                })?;
+                if *etag != receipt.etag {
+                    return Err(cratefield_core::BlobError::Operation(format!(
+                        "part {} etag mismatch",
+                        receipt.part_number
+                    )));
+                }
+                let is_last = index + 1 == ordered.len();
+                if !is_last && (bytes.len() as u64) < cratefield_core::MIN_MULTIPART_PART_BYTES {
+                    return Err(cratefield_core::BlobError::Operation(format!(
+                        "part {} is below the {}-byte minimum for a non-final part",
+                        receipt.part_number,
+                        cratefield_core::MIN_MULTIPART_PART_BYTES,
+                    )));
+                }
+                assembled.extend_from_slice(bytes);
+            }
+            assembled
+        };
+        let upload = uploads
+            .remove(upload_id.as_str())
+            .expect("the upload was checked above");
+        let content_type = upload.content_type;
+        drop(uploads);
+        self.objects.lock().unwrap().insert(
+            key.to_owned(),
+            cratefield_core::BlobObject {
+                bytes: assembled,
+                content_type,
+            },
+        );
+        Ok(())
+    }
+    async fn abort_multipart(
+        &self,
+        key: &str,
+        upload_id: &cratefield_core::UploadId,
+    ) -> Result<(), cratefield_core::BlobError> {
+        let mut uploads = self.uploads.lock().unwrap();
+        let upload = uploads.remove(upload_id.as_str()).ok_or_else(|| {
+            cratefield_core::BlobError::Operation(format!(
+                "no multipart upload `{}`",
+                upload_id.as_str()
+            ))
+        })?;
+        if upload.key != key {
+            uploads.insert(upload_id.as_str().to_owned(), upload);
+            return Err(cratefield_core::BlobError::Operation(
+                "multipart upload belongs to a different key".to_owned(),
+            ));
+        }
+        Ok(())
+    }
+    async fn list_multipart_uploads(
+        &self,
+        prefix: &str,
+    ) -> Result<Vec<cratefield_core::PendingUpload>, cratefield_core::BlobError> {
+        let uploads = self.uploads.lock().unwrap();
+        let mut pending: Vec<cratefield_core::PendingUpload> = uploads
+            .iter()
+            .filter(|(_, upload)| upload.key.starts_with(prefix))
+            .map(|(id, upload)| cratefield_core::PendingUpload {
+                key: upload.key.clone(),
+                upload_id: cratefield_core::UploadId::new(id.clone()),
+            })
+            .collect();
+        pending.sort_by(|a, b| a.key.cmp(&b.key));
+        Ok(pending)
     }
 }
 

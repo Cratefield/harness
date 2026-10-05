@@ -535,6 +535,26 @@ pub trait Module: Send + Sync + 'static {
         &[]
     }
 
+    /// The largest object this module's **streamed** and **multipart**
+    /// blob writes may produce (issue #586), enforced by the
+    /// [`ScopedBlob`](crate::ScopedBlob) the harness hands the module on
+    /// `put_stream`, `upload_part` and `complete_multipart`.
+    ///
+    /// The buffered [`Blob::put`](crate::Blob::put) path is unchanged and
+    /// stays capped at [`MAX_BLOB_BYTES`](crate::MAX_BLOB_BYTES); this
+    /// ceiling governs only the separate, explicitly opted-in path for
+    /// objects larger than that. Raising it above `MAX_BLOB_BYTES` is
+    /// legitimate for a module that streams a video, and is capped at
+    /// [`MAX_LARGE_BLOB_BYTES`](crate::MAX_LARGE_BLOB_BYTES) — R2's
+    /// single-object maximum — so no declaration can outrun the store.
+    /// Lowering it tightens what the module will accept.
+    ///
+    /// Default: `MAX_BLOB_BYTES`, so a module that says nothing changes
+    /// nothing.
+    fn max_blob_object_bytes(&self) -> u64 {
+        crate::ports::MAX_BLOB_BYTES as u64
+    }
+
     /// Problems the module can find in **itself**, with no configuration
     /// and no environment: its own embedded data, checked against its own
     /// declarations.
