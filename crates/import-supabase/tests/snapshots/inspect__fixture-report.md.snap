@@ -15,7 +15,7 @@ Source `<host>:5432/<database>`, PostgreSQL 16. Report version 1, written by cra
 | Needs work | 28 |
 | Blockers | 2 |
 | Decided | 0 |
-| Undecided | 28 |
+| Undecided | 30 |
 | Tables | 6 (~14 rows) |
 | Data | 0 B (plus 0 B of indexes, rebuilt on the target) |
 | Storage | 3 objects, 12 MiB |
@@ -115,6 +115,7 @@ Every needs-work item needs its own `covered` or `waived` entry (ADR 0026, Decis
 | grant | 0 | 0 | 2 |
 | policy | 0 | 0 | 12 |
 | publication | 0 | 0 | 1 |
+| storage_policy | 0 | 0 | 2 |
 | table | 0 | 0 | 1 |
 | trigger | 0 | 0 | 1 |
 | view | 0 | 0 | 1 |

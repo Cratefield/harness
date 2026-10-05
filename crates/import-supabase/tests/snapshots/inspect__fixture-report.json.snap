@@ -33,7 +33,7 @@ expression: normalized.to_json()
     "needs_work": 28,
     "blockers": 2,
     "decided": 0,
-    "undecided": 28,
+    "undecided": 30,
     "ready": false,
     "tables": 6,
     "estimated_rows": 14,
@@ -105,6 +105,12 @@ expression: normalized.to_json()
         "covered": 0,
         "waived": 0,
         "undecided": 1
+      },
+      {
+        "kind": "storage_policy",
+        "covered": 0,
+        "waived": 0,
+        "undecided": 2
       },
       {
         "kind": "table",

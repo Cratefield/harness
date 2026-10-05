@@ -99,6 +99,7 @@ fn fixture() -> Report {
             policy("posts", "Anyone can read posts"),
             policy("posts", "Old policy"),
         ],
+        managed_policies: Vec::new(),
         api_role_grants: Vec::new(),
         auth: Auth::default(),
         storage: Storage::default(),
