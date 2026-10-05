@@ -367,7 +367,7 @@ fn iso(t: OffsetDateTime) -> String {
 /// `sso_connection` is the connection id to name in the token, already
 /// resolved by the caller to "the session's connection, and only while it
 /// belongs to `client_id`" — the ownership rule is not a token-shape rule
-/// and lives in [`crate::token_endpoint`], where the client is known.
+/// and lives in the token endpoint (`token_endpoint`), where the client is known.
 ///
 /// # Errors
 ///

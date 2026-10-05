@@ -704,7 +704,7 @@ pub struct SessionRow {
     /// The `sso_connections.id` this session was signed in through (issue
     /// #627), `None` for every other way in. It becomes the access token's
     /// `sso_connection` claim only while the connection still belongs to the
-    /// client the token is for — [`crate::token_endpoint`] decides that at
+    /// client the token is for — the token endpoint (`token_endpoint`) decides that at
     /// mint time, not here.
     pub sso_connection: Option<String>,
 }

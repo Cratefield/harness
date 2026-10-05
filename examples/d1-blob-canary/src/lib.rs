@@ -13,8 +13,9 @@
 //!   ciphertext and the wrapped DEK all bind as bytes.
 //!
 //! The migrations applied here are the real ones (`crates/auth-core/
-//! migrations/sqlite/0001_init.sql` plus `0003_token_issuing.sql` and
-//! `0007_user_locale.sql`;
+//! migrations/sqlite/0001_init.sql` plus `0003_token_issuing.sql`,
+//! `0007_user_locale.sql` and `0010_sso_connections.sql`, which adds the
+//! `sessions.sso_connection` column the session row binds;
 //! `crates/secrets/migrations/sqlite/0001_init.sql` plus the audit chain
 //! from `0002_audit.sql`, its store attribution from
 //! `0003_audit_store.sql`, and the store-attribution rebuild from
@@ -116,6 +117,9 @@ async fn migrate(db: &dyn Database) -> Result<(), Json> {
     )));
     stmts.extend(statements(include_str!(
         "../../../crates/auth-core/migrations/sqlite/0007_user_locale.sql"
+    )));
+    stmts.extend(statements(include_str!(
+        "../../../crates/auth-core/migrations/sqlite/0010_sso_connections.sql"
     )));
     stmts.extend(statements(include_str!(
         "../../../crates/secrets/migrations/sqlite/0001_init.sql"
