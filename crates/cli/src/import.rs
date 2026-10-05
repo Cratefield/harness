@@ -1,6 +1,10 @@
 //! `fz import supabase inspect` (issue #658, ADR 0026): connects read-only
 //! to a Supabase project and writes the migration report.
 //!
+//! `--dispositions <FILE>` decides the report's needs-work and blocker items
+//! from a TOML file (ADR 0026, Decision 5);
+//! `fz import supabase dispositions init` writes a skeleton of that file.
+//!
 //! The engine is `cratefield-import-supabase`, which reads Postgres through
 //! sqlx and so is native-only. It is behind the `import-supabase` feature
 //! for the reason `postgres` and `push-send` are: a venture links this
@@ -58,6 +62,44 @@ pub struct InspectArgs {
     pub classify: bool,
     /// `--classify-threshold`.
     pub classify_threshold: f32,
+    /// `--dispositions`, if given: the file applied to the report.
+    pub dispositions: Option<PathBuf>,
+}
+
+/// Everything `fz import supabase dispositions init` was given.
+#[derive(Debug, Clone)]
+pub struct DispositionsInitArgs {
+    /// The project ref.
+    pub project: String,
+    /// `--db-url`, if given.
+    pub db_url: Option<String>,
+    /// `--management-token`, if given.
+    pub management_token: Option<String>,
+    /// `--out`: where the skeleton goes.
+    pub out: PathBuf,
+    /// `--force`: overwrite an existing file.
+    pub force: bool,
+    /// `--dispositions`: skip items this file already decides.
+    pub dispositions: Option<PathBuf>,
+}
+
+impl DispositionsInitArgs {
+    /// The inspect args that reach the same project, for the shared
+    /// credential and report code. Only the engine build inspects.
+    #[cfg(feature = "import-supabase")]
+    fn as_inspect(&self) -> InspectArgs {
+        InspectArgs {
+            project: self.project.clone(),
+            db_url: self.db_url.clone(),
+            management_token: self.management_token.clone(),
+            format: Format::Markdown,
+            out: None,
+            transfer_mbps: 100,
+            classify: false,
+            classify_threshold: 0.8,
+            dispositions: None,
+        }
+    }
 }
 
 /// Where each credential came from — the flag or the environment — with
@@ -176,8 +218,78 @@ fn write_report(path: &Path, text: &str) -> Result<(), String> {
 pub struct Rendered {
     /// The report in the requested format.
     pub text: String,
-    /// `N automatic, N needs work, N blockers`.
+    /// `N automatic, N needs work, N blockers, N undecided`.
     pub summary: String,
+}
+
+/// The refusal every command prints when `fz` was built without the engine.
+#[cfg(not(feature = "import-supabase"))]
+const WITHOUT_FEATURE: &str = "this `fz` was built without the `import-supabase` feature, so it \
+     cannot reach Postgres. Install one that has it — `cargo install cratefield-cli --features \
+     import-supabase` — and run that binary (it needs no compiled-in harness).";
+
+/// Runs `dispositions init`: inspects, then writes the skeleton file.
+///
+/// # Errors
+///
+/// A refusal — an existing file without `--force`, a bad dispositions file, a
+/// connection or permission error.
+pub fn dispositions_init(args: &DispositionsInitArgs) -> Result<(), String> {
+    // Without the engine there is nothing to inspect, so refuse before the
+    // overwrite and credential checks (which would otherwise be reached).
+    #[cfg(not(feature = "import-supabase"))]
+    {
+        let _ = args;
+        Err(WITHOUT_FEATURE.to_owned())
+    }
+
+    #[cfg(feature = "import-supabase")]
+    {
+        if args.out.exists() && !args.force {
+            return Err(format!(
+                "{} exists; pass --force to overwrite it",
+                args.out.display()
+            ));
+        }
+        let inspect_args = args.as_inspect();
+        let credentials = credentials(&inspect_args, &EnvVars)?;
+        for note in &credentials.notes {
+            eprintln!("{note}");
+        }
+        write_skeleton(&inspect_args, &credentials, args)
+    }
+}
+
+#[cfg(feature = "import-supabase")]
+fn write_skeleton(
+    inspect_args: &InspectArgs,
+    credentials: &Credentials,
+    args: &DispositionsInitArgs,
+) -> Result<(), String> {
+    use cratefield_import_supabase as engine;
+
+    let mut report = inspect_report(inspect_args, credentials)?;
+    if let Some(path) = &args.dispositions {
+        let file = engine::DispositionsFile::load(path).map_err(|error| error.to_string())?;
+        engine::apply_dispositions(&mut report, &file);
+    }
+    let text = engine::skeleton(&report);
+    if let Some(parent) = args
+        .out
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
+        std::fs::create_dir_all(parent)
+            .map_err(|error| format!("cannot create {}: {error}", parent.display()))?;
+    }
+    std::fs::write(&args.out, &text)
+        .map_err(|error| format!("cannot write {}: {error}", args.out.display()))?;
+    println!(
+        "{} undecided item(s) written to {}",
+        report.summary.undecided,
+        args.out.display()
+    );
+    Ok(())
 }
 
 #[cfg(feature = "import-supabase")]
@@ -213,22 +325,23 @@ fn engine_options(
     if classify {
         // TypeSafe (its judge, Jev) through the adapter's own reader, so
         // the key's name is the adapter's, not ours.
-        let classifier = cratefield_adapter_typesafe::TypeSafe::from_env(
-            Arc::clone(&http),
-            Arc::clone(&clock),
-        )
-        .ok_or_else(|| {
-            "--classify needs TYPESAFE_API_KEY (the TypeSafe adapter reads it); without it, \
-             drop --classify and unplaced policies stay needs_review"
-                .to_owned()
-        })?;
+        let classifier =
+            cratefield_adapter_typesafe::TypeSafe::from_env(Arc::clone(&http), Arc::clone(&clock))
+                .ok_or_else(|| {
+                    "--classify needs TYPESAFE_API_KEY (the TypeSafe adapter reads it); without \
+                     it, drop --classify and unplaced policies stay needs_review"
+                        .to_owned()
+                })?;
         options.classifier = Some(Arc::new(classifier));
     }
     Ok(options)
 }
 
 #[cfg(feature = "import-supabase")]
-fn run(args: &InspectArgs, credentials: &Credentials) -> Result<Rendered, String> {
+fn inspect_report(
+    args: &InspectArgs,
+    credentials: &Credentials,
+) -> Result<cratefield_import_supabase::Report, String> {
     use cratefield_import_supabase as engine;
 
     let options = engine_options(
@@ -242,15 +355,26 @@ fn run(args: &InspectArgs, credentials: &Credentials) -> Result<Rendered, String
         .enable_all()
         .build()
         .map_err(|err| format!("cannot start the async runtime inspect needs: {err}"))?;
-    let report = runtime
+    let mut report = runtime
         .block_on(engine::inspect(&options))
         .map_err(|error| error.to_string())?;
+    if let Some(path) = &args.dispositions {
+        let file = engine::DispositionsFile::load(path).map_err(|error| error.to_string())?;
+        engine::apply_dispositions(&mut report, &file);
+    }
+    Ok(report)
+}
+
+#[cfg(feature = "import-supabase")]
+fn run(args: &InspectArgs, credentials: &Credentials) -> Result<Rendered, String> {
+    let report = inspect_report(args, credentials)?;
     let s = &report.summary;
     let summary = format!(
-        "{} automatic, {} needs work, {} blocker(s){}",
+        "{} automatic, {} needs work, {} blocker(s), {} undecided{}",
         s.automatic,
         s.needs_work,
         s.blockers,
+        s.undecided,
         if s.ready { "" } else { " — not ready" }
     );
     Ok(Rendered {
@@ -264,14 +388,9 @@ fn run(args: &InspectArgs, credentials: &Credentials) -> Result<Rendered, String
 
 #[cfg(not(feature = "import-supabase"))]
 fn run(_args: &InspectArgs, _credentials: &Credentials) -> Result<Rendered, String> {
-    Err(
-        // As with `push-send`: an installed binary, never a feature on the
-        // venture's dependency, whose wasm build must not see sqlx.
-        "this `fz` was built without the `import-supabase` feature, so it cannot reach Postgres. \
-         Install one that has it — `cargo install cratefield-cli --features import-supabase` — \
-         and run that binary (it needs no compiled-in harness)."
-            .to_owned(),
-    )
+    // As with `push-send`: an installed binary, never a feature on the
+    // venture's dependency, whose wasm build must not see sqlx.
+    Err(WITHOUT_FEATURE.to_owned())
 }
 
 /// Everything the bare `fz import supabase` and `fz import supabase plan`
@@ -461,6 +580,7 @@ mod tests {
             transfer_mbps: 100,
             classify: false,
             classify_threshold: 0.8,
+            dispositions: None,
         }
     }
 
@@ -512,6 +632,29 @@ mod tests {
             "{error}"
         );
         assert!(!error.contains("hunter2"));
+    }
+
+    #[test]
+    #[cfg(feature = "import-supabase")]
+    fn dispositions_init_refuses_to_overwrite_without_force() {
+        let dir = std::env::temp_dir().join(format!("fz-dispositions-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("a temp dir");
+        let out = dir.join("supabase-dispositions.toml");
+        std::fs::write(&out, "# mine\n").expect("write");
+        let given = DispositionsInitArgs {
+            project: "abcdefghijklmnopqrst".to_owned(),
+            db_url: None,
+            management_token: None,
+            out: out.clone(),
+            force: false,
+            dispositions: None,
+        };
+        let error = dispositions_init(&given).unwrap_err();
+        assert!(error.contains("--force"), "{error}");
+        assert!(error.contains(&out.display().to_string()), "{error}");
+        // It left the file alone.
+        assert_eq!(std::fs::read_to_string(&out).expect("read"), "# mine\n");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

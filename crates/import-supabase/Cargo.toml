@@ -29,6 +29,9 @@ thiserror = { workspace = true }
 # ties a plan to the inspection it was written from (issue #728).
 sha2 = { workspace = true }
 hex = { workspace = true }
+# The dispositions file (ADR 0026, Decision 5) is TOML; the same version the
+# `fz` CLI already uses.
+toml = { workspace = true }
 # The database URL and the Management API token are cleared on drop.
 zeroize = { workspace = true }
 # Parses the connection string so the report can name its host and

@@ -36,6 +36,7 @@ compile_error!(
 
 mod classify;
 mod collect;
+pub mod dispositions;
 pub mod extensions;
 pub mod management;
 mod markdown;
@@ -50,6 +51,9 @@ use std::sync::Arc;
 
 use cratefield_core::Classifier;
 
+pub use dispositions::{
+    DispositionsError, DispositionsFile, apply as apply_dispositions, skeleton,
+};
 pub use management::{AuthConfig, DEFAULT_API_BASE, ManagementApi, ManagementError};
 pub use plan::{
     PLAN_VERSION, Plan, PlanBlocker, PlanDrift, TargetFacts, build_plan, check_drift,
@@ -295,6 +299,9 @@ pub async fn inspect(options: &InspectOptions) -> Result<Report, InspectError> {
         automatic: count(Classification::Automatic),
         needs_work: count(Classification::NeedsWork),
         blockers: count(Classification::Blocker),
+        // Both counts are set by `dispositions::apply` below.
+        decided: 0,
+        undecided: 0,
         ready: count(Classification::Blocker) == 0,
         tables: catalog.tables.len(),
         estimated_rows: catalog
@@ -330,7 +337,7 @@ pub async fn inspect(options: &InspectOptions) -> Result<Report, InspectError> {
 
     warnings.sort();
     warnings.dedup();
-    Ok(Report {
+    let mut report = Report {
         report_version: REPORT_VERSION,
         tool: Tool {
             name: env!("CARGO_PKG_NAME").to_owned(),
@@ -357,6 +364,9 @@ pub async fn inspect(options: &InspectOptions) -> Result<Report, InspectError> {
             policy_classifier: classifier_status,
         },
         summary,
+        // Set just below, with an empty file: without a dispositions file
+        // every needs-work and blocker item is undecided.
+        dispositions: DispositionsReport::default(),
         schemas,
         tables: catalog.tables.clone(),
         views: catalog.views.clone(),
@@ -386,5 +396,7 @@ pub async fn inspect(options: &InspectOptions) -> Result<Report, InspectError> {
         cron_jobs: catalog.cron_jobs.clone(),
         findings,
         warnings,
-    })
+    };
+    dispositions::apply(&mut report, &DispositionsFile::default());
+    Ok(report)
 }

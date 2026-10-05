@@ -425,21 +425,8 @@ enum SupabaseCommand {
     /// for a refused input, a connection or a permission error — never
     /// for a blocker, which is part of the report.
     Inspect {
-        /// The Supabase project ref (the `<ref>` in
-        /// `https://<ref>.supabase.co`).
-        #[arg(long, value_name = "REF")]
-        project: String,
-        /// The database URL of a read-only role. Prefer the
-        /// `SUPABASE_DB_URL` environment variable: a flag lands in the
-        /// shell history and the process list.
-        #[arg(long, value_name = "URL")]
-        db_url: Option<String>,
-        /// A Supabase Management API personal access token, for Edge
-        /// Functions and the auth configuration. Prefer
-        /// `SUPABASE_ACCESS_TOKEN`. Without one those are reported as not
-        /// inspected (unknown, not none).
-        #[arg(long, value_name = "TOKEN")]
-        management_token: Option<String>,
+        #[command(flatten)]
+        source: SourceArgs,
         /// Write the JSON report (the format later steps read).
         #[arg(long, conflicts_with = "md")]
         json: bool,
@@ -462,12 +449,67 @@ enum SupabaseCommand {
         /// stays `needs_review`. Per adapter: it is `TypeSafe`'s number.
         #[arg(long, default_value_t = 0.8, value_name = "0..1")]
         classify_threshold: f32,
+        /// Apply this dispositions file: give each needs-work and blocker
+        /// item its own `covered` or `waived` entry (ADR 0026, Decision
+        /// 5). A refused file is a non-zero exit naming the entry.
+        #[arg(long, value_name = "FILE")]
+        dispositions: Option<PathBuf>,
+    },
+    /// The dispositions file (ADR 0026, Decision 5).
+    Dispositions {
+        #[command(subcommand)]
+        command: DispositionsCommand,
     },
     /// Inspects the source, reads the target and writes the report and the
     /// plan — the same run as the bare `fz import supabase`.
     Plan {
         #[command(flatten)]
         args: SupabaseRunArgs,
+    },
+}
+
+/// The source flags `inspect` and `dispositions init` share: one read-only
+/// connection to the project.
+#[derive(Args)]
+struct SourceArgs {
+    /// The Supabase project ref (the `<ref>` in
+    /// `https://<ref>.supabase.co`).
+    #[arg(long, value_name = "REF")]
+    project: String,
+    /// The database URL of a read-only role. Prefer the
+    /// `SUPABASE_DB_URL` environment variable: a flag lands in the
+    /// shell history and the process list.
+    #[arg(long, value_name = "URL")]
+    db_url: Option<String>,
+    /// A Supabase Management API personal access token, for Edge
+    /// Functions and the auth configuration. Prefer
+    /// `SUPABASE_ACCESS_TOKEN`. Without one those are reported as not
+    /// inspected (unknown, not none).
+    #[arg(long, value_name = "TOKEN")]
+    management_token: Option<String>,
+}
+
+#[derive(Subcommand)]
+enum DispositionsCommand {
+    /// Writes a skeleton dispositions file: one placeholder entry per item
+    /// that needs a decision, to fill in. Refuses to overwrite an existing
+    /// file without `--force`.
+    Init {
+        #[command(flatten)]
+        source: SourceArgs,
+        /// Where to write the skeleton.
+        #[arg(
+            long,
+            value_name = "FILE",
+            default_value = "import/supabase-dispositions.toml"
+        )]
+        out: PathBuf,
+        /// Overwrite an existing file.
+        #[arg(long)]
+        force: bool,
+        /// Skip items already decided in this file.
+        #[arg(long, value_name = "FILE")]
+        dispositions: Option<PathBuf>,
     },
 }
 
@@ -834,27 +876,27 @@ fn harness_free(command: &Command) -> Option<ExitCode> {
     }
 }
 
-/// `fz import` (issues #658, #728): the bare command and `plan` run
-/// inspect + plan; `inspect` writes the report alone.
+/// `fz import` (issues #658, #727, #728): the bare command and `plan` run
+/// inspect + plan; `inspect` writes the report alone; `dispositions init`
+/// writes a skeleton dispositions file.
 fn run_import(command: &ImportCommand) -> Result<(), String> {
     let ImportCommand::Supabase { command, run } = command;
     match command {
         None => import::plan(&plan_args(run)?),
         Some(SupabaseCommand::Plan { args }) => import::plan(&plan_args(args)?),
         Some(SupabaseCommand::Inspect {
-            project,
-            db_url,
-            management_token,
+            source,
             json,
             md: _,
             out,
             transfer_mbps,
             classify,
             classify_threshold,
+            dispositions,
         }) => import::inspect(&import::InspectArgs {
-            project: project.clone(),
-            db_url: db_url.clone(),
-            management_token: management_token.clone(),
+            project: source.project.clone(),
+            db_url: source.db_url.clone(),
+            management_token: source.management_token.clone(),
             format: if *json {
                 import::Format::Json
             } else {
@@ -864,6 +906,23 @@ fn run_import(command: &ImportCommand) -> Result<(), String> {
             transfer_mbps: *transfer_mbps,
             classify: *classify,
             classify_threshold: *classify_threshold,
+            dispositions: dispositions.clone(),
+        }),
+        Some(SupabaseCommand::Dispositions {
+            command:
+                DispositionsCommand::Init {
+                    source,
+                    out,
+                    force,
+                    dispositions,
+                },
+        }) => import::dispositions_init(&import::DispositionsInitArgs {
+            project: source.project.clone(),
+            db_url: source.db_url.clone(),
+            management_token: source.management_token.clone(),
+            out: out.clone(),
+            force: *force,
+            dispositions: dispositions.clone(),
         }),
     }
 }

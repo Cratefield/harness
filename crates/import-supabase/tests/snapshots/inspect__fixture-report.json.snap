@@ -32,6 +32,8 @@ expression: normalized.to_json()
     "automatic": 23,
     "needs_work": 28,
     "blockers": 2,
+    "decided": 0,
+    "undecided": 30,
     "ready": false,
     "tables": 6,
     "estimated_rows": 14,
@@ -41,6 +43,96 @@ expression: normalized.to_json()
     "storage_bytes": 12635136,
     "transfer_assumed_mbps": 100,
     "estimated_transfer_seconds": 0
+  },
+  "dispositions": {
+    "by_kind": [
+      {
+        "kind": "auth",
+        "covered": 0,
+        "waived": 0,
+        "undecided": 1
+      },
+      {
+        "kind": "auth_provider",
+        "covered": 0,
+        "waived": 0,
+        "undecided": 2
+      },
+      {
+        "kind": "bucket",
+        "covered": 0,
+        "waived": 0,
+        "undecided": 1
+      },
+      {
+        "kind": "edge_function",
+        "covered": 0,
+        "waived": 0,
+        "undecided": 1
+      },
+      {
+        "kind": "extension",
+        "covered": 0,
+        "waived": 0,
+        "undecided": 1
+      },
+      {
+        "kind": "foreign_key",
+        "covered": 0,
+        "waived": 0,
+        "undecided": 3
+      },
+      {
+        "kind": "function",
+        "covered": 0,
+        "waived": 0,
+        "undecided": 1
+      },
+      {
+        "kind": "grant",
+        "covered": 0,
+        "waived": 0,
+        "undecided": 2
+      },
+      {
+        "kind": "policy",
+        "covered": 0,
+        "waived": 0,
+        "undecided": 12
+      },
+      {
+        "kind": "publication",
+        "covered": 0,
+        "waived": 0,
+        "undecided": 1
+      },
+      {
+        "kind": "storage_policy",
+        "covered": 0,
+        "waived": 0,
+        "undecided": 2
+      },
+      {
+        "kind": "table",
+        "covered": 0,
+        "waived": 0,
+        "undecided": 1
+      },
+      {
+        "kind": "trigger",
+        "covered": 0,
+        "waived": 0,
+        "undecided": 1
+      },
+      {
+        "kind": "view",
+        "covered": 0,
+        "waived": 0,
+        "undecided": 1
+      }
+    ],
+    "decided": [],
+    "stale": []
   },
   "schemas": [
     {

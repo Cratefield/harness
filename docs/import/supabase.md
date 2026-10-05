@@ -119,7 +119,9 @@ classification, sizes and the transfer estimate — then lists the findings:
 
 Every needs-work item needs a disposition before cutover — *covered* (with
 the code or test that covers it) or *waived* (with a reason) — and RLS
-policies one by one, never in bulk (ADR 0026, Decision 5).
+policies one by one, never in bulk (ADR 0026, Decision 5). The
+[Dispositions](#dispositions) section below covers the file, `inspect
+--dispositions` and `dispositions init`.
 
 [`supabase-report.md`](supabase-report.md) documents the JSON, field by
 field; [`supabase-report.sample.md`](supabase-report.sample.md) is the
@@ -153,8 +155,91 @@ right place.
 
 Each policy in the JSON carries `pattern`, `confidence`, `source` (`rule`
 or `classifier`), a `suggested_equivalent` (advice, not code), a failing
-`test_stub` to turn into the test that proves the replacement, and
-`disposition: "undecided"`.
+`test_stub` to turn into the test that proves the replacement, and a
+`disposition` — `undecided` until a dispositions file covers or waives it.
+
+## Dispositions
+
+Inspect reports; it does not decide. Every item classified **needs work** or
+**blocker** needs its own disposition before cutover (ADR 0026, Decision 5):
+*covered*, with a reference to the code or test that replaces it, or
+*waived*, with a reason. RLS policies are decided one by one, never in bulk.
+
+The decisions live in a TOML file, `import/supabase-dispositions.toml` by
+default, keyed by the finding `id` from the report verbatim:
+
+```toml
+[items."policy:public.posts.Anyone can read posts"]
+status = "waived"
+reason = "public feed by design"
+
+[items."function:public.handle_new_user()"]
+status = "covered"
+ref = "src/auth/hooks.rs#on_signup"
+```
+
+- `status = "covered"` requires a `ref`; `status = "waived"` requires a
+  `reason`. `status = "undecided"` is the placeholder `init` writes.
+- The key is the finding `id` — spaces, dots and all. The file is refused,
+  naming the entry, for a glob wildcard key (`*`), a key with no `kind:`
+  prefix, a waived entry with no reason, or a covered entry with no `ref`.
+  A `?` is a literal, not a wildcard: it can name a real policy.
+
+Write a starting point, one `undecided` block per item that needs a
+decision, each with the finding's kind and reason above it:
+
+```sh
+cratefield-cli import supabase dispositions init --project <ref>
+# → import/supabase-dispositions.toml
+```
+
+`init` refuses to overwrite an existing file without `--force`, and
+`--dispositions <FILE>` leaves out the items that file already decides.
+
+Apply it:
+
+```sh
+cratefield-cli import supabase inspect --project <ref> \
+  --dispositions import/supabase-dispositions.toml --json --out report.json
+```
+
+The report then carries each decision in `dispositions.decided`, the counts
+per kind in `dispositions.by_kind`, and any entry that matched no item in
+`dispositions.stale` — a renamed or removed item, delete it. `summary.decided`
+and `summary.undecided` count the items; **cutover refuses while
+`summary.undecided` is non-zero** (#661). A refused file is a non-zero exit
+naming the offending entry, and no report is written.
+
+### From a per-policy baseline
+
+A list of accepted permissive policies — EarthOS keeps one in
+`scripts/rls-baseline.json`, an array of `{ "table", "policy", "reason" }` —
+becomes one `waived` entry per policy, no importer needed. Write that file
+first (a `table` already containing a `.` is taken as schema-qualified,
+otherwise schema `public` is assumed):
+
+```sh
+node -e '
+for (const {table, policy, reason} of require("./scripts/rls-baseline.json")) {
+  const key = table.includes(".") ? table : `public.${table}`;
+  console.log(`[items.${JSON.stringify(`policy:${key}.${policy}`)}]\nstatus = "waived"\nreason = ${JSON.stringify(reason)}\n`);
+}' > import/supabase-rls-baseline.toml
+```
+
+`JSON.stringify` escapes the policy name and the reason as TOML basic strings
+(spaces, dots and quotes included), so a name like `Users update "own"
+profile` lands in a valid key.
+
+Then have `init` write the skeleton into a second file, leaving out the items
+the baseline already decides (`--dispositions` omits them), and merge the two
+— their keys are disjoint, so concatenating is enough:
+
+```sh
+cratefield-cli import supabase dispositions init --project <ref> \
+  --dispositions import/supabase-rls-baseline.toml \
+  --out import/supabase-dispositions.toml
+cat import/supabase-rls-baseline.toml >> import/supabase-dispositions.toml
+```
 
 ## Plan, dry run and apply
 

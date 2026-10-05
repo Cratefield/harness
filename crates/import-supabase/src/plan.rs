@@ -167,7 +167,7 @@ pub struct TargetExtension {
     pub installed_schema: Option<String>,
     /// The target's `default_version`.
     pub default_version: Option<String>,
-    /// The newest version the target can provide, by [`compare_versions`].
+    /// The newest version the target can provide, by `compare_versions`.
     pub max_version: Option<String>,
 }
 
@@ -555,18 +555,21 @@ mod tests {
                           "role_is_superuser": false, "role_can_write": false},
             "coverage": {"database": "inspected", "management_api": "not_inspected",
                          "policy_classifier": "not_inspected"},
-            "summary": {"automatic": 0, "needs_work": 0, "blockers": 0, "ready": true, "tables": 1,
+            "summary": {"automatic": 0, "needs_work": 0, "blockers": 0, "decided": 0,
+                        "undecided": 0, "ready": true, "tables": 1,
                         "estimated_rows": 4, "data_bytes": 8192, "index_bytes": 4096,
                         "storage_objects": 3, "storage_bytes": 20000, "transfer_assumed_mbps": 100,
                         "estimated_transfer_seconds": 1},
+            "dispositions": {"by_kind": [], "decided": [], "stale": []},
             "schemas": [], "tables": tables, "views": [], "sequences": [], "enums": [],
             "extensions": extensions, "functions": [], "triggers": [], "policies": [],
-            "api_role_grants": [],
+            "managed_policies": [], "api_role_grants": [],
             "auth": {"present": true, "users": 3, "users_without_password": 2,
                      "users_unconfirmed": 1, "anonymous_users": 0, "identities_by_provider": [],
                      "mfa_factors": 1, "sso_providers": 0, "enabled_providers": null,
                      "enabled_mfa": null},
-            "storage": {"present": true, "counts_exact": true, "buckets": []},
+            "storage": {"present": true, "counts_exact": true, "buckets": [],
+                        "unattached_policies": []},
             "edge_functions": {"status": "not_inspected", "functions": []},
             "realtime": {"publications": []}, "cron_jobs": [], "findings": [], "warnings": []
         }))
