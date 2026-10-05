@@ -155,9 +155,10 @@ Set the window to `0` where that risk outweighs the false positive.
 
 Design adopted 2026-09-06; per-instance model adopted 2026-10-05 (issue
 #777). The Worker composes all merged modules and deploys with wrangler, one
-instance per app. No instance is live yet: the first deploys of
-`instances/cratefield` and `instances/alphahunt` wait on the owner steps in
-[MANAGED-INSTANCES.md](MANAGED-INSTANCES.md) (D1 ids, secrets, domains,
+instance per app. `instances/alphahunt` and `instances/yoginini` are live on
+staging only (`auth-staging.alphahunt.ing`, `auth-staging.yoginini.us`);
+their production deploys and `instances/cratefield` wait on the steps in
+[MANAGED-INSTANCES.md](MANAGED-INSTANCES.md) (secrets, Owlpost, Turnstile,
 first `auth-v*` tag). Enterprise SAML SSO is deliberately deferred.
 
 ## License

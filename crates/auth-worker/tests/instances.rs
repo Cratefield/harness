@@ -73,7 +73,7 @@ fn config(vars: &BTreeMap<String, String>) -> MapConfig {
 #[test]
 fn the_known_instances_exist() {
     let names: Vec<String> = instances().into_iter().map(|(name, _)| name).collect();
-    for expected in ["alphahunt", "cratefield"] {
+    for expected in ["alphahunt", "cratefield", "yoginini"] {
         assert!(names.iter().any(|name| name == expected), "{names:?}");
     }
 }
