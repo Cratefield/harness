@@ -80,6 +80,7 @@ compatibility-doc` and checked in CI for drift. Do not edit by hand.
 | `cratefield-module-changelog` | 0.3.0 | 1 | `^0.8` — `>=0.8.0, <0.9.0` |
 | `cratefield-module-cms` | 0.3.0 | 1 | `^0.8` — `>=0.8.0, <0.9.0` |
 | `cratefield-module-connections` | 0.2.0 | 1 | `^0.8` — `>=0.8.0, <0.9.0` |
+| `cratefield-module-crm` | 0.1.0 | 1 | `^0.8` — `>=0.8.0, <0.9.0` |
 | `cratefield-module-device-auth` | 0.3.0 | 1 | `^0.8` — `>=0.8.0, <0.9.0` |
 | `cratefield-module-email-signup` | 0.4.0 | 1 | `^0.8` — `>=0.8.0, <0.9.0` |
 | `cratefield-module-hello` *(not published)* | 0.1.1 | 1 | `^0.8` — `>=0.8.0, <0.9.0` |
