@@ -10,16 +10,19 @@ published set on its own (see "The published set" below).
 
 ## How the pipeline works
 
-`.github/workflows/release.yml` runs on every push to `main`:
+`.github/workflows/release.yml` runs under `workflow_run`, once CI on a
+`main` commit has gone green — never on the push itself, so a release
+cannot begin on a commit that failed `cargo test`:
 
 1. `release-plz release-pr` collects the conventional commits since the
    last release and opens (or updates) a release PR: per-crate version
    bumps, per-crate `CHANGELOG.md`, rewritten workspace dependency
    requirements.
-2. Merging that release PR triggers `release-plz release` on the
-   resulting push to `main`: it publishes every crate whose version is
-   not yet on crates.io — in dependency order (`cratefield-core` first) —
-   and tags `<crate>-v<version>` with a GitHub release per crate.
+2. Merging that release PR puts CI on the merge commit, and the run that
+   passes triggers `release-plz release`: it publishes every crate whose
+   version is not yet on crates.io — in dependency order
+   (`cratefield-core` first) — and tags `<crate>-v<version>` with a
+   GitHub release per crate.
 
 Configuration lives in `release-plz.toml` (per-crate versioning,
 conventional-commit changelogs, `publish = false` for `examples/*` and
@@ -38,6 +41,16 @@ calls `tables_api::router` — so the facade cannot publish without it. Its
 first publish (0.1.0) is manual, after `cratefield-manifest` and before the
 facade in step 2 below, and its trusted publisher (step 3) is enabled after
 that.
+
+`cratefield-adapter-colonizer` and `cratefield-module-crm` are newer than
+the crates.io setup and are publishable, but neither has ever been
+published, so neither can have a trusted publisher yet. Both are in the
+ordered list in step 2 below; both need their first manual publish (step 2)
+and their trusted publisher (step 3) before the release run can publish
+them. They, along with `cratefield-tables-api` above, are what
+`tools/release-preflight.sh` currently fails on — `CRATES_IO_READY` must
+stay unset until they are done, or the round half-publishes before it
+reaches them.
 
 `cratefield-mcp` (issue #160) carries `publish = false` as well: it is
 new, nothing depends on it, and publishing it is the remaining human step
@@ -166,8 +179,9 @@ own the `cratefield-*` names.
    repository setting and add the variable `ACTIONS_MAY_OPEN_PRS=true`,
    as described above. Verify with Actions → *Release* → *Run workflow*
    (leave `dry_run` checked): the release PR appears.
- A crate's trusted publisher can only be configured **after the
-crate exists**, so the very first release of each crate is manual:
+
+   A crate's trusted publisher can only be configured **after the
+   crate exists**, so the very first release of each crate is manual:
 
 1. **Create a scoped token, on an account with a verified email.**
    Sign in to crates.io → *Account settings* → *API Tokens* → *New
@@ -249,7 +263,7 @@ crate exists**, so the very first release of each crate is manual:
    cargo publish -p cratefield            # the facade, last
    ```
 
-   Fifty-three crates, and the order is the dependency order: `--dry-run`
+   Every publishable crate, and the order is the dependency order: `--dry-run`
    for a crate whose upstream `cratefield-*` dependencies are not on
    crates.io yet resolves against the registry and fails until those are
    published. The `package` CI job (`tools/package-check.sh`) fails if this
@@ -288,7 +302,14 @@ crate exists**, so the very first release of each crate is manual:
    step is skipped and the run says so in an annotation. Verify with a
    manual dry run: Actions → *Release* → *Run workflow*, leave
    `dry_run` checked; the release step should now execute and report
-   what it *would* publish.
+   what it *would* publish. That run first runs
+   `tools/release-preflight.sh`, which asks crates.io whether every
+   crate in the publishable set exists yet and **fails, naming each
+   crate that does not**, so a first publish still pending shows up as
+   a list of names in the dry run rather than as a half-published round
+   on the first real one (issue #719). It proves only that each crate
+   *exists*: one published by hand whose trusted publisher (step 3) is
+   not enabled yet passes it and still fails mid-round.
 5. **Revoke the token from step 1.**
 6. **Add the team owner.** On each crate page → *Owners* → add a
    GitHub team from the `Cratefield` org (the org that owns this
