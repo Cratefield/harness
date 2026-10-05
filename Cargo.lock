@@ -1148,6 +1148,7 @@ dependencies = [
  "cratefield-core",
  "cratefield-i18n",
  "cratefield-module-privacy",
+ "cratefield-oauth-client",
  "cratefield-testing",
  "futures-util",
  "getrandom 0.4.3",
@@ -1163,6 +1164,7 @@ dependencies = [
  "tower",
  "tracing",
  "url",
+ "zeroize",
 ]
 
 [[package]]
@@ -1247,6 +1249,7 @@ dependencies = [
  "tower",
  "tracing",
  "url",
+ "zeroize",
 ]
 
 [[package]]

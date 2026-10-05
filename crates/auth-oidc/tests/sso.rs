@@ -117,13 +117,13 @@ async fn sign_in_through(kit: &support::Kit, pending: &str, connection_id: &str)
         "back to the pending authorization"
     );
     callback
-        .cookie("__Host-fz_session")
+        .cookie("__Host-session")
         .expect("a session cookie")
 }
 
 /// The `code` an `/authorize` with a live session redirects with.
 async fn code_for(kit: &support::Kit, pending: &str, session: &str) -> String {
-    let response = get(kit, pending, &[("__Host-fz_session", session)]).await;
+    let response = get(kit, pending, &[("__Host-session", session)]).await;
     assert_eq!(response.status, StatusCode::FOUND, "{}", response.text());
     let location = response.location().expect("a Location");
     assert!(
@@ -307,7 +307,7 @@ async fn an_id_token_the_connection_does_not_vouch_for_is_refused() {
 
         let callback = sso_callback(&kit, &started, "the-code", &started.state).await;
         is_the_generic_refusal(&callback);
-        assert!(callback.cookie("__Host-fz_session").is_none(), "{reason}");
+        assert!(callback.cookie("__Host-session").is_none(), "{reason}");
         // Nothing the refusal says may leak which check failed, or the
         // identity the `IdP` asserted.
         assert!(!callback.text().contains("acme.example"), "{reason}");

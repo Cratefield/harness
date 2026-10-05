@@ -185,8 +185,8 @@ async fn minted_response(
     )
     .map_err(|err| {
         tracing::error!(error = %err, "access-token mint failed");
-            Problem::internal()
-        })?;
+        Problem::internal()
+    })?;
     Ok(Json(json!({
         "access_token": access,
         "token_type": "Bearer",

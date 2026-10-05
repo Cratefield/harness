@@ -423,7 +423,7 @@ pub async fn sso_callback(kit: &Kit, started: &Started, code: &str, state: &str)
     get(
         kit,
         &format!("{SSO_CALLBACK}?code={code}&state={state}"),
-        &[("__Host-fz_oidc", &started.flow_cookie)],
+        &[("__Host-auth_oidc", &started.flow_cookie)],
     )
     .await
 }

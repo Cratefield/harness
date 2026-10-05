@@ -523,7 +523,7 @@ async fn authorize(
                     && connection.status == store::STATUS_ACTIVE
         );
         if !own_active {
-            return Ok(error_page(&scope));
+            return Ok(error_page(&scope, brand_of(&state)));
         }
         // Already signed in through this very connection: the request
         // proceeds to a code like any other session's. Anything else —

@@ -15,12 +15,12 @@ use axum::extract::{Path, Query, State};
 use axum::response::{Html, IntoResponse, Response};
 use axum::routing::get;
 use base64ct::{Base64UrlUnpadded, Encoding as _};
-use cratefield_core::{Clock, Database, Problem, Scope};
 use cratefield_auth_core::cookie_value as session_cookie_value;
 use cratefield_auth_core::{
     STATUS_ACTIVE, SsoConnectionRow, client_by_id, domain_of_email, open_client_secret,
     sso_connection_by_id,
 };
+use cratefield_core::{Clock, Database, Problem, Scope};
 use http::{HeaderMap, StatusCode, header};
 use openidconnect::core::{CoreAuthenticationFlow, CoreClient, CoreProviderMetadata};
 use openidconnect::{
