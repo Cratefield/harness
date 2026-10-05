@@ -40,9 +40,8 @@ done
 # with the dependency cargo names first. Each fix removes its entry; the
 # check below fails once an entry packages, or fails for another reason, so
 # this list cannot outlive the reason for it.
-UNPACKAGEABLE=(
-  cratefield:cratefield-tables-api
-)
+# Empty since the facade's `cratefield-tables-api` became versioned.
+UNPACKAGEABLE=()
 
 metadata=$(cargo metadata --no-deps --format-version 1) || \
   die "cargo metadata failed (its error is above): the workspace manifest itself is broken."

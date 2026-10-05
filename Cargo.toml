@@ -154,6 +154,10 @@ cratefield-cli = { path = "crates/cli", version = "0.6" }
 # `cratefield-auth-client` is: the manifest and the CLI are published, and
 # `cargo publish` refuses a dependency without a version.
 cratefield-tables = { path = "crates/tables", version = "0.4" }
+# The HTTP API over those tables, behind the facade's `tables-api` feature.
+# Versioned for the same reason: the facade is published, and cargo refuses
+# an optional dependency without a version as firmly as a required one.
+cratefield-tables-api = { path = "crates/tables-api", version = "0.1" }
 cratefield-client-ts = { path = "crates/client-ts", version = "0.4" }
 cratefield-introspect = { path = "crates/introspect", version = "0.3" }
 # The Supabase importer's engine (ADR 0026, issue #658): read-only

@@ -174,7 +174,7 @@ cratefield-manifest = { workspace = true, optional = true }
 cratefield-client-ts = { workspace = true, optional = true }
 cratefield-introspect = { workspace = true, optional = true }
 cratefield-import-supabase = { workspace = true, optional = true }
-cratefield-tables-api = { path = "../tables-api", optional = true }
+cratefield-tables-api = { workspace = true, optional = true }
 cratefield-auth-client = { workspace = true, optional = true }
 cratefield-oauth-client = { workspace = true, optional = true }
 cratefield-secrets = { workspace = true, optional = true }
