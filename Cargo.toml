@@ -108,6 +108,9 @@ cratefield-module-email-signup = { path = "crates/module-email-signup", version 
 cratefield-module-privacy = { path = "crates/module-privacy", version = "0.3" }
 cratefield-module-waitlist = { path = "crates/module-waitlist", version = "0.4" }
 cratefield-module-cms = { path = "crates/module-cms", version = "0.3" }
+# Contacts, organisations and tags (issue #572), with the idempotent upsert
+# API other modules call to file a person or a company by natural key.
+cratefield-module-crm = { path = "crates/module-crm", version = "0.1" }
 # The changelog module mirrors a project's GitHub releases (or its
 # CHANGELOG.md) into the venture's own database; its reads never call
 # upstream, so the changelog survives an outage of the thing it mirrors.

@@ -151,6 +151,9 @@ pub use cratefield_module_waitlist as waitlist;
 #[cfg(feature = "cms")]
 pub use cratefield_module_cms as cms;
 
+#[cfg(feature = "crm")]
+pub use cratefield_module_crm as crm;
+
 #[cfg(feature = "changelog")]
 pub use cratefield_module_changelog as changelog;
 

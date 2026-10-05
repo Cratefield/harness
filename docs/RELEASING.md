@@ -231,6 +231,7 @@ crate exists**, so the very first release of each crate is manual:
    cargo publish -p cratefield-adapter-workers-ai
    cargo publish -p cratefield-module-changelog
    cargo publish -p cratefield-module-cms
+   cargo publish -p cratefield-module-crm
    cargo publish -p cratefield-module-telemetry
    cargo publish -p cratefield-ui
    cargo publish -p cratefield-secrets
@@ -247,7 +248,7 @@ crate exists**, so the very first release of each crate is manual:
    cargo publish -p cratefield            # the facade, last
    ```
 
-   Fifty-two crates, and the order is the dependency order: `--dry-run`
+   Fifty-three crates, and the order is the dependency order: `--dry-run`
    for a crate whose upstream `cratefield-*` dependencies are not on
    crates.io yet resolves against the registry and fails until those are
    published. The `package` CI job (`tools/package-check.sh`) fails if this
