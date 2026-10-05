@@ -39,6 +39,10 @@ mod suppressions;
 
 pub use suppressions::Suppression;
 
+mod domains;
+
+pub use domains::{DnsRecord, Domain, DomainError, DomainStatus, RecordPurpose, RecordType};
+
 /// The hosted Owlpost API. A self-hosted or proxy deployment points the
 /// adapter elsewhere with [`Owlpost::with_base_url`] /
 /// [`OWLPOST_BASE_URL`](Owlpost::from_env); the wire path `/v1/emails` is
@@ -214,6 +218,34 @@ impl OwlpostClient {
         body: Option<Vec<u8>>,
         idempotency_key: Option<&str>,
     ) -> Result<String, OwlpostError> {
+        self.call_mapped(
+            method,
+            path,
+            body,
+            idempotency_key,
+            |client, status, text, retry_after| -> OwlpostError {
+                client.map_status(status, text, retry_after).into()
+            },
+        )
+        .await
+    }
+
+    /// The same request, with the caller's own mapping for a non-success
+    /// response. [`Self::call`] keeps the [`MailError`] mapping for the mail
+    /// routes; the sending domains map 404, 409 and 422 to their own
+    /// variants, which [`MailError`] would fold into one. A no-key short
+    /// circuit and a transport failure both arrive as `E::from`.
+    async fn call_mapped<E>(
+        &self,
+        method: http::Method,
+        path: &str,
+        body: Option<Vec<u8>>,
+        idempotency_key: Option<&str>,
+        map: impl FnOnce(&OwlpostClient, StatusCode, &str, Option<Duration>) -> E,
+    ) -> Result<String, E>
+    where
+        E: From<OwlpostError> + fmt::Display,
+    {
         let Some(api_key) = &self.api_key else {
             tracing::info!(
                 provider = "owlpost",
@@ -221,11 +253,15 @@ impl OwlpostClient {
                 idempotency = idempotency_key.unwrap_or(""),
                 "mailer outcome"
             );
-            return Err(OwlpostError::NotConfigured);
+            return Err(E::from(OwlpostError::NotConfigured));
         };
-        // What the log calls the answer: a write is "sent" whatever the verb
-        // (POST sends, PUT renames, DELETE removes), a GET reads.
-        let writes = method != http::Method::GET && method != http::Method::HEAD;
+        // What the log calls the answer: a POST sends and a PUT renames (both
+        // "sent"), a DELETE removes, a GET reads.
+        let outcome = match method {
+            http::Method::POST | http::Method::PUT | http::Method::PATCH => "sent",
+            http::Method::DELETE => "deleted",
+            _ => "read",
+        };
         let mut builder = Request::builder()
             .method(method)
             .uri(format!("{}{path}", self.base_url.trim_end_matches('/')))
@@ -238,18 +274,17 @@ impl OwlpostClient {
         }
         let request = builder
             .body(Bytes::from(body.unwrap_or_default()))
-            .map_err(|err| self.transport(err))?;
+            .map_err(|err| E::from(self.transport(err)))?;
 
         let response = self
             .http
             .send(request)
             .await
-            .map_err(|err: HttpError| self.transport(err))?;
+            .map_err(|err: HttpError| E::from(self.transport(err)))?;
         let status = response.status();
         let retry_after = retry_after(response.headers(), self.clock.as_ref());
         let text = String::from_utf8_lossy(response.body()).to_string();
         if status.is_success() {
-            let outcome = if writes { "sent" } else { "read" };
             tracing::info!(
                 provider = "owlpost",
                 code = status.as_u16(),
@@ -259,7 +294,7 @@ impl OwlpostClient {
             );
             return Ok(text);
         }
-        let error: OwlpostError = self.map_status(status, &text, retry_after).into();
+        let error = map(self, status, &text, retry_after);
         tracing::warn!(
             provider = "owlpost",
             code = status.as_u16(),
