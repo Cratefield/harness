@@ -463,6 +463,10 @@ jobs:
       # so nothing else would notice a dependency that cannot reach wasm32.
       - name: Build cratefield-adapter-polar to wasm
         run: cargo build --target wasm32-unknown-unknown -p cratefield-adapter-polar
+      # The Colonizer mothership client (issue #675) is the same shape — a
+      # plain `HttpClient` + `Clock` client no venture enables yet.
+      - name: Build cratefield-adapter-colonizer to wasm
+        run: cargo build --target wasm32-unknown-unknown -p cratefield-adapter-colonizer
       # The mail layout every mail-sending module renders through: string
       # building over core, so it must reach wasm32 on its own too.
       - name: Build cratefield-mail-templates to wasm

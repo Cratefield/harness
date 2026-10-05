@@ -665,6 +665,7 @@ dependencies = [
  "cratefield-adapter-apns",
  "cratefield-adapter-classifier-llm",
  "cratefield-adapter-cloudflare-saas",
+ "cratefield-adapter-colonizer",
  "cratefield-adapter-fcm",
  "cratefield-adapter-github-app",
  "cratefield-adapter-github-issues",
@@ -797,6 +798,23 @@ dependencies = [
  "pollster",
  "serde",
  "serde_json",
+ "tracing",
+]
+
+[[package]]
+name = "cratefield-adapter-colonizer"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "cratefield-core",
+ "cratefield-testing",
+ "getrandom 0.4.3",
+ "http",
+ "pollster",
+ "serde",
+ "serde_json",
+ "time",
  "tracing",
 ]
 
