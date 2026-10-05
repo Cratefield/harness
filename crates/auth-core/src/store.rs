@@ -39,6 +39,10 @@ pub const TOKEN_EMAIL_VERIFICATION: &str = "email_verification";
 /// (issue #20). Bearer, single-use and short-lived, because it is a way
 /// past the password rather than a way to present it.
 pub const TOKEN_PASSWORD_RESET: &str = "password_reset";
+/// The link that moves an account to a new address (issue #648). The
+/// address being moved to is the row's `payload`; spending the token is
+/// what applies it.
+pub const TOKEN_EMAIL_CHANGE: &str = "email_change";
 /// Opaque single-use refresh tokens (issue #9): rows of
 /// `single_use_tokens` bound to a session; reuse of a consumed one
 /// revokes the session.
@@ -918,6 +922,36 @@ pub async fn revoke_all_sessions(
     db.execute(&Statement::render(&update)).await
 }
 
+/// Revokes every live session of a user except `keep` (issue #648).
+///
+/// The email-change confirm uses this rather than [`revoke_all_sessions`]:
+/// the address moved, so every session signed in against the old one is
+/// a way in somebody else might still hold — but the person who pressed
+/// the link is mid-flow, and revoking their own session would sign them
+/// out of the thing they just confirmed. `keep` is the id of the
+/// session that carried the request, or `None` to revoke everything.
+///
+/// # Errors
+///
+/// [`DbError::Execute`] when the statement fails.
+pub async fn revoke_other_sessions(
+    db: &dyn Database,
+    user_id: &str,
+    keep: Option<&str>,
+    revoked_at: &str,
+) -> Result<u64, DbError> {
+    let mut update = Query::update();
+    update
+        .table(iden("sessions"))
+        .values([(iden("revoked_at"), revoked_at.into())])
+        .and_where(Expr::col(iden("user_id")).eq(user_id))
+        .and_where(Expr::col(iden("revoked_at")).is_null());
+    if let Some(keep) = keep {
+        update.and_where(Expr::col(iden("id")).ne(keep));
+    }
+    db.execute(&Statement::render(&update)).await
+}
+
 /// Deletes sessions whose `expires_at` has passed; returns the count.
 ///
 /// # Errors
@@ -1728,6 +1762,64 @@ pub async fn set_password_lockout(
             ),
         ])
         .and_where(Expr::col(iden("id")).eq(id));
+    db.execute(&Statement::render(&update)).await
+}
+
+/// Moves a user's primary address (issue #648).
+///
+/// Only ever called after proof: consuming a link sent to the new
+/// address. The caller re-checks that the address is free first, and
+/// the `primary_email_verified` write lands beside this one, so the
+/// pair leaves the account verified at the address it now answers to.
+///
+/// # Errors
+///
+/// [`DbError::Execute`] when the statement fails.
+pub async fn set_primary_email(
+    db: &dyn Database,
+    id: &str,
+    email: &str,
+    updated_at: &str,
+) -> Result<u64, DbError> {
+    let mut update = Query::update();
+    update
+        .table(iden("users"))
+        .values([
+            (iden("primary_email"), email.into()),
+            (iden("updated_at"), updated_at.into()),
+        ])
+        .and_where(Expr::col(iden("id")).eq(id));
+    db.execute(&Statement::render(&update)).await
+}
+
+/// Moves a `password` identity's subject to the address the account now
+/// answers at (issue #648).
+///
+/// For this provider the subject *is* the normalised address, and
+/// `(provider, provider_subject)` is unique. Left behind, the old
+/// subject would keep the old address unregistrable forever: the next
+/// person to register it would fail the insert on a row belonging to
+/// somebody else. Social identities are deliberately not touched —
+/// there the subject is the provider's own claim, not an address.
+///
+/// # Errors
+///
+/// [`DbError::Execute`] when the statement fails.
+pub async fn set_password_identity_email(
+    db: &dyn Database,
+    user_id: &str,
+    email: &str,
+) -> Result<u64, DbError> {
+    let mut update = Query::update();
+    update
+        .table(iden("identities"))
+        .values([
+            (iden("provider_subject"), email.into()),
+            (iden("email"), email.into()),
+            (iden("email_verified"), true.into()),
+        ])
+        .and_where(Expr::col(iden("user_id")).eq(user_id))
+        .and_where(Expr::col(iden("provider")).eq(PROVIDER_PASSWORD));
     db.execute(&Statement::render(&update)).await
 }
 

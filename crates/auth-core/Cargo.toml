@@ -2,6 +2,7 @@
 name = "cratefield-auth-core"
 description = "Auth module: users, identities, credentials, sessions, single-use tokens, clients, client registration, redirect validation, sessions (issues #5-#8)"
 publish = false
+readme = "README.md"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -18,6 +19,10 @@ cratefield-core = { workspace = true }
 # live in the i18n crate (issue #649). Pure Rust, wasm-safe, the same crate
 # the template registry's negotiation is built around.
 cratefield-i18n = { workspace = true }
+# The two email-change mails of issue #648 are rendered through the same
+# layout `auth-password` and `auth-magic-link` use, so a venture's mail
+# looks the same whoever sent it.
+cratefield-mail-templates = { workspace = true }
 axum = { workspace = true }
 http = { workspace = true }
 sea-query = { workspace = true }
