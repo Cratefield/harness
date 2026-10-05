@@ -636,7 +636,7 @@ async fn read_auth(
     };
     // A user is confirmed when either address is: a phone-only user has no
     // `email_confirmed_at`, and `phone_confirmed_at` is not on every stack.
-    let confirmed = if column_exists(session, "auth.users", "phone_confirmed_at").await? {
+    let confirmed = if column_exists(session, "auth", "users", "phone_confirmed_at").await? {
         "(email_confirmed_at IS NOT NULL OR phone_confirmed_at IS NOT NULL)"
     } else {
         "email_confirmed_at IS NOT NULL"

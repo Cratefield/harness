@@ -60,8 +60,8 @@ cratefield-adapter-postgres = { path = "../adapter-postgres" }
 # own dev-dependencies — a dev-dependency is stripped from the packaged
 # manifest.
 cratefield-testing = { path = "../testing" }
-factory0-auth-core = { path = "../auth-core" }
-factory0-auth-password = { path = "../auth-password" }
+cratefield-auth-core = { path = "../auth-core" }
+cratefield-auth-password = { path = "../auth-password" }
 tokio = { workspace = true, features = ["sync"] }
 async-trait = { workspace = true }
 insta = { workspace = true }

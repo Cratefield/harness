@@ -205,8 +205,8 @@ async fn phone_only_and_anonymous_users_are_skipped() {
     ))
     .await
     .expect("inspect succeeds");
-    assert_eq!(report.auth.users, 5);
-    assert_eq!(report.auth.users_unconfirmed, 2);
+    assert_eq!(report.auth.users, Some(5));
+    assert_eq!(report.auth.users_unconfirmed, Some(2));
     db.finish().await;
 }
 

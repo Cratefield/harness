@@ -12,11 +12,11 @@
 use std::sync::Arc;
 
 use cratefield_adapter_postgres::testing::{TempDb, base_url, skip_reason};
+use cratefield_auth_core::{AuthCore, user_by_primary_email};
+use cratefield_auth_password::Password;
 use cratefield_core::MapConfig;
 use cratefield_import_supabase::{ImportRecord, Secret, UsersOptions, read_users};
 use cratefield_testing::{TestHarness, request, request_as};
-use factory0_auth_core::{AuthCore, user_by_primary_email};
-use factory0_auth_password::Password;
 use http::{Method, StatusCode};
 use serde_json::json;
 use sqlx::PgPool;

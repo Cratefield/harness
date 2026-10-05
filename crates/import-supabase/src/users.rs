@@ -199,7 +199,7 @@ pub struct UnmappedProvider {
 pub struct ImportPlan {
     pub records: Vec<ImportRecord>,
     /// Their metadata, one entry per record, in id order — built by
-    /// [`plan_user`], which pushes the pair together, so index `n` of
+    /// `plan_user`, which pushes the pair together, so index `n` of
     /// `metadata` is index `n` of `records`. [`ImportPlan::users`] is the
     /// pairing.
     pub metadata: Vec<UserMetadata>,

@@ -50,8 +50,8 @@ pub mod report;
 mod secret;
 mod session;
 mod storage_policy;
-mod visibility;
 mod users;
+mod visibility;
 
 use std::sync::Arc;
 

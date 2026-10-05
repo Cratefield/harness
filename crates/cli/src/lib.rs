@@ -467,51 +467,6 @@ enum SupabaseCommand {
         #[command(flatten)]
         args: SupabaseRunArgs,
     },
-}
-
-/// The source flags `inspect` and `dispositions init` share: one read-only
-/// connection to the project.
-#[derive(Args)]
-struct SourceArgs {
-    /// The Supabase project ref (the `<ref>` in
-    /// `https://<ref>.supabase.co`).
-    #[arg(long, value_name = "REF")]
-    project: String,
-    /// The database URL of a read-only role. Prefer the
-    /// `SUPABASE_DB_URL` environment variable: a flag lands in the
-    /// shell history and the process list.
-    #[arg(long, value_name = "URL")]
-    db_url: Option<String>,
-    /// A Supabase Management API personal access token, for Edge
-    /// Functions and the auth configuration. Prefer
-    /// `SUPABASE_ACCESS_TOKEN`. Without one those are reported as not
-    /// inspected (unknown, not none).
-    #[arg(long, value_name = "TOKEN")]
-    management_token: Option<String>,
-}
-
-#[derive(Subcommand)]
-enum DispositionsCommand {
-    /// Writes a skeleton dispositions file: one placeholder entry per item
-    /// that needs a decision, to fill in. Refuses to overwrite an existing
-    /// file without `--force`.
-    Init {
-        #[command(flatten)]
-        source: SourceArgs,
-        /// Where to write the skeleton.
-        #[arg(
-            long,
-            value_name = "FILE",
-            default_value = "import/supabase-dispositions.toml"
-        )]
-        out: PathBuf,
-        /// Overwrite an existing file.
-        #[arg(long)]
-        force: bool,
-        /// Skip items already decided in this file.
-        #[arg(long, value_name = "FILE")]
-        dispositions: Option<PathBuf>,
-    },
     /// Moves the project's auth users into a running venture's `auth-core`
     /// (issue #659, step 2): reads `auth.users` and `auth.identities`
     /// read-only, sends each account's address, verified flag, bcrypt hash
@@ -557,6 +512,51 @@ enum DispositionsCommand {
         /// Where the JSON report goes (default stdout).
         #[arg(long, value_name = "PATH")]
         report: Option<PathBuf>,
+    },
+}
+
+/// The source flags `inspect` and `dispositions init` share: one read-only
+/// connection to the project.
+#[derive(Args)]
+struct SourceArgs {
+    /// The Supabase project ref (the `<ref>` in
+    /// `https://<ref>.supabase.co`).
+    #[arg(long, value_name = "REF")]
+    project: String,
+    /// The database URL of a read-only role. Prefer the
+    /// `SUPABASE_DB_URL` environment variable: a flag lands in the
+    /// shell history and the process list.
+    #[arg(long, value_name = "URL")]
+    db_url: Option<String>,
+    /// A Supabase Management API personal access token, for Edge
+    /// Functions and the auth configuration. Prefer
+    /// `SUPABASE_ACCESS_TOKEN`. Without one those are reported as not
+    /// inspected (unknown, not none).
+    #[arg(long, value_name = "TOKEN")]
+    management_token: Option<String>,
+}
+
+#[derive(Subcommand)]
+enum DispositionsCommand {
+    /// Writes a skeleton dispositions file: one placeholder entry per item
+    /// that needs a decision, to fill in. Refuses to overwrite an existing
+    /// file without `--force`.
+    Init {
+        #[command(flatten)]
+        source: SourceArgs,
+        /// Where to write the skeleton.
+        #[arg(
+            long,
+            value_name = "FILE",
+            default_value = "import/supabase-dispositions.toml"
+        )]
+        out: PathBuf,
+        /// Overwrite an existing file.
+        #[arg(long)]
+        force: bool,
+        /// Skip items already decided in this file.
+        #[arg(long, value_name = "FILE")]
+        dispositions: Option<PathBuf>,
     },
 }
 
