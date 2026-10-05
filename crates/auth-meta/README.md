@@ -107,6 +107,10 @@ unauthenticated by definition, so a caller who could tell "wrong
 signature" from "no such user" would learn whether a given person has an
 account.
 
+Submitting the app for Meta's review is a per-instance step: the URLs to
+enter and the reviewer walkthrough are in
+[the app-review runbook](../../docs/auth/META-APP-REVIEW.md).
+
 ## Known gaps
 
 - **No manual run against a real Meta app.** Everything here is exercised
