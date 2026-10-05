@@ -1,7 +1,7 @@
 //! The shared conformance suite plus the wasm dependency boundary.
 
+use cratefield_auth_password::Password;
 use cratefield_testing::{assert_wasm_safe_deps, conformance};
-use factory0_auth_password::Password;
 
 #[test]
 fn auth_password_conforms() {

@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 pub(crate) const PURPOSE: &str = "auth-oidc.flow";
 
 /// `__Host-` so the cookie is origin-locked: no domain, path `/`, secure.
-pub(crate) const COOKIE_NAME: &str = "__Host-fz_oidc";
+pub(crate) const COOKIE_NAME: &str = "__Host-auth_oidc";
 
 /// How long a person has to finish at the provider. Long enough to create
 /// an account or find a second factor, short enough that an abandoned flow
@@ -273,7 +273,7 @@ mod tests {
     #[test]
     fn the_cookie_is_origin_locked_and_survives_the_providers_redirect() {
         let header = set_cookie("value", SameSite::Lax);
-        assert!(header.starts_with("__Host-fz_oidc="), "{header}");
+        assert!(header.starts_with("__Host-auth_oidc="), "{header}");
         assert!(header.contains("Secure"), "{header}");
         assert!(header.contains("HttpOnly"), "{header}");
         // Lax, not Strict: the callback is a top-level navigation from the
@@ -301,7 +301,7 @@ mod tests {
         // `SameSite=None` without `Secure` is rejected outright by every
         // current browser, so the two travel together or not at all.
         assert!(header.contains("Secure"), "{header}");
-        assert!(header.starts_with("__Host-fz_oidc="), "{header}");
+        assert!(header.starts_with("__Host-auth_oidc="), "{header}");
         assert!(!header.contains("Domain="), "{header}");
     }
 
@@ -322,7 +322,7 @@ mod tests {
         let mut headers = http::HeaderMap::new();
         headers.insert(
             http::header::COOKIE,
-            "theme=dark; __Host-fz_oidc=abc; other=1"
+            "theme=dark; __Host-auth_oidc=abc; other=1"
                 .parse()
                 .expect("header"),
         );

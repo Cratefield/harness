@@ -43,6 +43,7 @@ use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
 use crate::ModuleState;
+use crate::brand::Brand;
 use crate::redirect_uri::matches_any;
 use crate::secrets;
 use crate::sessions;
@@ -177,6 +178,7 @@ fn html(template: &impl Template) -> Response {
 #[derive(Template)]
 #[template(path = "login_chooser.html")]
 struct LoginChooserTemplate {
+    brand: Brand,
     methods: Vec<LoginMethod>,
     /// Whether to emit the passkey script at all. A page that offers no
     /// passkey carries no script.
@@ -188,19 +190,23 @@ struct LoginChooserTemplate {
 #[derive(Template)]
 #[template(path = "authorize_error.html")]
 struct AuthorizeErrorTemplate {
+    brand: Brand,
     message: &'static str,
     request_id: String,
 }
 
 #[derive(Template)]
 #[template(path = "signed_out.html")]
-struct SignedOutTemplate;
+struct SignedOutTemplate {
+    brand: Brand,
+}
 
 /// The page a `GET /logout` carrying a live session renders instead of
 /// acting: it asks, and the form's POST is what acts (issue #439).
 #[derive(Template)]
 #[template(path = "confirm_logout.html")]
 struct ConfirmLogoutTemplate {
+    brand: Brand,
     /// Where the form posts — this request's path with `/confirm`
     /// appended, computed rather than hardcoded so the module's mount
     /// point stays the harness's decision (`/v1/{module name}`).
@@ -268,8 +274,14 @@ pub(crate) fn enabled_login_methods(cfg: &dyn Config, return_to: &str) -> Vec<Lo
         .collect()
 }
 
-fn error_page(scope: &Scope) -> Response {
+/// The instance's branding for a page this module renders.
+fn brand_of(state: &ModuleState) -> Brand {
+    Brand::from_config(&*state.ctx.config, &state.ctx.venture)
+}
+
+fn error_page(scope: &Scope, brand: Brand) -> Response {
     let page = html(&AuthorizeErrorTemplate {
+        brand,
         message: AUTHORIZE_REFUSED_MESSAGE,
         request_id: scope.request_id.clone(),
     });
@@ -396,7 +408,7 @@ async fn authorize(
             .await
             .is_err()
     {
-        return Ok(error_page(&scope));
+        return Ok(error_page(&scope, brand_of(&state)));
     }
 
     // From here the URI is registered: parameter failures redirect
@@ -456,6 +468,7 @@ async fn authorize(
         );
         let methods = enabled_login_methods(&*state.ctx.config, &return_to);
         html(&LoginChooserTemplate {
+            brand: brand_of(&state),
             has_passkey: methods.iter().any(|method| method.is_passkey),
             methods,
             return_to,
@@ -563,7 +576,7 @@ async fn logout(
     )
     .await
     else {
-        return Ok(error_page(&scope));
+        return Ok(error_page(&scope, brand_of(&state)));
     };
 
     // A live session is asked, not told: render the confirmation and
@@ -585,6 +598,7 @@ async fn logout(
             (query.client_id.clone(), Some(target.clone()))
         };
         return Ok(html(&ConfirmLogoutTemplate {
+            brand: brand_of(&state),
             action: confirm_action(original_uri.path()),
             client_id,
             post_logout_redirect_uri: redirect,
@@ -596,7 +610,14 @@ async fn logout(
     // Clearing an already-invalid cookie changes nothing an attacker
     // cares about, and the person still gets today's answer — the
     // validated redirect, or the signed-out page.
-    sign_out(&*db, &*clock, sessions::cookie_value(&headers), target).await
+    sign_out(
+        &*db,
+        &*clock,
+        sessions::cookie_value(&headers),
+        target,
+        brand_of(&state),
+    )
+    .await
 }
 
 #[derive(Deserialize)]
@@ -631,9 +652,16 @@ async fn logout_confirm(
     )
     .await
     else {
-        return Ok(error_page(&scope));
+        return Ok(error_page(&scope, brand_of(&state)));
     };
-    sign_out(&*db, &*clock, sessions::cookie_value(&headers), target).await
+    sign_out(
+        &*db,
+        &*clock,
+        sessions::cookie_value(&headers),
+        target,
+        brand_of(&state),
+    )
+    .await
 }
 
 /// The post-logout redirect target, after the one client / URI check both
@@ -672,6 +700,7 @@ async fn sign_out(
     clock: &dyn Clock,
     cookie: Option<String>,
     target: String,
+    brand: Brand,
 ) -> Result<Response, Problem> {
     if let Some(value) = cookie.as_deref()
         && let Ok(Some(session)) = sessions::validate(db, clock, value).await
@@ -687,7 +716,7 @@ async fn sign_out(
 
     let clear = [(header::SET_COOKIE, sessions::clear_cookie())];
     if target.is_empty() {
-        return Ok((clear, html(&SignedOutTemplate)).into_response());
+        return Ok((clear, html(&SignedOutTemplate { brand })).into_response());
     }
     Ok((StatusCode::FOUND, clear, [(header::LOCATION, target)]).into_response())
 }
@@ -726,6 +755,7 @@ mod tests {
     fn a_hostile_return_to_cannot_break_out_of_the_page() {
         let hostile = "/authorize?state=</script><script>alert(1)</script>";
         let page = LoginChooserTemplate {
+            brand: test_brand(),
             methods: vec![LoginMethod {
                 slug: "passkey".to_owned(),
                 label: "Continue with a passkey".to_owned(),
@@ -753,6 +783,13 @@ mod tests {
     }
     use super::*;
 
+    fn test_brand() -> Brand {
+        Brand::from_config(
+            &cratefield_core::MapConfig::default(),
+            &cratefield_core::Venture::new("acme", "auth.acme.example"),
+        )
+    }
+
     /// The confirmation page must escape whatever its hidden inputs
     /// carry, whatever the logout query held. The HTTP path cannot
     /// deliver a raw `<` — `http::Uri` refuses one — so, like the
@@ -765,6 +802,7 @@ mod tests {
     fn a_hostile_redirect_pair_cannot_break_out_of_the_confirmation() {
         let hostile = "https://app.example/cb?next=\"><script>alert(1)</script>";
         let page = ConfirmLogoutTemplate {
+            brand: test_brand(),
             action: "/v1/auth-core/logout/confirm".to_owned(),
             client_id: Some("\"><script>alert(1)</script>".to_owned()),
             post_logout_redirect_uri: Some(hostile.to_owned()),

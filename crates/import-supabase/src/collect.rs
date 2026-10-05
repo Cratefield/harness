@@ -677,6 +677,7 @@ async fn read_storage(
             present: false,
             counts_exact: true,
             buckets: Vec::new(),
+            unattached_policies: Vec::new(),
         };
         return Ok(());
     }
@@ -740,10 +741,14 @@ async fn read_storage(
                         objects: clamp(count),
                         bytes: clamp(bytes),
                         objects_over_blob_cap: clamp(over),
+                        // Filled by `storage_policy::attach` once every
+                        // policy has been read.
+                        policies: Vec::new(),
                     }
                 },
             )
             .collect(),
+        unattached_policies: Vec::new(),
     };
     if !counts_exact {
         catalog.warnings.push(

@@ -1,15 +1,26 @@
-//! The venture name may appear in exactly one place (issue #646): the
-//! `defaults` table. Anywhere else under `src` it is a deployment detail
-//! leaking into code that a wrapper venture should be able to reuse unchanged.
+//! No app is baked into the Worker (issues #646, #777): auth runs as one
+//! branded instance per app, and every app-specific value arrives through
+//! configuration. A name or domain under `src/` would be one app's
+//! deployment detail leaking into every other app's instance.
 
 use std::fs;
 use std::path::Path;
 
-/// The one literal the scan forbids outside `defaults.rs`.
-const VENTURE_MARKER: &str = "factory0";
+/// Literals that name a particular app, brand or domain. None may appear
+/// anywhere under `src/`, compared case-insensitively. The old umbrella's
+/// names are spelt in two halves so that this file does not itself match a
+/// repository-wide search for them.
+const APP_MARKERS: &[&str] = &[
+    concat!("factory", "0"),
+    concat!("factory", " zero"),
+    "cratefield.com",
+    "alphahunt",
+    "yoginini",
+    "earthos",
+];
 
 #[test]
-fn the_venture_marker_lives_only_in_the_defaults_table() {
+fn no_app_literal_appears_in_the_worker_source() {
     let mut offenders = Vec::new();
     scan(
         &Path::new(env!("CARGO_MANIFEST_DIR")).join("src"),
@@ -17,24 +28,23 @@ fn the_venture_marker_lives_only_in_the_defaults_table() {
     );
     assert!(
         offenders.is_empty(),
-        "the venture marker appears outside src/defaults.rs:\n{}",
+        "an app-specific literal appears in src/; move it to the instance's config:\n{}",
         offenders.join("\n")
     );
 }
 
-/// Collects every `factory0` line in a `.rs` file under `dir`, recursively,
-/// skipping the defaults table itself.
+/// Collects every line in a `.rs` file under `dir`, recursively, that
+/// carries one of the markers.
 fn scan(dir: &Path, offenders: &mut Vec<String>) {
     for entry in fs::read_dir(dir).expect("src is readable") {
         let path = entry.expect("a directory entry").path();
         if path.is_dir() {
             scan(&path, offenders);
-        } else if path.extension().and_then(|ext| ext.to_str()) == Some("rs")
-            && path.file_name().and_then(|name| name.to_str()) != Some("defaults.rs")
-        {
+        } else if path.extension().and_then(|ext| ext.to_str()) == Some("rs") {
             let text = fs::read_to_string(&path).expect("a source file is readable");
             for (line_no, line) in text.lines().enumerate() {
-                if line.contains(VENTURE_MARKER) {
+                let lower = line.to_ascii_lowercase();
+                if APP_MARKERS.iter().any(|marker| lower.contains(marker)) {
                     offenders.push(format!(
                         "{}:{}: {}",
                         path.display(),

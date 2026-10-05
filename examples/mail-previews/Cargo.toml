@@ -18,6 +18,6 @@ cratefield-module-waitlist = { workspace = true }
 cratefield-module-email-signup = { workspace = true }
 cratefield-module-orgs = { workspace = true }
 cratefield-module-notifications = { workspace = true }
-factory0-auth-magic-link = { path = "../../crates/auth-magic-link" }
-factory0-auth-password = { path = "../../crates/auth-password" }
+cratefield-auth-magic-link = { path = "../../crates/auth-magic-link" }
+cratefield-auth-password = { path = "../../crates/auth-password" }
 serde_json = { workspace = true }

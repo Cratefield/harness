@@ -11,16 +11,16 @@ use common::{EventSpy, Res};
 
 use async_trait::async_trait;
 use bytes::Bytes;
+use cratefield_auth_core::{
+    AuthCore, STATUS_ACTIVE, UserRow, insert_user, password_credential, set_password_hash,
+    user_by_primary_email,
+};
+use cratefield_auth_password::Password;
 use cratefield_core::{
     Clock, Config, Database, Decision, HttpClient, HttpError, MapConfig, RateLimitError,
     RateLimiter, Statement,
 };
 use cratefield_testing::TestHarness;
-use factory0_auth_core::{
-    AuthCore, STATUS_ACTIVE, UserRow, insert_user, password_credential, set_password_hash,
-    user_by_primary_email,
-};
-use factory0_auth_password::Password;
 use http::{Method, Request, Response, StatusCode, header};
 use serde_json::{Value, json};
 use std::sync::atomic::{AtomicI64, AtomicUsize, Ordering};
@@ -147,7 +147,7 @@ async fn post_with(
     cookie: Option<&str>,
     extra: &[(&str, &str)],
 ) -> Res {
-    let cookie = cookie.map(|value| format!("__Host-fz_session={value}"));
+    let cookie = cookie.map(|value| format!("__Host-session={value}"));
     let mut headers: Vec<(&str, &str)> = extra.to_vec();
     if let Some(cookie) = cookie.as_deref() {
         headers.push(("cookie", cookie));
@@ -361,7 +361,7 @@ fn the_right_password_signs_in_and_records_a_password_login() {
 
         let response = login(&kit, "ada@example.com", GOOD).await;
         assert_eq!(response.status, StatusCode::OK, "{}", response.text());
-        assert!(response.cookie("__Host-fz_session").is_some());
+        assert!(response.cookie("__Host-session").is_some());
         assert_eq!(count(&kit, "sessions"), 1);
 
         let rows = kit
@@ -408,7 +408,7 @@ fn every_refused_login_answers_identically() {
             assert_eq!(response.status, wrong.status, "{name} status differs");
             assert_eq!(shape(response), shape(&wrong), "{name} body differs");
             assert!(
-                response.cookie("__Host-fz_session").is_none(),
+                response.cookie("__Host-session").is_none(),
                 "{name} was issued a session"
             );
         }
@@ -443,14 +443,14 @@ fn a_locked_account_answers_the_same_way_and_refuses_the_right_password() {
             json
         };
         assert_eq!(shape(&locked), shape(&wrong), "a lock announced itself");
-        assert!(locked.cookie("__Host-fz_session").is_none());
+        assert!(locked.cookie("__Host-session").is_none());
         assert_eq!(count(&kit, "sessions"), 0);
 
         // Past the lock, the right password works again.
         kit.clock.0.fetch_add(901, Ordering::SeqCst);
         let response = login(&kit, "ada@example.com", GOOD).await;
         assert_eq!(response.status, StatusCode::OK, "{}", response.text());
-        assert!(response.cookie("__Host-fz_session").is_some());
+        assert!(response.cookie("__Host-session").is_some());
     });
 }
 
@@ -553,8 +553,8 @@ fn changing_a_password_revokes_every_other_session() {
         // Two devices.
         let first = login(&kit, "ada@example.com", GOOD).await;
         let second = login(&kit, "ada@example.com", GOOD).await;
-        let first_cookie = first.cookie("__Host-fz_session").expect("a session");
-        let second_cookie = second.cookie("__Host-fz_session").expect("a session");
+        let first_cookie = first.cookie("__Host-session").expect("a session");
+        let second_cookie = second.cookie("__Host-session").expect("a session");
         assert_eq!(count(&kit, "sessions"), 2);
 
         let response = post(
@@ -569,7 +569,7 @@ fn changing_a_password_revokes_every_other_session() {
         // The other device is signed out. A password change is what a
         // person does when they think somebody else has it.
         assert!(
-            factory0_auth_core::validate(&*kit.db, &*kit.clock, &first_cookie)
+            cratefield_auth_core::validate(&*kit.db, &*kit.clock, &first_cookie)
                 .await
                 .expect("query")
                 .is_none(),
@@ -596,7 +596,7 @@ fn a_change_needs_the_current_password_and_a_session() {
         register(&kit, "ada@example.com", GOOD).await;
         let cookie = login(&kit, "ada@example.com", GOOD)
             .await
-            .cookie("__Host-fz_session")
+            .cookie("__Host-session")
             .expect("a session");
 
         // No session at all.
@@ -634,7 +634,7 @@ fn a_new_password_must_also_be_usable() {
         register(&kit, "ada@example.com", GOOD).await;
         let cookie = login(&kit, "ada@example.com", GOOD)
             .await
-            .cookie("__Host-fz_session")
+            .cookie("__Host-session")
             .expect("a session");
 
         let response = post(
@@ -680,7 +680,7 @@ fn a_hash_at_old_parameters_is_upgraded_on_login() {
         // moment the plaintext is available, so it is the only moment it
         // can be upgraded.
         let weak = weak_hash(GOOD);
-        assert!(factory0_auth_core::password_needs_rehash(&weak));
+        assert!(cratefield_auth_core::password_needs_rehash(&weak));
         kit.db
             .execute(&Statement::new(format!(
                 "INSERT INTO credentials (id, user_id, kind, password_hash, created_at, \
@@ -702,7 +702,7 @@ fn a_hash_at_old_parameters_is_upgraded_on_login() {
             .and_then(|row| row.get::<String>("password_hash"))
             .expect("a hash");
         assert_ne!(stored, weak, "the old hash survived a login");
-        assert!(!factory0_auth_core::password_needs_rehash(&stored));
+        assert!(!cratefield_auth_core::password_needs_rehash(&stored));
         // And the password still works afterwards.
         assert_eq!(
             login(&kit, "ada@example.com", GOOD).await.status,
@@ -872,7 +872,7 @@ fn the_form_signs_in_and_lands_where_it_was_told() {
             Some("/welcome")
         );
         assert!(
-            answer.cookie("__Host-fz_session").is_some(),
+            answer.cookie("__Host-session").is_some(),
             "the redirect carries no session"
         );
     });
@@ -913,7 +913,7 @@ fn the_page_separates_none_of_the_things_the_json_route_refuses_alike() {
         );
         // And no refusal hands out a session.
         for answer in [&wrong_password, &unknown, &not_an_address] {
-            assert!(answer.cookie("__Host-fz_session").is_none());
+            assert!(answer.cookie("__Host-session").is_none());
         }
     });
 }
@@ -1013,7 +1013,7 @@ fn a_cross_site_form_cannot_sign_anyone_in() {
                 "{label}"
             );
             assert!(
-                response.cookie("__Host-fz_session").is_none(),
+                response.cookie("__Host-session").is_none(),
                 "{label} set a session cookie for a cross-site POST"
             );
         };
@@ -1071,7 +1071,7 @@ fn a_cross_site_fetch_metadata_is_refused_too() {
             "https://test.example/problems/auth/cross-site-request"
         );
         assert!(
-            response.cookie("__Host-fz_session").is_none(),
+            response.cookie("__Host-session").is_none(),
             "the cross-site POST set a session cookie"
         );
         assert_eq!(count(&kit, "sessions"), 0);
@@ -1100,7 +1100,7 @@ fn a_same_origin_sign_in_still_works() {
         )
         .await;
         assert_eq!(json_login.status, StatusCode::OK, "{}", json_login.text());
-        assert!(json_login.cookie("__Host-fz_session").is_some());
+        assert!(json_login.cookie("__Host-session").is_some());
 
         let form = post_form_with(
             &kit,
@@ -1110,7 +1110,7 @@ fn a_same_origin_sign_in_still_works() {
         )
         .await;
         assert_eq!(form.status, StatusCode::SEE_OTHER, "{}", form.text());
-        assert!(form.cookie("__Host-fz_session").is_some());
+        assert!(form.cookie("__Host-session").is_some());
     });
 }
 
@@ -1124,7 +1124,7 @@ fn a_cross_site_post_cannot_change_a_password() {
         register(&kit, "ada@example.com", GOOD).await;
         let cookie = login(&kit, "ada@example.com", GOOD)
             .await
-            .cookie("__Host-fz_session")
+            .cookie("__Host-session")
             .expect("a session");
 
         let cross_site = post_with(
@@ -1149,7 +1149,7 @@ fn a_cross_site_post_cannot_change_a_password() {
             "https://test.example/problems/auth/cross-site-request"
         );
         assert!(
-            cross_site.cookie("__Host-fz_session").is_none(),
+            cross_site.cookie("__Host-session").is_none(),
             "the cross-site change re-issued a session"
         );
 
@@ -1197,7 +1197,7 @@ fn a_same_origin_password_change_still_works() {
         register(&kit, "ada@example.com", GOOD).await;
         let cookie = login(&kit, "ada@example.com", GOOD)
             .await
-            .cookie("__Host-fz_session")
+            .cookie("__Host-session")
             .expect("a session");
 
         let response = post_with(
@@ -1214,11 +1214,11 @@ fn a_same_origin_password_change_still_works() {
         .await;
         assert_eq!(response.status, StatusCode::OK, "{}", response.text());
         let fresh = response
-            .cookie("__Host-fz_session")
+            .cookie("__Host-session")
             .expect("the change re-issues a session");
         assert_ne!(fresh, cookie, "the re-issued cookie is the one presented");
         assert!(
-            factory0_auth_core::validate(&*kit.db, &*kit.clock, &cookie)
+            cratefield_auth_core::validate(&*kit.db, &*kit.clock, &cookie)
                 .await
                 .expect("query")
                 .is_none(),

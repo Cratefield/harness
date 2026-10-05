@@ -11,8 +11,9 @@ rotation ([README.md](README.md), [ARCHITECTURE.md](ARCHITECTURE.md)).
 
 ## Register the client
 
-Register the app as a client the way a venture backend is (see
-[README.md](README.md), "How a venture uses it"): an id, a secret and an
+Register the app as a client of **its own** auth instance, the way a
+venture backend is (see [README.md](README.md), "How an app uses it", and
+[MANAGED-INSTANCES.md](MANAGED-INSTANCES.md) step 10): an id, a secret and an
 **exact** list of redirect URIs, no wildcards. Register the callback URL *and* the
 post-logout URL; the IdP refuses a post-logout URL it does not hold, and `redirectUri` must match byte for byte.
 
@@ -23,7 +24,7 @@ import { createAuth } from '@cratefield/auth';
 
 // One per isolate, at module scope: the JWKS cache and refresh single-flight live here.
 const auth = createAuth({
-  issuer: 'https://auth.factory0.ventures', // exact, and no trailing slash
+  issuer: 'https://auth.example.com', // your app's own instance: exact, no trailing slash
   clientId: 'client_abc',
   redirectUri: 'https://app.example/auth/callback',
   cookieSecret: env.COOKIE_SECRET, // >= 32 chars; keep it in a secret store

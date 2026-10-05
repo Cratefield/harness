@@ -15,8 +15,8 @@ use axum::extract::{Path, Query, State};
 use axum::response::{Html, IntoResponse, Response};
 use axum::routing::get;
 use base64ct::{Base64UrlUnpadded, Encoding as _};
+use cratefield_auth_core::cookie_value as session_cookie_value;
 use cratefield_core::{Clock, Problem, Scope};
-use factory0_auth_core::cookie_value as session_cookie_value;
 use http::{HeaderMap, StatusCode, header};
 use openidconnect::core::{CoreAuthenticationFlow, CoreClient};
 use openidconnect::{
@@ -243,7 +243,7 @@ async fn start(
     // so the callback can revoke that row even though the cookie naming it
     // will not arrive there (auth #36).
     let signed_in = match (ctx.ports.db.as_deref(), session_cookie_value(&headers)) {
-        (Some(db), Some(value)) => factory0_auth_core::validate(db, clock, &value)
+        (Some(db), Some(value)) => cratefield_auth_core::validate(db, clock, &value)
             .await
             .ok()
             .flatten(),
@@ -420,17 +420,17 @@ async fn complete_callback(
     // may have been revoked in between.
     let presented = session_cookie_value(&headers);
     let current_user = match presented.as_deref() {
-        Some(value) => factory0_auth_core::validate(db, clock, value)
+        Some(value) => cratefield_auth_core::validate(db, clock, value)
             .await
             .ok()
             .flatten()
             .map(|session| session.user_id),
         None => match flow.signed_in_user.as_deref() {
-            Some(user_id) => factory0_auth_core::user_by_id(db, user_id)
+            Some(user_id) => cratefield_auth_core::user_by_id(db, user_id)
                 .await
                 .ok()
                 .flatten()
-                .filter(|user| user.status == factory0_auth_core::STATUS_ACTIVE)
+                .filter(|user| user.status == cratefield_auth_core::STATUS_ACTIVE)
                 .map(|user| user.id),
             None => None,
         },

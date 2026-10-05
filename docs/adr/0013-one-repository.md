@@ -95,3 +95,13 @@ dependencies.
 - Anyone who cloned one of the six repositories now clones this one. The
   originals are archived read-only, not deleted, so their issue history
   and every link into it still resolve.
+
+> **Amended 2026-10-05 (issue #777).** Two bullets above no longer hold and
+> are kept only as the historical record. "Package names do not change":
+> the auth crates were renamed from `factory0-auth-*` to `cratefield-auth-*`
+> (see the ADR 0011 amendment of the same date), because the auth service is
+> now deployed as one branded instance per app rather than as one Factory
+> Zero service. Problem-type URIs are no longer fixed to
+> `factory0.ventures`: issue #557 takes the base from the venture (its
+> `public_url`, or `about:blank` when it has none). `fz-module-linkedin`
+> and the `factory0` example venture are unaffected.

@@ -1,0 +1,133 @@
+# The `cratefield` auth instance (issue #777): the harness auth Worker
+# (`crates/auth-worker`), deployed for Cratefield on Cratefield's own domain
+# with Cratefield's own branding, D1, secrets and passkey relying party.
+# Operated by Cratefield for its own app.
+#
+# Deployed by `.github/workflows/deploy-auth.yml` from this directory:
+# `main` -> staging (top level), an `auth-v*` tag -> production
+# (`[env.production]`, behind the `auth-cratefield-production` approval gate).
+# Wrangler does not inherit `[vars]` into an environment, so both blocks
+# carry the full set. Every variable is documented in
+# `crates/auth-worker/README.md`.
+#
+# needs-human before the first deploy (docs/auth/MANAGED-INSTANCES.md):
+# - `wrangler d1 create cratefield-auth-staging` / `cratefield-auth-production` and
+#   paste the ids below in place of the REPLACE_WITH_* placeholders.
+# - The secrets, by name only: HARNESS_SECRET, ADMIN_TOKEN,
+#   AUTH_CORE_SIGNING_KEYS (+ AUTH_CORE_SIGNING_KEY_ACTIVE), OWLPOST_API_KEY,
+#   TURNSTILE_SECRET, and the OIDC/Meta client secrets once those methods
+#   are enabled. Per environment: `wrangler secret put <NAME> [--env production]`.
+# - The custom domains (routes below) on the Cloudflare account that holds
+#   cratefield.com, the Turnstile site for both hostnames, and the Owlpost
+#   sending domain `send.cratefield.com`.
+name = "cratefield-auth"
+main = "../../crates/auth-worker/build/worker/shim.mjs"
+compatibility_date = "2026-09-01"
+workers_dev = false
+# Staging's own hostname; production's is in `[env.production]`.
+route = { pattern = "auth-staging.cratefield.com", custom_domain = true }
+
+# `worker-build` compiles the package in its working directory, so the build
+# runs in the crate and `main` points at the shim it writes there. Every
+# instance builds the same, unmodified crate.
+[build]
+cwd = "../../crates/auth-worker"
+command = "cargo install -q worker-build && worker-build --release"
+watch_dir = "../../crates/auth-worker/src"
+
+[observability]
+enabled = true
+
+# --- Staging (deployed from `main`) ---
+
+# Workers Rate Limiting backs the harness's throttle; readiness refuses the
+# instance unless a limiter resolves (harness #437). Namespace ids are per
+# account and must not collide with another instance's on the same account.
+[[ratelimits]]
+name = "RATE_LIMITER"
+namespace_id = "1101"
+
+[ratelimits.simple]
+limit = 30
+period = 60
+
+[[d1_databases]]
+binding = "DB"
+database_name = "cratefield-auth-staging"
+database_id = "REPLACE_WITH_STAGING_D1_ID"
+migrations_dir = "../../crates/auth-worker/migrations"
+
+# The meta-module drains Meta deletion jobs on a schedule.
+[triggers]
+crons = ["*/15 * * * *"]
+
+[vars]
+ENV = "staging"
+AUTH_PUBLIC_URL = "https://auth-staging.cratefield.com"
+AUTH_CORE_ISSUER = "https://auth-staging.cratefield.com"
+AUTH_VENTURE_NAME = "cratefield-auth"
+AUTH_CORS_ORIGINS = "https://cratefield.com,https://app.cratefield.com"
+AUTH_BRAND_NAME = "Cratefield"
+AUTH_BRAND_LOGO_URL = "https://cratefield.com/assets/email/logo-64.png"
+AUTH_BRAND_ACCENT = "#3a5bef"
+AUTH_BRAND_FOOTER = "Cratefield"
+AUTH_CORE_LOGIN_METHODS = "passkey,magic-link"
+AUTH_PASSKEYS_RP_ID = "auth-staging.cratefield.com"
+AUTH_PASSKEYS_ORIGINS = "https://auth-staging.cratefield.com"
+AUTH_MAILER = "owlpost"
+MAIL_FROM = "Cratefield <no-reply@send.cratefield.com>"
+AUTH_MAGIC_LINK_PUBLIC_BASE = "https://auth-staging.cratefield.com"
+AUTH_MAGIC_LINK_MAIL_FROM = "Cratefield <sign-in@send.cratefield.com>"
+AUTH_PASSWORD_PUBLIC_BASE = "https://auth-staging.cratefield.com"
+AUTH_PASSWORD_MAIL_FROM = "Cratefield <sign-in@send.cratefield.com>"
+AUTH_OIDC_REDIRECT_BASE = "https://auth-staging.cratefield.com"
+AUTH_META_REDIRECT_BASE = "https://auth-staging.cratefield.com"
+# AUTH_BRAND_SUPPORT_EMAIL = "support@cratefield.com"   # needs-human: confirm the page/address exists, then uncomment
+# AUTH_BRAND_PRIVACY_URL = "https://cratefield.com/privacy"   # needs-human: confirm the page/address exists, then uncomment
+# AUTH_BRAND_TERMS_URL = "https://cratefield.com/terms"   # needs-human: confirm the page/address exists, then uncomment
+
+# --- Production (deployed from an `auth-v*` tag, behind the approval gate) ---
+[env.production]
+route = { pattern = "auth.cratefield.com", custom_domain = true }
+
+[[env.production.ratelimits]]
+name = "RATE_LIMITER"
+namespace_id = "1102"
+
+[env.production.ratelimits.simple]
+limit = 30
+period = 60
+
+[[env.production.d1_databases]]
+binding = "DB"
+database_name = "cratefield-auth-production"
+database_id = "REPLACE_WITH_PRODUCTION_D1_ID"
+migrations_dir = "../../crates/auth-worker/migrations"
+
+[env.production.triggers]
+crons = ["*/15 * * * *"]
+
+[env.production.vars]
+ENV = "production"
+AUTH_PUBLIC_URL = "https://auth.cratefield.com"
+AUTH_CORE_ISSUER = "https://auth.cratefield.com"
+AUTH_VENTURE_NAME = "cratefield-auth"
+AUTH_CORS_ORIGINS = "https://cratefield.com,https://app.cratefield.com"
+AUTH_BRAND_NAME = "Cratefield"
+AUTH_BRAND_LOGO_URL = "https://cratefield.com/assets/email/logo-64.png"
+AUTH_BRAND_ACCENT = "#3a5bef"
+AUTH_BRAND_FOOTER = "Cratefield"
+AUTH_CORE_LOGIN_METHODS = "passkey,magic-link"
+AUTH_PASSKEYS_RP_ID = "cratefield.com"
+AUTH_PASSKEYS_ORIGINS = "https://auth.cratefield.com"
+AUTH_MAILER = "owlpost"
+MAIL_FROM = "Cratefield <no-reply@send.cratefield.com>"
+AUTH_MAGIC_LINK_PUBLIC_BASE = "https://auth.cratefield.com"
+AUTH_MAGIC_LINK_MAIL_FROM = "Cratefield <sign-in@send.cratefield.com>"
+AUTH_PASSWORD_PUBLIC_BASE = "https://auth.cratefield.com"
+AUTH_PASSWORD_MAIL_FROM = "Cratefield <sign-in@send.cratefield.com>"
+AUTH_OIDC_REDIRECT_BASE = "https://auth.cratefield.com"
+AUTH_META_REDIRECT_BASE = "https://auth.cratefield.com"
+# AUTH_BRAND_SUPPORT_EMAIL = "support@cratefield.com"   # needs-human: confirm the page/address exists, then uncomment
+# AUTH_BRAND_PRIVACY_URL = "https://cratefield.com/privacy"   # needs-human: confirm the page/address exists, then uncomment
+# AUTH_BRAND_TERMS_URL = "https://cratefield.com/terms"   # needs-human: confirm the page/address exists, then uncomment

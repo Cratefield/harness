@@ -3,7 +3,7 @@
 
 mod support;
 
-use factory0_auth_core::{UserRow, insert_user};
+use cratefield_auth_core::{UserRow, insert_user};
 use http::StatusCode;
 use support::provider::TokenClaims;
 use support::{Kit, callback, count, kit, start};
@@ -69,7 +69,7 @@ fn an_unverified_address_on_either_side_is_not_guessed() {
         // already can and link from there.
         assert_eq!(response.status, StatusCode::OK);
         assert!(
-            response.cookie("__Host-fz_session").is_none(),
+            response.cookie("__Host-session").is_none(),
             "issued a session"
         );
         assert_eq!(count(&kit, "users"), 1, "created a second account");
@@ -98,7 +98,7 @@ fn a_provider_that_does_not_vouch_for_the_address_gets_a_new_account() {
         let started = start(&kit, "").await;
         let response = callback(&kit, &started, "auth-code", &started.state).await;
         assert_eq!(response.status, StatusCode::OK);
-        assert!(response.cookie("__Host-fz_session").is_none());
+        assert!(response.cookie("__Host-session").is_none());
         assert_eq!(count(&kit, "identities"), 0);
     });
 }
@@ -163,7 +163,7 @@ fn a_disabled_account_cannot_sign_in_through_a_provider() {
         let response = callback(&kit, &started, "auth-code", &started.state).await;
         assert_eq!(response.status, StatusCode::BAD_REQUEST);
         assert!(
-            response.cookie("__Host-fz_session").is_none(),
+            response.cookie("__Host-session").is_none(),
             "issued a session"
         );
         assert_eq!(
@@ -237,7 +237,7 @@ fn a_disabled_account_gains_nothing_from_a_provider_sign_in() {
         let response = callback(&kit, &started, "auth-code", &started.state).await;
         assert_eq!(response.status, StatusCode::BAD_REQUEST);
         assert!(
-            response.cookie("__Host-fz_session").is_none(),
+            response.cookie("__Host-session").is_none(),
             "issued a session"
         );
         assert_eq!(
@@ -270,7 +270,7 @@ fn a_disabled_account_gains_no_identity_from_an_auto_link() {
         let response = callback(&kit, &started, "auth-code", &started.state).await;
 
         assert_eq!(response.status, StatusCode::BAD_REQUEST);
-        assert!(response.cookie("__Host-fz_session").is_none());
+        assert!(response.cookie("__Host-session").is_none());
         assert_eq!(
             count(&kit, "identities"),
             0,

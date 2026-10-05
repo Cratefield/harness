@@ -197,9 +197,13 @@ created on the source — no publications, no roles.
 
 Reported, never guessed:
 
-- RLS policies — each listed with its table, command, roles and
-  USING/WITH CHECK expression, plus a suggested code-level check and a
-  generated failing test stub per policy;
+- RLS policies on the venture's own tables — each listed with its table,
+  command, roles and USING/WITH CHECK expression, plus a suggested
+  code-level check and a generated failing test stub per policy. A policy
+  on a Supabase-managed schema is audited, never a finding; one on
+  `storage.objects`/`storage.buckets` is listed with its bucket and a
+  suggested check. Neither gets a stub: the schema it guards is not the
+  venture's;
 - auth.uid() and auth.jwt() usage, per object;
 - SECURITY DEFINER functions;
 - GRANTs to anon, authenticated and service_role;

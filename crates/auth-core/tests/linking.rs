@@ -5,16 +5,16 @@
 //! accounts, so each rule is asserted for each provider shape rather
 //! than assumed from the code reading correctly.
 
-use cratefield_core::UlidIdGen;
-use cratefield_testing::{FixedClock, TestHarness};
-use factory0_auth_core::linking::{
+use cratefield_auth_core::linking::{
     IncomingIdentity, Outcome, UnlinkError, create_user, is_apple_private_relay, link, resolve,
     unlink,
 };
-use factory0_auth_core::{
+use cratefield_auth_core::{
     AuthCore, CredentialRow, PROVIDER_APPLE, PROVIDER_GOOGLE, PROVIDER_META, PROVIDER_PASSWORD,
     Redacted, UserRow, identities_by_user, insert_credential, insert_user,
 };
+use cratefield_core::UlidIdGen;
+use cratefield_testing::{FixedClock, TestHarness};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 

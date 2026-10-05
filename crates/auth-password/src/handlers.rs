@@ -10,14 +10,14 @@
 use axum::extract::{Query, State};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
-use cratefield_core::{Json, Problem, Scope};
-use factory0_auth_core::{
+use cratefield_auth_core::{
     CREDENTIAL_PASSWORD, CredentialRow, IssuedSession, LegacyHashes, Login, PROVIDER_PASSWORD,
     STATUS_ACTIVE, SessionError, TOKEN_PASSWORD_RESET, cookie_value as session_cookie_value,
     hash_password, insert_credential, insert_identity, issue as issue_session, password_credential,
     retire_unconsumed_tokens, set_cookie, set_password_hash, set_password_lockout, user_by_id,
     user_by_primary_email, verify_password_with,
 };
+use cratefield_core::{Json, Problem, Scope};
 use http::{HeaderMap, StatusCode, Uri, header};
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -342,7 +342,7 @@ async fn create_account(
 ) -> Result<String, cratefield_core::DbError> {
     let now = lockout::iso(clock.now());
     let user_id = id_gen.ulid();
-    let user = factory0_auth_core::UserRow {
+    let user = cratefield_auth_core::UserRow {
         id: user_id.clone(),
         display_name: None,
         primary_email: Some(email.to_owned()),
@@ -356,9 +356,9 @@ async fn create_account(
         created_at: now.clone(),
         updated_at: now.clone(),
     };
-    factory0_auth_core::insert_user(db, &user).await?;
+    cratefield_auth_core::insert_user(db, &user).await?;
 
-    let identity = factory0_auth_core::IdentityRow {
+    let identity = cratefield_auth_core::IdentityRow {
         id: id_gen.ulid(),
         user_id: user_id.clone(),
         provider: PROVIDER_PASSWORD.to_owned(),
@@ -382,7 +382,7 @@ async fn create_account(
         passkey_sign_count: None,
         passkey_aaguid: None,
         passkey_transports: None,
-        password_hash: Some(factory0_auth_core::Redacted(password_hash.to_owned())),
+        password_hash: Some(cratefield_auth_core::Redacted(password_hash.to_owned())),
         label: None,
         created_at: now,
         last_used_at: None,
@@ -602,7 +602,7 @@ async fn sign_in(
     // *carrying*, not the answer from *setting* the attacker's (issue
     // #439). The request itself is refused on arrival, ahead of anything
     // else this function would do with it.
-    factory0_auth_core::csrf::require_same_origin(headers, uri)
+    cratefield_auth_core::csrf::require_same_origin(headers, uri)
         .map_err(|problem| problem.instance(&scope.request_id))?;
 
     let email = cratefield_core::normalize_email(raw_email);
@@ -664,7 +664,7 @@ async fn sign_in(
     // Rehash when the stored parameters are not the ones we write now.
     // Doing it on login is the only moment the plaintext is available.
     if let Some(stored) = stored.as_deref()
-        && factory0_auth_core::password_needs_rehash(stored)
+        && cratefield_auth_core::password_needs_rehash(stored)
         && let Ok(fresh) = hash_password(password)
         && let Err(err) = set_password_hash(db, &credential.id, &fresh).await
     {
@@ -750,7 +750,7 @@ async fn record_failure(
 /// What one login attempt found, after paying the same cost whatever the
 /// answer turns out to be.
 struct Attempt {
-    user: Option<factory0_auth_core::UserRow>,
+    user: Option<cratefield_auth_core::UserRow>,
     credential: Option<CredentialRow>,
     locked: bool,
     stored: Option<String>,
@@ -835,7 +835,7 @@ async fn change(
 ) -> Result<Response, Problem> {
     // A change re-issues a session, so it is a sign-in as far as a
     // cross-site attacker is concerned (issue #439).
-    factory0_auth_core::csrf::require_same_origin(&headers, &uri)
+    cratefield_auth_core::csrf::require_same_origin(&headers, &uri)
         .map_err(|problem| problem.instance(&scope.request_id))?;
     if let Some(limited) = limit(&state, &headers, None).await {
         return Ok(limited);
@@ -852,7 +852,7 @@ async fn change(
     let Some(cookie) = session_cookie_value(&headers) else {
         return Err(refused(&scope));
     };
-    let Ok(Some(session)) = factory0_auth_core::validate(db, clock, &cookie).await else {
+    let Ok(Some(session)) = cratefield_auth_core::validate(db, clock, &cookie).await else {
         return Err(refused(&scope));
     };
     let Ok(Some(user)) = user_by_id(db, &session.user_id).await else {
@@ -908,7 +908,7 @@ async fn change(
 
     // Every other session goes. Then a fresh one, so the person changing
     // their password is not signed out by their own action.
-    if let Err(err) = factory0_auth_core::revoke_all_sessions(db, &user.id, &now).await {
+    if let Err(err) = cratefield_auth_core::revoke_all_sessions(db, &user.id, &now).await {
         tracing::error!(error = %err, "could not revoke sessions after a password change");
         return Err(Problem::internal().instance(&scope.request_id));
     }
@@ -961,15 +961,15 @@ mod tests {
         // that it merely looks right.
         assert!(DUMMY_HASH.starts_with("$argon2id$v=19$m=19456,t=2,p=1$"));
         assert!(
-            !factory0_auth_core::password_needs_rehash(DUMMY_HASH),
+            !cratefield_auth_core::password_needs_rehash(DUMMY_HASH),
             "the dummy's parameters must match the ones we write"
         );
 
         // A real hash at the same parameters verifies against its own
         // password, which proves the parser accepts this shape. The dummy
         // then has to be indistinguishable from it except in its digest.
-        let real = factory0_auth_core::hash_password("a known password").expect("hash");
-        assert!(factory0_auth_core::verify_password(
+        let real = cratefield_auth_core::hash_password("a known password").expect("hash");
+        assert!(cratefield_auth_core::verify_password(
             "a known password",
             &real
         ));
@@ -981,11 +981,11 @@ mod tests {
         );
 
         // And it must not verify against anything.
-        assert!(!factory0_auth_core::verify_password(
+        assert!(!cratefield_auth_core::verify_password(
             "anything at all",
             DUMMY_HASH
         ));
-        assert!(!factory0_auth_core::verify_password("", DUMMY_HASH));
+        assert!(!cratefield_auth_core::verify_password("", DUMMY_HASH));
     }
 
     #[test]

@@ -1,9 +1,5 @@
 <p align="center">
-  <img src="assets/readme-banner.png" alt="Factory Zero Auth. One login. Every venture. Six ways in, one session." width="100%">
-</p>
-
-<p align="center">
-  <img src="https://img.shields.io/badge/STATUS-SPIKES-FF5A36?style=flat-square&labelColor=0A0A0B" alt="Status: spikes">
+  <img src="https://img.shields.io/badge/STATUS-BETA-FF5A36?style=flat-square&labelColor=0A0A0B" alt="Status: beta">
   <img src="https://img.shields.io/badge/LANGUAGE-RUST-EDEBE6?style=flat-square&labelColor=0A0A0B" alt="Language: Rust">
   <img src="https://img.shields.io/badge/RUNS%20ON-THE%20HARNESS-EDEBE6?style=flat-square&labelColor=0A0A0B" alt="Runs on the harness">
   <img src="https://img.shields.io/badge/LOGIN-PASSKEYS%20%C2%B7%20GOOGLE%20%C2%B7%20APPLE%20%C2%B7%20META%20%C2%B7%20PASSWORD%20%C2%B7%20MAGIC%20LINK-EDEBE6?style=flat-square&labelColor=0A0A0B" alt="Six login methods">
@@ -12,46 +8,77 @@
 </p>
 
 <p align="center">
-  <b>auth.factory0.ventures</b> · SHARED INFRASTRUCTURE
+  <b>auth.&lt;your-app&gt;</b> · ONE BRANDED INSTANCE PER APP
 </p>
 
 ---
 
 # The login
 
-Every Factory Zero venture needs people to sign in, and none of them should
-own a password table. This service is the one place logins happen. A venture
-registers as a client, sends people here, and gets back a token it can verify
-on its own.
+Every app built on the harness needs people to sign in, and none of them
+should own a password table. This service is where those logins happen, and
+it runs **once per app**: on the app's own domain (`auth.<app-domain>`), with
+the app's name, logo and colours on every page and mail, its own passkey
+relying party, its own cookies, sender, database and secrets. Nothing on an
+instance names any other app, or the harness.
 
 > **Six ways in, one session.**
 > Passkeys, Google, Apple, Meta, email and password, magic links. Whichever a
 > person picks, the result is the same session, and one person can use all
 > six on one account.
 
-Built as a consumer of the
-[Cratefield harness](https://github.com/Cratefield/harness): one Worker,
-one D1 database, modules that see only ports. It depends on the published
-crates (`cratefield-core` and friends on crates.io), not on a git revision.
-Its own crates stay `factory0-auth-*` and are never published: they are
-Factory Zero's service, not part of the harness (harness ADR 0011). Read
-[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for how it fits, what was
-validated before the issues were written, and what is deferred. Deploying your
-own instance, and rotating signing keys or client secrets, is
-[docs/auth/DEPLOYING.md](docs/auth/DEPLOYING.md).
+An instance runs one of two ways:
 
-## How a venture uses it
+- **Self-hosted.** The app's team deploys and operates the instance itself
+  (the EarthOS pattern: `auth.earthos.world`).
+- **Managed by Cratefield.** Cratefield operates the same instance on the
+  app's domain (for example `auth.alphahunt.ing`). Cratefield's own app uses
+  `auth.cratefield.com`. The instances Cratefield operates are the
+  directories under [`instances/`](../../instances).
 
-1. Register the venture as a client: it gets an id, a secret, and an exact
-   list of redirect URIs. No wildcards.
-2. Send people to `/authorize` with PKCE. They log in here, on
-   `auth.factory0.ventures`, by any method.
-3. Exchange the code at `/token` for a short-lived ES256 access token and a
+Either way it is the same, unmodified Worker
+([`crates/auth-worker`](../../crates/auth-worker)): one Worker, one D1
+database, harness modules that see only ports. Everything that makes an
+instance somebody's is configuration, and a missing piece of it is refused at
+boot rather than filled in with another app's value. The crates are
+`cratefield-auth-*`; only `cratefield-auth-client` is published (harness ADR
+0011, amended 2026-10-05).
+
+| Read | For |
+|---|---|
+| [MANAGED-INSTANCES.md](MANAGED-INSTANCES.md) | Standing up a new instance: D1, domain, secrets, Owlpost, Turnstile, OIDC callbacks, client registration |
+| [DEPLOYING.md](DEPLOYING.md) | The deploy workflow, the configuration surface, rotating signing keys and client secrets |
+| [`crates/auth-worker/README.md`](../../crates/auth-worker/README.md) | Every configuration key |
+| [ARCHITECTURE.md](ARCHITECTURE.md) | How it fits the harness, and why |
+| [WEB-APPS.md](WEB-APPS.md) | `@cratefield/auth` for TypeScript web apps |
+| [MIGRATING.md](MIGRATING.md) | Importing an existing userbase |
+| [META-APP-REVIEW.md](META-APP-REVIEW.md) | Getting an instance's Meta app through review |
+
+## How an app uses it
+
+1. Stand up the app's instance ([MANAGED-INSTANCES.md](MANAGED-INSTANCES.md)).
+2. Register the app as a client of it: an id, a secret, and an exact list of
+   redirect URIs. No wildcards.
+3. Send people to `/authorize` with PKCE. They log in on the instance
+   (`auth.<app-domain>`), by any method the instance enables.
+4. Exchange the code at `/token` for a short-lived ES256 access token and a
    single-use refresh token.
-4. Verify tokens locally with `cratefield-auth-client`, which fetches and caches
+5. Verify tokens locally with `cratefield-auth-client` against the
+   instance's issuer (`https://auth.<app-domain>`), which fetches and caches
    the published JWKS and checks the audience so nobody has to remember to.
    TypeScript web apps do the same with `@cratefield/auth`; see
    [WEB-APPS.md](WEB-APPS.md).
+
+## Branding
+
+Each instance sets its own (`AUTH_BRAND_*`, full list in the Worker's
+README): the display name used in page titles and every mail subject, an
+optional logo, accent colour, support address, footer line, and privacy and
+terms links. The passkey RP name defaults to the display name. The session
+cookie is the neutral `__Host-session`, host-locked to the instance. Login
+mail goes through the harness `Mailer` port, with
+[Owlpost](../../crates/adapter-owlpost) as the recommended adapter and Resend
+as an option.
 
 ## Modules
 
@@ -60,7 +87,7 @@ own instance, and rotating signing keys or client secrets, is
 | `auth-core` | schema, clients, sessions, tokens, the authorization flow, account linking |
 | `auth-passkeys` | WebAuthn registration and login |
 | `auth-oidc` | Google and Apple: discovery, PKCE, ID tokens, minted Apple client secret, form_post callback |
-| `auth-meta` | Facebook Login: OAuth 2.0 plus a Graph profile call, with no OpenID Connect anywhere. The data deletion callback is #18 |
+| `auth-meta` | Facebook Login: OAuth 2.0 plus a Graph profile call, with no OpenID Connect anywhere, and Meta's data deletion callback ([META-APP-REVIEW.md](META-APP-REVIEW.md)) |
 | `auth-password` | Email and password: argon2id, a per-account lockout, a breach check, and answers that reveal nothing about who has an account. **Needs the paid Workers plan** (ADR 0200) |
 | `auth-magic-link` | Sign in by email: a single-use bearer credential, the way an address gets verified, and the way back in for a locked or passwordless account |
 
@@ -90,7 +117,7 @@ passkey cannot be: a WebAuthn credential is bound to a relying-party id, and a
 browser only runs a ceremony on a page whose origin matches, so a passkey
 registered here works on this service's own pages and nowhere else. That is why
 the chooser ships one small inline script, and why it ships it only when a
-passkey is enabled. See [ADR 0203](docs/adr/0203-the-login-chooser-and-browser-side-methods.md).
+passkey is enabled. See [ADR 0203](../adr/0203-the-login-chooser-and-browser-side-methods.md).
 
 ## Refresh tokens and the reuse grace
 
@@ -126,10 +153,13 @@ Set the window to `0` where that risk outweighs the false positive.
 
 ## Status
 
-Design adopted 2026-09-06. Three spikes come first; everything else is
-blocked on them. Enterprise SAML SSO is deliberately deferred. Progress is in
-the [issues](../../issues) and [milestones](../../milestones).
+Design adopted 2026-09-06; per-instance model adopted 2026-10-05 (issue
+#777). The Worker composes all merged modules and deploys with wrangler, one
+instance per app. No instance is live yet: the first deploys of
+`instances/cratefield` and `instances/alphahunt` wait on the owner steps in
+[MANAGED-INSTANCES.md](MANAGED-INSTANCES.md) (D1 ids, secrets, domains,
+first `auth-v*` tag). Enterprise SAML SSO is deliberately deferred.
 
 ## License
 
-MIT. Built in the open by [Factory Zero](https://factory0.ventures).
+MIT. Part of the [Cratefield harness](https://github.com/Cratefield/harness).

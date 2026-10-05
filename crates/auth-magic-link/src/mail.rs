@@ -125,14 +125,13 @@ mod tests {
     use cratefield_core::EmptyConfig;
 
     fn venture() -> Venture {
-        Venture::new("factory0", "factory0.ventures")
+        Venture::new("acme", "acme.example")
     }
 
     fn data() -> MagicLinkMail {
         MagicLinkMail {
-            venture: "Factory Zero".to_owned(),
-            link: "https://auth.factory0.ventures/v1/auth-magic-link/consume?token=abc123"
-                .to_owned(),
+            venture: "Acme".to_owned(),
+            link: "https://auth.acme.example/v1/auth-magic-link/consume?token=abc123".to_owned(),
             minutes: 15,
         }
     }
@@ -146,7 +145,7 @@ mod tests {
             .render(&serde_json::to_value(data()).expect("json"), "en")
             .expect("renders");
         assert!(rendered.text.contains(&data().link), "{}", rendered.text);
-        assert!(rendered.subject.contains("Factory Zero"));
+        assert!(rendered.subject.contains("Acme"));
         assert!(rendered.text.contains("15 minutes"));
         // No HTML in the text part.
         assert!(!rendered.text.contains('<'), "{}", rendered.text);
@@ -190,7 +189,7 @@ mod tests {
         let empty = TemplateRegistry::new();
         let fallback = render(&empty, &data(), "en", &venture(), &EmptyConfig).expect("falls back");
         // In the venture's theme, which names it as the venture does.
-        assert_eq!(fallback.subject, "Sign in to factory0");
+        assert_eq!(fallback.subject, "Sign in to acme");
 
         let mut registry = TemplateRegistry::new();
         registry.register(TEMPLATE_MAGIC_LINK, Box::new(Override));

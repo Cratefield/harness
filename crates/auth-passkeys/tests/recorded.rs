@@ -1,4 +1,4 @@
-//! The public verifier (`factory0_auth_passkeys::webauthn`) against
+//! The public verifier (`cratefield_auth_passkeys::webauthn`) against
 //! ceremonies **recorded from real authenticators**, not minted by the
 //! software authenticator the other suites use: a Yubico security key assertion and a
 //! Touch ID (Edge) registration.
@@ -9,7 +9,7 @@
 //! this file is therefore MPL-2.0 too. Nothing else in the crate is.
 
 use ciborium::Value;
-use factory0_auth_passkeys::webauthn::{
+use cratefield_auth_passkeys::webauthn::{
     StoredPasskey, UserVerification, WebauthnError, verify_assertion, verify_registration,
 };
 use webauthn_rs_proto::{PublicKeyCredential, RegisterPublicKeyCredential};

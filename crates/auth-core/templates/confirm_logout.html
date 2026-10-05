@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex">
-<title>Sign out? · Factory Zero</title>
+<title>Sign out? · {{ brand.name }}</title>
 <style>
   :root { color-scheme: dark; }
   * { box-sizing: border-box; }
@@ -22,12 +22,15 @@
     border: 1px solid #26262b; transition: border-color .15s ease;
     font: inherit; font-weight: 550; cursor: pointer; text-align: center;
   }
-  button.method:hover, button.method:focus-visible { border-color: #FF5A36; outline: none; }
+  button.method:hover, button.method:focus-visible { border-color: {{ brand.accent }}; outline: none; }
   footer { margin-top: 2rem; color: #6f6c66; font-size: .8rem; }
+  img.brand-logo { display: block; max-height: 3rem; max-width: 12rem; margin: 0 auto 1.25rem; }
+  footer a { color: {{ brand.accent }}; }
 </style>
 </head>
 <body>
 <main>
+  {% include "_brand_header.html" %}
   <h1>Sign out of this device?</h1>
   <p>This ends the session on this device. Nothing else changes, and you
   can sign in again afterwards.</p>
@@ -40,7 +43,7 @@
     {% endif %}
     <button class="method" type="submit">Sign out</button>
   </form>
-  <footer>auth.factory0.ventures · Factory Zero</footer>
+  {% include "_brand_footer.html" %}
 </main>
 </body>
 </html>

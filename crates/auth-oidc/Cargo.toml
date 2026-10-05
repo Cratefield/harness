@@ -1,5 +1,5 @@
 [package]
-name = "factory0-auth-oidc"
+name = "cratefield-auth-oidc"
 description = "OpenID Connect login for the auth service: Google first, shaped so any compliant provider reuses the flow (issue #15)"
 readme = "README.md"
 publish = false
@@ -16,7 +16,7 @@ workspace = true
 cratefield-core = { workspace = true }
 # auth-core owns the schema and the account-linking rules; this module
 # writes through its published API and adds no tables of its own.
-factory0-auth-core = { path = "../auth-core" }
+cratefield-auth-core = { path = "../auth-core" }
 axum = { workspace = true }
 http = { workspace = true }
 bytes = { workspace = true }

@@ -6,6 +6,10 @@ report you keep, and the one config key that keeps a legacy password
 verifier working until it is upgraded. The example is Supabase; the format,
 limits and security notes are the same for any source.
 
+Users move into **the app's own auth instance** (one per app, issue #777;
+see [MANAGED-INSTANCES.md](MANAGED-INSTANCES.md)), never into another app's.
+`--target` below is that instance's origin, `https://auth.<app-domain>`.
+
 `fz auth import` (issue #650) reads a JSONL file of user objects and sends
 them to a running `auth-core` at `POST /v1/auth-core/admin/users/import`,
 behind `Authorization: Bearer <ADMIN_TOKEN>`. Only the email, its verified
@@ -51,7 +55,7 @@ hash and reports it `invalid`.
 **3. Dry run.**
 
 ```sh
-fz auth import --target https://auth.example --admin-token-env ADMIN_TOKEN users.jsonl
+fz auth import --target https://auth.example.com --admin-token-env ADMIN_TOKEN users.jsonl
 ```
 
 A run is a dry run unless `--apply` is given: the server validates every
@@ -73,7 +77,7 @@ need a decision:
 `--merge-by-email` if step 4 decided to.
 
 ```sh
-fz auth import --target https://auth.example --admin-token-env ADMIN_TOKEN \
+fz auth import --target https://auth.example.com --admin-token-env ADMIN_TOKEN \
   --apply users.jsonl
 ```
 

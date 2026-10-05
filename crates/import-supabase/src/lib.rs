@@ -44,6 +44,7 @@ pub mod policy;
 pub mod report;
 mod secret;
 mod session;
+mod storage_policy;
 
 use std::sync::Arc;
 
@@ -191,7 +192,28 @@ pub async fn inspect(options: &InspectOptions) -> Result<Report, InspectError> {
         SourceStatus::NotInspected
     };
     let mut policies = Vec::with_capacity(catalog.policies.len());
+    let mut managed_policies: Vec<ManagedPolicy> = Vec::new();
+    let mut storage_policies: Vec<collect::RawPolicy> = Vec::new();
     for raw in &catalog.policies {
+        // Policies on Supabase-managed schemas are the platform's, not the
+        // venture's: listed for audit, never classified, never a finding.
+        // The two storage tables are handled by the storage phase instead.
+        if collect::MANAGED_SCHEMAS.contains(&raw.schema.as_str()) {
+            if storage_policy::is_bucket_table(&raw.schema, &raw.table) {
+                storage_policies.push(raw.clone());
+            } else {
+                managed_policies.push(ManagedPolicy {
+                    schema: raw.schema.clone(),
+                    table: raw.table.clone(),
+                    name: raw.name.clone(),
+                    command: raw.command.clone(),
+                    roles: raw.roles.clone(),
+                    using: raw.using.clone(),
+                    with_check: raw.with_check.clone(),
+                });
+            }
+            continue;
+        }
         let table = format!("{}.{}", raw.schema, raw.table);
         let input = policy::PolicyInput {
             table: &table,
@@ -238,6 +260,11 @@ pub async fn inspect(options: &InspectOptions) -> Result<Report, InspectError> {
         });
     }
 
+    // Storage policies on `storage.objects`/`storage.buckets` go with the
+    // bucket they name; ones on any other `storage` table stayed managed.
+    let mut storage = catalog.storage.clone();
+    storage_policy::attach(&mut storage, &storage_policies);
+
     let role_can_write = catalog.role_can_write;
     if catalog.role_is_superuser {
         warnings.push(format!(
@@ -253,7 +280,7 @@ pub async fn inspect(options: &InspectOptions) -> Result<Report, InspectError> {
         ));
     }
 
-    let findings = classify::findings(&catalog, &policies, &auth, &edge);
+    let findings = classify::findings(&catalog, &policies, &storage, &auth, &edge);
     let count = |class: Classification| {
         findings
             .iter()
@@ -261,7 +288,7 @@ pub async fn inspect(options: &InspectOptions) -> Result<Report, InspectError> {
             .count()
     };
     let data_bytes: u64 = catalog.tables.iter().map(|table| table.data_bytes).sum();
-    let storage_bytes: u64 = catalog.storage.buckets.iter().map(|b| b.bytes).sum();
+    let storage_bytes: u64 = storage.buckets.iter().map(|b| b.bytes).sum();
     let mbps = u64::from(options.transfer_mbps.max(1));
     let bits = (data_bytes + storage_bytes).saturating_mul(8);
     let summary = Summary {
@@ -277,7 +304,7 @@ pub async fn inspect(options: &InspectOptions) -> Result<Report, InspectError> {
             .sum(),
         data_bytes,
         index_bytes: catalog.tables.iter().map(|table| table.index_bytes).sum(),
-        storage_objects: catalog.storage.buckets.iter().map(|b| b.objects).sum(),
+        storage_objects: storage.buckets.iter().map(|b| b.objects).sum(),
         storage_bytes,
         transfer_assumed_mbps: options.transfer_mbps.max(1),
         estimated_transfer_seconds: bits.div_ceil(mbps * 1_000_000),
@@ -348,9 +375,10 @@ pub async fn inspect(options: &InspectOptions) -> Result<Report, InspectError> {
         functions: catalog.functions.clone(),
         triggers: catalog.triggers.clone(),
         policies,
+        managed_policies,
         api_role_grants: catalog.grants.clone(),
         auth,
-        storage: catalog.storage.clone(),
+        storage,
         edge_functions: edge,
         realtime: Realtime {
             publications: catalog.publications.clone(),
