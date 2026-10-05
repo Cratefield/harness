@@ -3,7 +3,7 @@ source: crates/import-supabase/tests/inspect.rs
 expression: normalized.to_json()
 ---
 {
-  "report_version": 1,
+  "report_version": 2,
   "tool": {
     "name": "cratefield-import-supabase",
     "version": "<version>"
@@ -26,7 +26,25 @@ expression: normalized.to_json()
   "coverage": {
     "database": "inspected",
     "management_api": "not_inspected",
-    "policy_classifier": "not_inspected"
+    "policy_classifier": "not_inspected",
+    "sections": [
+      {
+        "section": "auth",
+        "coverage": "inspected"
+      },
+      {
+        "section": "schema:public",
+        "coverage": "inspected"
+      },
+      {
+        "section": "storage.buckets",
+        "coverage": "inspected"
+      },
+      {
+        "section": "storage.objects",
+        "coverage": "inspected"
+      }
+    ]
   },
   "summary": {
     "automatic": 23,
@@ -991,7 +1009,6 @@ expression: normalized.to_json()
   },
   "storage": {
     "present": true,
-    "counts_exact": true,
     "buckets": [
       {
         "id": "avatars",

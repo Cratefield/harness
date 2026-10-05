@@ -370,9 +370,15 @@ fn phases(report: &Report) -> Vec<PlanPhase> {
     vec![
         PlanPhase {
             phase: "auth_users".to_owned(),
-            does: format!(
-                "copy {} auth users with their password hashes and identities",
-                report.auth.users
+            does: report.auth.users.map_or_else(
+                || {
+                    "copy the auth users with their password hashes and identities (count not \
+                     visible to the inspecting role)"
+                        .to_owned()
+                },
+                |users| {
+                    format!("copy {users} auth users with their password hashes and identities")
+                },
             ),
         },
         PlanPhase {
@@ -392,10 +398,14 @@ fn phases(report: &Report) -> Vec<PlanPhase> {
         },
         PlanPhase {
             phase: "storage".to_owned(),
-            does: format!(
-                "copy {} storage objects ({} bytes) into R2",
-                report.summary.storage_objects, report.summary.storage_bytes
-            ),
+            does: match (report.summary.storage_objects, report.summary.storage_bytes) {
+                (Some(objects), Some(bytes)) => {
+                    format!("copy {objects} storage objects ({bytes} bytes) into R2")
+                }
+                _ => "copy the storage objects into R2 (count and size not visible to the \
+                      inspecting role)"
+                    .to_owned(),
+            },
         },
         PlanPhase {
             phase: "verify".to_owned(),
@@ -433,8 +443,8 @@ pub fn inspection_hash(report: &Report) -> String {
     canonical.summary.estimated_rows = 0;
     canonical.summary.data_bytes = 0;
     canonical.summary.index_bytes = 0;
-    canonical.summary.storage_objects = 0;
-    canonical.summary.storage_bytes = 0;
+    canonical.summary.storage_objects = canonical.summary.storage_objects.map(|_| 0);
+    canonical.summary.storage_bytes = canonical.summary.storage_bytes.map(|_| 0);
     canonical.summary.transfer_assumed_mbps = 0;
     canonical.summary.estimated_transfer_seconds = 0;
     for table in &mut canonical.tables {
@@ -442,20 +452,21 @@ pub fn inspection_hash(report: &Report) -> String {
         table.data_bytes = 0;
         table.index_bytes = 0;
     }
-    canonical.auth.users = 0;
-    canonical.auth.users_without_password = 0;
-    canonical.auth.users_unconfirmed = 0;
-    canonical.auth.anonymous_users = 0;
-    canonical.auth.mfa_factors = 0;
-    canonical.auth.sso_providers = 0;
-    for provider in &mut canonical.auth.identities_by_provider {
+    canonical.auth.users = canonical.auth.users.map(|_| 0);
+    canonical.auth.users_without_password = canonical.auth.users_without_password.map(|_| 0);
+    canonical.auth.users_unconfirmed = canonical.auth.users_unconfirmed.map(|_| 0);
+    canonical.auth.anonymous_users = canonical.auth.anonymous_users.map(|_| 0);
+    canonical.auth.mfa_factors = canonical.auth.mfa_factors.map(|_| 0);
+    canonical.auth.sso_providers = canonical.auth.sso_providers.map(|_| 0);
+    for provider in canonical.auth.identities_by_provider.iter_mut().flatten() {
         provider.identities = 0;
     }
-    canonical.storage.counts_exact = true;
-    for bucket in &mut canonical.storage.buckets {
-        bucket.objects = 0;
-        bucket.bytes = 0;
-        bucket.objects_over_blob_cap = 0;
+    // A count the role cannot see stays `None`: visibility is part of the
+    // shape, only the volatile numbers are zeroed.
+    for bucket in canonical.storage.buckets.iter_mut().flatten() {
+        bucket.objects = bucket.objects.map(|_| 0);
+        bucket.bytes = bucket.bytes.map(|_| 0);
+        bucket.objects_over_blob_cap = bucket.objects_over_blob_cap.map(|_| 0);
     }
     canonical.warnings.clear();
     let json = serde_json::to_vec(&canonical).expect("a report always serializes");
@@ -554,7 +565,7 @@ mod tests {
                           "no_transaction_id_assigned": true, "role": "postgres",
                           "role_is_superuser": false, "role_can_write": false},
             "coverage": {"database": "inspected", "management_api": "not_inspected",
-                         "policy_classifier": "not_inspected"},
+                         "policy_classifier": "not_inspected", "sections": []},
             "summary": {"automatic": 0, "needs_work": 0, "blockers": 0, "decided": 0,
                         "undecided": 0, "ready": true, "tables": 1,
                         "estimated_rows": 4, "data_bytes": 8192, "index_bytes": 4096,
@@ -568,7 +579,7 @@ mod tests {
                      "users_unconfirmed": 1, "anonymous_users": 0, "identities_by_provider": [],
                      "mfa_factors": 1, "sso_providers": 0, "enabled_providers": null,
                      "enabled_mfa": null},
-            "storage": {"present": true, "counts_exact": true, "buckets": [],
+            "storage": {"present": true, "buckets": [],
                         "unattached_policies": []},
             "edge_functions": {"status": "not_inspected", "functions": []},
             "realtime": {"publications": []}, "cron_jobs": [], "findings": [], "warnings": []
@@ -725,7 +736,7 @@ mod tests {
         other.summary.data_bytes = 999_999;
         other.tables[0].data_bytes = 999_999;
         other.tables[0].estimated_rows = Some(500);
-        other.auth.users = 42;
+        other.auth.users = Some(42);
         other.warnings.push("a warning".to_owned());
         assert_eq!(inspection_hash(&report), inspection_hash(&other));
 

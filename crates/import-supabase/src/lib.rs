@@ -46,6 +46,7 @@ pub mod report;
 mod secret;
 mod session;
 mod storage_policy;
+mod visibility;
 
 use std::sync::Arc;
 
@@ -292,9 +293,21 @@ pub async fn inspect(options: &InspectOptions) -> Result<Report, InspectError> {
             .count()
     };
     let data_bytes: u64 = catalog.tables.iter().map(|table| table.data_bytes).sum();
-    let storage_bytes: u64 = storage.buckets.iter().map(|b| b.bytes).sum();
+    // `None` when the storage section is not visible: a sum over hidden
+    // buckets would be a wrong fact, not a small one.
+    let storage_objects: Option<u64> = storage
+        .buckets
+        .as_ref()
+        .and_then(|buckets| buckets.iter().map(|bucket| bucket.objects).sum());
+    let storage_bytes: Option<u64> = storage
+        .buckets
+        .as_ref()
+        .and_then(|buckets| buckets.iter().map(|bucket| bucket.bytes).sum());
     let mbps = u64::from(options.transfer_mbps.max(1));
-    let bits = (data_bytes + storage_bytes).saturating_mul(8);
+    // The estimate is data-only when storage is not visible: adding a zero
+    // would silently understate it, so the Markdown says so instead (the
+    // JSON keeps its shape).
+    let bits = (data_bytes + storage_bytes.unwrap_or(0)).saturating_mul(8);
     let summary = Summary {
         automatic: count(Classification::Automatic),
         needs_work: count(Classification::NeedsWork),
@@ -311,7 +324,7 @@ pub async fn inspect(options: &InspectOptions) -> Result<Report, InspectError> {
             .sum(),
         data_bytes,
         index_bytes: catalog.tables.iter().map(|table| table.index_bytes).sum(),
-        storage_objects: storage.buckets.iter().map(|b| b.objects).sum(),
+        storage_objects,
         storage_bytes,
         transfer_assumed_mbps: options.transfer_mbps.max(1),
         estimated_transfer_seconds: bits.div_ceil(mbps * 1_000_000),
@@ -362,6 +375,7 @@ pub async fn inspect(options: &InspectOptions) -> Result<Report, InspectError> {
             database: SourceStatus::Inspected,
             management_api: management_status,
             policy_classifier: classifier_status,
+            sections: catalog.visibility.sections.clone(),
         },
         summary,
         // Set just below, with an empty file: without a dispositions file

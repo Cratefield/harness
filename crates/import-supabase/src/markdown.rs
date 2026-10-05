@@ -58,6 +58,7 @@ fn status(status: SourceStatus) -> &'static str {
     match status {
         SourceStatus::Inspected => "inspected",
         SourceStatus::NotInspected => "not inspected",
+        SourceStatus::NotVisible => "not visible",
         SourceStatus::Failed => "failed (see warnings)",
     }
 }
@@ -113,14 +114,23 @@ impl Report {
         );
 
         out.push_str("## Summary\n\n");
+        let storage = match (s.storage_objects, s.storage_bytes) {
+            (Some(objects), Some(bytes)) => format!("{objects} objects, {}", human_bytes(bytes)),
+            _ => "not visible to the role".to_owned(),
+        };
+        let estimate_basis = if s.storage_bytes.is_some() {
+            "data and storage only; index builds and verification are extra"
+        } else {
+            "data only — storage is not visible to the role, so it is not in this estimate; \
+             index builds and verification are extra"
+        };
         let _ = writeln!(
             out,
             "| | |\n|---|---|\n| Ready (no blockers) | **{}** |\n| Automatic | {} |\n| Needs \
              work | {} |\n| Blockers | {} |\n| Decided | {} |\n| Undecided | {} |\n| Tables | {} \
              (~{} rows) |\n| Data | {} (plus {} of \
-             indexes, rebuilt on the target) |\n| Storage | {} objects, {} |\n| Estimated \
-             transfer | about {} at {} Mbit/s (data and storage only; index builds and \
-             verification are extra) |\n",
+             indexes, rebuilt on the target) |\n| Storage | {} |\n| Estimated \
+             transfer | about {} at {} Mbit/s ({}) |\n",
             yes(s.ready),
             s.automatic,
             s.needs_work,
@@ -131,10 +141,10 @@ impl Report {
             s.estimated_rows,
             human_bytes(s.data_bytes),
             human_bytes(s.index_bytes),
-            s.storage_objects,
-            human_bytes(s.storage_bytes),
+            storage,
             duration(s.estimated_transfer_seconds),
             s.transfer_assumed_mbps,
+            estimate_basis,
         );
 
         let r = &self.read_only;
@@ -156,6 +166,46 @@ impl Report {
             status(self.coverage.management_api),
             status(self.coverage.policy_classifier),
         );
+
+        // Sections the role cannot see: unknown, never zero, with the SQL
+        // that fixes them in one pasteable block (issue #723).
+        let not_visible: Vec<_> = self
+            .coverage
+            .sections
+            .iter()
+            .filter(|section| section.coverage == SourceStatus::NotVisible)
+            .collect();
+        if !not_visible.is_empty() {
+            let names: Vec<String> = not_visible
+                .iter()
+                .map(|section| format!("`{}`", section.section))
+                .collect();
+            let _ = writeln!(
+                out,
+                "**Not visible to `{}`:** {}. This is unknown, not zero: the counts below are \
+                 omitted for those sections.\n",
+                self.read_only.role,
+                names.join(", ")
+            );
+            out.push_str("### Grants needed\n\n");
+            out.push_str(
+                "Run as the project's `postgres` role on the source, which can grant these:\n\n",
+            );
+            out.push_str("```sql\n");
+            let mut lines: Vec<&str> = Vec::new();
+            for section in &not_visible {
+                for line in section.fix.lines() {
+                    let line = line.trim();
+                    if !line.is_empty() && !lines.contains(&line) {
+                        lines.push(line);
+                    }
+                }
+            }
+            for line in lines {
+                let _ = writeln!(out, "{line}");
+            }
+            out.push_str("```\n\n");
+        }
 
         for (class, title, blurb, with_equivalent) in [
             (
@@ -328,24 +378,35 @@ impl Report {
         let a = &self.auth;
         out.push_str("## Auth\n\n");
         if a.present {
-            let _ = writeln!(
-                out,
-                "{} users ({} without a password, {} unconfirmed, {} anonymous); {} MFA factors; \
-                 {} SSO providers.\n",
-                a.users,
-                a.users_without_password,
-                a.users_unconfirmed,
-                a.anonymous_users,
-                a.mfa_factors,
-                a.sso_providers
-            );
-            if !a.identities_by_provider.is_empty() {
-                let providers: Vec<String> = a
+            if let Some(users) = a.users {
+                let _ = writeln!(
+                    out,
+                    "{} users ({} without a password, {} unconfirmed, {} anonymous); {} MFA \
+                     factors; {} SSO providers.\n",
+                    users,
+                    a.users_without_password.unwrap_or(0),
+                    a.users_unconfirmed.unwrap_or(0),
+                    a.anonymous_users.unwrap_or(0),
+                    a.mfa_factors.unwrap_or(0),
+                    a.sso_providers.unwrap_or(0),
+                );
+                let identities = a
                     .identities_by_provider
+                    .as_deref()
+                    .unwrap_or_default()
                     .iter()
                     .map(|count| format!("{} ({})", count.provider, count.identities))
-                    .collect();
-                let _ = writeln!(out, "Identities by provider: {}.\n", providers.join(", "));
+                    .collect::<Vec<_>>();
+                if !identities.is_empty() {
+                    let _ = writeln!(out, "Identities by provider: {}.\n", identities.join(", "));
+                }
+            } else {
+                let _ = writeln!(
+                    out,
+                    "Not visible to the role `{}`: the counts are unknown, not zero (see \
+                     Coverage).\n",
+                    self.read_only.role
+                );
             }
             match &a.enabled_providers {
                 Some(enabled) => {
@@ -371,62 +432,83 @@ impl Report {
         }
 
         out.push_str("## Storage\n\n");
-        if self.storage.buckets.is_empty() {
-            out.push_str("No buckets.\n\n");
-        } else {
-            out.push_str(
-                "| Bucket | Public | Objects | Size | Over 10 MiB |\n|---|---|---|---|---|\n",
-            );
-            for bucket in &self.storage.buckets {
-                let _ = writeln!(
-                    out,
-                    "| `{}` | {} | {} | {} | {} |",
-                    bucket.id,
-                    yes(bucket.public),
-                    bucket.objects,
-                    human_bytes(bucket.bytes),
-                    bucket.objects_over_blob_cap
-                );
-            }
-            out.push('\n');
-            for bucket in self
-                .storage
-                .buckets
-                .iter()
-                .filter(|bucket| !bucket.policies.is_empty())
-            {
-                let _ = writeln!(out, "Bucket `{}` policies:", bucket.id);
-                for policy in &bucket.policies {
-                    let scope = if policy.all_buckets {
-                        " (every bucket)"
-                    } else {
-                        ""
-                    };
+        if self.storage.present {
+            match &self.storage.buckets {
+                None => {
                     let _ = writeln!(
                         out,
-                        "- `{}` ({}, {} on `{}`{}) — {}",
-                        policy.name,
-                        policy.roles.join(", "),
-                        policy.command,
-                        policy.table,
-                        scope,
-                        cell(&policy.suggested_equivalent)
+                        "Not visible to the role `{}`: the bucket list is unknown, not empty (see \
+                         Coverage).\n",
+                        self.read_only.role
                     );
                 }
+                Some(buckets) if buckets.is_empty() => out.push_str("No buckets.\n\n"),
+                Some(buckets) => {
+                    out.push_str(
+                        "| Bucket | Public | Objects | Size | Over 10 MiB |\n|---|---|---|---|---|\n",
+                    );
+                    for bucket in buckets {
+                        let objects = bucket
+                            .objects
+                            .map_or_else(|| "—".to_owned(), |count| count.to_string());
+                        let size = bucket.bytes.map_or_else(|| "—".to_owned(), human_bytes);
+                        let over = bucket
+                            .objects_over_blob_cap
+                            .map_or_else(|| "—".to_owned(), |count| count.to_string());
+                        let _ = writeln!(
+                            out,
+                            "| `{}` | {} | {} | {} | {} |",
+                            bucket.id,
+                            yes(bucket.public),
+                            objects,
+                            size,
+                            over
+                        );
+                    }
+                    out.push('\n');
+                    for bucket in buckets.iter().filter(|bucket| !bucket.policies.is_empty()) {
+                        let _ = writeln!(out, "Bucket `{}` policies:", bucket.id);
+                        for policy in &bucket.policies {
+                            let scope = if policy.all_buckets {
+                                " (every bucket)"
+                            } else {
+                                ""
+                            };
+                            let _ = writeln!(
+                                out,
+                                "- `{}` ({}, {} on `{}`{}) — {}",
+                                policy.name,
+                                policy.roles.join(", "),
+                                policy.command,
+                                policy.table,
+                                scope,
+                                cell(&policy.suggested_equivalent)
+                            );
+                        }
+                        out.push('\n');
+                    }
+                }
+            }
+            for policy in &self.storage.unattached_policies {
+                let reason = if self.storage.buckets.is_none() {
+                    "the bucket list is not visible to the role, so it is not attached"
+                } else {
+                    "no bucket exists to attach it to"
+                };
+                let _ = writeln!(
+                    out,
+                    "Storage policy `{}` on `{}`: {} — {}",
+                    policy.name,
+                    policy.table,
+                    reason,
+                    cell(&policy.suggested_equivalent)
+                );
+            }
+            if !self.storage.unattached_policies.is_empty() {
                 out.push('\n');
             }
-        }
-        for policy in &self.storage.unattached_policies {
-            let _ = writeln!(
-                out,
-                "Storage policy `{}` on `{}`: no bucket exists to attach it to — {}",
-                policy.name,
-                policy.table,
-                cell(&policy.suggested_equivalent)
-            );
-        }
-        if !self.storage.unattached_policies.is_empty() {
-            out.push('\n');
+        } else {
+            out.push_str("No `storage` schema.\n\n");
         }
 
         out.push_str("## Edge Functions\n\n");
@@ -459,8 +541,19 @@ impl Report {
             };
             let _ = writeln!(out, "- Publication `{}`: {tables}.", publication.name);
         }
-        for job in &self.cron_jobs {
-            let _ = writeln!(out, "- Cron job `{}` on `{}`.", job.name, job.schedule);
+        match &self.cron_jobs {
+            Some(jobs) => {
+                for job in jobs {
+                    let _ = writeln!(out, "- Cron job `{}` on `{}`.", job.name, job.schedule);
+                }
+            }
+            None => {
+                let _ = writeln!(
+                    out,
+                    "- Cron jobs: not visible to the role `{}` (unknown, not none).",
+                    self.read_only.role
+                );
+            }
         }
         out.push('\n');
 

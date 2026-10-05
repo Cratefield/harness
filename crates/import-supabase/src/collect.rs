@@ -11,6 +11,7 @@ use crate::report::{
     Publication, RoleGrants, Sequence, Storage, Table, Trigger, View,
 };
 use crate::session::{InspectError, ReadOnlySession};
+use crate::visibility::{self, Visibility};
 
 /// Supabase-managed schemas: never copied as schemas (ADR 0026, Decision
 /// 3). `auth` and `storage` have their own phases.
@@ -81,8 +82,10 @@ pub(crate) struct Catalog {
     pub(crate) auth: Auth,
     pub(crate) storage: Storage,
     pub(crate) publications: Vec<Publication>,
-    pub(crate) cron_jobs: Vec<CronJob>,
+    pub(crate) cron_jobs: Option<Vec<CronJob>>,
     pub(crate) warnings: Vec<String>,
+    /// What the role could see, read before anything that needs a row.
+    pub(crate) visibility: Visibility,
 }
 
 /// A policy as read, before it is placed.
@@ -169,6 +172,11 @@ pub(crate) async fn read(session: &mut ReadOnlySession) -> Result<Catalog, Inspe
         .collect();
     let mut writable_scope = user.clone();
     writable_scope.extend(["auth".to_owned(), "storage".to_owned()]);
+
+    // The privilege preflight: catalog-only, before any row read. It is
+    // what keeps a schema without USAGE (or RLS) from aborting the run or
+    // reporting a hidden zero as a fact.
+    let visibility = visibility::preflight(session, &user).await?;
 
     catalog.role_can_write = fetch!(
         session,
@@ -451,12 +459,20 @@ pub(crate) async fn read(session: &mut ReadOnlySession) -> Result<Catalog, Inspe
             Option<String>,
             Vec<String>
         ),
-        "SELECT p.schemaname::text, p.tablename::text, p.policyname::text, p.cmd, p.permissive \
-         = 'PERMISSIVE', p.roles::text[], p.qual, p.with_check, array(SELECT a.attname::text \
-         FROM pg_attribute a WHERE a.attrelid = format('%I.%I', p.schemaname, \
-         p.tablename)::regclass AND a.attnum > 0 AND NOT a.attisdropped ORDER BY a.attnum) FROM \
-         pg_policies p WHERE p.schemaname NOT IN ('pg_catalog', 'information_schema') ORDER BY \
-         1, 2, 3"
+        // The relation comes from `pg_policy.polrelid`, never from casting
+        // `schemaname.tablename`: that resolves the name, which needs USAGE
+        // the role may not have (issue #723). Same for the policy's
+        // columns.
+        "SELECT n.nspname::text, c.relname::text, p.polname::text, CASE p.polcmd WHEN 'r' THEN \
+         'SELECT' WHEN 'a' THEN 'INSERT' WHEN 'w' THEN 'UPDATE' WHEN 'd' THEN 'DELETE' ELSE \
+         'ALL' END, p.polpermissive, CASE WHEN p.polroles = '{0}'::oid[] THEN \
+         ARRAY['public']::text[] ELSE array(SELECT ro.rolname::text FROM unnest(p.polroles) AS \
+         o(ro_id) JOIN pg_roles ro ON ro.oid = o.ro_id ORDER BY 1) END, \
+         pg_get_expr(p.polqual, p.polrelid), pg_get_expr(p.polwithcheck, p.polrelid), \
+         array(SELECT a.attname::text FROM pg_attribute a WHERE a.attrelid = p.polrelid AND \
+         a.attnum > 0 AND NOT a.attisdropped ORDER BY a.attnum) FROM pg_policy p JOIN pg_class c \
+         ON c.oid = p.polrelid JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname NOT \
+         IN ('pg_catalog', 'information_schema') ORDER BY 1, 2, 3"
     )?
     .into_iter()
     .map(
@@ -496,8 +512,8 @@ pub(crate) async fn read(session: &mut ReadOnlySession) -> Result<Catalog, Inspe
         .map(|(role, tables)| RoleGrants { role, tables })
         .collect();
 
-    read_auth(session, &mut catalog).await?;
-    read_storage(session, &mut catalog).await?;
+    read_auth(session, &mut catalog, &visibility).await?;
+    read_storage(session, &mut catalog, &visibility).await?;
 
     catalog.publications = fetch!(
         session,
@@ -527,101 +543,79 @@ pub(crate) async fn read(session: &mut ReadOnlySession) -> Result<Catalog, Inspe
     )
     .collect();
 
-    if relation_exists(session, "cron.job").await? {
-        // Optional: a role without access to `cron` still gets a report,
-        // with a warning that the jobs could not be listed. The savepoint
-        // lets the transaction survive a refused read.
-        sqlx::raw_sql("SAVEPOINT optional_read")
-            .execute(&mut session.conn)
-            .await
-            .map_err(|error| session.error(&error))?;
-        let jobs = fetch!(
-            session,
-            (i64, Option<String>, String, String, bool),
-            "SELECT jobid, jobname::text, schedule, command, active FROM cron.job ORDER BY \
-                 coalesce(jobname, ''), jobid"
-        );
-        match optional(session, jobs).await? {
-            Some(jobs) => {
-                catalog.cron_jobs = jobs
-                    .into_iter()
-                    .map(|(id, name, schedule, command, active)| CronJob {
-                        name: name
-                            .filter(|name| !name.is_empty())
-                            .unwrap_or_else(|| format!("job-{id}")),
-                        schedule,
-                        command: scrub_text(&command),
-                        active,
-                    })
-                    .collect();
-            }
-            None => catalog.warnings.push(
-                "pg_cron is installed but `cron.job` could not be read by this role; cron jobs \
-                 are not listed"
-                    .to_owned(),
-            ),
+    if visibility.exists("cron", "job") {
+        if visibility.section("cron") {
+            catalog.cron_jobs = Some(
+                fetch!(
+                    session,
+                    (i64, Option<String>, String, String, bool),
+                    "SELECT jobid, jobname::text, schedule, command, active FROM cron.job ORDER \
+                     BY coalesce(jobname, ''), jobid"
+                )?
+                .into_iter()
+                .map(|(id, name, schedule, command, active)| CronJob {
+                    name: name
+                        .filter(|name| !name.is_empty())
+                        .unwrap_or_else(|| format!("job-{id}")),
+                    schedule,
+                    command: scrub_text(&command),
+                    active,
+                })
+                .collect(),
+            );
+        } else {
+            // Not visible: unknown, never "no jobs". The section's blocker
+            // finding carries the fix; no row query runs, so no permission
+            // error and no savepoint to recover from one.
+            catalog.cron_jobs = None;
         }
+    } else {
+        catalog.cron_jobs = Some(Vec::new());
     }
 
+    catalog.visibility = visibility;
     Ok(catalog)
 }
 
-async fn relation_exists(session: &mut ReadOnlySession, name: &str) -> Result<bool, InspectError> {
-    Ok(
-        fetch!(session, (bool,), "SELECT to_regclass($1) IS NOT NULL", name)?
-            .remove(0)
-            .0,
-    )
-}
-
+/// Whether a table has a column, by catalog lookup (`pg_attribute` joined
+/// to `pg_class`/`pg_namespace` on the name text): never `to_regclass` on a
+/// name, which resolves it and can error without USAGE on its schema.
 async fn column_exists(
     session: &mut ReadOnlySession,
-    relation: &str,
+    schema: &str,
+    table: &str,
     column: &str,
 ) -> Result<bool, InspectError> {
     Ok(fetch!(
         session,
         (bool,),
-        "SELECT EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = to_regclass($1) AND attname \
-         = $2 AND NOT attisdropped)",
-        relation,
+        "SELECT EXISTS (SELECT 1 FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid JOIN \
+         pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = $1 AND c.relname = $2 AND \
+         a.attname = $3 AND a.attnum > 0 AND NOT a.attisdropped)",
+        schema,
+        table,
         column
     )?
     .remove(0)
     .0)
 }
 
-/// Ends an optional read taken after `SAVEPOINT optional_read`: a
-/// permission error becomes `None` (and the transaction stays usable),
-/// anything else is an error.
-async fn optional<T>(
-    session: &mut ReadOnlySession,
-    result: Result<T, InspectError>,
-) -> Result<Option<T>, InspectError> {
-    match result {
-        Ok(value) => Ok(Some(value)),
-        Err(InspectError::Permission(_)) => {
-            // The failed statement aborted the transaction; the savepoint
-            // taken before it brings it back.
-            sqlx::raw_sql("ROLLBACK TO SAVEPOINT optional_read")
-                .execute(&mut session.conn)
-                .await
-                .map_err(|error| session.error(&error))?;
-            Ok(None)
-        }
-        Err(other) => Err(other),
-    }
-}
-
 async fn read_auth(
     session: &mut ReadOnlySession,
     catalog: &mut Catalog,
+    visibility: &Visibility,
 ) -> Result<(), InspectError> {
-    if !relation_exists(session, "auth.users").await? {
+    if !visibility.exists("auth", "users") {
         return Ok(());
     }
     catalog.auth.present = true;
-    let anonymous = if column_exists(session, "auth.users", "is_anonymous").await? {
+    if !visibility.section("auth") {
+        // Not visible: every count stays null (unknown, never zero). The
+        // preflight already recorded why and the fix; no row is read, so
+        // there is no permission error to recover from.
+        return Ok(());
+    }
+    let anonymous = if column_exists(session, "auth", "users", "is_anonymous").await? {
         "count(*) FILTER (WHERE is_anonymous)"
     } else {
         "0::bigint"
@@ -636,12 +630,12 @@ async fn read_auth(
         )
     )?
     .remove(0);
-    catalog.auth.users = clamp(users);
-    catalog.auth.users_without_password = clamp(without_password);
-    catalog.auth.users_unconfirmed = clamp(unconfirmed);
-    catalog.auth.anonymous_users = clamp(anonymous);
-    if relation_exists(session, "auth.identities").await? {
-        catalog.auth.identities_by_provider = fetch!(
+    catalog.auth.users = Some(clamp(users));
+    catalog.auth.users_without_password = Some(clamp(without_password));
+    catalog.auth.users_unconfirmed = Some(clamp(unconfirmed));
+    catalog.auth.anonymous_users = Some(clamp(anonymous));
+    catalog.auth.identities_by_provider = Some(if visibility.exists("auth", "identities") {
+        fetch!(
             session,
             (String, i64),
             "SELECT provider, count(*) FROM auth.identities GROUP BY 1 ORDER BY 1"
@@ -651,19 +645,30 @@ async fn read_auth(
             provider,
             identities: clamp(identities),
         })
-        .collect();
-    }
-    for (relation, field) in [
-        ("auth.mfa_factors", &mut catalog.auth.mfa_factors),
-        ("auth.sso_providers", &mut catalog.auth.sso_providers),
+        .collect()
+    } else {
+        Vec::new()
+    });
+    for (table, field) in [
+        ("mfa_factors", &mut catalog.auth.mfa_factors),
+        ("sso_providers", &mut catalog.auth.sso_providers),
     ] {
-        if relation_exists(session, relation).await? {
-            *field = clamp(
-                fetch!(session, (i64,), &format!("SELECT count(*) FROM {relation}"))?
-                    .remove(0)
-                    .0,
-            );
-        }
+        // Absent table (visible section): none of them, so zero, matching
+        // `identities_by_provider`. `None` only when the section is
+        // not visible, which returned above.
+        *field = Some(if visibility.exists("auth", table) {
+            clamp(
+                fetch!(
+                    session,
+                    (i64,),
+                    &format!("SELECT count(*) FROM auth.{table}")
+                )?
+                .remove(0)
+                .0,
+            )
+        } else {
+            0
+        });
     }
     Ok(())
 }
@@ -671,22 +676,28 @@ async fn read_auth(
 async fn read_storage(
     session: &mut ReadOnlySession,
     catalog: &mut Catalog,
+    visibility: &Visibility,
 ) -> Result<(), InspectError> {
-    if !relation_exists(session, "storage.buckets").await? {
+    if !visibility.exists("storage", "buckets") {
         catalog.storage = Storage {
             present: false,
-            counts_exact: true,
-            buckets: Vec::new(),
+            buckets: None,
             unattached_policies: Vec::new(),
         };
         return Ok(());
     }
-    let mime = if column_exists(session, "storage.buckets", "allowed_mime_types").await? {
+    catalog.storage.present = true;
+    if !visibility.section("storage.buckets") {
+        // Not visible: null, not []. No row read, so no permission error.
+        catalog.storage.buckets = None;
+        return Ok(());
+    }
+    let mime = if column_exists(session, "storage", "buckets", "allowed_mime_types").await? {
         "coalesce(allowed_mime_types, '{}'::text[])"
     } else {
         "'{}'::text[]"
     };
-    let limit = if column_exists(session, "storage.buckets", "file_size_limit").await? {
+    let limit = if column_exists(session, "storage", "buckets", "file_size_limit").await? {
         "file_size_limit::bigint"
     } else {
         "NULL::bigint"
@@ -699,48 +710,47 @@ async fn read_storage(
              storage.buckets ORDER BY 1"
         )
     )?;
-    let mut objects: BTreeMap<String, (i64, i64, i64)> = BTreeMap::new();
-    let mut counts_exact = true;
-    if relation_exists(session, "storage.objects").await? {
-        counts_exact = fetch!(
-            session,
-            (bool,),
-            "SELECT NOT c.relrowsecurity OR r.rolsuper OR r.rolbypassrls OR (c.relowner = r.oid \
-             AND NOT c.relforcerowsecurity) FROM pg_class c, pg_roles r WHERE c.oid = \
-             'storage.objects'::regclass AND r.rolname = current_user"
-        )?
-        .first()
-        .is_none_or(|(exact,)| *exact);
+    // `None` when storage.objects is not visible: the per-bucket counts are
+    // then unknown, not zero. `Some(empty)` when the table is simply absent.
+    let objects: Option<BTreeMap<String, (i64, i64, i64)>> = if !visibility
+        .exists("storage", "objects")
+    {
+        Some(BTreeMap::new())
+    } else if visibility.section("storage.objects") {
         let size = "CASE WHEN metadata->>'size' ~ '^[0-9]+$' THEN (metadata->>'size')::bigint END";
+        let mut map = BTreeMap::new();
         for (bucket, count, bytes, over) in fetch!(
             session,
             (String, i64, i64, i64),
             &format!(
                 "SELECT bucket_id::text, count(*), coalesce(sum({size}), 0)::bigint, count(*) \
-                 FILTER (WHERE {size} > {BLOB_CAP_BYTES}) FROM storage.objects GROUP BY 1"
+                     FILTER (WHERE {size} > {BLOB_CAP_BYTES}) FROM storage.objects GROUP BY 1"
             )
         )? {
-            objects.insert(bucket, (count, bytes, over));
+            map.insert(bucket, (count, bytes, over));
         }
-    }
-    catalog.storage = Storage {
-        present: true,
-        counts_exact,
-        buckets: buckets
+        Some(map)
+    } else {
+        None
+    };
+    catalog.storage.buckets = Some(
+        buckets
             .into_iter()
             .map(
                 |(id, name, public, file_size_limit, mut allowed_mime_types)| {
                     allowed_mime_types.sort();
-                    let (count, bytes, over) = objects.get(&id).copied().unwrap_or_default();
+                    let counts = objects
+                        .as_ref()
+                        .map(|map| map.get(&id).copied().unwrap_or_default());
                     Bucket {
                         id,
                         name,
                         public,
                         file_size_limit: file_size_limit.map(clamp),
                         allowed_mime_types,
-                        objects: clamp(count),
-                        bytes: clamp(bytes),
-                        objects_over_blob_cap: clamp(over),
+                        objects: counts.map(|(count, _, _)| clamp(count)),
+                        bytes: counts.map(|(_, bytes, _)| clamp(bytes)),
+                        objects_over_blob_cap: counts.map(|(_, _, over)| clamp(over)),
                         // Filled by `storage_policy::attach` once every
                         // policy has been read.
                         policies: Vec::new(),
@@ -748,15 +758,6 @@ async fn read_storage(
                 },
             )
             .collect(),
-        unattached_policies: Vec::new(),
-    };
-    if !counts_exact {
-        catalog.warnings.push(
-            "storage.objects has row-level security and this role cannot bypass it, so the \
-             object counts and sizes may be low; inspect as a role with BYPASSRLS (or the table \
-             owner) for exact numbers"
-                .to_owned(),
-        );
-    }
+    );
     Ok(())
 }

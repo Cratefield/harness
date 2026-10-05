@@ -166,6 +166,58 @@ jobs:
       - name: Module catalog drift check (issue #139)
         run: cargo run -q -p cratefield-catalog --example catalog-doc -- --check
 
+  supabase-inspect-e2e:
+    # The acceptance test issue #723 asks for, against a real Supabase
+    # stack: `supabase start` (Docker, which the workspace `test` job does
+    # not have), the documented role SQL run as `postgres`, and a report
+    # identical to the `postgres` run apart from `read_only` and warnings.
+    # The fixture tests cover the same shape without a stack; only this
+    # proves the SQL itself against the schema Supabase actually ships.
+    name: supabase inspect against a supabase start (issue #723)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.98.1"
+      - uses: Swatinem/rust-cache@v2
+      # Pinned: the SQL is run against whatever schema this version's
+      # images ship, so an upstream change should be a deliberate bump.
+      - uses: supabase/setup-cli@v1
+        with:
+          version: 2.119.0
+      # The project lives outside the checkout: only Postgres is read, so
+      # every service the test does not need is excluded, which brings the
+      # stack up faster and pulls fewer images. The database itself and its
+      # migrations are not in the exclude list.
+      - name: Create the Supabase project directory
+        run: mkdir -p /tmp/supabase-e2e
+      - name: supabase init
+        working-directory: /tmp/supabase-e2e
+        run: supabase init
+      - name: Start a local Supabase stack
+        working-directory: /tmp/supabase-e2e
+        run: supabase start -x studio,imgproxy,mailpit,edge-runtime,logflare,vector,supavisor
+      # The guard on the guard: the test skips itself when the variable is
+      # unset, and a skipped test is a green job that proved nothing, so
+      # the marker is printed only by a run (see the test).
+      - name: Inspect as postgres and as the documented role (issue #723)
+        env:
+          FZ_TEST_SUPABASE_DB_URL: postgresql://postgres:postgres@127.0.0.1:54322/postgres
+        run: |
+          set -o pipefail
+          cargo test -p cratefield-import-supabase --test inspect \
+            the_documented_role_sql_yields_the_postgres_report_on_supabase \
+            -- --nocapture | tee /tmp/supabase-inspect.log
+          if ! grep -q 'supabase acceptance: the documented role matched' /tmp/supabase-inspect.log; then
+            echo "the acceptance test skipped instead of running: FZ_TEST_SUPABASE_DB_URL did not reach it"
+            exit 1
+          fi
+      - name: Stop the stack
+        if: always()
+        working-directory: /tmp/supabase-e2e
+        run: supabase stop --no-backup || true
+
   doc-identifiers:
     # The other half of keeping documents true. `doc-commands` runs what
     # they tell a reader to type; this checks the names they point at —

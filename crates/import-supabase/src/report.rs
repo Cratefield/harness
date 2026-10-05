@@ -17,8 +17,10 @@
 use serde::{Deserialize, Serialize};
 
 /// The version of the report's JSON shape. See the module docs for when it
-/// changes.
-pub const REPORT_VERSION: u32 = 1;
+/// changes. 2: the row counts a role cannot see are `null`, not `0`, and
+/// `storage.counts_exact` is gone (issue #723); `coverage.sections` says
+/// which section was invisible and why.
+pub const REPORT_VERSION: u32 = 2;
 
 /// The whole report. Field order is the JSON's key order.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -73,8 +75,10 @@ pub struct Report {
     pub edge_functions: EdgeFunctions,
     /// Logical-replication publications, which is what Realtime reads.
     pub realtime: Realtime,
-    /// `pg_cron` jobs.
-    pub cron_jobs: Vec<CronJob>,
+    /// `pg_cron` jobs; `null` when `cron.job` is not visible to the role,
+    /// `[]` when there is no `cron.job` (or no jobs). Never `[]` when the
+    /// jobs are merely hidden.
+    pub cron_jobs: Option<Vec<CronJob>>,
     /// Every item classified: automatic, needs work, or a blocker.
     pub findings: Vec<Finding>,
     /// Things the reader should know that are not findings: a role that
@@ -142,6 +146,31 @@ pub struct Coverage {
     pub management_api: SourceStatus,
     /// The RLS classifier: `not_inspected` unless one was configured.
     pub policy_classifier: SourceStatus,
+    /// One entry per section whose rows the role could not fully read,
+    /// plus one for each section it could: `auth`, `storage.buckets`,
+    /// `storage.objects`, `cron` (only when `cron.job` exists) and
+    /// `schema:<name>` for each user schema. A `not_visible` section's data
+    /// is `null`, never `0`, and there is a blocker finding with the SQL
+    /// that fixes it.
+    pub sections: Vec<SectionCoverage>,
+}
+
+/// One section of the report and what the inspecting role could see of it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SectionCoverage {
+    /// `auth`, `storage.buckets`, `storage.objects`, `cron`, or
+    /// `schema:<name>`.
+    pub section: String,
+    /// `inspected` or `not_visible` (unknown, never "none").
+    pub coverage: SourceStatus,
+    /// Why the section is not visible; empty, and omitted from the JSON,
+    /// when it is.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub reason: String,
+    /// The SQL that would make the section visible, when there is one;
+    /// empty, and omitted from the JSON, otherwise.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub fix: String,
 }
 
 /// Whether a source was read.
@@ -153,6 +182,9 @@ pub enum SourceStatus {
     /// Not read, because nothing to read it with was given. Absence of
     /// data from it means "unknown", never "none".
     NotInspected,
+    /// The role lacks a privilege a row read needs, so the section is
+    /// unknown, never "none".
+    NotVisible,
     /// Tried and failed; the warnings say why.
     Failed,
 }
@@ -184,10 +216,12 @@ pub struct Summary {
     /// Index bytes of the user tables, rebuilt on the target rather than
     /// moved.
     pub index_bytes: u64,
-    /// Storage objects.
-    pub storage_objects: u64,
-    /// Storage bytes, from each object's recorded size.
-    pub storage_bytes: u64,
+    /// Storage objects, summed over the buckets; `null` when the buckets
+    /// or their object counts are not visible to the role.
+    pub storage_objects: Option<u64>,
+    /// Storage bytes, from each object's recorded size; `null` when the
+    /// buckets or their object counts are not visible to the role.
+    pub storage_bytes: Option<u64>,
     /// The throughput the estimate assumes, in megabits per second.
     pub transfer_assumed_mbps: u32,
     /// `(data_bytes + storage_bytes)` at that throughput, rounded up, plus
@@ -555,25 +589,26 @@ pub struct RoleGrants {
     pub tables: Vec<String>,
 }
 
-/// Supabase Auth, as counts.
+/// Supabase Auth, as counts. A count is `null` when the role cannot see
+/// `auth.users`/`auth.identities`; unknown, never zero.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Auth {
     /// The `auth` schema exists.
     pub present: bool,
     /// Rows in `auth.users`.
-    pub users: u64,
+    pub users: Option<u64>,
     /// Users with no password (OAuth, magic link or phone only).
-    pub users_without_password: u64,
+    pub users_without_password: Option<u64>,
     /// Users whose email is not confirmed.
-    pub users_unconfirmed: u64,
+    pub users_unconfirmed: Option<u64>,
     /// Anonymous users (`is_anonymous`), when the column exists.
-    pub anonymous_users: u64,
+    pub anonymous_users: Option<u64>,
     /// `auth.identities` rows per provider, sorted by provider.
-    pub identities_by_provider: Vec<ProviderCount>,
+    pub identities_by_provider: Option<Vec<ProviderCount>>,
     /// MFA factors enrolled (`auth.mfa_factors`), when the table exists.
-    pub mfa_factors: u64,
+    pub mfa_factors: Option<u64>,
     /// SSO providers (`auth.sso_providers`), when the table exists.
-    pub sso_providers: u64,
+    pub sso_providers: Option<u64>,
     /// The providers the project's auth configuration enables, from the
     /// Management API. `null` when it was not inspected.
     pub enabled_providers: Option<Vec<String>>,
@@ -596,14 +631,12 @@ pub struct ProviderCount {
 pub struct Storage {
     /// The `storage` schema exists.
     pub present: bool,
-    /// The object counts are exact: false when `storage.objects` has RLS
-    /// and the inspecting role cannot bypass it, so a count may be low.
-    pub counts_exact: bool,
-    /// Buckets, by id.
-    pub buckets: Vec<Bucket>,
+    /// Buckets, by id; `null` when `storage.buckets` is not visible to the
+    /// role. Never `[]` on an invisible section.
+    pub buckets: Option<Vec<Bucket>>,
     /// Policies on `storage.objects`/`storage.buckets` that could not be
-    /// attached to any bucket, because the project has no buckets at all.
-    /// Empty when it has any.
+    /// attached to any bucket: the project has no buckets at all, or the
+    /// bucket list is not visible to the role. Empty otherwise.
     pub unattached_policies: Vec<BucketPolicy>,
 }
 
@@ -620,12 +653,14 @@ pub struct Bucket {
     pub file_size_limit: Option<u64>,
     /// The allowed MIME types, sorted.
     pub allowed_mime_types: Vec<String>,
-    /// Objects in it.
-    pub objects: u64,
-    /// The sum of their recorded sizes.
-    pub bytes: u64,
-    /// Objects over the Blob port's 10 MiB put cap.
-    pub objects_over_blob_cap: u64,
+    /// Objects in it; `null` when `storage.objects` is not visible.
+    pub objects: Option<u64>,
+    /// The sum of their recorded sizes; `null` when `storage.objects` is
+    /// not visible.
+    pub bytes: Option<u64>,
+    /// Objects over the Blob port's 10 MiB put cap; `null` when
+    /// `storage.objects` is not visible.
+    pub objects_over_blob_cap: Option<u64>,
     /// `storage.objects`/`storage.buckets` policies that name this bucket
     /// (or, with `all_buckets`, apply to every bucket).
     pub policies: Vec<BucketPolicy>,
