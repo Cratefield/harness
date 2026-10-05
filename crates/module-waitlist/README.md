@@ -39,6 +39,19 @@ serialize on every engine (D1, SQLite, Postgres) and never share a
 position; a UNIQUE(product, position) index backstops the allocation.
 Positions are never recomputed when rows are deleted.
 
+**Confirmation mail is deferred, and the join never depends on it.**
+`POST /v1/waitlist` answers `202 {"ok":true}` for every accepted join,
+whatever the mailer does — deliberately, so the answer leaks nothing about
+whether the address was already on the list (`docs/SECURITY.md`). The
+confirmation mail is built on the request path but sent after the response
+returns, through the request's `Defer` port. With no mailer configured
+(`RESEND_API_KEY` unset, or an unverified sending domain) the join still
+succeeds: the entry is recorded `pending`, no mail goes out, and the
+`NotConfigured` is only logged. There is no `503` on this path. A send
+failure releases the hour-long send claim, so a later join retries the
+mail. A form that has to offer a fallback address when mail is unreliable
+must get it from somewhere other than the join response.
+
 Register the mail templates in the venture's `src/lib.rs`, in the
 venture's own style: they render through `cratefield-mail-templates`
 (ADR 0028) with the `MailTheme` you give them. `default_templates()` renders

@@ -307,7 +307,7 @@ Table `subscribers(id, email, email_normalized unique, status, source, locale, c
 
 | Route | Behaviour |
 |---|---|
-| `POST /v1/waitlist` `{ email, product, ref?, answers?, captchaToken? }` | `202`. Row in `waitlist_entries` as `pending`, confirmation mail. `product` must be in the configured list. |
+| `POST /v1/waitlist` `{ email, product, ref?, answers?, captchaToken? }` | `202` always, whatever the mailer does; the confirmation mail goes out after the response. Row in `waitlist_entries` as `pending`. `product` must be in the configured list. |
 | `GET /v1/waitlist/confirm?token=` | Confirms, assigns `position` (max+1 per product) inside a `batch`, credits the referrer, `303` to the status page with the entry's own referral code. |
 | `GET /v1/waitlist/status?token=` | `{ product, position, referrals, referralCode, shareUrl }`. |
 | `GET /v1/waitlist/admin/export.csv?product=` | Admin. |
@@ -356,7 +356,7 @@ mismatch.
 
 - One Worker per venture per environment (`<venture>-api-staging`, `<venture>-api`), custom domain `api.<venture domain>`. `wrangler.toml` uses `main = "build/worker/shim.mjs"` and `[build] command = "cargo install -q worker-build && worker-build --release"`.
 - Secrets: `HARNESS_SECRET`, `RESEND_API_KEY`, `TURNSTILE_SECRET`, `ADMIN_TOKEN`. Set with `wrangler secret put` by a human for production; staging via GitHub Environment secrets. Ventures with public writes or admin routes also declare the Workers Rate Limiting binding (`RATE_LIMITER`, a `[[ratelimits]]` stanza in wrangler.toml — a binding, not a secret): readiness refuses the guarded routes unless it resolves, or the operator records `HARNESS_ALLOW_UNLIMITED_PUBLIC_ROUTES=<reason>` (issue #437). Optional signer entries: `HARNESS_SECRET_PREVIOUS` (demoted, verification-only), `HARNESS_SECRET_REVOKED` (key ids whose signatures are refused while configured), `HARNESS_VENTURE` (the `iss` binding label; a name, not a secret).
-- Mail sends from a **verified sending subdomain** `send.<domain>` (never the apex, which carries inbound Email Routing MX). Until verified, the adapter reports `NotConfigured` and the endpoints return `503 problem type=mail-not-configured` so forms can show a direct address.
+- Mail sends from a **verified sending subdomain** `send.<domain>` (never the apex, which carries inbound Email Routing MX). Until verified, the adapter reports `NotConfigured`; only the orgs invitation endpoints turn that into `503 problem type=mail-not-configured` so forms can show a direct address, while the waitlist logs it and still answers `202`.
 - Deploy workflow: `main` -> staging automatically; tag `v*` -> production behind a GitHub Environment approval.
 
 ## 10. Migration path to self-hosted

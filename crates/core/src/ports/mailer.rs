@@ -94,8 +94,9 @@ pub enum SendOutcome {
     /// Sent; carries the provider message id.
     Sent { id: String },
     /// The adapter is not configured (no API key / unverified sending
-    /// domain). The endpoint reports `503 mail-not-configured` so forms can
-    /// degrade instead of breaking.
+    /// domain). Whether the caller sees it is the endpoint's choice: the
+    /// orgs invitation endpoints turn it into `503 mail-not-configured`,
+    /// while the waitlist logs it and still answers `202`.
     NotConfigured,
 }
 

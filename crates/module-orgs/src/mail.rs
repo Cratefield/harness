@@ -189,10 +189,10 @@ fn render(registry: &TemplateRegistry, data: &Value) -> Result<Rendered, Templat
 /// # Errors
 ///
 /// [`OrgsError::MailNotConfigured`] when the deployment has no mailer or the
-/// mailer reports no verified sending domain — the `503 mail-not-configured`
-/// the waitlist form degrades on — and [`OrgsError::Mail`] when the provider
-/// refuses the message. Either way the caller drops the invitation row: an
-/// invitation nobody can receive is not an invitation.
+/// mailer reports no verified sending domain — the invitation endpoints are
+/// what surface that as `503 mail-not-configured` — and [`OrgsError::Mail`]
+/// when the provider refuses the message. Either way the caller drops the
+/// invitation row: an invitation nobody can receive is not an invitation.
 pub(crate) async fn send(
     ctx: &ModuleContext,
     mail: &OutgoingInvitation<'_>,
