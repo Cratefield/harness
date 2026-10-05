@@ -40,6 +40,7 @@ pub mod dispositions;
 pub mod extensions;
 pub mod management;
 mod markdown;
+pub mod plan;
 pub mod policy;
 pub mod report;
 mod secret;
@@ -54,6 +55,10 @@ pub use dispositions::{
     DispositionsError, DispositionsFile, apply as apply_dispositions, skeleton,
 };
 pub use management::{AuthConfig, DEFAULT_API_BASE, ManagementApi, ManagementError};
+pub use plan::{
+    PLAN_VERSION, Plan, PlanBlocker, PlanDrift, TargetFacts, build_plan, check_drift,
+    inspection_hash, read_target,
+};
 pub use report::*;
 pub use secret::{Secret, SourceName, source_name};
 pub use session::{InspectError, ReadOnlySession};

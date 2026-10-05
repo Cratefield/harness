@@ -25,6 +25,10 @@ http = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
+# The inspection hash (`sha256:<hex>` over the report's canonical JSON) that
+# ties a plan to the inspection it was written from (issue #728).
+sha2 = { workspace = true }
+hex = { workspace = true }
 # The dispositions file (ADR 0026, Decision 5) is TOML; the same version the
 # `fz` CLI already uses.
 toml = { workspace = true }

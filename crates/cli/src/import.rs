@@ -29,6 +29,10 @@ use cratefield_core::Config;
 pub const DB_URL_VAR: &str = "SUPABASE_DB_URL";
 /// The environment variable the Management API token is read from.
 pub const ACCESS_TOKEN_VAR: &str = "SUPABASE_ACCESS_TOKEN";
+/// The environment variable the target Postgres URL is read from by
+/// default: the harness's own app-database variable, the one a venture's
+/// native runtime reads (`crates/runtime-native/README.md`).
+pub const DEFAULT_TARGET_ENV: &str = "DATABASE_URL";
 
 /// The report format.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -137,14 +141,27 @@ impl std::fmt::Debug for Secret {
 ///
 /// A refusal naming `SUPABASE_DB_URL` when no URL was given either way.
 pub fn credentials(args: &InspectArgs, config: &dyn Config) -> Result<Credentials, String> {
+    resolve(
+        args.db_url.as_deref(),
+        args.management_token.as_deref(),
+        config,
+    )
+}
+
+/// [`credentials`] without an [`InspectArgs`], so the plan run reuses it.
+fn resolve(
+    db_url: Option<&str>,
+    management_token: Option<&str>,
+    config: &dyn Config,
+) -> Result<Credentials, String> {
     let mut notes = Vec::new();
-    let db_url = match &args.db_url {
+    let db_url = match db_url {
         Some(url) => {
             notes.push(format!(
                 "note: --db-url puts the password in your shell history and the process list; \
                  prefer {DB_URL_VAR}"
             ));
-            url.clone()
+            url.to_owned()
         }
         None => config.get(DB_URL_VAR).ok_or_else(|| {
             format!(
@@ -153,13 +170,13 @@ pub fn credentials(args: &InspectArgs, config: &dyn Config) -> Result<Credential
             )
         })?,
     };
-    let management_token = match &args.management_token {
+    let management_token = match management_token {
         Some(token) => {
             notes.push(format!(
                 "note: --management-token puts the token in your shell history and the process \
                  list; prefer {ACCESS_TOKEN_VAR}"
             ));
-            Some(token.clone())
+            Some(token.to_owned())
         }
         None => config.get(ACCESS_TOKEN_VAR),
     };
@@ -276,10 +293,13 @@ fn write_skeleton(
 }
 
 #[cfg(feature = "import-supabase")]
-fn inspect_report(
-    args: &InspectArgs,
+fn engine_options(
+    project: &str,
     credentials: &Credentials,
-) -> Result<cratefield_import_supabase::Report, String> {
+    transfer_mbps: u32,
+    classify: bool,
+    classify_threshold: f32,
+) -> Result<cratefield_import_supabase::InspectOptions, String> {
     use cratefield_import_supabase as engine;
     use std::sync::Arc;
 
@@ -290,11 +310,11 @@ fn inspect_report(
             Arc::clone(&clock),
         ));
     let mut options = engine::InspectOptions::new(
-        args.project.clone(),
+        project.to_owned(),
         engine::Secret::new(credentials.db_url.expose()),
     );
-    options.transfer_mbps = args.transfer_mbps;
-    options.classify_threshold = args.classify_threshold;
+    options.transfer_mbps = transfer_mbps;
+    options.classify_threshold = classify_threshold;
     options.management = credentials.management_token.as_ref().map(|token| {
         engine::ManagementApi::new(
             Arc::clone(&http),
@@ -302,7 +322,7 @@ fn inspect_report(
             engine::Secret::new(token.expose()),
         )
     });
-    if args.classify {
+    if classify {
         // TypeSafe (its judge, Jev) through the adapter's own reader, so
         // the key's name is the adapter's, not ours.
         let classifier =
@@ -314,6 +334,23 @@ fn inspect_report(
                 })?;
         options.classifier = Some(Arc::new(classifier));
     }
+    Ok(options)
+}
+
+#[cfg(feature = "import-supabase")]
+fn inspect_report(
+    args: &InspectArgs,
+    credentials: &Credentials,
+) -> Result<cratefield_import_supabase::Report, String> {
+    use cratefield_import_supabase as engine;
+
+    let options = engine_options(
+        &args.project,
+        credentials,
+        args.transfer_mbps,
+        args.classify,
+        args.classify_threshold,
+    )?;
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -354,6 +391,170 @@ fn run(_args: &InspectArgs, _credentials: &Credentials) -> Result<Rendered, Stri
     // As with `push-send`: an installed binary, never a feature on the
     // venture's dependency, whose wasm build must not see sqlx.
     Err(WITHOUT_FEATURE.to_owned())
+}
+
+/// Everything the bare `fz import supabase` and `fz import supabase plan`
+/// were given (issue #728).
+#[derive(Debug, Clone)]
+pub struct PlanArgs {
+    /// The project ref.
+    pub project: String,
+    /// `--db-url`, if given.
+    pub db_url: Option<String>,
+    /// `--management-token`, if given.
+    pub management_token: Option<String>,
+    /// `--target-env`: the variable the target Postgres URL is read from.
+    pub target_env: String,
+    /// `--dir`: where `report.json`, `report.md` and `plan.json` go.
+    pub dir: PathBuf,
+    /// `--transfer-mbps`.
+    pub transfer_mbps: u32,
+    /// `--classify`.
+    pub classify: bool,
+    /// `--classify-threshold`.
+    pub classify_threshold: f32,
+    /// `--apply`: apply an approved plan instead of writing one.
+    pub apply: bool,
+    /// `--plan`: the plan file to apply.
+    pub plan: Option<PathBuf>,
+}
+
+/// Runs the command: inspects the source read-only, reads the target
+/// read-only, and either writes `report.json`, `report.md` and `plan.json`
+/// to `--dir`, or re-checks an approved plan with `--apply --plan`.
+///
+/// # Errors
+///
+/// A refusal or an access error. Blockers are in the plan and the exit code
+/// is zero; `--apply` fails (non-zero) on an unknown plan version, a
+/// project mismatch, drift or a remaining blocker.
+pub fn plan(args: &PlanArgs) -> Result<(), String> {
+    let credentials = resolve(
+        args.db_url.as_deref(),
+        args.management_token.as_deref(),
+        &EnvVars,
+    )?;
+    for note in &credentials.notes {
+        eprintln!("{note}");
+    }
+    run_plan(args, &credentials)
+}
+
+#[cfg(feature = "import-supabase")]
+fn run_plan(args: &PlanArgs, credentials: &Credentials) -> Result<(), String> {
+    use cratefield_import_supabase as engine;
+
+    let options = engine_options(
+        &args.project,
+        credentials,
+        args.transfer_mbps,
+        args.classify,
+        args.classify_threshold,
+    )?;
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|err| format!("cannot start the async runtime the plan needs: {err}"))?;
+    runtime.block_on(async {
+        if args.apply {
+            let path = args
+                .plan
+                .as_ref()
+                .ok_or_else(|| "--apply needs --plan <FILE>".to_owned())?;
+            return apply_plan(args, path, &options).await;
+        }
+        let report = engine::inspect(&options)
+            .await
+            .map_err(|error| error.to_string())?;
+        let target = match EnvVars.get(&args.target_env) {
+            Some(url) => Some(
+                engine::read_target(&engine::Secret::new(url))
+                    .await
+                    .map_err(|error| format!("could not read the target database: {error}"))?,
+            ),
+            None => None,
+        };
+        let plan = engine::build_plan(&report, target.as_ref());
+        std::fs::create_dir_all(&args.dir)
+            .map_err(|err| format!("cannot create {}: {err}", args.dir.display()))?;
+        write_report(&args.dir.join("report.json"), &report.to_json())?;
+        write_report(&args.dir.join("report.md"), &report.to_markdown())?;
+        write_report(&args.dir.join("plan.json"), &plan.to_json())?;
+        eprintln!(
+            "wrote {}/report.json, report.md and plan.json: {} blocker(s) in the plan",
+            args.dir.display(),
+            plan.blockers.len()
+        );
+        for blocker in &plan.blockers {
+            eprintln!("  blocker {}: {}", blocker.code, blocker.message);
+        }
+        Ok(())
+    })
+}
+
+/// `--apply --plan FILE`: re-inspects and refuses unless the plan still
+/// matches. It writes nothing: the auth-users and data phases land with
+/// #659/#660.
+#[cfg(feature = "import-supabase")]
+async fn apply_plan(
+    args: &PlanArgs,
+    path: &Path,
+    options: &cratefield_import_supabase::InspectOptions,
+) -> Result<(), String> {
+    use cratefield_import_supabase as engine;
+
+    let text = std::fs::read_to_string(path)
+        .map_err(|err| format!("cannot read {}: {err}", path.display()))?;
+    let plan: engine::Plan = serde_json::from_str(&text)
+        .map_err(|err| format!("{} is not a plan file: {err}", path.display()))?;
+    if plan.plan_version != engine::PLAN_VERSION {
+        return Err(format!(
+            "{} is a version {} plan, and this fz applies version {}; re-plan with `fz import \
+             supabase plan`",
+            path.display(),
+            plan.plan_version,
+            engine::PLAN_VERSION
+        ));
+    }
+    if plan.project.project_ref != args.project {
+        return Err(format!(
+            "{} is a plan for project {}, not {}; re-plan with `fz import supabase plan --project \
+             {}`",
+            path.display(),
+            plan.project.project_ref,
+            args.project,
+            args.project
+        ));
+    }
+    let report = engine::inspect(options)
+        .await
+        .map_err(|error| error.to_string())?;
+    engine::check_drift(&plan, &report).map_err(|drift| drift.to_string())?;
+    if !plan.blockers.is_empty() {
+        let codes: Vec<&str> = plan.blockers.iter().map(|b| b.code.as_str()).collect();
+        return Err(format!(
+            "the plan still has {} blocker(s) ({}); resolve them and re-plan",
+            plan.blockers.len(),
+            codes.join(", ")
+        ));
+    }
+    eprintln!(
+        "the plan matches the source ({}); the auth-users and data phases land with #659/#660 — \
+         nothing was written to the target",
+        plan.inspection_hash
+    );
+    Ok(())
+}
+
+#[cfg(not(feature = "import-supabase"))]
+fn run_plan(_args: &PlanArgs, _credentials: &Credentials) -> Result<(), String> {
+    Err(
+        // The same refusal `inspect` gives without the engine.
+        "this `fz` was built without the `import-supabase` feature, so it cannot reach Postgres. \
+         Install one that has it — `cargo install cratefield-cli --features import-supabase` — \
+         and run that binary (it needs no compiled-in harness)."
+            .to_owned(),
+    )
 }
 
 #[cfg(test)]
