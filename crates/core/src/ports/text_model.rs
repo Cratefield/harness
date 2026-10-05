@@ -30,6 +30,14 @@
 //! that promised deltas would be a port the Workers twin could not keep.
 //! A tool loop still is one request and one buffered answer per step.
 //!
+//! **Image input arrived in issue #628.** A [`Turn`] may carry [`Part`]s —
+//! text and images in order — built with [`Turn::user_parts`]; a text-only
+//! turn is unchanged. An adapter that can carry images says so through
+//! [`Capability::Images`], and the router, the tool loop and every adapter
+//! call [`Prompt::check_images`] **before** any network call, so an
+//! over-limit prompt is refused locally rather than paid for. Adapters
+//! encode with [`encode_image`], needing no base64 dependency of their own.
+//!
 //! There is no outcome enum on this port, unlike [`Mailer`](crate::Mailer)
 //! and [`Push`](crate::Push), and that is deliberate: a completion has no
 //! "delivered but not configured" middle state — either text came back or
@@ -42,14 +50,32 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
+use base64::Engine as _;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+
+use super::http::MAX_RESPONSE_BYTES;
 
 /// The token ceiling a [`Prompt`] starts with: enough for a drafted reply,
 /// small enough that a forgotten `.max_tokens(..)` cannot turn into a run
 /// away bill. Explicit in the type so "how long can the answer get" is a
 /// field a caller can read, not an adapter's private default.
 pub const DEFAULT_MAX_TOKENS: u32 = 1024;
+
+/// The most images one [`Prompt`] may carry (issue #628): four, inside the
+/// vendors' own per-request range. [`Prompt::check_images`] refuses more.
+pub const MAX_PROMPT_IMAGES: usize = 4;
+
+/// The most base64 bytes one image may encode to (issue #628): 3.75 MiB,
+/// the vendors' per-image ceiling. [`encoded_image_len`] gives a raw
+/// image's encoded length; [`Prompt::check_images`] refuses any over it.
+pub const MAX_IMAGE_ENCODED_BYTES: usize = 3_932_160;
+
+/// The most base64 bytes **all** of a prompt's images may encode to
+/// together (issue #628): 4 MiB, the same [`MAX_RESPONSE_BYTES`] ceiling
+/// the [`HttpClient`](crate::HttpClient) port puts on a response body.
+/// [`Prompt::check_images`] refuses a total over it.
+pub const MAX_PROMPT_IMAGE_ENCODED_BYTES: usize = MAX_RESPONSE_BYTES;
 
 /// Which class of model a completion asks for — a **tier**, never a vendor
 /// or a model name. A venture maps each tier onto a provider in its own
@@ -113,9 +139,10 @@ impl std::fmt::Display for Role {
 /// router to ask "can the model behind this tier actually do this" before a
 /// caller wastes a request on one that cannot.
 ///
-/// `#[non_exhaustive]`: today the only capability is [`Self::Tools`], and
-/// the next one — a provider-native structured output, image input — should
-/// not be a breaking change for every `match` a caller writes.
+/// `#[non_exhaustive]`: today the capabilities are [`Self::Tools`] and
+/// [`Self::Images`], and the next one — a provider-native structured
+/// output — should not be a breaking change for every `match` a caller
+/// writes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum Capability {
@@ -123,6 +150,10 @@ pub enum Capability {
     /// provider, and the answer may carry [`Completion::tool_calls`]. An
     /// adapter that does not implement this is never asked to.
     Tools,
+    /// The adapter carries images: a prompt's [`Part::Image`]s reach the
+    /// provider. An adapter without vision is refused with
+    /// [`TextModelError::Unsupported`], never sent an image to drop.
+    Images,
 }
 
 impl Capability {
@@ -130,6 +161,7 @@ impl Capability {
     pub fn name(&self) -> &'static str {
         match self {
             Capability::Tools => "tools",
+            Capability::Images => "images",
         }
     }
 }
@@ -252,10 +284,92 @@ impl ToolResult {
     }
 }
 
+/// The media type of an image a [`Part`] carries (issue #628): the closed
+/// set the providers accept, so a caller picks one rather than handing the
+/// provider a bare string to validate. `#[non_exhaustive]`, so a `match`
+/// carries a wildcard.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ImageMediaType {
+    /// `image/png`.
+    Png,
+    /// `image/jpeg`.
+    Jpeg,
+    /// `image/gif`.
+    Gif,
+    /// `image/webp`.
+    Webp,
+}
+
+impl ImageMediaType {
+    /// The MIME type a provider expects on the wire.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            ImageMediaType::Png => "image/png",
+            ImageMediaType::Jpeg => "image/jpeg",
+            ImageMediaType::Gif => "image/gif",
+            ImageMediaType::Webp => "image/webp",
+        }
+    }
+}
+
+/// One piece of a [`Turn`]: text, or an image with its media type and raw
+/// bytes (issue #628). A parts-bearing turn carries them **in order**;
+/// `#[non_exhaustive]`, so a part is built with [`Part::text`] and
+/// [`Part::image`] rather than a struct literal.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum Part {
+    /// A run of text.
+    Text(String),
+    /// An image: its media type and its raw (undecoded) bytes. Adapters
+    /// encode with [`encode_image`] when they put it on the wire.
+    Image {
+        media_type: ImageMediaType,
+        bytes: Vec<u8>,
+    },
+}
+
+impl Part {
+    /// A text part.
+    #[must_use]
+    pub fn text(text: impl Into<String>) -> Self {
+        Part::Text(text.into())
+    }
+
+    /// An image part of `media_type` carrying the raw `bytes`.
+    #[must_use]
+    pub fn image(media_type: ImageMediaType, bytes: impl Into<Vec<u8>>) -> Self {
+        Part::Image {
+            media_type,
+            bytes: bytes.into(),
+        }
+    }
+}
+
+/// The standard, padded base64 encoding of an image's raw bytes (issue
+/// #628) — the form every provider expects for inline image data. Here so
+/// an adapter needs no base64 dependency of its own.
+#[must_use]
+pub fn encode_image(bytes: &[u8]) -> String {
+    base64::engine::general_purpose::STANDARD.encode(bytes)
+}
+
+/// The length of [`encode_image`]'s output for `raw_len` raw bytes (issue
+/// #628): `4 * ceil(raw_len / 3)`, padding included. Pure arithmetic, so
+/// [`Prompt::check_images`] can size an image without encoding it — to
+/// refuse an over-limit image before the allocation, not after.
+#[must_use]
+pub const fn encoded_image_len(raw_len: usize) -> usize {
+    raw_len.div_ceil(3) * 4
+}
+
 /// One message of the conversation a [`Prompt`] carries.
 ///
-/// `#[non_exhaustive]`: a turn grew its tool fields in issue #665 and will
-/// grow again, so it is built with [`Turn::user`], [`Turn::assistant`],
+/// `#[non_exhaustive]`: a turn grew its tool fields in issue #665 and its
+/// image [`Part`]s in issue #628 and will grow again, so it is built with
+/// [`Turn::user`], [`Turn::user_parts`], [`Turn::assistant`],
 /// [`Turn::assistant_tool_calls`] or [`Turn::tool_results`] rather than a
 /// struct literal.
 #[derive(Debug, Clone, PartialEq)]
@@ -263,6 +377,11 @@ impl ToolResult {
 pub struct Turn {
     pub role: Role,
     pub content: String,
+    /// The turn's content as ordered [`Part`]s, where it carries any
+    /// (issue #628). When non-empty it **is** the whole content, in order,
+    /// and [`content`](Self::content) is empty; a text-only turn keeps it
+    /// empty so it serialises exactly as before images existed.
+    pub parts: Vec<Part>,
     /// The calls an assistant turn asked for. Carried on a
     /// [`Role::Assistant`] turn; empty on every other turn.
     pub tool_calls: Vec<ToolCall>,
@@ -278,6 +397,22 @@ impl Turn {
         Turn {
             role: Role::User,
             content: content.into(),
+            parts: Vec::new(),
+            tool_calls: Vec::new(),
+            tool_results: Vec::new(),
+        }
+    }
+
+    /// A user turn carrying `parts` — text and images in order — with an
+    /// empty [`content`](Self::content) (issue #628). The way a prompt
+    /// sends an image: providers expect text and image in one message, so
+    /// the parts travel together rather than across two turns.
+    #[must_use]
+    pub fn user_parts(parts: impl IntoIterator<Item = Part>) -> Self {
+        Turn {
+            role: Role::User,
+            content: String::new(),
+            parts: parts.into_iter().collect(),
             tool_calls: Vec::new(),
             tool_results: Vec::new(),
         }
@@ -290,6 +425,7 @@ impl Turn {
         Turn {
             role: Role::Assistant,
             content: content.into(),
+            parts: Vec::new(),
             tool_calls: Vec::new(),
             tool_results: Vec::new(),
         }
@@ -302,6 +438,7 @@ impl Turn {
         Turn {
             role: Role::Assistant,
             content: content.into(),
+            parts: Vec::new(),
             tool_calls: calls,
             tool_results: Vec::new(),
         }
@@ -314,6 +451,7 @@ impl Turn {
         Turn {
             role: Role::User,
             content: String::new(),
+            parts: Vec::new(),
             tool_calls: Vec::new(),
             tool_results: results,
         }
@@ -401,6 +539,14 @@ impl Prompt {
         self
     }
 
+    /// Appends a [`Turn::user_parts`] — a user message carrying text and
+    /// images in order (issue #628).
+    #[must_use]
+    pub fn user_parts(mut self, parts: impl IntoIterator<Item = Part>) -> Self {
+        self.messages.push(Turn::user_parts(parts));
+        self
+    }
+
     /// Appends a [`Turn::assistant`].
     #[must_use]
     pub fn assistant(mut self, content: impl Into<String>) -> Self {
@@ -428,6 +574,66 @@ impl Prompt {
     pub fn max_tokens(mut self, max_tokens: u32) -> Self {
         self.max_tokens = max_tokens;
         self
+    }
+
+    /// Whether any turn carries an image [`Part`] (issue #628). The router
+    /// and the tool loop gate [`Capability::Images`] on this, exactly as
+    /// they gate [`Capability::Tools`] on [`Prompt::tools`].
+    #[must_use]
+    pub fn has_images(&self) -> bool {
+        self.messages.iter().any(|turn| {
+            turn.parts
+                .iter()
+                .any(|part| matches!(part, Part::Image { .. }))
+        })
+    }
+
+    /// Refuses a prompt whose images exceed a bound (issue #628), without
+    /// encoding anything: the count against [`MAX_PROMPT_IMAGES`], each
+    /// image's [`encoded_image_len`] against [`MAX_IMAGE_ENCODED_BYTES`],
+    /// and their sum against [`MAX_PROMPT_IMAGE_ENCODED_BYTES`].
+    ///
+    /// # Errors
+    ///
+    /// [`TextModelError::ImageLimit`], naming which bound was crossed:
+    /// [`ImageLimit::TooMany`], [`ImageLimit::ImageTooLarge`] (with the
+    /// 0-based index among the prompt's images) or
+    /// [`ImageLimit::TotalTooLarge`].
+    pub fn check_images(&self) -> Result<(), TextModelError> {
+        let count = self
+            .messages
+            .iter()
+            .flat_map(|turn| &turn.parts)
+            .filter(|part| matches!(part, Part::Image { .. }))
+            .count();
+        if count > MAX_PROMPT_IMAGES {
+            return Err(TextModelError::ImageLimit(ImageLimit::TooMany { count }));
+        }
+
+        let mut total: usize = 0;
+        let mut index: usize = 0;
+        for turn in &self.messages {
+            for part in &turn.parts {
+                let Part::Image { bytes, .. } = part else {
+                    continue;
+                };
+                let encoded_bytes = encoded_image_len(bytes.len());
+                if encoded_bytes > MAX_IMAGE_ENCODED_BYTES {
+                    return Err(TextModelError::ImageLimit(ImageLimit::ImageTooLarge {
+                        index,
+                        encoded_bytes,
+                    }));
+                }
+                total = total.saturating_add(encoded_bytes);
+                index += 1;
+            }
+        }
+        if total > MAX_PROMPT_IMAGE_ENCODED_BYTES {
+            return Err(TextModelError::ImageLimit(ImageLimit::TotalTooLarge {
+                encoded_bytes: total,
+            }));
+        }
+        Ok(())
     }
 }
 
@@ -518,6 +724,48 @@ impl Completion {
     }
 }
 
+/// Which image bound a [`Prompt`] crossed (issue #628): the count, one
+/// image's encoded size, or the whole prompt's. Carries only sizes and
+/// indices — never user content — so it is safe in a log line as-is.
+///
+/// `#[non_exhaustive]`: another bound should not break every `match`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ImageLimit {
+    /// The prompt carries more than [`MAX_PROMPT_IMAGES`] images.
+    TooMany { count: usize },
+    /// The image at 0-based `index` among the prompt's images encodes to
+    /// more than [`MAX_IMAGE_ENCODED_BYTES`] base64 bytes.
+    ImageTooLarge { index: usize, encoded_bytes: usize },
+    /// The prompt's images encode to more than
+    /// [`MAX_PROMPT_IMAGE_ENCODED_BYTES`] base64 bytes together.
+    TotalTooLarge { encoded_bytes: usize },
+}
+
+impl std::fmt::Display for ImageLimit {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::TooMany { count } => write!(
+                f,
+                "a prompt may carry at most {MAX_PROMPT_IMAGES} images, but this one carries {count}"
+            ),
+            Self::ImageTooLarge {
+                index,
+                encoded_bytes,
+            } => write!(
+                f,
+                "image {index} encodes to {encoded_bytes} bytes, over the \
+                 {MAX_IMAGE_ENCODED_BYTES}-byte per-image ceiling"
+            ),
+            Self::TotalTooLarge { encoded_bytes } => write!(
+                f,
+                "the prompt's images encode to {encoded_bytes} bytes, over the \
+                 {MAX_PROMPT_IMAGE_ENCODED_BYTES}-byte total"
+            ),
+        }
+    }
+}
+
 /// Completion failures.
 ///
 /// [`NotConfigured`](Self::NotConfigured) sits on the **error** enum here,
@@ -565,10 +813,11 @@ pub enum TextModelError {
     /// not reach the provider, or the answer did not survive the hop.
     Transport(String),
     /// The model behind this tier cannot do what the prompt asked for —
-    /// today, a prompt carrying [`Prompt::tools`] reached an adapter whose
-    /// [`TextModel::supports`] is false for [`Capability::Tools`], so the
-    /// adapter was never called. A fixed sentence, never provider text, so
-    /// there is nothing to scrub.
+    /// a prompt carrying [`Prompt::tools`] or image [`Part`]s reached an
+    /// adapter whose [`TextModel::supports`] is false for
+    /// [`Capability::Tools`] or [`Capability::Images`], so the adapter was
+    /// never called. A fixed sentence, never provider text, so there is
+    /// nothing to scrub.
     Unsupported(Capability),
     /// The schema itself cannot be honoured: it uses a JSON Schema keyword
     /// the built-in validator does not implement (a `$ref`, a `pattern`,
@@ -586,6 +835,9 @@ pub enum TextModelError {
     /// model's own output**, which may hold the personal data the schema
     /// was there to structure.
     SchemaViolation(String),
+    /// The prompt's images crossed a bound [`Prompt::check_images`]
+    /// enforces: too many, one too large, or too large together.
+    ImageLimit(ImageLimit),
 }
 
 impl std::fmt::Display for TextModelError {
@@ -609,6 +861,7 @@ impl std::fmt::Display for TextModelError {
                 "the model's answer did not match the schema: {}",
                 scrub(reason)
             ),
+            Self::ImageLimit(limit) => write!(f, "the prompt's images exceed a limit: {limit}"),
         }
     }
 }
@@ -646,8 +899,8 @@ pub trait TextModel: Send + Sync {
     /// refused a tools-bearing prompt by [`RoutingTextModel`] and
     /// [`run_tool_loop`](crate::run_tool_loop) before it is ever called,
     /// rather than sent a request it would silently drop the tools from.
-    /// An adapter that carries [`Capability::Tools`] overrides this to
-    /// answer `true` for it.
+    /// An adapter that carries [`Capability::Tools`] or
+    /// [`Capability::Images`] overrides this to answer `true` for it.
     ///
     /// `tier` is the router's own routing key, not the adapter's: an
     /// adapter serves whatever tier it was wired for and is free to ignore
@@ -686,6 +939,12 @@ pub trait TextModel: Send + Sync {
 /// to exactly one tier, so what matters is that tier's answer, and a
 /// strong-tier judge that cannot carry tools must not make a fast-tier
 /// drafting model look incapable.
+///
+/// The same agreement covers images (issue #628): a prompt carrying a
+/// [`Part::Image`] is refused with [`TextModelError::Unsupported`] before a
+/// tier that does not report [`Capability::Images`] is called, and an
+/// over-limit prompt by [`Prompt::check_images`] before the tier is looked
+/// up at all.
 #[derive(Default, Clone)]
 pub struct RoutingTextModel {
     fast: Option<Arc<dyn TextModel>>,
@@ -735,6 +994,10 @@ impl std::fmt::Debug for RoutingTextModel {
 #[async_trait]
 impl TextModel for RoutingTextModel {
     async fn complete(&self, prompt: &Prompt) -> Result<Completion, TextModelError> {
+        // An over-limit image prompt is refused before anything is routed:
+        // the limits are about the request a provider would be handed, so
+        // they hold whatever tier answers.
+        prompt.check_images()?;
         match self.route_for(prompt.tier) {
             Some(model) => {
                 // A tools-bearing prompt to a model that cannot carry tools
@@ -743,6 +1006,12 @@ impl TextModel for RoutingTextModel {
                 // honour, and a fabricated plain answer would hide that.
                 if !prompt.tools.is_empty() && !model.supports(prompt.tier, Capability::Tools) {
                     return Err(TextModelError::Unsupported(Capability::Tools));
+                }
+                // The same rule for images: a prompt carrying one to a
+                // model without vision is refused, never sent with the image
+                // silently dropped.
+                if prompt.has_images() && !model.supports(prompt.tier, Capability::Images) {
+                    return Err(TextModelError::Unsupported(Capability::Images));
                 }
                 model.complete(prompt).await
             }
@@ -960,6 +1229,7 @@ mod tests {
     struct Recording {
         label: &'static str,
         tools: bool,
+        images: bool,
         seen: std::sync::atomic::AtomicUsize,
     }
 
@@ -970,6 +1240,7 @@ mod tests {
             Arc::new(Self {
                 label,
                 tools: false,
+                images: false,
                 seen: std::sync::atomic::AtomicUsize::new(0),
             })
         }
@@ -979,6 +1250,17 @@ mod tests {
             Arc::new(Self {
                 label,
                 tools: true,
+                images: false,
+                seen: std::sync::atomic::AtomicUsize::new(0),
+            })
+        }
+
+        /// A model that reports [`Capability::Images`].
+        fn image_capable(label: &'static str) -> Arc<Self> {
+            Arc::new(Self {
+                label,
+                tools: false,
+                images: true,
                 seen: std::sync::atomic::AtomicUsize::new(0),
             })
         }
@@ -996,7 +1278,8 @@ mod tests {
         }
 
         fn supports(&self, _tier: ModelTier, capability: Capability) -> bool {
-            self.tools && capability == Capability::Tools
+            (capability == Capability::Tools && self.tools)
+                || (capability == Capability::Images && self.images)
         }
     }
 
@@ -1063,6 +1346,8 @@ mod tests {
     fn a_capability_names_itself_for_logs_and_errors() {
         assert_eq!(Capability::Tools.name(), "tools");
         assert_eq!(Capability::Tools.to_string(), "tools");
+        assert_eq!(Capability::Images.name(), "images");
+        assert_eq!(Capability::Images.to_string(), "images");
     }
 
     #[test]
@@ -1233,5 +1518,184 @@ mod tests {
         let unwired = RoutingTextModel::new();
         assert!(!unwired.supports(ModelTier::Fast, Capability::Tools));
         assert!(!unwired.supports(ModelTier::Strong, Capability::Tools));
+    }
+
+    // -----------------------------------------------------------------
+    // Images (issue #628)
+
+    /// A raw byte length whose standard, padded base64 encoding is exactly
+    /// `encoded`, for `encoded` a multiple of four.
+    fn raw_len_for_encoded(encoded: usize) -> usize {
+        (encoded / 4) * 3
+    }
+
+    #[test]
+    fn an_image_media_type_names_its_wire_mime() {
+        assert_eq!(ImageMediaType::Png.as_str(), "image/png");
+        assert_eq!(ImageMediaType::Jpeg.as_str(), "image/jpeg");
+        assert_eq!(ImageMediaType::Gif.as_str(), "image/gif");
+        assert_eq!(ImageMediaType::Webp.as_str(), "image/webp");
+    }
+
+    #[test]
+    fn encode_image_is_standard_padded_base64_and_encoded_image_len_predicts_it() {
+        // The canonical RFC 4648 test vectors, padded.
+        assert_eq!(encode_image(b""), "");
+        assert_eq!(encode_image(b"f"), "Zg==");
+        assert_eq!(encode_image(b"fo"), "Zm8=");
+        assert_eq!(encode_image(b"foo"), "Zm9v");
+        assert_eq!(encode_image(b"foob"), "Zm9vYg==");
+        assert_eq!(encode_image(b"fooba"), "Zm9vYmE=");
+        assert_eq!(encode_image(b"foobar"), "Zm9vYmFy");
+
+        // `encoded_image_len` is pure arithmetic and agrees with the
+        // encoding for every remainder class.
+        for raw in 0..=8usize {
+            assert_eq!(
+                encoded_image_len(raw),
+                encode_image(&vec![0u8; raw]).len(),
+                "raw length {raw}"
+            );
+        }
+        assert_eq!(encoded_image_len(0), 0);
+        assert_eq!(encoded_image_len(1), 4);
+        assert_eq!(encoded_image_len(3), 4);
+        assert_eq!(encoded_image_len(4), 8);
+    }
+
+    #[test]
+    fn a_parts_turn_carries_its_parts_in_order_and_a_text_turn_carries_none() {
+        let with_image = Prompt::new(ModelTier::Fast).user_parts([
+            Part::text("look"),
+            Part::image(ImageMediaType::Jpeg, vec![1, 2, 3]),
+        ]);
+        let turn = &with_image.messages[0];
+        assert_eq!(turn.role, Role::User);
+        assert_eq!(turn.content, "", "the parts are the whole content");
+        assert_eq!(
+            turn.parts,
+            vec![
+                Part::Text("look".to_owned()),
+                Part::Image {
+                    media_type: ImageMediaType::Jpeg,
+                    bytes: vec![1, 2, 3],
+                },
+            ]
+        );
+        assert!(with_image.has_images());
+        assert!(
+            !Prompt::new(ModelTier::Fast)
+                .user_parts([Part::text("no image here")])
+                .has_images()
+        );
+
+        // The compatibility promise: a turn built the old way carries no
+        // parts, so an adapter serialises it exactly as before images.
+        let text_only = Prompt::new(ModelTier::Fast).user("hi");
+        assert!(text_only.messages[0].parts.is_empty());
+        assert!(!text_only.has_images());
+        assert_eq!(text_only.check_images(), Ok(()));
+    }
+
+    #[test]
+    fn check_images_holds_each_bound_as_a_ceiling() {
+        // At the bound the prompt passes; one step over, the matching error.
+        let four = Prompt::new(ModelTier::Fast).user_parts(
+            (0..MAX_PROMPT_IMAGES).map(|_| Part::image(ImageMediaType::Png, vec![0u8])),
+        );
+        assert_eq!(four.check_images(), Ok(()));
+        let each_raw = raw_len_for_encoded(MAX_IMAGE_ENCODED_BYTES);
+        assert_eq!(encoded_image_len(each_raw), MAX_IMAGE_ENCODED_BYTES);
+        let at_ceiling = Prompt::new(ModelTier::Fast)
+            .user_parts([Part::image(ImageMediaType::Png, vec![0u8; each_raw])]);
+        assert_eq!(at_ceiling.check_images(), Ok(()));
+
+        // One image too many.
+        let five = Prompt::new(ModelTier::Fast).user_parts(
+            (0..=MAX_PROMPT_IMAGES).map(|_| Part::image(ImageMediaType::Png, vec![0u8])),
+        );
+        assert_eq!(
+            five.check_images(),
+            Err(TextModelError::ImageLimit(ImageLimit::TooMany {
+                count: MAX_PROMPT_IMAGES + 1,
+            }))
+        );
+
+        // A raw length encoding to one base64 group over the per-image cap.
+        let over = MAX_IMAGE_ENCODED_BYTES + 4;
+        let over_raw = raw_len_for_encoded(over);
+        assert_eq!(encoded_image_len(over_raw), over);
+        let too_large = Prompt::new(ModelTier::Fast)
+            .user_parts([Part::image(ImageMediaType::Png, vec![0u8; over_raw])]);
+        assert_eq!(
+            too_large.check_images(),
+            Err(TextModelError::ImageLimit(ImageLimit::ImageTooLarge {
+                index: 0,
+                encoded_bytes: over,
+            }))
+        );
+
+        // Two images just under the per-image cap, together over the total:
+        // the count and each image are legal, the sum is not.
+        let each = MAX_IMAGE_ENCODED_BYTES - 4;
+        let raw = raw_len_for_encoded(each);
+        assert!(2 * each > MAX_PROMPT_IMAGE_ENCODED_BYTES);
+        let too_total = Prompt::new(ModelTier::Fast).user_parts([
+            Part::image(ImageMediaType::Png, vec![0u8; raw]),
+            Part::image(ImageMediaType::Jpeg, vec![0u8; raw]),
+        ]);
+        assert_eq!(
+            too_total.check_images(),
+            Err(TextModelError::ImageLimit(ImageLimit::TotalTooLarge {
+                encoded_bytes: 2 * each,
+            }))
+        );
+    }
+
+    #[test]
+    fn the_image_limit_error_is_displayed_without_any_user_content() {
+        let error = TextModelError::ImageLimit(ImageLimit::TooMany { count: 9 });
+        assert_eq!(
+            error.to_string(),
+            "the prompt's images exceed a limit: a prompt may carry at most 4 images, but this \
+             one carries 9"
+        );
+        assert_eq!(error.retry_after(), None);
+    }
+
+    #[test]
+    fn images_to_a_tier_that_cannot_carry_them_are_refused_before_the_call() {
+        let fast = Recording::new("fast-vendor");
+        let router = RoutingTextModel::new().fast(fast.clone());
+        let prompt = Prompt::new(ModelTier::Fast)
+            .user_parts([Part::image(ImageMediaType::Png, vec![0u8; 4])]);
+
+        let error = pollster::block_on(router.complete(&prompt)).unwrap_err();
+        assert_eq!(error, TextModelError::Unsupported(Capability::Images));
+        assert_eq!(fast.count(), 0, "the adapter was never called");
+
+        // The capable mirror: the same prompt passes through untouched, but
+        // an over-limit one is still refused by the router before the tier,
+        // whatever the deployment claims.
+        let capable = Recording::image_capable("fast-vendor");
+        let router = RoutingTextModel::new().fast(capable.clone());
+        let prompt = Prompt::new(ModelTier::Fast)
+            .user_parts([Part::image(ImageMediaType::Webp, vec![0u8; 4])]);
+        assert_eq!(
+            pollster::block_on(router.complete(&prompt)).unwrap().model,
+            "fast-vendor"
+        );
+        assert_eq!(capable.count(), 1);
+
+        let over = Prompt::new(ModelTier::Fast).user_parts(
+            (0..=MAX_PROMPT_IMAGES).map(|_| Part::image(ImageMediaType::Png, vec![0u8])),
+        );
+        assert_eq!(
+            pollster::block_on(router.complete(&over)).unwrap_err(),
+            TextModelError::ImageLimit(ImageLimit::TooMany {
+                count: MAX_PROMPT_IMAGES + 1,
+            })
+        );
+        assert_eq!(capable.count(), 1, "the over-limit prompt never reached it");
     }
 }

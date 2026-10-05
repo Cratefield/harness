@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- TextModel image inputs (issue [#628](https://github.com/Cratefield/harness/issues/628)): the `text_model_image_bounds_conformance` port suite, and a `FakeTextModel` that answers image prompts and refuses an over-limit one before recording it.
+
 ## [0.5.0](https://github.com/Cratefield/harness/compare/cratefield-testing-v0.4.0...cratefield-testing-v0.5.0) - 2026-10-04
 
 ### Changed

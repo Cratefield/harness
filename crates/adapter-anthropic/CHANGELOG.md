@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Image input (issue [#628](https://github.com/Cratefield/harness/issues/628)): a `Turn::user_parts` message is sent as the Messages API content-block array, text and inline base64 images in order. `Anthropic::supports` now reports `Capability::Images`, and an image prompt over the port's bounds is refused (`TextModelError::ImageLimit`) before any network call.
+
 ## [0.3.0](https://github.com/Cratefield/harness/compare/cratefield-adapter-anthropic-v0.2.1...cratefield-adapter-anthropic-v0.3.0) - 2026-10-04
 
 ### Changed

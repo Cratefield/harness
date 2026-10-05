@@ -1437,6 +1437,10 @@ impl TextModel for FakeTextModel {
         if !prompt.tools.is_empty() {
             return Err(TextModelError::Unsupported(Capability::Tools));
         }
+        // An image prompt over a bound is refused here too, before the
+        // prompt is recorded or answered — the same rule a real adapter
+        // applies before any network call.
+        prompt.check_images()?;
         match self.mode_for(prompt.tier) {
             TextModelMode::Reply(text) => {
                 self.record(prompt);
@@ -1457,6 +1461,14 @@ impl TextModel for FakeTextModel {
             }
             TextModelMode::Error(error) => Err(error),
         }
+    }
+
+    fn supports(&self, _tier: ModelTier, capability: Capability) -> bool {
+        // The fake answers an image prompt — it refuses neither text nor
+        // images — so it reports vision, and a router lets an image prompt
+        // through to it rather than refusing it for capability. It carries
+        // no tools, and still reports none.
+        capability == Capability::Images
     }
 }
 

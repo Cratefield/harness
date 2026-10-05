@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- TextModel image inputs (issue [#628](https://github.com/Cratefield/harness/issues/628)): a `Prompt`'s image `Part`s serialise into the request's `content` array (`{"type":"image_url","image_url":{"url":"data:<media-type>;base64,…"}}`), text-only messages keep their plain-string content, image input is opted into with `OpenAiCompatible::with_images()` (`Capability::Images`, off by default), an image prompt without it is refused with `Unsupported` before any request, and `Prompt::check_images` bounds are enforced locally first.
+
 ## [0.2.1](https://github.com/Cratefield/harness/compare/cratefield-adapter-openai-compatible-v0.2.0...cratefield-adapter-openai-compatible-v0.2.1) - 2026-10-05
 
 ### Other

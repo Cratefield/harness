@@ -12,7 +12,7 @@ use cratefield_testing::{
     FakeHttpClient, FixedClock, TEXT_MODEL_CONFORMANCE_CACHED_INPUT_TOKENS,
     TEXT_MODEL_CONFORMANCE_INPUT_TOKENS, TEXT_MODEL_CONFORMANCE_OUTPUT_TOKENS,
     TEXT_MODEL_CONFORMANCE_REPLY, assert_wasm_safe_deps, text_model_conformance,
-    text_model_conformance_not_configured,
+    text_model_conformance_not_configured, text_model_image_bounds_conformance,
 };
 use http::Response;
 use std::sync::Arc;
@@ -82,4 +82,26 @@ fn an_absent_key_answers_not_configured() {
         "gpt-4o-mini",
     );
     pollster::block_on(text_model_conformance_not_configured(&unconfigured));
+}
+
+#[test]
+fn the_shared_image_bounds_conformance_suite_passes_over_the_openai_compatible_adapter() {
+    // A transport that answers nothing: the bounds are checked before the
+    // capability gate, so a pass proves each refusal happened locally rather
+    // than at the server, whatever the deployment carries.
+    let http = Arc::new(FakeHttpClient::scripted(vec![]));
+    let model = OpenAiCompatible::new(
+        http.clone(),
+        Arc::new(FixedClock(
+            time::OffsetDateTime::from_unix_timestamp(0).expect("valid timestamp"),
+        )),
+        // An obvious dummy key, never real.
+        Some("sk-openai-dummy-key-000000000000".to_owned()),
+        "gpt-4o-mini",
+    );
+    pollster::block_on(text_model_image_bounds_conformance(&model));
+    assert!(
+        http.captured().is_empty(),
+        "no over-limit prompt reaches the wire"
+    );
 }

@@ -12,6 +12,7 @@ use cratefield_testing::{
     FakeHttpClient, FixedClock, TEXT_MODEL_CONFORMANCE_CACHED_INPUT_TOKENS,
     TEXT_MODEL_CONFORMANCE_INPUT_TOKENS, TEXT_MODEL_CONFORMANCE_OUTPUT_TOKENS,
     TEXT_MODEL_CONFORMANCE_REPLY, assert_wasm_safe_deps, text_model_conformance,
+    text_model_image_bounds_conformance,
 };
 use http::Response;
 use std::sync::Arc;
@@ -68,4 +69,28 @@ fn anthropic_deps_are_wasm_safe() {
 #[test]
 fn the_shared_text_model_conformance_suite_passes_over_the_anthropic_adapter() {
     pollster::block_on(text_model_conformance(&adapter()));
+}
+
+#[test]
+fn the_image_bounds_are_refused_before_any_network_call() {
+    // A transport with nothing scripted: a pass proves each over-limit
+    // prompt was refused locally, and the emptiness check proves no request
+    // was made at all.
+    let http = Arc::new(FakeHttpClient::scripted(vec![]));
+    let transport: Arc<dyn HttpClient> = http.clone();
+    let model = Anthropic::new(
+        transport,
+        Arc::new(FixedClock(
+            time::OffsetDateTime::from_unix_timestamp(0).expect("valid timestamp"),
+        )),
+        // An obvious dummy key, never real — present so the bounds, not a
+        // missing key, are what the adapter answers with.
+        Some("sk-ant-dummy-key-000000000000".to_owned()),
+        "claude-opus-5",
+    );
+    pollster::block_on(text_model_image_bounds_conformance(&model));
+    assert!(
+        http.captured().is_empty(),
+        "no request for an over-limit prompt"
+    );
 }

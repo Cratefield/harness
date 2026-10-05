@@ -73,8 +73,10 @@ pub use rate_limiter::{Decision, Quota, RateLimitError, RateLimiter};
 pub use realtime::{Member, Realtime, RealtimeError, RoomContext, RoomHandler};
 pub use signer::{Kid, MAX_KID_NAME, Payload, SignatureError, Signer};
 pub use text_model::{
-    Capability, Completion, DEFAULT_MAX_TOKENS, ModelTier, Prompt, Role, RoutingTextModel,
-    TextModel, TextModelError, ToolCall, ToolChoice, ToolResult, ToolSpec, Turn,
+    Capability, Completion, DEFAULT_MAX_TOKENS, ImageLimit, ImageMediaType,
+    MAX_IMAGE_ENCODED_BYTES, MAX_PROMPT_IMAGE_ENCODED_BYTES, MAX_PROMPT_IMAGES, ModelTier, Part,
+    Prompt, Role, RoutingTextModel, TextModel, TextModelError, ToolCall, ToolChoice, ToolResult,
+    ToolSpec, Turn, encode_image, encoded_image_len,
 };
 pub use tracker::{
     Credential, Destination, Filed, InboundStatusError, RoutingTracker, Severity, StatusUpdate,
