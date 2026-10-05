@@ -120,11 +120,7 @@ fn subject_of(request: &ProviderRequest) -> Result<&str, Problem> {
 /// wrong". Opening the door instead — treating an absent secret as matching
 /// everything — would make a misconfigured deployment serve every subject's
 /// data to anyone who found the URL.
-fn verify(
-    state: &ProviderState,
-    headers: &HeaderMap,
-    body: &[u8],
-) -> Result<(), Problem> {
+fn verify(state: &ProviderState, headers: &HeaderMap, body: &[u8]) -> Result<(), Problem> {
     let Some(secret) = state
         .ctx
         .config

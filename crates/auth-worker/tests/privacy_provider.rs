@@ -334,7 +334,9 @@ fn a_table_erasure_cannot_reach_is_planned_as_a_retained_one_with_its_reason() {
 
         assert_eq!(section["action"], "retain", "{section}");
         assert!(
-            section["reason"].as_str().is_some_and(|why| !why.trim().is_empty()),
+            section["reason"]
+                .as_str()
+                .is_some_and(|why| !why.trim().is_empty()),
             "a retain with no reason is a plan the calling module rejects: {section}"
         );
         // And the tables this deployment *can* erase are still planned as

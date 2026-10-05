@@ -148,7 +148,10 @@ impl Module for Privacy {
         let ctx = Arc::new(ctx);
         let mut router = handlers::router(Arc::clone(&ctx), Arc::clone(&self.providers));
         if let Some(secret_env) = &self.server_secret_env {
-            router = router.merge(provider_server::router(Arc::clone(&ctx), Arc::clone(secret_env)));
+            router = router.merge(provider_server::router(
+                Arc::clone(&ctx),
+                Arc::clone(secret_env),
+            ));
         }
         router
     }

@@ -170,12 +170,10 @@ async fn export(
         );
     }
 
-    let tables = subject_tables(&state.ctx, subject)
-        .await
-        .map_err(|error| {
-            tracing::error!(error = %error, "privacy export failed");
-            Problem::internal().instance(&scope.request_id)
-        })?;
+    let tables = subject_tables(&state.ctx, subject).await.map_err(|error| {
+        tracing::error!(error = %error, "privacy export failed");
+        Problem::internal().instance(&scope.request_id)
+    })?;
 
     let (providers, complete) = export_providers(&state, subject).await;
 
@@ -218,9 +216,10 @@ pub(crate) async fn subject_tables(
             ));
         };
 
-        let rows = db.query(&statement).await.map_err(|err| {
-            format!("querying `{}` failed: {err}", entry.set.table)
-        })?;
+        let rows = db
+            .query(&statement)
+            .await
+            .map_err(|err| format!("querying `{}` failed: {err}", entry.set.table))?;
 
         let truncated = rows.rows.len() > MAX_ROWS_PER_TABLE;
         let taken: Vec<Value> = rows

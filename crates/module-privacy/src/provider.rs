@@ -128,7 +128,7 @@ impl HttpProvider {
     /// row survives and the erasure reports itself complete.
     ///
     /// So marked providers sort after every unmarked one, in all three loops
-    /// ([`in_erasure_order`]): export, plan and apply. Within each group the
+    /// (`in_erasure_order`): export, plan and apply. Within each group the
     /// registration order is kept, so the answer is stable and a reader can
     /// see the sequence a build produced rather than a sort's opinion of it.
     ///

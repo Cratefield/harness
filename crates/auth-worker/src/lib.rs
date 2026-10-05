@@ -101,7 +101,7 @@ impl AuthWorker {
     /// deployment `Env`.** `PRIVACY_PROVIDER_SECRET` set to a non-empty
     /// value mounts `Privacy` with its provider routes; absent, empty or
     /// unset, `Privacy` is not composed at all and those paths do not exist
-    /// (issue #656). Mounting here rather than in [`build`] is what makes it
+    /// (issue #656). Mounting here rather than in `build` is what makes it
     /// survive a wrapper venture: a wrapper calls this same method, so a
     /// wrapper that inherits the instance's configuration inherits the
     /// provider routes with it, and one that clears

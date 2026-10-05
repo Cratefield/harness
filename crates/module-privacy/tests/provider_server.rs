@@ -175,7 +175,12 @@ fn signature(secret: &str, at: i64, body: &[u8]) -> HeaderMap {
 
 /// A POST through the router with no network, carrying `headers` and a raw
 /// `body` — the bytes the signature covers, never re-serialised.
-async fn post(kit: &TestHarness, path: &str, body: &str, headers: HeaderMap) -> (StatusCode, String) {
+async fn post(
+    kit: &TestHarness,
+    path: &str,
+    body: &str,
+    headers: HeaderMap,
+) -> (StatusCode, String) {
     let mut request = Request::builder()
         .method(Method::POST)
         .uri(path)
@@ -186,7 +191,11 @@ async fn post(kit: &TestHarness, path: &str, body: &str, headers: HeaderMap) -> 
     let response = kit
         .router
         .clone()
-        .oneshot(request.body(Body::from(body.to_owned())).expect("request builds"))
+        .oneshot(
+            request
+                .body(Body::from(body.to_owned()))
+                .expect("request builds"),
+        )
         .await
         .expect("router answers");
     let status = response.status();
@@ -234,7 +243,11 @@ async fn seed(kit: &TestHarness) {
 }
 
 async fn count(kit: &TestHarness, table: &str, subject: &str) -> i64 {
-    let column = if table == "accounts" { "id" } else { "account_id" };
+    let column = if table == "accounts" {
+        "id"
+    } else {
+        "account_id"
+    };
     let rows = kit
         .db
         .query(&Statement::with_values(
@@ -286,13 +299,22 @@ async fn a_signed_export_returns_every_declared_table_for_that_subject() {
     }
 
     // The description is the owning module's own sentence.
-    assert_eq!(section(&sections, "accounts")["description"], "The account itself.");
+    assert_eq!(
+        section(&sections, "accounts")["description"],
+        "The account itself."
+    );
     // The declared credential column is named and not copied.
     let row = &section(&sections, "sessions")["data"]["rows"][0];
     assert_eq!(row["device_token"], "[redacted]", "{row:?}");
     assert_eq!(row["id"], "s1");
-    assert!(!raw.contains("tok-live-0123"), "the credential was copied: {raw}");
-    assert!(!raw.contains("b@example.test"), "another subject's row: {raw}");
+    assert!(
+        !raw.contains("tok-live-0123"),
+        "the credential was copied: {raw}"
+    );
+    assert!(
+        !raw.contains("b@example.test"),
+        "another subject's row: {raw}"
+    );
 
     // The body this deployment's own `/export` renders, for the same subject,
     // over the same catalog — one answer behind two doors.
@@ -321,7 +343,10 @@ async fn an_unsigned_wrongly_signed_or_out_of_window_call_is_refused() {
 
     let refused = [
         ("no signature at all", HeaderMap::new()),
-        ("the wrong secret", signature(WRONG_SECRET, now(), body.as_bytes())),
+        (
+            "the wrong secret",
+            signature(WRONG_SECRET, now(), body.as_bytes()),
+        ),
         ("an empty secret", signature("", now(), body.as_bytes())),
         (
             "a timestamp 301 s old",
@@ -366,7 +391,11 @@ async fn a_signature_inside_the_window_is_accepted() {
     let body = call(SUBJECT);
     for at in [now() - 300, now(), now() + 300] {
         let (status, raw) = post(&kit, EXPORT, &body, signature(SECRET, at, body.as_bytes())).await;
-        assert_eq!(status, StatusCode::OK, "a signature at {at} was refused: {raw}");
+        assert_eq!(
+            status,
+            StatusCode::OK,
+            "a signature at {at} was refused: {raw}"
+        );
     }
 }
 
@@ -382,7 +411,13 @@ async fn a_deployment_with_no_secret_refuses_every_call() {
         // Even a correctly shaped signature: there is nothing to check it
         // against, so the answer is `not_ready` and the operator learns which
         // variable to set.
-        let (status, raw) = post(&kit, EXPORT, &body, signature(SECRET, now(), body.as_bytes())).await;
+        let (status, raw) = post(
+            &kit,
+            EXPORT,
+            &body,
+            signature(SECRET, now(), body.as_bytes()),
+        )
+        .await;
         assert_eq!(
             status,
             StatusCode::SERVICE_UNAVAILABLE,
@@ -390,7 +425,10 @@ async fn a_deployment_with_no_secret_refuses_every_call() {
         );
         let body: Value = serde_json::from_str(&raw).expect("json");
         assert!(
-            body["type"].as_str().unwrap_or_default().ends_with("/not-ready"),
+            body["type"]
+                .as_str()
+                .unwrap_or_default()
+                .ends_with("/not-ready"),
             "not a not-ready problem: {raw}"
         );
         assert_eq!(count(&kit, "sessions", SUBJECT).await, 1);
@@ -414,15 +452,12 @@ async fn a_deployment_with_no_secret_refuses_every_call() {
 /// The routes exist only where the deployment opted in.
 #[pollster::test]
 async fn a_deployment_that_did_not_opt_in_has_no_provider_routes() {
-    let kit = TestHarness::with_ports(
-        vec![Box::new(Ledger), Box::new(Privacy::new())],
-        |ports| {
-            ports.config = Arc::new(MapConfig::from_pairs([
-                ("ADMIN_TOKEN", ADMIN),
-                (SECRET_ENV, SECRET),
-            ]));
-        },
-    );
+    let kit = TestHarness::with_ports(vec![Box::new(Ledger), Box::new(Privacy::new())], |ports| {
+        ports.config = Arc::new(MapConfig::from_pairs([
+            ("ADMIN_TOKEN", ADMIN),
+            (SECRET_ENV, SECRET),
+        ]));
+    });
     let (status, _) = signed(&kit, EXPORT, &call(SUBJECT)).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
 }
@@ -500,10 +535,7 @@ async fn a_whole_answer_carries_only_the_fields_the_client_reads() {
         assert!(section["name"].is_string(), "{section:?}");
         assert!(section.get("data").is_some(), "{section:?}");
         assert!(
-            matches!(
-                section.get("description"),
-                None | Some(Value::String(_))
-            ),
+            matches!(section.get("description"), None | Some(Value::String(_))),
             "a non-string description is an invalid response: {section:?}"
         );
     }
@@ -560,7 +592,10 @@ async fn a_repeated_apply_with_the_same_request_id_answers_twenty_ok() {
     for attempt in 1..=3 {
         let (status, raw) = signed(&kit, APPLY, &call(SUBJECT)).await;
         assert_eq!(status, StatusCode::OK, "attempt {attempt} failed: {raw}");
-        assert_eq!(serde_json::from_str::<Value>(&raw).expect("json")["applied"], Value::Bool(true));
+        assert_eq!(
+            serde_json::from_str::<Value>(&raw).expect("json")["applied"],
+            Value::Bool(true)
+        );
     }
     assert_eq!(count(&kit, "accounts", SUBJECT).await, 0);
     assert_eq!(count(&kit, "sessions", SUBJECT).await, 0);
@@ -607,7 +642,10 @@ async fn a_deployment_with_nothing_declared_answers_empty_rather_than_failing() 
     // Nothing to erase is not a failure to erase.
     let (status, raw) = signed(&kit, APPLY, &body).await;
     assert_eq!(status, StatusCode::OK, "{raw}");
-    assert_eq!(serde_json::from_str::<Value>(&raw).expect("json")["applied"], Value::Bool(true));
+    assert_eq!(
+        serde_json::from_str::<Value>(&raw).expect("json")["applied"],
+        Value::Bool(true)
+    );
 }
 
 // ------------------------------------------------- what erasure cannot reach
@@ -865,7 +903,9 @@ async fn the_shipped_client_parses_what_this_server_answers() {
         "the real client rejected the real server's export: {:?}",
         body["providers"]
     );
-    let sections = body["providers"][0]["sections"].as_array().expect("sections");
+    let sections = body["providers"][0]["sections"]
+        .as_array()
+        .expect("sections");
     assert_eq!(body["providers"][0]["provider"], "ledger");
     // The rows came out of the *other* deployment's database.
     let account = section(sections, "accounts");
@@ -891,11 +931,16 @@ async fn the_shipped_client_parses_what_this_server_answers() {
     assert_eq!(planned.status, StatusCode::OK);
     let body = planned.json();
     let request_id = body["request_id"].as_str().expect("request id").to_owned();
-    let sections = body["providers"][0]["sections"].as_array().expect("sections");
+    let sections = body["providers"][0]["sections"]
+        .as_array()
+        .expect("sections");
     assert_eq!(section(sections, "accounts")["action"], "delete");
     assert_eq!(section(sections, "sessions")["action"], "delete");
     assert_eq!(section(sections, "invoices")["action"], "retain");
-    assert_eq!(section(sections, "invoices")["reason"], "Tax law requires seven years.");
+    assert_eq!(
+        section(sections, "invoices")["reason"],
+        "Tax law requires seven years."
+    );
     // The `Unreachable` table survives the client's validator too, which is
     // the whole reason it is emitted with a reason at all.
     assert_eq!(section(sections, "signin_budget")["action"], "retain");
@@ -976,7 +1021,10 @@ async fn confirming_twice_through_the_client_erases_once() {
         Some(&json!({ "subject": SUBJECT }).to_string()),
     )
     .await;
-    let token = planned.json()["confirm_token"].as_str().expect("token").to_owned();
+    let token = planned.json()["confirm_token"]
+        .as_str()
+        .expect("token")
+        .to_owned();
 
     for attempt in 1..=2 {
         let confirmed = request_as(
@@ -1013,7 +1061,10 @@ async fn confirming_twice_through_the_client_erases_once() {
         Some(&json!({ "subject": "acct-2" }).to_string()),
     )
     .await;
-    let token = planned.json()["confirm_token"].as_str().expect("token").to_owned();
+    let token = planned.json()["confirm_token"]
+        .as_str()
+        .expect("token")
+        .to_owned();
     let confirmed = request_as(
         &caller.router,
         Method::POST,
@@ -1044,19 +1095,20 @@ async fn every_refusal_the_server_answers_reaches_the_client_as_its_own_word() {
     // in — a `401`, a `503` and a `404`.
     let wrong_secret = kit_with_secret(WRONG_SECRET);
     let unconfigured = kit_with_secret("");
-    let not_serving = TestHarness::with_ports(
-        vec![Box::new(Ledger), Box::new(Privacy::new())],
-        |ports| {
+    let not_serving =
+        TestHarness::with_ports(vec![Box::new(Ledger), Box::new(Privacy::new())], |ports| {
             ports.config = Arc::new(MapConfig::from_pairs([
                 ("ADMIN_TOKEN", ADMIN),
                 (SECRET_ENV, SECRET),
             ]));
-        },
-    );
+        });
     let routers = [
         ("a wrong secret", wrong_secret.router.clone()),
         ("no secret configured", unconfigured.router.clone()),
-        ("a deployment that never opted in", not_serving.router.clone()),
+        (
+            "a deployment that never opted in",
+            not_serving.router.clone(),
+        ),
     ];
 
     for (why, router) in routers {
@@ -1085,7 +1137,9 @@ async fn every_refusal_the_server_answers_reaches_the_client_as_its_own_word() {
         assert_eq!(exported.status, StatusCode::OK);
         let body = exported.json();
         assert_eq!(body["complete"], Value::Bool(false), "{why}");
-        let error = body["providers"][0]["error"].as_str().expect("an error word");
+        let error = body["providers"][0]["error"]
+            .as_str()
+            .expect("an error word");
         // `401` and `404` are the provider refusing; `503` is this
         // deployment being not-ready, which the client reads as an outage
         // worth retrying rather than a refusal.
@@ -1098,7 +1152,9 @@ async fn every_refusal_the_server_answers_reaches_the_client_as_its_own_word() {
         // Neither the server's body nor its status text rides through: the
         // client renders a word, never an upstream's words about a subject.
         assert!(
-            !body["providers"][0].to_string().contains("privacy-provider-unverified"),
+            !body["providers"][0]
+                .to_string()
+                .contains("privacy-provider-unverified"),
             "{why}"
         );
     }
@@ -1113,16 +1169,13 @@ async fn every_refusal_the_server_answers_reaches_the_client_as_its_own_word() {
 fn order_kit(providers: Privacy) -> (TestHarness, FakePrivacyProvider) {
     let provider = FakePrivacyProvider::new(SECRET).with_subject(SUBJECT, json!([]));
     let served = provider.clone();
-    let kit = TestHarness::with_ports(
-        vec![Box::new(Ledger), Box::new(providers)],
-        move |ports| {
-            ports.config = Arc::new(MapConfig::from_pairs([
-                ("ADMIN_TOKEN", ADMIN),
-                (SECRET_ENV, SECRET),
-            ]));
-            ports.http = Some(Arc::new(served.clone()));
-        },
-    );
+    let kit = TestHarness::with_ports(vec![Box::new(Ledger), Box::new(providers)], move |ports| {
+        ports.config = Arc::new(MapConfig::from_pairs([
+            ("ADMIN_TOKEN", ADMIN),
+            (SECRET_ENV, SECRET),
+        ]));
+        ports.http = Some(Arc::new(served.clone()));
+    });
     (kit, provider)
 }
 
@@ -1154,7 +1207,8 @@ async fn an_account_provider_is_called_after_the_others_on_export() {
                     .account(),
             )
             .provider(
-                HttpProvider::new("warehouse", "https://provider.test/warehouse").secret_env(SECRET_ENV),
+                HttpProvider::new("warehouse", "https://provider.test/warehouse")
+                    .secret_env(SECRET_ENV),
             )
             .provider(HttpProvider::new("crm", "https://provider.test/crm").secret_env(SECRET_ENV)),
     );
@@ -1186,7 +1240,8 @@ async fn an_account_provider_is_called_after_the_others_on_plan() {
                     .account(),
             )
             .provider(
-                HttpProvider::new("warehouse", "https://provider.test/warehouse").secret_env(SECRET_ENV),
+                HttpProvider::new("warehouse", "https://provider.test/warehouse")
+                    .secret_env(SECRET_ENV),
             )
             .provider(HttpProvider::new("crm", "https://provider.test/crm").secret_env(SECRET_ENV)),
     );
@@ -1218,7 +1273,8 @@ async fn an_account_provider_is_called_after_the_others_on_apply() {
                     .account(),
             )
             .provider(
-                HttpProvider::new("warehouse", "https://provider.test/warehouse").secret_env(SECRET_ENV),
+                HttpProvider::new("warehouse", "https://provider.test/warehouse")
+                    .secret_env(SECRET_ENV),
             )
             .provider(HttpProvider::new("crm", "https://provider.test/crm").secret_env(SECRET_ENV)),
     );
@@ -1232,7 +1288,10 @@ async fn an_account_provider_is_called_after_the_others_on_apply() {
         Some(&json!({ "subject": SUBJECT }).to_string()),
     )
     .await;
-    let token = planned.json()["confirm_token"].as_str().expect("token").to_owned();
+    let token = planned.json()["confirm_token"]
+        .as_str()
+        .expect("token")
+        .to_owned();
 
     let response = request_as(
         &kit.router,
