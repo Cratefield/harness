@@ -40,7 +40,7 @@ pub mod sidecars;
 pub mod tables;
 pub mod workflow;
 
-use clap::{Parser, Subcommand};
+use clap::{Args, Parser, Subcommand};
 use cratefield_core::{Config, Harness};
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -358,11 +358,62 @@ enum AuthCommand {
 
 #[derive(Subcommand)]
 enum ImportCommand {
-    /// A Supabase project (ADR 0026, issue #658).
+    /// A Supabase project (ADR 0026, issues #658, #728). With no
+    /// subcommand it inspects the source, reads the target and writes the
+    /// report and the plan; `inspect` writes the report alone.
+    #[command(args_conflicts_with_subcommands = true)]
     Supabase {
         #[command(subcommand)]
-        command: SupabaseCommand,
+        command: Option<SupabaseCommand>,
+        #[command(flatten)]
+        run: SupabaseRunArgs,
     },
+}
+
+/// The source and target the bare `fz import supabase` (and `plan`) runs
+/// against, shared by both. `project` is `Option` so a subcommand can
+/// replace the run; the run refuses without it.
+#[derive(Args)]
+struct SupabaseRunArgs {
+    /// The Supabase project ref (the `<ref>` in
+    /// `https://<ref>.supabase.co`).
+    #[arg(long, value_name = "REF")]
+    project: Option<String>,
+    /// The source database URL of a read-only role. Prefer the
+    /// `SUPABASE_DB_URL` environment variable: a flag lands in the shell
+    /// history and the process list.
+    #[arg(long, value_name = "URL")]
+    db_url: Option<String>,
+    /// A Supabase Management API personal access token. Prefer
+    /// `SUPABASE_ACCESS_TOKEN`.
+    #[arg(long, value_name = "TOKEN")]
+    management_token: Option<String>,
+    /// The name of the environment variable holding the target Postgres
+    /// URL. Unset, the plan carries a `target_not_checked` blocker rather
+    /// than failing.
+    #[arg(long, value_name = "VAR", default_value = import::DEFAULT_TARGET_ENV)]
+    target_env: String,
+    /// The directory the run writes `report.json`, `report.md` and
+    /// `plan.json` to.
+    #[arg(long, value_name = "DIR", default_value = ".")]
+    dir: PathBuf,
+    /// The throughput the transfer estimate assumes, in Mbit/s.
+    #[arg(long, default_value_t = 100, value_name = "MBPS")]
+    transfer_mbps: u32,
+    /// Ask the `TypeSafe` classifier (Jev; `TYPESAFE_API_KEY`) about the
+    /// RLS policies no rule placed. Advisory only.
+    #[arg(long)]
+    classify: bool,
+    /// The confidence a classifier label needs; below it the policy stays
+    /// `needs_review`.
+    #[arg(long, default_value_t = 0.8, value_name = "0..1")]
+    classify_threshold: f32,
+    /// Apply an approved plan instead of writing a new one. Needs `--plan`.
+    #[arg(long, requires = "plan")]
+    apply: bool,
+    /// The plan file to apply. Needs `--apply`.
+    #[arg(long, value_name = "FILE", requires = "apply")]
+    plan: Option<PathBuf>,
 }
 
 #[derive(Subcommand)]
@@ -411,6 +462,12 @@ enum SupabaseCommand {
         /// stays `needs_review`. Per adapter: it is `TypeSafe`'s number.
         #[arg(long, default_value_t = 0.8, value_name = "0..1")]
         classify_threshold: f32,
+    },
+    /// Inspects the source, reads the target and writes the report and the
+    /// plan — the same run as the bare `fz import supabase`.
+    Plan {
+        #[command(flatten)]
+        args: SupabaseRunArgs,
     },
 }
 
@@ -772,23 +829,29 @@ fn harness_free(command: &Command) -> Option<ExitCode> {
         }),
         Command::Push { command } => Some(finish(run_push(command))),
         Command::Auth { command } => Some(finish(run_auth(command))),
-        Command::Import {
-            command:
-                ImportCommand::Supabase {
-                    command:
-                        SupabaseCommand::Inspect {
-                            project,
-                            db_url,
-                            management_token,
-                            json,
-                            md: _,
-                            out,
-                            transfer_mbps,
-                            classify,
-                            classify_threshold,
-                        },
-                },
-        } => Some(finish(import::inspect(&import::InspectArgs {
+        Command::Import { command } => Some(finish(run_import(command))),
+        _ => workflow::dispatch(command),
+    }
+}
+
+/// `fz import` (issues #658, #728): the bare command and `plan` run
+/// inspect + plan; `inspect` writes the report alone.
+fn run_import(command: &ImportCommand) -> Result<(), String> {
+    let ImportCommand::Supabase { command, run } = command;
+    match command {
+        None => import::plan(&plan_args(run)?),
+        Some(SupabaseCommand::Plan { args }) => import::plan(&plan_args(args)?),
+        Some(SupabaseCommand::Inspect {
+            project,
+            db_url,
+            management_token,
+            json,
+            md: _,
+            out,
+            transfer_mbps,
+            classify,
+            classify_threshold,
+        }) => import::inspect(&import::InspectArgs {
             project: project.clone(),
             db_url: db_url.clone(),
             management_token: management_token.clone(),
@@ -801,9 +864,26 @@ fn harness_free(command: &Command) -> Option<ExitCode> {
             transfer_mbps: *transfer_mbps,
             classify: *classify,
             classify_threshold: *classify_threshold,
-        }))),
-        _ => workflow::dispatch(command),
+        }),
     }
+}
+
+fn plan_args(run: &SupabaseRunArgs) -> Result<import::PlanArgs, String> {
+    let project = run.project.clone().ok_or_else(|| {
+        "no project ref: pass --project <ref>, the `<ref>` in https://<ref>.supabase.co".to_owned()
+    })?;
+    Ok(import::PlanArgs {
+        project,
+        db_url: run.db_url.clone(),
+        management_token: run.management_token.clone(),
+        target_env: run.target_env.clone(),
+        dir: run.dir.clone(),
+        transfer_mbps: run.transfer_mbps,
+        classify: run.classify,
+        classify_threshold: run.classify_threshold,
+        apply: run.apply,
+        plan: run.plan.clone(),
+    })
 }
 
 /// `fz push` (issue #184). Every path prints its report to stdout and
@@ -970,5 +1050,114 @@ fn print_modules(harness: &Harness) {
             module.emits().join(", "),
             module.tables().join(", "),
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Cli, Command, ImportCommand, SupabaseCommand};
+    use clap::Parser as _;
+    use std::ffi::OsString;
+
+    fn parse(parts: &[&str]) -> Result<Cli, clap::Error> {
+        let mut argv = vec![OsString::from("fz")];
+        argv.extend(parts.iter().map(OsString::from));
+        Cli::try_parse_from(argv)
+    }
+
+    #[test]
+    fn the_bare_supabase_command_parses_the_run() {
+        let cli = parse(&["import", "supabase", "--project", "abcdefghijklmnopqrst"])
+            .expect("the bare run parses");
+        let Command::Import {
+            command: ImportCommand::Supabase { command, run },
+        } = cli.command
+        else {
+            panic!("expected `import supabase`");
+        };
+        assert!(command.is_none());
+        assert_eq!(run.project.as_deref(), Some("abcdefghijklmnopqrst"));
+        assert_eq!(run.target_env, "DATABASE_URL");
+        assert_eq!(run.dir, std::path::PathBuf::from("."));
+        assert!(!run.apply);
+        assert!(run.plan.is_none());
+    }
+
+    #[test]
+    fn supabase_inspect_still_parses_without_the_run_args() {
+        let cli = parse(&[
+            "import",
+            "supabase",
+            "inspect",
+            "--project",
+            "abcdefghijklmnopqrst",
+            "--json",
+        ])
+        .expect("inspect parses as before");
+        let Command::Import {
+            command: ImportCommand::Supabase { command, .. },
+        } = cli.command
+        else {
+            panic!("expected `import supabase`");
+        };
+        assert!(matches!(
+            command,
+            Some(SupabaseCommand::Inspect { json: true, .. })
+        ));
+    }
+
+    #[test]
+    fn supabase_plan_parses_its_run_args() {
+        let cli = parse(&[
+            "import",
+            "supabase",
+            "plan",
+            "--project",
+            "abcdefghijklmnopqrst",
+            "--dir",
+            "/tmp/plan",
+        ])
+        .expect("plan parses");
+        let Command::Import {
+            command: ImportCommand::Supabase { command, .. },
+        } = cli.command
+        else {
+            panic!("expected `import supabase`");
+        };
+        let Some(SupabaseCommand::Plan { args }) = command else {
+            panic!("expected `plan`");
+        };
+        assert_eq!(args.project.as_deref(), Some("abcdefghijklmnopqrst"));
+        assert_eq!(args.dir, std::path::PathBuf::from("/tmp/plan"));
+    }
+
+    #[test]
+    fn apply_without_a_plan_is_refused() {
+        let Err(error) = parse(&[
+            "import",
+            "supabase",
+            "--project",
+            "abcdefghijklmnopqrst",
+            "--apply",
+        ]) else {
+            panic!("--apply without --plan must be refused");
+        };
+        assert!(error.to_string().contains("--plan"), "{error}");
+    }
+
+    #[test]
+    fn the_bare_command_needs_a_project_at_run_time() {
+        let Ok(cli) = parse(&["import", "supabase"]) else {
+            panic!("the bare command parses (a subcommand may replace the run)");
+        };
+        let Command::Import {
+            command: ImportCommand::Supabase { run, .. },
+        } = cli.command
+        else {
+            panic!("expected `import supabase`");
+        };
+        assert!(run.project.is_none());
+        let error = super::plan_args(&run).expect_err("a project ref is required");
+        assert!(error.contains("--project"), "{error}");
     }
 }

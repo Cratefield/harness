@@ -156,6 +156,64 @@ or `classifier`), a `suggested_equivalent` (advice, not code), a failing
 `test_stub` to turn into the test that proves the replacement, and
 `disposition: "undecided"`.
 
+## Plan, dry run and apply
+
+Inspect is step 1; the plan (issue #728, ADR 0026 Decision 3) is what ties a
+run to the inspection it was written from and to the Postgres it is going
+into. It is a document, not an action — nothing here writes to the target.
+
+```sh
+cratefield-cli import supabase --project <ref> --dir ./import
+```
+
+The bare `fz import supabase` (and its explicit `fz import supabase plan`)
+inspects the source read-only, reads the target read-only, and writes three
+files to `--dir` (default `.`):
+
+- `report.json` and `report.md` — the inspection (as `inspect --out`).
+- `plan.json` — the plan: `plan_version` (readers refuse one they do not
+  know), `tool`, `project` (by ref), `inspection_hash` (`sha256:<hex>` over
+  the report; a column add, drop or retype changes it, re-inspecting an
+  unchanged source does not), `schema_mapping` (`public` -> `app`),
+  `phases` in order (`auth_users`, `schema`, `data`, `storage`, `verify`),
+  `target` (`null` when it was not checked), `extensions` (each source
+  extension with its version and schema, what the target makes available,
+  installed and default versions, schema), and `blockers`.
+
+Flags: `--project` (the run's only required one), `--db-url`,
+`--management-token` (prefer `SUPABASE_DB_URL` / `SUPABASE_ACCESS_TOKEN`),
+`--target-env <VAR>` (the variable the target Postgres URL is read from;
+default `DATABASE_URL`, the harness's own app-database variable), `--dir`,
+`--transfer-mbps`, and the `--classify` / `--classify-threshold` pair.
+
+**Blockers are in the plan, and the exit code is zero.** The codes are:
+
+- `target_not_checked` — `--target-env`'s variable is unset, so the plan
+  says what it could not check and how to supply it.
+- `extension_missing` — the source has an extension the target cannot
+  provide; names it and the source version.
+- `extension_older` — the target's best version is older than the source's;
+  names both.
+- `extension_in_public` — the source installed an extension in `public`,
+  which the target move makes `app`: the search path, the extension schema
+  and the `public.<type>` remap.
+
+Only the source's own extensions are checked; the platform's (and
+`plpgsql`) are not.
+
+### Applying a plan
+
+```sh
+cratefield-cli import supabase --project <ref> --apply --plan ./import/plan.json
+```
+
+Apply re-inspects the source and refuses, non-zero, unless the plan still
+matches: an unknown `plan_version`, a different project, a hash that no
+longer matches ("the source changed since the plan was written …
+re-plan"), or a blocker the plan still carries. When it matches it prints
+the hash and writes nothing to the target — the auth-users and data phases
+land with #659/#660.
+
 ## What comes next
 
 Inspect is step 1. The later steps read its JSON report:

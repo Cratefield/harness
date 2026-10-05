@@ -25,6 +25,10 @@ http = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
+# The inspection hash (`sha256:<hex>` over the report's canonical JSON) that
+# ties a plan to the inspection it was written from (issue #728).
+sha2 = { workspace = true }
+hex = { workspace = true }
 # The database URL and the Management API token are cleared on drop.
 zeroize = { workspace = true }
 # Parses the connection string so the report can name its host and
