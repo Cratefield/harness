@@ -31,5 +31,10 @@ tracing = { workspace = true }
 getrandom = { workspace = true }
 
 [dev-dependencies]
+# Path-only on purpose: `cargo publish` resolves dev-dependencies against
+# crates.io, and a path-only one is stripped from the packaged manifest
+# (see the note in the workspace manifest). Carries `sign_stripe_style`,
+# which signs the webhook fixtures exactly as Owlpost would.
+cratefield-testing = { path = "../testing", default-features = false, features = ["port-conformance"] }
 pollster = { workspace = true }
 time = { workspace = true }
