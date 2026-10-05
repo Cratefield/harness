@@ -115,6 +115,29 @@ fn branding_and_the_problem_base_are_configurable() {
 }
 
 #[test]
+fn the_mailer_is_chosen_by_config_with_owlpost_first() {
+    let owlpost = config(&[("OWLPOST_API_KEY", "k")]);
+    assert_eq!(owlpost.mailer_kind, MailerKind::Owlpost);
+    let resend = config(&[("RESEND_API_KEY", "k")]);
+    assert_eq!(resend.mailer_kind, MailerKind::Resend);
+    let chosen = config(&[
+        ("AUTH_MAILER", "resend"),
+        ("RESEND_API_KEY", "k"),
+        ("OWLPOST_API_KEY", "k"),
+    ]);
+    assert_eq!(chosen.mailer_kind, MailerKind::Resend);
+
+    assert!(
+        refusal(&[("RESEND_API_KEY", "k"), ("OWLPOST_API_KEY", "k")]).contains("AUTH_MAILER"),
+        "two keys and no choice is ambiguous"
+    );
+    assert!(
+        refusal(&[("ENV", "production")]).contains("ENV=production needs a mailer"),
+        "production refuses to run without a mailer"
+    );
+}
+
+#[test]
 fn a_public_url_drives_the_domain_and_the_derived_defaults() {
     let cfg = config(&[("AUTH_PUBLIC_URL", "https://auth.example.test")]);
     assert_eq!(cfg.venture().domain, "auth.example.test");

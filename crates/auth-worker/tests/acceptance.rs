@@ -57,7 +57,16 @@ fn pairs() -> Vec<(&'static str, &'static str)> {
 /// Builds the venture through the same path the Worker boots, with fake
 /// ports and a migrated in-memory database.
 fn build(customize: impl FnOnce(AuthWorker) -> AuthWorker) -> (axum::Router, FakeHttpClient) {
-    let config = AuthWorkerConfig::from_config(&MapConfig::from_pairs(pairs())).expect("config");
+    build_with(pairs(), customize)
+}
+
+/// [`build`] over an explicit variable set, for the mailer selection.
+fn build_with(
+    pairs: Vec<(&'static str, &'static str)>,
+    customize: impl FnOnce(AuthWorker) -> AuthWorker,
+) -> (axum::Router, FakeHttpClient) {
+    let config =
+        AuthWorkerConfig::from_config(&MapConfig::from_pairs(pairs.clone())).expect("config");
 
     let http = FakeHttpClient::ok_json(r#"{"id":"msg_1"}"#);
     let harness = customize(AuthWorker::new(config.clone()))
@@ -72,7 +81,7 @@ fn build(customize: impl FnOnce(AuthWorker) -> AuthWorker) -> (axum::Router, Fak
             .expect("migrations apply");
     }
 
-    let mut ports = Ports::with_config(Arc::new(MapConfig::from_pairs(pairs())));
+    let mut ports = Ports::with_config(Arc::new(MapConfig::from_pairs(pairs)));
     ports.db = Some(db);
     ports.mailer = Some(config.mailer(Arc::new(http.clone()), Arc::new(SystemClock)));
     ports.captcha = Some(Arc::new(FakeCaptcha::allow_all()));
@@ -169,6 +178,29 @@ fn a_magic_link_request_sends_through_owlpost() {
         assert!(body.contains("Sign in to Example"), "{body}");
         assert!(!body.contains("example-auth"), "{body}");
         assert_neutral(body);
+    });
+}
+
+/// Resend stays a supported adapter: the same request, with the instance
+/// configured for it, goes to Resend's endpoint instead.
+#[test]
+fn resend_remains_selectable_by_config() {
+    pollster::block_on(async {
+        let pairs: Vec<_> = pairs()
+            .into_iter()
+            .filter(|(key, _)| !key.starts_with("OWLPOST_") && *key != "AUTH_MAILER")
+            .chain([("AUTH_MAILER", "resend"), ("RESEND_API_KEY", "test-key")])
+            .collect();
+        let (router, http) = build_with(pairs, |worker| worker);
+
+        let (status, _) = send(&router, request_link()).await;
+        assert_eq!(status, StatusCode::ACCEPTED);
+        let captured = http.captured();
+        assert_eq!(captured.len(), 1, "one mail was sent: {captured:?}");
+        assert!(
+            captured[0].1.starts_with("https://api.resend.com/"),
+            "{captured:?}"
+        );
     });
 }
 

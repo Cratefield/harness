@@ -24,14 +24,15 @@ use cratefield_core::{
 };
 use url::Url;
 
-/// Which provider the venture sends through, resolved at boot from
-/// `AUTH_MAILER` and the keys present.
+/// Which provider the instance sends its mail through, resolved at boot
+/// from `AUTH_MAILER` and the keys present. Owlpost is the supported
+/// default; Resend stays available.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MailerKind {
+    /// Sends through Owlpost (`cratefield-adapter-owlpost`).
+    Owlpost,
     /// Sends through Resend.
     Resend,
-    /// Sends through Owlpost.
-    Owlpost,
     /// A capture-only no-op: no provider key is configured.
     None,
 }
@@ -356,8 +357,34 @@ fn resolve_provider(cfg: &dyn Config, env: VentureEnv, errors: &mut ConfigError)
         get(cfg, "RESEND_API_KEY"),
         get(cfg, "OWLPOST_API_KEY"),
     ) {
-        // Unset: Resend when its key is present.
-        (None, key, _) => key.map_or(Provider::None, |key| Provider::Resend(Secret(Some(key)))),
+        // Unset: whichever single provider has a key, Owlpost first. Both
+        // keys and no choice is ambiguous, and production must send mail.
+        (None, resend, owlpost) => match (resend, owlpost) {
+            (None, Some(key)) => Provider::Owlpost {
+                key: Secret(Some(key)),
+                base: owlpost_base,
+            },
+            (Some(key), None) => Provider::Resend(Secret(Some(key))),
+            (Some(_), Some(_)) => {
+                errors.push(
+                    "AUTH_MAILER: both OWLPOST_API_KEY and RESEND_API_KEY are set; \
+                     set AUTH_MAILER to owlpost or resend"
+                        .to_owned(),
+                );
+                Provider::None
+            }
+            (None, None) => {
+                if env == VentureEnv::Production {
+                    errors.push(
+                        "AUTH_MAILER: ENV=production needs a mailer; set AUTH_MAILER=owlpost \
+                         and the OWLPOST_API_KEY secret (or AUTH_MAILER=resend and \
+                         RESEND_API_KEY)"
+                            .to_owned(),
+                    );
+                }
+                Provider::None
+            }
+        },
         (Some("resend"), Some(key), _) => Provider::Resend(Secret(Some(key))),
         (Some("resend"), None, _) => {
             errors.push("AUTH_MAILER: resend requires RESEND_API_KEY".to_owned());

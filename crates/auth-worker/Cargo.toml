@@ -1,6 +1,6 @@
 [package]
 name = "cratefield-auth-worker"
-description = "The deployable auth Worker: composes the auth modules into one harness venture (auth#41)"
+description = "The deployable auth Worker: composes the auth modules into one harness venture, deployed as one branded instance per app"
 publish = false
 version.workspace = true
 edition.workspace = true
