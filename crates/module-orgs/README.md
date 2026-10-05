@@ -89,8 +89,10 @@ is a `DELETE` — that is the reason to move.
 
 Requires `Db` and `Auth`. Optionally uses `Clock` (expiry and single-use),
 `IdGen` (ids and the invitation token) and `Mailer`. A mailer that reports
-`NotConfigured` leaves no invitation behind: the row is deleted and the caller
-gets the same `503 mail-not-configured` the waitlist form degrades on.
+`NotConfigured` leaves no invitation behind: the row is deleted and the
+caller gets a `503 mail-not-configured`. Orgs is what still surfaces that
+failure to the client; the waitlist, whose answer must not vary, logs the
+same `NotConfigured` and answers `202` anyway.
 
 ## Personal data (ADR 0015)
 

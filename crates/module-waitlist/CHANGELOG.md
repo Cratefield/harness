@@ -31,3 +31,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - *(core)* [**breaking**] name problem `type` URIs under the venture's own base ([#557](https://github.com/Cratefield/harness/pull/557)) ([#581](https://github.com/Cratefield/harness/pull/581))
+
+### Changed
+
+- [**breaking**] The confirmation mail is deferred: the entry lands on the
+  request path and `POST /v1/waitlist` now always answers `202 {"ok":true}`.
+  Upgrading from 0.2.0 removes the `503 mail-not-configured` a join used to
+  return when no mailer was configured — with no mailer the entry is recorded
+  as `pending` and no mail is sent, and the `NotConfigured` is only logged.
+  The answer is deliberately identical for every row state so it leaks
+  nothing about the address ([#713](https://github.com/Cratefield/harness/issues/713)).

@@ -201,21 +201,29 @@ Every response echoes `x-request-id` (a ULID unless the client sent a
 valid one); errors are RFC 9457 `application/problem+json` with that id
 as `instance`.
 
-**Degraded mail is visible, not silent.** This example wires the Resend
-mailer with no API key on purpose — the port exists, nothing is ever
-sent. With `HARNESS_SECRET` set, a join answers the documented `503`
-instead of pretending success (real output):
+**Degraded mail is easy to miss — look in the logs.** This example wires
+the Resend mailer with no API key on purpose — the port exists, nothing is
+ever sent. A join nevertheless answers the documented success, because the
+confirmation mail is deferred past the response and the answer must not
+vary with the mailer's state (real output):
 
 ```
 $ curl -sS -X POST http://127.0.0.1:8792/v1/waitlist \
     -H 'content-type: application/json' \
     -d '{"email":"guide@example.com","product":"kontinuum"}'
-{"instance":"01M1V346ASH01J0M70K5K1T60K","status":503,"title":"Mail is not configured",
- "type":"https://cratefield.com/problems/mail-not-configured"}
+{"ok":true}
 ```
 
-…and without `HARNESS_SECRET` in `.dev.vars` the same call is a `500
-internal` — that is your cue that the secret is missing, not a bug.
+The row is there as `pending` and the only trace of the missing mailer is
+an `ERROR` line in the dev server's log — check there before concluding
+that mail works. If you want to watch `503 mail-not-configured` on the wire,
+call an endpoint that cannot defer: the orgs invitation route,
+`POST /v1/orgs/{org_id}/invitations`, answers `503` when the mailer is not
+configured.
+
+Separately: without `HARNESS_SECRET` in `.dev.vars` this same call is a
+`500 internal` — that is the *signer* port being missing, not the mailer,
+and it is your cue that the secret is missing.
 
 ## 3. Create the databases
 
@@ -449,9 +457,10 @@ not compile to wasm, into the crate that builds the Worker.
 **Human** (Resend dashboard). Verify a **sending subdomain**
 `send.<your-domain>` — never the apex, which carries inbound email
 routing MX (architecture section 9). Until the domain is verified, real
-sends fail; with no `RESEND_API_KEY` the adapter reports `NotConfigured`
-and mail-needing endpoints answer `503 mail-not-configured` (real output
-in step 2), so forms can show a direct address meanwhile.
+sends fail; with no `RESEND_API_KEY` the adapter reports `NotConfigured`.
+The orgs invitation endpoints turn that into `503 mail-not-configured` so
+forms can show a direct address meanwhile; the waitlist does not — it logs
+the same condition and answers `202` anyway (both seen in step 2).
 
 **Owlpost is the same step, a different provider.** Switching a venture
 is changing the adapter crate — the facade feature (`resend` →
@@ -459,9 +468,10 @@ is changing the adapter crate — the facade feature (`resend` →
 `OWLPOST_API_KEY`, and optionally `OWLPOST_BASE_URL` for a self-hosted or
 proxy deployment (default `https://api.owlpost.to`). Owlpost is
 Resend-compatible, so the verified-subdomain rule and the degraded
-`NotConfigured`/`503` behavior are unchanged. Use an `op_test_…` key in
-development (it never reaches a provider) and the venture's `op_live_…`
-key in production: `wrangler secret put OWLPOST_API_KEY`.
+`NotConfigured` behavior are unchanged: the orgs invitation endpoints
+answer `503 mail-not-configured`, the waitlist logs it. Use an `op_test_…`
+key in development (it never reaches a provider) and the venture's
+`op_live_…` key in production: `wrangler secret put OWLPOST_API_KEY`.
 
 ### 7b. Mail in the venture's own style
 
