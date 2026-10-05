@@ -231,6 +231,96 @@ pub struct PortalSession {
     pub url: String,
 }
 
+/// Where a recurring subscription stands (issue #589), in the provider's own
+/// vocabulary — Stripe's subscription statuses today, plus
+/// [`Other`](SubscriptionStatus::Other) for one this version does not know.
+/// This is the provider's word, not an entitlement: a billing module reads it
+/// and decides what access it grants (ADR 0025).
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum SubscriptionStatus {
+    /// In a free trial; the first invoice has not been raised yet.
+    Trialing,
+    /// Paid and current.
+    Active,
+    /// A renewal payment failed; the provider is still retrying.
+    PastDue,
+    /// Ended, by the customer or after collection gave up.
+    Canceled,
+    /// The final invoice went unpaid, after the retries ran out.
+    Unpaid,
+    /// Created, but the first payment has not completed yet.
+    Incomplete,
+    /// The first payment was never completed in time; the subscription is
+    /// dead and cannot be revived.
+    IncompleteExpired,
+    /// Paused: billing is suspended and no invoices are raised.
+    Paused,
+    /// A status this version does not know; the raw value is kept.
+    Other(String),
+}
+
+impl SubscriptionStatus {
+    /// Maps a provider status string (Stripe's spellings) to a status;
+    /// anything unknown is kept as [`SubscriptionStatus::Other`].
+    #[must_use]
+    pub fn from_provider(status: &str) -> Self {
+        match status {
+            "trialing" => Self::Trialing,
+            "active" => Self::Active,
+            "past_due" => Self::PastDue,
+            "canceled" => Self::Canceled,
+            "unpaid" => Self::Unpaid,
+            "incomplete" => Self::Incomplete,
+            "incomplete_expired" => Self::IncompleteExpired,
+            "paused" => Self::Paused,
+            other => Self::Other(other.to_owned()),
+        }
+    }
+
+    /// The provider's status string, the inverse of
+    /// [`from_provider`](SubscriptionStatus::from_provider), so a status read
+    /// from a provider and written back keeps its spelling.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::Trialing => "trialing",
+            Self::Active => "active",
+            Self::PastDue => "past_due",
+            Self::Canceled => "canceled",
+            Self::Unpaid => "unpaid",
+            Self::Incomplete => "incomplete",
+            Self::IncompleteExpired => "incomplete_expired",
+            Self::Paused => "paused",
+            Self::Other(other) => other,
+        }
+    }
+}
+
+/// A recurring subscription as the provider reports it (issue #589).
+/// `customer_ref` names the customer the way the adapter is configured to name
+/// customers (a provider id, or the venture's own id where the adapter maps
+/// it); the fields mirror what a billing module reconciles against, never an
+/// entitlement.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Subscription {
+    pub id: String,
+    pub customer_ref: String,
+    pub status: SubscriptionStatus,
+    /// The price the subscription is on (a Stripe Price id), when the
+    /// provider reports one.
+    pub price_ref: Option<String>,
+    /// The number of units subscribed. `1` when the provider reports none —
+    /// a metered price, for example, has no fixed quantity.
+    pub quantity: u32,
+    /// When the current period ends; `None` when the provider does not say.
+    pub current_period_end: Option<OffsetDateTime>,
+    /// Whether the subscription is set to end when the current period does.
+    pub cancel_at_period_end: bool,
+    /// The metadata the provider holds on the subscription.
+    pub metadata: BTreeMap<String, String>,
+}
+
 /// Where a dispute (a chargeback, or the inquiry before one) stands, in the
 /// shape issue #602 set out, plus the two states a Merchant of Record reports
 /// around it. The provider's own spelling is kept on
@@ -486,6 +576,28 @@ pub trait Payments: Send + Sync {
         Err(PaymentsError::Unsupported("customer portal sessions"))
     }
 
+    /// Reads one subscription by its provider id (issue #589): the lookup a
+    /// billing module makes when a webhook was missed, arrived out of order,
+    /// or left the module unsure of the current state. The default reports
+    /// [`PaymentsError::Unsupported`].
+    async fn get_subscription(
+        &self,
+        _subscription_ref: &str,
+    ) -> Result<Subscription, PaymentsError> {
+        Err(PaymentsError::Unsupported("subscriptions"))
+    }
+
+    /// Lists a customer's subscriptions (issue #589): the poll a venture runs
+    /// to reconcile what a webhook stream missed, including canceled
+    /// subscriptions where the provider would otherwise hide them. The default
+    /// reports [`PaymentsError::Unsupported`].
+    async fn list_subscriptions(
+        &self,
+        _customer_ref: &str,
+    ) -> Result<Vec<Subscription>, PaymentsError> {
+        Err(PaymentsError::Unsupported("subscriptions"))
+    }
+
     /// Reads one dispute (issue #602). The default reports
     /// [`PaymentsError::Unsupported`].
     async fn get_dispute(&self, _dispute_ref: &str) -> Result<Dispute, PaymentsError> {
@@ -598,6 +710,34 @@ mod tests {
             pollster::block_on(Minimal.close_dispute("d", "k")),
             Err(PaymentsError::Unsupported(_))
         ));
+        assert!(matches!(
+            pollster::block_on(Minimal.get_subscription("sub_1")),
+            Err(PaymentsError::Unsupported(_))
+        ));
+        assert!(matches!(
+            pollster::block_on(Minimal.list_subscriptions("cus_1")),
+            Err(PaymentsError::Unsupported(_))
+        ));
+    }
+
+    #[test]
+    fn subscription_status_round_trips_stripe_spellings() {
+        for status in [
+            "trialing",
+            "active",
+            "past_due",
+            "canceled",
+            "unpaid",
+            "incomplete",
+            "incomplete_expired",
+            "paused",
+        ] {
+            assert_eq!(SubscriptionStatus::from_provider(status).as_str(), status);
+        }
+        // An unknown status is kept, not lost or coerced.
+        let other = SubscriptionStatus::from_provider("new_thing");
+        assert_eq!(other, SubscriptionStatus::Other("new_thing".to_owned()));
+        assert_eq!(other.as_str(), "new_thing");
     }
 
     #[test]

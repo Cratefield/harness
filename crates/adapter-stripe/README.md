@@ -36,6 +36,12 @@ it holds Stripe identifiers only. See `docs/PAYMENTS.md`.
   `transfer_data[destination]` and `application_fee_amount`): the platform keeps
   its fee, the rest goes to the connected account.
 - `refund` — a full or partial refund of a prior payment.
+- `create_portal_session` — a hosted customer-portal session
+  (`POST /v1/billing_portal/sessions`): the page where a customer changes plan,
+  updates their payment method, reads invoices and cancels.
+- `get_subscription` / `list_subscriptions` — read one subscription by id
+  (`GET /v1/subscriptions/{id}`), or every subscription for a customer. The
+  list sends `status=all`, since Stripe omits canceled subscriptions by default.
 - `report_usage` — reports one metered usage amount to a Stripe Billing Meter
   (`POST /v1/billing/meter_events`). The `identifier` is the exactly-once key
   and also the `Idempotency-Key`, so a retry is safe; Stripe's
