@@ -6,7 +6,7 @@ expression: normalized.to_json()
   "report_version": 1,
   "tool": {
     "name": "cratefield-import-supabase",
-    "version": "0.1.0"
+    "version": "<version>"
   },
   "project": {
     "ref": "fixtureprojectref000",

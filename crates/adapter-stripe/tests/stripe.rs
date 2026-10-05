@@ -10,8 +10,8 @@ use bytes::Bytes;
 use cratefield_adapter_stripe::Stripe;
 use cratefield_core::{
     CheckoutRequest, Clock, ConnectAccountLinkRequest, HttpClient, HttpError, LineItem, Money,
-    Payments, PaymentsError, RefundRequest, SubscriptionCheckoutRequest, TransferCharge,
-    UsageReport,
+    Payments, PaymentsError, PortalSessionRequest, RefundRequest, SubscriptionCheckoutRequest,
+    SubscriptionStatus, TransferCharge, UsageReport,
 };
 use hmac::{Hmac, KeyInit, Mac};
 use sha2::Sha256;
@@ -79,6 +79,15 @@ impl ScriptedHttp {
             .to_str()
             .unwrap()
             .to_owned()
+    }
+    fn last_method(&self) -> String {
+        self.requests
+            .lock()
+            .unwrap()
+            .last()
+            .unwrap()
+            .method()
+            .to_string()
     }
 }
 #[async_trait::async_trait]
@@ -251,6 +260,208 @@ fn refund_full_and_partial() {
     }))
     .unwrap();
     assert!(http2.last_body().contains("amount=500"));
+}
+
+// ---------------------------------------------------------------------------
+// Customer portal + subscriptions
+
+#[test]
+fn create_portal_session_posts_a_billing_portal_session() {
+    let http = ScriptedHttp::ok(r#"{"url":"https://billing.stripe.com/p/session/tok_1"}"#);
+    let s = stripe(http.clone());
+    let session = pollster::block_on(s.create_portal_session(&PortalSessionRequest {
+        customer_ref: "cus_1".to_owned(),
+        return_url: "https://x/account".to_owned(),
+        idempotency_key: "idem-7".to_owned(),
+    }))
+    .unwrap();
+
+    assert_eq!(session.url, "https://billing.stripe.com/p/session/tok_1");
+    assert_eq!(http.last_method(), "POST");
+    assert!(http.last_uri().ends_with("/v1/billing_portal/sessions"));
+    assert_eq!(http.last_header("Idempotency-Key"), "idem-7");
+    let body = http.last_body();
+    assert!(body.contains("customer=cus_1"));
+    assert!(body.contains("return_url=https%3A%2F%2Fx%2Faccount"));
+}
+
+/// A subscription body as API 2024-06-20 returns it: `current_period_end` at
+/// the top level, the price and quantity under `items.data[0]`.
+const ACTIVE_SUBSCRIPTION: &str = r#"{
+    "id":"sub_1","object":"subscription","customer":"cus_1","status":"active",
+    "cancel_at_period_end":false,"current_period_end":1735689600,
+    "metadata":{"order":"42"},
+    "items":{"object":"list","data":[{"id":"si_1","quantity":2,"price":{"id":"price_123"}}]}
+}"#;
+
+#[test]
+fn get_subscription_reads_the_stripe_object() {
+    let http = ScriptedHttp::ok(ACTIVE_SUBSCRIPTION);
+    let s = stripe(http.clone());
+    let sub = pollster::block_on(s.get_subscription("sub_1")).unwrap();
+
+    assert_eq!(sub.id, "sub_1");
+    assert_eq!(sub.customer_ref, "cus_1");
+    assert_eq!(sub.status, SubscriptionStatus::Active);
+    assert_eq!(sub.price_ref.as_deref(), Some("price_123"));
+    assert_eq!(sub.quantity, 2);
+    assert_eq!(
+        sub.current_period_end,
+        Some(time::OffsetDateTime::from_unix_timestamp(1_735_689_600).unwrap())
+    );
+    assert!(!sub.cancel_at_period_end);
+    assert_eq!(sub.metadata.get("order").map(String::as_str), Some("42"));
+
+    assert_eq!(http.last_method(), "GET");
+    assert!(http.last_uri().ends_with("/v1/subscriptions/sub_1"));
+}
+
+#[test]
+fn get_subscription_reads_cancel_at_period_end_and_an_expanded_customer() {
+    // The customer is expanded into an object, not a bare id.
+    let http = ScriptedHttp::ok(
+        r#"{"id":"sub_2","customer":{"id":"cus_2","object":"customer"},"status":"active",
+            "cancel_at_period_end":true,"current_period_end":1735689600,
+            "items":{"data":[{"quantity":1,"price":{"id":"price_9"}}]}}"#,
+    );
+    let s = stripe(http);
+    let sub = pollster::block_on(s.get_subscription("sub_2")).unwrap();
+    assert_eq!(sub.customer_ref, "cus_2");
+    assert!(sub.cancel_at_period_end);
+}
+
+#[test]
+fn get_subscription_falls_back_to_the_item_period_end() {
+    // API 2025-03-31 ("basil") moved `current_period_end` onto the items; the
+    // adapter reads it from there when the top level has none.
+    let http = ScriptedHttp::ok(
+        r#"{"id":"sub_3","customer":"cus_3","status":"trialing",
+            "items":{"data":[{"quantity":1,"price":{"id":"price_5"},"current_period_end":1735689600}]}}"#,
+    );
+    let s = stripe(http);
+    let sub = pollster::block_on(s.get_subscription("sub_3")).unwrap();
+    assert_eq!(sub.status, SubscriptionStatus::Trialing);
+    assert_eq!(
+        sub.current_period_end,
+        Some(time::OffsetDateTime::from_unix_timestamp(1_735_689_600).unwrap())
+    );
+}
+
+#[test]
+fn get_subscription_keeps_an_unknown_status() {
+    let http = ScriptedHttp::ok(
+        r#"{"id":"sub_4","customer":"cus_4","status":"new_thing",
+            "items":{"data":[{"quantity":1,"price":{"id":"price_1"}}]}}"#,
+    );
+    let s = stripe(http);
+    let sub = pollster::block_on(s.get_subscription("sub_4")).unwrap();
+    assert_eq!(
+        sub.status,
+        SubscriptionStatus::Other("new_thing".to_owned())
+    );
+}
+
+#[test]
+fn get_subscription_rejects_an_id_that_would_change_the_path() {
+    let http = ScriptedHttp::ok(ACTIVE_SUBSCRIPTION);
+    let s = stripe(http.clone());
+    for bad in ["", "sub/1", "sub?x=1", "sub #1", ".."] {
+        let err = pollster::block_on(s.get_subscription(bad)).unwrap_err();
+        assert!(matches!(err, PaymentsError::Rejected(_)), "id {bad:?}");
+    }
+    assert!(http.bodies().is_empty(), "a bad id must never reach Stripe");
+}
+
+#[test]
+fn list_subscriptions_asks_for_all_statuses_by_customer() {
+    let http = ScriptedHttp::ok(
+        r#"{"object":"list","data":[
+            {"id":"sub_1","customer":"cus_1","status":"active","cancel_at_period_end":true,
+             "current_period_end":1735689600,
+             "items":{"data":[{"quantity":1,"price":{"id":"price_123"}}]}},
+            {"id":"sub_2","customer":"cus_1","status":"canceled","cancel_at_period_end":false,
+             "items":{"data":[{"quantity":1,"price":{"id":"price_123"}}]}}
+        ]}"#,
+    );
+    let s = stripe(http.clone());
+    let subs = pollster::block_on(s.list_subscriptions("cus_1")).unwrap();
+
+    assert_eq!(subs.len(), 2);
+    assert_eq!(subs[0].status, SubscriptionStatus::Active);
+    assert!(subs[0].cancel_at_period_end);
+    assert_eq!(subs[1].status, SubscriptionStatus::Canceled);
+
+    let uri = http.last_uri();
+    assert!(uri.contains("/v1/subscriptions?"));
+    assert!(uri.contains("customer=cus_1"));
+    assert!(uri.contains("status=all"), "canceled subs must be included");
+    assert!(uri.contains("limit=100"), "ask for Stripe's maximum page");
+}
+
+#[test]
+fn list_subscriptions_follows_pagination_with_starting_after() {
+    // Page one says there is more; the next request must carry
+    // `starting_after` naming the last id of page one.
+    let seq = SequencedHttp::new(vec![
+        (
+            200,
+            r#"{"object":"list","has_more":true,"data":[
+                {"id":"sub_1","customer":"cus_1","status":"active",
+                 "items":{"data":[{"quantity":1,"price":{"id":"price_1"}}]}}
+            ]}"#
+            .to_owned(),
+        ),
+        (
+            200,
+            r#"{"object":"list","has_more":false,"data":[
+                {"id":"sub_2","customer":"cus_1","status":"canceled",
+                 "items":{"data":[{"quantity":1,"price":{"id":"price_1"}}]}}
+            ]}"#
+            .to_owned(),
+        ),
+    ]);
+    let s = Stripe::new(
+        seq.clone(),
+        Arc::new(FixedClock(1_700_000_000)),
+        "sk_test_x",
+        "whsec_test",
+    );
+    let subs = pollster::block_on(s.list_subscriptions("cus_1")).unwrap();
+
+    assert_eq!(subs.len(), 2);
+    assert_eq!(subs[0].id, "sub_1");
+    assert_eq!(subs[1].id, "sub_2");
+
+    let uris = seq.uris();
+    assert_eq!(uris.len(), 2, "the second page must be fetched");
+    assert!(!uris[0].contains("starting_after"));
+    assert!(
+        uris[1].contains("starting_after=sub_1"),
+        "second page starts after the last id: {}",
+        uris[1]
+    );
+}
+
+#[test]
+fn portal_and_subscriptions_not_configured_never_call_the_network() {
+    let s = Stripe::not_configured();
+    let portal = PortalSessionRequest {
+        customer_ref: "cus_1".to_owned(),
+        return_url: "https://x".to_owned(),
+        idempotency_key: "k".to_owned(),
+    };
+    assert!(matches!(
+        pollster::block_on(s.create_portal_session(&portal)),
+        Err(PaymentsError::NotConfigured)
+    ));
+    assert!(matches!(
+        pollster::block_on(s.get_subscription("sub_1")),
+        Err(PaymentsError::NotConfigured)
+    ));
+    assert!(matches!(
+        pollster::block_on(s.list_subscriptions("cus_1")),
+        Err(PaymentsError::NotConfigured)
+    ));
 }
 
 // ---------------------------------------------------------------------------
@@ -580,6 +791,15 @@ impl SequencedHttp {
             .unwrap()
             .iter()
             .map(|req| String::from_utf8(req.body().to_vec()).unwrap())
+            .collect()
+    }
+    fn uris(&self) -> Vec<String> {
+        self.inner
+            .requests
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|req| req.uri().to_string())
             .collect()
     }
 }

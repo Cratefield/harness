@@ -135,10 +135,11 @@ pub use ports::{
     check_blob_size, check_hostname, declared_content_length, receive_status, retry_after, timeout,
     ttl_secs, validate_questions,
 };
-// The dispute and portal types on `Payments` (issues #589, #602, #690).
+// The dispute, portal and subscription types on `Payments` (issues #589,
+// #602, #690).
 pub use ports::{
     Dispute, DisputeListRequest, DisputePage, DisputePhase, DisputeStatus, PortalSession,
-    PortalSessionRequest,
+    PortalSessionRequest, Subscription, SubscriptionStatus,
 };
 // The Blob presign API (issue #622), kept out of the wholesale block above.
 pub use ports::{DEFAULT_PRESIGN_TTL, MAX_PRESIGN_TTL, PresignedPut};
