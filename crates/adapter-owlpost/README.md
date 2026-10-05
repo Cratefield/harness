@@ -59,6 +59,43 @@ are omitted, so a plain `send` body is unchanged. A `topic` with
 path-like id are refused locally, with no request — the refusals are checked
 before the key, so a programming error surfaces even in keyless dev.
 
+## Webhooks
+
+`webhook` verifies and parses Owlpost's inbound events. Owlpost signs
+Stripe-style — `Cratefield-Signature: t=<unix>,v1=<hex HMAC-SHA256 of
+"{t}.{body}">` — at core's ±300 s tolerance, widened with
+`verifier().tolerance_secs(n)`. `parse_verified` verifies the **raw body
+bytes first** and returns `WebhookError::Signature` without parsing them
+when that fails, so an unverified delivery is never read.
+
+The 13 event types (`email.sent`/`delivered`/`delivery_delayed`/`bounced`/
+`soft_bounced`/`complained`/`unsubscribed`/`rejected`/`opened`/`clicked`/
+`failed`, `message.received`/`held`) each parse into a typed `OwlpostEvent`
+variant. A type this crate does not know becomes
+`OwlpostEvent::Unknown(type_string)` — carried, not an error, so a handler
+can ignore it.
+
+**Deduplicate on `Envelope::id`, not on the header.** The signature covers
+`t` and the body only, so `Cratefield-Event-Id` is unauthenticated: a
+captured delivery replayed with a fresh id header still verifies and would
+slip past a header-keyed ledger. `event_id(headers)` reads that header for
+correlation and logging — reading it before verification, for instance —
+and nothing more.
+
+```rust,ignore
+use cratefield_adapter_owlpost::webhook::{OwlpostEvent, event_id, parse_verified, verifier};
+
+let envelope = parse_verified(&verifier(), secret, &headers, body, now_unix)?;
+// `envelope.id` is inside the signed body — this is the dedup key.
+let seen = inbox.claim(&envelope.id)?;
+let _correlation = event_id(&headers); // logging only
+match &envelope.data {
+    OwlpostEvent::EmailBounced(b) => log(&format!("bounce {}", b.code.clone().unwrap_or_default())),
+    OwlpostEvent::Unknown(t) => log(&format!("unhandled event {t}")),
+    _ => {}
+}
+```
+
 ## Error mapping
 
 Owlpost answers RFC 9457 `application/problem+json`. `OwlpostError` is

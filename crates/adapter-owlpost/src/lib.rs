@@ -31,6 +31,10 @@ use std::fmt;
 use std::sync::Arc;
 use std::time::Duration;
 
+pub mod webhook;
+
+pub use webhook::{Envelope, OwlpostEvent, WebhookError, parse_verified};
+
 /// The hosted Owlpost API. A self-hosted or proxy deployment points the
 /// adapter elsewhere with [`Owlpost::with_base_url`] /
 /// [`OWLPOST_BASE_URL`](Owlpost::from_env); the wire path `/v1/emails` is

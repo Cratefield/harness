@@ -920,6 +920,7 @@ dependencies = [
  "async-trait",
  "bytes",
  "cratefield-core",
+ "cratefield-testing",
  "getrandom 0.4.3",
  "http",
  "pollster",

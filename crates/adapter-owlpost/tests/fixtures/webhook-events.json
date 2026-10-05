@@ -1,0 +1,15 @@
+[
+{"id":"evt_test_sent","type":"email.sent","created_at":"2026-01-01T00:00:00Z","data":{"message_id":"msg_test_sent","to":["ada@example.com"],"from":"no-reply@send.example.com","subject":"Welcome"}},
+{"id":"evt_test_delivered","type":"email.delivered","created_at":"2026-01-01T00:01:00Z","data":{"message_id":"msg_test_delivered","to":["ada@example.com"],"from":"no-reply@send.example.com","subject":"Welcome"}},
+{"id":"evt_test_delayed","type":"email.delivery_delayed","created_at":"2026-01-01T00:02:00Z","data":{"message_id":"msg_test_delayed","to":["ada@example.com"],"reason":"Recipient server busy, retrying"}},
+{"id":"evt_test_bounced","type":"email.bounced","created_at":"2026-01-01T00:03:00Z","data":{"message_id":"msg_test_bounced","to":["nobody@example.com"],"bounce_type":"hard","code":"550","description":"5.1.1 mailbox does not exist"}},
+{"id":"evt_test_soft_bounced","type":"email.soft_bounced","created_at":"2026-01-01T00:04:00Z","data":{"message_id":"msg_test_soft_bounced","to":["ada@example.com"],"bounce_type":"soft","code":"452","description":"4.2.2 mailbox full"}},
+{"id":"evt_test_complained","type":"email.complained","created_at":"2026-01-01T00:05:00Z","data":{"message_id":"msg_test_complained","to":["ada@example.com"],"from":"no-reply@send.example.com","subject":"Welcome"}},
+{"id":"evt_test_unsubscribed","type":"email.unsubscribed","created_at":"2026-01-01T00:06:00Z","data":{"message_id":"msg_test_unsubscribed","to":["ada@example.com"],"from":"no-reply@send.example.com","subject":"Welcome"}},
+{"id":"evt_test_rejected","type":"email.rejected","created_at":"2026-01-01T00:07:00Z","data":{"message_id":"msg_test_rejected","to":["blocked@example.com"],"reason":"Recipient address is on the account blocklist"}},
+{"id":"evt_test_opened","type":"email.opened","created_at":"2026-01-01T00:08:00Z","data":{"message_id":"msg_test_opened","user_agent":"Mozilla/5.0","ip":"203.0.113.7"}},
+{"id":"evt_test_clicked","type":"email.clicked","created_at":"2026-01-01T00:09:00Z","data":{"message_id":"msg_test_clicked","url":"https://example.com/pricing","user_agent":"Mozilla/5.0","ip":"203.0.113.7"}},
+{"id":"evt_test_failed","type":"email.failed","created_at":"2026-01-01T00:10:00Z","data":{"message_id":"msg_test_failed","to":["ada@example.com"],"reason":"Giving up after 5 attempts"}},
+{"id":"evt_test_received","type":"message.received","created_at":"2026-01-01T00:11:00Z","data":{"message_id":"msg_test_received","from":"ada@example.com","to":["inbox@example.com"],"subject":"Hello there"}},
+{"id":"evt_test_held","type":"message.held","created_at":"2026-01-01T00:12:00Z","data":{"message_id":"msg_test_held","reason":"Held for manual review"}}
+]
