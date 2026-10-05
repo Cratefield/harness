@@ -4,7 +4,7 @@ expression: normalized.to_markdown()
 ---
 # Supabase migration report: `fixtureprojectref000`
 
-Source `<host>:5432/<database>`, PostgreSQL 16. Report version 1, written by cratefield-import-supabase 0.1.0. Read-only: nothing was written to the project.
+Source `<host>:5432/<database>`, PostgreSQL 16. Report version 1, written by cratefield-import-supabase <version>. Read-only: nothing was written to the project.
 
 ## Summary
 

@@ -29,6 +29,7 @@ cd "$(dirname "$0")/.."
 # cannot become a place to silence a finding.
 declare -A EXTERNAL=(
   [pg_stat_statements]="a PostgreSQL extension, named in TENANT-ROUTING.md as an operator's tool"
+  [trial_will_end]="a Stripe webhook event (customer.subscription.trial_will_end), named in PAYMENTS.md as one to subscribe to"
 )
 
 failures=()
