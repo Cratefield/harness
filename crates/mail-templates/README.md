@@ -63,7 +63,7 @@ Compose it into each module that sends mail, in place of its
 ```rust
 Harness::builder()
     .templates(cratefield_module_waitlist::themed_templates(&theme()))
-    .templates(factory0_auth_magic_link::themed_templates(&theme()))
+    .templates(cratefield_auth_magic_link::themed_templates(&theme()))
 ```
 
 Where a module's theme comes from, strongest first:

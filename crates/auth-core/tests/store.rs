@@ -5,12 +5,12 @@
 //! hash column.
 
 use cratefield_adapter_sqlite::SqliteDatabase;
-use cratefield_core::{Module, Ports, UlidIdGen};
-use cratefield_testing::TestHarness;
-use factory0_auth_core::{
+use cratefield_auth_core::{
     AuthCore, Bytes, ClientRedirectUriRow, ClientRow, CredentialRow, IdentityRow, Redacted,
     SessionRow, SingleUseTokenRow, UserRow,
 };
+use cratefield_core::{Module, Ports, UlidIdGen};
+use cratefield_testing::TestHarness;
 use std::sync::Arc;
 use time::format_description::well_known::Rfc3339;
 
@@ -134,11 +134,11 @@ fn token(id: &str, kind: &str, hash: &[u8], expires_in_secs: i64) -> SingleUseTo
 #[pollster::test]
 async fn user_lookups_roundtrip() {
     let db = db();
-    factory0_auth_core::insert_user(&db, &user("u1"))
+    cratefield_auth_core::insert_user(&db, &user("u1"))
         .await
         .expect("insert user");
 
-    let by_id = factory0_auth_core::user_by_id(&db, "u1")
+    let by_id = cratefield_auth_core::user_by_id(&db, "u1")
         .await
         .expect("select");
     let found = by_id.expect("user found");
@@ -146,19 +146,19 @@ async fn user_lookups_roundtrip() {
     assert!(found.primary_email_verified);
     assert_eq!(found.status, "active");
 
-    let by_email = factory0_auth_core::user_by_primary_email(&db, "u1@example.com")
+    let by_email = cratefield_auth_core::user_by_primary_email(&db, "u1@example.com")
         .await
         .expect("select");
     assert_eq!(by_email.expect("found by email").id, "u1");
 
     assert!(
-        factory0_auth_core::user_by_id(&db, "nope")
+        cratefield_auth_core::user_by_id(&db, "nope")
             .await
             .unwrap()
             .is_none()
     );
     assert!(
-        factory0_auth_core::user_by_primary_email(&db, "none@example.com")
+        cratefield_auth_core::user_by_primary_email(&db, "none@example.com")
             .await
             .unwrap()
             .is_none()
@@ -168,36 +168,37 @@ async fn user_lookups_roundtrip() {
 #[pollster::test]
 async fn identity_is_unique_per_provider_subject() {
     let db = db();
-    factory0_auth_core::insert_user(&db, &user("u1"))
+    cratefield_auth_core::insert_user(&db, &user("u1"))
         .await
         .unwrap();
-    factory0_auth_core::insert_user(&db, &user("u2"))
+    cratefield_auth_core::insert_user(&db, &user("u2"))
         .await
         .unwrap();
 
-    factory0_auth_core::insert_identity(&db, &identity("i1", "u1", "google", "g-sub-1"))
+    cratefield_auth_core::insert_identity(&db, &identity("i1", "u1", "google", "g-sub-1"))
         .await
         .expect("first identity");
 
     let duplicate =
-        factory0_auth_core::insert_identity(&db, &identity("i2", "u2", "google", "g-sub-1")).await;
+        cratefield_auth_core::insert_identity(&db, &identity("i2", "u2", "google", "g-sub-1"))
+            .await;
     assert!(duplicate.is_err(), "one row per (provider, subject)");
 
-    factory0_auth_core::insert_identity(&db, &identity("i3", "u2", "password", "g-sub-1"))
+    cratefield_auth_core::insert_identity(&db, &identity("i3", "u2", "password", "g-sub-1"))
         .await
         .expect("same subject under another provider is a different identity");
 
-    let login = factory0_auth_core::identity_by_provider_subject(&db, "google", "g-sub-1")
+    let login = cratefield_auth_core::identity_by_provider_subject(&db, "google", "g-sub-1")
         .await
         .expect("select")
         .expect("found");
     assert_eq!(login.user_id, "u1");
 
-    let touched = factory0_auth_core::touch_identity_login(&db, "i1", &iso(NOW_SECS + 60))
+    let touched = cratefield_auth_core::touch_identity_login(&db, "i1", &iso(NOW_SECS + 60))
         .await
         .expect("touch");
     assert_eq!(touched, 1);
-    let linked = factory0_auth_core::identities_by_user(&db, "u1")
+    let linked = cratefield_auth_core::identities_by_user(&db, "u1")
         .await
         .unwrap();
     assert_eq!(linked.len(), 1);
@@ -210,31 +211,31 @@ async fn identity_is_unique_per_provider_subject() {
 #[pollster::test]
 async fn passkey_credential_ids_are_unique_and_passwords_coexist() {
     let db = db();
-    factory0_auth_core::insert_user(&db, &user("u1"))
+    cratefield_auth_core::insert_user(&db, &user("u1"))
         .await
         .unwrap();
 
-    factory0_auth_core::insert_credential(&db, &passkey("c1", "u1", b"cred-id-1"))
+    cratefield_auth_core::insert_credential(&db, &passkey("c1", "u1", b"cred-id-1"))
         .await
         .expect("first passkey");
     let duplicate =
-        factory0_auth_core::insert_credential(&db, &passkey("c2", "u1", b"cred-id-1")).await;
+        cratefield_auth_core::insert_credential(&db, &passkey("c2", "u1", b"cred-id-1")).await;
     assert!(duplicate.is_err(), "unique passkey credential ids");
 
-    factory0_auth_core::insert_credential(
+    cratefield_auth_core::insert_credential(
         &db,
         &password_credential("c3", "u1", "$argon2id$v=19$m=19456,t=2,p=1$c2FsdA$aGFzaA"),
     )
     .await
     .expect("password credential");
-    factory0_auth_core::insert_credential(
+    cratefield_auth_core::insert_credential(
         &db,
         &password_credential("c4", "u1", "$argon2id$v=19$m=19456,t=2,p=1$c2FsdA$b3RoZXI"),
     )
     .await
     .expect("second password credential: NULL passkey ids do not collide");
 
-    let found = factory0_auth_core::passkey_by_credential_id(&db, b"cred-id-1")
+    let found = cratefield_auth_core::passkey_by_credential_id(&db, b"cred-id-1")
         .await
         .expect("select")
         .expect("passkey found");
@@ -242,26 +243,26 @@ async fn passkey_credential_ids_are_unique_and_passwords_coexist() {
     assert_eq!(found.passkey_sign_count, Some(1));
 
     assert_eq!(
-        factory0_auth_core::update_passkey_sign_count(&db, "c1", 2, &iso(NOW_SECS + 30))
+        cratefield_auth_core::update_passkey_sign_count(&db, "c1", 2, &iso(NOW_SECS + 30))
             .await
             .unwrap(),
         1
     );
     assert_eq!(
-        factory0_auth_core::update_passkey_sign_count(&db, "c3", 2, &iso(NOW_SECS + 30))
+        cratefield_auth_core::update_passkey_sign_count(&db, "c3", 2, &iso(NOW_SECS + 30))
             .await
             .unwrap(),
         0,
         "password credentials have no sign count"
     );
     assert_eq!(
-        factory0_auth_core::touch_credential_used(&db, "c3", &iso(NOW_SECS + 30))
+        cratefield_auth_core::touch_credential_used(&db, "c3", &iso(NOW_SECS + 30))
             .await
             .unwrap(),
         1
     );
     assert_eq!(
-        factory0_auth_core::credentials_by_user(&db, "u1")
+        cratefield_auth_core::credentials_by_user(&db, "u1")
             .await
             .unwrap()
             .len(),
@@ -272,14 +273,14 @@ async fn passkey_credential_ids_are_unique_and_passwords_coexist() {
 #[pollster::test]
 async fn session_lookup_touch_and_revocation() {
     let db = db();
-    factory0_auth_core::insert_user(&db, &user("u1"))
+    cratefield_auth_core::insert_user(&db, &user("u1"))
         .await
         .unwrap();
-    factory0_auth_core::insert_session(&db, &session("s1", "u1", b"hash-of-cookie-1", DAY))
+    cratefield_auth_core::insert_session(&db, &session("s1", "u1", b"hash-of-cookie-1", DAY))
         .await
         .expect("insert session");
 
-    let found = factory0_auth_core::session_by_token_hash(&db, b"hash-of-cookie-1")
+    let found = cratefield_auth_core::session_by_token_hash(&db, b"hash-of-cookie-1")
         .await
         .expect("select")
         .expect("session found");
@@ -287,26 +288,26 @@ async fn session_lookup_touch_and_revocation() {
     assert!(found.revoked_at.is_none());
 
     assert_eq!(
-        factory0_auth_core::touch_session_seen(&db, "s1", &iso(NOW_SECS + 99))
+        cratefield_auth_core::touch_session_seen(&db, "s1", &iso(NOW_SECS + 99))
             .await
             .unwrap(),
         1
     );
     assert_eq!(
-        factory0_auth_core::revoke_session(&db, "s1", &iso(NOW_SECS + 100))
+        cratefield_auth_core::revoke_session(&db, "s1", &iso(NOW_SECS + 100))
             .await
             .unwrap(),
         1
     );
     assert_eq!(
-        factory0_auth_core::revoke_session(&db, "s1", &iso(NOW_SECS + 200))
+        cratefield_auth_core::revoke_session(&db, "s1", &iso(NOW_SECS + 200))
             .await
             .unwrap(),
         0,
         "revocation is guarded"
     );
     assert_eq!(
-        factory0_auth_core::session_by_token_hash(&db, b"hash-of-cookie-1")
+        cratefield_auth_core::session_by_token_hash(&db, b"hash-of-cookie-1")
             .await
             .unwrap()
             .expect("still readable")
@@ -319,38 +320,38 @@ async fn session_lookup_touch_and_revocation() {
 #[pollster::test]
 async fn a_single_use_token_is_consumed_exactly_once() {
     let db = db();
-    factory0_auth_core::insert_single_use_token(
+    cratefield_auth_core::insert_single_use_token(
         &db,
         &token("t1", "magic_link", b"hash-of-token-1", DAY),
     )
     .await
     .expect("insert");
-    factory0_auth_core::insert_single_use_token(
+    cratefield_auth_core::insert_single_use_token(
         &db,
         &token("t2", "magic_link", b"hash-of-token-2", -1),
     )
     .await
     .expect("insert already-expired");
 
-    let found = factory0_auth_core::single_use_token_by_hash(&db, b"hash-of-token-1")
+    let found = cratefield_auth_core::single_use_token_by_hash(&db, b"hash-of-token-1")
         .await
         .unwrap()
         .expect("found by hash");
     assert_eq!(found.payload.as_deref(), Some(r#"{"nonce":"n1"}"#));
 
     let now = iso(NOW_SECS + 10);
-    let won = factory0_auth_core::consume_single_use_token(&db, "t1", &now)
+    let won = cratefield_auth_core::consume_single_use_token(&db, "t1", &now)
         .await
         .expect("consume")
         .expect("first consume wins");
     assert_eq!(won.consumed_at.as_deref(), Some(now.as_str()));
 
-    let replay = factory0_auth_core::consume_single_use_token(&db, "t1", &now)
+    let replay = cratefield_auth_core::consume_single_use_token(&db, "t1", &now)
         .await
         .expect("consume");
     assert!(replay.is_none(), "the second consume loses");
 
-    let expired = factory0_auth_core::consume_single_use_token(&db, "t2", &now)
+    let expired = cratefield_auth_core::consume_single_use_token(&db, "t2", &now)
         .await
         .expect("consume");
     assert!(expired.is_none(), "expired tokens never win");
@@ -359,56 +360,56 @@ async fn a_single_use_token_is_consumed_exactly_once() {
 #[pollster::test]
 async fn purge_removes_only_expired_rows() {
     let db = db();
-    factory0_auth_core::insert_user(&db, &user("u1"))
+    cratefield_auth_core::insert_user(&db, &user("u1"))
         .await
         .unwrap();
-    factory0_auth_core::insert_session(&db, &session("s-old", "u1", b"h1", -1))
+    cratefield_auth_core::insert_session(&db, &session("s-old", "u1", b"h1", -1))
         .await
         .unwrap();
-    factory0_auth_core::insert_session(&db, &session("s-live", "u1", b"h2", DAY))
+    cratefield_auth_core::insert_session(&db, &session("s-live", "u1", b"h2", DAY))
         .await
         .unwrap();
-    factory0_auth_core::insert_single_use_token(&db, &token("t-old", "magic_link", b"h3", -1))
+    cratefield_auth_core::insert_single_use_token(&db, &token("t-old", "magic_link", b"h3", -1))
         .await
         .unwrap();
-    factory0_auth_core::insert_single_use_token(&db, &token("t-live", "magic_link", b"h4", DAY))
+    cratefield_auth_core::insert_single_use_token(&db, &token("t-live", "magic_link", b"h4", DAY))
         .await
         .unwrap();
 
     let now = iso(NOW_SECS);
     assert_eq!(
-        factory0_auth_core::purge_expired_single_use_tokens(&db, &now)
+        cratefield_auth_core::purge_expired_single_use_tokens(&db, &now)
             .await
             .unwrap(),
         1
     );
     assert_eq!(
-        factory0_auth_core::purge_expired_sessions(&db, &now)
+        cratefield_auth_core::purge_expired_sessions(&db, &now)
             .await
             .unwrap(),
         1
     );
 
     assert!(
-        factory0_auth_core::session_by_token_hash(&db, b"h2")
+        cratefield_auth_core::session_by_token_hash(&db, b"h2")
             .await
             .unwrap()
             .is_some()
     );
     assert!(
-        factory0_auth_core::session_by_token_hash(&db, b"h1")
+        cratefield_auth_core::session_by_token_hash(&db, b"h1")
             .await
             .unwrap()
             .is_none()
     );
     assert!(
-        factory0_auth_core::single_use_token_by_hash(&db, b"h4")
+        cratefield_auth_core::single_use_token_by_hash(&db, b"h4")
             .await
             .unwrap()
             .is_some()
     );
     assert!(
-        factory0_auth_core::single_use_token_by_hash(&db, b"h3")
+        cratefield_auth_core::single_use_token_by_hash(&db, b"h3")
             .await
             .unwrap()
             .is_none()
@@ -419,16 +420,16 @@ async fn purge_removes_only_expired_rows() {
 async fn scheduled_purge_runs_against_the_clock_port() {
     let kit = TestHarness::new(vec![Box::new(AuthCore::new())]);
     let db = kit.db.as_ref();
-    factory0_auth_core::insert_user(db, &user("u1"))
+    cratefield_auth_core::insert_user(db, &user("u1"))
         .await
         .unwrap();
-    factory0_auth_core::insert_session(db, &session("s-old", "u1", b"h1", -1))
+    cratefield_auth_core::insert_session(db, &session("s-old", "u1", b"h1", -1))
         .await
         .unwrap();
-    factory0_auth_core::insert_session(db, &session("s-live", "u1", b"h2", DAY))
+    cratefield_auth_core::insert_session(db, &session("s-live", "u1", b"h2", DAY))
         .await
         .unwrap();
-    factory0_auth_core::insert_single_use_token(db, &token("t-old", "magic_link", b"h3", -1))
+    cratefield_auth_core::insert_single_use_token(db, &token("t-old", "magic_link", b"h3", -1))
         .await
         .unwrap();
 
@@ -445,21 +446,21 @@ async fn scheduled_purge_runs_against_the_clock_port() {
         .expect("scheduled run");
 
     assert!(
-        factory0_auth_core::session_by_token_hash(db, b"h1")
+        cratefield_auth_core::session_by_token_hash(db, b"h1")
             .await
             .unwrap()
             .is_none(),
         "expired session purged"
     );
     assert!(
-        factory0_auth_core::session_by_token_hash(db, b"h2")
+        cratefield_auth_core::session_by_token_hash(db, b"h2")
             .await
             .unwrap()
             .is_some(),
         "live session kept"
     );
     assert!(
-        factory0_auth_core::single_use_token_by_hash(db, b"h3")
+        cratefield_auth_core::single_use_token_by_hash(db, b"h3")
             .await
             .unwrap()
             .is_none(),
@@ -470,7 +471,7 @@ async fn scheduled_purge_runs_against_the_clock_port() {
 #[pollster::test]
 async fn client_and_redirect_uri_lookups() {
     let db = db();
-    factory0_auth_core::insert_client(
+    cratefield_auth_core::insert_client(
         &db,
         &ClientRow {
             id: "app1".to_owned(),
@@ -485,7 +486,7 @@ async fn client_and_redirect_uri_lookups() {
     )
     .await
     .expect("insert client");
-    factory0_auth_core::insert_redirect_uri(
+    cratefield_auth_core::insert_redirect_uri(
         &db,
         &ClientRedirectUriRow {
             client_id: "app1".to_owned(),
@@ -495,7 +496,7 @@ async fn client_and_redirect_uri_lookups() {
     .await
     .expect("insert uri");
 
-    let client = factory0_auth_core::client_by_id(&db, "app1")
+    let client = cratefield_auth_core::client_by_id(&db, "app1")
         .await
         .unwrap()
         .expect("client found");
@@ -503,13 +504,13 @@ async fn client_and_redirect_uri_lookups() {
     assert_eq!(client.kind, "confidential");
     assert!(client.previous_secret_hash.is_none());
 
-    let uris = factory0_auth_core::redirect_uris_for_client(&db, "app1")
+    let uris = cratefield_auth_core::redirect_uris_for_client(&db, "app1")
         .await
         .unwrap();
     assert_eq!(uris.len(), 1);
     assert_eq!(uris[0].uri, "https://undercoverrockstars.com/auth/callback");
 
-    let duplicate = factory0_auth_core::insert_redirect_uri(
+    let duplicate = cratefield_auth_core::insert_redirect_uri(
         &db,
         &ClientRedirectUriRow {
             client_id: "app1".to_owned(),
@@ -523,7 +524,7 @@ async fn client_and_redirect_uri_lookups() {
 #[pollster::test]
 async fn client_rotation_status_and_uri_replacement() {
     let db = db();
-    factory0_auth_core::insert_client(
+    cratefield_auth_core::insert_client(
         &db,
         &ClientRow {
             id: "app1".to_owned(),
@@ -540,18 +541,18 @@ async fn client_rotation_status_and_uri_replacement() {
     .expect("insert client");
 
     assert_eq!(
-        factory0_auth_core::rotate_client_secret(&db, "app1", "new-hash", &iso(NOW_SECS + 3600))
+        cratefield_auth_core::rotate_client_secret(&db, "app1", "new-hash", &iso(NOW_SECS + 3600))
             .await
             .unwrap(),
         1
     );
     assert_eq!(
-        factory0_auth_core::rotate_client_secret(&db, "ghost", "x", &iso(NOW_SECS)).await,
+        cratefield_auth_core::rotate_client_secret(&db, "ghost", "x", &iso(NOW_SECS)).await,
         Ok(0),
         "unknown ids affect nothing"
     );
 
-    let rotated = factory0_auth_core::client_by_id(&db, "app1")
+    let rotated = cratefield_auth_core::client_by_id(&db, "app1")
         .await
         .unwrap()
         .expect("client");
@@ -567,23 +568,23 @@ async fn client_rotation_status_and_uri_replacement() {
     );
 
     assert_eq!(
-        factory0_auth_core::update_client_status(&db, "app1", "disabled")
+        cratefield_auth_core::update_client_status(&db, "app1", "disabled")
             .await
             .unwrap(),
         1
     );
     assert_eq!(
-        factory0_auth_core::update_client_name(&db, "app1", "Kontinuum Audio")
+        cratefield_auth_core::update_client_name(&db, "app1", "Kontinuum Audio")
             .await
             .unwrap(),
         1
     );
-    let listed = factory0_auth_core::list_clients(&db).await.unwrap();
+    let listed = cratefield_auth_core::list_clients(&db).await.unwrap();
     assert_eq!(listed.len(), 1);
     assert_eq!(listed[0].status, "disabled");
     assert_eq!(listed[0].name, "Kontinuum Audio");
 
-    factory0_auth_core::replace_redirect_uris(
+    cratefield_auth_core::replace_redirect_uris(
         &db,
         "app1",
         &[
@@ -593,7 +594,7 @@ async fn client_rotation_status_and_uri_replacement() {
     )
     .await
     .expect("replace");
-    let uris = factory0_auth_core::redirect_uris_for_client(&db, "app1")
+    let uris = cratefield_auth_core::redirect_uris_for_client(&db, "app1")
         .await
         .unwrap()
         .iter()
@@ -608,10 +609,14 @@ async fn client_rotation_status_and_uri_replacement() {
         "replacement is wholesale"
     );
 
-    factory0_auth_core::replace_redirect_uris(&db, "app1", &["https://kontinuum.audio/cb".into()])
-        .await
-        .expect("replace again");
-    let after = factory0_auth_core::redirect_uris_for_client(&db, "app1")
+    cratefield_auth_core::replace_redirect_uris(
+        &db,
+        "app1",
+        &["https://kontinuum.audio/cb".into()],
+    )
+    .await
+    .expect("replace again");
+    let after = cratefield_auth_core::redirect_uris_for_client(&db, "app1")
         .await
         .unwrap();
     assert_eq!(after.len(), 1, "the stale URI is gone");

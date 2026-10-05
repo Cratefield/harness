@@ -11,16 +11,16 @@ use common::{EventSpy, Res};
 
 use async_trait::async_trait;
 use bytes::Bytes;
+use cratefield_auth_core::{
+    AuthCore, STATUS_ACTIVE, UserRow, insert_user, password_credential, set_password_hash,
+    user_by_primary_email,
+};
+use cratefield_auth_password::Password;
 use cratefield_core::{
     Clock, Config, Database, Decision, HttpClient, HttpError, MapConfig, RateLimitError,
     RateLimiter, Statement,
 };
 use cratefield_testing::TestHarness;
-use factory0_auth_core::{
-    AuthCore, STATUS_ACTIVE, UserRow, insert_user, password_credential, set_password_hash,
-    user_by_primary_email,
-};
-use factory0_auth_password::Password;
 use http::{Method, Request, Response, StatusCode, header};
 use serde_json::{Value, json};
 use std::sync::atomic::{AtomicI64, AtomicUsize, Ordering};
@@ -569,7 +569,7 @@ fn changing_a_password_revokes_every_other_session() {
         // The other device is signed out. A password change is what a
         // person does when they think somebody else has it.
         assert!(
-            factory0_auth_core::validate(&*kit.db, &*kit.clock, &first_cookie)
+            cratefield_auth_core::validate(&*kit.db, &*kit.clock, &first_cookie)
                 .await
                 .expect("query")
                 .is_none(),
@@ -680,7 +680,7 @@ fn a_hash_at_old_parameters_is_upgraded_on_login() {
         // moment the plaintext is available, so it is the only moment it
         // can be upgraded.
         let weak = weak_hash(GOOD);
-        assert!(factory0_auth_core::password_needs_rehash(&weak));
+        assert!(cratefield_auth_core::password_needs_rehash(&weak));
         kit.db
             .execute(&Statement::new(format!(
                 "INSERT INTO credentials (id, user_id, kind, password_hash, created_at, \
@@ -702,7 +702,7 @@ fn a_hash_at_old_parameters_is_upgraded_on_login() {
             .and_then(|row| row.get::<String>("password_hash"))
             .expect("a hash");
         assert_ne!(stored, weak, "the old hash survived a login");
-        assert!(!factory0_auth_core::password_needs_rehash(&stored));
+        assert!(!cratefield_auth_core::password_needs_rehash(&stored));
         // And the password still works afterwards.
         assert_eq!(
             login(&kit, "ada@example.com", GOOD).await.status,
@@ -1218,7 +1218,7 @@ fn a_same_origin_password_change_still_works() {
             .expect("the change re-issues a session");
         assert_ne!(fresh, cookie, "the re-issued cookie is the one presented");
         assert!(
-            factory0_auth_core::validate(&*kit.db, &*kit.clock, &cookie)
+            cratefield_auth_core::validate(&*kit.db, &*kit.clock, &cookie)
                 .await
                 .expect("query")
                 .is_none(),

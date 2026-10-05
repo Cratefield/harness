@@ -513,8 +513,8 @@ dependencies = [
  "cratefield-chrome",
  "cratefield-core",
  "cratefield-provisioning",
- "factory0-auth-meta",
- "factory0-auth-oidc",
+ "cratefield-auth-meta",
+ "cratefield-auth-oidc",
  "getrandom 0.4.3",
  "http",
  "sea-query",
@@ -1113,7 +1113,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "factory0-auth-core"
+name = "cratefield-auth-core"
 version = "0.1.1"
 dependencies = [
  "argon2",
@@ -1134,14 +1134,14 @@ dependencies = [
 ]
 
 [[package]]
-name = "factory0-auth-meta"
+name = "cratefield-auth-meta"
 version = "0.1.1"
 dependencies = [
  "axum",
  "base64ct",
  "bytes",
  "cratefield-core",
- "factory0-auth-core",
+ "cratefield-auth-core",
  "getrandom 0.4.3",
  "hmac 0.13.0",
  "http",
@@ -1156,7 +1156,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "factory0-auth-oidc"
+name = "cratefield-auth-oidc"
 version = "0.1.1"
 dependencies = [
  "axum",
@@ -1164,7 +1164,7 @@ dependencies = [
  "bytes",
  "chrono",
  "cratefield-core",
- "factory0-auth-core",
+ "cratefield-auth-core",
  "getrandom 0.4.3",
  "http",
  "openidconnect",

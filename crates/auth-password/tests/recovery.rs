@@ -16,12 +16,12 @@ use common::{
     EventSpy, Res, exec, get, post_form_fields, post_json, post_json_with, scalar, send,
     user_id_of, verified,
 };
-use cratefield_testing::TestHarness;
-use factory0_auth_core::{
+use cratefield_auth_core::{
     AuthCore, Redacted, STATUS_ACTIVE, SingleUseTokenRow, TOKEN_REFRESH, UserRow,
     insert_single_use_token, insert_user,
 };
-use factory0_auth_password::Password;
+use cratefield_auth_password::Password;
+use cratefield_testing::TestHarness;
 use http::{Method, StatusCode};
 use serde_json::{Value, json};
 

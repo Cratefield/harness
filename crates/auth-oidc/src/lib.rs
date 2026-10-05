@@ -1,7 +1,7 @@
-//! `factory0-auth-oidc`: OpenID Connect login (issues #15, #16).
+//! `cratefield-auth-oidc`: OpenID Connect login (issues #15, #16).
 //!
 //! ```no_run
-//! use factory0_auth_oidc::Oidc;
+//! use cratefield_auth_oidc::Oidc;
 //!
 //! let module = Oidc::new();
 //! ```

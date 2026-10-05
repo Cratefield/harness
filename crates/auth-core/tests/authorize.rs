@@ -17,12 +17,12 @@
 
 use axum::http::{Method, StatusCode, header};
 use base64ct::{Base64UrlUnpadded, Encoding};
-use cratefield_core::{MapConfig, UlidIdGen};
-use cratefield_testing::{FixedClock, TestHarness};
-use factory0_auth_core::{
+use cratefield_auth_core::{
     AuthCore, ClientRedirectUriRow, ClientRow, Login, Redacted, UserRow, insert_client,
     insert_redirect_uri, issue, session_by_token_hash,
 };
+use cratefield_core::{MapConfig, UlidIdGen};
+use cratefield_testing::{FixedClock, TestHarness};
 use p256::ecdsa;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -121,10 +121,10 @@ fn kit_with_every_module() -> TestHarness {
     TestHarness::with_ports(
         vec![
             Box::new(AuthCore::new()),
-            Box::new(factory0_auth_magic_link::MagicLink::new()),
-            Box::new(factory0_auth_password::Password::new()),
-            Box::new(factory0_auth_oidc::Oidc::new()),
-            Box::new(factory0_auth_meta::Meta::new()),
+            Box::new(cratefield_auth_magic_link::MagicLink::new()),
+            Box::new(cratefield_auth_password::Password::new()),
+            Box::new(cratefield_auth_oidc::Oidc::new()),
+            Box::new(cratefield_auth_meta::Meta::new()),
         ],
         move |ports| {
             ports.config = config;
@@ -158,7 +158,7 @@ fn challenge() -> String {
 }
 
 async fn seed_user(kit: &TestHarness, id: &str) {
-    factory0_auth_core::insert_user(
+    cratefield_auth_core::insert_user(
         &*kit.db,
         &UserRow {
             id: id.to_owned(),
@@ -307,7 +307,7 @@ fn clears_the_session(response: &axum::response::Response) -> bool {
 }
 
 /// The session row a cookie value names, read straight from the store.
-async fn session_row(kit: &TestHarness, cookie: &str) -> factory0_auth_core::SessionRow {
+async fn session_row(kit: &TestHarness, cookie: &str) -> cratefield_auth_core::SessionRow {
     let hash = Sha256::digest(cookie.as_bytes()).to_vec();
     session_by_token_hash(&*kit.db, &hash)
         .await

@@ -65,7 +65,7 @@ what actually keeps a crate off crates.io.
 | Prefix | Distribution | Visibility |
 |---|---|---|
 | `cratefield-*` | crates.io, except where `publish = false` | public, MIT |
-| `factory0-auth-*` | never published | public source, Factory Zero's service |
+| `cratefield-auth-*` | never published (except `cratefield-auth-client`) | public source, deployed as one branded instance per app |
 | `fz-*` | never published | public source, Factory Zero's module |
 
 ### The published crates
@@ -95,10 +95,12 @@ what actually keeps a crate off crates.io.
 
 ### The unpublished crates
 
-**The auth service** (`crates/auth-*`, packages `factory0-auth-*`). One
+**The auth service** (`crates/auth-*`, packages `cratefield-auth-*`). One
 crate per login method over a shared `auth-core`, plus the deployable
-`auth-worker`. Its ADRs are the 0200 block. It moved here from
-`Factory-Zero/auth`.
+`auth-worker`, deployed as one branded instance per app (`instances/<app>/`,
+issue #777). Its ADRs are the 0200 block. It moved here from
+`Factory-Zero/auth`; the packages were renamed from `factory0-auth-*` on
+2026-10-05 (ADR 0011 amendment).
 
 **Private modules** are `fz-*` crates alongside the public ones and pass the
 same `cratefield-testing` conformance kit in this repo's own CI.

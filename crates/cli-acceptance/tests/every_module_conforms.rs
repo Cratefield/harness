@@ -124,7 +124,7 @@ fn the_scan_finds_the_modules_that_exist() {
         "cratefield-chrome",
         "cratefield-console",
         "cratefield-module-waitlist",
-        "factory0-auth-core",
+        "cratefield-auth-core",
     ] {
         assert!(
             names.contains(&expected),

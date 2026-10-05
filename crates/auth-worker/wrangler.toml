@@ -36,7 +36,7 @@ period = 60
 
 [[d1_databases]]
 binding = "DB"
-database_name = "factory0-auth-staging"
+database_name = "cratefield-auth-staging"
 database_id = "REPLACE_WITH_STAGING_D1_ID"
 migrations_dir = "migrations"
 
@@ -70,6 +70,6 @@ ENV = "production"
 
 [[env.production.d1_databases]]
 binding = "DB"
-database_name = "factory0-auth-production"
+database_name = "cratefield-auth-production"
 database_id = "REPLACE_WITH_PRODUCTION_D1_ID"
 migrations_dir = "migrations"

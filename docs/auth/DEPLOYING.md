@@ -36,7 +36,7 @@ Register as a client of `auth.factory0.ventures` instead; run your own only when
    your `wrangler.toml` (a deployment repo, or `wrangler deploy -c path/to/wrangler.toml`) sets
    `name`, the production `route = { pattern = "<your-host>", custom_domain = true }`,
    `[[d1_databases]]` (`binding = "DB"`), a per-environment `[[ratelimits]]` `namespace_id`, and
-   `[vars]` (below; secrets are not vars). It builds the **unmodified** `factory0-auth-worker`
+   `[vars]` (below; secrets are not vars). It builds the **unmodified** `cratefield-auth-worker`
    crate — no copy, no fork. Note `worker-build` compiles the package in the config's directory
    (`main = "build/worker/shim.mjs"` is relative to it), so the config either sits beside the
    crate or sets `[build] command`/`main` to build it and point at the shim. Create a D1 per
@@ -86,14 +86,14 @@ Register as a client of `auth.factory0.ventures` instead; run your own only when
 ### A wrapper crate, only for template overrides
 
 To override templates (e.g. your own magic-link mail), wrap the crate: depend on
-`factory0-auth-worker` with `default-features = false` (dropping `entry`, so its
+`cratefield-auth-worker` with `default-features = false` (dropping `entry`, so its
 `#[event(fetch)]`/`#[event(scheduled)]` do not collide), serve from your handlers,
 and read config with `AuthWorkerConfig::from_config(&EnvConfig(env))` (or
 `validate_config` without building):
 
 ```rust
-factory0_auth_worker::serve_request(req, env, ctx, |w| w.templates(my_templates())).await
-factory0_auth_worker::serve_scheduled_request(event, env, ctx, |w| w.templates(my_templates())).await
+cratefield_auth_worker::serve_request(req, env, ctx, |w| w.templates(my_templates())).await
+cratefield_auth_worker::serve_scheduled_request(event, env, ctx, |w| w.templates(my_templates())).await
 ```
 
 Ids are `<module>/<template>` with `<id>@<locale>` variants; overrides are

@@ -11,7 +11,7 @@
 //! login method is a password is stuck for the lockout window, and that
 //! window is short for exactly that reason.
 
-use factory0_auth_core::CredentialRow;
+use cratefield_auth_core::CredentialRow;
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
@@ -87,7 +87,7 @@ pub(crate) fn iso(at: OffsetDateTime) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use factory0_auth_core::{CREDENTIAL_PASSWORD, Redacted};
+    use cratefield_auth_core::{CREDENTIAL_PASSWORD, Redacted};
 
     fn at(secs: i64) -> OffsetDateTime {
         OffsetDateTime::from_unix_timestamp(secs).expect("in range")

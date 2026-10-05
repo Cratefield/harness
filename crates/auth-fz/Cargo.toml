@@ -3,7 +3,7 @@
 # modules. Kept OUT of the workspace (see `exclude` in the root manifest) so
 # the CLI's native-only deps (clap, rusqlite) never reach the wasm build.
 [package]
-name = "factory0-auth-fz"
+name = "cratefield-auth-fz"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.98"
@@ -17,9 +17,9 @@ path = "src/main.rs"
 [dependencies]
 cratefield-core = { path = "../core" }
 cratefield-cli = { path = "../cli" }
-factory0-auth-core = { path = "../auth-core" }
-factory0-auth-oidc = { path = "../auth-oidc" }
-factory0-auth-passkeys = { path = "../auth-passkeys" }
-factory0-auth-magic-link = { path = "../auth-magic-link" }
-factory0-auth-password = { path = "../auth-password" }
-factory0-auth-meta = { path = "../auth-meta" }
+cratefield-auth-core = { path = "../auth-core" }
+cratefield-auth-oidc = { path = "../auth-oidc" }
+cratefield-auth-passkeys = { path = "../auth-passkeys" }
+cratefield-auth-magic-link = { path = "../auth-magic-link" }
+cratefield-auth-password = { path = "../auth-password" }
+cratefield-auth-meta = { path = "../auth-meta" }

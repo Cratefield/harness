@@ -109,7 +109,7 @@ supported `de` takes `de-AT` and stores the canonical `de`.
 `AUTH_LOCALES` lists the supported tags, comma-separated in BCP 47 form,
 the first being the default (`AUTH_LOCALES=de,en`). It is a deployment-wide
 key rather than an `AUTH_PASSWORD_` one: every auth module reads it, and
-the same list is what `factory0-auth-magic-link` resolves its sign-in mail
+the same list is what `cratefield-auth-magic-link` resolves its sign-in mail
 from. Unset, the deployment supports `en`.
 
 ## Three defences, and they are not the same defence

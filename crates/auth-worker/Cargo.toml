@@ -1,5 +1,5 @@
 [package]
-name = "factory0-auth-worker"
+name = "cratefield-auth-worker"
 description = "The deployable auth Worker: composes the auth modules into one harness venture (auth#41)"
 publish = false
 version.workspace = true
@@ -24,12 +24,12 @@ workspace = true
 [dependencies]
 # Renamed so `src` reads `auth_core::AuthCore`, never the package's own name
 # (issue #646): the venture name lives only in `defaults`.
-auth_core = { package = "factory0-auth-core", path = "../auth-core" }
-auth_oidc = { package = "factory0-auth-oidc", path = "../auth-oidc" }
-auth_passkeys = { package = "factory0-auth-passkeys", path = "../auth-passkeys" }
-auth_magic_link = { package = "factory0-auth-magic-link", path = "../auth-magic-link" }
-auth_password = { package = "factory0-auth-password", path = "../auth-password" }
-auth_meta = { package = "factory0-auth-meta", path = "../auth-meta" }
+auth_core = { package = "cratefield-auth-core", path = "../auth-core" }
+auth_oidc = { package = "cratefield-auth-oidc", path = "../auth-oidc" }
+auth_passkeys = { package = "cratefield-auth-passkeys", path = "../auth-passkeys" }
+auth_magic_link = { package = "cratefield-auth-magic-link", path = "../auth-magic-link" }
+auth_password = { package = "cratefield-auth-password", path = "../auth-password" }
+auth_meta = { package = "cratefield-auth-meta", path = "../auth-meta" }
 cratefield-core = { workspace = true }
 cratefield-runtime-cloudflare = { workspace = true }
 cratefield-adapter-resend = { workspace = true }
@@ -45,7 +45,7 @@ getrandom = { workspace = true }
 [dev-dependencies]
 cratefield-testing = { workspace = true }
 cratefield-adapter-sqlite = { workspace = true }
-auth_magic_link = { package = "factory0-auth-magic-link", path = "../auth-magic-link" }
+auth_magic_link = { package = "cratefield-auth-magic-link", path = "../auth-magic-link" }
 pollster = { workspace = true }
 tower = { workspace = true }
 axum = { workspace = true }

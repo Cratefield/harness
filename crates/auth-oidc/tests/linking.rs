@@ -3,7 +3,7 @@
 
 mod support;
 
-use factory0_auth_core::{UserRow, insert_user};
+use cratefield_auth_core::{UserRow, insert_user};
 use http::StatusCode;
 use support::provider::TokenClaims;
 use support::{Kit, callback, count, kit, start};

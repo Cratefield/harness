@@ -4,13 +4,13 @@ use axum::extract::{Query, State};
 use axum::response::{Html, IntoResponse, Response};
 use axum::routing::{get, post};
 use base64ct::{Base64UrlUnpadded, Encoding as _};
-use cratefield_core::{Json, Message, Problem, Scope, SendOutcome};
-use factory0_auth_core::{
+use cratefield_auth_core::{
     Hints, Redacted, STATUS_ACTIVE, SingleUseTokenRow, TOKEN_MAGIC_LINK, UserRow,
     consume_single_use_token, cookie_value as session_cookie_value, insert_single_use_token,
     insert_user, resolve, retire_unconsumed_tokens, set_cookie, single_use_token_by_hash,
     ui_locales_from_return_to, user_by_id, user_by_primary_email,
 };
+use cratefield_core::{Json, Message, Problem, Scope, SendOutcome};
 use http::{HeaderMap, StatusCode, Uri, header};
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -687,7 +687,7 @@ async fn confirm(
     // a mail client is inherently cross-site and so is a forced
     // navigation (issue #483), and only a request from our own page can
     // be told apart from both.
-    factory0_auth_core::csrf::require_same_origin(&headers, &uri)
+    cratefield_auth_core::csrf::require_same_origin(&headers, &uri)
         .map_err(|problem| problem.instance(&scope.request_id))?;
     let token = url::form_urlencoded::parse(body.as_bytes())
         .find(|(key, _)| key == "token")
@@ -757,7 +757,8 @@ async fn spend(
     // theirs, and the only proof this service has. The linking rules only
     // ever auto-link a verified address, so this is what makes one.
     if !user.primary_email_verified {
-        if let Err(err) = factory0_auth_core::set_primary_email_verified(db, &user.id, &now).await {
+        if let Err(err) = cratefield_auth_core::set_primary_email_verified(db, &user.id, &now).await
+        {
             tracing::warn!(error = %err, "could not record a verified address");
         } else {
             ctx.events
@@ -766,11 +767,11 @@ async fn spend(
     }
 
     let presented = session_cookie_value(headers);
-    let session = factory0_auth_core::issue(
+    let session = cratefield_auth_core::issue(
         db,
         clock,
         id_gen,
-        factory0_auth_core::Login {
+        cratefield_auth_core::Login {
             user_id: &user.id,
             ip: cratefield_core::client_ip(headers).as_deref(),
             user_agent: headers

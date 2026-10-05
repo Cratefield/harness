@@ -1,7 +1,7 @@
-//! `factory0-auth-passkeys`: passkey registration and login (issues #13, #14).
+//! `cratefield-auth-passkeys`: passkey registration and login (issues #13, #14).
 //!
 //! ```no_run
-//! use factory0_auth_passkeys::Passkeys;
+//! use cratefield_auth_passkeys::Passkeys;
 //!
 //! let module = Passkeys::new();
 //! ```

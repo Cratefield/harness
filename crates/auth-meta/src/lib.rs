@@ -1,7 +1,7 @@
-//! `factory0-auth-meta`: Facebook Login (issue #17).
+//! `cratefield-auth-meta`: Facebook Login (issue #17).
 //!
 //! ```no_run
-//! use factory0_auth_meta::Meta;
+//! use cratefield_auth_meta::Meta;
 //!
 //! let module = Meta::new();
 //! ```

@@ -3,10 +3,10 @@
 
 #![allow(dead_code)]
 
+use cratefield_auth_core::{AuthCore, Login, UserRow, insert_user, issue};
+use cratefield_auth_passkeys::Passkeys;
 use cratefield_core::{Clock, Config, Database, IdGen, MapConfig, UlidIdGen};
 use cratefield_testing::TestHarness;
-use factory0_auth_core::{AuthCore, Login, UserRow, insert_user, issue};
-use factory0_auth_passkeys::Passkeys;
 use http::StatusCode;
 use serde_json::Value;
 use std::sync::Arc;
@@ -154,9 +154,13 @@ impl Kit {
     /// Flags a credential as a possible clone, the way a counter regression
     /// does.
     pub async fn mark_suspect(&self, credential_id: &str) {
-        factory0_auth_core::mark_passkey_suspect(&*self.db, credential_id, "2026-09-07T10:00:00Z")
-            .await
-            .expect("mark applies");
+        cratefield_auth_core::mark_passkey_suspect(
+            &*self.db,
+            credential_id,
+            "2026-09-07T10:00:00Z",
+        )
+        .await
+        .expect("mark applies");
     }
 
     /// A session cookie value for that account.

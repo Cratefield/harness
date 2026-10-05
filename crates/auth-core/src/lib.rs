@@ -1,4 +1,4 @@
-//! `factory0-auth-core`: the schema and shared flows of the auth
+//! `cratefield-auth-core`: the schema and shared flows of the auth
 //! service — `users`, `identities`, `credentials`, `sessions`,
 //! `single_use_tokens`, `clients`, `client_redirect_uris` (auth issue
 //! #5), the client-registration admin API (issue #6), exact-match

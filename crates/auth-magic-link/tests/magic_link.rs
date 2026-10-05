@@ -1,13 +1,13 @@
 //! Issue #21 end to end.
 
 use async_trait::async_trait;
+use cratefield_auth_core::{AuthCore, STATUS_ACTIVE, UserRow, insert_user, user_by_primary_email};
+use cratefield_auth_magic_link::MagicLink;
 use cratefield_core::{
     Clock, Config, Database, Decision, MailError, Mailer, MapConfig, Message, SendOutcome,
     Statement,
 };
 use cratefield_testing::TestHarness;
-use factory0_auth_core::{AuthCore, STATUS_ACTIVE, UserRow, insert_user, user_by_primary_email};
-use factory0_auth_magic_link::MagicLink;
 use http::{HeaderMap, Method, Request, StatusCode, header};
 use serde_json::{Value, json};
 use std::sync::atomic::{AtomicI64, Ordering};
@@ -450,14 +450,14 @@ fn the_mail_carries_a_working_link_and_the_token_is_stored_hashed() {
             Sha256::digest(token.as_bytes()).to_vec()
         };
         assert!(
-            factory0_auth_core::single_use_token_by_hash(&*kit.db, &digest)
+            cratefield_auth_core::single_use_token_by_hash(&*kit.db, &digest)
                 .await
                 .expect("query")
                 .is_some(),
             "the row is not keyed by the token's digest"
         );
         assert!(
-            factory0_auth_core::single_use_token_by_hash(&*kit.db, token.as_bytes())
+            cratefield_auth_core::single_use_token_by_hash(&*kit.db, token.as_bytes())
                 .await
                 .expect("query")
                 .is_none(),
@@ -911,12 +911,12 @@ fn a_token_of_another_kind_cannot_be_spent_here() {
             use sha2::{Digest, Sha256};
             Sha256::digest(token.as_bytes()).to_vec()
         };
-        factory0_auth_core::insert_single_use_token(
+        cratefield_auth_core::insert_single_use_token(
             &*kit.db,
-            &factory0_auth_core::SingleUseTokenRow {
+            &cratefield_auth_core::SingleUseTokenRow {
                 id: "t1".to_owned(),
-                kind: factory0_auth_core::TOKEN_AUTHORIZATION_CODE.to_owned(),
-                token_hash: factory0_auth_core::Redacted(digest),
+                kind: cratefield_auth_core::TOKEN_AUTHORIZATION_CODE.to_owned(),
+                token_hash: cratefield_auth_core::Redacted(digest),
                 user_id: Some("u-ada".to_owned()),
                 client_id: None,
                 payload: None,

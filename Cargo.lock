@@ -1285,9 +1285,9 @@ dependencies = [
  "cratefield-module-privacy",
  "cratefield-provisioning",
  "cratefield-testing",
- "factory0-auth-core",
- "factory0-auth-meta",
- "factory0-auth-oidc",
+ "cratefield-auth-core",
+ "cratefield-auth-meta",
+ "cratefield-auth-oidc",
  "getrandom 0.4.3",
  "http",
  "p256 0.13.2",
@@ -1478,8 +1478,8 @@ dependencies = [
  "cratefield-module-notifications",
  "cratefield-module-orgs",
  "cratefield-module-waitlist",
- "factory0-auth-magic-link",
- "factory0-auth-password",
+ "cratefield-auth-magic-link",
+ "cratefield-auth-password",
  "serde_json",
 ]
 
@@ -2246,7 +2246,7 @@ dependencies = [
  "cratefield-kms",
  "cratefield-runtime-cloudflare",
  "cratefield-secrets",
- "factory0-auth-core",
+ "cratefield-auth-core",
  "getrandom 0.4.3",
  "serde_json",
  "worker",
@@ -2618,7 +2618,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "factory0-auth-core"
+name = "cratefield-auth-core"
 version = "0.1.1"
 dependencies = [
  "argon2",
@@ -2632,10 +2632,10 @@ dependencies = [
  "cratefield-i18n",
  "cratefield-module-privacy",
  "cratefield-testing",
- "factory0-auth-magic-link",
- "factory0-auth-meta",
- "factory0-auth-oidc",
- "factory0-auth-password",
+ "cratefield-auth-magic-link",
+ "cratefield-auth-meta",
+ "cratefield-auth-oidc",
+ "cratefield-auth-password",
  "futures-util",
  "getrandom 0.4.3",
  "http",
@@ -2653,7 +2653,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "factory0-auth-magic-link"
+name = "cratefield-auth-magic-link"
 version = "0.1.1"
 dependencies = [
  "async-trait",
@@ -2664,7 +2664,7 @@ dependencies = [
  "cratefield-core",
  "cratefield-mail-templates",
  "cratefield-testing",
- "factory0-auth-core",
+ "cratefield-auth-core",
  "futures-lite",
  "getrandom 0.4.3",
  "http",
@@ -2679,7 +2679,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "factory0-auth-meta"
+name = "cratefield-auth-meta"
 version = "0.1.1"
 dependencies = [
  "async-trait",
@@ -2689,7 +2689,7 @@ dependencies = [
  "cratefield-adapter-sqlite",
  "cratefield-core",
  "cratefield-testing",
- "factory0-auth-core",
+ "cratefield-auth-core",
  "getrandom 0.4.3",
  "hmac 0.13.0",
  "http",
@@ -2706,7 +2706,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "factory0-auth-oidc"
+name = "cratefield-auth-oidc"
 version = "0.1.1"
 dependencies = [
  "async-trait",
@@ -2717,7 +2717,7 @@ dependencies = [
  "cratefield-adapter-sqlite",
  "cratefield-core",
  "cratefield-testing",
- "factory0-auth-core",
+ "cratefield-auth-core",
  "getrandom 0.4.3",
  "http",
  "openidconnect",
@@ -2737,7 +2737,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "factory0-auth-passkeys"
+name = "cratefield-auth-passkeys"
 version = "0.1.1"
 dependencies = [
  "axum",
@@ -2748,7 +2748,7 @@ dependencies = [
  "cratefield-core",
  "cratefield-testing",
  "ed25519-dalek",
- "factory0-auth-core",
+ "cratefield-auth-core",
  "getrandom 0.4.3",
  "http",
  "p256 0.14.0",
@@ -2768,7 +2768,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "factory0-auth-password"
+name = "cratefield-auth-password"
 version = "0.1.1"
 dependencies = [
  "argon2",
@@ -2781,7 +2781,7 @@ dependencies = [
  "cratefield-core",
  "cratefield-mail-templates",
  "cratefield-testing",
- "factory0-auth-core",
+ "cratefield-auth-core",
  "getrandom 0.4.3",
  "http",
  "pollster",
@@ -2796,7 +2796,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "factory0-auth-worker"
+name = "cratefield-auth-worker"
 version = "0.1.1"
 dependencies = [
  "async-trait",
@@ -2808,12 +2808,12 @@ dependencies = [
  "cratefield-core",
  "cratefield-runtime-cloudflare",
  "cratefield-testing",
- "factory0-auth-core",
- "factory0-auth-magic-link",
- "factory0-auth-meta",
- "factory0-auth-oidc",
- "factory0-auth-passkeys",
- "factory0-auth-password",
+ "cratefield-auth-core",
+ "cratefield-auth-magic-link",
+ "cratefield-auth-meta",
+ "cratefield-auth-oidc",
+ "cratefield-auth-passkeys",
+ "cratefield-auth-password",
  "getrandom 0.4.3",
  "http",
  "pollster",

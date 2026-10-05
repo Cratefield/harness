@@ -11,7 +11,7 @@
 mod support;
 
 use base64ct::{Base64UrlUnpadded, Encoding as _};
-use factory0_auth_core::{UserRow, identity_by_provider_subject, insert_user};
+use cratefield_auth_core::{UserRow, identity_by_provider_subject, insert_user};
 use http::StatusCode;
 use serde_json::Value;
 use support::provider::{APPLE_CLIENT_ID, TokenClaims};
@@ -403,11 +403,11 @@ fn signing_in_while_signed_in_adds_a_provider_rather_than_a_second_account() {
     pollster::block_on(async {
         let kit = apple_kit();
         let existing = seed_user(&kit, "someone@example.com").await;
-        let session = factory0_auth_core::issue(
+        let session = cratefield_auth_core::issue(
             &*kit.db,
             &*kit.clock,
             &*kit.id_gen,
-            factory0_auth_core::Login {
+            cratefield_auth_core::Login {
                 user_id: &existing,
                 ip: None,
                 user_agent: None,
@@ -494,7 +494,7 @@ fn the_form_post_callback_revokes_the_session_it_replaces() {
         assert_eq!(response.status, StatusCode::FOUND, "{}", response.text());
         let old_value = session_cookie(&response).expect("the first sign-in set a session");
 
-        let old = factory0_auth_core::validate(&*kit.db, &*kit.clock, &old_value)
+        let old = cratefield_auth_core::validate(&*kit.db, &*kit.clock, &old_value)
             .await
             .expect("validate runs")
             .expect("the first session is valid to begin with");
@@ -538,7 +538,7 @@ fn the_form_post_callback_revokes_the_session_it_replaces() {
 
         // The cookie the browser arrived with is now worthless.
         assert!(
-            factory0_auth_core::validate(&*kit.db, &*kit.clock, &old_value)
+            cratefield_auth_core::validate(&*kit.db, &*kit.clock, &old_value)
                 .await
                 .expect("validate runs")
                 .is_none(),
@@ -546,7 +546,7 @@ fn the_form_post_callback_revokes_the_session_it_replaces() {
         );
 
         // Revoked, not merely deleted or expired, and the new one is live.
-        let rows = factory0_auth_core::sessions_by_user(&*kit.db, &old.user_id)
+        let rows = cratefield_auth_core::sessions_by_user(&*kit.db, &old.user_id)
             .await
             .expect("sessions read");
         let superseded = rows

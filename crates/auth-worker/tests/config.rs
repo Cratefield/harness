@@ -2,8 +2,8 @@
 //! deployment, and every invalid value is refused rather than silently
 //! replaced.
 
+use cratefield_auth_worker::{AuthWorkerConfig, MailerKind, validate_config};
 use cratefield_core::{MapConfig, VentureEnv};
-use factory0_auth_worker::{AuthWorkerConfig, MailerKind, validate_config};
 
 fn config(pairs: &[(&str, &str)]) -> AuthWorkerConfig {
     AuthWorkerConfig::from_config(&MapConfig::from_pairs(pairs.iter().copied()))

@@ -18,7 +18,7 @@
 //!
 //! What the console refuses to duplicate it takes from the auth crates:
 //! Apple's ES256 secret minting and Meta's Graph profile call are used
-//! through `factory0-auth-oidc`/`factory0-auth-meta`, through APIs those
+//! through `cratefield-auth-oidc`/`cratefield-auth-meta`, through APIs those
 //! crates made public for exactly this.
 //!
 //! Only the Google endpoints are hit, over the runtime's `HttpClient` port. The

@@ -3,10 +3,10 @@
 
 #![allow(dead_code)]
 
+use cratefield_auth_core::AuthCore;
+use cratefield_auth_oidc::Oidc;
 use cratefield_core::{Clock, Config, Database, IdGen, MapConfig, UlidIdGen};
 use cratefield_testing::TestHarness;
-use factory0_auth_core::AuthCore;
-use factory0_auth_oidc::Oidc;
 use http::StatusCode;
 use serde_json::Value;
 use std::sync::Arc;

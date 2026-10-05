@@ -8,12 +8,12 @@
 
 use async_trait::async_trait;
 use bytes::Bytes;
+use cratefield_auth_core::{AuthCore, UserRow, identity_by_provider_subject, insert_user};
+use cratefield_auth_meta::Meta;
 use cratefield_core::{
     Clock, Config, Database, HttpClient, HttpError, IdGen, MapConfig, UlidIdGen,
 };
 use cratefield_testing::TestHarness;
-use factory0_auth_core::{AuthCore, UserRow, identity_by_provider_subject, insert_user};
-use factory0_auth_meta::Meta;
 use http::{Method, Request, Response, StatusCode, header};
 use serde_json::{Value, json};
 use std::sync::atomic::{AtomicI64, Ordering};
@@ -960,9 +960,9 @@ fn a_job_only_unlinks_when_the_account_has_another_way_in() {
             .expect("an identity");
         // A second identity on the same account: a Google sign-in they
         // also use. Meta's request must not take it with them.
-        factory0_auth_core::insert_identity(
+        cratefield_auth_core::insert_identity(
             &*kit.db,
-            &factory0_auth_core::IdentityRow {
+            &cratefield_auth_core::IdentityRow {
                 id: kit.id_gen.ulid(),
                 user_id: identity.user_id.clone(),
                 provider: "google".to_owned(),
