@@ -146,10 +146,25 @@ ran.
 **So bump one place, not two.** Set the new version in
 `crates/<name>/Cargo.toml` and leave the `[workspace.dependencies]`
 requirement in the root `Cargo.toml` alone — moving it is release-plz's
-job, and moving it first is what costs the dependent round. If the two
-have already diverged, the dependents will not catch up on their own:
-bump each of them in the release PR by hand, or publish them in the
-dependency order given in step 2 below.
+job, and moving it first is what costs the dependent round.
+
+**A cascaded patch bump is not enough, and the floor is what a lockfile
+keeps.** A cascaded dependent is republished as 0.2.0 → 0.2.1, built on
+the new core, but the root table still reads `version = "0.2"`, so every
+crate published after it carries the requirement
+`cratefield-auth-client ^0.2` — whose *lowest* published version, 0.2.0,
+still requires core `^0.6`. A venture with an existing lockfile keeps
+0.2.0, so it resolves two copies of core, and every type in core is an
+identity per copy. So when a dependency takes a breaking minor and the
+cascade moves its dependents as patches, raise each internal requirement
+in `[workspace.dependencies]` to the first version built on the new core
+— `"0.2.1"`, not `"0.2"` — and make that edit **in the release PR**,
+where the new versions are already computed, or after the dependency is
+published. Never ahead of it: that is the hand edit the paragraph above
+is about, and it suppresses the cascade for everything behind the edit.
+The same hand edit is the only repair when a crate's version and its
+requirement have already diverged: bump each of them in the release PR,
+or publish them in the dependency order given in step 2 below.
 
 **A cascaded dependent gets a patch bump even when the dependency
 broke.** release-plz does not inspect code to work out whether a
@@ -161,13 +176,19 @@ workspace manifests and checked in CI for drift, so it records the
 ranges this tree declares, not the ranges the published crates actually
 carry.
 
-**Nothing in this repository catches the mismatch.** Every in-tree build
-resolves `cratefield-core` through the path dependency in the root
-`Cargo.toml`, so the workspace compiles against the local 0.5 whatever
-the published requirements say, and CI stays green while the published
-set is unresolvable. Issue #466 tracks the CI job that resolves a
-venture from crates.io alone, which is the check that would have caught
-this.
+**Every in-tree build resolves internal dependencies through `path`,
+so only the index can catch it.** `cargo update -Z minimal-versions`
+cannot help either: the published floor is never read, and the flag drags
+every third-party crate to its floor as well. Two CI jobs read the sparse
+index instead. `tools/dependency-floors.sh` (the `internal dependency
+floors` job) takes every internal requirement a publishable crate
+declares, finds the lowest non-yanked published version inside that range
+— the floor a stranger's resolver is free to pick — and fails when that
+floor's own requirements sit in a different caret bucket from this tree's,
+naming the dependent and the version to raise the requirement to. The
+`crates.io resolve` workflow resolves the whole published set together,
+which catches a set that cannot be resolved at all but not a set that
+resolves to the wrong floor.
 
 ## Owner setup (once)
 
@@ -407,6 +428,13 @@ The package itself is checked on every push and pull request, by the
 `tools/package-check.sh --no-verify` runs everything but the verification
 build, for a fast local check that takes seconds once cargo's index
 is warm.
+
+The internal requirements' *floors* are checked by
+`tools/dependency-floors.sh` (the `internal dependency floors` job, and
+the second step of the `crates.io resolve` workflow): each requirement a
+publishable crate declares, against the lowest published version inside
+it, so a requirement that still admits a version built on the previous
+core fails before a venture's lockfile can (#712).
 
 Still manual: the credentialed publish itself. Every first publish is
 `cargo publish` with the scoped token (step 2 above); only after that

@@ -63,3 +63,10 @@ jobs:
       # "did the set resolve the way it did last time", which is the one
       # question this job exists not to ask.
       - run: tools/crates-io-resolve.sh
+      # The same reason this workflow exists, one level up: a publish can land
+      # a version of a crate whose own requirements are behind the tree's, and
+      # nothing in this repository's own history records that. `cargo add`
+      # above will resolve one copy each anyway — it takes the newest of
+      # everything — so only the floors read the index directly
+      # (tools/dependency-floors.sh, issue #712).
+      - run: tools/dependency-floors.sh

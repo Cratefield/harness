@@ -275,6 +275,23 @@ jobs:
       - name: "cargo package: publish order, file lists, verification build"
         run: tools/package-check.sh
 
+  dependency-floors:
+    # `version = "0.2"` in [workspace.dependencies] admits a published 0.2.0
+    # that is still built on the previous core, and a venture with a
+    # lockfile keeps it: two copies of core, and every type in core is an
+    # identity per copy (issue #712). Every other job here resolves internal
+    # dependencies through `path`, so nothing in-tree can see that. This
+    # asks the crates.io index for the floor of each internal requirement.
+    # No build, no credentials: only cargo metadata and HTTP GETs.
+    name: internal dependency floors
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.98.1"
+      - run: tools/dependency-floors.sh
+
   webpush-ntfy:
     # No `#` in the name: GitHub truncates a check-run name there (issue #34).
     name: web push conformance against a real ntfy server
