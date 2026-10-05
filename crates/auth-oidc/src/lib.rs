@@ -49,6 +49,7 @@ use cratefield_core::{
 };
 use http::StatusCode;
 use std::sync::Arc;
+use zeroize::Zeroizing;
 
 pub use provider::{APPLE, GOOGLE, PROVIDERS, Provider, ResponseMode, SecretSource, TokenAuth};
 
@@ -86,13 +87,30 @@ pub(crate) const DEFAULT_RETURN_TO: &str = "/";
 /// One provider's credentials, ready for a request.
 ///
 /// `client_secret` is a resolved string by the time anything holds this:
-/// configured for Google, minted for Apple. The flow never learns which,
-/// which is the point of the descriptor.
-#[derive(Debug, Clone)]
+/// configured for Google, minted for Apple, unsealed for an enterprise
+/// connection. The flow never learns which, which is the point of the
+/// descriptor. It is held in a [`Zeroizing`] so the one plaintext copy
+/// this module owns for the length of a request is wiped when it drops,
+/// whatever the string's provenance.
+#[derive(Clone)]
 pub(crate) struct ProviderConfig {
     pub client_id: String,
-    pub client_secret: String,
+    pub client_secret: Zeroizing<String>,
     pub redirect_uri: String,
+}
+
+impl std::fmt::Debug for ProviderConfig {
+    /// Prints the secret as `[redacted]`. An enterprise connection's
+    /// secret (issue #627) is one organization's, and a struct nothing
+    /// means to print should not become printable when a stray `?` is
+    /// added to a log line — the same rule the connection row keeps.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ProviderConfig")
+            .field("client_id", &self.client_id)
+            .field("client_secret", &"[redacted]")
+            .field("redirect_uri", &self.redirect_uri)
+            .finish()
+    }
 }
 
 /// Where a provider's secret comes from, before it is resolved.
@@ -122,6 +140,20 @@ pub(crate) struct Settings {
 }
 
 impl Settings {
+    /// The redirect URI every enterprise SSO connection registers with its
+    /// `IdP` (issue #627).
+    ///
+    /// One fixed path for the whole deployment, so an organization
+    /// registering our service with its `IdP` has one URL to paste, and the
+    /// connection is recovered from the signed flow cookie at the callback
+    /// rather than from the path.
+    pub(crate) fn sso_redirect_uri(&self) -> String {
+        format!(
+            "{}/v1/auth-oidc/sso/callback",
+            self.redirect_base.trim_end_matches('/')
+        )
+    }
+
     pub(crate) fn provider_credentials(
         &self,
         cfg: &dyn Config,
@@ -141,6 +173,10 @@ impl Settings {
                 ConfiguredSecret::Static(value)
             }
             SecretSource::AppleMinted => ConfiguredSecret::Apple(apple_config(&module, provider)?),
+            // Neither: the credentials belong to one `sso_connections` row
+            // (issue #627), which the SSO handlers read directly. Nothing
+            // in the environment names them, so there is nothing here.
+            SecretSource::Connection => return None,
         };
         Some(ProviderCredentials {
             client_id,
@@ -267,6 +303,10 @@ fn resolve_settings(cfg: &dyn Config) -> Result<Settings, Vec<String>> {
                     ));
                 }
             }
+            // Nothing to check. An SSO connection's credentials live in a
+            // row that is written through the admin API, not in the
+            // environment, and `PROVIDERS` holds no such descriptor.
+            SecretSource::Connection => {}
         }
     }
 
@@ -324,7 +364,7 @@ impl ModuleState {
         };
         Ok(ProviderConfig {
             client_id: credentials.client_id,
-            client_secret,
+            client_secret: Zeroizing::new(client_secret),
             redirect_uri: credentials.redirect_uri,
         })
     }

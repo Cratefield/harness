@@ -134,6 +134,45 @@ async fn a_valid_token_verifies_and_yields_its_claims() {
     assert_eq!(verified.sub, "user-1");
     assert_eq!(verified.sid, "session-1");
     assert_eq!(verified.amr, vec!["passkey".to_owned()]);
+    // A token minted before issue #627 carries no `sso_connection`, and
+    // must still verify rather than fail on the missing claim.
+    assert_eq!(verified.sso_connection, None);
+    assert!(!verified.signed_in_via_sso("ssoc_1"));
+}
+
+/// Issue #627: an enterprise SSO sign-in says which connection it came
+/// through, and `signed_in_via_sso` is how a relying party gates on it.
+#[pollster::test]
+async fn an_sso_token_names_its_connection_and_only_that_one() {
+    let (signing, jwk) = key(1);
+    let auth = client(FakeJwks::new(jwks_body(&[jwk])));
+    let mut payload = claims(CLIENT, ISSUER, NOW + 600);
+    payload["sso_connection"] = json!("ssoc_1");
+    payload["amr"] = json!(["sso"]);
+    let token = mint(&signing, &json!({"alg": "ES256", "kid": "k1"}), &payload);
+
+    let verified = auth.verify(&token).await.expect("verifies");
+    assert_eq!(verified.sso_connection.as_deref(), Some("ssoc_1"));
+    assert!(verified.signed_in_via_sso("ssoc_1"));
+    // A connection id is not a secret, but it is not a bearer either:
+    // naming the one this token did not come through is refused.
+    assert!(!verified.signed_in_via_sso("ssoc_2"));
+    assert!(!verified.signed_in_via_sso(""));
+}
+
+/// Both halves are required. A token that names a connection without
+/// `sso` in `amr` is not one this crate will treat as an SSO sign-in.
+#[pollster::test]
+async fn an_sso_connection_without_the_amr_is_not_an_sso_sign_in() {
+    let (signing, jwk) = key(1);
+    let auth = client(FakeJwks::new(jwks_body(&[jwk])));
+    let mut payload = claims(CLIENT, ISSUER, NOW + 600);
+    payload["sso_connection"] = json!("ssoc_1");
+    let token = mint(&signing, &json!({"alg": "ES256", "kid": "k1"}), &payload);
+
+    let verified = auth.verify(&token).await.expect("verifies");
+    assert_eq!(verified.sso_connection.as_deref(), Some("ssoc_1"));
+    assert!(!verified.signed_in_via_sso("ssoc_1"));
 }
 
 /// The check hand-written verifiers forget. This token is signed by the

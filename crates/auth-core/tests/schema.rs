@@ -29,7 +29,11 @@ const FORBIDDEN_EXACT: &[&str] = &[
     "private_key",
 ];
 
-/// Name stems that may appear only on hash columns (suffix `_hash`).
+/// Name stems that may appear only on hash columns (suffix `_hash`) or on
+/// sealed columns (suffix `_sealed`): the latter is an AEAD blob whose key
+/// lives outside the database, the shape `module-connections` stores its
+/// provider tokens in and issue #627 stores an SSO client secret in. A
+/// plaintext column named after any of these still fails.
 const SECRET_STEMS: &[&str] = &["password", "secret", "token", "cookie"];
 
 /// The harness portable-SQL lint (fz `lint.rs`, issue #8): tokens SQLite
@@ -128,8 +132,8 @@ fn no_column_can_hold_a_login_secret_in_the_clear() {
             );
             if let Some(stem) = SECRET_STEMS.iter().find(|stem| column.contains(*stem)) {
                 assert!(
-                    column.ends_with("_hash"),
-                    "{table}.{column}: a `{stem}` column must end in `_hash` — \
+                    column.ends_with("_hash") || column.ends_with("_sealed"),
+                    "{table}.{column}: a `{stem}` column must end in `_hash` or `_sealed` — \
                      nothing that can log a user in is stored in the clear"
                 );
             }
@@ -143,6 +147,10 @@ fn no_column_can_hold_a_login_secret_in_the_clear() {
         ("single_use_tokens", "token_hash"),
         ("credentials", "password_hash"),
         ("clients", "secret_hash"),
+        // Issue #627: the SSO client secret is sealed, never hashed — the
+        // issuer has to be able to check it, so it is stored reversibly,
+        // and the seal is what keeps the clear text out of a leaked row.
+        ("sso_connections", "oidc_client_secret_sealed"),
     ] {
         assert!(
             all_columns.iter().any(|(t, c)| t == table && c == column),

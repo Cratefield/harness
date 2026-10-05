@@ -33,6 +33,15 @@ pub const APPLE_AUTHORIZATION_ENDPOINT: &str = "https://appleid.apple.com/auth/a
 /// Apple calls this the Services ID.
 pub const APPLE_CLIENT_ID: &str = "com.example.service";
 
+// Enterprise SSO (#627). The issuer is whichever organization's own `IdP`
+// the connection was configured with; the fake answers any origin that is
+// neither Google nor Apple by echoing the origin it was asked about, so a
+// test that needs a second organization gets one by naming a second host.
+pub const SSO_ISSUER: &str = "https://idp.acme.example";
+pub const SSO_CLIENT_ID: &str = "acme-oidc-client";
+pub const SSO_CLIENT_SECRET: &str = "acme-oidc-client-secret";
+pub const SSO_EMAIL: &str = "ada@acme.example";
+
 /// One 2048-bit key for the whole test binary; generating one per test would
 /// dominate the run.
 fn key() -> &'static rsa::RsaPrivateKey {
@@ -65,6 +74,23 @@ pub struct TokenClaims {
     pub email_verified_as_string: bool,
 }
 
+impl TokenClaims {
+    /// The shape an enterprise `IdP` sends through a connection (#627):
+    /// the connection's issuer and OIDC client id, and an address in one
+    /// of the connection's domains. Every field is still a knob.
+    pub fn sso(issuer: &str, client_id: &str, email: &str) -> Self {
+        Self {
+            issuer: issuer.to_owned(),
+            audience: client_id.to_owned(),
+            subject: "idp-subject-1".to_owned(),
+            email: Some(email.to_owned()),
+            email_verified: true,
+            name: Some("Ada".to_owned()),
+            ..Self::default()
+        }
+    }
+}
+
 impl Default for TokenClaims {
     fn default() -> Self {
         Self {
@@ -94,6 +120,12 @@ struct Inner {
     published_key_id: RwLock<Option<String>>,
     token_error: RwLock<Option<(u16, Value)>>,
     discovery_error: RwLock<Option<u16>>,
+    /// What the discovery document lists for
+    /// `token_endpoint_auth_methods_supported`. `None` omits the field
+    /// altogether, which is what an `IdP` that does not say how its token
+    /// endpoint authenticates looks like — and the spec's default (Basic)
+    /// is what a relying party must fall back to.
+    token_auth_methods: RwLock<Option<Vec<String>>>,
 }
 
 #[derive(Clone, Default)]
@@ -130,6 +162,14 @@ impl FakeProvider {
 
     pub fn fail_discovery(&self, status: u16) {
         *self.inner.discovery_error.write().expect("lock") = Some(status);
+    }
+
+    /// What the next discovery document says about token-endpoint client
+    /// authentication. `&[]` omits the field, which means "the spec's
+    /// default" rather than "none supported".
+    pub fn set_token_auth_methods(&self, methods: &[&str]) {
+        *self.inner.token_auth_methods.write().expect("lock") =
+            (!methods.is_empty()).then(|| methods.iter().map(|m| (*m).to_owned()).collect());
     }
 
     pub fn calls(&self) -> Vec<(String, String, String)> {
@@ -289,27 +329,56 @@ impl HttpClient for FakeProvider {
                     }),
                 ));
             }
-            return Ok(json_response(
-                200,
-                &json!({
-                    "issuer": ISSUER,
-                    "authorization_endpoint": AUTHORIZATION_ENDPOINT,
-                    "token_endpoint": TOKEN_ENDPOINT,
-                    "jwks_uri": JWKS_URI,
-                    "response_types_supported": ["code"],
-                    "subject_types_supported": ["public"],
-                    "id_token_signing_alg_values_supported": ["RS256"],
-                    "scopes_supported": ["openid", "email", "profile"],
-                    "claims_supported": ["sub", "email", "email_verified", "name"],
-                }),
-            ));
+            if url.contains("accounts.google.com") {
+                return Ok(json_response(
+                    200,
+                    &json!({
+                        "issuer": ISSUER,
+                        "authorization_endpoint": AUTHORIZATION_ENDPOINT,
+                        "token_endpoint": TOKEN_ENDPOINT,
+                        "jwks_uri": JWKS_URI,
+                        "response_types_supported": ["code"],
+                        "subject_types_supported": ["public"],
+                        "id_token_signing_alg_values_supported": ["RS256"],
+                        "scopes_supported": ["openid", "email", "profile"],
+                        "claims_supported": ["sub", "email", "email_verified", "name"],
+                    }),
+                ));
+            }
+            // An enterprise connection's own `IdP` (#627): the document
+            // echoes back the origin it was asked about, which is what
+            // `openidconnect` pins the issuer to, and derives the three
+            // endpoints from it.
+            let origin = url
+                .split("/.well-known/")
+                .next()
+                .unwrap_or_default()
+                .to_owned();
+            let mut document = json!({
+                "issuer": origin,
+                "authorization_endpoint": format!("{origin}/authorize"),
+                "token_endpoint": format!("{origin}/token"),
+                "jwks_uri": format!("{origin}/jwks"),
+                "response_types_supported": ["code"],
+                "subject_types_supported": ["public"],
+                "id_token_signing_alg_values_supported": ["RS256"],
+                "scopes_supported": ["openid", "email", "profile"],
+                "claims_supported": ["sub", "email", "email_verified", "name"],
+            });
+            if let Some(methods) = self.inner.token_auth_methods.read().expect("lock").clone() {
+                document["token_endpoint_auth_methods_supported"] = json!(methods);
+            }
+            return Ok(json_response(200, &document));
         }
 
-        if url.starts_with(JWKS_URI) || url.starts_with(APPLE_JWKS_URI) {
+        if url.starts_with(JWKS_URI) || url.starts_with(APPLE_JWKS_URI) || url.ends_with("/jwks") {
             return Ok(json_response(200, &self.jwks()));
         }
 
-        if url.starts_with(TOKEN_ENDPOINT) || url.starts_with(APPLE_TOKEN_ENDPOINT) {
+        if url.starts_with(TOKEN_ENDPOINT)
+            || url.starts_with(APPLE_TOKEN_ENDPOINT)
+            || url.ends_with("/token")
+        {
             if let Some((status, body)) = self.inner.token_error.read().expect("lock").clone() {
                 return Ok(json_response(status, &body));
             }

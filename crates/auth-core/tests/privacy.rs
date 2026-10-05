@@ -368,7 +368,7 @@ async fn an_export_copies_no_hash_and_no_authorization_payload() {
 }
 
 #[pollster::test]
-async fn the_manifest_says_the_two_client_tables_hold_software_not_people() {
+async fn the_manifest_says_the_software_tables_hold_software_not_people() {
     let kit = privacy_kit();
     let response = send(&kit, Method::GET, "/v1/privacy/manifest", None, None).await;
     assert_eq!(response.status, StatusCode::OK);
@@ -379,7 +379,13 @@ async fn the_manifest_says_the_two_client_tables_hold_software_not_people() {
         .iter()
         .filter_map(|entry| entry["table"].as_str())
         .collect();
-    assert_eq!(listed, ["clients", "client_redirect_uris"]);
+    // `sso_connections` (issue #627) joined this list: it names an
+    // organization's identity provider, which describes a company rather
+    // than a person.
+    assert_eq!(
+        listed,
+        ["clients", "client_redirect_uris", "sso_connections"]
+    );
     for entry in not_personal {
         let reason = entry["reason"].as_str().unwrap_or_default();
         assert!(

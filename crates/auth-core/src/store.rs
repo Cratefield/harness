@@ -701,6 +701,12 @@ pub struct SessionRow {
     pub ip_hash: Option<Redacted<String>>,
     pub ua_family: Option<String>,
     pub amr: Option<String>,
+    /// The `sso_connections.id` this session was signed in through (issue
+    /// #627), `None` for every other way in. It becomes the access token's
+    /// `sso_connection` claim only while the connection still belongs to the
+    /// client the token is for — the token endpoint (`token_endpoint`) decides that at
+    /// mint time, not here.
+    pub sso_connection: Option<String>,
 }
 
 fn session_from(row: &Row) -> SessionRow {
@@ -715,6 +721,7 @@ fn session_from(row: &Row) -> SessionRow {
         ip_hash: optional::<String>(row, "ip_hash").map(Redacted),
         ua_family: row.get::<Option<String>>("ua_family").flatten(),
         amr: row.get::<Option<String>>("amr").flatten(),
+        sso_connection: row.get::<Option<String>>("sso_connection").flatten(),
     }
 }
 
@@ -732,6 +739,7 @@ fn select_sessions() -> sea_query::SelectStatement {
             "ip_hash",
             "ua_family",
             "amr",
+            "sso_connection",
         ])
         .from(iden("sessions"));
     select
@@ -758,6 +766,7 @@ pub async fn insert_session(db: &dyn Database, row: &SessionRow) -> Result<(), D
             "ip_hash",
             "ua_family",
             "amr",
+            "sso_connection",
         ])
         .values_panic([
             row.id.clone().into(),
@@ -770,6 +779,7 @@ pub async fn insert_session(db: &dyn Database, row: &SessionRow) -> Result<(), D
             row.ip_hash.as_ref().map(|hash| hash.0.clone()).into(),
             row.ua_family.clone().into(),
             row.amr.clone().into(),
+            row.sso_connection.clone().into(),
         ]);
     db.execute(&Statement::render(&insert)).await?;
     Ok(())
@@ -1742,6 +1752,205 @@ pub async fn set_primary_email_verified(
             (iden("primary_email_verified"), true.into()),
             (iden("updated_at"), updated_at.into()),
         ])
+        .and_where(Expr::col(iden("id")).eq(id));
+    db.execute(&Statement::render(&update)).await
+}
+
+// ---------------------------------------------------------------------------
+// sso_connections (issue #627)
+
+/// One `sso_connections` row: an organization's own identity provider.
+///
+/// `oidc_client_secret_sealed` is the ciphertext, and it is [`Redacted`]
+/// so `{:?}` on this row cannot print even that. The plaintext exists
+/// only inside `crate::sso::open_client_secret`, for the length of the
+/// token exchange.
+#[derive(Clone)]
+pub struct SsoConnectionRow {
+    pub id: String,
+    pub client_id: String,
+    pub org_ref: String,
+    pub issuer: String,
+    pub oidc_client_id: String,
+    pub oidc_client_secret_sealed: Redacted<String>,
+    /// Normalized lowercase email domains. Stored as a JSON array.
+    pub domains: Vec<String>,
+    pub status: String,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+impl std::fmt::Debug for SsoConnectionRow {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SsoConnectionRow")
+            .field("id", &self.id)
+            .field("client_id", &self.client_id)
+            .field("org_ref", &self.org_ref)
+            .field("issuer", &self.issuer)
+            .field("oidc_client_id", &self.oidc_client_id)
+            .field("oidc_client_secret_sealed", &self.oidc_client_secret_sealed)
+            .field("domains", &self.domains)
+            .field("status", &self.status)
+            .field("created_at", &self.created_at)
+            .field("updated_at", &self.updated_at)
+            .finish()
+    }
+}
+
+fn sso_connection_from(row: &Row) -> SsoConnectionRow {
+    SsoConnectionRow {
+        id: row.get::<String>("id").unwrap_or_default(),
+        client_id: row.get::<String>("client_id").unwrap_or_default(),
+        org_ref: row.get::<String>("org_ref").unwrap_or_default(),
+        issuer: row.get::<String>("issuer").unwrap_or_default(),
+        oidc_client_id: row.get::<String>("oidc_client_id").unwrap_or_default(),
+        oidc_client_secret_sealed: Redacted(required(row, "oidc_client_secret_sealed")),
+        domains: optional::<String>(row, "domains")
+            .and_then(|raw| serde_json::from_str::<Vec<String>>(&raw).ok())
+            .unwrap_or_default(),
+        status: row.get::<String>("status").unwrap_or_default(),
+        created_at: row.get::<String>("created_at").unwrap_or_default(),
+        updated_at: row.get::<String>("updated_at").unwrap_or_default(),
+    }
+}
+
+fn select_sso_connections() -> sea_query::SelectStatement {
+    let mut select = Query::select();
+    select
+        .columns([
+            "id",
+            "client_id",
+            "org_ref",
+            "issuer",
+            "oidc_client_id",
+            "oidc_client_secret_sealed",
+            "domains",
+            "status",
+            "created_at",
+            "updated_at",
+        ])
+        .from(iden("sso_connections"));
+    select
+}
+
+/// Inserts a connection.
+///
+/// # Errors
+///
+/// [`DbError::Execute`] when the statement fails.
+pub async fn insert_sso_connection(
+    db: &dyn Database,
+    row: &SsoConnectionRow,
+) -> Result<(), DbError> {
+    let mut insert = Query::insert();
+    insert
+        .into_table(iden("sso_connections"))
+        .columns([
+            "id",
+            "client_id",
+            "org_ref",
+            "issuer",
+            "oidc_client_id",
+            "oidc_client_secret_sealed",
+            "domains",
+            "status",
+            "created_at",
+            "updated_at",
+        ])
+        .values_panic([
+            row.id.clone().into(),
+            row.client_id.clone().into(),
+            row.org_ref.clone().into(),
+            row.issuer.clone().into(),
+            row.oidc_client_id.clone().into(),
+            row.oidc_client_secret_sealed.0.clone().into(),
+            serde_json::to_string(&row.domains)
+                .unwrap_or_else(|_| "[]".to_owned())
+                .into(),
+            row.status.clone().into(),
+            row.created_at.clone().into(),
+            row.updated_at.clone().into(),
+        ]);
+    db.execute(&Statement::render(&insert)).await?;
+    Ok(())
+}
+
+/// One connection by its opaque id, whatever its status and whichever
+/// client owns it. The caller decides whether it may be read or used;
+/// this is the row lookup both the admin API and the SSO flow share.
+///
+/// # Errors
+///
+/// [`DbError::Query`] when the statement fails.
+pub async fn sso_connection_by_id(
+    db: &dyn Database,
+    id: &str,
+) -> Result<Option<SsoConnectionRow>, DbError> {
+    let query = select_sso_connections()
+        .and_where(Expr::col(iden("id")).eq(id))
+        .limit(1)
+        .to_owned();
+    let rows = db.query(&Statement::render(&query)).await?;
+    Ok(rows.first().map(sso_connection_from))
+}
+
+/// Every connection of one client, optionally narrowed to one `org_ref`,
+/// newest last. The client id is the isolation boundary: a query that
+/// forgot it would hand one venture another's connections.
+///
+/// # Errors
+///
+/// [`DbError::Query`] when the statement fails.
+pub async fn sso_connections_for_client(
+    db: &dyn Database,
+    client_id: &str,
+    org_ref: Option<&str>,
+) -> Result<Vec<SsoConnectionRow>, DbError> {
+    let mut query = select_sso_connections()
+        .and_where(Expr::col(iden("client_id")).eq(client_id))
+        .to_owned();
+    if let Some(org_ref) = org_ref {
+        query.and_where(Expr::col(iden("org_ref")).eq(org_ref));
+    }
+    query.order_by(iden("created_at"), sea_query::Order::Asc);
+    let rows = db.query(&Statement::render(&query)).await?;
+    Ok(rows.rows.iter().map(sso_connection_from).collect())
+}
+
+/// Updates the mutable parts of a connection — its status, its sealed
+/// secret and its domains — plus `updated_at`, in one statement. A
+/// `None` leaves that column alone, so a status change does not rewrite
+/// the secret and a rotation does not rewrite the domains. Returns `0`
+/// when the id is gone.
+///
+/// `domains` is the pre-serialized JSON array.
+///
+/// # Errors
+///
+/// [`DbError::Execute`] when the statement fails.
+pub async fn update_sso_connection(
+    db: &dyn Database,
+    id: &str,
+    status: Option<&str>,
+    oidc_client_secret_sealed: Option<&str>,
+    domains: Option<&str>,
+    updated_at: &str,
+) -> Result<u64, DbError> {
+    let mut values: Vec<(Alias, sea_query::SimpleExpr)> =
+        vec![(iden("updated_at"), updated_at.into())];
+    if let Some(status) = status {
+        values.push((iden("status"), status.into()));
+    }
+    if let Some(sealed) = oidc_client_secret_sealed {
+        values.push((iden("oidc_client_secret_sealed"), sealed.into()));
+    }
+    if let Some(domains) = domains {
+        values.push((iden("domains"), domains.into()));
+    }
+    let mut update = Query::update();
+    update
+        .table(iden("sso_connections"))
+        .values(values)
         .and_where(Expr::col(iden("id")).eq(id));
     db.execute(&Statement::render(&update)).await
 }

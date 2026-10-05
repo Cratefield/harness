@@ -318,7 +318,7 @@ impl SigningKeys {
             "id_token_signing_alg_values_supported": ["ES256"],
             "claims_supported": [
                 "iss", "sub", "aud", "exp", "iat", "sid",
-                "email", "email_verified", "amr"
+                "email", "email_verified", "amr", "sso_connection"
             ],
         })
     }
@@ -339,6 +339,12 @@ struct AccessClaims<'a> {
     email: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     email_verified: Option<bool>,
+    /// The enterprise SSO connection the session was signed in through
+    /// (issue #627), present only while that connection belongs to the
+    /// client this token is for (`aud`). Omitted otherwise, so an ordinary
+    /// login and a foreign client's token never carry it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    sso_connection: Option<&'a str>,
     amr: &'a [String],
 }
 
@@ -358,6 +364,11 @@ fn iso(t: OffsetDateTime) -> String {
 /// id, `aud` the client id, `sid` the session id, `exp`/`iat` from
 /// the `Clock` port, `amr` the session's login methods.
 ///
+/// `sso_connection` is the connection id to name in the token, already
+/// resolved by the caller to "the session's connection, and only while it
+/// belongs to `client_id`" — the ownership rule is not a token-shape rule
+/// and lives in the token endpoint (`token_endpoint`), where the client is known.
+///
 /// # Errors
 ///
 /// [`TokenError::Unconfigured`] when no signing keys resolved;
@@ -369,6 +380,10 @@ fn iso(t: OffsetDateTime) -> String {
 /// Never in practice: the documented panics are the `time` crate's
 /// nanosecond truncation and RFC 3339 formatting, both infallible on
 /// this path.
+// The eight arguments are the eight things an RFC 9068 token says; bundling
+// them into a struct would only move the list somewhere the claims are read
+// from, and `sso_connection` adding the eighth is what issue #627 is.
+#[allow(clippy::too_many_arguments)]
 pub fn mint_access_token(
     keys: &SigningKeys,
     clock: &dyn Clock,
@@ -376,6 +391,7 @@ pub fn mint_access_token(
     user_id: &str,
     user_email: Option<(&str, bool)>,
     client_id: &str,
+    sso_connection: Option<&str>,
     amr: &[String],
 ) -> Result<String, TokenError> {
     let now = clock.now().replace_nanosecond(0).expect("in range");
@@ -388,6 +404,7 @@ pub fn mint_access_token(
         sid: session_id,
         email: user_email.map(|(email, _)| email),
         email_verified: user_email.map(|(_, verified)| verified),
+        sso_connection,
         amr,
     };
     let header = json!({
@@ -1049,6 +1066,7 @@ mod tests {
             "user_1",
             Some(("user@example.com", true)),
             "client_1",
+            None,
             &amr,
         )
         .expect("mint");
@@ -1087,10 +1105,40 @@ mod tests {
         assert_eq!(claims["email"], "user@example.com");
         assert_eq!(claims["email_verified"], true);
         assert_eq!(claims["amr"], json!(["user", "passkey"]));
+        // No SSO connection: the claim is omitted, not null.
+        assert!(claims.get("sso_connection").is_none());
+
+        // An SSO login names the connection; it is a claim like any other.
+        let sso = mint_access_token(
+            &keys,
+            &clock,
+            "sess_1",
+            "user_1",
+            None,
+            "client_1",
+            Some("ssoc_1"),
+            &["sso".to_owned()],
+        )
+        .expect("mint");
+        let sso_claims = sso.split('.').nth(1).expect("claims");
+        let sso_claims: Value =
+            serde_json::from_slice(&Base64UrlUnpadded::decode_vec(sso_claims).expect("b64"))
+                .expect("json");
+        assert_eq!(sso_claims["sso_connection"], "ssoc_1");
+        assert_eq!(sso_claims["amr"], json!(["sso"]));
 
         // No email: the claims are omitted, not null.
-        let bare = mint_access_token(&keys, &clock, "sess_1", "user_1", None, "client_1", &[])
-            .expect("mint");
+        let bare = mint_access_token(
+            &keys,
+            &clock,
+            "sess_1",
+            "user_1",
+            None,
+            "client_1",
+            None,
+            &[],
+        )
+        .expect("mint");
         let bare_claims = bare.split('.').nth(1).expect("claims");
         let bare_claims: Value =
             serde_json::from_slice(&Base64UrlUnpadded::decode_vec(bare_claims).expect("b64"))

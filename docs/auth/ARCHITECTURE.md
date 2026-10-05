@@ -22,7 +22,7 @@ Historical (both landed). Two small things, filed in the harness repo as one iss
 
 ## Deferred
 
-Enterprise SAML SSO is out of scope for this epic and has no issues. When a venture needs it, it becomes a separate epic on top of the same session and client model.
+Enterprise SAML SSO is out of scope for this epic and has no issues. When a venture needs it, it becomes a separate epic on top of the same session and client model. Per-organization enterprise SSO over OpenID Connect is implemented (issue #627): a connection is one organization's `IdP`, owned by a client, and a sign-in through it marks the session and the access token. See [SSO.md](SSO.md).
 
 ## Order
 

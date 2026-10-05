@@ -37,7 +37,10 @@ const FORCE_COOLDOWN_SECS: i64 = 30;
 pub(crate) enum DiscoveryError {
     #[error("{provider} discovery failed: {detail}")]
     Failed {
-        provider: &'static str,
+        /// The issuer, not the slug: an SSO connection's provider is one
+        /// row's issuer (issue #627), and its slug is the same for all of
+        /// them.
+        provider: String,
         detail: String,
     },
 }
@@ -93,25 +96,30 @@ struct Cached {
     forced_at: Option<i64>,
 }
 
-/// One cache per module instance, keyed by provider slug. `RwLock` rather
-/// than `Mutex` because reads dominate and the clippy configuration
-/// disallows `Mutex` (ADR 0007); this is not request state, it is a
-/// per-isolate memo of a public document.
+/// One cache per module instance, keyed by issuer. `RwLock` rather than
+/// `Mutex` because reads dominate and the clippy configuration disallows
+/// `Mutex` (ADR 0007); this is not request state, it is a per-isolate memo
+/// of a public document.
+///
+/// The key is the issuer rather than the provider slug because an SSO
+/// connection's issuer is a row's value, not a constant (issue #627) —
+/// and because two connections pointed at the same `IdP` share one document
+/// and one JWKS, which is what discovery is.
 #[derive(Default)]
 pub(crate) struct Cache {
-    entries: RwLock<Vec<(&'static str, Cached)>>,
-    /// When discovery last failed, per provider. While a provider is down,
+    entries: RwLock<Vec<(String, Cached)>>,
+    /// When discovery last failed, per issuer. While an issuer is down,
     /// every request would otherwise re-run two upstream fetches.
-    failures: RwLock<Vec<(&'static str, i64)>>,
+    failures: RwLock<Vec<(String, i64)>>,
 }
 
 impl Cache {
     /// The cached document, when it is still usable for this kind of read.
     /// An ordinary read wants a fresh entry; a forced one wants only to know
     /// whether another forced refresh happened moments ago.
-    fn read(&self, slug: &str, now: i64, force: bool) -> Option<CoreProviderMetadata> {
+    fn read(&self, key: &str, now: i64, force: bool) -> Option<CoreProviderMetadata> {
         let entries = self.entries.read().ok()?;
-        let (_, cached) = entries.iter().find(|(key, _)| *key == slug)?;
+        let (_, cached) = entries.iter().find(|(entry, _)| entry == key)?;
         let usable = if force {
             cached
                 .forced_at
@@ -122,12 +130,12 @@ impl Cache {
         usable.then(|| cached.metadata.clone())
     }
 
-    fn write(&self, slug: &'static str, metadata: &CoreProviderMetadata, now: i64, force: bool) {
+    fn write(&self, key: String, metadata: &CoreProviderMetadata, now: i64, force: bool) {
         let Ok(mut entries) = self.entries.write() else {
             return;
         };
         let forced_at = force.then_some(now);
-        if let Some(slot) = entries.iter_mut().find(|(key, _)| *key == slug) {
+        if let Some(slot) = entries.iter_mut().find(|(entry, _)| *entry == key) {
             slot.1.metadata = metadata.clone();
             slot.1.fetched_at = now;
             if forced_at.is_some() {
@@ -135,7 +143,7 @@ impl Cache {
             }
         } else {
             entries.push((
-                slug,
+                key,
                 Cached {
                     metadata: metadata.clone(),
                     fetched_at: now,
@@ -159,67 +167,71 @@ impl Cache {
         force: bool,
     ) -> Result<CoreProviderMetadata, DiscoveryError> {
         let now = clock.now().unix_timestamp();
-        if let Some(metadata) = self.read(provider.slug, now, force) {
+        // The issuer is both the cache key and the discovery document's
+        // own claim about itself: `discover` refuses a document whose
+        // `issuer` is not the one asked for, which is what pins an SSO
+        // connection to the IdP it was configured with.
+        let key = provider.issuer.to_string();
+        if let Some(metadata) = self.read(&key, now, force) {
             return Ok(metadata);
         }
-        if self.failed_recently(provider.slug, now) {
+        if self.failed_recently(&key, now) {
             return Err(DiscoveryError::Failed {
-                provider: provider.slug,
+                provider: key,
                 detail: "discovery failed moments ago; not retrying yet".to_owned(),
             });
         }
 
-        let issuer =
-            IssuerUrl::new(provider.issuer.to_owned()).map_err(|err| DiscoveryError::Failed {
-                provider: provider.slug,
-                detail: format!("issuer url: {err}"),
-            })?;
+        let issuer = IssuerUrl::new(key.clone()).map_err(|err| DiscoveryError::Failed {
+            provider: key.clone(),
+            detail: format!("issuer url: {err}"),
+        })?;
         let client = PortHttpClient::new(http);
         let metadata = CoreProviderMetadata::discover_async(issuer, &client)
             .await
             .map_err(|err| {
-                self.remember_failure(provider.slug, now);
+                self.remember_failure(key.clone(), now);
                 DiscoveryError::Failed {
-                    provider: provider.slug,
+                    provider: key.clone(),
                     detail: err.to_string(),
                 }
             })?;
 
-        self.write(provider.slug, &metadata, now, force);
+        self.write(key, &metadata, now, force);
         Ok(metadata)
     }
 
-    fn failed_recently(&self, slug: &str, now: i64) -> bool {
+    fn failed_recently(&self, key: &str, now: i64) -> bool {
         let Ok(failures) = self.failures.read() else {
             return false;
         };
         failures
             .iter()
-            .find(|(key, _)| *key == slug)
+            .find(|(entry, _)| entry == key)
             .is_some_and(|(_, at)| now - at < FORCE_COOLDOWN_SECS)
     }
 
-    fn remember_failure(&self, slug: &'static str, now: i64) {
+    fn remember_failure(&self, key: String, now: i64) {
         let Ok(mut failures) = self.failures.write() else {
             return;
         };
-        if let Some(slot) = failures.iter_mut().find(|(key, _)| *key == slug) {
+        if let Some(slot) = failures.iter_mut().find(|(entry, _)| *entry == key) {
             slot.1 = now;
         } else {
-            failures.push((slug, now));
+            failures.push((key, now));
         }
     }
 
     /// Whether the cached JWKS holds a given key id. Used to decide whether
     /// a verification failure is worth one forced refresh, rather than
     /// refreshing on every failure.
-    pub(crate) fn knows_key(&self, slug: &str, key_id: &str) -> bool {
+    pub(crate) fn knows_key(&self, key: &str, key_id: &str) -> bool {
         let Ok(entries) = self.entries.read() else {
             return false;
         };
         entries
             .iter()
-            .find(|(key, _)| *key == slug)
+            .find(|(entry, _)| entry == key)
             .is_some_and(|(_, cached)| jwks_has_key(cached.metadata.jwks(), key_id))
     }
 }

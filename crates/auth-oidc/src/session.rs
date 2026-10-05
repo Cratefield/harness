@@ -23,9 +23,20 @@ pub(crate) const EVENT_AUTO_LINKED: &str = "auth-oidc.auto_linked";
 /// `mfa`, whatever the provider did behind its own door: we did not see it.
 const AMR: [&str; 1] = ["federated"];
 
+/// An enterprise SSO sign-in says so in `amr` (issue #627) as well as in
+/// the `sso_connection` claim, because a relying party that only reads
+/// `amr` still has to be able to tell "our own `IdP` vouched for this" from
+/// "Google did".
+const SSO_AMR: [&str; 1] = ["sso"];
+
 /// What the provider told us, already normalized.
 pub(crate) struct Identity {
     pub subject: String,
+    /// The ID token's `iss`, as the provider wrote it. Carried out of the
+    /// verifier so an SSO callback can compare it with the connection's
+    /// stored issuer and refuse with a reason it can name (issue #627);
+    /// the signature check already refused a token from anywhere else.
+    pub issuer: String,
     pub email: Option<String>,
     pub email_verified: bool,
     pub name: Option<String>,
@@ -74,29 +85,74 @@ pub(crate) async fn complete(
     identity: &Identity,
     caller: &Caller<'_>,
 ) -> Result<Completed, Problem> {
-    let outcome = federated::complete(
-        &CorePorts {
-            db: ports.db,
-            clock: ports.clock,
-            id_gen: ports.id_gen,
-        },
-        &FederatedIdentity {
-            provider: provider.slug,
-            subject: &identity.subject,
-            email: identity.email.as_deref(),
-            email_verified: identity.email_verified,
-            name: identity.name.as_deref(),
-        },
-        &CoreCaller {
-            current_user: caller.current_user,
-            presented_cookie: caller.presented_cookie,
-            presented_session_id: caller.presented_session_id,
-            ip: caller.ip,
-            user_agent: caller.user_agent,
-        },
-        &AMR,
+    complete_for(ctx, scope, ports, provider, identity, caller, None).await
+}
+
+/// [`complete`] for a sign-in that came through an enterprise SSO
+/// connection (issue #627): the same linking rules, the same session, with
+/// `sso_connections.id` recorded on it and `amr` saying so.
+pub(crate) async fn complete_sso(
+    ctx: &ModuleContext,
+    scope: &Scope,
+    ports: &Ports<'_>,
+    provider: &Provider,
+    identity: &Identity,
+    caller: &Caller<'_>,
+    connection_id: &str,
+) -> Result<Completed, Problem> {
+    complete_for(
+        ctx,
+        scope,
+        ports,
+        provider,
+        identity,
+        caller,
+        Some(connection_id),
     )
-    .await;
+    .await
+}
+
+async fn complete_for(
+    ctx: &ModuleContext,
+    scope: &Scope,
+    ports: &Ports<'_>,
+    provider: &Provider,
+    identity: &Identity,
+    caller: &Caller<'_>,
+    sso_connection: Option<&str>,
+) -> Result<Completed, Problem> {
+    let core_ports = CorePorts {
+        db: ports.db,
+        clock: ports.clock,
+        id_gen: ports.id_gen,
+    };
+    let core_identity = FederatedIdentity {
+        provider: provider.slug,
+        subject: &identity.subject,
+        email: identity.email.as_deref(),
+        email_verified: identity.email_verified,
+        name: identity.name.as_deref(),
+    };
+    let core_caller = CoreCaller {
+        current_user: caller.current_user,
+        presented_cookie: caller.presented_cookie,
+        presented_session_id: caller.presented_session_id,
+        ip: caller.ip,
+        user_agent: caller.user_agent,
+    };
+    let outcome = match sso_connection {
+        Some(connection_id) => {
+            federated::complete_sso(
+                &core_ports,
+                &core_identity,
+                &core_caller,
+                &SSO_AMR,
+                connection_id,
+            )
+            .await
+        }
+        None => federated::complete(&core_ports, &core_identity, &core_caller, &AMR).await,
+    };
 
     // An auto-link is written before the account's status is read, so
     // it must be announced even when the sign-in is then refused:

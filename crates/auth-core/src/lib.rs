@@ -46,8 +46,17 @@ pub mod linking;
 mod locale;
 mod secrets;
 mod sessions;
+mod sso;
 mod store;
 mod token_endpoint;
+
+/// Per-organization enterprise SSO connections (issue #627): the row
+/// shape, the sealing of the stored client secret, the domain rules, and
+/// the admin API that writes them. `auth-oidc` runs the flow.
+pub use sso::{
+    SSO_DOMAIN_CLAIMED, SSO_PROVIDER, SSO_UNAUTHORIZED, SSO_UNCONFIGURED, SsoSecretError,
+    domain_of_email, normalize_domain, open_client_secret, valid_domain,
+};
 
 /// Exact-match redirect URI validation (issue #7): the one matching
 /// rule, used at registration and — from issue #10 — at `/authorize`.
@@ -68,7 +77,7 @@ pub use secrets::{
 pub use sessions::{
     ABSOLUTE_CAP_DAYS, COOKIE_NAME, IssuedSession, Login, SESSION_INVALID, SESSION_VALUE_BYTES,
     SLIDE_AFTER_SECS, SLIDE_WINDOW_DAYS, Session, SessionError, ValidSession, clear_cookie,
-    cookie_value, issue, revoke_all, set_cookie, ua_family, validate,
+    cookie_value, issue, issue_sso, revoke_all, set_cookie, ua_family, validate,
 };
 pub use store::{
     Bytes, CLIENT_CONFIDENTIAL, CLIENT_PUBLIC, CREDENTIAL_PASSKEY, CREDENTIAL_PASSWORD,
@@ -76,20 +85,21 @@ pub use store::{
     DELETION_NOTHING_TO_DO, DELETION_PENDING, DELETION_UNLINKED, DeletionJobRow, IdentityRow,
     PROVIDER_APPLE, PROVIDER_GOOGLE, PROVIDER_IMPORT, PROVIDER_MAGIC_LINK, PROVIDER_META,
     PROVIDER_PASSKEY, PROVIDER_PASSWORD, Redacted, STATUS_ACTIVE, STATUS_DISABLED, SessionRow,
-    SingleUseTokenRow, TOKEN_AUTHORIZATION_CODE, TOKEN_EMAIL_VERIFICATION, TOKEN_MAGIC_LINK,
-    TOKEN_PASSWORD_RESET, TOKEN_REFRESH, TOKEN_WEBAUTHN_CHALLENGE, UserRow, client_by_id,
-    complete_deletion_job, consume_single_use_token, credentials_by_user, delete_credential,
-    delete_identity, delete_user, deletion_job_by_code, identities_by_user,
+    SingleUseTokenRow, SsoConnectionRow, TOKEN_AUTHORIZATION_CODE, TOKEN_EMAIL_VERIFICATION,
+    TOKEN_MAGIC_LINK, TOKEN_PASSWORD_RESET, TOKEN_REFRESH, TOKEN_WEBAUTHN_CHALLENGE, UserRow,
+    client_by_id, complete_deletion_job, consume_single_use_token, credentials_by_user,
+    delete_credential, delete_identity, delete_user, deletion_job_by_code, identities_by_user,
     identity_by_provider_subject, insert_client, insert_credential, insert_deletion_job,
-    insert_identity, insert_redirect_uri, insert_session, insert_single_use_token, insert_user,
-    list_clients, mark_passkey_suspect, passkey_by_credential_id, password_credential,
-    pending_deletion_jobs, purge_expired_sessions, purge_expired_single_use_tokens, purge_user,
-    redirect_uris_for_client, replace_redirect_uris, retire_unconsumed_tokens, revoke_all_sessions,
-    revoke_session, rotate_client_secret, session_by_id, session_by_token_hash, sessions_by_user,
-    set_password_hash, set_password_lockout, set_primary_email_verified, single_use_token_by_hash,
-    slide_session, touch_credential_used, touch_identity_login, touch_session_seen,
-    update_client_name, update_client_status, update_passkey_sign_count, user_by_id,
-    user_by_primary_email,
+    insert_identity, insert_redirect_uri, insert_session, insert_single_use_token,
+    insert_sso_connection, insert_user, list_clients, mark_passkey_suspect,
+    passkey_by_credential_id, password_credential, pending_deletion_jobs, purge_expired_sessions,
+    purge_expired_single_use_tokens, purge_user, redirect_uris_for_client, replace_redirect_uris,
+    retire_unconsumed_tokens, revoke_all_sessions, revoke_session, rotate_client_secret,
+    session_by_id, session_by_token_hash, sessions_by_user, set_password_hash,
+    set_password_lockout, set_primary_email_verified, single_use_token_by_hash, slide_session,
+    sso_connection_by_id, sso_connections_for_client, touch_credential_used, touch_identity_login,
+    touch_session_seen, update_client_name, update_client_status, update_passkey_sign_count,
+    update_sso_connection, user_by_id, user_by_primary_email,
 };
 pub use tokens::{
     ACCESS_TOKEN_SECS, DEFAULT_REFRESH_REUSE_GRACE_MAX_USES, JWKS_CACHE_CONTROL,
@@ -218,6 +228,23 @@ const MIGRATION_IMPORT_PROVIDER_POSTGRES: SqlMigration = SqlMigration::new(
     include_str!("../migrations/postgres/0008_import_provider.sql"),
 );
 
+/// The SSO-connections migration of issue #627: the
+/// `sso_connections` table, the widened `identities` provider CHECK
+/// (adding `sso`) and the `sessions.sso_connection` column.
+const MIGRATION_SSO_CONNECTIONS: SqlMigration = SqlMigration::new(
+    "0010",
+    "sso_connections",
+    include_str!("../migrations/sqlite/0010_sso_connections.sql"),
+);
+
+/// The Postgres form of the SSO-connections migration: Postgres alters
+/// the named CHECK in place rather than rebuilding the table.
+const MIGRATION_SSO_CONNECTIONS_POSTGRES: SqlMigration = SqlMigration::new(
+    "0010",
+    "sso_connections",
+    include_str!("../migrations/postgres/0010_sso_connections.sql"),
+);
+
 /// Router state: the module context and the resolved rotation overlap.
 pub(crate) struct ModuleState {
     pub(crate) ctx: Arc<ModuleContext>,
@@ -323,6 +350,9 @@ impl Module for AuthCore {
             "clients",
             "client_redirect_uris",
             "deletion_jobs",
+            // Issue #627: one row per (client, organization) identity
+            // provider.
+            "sso_connections",
         ]
     }
 
@@ -438,6 +468,21 @@ impl Module for AuthCore {
                 "The exact addresses each registered application may be sent back to once a \
                  sign-in finishes. It describes where software lives, not a person.",
             ),
+            // An organization's own identity provider (issue #627). It
+            // describes a company's IdP, not a person: `org_ref` is the
+            // venture's own name for the organization, the issuer and
+            // domains say where its people sign in, and the client secret
+            // is the application's, sealed. Nothing here is about an
+            // individual, and an erasure must not touch it — deleting a
+            // connection would break sign-in for everyone else at the
+            // organization.
+            PersonalDataSet::none(
+                "sso_connections",
+                "An organization's own identity provider: the venture's name for the \
+                 organization, the issuer its people sign in at, the client credentials this \
+                 service presents there (sealed), and the email domains that route to it. It \
+                 describes a company, not a person.",
+            ),
             // The deletion queue (issue #272). Last in the catalogue, which
             // means first under erasure — it is `Retain`, so nothing is
             // deleted from it either way, and the position simply keeps the
@@ -474,7 +519,7 @@ impl Module for AuthCore {
     }
 
     fn migrations(&self) -> cratefield_core::Migrations {
-        const MIGRATIONS: [SqlMigration; 9] = [
+        const MIGRATIONS: [SqlMigration; 10] = [
             MIGRATION_INIT,
             MIGRATION_ROTATION,
             MIGRATION_TOKENS,
@@ -484,16 +529,17 @@ impl Module for AuthCore {
             MIGRATION_USER_LOCALE,
             MIGRATION_IMPORT_PROVIDER,
             MIGRATION_TOKEN_KINDS_RECOVERY,
+            MIGRATION_SSO_CONNECTIONS,
         ];
         // The array is the apply order; this refuses a gap, a duplicate
         // or an entry out of order at build time (issue #27).
         const _: () = cratefield_core::assert_migration_set(&MIGRATIONS);
         // The runner selects one set wholesale (harness issue #18), so the
-        // Postgres list carries all nine: the four whose SQL truly differs
-        // (BYTEA for the byte columns in three, and the in-place CHECK rename
-        // in the import) and the five portable ones reused from the sqlite
-        // files unchanged (ADR 0004).
-        const MIGRATIONS_POSTGRES: [SqlMigration; 9] = [
+        // Postgres list carries all ten: the five whose SQL truly differs
+        // (BYTEA for the byte columns in three, the in-place CHECK rename
+        // in the import, and the same in SSO) and the five portable ones
+        // reused from the sqlite files unchanged (ADR 0004).
+        const MIGRATIONS_POSTGRES: [SqlMigration; 10] = [
             MIGRATION_INIT_POSTGRES,
             MIGRATION_ROTATION,
             MIGRATION_TOKENS_POSTGRES,
@@ -503,6 +549,7 @@ impl Module for AuthCore {
             MIGRATION_USER_LOCALE,
             MIGRATION_IMPORT_PROVIDER_POSTGRES,
             MIGRATION_TOKEN_KINDS_RECOVERY_POSTGRES,
+            MIGRATION_SSO_CONNECTIONS_POSTGRES,
         ];
         // The array is the apply order; this refuses a gap, a duplicate
         // or an entry out of order at build time (issue #27).
@@ -619,6 +666,7 @@ impl Module for AuthCore {
             .merge(sessions::router().with_state(Arc::clone(&state)))
             .merge(authorize::router().with_state(Arc::clone(&state)))
             .merge(import::router(Arc::clone(&state)))
+            .merge(sso::router(Arc::clone(&state)))
             .merge(token_endpoint::router().with_state(state))
     }
 
@@ -668,7 +716,9 @@ mod tests {
                 "client_redirect_uris",
                 // Issue #272: the table the migrations created and this list
                 // never mentioned, so nothing exported or erased it.
-                "deletion_jobs"
+                "deletion_jobs",
+                // Issue #627: the per-organization SSO connections.
+                "sso_connections"
             ]
         );
         assert!(!module.public_writes());
@@ -701,7 +751,7 @@ mod tests {
     #[test]
     fn migrations_are_the_embedded_set_in_order() {
         let migrations = AuthCore::new().migrations();
-        assert_eq!(migrations.sqlite.len(), 9);
+        assert_eq!(migrations.sqlite.len(), 10);
         assert_eq!(migrations.sqlite[0].id, "0001");
         assert_eq!(migrations.sqlite[0].name, "init");
         assert_eq!(migrations.sqlite[1].id, "0002");
@@ -720,10 +770,12 @@ mod tests {
         assert_eq!(migrations.sqlite[7].name, "import_provider");
         assert_eq!(migrations.sqlite[8].id, "0009");
         assert_eq!(migrations.sqlite[8].name, "token_kinds_recovery");
+        assert_eq!(migrations.sqlite[9].id, "0010");
+        assert_eq!(migrations.sqlite[9].name, "sso_connections");
         // The Postgres set is selected wholesale (harness issue #18), so it
         // must mirror the sqlite one id-for-id: only the files whose SQL
         // truly differs carry an override, the rest are the same const.
-        assert_eq!(migrations.postgres.len(), 9);
+        assert_eq!(migrations.postgres.len(), 10);
         for (pg, sqlite) in migrations.postgres.iter().zip(migrations.sqlite) {
             assert_eq!(pg.id, sqlite.id);
             assert_eq!(pg.name, sqlite.name);

@@ -43,6 +43,9 @@ human-readable page at each `<public_url>/problems/<slug>`.
 | `auth/password-token-refused` | 400 | That link is no longer valid | `cratefield-auth-password` | Missing, expired, already used, or never issued |
 | `auth/password-unsuitable` | 400 | That password cannot be used | `cratefield-auth-password` | Too short, too long, or found in a public breach corpus |
 | `auth/session-invalid` | 401 | A valid session is required | `cratefield-auth-core` | Missing, unknown, revoked or expired session — not distinguished |
+| `auth/sso-domain-claimed` | 409 | That email domain is already in use | `cratefield-auth-core` | An email domain routes to at most one active SSO connection per client |
+| `auth/sso-unauthorized` | 401 | That SSO request is not authorized | `cratefield-auth-core` | The admin API takes HTTP Basic with a confidential client's id and secret |
+| `auth/sso-unconfigured` | 503 | SSO connections are not configured on this deployment | `cratefield-auth-core` | AUTH_CORE_SSO_TOKEN_KEY is missing or unusable |
 | `auth/token-request-refused` | 400 | Token request refused | `cratefield-auth-core` | Unknown client, wrong secret, or an invalid grant — deliberately not distinguished |
 | `auth/tokens-unconfigured` | 503 | Token issuing is not configured | `cratefield-auth-core` | Signing keys are absent; no token can be minted or published |
 | `bad-cursor` | 400 | Not a cursor for this table | `cratefield-tables-api` | The `after` parameter is not the `next` value from a previous page of this table. |
