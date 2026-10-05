@@ -1,14 +1,23 @@
 name: deploy auth
 
-# The deployable auth Worker (auth#41): `main` -> staging, an `auth-v*` tag
-# -> production behind the environment approval gate.
+# The auth Worker, deployed as one branded instance per app (issue #777).
+# Each instance is a directory `instances/<app>/` with its own
+# `wrangler.toml` (route, D1, branding, passkey RP id); every instance builds
+# the same `crates/auth-worker` crate.
 #
-# Moved here with `Factory-Zero/auth` (ADR 0013). Two things changed:
-# `wrangler.toml`, `migrations/` and `smoke.sh` now live beside the crate
-# in `crates/auth-worker/`, so every wrangler step runs from there; and the
-# production trigger is `auth-v*` rather than `v*`, because a bare `v*` tag
-# in this repository is a harness release, not an auth deploy.
+# - `main` -> every instance's staging.
+# - an `auth-v*` tag -> every instance's production, each behind its own
+#   `auth-<app>-production` environment approval gate.
+# - `workflow_dispatch` -> one instance (or all), one environment.
 #
+# Cloudflare credentials are environment-scoped secrets
+# (`auth-<app>-staging`, `auth-<app>-production`), so a self-hosted instance
+# and a Cratefield-managed one can live on different Cloudflare accounts.
+# An instance whose D1 ids are still `REPLACE_WITH_*` placeholders is not
+# provisioned yet and is skipped with a notice rather than failed.
+#
+# The production trigger is `auth-v*` rather than `v*`, because a bare `v*`
+# tag in this repository is a harness release, not an auth deploy.
 # `paths` keeps an unrelated harness change from redeploying auth.
 on:
   push:
@@ -16,59 +25,129 @@ on:
     tags: ["auth-v*"]
     paths:
       - "crates/auth-*/**"
+      - "instances/**"
       - ".github/workflows/deploy-auth.yml"
+  workflow_dispatch:
+    inputs:
+      instance:
+        description: "Instance directory under instances/ (or 'all')"
+        required: true
+        default: all
+      environment:
+        description: "staging or production"
+        required: true
+        type: choice
+        options: [staging, production]
+        default: staging
+
+permissions:
+  contents: read
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  staging:
-    name: deploy staging
-    if: github.ref == 'refs/heads/main'
+  plan:
+    name: plan
     runs-on: ubuntu-latest
+    outputs:
+      instances: ${{ steps.plan.outputs.instances }}
+      environment: ${{ steps.plan.outputs.environment }}
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: "1.98.1"
-          targets: wasm32-unknown-unknown
-      - uses: Swatinem/rust-cache@v2
-      - name: Deploy (staging) + apply migrations
-        uses: cloudflare/wrangler-action@v3
-        with:
-          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          workingDirectory: crates/auth-worker
-          command: deploy
-          preCommands: |
-            cargo install -q worker-build
-            npx wrangler d1 migrations apply DB --remote
-      - name: Smoke staging
-        working-directory: crates/auth-worker
-        run: ./smoke.sh "${{ vars.AUTH_STAGING_URL }}"
+      - id: plan
+        env:
+          EVENT: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+          INPUT_INSTANCE: ${{ inputs.instance }}
+          INPUT_ENVIRONMENT: ${{ inputs.environment }}
+        run: |
+          set -euo pipefail
+          all="$(for f in instances/*/wrangler.toml; do basename "$(dirname "$f")"; done | sort)"
+          if [ "$EVENT" = "workflow_dispatch" ]; then
+            environment="$INPUT_ENVIRONMENT"
+            if [ "$INPUT_INSTANCE" = "all" ]; then
+              chosen="$all"
+            elif printf '%s\n' "$all" | grep -qx -- "$INPUT_INSTANCE"; then
+              chosen="$INPUT_INSTANCE"
+            else
+              echo "::error::no instances/${INPUT_INSTANCE}/wrangler.toml (known: ${all//$'\n'/ })"
+              exit 1
+            fi
+          elif [[ "$REF" == refs/tags/auth-v* ]]; then
+            environment=production
+            chosen="$all"
+          else
+            environment=staging
+            chosen="$all"
+          fi
+          json="$(printf '%s\n' "$chosen" | python3 -c 'import json,sys; print(json.dumps([l.strip() for l in sys.stdin if l.strip()]))')"
+          echo "instances=$json" >> "$GITHUB_OUTPUT"
+          echo "environment=$environment" >> "$GITHUB_OUTPUT"
+          echo "Deploying $json to $environment"
 
-  production:
-    name: deploy production
-    if: startsWith(github.ref, 'refs/tags/auth-v')
+  deploy:
+    name: deploy ${{ matrix.instance }} (${{ needs.plan.outputs.environment }})
+    needs: plan
     runs-on: ubuntu-latest
-    environment: production # the approval gate
+    strategy:
+      fail-fast: false
+      matrix:
+        instance: ${{ fromJSON(needs.plan.outputs.instances) }}
+    # The approval gate and the scope of this instance's Cloudflare secrets.
+    environment: auth-${{ matrix.instance }}-${{ needs.plan.outputs.environment }}
+    concurrency:
+      group: deploy-auth-${{ matrix.instance }}-${{ needs.plan.outputs.environment }}
+      cancel-in-progress: false
+    env:
+      INSTANCE_DIR: instances/${{ matrix.instance }}
+      TARGET_ENV: ${{ needs.plan.outputs.environment }}
     steps:
       - uses: actions/checkout@v4
+
+      - name: Read the instance
+        id: instance
+        run: |
+          set -euo pipefail
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import os, tomllib
+          path = os.path.join(os.environ["INSTANCE_DIR"], "wrangler.toml")
+          with open(path, "rb") as fh:
+              top = tomllib.load(fh)
+          env = top if os.environ["TARGET_ENV"] == "staging" else top["env"]["production"]
+          url = env["vars"]["AUTH_PUBLIC_URL"].rstrip("/")
+          d1 = env["d1_databases"][0]["database_id"]
+          ready = "false" if d1.startswith("REPLACE_WITH_") else "true"
+          print(f"url={url}")
+          print(f"ready={ready}")
+          print(f"env_flag={'' if os.environ['TARGET_ENV'] == 'staging' else '--env production'}")
+          PY
+
+      - name: Not provisioned yet
+        if: steps.instance.outputs.ready != 'true'
+        run: |
+          echo "::notice::instances/${{ matrix.instance }} has placeholder D1 ids for ${TARGET_ENV}; skipping. See docs/auth/MANAGED-INSTANCES.md."
+
       - uses: dtolnay/rust-toolchain@master
+        if: steps.instance.outputs.ready == 'true'
         with:
           toolchain: "1.98.1"
           targets: wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@v2
-      - name: Deploy (production) + apply migrations
+        if: steps.instance.outputs.ready == 'true'
+
+      - name: Deploy + apply migrations
+        if: steps.instance.outputs.ready == 'true'
         uses: cloudflare/wrangler-action@v3
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          workingDirectory: crates/auth-worker
-          command: deploy --env production
+          workingDirectory: ${{ env.INSTANCE_DIR }}
+          command: deploy ${{ steps.instance.outputs.env_flag }}
           preCommands: |
             cargo install -q worker-build
-            npx wrangler d1 migrations apply DB --env production --remote
-      - name: Smoke production
-        working-directory: crates/auth-worker
-        run: ./smoke.sh "https://auth.factory0.ventures"
+            npx wrangler d1 migrations apply DB ${{ steps.instance.outputs.env_flag }} --remote
+
+      - name: Smoke ${{ steps.instance.outputs.url }}
+        if: steps.instance.outputs.ready == 'true'
+        run: ./crates/auth-worker/smoke.sh "${{ steps.instance.outputs.url }}"

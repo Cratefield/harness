@@ -46,6 +46,7 @@ getrandom = { workspace = true }
 cratefield-testing = { workspace = true }
 cratefield-adapter-sqlite = { workspace = true }
 auth_magic_link = { package = "cratefield-auth-magic-link", path = "../auth-magic-link" }
+toml = { workspace = true }
 pollster = { workspace = true }
 tower = { workspace = true }
 axum = { workspace = true }

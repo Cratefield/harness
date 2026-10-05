@@ -131,8 +131,11 @@ a D1 binding, and a `migrations/` dir maintained by `fz migrations collect`.
 | `factory0` | `api.factory0.ventures` — signup and waitlist for factory0.ventures. Not deployed |
 
 Deployable Workers that are crates rather than ventures keep their
-`wrangler.toml` and `migrations/` beside the crate: `crates/auth-worker`
-and `crates/control-plane`.
+`migrations/` beside the crate: `crates/auth-worker` and
+`crates/control-plane`. The control plane's `wrangler.toml` sits beside it
+too. The auth Worker is deployed once per app, so its configurations live
+in `instances/<app>/wrangler.toml`, each building the same crate (issue
+#777).
 
 ## 4. The module contract
 
