@@ -26,17 +26,18 @@ pub(crate) fn is_bucket_table(schema: &str, table: &str) -> bool {
 pub(crate) fn attach(storage: &mut Storage, policies: &[RawPolicy]) {
     // No buckets, or a bucket list the role cannot see (issue #723): the
     // policies cannot be attached, so they stay discoverable here.
-    let Some(buckets) = storage.buckets.as_mut().filter(|buckets| !buckets.is_empty()) else {
+    let Some(buckets) = storage
+        .buckets
+        .as_mut()
+        .filter(|buckets| !buckets.is_empty())
+    else {
         storage.unattached_policies = policies
             .iter()
             .map(|raw| policy_for(raw, true, false))
             .collect();
         return;
     };
-    let ids: Vec<String> = buckets
-        .iter()
-        .map(|bucket| bucket.id.clone())
-        .collect();
+    let ids: Vec<String> = buckets.iter().map(|bucket| bucket.id.clone()).collect();
     for raw in policies {
         let columns: &[&str] = if raw.table == "buckets" {
             &["id", "name"]
@@ -345,9 +346,16 @@ mod tests {
                 None,
             )],
         );
-        assert_eq!(named.buckets.as_ref().expect("buckets")[0].policies.len(), 1);
+        assert_eq!(
+            named.buckets.as_ref().expect("buckets")[0].policies.len(),
+            1
+        );
         assert!(!named.buckets.as_ref().expect("buckets")[0].policies[0].all_buckets);
-        assert!(named.buckets.as_ref().expect("buckets")[1].policies.is_empty());
+        assert!(
+            named.buckets.as_ref().expect("buckets")[1]
+                .policies
+                .is_empty()
+        );
 
         // Mixed: an unknown name drops out, the rest still attach.
         let mut mixed = storage_of(&[("receipts", false)]);
@@ -360,7 +368,10 @@ mod tests {
                 None,
             )],
         );
-        assert_eq!(mixed.buckets.as_ref().expect("buckets")[0].policies.len(), 1);
+        assert_eq!(
+            mixed.buckets.as_ref().expect("buckets")[0].policies.len(),
+            1
+        );
         assert!(!mixed.buckets.as_ref().expect("buckets")[0].policies[0].all_buckets);
 
         // Unparsed, or no existing bucket named: every bucket, flagged.
