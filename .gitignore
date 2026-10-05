@@ -23,3 +23,16 @@ node_modules/
 # that cannot be walked back.
 /control-plane-dev.kek
 *.kek
+
+# Credential stores and local-tool config. `git add -A` otherwise stages
+# them; the filename is the whole warning, so an empty one must be ignored
+# too. Root-anchored: examples/next-auth/.npmrc is a tracked template.
+/.env
+/.env.*
+/.netrc
+/.git-credentials
+/.npmrc
+/.pypirc
+/.envrc
+/.mcp.json
+/.gitmodules
