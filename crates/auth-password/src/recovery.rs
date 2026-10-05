@@ -390,7 +390,10 @@ fn render<T: serde::Serialize>(
         default,
         data,
         locale,
-        &ctx.venture,
+        // The instance's branding, so the mail reads like its pages
+        // (issue #777).
+        &cratefield_auth_core::Brand::from_config(&*ctx.config, &ctx.venture)
+            .mail_venture(&ctx.venture),
         &*ctx.config,
     ) {
         Ok(rendered) => Some(rendered),
@@ -466,7 +469,7 @@ pub(crate) fn send_verify_mail(
             issued.token
         );
         let data = VerifyMail {
-            venture: ctx.venture.name.clone(),
+            venture: cratefield_auth_core::Brand::from_config(&*ctx.config, &ctx.venture).name,
             link,
             hours: VERIFY_TTL_SECS / 3600,
         };
@@ -529,7 +532,7 @@ pub(crate) fn send_reset_mail(
             issued.token
         );
         let data = ResetMail {
-            venture: ctx.venture.name.clone(),
+            venture: cratefield_auth_core::Brand::from_config(&*ctx.config, &ctx.venture).name,
             link,
             minutes: RESET_TTL_SECS / 60,
         };
@@ -572,7 +575,7 @@ pub(crate) fn send_duplicate_mail(
             return;
         };
         let data = DuplicateMail {
-            venture: ctx.venture.name.clone(),
+            venture: cratefield_auth_core::Brand::from_config(&*ctx.config, &ctx.venture).name,
             reset_link: format!("{public_base}/v1/auth-password/reset/request"),
         };
         // Keyed on the user, not a token row: there is no token here, and

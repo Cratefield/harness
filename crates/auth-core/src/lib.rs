@@ -23,6 +23,10 @@
 #![forbid(unsafe_code)]
 
 mod authorize;
+/// The instance's branding (issue #777): display name, logo, accent,
+/// support address, footer and legal links, shared by every auth module.
+pub mod brand;
+pub use brand::Brand;
 // The two items a venture author needs from the chooser: the config key
 // and the slugs it accepts. They were `pub` inside this private module,
 // which meant nothing outside the crate could name either — the README
@@ -511,6 +515,17 @@ impl Module for AuthCore {
 
     fn validate_config(&self, cfg: &dyn Config) -> Result<(), ConfigError> {
         let module = ModuleConfig::new("auth-core", cfg);
+        // A malformed branding value is refused at boot rather than
+        // rendered (issue #777): the accent lands inside a `<style>` block
+        // and the name inside mail subjects.
+        let brand_problems = brand::Brand::problems(cfg);
+        if !brand_problems.is_empty() {
+            let mut errors = ConfigError::default();
+            for problem in brand_problems {
+                errors.push(format!("auth-core: {problem}"));
+            }
+            return Err(errors);
+        }
         if let Some(raw) = cfg.get(&module.key("SECRET_OVERLAP_SECS"))
             && raw.parse::<u32>().is_err()
         {

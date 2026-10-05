@@ -461,7 +461,7 @@ mod tests {
             Oidc::new()
                 .validate_config(&config(&[(
                     "AUTH_OIDC_REDIRECT_BASE",
-                    "http://auth.factory0.ventures"
+                    "http://auth.acme.example"
                 )]))
                 .is_err()
         );
@@ -469,7 +469,7 @@ mod tests {
             Oidc::new()
                 .validate_config(&config(&[(
                     "AUTH_OIDC_REDIRECT_BASE",
-                    "https://auth.factory0.ventures"
+                    "https://auth.acme.example"
                 )]))
                 .is_ok()
         );
@@ -489,7 +489,7 @@ mod tests {
         // It would otherwise answer 503 at runtime with nothing to say why.
         let error = Oidc::new()
             .validate_config(&config(&[
-                ("AUTH_OIDC_REDIRECT_BASE", "https://auth.factory0.ventures"),
+                ("AUTH_OIDC_REDIRECT_BASE", "https://auth.acme.example"),
                 ("AUTH_OIDC_GOOGLE_CLIENT_ID", "id"),
             ]))
             .expect_err("half a credential");
@@ -505,7 +505,7 @@ mod tests {
             assert!(
                 Oidc::new()
                     .validate_config(&config(&[
-                        ("AUTH_OIDC_REDIRECT_BASE", "https://auth.factory0.ventures"),
+                        ("AUTH_OIDC_REDIRECT_BASE", "https://auth.acme.example"),
                         ("AUTH_OIDC_DEFAULT_RETURN_TO", bad),
                     ]))
                     .is_err(),
@@ -517,7 +517,7 @@ mod tests {
     #[test]
     fn the_redirect_uri_is_built_from_the_base_and_the_slug() {
         let cfg = config(&[
-            ("AUTH_OIDC_REDIRECT_BASE", "https://auth.factory0.ventures/"),
+            ("AUTH_OIDC_REDIRECT_BASE", "https://auth.acme.example/"),
             ("AUTH_OIDC_GOOGLE_CLIENT_ID", "id"),
             ("AUTH_OIDC_GOOGLE_CLIENT_SECRET", "secret"),
         ]);
@@ -529,7 +529,7 @@ mod tests {
         // redirect URI is matched exactly by the provider.
         assert_eq!(
             provider.redirect_uri,
-            "https://auth.factory0.ventures/v1/auth-oidc/google/callback"
+            "https://auth.acme.example/v1/auth-oidc/google/callback"
         );
     }
 

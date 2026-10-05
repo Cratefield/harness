@@ -146,7 +146,7 @@ async fn route(
 ) -> (StatusCode, Value, Option<String>) {
     let mut builder = axum::http::Request::builder().method(method).uri(path);
     if let Some(cookie) = cookie {
-        builder = builder.header(header::COOKIE, format!("__Host-fz_session={cookie}"));
+        builder = builder.header(header::COOKIE, format!("__Host-session={cookie}"));
     }
     let request = builder.body(axum::body::Body::empty()).expect("builds");
     let response: Response = kit.router.clone().oneshot(request).await.expect("answers");
@@ -173,7 +173,7 @@ async fn issue_stores_only_the_hash_and_builds_the_host_cookie() {
     assert!(
         issued
             .cookie
-            .starts_with(&format!("__Host-fz_session={}", issued.value))
+            .starts_with(&format!("__Host-session={}", issued.value))
     );
     for attribute in ["Path=/", "Secure", "HttpOnly", "SameSite=Lax"] {
         assert!(issued.cookie.contains(attribute), "{attribute}");
@@ -527,7 +527,7 @@ async fn logout_revokes_and_clears_the_cookie() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["ok"], true);
     let clear = set_cookie.expect("Set-Cookie present");
-    assert!(clear.starts_with("__Host-fz_session=;"));
+    assert!(clear.starts_with("__Host-session=;"));
     assert!(clear.contains("Max-Age=0"));
 
     let (status, _, _) = route(

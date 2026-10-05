@@ -1,5 +1,5 @@
 //! Sessions (issue #8): one session per login, carried by the
-//! `__Host-fz_session` cookie. The cookie value is 32 random bytes;
+//! `__Host-session` cookie. The cookie value is 32 random bytes;
 //! only its SHA-256 is stored, so a leaked database cannot log anyone
 //! in. Validation is a hash lookup plus revocation and expiry checks,
 //! with a sliding 30-day expiry capped at 90 days from creation.
@@ -29,7 +29,7 @@ use crate::store::{self, Redacted};
 
 /// The session cookie. `__Host-` prefix rules: `Secure`, `Path=/`, no
 /// `Domain` — the attributes built below are exactly those rules.
-pub const COOKIE_NAME: &str = "__Host-fz_session";
+pub const COOKIE_NAME: &str = "__Host-session";
 
 /// Random bytes in a session cookie value.
 pub const SESSION_VALUE_BYTES: usize = 32;
@@ -534,7 +534,7 @@ mod tests {
     #[test]
     fn set_cookie_carries_the_host_prefix_rules() {
         let cookie = set_cookie("abc");
-        assert!(cookie.starts_with("__Host-fz_session=abc;"));
+        assert!(cookie.starts_with("__Host-session=abc;"));
         for attribute in ["Path=/", "Secure", "HttpOnly", "SameSite=Lax"] {
             assert!(cookie.contains(attribute), "{attribute} missing: {cookie}");
         }
@@ -544,7 +544,7 @@ mod tests {
     #[test]
     fn clear_cookie_expires_the_value_immediately() {
         let cookie = clear_cookie();
-        assert!(cookie.starts_with("__Host-fz_session=;"));
+        assert!(cookie.starts_with("__Host-session=;"));
         assert!(cookie.contains("Max-Age=0"));
         assert!(cookie.contains("Expires=Thu, 01 Jan 1970"));
         assert!(!cookie.to_lowercase().contains("domain"));
@@ -553,16 +553,15 @@ mod tests {
     #[test]
     fn cookie_value_reads_past_sibling_cookies() {
         let value = "a".repeat(43);
-        let headers =
-            headers_with_cookie(&format!("theme=dark; __Host-fz_session={value}; other=1"));
+        let headers = headers_with_cookie(&format!("theme=dark; __Host-session={value}; other=1"));
         assert_eq!(cookie_value(&headers).as_deref(), Some(value.as_str()));
         assert_eq!(cookie_value(&HeaderMap::new()), None);
         assert!(
-            cookie_value(&headers_with_cookie("__Host-fz_session=short")).is_none(),
+            cookie_value(&headers_with_cookie("__Host-session=short")).is_none(),
             "wrong-length values never reach validation"
         );
         assert!(
-            cookie_value(&headers_with_cookie("__Host-fz_session=")).is_none(),
+            cookie_value(&headers_with_cookie("__Host-session=")).is_none(),
             "empty values never reach validation"
         );
     }

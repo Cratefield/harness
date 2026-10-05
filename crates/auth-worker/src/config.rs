@@ -1,13 +1,21 @@
 //! The auth Worker's configuration surface (issue #646): one struct reads
 //! every variable, validates them together at boot, and builds the [`Venture`]
 //! and the [`Mailer`] the composition runs with. Every invalid value is a
-//! startup error, never a silent fallback; the fallbacks live in
-//! [`crate::defaults`].
+//! startup error, never a silent fallback.
+//!
+//! **One instance per app (issue #777).** Nothing here defaults to any
+//! app's name or domain. The values that make an instance *somebody's*
+//! (`AUTH_PUBLIC_URL`, `AUTH_VENTURE_NAME`, `AUTH_CORS_ORIGINS`,
+//! `AUTH_BRAND_NAME`) are required, and a missing one is refused with a
+//! message naming it. Everything else either derives from them (the
+//! Turnstile hostname, the default `MAIL_FROM`, the problem-type base) or
+//! is genuinely optional (the rest of the branding, `MAIL_REPLY_TO`).
 
 use std::fmt;
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use auth_core::Brand;
 use cratefield_adapter_owlpost::Owlpost;
 use cratefield_adapter_resend::Resend;
 use cratefield_core::{
@@ -15,8 +23,6 @@ use cratefield_core::{
     VentureEnv,
 };
 use url::Url;
-
-use crate::defaults;
 
 /// Which provider the venture sends through, resolved at boot from
 /// `AUTH_MAILER` and the keys present.
@@ -55,6 +61,12 @@ pub struct AuthWorkerConfig {
     pub public_url: String,
     /// The kebab-case venture name.
     pub venture_name: String,
+    /// The instance's branding: the display name every page and mail
+    /// subject uses, plus the optional logo, accent, links and footer.
+    pub brand: Brand,
+    /// An explicit problem-type base (`AUTH_PROBLEM_BASE`, issue #557);
+    /// unset means `<AUTH_PUBLIC_URL>/problems/`.
+    pub problem_base: Option<String>,
     /// The browser origins allowed to call cross-origin.
     pub cors_origins: Vec<String>,
     /// The hostname the Turnstile verdict must name.
@@ -81,47 +93,54 @@ impl AuthWorkerConfig {
     pub fn from_config(cfg: &dyn Config) -> Result<Self, ConfigError> {
         let mut errors = ConfigError::new();
 
-        let raw_public = get(cfg, "AUTH_PUBLIC_URL");
-        let public_url = take(
-            raw_public.as_deref(),
+        let public_url = required(
+            cfg,
             "AUTH_PUBLIC_URL",
-            defaults::PUBLIC_URL,
+            "the instance's own origin, e.g. https://auth.example.com",
             // A bare trailing slash is allowed and normalized away.
             |raw| require_origin(raw.trim_end_matches('/')),
             &mut errors,
         );
-        let host = host_of(&public_url).to_owned();
+        let host = public_url
+            .as_deref()
+            .map(host_of)
+            .unwrap_or_default()
+            .to_owned();
 
-        let venture_name = take(
-            get(cfg, "AUTH_VENTURE_NAME").as_deref(),
+        let venture_name = required(
+            cfg,
             "AUTH_VENTURE_NAME",
-            defaults::VENTURE_NAME,
+            "the instance's kebab-case id, e.g. example-auth",
             require_kebab_case,
             &mut errors,
         );
-        let cors_origins = match cfg.get("AUTH_CORS_ORIGINS") {
-            Some(raw) => parse_origins(&raw, &mut errors),
-            None => defaults::CORS_ORIGINS
-                .iter()
-                .map(ToString::to_string)
-                .collect(),
+        let cors_origins = read_cors_origins(cfg, &mut errors);
+        check_brand(cfg, &mut errors);
+        let problem_base = read_problem_base(cfg, &mut errors);
+        // Defaults to the instance's own host; when the public URL is
+        // missing, its own error already says so.
+        let turnstile_hostname = match get(cfg, "AUTH_TURNSTILE_HOSTNAME") {
+            Some(raw) => take(
+                Some(&raw),
+                "AUTH_TURNSTILE_HOSTNAME",
+                "",
+                require_hostname,
+                &mut errors,
+            ),
+            None => host.clone(),
         };
-        let turnstile_hostname = take(
-            get(cfg, "AUTH_TURNSTILE_HOSTNAME").as_deref(),
-            "AUTH_TURNSTILE_HOSTNAME",
-            &host,
-            require_hostname,
-            &mut errors,
-        );
 
-        let default_from = format!("no-reply@{host}");
-        let mail_from = take(
-            get(cfg, "MAIL_FROM").as_deref(),
-            "MAIL_FROM",
-            &default_from,
-            require_address,
-            &mut errors,
-        );
+        let default_from = if host.is_empty() {
+            String::new()
+        } else {
+            format!("no-reply@{host}")
+        };
+        let mail_from = match get(cfg, "MAIL_FROM") {
+            Some(raw) => take(Some(&raw), "MAIL_FROM", "", require_address, &mut errors),
+            // Derived from the public URL; when that is missing its own
+            // error already says so.
+            None => default_from,
+        };
         let mail_reply_to = get(cfg, "MAIL_REPLY_TO");
         if let Some(value) = mail_reply_to.as_deref()
             && let Err(problem) = require_address(value)
@@ -129,16 +148,13 @@ impl AuthWorkerConfig {
             errors.push(format!("MAIL_REPLY_TO: {problem}"));
         }
 
-        // `auth-core` mints tokens under `AUTH_CORE_ISSUER`, so a deployment
+        // `auth-core` mints tokens under `AUTH_CORE_ISSUER`, so an instance
         // must not point it at another origin: the discovery document would
-        // advertise an issuer the tokens do not match. Checked only when
-        // `AUTH_PUBLIC_URL` is set — a staging Worker may keep the default
-        // public URL and still mint under its own host.
-        if let Some(issuer) = get(cfg, "AUTH_CORE_ISSUER")
-            && raw_public.is_some()
+        // advertise an issuer the tokens do not match.
+        if let (Some(issuer), Some(public_url)) = (get(cfg, "AUTH_CORE_ISSUER"), &public_url)
             && !issuer
                 .trim_end_matches('/')
-                .eq_ignore_ascii_case(&public_url)
+                .eq_ignore_ascii_case(public_url)
         {
             errors.push("AUTH_CORE_ISSUER must equal AUTH_PUBLIC_URL".to_owned());
         }
@@ -161,9 +177,20 @@ impl AuthWorkerConfig {
         };
 
         errors.into_result()?;
+        let (Some(public_url), Some(venture_name)) = (public_url, venture_name) else {
+            // Both are pushed as errors when missing, so this is unreachable
+            // once `into_result` passed; refuse rather than invent a value.
+            let mut errors = ConfigError::new();
+            errors.push("AUTH_PUBLIC_URL and AUTH_VENTURE_NAME are required".to_owned());
+            return Err(errors);
+        };
+        let host_venture = Venture::new(venture_name.clone(), host_of(&public_url).to_owned());
+        let brand = Brand::from_config(cfg, &host_venture);
         Ok(Self {
             public_url,
             venture_name,
+            brand,
+            problem_base,
             cors_origins,
             turnstile_hostname,
             mail_from,
@@ -174,7 +201,8 @@ impl AuthWorkerConfig {
         })
     }
 
-    /// The venture descriptor: name, domain and public URL from this config.
+    /// The venture descriptor: name, domain, public URL, problem-type base
+    /// and mail branding from this config.
     ///
     /// The compiled [`VentureEnv`] stays at its default, so
     /// `HarnessBuilder::build`'s production-only boot gates do not refuse the
@@ -182,12 +210,21 @@ impl AuthWorkerConfig {
     /// `cratefield_core::deployed_env`.
     #[must_use]
     pub fn venture(&self) -> Venture {
-        Venture::new(
+        let venture = Venture::new(
             self.venture_name.clone(),
             host_of(&self.public_url).to_owned(),
         )
         .public_url(self.public_url.clone())
         .cors_origins(self.cors_origins.clone())
+        .brand(cratefield_core::Brand {
+            accent: self.brand.accent.clone(),
+            logo_url: self.brand.logo_url.clone(),
+            footer: Some(self.brand.footer.clone()),
+        });
+        match &self.problem_base {
+            Some(base) => venture.problem_base(base.clone()),
+            None => venture,
+        }
     }
 
     /// Builds the mailer over the injected ports: a test drives the same
@@ -240,6 +277,70 @@ fn take(
     }
 }
 
+/// `AUTH_CORS_ORIGINS`: required, and never empty.
+fn read_cors_origins(cfg: &dyn Config, errors: &mut ConfigError) -> Vec<String> {
+    match get(cfg, "AUTH_CORS_ORIGINS") {
+        Some(raw) => parse_origins(&raw, errors),
+        None if cfg.get("AUTH_CORS_ORIGINS").is_some() => parse_origins("", errors),
+        None => {
+            errors.push(
+                "AUTH_CORS_ORIGINS is required: the app's own browser origins, \
+                 comma-separated, e.g. https://example.com,https://app.example.com"
+                    .to_owned(),
+            );
+            Vec::new()
+        }
+    }
+}
+
+/// The branding: `AUTH_BRAND_NAME` is required of an instance, and every
+/// branding value present must be well formed.
+fn check_brand(cfg: &dyn Config, errors: &mut ConfigError) {
+    if get(cfg, auth_core::brand::NAME_KEY).is_none() {
+        errors.push(format!(
+            "{} is required: the display name the login pages and mail subjects use, \
+             e.g. Example",
+            auth_core::brand::NAME_KEY
+        ));
+    }
+    for problem in Brand::problems(cfg) {
+        errors.push(problem);
+    }
+}
+
+/// `AUTH_PROBLEM_BASE` (issue #557): optional, an absolute URL when set.
+fn read_problem_base(cfg: &dyn Config, errors: &mut ConfigError) -> Option<String> {
+    let problem_base = get(cfg, "AUTH_PROBLEM_BASE");
+    if let Some(base) = problem_base.as_deref()
+        && let Err(problem) = require_base_url(base)
+    {
+        errors.push(format!("AUTH_PROBLEM_BASE: {problem}"));
+    }
+    problem_base
+}
+
+/// A value the instance cannot run without: a missing one is refused with
+/// `what` as the hint, never replaced by somebody else's value.
+fn required(
+    cfg: &dyn Config,
+    key: &str,
+    what: &str,
+    check: impl FnOnce(&str) -> Result<String, String>,
+    errors: &mut ConfigError,
+) -> Option<String> {
+    let Some(raw) = get(cfg, key) else {
+        errors.push(format!("{key} is required: {what}"));
+        return None;
+    };
+    match check(&raw) {
+        Ok(value) => Some(value),
+        Err(problem) => {
+            errors.push(format!("{key}: {problem}"));
+            None
+        }
+    }
+}
+
 /// `AUTH_MAILER`, the keys present and the environment, resolved into the
 /// provider to build.
 fn resolve_provider(cfg: &dyn Config, env: VentureEnv, errors: &mut ConfigError) -> Provider {
@@ -255,7 +356,7 @@ fn resolve_provider(cfg: &dyn Config, env: VentureEnv, errors: &mut ConfigError)
         get(cfg, "RESEND_API_KEY"),
         get(cfg, "OWLPOST_API_KEY"),
     ) {
-        // Unset: today's behaviour — Resend when its key is present.
+        // Unset: Resend when its key is present.
         (None, key, _) => key.map_or(Provider::None, |key| Provider::Resend(Secret(Some(key)))),
         (Some("resend"), Some(key), _) => Provider::Resend(Secret(Some(key))),
         (Some("resend"), None, _) => {

@@ -237,7 +237,7 @@ fn authorize_uri(extra: &str) -> String {
 async fn get(kit: &TestHarness, uri: &str, cookie: Option<&str>) -> axum::response::Response {
     let mut request = axum::http::Request::builder().method(Method::GET).uri(uri);
     if let Some(cookie) = cookie {
-        request = request.header(header::COOKIE, format!("__Host-fz_session={cookie}"));
+        request = request.header(header::COOKIE, format!("__Host-session={cookie}"));
     }
     kit.router
         .clone()
@@ -271,7 +271,7 @@ async fn post(
         .uri(uri)
         .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded");
     if let Some(cookie) = cookie {
-        request = request.header(header::COOKIE, format!("__Host-fz_session={cookie}"));
+        request = request.header(header::COOKIE, format!("__Host-session={cookie}"));
     }
     for (name, value) in headers {
         request = request.header(*name, *value);
@@ -538,7 +538,7 @@ async fn a_cross_site_navigation_to_logout_still_asks_instead_of_failing() {
     let request = axum::http::Request::builder()
         .method(Method::GET)
         .uri("/v1/auth-core/logout")
-        .header(header::COOKIE, format!("__Host-fz_session={cookie}"))
+        .header(header::COOKIE, format!("__Host-session={cookie}"))
         .header("sec-fetch-site", "cross-site")
         .body(axum::body::Body::empty())
         .expect("request");
@@ -950,7 +950,7 @@ async fn an_absolute_request_target_still_yields_a_path_return_to() {
     seed_client(&kit).await;
 
     // Exactly what runtime-cloudflare passes to axum.
-    let absolute = format!("https://auth.factory0.ventures{}", authorize_uri(""));
+    let absolute = format!("https://auth.acme.example{}", authorize_uri(""));
     let page = body_of(get(&kit, &absolute, None).await).await;
 
     assert!(

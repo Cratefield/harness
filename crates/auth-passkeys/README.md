@@ -1,6 +1,6 @@
 # auth-passkeys
 
-Passkey registration and login for the Factory Zero auth service
+Passkey registration and login for the auth service
 (issues #13, #14). Mounted at `/v1/auth-passkeys`.
 
 ## Routes
@@ -25,7 +25,7 @@ from *carrying* our session cookie, not from *setting* one (issue #439).
 |---|---|---|
 | `AUTH_PASSKEYS_RP_ID` | yes | the registrable domain passkeys are bound to |
 | `AUTH_PASSKEYS_ORIGINS` | no | `https://<rp id>`; comma-separated |
-| `AUTH_PASSKEYS_RP_NAME` | no | the RP id |
+| `AUTH_PASSKEYS_RP_NAME` | no | `AUTH_BRAND_NAME`, else the RP id |
 | `AUTH_PASSKEYS_CHALLENGE_TTL_SECS` | no | `300`, bounded to 60..900 |
 | `AUTH_PASSKEYS_USER_VERIFICATION` | no | `preferred` |
 
@@ -100,4 +100,4 @@ against `wrangler dev` with a platform authenticator, and it stays open.
 
 ---
 
-MIT. Built in the open for [Cratefield](https://cratefield.com), a [Factory Zero](https://factory0.ventures) venture.
+MIT. Part of the [Cratefield harness](https://github.com/Cratefield/harness).

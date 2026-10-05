@@ -524,15 +524,18 @@ async fn issue_link(
         "{}/v1/auth-magic-link/consume?token={token}",
         settings.public_base
     );
+    // The subject names the instance's display name (issue #777), not the
+    // venture's kebab-case id.
+    let brand = cratefield_auth_core::Brand::from_config(&*ctx.config, &ctx.venture);
     let rendered = match mail::render(
         &ctx.templates,
         &MagicLinkMail {
-            venture: ctx.venture.name.clone(),
+            venture: brand.name.clone(),
             link,
             minutes: settings.ttl_secs / 60,
         },
         locale,
-        &ctx.venture,
+        &brand.mail_venture(&ctx.venture),
         &*ctx.config,
     ) {
         Ok(rendered) => rendered,

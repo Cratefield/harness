@@ -17,7 +17,7 @@ use tower::ServiceExt;
 
 const REQUEST: &str = "/v1/auth-magic-link/request";
 const CONSUME: &str = "/v1/auth-magic-link/consume";
-const BASE: &str = "https://auth.factory0.ventures";
+const BASE: &str = "https://auth.acme.example";
 
 /// A token-shaped value that was never issued: exactly the length and
 /// alphabet a real token has, so it gets past the shape guard and reaches
@@ -111,7 +111,7 @@ fn kit_limited(extra: &[(&str, &str)], limiter: cratefield_testing::FakeRateLimi
         ("AUTH_MAGIC_LINK_PUBLIC_BASE".to_owned(), BASE.to_owned()),
         (
             "AUTH_MAGIC_LINK_MAIL_FROM".to_owned(),
-            "sign-in@factory0.ventures".to_owned(),
+            "sign-in@acme.example".to_owned(),
         ),
     ];
     for (key, value) in extra {
@@ -156,9 +156,9 @@ impl cratefield_core::Template for GermanMail {
         _locale: &str,
     ) -> Result<cratefield_core::Rendered, cratefield_core::TemplateError> {
         Ok(cratefield_core::Rendered {
-            subject: "Bei Factory Zero anmelden".to_owned(),
+            subject: "Bei Acme anmelden".to_owned(),
             html: "<p>Melde dich an.</p>".to_owned(),
-            text: "Melde dich bei Factory Zero an.".to_owned(),
+            text: "Melde dich bei Acme an.".to_owned(),
         })
     }
 }
@@ -171,7 +171,7 @@ fn kit_localized() -> Kit {
         ("AUTH_MAGIC_LINK_PUBLIC_BASE".to_owned(), BASE.to_owned()),
         (
             "AUTH_MAGIC_LINK_MAIL_FROM".to_owned(),
-            "sign-in@factory0.ventures".to_owned(),
+            "sign-in@acme.example".to_owned(),
         ),
         ("AUTH_LOCALES".to_owned(), "en,de".to_owned()),
     ];
@@ -301,7 +301,7 @@ async fn click(kit: &Kit, token: &str) -> Res {
     let opened = navigate(kit, &link).await;
     assert_eq!(opened.status, StatusCode::OK, "{}", opened.text());
     assert!(
-        opened.cookie("__Host-fz_session").is_none(),
+        opened.cookie("__Host-session").is_none(),
         "opening the link signed somebody in"
     );
     assert!(
@@ -476,7 +476,7 @@ fn clicking_the_link_signs_in_and_verifies_the_address() {
 
         let response = click(&kit, &token).await;
         assert_eq!(response.status, StatusCode::FOUND, "{}", response.text());
-        assert!(response.cookie("__Host-fz_session").is_some());
+        assert!(response.cookie("__Host-session").is_some());
         assert_eq!(response.location().as_deref(), Some("/"));
         assert_eq!(count(&kit, "sessions"), 1);
 
@@ -577,7 +577,7 @@ fn a_prefetch_does_not_spend_the_token_and_a_click_still_works() {
             let response = prefetch(&kit, &token).await;
             assert_eq!(response.status, StatusCode::OK);
             assert!(
-                response.cookie("__Host-fz_session").is_none(),
+                response.cookie("__Host-session").is_none(),
                 "a prefetch signed somebody in"
             );
             assert!(response.text().contains("Confirm"), "{}", response.text());
@@ -610,7 +610,7 @@ fn the_confirm_button_spends_the_token() {
             .expect("request");
         let response = send(&kit, request).await;
         assert_eq!(response.status, StatusCode::FOUND, "{}", response.text());
-        assert!(response.cookie("__Host-fz_session").is_some());
+        assert!(response.cookie("__Host-session").is_some());
     });
 }
 
@@ -647,7 +647,7 @@ fn a_cross_site_confirm_cannot_spend_a_token_or_sign_anyone_in() {
             "https://test.example/problems/auth/cross-site-request"
         );
         assert!(
-            cross_site.cookie("__Host-fz_session").is_none(),
+            cross_site.cookie("__Host-session").is_none(),
             "the cross-site confirm signed somebody in"
         );
         assert_eq!(count(&kit, "sessions"), 0, "a session was issued anyway");
@@ -666,7 +666,7 @@ fn a_cross_site_confirm_cannot_spend_a_token_or_sign_anyone_in() {
         )
         .await;
         assert_eq!(own.status, StatusCode::FOUND, "{}", own.text());
-        assert!(own.cookie("__Host-fz_session").is_some());
+        assert!(own.cookie("__Host-session").is_some());
     });
 }
 
@@ -689,7 +689,7 @@ fn a_forced_navigation_to_the_link_does_not_sign_anyone_in() {
         let forced = navigate(&kit, &format!("{CONSUME}?token={token}")).await;
         assert_eq!(forced.status, StatusCode::OK, "{}", forced.text());
         assert!(
-            forced.cookie("__Host-fz_session").is_none(),
+            forced.cookie("__Host-session").is_none(),
             "a forced navigation signed the victim in"
         );
         assert!(forced.location().is_none(), "the GET redirected");
@@ -713,7 +713,7 @@ fn a_forced_navigation_to_the_link_does_not_sign_anyone_in() {
         // from the confirm page, same-origin.
         let pressed = click(&kit, &token).await;
         assert_eq!(pressed.status, StatusCode::FOUND, "{}", pressed.text());
-        assert!(pressed.cookie("__Host-fz_session").is_some());
+        assert!(pressed.cookie("__Host-session").is_some());
         assert_eq!(count(&kit, "sessions"), 1);
     });
 }
@@ -929,7 +929,7 @@ fn a_token_of_another_kind_cannot_be_spent_here() {
 
         let response = click(&kit, token).await;
         assert_eq!(response.status, StatusCode::BAD_REQUEST);
-        assert!(response.cookie("__Host-fz_session").is_none());
+        assert!(response.cookie("__Host-session").is_none());
         assert_eq!(count(&kit, "sessions"), 0);
     });
 }
@@ -1241,7 +1241,7 @@ fn a_named_locale_renders_the_localized_mail() {
         assert_eq!(response.status, StatusCode::ACCEPTED);
         assert_eq!(
             kit.outbox.last().expect("a mail").subject,
-            "Bei Factory Zero anmelden"
+            "Bei Acme anmelden"
         );
     });
 }
@@ -1263,7 +1263,7 @@ fn accept_language_picks_a_localized_template() {
         assert_eq!(response.status, StatusCode::ACCEPTED);
         assert_eq!(
             kit.outbox.last().expect("a mail").subject,
-            "Bei Factory Zero anmelden"
+            "Bei Acme anmelden"
         );
     });
 }

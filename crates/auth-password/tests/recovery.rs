@@ -612,12 +612,12 @@ fn a_password_change_retires_an_outstanding_reset_link() {
                 json!({ "email": "ada@example.com", "password": GOOD }),
             )
             .await;
-            let cookie = login.cookie("__Host-fz_session").expect("a session cookie");
+            let cookie = login.cookie("__Host-session").expect("a session cookie");
             let changed = post_json_with(
                 &kit,
                 CHANGE,
                 json!({ "current_password": GOOD, "new_password": NEW }),
-                &[("cookie", &format!("__Host-fz_session={cookie}"))],
+                &[("cookie", &format!("__Host-session={cookie}"))],
             )
             .await;
             assert_eq!(changed.status, StatusCode::OK, "{}", changed.text());

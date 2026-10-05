@@ -20,7 +20,7 @@ use serde::{Deserialize, Serialize};
 pub(crate) const PURPOSE: &str = "auth-meta.flow";
 
 /// `__Host-` so the cookie is origin-locked: no domain, path `/`, secure.
-pub(crate) const COOKIE_NAME: &str = "__Host-fz_meta";
+pub(crate) const COOKIE_NAME: &str = "__Host-auth_meta";
 
 /// How long a person has to finish at Meta.
 pub(crate) const TTL_SECS: i64 = 600;
@@ -189,7 +189,7 @@ mod tests {
     #[test]
     fn the_cookie_is_origin_locked_and_survives_metas_redirect() {
         let header = set_cookie("value");
-        assert!(header.starts_with("__Host-fz_meta="), "{header}");
+        assert!(header.starts_with("__Host-auth_meta="), "{header}");
         assert!(header.contains("Secure"), "{header}");
         assert!(header.contains("HttpOnly"), "{header}");
         // Meta redirects, so `Lax` arrives and nothing needs widening.
@@ -203,7 +203,7 @@ mod tests {
         let mut headers = http::HeaderMap::new();
         headers.insert(
             http::header::COOKIE,
-            "theme=dark; __Host-fz_meta=abc; other=1"
+            "theme=dark; __Host-auth_meta=abc; other=1"
                 .parse()
                 .expect("header"),
         );

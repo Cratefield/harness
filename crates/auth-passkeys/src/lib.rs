@@ -228,7 +228,7 @@ impl RelyingParty {
 
         if problems.is_empty() {
             Ok(Self {
-                rp_name: module.get_str("RP_NAME", &rp_id),
+                rp_name: module.get_str("RP_NAME", &default_rp_name(cfg, &rp_id)),
                 rp_id,
                 origins,
                 challenge_ttl_secs,
@@ -239,6 +239,16 @@ impl RelyingParty {
             Err(problems)
         }
     }
+}
+
+/// What an authenticator shows next to the credential when
+/// `AUTH_PASSKEYS_RP_NAME` is unset: the instance's display name when one is
+/// configured, else the RP id (issue #777).
+fn default_rp_name(cfg: &dyn Config, rp_id: &str) -> String {
+    cfg.get(cratefield_auth_core::brand::NAME_KEY)
+        .map(|name| name.trim().to_owned())
+        .filter(|name| !name.is_empty())
+        .unwrap_or_else(|| rp_id.to_owned())
 }
 
 pub(crate) struct ModuleState {
@@ -466,7 +476,7 @@ mod tests {
         // to get it wrong.
         let error = Passkeys::new()
             .validate_config(&config(&[
-                ("AUTH_PASSKEYS_RP_ID", "auth.factory0.ventures"),
+                ("AUTH_PASSKEYS_RP_ID", "auth.acme.example"),
                 ("AUTH_PASSKEYS_ORIGINS", "https://evil.example"),
             ]))
             .expect_err("a foreign origin is unusable");
@@ -476,10 +486,10 @@ mod tests {
         assert!(
             Passkeys::new()
                 .validate_config(&config(&[
-                    ("AUTH_PASSKEYS_RP_ID", "factory0.ventures"),
+                    ("AUTH_PASSKEYS_RP_ID", "acme.example"),
                     (
                         "AUTH_PASSKEYS_ORIGINS",
-                        "https://factory0.ventures,https://auth.factory0.ventures",
+                        "https://acme.example,https://auth.acme.example",
                     ),
                 ]))
                 .is_ok()
@@ -491,8 +501,8 @@ mod tests {
         assert!(
             Passkeys::new()
                 .validate_config(&config(&[
-                    ("AUTH_PASSKEYS_RP_ID", "auth.factory0.ventures"),
-                    ("AUTH_PASSKEYS_ORIGINS", "http://auth.factory0.ventures"),
+                    ("AUTH_PASSKEYS_RP_ID", "auth.acme.example"),
+                    ("AUTH_PASSKEYS_ORIGINS", "http://auth.acme.example"),
                 ]))
                 .is_err()
         );
@@ -512,7 +522,7 @@ mod tests {
         let error = Passkeys::new()
             .validate_config(&config(&[(
                 "AUTH_PASSKEYS_RP_ID",
-                "https://auth.factory0.ventures",
+                "https://auth.acme.example",
             )]))
             .expect_err("a URL is not an rp id");
         assert!(error.to_string().contains("bare domain"), "{error}");
@@ -524,7 +534,7 @@ mod tests {
             assert!(
                 Passkeys::new()
                     .validate_config(&config(&[
-                        ("AUTH_PASSKEYS_RP_ID", "auth.factory0.ventures"),
+                        ("AUTH_PASSKEYS_RP_ID", "auth.acme.example"),
                         ("AUTH_PASSKEYS_CHALLENGE_TTL_SECS", bad),
                     ]))
                     .is_err(),
@@ -532,21 +542,21 @@ mod tests {
             );
         }
         let rp = RelyingParty::from_config(&config(&[
-            ("AUTH_PASSKEYS_RP_ID", "auth.factory0.ventures"),
+            ("AUTH_PASSKEYS_RP_ID", "auth.acme.example"),
             ("AUTH_PASSKEYS_CHALLENGE_TTL_SECS", "120"),
         ]))
         .expect("valid");
         assert_eq!(rp.challenge_ttl_secs, 120);
         assert_eq!(rp.user_verification, UserVerification::Preferred);
         assert_eq!(rp.origins.len(), 1);
-        assert_eq!(rp.origins[0].as_str(), "https://auth.factory0.ventures/");
+        assert_eq!(rp.origins[0].as_str(), "https://auth.acme.example/");
     }
 
     #[test]
     fn every_configuration_problem_is_reported_at_once() {
         let error = Passkeys::new()
             .validate_config(&config(&[
-                ("AUTH_PASSKEYS_RP_ID", "auth.factory0.ventures"),
+                ("AUTH_PASSKEYS_RP_ID", "auth.acme.example"),
                 ("AUTH_PASSKEYS_ORIGINS", "https://evil.example,not-a-url"),
                 ("AUTH_PASSKEYS_USER_VERIFICATION", "whenever"),
             ]))

@@ -22,7 +22,7 @@ use time::OffsetDateTime;
 use tower::ServiceExt;
 
 const CLIENT_ID: &str = "1234567890";
-const REDIRECT_BASE: &str = "https://auth.factory0.ventures";
+const REDIRECT_BASE: &str = "https://auth.acme.example";
 const START: &str = "/v1/auth-meta/start";
 const CALLBACK: &str = "/v1/auth-meta/callback";
 
@@ -287,7 +287,7 @@ async fn start(kit: &Kit, cookies: &[(&str, &str)]) -> Started {
         .map(|(_, value)| value.to_string())
         .expect("a state");
     Started {
-        flow_cookie: response.cookie("__Host-fz_meta").expect("a flow cookie"),
+        flow_cookie: response.cookie("__Host-auth_meta").expect("a flow cookie"),
         state,
     }
 }
@@ -323,7 +323,7 @@ fn start_redirects_to_meta_with_pkce_and_a_flow_cookie() {
         assert_eq!(param("response_type").as_deref(), Some("code"));
         assert_eq!(
             param("redirect_uri").as_deref(),
-            Some("https://auth.factory0.ventures/v1/auth-meta/callback")
+            Some("https://auth.acme.example/v1/auth-meta/callback")
         );
         // PKCE is not optional: a code that leaks is useless without the
         // verifier, which never leaves the cookie.
@@ -338,7 +338,7 @@ fn start_redirects_to_meta_with_pkce_and_a_flow_cookie() {
             .get_all(header::SET_COOKIE)
             .iter()
             .filter_map(|value| value.to_str().ok())
-            .find(|header| header.starts_with("__Host-fz_meta="))
+            .find(|header| header.starts_with("__Host-auth_meta="))
             .expect("a flow cookie");
         assert!(cookie.contains("SameSite=Lax"), "{cookie}");
         assert!(cookie.contains("HttpOnly"), "{cookie}");
@@ -360,11 +360,11 @@ fn a_first_login_creates_the_account_and_a_second_finds_it() {
         let response = get(
             &kit,
             &format!("{CALLBACK}?code=meta-code&state={}", started.state),
-            &[("__Host-fz_meta", &started.flow_cookie)],
+            &[("__Host-auth_meta", &started.flow_cookie)],
         )
         .await;
         assert_eq!(response.status, StatusCode::FOUND, "{}", response.text());
-        assert!(response.cookie("__Host-fz_session").is_some());
+        assert!(response.cookie("__Host-session").is_some());
         assert_eq!(response.location().as_deref(), Some("/"));
         assert_eq!(count(&kit, "users"), 1);
         assert_eq!(count(&kit, "identities"), 1);
@@ -375,7 +375,7 @@ fn a_first_login_creates_the_account_and_a_second_finds_it() {
         let response = get(
             &kit,
             &format!("{CALLBACK}?code=meta-code-2&state={}", started.state),
-            &[("__Host-fz_meta", &started.flow_cookie)],
+            &[("__Host-auth_meta", &started.flow_cookie)],
         )
         .await;
         assert_eq!(response.status, StatusCode::FOUND);
@@ -405,7 +405,7 @@ fn the_address_meta_reports_is_never_stored_as_verified() {
         let response = get(
             &kit,
             &format!("{CALLBACK}?code=meta-code&state={}", started.state),
-            &[("__Host-fz_meta", &started.flow_cookie)],
+            &[("__Host-auth_meta", &started.flow_cookie)],
         )
         .await;
         assert_eq!(response.status, StatusCode::FOUND, "{}", response.text());
@@ -454,14 +454,14 @@ fn an_existing_account_on_the_same_address_is_not_taken_over() {
         let response = get(
             &kit,
             &format!("{CALLBACK}?code=meta-code&state={}", started.state),
-            &[("__Host-fz_meta", &started.flow_cookie)],
+            &[("__Host-auth_meta", &started.flow_cookie)],
         )
         .await;
 
         // A page, not a session: the rules will not guess.
         assert_eq!(response.status, StatusCode::OK);
         assert!(
-            response.cookie("__Host-fz_session").is_none(),
+            response.cookie("__Host-session").is_none(),
             "a Meta sign-in walked into an existing account"
         );
         assert_eq!(count(&kit, "identities"), 0);
@@ -502,14 +502,14 @@ fn a_differently_cased_address_is_not_a_second_account() {
         let response = get(
             &kit,
             &format!("{CALLBACK}?code=meta-code&state={}", started.state),
-            &[("__Host-fz_meta", &started.flow_cookie)],
+            &[("__Host-auth_meta", &started.flow_cookie)],
         )
         .await;
 
         // The same refusal a matching-case address gets: the rules will not
         // guess, and there is exactly one account.
         assert_eq!(response.status, StatusCode::OK, "{}", response.text());
-        assert!(response.cookie("__Host-fz_session").is_none());
+        assert!(response.cookie("__Host-session").is_none());
         assert_eq!(
             count(&kit, "users"),
             1,
@@ -531,11 +531,11 @@ fn a_profile_without_an_email_still_signs_in() {
         let response = get(
             &kit,
             &format!("{CALLBACK}?code=meta-code&state={}", started.state),
-            &[("__Host-fz_meta", &started.flow_cookie)],
+            &[("__Host-auth_meta", &started.flow_cookie)],
         )
         .await;
         assert_eq!(response.status, StatusCode::FOUND, "{}", response.text());
-        assert!(response.cookie("__Host-fz_session").is_some());
+        assert!(response.cookie("__Host-session").is_some());
         assert_eq!(count(&kit, "users"), 1);
     });
 }
@@ -548,7 +548,7 @@ fn the_profile_call_carries_the_token_in_a_header_not_the_url() {
         let response = get(
             &kit,
             &format!("{CALLBACK}?code=meta-code&state={}", started.state),
-            &[("__Host-fz_meta", &started.flow_cookie)],
+            &[("__Host-auth_meta", &started.flow_cookie)],
         )
         .await;
         assert_eq!(response.status, StatusCode::FOUND, "{}", response.text());
@@ -574,7 +574,7 @@ fn the_token_exchange_sends_the_secret_in_the_body() {
         let _ = get(
             &kit,
             &format!("{CALLBACK}?code=meta-code&state={}", started.state),
-            &[("__Host-fz_meta", &started.flow_cookie)],
+            &[("__Host-auth_meta", &started.flow_cookie)],
         )
         .await;
 
@@ -598,7 +598,7 @@ fn a_state_that_does_not_match_the_cookie_is_refused_before_the_exchange() {
         let response = get(
             &kit,
             &format!("{CALLBACK}?code=meta-code&state=not-the-state"),
-            &[("__Host-fz_meta", &started.flow_cookie)],
+            &[("__Host-auth_meta", &started.flow_cookie)],
         )
         .await;
         assert_eq!(response.status, StatusCode::BAD_REQUEST);
@@ -609,7 +609,7 @@ fn a_state_that_does_not_match_the_cookie_is_refused_before_the_exchange() {
             "a mismatched state still spent the code"
         );
         assert!(
-            !response.cleared("__Host-fz_meta"),
+            !response.cleared("__Host-auth_meta"),
             "an unmatched state must not clear a flow it did not prove it owned"
         );
     });
@@ -642,7 +642,7 @@ fn an_expired_flow_is_refused() {
         let response = get(
             &kit,
             &format!("{CALLBACK}?code=meta-code&state={}", started.state),
-            &[("__Host-fz_meta", &started.flow_cookie)],
+            &[("__Host-auth_meta", &started.flow_cookie)],
         )
         .await;
         assert_eq!(response.status, StatusCode::BAD_REQUEST);
@@ -662,7 +662,7 @@ fn a_token_exchange_error_fails_cleanly() {
         let response = get(
             &kit,
             &format!("{CALLBACK}?code=meta-code&state={}", started.state),
-            &[("__Host-fz_meta", &started.flow_cookie)],
+            &[("__Host-auth_meta", &started.flow_cookie)],
         )
         .await;
         assert_eq!(response.status, StatusCode::BAD_GATEWAY);
@@ -686,7 +686,7 @@ fn a_profile_call_failure_fails_cleanly() {
         let response = get(
             &kit,
             &format!("{CALLBACK}?code=meta-code&state={}", started.state),
-            &[("__Host-fz_meta", &started.flow_cookie)],
+            &[("__Host-auth_meta", &started.flow_cookie)],
         )
         .await;
         assert_eq!(response.status, StatusCode::BAD_GATEWAY);
@@ -705,7 +705,7 @@ fn meta_refusing_the_person_is_not_an_error_page() {
                 "{CALLBACK}?error=access_denied&error_description=%3Cscript%3E&state={}",
                 started.state
             ),
-            &[("__Host-fz_meta", &started.flow_cookie)],
+            &[("__Host-auth_meta", &started.flow_cookie)],
         )
         .await;
         assert_eq!(response.status, StatusCode::OK);
@@ -713,7 +713,7 @@ fn meta_refusing_the_person_is_not_an_error_page() {
         // Meta can put anything in `error_description`; none of it is ours
         // to render.
         assert!(!response.text().contains("<script>"), "{}", response.text());
-        assert!(response.cleared("__Host-fz_meta"));
+        assert!(response.cleared("__Host-auth_meta"));
     });
 }
 
@@ -742,7 +742,7 @@ fn a_disabled_account_gets_no_session() {
         let response = get(
             &kit,
             &format!("{CALLBACK}?code=meta-code&state={}", started.state),
-            &[("__Host-fz_meta", &started.flow_cookie)],
+            &[("__Host-auth_meta", &started.flow_cookie)],
         )
         .await;
         assert_eq!(response.status, StatusCode::FOUND);
@@ -761,12 +761,12 @@ fn a_disabled_account_gets_no_session() {
         let response = get(
             &kit,
             &format!("{CALLBACK}?code=meta-code&state={}", started.state),
-            &[("__Host-fz_meta", &started.flow_cookie)],
+            &[("__Host-auth_meta", &started.flow_cookie)],
         )
         .await;
         assert_eq!(response.status, StatusCode::BAD_REQUEST);
         assert!(
-            response.cookie("__Host-fz_session").is_none(),
+            response.cookie("__Host-session").is_none(),
             "a disabled account was issued a session"
         );
     });
@@ -831,7 +831,7 @@ async fn sign_in(kit: &Kit, subject: &str) {
     let response = get(
         kit,
         &format!("{CALLBACK}?code=meta-code&state={}", started.state),
-        &[("__Host-fz_meta", &started.flow_cookie)],
+        &[("__Host-auth_meta", &started.flow_cookie)],
     )
     .await;
     assert_eq!(response.status, StatusCode::FOUND, "{}", response.text());

@@ -1,51 +1,117 @@
-//! The configuration surface (issue #646): the defaults match today's
-//! deployment, and every invalid value is refused rather than silently
-//! replaced.
+//! The configuration surface (issues #646, #777): an instance names
+//! itself — origin, id, browser origins, display name — and anything
+//! missing or invalid is refused rather than silently replaced by another
+//! app's value.
 
 use cratefield_auth_worker::{AuthWorkerConfig, MailerKind, validate_config};
 use cratefield_core::{MapConfig, VentureEnv};
 
+/// The four values every instance must name, for a hypothetical app.
+const REQUIRED: &[(&str, &str)] = &[
+    ("AUTH_PUBLIC_URL", "https://auth.example.test"),
+    ("AUTH_VENTURE_NAME", "example-auth"),
+    ("AUTH_CORS_ORIGINS", "https://example.test"),
+    ("AUTH_BRAND_NAME", "Example"),
+];
+
+/// `REQUIRED` with `pairs` laid over it (a later pair wins).
+fn with_required(pairs: &[(&str, &str)]) -> MapConfig {
+    let mut all: Vec<(&str, &str)> = REQUIRED
+        .iter()
+        .copied()
+        .filter(|(key, _)| !pairs.iter().any(|(k, _)| k == key))
+        .collect();
+    all.extend(pairs.iter().copied());
+    MapConfig::from_pairs(all)
+}
+
 fn config(pairs: &[(&str, &str)]) -> AuthWorkerConfig {
-    AuthWorkerConfig::from_config(&MapConfig::from_pairs(pairs.iter().copied()))
-        .expect("valid configuration")
+    AuthWorkerConfig::from_config(&with_required(pairs)).expect("valid configuration")
 }
 
 fn refusal(pairs: &[(&str, &str)]) -> String {
-    let cfg: MapConfig = MapConfig::from_pairs(pairs.iter().copied());
-    AuthWorkerConfig::from_config(&cfg)
+    AuthWorkerConfig::from_config(&with_required(pairs))
         .expect_err("must be refused")
         .to_string()
 }
 
 #[test]
-fn empty_config_is_todays_deployment() {
+fn an_empty_config_is_refused_naming_every_required_value() {
+    let message = AuthWorkerConfig::from_config(&MapConfig::default())
+        .expect_err("an instance must name itself")
+        .to_string();
+    for key in [
+        "AUTH_PUBLIC_URL is required",
+        "AUTH_VENTURE_NAME is required",
+        "AUTH_CORS_ORIGINS is required",
+        "AUTH_BRAND_NAME is required",
+    ] {
+        assert!(message.contains(key), "{key} missing from: {message}");
+    }
+    // Nothing falls back to another app's value.
+    let lower = message.to_ascii_lowercase();
+    // Spelt in halves so this file does not match a search for them.
+    assert!(
+        !lower.contains(concat!("factory", "0")) && !lower.contains(concat!("factory", " zero"))
+    );
+}
+
+#[test]
+fn a_minimal_instance_derives_everything_else_from_its_own_values() {
     let cfg = config(&[]);
     let venture = cfg.venture();
 
-    assert_eq!(venture.name, "factory0-auth");
-    assert_eq!(venture.domain, "auth.factory0.ventures");
-    assert_eq!(venture.public_url, "https://auth.factory0.ventures");
-    assert_eq!(
-        venture.cors_origins,
-        [
-            "https://app.cratefield.com",
-            "https://cratefield.com",
-            "https://yoginini.us"
-        ]
-    );
+    assert_eq!(venture.name, "example-auth");
+    assert_eq!(venture.domain, "auth.example.test");
+    assert_eq!(venture.public_url, "https://auth.example.test");
+    assert_eq!(venture.cors_origins, ["https://example.test"]);
     assert_eq!(venture.env, VentureEnv::default());
     assert_eq!(venture.problem_base, None);
-    // Problem URIs follow the public URL (issue #557).
+    // Problem URIs follow the instance's public URL (issue #557).
     assert_eq!(
         venture.problem_type_base(),
-        "https://auth.factory0.ventures/problems/"
+        "https://auth.example.test/problems/"
     );
 
-    assert_eq!(cfg.turnstile_hostname, "auth.factory0.ventures");
-    assert_eq!(cfg.mail_from, "no-reply@auth.factory0.ventures");
+    assert_eq!(cfg.brand.name, "Example");
+    assert_eq!(cfg.brand.footer, "auth.example.test · Example");
+    assert_eq!(cfg.brand.accent, auth_core::brand::DEFAULT_ACCENT);
+    assert_eq!(cfg.turnstile_hostname, "auth.example.test");
+    assert_eq!(cfg.mail_from, "no-reply@auth.example.test");
     assert_eq!(cfg.mail_reply_to, None);
-    // Unset `AUTH_MAILER` with no key: no mail is sent.
+    // No provider key outside production: no mail is sent.
     assert_eq!(cfg.mailer_kind, MailerKind::None);
+}
+
+#[test]
+fn branding_and_the_problem_base_are_configurable() {
+    let cfg = config(&[
+        ("AUTH_BRAND_LOGO_URL", "https://example.test/logo.svg"),
+        ("AUTH_BRAND_ACCENT", "#0A84FF"),
+        ("AUTH_BRAND_SUPPORT_EMAIL", "help@example.test"),
+        ("AUTH_BRAND_FOOTER", "Example Ltd"),
+        ("AUTH_BRAND_PRIVACY_URL", "https://example.test/privacy"),
+        ("AUTH_BRAND_TERMS_URL", "https://example.test/terms"),
+        ("AUTH_PROBLEM_BASE", "https://example.test/problems/"),
+    ]);
+    assert_eq!(cfg.brand.accent, "#0a84ff");
+    assert_eq!(cfg.brand.footer, "Example Ltd");
+    let venture = cfg.venture();
+    assert_eq!(
+        venture.problem_type_base(),
+        "https://example.test/problems/"
+    );
+    assert_eq!(venture.brand.accent, "#0a84ff");
+    assert_eq!(
+        venture.brand.logo_url.as_deref(),
+        Some("https://example.test/logo.svg")
+    );
+
+    assert!(refusal(&[("AUTH_BRAND_ACCENT", "orange")]).contains("AUTH_BRAND_ACCENT"));
+    assert!(
+        refusal(&[("AUTH_BRAND_LOGO_URL", "ftp://x.test/l.png")]).contains("AUTH_BRAND_LOGO_URL")
+    );
+    assert!(refusal(&[("AUTH_PROBLEM_BASE", "not a url")]).contains("AUTH_PROBLEM_BASE"));
 }
 
 #[test]
@@ -84,26 +150,14 @@ fn cors_origins_are_trimmed() {
 }
 
 #[test]
-fn the_issuer_only_has_to_agree_when_the_public_url_is_set() {
-    // Nothing is cross-checked by default: a staging deployment may rely on
-    // the default public URL and point the issuer at its own host.
-    let staging = config(&[("AUTH_CORE_ISSUER", "https://staging.example.test")]);
-    assert_eq!(staging.public_url, "https://auth.factory0.ventures");
-
-    // With `AUTH_PUBLIC_URL` set, the same origin must be named, in any case
-    // and with or without a trailing slash.
-    let same = config(&[
-        ("AUTH_PUBLIC_URL", "https://auth.example.test"),
-        ("AUTH_CORE_ISSUER", "HTTPS://AUTH.Example.Test/"),
-    ]);
+fn the_issuer_must_name_the_instance_s_own_origin() {
+    // The same origin, in any case and with or without a trailing slash.
+    let same = config(&[("AUTH_CORE_ISSUER", "HTTPS://AUTH.Example.Test/")]);
     assert_eq!(same.public_url, "https://auth.example.test");
 
     assert!(
-        refusal(&[
-            ("AUTH_PUBLIC_URL", "https://auth.example.test"),
-            ("AUTH_CORE_ISSUER", "https://other.example.test"),
-        ])
-        .contains("AUTH_CORE_ISSUER must equal AUTH_PUBLIC_URL")
+        refusal(&[("AUTH_CORE_ISSUER", "https://other.example.test")])
+            .contains("AUTH_CORE_ISSUER must equal AUTH_PUBLIC_URL")
     );
 }
 
@@ -180,7 +234,7 @@ fn invalid_values_are_refused() {
 
 #[test]
 fn validate_config_matches_the_from_config_contract() {
-    let bad = MapConfig::from_pairs([("AUTH_MAILER", "resend")]);
-    assert!(validate_config(&bad).is_err());
-    assert!(validate_config(&MapConfig::default()).is_ok());
+    assert!(validate_config(&with_required(&[("AUTH_MAILER", "resend")])).is_err());
+    assert!(validate_config(&MapConfig::default()).is_err());
+    assert!(validate_config(&with_required(&[])).is_ok());
 }

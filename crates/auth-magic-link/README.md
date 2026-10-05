@@ -234,4 +234,4 @@ clients that strip anchors.
 
 ---
 
-MIT. Built in the open for [Cratefield](https://cratefield.com), a [Factory Zero](https://factory0.ventures) venture.
+MIT. Part of the [Cratefield harness](https://github.com/Cratefield/harness).

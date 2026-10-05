@@ -1,8 +1,9 @@
-//! Acceptance for a reconfigured venture (issue #646): a non-`factory0`
-//! origin, an Owlpost mailer and a two-origin CORS allowlist, driven end to
-//! end through `AuthWorker::builder()` with fake ports — a magic-link request
-//! really sends, CORS answers only the configured origins, and a template
-//! override wins.
+//! Acceptance for one branded instance (issues #646, #777): its own
+//! origin, an Owlpost mailer, a two-origin CORS allowlist and its own
+//! branding, driven end to end through `AuthWorker::builder()` with fake
+//! ports — a magic-link request really sends under the instance's display
+//! name, CORS answers only the configured origins, pages and problem types
+//! name the instance and nobody else, and a template override wins.
 
 use std::sync::Arc;
 
@@ -32,6 +33,10 @@ impl Runtime for AllPorts {
 fn pairs() -> Vec<(&'static str, &'static str)> {
     vec![
         ("AUTH_PUBLIC_URL", "https://auth.example.test"),
+        ("AUTH_VENTURE_NAME", "example-auth"),
+        ("AUTH_BRAND_NAME", "Example"),
+        ("AUTH_BRAND_ACCENT", "#123abc"),
+        ("AUTH_BRAND_PRIVACY_URL", "https://example.test/privacy"),
         ("AUTH_MAILER", "owlpost"),
         ("OWLPOST_API_KEY", "test-key"),
         ("OWLPOST_BASE_URL", "https://owlpost.example.test"),
@@ -79,13 +84,42 @@ fn build(customize: impl FnOnce(AuthWorker) -> AuthWorker) -> (axum::Router, Fak
 }
 
 async fn send(router: &axum::Router, request: Request<Body>) -> (StatusCode, HeaderMap) {
+    let (status, headers, _) = send_full(router, request).await;
+    (status, headers)
+}
+
+async fn send_full(
+    router: &axum::Router,
+    request: Request<Body>,
+) -> (StatusCode, HeaderMap, String) {
     let response = router
         .clone()
         .oneshot(request)
         .await
         .expect("the router answers");
-    let (parts, _body) = response.into_parts();
-    (parts.status, parts.headers)
+    let (parts, body) = response.into_parts();
+    let bytes = axum::body::to_bytes(body, usize::MAX)
+        .await
+        .expect("a readable body");
+    (
+        parts.status,
+        parts.headers,
+        String::from_utf8_lossy(&bytes).into_owned(),
+    )
+}
+
+/// Nothing a person or a client sees names another app, or the umbrella
+/// the service used to run under.
+fn assert_neutral(body: &str) {
+    let lower = body.to_ascii_lowercase();
+    // Spelt in halves so this file does not match a search for them.
+    for marker in [
+        concat!("factory", "0"),
+        concat!("factory", " zero"),
+        concat!("fz", "_session"),
+    ] {
+        assert!(!lower.contains(marker), "{marker} leaked: {body}");
+    }
 }
 
 fn request_link() -> Request<Body> {
@@ -131,6 +165,56 @@ fn a_magic_link_request_sends_through_owlpost() {
             "the magic-link module's from, not the adapter's MAIL_FROM, reached the wire: {body}"
         );
         assert!(body.contains(r#""to":"ada@example.com""#), "{body}");
+        // The subject names the instance's display name, not its id.
+        assert!(body.contains("Sign in to Example"), "{body}");
+        assert!(!body.contains("example-auth"), "{body}");
+        assert_neutral(body);
+    });
+}
+
+#[test]
+fn the_pages_carry_the_instance_s_branding() {
+    pollster::block_on(async {
+        let (router, _) = build(|worker| worker);
+        let request = Request::builder()
+            .uri("/v1/auth-core/authorize?client_id=nobody&redirect_uri=https://x.test/cb&response_type=code")
+            .body(Body::empty())
+            .expect("request");
+        let (status, _, page) = send_full(&router, request).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert!(
+            page.contains("<title>Sign-in error · Example</title>"),
+            "{page}"
+        );
+        assert!(
+            page.contains("#123abc"),
+            "the accent is not applied: {page}"
+        );
+        assert!(page.contains("https://example.test/privacy"), "{page}");
+        assert!(page.contains("auth.example.test · Example"), "{page}");
+        assert_neutral(&page);
+    });
+}
+
+#[test]
+fn problem_types_are_named_under_the_instance_s_origin() {
+    pollster::block_on(async {
+        let (router, _) = build(|worker| worker);
+        let request = Request::builder()
+            .method(Method::POST)
+            .uri("/v1/auth-core/token")
+            .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+            .body(Body::from("grant_type=authorization_code&client_id=nobody"))
+            .expect("request");
+        // No signing keys in this kit, so the answer is the stable
+        // "not configured" problem; what matters is whose name it carries.
+        let (status, _, body) = send_full(&router, request).await;
+        assert!(!status.is_success(), "{status}: {body}");
+        assert!(
+            body.contains(r#""type":"https://auth.example.test/problems/"#),
+            "the problem type is not under the instance's origin: {body}"
+        );
+        assert_neutral(&body);
     });
 }
 

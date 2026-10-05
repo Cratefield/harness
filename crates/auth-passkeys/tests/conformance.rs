@@ -1,5 +1,5 @@
 //! The shared conformance suite plus the wasm dependency boundary, as for
-//! every Factory Zero module.
+//! every harness module.
 
 use cratefield_auth_passkeys::Passkeys;
 use cratefield_testing::{assert_wasm_safe_deps, conformance};
