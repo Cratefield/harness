@@ -35,6 +35,8 @@ pub struct Report {
     pub coverage: Coverage,
     /// Totals, counts per classification and the transfer estimate.
     pub summary: Summary,
+    /// The dispositions of the needs-work and blocker items.
+    pub dispositions: DispositionsReport,
     /// Every non-system schema, Supabase-managed ones included.
     pub schemas: Vec<Schema>,
     /// Tables in the user schemas (never `auth`, `storage` or another
@@ -164,6 +166,12 @@ pub struct Summary {
     pub needs_work: usize,
     /// Findings classified blocker.
     pub blockers: usize,
+    /// Needs-work and blocker items with a `covered` or `waived`
+    /// disposition.
+    pub decided: usize,
+    /// Needs-work and blocker items with no disposition yet. Cutover
+    /// refuses while this is non-zero (#661).
+    pub undecided: usize,
     /// No blockers: the later steps can run once the needs-work items have
     /// a disposition.
     pub ready: bool,
@@ -435,10 +443,11 @@ pub struct Policy {
     /// replacement check. Written into the run directory, never into the
     /// venture's source tree.
     pub test_stub: String,
-    /// Always `undecided` in an inspect report: before cutover each
-    /// policy needs its own `covered` (with a reference to the code or
-    /// test) or `waived` (with a reason) — never in bulk (ADR 0026,
-    /// Decision 5).
+    /// `covered`, `waived` or `undecided`: this item's entry in the
+    /// dispositions file (`--dispositions`), and `undecided` when no file
+    /// covers it. Before cutover each policy needs its own `covered` (with a
+    /// reference to the code or test) or `waived` (with a reason) — never in
+    /// bulk (ADR 0026, Decision 5).
     pub disposition: Disposition,
 }
 
@@ -722,6 +731,47 @@ impl Classification {
             Self::Blocker => "blocker",
         }
     }
+}
+
+/// The dispositions in a report, per kind and item.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DispositionsReport {
+    /// Counts per kind of item that needs a disposition, only kinds with
+    /// at least one item, sorted by kind.
+    pub by_kind: Vec<KindDispositions>,
+    /// Every item decided, sorted by id.
+    pub decided: Vec<DecidedItem>,
+    /// Entries in the file that match no item that needs a disposition,
+    /// sorted.
+    pub stale: Vec<String>,
+}
+
+/// The disposition counts of one kind of item.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KindDispositions {
+    /// The finding kind (`policy`, `function`, `extension`, …).
+    pub kind: String,
+    /// Items of this kind covered.
+    pub covered: usize,
+    /// Items of this kind waived.
+    pub waived: usize,
+    /// Items of this kind still undecided.
+    pub undecided: usize,
+}
+
+/// One item with a disposition.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DecidedItem {
+    /// The finding id.
+    pub id: String,
+    /// `covered` or `waived`.
+    pub status: Disposition,
+    /// The code or test that covers it; `covered` entries only.
+    #[serde(rename = "ref", skip_serializing_if = "Option::is_none")]
+    pub reference: Option<String>,
+    /// Why it is waived; `waived` entries only.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
 }
 
 impl Report {

@@ -10,6 +10,8 @@ Source `db.fixtureprojectref000.supabase.co:5432/postgres`, PostgreSQL 16.15. Re
 | Automatic | 23 |
 | Needs work | 28 |
 | Blockers | 2 |
+| Decided | 0 |
+| Undecided | 28 |
 | Tables | 6 (~14 rows) |
 | Data | 88 KiB (plus 112 KiB of indexes, rebuilt on the target) |
 | Storage | 3 objects, 12 MiB |
@@ -92,6 +94,26 @@ Moved by the importer with nothing to decide.
 | table | `public.teams` | data | columns, constraints and indexes recreated; rows copied with COPY and verified by count and checksum | app.teams |
 | trigger | `public.profiles.profiles_set_updated_at` | schema | copied verbatim with its function | on app.profiles |
 | view | `public.active_projects` | schema | copied verbatim | app.active_projects |
+
+## Dispositions
+
+Every needs-work item needs its own `covered` or `waived` entry (ADR 0026, Decision 5): `fz import supabase inspect --dispositions <FILE>`. Cutover refuses while `Undecided` is non-zero.
+
+| Kind | Covered | Waived | Undecided |
+|---|---|---|---|
+| auth | 0 | 0 | 1 |
+| auth_provider | 0 | 0 | 2 |
+| bucket | 0 | 0 | 1 |
+| edge_function | 0 | 0 | 1 |
+| extension | 0 | 0 | 1 |
+| foreign_key | 0 | 0 | 3 |
+| function | 0 | 0 | 1 |
+| grant | 0 | 0 | 2 |
+| policy | 0 | 0 | 12 |
+| publication | 0 | 0 | 1 |
+| table | 0 | 0 | 1 |
+| trigger | 0 | 0 | 1 |
+| view | 0 | 0 | 1 |
 
 ## Row-level security (12 policies)
 
