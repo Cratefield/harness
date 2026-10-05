@@ -137,7 +137,9 @@ fn markdown(rows: &[Consumer]) -> String {
          \x20 URL — instead of one fixed base. Clients must match on the slug,\n\
          \x20 the part after `/problems/` (`auth/…` namespaces included), never\n\
          \x20 on the full URI: the URI names whichever venture served the\n\
-         \x20 answer. docs/ERRORS.md is the slug list.\n\n"
+         \x20 answer. docs/ERRORS.md is the slug list. Every other\n\
+         \x20 source-breaking change since 0.5.0, per minor, is in\n\
+         \x20 docs/UPGRADING.md.\n\n"
     );
 
     out.push_str("## Supported core ranges\n\n");

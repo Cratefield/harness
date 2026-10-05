@@ -50,7 +50,9 @@ Decisions, including why the TypeScript attempt was thrown away, are in
 [docs/SECURITY.md](https://github.com/Cratefield/harness/blob/main/docs/SECURITY.md). What we store and for how long:
 [docs/PRIVACY.md](https://github.com/Cratefield/harness/blob/main/docs/PRIVACY.md). Which module version runs on which
 core: [docs/COMPATIBILITY.md](https://github.com/Cratefield/harness/blob/main/docs/COMPATIBILITY.md), generated and
-drift-checked in CI. How crates reach crates.io:
+drift-checked in CI, and the per-minor list of source breaks to fix when
+you move a venture forward: [docs/UPGRADING.md](https://github.com/Cratefield/harness/blob/main/docs/UPGRADING.md).
+How crates reach crates.io:
 [docs/RELEASING.md](https://github.com/Cratefield/harness/blob/main/docs/RELEASING.md).
 Driving the venture CLI from an AI agent over MCP:
 [docs/MCP.md](https://github.com/Cratefield/harness/blob/main/docs/MCP.md). Metering an allowance

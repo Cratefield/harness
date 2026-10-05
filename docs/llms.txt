@@ -111,3 +111,6 @@ hallucination:
   venture's UI spec (ADR 0010).
 - `docs/VENTURE-GUIDE.md` — the guide to building a venture, module by
   module.
+- `docs/UPGRADING.md` — the source-breaking changes in
+  `cratefield-core`, one section per minor, when you move a venture's
+  `cratefield-core` requirement forward.
