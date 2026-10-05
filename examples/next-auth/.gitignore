@@ -1,0 +1,17 @@
+# Next build output
+.next/
+out/
+next-env.d.ts
+*.tsbuildinfo
+# Local secrets written by `npm run setup`
+.env.local
+# Dependencies
+node_modules/
+# Playwright
+test-results/
+playwright-report/
+blob-report/
+playwright/.cache/
+# Misc
+*.log
+.DS_Store

@@ -56,8 +56,27 @@ claims and the `Set-Cookie` headers for a rotated session; `signOut()` returns
 a redirect that ends the browser's one session (there is no "sign out
 everywhere" browser flow yet).
 
-See [`docs/auth/WEB-APPS.md`](../../docs/auth/WEB-APPS.md) for the full
-integration guide, the cookie layout and the security model.
+## Next.js
+
+The `@cratefield/auth/next` subpath adapts the same client to the app router:
+route handlers for `start` / `callback` / `refresh` / `logout`, an
+`authMiddleware({ protect, signInPath })` for `middleware.ts`, and a
+`getSession()` for server components. `next` is an optional peer dependency.
+
+```ts
+import { createNextAuth } from '@cratefield/auth/next';
+
+const nextAuth = createNextAuth(auth); // same `auth` as above
+
+// middleware.ts
+export const middleware = nextAuth.authMiddleware({ protect: ['/app'], signInPath: '/auth/start' });
+
+// app/api/auth/start/route.ts
+export const GET = nextAuth.handlers.start;
+```
+
+See [`docs/auth/WEB-APPS.md#nextjs`](../../docs/auth/WEB-APPS.md#nextjs) for the
+full integration guide, the cookie layout and the security model.
 
 ## License
 
