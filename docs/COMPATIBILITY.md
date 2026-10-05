@@ -27,7 +27,9 @@ compatibility-doc` and checked in CI for drift. Do not edit by hand.
   URL — instead of one fixed base. Clients must match on the slug,
   the part after `/problems/` (`auth/…` namespaces included), never
   on the full URI: the URI names whichever venture served the
-  answer. docs/ERRORS.md is the slug list.
+  answer. docs/ERRORS.md is the slug list. Every other
+  source-breaking change since 0.5.0, per minor, is in
+  docs/UPGRADING.md.
 
 ## Supported core ranges
 
