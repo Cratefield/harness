@@ -1148,6 +1148,7 @@ dependencies = [
  "cratefield-auth-password",
  "cratefield-core",
  "cratefield-i18n",
+ "cratefield-mail-templates",
  "cratefield-module-privacy",
  "cratefield-oauth-client",
  "cratefield-testing",
