@@ -17,6 +17,11 @@
 # cratefield_core::Module` in a downstream build, because every type in
 # core is an identity per copy.
 #
+# Issue #708: resolving what crates.io holds also says nothing about
+# what this tree holds, so a workspace version that was never published
+# passes here silently. Every crate that exists on the registry must
+# therefore have the version this workspace names published too.
+#
 # Usage: tools/crates-io-resolve.sh [crate ...]
 #   With no arguments every publishable crate in the workspace is used;
 #   with arguments, exactly those (so a subset can be checked by hand).
@@ -61,7 +66,16 @@ fi
 # index does not. The path mirroring is cargo's own rule: 1-char names
 # under 1/, 2-char under 2/, 3-char under 3/<first>/, everything else
 # under <first two>/<chars 3-4>/.
+# The scratch directory is made here rather than at the resolve stage
+# because the index body of the existence probe is kept in it: the release
+# lag check below reads that same body, so no crate is asked about twice.
+scratch=$(mktemp -d /tmp/crates-io-resolve.XXXXXX)
+trap 'rm -rf "$scratch"' EXIT
 existing=()
+# Filled in below and reported at the very end: `name local-version
+# (crates.io has <newest>)` for every crate whose workspace version the
+# registry has never published.
+lagged=()
 for name in "${crates[@]}"; do
   case ${#name} in
     1) path="1/$name" ;;
@@ -77,15 +91,41 @@ for name in "${crates[@]}"; do
   # `|| true` only keeps `set -e` from killing the script on the capture
   # itself; the branch below is what decides. A 000 (or empty) status
   # means curl never got a response at all.
-  status=$(curl -s -o /dev/null -w '%{http_code}' --retry 2 --retry-connrefused -m 30 "https://index.crates.io/$path") || true
+  status=$(curl -s -o "$scratch/index.json" -w '%{http_code}' --retry 2 --retry-connrefused -m 30 "https://index.crates.io/$path") || true
   if [ "$status" = 200 ]; then
     existing+=("$name")
+    # Issue #708. The stages below resolve whatever the registry holds,
+    # so a crate whose newest version exists only in this tree resolves
+    # cleanly and reads as healthy: nothing in a stranger's build points
+    # back at a version that was never published. The index body just
+    # fetched is one JSON object per line, so `vers` is read off it with
+    # jq instead of asking the registry a second time — `==` compares
+    # whole strings, so 0.2.0 cannot pass for 0.2.01, and a yanked
+    # version still counts as published (it resolved; it was withdrawn).
+    # A crate named on the command line that this workspace does not
+    # build has no workspace version to compare and is left alone.
+    local_version=$(jq -r --arg n "$name" '.packages[] | select(.name == $n) | .version' <<<"$metadata")
+    if [ -n "$local_version" ] && ! jq -s -e --arg v "$local_version" 'any(.[]; .vers == $v)' "$scratch/index.json" >/dev/null; then
+      newest=$(jq -r 'select(.yanked | not) | .vers' "$scratch/index.json" | tail -n 1)
+      lagged+=("$name $local_version (crates.io has ${newest:-no version})")
+    fi
   elif [ "$status" = 404 ]; then
     printf '::notice::skipping %s: not on crates.io yet. Its first publish is still pending, so the published set cannot include it (docs/RELEASING.md, Owner setup).\n' "$name" >&2
   else
     die "could not reach the sparse index to check $name (HTTP status ${status:-none}, after --retry re-asked the transient statuses). This is deliberately fatal rather than a skip: treating an unreachable registry as \"not published yet\" would shrink the checked set and pass a subset as the whole. Nothing about the published set was learned — run again once the registry answers."
   fi
 done
+# The lag list is reported here, where it is collected, rather than at the
+# end: the stages below can fail first on their own terms — the duplicate
+# assertion of issue #466 is red today — and an error this run found must
+# reach the log whatever else it finds, or it is lost behind the next one.
+# Only the non-zero exit waits for the end.
+if [ "${#lagged[@]}" -gt 0 ]; then
+  for entry in "${lagged[@]}"; do
+    printf '::error::%s: the workspace version was never published\n' "$entry" >&2
+  done
+  printf '::error::the workspace carries a version crates.io has never published. Either a release run failed part-way or publishing is switched off for these crates (docs/RELEASING.md). Everything checked below is the published set, so a run that passes while this stands has verified an older set than this tree builds, and a stranger pulling these crates gets the older versions.\n' >&2
+fi
 [ "${#existing[@]}" -gt 0 ] || die "none of the requested crates exists on crates.io yet — every name answered a plain 404, so there is no published set to resolve. That is what a first publish still pending looks like: run this again after publishing. A registry outage cannot land here; it dies in the loop above."
 
 echo "crates-io-resolve: resolving ${#existing[@]} published crate(s): ${existing[*]}"
@@ -95,8 +135,6 @@ echo "crates-io-resolve: resolving ${#existing[@]} published crate(s): ${existin
 # A fresh project outside the workspace, the crates added with no version
 # and no path override, so cargo picks the same latest releases a stranger
 # picking up the published set would get.
-scratch=$(mktemp -d /tmp/crates-io-resolve.XXXXXX)
-trap 'rm -rf "$scratch"' EXIT
 cd "$scratch"
 cargo new --quiet cf-resolve
 cd cf-resolve
@@ -175,3 +213,13 @@ if [ "${#bin_only[@]}" -gt 0 ]; then
 else
   echo "crates-io-resolve: ${#existing[@]} published crate(s) resolved and compiled together, one copy each."
 fi
+
+# --- 6. The workspace version is on crates.io ------------------------------
+#
+# Reported back in stage 2, where it is collected; only the verdict is
+# left to run last. The stages in between still run, and still report
+# their own findings, when the list is not empty — a version that was
+# never published is a release process problem whose diagnosis does not
+# need the resolve or compile stages' verdict, but suppressing what they
+# found would hide the more urgent of the two.
+[ "${#lagged[@]}" -eq 0 ] || exit 1

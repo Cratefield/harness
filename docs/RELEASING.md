@@ -342,7 +342,10 @@ of ours is the `expected cratefield_core::Module, found
 cratefield_core::Module` failure downstream); and the result is compiled
 (`cargo check`). A crate whose first publish is still pending is skipped
 with a notice, not failed on — a pending first publish is a gap being
-filled (Owner setup above), not a broken published set.
+filled (Owner setup above), not a broken published set. It also fails
+when the workspace names a version the registry has never published
+(issue #708): the published set resolves fine while that stands, it is
+just older than this tree.
 
 It runs daily on a schedule, after a real release (the Release workflow
 calls it once a publishing run actually happened, dry runs excepted), and
