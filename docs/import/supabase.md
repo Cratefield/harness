@@ -170,8 +170,11 @@ right place.
 - **Rules first.** Common Supabase shapes are recognised from the policy's
   roles and SQL: owner-only (`auth.uid() = user_id`), tenant-scoped through
   a membership lookup, public read (`true`), public write, role- or
-  claim-based (`auth.role()`, `auth.jwt()`), and service-role only. A rule
-  match has confidence 1.0.
+  claim-based (`auth.role()`, `auth.jwt()`), and service-role only. Then the
+  shapes those miss: ownership through a parent row, tenancy through a parent
+  row and a membership table, a filtered public read (a column predicate, no
+  `auth.*`), deny-all (`false`), and an OR of recognised shapes as
+  `composite`, listing each part. A rule match has confidence 1.0.
 - **A classifier for the rest, if you want one.** With `--classify`, each
   policy no rule placed is asked one typed question — which access pattern
   is this? — through the harness's `Classifier` port: TypeSafe's calibrated

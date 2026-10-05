@@ -1,0 +1,101 @@
+# EarthOS-shaped RLS policies, as pg_get_expr renders them, with the pattern
+# the rules place each one on before this change (`before`) and after it
+# (`after`). Tab-separated; empty cell means "none". `roles` is
+# comma-joined. A `#` line is a comment.
+#
+# The 66 rows whose `before` is needs_review are the shapes issue #725 adds
+# rules for: owner_via_parent, tenant_via_parent, public_read_filtered,
+# deny_all and composite. The rest are shapes the existing rules already
+# place; their `before` and `after` must stay equal.
+table	name	command	roles	using	with_check	before	after
+api_keys	Own keys through their client	SELECT	authenticated	(EXISTS ( SELECT 1 FROM api_clients c WHERE ((c.id = api_keys.api_client_id) AND (c.owner_user_id = auth.uid()))))		needs_review	owner_via_parent
+aura_itinerary_items	Itinerary items through their trip	ALL	authenticated	(EXISTS ( SELECT 1 FROM aura_trips t WHERE ((t.id = aura_itinerary_items.trip_id) AND (t.owner_user_id = auth.uid()))))	(EXISTS ( SELECT 1 FROM aura_trips t WHERE ((t.id = aura_itinerary_items.trip_id) AND (t.owner_user_id = auth.uid()))))	needs_review	owner_via_parent
+aura_messages	Messages through their thread	SELECT	authenticated	(EXISTS ( SELECT 1 FROM aura_threads th WHERE ((th.id = aura_messages.thread_id) AND (th.owner_user_id = auth.uid()))))		needs_review	owner_via_parent
+documents	Insert a document into an owned folder	INSERT	authenticated		(EXISTS ( SELECT 1 FROM folders f WHERE ((f.id = documents.folder_id) AND (f.owner_id = auth.uid()))))	needs_review	owner_via_parent
+comments	Update a comment on an owned post	UPDATE	authenticated	(EXISTS ( SELECT 1 FROM posts p WHERE ((p.id = comments.post_id) AND (p.author_id = auth.uid()))))	(EXISTS ( SELECT 1 FROM posts p WHERE ((p.id = comments.post_id) AND (p.author_id = auth.uid()))))	needs_review	owner_via_parent
+attachments	Attachment through its project	SELECT	authenticated	(EXISTS ( SELECT 1 FROM projects pr WHERE ((pr.id = attachments.project_id) AND (pr.created_by = auth.uid()))))		needs_review	owner_via_parent
+invoices	Delete an invoice on an owned order	DELETE	authenticated	(EXISTS ( SELECT 1 FROM orders o WHERE ((o.id = invoices.order_id) AND (o.user_id = auth.uid()))))		needs_review	owner_via_parent
+subscriptions	Subscription through its plan owner	SELECT	authenticated	(EXISTS ( SELECT 1 FROM plans pl WHERE ((pl.id = subscriptions.plan_id) AND (pl.owner_user_id = auth.uid()))))		needs_review	owner_via_parent
+vehicles	Vehicle through its fleet	ALL	authenticated	(EXISTS ( SELECT 1 FROM fleets fl WHERE ((fl.id = vehicles.fleet_id) AND (fl.owner_id = auth.uid()))))	(EXISTS ( SELECT 1 FROM fleets fl WHERE ((fl.id = vehicles.fleet_id) AND (fl.owner_id = auth.uid()))))	needs_review	owner_via_parent
+devices	Update a device in an owned region	UPDATE	authenticated	(EXISTS ( SELECT 1 FROM regions r WHERE ((r.id = devices.region_id) AND (r.user_id = auth.uid()))))		needs_review	owner_via_parent
+sessions	Session through its profile owner	SELECT	authenticated	(EXISTS ( SELECT 1 FROM profiles p WHERE ((p.id = sessions.profile_id) AND (p.user_id = auth.uid()))))		needs_review	owner_via_parent
+boards	Board through its list owner	ALL	authenticated	(EXISTS ( SELECT 1 FROM lists l WHERE ((l.id = boards.list_id) AND (l.owner_id = auth.uid()))))	(EXISTS ( SELECT 1 FROM lists l WHERE ((l.id = boards.list_id) AND (l.owner_id = auth.uid()))))	needs_review	owner_via_parent
+files	File through its upload owner	SELECT	authenticated	(EXISTS ( SELECT 1 FROM uploads u WHERE ((u.id = files.upload_id) AND (u.owner_id = auth.uid()))))		needs_review	owner_via_parent
+routes	Route through its trip creator	SELECT	authenticated	(EXISTS ( SELECT 1 FROM aura_trips t WHERE ((t.id = routes.trip_id) AND (t.created_by = auth.uid()))))		needs_review	owner_via_parent
+campaigns	Campaign through its plan owner	ALL	authenticated	(EXISTS ( SELECT 1 FROM plans p WHERE ((p.id = campaigns.plan_id) AND (p.owner_user_id = auth.uid()))))	(EXISTS ( SELECT 1 FROM plans p WHERE ((p.id = campaigns.plan_id) AND (p.owner_user_id = auth.uid()))))	needs_review	owner_via_parent
+lists	Insert a list into an owned board	INSERT	authenticated		(EXISTS ( SELECT 1 FROM boards b WHERE ((b.id = lists.board_id) AND (b.owner_id = auth.uid()))))	needs_review	owner_via_parent
+drafts	Draft through its post author	SELECT	authenticated	(EXISTS ( SELECT 1 FROM posts p WHERE ((p.id = drafts.post_id) AND (p.author_id = auth.uid()))))		needs_review	owner_via_parent
+orders	Update an order on an owned cart	UPDATE	authenticated	(EXISTS ( SELECT 1 FROM carts c WHERE ((c.id = orders.cart_id) AND (c.user_id = auth.uid()))))	(EXISTS ( SELECT 1 FROM carts c WHERE ((c.id = orders.cart_id) AND (c.user_id = auth.uid()))))	needs_review	owner_via_parent
+regions	Region through its country owner	SELECT	authenticated	(EXISTS ( SELECT 1 FROM countries WHERE ((countries.id = regions.country_id) AND (countries.owner_user_id = auth.uid()))))		needs_review	owner_via_parent
+inventory_lots	Lots in an organisation the user belongs to	SELECT	authenticated	(EXISTS ( SELECT 1 FROM (inventory_locations il JOIN organization_members om ON ((om.organization_id = il.organization_id))) WHERE ((il.id = inventory_lots.inventory_location_id) AND (om.user_id = auth.uid()))))		needs_review	tenant_via_parent
+distribution_lines	Lines in an org the user owns or administrates	SELECT	authenticated	(EXISTS ( SELECT 1 FROM (inventory_locations il JOIN organization_members om ON ((om.organization_id = il.organization_id))) WHERE ((il.id = distribution_lines.inventory_location_id) AND (om.user_id = auth.uid()) AND (om.role = ANY (ARRAY['owner'::text, 'admin'::text])))))		needs_review	tenant_via_parent
+inventory_lots	Lots with a varchar-cast role list	SELECT	authenticated	(EXISTS ( SELECT 1 FROM (inventory_locations il JOIN organization_members om ON ((om.organization_id = il.organization_id))) WHERE ((il.id = inventory_lots.inventory_location_id) AND (om.user_id = auth.uid()) AND ((om.role)::text = ANY ((ARRAY['owner'::character varying, 'admin'::character varying])::text[])))))		needs_review	tenant_via_parent
+products	Products in a catalog of the user's team	SELECT	authenticated	(EXISTS ( SELECT 1 FROM (catalogs c JOIN team_members tm ON ((c.team_id = tm.team_id))) WHERE ((c.id = products.catalog_id) AND (tm.user_id = auth.uid()))))		needs_review	tenant_via_parent
+shipments	Shipments in a workspace the user belongs to	SELECT	authenticated	(EXISTS ( SELECT 1 FROM (warehouses w JOIN workspace_members wm ON ((wm.workspace_id = w.workspace_id))) WHERE ((w.id = shipments.warehouse_id) AND (wm.user_id = auth.uid()))))		needs_review	tenant_via_parent
+tasks	Tasks for admins of the board's team	SELECT	authenticated	(EXISTS ( SELECT 1 FROM (boards b JOIN team_members tm ON ((tm.team_id = b.team_id))) WHERE ((b.id = tasks.board_id) AND (tm.user_id = auth.uid()) AND (tm.role = ANY (ARRAY['admin'::text])))))		needs_review	tenant_via_parent
+files	Files in a group the user belongs to	ALL	authenticated	(EXISTS ( SELECT 1 FROM (folders f JOIN group_members gm ON ((gm.group_id = f.group_id))) WHERE ((gm.user_id = auth.uid()) AND (f.id = files.folder_id))))	(EXISTS ( SELECT 1 FROM (folders f JOIN group_members gm ON ((gm.group_id = f.group_id))) WHERE ((gm.user_id = auth.uid()) AND (f.id = files.folder_id))))	needs_review	tenant_via_parent
+documents	Documents in an organisation the user belongs to	SELECT	authenticated	(EXISTS ( SELECT 1 FROM (accounts a JOIN account_members am ON ((am.account_id = a.account_id))) WHERE ((a.id = documents.account_id) AND (am.user_id = auth.uid()))))		needs_review	tenant_via_parent
+reports	Reports for owners and admins with a varchar list	SELECT	authenticated	(EXISTS ( SELECT 1 FROM (workspaces w JOIN workspace_members wm ON ((wm.workspace_id = w.workspace_id))) WHERE ((w.id = reports.workspace_id) AND (wm.user_id = auth.uid()) AND ((wm.role)::text = ANY ((ARRAY['owner'::character varying, 'admin'::character varying])::text[])))))		needs_review	tenant_via_parent
+comments	Insert a comment in an organisation the user belongs to	INSERT	authenticated		(EXISTS ( SELECT 1 FROM (threads th JOIN organization_members om ON ((th.organization_id = om.organization_id))) WHERE ((om.user_id = auth.uid()) AND (th.id = comments.thread_id))))	needs_review	tenant_via_parent
+attachments	Attachments of the user's teams	SELECT	authenticated	(EXISTS ( SELECT 1 FROM (projects p JOIN team_members tm ON ((tm.team_id = p.team_id))) WHERE ((p.id = attachments.project_id) AND (tm.user_id = auth.uid()))))		needs_review	tenant_via_parent
+events	Events for editors of the calendar's group	SELECT	authenticated	(EXISTS ( SELECT 1 FROM (calendars c JOIN group_members gm ON ((gm.group_id = c.group_id))) WHERE ((c.id = events.calendar_id) AND (gm.user_id = auth.uid()) AND (gm.role = ANY (ARRAY['editor'::text])))))		needs_review	tenant_via_parent
+invoices	Update an invoice in an organisation the user belongs to	UPDATE	authenticated	(EXISTS ( SELECT 1 FROM (vendors v JOIN organization_members om ON ((om.organization_id = v.organization_id))) WHERE ((om.user_id = auth.uid()) AND (om.role = ANY (ARRAY['owner'::text, 'admin'::text])) AND (v.id = invoices.vendor_id))))	(EXISTS ( SELECT 1 FROM (vendors v JOIN organization_members om ON ((om.organization_id = v.organization_id))) WHERE ((om.user_id = auth.uid()) AND (om.role = ANY (ARRAY['owner'::text, 'admin'::text])) AND (v.id = invoices.vendor_id))))	needs_review	tenant_via_parent
+payments	Payments for owners of the subscription's team	ALL	authenticated	(EXISTS ( SELECT 1 FROM (subscriptions s JOIN team_members tm ON ((tm.team_id = s.team_id))) WHERE ((s.id = payments.subscription_id) AND (tm.user_id = auth.uid()) AND (tm.role = ANY (ARRAY['owner'::text])))))	(EXISTS ( SELECT 1 FROM (subscriptions s JOIN team_members tm ON ((tm.team_id = s.team_id))) WHERE ((s.id = payments.subscription_id) AND (tm.user_id = auth.uid()) AND (tm.role = ANY (ARRAY['owner'::text])))))	needs_review	tenant_via_parent
+messages	Messages in an organisation the user belongs to	SELECT	authenticated	(EXISTS ( SELECT 1 FROM (threads th JOIN organization_members om ON ((om.organization_id = th.organization_id))) WHERE ((th.id = messages.thread_id) AND (om.user_id = auth.uid()))))		needs_review	tenant_via_parent
+notes	Notes in a workspace the user owns or administrates	SELECT	authenticated	(EXISTS ( SELECT 1 FROM (notebooks n JOIN workspace_members wm ON ((wm.workspace_id = n.workspace_id))) WHERE ((n.id = notes.notebook_id) AND (wm.user_id = auth.uid()) AND (wm.role = ANY (ARRAY['owner'::text, 'admin'::text])))))		needs_review	tenant_via_parent
+leads	Leads for the user's team	SELECT	authenticated	(EXISTS ( SELECT 1 FROM (campaigns c JOIN team_members tm ON ((tm.team_id = c.team_id))) WHERE ((c.id = leads.campaign_id) AND (tm.user_id = auth.uid()))))		needs_review	tenant_via_parent
+assets	Delete an asset in a group the user belongs to	DELETE	authenticated	(EXISTS ( SELECT 1 FROM (libraries l JOIN group_members gm ON ((gm.group_id = l.group_id))) WHERE ((l.id = assets.library_id) AND (gm.user_id = auth.uid()))))		needs_review	tenant_via_parent
+forms	Forms for owners and admins with a varchar list	SELECT	authenticated	(EXISTS ( SELECT 1 FROM (surveys s JOIN organization_members om ON ((om.organization_id = s.organization_id))) WHERE ((s.id = forms.survey_id) AND (om.user_id = auth.uid()) AND ((om.role)::text = ANY ((ARRAY['owner'::character varying, 'admin'::character varying])::text[])))))		needs_review	tenant_via_parent
+entries	Entries for the user's team	ALL	authenticated	(EXISTS ( SELECT 1 FROM (journals j JOIN team_members tm ON ((tm.team_id = j.team_id))) WHERE ((j.id = entries.journal_id) AND (tm.user_id = auth.uid()))))	(EXISTS ( SELECT 1 FROM (journals j JOIN team_members tm ON ((tm.team_id = j.team_id))) WHERE ((j.id = entries.journal_id) AND (tm.user_id = auth.uid()))))	needs_review	tenant_via_parent
+categories	Active categories are public	SELECT	public	(is_active = true)		needs_review	public_read_filtered
+regions	Active regions are public	SELECT	public	(is_active = true)		needs_review	public_read_filtered
+products	Active products are public	SELECT	public	(is_active = true)		needs_review	public_read_filtered
+listings	Active listings are public	SELECT	anon	(is_active = true)		needs_review	public_read_filtered
+courses	Active courses for signed-in subjects	SELECT	authenticated	(is_active = true)		needs_review	public_read_filtered
+articles	Active articles are public	SELECT	public	(is_active = true)		needs_review	public_read_filtered
+posts	Public posts are readable	SELECT	public	(visibility = 'public'::text)		needs_review	public_read_filtered
+events	Active events are public	SELECT	public	(active = true)		needs_review	public_read_filtered
+venues	Published venues are public	SELECT	public	(status = 'published'::text)		needs_review	public_read_filtered
+documents	Documents that are not deleted are public	SELECT	public	(deleted_at IS NULL)		needs_review	public_read_filtered
+profiles	Public profiles are readable	SELECT	public	(is_public = true)		needs_review	public_read_filtered
+boards	Active boards that are not deleted	SELECT	public	((is_active = true) AND (deleted_at IS NULL))		needs_review	public_read_filtered
+galleries	Public or unlisted galleries	SELECT	public	(visibility = ANY (ARRAY['public'::text, 'unlisted'::text]))		needs_review	public_read_filtered
+items	Items whose parent is active	SELECT	public	(EXISTS ( SELECT 1 FROM parents p WHERE ((p.id = items.parent_id) AND (p.is_active = true))))		needs_review	public_read_filtered
+snippets	Snippets whose project is active	SELECT	public	(EXISTS ( SELECT 1 FROM projects WHERE ((projects.id = snippets.project_id) AND (projects.active = true))))		needs_review	public_read_filtered
+menus	Published menus for signed-in subjects	SELECT	authenticated	(published = true)		needs_review	public_read_filtered
+tags	Tags that are not hidden	SELECT	public	(hidden = false)		needs_review	public_read_filtered
+early_access_leads	No one reads early-access leads	SELECT	public	false		needs_review	deny_all
+early_access_leads	No one updates early-access leads	UPDATE	public	false	false	needs_review	deny_all
+early_access_leads	No one deletes early-access leads	DELETE	public	false		needs_review	deny_all
+event_ledger	Updates to the ledger are refused	UPDATE	authenticated	false	false	needs_review	deny_all
+event_ledger	Deletes from the ledger are refused	DELETE	authenticated	false		needs_review	deny_all
+audit_log	The audit log is closed	ALL	public	false	false	needs_review	deny_all
+articles	Public or the author	SELECT	public	((visibility = 'public'::text) OR (author_id = auth.uid()))		needs_review	composite
+notes	The owner or an orphan row	SELECT	authenticated	((auth.uid() = user_id) OR (user_id IS NULL))		needs_review	composite
+posts	The author or public	SELECT	public	((auth.uid() = author_id) OR (is_public = true))		needs_review	composite
+projects	Archived projects stay visible for a grace period (unplaced)	SELECT	public	((status <> 'archived'::project_status) OR (created_at > (now() - '30 days'::interval)))		needs_review	needs_review
+profiles	Public profiles are viewable by everyone	SELECT	public	true		public_read	public_read
+attachments	Anyone can file an attachment	INSERT	anon		true	public_write	public_write
+teams	Signed-in users can list teams	SELECT	authenticated	true		role_based	role_based
+profiles	Users can insert their own profile	INSERT	authenticated		(( SELECT auth.uid() AS uid) = id)	owner_only	owner_only
+profiles	Users can update own profile	UPDATE	authenticated	(auth.uid() = id)		owner_only	owner_only
+profiles	Users can delete own profile	DELETE	authenticated	(id = auth.uid())		owner_only	owner_only
+documents	Own document by text cast	SELECT	authenticated	((auth.uid())::text = (owner)::text)		owner_only	owner_only
+notes	Own note on every command	ALL	authenticated	(auth.uid() = owner_id)	(auth.uid() = owner_id)	owner_only	owner_only
+projects	Team members can view projects	SELECT	authenticated	(EXISTS ( SELECT 1 FROM team_members m WHERE ((m.team_id = projects.team_id) AND (m.user_id = auth.uid()))))		tenant_scoped	tenant_scoped
+projects	Organisation members can view projects	SELECT	authenticated	(EXISTS ( SELECT 1 FROM organization_members om WHERE ((om.organization_id = projects.organization_id) AND (om.user_id = auth.uid()))))		tenant_scoped	tenant_scoped
+teams	Service role manages teams	ALL	service_role	true	true	service_role_only	service_role_only
+audit	Service-role claim	ALL	public	(auth.role() = 'service_role'::text)		service_role_only	service_role_only
+projects	Admins can delete projects	DELETE	public	(((auth.jwt() -> 'app_metadata'::text) ->> 'role'::text) = 'admin'::text)		role_based	role_based
+profiles	Authenticated claim	SELECT	authenticated	(auth.role() = 'authenticated'::text)		role_based	role_based
+sessions	Own session update	UPDATE	authenticated	(user_id = auth.uid())	(user_id = auth.uid())	owner_only	owner_only
+files	Own uploaded file	SELECT	authenticated	(auth.uid() = uploaded_by)		owner_only	owner_only
+api_keys	Own API key	ALL	authenticated	(auth.uid() = owner_id)	(auth.uid() = owner_id)	owner_only	owner_only
+drafts	Public drafts are readable	SELECT	public	true		public_read	public_read
+events	Anyone can file an event	INSERT	public		true	public_write	public_write
+events	Service role manages events	ALL	service_role	true	true	service_role_only	service_role_only
+posts	JWT admin posts	ALL	public	(((auth.jwt() -> 'app_metadata'::text) ->> 'role'::text) = 'admin'::text)		role_based	role_based
+teams	Signed-in true	SELECT	authenticated	true		role_based	role_based
+menus	Service role menus	ALL	service_role	true	true	service_role_only	service_role_only
+profiles	Anon insert profile	INSERT	anon		true	public_write	public_write
+regions	Public regions read	SELECT	public	true		public_read	public_read

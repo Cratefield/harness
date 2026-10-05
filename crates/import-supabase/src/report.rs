@@ -563,6 +563,20 @@ pub enum PolicyPattern {
     RoleBased,
     /// Only the service role: no client ever passes it.
     ServiceRoleOnly,
+    /// Ownership through a parent row: the row's foreign key points at a
+    /// parent whose owner column must equal the request's subject.
+    OwnerViaParent,
+    /// Membership through a parent row: the row's foreign key points at a
+    /// parent joined to a membership table the subject appears in.
+    TenantViaParent,
+    /// A public read bounded by a filter on the row's own columns (or on a
+    /// parent row reached through a foreign key): no subject check.
+    PublicReadFiltered,
+    /// The policy refuses everything (`false` in `USING` and/or `WITH
+    /// CHECK`).
+    DenyAll,
+    /// A disjunction of patterns: any one of them grants access.
+    Composite,
     /// The classifier judged it bespoke logic.
     CustomLogic,
     /// Not placed by a rule, and either no classifier was configured or
