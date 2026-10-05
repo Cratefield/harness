@@ -26,7 +26,7 @@ fn start_redirects_to_the_provider_with_pkce_and_a_flow_cookie() {
         assert_eq!(param("response_type").as_deref(), Some("code"));
         assert_eq!(
             param("redirect_uri").as_deref(),
-            Some("https://auth.factory0.ventures/v1/auth-oidc/google/callback")
+            Some("https://auth.acme.example/v1/auth-oidc/google/callback")
         );
         // PKCE is not optional here: an authorization code that leaks is
         // useless without the verifier, which never leaves the cookie.
@@ -50,7 +50,7 @@ fn a_first_login_creates_the_account_and_a_second_finds_it() {
         let first = callback(&kit, &started, "auth-code", &started.state).await;
         assert_eq!(first.status, StatusCode::FOUND, "{}", first.text());
         assert!(
-            first.cookie("__Host-fz_session").is_some(),
+            first.cookie("__Host-session").is_some(),
             "no session cookie"
         );
         assert_eq!(first.location().as_deref(), Some("/"));
@@ -95,7 +95,7 @@ fn the_flow_cookie_is_spent_and_cleared() {
         let cleared = response
             .cookies()
             .into_iter()
-            .find(|header| header.starts_with("__Host-fz_oidc="))
+            .find(|header| header.starts_with("__Host-auth_oidc="))
             .expect("the flow cookie is cleared");
         assert!(cleared.contains("Max-Age=0"), "{cleared}");
     });
@@ -226,7 +226,7 @@ fn a_provider_that_refuses_is_reported_without_reflecting_anything() {
                 "{CALLBACK}?error=access_denied&error_description={payload}&state={}",
                 started.state
             ),
-            &[("__Host-fz_oidc", &started.flow_cookie)],
+            &[("__Host-auth_oidc", &started.flow_cookie)],
         )
         .await;
 
@@ -255,7 +255,7 @@ fn a_stranger_cannot_abort_a_login_in_progress() {
         let interference = get(
             &kit,
             &format!("{CALLBACK}?error=access_denied&state=not-the-state"),
-            &[("__Host-fz_oidc", &started.flow_cookie)],
+            &[("__Host-auth_oidc", &started.flow_cookie)],
         )
         .await;
         assert_eq!(interference.status, StatusCode::BAD_REQUEST);
@@ -384,7 +384,7 @@ fn the_apple_only_user_field_is_ignored_on_a_redirect_callback() {
                 "{CALLBACK}?code=auth-code&state={}&user=%7B%22name%22%3A%7B%22firstName%22%3A%22Mallory%22%7D%7D",
                 started.state
             ),
-            &[("__Host-fz_oidc", &started.flow_cookie)],
+            &[("__Host-auth_oidc", &started.flow_cookie)],
         )
         .await;
         assert_eq!(response.status, StatusCode::FOUND, "{}", response.text());

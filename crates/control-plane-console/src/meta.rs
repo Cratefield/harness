@@ -8,7 +8,7 @@
 //! authorization response is a plain redirect (so the state cookie is
 //! `SameSite=Lax`, like Google's), the code exchanges for a plain OAuth 2.0
 //! access token, and who the person is comes from a Graph call — made
-//! through the same [`factory0_auth_meta::graph::profile`] the auth service
+//! through the same [`cratefield_auth_meta::graph::profile`] the auth service
 //! uses, made public for exactly this.
 //!
 //! **An identity without an email cannot be matched.** The allowlist is
@@ -32,8 +32,8 @@
 
 use bytes::Bytes;
 use cratefield_access::VerifiedIdentity;
+use cratefield_auth_meta::graph;
 use cratefield_core::{HttpClient, HttpError};
-use factory0_auth_meta::graph;
 use http::Request;
 use http::header::CONTENT_TYPE;
 use serde::Deserialize;

@@ -109,7 +109,7 @@ allow = [
     # #19) — the Boost Software License 1.0: OSI-approved, permissive,
     # attribution + license-copy only.
     "BSL-1.0",
-    # MPL-2.0 (webauthn-rs-proto + base64urlsafedata, via factory0-auth-passkeys'
+    # MPL-2.0 (webauthn-rs-proto + base64urlsafedata, via cratefield-auth-passkeys'
     # WebAuthn wire types, ADR 0200; PR #166) — FIRST copyleft license accepted by
     # this project, so the reasoning is recorded. ACCEPTED 2026-09-09, review-by
     # 2027-03-01. OSI-approved/FSF-free weak FILE-level copyleft: obligations attach

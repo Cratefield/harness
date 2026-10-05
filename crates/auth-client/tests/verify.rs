@@ -17,7 +17,7 @@ use p256::ecdsa::{self, Signature};
 use serde_json::{Value, json};
 use time::OffsetDateTime;
 
-const ISSUER: &str = "https://auth.factory0.ventures";
+const ISSUER: &str = "https://auth.acme.example";
 const CLIENT: &str = "client-kontinuum";
 const OTHER_CLIENT: &str = "client-undercover";
 const NOW: i64 = 1_800_000_000;
@@ -138,7 +138,7 @@ async fn a_valid_token_verifies_and_yields_its_claims() {
 
 /// The check hand-written verifiers forget. This token is signed by the
 /// right issuer with the right key and is entirely valid — for another
-/// venture. Accepting it would let any Factory Zero client use its own
+/// venture. Accepting it would let any client of the same instance use its own
 /// token against every other one.
 #[pollster::test]
 async fn a_token_for_another_client_is_refused() {

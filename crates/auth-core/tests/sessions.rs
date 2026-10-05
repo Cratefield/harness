@@ -8,8 +8,8 @@
 
 use axum::http::{Method, StatusCode, header};
 use axum::response::Response;
+use cratefield_auth_core::{AuthCore, Login, UserRow, issue, sessions_by_user, validate};
 use cratefield_testing::{FixedClock, TestHarness};
-use factory0_auth_core::{AuthCore, Login, UserRow, issue, sessions_by_user, validate};
 use serde_json::Value;
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
@@ -36,7 +36,7 @@ fn kit() -> TestHarness {
 }
 
 async fn user(kit: &TestHarness, id: &str) {
-    factory0_auth_core::insert_user(
+    cratefield_auth_core::insert_user(
         &*kit.db,
         &UserRow {
             id: id.to_owned(),
@@ -85,7 +85,7 @@ fn a_session_is_never_issued_to_an_account_that_is_not_active() {
         )
         .await;
         assert!(
-            matches!(refused, Err(factory0_auth_core::SessionError::NotActive)),
+            matches!(refused, Err(cratefield_auth_core::SessionError::NotActive)),
             "a disabled account was issued a session"
         );
 
@@ -107,7 +107,7 @@ fn a_session_is_never_issued_to_an_account_that_is_not_active() {
         .await;
         assert!(matches!(
             missing,
-            Err(factory0_auth_core::SessionError::NotActive)
+            Err(cratefield_auth_core::SessionError::NotActive)
         ));
         assert_eq!(
             sessions_by_user(&*kit.db, "u1").await.expect("query").len(),
@@ -120,7 +120,7 @@ async fn login(
     kit: &TestHarness,
     user_id: &str,
     presented: Option<&str>,
-) -> factory0_auth_core::IssuedSession {
+) -> cratefield_auth_core::IssuedSession {
     issue(
         &*kit.db,
         &at(EPOCH),
@@ -146,7 +146,7 @@ async fn route(
 ) -> (StatusCode, Value, Option<String>) {
     let mut builder = axum::http::Request::builder().method(method).uri(path);
     if let Some(cookie) = cookie {
-        builder = builder.header(header::COOKIE, format!("__Host-fz_session={cookie}"));
+        builder = builder.header(header::COOKIE, format!("__Host-session={cookie}"));
     }
     let request = builder.body(axum::body::Body::empty()).expect("builds");
     let response: Response = kit.router.clone().oneshot(request).await.expect("answers");
@@ -173,7 +173,7 @@ async fn issue_stores_only_the_hash_and_builds_the_host_cookie() {
     assert!(
         issued
             .cookie
-            .starts_with(&format!("__Host-fz_session={}", issued.value))
+            .starts_with(&format!("__Host-session={}", issued.value))
     );
     for attribute in ["Path=/", "Secure", "HttpOnly", "SameSite=Lax"] {
         assert!(issued.cookie.contains(attribute), "{attribute}");
@@ -201,7 +201,7 @@ async fn issue_stores_only_the_hash_and_builds_the_host_cookie() {
         .expect("validate");
     assert_eq!(
         ok,
-        Some(factory0_auth_core::ValidSession {
+        Some(cratefield_auth_core::ValidSession {
             id: issued.session_id.clone(),
             user_id: "u1".to_owned()
         })
@@ -296,7 +296,7 @@ async fn revoked_expired_and_unknown_are_indistinguishable() {
     user(&kit, "u1").await;
 
     let revoked = login(&kit, "u1", None).await;
-    factory0_auth_core::revoke_session(&*kit.db, &revoked.session_id, &iso(EPOCH + 10))
+    cratefield_auth_core::revoke_session(&*kit.db, &revoked.session_id, &iso(EPOCH + 10))
         .await
         .unwrap();
 
@@ -337,7 +337,7 @@ async fn revoke_all_kills_every_session_of_the_user_only() {
     let s2 = login(&kit, "u1", None).await;
     let other = login(&kit, "u2", None).await;
 
-    let revoked = factory0_auth_core::revoke_all_sessions(&*kit.db, "u1", &iso(EPOCH + 5))
+    let revoked = cratefield_auth_core::revoke_all_sessions(&*kit.db, "u1", &iso(EPOCH + 5))
         .await
         .unwrap();
     assert_eq!(revoked, 2);
@@ -413,7 +413,7 @@ async fn the_extractor_answers_one_401_for_every_signed_out_shape() {
     );
 
     let revoked = login(&kit, "u1", None).await;
-    factory0_auth_core::revoke_session(&*kit.db, &revoked.session_id, &iso(EPOCH + 1))
+    cratefield_auth_core::revoke_session(&*kit.db, &revoked.session_id, &iso(EPOCH + 1))
         .await
         .unwrap();
     let revoked = route(
@@ -527,7 +527,7 @@ async fn logout_revokes_and_clears_the_cookie() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["ok"], true);
     let clear = set_cookie.expect("Set-Cookie present");
-    assert!(clear.starts_with("__Host-fz_session=;"));
+    assert!(clear.starts_with("__Host-session=;"));
     assert!(clear.contains("Max-Age=0"));
 
     let (status, _, _) = route(

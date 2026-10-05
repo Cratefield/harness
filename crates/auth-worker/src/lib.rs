@@ -11,17 +11,20 @@
 //! on this crate with `default-features = false`, so the `entry` feature's
 //! `fetch`/`scheduled` exports do not collide with its own.
 //!
-//! Every deployment-specific literal lives in [`defaults`], read by
-//! [`config`]; a test fails if the venture marker escapes that table.
+//! **One branded instance per app (issue #777).** Nothing in this crate
+//! names an app: every instance supplies its own origin, id, browser
+//! origins and branding through configuration (`instances/<app>/wrangler.toml`
+//! in the repository), and a missing one is refused at boot. A test fails if
+//! an app's name or domain is ever baked into `src/`.
 //!
-//! **Owner-only (needs-human):** `wrangler d1 create` for each environment, the
-//! `HARNESS_SECRET`/signing material, the auth route on the Cloudflare account,
-//! and the first production tag (auth#41).
+//! **Owner-only (needs-human), per instance:** `wrangler d1 create`, the
+//! `HARNESS_SECRET`/signing material, the custom domain on the Cloudflare
+//! account, and the first production tag. The runbook is
+//! `docs/auth/MANAGED-INSTANCES.md`.
 
 #![forbid(unsafe_code)]
 
 pub mod config;
-pub mod defaults;
 
 pub use config::{AuthWorkerConfig, MailerKind, validate_config};
 

@@ -554,9 +554,9 @@ for you — the toolchain's wasm target, and Cloudflare credentials.
 
 For the workflow around those commands, copy what already works:
 [`.github/workflows/deploy-auth.yml`](../.github/workflows/deploy-auth.yml)
-deploys this repository's auth Worker — a push to `main` deploys
-staging, an `auth-v*` tag deploys production behind a GitHub Environment
-approval gate, D1 migrations are applied before each deploy, and a smoke
+deploys this repository's auth instances (one per app, each from
+`instances/<app>/wrangler.toml`) — a push to `main` deploys staging, an
+`auth-v*` tag deploys production behind a GitHub Environment approval gate, D1 migrations are applied before each deploy, and a smoke
 script runs after it. It is not a venture deploy, and no venture deploy
 workflow ships in this repository today; pointing that shape at your
 venture directory is a one-time human step.

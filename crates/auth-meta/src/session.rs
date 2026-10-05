@@ -5,11 +5,11 @@
 //! `["federated"]` and an address nobody verified, and announces the result
 //! under this module's own event names.
 
-use cratefield_core::{ModuleContext, Problem, Scope};
-use factory0_auth_core::federated::{
+use cratefield_auth_core::federated::{
     self, Caller, CompleteError, Completed as CoreCompleted, FederatedIdentity, Ports,
 };
-use factory0_auth_core::{IssuedSession, set_cookie};
+use cratefield_auth_core::{IssuedSession, set_cookie};
+use cratefield_core::{ModuleContext, Problem, Scope};
 use serde_json::json;
 
 pub(crate) const EVENT_LOGGED_IN: &str = "auth-meta.logged_in";
@@ -20,7 +20,7 @@ pub(crate) const EVENT_AUTO_LINKED: &str = "auth-meta.auto_linked";
 const AMR: [&str; 1] = ["federated"];
 
 /// The provider slug, which is also the `identities.provider` value.
-pub(crate) const PROVIDER: &str = factory0_auth_core::PROVIDER_META;
+pub(crate) const PROVIDER: &str = cratefield_auth_core::PROVIDER_META;
 
 pub(crate) enum Completed {
     SignedIn { session: IssuedSession },

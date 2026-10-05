@@ -1131,6 +1131,213 @@ dependencies = [
 ]
 
 [[package]]
+name = "cratefield-auth-core"
+version = "0.1.1"
+dependencies = [
+ "argon2",
+ "askama",
+ "async-trait",
+ "axum",
+ "base64ct",
+ "bcrypt",
+ "cratefield-adapter-sqlite",
+ "cratefield-auth-magic-link",
+ "cratefield-auth-meta",
+ "cratefield-auth-oidc",
+ "cratefield-auth-password",
+ "cratefield-core",
+ "cratefield-i18n",
+ "cratefield-module-privacy",
+ "cratefield-testing",
+ "futures-util",
+ "getrandom 0.4.3",
+ "http",
+ "p256 0.14.0",
+ "pollster",
+ "sea-query",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "thiserror 2.0.20",
+ "time",
+ "tower",
+ "tracing",
+ "url",
+]
+
+[[package]]
+name = "cratefield-auth-magic-link"
+version = "0.1.1"
+dependencies = [
+ "async-trait",
+ "axum",
+ "base64ct",
+ "bytes",
+ "cratefield-adapter-sqlite",
+ "cratefield-auth-core",
+ "cratefield-core",
+ "cratefield-mail-templates",
+ "cratefield-testing",
+ "futures-lite",
+ "getrandom 0.4.3",
+ "http",
+ "pollster",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "time",
+ "tower",
+ "tracing",
+ "url",
+]
+
+[[package]]
+name = "cratefield-auth-meta"
+version = "0.1.1"
+dependencies = [
+ "async-trait",
+ "axum",
+ "base64ct",
+ "bytes",
+ "cratefield-adapter-sqlite",
+ "cratefield-auth-core",
+ "cratefield-core",
+ "cratefield-testing",
+ "getrandom 0.4.3",
+ "hmac 0.13.0",
+ "http",
+ "oauth2",
+ "pollster",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "thiserror 2.0.20",
+ "time",
+ "tower",
+ "tracing",
+ "url",
+]
+
+[[package]]
+name = "cratefield-auth-oidc"
+version = "0.1.1"
+dependencies = [
+ "async-trait",
+ "axum",
+ "base64ct",
+ "bytes",
+ "chrono",
+ "cratefield-adapter-sqlite",
+ "cratefield-auth-core",
+ "cratefield-core",
+ "cratefield-testing",
+ "getrandom 0.4.3",
+ "http",
+ "openidconnect",
+ "p256 0.14.0",
+ "pollster",
+ "rand 0.8.8",
+ "rsa",
+ "serde",
+ "serde_json",
+ "serde_urlencoded",
+ "sha2 0.11.0",
+ "thiserror 2.0.20",
+ "time",
+ "tower",
+ "tracing",
+ "url",
+]
+
+[[package]]
+name = "cratefield-auth-passkeys"
+version = "0.1.1"
+dependencies = [
+ "axum",
+ "base64ct",
+ "ciborium",
+ "coset",
+ "cratefield-adapter-sqlite",
+ "cratefield-auth-core",
+ "cratefield-core",
+ "cratefield-testing",
+ "ed25519-dalek",
+ "getrandom 0.4.3",
+ "http",
+ "p256 0.14.0",
+ "pollster",
+ "rand 0.8.8",
+ "rsa",
+ "sea-query",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "thiserror 2.0.20",
+ "time",
+ "tower",
+ "tracing",
+ "url",
+ "webauthn-rs-proto",
+]
+
+[[package]]
+name = "cratefield-auth-password"
+version = "0.1.1"
+dependencies = [
+ "argon2",
+ "async-trait",
+ "axum",
+ "base16ct 0.2.0",
+ "base64ct",
+ "bytes",
+ "cratefield-adapter-sqlite",
+ "cratefield-auth-core",
+ "cratefield-core",
+ "cratefield-mail-templates",
+ "cratefield-testing",
+ "getrandom 0.4.3",
+ "http",
+ "pollster",
+ "serde",
+ "serde_json",
+ "sha1 0.10.7",
+ "sha2 0.11.0",
+ "time",
+ "tower",
+ "tracing",
+ "url",
+]
+
+[[package]]
+name = "cratefield-auth-worker"
+version = "0.1.1"
+dependencies = [
+ "async-trait",
+ "axum",
+ "cratefield-adapter-owlpost",
+ "cratefield-adapter-resend",
+ "cratefield-adapter-sqlite",
+ "cratefield-adapter-turnstile",
+ "cratefield-auth-core",
+ "cratefield-auth-magic-link",
+ "cratefield-auth-meta",
+ "cratefield-auth-oidc",
+ "cratefield-auth-passkeys",
+ "cratefield-auth-password",
+ "cratefield-core",
+ "cratefield-runtime-cloudflare",
+ "cratefield-testing",
+ "getrandom 0.4.3",
+ "http",
+ "pollster",
+ "serde_json",
+ "toml 0.8.23",
+ "tower",
+ "url",
+ "worker",
+]
+
+[[package]]
 name = "cratefield-bench-write-ceiling"
 version = "0.1.1"
 dependencies = [
@@ -1278,6 +1485,9 @@ dependencies = [
  "cratefield-access",
  "cratefield-accounts",
  "cratefield-adapter-sqlite",
+ "cratefield-auth-core",
+ "cratefield-auth-meta",
+ "cratefield-auth-oidc",
  "cratefield-catalog",
  "cratefield-chrome",
  "cratefield-core",
@@ -1285,9 +1495,6 @@ dependencies = [
  "cratefield-module-privacy",
  "cratefield-provisioning",
  "cratefield-testing",
- "factory0-auth-core",
- "factory0-auth-meta",
- "factory0-auth-oidc",
  "getrandom 0.4.3",
  "http",
  "p256 0.13.2",
@@ -1472,14 +1679,14 @@ dependencies = [
 name = "cratefield-mail-previews"
 version = "0.1.1"
 dependencies = [
+ "cratefield-auth-magic-link",
+ "cratefield-auth-password",
  "cratefield-core",
  "cratefield-mail-templates",
  "cratefield-module-email-signup",
  "cratefield-module-notifications",
  "cratefield-module-orgs",
  "cratefield-module-waitlist",
- "factory0-auth-magic-link",
- "factory0-auth-password",
  "serde_json",
 ]
 
@@ -2242,11 +2449,11 @@ name = "d1-blob-canary"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "cratefield-auth-core",
  "cratefield-core",
  "cratefield-kms",
  "cratefield-runtime-cloudflare",
  "cratefield-secrets",
- "factory0-auth-core",
  "getrandom 0.4.3",
  "serde_json",
  "worker",
@@ -2615,212 +2822,6 @@ checksum = "8be9f3dfaaffdae2972880079a491a1a8bb7cbed0b8dd7a347f668b4150a3b93"
 dependencies = [
  "event-listener",
  "pin-project-lite",
-]
-
-[[package]]
-name = "factory0-auth-core"
-version = "0.1.1"
-dependencies = [
- "argon2",
- "askama",
- "async-trait",
- "axum",
- "base64ct",
- "bcrypt",
- "cratefield-adapter-sqlite",
- "cratefield-core",
- "cratefield-i18n",
- "cratefield-module-privacy",
- "cratefield-testing",
- "factory0-auth-magic-link",
- "factory0-auth-meta",
- "factory0-auth-oidc",
- "factory0-auth-password",
- "futures-util",
- "getrandom 0.4.3",
- "http",
- "p256 0.14.0",
- "pollster",
- "sea-query",
- "serde",
- "serde_json",
- "sha2 0.11.0",
- "thiserror 2.0.20",
- "time",
- "tower",
- "tracing",
- "url",
-]
-
-[[package]]
-name = "factory0-auth-magic-link"
-version = "0.1.1"
-dependencies = [
- "async-trait",
- "axum",
- "base64ct",
- "bytes",
- "cratefield-adapter-sqlite",
- "cratefield-core",
- "cratefield-mail-templates",
- "cratefield-testing",
- "factory0-auth-core",
- "futures-lite",
- "getrandom 0.4.3",
- "http",
- "pollster",
- "serde",
- "serde_json",
- "sha2 0.11.0",
- "time",
- "tower",
- "tracing",
- "url",
-]
-
-[[package]]
-name = "factory0-auth-meta"
-version = "0.1.1"
-dependencies = [
- "async-trait",
- "axum",
- "base64ct",
- "bytes",
- "cratefield-adapter-sqlite",
- "cratefield-core",
- "cratefield-testing",
- "factory0-auth-core",
- "getrandom 0.4.3",
- "hmac 0.13.0",
- "http",
- "oauth2",
- "pollster",
- "serde",
- "serde_json",
- "sha2 0.11.0",
- "thiserror 2.0.20",
- "time",
- "tower",
- "tracing",
- "url",
-]
-
-[[package]]
-name = "factory0-auth-oidc"
-version = "0.1.1"
-dependencies = [
- "async-trait",
- "axum",
- "base64ct",
- "bytes",
- "chrono",
- "cratefield-adapter-sqlite",
- "cratefield-core",
- "cratefield-testing",
- "factory0-auth-core",
- "getrandom 0.4.3",
- "http",
- "openidconnect",
- "p256 0.14.0",
- "pollster",
- "rand 0.8.8",
- "rsa",
- "serde",
- "serde_json",
- "serde_urlencoded",
- "sha2 0.11.0",
- "thiserror 2.0.20",
- "time",
- "tower",
- "tracing",
- "url",
-]
-
-[[package]]
-name = "factory0-auth-passkeys"
-version = "0.1.1"
-dependencies = [
- "axum",
- "base64ct",
- "ciborium",
- "coset",
- "cratefield-adapter-sqlite",
- "cratefield-core",
- "cratefield-testing",
- "ed25519-dalek",
- "factory0-auth-core",
- "getrandom 0.4.3",
- "http",
- "p256 0.14.0",
- "pollster",
- "rand 0.8.8",
- "rsa",
- "sea-query",
- "serde",
- "serde_json",
- "sha2 0.11.0",
- "thiserror 2.0.20",
- "time",
- "tower",
- "tracing",
- "url",
- "webauthn-rs-proto",
-]
-
-[[package]]
-name = "factory0-auth-password"
-version = "0.1.1"
-dependencies = [
- "argon2",
- "async-trait",
- "axum",
- "base16ct 0.2.0",
- "base64ct",
- "bytes",
- "cratefield-adapter-sqlite",
- "cratefield-core",
- "cratefield-mail-templates",
- "cratefield-testing",
- "factory0-auth-core",
- "getrandom 0.4.3",
- "http",
- "pollster",
- "serde",
- "serde_json",
- "sha1 0.10.7",
- "sha2 0.11.0",
- "time",
- "tower",
- "tracing",
- "url",
-]
-
-[[package]]
-name = "factory0-auth-worker"
-version = "0.1.1"
-dependencies = [
- "async-trait",
- "axum",
- "cratefield-adapter-owlpost",
- "cratefield-adapter-resend",
- "cratefield-adapter-sqlite",
- "cratefield-adapter-turnstile",
- "cratefield-core",
- "cratefield-runtime-cloudflare",
- "cratefield-testing",
- "factory0-auth-core",
- "factory0-auth-magic-link",
- "factory0-auth-meta",
- "factory0-auth-oidc",
- "factory0-auth-passkeys",
- "factory0-auth-password",
- "getrandom 0.4.3",
- "http",
- "pollster",
- "serde_json",
- "tower",
- "url",
- "worker",
 ]
 
 [[package]]

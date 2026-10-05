@@ -1,5 +1,5 @@
 [package]
-name = "factory0-auth-core"
+name = "cratefield-auth-core"
 description = "Auth module: users, identities, credentials, sessions, single-use tokens, clients, client registration, redirect validation, sessions (issues #5-#8)"
 publish = false
 version.workspace = true
@@ -58,10 +58,10 @@ cratefield-module-privacy = { path = "../module-privacy" }
 # Path-only, so they are stripped from the packaged manifest. A dev-only
 # cycle back to this crate is fine — cargo resolves dev-dependencies
 # separately from the library graph.
-factory0-auth-magic-link = { path = "../auth-magic-link" }
-factory0-auth-password = { path = "../auth-password" }
-factory0-auth-oidc = { path = "../auth-oidc" }
-factory0-auth-meta = { path = "../auth-meta" }
+cratefield-auth-magic-link = { path = "../auth-magic-link" }
+cratefield-auth-password = { path = "../auth-password" }
+cratefield-auth-oidc = { path = "../auth-oidc" }
+cratefield-auth-meta = { path = "../auth-meta" }
 cratefield-testing = { workspace = true, features = ["postgres"] }
 cratefield-adapter-sqlite = { workspace = true }
 pollster = { workspace = true }

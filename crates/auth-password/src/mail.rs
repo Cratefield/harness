@@ -268,7 +268,7 @@ mod tests {
     use cratefield_core::EmptyConfig;
 
     fn venture() -> Venture {
-        Venture::new("Factory Zero", "factory0.ventures")
+        Venture::new("Acme", "acme.example")
     }
 
     #[test]
@@ -277,8 +277,8 @@ mod tests {
         // usable, and a person copying the link out of it must get the
         // whole thing.
         let data = VerifyMail {
-            venture: "Factory Zero".to_owned(),
-            link: "https://auth.factory0.ventures/v1/auth-password/verify?token=abc".to_owned(),
+            venture: "Acme".to_owned(),
+            link: "https://auth.acme.example/v1/auth-password/verify?token=abc".to_owned(),
             hours: 24,
         };
         let rendered = render(
@@ -292,7 +292,7 @@ mod tests {
         )
         .expect("renders");
         assert!(rendered.text.contains(&data.link), "{}", rendered.text);
-        assert!(rendered.subject.contains("Factory Zero"));
+        assert!(rendered.subject.contains("Acme"));
         assert!(rendered.text.contains("24 hours"));
         assert!(!rendered.text.contains('<'), "{}", rendered.text);
         // Once as the button, once as the copyable link.
@@ -308,7 +308,7 @@ mod tests {
     #[test]
     fn the_duplicate_mail_omits_the_reset_button_when_there_is_no_page() {
         let data = DuplicateMail {
-            venture: "Factory Zero".to_owned(),
+            venture: "Acme".to_owned(),
             reset_link: String::new(),
         };
         let rendered = render(
@@ -352,7 +352,7 @@ mod tests {
         let mut registry = TemplateRegistry::new();
         registry.register(TEMPLATE_RESET, Box::new(Override));
         let data = ResetMail {
-            venture: "Factory Zero".to_owned(),
+            venture: "Acme".to_owned(),
             link: "https://auth.example/v1/auth-password/reset?token=abc".to_owned(),
             minutes: 30,
         };
@@ -374,7 +374,7 @@ mod tests {
             TEMPLATE_VERIFY,
             &VERIFY_DEFAULT,
             &VerifyMail {
-                venture: "Factory Zero".to_owned(),
+                venture: "Acme".to_owned(),
                 link: "https://auth.example/v1/auth-password/verify?token=abc".to_owned(),
                 hours: 24,
             },
@@ -383,7 +383,7 @@ mod tests {
             &EmptyConfig,
         )
         .expect("falls back");
-        assert!(verify.subject.contains("Factory Zero"));
+        assert!(verify.subject.contains("Acme"));
     }
 
     #[test]
@@ -391,7 +391,7 @@ mod tests {
         // The link is built by this service, not by a caller, but the
         // layout escapes it anyway and this asserts that it does.
         let hostile = ResetMail {
-            venture: "Factory Zero".to_owned(),
+            venture: "Acme".to_owned(),
             link: "https://auth.example/x?t=a\"><script>alert(1)</script>".to_owned(),
             minutes: 30,
         };

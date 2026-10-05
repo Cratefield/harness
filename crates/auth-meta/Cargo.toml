@@ -1,5 +1,5 @@
 [package]
-name = "factory0-auth-meta"
+name = "cratefield-auth-meta"
 description = "Facebook Login for the auth service: OAuth 2.0 plus a Graph profile call, with no OpenID Connect anywhere (issue #17)"
 readme = "README.md"
 publish = false
@@ -16,7 +16,7 @@ workspace = true
 cratefield-core = { workspace = true }
 # auth-core owns the schema, the linking rules and the step that turns a
 # verified identity into a session; this module adds no tables.
-factory0-auth-core = { path = "../auth-core" }
+cratefield-auth-core = { path = "../auth-core" }
 axum = { workspace = true }
 http = { workspace = true }
 bytes = { workspace = true }

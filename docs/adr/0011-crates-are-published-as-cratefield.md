@@ -49,3 +49,14 @@ every downstream `Cargo.toml` on any later day.
   `factory0.ventures` domains and the example venture named `factory0` are
   untouched. They are Factory Zero's, they are a wire contract, and they
   are not package names.
+
+> **Amended 2026-10-05 (issue #777).** The auth service is no longer a
+> Factory Zero service. It runs as one branded instance per app, either
+> self-hosted by the venture or operated by Cratefield on the app's own
+> domain, so the reason given above for keeping its `factory0-auth-*`
+> names no longer holds. The unpublished service crates were renamed
+> `cratefield-auth-*` (`cratefield-auth-core`, `-magic-link`, `-meta`,
+> `-oidc`, `-passkeys`, `-password`, `-worker`, `-fz`), matching
+> `cratefield-auth-client`. None of them was ever published, so nothing
+> downstream broke; they stay `publish = false`. The text above, and the
+> `factory0-auth-*` names in it, are kept as the historical record.

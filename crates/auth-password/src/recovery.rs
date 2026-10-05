@@ -20,14 +20,14 @@
 use axum::extract::{Query, State};
 use axum::response::{Html, IntoResponse, Response};
 use base64ct::{Base64UrlUnpadded, Encoding as _};
-use cratefield_core::{
-    Json, Message, ModuleContext, Problem, Rendered, Scope, SendOutcome, Template,
-};
-use factory0_auth_core::{
+use cratefield_auth_core::{
     Redacted, STATUS_ACTIVE, SingleUseTokenRow, TOKEN_EMAIL_VERIFICATION, TOKEN_PASSWORD_RESET,
     TOKEN_REFRESH, UserRow, consume_single_use_token, hash_password, insert_single_use_token,
     password_credential, retire_unconsumed_tokens, revoke_all_sessions, set_password_hash,
     set_primary_email_verified, single_use_token_by_hash, user_by_id, user_by_primary_email,
+};
+use cratefield_core::{
+    Json, Message, ModuleContext, Problem, Rendered, Scope, SendOutcome, Template,
 };
 use http::{HeaderMap, StatusCode, Uri, header};
 use serde::Deserialize;
@@ -390,7 +390,10 @@ fn render<T: serde::Serialize>(
         default,
         data,
         locale,
-        &ctx.venture,
+        // The instance's branding, so the mail reads like its pages
+        // (issue #777).
+        &cratefield_auth_core::Brand::from_config(&*ctx.config, &ctx.venture)
+            .mail_venture(&ctx.venture),
         &*ctx.config,
     ) {
         Ok(rendered) => Some(rendered),
@@ -466,7 +469,7 @@ pub(crate) fn send_verify_mail(
             issued.token
         );
         let data = VerifyMail {
-            venture: ctx.venture.name.clone(),
+            venture: cratefield_auth_core::Brand::from_config(&*ctx.config, &ctx.venture).name,
             link,
             hours: VERIFY_TTL_SECS / 3600,
         };
@@ -529,7 +532,7 @@ pub(crate) fn send_reset_mail(
             issued.token
         );
         let data = ResetMail {
-            venture: ctx.venture.name.clone(),
+            venture: cratefield_auth_core::Brand::from_config(&*ctx.config, &ctx.venture).name,
             link,
             minutes: RESET_TTL_SECS / 60,
         };
@@ -572,7 +575,7 @@ pub(crate) fn send_duplicate_mail(
             return;
         };
         let data = DuplicateMail {
-            venture: ctx.venture.name.clone(),
+            venture: cratefield_auth_core::Brand::from_config(&*ctx.config, &ctx.venture).name,
             reset_link: format!("{public_base}/v1/auth-password/reset/request"),
         };
         // Keyed on the user, not a token row: there is no token here, and
@@ -603,7 +606,7 @@ pub(crate) async fn verify(
 ) -> Result<Response, Problem> {
     // Spending a verification token changes account state, so a form on
     // another site must not be able to press this button (issue #439).
-    factory0_auth_core::csrf::require_same_origin(&headers, &uri)
+    cratefield_auth_core::csrf::require_same_origin(&headers, &uri)
         .map_err(|problem| problem.instance(&scope.request_id))?;
     let kind = kind_of(&headers);
     let token = field(&raw, kind, "token");
@@ -646,7 +649,7 @@ pub(crate) async fn reset(
     uri: Uri,
     raw: bytes::Bytes,
 ) -> Result<Response, Problem> {
-    factory0_auth_core::csrf::require_same_origin(&headers, &uri)
+    cratefield_auth_core::csrf::require_same_origin(&headers, &uri)
         .map_err(|problem| problem.instance(&scope.request_id))?;
     let kind = kind_of(&headers);
     let token = field(&raw, kind, "token");
@@ -769,7 +772,7 @@ pub(crate) async fn resend(
     uri: Uri,
     raw: bytes::Bytes,
 ) -> Result<Response, Problem> {
-    factory0_auth_core::csrf::require_same_origin(&headers, &uri)
+    cratefield_auth_core::csrf::require_same_origin(&headers, &uri)
         .map_err(|problem| problem.instance(&scope.request_id))?;
     let kind = kind_of(&headers);
     let RequestFields {
@@ -816,7 +819,7 @@ pub(crate) async fn request_reset(
     uri: Uri,
     raw: bytes::Bytes,
 ) -> Result<Response, Problem> {
-    factory0_auth_core::csrf::require_same_origin(&headers, &uri)
+    cratefield_auth_core::csrf::require_same_origin(&headers, &uri)
         .map_err(|problem| problem.instance(&scope.request_id))?;
     let kind = kind_of(&headers);
     let RequestFields {
