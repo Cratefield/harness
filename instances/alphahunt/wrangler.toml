@@ -10,9 +10,9 @@
 # carry the full set. Every variable is documented in
 # `crates/auth-worker/README.md`.
 #
-# needs-human before the first deploy (docs/auth/MANAGED-INSTANCES.md):
-# - `wrangler d1 create alphahunt-auth-staging` / `alphahunt-auth-production` and
-#   paste the ids below in place of the REPLACE_WITH_* placeholders.
+# Provisioned on the Cloudflare account that holds alphahunt.ing: both D1
+# databases exist (ids below) and staging is migrated. Still needed before
+# production (docs/auth/MANAGED-INSTANCES.md):
 # - The secrets, by name only: HARNESS_SECRET, ADMIN_TOKEN,
 #   AUTH_CORE_SIGNING_KEYS (+ AUTH_CORE_SIGNING_KEY_ACTIVE), OWLPOST_API_KEY,
 #   TURNSTILE_SECRET, and the OIDC/Meta client secrets once those methods
@@ -54,7 +54,7 @@ period = 60
 [[d1_databases]]
 binding = "DB"
 database_name = "alphahunt-auth-staging"
-database_id = "REPLACE_WITH_STAGING_D1_ID"
+database_id = "f62881b8-76c2-4a13-bf92-974af569b4e6"
 migrations_dir = "../../crates/auth-worker/migrations"
 
 # The meta-module drains Meta deletion jobs on a schedule.
@@ -72,7 +72,9 @@ AUTH_BRAND_FOOTER = "Alphahunt"
 AUTH_CORE_LOGIN_METHODS = "passkey,magic-link"
 AUTH_PASSKEYS_RP_ID = "auth-staging.alphahunt.ing"
 AUTH_PASSKEYS_ORIGINS = "https://auth-staging.alphahunt.ing"
-AUTH_MAILER = "owlpost"
+# Staging leaves AUTH_MAILER unset: the Worker then uses Owlpost as soon as
+# the OWLPOST_API_KEY secret exists, and boots without mail until then
+# (production keeps `owlpost` and refuses to boot without the key).
 MAIL_FROM = "Alphahunt <no-reply@send.alphahunt.ing>"
 AUTH_MAGIC_LINK_PUBLIC_BASE = "https://auth-staging.alphahunt.ing"
 AUTH_MAGIC_LINK_MAIL_FROM = "Alphahunt <sign-in@send.alphahunt.ing>"
@@ -101,7 +103,7 @@ period = 60
 [[env.production.d1_databases]]
 binding = "DB"
 database_name = "alphahunt-auth-production"
-database_id = "REPLACE_WITH_PRODUCTION_D1_ID"
+database_id = "abcb0141-b916-4dd9-8cb4-daf0cb6e7563"
 migrations_dir = "../../crates/auth-worker/migrations"
 
 [env.production.triggers]

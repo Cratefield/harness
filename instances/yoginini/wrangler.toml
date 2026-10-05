@@ -1,0 +1,138 @@
+# The `yoginini` auth instance (issue #777): the harness auth Worker
+# (`crates/auth-worker`), deployed for Yoginini on Yoginini's own domain
+# with Yoginini's own branding, D1, secrets and passkey relying party.
+# Hosted by Cratefield on Yoginini's domain (a Cratefield-managed instance).
+# Consumers: Yoginini/yoginini-backend (`AUTH_ISSUER`, `AUTH_CLIENT_ID`) and
+# Yoginini/ios (`YogAuthIssuer`, `YogAuthClientID`, redirect
+# `us.yoginini.app://auth`, a public PKCE client).
+#
+# Deployed by `.github/workflows/deploy-auth.yml` from this directory:
+# `main` -> staging (top level), an `auth-v*` tag -> production
+# (`[env.production]`, behind the `auth-yoginini-production` approval gate).
+# Wrangler does not inherit `[vars]` into an environment, so both blocks
+# carry the full set. Every variable is documented in
+# `crates/auth-worker/README.md`.
+#
+# Provisioned on the Cloudflare account that holds yoginini.us: both D1
+# databases exist (ids below) and staging is migrated. Still needed before
+# production (docs/auth/MANAGED-INSTANCES.md):
+# - The secrets, by name only: HARNESS_SECRET, ADMIN_TOKEN,
+#   AUTH_CORE_SIGNING_KEYS (+ AUTH_CORE_SIGNING_KEY_ACTIVE), OWLPOST_API_KEY,
+#   TURNSTILE_SECRET, and the OIDC/Meta client secrets once those methods
+#   are enabled. Per environment: `wrangler secret put <NAME> [--env production]`.
+# - The custom domains (routes below) on the Cloudflare account that holds
+#   yoginini.us, the Turnstile site for both hostnames, and the Owlpost
+#   sending domain `send.yoginini.us`.
+name = "yoginini-auth"
+main = "../../crates/auth-worker/build/worker/shim.mjs"
+compatibility_date = "2026-09-01"
+workers_dev = false
+# Staging's own hostname; production's is in `[env.production]`.
+route = { pattern = "auth-staging.yoginini.us", custom_domain = true }
+
+# `worker-build` compiles the package in its working directory, so the build
+# runs in the crate and `main` points at the shim it writes there. Every
+# instance builds the same, unmodified crate.
+[build]
+cwd = "../../crates/auth-worker"
+command = "cargo install -q worker-build && worker-build --release"
+watch_dir = "../../crates/auth-worker/src"
+
+[observability]
+enabled = true
+
+# --- Staging (deployed from `main`) ---
+
+# Workers Rate Limiting backs the harness's throttle; readiness refuses the
+# instance unless a limiter resolves (harness #437). Namespace ids are per
+# account and must not collide with another instance's on the same account.
+[[ratelimits]]
+name = "RATE_LIMITER"
+namespace_id = "1301"
+
+[ratelimits.simple]
+limit = 30
+period = 60
+
+[[d1_databases]]
+binding = "DB"
+database_name = "yoginini-auth-staging"
+database_id = "63aa173c-30a5-4b4f-93d9-de1854a175f1"
+migrations_dir = "../../crates/auth-worker/migrations"
+
+# The meta-module drains Meta deletion jobs on a schedule.
+[triggers]
+crons = ["*/15 * * * *"]
+
+[vars]
+ENV = "staging"
+AUTH_PUBLIC_URL = "https://auth-staging.yoginini.us"
+AUTH_CORE_ISSUER = "https://auth-staging.yoginini.us"
+AUTH_VENTURE_NAME = "yoginini-auth"
+AUTH_CORS_ORIGINS = "https://yoginini.us,https://www.yoginini.us"
+AUTH_BRAND_NAME = "Yoginini"
+AUTH_BRAND_FOOTER = "Yoginini"
+AUTH_CORE_LOGIN_METHODS = "passkey,magic-link"
+AUTH_PASSKEYS_RP_ID = "auth-staging.yoginini.us"
+AUTH_PASSKEYS_ORIGINS = "https://auth-staging.yoginini.us"
+# Staging leaves AUTH_MAILER unset: the Worker then uses Owlpost as soon as
+# the OWLPOST_API_KEY secret exists, and boots without mail until then
+# (production keeps `owlpost` and refuses to boot without the key).
+MAIL_FROM = "Yoginini <no-reply@send.yoginini.us>"
+AUTH_MAGIC_LINK_PUBLIC_BASE = "https://auth-staging.yoginini.us"
+AUTH_MAGIC_LINK_MAIL_FROM = "Yoginini <sign-in@send.yoginini.us>"
+AUTH_PASSWORD_PUBLIC_BASE = "https://auth-staging.yoginini.us"
+AUTH_PASSWORD_MAIL_FROM = "Yoginini <sign-in@send.yoginini.us>"
+AUTH_OIDC_REDIRECT_BASE = "https://auth-staging.yoginini.us"
+AUTH_META_REDIRECT_BASE = "https://auth-staging.yoginini.us"
+AUTH_BRAND_LOGO_URL = "https://yoginini.us/assets/icon-512.png"
+AUTH_BRAND_ACCENT = "#5e4b9a"
+AUTH_BRAND_SUPPORT_EMAIL = "contact@yoginini.us"
+AUTH_BRAND_PRIVACY_URL = "https://yoginini.us/privacy/"
+# AUTH_BRAND_TERMS_URL = "https://yoginini.us/terms/"   # needs-human: yoginini.us has no terms page yet (404); uncomment once it exists
+
+# --- Production (deployed from an `auth-v*` tag, behind the approval gate) ---
+[env.production]
+route = { pattern = "auth.yoginini.us", custom_domain = true }
+
+[[env.production.ratelimits]]
+name = "RATE_LIMITER"
+namespace_id = "1302"
+
+[env.production.ratelimits.simple]
+limit = 30
+period = 60
+
+[[env.production.d1_databases]]
+binding = "DB"
+database_name = "yoginini-auth-production"
+database_id = "58873c02-4247-48e8-9787-80beeff8068e"
+migrations_dir = "../../crates/auth-worker/migrations"
+
+[env.production.triggers]
+crons = ["*/15 * * * *"]
+
+[env.production.vars]
+ENV = "production"
+AUTH_PUBLIC_URL = "https://auth.yoginini.us"
+AUTH_CORE_ISSUER = "https://auth.yoginini.us"
+AUTH_VENTURE_NAME = "yoginini-auth"
+AUTH_CORS_ORIGINS = "https://yoginini.us,https://www.yoginini.us"
+AUTH_BRAND_NAME = "Yoginini"
+AUTH_BRAND_FOOTER = "Yoginini"
+AUTH_CORE_LOGIN_METHODS = "passkey,magic-link"
+AUTH_PASSKEYS_RP_ID = "yoginini.us"
+AUTH_PASSKEYS_ORIGINS = "https://auth.yoginini.us"
+AUTH_MAILER = "owlpost"
+MAIL_FROM = "Yoginini <no-reply@send.yoginini.us>"
+AUTH_MAGIC_LINK_PUBLIC_BASE = "https://auth.yoginini.us"
+AUTH_MAGIC_LINK_MAIL_FROM = "Yoginini <sign-in@send.yoginini.us>"
+AUTH_PASSWORD_PUBLIC_BASE = "https://auth.yoginini.us"
+AUTH_PASSWORD_MAIL_FROM = "Yoginini <sign-in@send.yoginini.us>"
+AUTH_OIDC_REDIRECT_BASE = "https://auth.yoginini.us"
+AUTH_META_REDIRECT_BASE = "https://auth.yoginini.us"
+AUTH_BRAND_LOGO_URL = "https://yoginini.us/assets/icon-512.png"
+AUTH_BRAND_ACCENT = "#5e4b9a"
+AUTH_BRAND_SUPPORT_EMAIL = "contact@yoginini.us"
+AUTH_BRAND_PRIVACY_URL = "https://yoginini.us/privacy/"
+# AUTH_BRAND_TERMS_URL = "https://yoginini.us/terms/"   # needs-human: yoginini.us has no terms page yet (404); uncomment once it exists
