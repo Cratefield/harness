@@ -1,0 +1,38 @@
+# The local IdP the Next example signs in against: the harness auth Worker
+# (`crates/auth-worker`) under `wrangler dev --local`, never deployed.
+#
+# Deployed instances live in `instances/<app>/` (issue #777); this file is
+# deliberately outside that directory so `deploy-auth.yml` and
+# `crates/auth-worker/tests/instances.rs` never treat it as one. Its D1 id is
+# a placeholder because only the local (Miniflare) database is ever used.
+#
+# The variables, including the required identity and branding keys, are
+# written to `.dev.vars` next to this file by `npm run idp`
+# (`scripts/write-dev-vars.mjs`), together with the generated secrets.
+name = "next-auth-example-idp"
+main = "../../../crates/auth-worker/build/worker/shim.mjs"
+compatibility_date = "2026-09-01"
+workers_dev = false
+
+# `worker-build` compiles the package in its working directory, so the build
+# runs in the crate and `main` points at the shim it writes there, exactly as
+# for the deployed instances.
+[build]
+cwd = "../../../crates/auth-worker"
+command = "cargo install -q worker-build && worker-build --release"
+watch_dir = "../../../crates/auth-worker/src"
+
+# Readiness refuses the Worker unless a limiter resolves (harness #437).
+[[ratelimits]]
+name = "RATE_LIMITER"
+namespace_id = "9001"
+
+[ratelimits.simple]
+limit = 30
+period = 60
+
+[[d1_databases]]
+binding = "DB"
+database_name = "next-auth-example-idp"
+database_id = "00000000-0000-0000-0000-000000000000"
+migrations_dir = "../../../crates/auth-worker/migrations"

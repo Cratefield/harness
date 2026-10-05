@@ -29,13 +29,13 @@ wrangler. From the repository root:
 npm ci
 npm run build -w @cratefield/auth
 
-# 2. Write crates/auth-worker/.dev.vars (generates the secrets + signing key).
+# 2. Write idp/.dev.vars (generates the secrets + signing key).
 cd examples/next-auth
 npm ci
 npm run idp
 
 # 3. Build and start the local IdP on http://localhost:8787.
-cd ../../crates/auth-worker
+cd idp
 npx wrangler d1 migrations apply DB --local
 npx wrangler dev --local --port 8787     # leave running
 

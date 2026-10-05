@@ -1,4 +1,4 @@
-// Write `crates/auth-worker/.dev.vars` for a local IdP.
+// Write `idp/.dev.vars` for the local IdP (`idp/wrangler.toml`).
 //
 // Generates the two shared secrets and a fresh ES256 signing key, and points
 // the Worker at this example. Run from the example root: `npm run idp`.
@@ -9,7 +9,7 @@ import { randomBytes } from 'node:crypto';
 import { writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
-const devVars = fileURLToPath(new URL('../../../crates/auth-worker/.dev.vars', import.meta.url));
+const devVars = fileURLToPath(new URL('../idp/.dev.vars', import.meta.url));
 
 const keyPair = await crypto.subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, true, [
   'sign',
@@ -32,6 +32,8 @@ const lines = [
   'ENV=development',
   'AUTH_PUBLIC_URL=http://localhost:8787',
   'AUTH_CORE_ISSUER=http://localhost:8787',
+  'AUTH_VENTURE_NAME=next-auth-example-idp',
+  'AUTH_BRAND_NAME=Next auth example',
   'AUTH_CORE_LOGIN_METHODS=password',
   'AUTH_CORS_ORIGINS=http://localhost:3000',
   // The captcha is deliberately off so the e2e run can drive the plain form.

@@ -75,14 +75,14 @@ jobs:
       - name: Install Chromium
         working-directory: examples/next-auth
         run: npx playwright install --with-deps chromium
-      - name: Write crates/auth-worker/.dev.vars
+      - name: Write examples/next-auth/idp/.dev.vars
         working-directory: examples/next-auth
         run: npm run idp
       - name: Apply local D1 migrations
-        working-directory: crates/auth-worker
+        working-directory: examples/next-auth/idp
         run: bunx wrangler d1 migrations apply DB --local
       - name: Start wrangler dev
-        working-directory: crates/auth-worker
+        working-directory: examples/next-auth/idp
         run: |
           nohup bunx wrangler dev --local --port 8787 > "$RUNNER_TEMP/wrangler.log" 2>&1 &
           for _ in $(seq 1 60); do

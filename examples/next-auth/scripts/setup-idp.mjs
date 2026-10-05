@@ -12,7 +12,7 @@ const APP = process.env.APP_URL ?? 'http://localhost:3000';
 const EMAIL = process.env.E2E_EMAIL ?? 'next-auth-e2e@example.com';
 const PASSWORD = process.env.E2E_PASSWORD ?? 'correct horse battery staple';
 
-const devVarsPath = fileURLToPath(new URL('../../../crates/auth-worker/.dev.vars', import.meta.url));
+const devVarsPath = fileURLToPath(new URL('../idp/.dev.vars', import.meta.url));
 const envLocalPath = fileURLToPath(new URL('../.env.local', import.meta.url));
 
 /** `KEY=VALUE` lines as an object (enough for our own `.dev.vars`). */
