@@ -39,6 +39,9 @@ pub use cratefield_adapter_resend as resend;
 #[cfg(feature = "owlpost")]
 pub use cratefield_adapter_owlpost as owlpost;
 
+#[cfg(feature = "colonizer")]
+pub use cratefield_adapter_colonizer as colonizer;
+
 #[cfg(feature = "turnstile")]
 pub use cratefield_adapter_turnstile as turnstile;
 

@@ -134,6 +134,29 @@ from this one, so the fixture is authored from the Resend-compatible shape
 Owlpost speaks and carries the provenance in a `$comment`. Refresh it from a
 local checkout with `scripts/refresh-fixture.sh`.
 
+## Inbound
+
+Owlpost also receives: the `/v1/inbound/messages` API (issue #682). Reads need
+the `inbound:read` scope, writes `inbound:manage`.
+
+| Operation | Endpoint |
+|---|---|
+| `Owlpost::list_messages(&MessageQuery)` — `inbox`, `thread`, `q`, `limit`, `before`, `held`, all optional | `GET {base}/v1/inbound/messages` |
+| `Owlpost::list_held(inbox, before)` — `list_messages` with `status=held` | `GET {base}/v1/inbound/messages` |
+| `Owlpost::get_message(id)` — with the body, as a `MessageDetail` | `GET {base}/v1/inbound/messages/{id}` |
+| `Owlpost::raw_message(id)` — the RFC 822 source, as a `String` | `GET {base}/v1/inbound/messages/{id}/raw` |
+| `Owlpost::reply(id, message)` — sends `to`, `subject`, `text`, `html` (Owlpost takes the sender from the inbox), returns the reply's id | `POST {base}/v1/inbound/messages/{id}/reply` |
+| `Owlpost::release(id)` — stops holding the message | `POST {base}/v1/inbound/messages/{id}/release` |
+
+A held message's body is never part of a listing: the page item `MessageSummary`
+has no body field, so a held body is readable only through `get_message` or
+`raw_message`, and `raw_message` returns the source verbatim. `MessageQuery` is
+`#[non_exhaustive]` — build it with
+`MessageQuery::default()` and set fields. Listings are cursor-paged:
+`MessagePage::next` is the cursor to pass back as `MessageQuery::before`, and is
+`None` on the last page. Message ids are validated to `[A-Za-z0-9_-]` before any
+request, as outbound ids are. Inboxes, threads and routes follow.
+
 ---
 
 MIT. Built in the open for [Cratefield](https://cratefield.com), a [Factory Zero](https://factory0.ventures) venture.

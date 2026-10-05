@@ -25,6 +25,7 @@ human-readable page at each `<public_url>/problems/<slug>`.
 | `api-key-unauthorized` | 401 | API key unauthorized | `cratefield-core` | The request's API key was missing, malformed, unknown, revoked or invalid; one uniform answer for all five. |
 | `auth/client-disabled` | 403 | Client is disabled | `cratefield-auth-core` | A disabled client is refused by every flow |
 | `auth/cross-site-request` | 403 | A same-origin request is required | `cratefield-auth-core` | Fetch metadata or the origin header reports another site; a request that can change state is accepted only from this venture's own origin |
+| `auth/email-token-refused` | 400 | That link is no longer valid | `cratefield-auth-core` | Missing, expired, already used, never issued, or the address is now taken |
 | `auth/import-too-large` | 413 | Too many users to import | `cratefield-auth-core` | An import may carry at most 1000 users in one request; nothing was written. |
 | `auth/last-login-method` | 409 | That is the account's only login method | `cratefield-auth-passkeys` | Add another passkey or link a provider before removing this one |
 | `auth/magic-link-not-ready` | 503 | Email sign-in is not available | `cratefield-auth-magic-link` | The module is missing a port it requires |
@@ -42,6 +43,7 @@ human-readable page at each `<public_url>/problems/<slug>`.
 | `auth/password-not-ready` | 503 | Password sign-in is not available | `cratefield-auth-password` | The module is missing a port it requires |
 | `auth/password-token-refused` | 400 | That link is no longer valid | `cratefield-auth-password` | Missing, expired, already used, or never issued |
 | `auth/password-unsuitable` | 400 | That password cannot be used | `cratefield-auth-password` | Too short, too long, or found in a public breach corpus |
+| `auth/reauthentication-required` | 403 | Sign in again to change this | `cratefield-auth-core` | The session is too old and the password does not match, not distinguished |
 | `auth/session-invalid` | 401 | A valid session is required | `cratefield-auth-core` | Missing, unknown, revoked or expired session — not distinguished |
 | `auth/sso-domain-claimed` | 409 | That email domain is already in use | `cratefield-auth-core` | An email domain routes to at most one active SSO connection per client |
 | `auth/sso-unauthorized` | 401 | That SSO request is not authorized | `cratefield-auth-core` | The admin API takes HTTP Basic with a confidential client's id and secret |
@@ -100,6 +102,7 @@ human-readable page at each `<public_url>/problems/<slug>`.
 | `orgs-not-found` | 404 | No such organization | `cratefield-module-orgs` | No organization the caller is a member of carries that id. An organization the caller is not in answers the same way, so its existence is not disclosed. |
 | `orgs-unknown-role` | 422 | Unknown role | `cratefield-module-orgs` | The role is not one of the roles this venture configured for its organizations. The configured set is fixed at build. |
 | `partial-key` | 400 | The key is not complete | `cratefield-tables-api` | Name every primary-key column of the table once: a row is addressed by its whole key. `after` and `sort` are the page's parameters on this route and cannot name a key column, so a table whose key uses one of those names has no address here. |
+| `privacy-provider-unverified` | 401 | Unverified provider call | `cratefield-module-privacy` | The request carried no signature this deployment could verify, or one that did not hold. |
 | `rate-limited` | 429 | Rate limit exceeded | `cratefield-core` | Too many requests from this IP or address; retry after the pause. |
 | `request-too-large` | 413 | Request body too large | `cratefield-core` | The request body exceeded the 64 KiB limit for /v1 endpoints. |
 | `sidecar-contract-mismatch` | 503 | Sidecar contract mismatch | `cratefield-core` | A sidecar answers a different HARNESS_API than this harness speaks. |

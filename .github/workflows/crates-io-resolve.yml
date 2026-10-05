@@ -6,7 +6,9 @@
 # published dependents still require ^0.4, say) is invisible to every other
 # job here. tools/crates-io-resolve.sh is the stranger: a fresh project, no
 # path overrides, every published crate added, resolved and compiled
-# together.
+# together. It also fails when the workspace names a version crates.io has
+# never published (issue #708), which resolving the published set cannot
+# see: that set is healthy, just older than this tree.
 #
 # On a schedule because the thing being checked is not this repository: the
 # registry's state can become inconsistent without a single commit here —

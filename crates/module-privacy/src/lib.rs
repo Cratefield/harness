@@ -13,6 +13,10 @@
 //! database — is reached by registering a provider with
 //! [`Privacy::provider`]; each is called over one signed HTTP contract, and
 //! `requires()` grows the `HttpClient` and `Defer` ports it needs with it.
+//! The other end of that same contract is [`Privacy::serve_provider`]: a
+//! deployment that holds such a system of its own, or is itself the system
+//! another deployment reaches, can answer `/v1/privacy/provider/*` over the
+//! same declarations, with the same signature and the same answer.
 //!
 //! What catches a table nobody declared is `cratefield_core::undeclared_tables`,
 //! through `cratefield_testing::conformance` — a **kit check, not a build
@@ -27,6 +31,7 @@
 mod erase;
 mod handlers;
 mod provider;
+mod provider_server;
 
 use cratefield_core::{ConfigError, Migrations, Module, ModuleContext, Port};
 use std::sync::Arc;
@@ -38,6 +43,11 @@ pub use provider::{HttpProvider, SIGNATURE_HEADER};
 #[derive(Clone, Debug, Default)]
 pub struct Privacy {
     providers: Arc<Vec<HttpProvider>>,
+    /// The env var holding this deployment's *provider server* secret, or
+    /// `None` where the deployment does not serve the protocol. `Option`, not
+    /// an empty `String`: "serving" and "serving with an unset secret" are
+    /// different states, and the second one must refuse rather than serve.
+    server_secret_env: Option<Arc<str>>,
 }
 
 impl Privacy {
@@ -57,6 +67,32 @@ impl Privacy {
         Arc::make_mut(&mut self.providers).push(provider);
         self
     }
+
+    /// Serves the same protocol this module calls out on (issue #656), so
+    /// this deployment can be the provider *another* deployment reaches:
+    /// `/v1/privacy/provider/export`, `/provider/erase/plan` and
+    /// `/provider/erase/apply` answer over this composition's declarations.
+    ///
+    /// `secret_env` names the config/env variable holding the shared HMAC
+    /// secret — the same one an outbound [`HttpProvider::secret_env`] points
+    /// at. The **name** is taken here; the value is read from the config port
+    /// at request time, so one build works in every environment and a
+    /// deployment that was built before the secret existed does not have to be
+    /// rebuilt to start answering.
+    ///
+    /// Opt-in rather than always-on because the routes are a public door: a
+    /// deployment that never opted in does not answer, and a deployment that
+    /// did but has no secret refuses every call rather than opening.
+    ///
+    /// **No admin token, deliberately.** The HMAC over the raw body *is* the
+    /// authorisation — a caller on another deployment has no account here and
+    /// no `ADMIN_TOKEN` to present, so an admin guard would refuse every
+    /// legitimate call while authorising nothing the protocol lacks.
+    #[must_use]
+    pub fn serve_provider(mut self, secret_env: impl Into<String>) -> Self {
+        self.server_secret_env = Some(Arc::from(secret_env.into()));
+        self
+    }
 }
 
 impl Module for Privacy {
@@ -74,6 +110,11 @@ impl Module for Privacy {
     /// confirmation token, and erasure would have to be a single call.
     /// `HttpClient` and `Defer` join only when a provider is registered —
     /// with none, this module makes no outbound call and defers nothing.
+    /// Serving the protocol ([`Self::serve_provider`]) adds no port: it
+    /// reads the same tables through the `Db` already required here and
+    /// takes its secret from the config every route already has, so a
+    /// deployment that only serves does not ask for an outbound client it
+    /// will never use.
     fn requires(&self) -> &'static [Port] {
         if self.providers.is_empty() {
             &[Port::Db, Port::Signer]
@@ -104,6 +145,14 @@ impl Module for Privacy {
     }
 
     fn router(&self, ctx: ModuleContext) -> axum::Router {
-        handlers::router(Arc::new(ctx), Arc::clone(&self.providers))
+        let ctx = Arc::new(ctx);
+        let mut router = handlers::router(Arc::clone(&ctx), Arc::clone(&self.providers));
+        if let Some(secret_env) = &self.server_secret_env {
+            router = router.merge(provider_server::router(
+                Arc::clone(&ctx),
+                Arc::clone(secret_env),
+            ));
+        }
+        router
     }
 }

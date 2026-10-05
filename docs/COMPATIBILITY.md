@@ -40,6 +40,7 @@ compatibility-doc` and checked in CI for drift. Do not edit by hand.
 | `cratefield-adapter-apns` | 0.3.0 | 1 | `^0.8` — `>=0.8.0, <0.9.0` |
 | `cratefield-adapter-classifier-llm` | 0.3.0 | 1 | `^0.8` — `>=0.8.0, <0.9.0` |
 | `cratefield-adapter-cloudflare-saas` | 0.2.0 | 1 | `^0.8` — `>=0.8.0, <0.9.0` |
+| `cratefield-adapter-colonizer` | 0.1.0 | 1 | `^0.8` — `>=0.8.0, <0.9.0` |
 | `cratefield-adapter-fcm` | 0.3.0 | 1 | `^0.8` — `>=0.8.0, <0.9.0` |
 | `cratefield-adapter-github-app` | 0.2.0 | 1 | `^0.8` — `>=0.8.0, <0.9.0` |
 | `cratefield-adapter-github-issues` | 0.3.0 | 1 | `^0.8` — `>=0.8.0, <0.9.0` |
