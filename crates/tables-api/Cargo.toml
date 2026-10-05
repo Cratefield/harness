@@ -5,9 +5,6 @@ readme = "README.md"
 keywords = ["cratefield", "tables", "crud", "access"]
 categories = ["web-programming"]
 include = ["src/**/*", "README.md"]
-# Not published until the routes are built; the crate exists for the
-# access decision they will consult.
-publish = false
 version = "0.1.0"
 edition.workspace = true
 rust-version.workspace = true
@@ -19,7 +16,7 @@ workspace = true
 
 [dependencies]
 cratefield-core = { workspace = true }
-cratefield-tables = { path = "../tables" }
+cratefield-tables = { workspace = true }
 # For `Access` and `TablePrivacy`, the vocabularies a venture's manifest
 # declares. A light crate — serde, serde_json, sha2 and `cratefield-tables`
 # — so a runtime module depending on it pulls nothing a Worker cannot run.

@@ -31,6 +31,14 @@ so it is in the ordered list in step 2 below ahead of both. Its trusted
 publisher (step 3) is still to be enabled; until it is, the release run
 cannot publish it over OIDC.
 
+`cratefield-tables-api` carried `publish = false` until its routes were
+built. They are, the facade's `tables-api` feature re-exports it as
+`cratefield::tables_api`, and a generated venture with a `[tables]` section
+calls `tables_api::router` — so the facade cannot publish without it. Its
+first publish (0.1.0) is manual, after `cratefield-manifest` and before the
+facade in step 2 below, and its trusted publisher (step 3) is enabled after
+that.
+
 `cratefield-mcp` (issue #160) carries `publish = false` as well: it is
 new, nothing depends on it, and publishing it is the remaining human step
 ADR 0021 records — until the crates.io setup below exists, a publishable
@@ -192,6 +200,7 @@ crate exists**, so the very first release of each crate is manual:
    cargo publish -p cratefield-tables         # before the manifest and the CLI
    cargo publish -p cratefield-introspect     # before the CLI (its `postgres` feature)
    cargo publish -p cratefield-manifest       # before the CLI and the facade
+   cargo publish -p cratefield-tables-api     # needs core, tables and manifest; before the facade
    cargo publish -p cratefield-i18n           # before module-notifications
    cargo publish -p cratefield-kms
    cargo publish -p cratefield-adapter-anthropic
@@ -235,21 +244,21 @@ crate exists**, so the very first release of each crate is manual:
    cargo publish -p cratefield-runtime-native
    cargo publish -p cratefield-runtime-cloudflare
    cargo publish -p cratefield-cli
-   cargo publish -p cratefield            # the facade; cannot package yet: path-only dep, see tools/package-check.sh
+   cargo publish -p cratefield            # the facade, last
    ```
 
-   Fifty-one crates, and the order is the dependency order: `--dry-run`
+   Fifty-two crates, and the order is the dependency order: `--dry-run`
    for a crate whose upstream `cratefield-*` dependencies are not on
    crates.io yet resolves against the registry and fails until those are
    published. The `package` CI job (`tools/package-check.sh`) fails if this
    list misses a publishable crate, lists one that is not publishable, or
    puts a crate before one of its `cratefield-*` dependencies, so a new
-   crate has to be added here in a valid position. One line cannot run
-   yet: the facade has a path-only dependency with no version
-   (`cratefield-tables-api`), which `cargo package` refuses (`UNPACKAGEABLE`
-   in the script names it). The runtimes and the CLI became packageable in
-   0.6.0 (#558), when `auth-client`, `client-ts` and `introspect` became
-   versioned workspace dependencies. An older version of this list put `cratefield-auth-client` after
+   crate has to be added here in a valid position. Every line runs: the
+   facade became packageable once `cratefield-tables-api` became a versioned
+   workspace dependency (Release run 37257238269 failed on its path-only
+   one; `UNPACKAGEABLE` in the script is empty now). The runtimes and the
+   CLI became packageable in 0.6.0 (#558), when `auth-client`, `client-ts`
+   and `introspect` became versioned workspace dependencies. An older version of this list put `cratefield-auth-client` after
    the two runtimes that depend on it; it now comes before them.
 
    `cargo publish` resolves **dev**-dependencies against crates.io too,
