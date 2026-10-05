@@ -17,6 +17,14 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   and #601). Additive: no existing API changed and `HARNESS_API` is
   untouched.
 - TextModel image inputs (issue [#628](https://github.com/Cratefield/harness/issues/628)): `Part` (`Text`/`Image`), `Turn::user_parts`, `Prompt::user_parts`, `Prompt::has_images`, `Prompt::check_images`, `Capability::Images`, `TextModelError::ImageLimit`, the `encode_image`/`encoded_image_len` helpers, and the `MAX_PROMPT_IMAGES`/`MAX_IMAGE_ENCODED_BYTES`/`MAX_PROMPT_IMAGE_ENCODED_BYTES` bounds. The router and `run_tool_loop` gate `Capability::Images` like `Capability::Tools`.
+- `StatusOnly`, a request marker asking for the status line alone. An
+  implementation that honours it returns no body and no body-describing
+  headers, because there is no body to describe — cheaper than `HEAD`
+  where the endpoint is already known and only liveness is wanted. It
+  rides as a request extension exactly as `HttpPolicy` does and waives
+  the body, not the ceilings; an implementation that does not read the
+  extension answers the request like any other
+  ([#714](https://github.com/Cratefield/harness/issues/714)).
 
 ## [0.8.1](https://github.com/Cratefield/harness/compare/cratefield-core-v0.8.0...cratefield-core-v0.8.1) - 2026-10-05
 

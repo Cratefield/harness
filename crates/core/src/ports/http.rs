@@ -13,7 +13,8 @@
 //!    [`HttpError::ResponseTooLarge`] — and MUST check the declared
 //!    `Content-Length` before consuming the body, so a hostile length does
 //!    not cost an allocation. A caller can only ever *lower* the cap
-//!    below [`MAX_RESPONSE_BYTES`].
+//!    below [`MAX_RESPONSE_BYTES`]. The one exemption is a
+//!    [`StatusOnly`] request, which reads no body at all.
 //! 2. **Deadline.** Every send is bounded by the effective
 //!    [`HttpPolicy::timeout`]; an upstream that has not answered by then
 //!    is abandoned (not awaited) with [`HttpError::DeadlineExceeded`], so
@@ -32,6 +33,9 @@
 //!    hop** rather than trusting the first destination. On Workers this
 //!    falls to the platform, whose `fetch` refuses non-public
 //!    destinations; the native runtime implements the vetting itself.
+//!    An implementation that follows no redirects at all satisfies this
+//!    by construction — the Workers port asks for `redirect: "manual"`
+//!    and hands the caller the 3xx itself (issue #714).
 //! 4. **Concurrency budget.** A runtime with a shared outbound client MUST
 //!    cap in-flight requests at [`MAX_CONCURRENT_REQUESTS`] per process
 //!    (one native process serves one tenant, so that cap *is* the
@@ -118,6 +122,25 @@ impl HttpPolicy {
     }
 }
 
+/// Marks a request whose caller wants only the status line. An
+/// implementation that honours it returns a response with no body and no
+/// body-describing headers (`Content-Length`, `Content-Encoding`,
+/// `Transfer-Encoding`), because there is no body here to describe.
+///
+/// Cheaper than `HEAD` when the caller already knows the endpoint and
+/// only needs to know whether it answered — a liveness probe of a
+/// customer's webhook URL, say, where a multi-megabyte body is a
+/// liability and its absence is no information at all. The extensions
+/// never reach the wire: implementations read this before rebuilding the
+/// transport request, exactly as [`HttpPolicy`] is read.
+///
+/// Honoured today by the Workers port (`cratefield-runtime-cloudflare`'s
+/// `FetchClient`). The native port does not read the extension and
+/// answers such a request like any other; the marker asks, it does not
+/// oblige.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StatusOnly;
+
 /// The declared `Content-Length` of a response, when it parses as a
 /// non-negative size. Implementations check this before touching the
 /// body, so an oversized declared length is refused without allocating
@@ -163,6 +186,11 @@ pub trait HttpClient: Send + Sync {
     /// (enforced through [`BoundedHttpClient`] on runtimes that wrap),
     /// the destination is vetted where real sockets are opened, and a
     /// runtime that keeps a concurrency budget holds one for the send.
+    ///
+    /// An implementation MAY honour a [`StatusOnly`] request extension by
+    /// answering with no body and no body-describing headers; an
+    /// implementation that does not read the extension answers it like
+    /// any other request. The Workers port honours it today.
     async fn send(&self, request: http::Request<Bytes>)
     -> Result<http::Response<Bytes>, HttpError>;
 }
@@ -175,8 +203,9 @@ pub trait HttpClient: Send + Sync {
 ///
 /// This is defence in depth, not the only defence: the native adapter
 /// also enforces the cap while streaming (before the oversized body is
-/// ever buffered) and the Workers adapter checks the declared length
-/// before calling `bytes()`. Runtimes wire every `ports.http` through
+/// ever buffered) and the Workers adapter checks the declared length and
+/// then reads the body as a stream under the same cap, aborting at the
+/// chunk that crosses it. Runtimes wire every `ports.http` through
 /// this wrapper.
 pub struct BoundedHttpClient {
     inner: Arc<dyn HttpClient>,
