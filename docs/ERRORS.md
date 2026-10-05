@@ -23,28 +23,28 @@ human-readable page at each `<public_url>/problems/<slug>`.
 | `already-exists` | 409 | That key is taken | `cratefield-tables-api` | A row of this table already has that primary key. |
 | `api-key-forbidden` | 403 | API key lacks the required scope | `cratefield-core` | The presented API key is valid but does not carry the scope this route requires. |
 | `api-key-unauthorized` | 401 | API key unauthorized | `cratefield-core` | The request's API key was missing, malformed, unknown, revoked or invalid; one uniform answer for all five. |
-| `auth/client-disabled` | 403 | Client is disabled | `factory0-auth-core` | A disabled client is refused by every flow |
-| `auth/cross-site-request` | 403 | A same-origin request is required | `factory0-auth-core` | Fetch metadata or the origin header reports another site; a request that can change state is accepted only from this venture's own origin |
-| `auth/import-too-large` | 413 | Too many users to import | `factory0-auth-core` | An import may carry at most 1000 users in one request; nothing was written. |
-| `auth/last-login-method` | 409 | That is the account's only login method | `factory0-auth-passkeys` | Add another passkey or link a provider before removing this one |
-| `auth/magic-link-not-ready` | 503 | Email sign-in is not available | `factory0-auth-magic-link` | The module is missing a port it requires |
-| `auth/magic-link-refused` | 400 | That sign-in link is no longer valid | `factory0-auth-magic-link` | Missing, expired, already used, or never issued |
-| `auth/meta-callback-refused` | 400 | That sign-in link is no longer valid | `factory0-auth-meta` | Missing, expired, replayed or mismatched authorization state |
-| `auth/meta-not-configured` | 503 | Facebook sign-in is not configured | `factory0-auth-meta` | AUTH_META_CLIENT_ID and AUTH_META_CLIENT_SECRET must both be set |
-| `auth/meta-unavailable` | 502 | Facebook could not be reached | `factory0-auth-meta` | The token exchange or the profile call failed; the detail is in the logs |
-| `auth/oidc-callback-refused` | 400 | That sign-in link is no longer valid | `factory0-auth-oidc` | Missing, expired, replayed or mismatched authorization state |
-| `auth/oidc-provider-unavailable` | 502 | The sign-in provider could not be reached | `factory0-auth-oidc` | Discovery, the token exchange or the ID token failed; the detail is in the logs |
-| `auth/oidc-provider-unconfigured` | 503 | That sign-in provider is not configured | `factory0-auth-oidc` | The provider's AUTH_OIDC_<PROVIDER>_* settings are missing or unusable |
-| `auth/passkey-already-registered` | 409 | That authenticator is already registered | `factory0-auth-passkeys` | The credential id is already stored for an account |
-| `auth/passkey-ceremony-failed` | 401 | The passkey ceremony could not be completed | `factory0-auth-passkeys` | Unknown credential, spent or expired challenge, wrong origin, or a signature that does not verify — not distinguished |
-| `auth/passkeys-unconfigured` | 503 | Passkeys are not configured | `factory0-auth-passkeys` | AUTH_PASSKEYS_RP_ID and AUTH_PASSKEYS_ORIGINS must be set |
-| `auth/password-login-refused` | 401 | That email address and password do not match | `factory0-auth-password` | Wrong password, unknown address, or the account cannot sign in this way |
-| `auth/password-not-ready` | 503 | Password sign-in is not available | `factory0-auth-password` | The module is missing a port it requires |
-| `auth/password-token-refused` | 400 | That link is no longer valid | `factory0-auth-password` | Missing, expired, already used, or never issued |
-| `auth/password-unsuitable` | 400 | That password cannot be used | `factory0-auth-password` | Too short, too long, or found in a public breach corpus |
-| `auth/session-invalid` | 401 | A valid session is required | `factory0-auth-core` | Missing, unknown, revoked or expired session — not distinguished |
-| `auth/token-request-refused` | 400 | Token request refused | `factory0-auth-core` | Unknown client, wrong secret, or an invalid grant — deliberately not distinguished |
-| `auth/tokens-unconfigured` | 503 | Token issuing is not configured | `factory0-auth-core` | Signing keys are absent; no token can be minted or published |
+| `auth/client-disabled` | 403 | Client is disabled | `cratefield-auth-core` | A disabled client is refused by every flow |
+| `auth/cross-site-request` | 403 | A same-origin request is required | `cratefield-auth-core` | Fetch metadata or the origin header reports another site; a request that can change state is accepted only from this venture's own origin |
+| `auth/import-too-large` | 413 | Too many users to import | `cratefield-auth-core` | An import may carry at most 1000 users in one request; nothing was written. |
+| `auth/last-login-method` | 409 | That is the account's only login method | `cratefield-auth-passkeys` | Add another passkey or link a provider before removing this one |
+| `auth/magic-link-not-ready` | 503 | Email sign-in is not available | `cratefield-auth-magic-link` | The module is missing a port it requires |
+| `auth/magic-link-refused` | 400 | That sign-in link is no longer valid | `cratefield-auth-magic-link` | Missing, expired, already used, or never issued |
+| `auth/meta-callback-refused` | 400 | That sign-in link is no longer valid | `cratefield-auth-meta` | Missing, expired, replayed or mismatched authorization state |
+| `auth/meta-not-configured` | 503 | Facebook sign-in is not configured | `cratefield-auth-meta` | AUTH_META_CLIENT_ID and AUTH_META_CLIENT_SECRET must both be set |
+| `auth/meta-unavailable` | 502 | Facebook could not be reached | `cratefield-auth-meta` | The token exchange or the profile call failed; the detail is in the logs |
+| `auth/oidc-callback-refused` | 400 | That sign-in link is no longer valid | `cratefield-auth-oidc` | Missing, expired, replayed or mismatched authorization state |
+| `auth/oidc-provider-unavailable` | 502 | The sign-in provider could not be reached | `cratefield-auth-oidc` | Discovery, the token exchange or the ID token failed; the detail is in the logs |
+| `auth/oidc-provider-unconfigured` | 503 | That sign-in provider is not configured | `cratefield-auth-oidc` | The provider's AUTH_OIDC_<PROVIDER>_* settings are missing or unusable |
+| `auth/passkey-already-registered` | 409 | That authenticator is already registered | `cratefield-auth-passkeys` | The credential id is already stored for an account |
+| `auth/passkey-ceremony-failed` | 401 | The passkey ceremony could not be completed | `cratefield-auth-passkeys` | Unknown credential, spent or expired challenge, wrong origin, or a signature that does not verify — not distinguished |
+| `auth/passkeys-unconfigured` | 503 | Passkeys are not configured | `cratefield-auth-passkeys` | AUTH_PASSKEYS_RP_ID and AUTH_PASSKEYS_ORIGINS must be set |
+| `auth/password-login-refused` | 401 | That email address and password do not match | `cratefield-auth-password` | Wrong password, unknown address, or the account cannot sign in this way |
+| `auth/password-not-ready` | 503 | Password sign-in is not available | `cratefield-auth-password` | The module is missing a port it requires |
+| `auth/password-token-refused` | 400 | That link is no longer valid | `cratefield-auth-password` | Missing, expired, already used, or never issued |
+| `auth/password-unsuitable` | 400 | That password cannot be used | `cratefield-auth-password` | Too short, too long, or found in a public breach corpus |
+| `auth/session-invalid` | 401 | A valid session is required | `cratefield-auth-core` | Missing, unknown, revoked or expired session — not distinguished |
+| `auth/token-request-refused` | 400 | Token request refused | `cratefield-auth-core` | Unknown client, wrong secret, or an invalid grant — deliberately not distinguished |
+| `auth/tokens-unconfigured` | 503 | Token issuing is not configured | `cratefield-auth-core` | Signing keys are absent; no token can be minted or published |
 | `bad-cursor` | 400 | Not a cursor for this table | `cratefield-tables-api` | The `after` parameter is not the `next` value from a previous page of this table. |
 | `bad-filter` | 400 | Not a filter for this table | `cratefield-tables-api` | A query parameter names a column the table does not declare, or a value that is not that column's kind. |
 | `bad-key` | 400 | Not a key for this table | `cratefield-tables-api` | The path segment is not a value of the table's primary-key column. |

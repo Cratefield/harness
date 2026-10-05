@@ -200,14 +200,14 @@ pub(crate) fn exec(kit: &TestHarness, sql: &str) {
 }
 
 pub(crate) fn user_id_of(kit: &TestHarness, email: &str) -> String {
-    pollster::block_on(factory0_auth_core::user_by_primary_email(&*kit.db, email))
+    pollster::block_on(cratefield_auth_core::user_by_primary_email(&*kit.db, email))
         .expect("query")
         .expect("a user")
         .id
 }
 
 pub(crate) fn verified(kit: &TestHarness, email: &str) -> bool {
-    pollster::block_on(factory0_auth_core::user_by_primary_email(&*kit.db, email))
+    pollster::block_on(cratefield_auth_core::user_by_primary_email(&*kit.db, email))
         .expect("query")
         .expect("a user")
         .primary_email_verified

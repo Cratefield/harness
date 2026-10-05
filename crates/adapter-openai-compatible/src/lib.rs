@@ -771,14 +771,15 @@ impl OpenAiCompatible {
                         .to_owned(),
                 ));
             }
-            // A `response_format` was the whole point of the call.
-            // Content that is not the asked-for JSON means the server did
-            // not honour it — the answer never arrived in usable form,
-            // which is a transport failure, not a refusal.
-            let parsed_json: serde_json::Value = serde_json::from_str(&content).map_err(|err| {
-                TextModelError::Transport(format!("the schema-shaped answer did not parse: {err}"))
-            })?;
-            json = Some(parsed_json);
+            // A server that ignored `response_format` answers in prose. That
+            // is not a transport failure: the raw content rides in `text`
+            // with no parsed value, and the port's `complete_json` parses it
+            // (stripping a fence), validates it and repairs it if it does not
+            // conform — the same fallback a provider without native
+            // structured output takes.
+            if let Ok(parsed_json) = serde_json::from_str(&content) {
+                json = Some(parsed_json);
+            }
         }
 
         // A server that answers without a `usage` block still completes,

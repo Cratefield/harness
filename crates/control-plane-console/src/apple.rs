@@ -16,7 +16,7 @@
 //!   exists because of it.
 //! - **No client secret to store.** It is minted per request as an ES256
 //!   JWT over the `.p8`, by the same
-//!   [`Minter`](factory0_auth_oidc::apple::Minter) the auth service uses —
+//!   [`Minter`](cratefield_auth_oidc::apple::Minter) the auth service uses —
 //!   made public for exactly this. A second copy of ES256 secret minting
 //!   is the drift this repository keeps paying for.
 //!
@@ -32,8 +32,8 @@
 use base64ct::{Base64UrlUnpadded, Encoding as _};
 use bytes::Bytes;
 use cratefield_access::VerifiedIdentity;
+use cratefield_auth_oidc::apple::{AppleConfig, Minter};
 use cratefield_core::{Clock, HttpClient, HttpError};
-use factory0_auth_oidc::apple::{AppleConfig, Minter};
 use http::Request;
 use http::header::CONTENT_TYPE;
 use serde::Deserialize;
@@ -135,7 +135,7 @@ impl AppleClient {
     /// `invalid_client` that names nothing), then read the `id_token`
     /// claims. `user` is Apple's first-authorization form field — the only
     /// place the person's name ever arrives — parsed by the same
-    /// [`factory0_auth_oidc::apple::name_from_user_field`] the auth
+    /// [`cratefield_auth_oidc::apple::name_from_user_field`] the auth
     /// service uses.
     ///
     /// # Errors
@@ -203,7 +203,7 @@ impl AppleClient {
         // nowhere else; a second sign-in arrives without it and the empty
         // name is the ordinary case.
         let name = user
-            .and_then(factory0_auth_oidc::apple::name_from_user_field)
+            .and_then(cratefield_auth_oidc::apple::name_from_user_field)
             .unwrap_or_default();
         Ok(VerifiedIdentity {
             email: email.to_owned(),

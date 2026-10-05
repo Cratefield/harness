@@ -1,7 +1,7 @@
-//! `factory0-auth-magic-link`: sign in by email (issue #21).
+//! `cratefield-auth-magic-link`: sign in by email (issue #21).
 //!
 //! ```no_run
-//! use factory0_auth_magic_link::MagicLink;
+//! use cratefield_auth_magic_link::MagicLink;
 //!
 //! let module = MagicLink::new();
 //! ```
@@ -38,11 +38,11 @@
 mod handlers;
 mod mail;
 
+use cratefield_auth_core::SupportedLocales;
 use cratefield_core::{
     Config, ConfigError, DataKind, Disposition, Migrations, Module, ModuleConfig, ModuleContext,
     PersonalDataSet, Port, ProblemDef, SqlMigration, SubjectVia,
 };
-use factory0_auth_core::SupportedLocales;
 
 /// The durable send-cooldown table behind the one-mail-per-window claim
 /// (issue #133). Name must match `handlers::SEND_COOLDOWN_TABLE`.
@@ -54,7 +54,7 @@ const MIGRATION_SEND_COOLDOWN: SqlMigration = SqlMigration::new(
 use http::StatusCode;
 use std::sync::Arc;
 
-pub use mail::{MagicLinkMail, TEMPLATE_MAGIC_LINK, default_templates};
+pub use mail::{MagicLinkMail, TEMPLATE_MAGIC_LINK, default_templates, themed_templates};
 
 /// The one answer a request gives, whatever it found.
 pub const REQUEST_REFUSED: ProblemDef = ProblemDef {

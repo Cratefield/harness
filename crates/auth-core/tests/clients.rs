@@ -6,9 +6,9 @@
 
 use axum::http::{Method, StatusCode, header};
 use axum::response::Response;
+use cratefield_auth_core::AuthCore;
 use cratefield_core::Statement;
 use cratefield_testing::TestHarness;
-use factory0_auth_core::AuthCore;
 use serde_json::Value;
 use std::sync::Arc;
 use tower::ServiceExt;
@@ -155,8 +155,11 @@ async fn create_returns_the_secret_once_and_stores_only_a_hash() {
             .flatten()
             .is_none()
     );
-    assert!(factory0_auth_core::verify_secret(&secret, &stored));
-    assert!(!factory0_auth_core::verify_secret("wrong-secret", &stored));
+    assert!(cratefield_auth_core::verify_secret(&secret, &stored));
+    assert!(!cratefield_auth_core::verify_secret(
+        "wrong-secret",
+        &stored
+    ));
 
     let listed = admin(&kit, Method::GET, &format!("{BASE}/admin/clients"), None).await;
     assert_eq!(listed.status, StatusCode::OK);
@@ -239,29 +242,29 @@ async fn rotation_keeps_the_old_secret_for_the_overlap() {
         .to_owned();
     assert_eq!(overlap_end, "2027-01-15T09:00:00Z", "fixed clock + 1 h");
 
-    let row = factory0_auth_core::client_by_id(&*kit.db, &id)
+    let row = cratefield_auth_core::client_by_id(&*kit.db, &id)
         .await
         .unwrap()
         .expect("client");
-    assert!(factory0_auth_core::verify_client_secret(
+    assert!(cratefield_auth_core::verify_client_secret(
         &row,
         &new_secret,
         "2027-01-15T08:30:00Z"
     ));
     assert!(
-        factory0_auth_core::verify_client_secret(&row, &old_secret, "2027-01-15T08:30:00Z"),
+        cratefield_auth_core::verify_client_secret(&row, &old_secret, "2027-01-15T08:30:00Z"),
         "the old secret still verifies inside the overlap"
     );
-    assert!(factory0_auth_core::verify_client_secret(
+    assert!(cratefield_auth_core::verify_client_secret(
         &row,
         &old_secret,
         "2027-01-15T08:59:59Z"
     ));
     assert!(
-        !factory0_auth_core::verify_client_secret(&row, &old_secret, "2027-01-15T09:00:00Z"),
+        !cratefield_auth_core::verify_client_secret(&row, &old_secret, "2027-01-15T09:00:00Z"),
         "the overlap ends exactly at previous_hash_expires_at"
     );
-    assert!(factory0_auth_core::verify_client_secret(
+    assert!(cratefield_auth_core::verify_client_secret(
         &row,
         &new_secret,
         "2027-01-15T09:00:00Z"
@@ -305,11 +308,11 @@ async fn patch_changes_uris_and_status_and_disabled_fails_the_stable_problem() {
     assert_eq!(disabled.status, StatusCode::OK);
     assert_eq!(disabled.json["status"], "disabled");
 
-    let row = factory0_auth_core::client_by_id(&*kit.db, &id)
+    let row = cratefield_auth_core::client_by_id(&*kit.db, &id)
         .await
         .unwrap()
         .expect("client");
-    let problem = factory0_auth_core::ensure_client_usable(&row).expect_err("disabled");
+    let problem = cratefield_auth_core::ensure_client_usable(&row).expect_err("disabled");
     assert_eq!(problem.slug, "auth/client-disabled");
     assert_eq!(problem.status, StatusCode::FORBIDDEN);
 
@@ -321,11 +324,11 @@ async fn patch_changes_uris_and_status_and_disabled_fails_the_stable_problem() {
     )
     .await;
     assert_eq!(revived.json["status"], "active");
-    let row = factory0_auth_core::client_by_id(&*kit.db, &id)
+    let row = cratefield_auth_core::client_by_id(&*kit.db, &id)
         .await
         .unwrap()
         .unwrap();
-    assert!(factory0_auth_core::ensure_client_usable(&row).is_ok());
+    assert!(cratefield_auth_core::ensure_client_usable(&row).is_ok());
 }
 
 #[pollster::test]

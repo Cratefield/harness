@@ -11,10 +11,10 @@
 //! worst of the five modules issue #265 covers.
 
 use axum::http::{Method, StatusCode, header};
+use cratefield_auth_core::AuthCore;
 use cratefield_core::{Config, MapConfig, Statement};
 use cratefield_module_privacy::Privacy;
 use cratefield_testing::TestHarness;
-use factory0_auth_core::AuthCore;
 use serde_json::Value;
 use std::sync::Arc;
 use tower::ServiceExt;

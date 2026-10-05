@@ -7,10 +7,12 @@
 //!
 //! **Mail.** The `waitlist` module records a join only after the mailer
 //! reports success, and it sends its confirmation `from` `no-reply@send.
-//! cratefield.com`. When the `RESEND_API_KEY` secret is set, this worker uses
-//! the Resend adapter and double opt-in comes to life; until then it falls
-//! back to `NoopMailer`, which reports success without sending so the
-//! address is still captured as a pending entry. The key is read from the
+//! cratefield.com`. When the `OWLPOST_API_KEY` secret is set this worker uses
+//! the Owlpost adapter; failing that, a non-empty `RESEND_API_KEY` uses the
+//! Resend adapter; with neither it falls back to `NoopMailer`, which reports
+//! success without sending so the address is still captured as a pending
+//! entry. Whichever provider is picked, the from-address stays on the
+//! verified `send.cratefield.com` subdomain. The keys are read from the
 //! Worker `Env` at init — not `std::env`, which is empty on Workers.
 
 #![forbid(unsafe_code)]
@@ -18,6 +20,7 @@
 use std::sync::{Arc, OnceLock};
 
 use async_trait::async_trait;
+use cratefield_adapter_owlpost::Owlpost;
 use cratefield_adapter_resend::Resend;
 use cratefield_adapter_turnstile::Turnstile;
 use cratefield_core::{Harness, MailError, Mailer, Message, SendOutcome, Venture};
@@ -32,8 +35,9 @@ use worker::{Context, Env, Request, Response, event};
 /// braces.
 const MAIL_FROM: &str = "no-reply@send.cratefield.com";
 
-/// Reports a send as done without sending: used until a Resend key is set, so
-/// a join is still captured (as a pending entry) rather than failing.
+/// Reports a send as done without sending: the last resort when neither mail
+/// key is set, so a join is still captured (as a pending entry) rather than
+/// failing.
 struct NoopMailer;
 
 #[async_trait]
@@ -68,24 +72,55 @@ fn build_captcha(env: &Env) -> Option<Turnstile> {
     )
 }
 
-/// Resend when `RESEND_API_KEY` is present on the Worker `Env`, else the
-/// capture-only no-op. Read from the binding, since `std::env` is empty on
-/// Workers.
+/// Which `Mailer` the two keys select. Pure, so the precedence is testable
+/// without a Worker `Env`: Owlpost wins when its key is set, Resend is the
+/// fallback, and neither (or an empty key) means the capture-only no-op.
+#[derive(Debug, PartialEq, Eq)]
+enum MailerChoice {
+    Owlpost,
+    Resend,
+    Noop,
+}
+
+fn mailer_choice(owlpost: Option<&str>, resend: Option<&str>) -> MailerChoice {
+    let set = |key: Option<&str>| key.is_some_and(|key| !key.is_empty());
+    if set(owlpost) {
+        MailerChoice::Owlpost
+    } else if set(resend) {
+        MailerChoice::Resend
+    } else {
+        MailerChoice::Noop
+    }
+}
+
+/// Owlpost when `OWLPOST_API_KEY` is present on the Worker `Env`, else Resend
+/// when `RESEND_API_KEY` is, else the capture-only no-op. Both send `from`
+/// [`MAIL_FROM`]. Read from the binding, since `std::env` is empty on Workers.
 fn build_mailer(env: &Env) -> Arc<dyn Mailer> {
-    let key = env
+    let owlpost = env
+        .secret("OWLPOST_API_KEY")
+        .ok()
+        .map(|secret| secret.to_string());
+    let resend = env
         .secret("RESEND_API_KEY")
         .ok()
-        .map(|secret| secret.to_string())
-        .filter(|key| !key.is_empty());
-    match key {
-        Some(key) => Arc::new(Resend::new(
+        .map(|secret| secret.to_string());
+    match mailer_choice(owlpost.as_deref(), resend.as_deref()) {
+        MailerChoice::Owlpost => Arc::new(Owlpost::new(
             Arc::new(FetchClient),
             Arc::new(WorkersClock),
-            Some(key),
+            owlpost,
             MAIL_FROM,
             None,
         )),
-        None => Arc::new(NoopMailer),
+        MailerChoice::Resend => Arc::new(Resend::new(
+            Arc::new(FetchClient),
+            Arc::new(WorkersClock),
+            resend,
+            MAIL_FROM,
+            None,
+        )),
+        MailerChoice::Noop => Arc::new(NoopMailer),
     }
 }
 
@@ -107,7 +142,10 @@ fn instance(env: &Env) -> &'static (Harness, Cloudflare) {
                     // says loudly what it is missing.
                     .cors_origins(["https://cratefield.com", "https://www.cratefield.com"]),
             )
-            .templates(cratefield_module_waitlist::default_templates())
+            // Cratefield's own mail theme (cratefield.com's tokens and mark).
+            .templates(cratefield_module_waitlist::themed_templates(
+                &cratefield_mail_templates::MailTheme::cratefield(),
+            ))
             .module(
                 Waitlist::new()
                     .products(["cratefield"])
@@ -163,4 +201,112 @@ pub async fn fetch(req: Request, env: Env, ctx: Context) -> worker::Result<Respo
 pub async fn scheduled(event: worker::ScheduledEvent, env: Env, ctx: worker::ScheduleContext) {
     let (harness, runtime) = instance(&env);
     serve_scheduled(harness, runtime, event, env, ctx).await;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cratefield_core::{Brand, Rendered};
+    use cratefield_module_waitlist::{ConfirmMailData, ConfirmedMailData};
+    use serde_json::{Value, json};
+
+    #[test]
+    fn owlpost_key_wins_over_resend() {
+        assert_eq!(
+            mailer_choice(Some("op_test_x"), Some("re_x")),
+            MailerChoice::Owlpost
+        );
+    }
+
+    #[test]
+    fn resend_is_the_fallback_when_only_its_key_is_set() {
+        assert_eq!(mailer_choice(None, Some("re_x")), MailerChoice::Resend);
+    }
+
+    #[test]
+    fn neither_key_falls_back_to_the_no_op() {
+        assert_eq!(mailer_choice(None, None), MailerChoice::Noop);
+    }
+
+    #[test]
+    fn blank_keys_are_ignored() {
+        assert_eq!(mailer_choice(Some(""), Some("")), MailerChoice::Noop);
+        // A blank Owlpost key must not shadow a real Resend one.
+        assert_eq!(mailer_choice(Some(""), Some("re_x")), MailerChoice::Resend);
+    }
+
+    fn brand() -> Brand {
+        Brand {
+            accent: "#3A5BEF".to_owned(),
+            logo_url: Some("https://cratefield.com/assets/email/logo-64.png".to_owned()),
+            footer: Some("Cratefield · cratefield.com".to_owned()),
+        }
+    }
+
+    /// Render one of the templates this venture actually registers: the
+    /// module's, in `MailTheme::cratefield()` (see `instance`). Using the
+    /// same `themed_templates` call keeps the snapshot honest to what ships.
+    fn render(id: &str, data: &Value) -> Rendered {
+        cratefield_module_waitlist::themed_templates(
+            &cratefield_mail_templates::MailTheme::cratefield(),
+        )
+        .into_iter()
+        .find(|(template_id, _)| template_id == id)
+        .unwrap_or_else(|| panic!("{id} registered"))
+        .1
+        .render(data, "en")
+        .expect("renders")
+    }
+
+    fn confirm_data() -> Value {
+        json!(ConfirmMailData {
+            venture: "cratefield".to_owned(),
+            product: "cratefield".to_owned(),
+            email: "ada@example.com".to_owned(),
+            confirm_url: "https://api.cratefield.com/v1/waitlist/confirm?token=abc".to_owned(),
+            brand: brand(),
+        })
+    }
+
+    fn confirmed_data() -> Value {
+        json!(ConfirmedMailData {
+            venture: "cratefield".to_owned(),
+            product: "cratefield".to_owned(),
+            email: "ada@example.com".to_owned(),
+            position: 42,
+            status_url: "https://api.cratefield.com/v1/waitlist/status?token=def".to_owned(),
+            brand: brand(),
+        })
+    }
+
+    #[test]
+    fn confirm_template_snapshots() {
+        let rendered = render("waitlist/confirm", &confirm_data());
+        insta::assert_snapshot!("confirm_subject", rendered.subject);
+        insta::assert_snapshot!("confirm_html", rendered.html);
+        insta::assert_snapshot!("confirm_text", rendered.text);
+    }
+
+    #[test]
+    fn confirmed_template_snapshots() {
+        let rendered = render("waitlist/confirmed", &confirmed_data());
+        insta::assert_snapshot!("confirmed_subject", rendered.subject);
+        insta::assert_snapshot!("confirmed_html", rendered.html);
+        insta::assert_snapshot!("confirmed_text", rendered.text);
+    }
+
+    #[test]
+    fn the_cratefield_theme_reaches_the_mail() {
+        let html = render("waitlist/confirm", &confirm_data()).html;
+        for needle in [
+            "https://cratefield.com/assets/email/logo-64.png",
+            "#4C6FFF",
+            "Archivo",
+            // Both schemes ship: the light palette and the dark override.
+            "prefers-color-scheme:dark",
+            "#0A0A0B",
+        ] {
+            assert!(html.contains(needle), "html is missing {needle}");
+        }
+    }
 }

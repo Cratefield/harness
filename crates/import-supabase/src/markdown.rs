@@ -239,6 +239,34 @@ impl Report {
             out.push('\n');
         }
 
+        let _ = writeln!(
+            out,
+            "## Supabase-managed policies ({})\n",
+            self.managed_policies.len()
+        );
+        if self.managed_policies.is_empty() {
+            out.push_str("None.\n\n");
+        } else {
+            let names = self
+                .managed_policies
+                .iter()
+                .map(|policy| {
+                    format!(
+                        "`{}.{}.{}`",
+                        policy.schema,
+                        policy.table,
+                        cell(&policy.name)
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            let _ = writeln!(
+                out,
+                "On Supabase's own schemas: the platform's, not the venture's — never copied and \
+                 never a finding: {names}.\n"
+            );
+        }
+
         let _ = writeln!(out, "## Tables ({})\n", self.tables.len());
         if !self.tables.is_empty() {
             out.push_str(
@@ -329,6 +357,44 @@ impl Report {
                     bucket.objects_over_blob_cap
                 );
             }
+            out.push('\n');
+            for bucket in self
+                .storage
+                .buckets
+                .iter()
+                .filter(|bucket| !bucket.policies.is_empty())
+            {
+                let _ = writeln!(out, "Bucket `{}` policies:", bucket.id);
+                for policy in &bucket.policies {
+                    let scope = if policy.all_buckets {
+                        " (every bucket)"
+                    } else {
+                        ""
+                    };
+                    let _ = writeln!(
+                        out,
+                        "- `{}` ({}, {} on `{}`{}) — {}",
+                        policy.name,
+                        policy.roles.join(", "),
+                        policy.command,
+                        policy.table,
+                        scope,
+                        cell(&policy.suggested_equivalent)
+                    );
+                }
+                out.push('\n');
+            }
+        }
+        for policy in &self.storage.unattached_policies {
+            let _ = writeln!(
+                out,
+                "Storage policy `{}` on `{}`: no bucket exists to attach it to — {}",
+                policy.name,
+                policy.table,
+                cell(&policy.suggested_equivalent)
+            );
+        }
+        if !self.storage.unattached_policies.is_empty() {
             out.push('\n');
         }
 

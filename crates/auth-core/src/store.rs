@@ -1023,7 +1023,13 @@ pub async fn single_use_token_by_hash(
     Ok(rows.first().map(single_use_token_from))
 }
 
-async fn single_use_token_by_id(
+/// Finds a single-use token by its row id (to read back the row a guarded
+/// update just changed, or the row a payload points at as its successor).
+///
+/// # Errors
+///
+/// [`DbError::Query`] when the statement fails.
+pub(crate) async fn single_use_token_by_id(
     db: &dyn Database,
     id: &str,
 ) -> Result<Option<SingleUseTokenRow>, DbError> {
@@ -1061,6 +1067,62 @@ pub async fn consume_single_use_token(
         return Ok(None);
     }
     single_use_token_by_id(db, id).await
+}
+
+/// [`consume_single_use_token`] that also rewrites `payload` in the same
+/// guarded update. Refresh-token rotation uses this to point the consumed
+/// row at the successor it just minted: the state lives in the one
+/// `payload` column, so no migration is needed to add the refresh-reuse
+/// grace (issue #655).
+///
+/// # Errors
+///
+/// [`DbError::Execute`] when the statement fails.
+pub(crate) async fn consume_single_use_token_with_payload(
+    db: &dyn Database,
+    id: &str,
+    now: &str,
+    payload: &str,
+) -> Result<Option<SingleUseTokenRow>, DbError> {
+    let mut update = Query::update();
+    update
+        .table(iden("single_use_tokens"))
+        .values([
+            (iden("consumed_at"), now.into()),
+            (iden("payload"), payload.into()),
+        ])
+        .and_where(Expr::col(iden("id")).eq(id))
+        .and_where(Expr::col(iden("consumed_at")).is_null())
+        .and_where(Expr::col(iden("expires_at")).gt(now));
+    let won = db.execute(&Statement::render(&update)).await?;
+    if won == 0 {
+        return Ok(None);
+    }
+    single_use_token_by_id(db, id).await
+}
+
+/// Compare-and-swaps a single-use token's `payload`: the update applies
+/// only when the stored text is still exactly `old_payload`, so of two
+/// concurrent writers at most one sees `1`. The refresh-reuse grace
+/// (issue #655) uses it to claim a grace use without losing another
+/// claim's successor; the returned count is the winner's decision.
+///
+/// # Errors
+///
+/// [`DbError::Execute`] when the statement fails.
+pub(crate) async fn compare_and_swap_payload(
+    db: &dyn Database,
+    id: &str,
+    old_payload: &str,
+    new_payload: &str,
+) -> Result<u64, DbError> {
+    let mut update = Query::update();
+    update
+        .table(iden("single_use_tokens"))
+        .values([(iden("payload"), new_payload.into())])
+        .and_where(Expr::col(iden("id")).eq(id))
+        .and_where(Expr::col(iden("payload")).eq(old_payload));
+    db.execute(&Statement::render(&update)).await
 }
 
 /// Retires a user's unconsumed, unexpired tokens of one kind by stamping

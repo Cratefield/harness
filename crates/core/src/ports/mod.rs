@@ -17,6 +17,7 @@ mod dispatcher;
 mod embedder;
 mod http;
 mod idgen;
+mod inbound_mail;
 mod kv;
 mod mailer;
 mod payments;
@@ -52,6 +53,7 @@ pub use http::{
     MAX_CONCURRENT_REQUESTS, MAX_RESPONSE_BYTES, MAX_RESPONSE_TIMEOUT, declared_content_length,
 };
 pub use idgen::{IdGen, UlidIdGen};
+pub use inbound_mail::{InboundMailError, InboundMailSource, InboundMessage, receive_mail};
 pub use kv::{KeyValue, KvError};
 pub use mailer::{MailError, Mailer, Message, SendOutcome};
 pub use payments::{

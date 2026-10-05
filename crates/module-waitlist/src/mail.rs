@@ -1,14 +1,16 @@
-//! Mail rendering and sending for `waitlist`. The default templates are
-//! askama templates compiled into the crate (issue #12), exported via
-//! [`default_templates`] and used directly as the fallback when the
-//! venture registered no override. Locale: `en` shipped; ventures
-//! register `waitlist/confirm@<locale>` overrides.
+//! Mail rendering and sending for `waitlist`. The default templates render
+//! through `cratefield-mail-templates` in the venture's [`MailTheme`]
+//! (issue #12), exported via [`default_templates`] (the theme the module
+//! resolves from the venture and its `MAIL_THEME` config) and
+//! [`themed_templates`] (a theme the venture composed), and used directly
+//! as the fallback when the venture registered neither. Locale: `en`
+//! shipped; ventures register `waitlist/confirm@<locale>` overrides.
 
-use askama::Template as _;
 use cratefield_core::{
     Brand, MailError, Message, ModuleConfig, ModuleContext, Rendered, SendOutcome, Template,
     TemplateError, TemplateRegistry,
 };
+use cratefield_mail_templates::{self as mt, MailTheme};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::sync::Arc;
@@ -16,7 +18,9 @@ use std::sync::Arc;
 pub(crate) const TEMPLATE_CONFIRM: &str = "waitlist/confirm";
 pub(crate) const TEMPLATE_CONFIRMED: &str = "waitlist/confirmed";
 
-/// Typed data for `waitlist/confirm`.
+/// Typed data for `waitlist/confirm`. The module also puts the resolved
+/// theme under `theme` (see [`mt::attach_theme`]), so a venture's own
+/// override template can render in the same style.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConfirmMailData {
     pub venture: String,
@@ -46,82 +50,125 @@ fn parse_failed(id: &str) -> TemplateError {
     }
 }
 
-fn askama_failed(id: &str, err: &askama::Error) -> TemplateError {
-    TemplateError::RenderFailed {
-        id: id.to_owned(),
-        reason: err.to_string(),
+/// How the mails name the list: `(list, members, on)` — the list in the
+/// subject, who is admitted, and the list in a sentence. A single-product
+/// venture whose product slug is its own name reads "the `FindsYou`
+/// waitlist", not "the `FindsYou` `findsyou` waitlist".
+fn wording(venture: &str, product: &str) -> (String, String, String) {
+    let squash = |s: &str| {
+        s.chars()
+            .filter(char::is_ascii_alphanumeric)
+            .map(|c| c.to_ascii_lowercase())
+            .collect::<String>()
+    };
+    if squash(venture) == squash(product) {
+        (venture.to_owned(), "members".to_owned(), venture.to_owned())
+    } else {
+        (
+            product.to_owned(),
+            format!("{product} members"),
+            format!("{venture} {product}"),
+        )
     }
 }
 
-#[derive(askama::Template)]
-#[template(path = "waitlist_confirm.html")]
-struct ConfirmHtml<'a> {
-    data: &'a ConfirmMailData,
+struct ConfirmTemplate {
+    theme: Option<MailTheme>,
 }
-
-#[derive(askama::Template)]
-#[template(path = "waitlist_confirm.txt")]
-struct ConfirmText<'a> {
-    data: &'a ConfirmMailData,
-}
-
-#[derive(askama::Template)]
-#[template(path = "waitlist_confirmed.html")]
-struct ConfirmedHtml<'a> {
-    data: &'a ConfirmedMailData,
-}
-
-#[derive(askama::Template)]
-#[template(path = "waitlist_confirmed.txt")]
-struct ConfirmedText<'a> {
-    data: &'a ConfirmedMailData,
-}
-
-struct ConfirmTemplate;
 
 impl Template for ConfirmTemplate {
     fn render(&self, data: &Value, _locale: &str) -> Result<Rendered, TemplateError> {
+        let theme = mt::theme_for_template(self.theme.as_ref(), data);
         let data: ConfirmMailData =
             serde_json::from_value(data.clone()).map_err(|_| parse_failed(TEMPLATE_CONFIRM))?;
-        Ok(Rendered {
-            subject: format!("Confirm your spot on the {} waitlist", data.product),
-            html: ConfirmHtml { data: &data }
-                .render()
-                .map_err(|err| askama_failed(TEMPLATE_CONFIRM, &err))?,
-            text: ConfirmText { data: &data }
-                .render()
-                .map_err(|err| askama_failed(TEMPLATE_CONFIRM, &err))?,
-        })
+        let venture = theme.name_or(&data.venture);
+        let (list, members, on) = wording(venture, &data.product);
+        Ok(mt::Message::new(
+            format!("Confirm your spot on the {list} waitlist"),
+            "Hold your spot",
+        )
+        .preheader(format!(
+            "Confirm your address to hold your place on the {list} waitlist."
+        ))
+        .paragraph(format!(
+            "{venture} is admitting {members} in join order. Confirm your address to hold \
+             your place on the waitlist."
+        ))
+        .button("Confirm my spot", &data.confirm_url)
+        .fallback_link()
+        .link_intro("If the button does not work, open this link:")
+        .note(
+            "If you did not join this waitlist, ignore this email: nothing happens until the \
+             link is opened.",
+        )
+        .recipient(&data.email)
+        .why(format!("this address was entered on the {on} waitlist"))
+        .render(&theme)
+        .into())
     }
 }
 
-struct ConfirmedTemplate;
+struct ConfirmedTemplate {
+    theme: Option<MailTheme>,
+}
 
 impl Template for ConfirmedTemplate {
     fn render(&self, data: &Value, _locale: &str) -> Result<Rendered, TemplateError> {
+        let theme = mt::theme_for_template(self.theme.as_ref(), data);
         let data: ConfirmedMailData =
             serde_json::from_value(data.clone()).map_err(|_| parse_failed(TEMPLATE_CONFIRMED))?;
-        Ok(Rendered {
-            subject: format!(
-                "You are #{} on the {} waitlist",
-                data.position, data.product
-            ),
-            html: ConfirmedHtml { data: &data }
-                .render()
-                .map_err(|err| askama_failed(TEMPLATE_CONFIRMED, &err))?,
-            text: ConfirmedText { data: &data }
-                .render()
-                .map_err(|err| askama_failed(TEMPLATE_CONFIRMED, &err))?,
-        })
+        let venture = theme.name_or(&data.venture);
+        let (list, _, on) = wording(venture, &data.product);
+        let position = data.position;
+        Ok(mt::Message::new(
+            format!("You are #{position} on the {list} waitlist"),
+            format!("You are #{position}"),
+        )
+        .preheader(format!(
+            "Your spot is confirmed. You are number {position} in line."
+        ))
+        .paragraph(format!(
+            "Your spot on the {on} waitlist is confirmed. You are number {position} in line."
+        ))
+        .button("Check my place", &data.status_url)
+        .fallback_link()
+        .link_intro("Check your place any time:")
+        .recipient(&data.email)
+        .why(format!("you confirmed your spot on the {on} waitlist"))
+        .render(&theme)
+        .into())
     }
 }
 
-/// The module's default askama templates, for
-/// `Harness::builder().templates(..)`.
+/// The module's default templates, for `Harness::builder().templates(..)`.
+/// They render in the theme the module resolves for each mail: the
+/// venture's core `Brand`, with the deployment's `MAIL_THEME` config on
+/// top. Use [`themed_templates`] to compose the venture's own theme.
 pub fn default_templates() -> Vec<(String, Box<dyn Template>)> {
+    templates(None)
+}
+
+/// The module's templates in `theme`, the venture's own style, for
+/// `Harness::builder().templates(..)`. The deployment's `MAIL_THEME`
+/// config still applies on top.
+pub fn themed_templates(theme: &MailTheme) -> Vec<(String, Box<dyn Template>)> {
+    templates(Some(theme))
+}
+
+fn templates(theme: Option<&MailTheme>) -> Vec<(String, Box<dyn Template>)> {
     vec![
-        (TEMPLATE_CONFIRM.to_owned(), Box::new(ConfirmTemplate)),
-        (TEMPLATE_CONFIRMED.to_owned(), Box::new(ConfirmedTemplate)),
+        (
+            TEMPLATE_CONFIRM.to_owned(),
+            Box::new(ConfirmTemplate {
+                theme: theme.cloned(),
+            }),
+        ),
+        (
+            TEMPLATE_CONFIRMED.to_owned(),
+            Box::new(ConfirmedTemplate {
+                theme: theme.cloned(),
+            }),
+        ),
     ]
 }
 
@@ -134,8 +181,8 @@ pub(crate) fn render(
     match registry.render(id, data, locale) {
         Ok(rendered) => Ok(rendered),
         Err(TemplateError::UnknownTemplate { .. }) => match id {
-            TEMPLATE_CONFIRM => ConfirmTemplate.render(data, locale),
-            TEMPLATE_CONFIRMED => ConfirmedTemplate.render(data, locale),
+            TEMPLATE_CONFIRM => ConfirmTemplate { theme: None }.render(data, locale),
+            TEMPLATE_CONFIRMED => ConfirmedTemplate { theme: None }.render(data, locale),
             other => Err(TemplateError::UnknownTemplate {
                 id: other.to_owned(),
                 locale: locale.to_owned(),
@@ -159,8 +206,10 @@ pub(crate) async fn send(
     ctx: &ModuleContext,
     mail: &OutgoingMail,
 ) -> Result<SendOutcome, MailError> {
+    let mut data = mail.data.clone();
+    mt::attach_theme(&mut data, &ctx.venture, &*ctx.config);
     let rendered =
-        render(&ctx.templates, mail.template_id, &mail.data, &mail.locale).map_err(|err| {
+        render(&ctx.templates, mail.template_id, &data, &mail.locale).map_err(|err| {
             MailError::Invalid {
                 detail: err.to_string(),
             }

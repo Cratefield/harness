@@ -13,12 +13,12 @@
 use axum::extract::State;
 use axum::response::{IntoResponse, Response};
 use axum::routing::post;
-use cratefield_core::{Json, Problem, Scope};
-use factory0_auth_core::{
+use cratefield_auth_core::{
     CREDENTIAL_PASSKEY, Login, STATUS_ACTIVE, credentials_by_user, issue as issue_session,
     mark_passkey_suspect, passkey_by_credential_id, set_cookie, touch_credential_used,
     update_passkey_sign_count, user_by_id, user_by_primary_email,
 };
+use cratefield_core::{Json, Problem, Scope};
 use http::header;
 use http::{HeaderMap, Uri};
 use serde::Deserialize;
@@ -175,7 +175,7 @@ async fn lookup(
     scope: &Scope,
     consumed: &crate::challenge::Consumed,
     credential: &PublicKeyCredential,
-) -> Result<factory0_auth_core::CredentialRow, Problem> {
+) -> Result<cratefield_auth_core::CredentialRow, Problem> {
     let credential_id = credential.get_credential_id().to_vec();
     let stored = passkey_by_credential_id(db, &credential_id)
         .await
@@ -234,7 +234,7 @@ async fn start_session(
     headers: &HeaderMap,
     user_id: &str,
     user_verified: bool,
-) -> Result<factory0_auth_core::IssuedSession, factory0_auth_core::SessionError> {
+) -> Result<cratefield_auth_core::IssuedSession, cratefield_auth_core::SessionError> {
     let mut amr = vec![AMR_PASSKEY, AMR_USER_PRESENT];
     if user_verified {
         // A passkey the authenticator verified is possession plus knowledge
@@ -252,7 +252,7 @@ async fn start_session(
             user_agent: user_agent.as_deref(),
             // Any cookie the login request carried is revoked before the new
             // session exists, which is auth-core's fixation defence.
-            presented_cookie: factory0_auth_core::cookie_value(headers).as_deref(),
+            presented_cookie: cratefield_auth_core::cookie_value(headers).as_deref(),
             // A same-origin POST from our own page, so the cookie above
             // arrives and names the session itself (auth #36).
             presented_session_id: None,
@@ -271,7 +271,7 @@ async fn check_assertion(
     scope: &Scope,
     rp: &crate::RelyingParty,
     challenge_bytes: &[u8],
-    stored: &factory0_auth_core::CredentialRow,
+    stored: &cratefield_auth_core::CredentialRow,
     credential: &PublicKeyCredential,
 ) -> Result<crate::webauthn::VerifiedAssertion, Problem> {
     let (Some(cose_key), Some(stored_credential_id)) = (
@@ -333,7 +333,7 @@ async fn verify(
     // not be able to complete one (issue #439). Ahead of the limiter, so
     // a cross-site POST cannot spend the account's rate-limit budget
     // either.
-    factory0_auth_core::csrf::require_same_origin(&headers, &uri)
+    cratefield_auth_core::csrf::require_same_origin(&headers, &uri)
         .map_err(|problem| problem.instance(&scope.request_id))?;
     if let Some(limited) = limit_login(&state, &headers).await {
         return Ok(limited);

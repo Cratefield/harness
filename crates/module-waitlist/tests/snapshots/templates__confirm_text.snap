@@ -2,10 +2,16 @@
 source: crates/module-waitlist/tests/templates.rs
 expression: rendered.text
 ---
-factory0 is admitting kontinuum members in join order.
-This mail was sent to nick@example.com.
+Hold your spot
 
-Confirm your address to hold your spot:
+factory0 is admitting kontinuum members in join order. Confirm your address to hold your place on the waitlist.
+
+Confirm my spot:
 https://api.factory0.ventures/v1/waitlist/confirm?token=abc
 
+If you did not join this waitlist, ignore this email: nothing happens until the link is opened.
+
+--
+Sent to nick@example.com because this address was entered on the factory0 kontinuum waitlist.
 Factory Zero · factory0.ventures
+factory0

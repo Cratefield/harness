@@ -3,18 +3,18 @@
 
 #![allow(dead_code)]
 
+use cratefield_auth_core::{AuthCore, Login, UserRow, insert_user, issue};
+use cratefield_auth_passkeys::Passkeys;
 use cratefield_core::{Clock, Config, Database, IdGen, MapConfig, UlidIdGen};
 use cratefield_testing::TestHarness;
-use factory0_auth_core::{AuthCore, Login, UserRow, insert_user, issue};
-use factory0_auth_passkeys::Passkeys;
 use http::StatusCode;
 use serde_json::Value;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicI64, Ordering};
 use time::OffsetDateTime;
 
-pub const RP_ID: &str = "auth.factory0.ventures";
-pub const ORIGIN: &str = "https://auth.factory0.ventures";
+pub const RP_ID: &str = "auth.acme.example";
+pub const ORIGIN: &str = "https://auth.acme.example";
 pub const OTHER_ORIGIN: &str = "https://evil.example";
 
 /// A clock a test can move: challenge expiry only means something if time
@@ -48,10 +48,7 @@ pub fn config_pairs() -> Vec<(String, String)> {
     vec![
         ("AUTH_PASSKEYS_RP_ID".to_owned(), RP_ID.to_owned()),
         ("AUTH_PASSKEYS_ORIGINS".to_owned(), ORIGIN.to_owned()),
-        (
-            "AUTH_PASSKEYS_RP_NAME".to_owned(),
-            "Factory Zero".to_owned(),
-        ),
+        ("AUTH_PASSKEYS_RP_NAME".to_owned(), "Acme".to_owned()),
     ]
 }
 
@@ -154,9 +151,13 @@ impl Kit {
     /// Flags a credential as a possible clone, the way a counter regression
     /// does.
     pub async fn mark_suspect(&self, credential_id: &str) {
-        factory0_auth_core::mark_passkey_suspect(&*self.db, credential_id, "2026-09-07T10:00:00Z")
-            .await
-            .expect("mark applies");
+        cratefield_auth_core::mark_passkey_suspect(
+            &*self.db,
+            credential_id,
+            "2026-09-07T10:00:00Z",
+        )
+        .await
+        .expect("mark applies");
     }
 
     /// A session cookie value for that account.
@@ -232,7 +233,7 @@ pub async fn send_with_headers(
     use tower::ServiceExt;
     let mut builder = axum::http::Request::builder().method(method).uri(path);
     if let Some(cookie) = cookie {
-        builder = builder.header(http::header::COOKIE, format!("__Host-fz_session={cookie}"));
+        builder = builder.header(http::header::COOKIE, format!("__Host-session={cookie}"));
     }
     for (name, value) in extra {
         builder = builder.header(*name, *value);

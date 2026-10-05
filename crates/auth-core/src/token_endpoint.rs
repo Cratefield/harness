@@ -17,7 +17,12 @@
 //! Single-use semantics come from the guarded consume in
 //! [`store::consume_single_use_token`]; reuse of a consumed
 //! authorization code or refresh token **revokes the session** it was
-//! bound to before the request is refused.
+//! bound to before the request is refused. One exception, for refresh
+//! only (issue #655): a short configured grace lets the same client
+//! present the token again moments after a legitimate rotation —
+//! parallel refreshes from separate Worker isolates — handing each a
+//! sibling successor instead of revoking; the first sibling used retires
+//! the rest.
 
 use axum::extract::rejection::FormRejection;
 use axum::extract::{Form, State};
@@ -58,6 +63,9 @@ struct GrantContext<'a> {
     id_gen: &'a dyn cratefield_core::IdGen,
     keys: &'a SigningKeys,
     client_id: &'a str,
+    /// The resolved refresh-reuse grace (issue #655), applied only by
+    /// the `refresh_token` grant.
+    grace: tokens::RefreshReuseGrace,
 }
 
 #[derive(Deserialize)]
@@ -131,14 +139,18 @@ fn amr_of(session: &store::SessionRow) -> Vec<String> {
         .unwrap_or_default()
 }
 
-async fn mint_pair(
-    db: &dyn Database,
+/// Mints a fresh access token beside an already-minted refresh token
+/// and answers the token response. The refresh token is passed in
+/// because the two grants mint it in different places: the code grant
+/// here (via [`mint_pair`]), the refresh grant inside the exchange,
+/// which must record the successor in the consumed row (issue #655).
+fn minted_response(
     clock: &dyn Clock,
-    id_gen: &dyn cratefield_core::IdGen,
     keys: &SigningKeys,
     session: &store::SessionRow,
     user: &UserRow,
     client_id: &str,
+    refresh: &str,
 ) -> Result<Response, Problem> {
     let email = user
         .primary_email
@@ -150,12 +162,6 @@ async fn mint_pair(
             tracing::error!(error = %err, "access-token mint failed");
             Problem::internal()
         })?;
-    let refresh = mint_refresh_token(db, clock, id_gen, &session.id, &user.id, client_id)
-        .await
-        .map_err(|err| {
-            tracing::error!(error = %err, "minting a refresh token failed");
-            Problem::internal()
-        })?;
     Ok(Json(json!({
         "access_token": access,
         "token_type": "Bearer",
@@ -163,6 +169,26 @@ async fn mint_pair(
         "refresh_token": refresh,
     }))
     .into_response())
+}
+
+/// The authorization-code path mints both halves; the refresh path
+/// already has its refresh token from the exchange.
+async fn mint_pair(
+    db: &dyn Database,
+    clock: &dyn Clock,
+    id_gen: &dyn cratefield_core::IdGen,
+    keys: &SigningKeys,
+    session: &store::SessionRow,
+    user: &UserRow,
+    client_id: &str,
+) -> Result<Response, Problem> {
+    let refresh = mint_refresh_token(db, clock, id_gen, &session.id, &user.id, client_id)
+        .await
+        .map_err(|err| {
+            tracing::error!(error = %err, "minting a refresh token failed");
+            Problem::internal()
+        })?;
+    minted_response(clock, keys, session, user, client_id, &refresh)
 }
 
 async fn token(
@@ -215,6 +241,7 @@ async fn token(
         id_gen: &*id_gen,
         keys: &keys,
         client_id: &client.id,
+        grace: state.refresh_grace,
     };
     match form.grant_type.as_str() {
         "authorization_code" => code_grant(&grant, &form).await,
@@ -315,7 +342,8 @@ async fn refresh_grant(grant: &GrantContext<'_>, form: &TokenForm) -> Result<Res
         return Err(refused(scope));
     };
     let (tokens::RefreshOutcome::Granted, Some(granted)) =
-        tokens::exchange_refresh_token(db, clock, presented, client_id).await?
+        tokens::exchange_refresh_token(db, clock, grant.id_gen, grant.grace, presented, client_id)
+            .await?
     else {
         return Err(refused(scope));
     };
@@ -330,16 +358,17 @@ async fn refresh_grant(grant: &GrantContext<'_>, form: &TokenForm) -> Result<Res
         subject_hash = %subject_hash(&user.id),
         "refresh token exchanged"
     );
-    mint_pair(
-        db,
+    // The exchange already minted the successor refresh token and
+    // recorded the rotation; only the access token is minted here, so a
+    // refresh grant never mints two refresh tokens (issue #655).
+    minted_response(
         clock,
-        grant.id_gen,
         grant.keys,
         &session,
         &user,
         client_id,
+        &granted.refresh_token,
     )
-    .await
 }
 
 pub(crate) fn router() -> axum::Router<Arc<ModuleState>> {

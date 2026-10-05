@@ -865,7 +865,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "877a4ace8713b0bcf2a4e7eec82529c029f1d0619886d18145fea96c3ffe5c0f"
 
 [[package]]
-name = "factory0-auth-core"
+name = "cratefield-auth-core"
 version = "0.1.1"
 dependencies = [
  "argon2",
@@ -886,21 +886,21 @@ dependencies = [
 ]
 
 [[package]]
-name = "factory0-auth-fz"
+name = "cratefield-auth-fz"
 version = "0.1.0"
 dependencies = [
  "cratefield-cli",
  "cratefield-core",
- "factory0-auth-core",
- "factory0-auth-magic-link",
- "factory0-auth-meta",
- "factory0-auth-oidc",
- "factory0-auth-passkeys",
- "factory0-auth-password",
+ "cratefield-auth-core",
+ "cratefield-auth-magic-link",
+ "cratefield-auth-meta",
+ "cratefield-auth-oidc",
+ "cratefield-auth-passkeys",
+ "cratefield-auth-password",
 ]
 
 [[package]]
-name = "factory0-auth-magic-link"
+name = "cratefield-auth-magic-link"
 version = "0.1.1"
 dependencies = [
  "askama",
@@ -908,7 +908,7 @@ dependencies = [
  "base64ct",
  "bytes",
  "cratefield-core",
- "factory0-auth-core",
+ "cratefield-auth-core",
  "getrandom 0.4.3",
  "http",
  "serde",
@@ -920,14 +920,14 @@ dependencies = [
 ]
 
 [[package]]
-name = "factory0-auth-meta"
+name = "cratefield-auth-meta"
 version = "0.1.1"
 dependencies = [
  "axum",
  "base64ct",
  "bytes",
  "cratefield-core",
- "factory0-auth-core",
+ "cratefield-auth-core",
  "getrandom 0.4.3",
  "hmac 0.13.0",
  "http",
@@ -942,7 +942,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "factory0-auth-oidc"
+name = "cratefield-auth-oidc"
 version = "0.1.1"
 dependencies = [
  "axum",
@@ -950,7 +950,7 @@ dependencies = [
  "bytes",
  "chrono",
  "cratefield-core",
- "factory0-auth-core",
+ "cratefield-auth-core",
  "getrandom 0.4.3",
  "http",
  "openidconnect",
@@ -965,7 +965,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "factory0-auth-passkeys"
+name = "cratefield-auth-passkeys"
 version = "0.1.1"
 dependencies = [
  "axum",
@@ -974,7 +974,7 @@ dependencies = [
  "coset",
  "cratefield-core",
  "ed25519-dalek",
- "factory0-auth-core",
+ "cratefield-auth-core",
  "getrandom 0.4.3",
  "http",
  "p256 0.14.0",
@@ -990,14 +990,14 @@ dependencies = [
 ]
 
 [[package]]
-name = "factory0-auth-password"
+name = "cratefield-auth-password"
 version = "0.1.1"
 dependencies = [
  "axum",
  "base16ct 0.2.0",
  "bytes",
  "cratefield-core",
- "factory0-auth-core",
+ "cratefield-auth-core",
  "http",
  "serde",
  "serde_json",

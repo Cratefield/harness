@@ -57,6 +57,12 @@ now, unleased — when the budget runs out. The outbox lease already
 solves the two hard parts (exactly-one drainer per row; at-least-once
 across a crash), so the budgeted drain adds only the stopping rule.
 
+Webhook delivery is a consumer of it: `cratefield-module-webhooks` drains
+its outbox through `drain_within` and charges one subrequest per row
+processed (each delivery attempt, at most one outbound `POST`) — a
+conservative count — so a backlog bigger than a tick's allowance is
+spread across ticks rather than spent in one invocation.
+
 **`reschedule` is the per-item cursor.** A recurring poller is one
 outbox row per thing to poll; its handler answers `Processed::NextAt`
 with the row's next poll time, and `reschedule` moves the row there

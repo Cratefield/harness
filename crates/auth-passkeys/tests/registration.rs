@@ -43,7 +43,7 @@ fn options_describe_the_relying_party_and_the_algorithms_we_accept() {
         let public_key = &body["publicKey"];
 
         assert_eq!(public_key["rp"]["id"], RP_ID);
-        assert_eq!(public_key["rp"]["name"], "Factory Zero");
+        assert_eq!(public_key["rp"]["name"], "Acme");
         assert_eq!(public_key["user"]["name"], "nick@example.com");
         // ES256 first, then RS256 (Windows Hello) and EdDSA.
         let algorithms: Vec<i64> = public_key["pubKeyCredParams"]

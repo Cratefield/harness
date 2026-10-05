@@ -1,7 +1,7 @@
-//! `factory0-auth-password`: email and password (issues #12, #19, #20).
+//! `cratefield-auth-password`: email and password (issues #12, #19, #20).
 //!
 //! ```no_run
-//! use factory0_auth_password::Password;
+//! use cratefield_auth_password::Password;
 //!
 //! let module = Password::new();
 //! ```
@@ -40,16 +40,16 @@ mod lockout;
 mod mail;
 mod recovery;
 
+use cratefield_auth_core::{LegacyHashes, SupportedLocales};
 use cratefield_core::{
     Config, ConfigError, Migrations, Module, ModuleConfig, ModuleContext, Port, ProblemDef,
 };
-use factory0_auth_core::{LegacyHashes, SupportedLocales};
 use http::StatusCode;
 use std::sync::Arc;
 
 pub use mail::{
     DuplicateMail, ResetMail, TEMPLATE_DUPLICATE, TEMPLATE_RESET, TEMPLATE_VERIFY, VerifyMail,
-    default_templates,
+    default_templates, themed_templates,
 };
 
 /// How long a verification link lasts (issue #19). A day: long enough to

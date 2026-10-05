@@ -7,9 +7,9 @@
 
 use axum::body::Body;
 use axum::http::{Method, StatusCode, header};
+use cratefield_auth_core::AuthCore;
 use cratefield_core::Statement;
 use cratefield_testing::TestHarness;
-use factory0_auth_core::AuthCore;
 use serde_json::{Value, json};
 use std::sync::Arc;
 use tower::ServiceExt;
@@ -115,7 +115,7 @@ async fn rows(kit: &TestHarness, table: &str) -> usize {
 
 /// A well-formed argon2id PHC string this crate writes.
 fn argon_hash() -> String {
-    factory0_auth_core::hash_password("a long enough password").expect("hash")
+    cratefield_auth_core::hash_password("a long enough password").expect("hash")
 }
 
 /// A deterministic cost-4 bcrypt hash, obviously fake test material.

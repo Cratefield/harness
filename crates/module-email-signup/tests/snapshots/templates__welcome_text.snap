@@ -2,10 +2,13 @@
 source: crates/module-email-signup/tests/templates.rs
 expression: rendered.text
 ---
+You are on the list
+
 Welcome to factory0 — your email address is confirmed.
-This mail was sent to nick@example.com.
 
-Unsubscribe any time:
+--
+Sent to nick@example.com because you signed up for factory0.
+Unsubscribe:
 https://api.factory0.ventures/v1/email-signup/unsubscribe?token=def
-
 Factory Zero · factory0.ventures
+factory0

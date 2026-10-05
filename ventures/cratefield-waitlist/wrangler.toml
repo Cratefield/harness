@@ -19,6 +19,15 @@ ENV = "production"
 # the `HARNESS_ALLOW_UNPROTECTED_WRITES` acceptance that used to sit here
 # is gone (issue #143).
 
+# Mail secrets, also set with `wrangler secret put`, not vars. The mailer
+# picks the first of these that is set, as a non-empty key (see
+# `build_mailer` in src/lib.rs):
+#   OWLPOST_API_KEY  `op_test_…` in development, `op_live_…` in production
+#   RESEND_API_KEY   the fallback while a domain moves over
+# with neither, a no-op mailer captures the join as a pending entry. Both
+# adapters send `from` no-reply@send.cratefield.com, so both need that
+# subdomain verified with the provider.
+
 # Workers Rate Limiting backs the harness's throttle: the `admin:ip:*`
 # admin floor and every guarded public write consult it, and readiness
 # refuses the venture unless a limiter resolves (issue #437). `simple`
