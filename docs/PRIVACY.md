@@ -309,3 +309,260 @@ async function exportSections(_subject: string) { return []; }
 async function planErasure(_subject: string) { return [{ name: "orders", action: "delete" }]; }
 async function applyErasure(_subject: string) { /* delete or anonymise */ }
 ```
+
+## Serving the protocol
+
+The provider contract has two ends, and until now only one of them was a
+product. `Privacy::provider` is this deployment reaching a warehouse or a CRM.
+`Privacy::serve_provider` is the other: a deployment that holds such a system
+of its own, or that *is* the system another deployment reaches, answering the
+same three signed POSTs over the same declarations
+(`crates/module-privacy/src/provider_server.rs`).
+
+```rust
+Privacy::new().serve_provider("PRIVACY_PROVIDER_SECRET")
+```
+
+The harness nests a module's routes under its name, so the three paths are
+`POST /v1/privacy/provider/export`, `POST /v1/privacy/provider/erase/plan` and
+`POST /v1/privacy/provider/erase/apply`.
+
+**Opt-in, because the routes are a public door.** A deployment that never
+calls `serve_provider` has no such routes at all — they are not mounted to
+answer 404, they are absent from the router. Between the reference provider
+above and this, there are two ways to close the other end of the protocol, and
+a deployment that only ever calls out needs neither.
+
+### Where the answers come from
+
+Not from a hand-written list, which is the failure mode the whole catalogue
+exists to avoid. `export` calls the same `handlers::subject_tables` the local
+`/v1/privacy/export` route renders, so a signed caller and an operator reading
+the admin route are shown one catalog read by one piece of code: a deployment
+cannot answer a signed caller differently from an operator.
+
+| Route | Answers |
+|---|---|
+| `provider/export` | one section per declared table that is not `none`: `{name, description?, data: {module, kind, rows, truncated}}` |
+| `provider/erase/plan` | one section per table: `{name, action: "delete" \| "anonymise" \| "retain", reason?, columns?, rows}`; writes nothing |
+| `provider/erase/apply` | `{"applied": true, "request_id": …, "subject": …}` once the batch ran and the verification found nothing left |
+
+Everything the local export does carries over: a column the declaration names
+in `redacted` appears with the value replaced by `[redacted]` (ADR 0015), a
+table contributing more rows than the per-table cap is `truncated`, and a table
+keyed one hop away is reached through `SubjectVia` — `deletion_jobs` is keyed on
+`provider_subject` and is found through `identities.user_id`, the same join an
+erasure takes. `rows` is not part of the contract — the calling module drops
+it — but it is counted anyway, because an operator debugging a provider
+deployment with `curl` reads a plan that says how many rows each action
+matches, not one that only says what kind of action it is.
+
+**Two vocabularies for the same act.** A plan section says `delete`, not
+`erase`: the protocol's word for what a provider will do to rows is `delete`,
+where the local preview describes what this deployment's own erasure does.
+And a `retain` **must** carry a `reason` — the calling module rejects a plan
+that keeps something silently, because "we are keeping this" without a reason
+is the one thing a subject is most entitled to be told. A declaration that
+keeps a table with no reason is refused by `HarnessBuilder::build`, so the case
+the route guards against is a declaration written in a shape the build does not
+check; should one exist anyway, the plan fails rather than produce an answer the
+caller would discard.
+
+**`Unreachable` is a `retain`, and the reason is why.** `Disposition::Unreachable`
+is a table no equality predicate on the subject can reach — `auth-passkeys`'
+challenge budget, keyed `email:<address>` or `ip:<address>`, is the case — and it
+holds personal data, which is why the subject-facing manifest gives it its own
+bucket rather than filing it as `none`.
+
+The protocol has no fourth action, so it plans as `retain`, carrying the
+declaration's reason verbatim. That is the honest mapping rather than a
+convenient one: the rows stay — `Disposition::keeps_row` counts it — so `delete`
+and `anonymise` would each be a claim about rows the deployment never touched,
+while `retain` says only what is true. The reason is what keeps the answer
+faithful to the declaration, because the two read very differently to a subject:
+*we keep these because the law requires it* is not *we keep these because no
+predicate can find them*.
+
+Two things follow, and both are load-bearing. An `erase/apply` emits no
+statement for a table its own plan retained, so a plan cannot promise an
+erasure the apply then performs or skips. And a reason that is blank still
+fails the plan: `validate` checks the reason on a `Retain` and on a
+blank-subject `Unreachable`, but a `Unreachable` written as a struct literal
+with a real subject column — which is the shape `auth-passkeys` uses, and the
+only way one reaches `subject_sets` at all — is checked as an ordinary
+declaration and its reason is not looked at. The client would discard the whole
+plan over that one line.
+
+A deployment holding such a table therefore has a working plan, a working
+export and a working apply. `AuthWorker::builder` mounts passkeys always, so
+this is not an edge case there: `crates/auth-worker/tests/privacy_provider.rs`
+asserts the section, its action and its reason.
+
+### The signature is the authorisation
+
+Not `ADMIN_TOKEN`, deliberately. A caller on another deployment has no account
+here and no admin token to present, so an admin guard would refuse every
+legitimate call while authorising nothing this protocol lacks. The HMAC over
+the raw body *is* the authorisation: "this deployment asked for this subject's
+data".
+
+It is the same layout the webhooks engine signs deliveries with, checked by the
+same receiver — core's `WebhookVerifier` over `StripeStyle { header:
+SIGNATURE_HEADER }` — in constant time, at the same 300 s tolerance in both
+directions, and over the exact raw bytes received **before** the body is
+parsed. Re-serialising parsed JSON would verify a string the caller never
+signed. One implementation covering both senders and receivers is what stops
+the two from drifting apart.
+
+Every way a call fails to prove itself is one answer: a missing header, a wrong
+secret, a timestamp outside the window and a tampered body all get the same
+`401 privacy-provider-unverified`, so a caller probing the endpoint learns
+whether it signed correctly and nothing about how the deployment is configured.
+A deployment with the routes mounted but no secret configured is the one case
+that answers differently — `503 not_ready`, logging which variable to set —
+because the operator has to be able to tell a missing secret from a bad
+signature. Opening the door instead, treating an absent secret as matching
+everything, would serve every subject's data to anyone who found the URL.
+
+The secret's **name** is taken at build; its value is read through the config
+port at request time, as an outbound `HttpProvider::secret_env` does. One build
+therefore works in every environment, and rotating the secret is a config push
+rather than a redeploy.
+
+**No second confirmation here.** Erasure elsewhere is two calls with a
+confirmation token because an erasure cannot be undone and one HTTP call is
+not a moment to reconsider. That reconsideration happened at the *caller*:
+`POST /v1/privacy/erase` previewed it and an admin confirmed the token, and
+this route is reached only afterwards. Requiring a second confirmation from a
+system that cannot show the operator the preview would make the protocol
+impossible to complete honestly.
+
+### The signature is a bearer credential in practice
+
+The HMAC covers the timestamp and the raw body and nothing else — not the
+route, not the HTTP method, not the caller. All three routes take the same
+`{subject, request_id}` shape, so a signature captured for `provider/export`
+verifies unchanged on `provider/erase/apply`. This is a known limitation of
+the protocol's signing scheme, tracked separately, and mounting the server
+does not change it.
+
+The consequence is that a captured signed request is, for its 300 s window, a
+credential somebody else can present, and there is no replay ledger: the same
+request offered twice inside the window is honoured twice, and the erasure
+route will run again.
+
+So treat these routes as reachable only over transport an attacker cannot
+observe, keep request bodies out of access logs, debug traces and error
+reports at the edge — an erasure body carries the subject identifier — and
+handle the signing secret with the care you would give a credential
+transmitted on every call, because that is what it is. Binding the route into
+the signed payload is the actual fix. It changes the wire format, so it has to
+move in step with every deployed provider.
+
+### Idempotence is the database's
+
+`erase/apply` is idempotent on `request_id` because the SQL is. The statements
+run in one atomic batch; every `erase` table is then re-counted, and a
+non-zero count fails the request rather than report a success it did not
+achieve. Run twice, the second pass matches nothing, counts nothing and
+answers `200`.
+
+There is deliberately no isolate-local "already applied" cache. Such a cache is
+per-isolate, so it would claim an idempotence it cannot deliver across two
+Workers, and a cache that answers "already applied" for a request that never
+was is a lie with a status code on it. The `request_id` is echoed rather than
+stored; a genuinely new id redoes the work, which is what a new erasure
+should do.
+
+## Ordering: the account provider goes last
+
+Registration order is not the erasure order. `HttpProvider::account()` marks
+the one provider holding the **identity itself** — the account row everything
+else is keyed on — and marked providers are applied last, in all three loops
+(export, plan and apply alike):
+
+```rust
+Privacy::new()
+    .provider(
+        HttpProvider::new("crm", "https://crm.example.com/privacy")
+            .secret_env("PRIVACY_PROVIDER_SECRET"),
+    )
+    .provider(
+        HttpProvider::new("mail", "https://mail.example.com/privacy")
+            .secret_env("PRIVACY_PROVIDER_SECRET"),
+    )
+    // The venture's own auth Worker: it holds the account, so it goes last.
+    .provider(
+        HttpProvider::new("auth", "https://auth.example.com/v1/privacy/provider")
+            .secret_env("PRIVACY_PROVIDER_SECRET")
+            .account(),
+    )
+```
+
+The reason is the whole point of the marking. Erasure identifies its subject by
+a value, and every provider after the account provider is reached *through*
+that value — a CRM holding only `account_id` might be asked to erase after the
+accounts table is already gone, and a row keyed on a subject the calling
+deployment no longer holds an identifier for cannot be found, let alone erased.
+The row survives, and the erasure reports itself complete.
+
+The ordering is a stable partition: unmarked providers in registration order,
+then the account-marked ones also in registration order. It is applied
+identically in all three loops because the order that finds a subject's rows
+is the order that erases them — an export that read the account provider last
+while an apply read it first would describe a deployment that does not exist.
+A build is expected to mark at most one provider this way; marking several
+breaks nothing, they simply go last in the order they were registered.
+
+## The auth Worker as a provider
+
+Google, Apple and Meta do not sign in as a user and do not hold this
+deployment's `ADMIN_TOKEN`, which is exactly the caller the provider protocol
+exists for. `AuthWorker::builder` composes `Privacy::new().serve_provider(..)`
+when `PRIVACY_PROVIDER_SECRET` is set to a non-empty value; absent, empty or
+whitespace, `Privacy` is not composed at all and those paths do not exist.
+Mounting it in `builder` rather than in `build` is what makes it survive a
+wrapper venture — a wrapper calls the same method, so it inherits the routes
+with the instance's configuration, and one that clears the flag does not get
+them.
+
+The configuration keeps a **bool, never the secret** (`privacy_provider`). The
+value is a binding secret the config does not need and must not hold: a
+`Debug` of the struct says whether the feature is on and nothing about the
+key, and the module re-reads the value itself at request time — which is what
+makes rotation a config push rather than a redeploy.
+
+**What one `erase/apply` removes from an auth deployment**, in one atomic
+batch and then verified row by row:
+
+- `credentials` — the password hashes and the passkeys
+- `sessions` — every sign-in still valid
+- `single_use_tokens` — one-time links and codes, and **refresh tokens**: there
+  is no refresh-token table, a refresh token is a `single_use_tokens` row of
+  kind `refresh_token` whose payload names the session, and only its SHA-256
+  is stored
+- `identities` — every way to sign in, every kind, including the `import`
+  identities CF05 pre-links
+- `users` — the account row itself, erased last among the tables it parents
+
+`deletion_jobs` is **retained**, with the reason the declaration gives: a
+deletion request and what was done about it is the record that the request was
+honoured, and erasing it would destroy the only evidence the erasure happened
+while breaking the status page the person is sent to.
+
+A later sign-in with that subject fails, refused the same way a wrong password
+is. `crates/auth-worker/tests/privacy_provider.rs` drives the whole property
+through HTTP rather than by counting rows — login succeeds before the erasure,
+is refused after, another account keeps its own session throughout — because a
+row count would pass while the login path kept working off some other table.
+
+**The subject is the harness subject id.** Every `auth-core` declaration keys
+on `users.id`, and that is what the protocol's `subject` means. It is *not* the
+identity provider's own id for the person, which is the value Google, Apple and
+Meta actually send: an account provider holding only
+`google-subject-alice-0001` is answered `200 {"applied": true}` while erasing
+nothing. Resolving a provider's id to an account is the `identities` join
+`auth-meta`'s deletion-job drain already performs, not this route's. That gap
+is pinned by an assertion of what happens today, so a change that starts
+resolving provider ids fails a test and gets a decision rather than passing
+silently.

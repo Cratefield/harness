@@ -70,6 +70,9 @@ pub struct HttpProvider {
     secret_env: Option<String>,
     timeout: Duration,
     max_response_bytes: usize,
+    /// Whether this provider holds the **identity** — the account row itself,
+    /// the record everything else is keyed on. See [`HttpProvider::account`].
+    account: bool,
 }
 
 impl HttpProvider {
@@ -83,6 +86,7 @@ impl HttpProvider {
             secret_env: None,
             timeout: DEFAULT_TIMEOUT,
             max_response_bytes: DEFAULT_MAX_RESPONSE_BYTES,
+            account: false,
         }
     }
 
@@ -107,6 +111,34 @@ impl HttpProvider {
     #[must_use]
     pub fn max_response_bytes(mut self, max_response_bytes: usize) -> Self {
         self.max_response_bytes = max_response_bytes;
+        self
+    }
+
+    /// Marks this provider as the one holding the **identity itself** — the
+    /// accounts table, the CRM's contact record, the identity provider the
+    /// others key on.
+    ///
+    /// **Why it must be erased last.** Erasure identifies its subject by a
+    /// value (`acct-1`). Every provider after the account provider is reached
+    /// *through* that value, and the provider that holds the identity can
+    /// delete it. Called in registration order, a CRM holding only
+    /// `account_id` might be asked to erase after the accounts table is
+    /// already gone — and a row keyed on a subject the calling deployment no
+    /// longer holds an identifier for cannot be found, let alone erased. The
+    /// row survives and the erasure reports itself complete.
+    ///
+    /// So marked providers sort after every unmarked one, in all three loops
+    /// ([`in_erasure_order`]): export, plan and apply. Within each group the
+    /// registration order is kept, so the answer is stable and a reader can
+    /// see the sequence a build produced rather than a sort's opinion of it.
+    ///
+    /// A build is expected to mark **at most one** provider this way — the
+    /// account is one record however many systems mirror it — but nothing
+    /// breaks if it marks several: they go last, in the order they were
+    /// registered.
+    #[must_use]
+    pub fn account(mut self) -> Self {
+        self.account = true;
         self
     }
 
@@ -203,6 +235,23 @@ impl HttpProvider {
         }
         Ok(response)
     }
+}
+
+/// The providers in the order every loop must call them: unmarked providers
+/// in registration order, then the [`account`](HttpProvider::account) ones,
+/// also in registration order.
+///
+/// **Stable, and shared.** All three loops — export, plan, apply — read this
+/// one answer, because the order that finds a subject's rows is the order
+/// that erases them, and an export that reads the account provider last while
+/// an apply reads it first describes a deployment that does not exist. Within
+/// each group the registration order survives, so the sequence a build
+/// produced is legible rather than re-sorted behind the reader's back.
+pub(crate) fn in_erasure_order(providers: &[HttpProvider]) -> Vec<&HttpProvider> {
+    let (mut rest, account): (Vec<_>, Vec<_>) =
+        providers.iter().partition(|provider| !provider.account);
+    rest.extend(account);
+    rest
 }
 
 /// The shared body both sides sign.
