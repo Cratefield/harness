@@ -369,8 +369,9 @@ a VAPID `401`. Catches an endpoint that is not an absolute http(s) URL, a
 
 Loads users into a running venture's `auth-core` module over its admin API:
 one JSON object per line — `external_provider`, `external_id`, `email`,
-`email_verified`, and optionally `password_hash`, `created_at`, `locale` —
-blank lines skipped. The objects are passed through unchanged and sent to
+`email_verified`, and optionally `password_hash`, `created_at`, `locale`,
+`identities` (`[{provider, subject}]`, the OIDC links to record) — blank
+lines skipped. The objects are passed through unchanged and sent to
 `POST <target>/v1/auth-core/admin/users/import` in batches of `--batch-size`
 (default 500, max 1000), behind `Authorization: Bearer <ADMIN_TOKEN>`: the
 token is read from the environment variable `--admin-token-env` names, never

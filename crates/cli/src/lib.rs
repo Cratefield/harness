@@ -33,6 +33,7 @@ mod collect;
 pub mod data;
 pub mod doctor;
 pub mod import;
+pub mod import_users;
 pub mod lint;
 mod lock;
 pub mod push;
@@ -465,6 +466,52 @@ enum SupabaseCommand {
     Plan {
         #[command(flatten)]
         args: SupabaseRunArgs,
+    },
+    /// Moves the project's auth users into a running venture's `auth-core`
+    /// (issue #659, step 2): reads `auth.users` and `auth.identities`
+    /// read-only, sends each account's address, verified flag, bcrypt hash
+    /// and OIDC links to the admin import, and (with `--apply`) records the
+    /// source-to-account mapping the data step rewrites references through.
+    /// A dry run unless `--apply`. The network leg needs the
+    /// `import-supabase` feature.
+    Users {
+        /// The database URL of a read-only role. Prefer the
+        /// `SUPABASE_DB_URL` environment variable: a flag lands in the
+        /// shell history and the process list.
+        #[arg(long, value_name = "URL")]
+        db_url: Option<String>,
+        /// The venture's base URL, e.g. `https://venture.example`.
+        #[arg(long, value_name = "URL")]
+        target: String,
+        /// The environment variable holding the target's `ADMIN_TOKEN`.
+        /// Never printed.
+        #[arg(long, value_name = "VAR")]
+        admin_token_env: String,
+        /// The environment variable holding the *target* database URL (the
+        /// harness Postgres, where `import_supabase_users` lives).
+        /// Required with `--apply`.
+        #[arg(long, value_name = "VAR")]
+        map_db_url_env: Option<String>,
+        /// A Supabase OAuth provider configured on the deployment
+        /// (`google`, `apple`, `facebook`), repeatable: only these
+        /// identities are linked. An unlisted one is reported unmapped and
+        /// signs in by magic link.
+        #[arg(long, value_name = "NAME")]
+        oidc_provider: Vec<String>,
+        /// Users per request (default 500, max 1000).
+        #[arg(long, default_value_t = auth_import::DEFAULT_BATCH_SIZE, value_name = "N")]
+        batch_size: usize,
+        /// Let the server merge a user into an existing account that
+        /// shares the email, instead of reporting a conflict.
+        #[arg(long)]
+        merge_by_email: bool,
+        /// Actually write: import the users and record the mapping. Without
+        /// it the run is a dry run.
+        #[arg(long)]
+        apply: bool,
+        /// Where the JSON report goes (default stdout).
+        #[arg(long, value_name = "PATH")]
+        report: Option<PathBuf>,
     },
 }
 
@@ -923,6 +970,27 @@ fn run_import(command: &ImportCommand) -> Result<(), String> {
             out: out.clone(),
             force: *force,
             dispositions: dispositions.clone(),
+        }),
+        Some(SupabaseCommand::Users {
+            db_url,
+            target,
+            admin_token_env,
+            map_db_url_env,
+            oidc_provider,
+            batch_size,
+            merge_by_email,
+            apply,
+            report,
+        }) => import_users::run(&import_users::UsersArgs {
+            db_url: db_url.clone(),
+            target: target.clone(),
+            admin_token_env: admin_token_env.clone(),
+            map_db_url_env: map_db_url_env.clone(),
+            oidc_providers: oidc_provider.clone(),
+            batch_size: *batch_size,
+            merge_by_email: *merge_by_email,
+            apply: *apply,
+            report: report.clone(),
         }),
     }
 }

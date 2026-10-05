@@ -154,22 +154,8 @@ fn resolve(
     management_token: Option<&str>,
     config: &dyn Config,
 ) -> Result<Credentials, String> {
-    let mut notes = Vec::new();
-    let db_url = match db_url {
-        Some(url) => {
-            notes.push(format!(
-                "note: --db-url puts the password in your shell history and the process list; \
-                 prefer {DB_URL_VAR}"
-            ));
-            url.to_owned()
-        }
-        None => config.get(DB_URL_VAR).ok_or_else(|| {
-            format!(
-                "no database URL: set {DB_URL_VAR} to the read-only role's connection string \
-                 (docs/import/supabase.md), or pass --db-url. fz never prompts"
-            )
-        })?,
-    };
+    let (db_url, note) = source_db_url(db_url, config)?;
+    let mut notes = note.into_iter().collect::<Vec<_>>();
     let management_token = match management_token {
         Some(token) => {
             notes.push(format!(
@@ -181,10 +167,44 @@ fn resolve(
         None => config.get(ACCESS_TOKEN_VAR),
     };
     Ok(Credentials {
-        db_url: Secret(zeroize::Zeroizing::new(db_url)),
+        db_url,
         management_token: management_token.map(|token| Secret(zeroize::Zeroizing::new(token))),
         notes,
     })
+}
+
+/// Resolves the source database URL from `--db-url`, then [`DB_URL_VAR`] in
+/// `config`. Never prompts. Shared by `inspect` and `fz import supabase
+/// users` (#659), which read the same source through the same variable.
+///
+/// Returns the note a flag earns, if any: a flag is in the shell history
+/// and the process list.
+///
+/// # Errors
+///
+/// A refusal naming [`DB_URL_VAR`] when no URL was given either way.
+pub fn source_db_url(
+    db_url: Option<&str>,
+    config: &dyn Config,
+) -> Result<(Secret, Option<String>), String> {
+    match db_url {
+        Some(url) => Ok((
+            Secret(zeroize::Zeroizing::new(url.to_owned())),
+            Some(format!(
+                "note: --db-url puts the password in your shell history and the process list; \
+                 prefer {DB_URL_VAR}"
+            )),
+        )),
+        None => config.get(DB_URL_VAR).map_or_else(
+            || {
+                Err(format!(
+                    "no database URL: set {DB_URL_VAR} to the read-only role's connection string \
+                     (docs/import/supabase.md), or pass --db-url. fz never prompts"
+                ))
+            },
+            |url| Ok((Secret(zeroize::Zeroizing::new(url)), None)),
+        ),
+    }
 }
 
 /// Runs the command: inspects, then writes the report to `--out` or

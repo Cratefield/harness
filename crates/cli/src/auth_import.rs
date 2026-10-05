@@ -113,13 +113,15 @@ impl ImportOptions {
 /// One user's verdict, as the server reports it. The field set is the
 /// report's whole contract, and it is deliberately narrower than the
 /// request: no email, no password hash.
+// `pub(crate)`: `fz import supabase users` sends the same contract
+// through `send_batch` and reports these rows (issue #659).
 #[derive(Debug, Serialize, Deserialize)]
-struct ResultRow {
-    external_provider: String,
-    external_id: String,
-    status: String,
-    sub: Option<String>,
-    reason: Option<String>,
+pub(crate) struct ResultRow {
+    pub(crate) external_provider: String,
+    pub(crate) external_id: String,
+    pub(crate) status: String,
+    pub(crate) sub: Option<String>,
+    pub(crate) reason: Option<String>,
 }
 
 /// The server's reply to one batch.
@@ -229,7 +231,7 @@ fn load_users(path: &Path) -> Result<Vec<Value>, String> {
 /// The URL a batch is sent to: the base URL with any trailing slash
 /// removed, then [`IMPORT_PATH`].
 #[cfg(any(feature = "auth-import", test))]
-fn import_url(target: &str) -> String {
+pub(crate) fn import_url(target: &str) -> String {
     format!("{}{IMPORT_PATH}", target.trim_end_matches('/'))
 }
 
@@ -244,34 +246,50 @@ async fn import_all(
     let dry_run = options.dry_run();
     let mut results = Vec::with_capacity(users.len());
     for batch in users.chunks(options.batch_size) {
-        results.extend(send_batch(http, &url, options, dry_run, batch).await?);
+        results.extend(
+            send_batch(
+                http,
+                &url,
+                &options.admin_token,
+                options.merge_by_email,
+                dry_run,
+                batch,
+            )
+            .await?,
+        );
     }
     Ok(Outcome { dry_run, results })
 }
 
 /// Sends one batch and returns its results. The server answers one result
 /// per user in request order.
+///
+/// The shared seam: `fz auth import` passes an [`ImportOptions`]'s pieces,
+/// and `fz import supabase users` (issue #659) passes its own, so the one
+/// HTTP path — headers, problem detail, result-count check — is written
+/// once.
 #[cfg(any(feature = "auth-import", test))]
-async fn send_batch(
+pub(crate) async fn send_batch(
     http: &Arc<dyn HttpClient>,
     url: &str,
-    options: &ImportOptions,
+    admin_token: &str,
+    merge_by_email: bool,
     dry_run: bool,
     users: &[Value],
 ) -> Result<Vec<ResultRow>, String> {
     let uri = url
         .parse::<http::Uri>()
-        .map_err(|_| format!("`{}` is not a valid URL", options.target))?;
+        .map_err(|_| format!("`{url}` is not a valid URL"))?;
     let body = serde_json::to_vec(&ImportRequest {
         dry_run,
-        merge_by_email: options.merge_by_email,
+        merge_by_email,
         users,
     })
     .map_err(|err| format!("cannot encode the import request: {err}"))?;
     // The header value is built without echoing either the token or the
     // builder's error: a malformed token must not reach a terminal.
-    let authorization = http::HeaderValue::from_str(&format!("Bearer {}", options.admin_token))
-        .map_err(|_| {
+    let authorization =
+        http::HeaderValue::from_str(&format!("Bearer {admin_token}")).map_err(|_| {
             "the environment variable `--admin-token-env` named does not hold a value usable as \
              an `Authorization` header"
                 .to_owned()
@@ -381,7 +399,7 @@ fn import_dispatch(options: &ImportOptions, users: &[Value]) -> Result<Outcome, 
 /// uses (issue #184), so the import goes through the client the runtime
 /// uses rather than one written for the occasion.
 #[cfg(feature = "auth-import")]
-fn native_stack() -> (Arc<dyn HttpClient>, Arc<dyn cratefield_core::Clock>) {
+pub(crate) fn native_stack() -> (Arc<dyn HttpClient>, Arc<dyn cratefield_core::Clock>) {
     let clock: Arc<dyn cratefield_core::Clock> = Arc::new(cratefield_runtime_native::TokioClock);
     let http: Arc<dyn HttpClient> = Arc::new(cratefield_core::BoundedHttpClient::new(
         Arc::new(cratefield_runtime_native::ReqwestClient::new()),

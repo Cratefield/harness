@@ -17,6 +17,12 @@
 //! That row is the idempotency key: a second run of the same import finds
 //! it and reports `unchanged`, writing nothing.
 //!
+//! A user may also carry an optional `identities` list — OIDC links the
+//! source already holds (issue #659) — written as `identities` rows with the
+//! provider slug verbatim, so a later Google/Apple/Meta sign-in finds the
+//! account. Linking a subject already owned by another account is refused
+//! with `conflict`/`identity-taken`.
+//!
 //! The password verifier is stored verbatim, so a person signs in with the
 //! password they already had and is upgraded to argon2id on that first
 //! login (the login path in `auth-password` does the rehash). A hash this
@@ -59,8 +65,8 @@ use crate::LegacyHashes;
 use crate::ModuleState;
 use crate::secrets::{BCRYPT_MAX_COST, bcrypt_cost, is_argon2id_phc};
 use crate::store::{
-    self, CREDENTIAL_PASSWORD, CredentialRow, IdentityRow, PROVIDER_IMPORT, PROVIDER_PASSWORD,
-    Redacted, STATUS_ACTIVE, UserRow,
+    self, CREDENTIAL_PASSWORD, CredentialRow, IdentityRow, PROVIDER_APPLE, PROVIDER_GOOGLE,
+    PROVIDER_IMPORT, PROVIDER_META, PROVIDER_PASSWORD, Redacted, STATUS_ACTIVE, UserRow,
 };
 
 /// Users one request may carry. Above this the import is refused whole, so
@@ -133,6 +139,20 @@ struct ImportUser {
     email_verified: bool,
     password_hash: Option<String>,
     created_at: Option<String>,
+    /// OAuth links the source already holds (issue #659). Absent from the
+    /// request means none, so a caller that never sends the field is
+    /// unaffected.
+    #[serde(default)]
+    identities: Vec<ImportIdentity>,
+}
+
+/// One OIDC link to pre-attach to an imported account. `provider` is one of
+/// auth-core's OIDC slugs and `subject` the OIDC `sub`, stored verbatim so a
+/// later provider sign-in finds the row.
+#[derive(Deserialize)]
+struct ImportIdentity {
+    provider: String,
+    subject: String,
 }
 
 /// One user's verdict.
@@ -150,6 +170,31 @@ impl Verdict {
             reason: Some(reason),
         }
     }
+
+    /// A user refused whole because one of its OIDC links is already
+    /// somebody else's.
+    fn identity_taken() -> Self {
+        Self {
+            status: "conflict",
+            sub: None,
+            reason: Some("identity-taken"),
+        }
+    }
+}
+
+/// What this request has already accounted for, so an earlier row owns its
+/// address — and the OIDC subjects it claimed — even in a dry run, when
+/// nothing has been written to find.
+#[derive(Default)]
+struct Claimed {
+    /// Normalised address -> the account's id, or `None` when this request
+    /// would have created it and is only dry-running.
+    emails: HashMap<String, Option<String>>,
+    /// `(provider, subject)` -> the normalised address of the account that
+    /// claimed it. Two rows share an account exactly when they share an
+    /// address, so a second claim from a different address is
+    /// `identity-taken`.
+    identities: HashMap<(String, String), String>,
 }
 
 /// `POST /admin/users/import`.
@@ -189,10 +234,10 @@ async fn import_users(
     };
     let now = crate::clients::now_iso(&*clock);
 
-    let mut owned: HashMap<String, Option<String>> = HashMap::new();
+    let mut claimed = Claimed::default();
     let mut results = Vec::with_capacity(body.users.len());
     for user in &body.users {
-        let verdict = import_one(&*db, &*id_gen, legacy, &body, user, &now, &mut owned).await?;
+        let verdict = import_one(&*db, &*id_gen, legacy, &body, user, &now, &mut claimed).await?;
         results.push(json!({
             "external_provider": user.external_provider,
             "external_id": user.external_id,
@@ -216,10 +261,10 @@ async fn import_users(
     .into_response())
 }
 
-/// Validates one user and, unless this is a dry run, applies it. `owned`
-/// records the normalised address of every user this request has already
-/// accounted for, so an earlier row in the same request owns its email
-/// even in a dry run, when nothing has been written to find.
+/// Validates one user and, unless this is a dry run, applies it. `claimed`
+/// records the address of every user this request has already accounted for
+/// — and the OIDC subjects they claimed — so an earlier row owns them even
+/// in a dry run, when nothing has been written to find.
 async fn import_one(
     db: &dyn Database,
     id_gen: &dyn IdGen,
@@ -227,7 +272,7 @@ async fn import_one(
     body: &ImportBody,
     user: &ImportUser,
     now: &str,
-    owned: &mut HashMap<String, Option<String>>,
+    claimed: &mut Claimed,
 ) -> Result<Verdict, Problem> {
     if !valid_provider(&user.external_provider) {
         return Ok(Verdict::invalid("invalid-provider"));
@@ -251,6 +296,16 @@ async fn import_one(
     {
         return Ok(Verdict::invalid(reason));
     }
+    // Identities are validated here, before any write, like every other
+    // field: a run that will be refused should be refused whole.
+    for identity in &user.identities {
+        if !valid_identity_provider(&identity.provider) {
+            return Ok(Verdict::invalid("unsupported-identity-provider"));
+        }
+        if !valid_external_id(&identity.subject) {
+            return Ok(Verdict::invalid("invalid-identity-subject"));
+        }
+    }
 
     let subject = format!("{}:{}", user.external_provider, user.external_id);
     // The import identity is the idempotency key: seen before, this user is
@@ -265,15 +320,7 @@ async fn import_one(
         });
     }
 
-    // Who owns this address: an earlier row in this request, or an account
-    // the store already holds. `Some(sub)` is the owner's id, or `None`
-    // when this request would have created it and is only dry-running.
-    let claim: Option<Option<String>> = match owned.get(&email) {
-        Some(sub) => Some(sub.clone()),
-        None => store::user_by_primary_email(db, &email)
-            .await?
-            .map(|row| Some(row.id)),
-    };
+    let claim = email_claim(db, claimed, &email).await?;
 
     if let Some(sub) = claim {
         if !body.merge_by_email {
@@ -283,6 +330,20 @@ async fn import_one(
                 reason: Some("email-exists"),
             });
         }
+        // An identity already linked to somebody else refuses the user
+        // whole, before the account is touched: taking it would strand its
+        // owner, and a half-written user is worse than a refused one.
+        let Some(pending) = linkable_identities(
+            db,
+            sub.as_deref(),
+            &user.identities,
+            &claimed.identities,
+            &email,
+        )
+        .await?
+        else {
+            return Ok(Verdict::identity_taken());
+        };
         // Merged into the account that owns the address. The account's
         // own row is left alone — no email, no timestamp, and above all
         // no existing password credential is overwritten.
@@ -291,27 +352,71 @@ async fn import_one(
         {
             attach_import_identity(db, id_gen, user_id, &subject, user, &email, now).await?;
             attach_password_if_absent(db, id_gen, user_id, user, &email, now).await?;
+            attach_identities(db, id_gen, user_id, &pending, user, &email, now).await?;
         }
-        owned.insert(email, sub.clone());
+        claimed.emails.insert(email.clone(), sub.clone());
+        claim_identities(&mut claimed.identities, &pending, &email);
         Ok(Verdict {
             status: "merged",
             sub,
             reason: None,
         })
     } else {
+        // A new account's ids are unknown until it exists, so any live
+        // `(provider, subject)` belongs to a different user and is a
+        // conflict; the check runs before the user is written.
+        let Some(pending) =
+            linkable_identities(db, None, &user.identities, &claimed.identities, &email).await?
+        else {
+            return Ok(Verdict::identity_taken());
+        };
         let sub = if body.dry_run {
             None
         } else {
             let user_id = id_gen.ulid();
             create_imported_user(db, id_gen, &user_id, user, &email, &created_at, now).await?;
+            attach_identities(db, id_gen, &user_id, &pending, user, &email, now).await?;
             Some(user_id)
         };
-        owned.insert(email, sub.clone());
+        claimed.emails.insert(email.clone(), sub.clone());
+        claim_identities(&mut claimed.identities, &pending, &email);
         Ok(Verdict {
             status: "created",
             sub,
             reason: None,
         })
+    }
+}
+
+/// Who owns `email`: an earlier row in this request, or an account the
+/// store already holds. `Some(sub)` is the owner's id, or `None` when this
+/// request would have created it and is only dry-running.
+async fn email_claim(
+    db: &dyn Database,
+    claimed: &Claimed,
+    email: &str,
+) -> Result<Option<Option<String>>, Problem> {
+    match claimed.emails.get(email) {
+        Some(sub) => Ok(Some(sub.clone())),
+        None => Ok(store::user_by_primary_email(db, email)
+            .await?
+            .map(|row| Some(row.id))),
+    }
+}
+
+/// Records that `email`'s account claimed each free OIDC link, so a later
+/// row in the same request sees the subject taken even when nothing was
+/// written (a dry run).
+fn claim_identities(
+    claimed: &mut HashMap<(String, String), String>,
+    pending: &[&ImportIdentity],
+    email: &str,
+) {
+    for identity in pending {
+        claimed.insert(
+            (identity.provider.clone(), identity.subject.clone()),
+            email.to_owned(),
+        );
     }
 }
 
@@ -394,6 +499,77 @@ async fn attach_import_identity(
         },
     )
     .await?;
+    Ok(())
+}
+
+/// The identities of `identities` free to link to `target` (the existing
+/// account's id, or `None` for a user about to be created), so a caller can
+/// check a whole user before writing any of it. `None` means one of them is
+/// already linked to a different user — a conflict. Entries already linked
+/// to `target` itself are omitted, so a merge does not re-insert them.
+///
+/// The store holds what a previous request wrote; `claimed` holds what an
+/// earlier row in *this* request claimed, so a dry run — which writes
+/// nothing — still refuses a subject a prior row in the same request owns.
+/// An entry claimed by `email` itself is this account's own link.
+async fn linkable_identities<'a>(
+    db: &dyn Database,
+    target: Option<&str>,
+    identities: &'a [ImportIdentity],
+    claimed: &HashMap<(String, String), String>,
+    email: &str,
+) -> Result<Option<Vec<&'a ImportIdentity>>, Problem> {
+    let mut free = Vec::with_capacity(identities.len());
+    for identity in identities {
+        match store::identity_by_provider_subject(db, &identity.provider, &identity.subject).await?
+        {
+            // Already this account's link: a no-op, not a duplicate insert.
+            Some(existing) if target == Some(existing.user_id.as_str()) => {}
+            Some(_) => return Ok(None),
+            None => {
+                let key = (identity.provider.clone(), identity.subject.clone());
+                match claimed.get(&key) {
+                    // An earlier row in this request claimed it for the same
+                    // account: a no-op, exactly as a re-link would be.
+                    Some(owner) if owner == email => {}
+                    Some(_) => return Ok(None),
+                    None => free.push(identity),
+                }
+            }
+        }
+    }
+    Ok(Some(free))
+}
+
+/// Writes one `identities` row per free OIDC link, carrying the same email
+/// and verified flag as the account and storing the provider subject
+/// verbatim, exactly as a real provider sign-in would have.
+async fn attach_identities(
+    db: &dyn Database,
+    id_gen: &dyn IdGen,
+    user_id: &str,
+    identities: &[&ImportIdentity],
+    user: &ImportUser,
+    email: &str,
+    now: &str,
+) -> Result<(), Problem> {
+    for identity in identities {
+        store::insert_identity(
+            db,
+            &IdentityRow {
+                id: id_gen.ulid(),
+                user_id: user_id.to_owned(),
+                provider: identity.provider.clone(),
+                provider_subject: identity.subject.clone(),
+                email: Some(email.to_owned()),
+                email_verified: user.email_verified,
+                name_at_link: None,
+                created_at: now.to_owned(),
+                last_login_at: None,
+            },
+        )
+        .await?;
+    }
     Ok(())
 }
 
@@ -507,6 +683,15 @@ fn valid_provider(provider: &str) -> bool {
 /// restricted, so the split on the first `:` stays unambiguous.
 fn valid_external_id(id: &str) -> bool {
     !id.is_empty() && id.len() <= MAX_EXTERNAL_ID_BYTES && !id.chars().any(char::is_control)
+}
+
+/// The OIDC slugs an imported link may name (issue #659): the ones the
+/// `identities.provider` CHECK admits besides the crate's own rows. The
+/// session-provider slugs (`password`, `magic_link`, `passkey`, `import`)
+/// are deliberately not offered — an import states an OIDC subject, not a
+/// way in.
+fn valid_identity_provider(provider: &str) -> bool {
+    matches!(provider, PROVIDER_GOOGLE | PROVIDER_APPLE | PROVIDER_META)
 }
 
 /// The reason a hash may not be stored, or `None` when it may. The order

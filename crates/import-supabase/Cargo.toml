@@ -54,6 +54,14 @@ sqlx = { version = "0.8.6", default-features = false, features = [
 # Postgres test in the workspace uses. Path-only: a dev-dependency is
 # stripped from the packaged manifest (see the root manifest).
 cratefield-adapter-postgres = { path = "../adapter-postgres" }
+# The end-to-end sign-in test (`tests/sign_in.rs`): the kit's `TestHarness`
+# over the in-memory target, and the two auth modules it drives an import
+# and a login through. Path-only, like the pair above and the auth crates'
+# own dev-dependencies — a dev-dependency is stripped from the packaged
+# manifest.
+cratefield-testing = { path = "../testing" }
+cratefield-auth-core = { path = "../auth-core" }
+cratefield-auth-password = { path = "../auth-password" }
 tokio = { workspace = true, features = ["sync"] }
 async-trait = { workspace = true }
 insta = { workspace = true }

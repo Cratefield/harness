@@ -89,6 +89,19 @@ fn user_with_hash(provider: &str, id: &str, email: &str, hash: &str) -> Value {
     value
 }
 
+/// A user carrying one pre-linked OIDC identity (issue #659).
+fn user_with_identity(
+    provider: &str,
+    id: &str,
+    email: &str,
+    oidc_provider: &str,
+    subject: &str,
+) -> Value {
+    let mut value = user(provider, id, email);
+    value["identities"] = json!([{ "provider": oidc_provider, "subject": subject }]);
+    value
+}
+
 async fn import(kit: &TestHarness, request: &str) -> Value {
     let (status, raw) = post(kit, IMPORT, Some(ADMIN), request).await;
     assert_eq!(status, StatusCode::OK, "{raw}");
@@ -489,6 +502,173 @@ async fn import_routes_without_a_token_are_unauthorized() {
             "https://test.example/problems/admin-unauthorized"
         );
     }
+}
+
+#[pollster::test]
+async fn an_imported_google_identity_lands_and_a_re_run_changes_nothing() {
+    let kit = kit(vec![]);
+    let request = body(
+        false,
+        false,
+        vec![user_with_identity(
+            "supabase", "1", "a@b.co", "google", "sub-1",
+        )],
+    );
+
+    let first = import(&kit, &request).await;
+    assert_eq!(
+        results(&first)[0]["status"].as_str(),
+        Some("created"),
+        "{first}"
+    );
+    let sub = results(&first)[0]["sub"].as_str().expect("sub").to_owned();
+    let found = kit
+        .db
+        .query(&Statement::new(
+            "SELECT user_id, provider_subject FROM identities WHERE provider = 'google'".to_owned(),
+        ))
+        .await
+        .expect("query");
+    assert_eq!(found.rows.len(), 1, "one google identity was written");
+    let row = found.first().expect("row");
+    assert_eq!(row.get::<String>("user_id").as_deref(), Some(sub.as_str()));
+    assert_eq!(
+        row.get::<String>("provider_subject").as_deref(),
+        Some("sub-1"),
+        "the OIDC sub is stored verbatim"
+    );
+
+    let second = import(&kit, &request).await;
+    assert_eq!(
+        results(&second)[0]["status"].as_str(),
+        Some("unchanged"),
+        "{second}"
+    );
+    assert_eq!(rows(&kit, "identities").await, 2, "a re-run adds no row");
+}
+
+#[pollster::test]
+async fn an_unsupported_identity_provider_is_refused() {
+    let kit = kit(vec![]);
+    let doc = import(
+        &kit,
+        &body(
+            false,
+            false,
+            vec![user_with_identity("supabase", "1", "a@b.co", "github", "1")],
+        ),
+    )
+    .await;
+    assert_eq!(
+        results(&doc)[0]["status"].as_str(),
+        Some("invalid"),
+        "{doc}"
+    );
+    assert_eq!(
+        results(&doc)[0]["reason"].as_str(),
+        Some("unsupported-identity-provider")
+    );
+    assert_eq!(rows(&kit, "users").await, 0, "nothing was written");
+    assert_eq!(rows(&kit, "identities").await, 0);
+}
+
+#[pollster::test]
+async fn a_google_subject_already_linked_to_another_user_conflicts() {
+    let kit = kit(vec![]);
+    let first = import(
+        &kit,
+        &body(
+            false,
+            false,
+            vec![user_with_identity(
+                "supabase", "1", "a@b.co", "google", "sub-x",
+            )],
+        ),
+    )
+    .await;
+    assert_eq!(results(&first)[0]["status"].as_str(), Some("created"));
+
+    // A different account claiming the same subject is refused whole: the
+    // second user and its import identity are not written.
+    let second = import(
+        &kit,
+        &body(
+            false,
+            false,
+            vec![user_with_identity(
+                "supabase", "2", "c@d.co", "google", "sub-x",
+            )],
+        ),
+    )
+    .await;
+    assert_eq!(
+        results(&second)[0]["status"].as_str(),
+        Some("conflict"),
+        "{second}"
+    );
+    assert_eq!(
+        results(&second)[0]["reason"].as_str(),
+        Some("identity-taken")
+    );
+    assert_eq!(rows(&kit, "users").await, 1, "only the first user exists");
+    assert_eq!(
+        rows(&kit, "identities").await,
+        2,
+        "the conflicting user wrote nothing"
+    );
+
+    // The same subject on the account that already owns it is a no-op, not a
+    // duplicate insert.
+    let repeat = import(
+        &kit,
+        &body(
+            false,
+            true,
+            vec![user_with_identity(
+                "supabase", "3", "a@b.co", "google", "sub-x",
+            )],
+        ),
+    )
+    .await;
+    assert_eq!(
+        results(&repeat)[0]["status"].as_str(),
+        Some("merged"),
+        "{repeat}"
+    );
+    assert_eq!(rows(&kit, "identities").await, 3, "no duplicate identity");
+
+    // Two rows in one dry run claiming the same subject: the first would
+    // create, the second is refused — the same verdict applying would give,
+    // though the dry run writes nothing to find.
+    let dry = import(
+        &kit,
+        &body(
+            true,
+            false,
+            vec![
+                user_with_identity("supabase", "4", "e@f.co", "google", "sub-dry"),
+                user_with_identity("supabase", "5", "g@h.co", "google", "sub-dry"),
+            ],
+        ),
+    )
+    .await;
+    assert_eq!(
+        results(&dry)[0]["status"].as_str(),
+        Some("created"),
+        "{dry}"
+    );
+    assert_eq!(
+        results(&dry)[1]["status"].as_str(),
+        Some("conflict"),
+        "{dry}"
+    );
+    assert_eq!(
+        results(&dry)[1]["reason"].as_str(),
+        Some("identity-taken"),
+        "{dry}"
+    );
+    assert_eq!(rows(&kit, "users").await, 1, "the dry run wrote no user");
+    assert_eq!(rows(&kit, "identities").await, 3, "and no identity either");
 }
 
 #[pollster::test]
