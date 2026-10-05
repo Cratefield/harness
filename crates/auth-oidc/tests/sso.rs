@@ -116,9 +116,7 @@ async fn sign_in_through(kit: &support::Kit, pending: &str, connection_id: &str)
         Some(pending),
         "back to the pending authorization"
     );
-    callback
-        .cookie("__Host-session")
-        .expect("a session cookie")
+    callback.cookie("__Host-session").expect("a session cookie")
 }
 
 /// The `code` an `/authorize` with a live session redirects with.
