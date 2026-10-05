@@ -442,4 +442,116 @@ mod tests {
             .expect("referrals");
         assert_eq!(referrals, 1, "one referral, one credit");
     }
+
+    /// Issue #707: a database that confirmed entries before migration
+    /// 0004 shipped has no `waitlist_position_lock` row for its product,
+    /// so 0006's backfill never seeded the counter and the first confirm
+    /// after the upgrade assigned position 1 to a third entry — colliding
+    /// with the UNIQUE(product, position) index 0006 added and failing the
+    /// commit. 0007 gives those products the counter they should have
+    /// had.
+    #[test]
+    fn confirm_after_upgrade_continues_the_pre_0004_sequence() {
+        use crate::{
+            MIGRATION_ANONYMISABLE_ENTRY, MIGRATION_ENTRY_GENERATION, MIGRATION_INIT,
+            MIGRATION_LOCK_BACKFILL, MIGRATION_MAIL_COOLDOWN, MIGRATION_POSITION_COUNTER,
+            MIGRATION_POSITION_LOCK,
+        };
+
+        let module = crate::Waitlist::new().products(["kontinuum"]);
+        let db = cratefield_adapter_sqlite::SqliteDatabase::in_memory().expect("db");
+
+        // 0001 to 0004: the schema a database that predates the lock table
+        // actually has. Entries are inserted by raw SQL because there is no
+        // code path that can create them here without also creating the
+        // lock row the bug is about.
+        db.apply_migrations(
+            module.name(),
+            &[
+                MIGRATION_INIT,
+                MIGRATION_ENTRY_GENERATION,
+                MIGRATION_MAIL_COOLDOWN,
+                MIGRATION_POSITION_LOCK,
+            ],
+        )
+        .expect("migrate to 0004");
+
+        let seed = |id: &str, email: &str, status: &str, position: Option<i64>| {
+            let confirmed_at = (position.is_some()).then_some("2026-01-01T00:00:00Z");
+            let stmt = Statement::with_values(
+                "INSERT INTO waitlist_entries \
+                 (id, email, email_normalized, product, status, position, \
+                  referrals, created_at, confirmed_at, generation) \
+                 VALUES (?, ?, ?, 'kontinuum', ?, ?, 0, '2026-01-01T00:00:00Z', ?, 1)",
+                vec![
+                    id.into(),
+                    email.into(),
+                    email.into(),
+                    status.into(),
+                    position.into(),
+                    confirmed_at.into(),
+                ],
+            );
+            pollster::block_on(db.execute(&stmt)).expect("insert");
+        };
+        seed("old-1", "one@example.com", "confirmed", Some(1));
+        seed("old-2", "two@example.com", "confirmed", Some(2));
+
+        let locks = pollster::block_on(db.query(&Statement::new(
+            "SELECT product FROM waitlist_position_lock",
+        )))
+        .expect("select");
+        assert!(
+            locks.is_empty(),
+            "a pre-0004 database has confirmed positions and no lock row"
+        );
+
+        db.apply_migrations(
+            module.name(),
+            &[
+                MIGRATION_ANONYMISABLE_ENTRY,
+                MIGRATION_POSITION_COUNTER,
+                MIGRATION_LOCK_BACKFILL,
+            ],
+        )
+        .expect("migrate to 0007");
+
+        seed("newcomer", "three@example.com", "pending", None);
+
+        let snapshot = pollster::block_on(find_by_id(&db, "newcomer"))
+            .expect("query")
+            .expect("row");
+        assert_eq!(snapshot.position, None, "pending entries hold no position");
+
+        let flipped = pollster::block_on(confirm_entry(
+            &db,
+            &snapshot,
+            snapshot.generation,
+            "2026-01-01T00:00:01Z",
+            "CODE1234",
+        ))
+        .expect("confirm after upgrade");
+        assert!(flipped, "a pending entry at its generation confirms");
+
+        let confirmed = pollster::block_on(find_by_id(&db, "newcomer"))
+            .expect("query")
+            .expect("row");
+        assert_eq!(
+            confirmed.position,
+            Some(3),
+            "the counter continues the pre-0004 sequence, not position 1"
+        );
+
+        let counters = pollster::block_on(db.query(&Statement::new(
+            "SELECT next_position FROM waitlist_position_lock WHERE product = 'kontinuum'",
+        )))
+        .expect("select");
+        assert_eq!(
+            counters
+                .first()
+                .and_then(|row| row.get::<i64>("next_position")),
+            Some(3),
+            "0007 seeded the counter at 2 and the confirm advanced it to 3"
+        );
+    }
 }
