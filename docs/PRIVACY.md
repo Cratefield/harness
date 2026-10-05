@@ -130,6 +130,54 @@ reporting clients actually run.
 Retention: rows whose `day` is older than `TELEMETRY_RETENTION_DAYS` (default
 180 days) go in the same scheduled purge as `telemetry_events`.
 
+### `crm_contacts` (module-crm)
+
+One person or lead, keyed on `email_normalized` so filing the same address
+twice updates one row rather than duplicating it. The column erasure matches
+is `id`, not the address: a request naming a subject reaches the rows whose
+`id` it carries.
+
+| Column | Kind | Purpose |
+|---|---|---|
+| `id` | ULID, generated | Row identity; the subject of an access request and of erasure |
+| `email`, `email_normalized` | PII (address) | The address as filed, and the trim + NFC + lowercase uniqueness key. Nullable — a contact may be filed with a name only |
+| `name`, `phone` | PII | What the venture knows about the person |
+| `locale` | label | Locale hint, as in `subscribers` |
+| `organisation_id` | id | The organization they belong to; `ON DELETE SET NULL`, so removing an organization orphans the link rather than the person |
+| `source` | label | Where the record came from |
+| `data` | JSON | Whatever structured fields the venture keeps alongside the person |
+| `created_at`, `updated_at` | timestamps | |
+| `generation` | counter | The optimistic-concurrency guard; a PATCH must carry the value it read, so a stale edit is refused rather than overwriting a newer one |
+
+### `crm_organisations` (module-crm)
+
+The companies the venture deals with — a business record rather than a
+person's. Declared `PersonalDataSet::none`, so `GET /v1/privacy/manifest`
+publishes it as retained, and **erasure does not reach these rows**: deleting
+one would take every contact linked to it with it. Review that before
+relying on it. `email` and `phone` may hold an individual's details rather
+than a shared switchboard, and a sole trader's record is a person's data in
+practice. The rest is `id`, `name`, `domain` (the natural key the upsert uses),
+`website`, `postal address`, `data`, the two timestamps and `generation`.
+
+### `crm_tags` (module-crm)
+
+The labels a venture files its records under — a name and a colour, and
+nothing that names a person. Not personal; no erasure reaches it, and a tag
+outliving every record it labelled is the point.
+
+### `crm_taggings` (module-crm)
+
+Which labels are filed against which record. `subject_id` is polymorphic
+(`subject_type` is `contact`, `organisation` or `item`), so there is no
+foreign key to match on and the declaration reaches these rows through
+`subject_via` `crm_contacts` instead: it matches a contact id in
+`subject_id` whatever the type says. That is safe only because ids are
+ULIDs no other table's row shares. These rows are erased with the contact
+they name; the tables are declared parent-first because the privacy module
+erases in reverse catalog order, and `crm_taggings` is declared last for
+exactly that reason.
+
 ## Signed links
 
 Confirm and unsubscribe links are HMAC-SHA256 tokens (ADR 0006) carrying

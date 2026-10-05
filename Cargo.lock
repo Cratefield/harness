@@ -1369,6 +1369,7 @@ dependencies = [
  "cratefield-manifest",
  "cratefield-module-changelog",
  "cratefield-module-cms",
+ "cratefield-module-crm",
  "cratefield-module-device-auth",
  "cratefield-module-email-signup",
  "cratefield-module-notifications",

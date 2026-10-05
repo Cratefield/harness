@@ -12,6 +12,38 @@ let module = Crm::new();
 Mounted at `/v1/crm`. It requires the `Db`, `IdGen` and `Clock` ports and
 declares `Auth` as optional.
 
+## Configuration
+
+None. The module reads no config keys of its own: every default is a
+constant, every route is admin-gated, and `Module::validate_config` accepts
+whatever it is given. The one key that decides whether the module is usable
+is the harness-wide `ADMIN_TOKEN`, because every route it declares is an
+admin action — with no token configured, all of them answer `401`
+(`admin-unauthorized`) rather than open.
+
+## In a venture manifest
+
+The module is a catalog slug, so a venture that wants it lists `"crm"` in
+its manifest and `fz build` wires it up:
+
+```json
+{
+  "name": "acme",
+  "host": "acme.factory0.dev",
+  "cors_origins": ["https://acme.factory0.dev"],
+  "modules": ["crm"]
+}
+```
+
+Or, by hand, through the facade (the facade crate is not a dependency of this
+one, so the snippet is not compiled):
+
+```rust,ignore
+use cratefield::crm::Crm;
+
+let module = Crm::new();
+```
+
 ## Idempotent by natural key
 
 `store::upsert_contact` keys a contact on its normalized email address, and
@@ -47,8 +79,34 @@ Everything is an admin action behind the harness `ADMIN_TOKEN` bearer:
 - `POST /v1/crm/admin/tags` creates a tag; `POST …/tags/tag` and
   `POST …/tags/untag` file a tag against a subject and take it off again.
 
+## Events
+
+| event | emitted when |
+| --- | --- |
+| `crm.contact.created` | An upsert inserted a contact. |
+| `crm.contact.updated` | An upsert matched an existing contact, a PATCH changed one, or a merge folded another into it. |
+| `crm.organisation.created` | An upsert inserted an organisation. |
+
+Nothing else emits: a delete is silent, and an organisation PATCH has no
+event because the module declares no `crm.organisation.updated` — inventing
+one per edit would be a promise no subscription list carries.
+
 ## Personal data
 
-The privacy module reads the declarations in `Module::personal_data`: a contact
-is erased with its taggings, an organisation is a business record that
-survives, and the tag table names nobody.
+The privacy module reads the declarations in `Module::personal_data`:
+
+| table | subject | kind | disposition |
+| --- | --- | --- | --- |
+| `crm_contacts` | `id` | contact | erase |
+| `crm_organisations` | — | — | retained: a business record, not a person's |
+| `crm_tags` | — | — | not personal: a name and a colour |
+| `crm_taggings` | `subject_id`, via `crm_contacts` | identifier | erase |
+
+So a contact is erased with its taggings — the tables are declared
+parent-first because the privacy module erases in reverse catalog order, and
+`crm_taggings`' polymorphic `subject_id` is matched through `crm_contacts`
+rather than a foreign key. An organisation survives: it is a business record,
+and deleting one would take every contact linked to it with it. Review that
+before relying on it — an organisation's `email` and `phone` may hold an
+individual's details rather than a switchboard, and a sole trader's record is
+a person's data in practice.

@@ -45,6 +45,13 @@ cratefield = { path = "../../crates/facade", version = "0.2", features = [
     # The organizations module (issue #652): mounted below with a staff
     # organization and a guarded admin route, through `cratefield::orgs`.
     "orgs",
+    # The CRM module (issue #572): contacts, organisations and tags, mounted
+    # below through `cratefield::crm`. It takes no settings, and every route
+    # it declares is an admin action, so with no `ADMIN_TOKEN` configured
+    # they answer 401 — which is what the wasm build and the `wrangler dev`
+    # smoke should cover: the module boots and says so rather than
+    # pretending.
+    "crm",
 ] }
 async-trait = { workspace = true }
 # The `#[durable_object]` macro expands to a `wasm_bindgen` export, so the
