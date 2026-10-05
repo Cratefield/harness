@@ -40,6 +40,9 @@ mod scheduled;
 mod scope;
 mod sidecar;
 mod signer;
+// The provider-neutral billing lifecycle (issue #593): the names are
+// generic, so the module is public and namespaced as `billing::`.
+pub mod billing;
 // The `Blob` port's presigned URLs (issue #622); pure `SigV4`, public so
 // adapters and tests share one implementation.
 pub mod sigv4;
