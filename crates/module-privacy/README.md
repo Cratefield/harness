@@ -39,6 +39,23 @@ in [docs/PRIVACY.md](../../docs/PRIVACY.md#external-providers).
   the rows again afterwards rather than trusting the statements. The subject
   comes from the token, never from the body.
 
+And, when the deployment opts in with
+`Privacy::new().serve_provider("PRIVACY_PROVIDER_SECRET")`, the other end of
+the same protocol — this deployment answering a signed caller that it is
+*itself* a system someone else holds data in:
+
+- `POST /v1/privacy/provider/export` — the same tables, rows and redactions
+  the local export renders, for one subject.
+- `POST /v1/privacy/provider/erase/plan` — per table, `delete`, `anonymise`
+  or `retain` with the reason it is kept.
+- `POST /v1/privacy/provider/erase/apply` — the erasure, atomically, verified
+  by counting what is left.
+
+The HMAC over the raw body is the authorisation on those three — a caller on
+another deployment has no account here and no admin token to present — and
+the secret is read from the config port at request time, so a deployment
+without one refuses every call rather than opening.
+
 What it can reach locally is exactly what the composed modules declared — plus
 any external providers registered on it. A module that owns a table and
 declares nothing about it is outside the routes, which is why

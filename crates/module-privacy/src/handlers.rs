@@ -170,31 +170,56 @@ async fn export(
         );
     }
 
-    let Some(db) = state.ctx.ports.db.clone() else {
-        return Err(Problem::internal().instance(&scope.request_id));
+    let tables = subject_tables(&state.ctx, subject).await.map_err(|error| {
+        tracing::error!(error = %error, "privacy export failed");
+        Problem::internal().instance(&scope.request_id)
+    })?;
+
+    let (providers, complete) = export_providers(&state, subject).await;
+
+    Ok(Json(json!({
+        "subject": subject,
+        "tables": tables,
+        // External systems holding the same subject, and whether every one
+        // answered. A deployment with none reports `[]` and `complete: true`.
+        "providers": providers,
+        "complete": complete,
+    })))
+}
+
+/// Every declared table's rows for one subject, as the export route renders
+/// them.
+///
+/// One function for both callers of "what does this deployment hold about
+/// this person": [`export`] above and the provider server
+/// ([`crate::provider_server`]), which answers the same question for a
+/// signed caller on another deployment. Two copies would be two answers, and
+/// the whole point of the catalog is that there is one.
+pub(crate) async fn subject_tables(
+    ctx: &ModuleContext,
+    subject: &str,
+) -> Result<Vec<Value>, String> {
+    let Some(db) = ctx.ports.db.clone() else {
+        return Err("no database port".to_owned());
     };
 
     let mut tables = Vec::new();
-    for entry in state.ctx.personal_data.subject_sets() {
+    for entry in ctx.personal_data.subject_sets() {
         // Unreachable through `HarnessBuilder::build`, which refuses a
         // declaration whose names are not plain identifiers. Re-checked rather
         // than assumed: the cost of being wrong is a generated statement that
         // means something else.
         let Some(statement) = select_for(entry, subject) else {
-            tracing::error!(
-                table = entry.set.table,
-                "a personal-data declaration is not safe to query"
-            );
-            return Err(Problem::internal().instance(&scope.request_id));
+            return Err(format!(
+                "declaration for `{}` is not safe to query",
+                entry.set.table
+            ));
         };
 
-        let rows = match db.query(&statement).await {
-            Ok(rows) => rows,
-            Err(err) => {
-                tracing::error!(table = entry.set.table, error = %err, "privacy export query failed");
-                return Err(Problem::internal().instance(&scope.request_id));
-            }
-        };
+        let rows = db
+            .query(&statement)
+            .await
+            .map_err(|err| format!("querying `{}` failed: {err}", entry.set.table))?;
 
         let truncated = rows.rows.len() > MAX_ROWS_PER_TABLE;
         let taken: Vec<Value> = rows
@@ -213,17 +238,7 @@ async fn export(
             "truncated": truncated,
         }));
     }
-
-    let (providers, complete) = export_providers(&state, subject).await;
-
-    Ok(Json(json!({
-        "subject": subject,
-        "tables": tables,
-        // External systems holding the same subject, and whether every one
-        // answered. A deployment with none reports `[]` and `complete: true`.
-        "providers": providers,
-        "complete": complete,
-    })))
+    Ok(tables)
 }
 
 /// Calls every registered provider's `/export` and reports each one. A
@@ -234,7 +249,7 @@ async fn export_providers(state: &PrivacyState, subject: &str) -> (Vec<Value>, b
     let request_id = provider::export_request_id(subject, unix_now());
     let mut report = Vec::new();
     let mut complete = true;
-    for provider in state.providers.iter() {
+    for provider in provider::in_erasure_order(&state.providers) {
         let result = match http_port(state) {
             Ok(http) => {
                 provider
@@ -445,7 +460,7 @@ async fn erase(
 /// holds. Nothing is erased here.
 async fn plan_providers(state: &PrivacyState, subject: &str, request_id: &str) -> Vec<Value> {
     let mut report = Vec::new();
-    for provider in state.providers.iter() {
+    for provider in provider::in_erasure_order(&state.providers) {
         let result = match http_port(state) {
             Ok(http) => {
                 provider
@@ -564,7 +579,7 @@ async fn apply_providers(
 ) -> (Vec<Value>, bool) {
     let mut report = Vec::new();
     let mut complete = true;
-    for provider in state.providers.iter() {
+    for provider in provider::in_erasure_order(&state.providers) {
         let http = match http_port(state) {
             Ok(http) => http,
             Err(error) => {

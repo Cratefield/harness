@@ -261,3 +261,34 @@ fn validate_config_matches_the_from_config_contract() {
     assert!(validate_config(&MapConfig::default()).is_err());
     assert!(validate_config(&with_required(&[])).is_ok());
 }
+
+/// Issue #656: the CF08 provider server is off unless a deployment has been
+/// issued a shared secret, and its presence is the whole switch.
+///
+/// A `bool` and never the value, which is what makes this assertable without
+/// holding a credential: the struct says whether the door is unlocked, and
+/// nothing about the key.
+#[test]
+fn the_provider_server_is_off_until_a_secret_is_set() {
+    assert!(!config(&[]).privacy_provider);
+    // Empty and whitespace are the same as absent, so a variable someone
+    // blanked out cannot leave the routes mounted with nothing to verify
+    // them against.
+    assert!(!config(&[("PRIVACY_PROVIDER_SECRET", "")]).privacy_provider);
+    assert!(!config(&[("PRIVACY_PROVIDER_SECRET", "   ")]).privacy_provider);
+    assert!(config(&[("PRIVACY_PROVIDER_SECRET", "shhh")]).privacy_provider);
+    // Never required: a deployment that has not been issued one is a normal
+    // deployment, so it must not appear in the all-or-nothing error list.
+    assert!(validate_config(&with_required(&[])).is_ok());
+}
+
+/// The read is a presence check, so the secret itself is never carried on the
+/// config — a `Debug` of a parsed instance must not print it.
+#[test]
+fn the_parsed_config_never_carries_the_secret_itself() {
+    let secret = "a-provider-secret-that-must-not-be-held";
+    let parsed = config(&[("PRIVACY_PROVIDER_SECRET", secret)]);
+    assert!(parsed.privacy_provider);
+    let debug = format!("{parsed:?}");
+    assert!(!debug.contains(secret), "the secret reached Debug: {debug}");
+}

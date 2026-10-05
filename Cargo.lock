@@ -1348,11 +1348,13 @@ dependencies = [
  "cratefield-auth-passkeys",
  "cratefield-auth-password",
  "cratefield-core",
+ "cratefield-module-privacy",
  "cratefield-runtime-cloudflare",
  "cratefield-testing",
  "getrandom 0.4.3",
  "http",
  "pollster",
+ "sea-query",
  "serde_json",
  "toml 0.8.23",
  "tower",
@@ -1972,10 +1974,12 @@ dependencies = [
 name = "cratefield-module-privacy"
 version = "0.3.0"
 dependencies = [
+ "async-trait",
  "axum",
  "bytes",
  "cratefield-core",
  "cratefield-testing",
+ "getrandom 0.4.3",
  "hex",
  "hmac 0.13.0",
  "http",

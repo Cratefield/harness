@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- *(provider server)* `Privacy::serve_provider`, so a deployment can answer the same signed protocol it calls out on: `POST /v1/privacy/provider/{export,erase/plan,erase/apply}` over this composition's own declarations, with the HMAC as the authorisation rather than `ADMIN_TOKEN`, and no routes at all where it was not opted in ([#656](https://github.com/Cratefield/harness/issues/656)).
+- `HttpProvider::account()`, marking the provider that holds the identity so it is applied last — unmarked providers in registration order, then the marked ones — in all three loops ([#656](https://github.com/Cratefield/harness/issues/656)).
+
 ## [0.3.0](https://github.com/Cratefield/harness/compare/cratefield-module-privacy-v0.2.1...cratefield-module-privacy-v0.3.0) - 2026-10-04
 
 ### Changed

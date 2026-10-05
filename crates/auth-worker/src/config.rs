@@ -24,6 +24,12 @@ use cratefield_core::{
 };
 use url::Url;
 
+/// The binding secret the CF08 account-provider server verifies its calls
+/// with (issue #656). Set on the deployment to turn the feature on; its
+/// value is never held here, only its presence — see
+/// [`AuthWorkerConfig::privacy_provider`].
+pub const PRIVACY_PROVIDER_SECRET_KEY: &str = "PRIVACY_PROVIDER_SECRET";
+
 /// Which provider the instance sends its mail through, resolved at boot
 /// from `AUTH_MAILER` and the keys present. Owlpost is the supported
 /// default; Resend stays available.
@@ -81,6 +87,21 @@ pub struct AuthWorkerConfig {
     pub mailer_kind: MailerKind,
     /// The deployment environment, from `ENV`.
     pub env: VentureEnv,
+    /// The CF08 provider server is on: `PRIVACY_PROVIDER_SECRET` is set to
+    /// a non-empty value, so this instance answers
+    /// `POST /v1/privacy/provider/{export,erase/plan,erase/apply}` for the
+    /// account provider (issue #656).
+    ///
+    /// A **bool, never the secret**. The value is a binding secret that this
+    /// crate does not need and must not hold: the `Privacy` module reads it
+    /// itself, through the config port, at request time — which is also why
+    /// rotating it needs no redeploy. A `Debug` of this struct therefore
+    /// says whether the feature is on and nothing about the key.
+    ///
+    /// Never required. Absent, empty or whitespace means the feature is off
+    /// and the routes do not exist at all, which is a smaller surface than a
+    /// mounted router answering 503.
+    pub privacy_provider: bool,
     provider: Provider,
 }
 
@@ -177,6 +198,24 @@ impl AuthWorkerConfig {
             Provider::None => MailerKind::None,
         };
 
+        // Issue #656: the CF08 provider server. Read as a **presence** and
+        // nothing more — `get` already trims and drops an empty value, so a
+        // var set to "" is off exactly as an absent one is. Deliberately
+        // never an error: this is a binding secret, and a deployment that
+        // has not been issued one yet is a normal deployment, not a
+        // misconfigured one.
+        //
+        // Read through the `Config` port rather than the `Env` binding the
+        // way `build_captcha` reads `TURNSTILE_SECRET`, because the value is
+        // not what decides anything: the module re-reads it itself at
+        // request time (which is what makes a rotation a config push rather
+        // than a redeploy), and `EnvConfig` reads secrets before vars, so a
+        // `Config`-port read reaches the same binding. Putting the *decision*
+        // on the port is what lets the composition be tested natively with
+        // a `MapConfig` — `AuthWorker::builder` composes from this struct
+        // and has no `Env` of its own.
+        let privacy_provider = get(cfg, PRIVACY_PROVIDER_SECRET_KEY).is_some();
+
         errors.into_result()?;
         let (Some(public_url), Some(venture_name)) = (public_url, venture_name) else {
             // Both are pushed as errors when missing, so this is unreachable
@@ -198,6 +237,7 @@ impl AuthWorkerConfig {
             mail_reply_to,
             mailer_kind,
             env,
+            privacy_provider,
             provider,
         })
     }

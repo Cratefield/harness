@@ -31,6 +31,12 @@ tracing = { workspace = true }
 hmac = { workspace = true }
 sha2 = { workspace = true }
 hex = { workspace = true }
+# Not otherwise called from this crate — it is here to pick getrandom's
+# `wasm_js` backend, which `ulid` (via cratefield-core) pulls in and which
+# otherwise only a leaf crate selects, so the wasm build of this crate stands
+# on its own (the same line, for the same reason, is in `module-webhooks` and
+# the adapters).
+getrandom = { workspace = true }
 
 [dev-dependencies]
 # The `postgres` feature unlocks the Postgres parity leg of the testing
@@ -39,3 +45,6 @@ hex = { workspace = true }
 cratefield-testing = { path = "../testing", features = ["postgres"] }
 pollster = { workspace = true }
 tower = { workspace = true }
+# `HttpClient` is an `async_trait`, so the in-process transport the round-trip
+# test drives the real server through has to be written with it too.
+async-trait = { workspace = true }

@@ -21,12 +21,20 @@
 //! `HARNESS_SECRET`/signing material, the custom domain on the Cloudflare
 //! account, and the first production tag. The runbook is
 //! `docs/auth/MANAGED-INSTANCES.md`.
+//!
+//! **The account provider's own door (issue #656).** When
+//! `PRIVACY_PROVIDER_SECRET` is set, this Worker is not only the place a
+//! person asks what is held about them: it is the *provider* Google, Apple
+//! and Meta call for a subject's export and erasure, over one signed HTTP
+//! contract at `POST /v1/privacy/provider/{export,erase/plan,erase/apply}`.
+//! Unset, the feature is off and those paths do not exist. See
+//! [`AuthWorker::builder`].
 
 #![forbid(unsafe_code)]
 
 pub mod config;
 
-pub use config::{AuthWorkerConfig, MailerKind, validate_config};
+pub use config::{AuthWorkerConfig, MailerKind, PRIVACY_PROVIDER_SECRET_KEY, validate_config};
 
 use std::sync::{Arc, OnceLock};
 
@@ -38,6 +46,7 @@ use auth_passkeys::Passkeys;
 use auth_password::Password;
 use cratefield_adapter_turnstile::Turnstile;
 use cratefield_core::{Harness, HarnessBuilder, Mailer, Template, Venture};
+use cratefield_module_privacy::Privacy;
 use cratefield_runtime_cloudflare::{
     Cloudflare, EnvConfig, FetchClient, WorkersClock, serve, serve_scheduled,
 };
@@ -87,6 +96,18 @@ impl AuthWorker {
     /// The composition: the venture, the magic-link and password default
     /// templates, any overrides, and the six auth modules — no runtime, so the caller (a
     /// wrapper venture, or this crate's boot path) chooses one.
+    ///
+    /// **The CF08 provider server rides on the config, not on the
+    /// deployment `Env`.** `PRIVACY_PROVIDER_SECRET` set to a non-empty
+    /// value mounts `Privacy` with its provider routes; absent, empty or
+    /// unset, `Privacy` is not composed at all and those paths do not exist
+    /// (issue #656). Mounting here rather than in `build` is what makes it
+    /// survive a wrapper venture: a wrapper calls this same method, so a
+    /// wrapper that inherits the instance's configuration inherits the
+    /// provider routes with it, and one that clears
+    /// [`config::AuthWorkerConfig::privacy_provider`] does not get them.
+    /// The secret itself is never passed here — the module names the
+    /// variable and reads it at request time.
     #[must_use]
     pub fn builder(self) -> HarnessBuilder {
         let mut builder = Harness::builder()
@@ -101,6 +122,10 @@ impl AuthWorker {
             .module(MagicLink::new())
             .module(Password::new())
             .module(Meta::new());
+        if self.config.privacy_provider {
+            builder =
+                builder.module(Privacy::new().serve_provider(config::PRIVACY_PROVIDER_SECRET_KEY));
+        }
         for (id, template) in self.templates {
             builder = builder.template(id, template);
         }

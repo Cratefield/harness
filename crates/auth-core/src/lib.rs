@@ -817,6 +817,38 @@ mod tests {
         assert!(cratefield_core::unlisted_tables(&module).is_empty());
     }
 
+    /// Every table the migrations create has a `personal_data()` entry, and
+    /// every entry names one the migrations create (issue #656).
+    ///
+    /// The other half of `tables_and_migrations_agree`, and the one that was
+    /// missing here: that test proved `tables()` and the DDL agree, which is
+    /// necessary but not sufficient. Subject access and erasure walk
+    /// `personal_data()`, so a table in `tables()` with no declaration is
+    /// outside all of them — exported by nothing, erased by nothing — while
+    /// the harness's own kit check only reports it (issue #268), never
+    /// refuses to build. `auth-magic-link` and `auth-passkeys` assert the same
+    /// pair; this is the module the rule was first found in, so it asserts it
+    /// too.
+    #[test]
+    fn every_table_the_migration_creates_is_declared_and_described() {
+        let module = AuthCore::new();
+        assert!(
+            cratefield_core::undeclared_tables(&module).is_empty(),
+            "a declared table has no `personal_data()` entry: {:?}",
+            cratefield_core::undeclared_tables(&module)
+        );
+        // The reverse direction, so the check cannot pass by a declaration
+        // naming a table nothing creates: every entry is a row in `tables()`.
+        let listed: Vec<&str> = module.tables().to_vec();
+        for set in module.personal_data() {
+            assert!(
+                listed.contains(&set.table),
+                "`{}` is declared as personal data but is not one of the module's tables",
+                set.table
+            );
+        }
+    }
+
     #[test]
     fn migrations_are_the_embedded_set_in_order() {
         let migrations = AuthCore::new().migrations();
