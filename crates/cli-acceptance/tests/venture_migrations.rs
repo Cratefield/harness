@@ -50,6 +50,23 @@ const VENTURES: &[(&str, &[ComposedModule])] = &[
             ("crm", Some("module-crm")),
         ],
     ),
+    (
+        // The auth harness missed for a different reason than the waitlist.
+        // It does provide a binary — `crates/auth-fz` — but that crate is
+        // excluded from the cargo workspace, so nothing in CI builds it and
+        // collect is only ever run by hand, when someone remembers. The
+        // passkey and magic-link modules each shipped a sqlite migration
+        // afterwards and the directory was never refreshed.
+        "crates/auth-worker",
+        &[
+            ("auth-core", Some("auth-core")),
+            ("auth-oidc", None),
+            ("auth-passkeys", Some("auth-passkeys")),
+            ("auth-magic-link", Some("auth-magic-link")),
+            ("auth-password", None),
+            ("auth-meta", None),
+        ],
+    ),
 ];
 
 /// Whether a directory entry is a migration file.
