@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0](https://github.com/Cratefield/harness/compare/cratefield-module-webhooks-v0.3.0...cratefield-module-webhooks-v0.4.0) - 2026-10-05
+
+### Other
+
+- deliver within the per-module ScheduledBudget via Outbox::drain_within ([#554](https://github.com/Cratefield/harness/pull/554)) ([#736](https://github.com/Cratefield/harness/pull/736))
+
 ## [0.3.0](https://github.com/Cratefield/harness/compare/cratefield-module-webhooks-v0.2.1...cratefield-module-webhooks-v0.3.0) - 2026-10-04
 
 ### Changed

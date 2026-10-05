@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.1](https://github.com/Cratefield/harness/compare/cratefield-adapter-stripe-v0.3.0...cratefield-adapter-stripe-v0.3.1) - 2026-10-05
+
+### Other
+
+- Stripe customer portal sessions and subscription lookup ([#589](https://github.com/Cratefield/harness/pull/589)) ([#740](https://github.com/Cratefield/harness/pull/740))
+
 ## [0.3.0](https://github.com/Cratefield/harness/compare/cratefield-adapter-stripe-v0.2.1...cratefield-adapter-stripe-v0.3.0) - 2026-10-04
 
 ### Changed
