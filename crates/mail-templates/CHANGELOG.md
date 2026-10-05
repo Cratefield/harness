@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.1](https://github.com/Cratefield/harness/compare/cratefield-mail-templates-v0.1.0...cratefield-mail-templates-v0.1.1) - 2026-10-05
+
+### Other
+
+- one branded instance per app; cratefield-auth-* crates; Owlpost mail ([#778](https://github.com/Cratefield/harness/pull/778))
+
 ## [0.1.0](https://github.com/Cratefield/harness/releases/tag/cratefield-mail-templates-v0.1.0) - 2026-10-04
 
 ### Added

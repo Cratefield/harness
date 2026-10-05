@@ -121,7 +121,7 @@ cratefield-module-telemetry = { path = "crates/module-telemetry", version = "0.3
 # Outbound webhooks (issue #536): per-subject endpoints, signed POSTs over
 # the core outbox, dead letters and replay. The Rust API is the surface —
 # the module ships no routes of its own.
-cratefield-module-webhooks = { path = "crates/module-webhooks", version = "0.3" }
+cratefield-module-webhooks = { path = "crates/module-webhooks", version = "0.4" }
 # The OAuth 2.0 device authorization grant (issue #587): a client with no
 # browser shows a code, a signed-in person approves it, and the venture's
 # own issuer mints the credential.
@@ -148,7 +148,7 @@ cratefield-i18n = { path = "crates/i18n", version = "0.2" }
 cratefield-testing = { path = "crates/testing", version = "0.5" }
 # The control plane's shared page chrome (cratefield.com's look, one copy).
 cratefield-chrome = { path = "crates/control-plane-chrome", version = "0.1.0" }
-cratefield-cli = { path = "crates/cli", version = "0.5" }
+cratefield-cli = { path = "crates/cli", version = "0.6" }
 # Declared tables (issue #153): the schema type, its DDL and row validation.
 # Here rather than by bare path in its dependents for the reason
 # `cratefield-auth-client` is: the manifest and the CLI are published, and
@@ -159,7 +159,7 @@ cratefield-introspect = { path = "crates/introspect", version = "0.3" }
 # The Supabase importer's engine (ADR 0026, issue #658): read-only
 # inspection and the migration report. Native only; reached from `fz` behind
 # the CLI's `import-supabase` feature.
-cratefield-import-supabase = { path = "crates/import-supabase", version = "0.1" }
+cratefield-import-supabase = { path = "crates/import-supabase", version = "0.2" }
 # The venture manifest + deterministic composition generator (issue #138).
 # Depends only on serde/serde_json so both engines can consume it: the
 # native compile engine (fz build) and, later, the wasm compose engine.

@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.1](https://github.com/Cratefield/harness/compare/cratefield-adapter-resend-v0.4.0...cratefield-adapter-resend-v0.4.1) - 2026-10-05
+
+### Other
+
+- Inbound mail: a verify-then-parse source in core, a Resend inbound adapter, and ADR 0028 for channels ([#563](https://github.com/Cratefield/harness/pull/563)) ([#734](https://github.com/Cratefield/harness/pull/734))
+
 ## [0.4.0](https://github.com/Cratefield/harness/compare/cratefield-adapter-resend-v0.3.1...cratefield-adapter-resend-v0.4.0) - 2026-10-04
 
 ### Changed

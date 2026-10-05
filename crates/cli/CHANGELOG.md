@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0](https://github.com/Cratefield/harness/compare/cratefield-cli-v0.5.0...cratefield-cli-v0.6.0) - 2026-10-05
+
+### Other
+
+- Supabase import: plan.json, bare `fz import supabase` dry run, `--apply --plan` drift check and target extension preflight ([#754](https://github.com/Cratefield/harness/pull/754))
+- Supabase import: record per-item dispositions (covered/waived) in a file and merge them into the report ([#752](https://github.com/Cratefield/harness/pull/752))
+
 ## [0.5.0](https://github.com/Cratefield/harness/compare/cratefield-cli-v0.4.0...cratefield-cli-v0.5.0) - 2026-10-04
 
 ### Changed

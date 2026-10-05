@@ -6,6 +6,15 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.8.1](https://github.com/Cratefield/harness/compare/cratefield-core-v0.8.0...cratefield-core-v0.8.1) - 2026-10-05
+
+### Other
+
+- Stripe customer portal sessions and subscription lookup ([#589](https://github.com/Cratefield/harness/pull/589)) ([#740](https://github.com/Cratefield/harness/pull/740))
+- schema-validated structured output (complete_json / complete_as) ([#739](https://github.com/Cratefield/harness/pull/739))
+- Venture CORS: accept browser-extension origins (chrome-extension, moz-extension, safari-web-extension) ([#737](https://github.com/Cratefield/harness/pull/737))
+- Inbound mail: a verify-then-parse source in core, a Resend inbound adapter, and ADR 0028 for channels ([#563](https://github.com/Cratefield/harness/pull/563)) ([#734](https://github.com/Cratefield/harness/pull/734))
+
 ## [0.8.0](https://github.com/Cratefield/harness/compare/cratefield-core-v0.7.0...cratefield-core-v0.8.0) - 2026-10-04
 
 ### Added
