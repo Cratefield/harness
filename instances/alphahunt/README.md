@@ -16,8 +16,12 @@ The Worker is the unmodified `crates/auth-worker`; everything specific to
 Alphahunt is in [`wrangler.toml`](wrangler.toml). Login methods start as
 passkey and magic link.
 
-**Status:** not provisioned. The D1 ids are placeholders, so the deploy
-workflow skips this instance until they are filled in. The steps are in
+**Status:** both D1 databases exist on the Cloudflare account that holds
+`alphahunt.ing`; staging is migrated, has its core secrets and answers at
+`https://auth-staging.alphahunt.ing`. Production has no secrets, migrations
+or deploy yet. Owlpost (`OWLPOST_API_KEY`) and Turnstile (`TURNSTILE_SECRET`)
+are not set on staging yet, so staging sends no mail and shows no captcha.
+The steps are in
 [`docs/auth/MANAGED-INSTANCES.md`](../../docs/auth/MANAGED-INSTANCES.md).
 Alphahunt's logo, accent, support address and legal URLs are commented out
 in `wrangler.toml` until Alphahunt confirms them.
