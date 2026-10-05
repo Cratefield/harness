@@ -157,6 +157,23 @@ has no body field, so a held body is readable only through `get_message` or
 `None` on the last page. Message ids are validated to `[A-Za-z0-9_-]` before any
 request, as outbound ids are. Inboxes, threads and routes follow.
 
+## Suppressions and topics
+
+Per the [published Owlpost docs](https://owlpost.to/docs/suppression/):
+
+| Method | Route |
+|---|---|
+| `list_suppressions(topic?)` | `GET /v1/emails/suppressions` (`?topic=`, percent-encoded) |
+| `add_suppression(address, topic?)` | `POST /v1/emails/suppressions`, body `{address, topic?}` |
+| `remove_suppression(address, topic?, reason?)` | `DELETE /v1/emails/suppressions/{address}`, `topic`/`reason` as query parameters |
+| `set_topic_name(topic, name)` | `PUT /v1/emails/topics/{topic}`, body `{name}` |
+
+An absent `topic` is an account-wide entry. Every route that takes a topic
+checks it against Owlpost's charset (`a-z 0-9 : _ -`, 1–64 chars), then
+percent-encodes it; `set_topic_name` also checks the name's length (1–200).
+Empty address, topic and reason fields are refused locally too. A 404 or 422
+is `MailError::Invalid { detail }` like every other route.
+
 ---
 
 MIT. Built in the open for [Cratefield](https://cratefield.com), a [Factory Zero](https://factory0.ventures) venture.
