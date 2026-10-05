@@ -22,7 +22,7 @@ cratefield-core = { workspace = true }
 cratefield-runtime-cloudflare = { workspace = true }
 # The session path binds `token_hash` as `Vec<u8>` (store.rs insert_session /
 # session_by_token_hash) — the production byte-bearing path on D1.
-factory0-auth-core = { path = "../../crates/auth-core" }
+cratefield-auth-core = { path = "../../crates/auth-core" }
 # `Secrets::put`/`get` bind nonce and ciphertext as bytes.
 cratefield-secrets = { workspace = true }
 cratefield-kms = { workspace = true }

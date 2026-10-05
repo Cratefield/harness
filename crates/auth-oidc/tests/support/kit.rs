@@ -3,10 +3,10 @@
 
 #![allow(dead_code)]
 
+use cratefield_auth_core::AuthCore;
+use cratefield_auth_oidc::Oidc;
 use cratefield_core::{Clock, Config, Database, IdGen, MapConfig, UlidIdGen};
 use cratefield_testing::TestHarness;
-use factory0_auth_core::AuthCore;
-use factory0_auth_oidc::Oidc;
 use http::StatusCode;
 use serde_json::Value;
 use std::sync::Arc;
@@ -15,7 +15,7 @@ use time::OffsetDateTime;
 
 use crate::support::provider::{APPLE_CLIENT_ID, CLIENT_ID, FakeProvider};
 
-pub const REDIRECT_BASE: &str = "https://auth.factory0.ventures";
+pub const REDIRECT_BASE: &str = "https://auth.acme.example";
 pub const START: &str = "/v1/auth-oidc/google/start";
 pub const CALLBACK: &str = "/v1/auth-oidc/google/callback";
 pub const APPLE_START: &str = "/v1/auth-oidc/apple/start";
@@ -284,7 +284,7 @@ pub async fn start_at(kit: &Kit, path: &str, query: &str) -> Started {
             )
     };
     let started = Started {
-        flow_cookie: response.cookie("__Host-fz_oidc").expect("a flow cookie"),
+        flow_cookie: response.cookie("__Host-auth_oidc").expect("a flow cookie"),
         state: param("state"),
         nonce: param("nonce"),
         authorization_url: url,
@@ -300,7 +300,7 @@ pub async fn callback(kit: &Kit, started: &Started, code: &str, state: &str) -> 
     get(
         kit,
         &format!("{CALLBACK}?code={code}&state={state}"),
-        &[("__Host-fz_oidc", &started.flow_cookie)],
+        &[("__Host-auth_oidc", &started.flow_cookie)],
     )
     .await
 }

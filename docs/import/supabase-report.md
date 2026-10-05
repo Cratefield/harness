@@ -44,7 +44,8 @@ command.
 | `extensions` | array | `name`, `version`, `schema`, `support`: `supported`, `supabase_platform`, `unsupported` or `unknown` |
 | `functions` | array | `schema`, `name`, `arguments`, `kind`, `language`, `returns`, `security_definer`, `references_auth`, `references_storage`, `references_net` — never the body |
 | `triggers` | array | `schema`, `table`, `name`, `function` (`schema.name`), `definition`, `enabled`; user triggers on `auth`/`storage` tables are included |
-| `policies` | array | RLS policies (below) |
+| `policies` | array | RLS policies on the venture's own tables (below); Supabase-managed and storage policies are elsewhere |
+| `managed_policies` | array | policies on Supabase-managed schemas (`auth`, `cron`, `vault`, `storage` tables other than `objects`/`buckets`), for audit only (below) |
 | `api_role_grants` | array | `role` (`anon`, `authenticated`, `service_role`) and the `tables` it holds a privilege on |
 | `auth` | object | Supabase Auth as counts (below) |
 | `storage` | object | `present`, `counts_exact`, `buckets` (below) |
@@ -122,6 +123,18 @@ are empty and `by_kind` lists them all as `undecided`.
 | `decided` | one entry per decided item — `id`, `status` (`covered` or `waived`), and `ref` (covered only) or `reason` (waived only) — sorted by `id` |
 | `stale` | entry ids from the file that match no needs-work or blocker item, sorted |
 
+A policy on a Supabase-managed schema never appears here. One on
+`storage.objects` or `storage.buckets` is attached to its bucket instead
+(see `storage`). Everything else on a managed schema is in
+`managed_policies`.
+
+## `managed_policies[]`
+
+`schema`, `table`, `name`, `command`, `roles` (sorted), `using`, `with_check`.
+Policies on Supabase's own schemas (`auth`, `cron`, `vault`, `net`, `storage`
+tables other than `objects`/`buckets`, …) are the platform's: audited, but
+never classified, copied or a finding — so never in `summary.needs_work`.
+
 ## `auth`
 
 `present`, `users`, `users_without_password`, `users_unconfirmed`,
@@ -134,14 +147,29 @@ are empty and `by_kind` lists them all as `undecided`.
 `present`; `counts_exact` (false when `storage.objects` has RLS the role
 cannot bypass, so counts may be low); `buckets`: `id`, `name`, `public`,
 `file_size_limit`, `allowed_mime_types`, `objects`, `bytes`,
-`objects_over_blob_cap` (objects over the Blob port's 10 MiB put cap).
+`objects_over_blob_cap` (objects over the Blob port's 10 MiB put cap), and
+`policies`; plus `unattached_policies`.
+
+Each bucket's `policies` holds the `storage.objects`/`storage.buckets`
+policies that name it (or, with `all_buckets`, apply to every bucket):
+`table` (`storage.objects` or `storage.buckets`), `name`, `command`, `roles`
+(sorted), `using`, `with_check`, `all_buckets` (the expression named no bucket
+that exists, so the policy applies to every bucket — and to any added later),
+`suggested_equivalent` (a route that checks the expression and hands out a
+signed URL, or a public URL for a public read — advice, never enforcement
+code) and `disposition` (`undecided`; per policy before cutover, ADR 0026
+Decision 5). Bucket ids are parsed as `pg_policies` renders them
+(`bucket_id = 'x'`, `'x'::text = bucket_id`, or
+`bucket_id = ANY (ARRAY['a', 'b'])`; on `storage.buckets` the column is `id`
+or `name`). `unattached_policies` holds the same shape when the project has no
+buckets at all, where there is nothing to attach them to.
 
 ## `findings[]`
 
 | Field | Meaning |
 |---|---|
 | `id` | `<kind>:<object>`, stable across runs; the sort key |
-| `kind` | `schema`, `table`, `foreign_key`, `view`, `materialized_view`, `sequence`, `enum`, `extension`, `function`, `trigger`, `policy`, `grant`, `auth`, `auth_provider`, `bucket`, `edge_function`, `publication`, `cron_job` |
+| `kind` | `schema`, `table`, `rls_no_policy`, `foreign_key`, `view`, `materialized_view`, `sequence`, `enum`, `extension`, `function`, `trigger`, `policy`, `storage_policy`, `grant`, `auth`, `auth_provider`, `bucket`, `edge_function`, `publication`, `cron_job` |
 | `object` | the qualified name |
 | `classification` | `automatic`, `needs_work` or `blocker` |
 | `phase` | the step that handles it — `schema`, `data`, `auth`, `storage` — or `code` when the venture's own code has to |
@@ -151,3 +179,11 @@ cannot bypass, so counts may be low); `buckets`: `id`, `name`, `public`,
 A later step looks up its own items by `kind` and `phase`; the dashboard
 groups by `classification`. Every `needs_work` finding needs a disposition
 before cutover (ADR 0026, Decision 5).
+
+`rls_no_policy` is `automatic`, phase `code`: a table with RLS enabled and no
+policy denies every client, so nothing is ported (its `cratefield_equivalent`
+says `service_role_only`); it does not inflate `needs_work`. `storage_policy`
+is `needs_work`, phase `storage`: one finding per `storage.objects` /
+`storage.buckets` policy however many buckets it landed on, its reason naming
+the bucket(s). Such a policy is never in `policies` and never a phase-`code`
+finding; the policy itself is on its bucket (or in `unattached_policies`).

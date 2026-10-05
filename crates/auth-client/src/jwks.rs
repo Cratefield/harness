@@ -54,7 +54,7 @@ impl JwksCache {
     }
 }
 
-/// Verifies tokens issued by one Factory Zero auth service, for one
+/// Verifies tokens issued by one auth instance, for one
 /// registered client.
 pub struct AuthClient {
     http: Arc<dyn HttpClient>,

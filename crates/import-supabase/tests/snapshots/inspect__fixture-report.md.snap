@@ -11,8 +11,8 @@ Source `<host>:5432/<database>`, PostgreSQL 16. Report version 1, written by cra
 | | |
 |---|---|
 | Ready (no blockers) | **no** |
-| Automatic | 22 |
-| Needs work | 26 |
+| Automatic | 23 |
+| Needs work | 28 |
 | Blockers | 2 |
 | Decided | 0 |
 | Undecided | 28 |
@@ -34,7 +34,7 @@ Each stops a later step until it is resolved.
 | extension | `dblink` | schema | cross-database queries: the harness is one database per tenant (ADR 0008) and reaches other systems through ports, not through SQL | none |
 | foreign_key | `public.attachments.attachments_object_id_fkey` | schema | points into storage.objects, which no phase recreates as a table (storage objects become R2 keys, auth rows become harness users) | drop the constraint on the source or decide what the column holds after the move (an object key, a user id) before the schema phase |
 
-## Needs work (26)
+## Needs work (28)
 
 Moved or reported, but the venture writes or decides something. Each needs a `covered` or `waived` disposition before cutover.
 
@@ -56,18 +56,20 @@ Moved or reported, but the venture writes or decides something. Each needs a `co
 | policy | `public.profiles.Users can update own profile.` | code | RLS is neither copied nor translated (ADR 0026); owner_only by rule at confidence 1.00; needs a covered or waived disposition before cutover | owner check in the route: the request's subject must equal `id` (filter reads and refuse writes by it) |
 | policy | `public.projects.Admins can delete projects` | code | RLS is neither copied nor translated (ADR 0026); role_based by rule at confidence 1.00; needs a covered or waived disposition before cutover | a role or claim check in the route on the request's subject (signed in, or holding the role) |
 | policy | `public.projects.Archived projects stay visible for a grace period` | code | RLS is neither copied nor translated (ADR 0026); needs_review by rule at confidence 0.00; needs a covered or waived disposition before cutover | read the expression and write the equivalent route check, with a failing test first |
+| policy | `public.projects.Members can read their team's rows` | code | RLS is neither copied nor translated (ADR 0026); needs_review by rule at confidence 0.00; needs a covered or waived disposition before cutover | read the expression and write the equivalent route check, with a failing test first |
 | policy | `public.projects.Team members can view projects` | code | RLS is neither copied nor translated (ADR 0026); tenant_scoped by rule at confidence 1.00; needs a covered or waived disposition before cutover | membership check in the route: the request's subject must be a member, looked up in `team_members`, of the row's tenant |
+| policy | `public.team_members.Members can leave unless they own the team` | code | RLS is neither copied nor translated (ADR 0026); needs_review by rule at confidence 0.00; needs a covered or waived disposition before cutover | read the expression and write the equivalent route check, with a failing test first |
 | policy | `public.team_members.Members see their memberships` | code | RLS is neither copied nor translated (ADR 0026); owner_only by rule at confidence 1.00; needs a covered or waived disposition before cutover | owner check in the route: the request's subject must equal `user_id` (filter reads and refuse writes by it) |
 | policy | `public.teams.Service role manages teams` | code | RLS is neither copied nor translated (ADR 0026); service_role_only by rule at confidence 1.00; needs a covered or waived disposition before cutover | server-side only: no route exposes it; module code reads and writes it directly |
 | policy | `public.teams.Signed-in users can list teams` | code | RLS is neither copied nor translated (ADR 0026); role_based by rule at confidence 1.00; needs a covered or waived disposition before cutover | a role or claim check in the route on the request's subject (signed in, or holding the role) |
-| policy | `storage.objects.Avatar images are publicly accessible` | code | RLS is neither copied nor translated (ADR 0026); needs_review by rule at confidence 0.00; needs a covered or waived disposition before cutover | read the expression and write the equivalent route check, with a failing test first |
-| policy | `storage.objects.Users upload their own avatar` | code | RLS is neither copied nor translated (ADR 0026); needs_review by rule at confidence 0.00; needs a covered or waived disposition before cutover | read the expression and write the equivalent route check, with a failing test first |
 | publication | `supabase_realtime` | code | Realtime streams changes to these tables to clients | the `Realtime` port: a room the owning module broadcasts to after each write |
+| storage_policy | `storage.objects.Avatar images are publicly accessible` | storage | RLS is neither copied nor translated (ADR 0026); this policy applies to bucket(s) `avatars` and needs a covered or waived disposition before cutover | a public URL: serve the object under the same key from a public route |
+| storage_policy | `storage.objects.Users upload their own avatar` | storage | RLS is neither copied nor translated (ADR 0026); this policy applies to bucket(s) `avatars` and needs a covered or waived disposition before cutover | serve objects through a route that checks that the request's subject equals `owner` and hands out a signed URL; keep the `owner` column |
 | table | `public.audit_log` | data | no primary key: copied in one piece and checksummed over its sorted rows, so an interrupted copy restarts the table; add a key for chunked, resumable copy | app.audit_log |
 | trigger | `auth.users.on_auth_user_created` | code | fires on auth.users, which the harness replaces: it will never fire | a module reacting to the harness's account events (sign-up, deletion) |
 | view | `public.my_projects` | code | reads auth.* or storage.*, which do not exist on the target; not copied | a module query that takes the request's subject as a parameter |
 
-## Automatic (22)
+## Automatic (23)
 
 Moved by the importer with nothing to decide.
 
@@ -84,6 +86,7 @@ Moved by the importer with nothing to decide.
 | function | `public.project_count(team bigint)` | schema | copied verbatim, its search_path pinned to the target schema | app.project_count |
 | function | `public.set_updated_at()` | schema | copied verbatim, its search_path pinned to the target schema | app.set_updated_at |
 | grant | `service_role (8 tables)` | code | the server-side role; module code has the same reach | module code |
+| rls_no_policy | `public.audit_log` | code | RLS is enabled with no policy on the table, so every client request is denied; nothing reaches it but the server side | service_role_only: only server-side module code touches it, expose no route |
 | schema | `public` | schema | a user schema; owned by the venture, not tracked by harness migrations | the Postgres schema `app` in the venture's database |
 | sequence | `public.invoice_number_seq` | schema | recreated, and set to at least the source's value in verify | app.invoice_number_seq |
 | sequence | `public.projects_id_seq` | schema | recreated, and set to at least the source's value in verify | app.projects_id_seq |
@@ -128,12 +131,16 @@ RLS is neither copied nor translated (ADR 0026). The pattern and the suggested c
 | `public.profiles` | Users can update own profile. | UPDATE | public | `(auth.uid() = id)` | — | owner_only | 1.00 | rule | owner check in the route: the request's subject must equal `id` (filter reads and refuse writes by it) |
 | `public.projects` | Admins can delete projects | DELETE | public | `(((auth.jwt() -> 'app_metadata'::text) ->> 'role'::text) = 'admin'::text)` | — | role_based | 1.00 | rule | a role or claim check in the route on the request's subject (signed in, or holding the role) |
 | `public.projects` | Archived projects stay visible for a grace period | SELECT | public | `((status <> 'archived'::project_status) OR (created_at > (now() - '30 days'::interval)))` | — | needs_review | 0.00 | rule | read the expression and write the equivalent route check, with a failing test first |
+| `public.projects` | Members can read their team's rows | SELECT | public | `((team_id > 0) AND (status <> 'archived'::project_status))` | — | needs_review | 0.00 | rule | read the expression and write the equivalent route check, with a failing test first |
 | `public.projects` | Team members can view projects | SELECT | authenticated | `(EXISTS ( SELECT 1 FROM team_members m WHERE ((m.team_id = projects.team_id) AND (m.user_id = auth.uid()))))` | — | tenant_scoped | 1.00 | rule | membership check in the route: the request's subject must be a member, looked up in `team_members`, of the row's tenant |
+| `public.team_members` | Members can leave unless they own the team | DELETE | public | `((user_id = auth.uid()) AND (role <> 'owner'::text))` | — | needs_review | 0.00 | rule | read the expression and write the equivalent route check, with a failing test first |
 | `public.team_members` | Members see their memberships | SELECT | public | `(user_id = auth.uid())` | — | owner_only | 1.00 | rule | owner check in the route: the request's subject must equal `user_id` (filter reads and refuse writes by it) |
 | `public.teams` | Service role manages teams | ALL | service_role | `true` | `true` | service_role_only | 1.00 | rule | server-side only: no route exposes it; module code reads and writes it directly |
 | `public.teams` | Signed-in users can list teams | SELECT | authenticated | `true` | — | role_based | 1.00 | rule | a role or claim check in the route on the request's subject (signed in, or holding the role) |
-| `storage.objects` | Avatar images are publicly accessible | SELECT | public | `(bucket_id = 'avatars'::text)` | — | needs_review | 0.00 | rule | read the expression and write the equivalent route check, with a failing test first |
-| `storage.objects` | Users upload their own avatar | INSERT | authenticated | — | `((bucket_id = 'avatars'::text) AND (( SELECT auth.uid() AS uid) = owner))` | needs_review | 0.00 | rule | read the expression and write the equivalent route check, with a failing test first |
+
+## Supabase-managed policies (0)
+
+None.
 
 ## Tables (6)
 
@@ -160,6 +167,10 @@ The auth configuration was not read (no Management API token).
 |---|---|---|---|---|
 | `avatars` | yes | 2 | 51 KiB | 0 |
 | `documents` | no | 1 | 12 MiB | 1 |
+
+Bucket `avatars` policies:
+- `Avatar images are publicly accessible` (public, SELECT on `storage.objects`) — a public URL: serve the object under the same key from a public route
+- `Users upload their own avatar` (authenticated, INSERT on `storage.objects`) — serve objects through a route that checks that the request's subject equals `owner` and hands out a signed URL; keep the `owner` column
 
 ## Edge Functions
 

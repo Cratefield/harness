@@ -76,7 +76,7 @@ fn every_algorithm_a_real_passkey_can_present_verifies() {
             assert_eq!(response.json()["user_verified"], true);
 
             let cookie = response.set_cookie().expect("a session cookie");
-            assert!(cookie.contains("__Host-fz_session="), "{cookie}");
+            assert!(cookie.contains("__Host-session="), "{cookie}");
             assert!(cookie.contains("HttpOnly"), "{cookie}");
             assert!(cookie.contains("Secure"), "{cookie}");
         });
@@ -702,7 +702,7 @@ fn a_cross_site_assertion_cannot_sign_anyone_in() {
             &kit,
             LOGIN_VERIFY,
             r#"{"credential":{}}"#,
-            &[("host", "auth.factory0.ventures"), ("origin", OTHER_ORIGIN)],
+            &[("host", "auth.acme.example"), ("origin", OTHER_ORIGIN)],
         )
         .await;
         assert_eq!(
@@ -732,7 +732,7 @@ fn a_cross_site_assertion_cannot_sign_anyone_in() {
             LOGIN_VERIFY,
             r#"{"credential":{}}"#,
             &[
-                ("host", "auth.factory0.ventures"),
+                ("host", "auth.acme.example"),
                 ("sec-fetch-site", "cross-site"),
             ],
         )
@@ -758,7 +758,7 @@ fn a_cross_site_assertion_cannot_sign_anyone_in() {
             LOGIN_VERIFY,
             "not json",
             &[
-                ("host", "auth.factory0.ventures"),
+                ("host", "auth.acme.example"),
                 ("origin", ORIGIN),
                 ("sec-fetch-site", "same-origin"),
             ],
@@ -775,7 +775,7 @@ fn a_cross_site_assertion_cannot_sign_anyone_in() {
             &kit,
             LOGIN_VERIFY,
             "not json",
-            &[("host", "auth.factory0.ventures"), ("origin", OTHER_ORIGIN)],
+            &[("host", "auth.acme.example"), ("origin", OTHER_ORIGIN)],
         )
         .await;
         assert_eq!(

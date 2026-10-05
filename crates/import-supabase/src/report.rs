@@ -55,8 +55,14 @@ pub struct Report {
     /// Triggers on user tables, and user-defined triggers on `auth` and
     /// `storage` tables.
     pub triggers: Vec<Trigger>,
-    /// Every row-level-security policy outside the system catalogs.
+    /// Every row-level-security policy outside the system catalogs, except
+    /// the managed ones and the two storage tables (below).
     pub policies: Vec<Policy>,
+    /// Policies on Supabase-managed schemas (`auth`, `cron`, `vault`, and
+    /// every `storage` table other than `objects`/`buckets`): the platform's,
+    /// not the venture's, so they are listed for audit only — never
+    /// classified, never a finding.
+    pub managed_policies: Vec<ManagedPolicy>,
     /// Table grants to Supabase's API roles, one entry per role.
     pub api_role_grants: Vec<RoleGrants>,
     /// Supabase Auth: counts and providers, never a user.
@@ -445,6 +451,54 @@ pub struct Policy {
     pub disposition: Disposition,
 }
 
+/// A policy on a Supabase-managed schema (`auth`, `cron`, `vault`, …): the
+/// platform's, not the venture's — audited, never classified, copied or a
+/// finding.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ManagedPolicy {
+    /// The schema of its table.
+    pub schema: String,
+    /// Its table.
+    pub table: String,
+    /// Its name.
+    pub name: String,
+    /// `ALL`, `SELECT`, `INSERT`, `UPDATE` or `DELETE`.
+    pub command: String,
+    /// The roles it applies to, sorted.
+    pub roles: Vec<String>,
+    /// The `USING` expression, scrubbed.
+    pub using: Option<String>,
+    /// The `WITH CHECK` expression, scrubbed.
+    pub with_check: Option<String>,
+}
+
+/// An RLS policy on `storage.objects`/`storage.buckets`, attached to the
+/// bucket(s) it governs; each needs its own disposition (ADR 0026,
+/// Decision 5).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BucketPolicy {
+    /// `storage.objects` or `storage.buckets`.
+    pub table: String,
+    /// Its name.
+    pub name: String,
+    /// `ALL`, `SELECT`, `INSERT`, `UPDATE` or `DELETE`.
+    pub command: String,
+    /// The roles it applies to, sorted.
+    pub roles: Vec<String>,
+    /// The `USING` expression, scrubbed.
+    pub using: Option<String>,
+    /// The `WITH CHECK` expression, scrubbed.
+    pub with_check: Option<String>,
+    /// The expression named no bucket that exists, so the policy applies to
+    /// every bucket (and to any added later).
+    pub all_buckets: bool,
+    /// The storage-specific check to write, as advice — never enforcement
+    /// code.
+    pub suggested_equivalent: String,
+    /// Always `undecided` in an inspect report.
+    pub disposition: Disposition,
+}
+
 /// The decision a reported item needs before cutover.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -547,6 +601,10 @@ pub struct Storage {
     pub counts_exact: bool,
     /// Buckets, by id.
     pub buckets: Vec<Bucket>,
+    /// Policies on `storage.objects`/`storage.buckets` that could not be
+    /// attached to any bucket, because the project has no buckets at all.
+    /// Empty when it has any.
+    pub unattached_policies: Vec<BucketPolicy>,
 }
 
 /// A bucket.
@@ -568,6 +626,9 @@ pub struct Bucket {
     pub bytes: u64,
     /// Objects over the Blob port's 10 MiB put cap.
     pub objects_over_blob_cap: u64,
+    /// `storage.objects`/`storage.buckets` policies that name this bucket
+    /// (or, with `all_buckets`, apply to every bucket).
+    pub policies: Vec<BucketPolicy>,
 }
 
 /// Edge Functions.

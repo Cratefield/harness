@@ -6,8 +6,8 @@
 //! issue #10, which is where `/authorize` exists.
 
 use axum::http::{Method, StatusCode, header};
+use cratefield_auth_core::AuthCore;
 use cratefield_testing::TestHarness;
-use factory0_auth_core::AuthCore;
 use serde_json::Value;
 use std::sync::Arc;
 use tower::ServiceExt;
@@ -143,7 +143,7 @@ async fn patch_revalidates_and_leaves_the_client_untouched_on_reject() {
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
 
-    let uris = factory0_auth_core::redirect_uris_for_client(&*kit.db, &id)
+    let uris = cratefield_auth_core::redirect_uris_for_client(&*kit.db, &id)
         .await
         .unwrap()
         .into_iter()
@@ -172,19 +172,19 @@ async fn the_matcher_table_over_the_wire_shape() {
         "https://undercoverrockstars.com/auth/callback".to_owned(),
         "com.example.app:/callback".to_owned(),
     ];
-    assert!(factory0_auth_core::redirect_uri::matches_any(
+    assert!(cratefield_auth_core::redirect_uri::matches_any(
         &registered,
         "https://undercoverrockstars.com/auth/callback"
     ));
-    assert!(factory0_auth_core::redirect_uri::matches_any(
+    assert!(cratefield_auth_core::redirect_uri::matches_any(
         &registered,
         "com.example.app:/callback"
     ));
-    assert!(!factory0_auth_core::redirect_uri::matches_any(
+    assert!(!cratefield_auth_core::redirect_uri::matches_any(
         &registered,
         "https://undercoverrockstars.com/auth/callback/"
     ));
-    assert!(!factory0_auth_core::redirect_uri::matches_any(
+    assert!(!cratefield_auth_core::redirect_uri::matches_any(
         &registered,
         "https://evil.example/auth/callback"
     ));

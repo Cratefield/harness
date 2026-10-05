@@ -1,7 +1,7 @@
-//! `factory0-auth-password`: email and password (issues #12, #19, #20).
+//! `cratefield-auth-password`: email and password (issues #12, #19, #20).
 //!
 //! ```no_run
-//! use factory0_auth_password::Password;
+//! use cratefield_auth_password::Password;
 //!
 //! let module = Password::new();
 //! ```
@@ -40,10 +40,10 @@ mod lockout;
 mod mail;
 mod recovery;
 
+use cratefield_auth_core::{LegacyHashes, SupportedLocales};
 use cratefield_core::{
     Config, ConfigError, Migrations, Module, ModuleConfig, ModuleContext, Port, ProblemDef,
 };
-use factory0_auth_core::{LegacyHashes, SupportedLocales};
 use http::StatusCode;
 use std::sync::Arc;
 

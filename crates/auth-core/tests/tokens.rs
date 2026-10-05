@@ -9,13 +9,13 @@
 
 use axum::http::{Method, StatusCode, header};
 use base64ct::{Base64UrlUnpadded, Encoding};
-use cratefield_core::{Database, DbError, MapConfig, Rows, Statement, UlidIdGen};
-use cratefield_testing::{FixedClock, TestHarness};
-use factory0_auth_core::{
+use cratefield_auth_core::{
     AuthCore, DEFAULT_REFRESH_REUSE_GRACE_MAX_USES, Login, REFRESH_TOKEN_DAYS, RefreshGrant,
     RefreshOutcome, RefreshReuseGrace, SLIDE_WINDOW_DAYS, SigningKeys, UserRow,
     exchange_refresh_token, issue, mint_access_token, mint_refresh_token, session_by_token_hash,
 };
+use cratefield_core::{Database, DbError, MapConfig, Rows, Statement, UlidIdGen};
+use cratefield_testing::{FixedClock, TestHarness};
 use p256::ecdsa::{self, signature::Verifier};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -122,7 +122,7 @@ fn plain_kit() -> TestHarness {
 }
 
 async fn seed_user(kit: &TestHarness, id: &str, email: Option<&str>, verified: bool) {
-    factory0_auth_core::insert_user(
+    cratefield_auth_core::insert_user(
         &*kit.db,
         &UserRow {
             id: id.to_owned(),
@@ -143,7 +143,7 @@ async fn seed_session(
     kit: &TestHarness,
     user_id: &str,
     amr: &[&str],
-) -> factory0_auth_core::IssuedSession {
+) -> cratefield_auth_core::IssuedSession {
     issue(
         &*kit.db,
         &at(EPOCH),
@@ -357,7 +357,7 @@ async fn refresh_tokens_are_single_use_and_reuse_revokes_the_session() {
 
     // Only the hash is stored, bound to the session, 30-day expiry.
     let hash = Sha256::digest(value.as_bytes()).to_vec();
-    let row = factory0_auth_core::single_use_token_by_hash(&*kit.db, &hash)
+    let row = cratefield_auth_core::single_use_token_by_hash(&*kit.db, &hash)
         .await
         .expect("query")
         .expect("stored");
@@ -472,7 +472,7 @@ async fn an_unknown_refresh_token_is_refused_without_side_effects() {
 async fn mint_for_session(
     kit: &TestHarness,
     client_id: &str,
-) -> (factory0_auth_core::IssuedSession, String) {
+) -> (cratefield_auth_core::IssuedSession, String) {
     seed_user(kit, "u1", None, false).await;
     let session = seed_session(kit, "u1", &[]).await;
     let value = mint_refresh_token(
@@ -560,7 +560,7 @@ async fn yield_once() {
 
 /// The cookie race set up: P rotates to S1, a graced re-presentation at
 /// +20s mints the sibling S2, and both live until one is used.
-async fn two_siblings(kit: &TestHarness) -> (factory0_auth_core::IssuedSession, String, String) {
+async fn two_siblings(kit: &TestHarness) -> (cratefield_auth_core::IssuedSession, String, String) {
     let (session, value) = mint_for_session(kit, "client_1").await;
     let grace = grace(30, 3);
     let (outcome, grant) = exchange(kit, EPOCH + 10, grace, &value, "client_1").await;

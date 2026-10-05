@@ -12,12 +12,13 @@
 //! foreign key into a Supabase table no phase recreates, a schema name the
 //! target already uses.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::collect::{Catalog, names_schema};
 use crate::extensions;
 use crate::report::{
-    Auth, Classification, EdgeFunctions, ExtensionSupport, Finding, Policy, SourceStatus,
+    Auth, BucketPolicy, Classification, EdgeFunctions, ExtensionSupport, Finding, Policy,
+    SourceStatus, Storage,
 };
 
 use Classification::{Automatic, Blocker, NeedsWork};
@@ -74,10 +75,18 @@ impl Findings {
 pub(crate) fn findings(
     catalog: &Catalog,
     policies: &[Policy],
+    storage: &Storage,
     auth: &Auth,
     edge: &EdgeFunctions,
 ) -> Vec<Finding> {
     let mut out = Findings(Vec::new());
+    // Every `schema.table` that has at least one policy, so a table with RLS
+    // enabled and none can be told apart from one that has them.
+    let policed: BTreeSet<(&str, &str)> = catalog
+        .policies
+        .iter()
+        .map(|policy| (policy.schema.as_str(), policy.table.as_str()))
+        .collect();
     let user_schemas: Vec<&str> = catalog
         .schemas
         .iter()
@@ -130,6 +139,19 @@ pub(crate) fn findings(
                 "columns, constraints and indexes recreated; rows copied with COPY and verified \
                  by count and checksum",
                 target,
+            );
+        }
+        // RLS on with no policy denies every client by default. Nothing to
+        // port: an informational fact, so it does not inflate needs work.
+        if table.rls_enabled && !policed.contains(&(table.schema.as_str(), table.name.as_str())) {
+            out.push(
+                "rls_no_policy",
+                &object,
+                Automatic,
+                "code",
+                "RLS is enabled with no policy on the table, so every client request is denied; \
+                 nothing reaches it but the server side",
+                "service_role_only: only server-side module code touches it, expose no route",
             );
         }
         for constraint in &table.constraints {
@@ -375,7 +397,9 @@ pub(crate) fn findings(
 
     auth_findings(&mut out, auth);
 
-    for bucket in &catalog.storage.buckets {
+    storage_policy_findings(&mut out, storage);
+
+    for bucket in &storage.buckets {
         let target = if bucket.public {
             "R2 under the same keys, served by a public route"
         } else {
@@ -477,6 +501,72 @@ pub(crate) fn findings(
     let mut findings = out.0;
     findings.sort_by(|a, b| a.id.cmp(&b.id));
     findings
+}
+
+/// One finding per storage policy, however many buckets it landed on. The
+/// policy itself is on the bucket (`report.storage.buckets[].policies`) or,
+/// with no buckets at all, in `report.storage.unattached_policies`.
+fn storage_policy_findings(out: &mut Findings, storage: &Storage) {
+    // Per policy: the bucket ids it landed on, whether it applies to all
+    // buckets, and its suggested check.
+    type Scope = (Vec<String>, bool, String);
+    let mut groups: BTreeMap<(String, String), Scope> = BTreeMap::new();
+    for bucket in &storage.buckets {
+        for policy in &bucket.policies {
+            record(&mut groups, policy, Some(&bucket.id));
+        }
+    }
+    for policy in &storage.unattached_policies {
+        record(&mut groups, policy, None);
+    }
+
+    for ((table, name), (mut buckets, all_buckets, suggested)) in groups {
+        buckets.sort();
+        buckets.dedup();
+        let scope = if buckets.is_empty() {
+            "no bucket exists in the project".to_owned()
+        } else if all_buckets {
+            "every bucket".to_owned()
+        } else {
+            format!(
+                "bucket(s) {}",
+                buckets
+                    .iter()
+                    .map(|id| format!("`{id}`"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        };
+        out.push(
+            "storage_policy",
+            format!("{table}.{name}"),
+            NeedsWork,
+            "storage",
+            format!(
+                "RLS is neither copied nor translated (ADR 0026); this policy applies to {scope} \
+                 and needs a covered or waived disposition before cutover"
+            ),
+            suggested,
+        );
+    }
+}
+
+/// Folds one bucket's copy of a policy (or an unattached one) into the
+/// per-policy group `groups`.
+fn record(
+    groups: &mut BTreeMap<(String, String), (Vec<String>, bool, String)>,
+    policy: &BucketPolicy,
+    bucket: Option<&str>,
+) {
+    let entry = groups
+        .entry((policy.table.clone(), policy.name.clone()))
+        .or_insert_with(|| (Vec::new(), false, policy.suggested_equivalent.clone()));
+    if let Some(bucket) = bucket
+        && !entry.0.iter().any(|id| id == bucket)
+    {
+        entry.0.push(bucket.to_owned());
+    }
+    entry.1 |= policy.all_buckets;
 }
 
 fn auth_findings(out: &mut Findings, auth: &Auth) {

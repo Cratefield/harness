@@ -1,7 +1,7 @@
-//! `factory0-auth-meta`: Facebook Login (issue #17).
+//! `cratefield-auth-meta`: Facebook Login (issue #17).
 //!
 //! ```no_run
-//! use factory0_auth_meta::Meta;
+//! use cratefield_auth_meta::Meta;
 //!
 //! let module = Meta::new();
 //! ```
@@ -352,14 +352,14 @@ mod tests {
         let cfg = config(&[
             ("AUTH_META_CLIENT_ID", "123"),
             ("AUTH_META_CLIENT_SECRET", "shh"),
-            ("AUTH_META_REDIRECT_BASE", "https://auth.factory0.ventures/"),
+            ("AUTH_META_REDIRECT_BASE", "https://auth.acme.example/"),
         ]);
         let settings = resolve_settings(&cfg).expect("valid").expect("configured");
         // The trailing slash must not become a double slash: Meta matches
         // the redirect URI exactly.
         assert_eq!(
             settings.redirect_uri(),
-            "https://auth.factory0.ventures/v1/auth-meta/callback"
+            "https://auth.acme.example/v1/auth-meta/callback"
         );
     }
 

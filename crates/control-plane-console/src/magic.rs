@@ -47,7 +47,7 @@
 //!   the operator would be signed in as the attacker.
 //!
 //! The `POST` is refused unless the browser reports it as coming from the
-//! console's own origin (`factory0_auth_core::csrf::require_same_origin`),
+//! console's own origin (`cratefield_auth_core::csrf::require_same_origin`),
 //! so another site cannot press the button for somebody either. The
 //! confirm page is identical for a real and an invented token and reads
 //! nothing to produce itself, so it is not an oracle either.
@@ -305,7 +305,7 @@ pub(crate) async fn magic_consume_post(
     // client is inherently cross-site and so is a forced navigation
     // (issue #524), and only a request from our own page can be told
     // apart from both.
-    if let Err(problem) = factory0_auth_core::csrf::require_same_origin(&headers, &uri) {
+    if let Err(problem) = cratefield_auth_core::csrf::require_same_origin(&headers, &uri) {
         return problem.into_response();
     }
     let form = parse_form(&body);

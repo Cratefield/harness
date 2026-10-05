@@ -107,8 +107,8 @@ fn main() -> std::io::Result<()> {
         (
             "sign-in",
             find(
-                factory0_auth_magic_link::themed_templates(&theme),
-                factory0_auth_magic_link::TEMPLATE_MAGIC_LINK,
+                cratefield_auth_magic_link::themed_templates(&theme),
+                cratefield_auth_magic_link::TEMPLATE_MAGIC_LINK,
             ),
             json!({
                 "venture": venture,
@@ -144,8 +144,8 @@ fn main() -> std::io::Result<()> {
         (
             "password-verify",
             find(
-                factory0_auth_password::themed_templates(&theme),
-                factory0_auth_password::TEMPLATE_VERIFY,
+                cratefield_auth_password::themed_templates(&theme),
+                cratefield_auth_password::TEMPLATE_VERIFY,
             ),
             json!({
                 "venture": venture,
@@ -156,8 +156,8 @@ fn main() -> std::io::Result<()> {
         (
             "password-reset",
             find(
-                factory0_auth_password::themed_templates(&theme),
-                factory0_auth_password::TEMPLATE_RESET,
+                cratefield_auth_password::themed_templates(&theme),
+                cratefield_auth_password::TEMPLATE_RESET,
             ),
             json!({
                 "venture": venture,
@@ -168,8 +168,8 @@ fn main() -> std::io::Result<()> {
         (
             "password-duplicate",
             find(
-                factory0_auth_password::themed_templates(&theme),
-                factory0_auth_password::TEMPLATE_DUPLICATE,
+                cratefield_auth_password::themed_templates(&theme),
+                cratefield_auth_password::TEMPLATE_DUPLICATE,
             ),
             json!({
                 "venture": venture,

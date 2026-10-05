@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Signed out · Factory Zero</title>
+<title>Signed out · {{ brand.name }}</title>
 <style>
   :root { color-scheme: dark; }
   * { box-sizing: border-box; }
@@ -16,13 +16,16 @@
   h1 { font-size: 1.25rem; font-weight: 650; margin: 0 0 .5rem; }
   p { color: #b7b3ab; margin: 0; }
   footer { margin-top: 2rem; color: #6f6c66; font-size: .8rem; }
+  img.brand-logo { display: block; max-height: 3rem; max-width: 12rem; margin: 0 auto 1.25rem; }
+  footer a { color: {{ brand.accent }}; }
 </style>
 </head>
 <body>
 <main>
+  {% include "_brand_header.html" %}
   <h1>You are signed out</h1>
   <p>The session on this device was revoked.</p>
-  <footer>auth.factory0.ventures · Factory Zero</footer>
+  {% include "_brand_footer.html" %}
 </main>
 </body>
 </html>

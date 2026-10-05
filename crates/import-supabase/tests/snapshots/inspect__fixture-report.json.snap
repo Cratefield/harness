@@ -29,8 +29,8 @@ expression: normalized.to_json()
     "policy_classifier": "not_inspected"
   },
   "summary": {
-    "automatic": 22,
-    "needs_work": 26,
+    "automatic": 23,
+    "needs_work": 28,
     "blockers": 2,
     "decided": 0,
     "undecided": 28,
@@ -804,6 +804,25 @@ expression: normalized.to_json()
     {
       "schema": "public",
       "table": "projects",
+      "name": "Members can read their team's rows",
+      "command": "SELECT",
+      "permissive": true,
+      "roles": [
+        "public"
+      ],
+      "using": "((team_id > 0) AND (status <> 'archived'::project_status))",
+      "with_check": null,
+      "pattern": "needs_review",
+      "confidence": 0.0,
+      "source": "rule",
+      "classifier_label": null,
+      "suggested_equivalent": "read the expression and write the equivalent route check, with a failing test first",
+      "test_stub": "#[tokio::test]\nasync fn rls_public_projects_members_can_read_their_team_s_rows() {\n    // Supabase RLS policy \"Members can read their team's rows\" on public.projects (SELECT, roles: public).\n    // USING:\n    //   ((team_id > 0) AND (status <> 'archived'::project_status))\n    // Suggested check (advice, not a translation): read the expression and write the equivalent route check, with a failing test first\n    todo!(\"prove the route refuses what this policy refused, then record the policy as covered\");\n}\n",
+      "disposition": "undecided"
+    },
+    {
+      "schema": "public",
+      "table": "projects",
       "name": "Team members can view projects",
       "command": "SELECT",
       "permissive": true,
@@ -818,6 +837,25 @@ expression: normalized.to_json()
       "classifier_label": null,
       "suggested_equivalent": "membership check in the route: the request's subject must be a member, looked up in `team_members`, of the row's tenant",
       "test_stub": "#[tokio::test]\nasync fn rls_public_projects_team_members_can_view_projects() {\n    // Supabase RLS policy \"Team members can view projects\" on public.projects (SELECT, roles: authenticated).\n    // USING:\n    //   (EXISTS ( SELECT 1\n    //      FROM team_members m\n    //     WHERE ((m.team_id = projects.team_id) AND (m.user_id = auth.uid()))))\n    // Suggested check (advice, not a translation): membership check in the route: the request's subject must be a member, looked up in `team_members`, of the row's tenant\n    todo!(\"prove the route refuses what this policy refused, then record the policy as covered\");\n}\n",
+      "disposition": "undecided"
+    },
+    {
+      "schema": "public",
+      "table": "team_members",
+      "name": "Members can leave unless they own the team",
+      "command": "DELETE",
+      "permissive": true,
+      "roles": [
+        "public"
+      ],
+      "using": "((user_id = auth.uid()) AND (role <> 'owner'::text))",
+      "with_check": null,
+      "pattern": "needs_review",
+      "confidence": 0.0,
+      "source": "rule",
+      "classifier_label": null,
+      "suggested_equivalent": "read the expression and write the equivalent route check, with a failing test first",
+      "test_stub": "#[tokio::test]\nasync fn rls_public_team_members_members_can_leave_unless_they_own_the_team() {\n    // Supabase RLS policy \"Members can leave unless they own the team\" on public.team_members (DELETE, roles: public).\n    // USING:\n    //   ((user_id = auth.uid()) AND (role <> 'owner'::text))\n    // Suggested check (advice, not a translation): read the expression and write the equivalent route check, with a failing test first\n    todo!(\"prove the route refuses what this policy refused, then record the policy as covered\");\n}\n",
       "disposition": "undecided"
     },
     {
@@ -876,46 +914,9 @@ expression: normalized.to_json()
       "suggested_equivalent": "a role or claim check in the route on the request's subject (signed in, or holding the role)",
       "test_stub": "#[tokio::test]\nasync fn rls_public_teams_signed_in_users_can_list_teams() {\n    // Supabase RLS policy \"Signed-in users can list teams\" on public.teams (SELECT, roles: authenticated).\n    // USING:\n    //   true\n    // Suggested check (advice, not a translation): a role or claim check in the route on the request's subject (signed in, or holding the role)\n    todo!(\"prove the route refuses what this policy refused, then record the policy as covered\");\n}\n",
       "disposition": "undecided"
-    },
-    {
-      "schema": "storage",
-      "table": "objects",
-      "name": "Avatar images are publicly accessible",
-      "command": "SELECT",
-      "permissive": true,
-      "roles": [
-        "public"
-      ],
-      "using": "(bucket_id = 'avatars'::text)",
-      "with_check": null,
-      "pattern": "needs_review",
-      "confidence": 0.0,
-      "source": "rule",
-      "classifier_label": null,
-      "suggested_equivalent": "read the expression and write the equivalent route check, with a failing test first",
-      "test_stub": "#[tokio::test]\nasync fn rls_storage_objects_avatar_images_are_publicly_accessible() {\n    // Supabase RLS policy \"Avatar images are publicly accessible\" on storage.objects (SELECT, roles: public).\n    // USING:\n    //   (bucket_id = 'avatars'::text)\n    // Suggested check (advice, not a translation): read the expression and write the equivalent route check, with a failing test first\n    todo!(\"prove the route refuses what this policy refused, then record the policy as covered\");\n}\n",
-      "disposition": "undecided"
-    },
-    {
-      "schema": "storage",
-      "table": "objects",
-      "name": "Users upload their own avatar",
-      "command": "INSERT",
-      "permissive": true,
-      "roles": [
-        "authenticated"
-      ],
-      "using": null,
-      "with_check": "((bucket_id = 'avatars'::text) AND (( SELECT auth.uid() AS uid) = owner))",
-      "pattern": "needs_review",
-      "confidence": 0.0,
-      "source": "rule",
-      "classifier_label": null,
-      "suggested_equivalent": "read the expression and write the equivalent route check, with a failing test first",
-      "test_stub": "#[tokio::test]\nasync fn rls_storage_objects_users_upload_their_own_avatar() {\n    // Supabase RLS policy \"Users upload their own avatar\" on storage.objects (INSERT, roles: authenticated).\n    // WITH CHECK:\n    //   ((bucket_id = 'avatars'::text) AND (( SELECT auth.uid() AS uid) = owner))\n    // Suggested check (advice, not a translation): read the expression and write the equivalent route check, with a failing test first\n    todo!(\"prove the route refuses what this policy refused, then record the policy as covered\");\n}\n",
-      "disposition": "undecided"
     }
   ],
+  "managed_policies": [],
   "api_role_grants": [
     {
       "role": "anon",
@@ -997,7 +998,35 @@ expression: normalized.to_json()
         ],
         "objects": 2,
         "bytes": 52224,
-        "objects_over_blob_cap": 0
+        "objects_over_blob_cap": 0,
+        "policies": [
+          {
+            "table": "storage.objects",
+            "name": "Avatar images are publicly accessible",
+            "command": "SELECT",
+            "roles": [
+              "public"
+            ],
+            "using": "(bucket_id = 'avatars'::text)",
+            "with_check": null,
+            "all_buckets": false,
+            "suggested_equivalent": "a public URL: serve the object under the same key from a public route",
+            "disposition": "undecided"
+          },
+          {
+            "table": "storage.objects",
+            "name": "Users upload their own avatar",
+            "command": "INSERT",
+            "roles": [
+              "authenticated"
+            ],
+            "using": null,
+            "with_check": "((bucket_id = 'avatars'::text) AND (( SELECT auth.uid() AS uid) = owner))",
+            "all_buckets": false,
+            "suggested_equivalent": "serve objects through a route that checks that the request's subject equals `owner` and hands out a signed URL; keep the `owner` column",
+            "disposition": "undecided"
+          }
+        ]
       },
       {
         "id": "documents",
@@ -1007,9 +1036,11 @@ expression: normalized.to_json()
         "allowed_mime_types": [],
         "objects": 1,
         "bytes": 12582912,
-        "objects_over_blob_cap": 1
+        "objects_over_blob_cap": 1,
+        "policies": []
       }
-    ]
+    ],
+    "unattached_policies": []
   },
   "edge_functions": {
     "status": "not_inspected",
@@ -1296,6 +1327,15 @@ expression: normalized.to_json()
       "cratefield_equivalent": "read the expression and write the equivalent route check, with a failing test first"
     },
     {
+      "id": "policy:public.projects.Members can read their team's rows",
+      "kind": "policy",
+      "object": "public.projects.Members can read their team's rows",
+      "classification": "needs_work",
+      "phase": "code",
+      "reason": "RLS is neither copied nor translated (ADR 0026); needs_review by rule at confidence 0.00; needs a covered or waived disposition before cutover",
+      "cratefield_equivalent": "read the expression and write the equivalent route check, with a failing test first"
+    },
+    {
       "id": "policy:public.projects.Team members can view projects",
       "kind": "policy",
       "object": "public.projects.Team members can view projects",
@@ -1303,6 +1343,15 @@ expression: normalized.to_json()
       "phase": "code",
       "reason": "RLS is neither copied nor translated (ADR 0026); tenant_scoped by rule at confidence 1.00; needs a covered or waived disposition before cutover",
       "cratefield_equivalent": "membership check in the route: the request's subject must be a member, looked up in `team_members`, of the row's tenant"
+    },
+    {
+      "id": "policy:public.team_members.Members can leave unless they own the team",
+      "kind": "policy",
+      "object": "public.team_members.Members can leave unless they own the team",
+      "classification": "needs_work",
+      "phase": "code",
+      "reason": "RLS is neither copied nor translated (ADR 0026); needs_review by rule at confidence 0.00; needs a covered or waived disposition before cutover",
+      "cratefield_equivalent": "read the expression and write the equivalent route check, with a failing test first"
     },
     {
       "id": "policy:public.team_members.Members see their memberships",
@@ -1332,24 +1381,6 @@ expression: normalized.to_json()
       "cratefield_equivalent": "a role or claim check in the route on the request's subject (signed in, or holding the role)"
     },
     {
-      "id": "policy:storage.objects.Avatar images are publicly accessible",
-      "kind": "policy",
-      "object": "storage.objects.Avatar images are publicly accessible",
-      "classification": "needs_work",
-      "phase": "code",
-      "reason": "RLS is neither copied nor translated (ADR 0026); needs_review by rule at confidence 0.00; needs a covered or waived disposition before cutover",
-      "cratefield_equivalent": "read the expression and write the equivalent route check, with a failing test first"
-    },
-    {
-      "id": "policy:storage.objects.Users upload their own avatar",
-      "kind": "policy",
-      "object": "storage.objects.Users upload their own avatar",
-      "classification": "needs_work",
-      "phase": "code",
-      "reason": "RLS is neither copied nor translated (ADR 0026); needs_review by rule at confidence 0.00; needs a covered or waived disposition before cutover",
-      "cratefield_equivalent": "read the expression and write the equivalent route check, with a failing test first"
-    },
-    {
       "id": "publication:supabase_realtime",
       "kind": "publication",
       "object": "supabase_realtime",
@@ -1357,6 +1388,15 @@ expression: normalized.to_json()
       "phase": "code",
       "reason": "Realtime streams changes to these tables to clients",
       "cratefield_equivalent": "the `Realtime` port: a room the owning module broadcasts to after each write"
+    },
+    {
+      "id": "rls_no_policy:public.audit_log",
+      "kind": "rls_no_policy",
+      "object": "public.audit_log",
+      "classification": "automatic",
+      "phase": "code",
+      "reason": "RLS is enabled with no policy on the table, so every client request is denied; nothing reaches it but the server side",
+      "cratefield_equivalent": "service_role_only: only server-side module code touches it, expose no route"
     },
     {
       "id": "schema:public",
@@ -1393,6 +1433,24 @@ expression: normalized.to_json()
       "phase": "schema",
       "reason": "recreated, and set to at least the source's value in verify",
       "cratefield_equivalent": "app.teams_id_seq"
+    },
+    {
+      "id": "storage_policy:storage.objects.Avatar images are publicly accessible",
+      "kind": "storage_policy",
+      "object": "storage.objects.Avatar images are publicly accessible",
+      "classification": "needs_work",
+      "phase": "storage",
+      "reason": "RLS is neither copied nor translated (ADR 0026); this policy applies to bucket(s) `avatars` and needs a covered or waived disposition before cutover",
+      "cratefield_equivalent": "a public URL: serve the object under the same key from a public route"
+    },
+    {
+      "id": "storage_policy:storage.objects.Users upload their own avatar",
+      "kind": "storage_policy",
+      "object": "storage.objects.Users upload their own avatar",
+      "classification": "needs_work",
+      "phase": "storage",
+      "reason": "RLS is neither copied nor translated (ADR 0026); this policy applies to bucket(s) `avatars` and needs a covered or waived disposition before cutover",
+      "cratefield_equivalent": "serve objects through a route that checks that the request's subject equals `owner` and hands out a signed URL; keep the `owner` column"
     },
     {
       "id": "table:public.attachments",

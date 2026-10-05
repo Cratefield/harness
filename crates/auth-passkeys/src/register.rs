@@ -7,11 +7,11 @@
 use axum::extract::{Path, State};
 use axum::response::Response;
 use axum::routing::{get, post};
-use cratefield_core::{Json, Problem, Scope};
-use factory0_auth_core::{
+use cratefield_auth_core::{
     Bytes, CREDENTIAL_PASSKEY, CredentialRow, credentials_by_user, identities_by_user,
     insert_credential, passkey_by_credential_id, user_by_id,
 };
+use cratefield_core::{Json, Problem, Scope};
 use http::HeaderMap;
 use serde::Deserialize;
 use serde_json::json;
@@ -375,7 +375,7 @@ async fn remove(
         return Err(Problem::new(&crate::LAST_LOGIN_METHOD).instance(&scope.request_id));
     }
 
-    factory0_auth_core::delete_credential(db, &target.id, &session.user_id)
+    cratefield_auth_core::delete_credential(db, &target.id, &session.user_id)
         .await
         .map_err(|err| {
             tracing::error!(error = %err, "could not delete the passkey");

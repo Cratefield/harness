@@ -109,7 +109,7 @@ supported `de` takes `de-AT` and stores the canonical `de`.
 `AUTH_LOCALES` lists the supported tags, comma-separated in BCP 47 form,
 the first being the default (`AUTH_LOCALES=de,en`). It is a deployment-wide
 key rather than an `AUTH_PASSWORD_` one: every auth module reads it, and
-the same list is what `factory0-auth-magic-link` resolves its sign-in mail
+the same list is what `cratefield-auth-magic-link` resolves its sign-in mail
 from. Unset, the deployment supports `en`.
 
 ## Three defences, and they are not the same defence
@@ -148,6 +148,34 @@ it would have to do anyway: an address can change, and the copy in an old
 event would be the stale one. `no_event_this_module_emits_carries_an_address`
 pins it, and also asserts the payload still names somebody, because an
 empty payload would satisfy the first half and be useless.
+
+## Rate limits
+
+This crate owns the key strings and the 429 behaviour, not the numbers.
+Quotas are enforced by the harness `RateLimiter` adapter and set in the
+instance's deployment config; keys are `auth-password:{key}` over
+`rate_limit_keys(ip, email)`, i.e. one per-IP bucket and one per
+normalised-email bucket. In-memory adapters are per-isolate, so a
+multi-isolate deployment needs a KV-backed limiter. Every refusal is
+`429` with a `Retry-After`.
+
+| Scope | Recommended quota | Why |
+|---|---|---|
+| Login per IP | 10/min | A person mistypes a few times; a guesser needs thousands. 10/min fits the former and is noise against Argon2id, while staying loose enough for an office or campus behind one NAT address. |
+| Login per normalised email, any IP | 5/15min | The per-IP bucket does nothing against a botnet guessing one account from many addresses. The email bucket is what catches that: 5 per 15 minutes still tolerates real mistyping but caps distributed guessing at under 500 tries a day per account, before the lockout below even matters. |
+| Lockout | 10 failures in an hour, frozen 15 minutes | Owned here (`AUTH_PASSWORD_LOCKOUT_*`, env-overridable, min-clamped). Ten is far above mistyping and far below a useful guessing rate; fifteen minutes makes guessing pointless without stranding somebody whose only login method is a password for the day. |
+| Registration and password change per IP | Same bucket policy as login | No separate number is set for these, so use the login one: both are anonymous (registration) or low-frequency (change) writes with the same abuse shape, and one knob is easier to operate than three. |
+
+The lockout freezes the **password**, not the person: passkey, OIDC and
+magic-link sign-ins still work during it (see
+`../auth-magic-link/README.md` for the way back in). Nothing clears the
+lockout row except wall-clock expiry and a successful password
+login/change — an alternative-method sign-in bypasses the freeze, it
+does not lift it.
+
+Captcha, where the port is present, is required on login (and on
+magic-link request): verification failure refuses the request rather
+than letting it through, so a captcha outage fails closed.
 
 ## Nothing here says whether an address has an account
 
@@ -268,4 +296,4 @@ rehashing on the strength of an unreadable value would be guessing.
 
 ---
 
-MIT. Built in the open for [Cratefield](https://cratefield.com), a [Factory Zero](https://factory0.ventures) venture.
+MIT. Part of the [Cratefield harness](https://github.com/Cratefield/harness).
