@@ -39,3 +39,4 @@ cratefield-module-privacy = { workspace = true }
 cratefield-module-telemetry = { path = "../module-telemetry" }
 cratefield-module-device-auth = { path = "../module-device-auth" }
 cratefield-module-orgs = { path = "../module-orgs" }
+cratefield-module-crm = { path = "../module-crm" }

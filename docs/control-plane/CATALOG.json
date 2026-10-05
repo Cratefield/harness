@@ -616,6 +616,106 @@
         ],
         "surface": "Every route as a declared JSON action — organizations, memberships, roles and invitations — with no HTML page of its own; the admin listing is the one action gated on the admin token or a staff-organization member."
       }
+    },
+    {
+      "slug": "crm",
+      "name": "CRM",
+      "summary": "Contacts, organisations and the tags that label them, filed idempotently by natural key: the same email address is one contact, and a stale write is refused rather than overwriting a newer edit.",
+      "tier": "optional",
+      "depends_on": [],
+      "releases": [
+        {
+          "version": "0.1.0",
+          "digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+          "review": {
+            "approved": {
+              "reviewer": "release-review",
+              "reviewed_at": "2026-09-01T00:00:00Z"
+            }
+          }
+        }
+      ],
+      "detail": {
+        "what_it_is": "Contacts, organisations and the tags that label them, in your own database. Filing a person is idempotent: the contact is keyed on its normalized email address and the organization on its domain, so the same address filed twice is one contact that is updated rather than duplicated — which is what makes it safe to call from an event handler that may run twice. Every write is optimistic, so a stale edit is refused with `409 crm-stale-generation` rather than overwriting a newer change. Every route is an admin action behind the deployment's `ADMIN_TOKEN`, so there is no public write endpoint. A contact is personal data and is erased with its taggings; an organization is a business record and survives.",
+        "crate_name": "cratefield-module-crm",
+        "needs": [
+          "Database",
+          "IdGen",
+          "Clock"
+        ],
+        "optional": [
+          "Auth"
+        ],
+        "tables": [
+          "crm_contacts",
+          "crm_organisations",
+          "crm_tags",
+          "crm_taggings"
+        ],
+        "routes": [
+          {
+            "method": "GET",
+            "path": "/v1/crm/admin/contacts.csv",
+            "note": "Export a page of contacts as CSV."
+          },
+          {
+            "method": "GET",
+            "path": "/v1/crm/admin/organisations.csv",
+            "note": "Export a page of organizations as CSV."
+          },
+          {
+            "method": "POST",
+            "path": "/v1/crm/admin/contacts",
+            "note": "File a contact; keyed on its normalized address, so a repeat is an update."
+          },
+          {
+            "method": "PATCH",
+            "path": "/v1/crm/admin/contacts/{id}",
+            "note": "Edit a contact; the body carries the generation it was read at."
+          },
+          {
+            "method": "DELETE",
+            "path": "/v1/crm/admin/contacts/{id}",
+            "note": "Remove a contact and its taggings."
+          },
+          {
+            "method": "POST",
+            "path": "/v1/crm/admin/contacts/merge",
+            "note": "Fold one contact into another: fill the survivor's gaps, merge their data, move their tags."
+          },
+          {
+            "method": "POST",
+            "path": "/v1/crm/admin/organisations",
+            "note": "File an organization; keyed on its domain, so a repeat is an update."
+          },
+          {
+            "method": "PATCH",
+            "path": "/v1/crm/admin/organisations/{id}",
+            "note": "Edit an organization; the body carries the generation it was read at."
+          },
+          {
+            "method": "DELETE",
+            "path": "/v1/crm/admin/organisations/{id}",
+            "note": "Remove an organization."
+          },
+          {
+            "method": "POST",
+            "path": "/v1/crm/admin/tags",
+            "note": "Create a tag."
+          },
+          {
+            "method": "POST",
+            "path": "/v1/crm/admin/tags/tag",
+            "note": "File a tag against a contact, organization or other record."
+          },
+          {
+            "method": "POST",
+            "path": "/v1/crm/admin/tags/untag",
+            "note": "Take a tag off the record it labels."
+          }
+        ],
+        "surface": "Every route as a declared JSON action, with the two CSV exports given their declared table view, and no HTML page of its own; all of them are admin actions gated on the admin token."
+      }
     }
   ]
 }

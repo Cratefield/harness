@@ -156,6 +156,11 @@ fn instance() -> &'static (Harness, Cloudflare) {
                     .build(),
             )
             .module(admin::AdminModule)
+            // Contacts, organisations and the tags that label them (issue
+            // #572). It takes no settings, and every route it declares is an
+            // admin action behind `ADMIN_TOKEN` — so with no token configured
+            // they answer `401`, never open.
+            .module(cratefield::crm::Crm::new())
             // The Actor port's demo kinds (issue #583): registered from the
             // same `actor_handlers()` the `Actors` object serves with, so a
             // kind answers the same in a Worker and on native.
