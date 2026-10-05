@@ -45,6 +45,7 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
+  WRANGLER_VERSION: "4.147.0"
 
 jobs:
   plan:
@@ -128,26 +129,47 @@ jobs:
         run: |
           echo "::notice::instances/${{ matrix.instance }} has placeholder D1 ids for ${TARGET_ENV}; skipping. See docs/auth/MANAGED-INSTANCES.md."
 
-      - uses: dtolnay/rust-toolchain@master
+      # In this job rather than a preflight job: the Cloudflare secrets are
+      # scoped to the instance's GitHub environment, so they only exist here.
+      # An instance whose environment has no credentials is skipped rather
+      # than failed, so `main` stays green before the account is wired and a
+      # real failure remains visible. Only asked once the instance is known
+      # to be provisioned, so the two notices never both fire.
+      - name: Check Cloudflare credentials
+        id: credentials
         if: steps.instance.outputs.ready == 'true'
+        env:
+          HAS_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN != '' }}
+          HAS_ACCOUNT: ${{ secrets.CLOUDFLARE_ACCOUNT_ID != '' }}
+        run: |
+          if [ "$HAS_TOKEN" = "true" ] && [ "$HAS_ACCOUNT" = "true" ]; then
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice title=Auth deploy skipped::CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID are not both set as secrets of auth-${{ matrix.instance }}-${TARGET_ENV}; skipping. See docs/auth/MANAGED-INSTANCES.md."
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: dtolnay/rust-toolchain@master
+        if: steps.instance.outputs.ready == 'true' && steps.credentials.outputs.configured == 'true'
         with:
           toolchain: "1.98.1"
           targets: wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@v2
-        if: steps.instance.outputs.ready == 'true'
+        if: steps.instance.outputs.ready == 'true' && steps.credentials.outputs.configured == 'true'
 
       - name: Deploy + apply migrations
-        if: steps.instance.outputs.ready == 'true'
+        if: steps.instance.outputs.ready == 'true' && steps.credentials.outputs.configured == 'true'
         uses: cloudflare/wrangler-action@v3
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          wranglerVersion: ${{ env.WRANGLER_VERSION }}
           workingDirectory: ${{ env.INSTANCE_DIR }}
           command: deploy ${{ steps.instance.outputs.env_flag }}
           preCommands: |
             cargo install -q worker-build
-            npx wrangler d1 migrations apply DB ${{ steps.instance.outputs.env_flag }} --remote
+            npx --yes "wrangler@${WRANGLER_VERSION}" d1 migrations apply DB ${{ steps.instance.outputs.env_flag }} --remote
 
       - name: Smoke ${{ steps.instance.outputs.url }}
-        if: steps.instance.outputs.ready == 'true'
+        if: steps.instance.outputs.ready == 'true' && steps.credentials.outputs.configured == 'true'
         run: ./crates/auth-worker/smoke.sh "${{ steps.instance.outputs.url }}"

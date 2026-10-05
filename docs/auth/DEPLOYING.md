@@ -28,7 +28,10 @@ instance itself. An instance whose D1 ids are still `REPLACE_WITH_*` is not
 provisioned and is skipped with a notice. Cloudflare credentials are read per
 GitHub environment (`auth-<app>-staging`, `auth-<app>-production`), falling
 back to the repository's secrets, so instances can live on different
-Cloudflare accounts.
+Cloudflare accounts. If `CLOUDFLARE_API_TOKEN` or `CLOUDFLARE_ACCOUNT_ID` is
+missing for that environment, the job is skipped with a notice rather than
+failing — set both as environment secrets as
+[MANAGED-INSTANCES.md](MANAGED-INSTANCES.md) describes.
 
 By hand, from an instance's directory:
 
