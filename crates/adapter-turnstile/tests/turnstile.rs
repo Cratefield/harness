@@ -347,6 +347,71 @@ async fn binding_reports_configured_checks() {
     );
 }
 
+// --- issue #710: one widget, several expected hostnames ---
+
+#[pollster::test]
+async fn expected_hostnames_accepts_any_member() {
+    // A page served on both the apex and `www` runs one widget for both,
+    // and siteverify reports whichever host the visitor used (issue #710).
+    let captcha = turnstile(ok_json(
+        r#"{"success":true,"error-codes":[],"hostname":"www.example.com"}"#,
+    ))
+    .expected_hostnames(["example.com", "www.example.com"]);
+    let verdict = captcha.verify("tok", None).await.expect("ok");
+    assert_eq!(
+        verdict,
+        Verdict {
+            ok: true,
+            reason: None
+        }
+    );
+}
+
+#[pollster::test]
+async fn expected_hostnames_rejects_non_member() {
+    let captcha = turnstile(ok_json(
+        r#"{"success":true,"error-codes":[],"hostname":"evil.example"}"#,
+    ))
+    .expected_hostnames(["example.com", "www.example.com"]);
+    let verdict = captcha.verify("tok", None).await.expect("ok");
+    assert_eq!(
+        verdict,
+        Verdict {
+            ok: false,
+            reason: Some("hostname-mismatch".to_string()),
+        }
+    );
+}
+
+#[pollster::test]
+async fn expected_hostnames_rejects_response_without_hostname() {
+    // Absent is not "passed", exactly as for the single-hostname binding.
+    let captcha = turnstile(ok_json(r#"{"success":true,"error-codes":[]}"#))
+        .expected_hostnames(["example.com", "www.example.com"]);
+    let verdict = captcha.verify("tok", None).await.expect("ok");
+    assert_eq!(
+        verdict,
+        Verdict {
+            ok: false,
+            reason: Some("hostname-mismatch".to_string()),
+        }
+    );
+}
+
+#[pollster::test]
+async fn binding_reports_hostname_bound_for_set() {
+    let captcha = turnstile(ok_json(r#"{"success":true}"#))
+        .expected_hostnames(["example.com", "www.example.com"]);
+    assert_eq!(
+        captcha.binding(),
+        Some(CaptchaBinding {
+            hostname_bound: true,
+            action_bound: false,
+            fail_open: false,
+        })
+    );
+}
+
 // --- issue #436: a malformed token is refused before any network call ---
 
 #[pollster::test]

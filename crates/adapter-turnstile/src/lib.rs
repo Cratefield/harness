@@ -8,11 +8,12 @@
 //! `None` so the port is not provided at all — and `Harness::build` then
 //! refuses a production venture with `HumanForm` routes (issue #133).
 //!
-//! A bound adapter checks what it was bound to: an expected hostname
-//! rejects responses from any other site (including a response that omits
-//! the hostname), and an expected action rejects a token minted for a
-//! different flow. [`Captcha::binding`] reports both, so the harness can
-//! tell "port present" from "verification configured".
+//! A bound adapter checks what it was bound to: a set of expected
+//! hostnames — an apex and its `www`, say — rejects responses from any
+//! other site (including a response that omits the hostname), and an
+//! expected action rejects a token minted for a different flow.
+//! [`Captcha::binding`] reports both, so the harness can tell "port
+//! present" from "verification configured".
 //!
 //! The siteverify form body is fully percent-encoded and the token is
 //! shape-checked before anything is sent: a malformed token verifies as
@@ -36,7 +37,9 @@ pub struct Turnstile {
     http: Arc<dyn HttpClient>,
     clock: Arc<dyn Clock>,
     secret: String,
-    expected_hostname: Option<String>,
+    /// Empty means unbound; [`Turnstile::expected_hostname`] binds a
+    /// one-element vec, [`Turnstile::expected_hostnames`] a set.
+    expected_hostnames: Vec<String>,
     expected_action: Option<String>,
     fail_open: bool,
 }
@@ -51,21 +54,22 @@ impl Turnstile {
             http,
             clock,
             secret: secret.into(),
-            expected_hostname: None,
+            expected_hostnames: Vec::new(),
             expected_action: None,
             fail_open: false,
         }
     }
 
     /// `Some(...)` only when `TURNSTILE_SECRET` is set: an absent secret
-    /// means the port is not provided at all. `TURNSTILE_HOSTNAME` and
-    /// `TURNSTILE_ACTION` bind the checks when present (issue #133: an
-    /// unbound adapter cannot support a production `HumanForm` route).
+    /// means the port is not provided at all. `TURNSTILE_HOSTNAME` (a
+    /// comma-separated list of hostnames) and `TURNSTILE_ACTION` bind the
+    /// checks when present (issue #133: an unbound adapter cannot support a
+    /// production `HumanForm` route).
     pub fn from_env(http: Arc<dyn HttpClient>, clock: Arc<dyn Clock>) -> Option<Self> {
         let secret = std::env::var("TURNSTILE_SECRET").ok()?;
         let mut turnstile = Self::new(http, clock, secret);
-        if let Ok(hostname) = std::env::var("TURNSTILE_HOSTNAME") {
-            turnstile = turnstile.expected_hostname(hostname);
+        if let Ok(hostnames) = std::env::var("TURNSTILE_HOSTNAME") {
+            turnstile = turnstile.expected_hostnames(parse_hostnames(&hostnames));
         }
         if let Ok(action) = std::env::var("TURNSTILE_ACTION") {
             turnstile = turnstile.expected_action(action);
@@ -77,8 +81,35 @@ impl Turnstile {
     /// — or a response that carries no hostname at all — fails the verdict
     /// with `hostname-mismatch` (issue #133: absent is not "passed").
     #[must_use]
-    pub fn expected_hostname(mut self, hostname: impl Into<String>) -> Self {
-        self.expected_hostname = Some(hostname.into());
+    pub fn expected_hostname(self, hostname: impl Into<String>) -> Self {
+        self.expected_hostnames([hostname.into()])
+    }
+
+    /// Verifies the response hostname against this set: any member passes,
+    /// and a mismatch — or a response that carries no hostname at all —
+    /// fails the verdict with `hostname-mismatch` (issue #710: a page
+    /// served on both the apex and `www` runs one widget for both hosts,
+    /// and siteverify reports whichever host the visitor used).
+    ///
+    /// Pass at least one hostname: an empty iterator leaves the adapter
+    /// unbound and accepting of every response, whereas the env path reads
+    /// "nothing usable" as *bound* so a malformed value keeps failing
+    /// closed. `Harness::build` rejects that unbound shape for a production
+    /// `HumanForm` route (`binding.hostname_bound` must be true), so the
+    /// mistake surfaces at build time rather than at the first verification.
+    ///
+    /// Members are matched exactly as given: nothing is trimmed and no
+    /// empty entry is dropped, so `["example.com", ""]` would match a
+    /// response carrying an empty hostname. The comma-separated
+    /// `TURNSTILE_HOSTNAME` path does trim and drop empties, so prefer the
+    /// env list or pass already-trimmed names.
+    #[must_use]
+    pub fn expected_hostnames<I, S>(mut self, hostnames: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.expected_hostnames = hostnames.into_iter().map(Into::into).collect();
         self
     }
 
@@ -109,6 +140,25 @@ impl Turnstile {
             },
         }
     }
+}
+
+/// Splits `TURNSTILE_HOSTNAME` into the hostnames it lists: comma
+/// separated, whitespace trimmed (issue #710 — a page served on both the
+/// apex and `www` uses one widget for both hosts, and siteverify reports
+/// whichever host the visitor used). A value that lists nothing usable
+/// binds that raw value rather than nothing, so a malformed
+/// configuration keeps failing closed instead of silently unbound.
+fn parse_hostnames(value: &str) -> Vec<String> {
+    let listed: Vec<String> = value
+        .split(',')
+        .map(str::trim)
+        .filter(|hostname| !hostname.is_empty())
+        .map(str::to_string)
+        .collect();
+    if listed.is_empty() {
+        return vec![value.to_string()];
+    }
+    listed
 }
 
 /// Turnstile tokens are ASCII `[A-Za-z0-9._-]`, bounded in length; a
@@ -242,11 +292,13 @@ impl Captcha for Turnstile {
         // A bound check that the provider did not answer is a mismatch:
         // absent hostname/action means the widget was not bound as this
         // deployment requires (issue #133).
-        if let Some(expected) = &self.expected_hostname
-            && parsed
-                .hostname
-                .as_deref()
-                .is_none_or(|actual| actual != expected)
+        if !self.expected_hostnames.is_empty()
+            && parsed.hostname.as_deref().is_none_or(|actual| {
+                !self
+                    .expected_hostnames
+                    .iter()
+                    .any(|expected| expected == actual)
+            })
         {
             return Ok(Verdict {
                 ok: false,
@@ -274,7 +326,7 @@ impl Captcha for Turnstile {
 
     fn binding(&self) -> Option<CaptchaBinding> {
         Some(CaptchaBinding {
-            hostname_bound: self.expected_hostname.is_some(),
+            hostname_bound: !self.expected_hostnames.is_empty(),
             action_bound: self.expected_action.is_some(),
             fail_open: self.fail_open,
         })
@@ -323,6 +375,55 @@ mod tests {
             encode_form("secret-value", "tok", None),
             "secret=secret-value&response=tok"
         );
+    }
+
+    #[test]
+    fn parse_hostnames_splits_a_comma_list_and_trims() {
+        assert_eq!(
+            parse_hostnames("a.com, www.a.com"),
+            vec!["a.com".to_string(), "www.a.com".to_string()]
+        );
+        assert_eq!(
+            parse_hostnames("  a.com ,  www.a.com  "),
+            vec!["a.com".to_string(), "www.a.com".to_string()]
+        );
+    }
+
+    #[test]
+    fn parse_hostnames_takes_a_single_value_whole() {
+        assert_eq!(parse_hostnames("a.com"), vec!["a.com".to_string()]);
+    }
+
+    #[test]
+    fn parse_hostnames_drops_an_empty_element_between_two_hostnames() {
+        // A doubled comma is a typo in the env value, not a hostname: the
+        // interior empty must not become a member that a response could
+        // match against (issue #710 made the list multi-valued, so an
+        // interior empty is now reachable at all).
+        assert_eq!(
+            parse_hostnames("a.com,,b.com"),
+            vec!["a.com".to_string(), "b.com".to_string()]
+        );
+    }
+
+    #[test]
+    fn parse_hostnames_drops_an_empty_tail_from_a_trailing_comma() {
+        // The same typo at the end of the list still leaves the two real
+        // hostnames bound, rather than degrading to the raw value.
+        assert_eq!(parse_hostnames("a.com,"), vec!["a.com".to_string()]);
+    }
+
+    // `from_env` itself cannot be exercised here: env mutation is unsafe in
+    // edition 2024, so `parse_hostnames` — the part that decides what a
+    // `TURNSTILE_HOSTNAME` value binds — is unit-tested directly.
+    #[test]
+    fn a_value_listing_nothing_usable_stays_bound() {
+        // The fail-closed property: an empty (or whitespace-only) value
+        // binds its raw value rather than nothing, so a misconfigured
+        // deployment still rejects every response.
+        assert_eq!(parse_hostnames(""), vec![String::new()]);
+        assert_eq!(parse_hostnames("   "), vec!["   ".to_string()]);
+        assert_eq!(parse_hostnames(","), vec![",".to_string()]);
     }
 
     #[test]
