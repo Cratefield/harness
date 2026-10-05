@@ -1149,6 +1149,95 @@ fn orgs() -> ModuleDetail {
     )
 }
 
+/// The `crm` detail.
+fn crm() -> ModuleDetail {
+    detail(
+        "Contacts, organisations and the tags that label them, in your own database. Filing a \
+                 person is idempotent: the contact is keyed on its normalized email address \
+                 and the organization on its domain, so the same address filed twice is one \
+                 contact that is updated rather than duplicated — which is what makes it safe \
+                 to call from an event handler that may run twice. Every write is optimistic, \
+                 so a stale edit is refused with `409 crm-stale-generation` rather than \
+                 overwriting a newer change. Every route is an admin action behind the \
+                 deployment's `ADMIN_TOKEN`, so there is no public write endpoint. A contact is \
+                 personal data and is erased with its taggings; an organization is a business \
+                 record and survives.",
+        "cratefield-module-crm",
+        &["Database", "IdGen", "Clock"],
+        &["Auth"],
+        &[
+            "crm_contacts",
+            "crm_organisations",
+            "crm_tags",
+            "crm_taggings",
+        ],
+        vec![
+            route(
+                "GET",
+                "/v1/crm/admin/contacts.csv",
+                "Export a page of contacts as CSV.",
+            ),
+            route(
+                "GET",
+                "/v1/crm/admin/organisations.csv",
+                "Export a page of organizations as CSV.",
+            ),
+            route(
+                "POST",
+                "/v1/crm/admin/contacts",
+                "File a contact; keyed on its normalized address, so a repeat is an update.",
+            ),
+            route(
+                "PATCH",
+                "/v1/crm/admin/contacts/{id}",
+                "Edit a contact; the body carries the generation it was read at.",
+            ),
+            route(
+                "DELETE",
+                "/v1/crm/admin/contacts/{id}",
+                "Remove a contact and its taggings.",
+            ),
+            route(
+                "POST",
+                "/v1/crm/admin/contacts/merge",
+                "Fold one contact into another: fill the survivor's gaps, merge their data, \
+                 move their tags.",
+            ),
+            route(
+                "POST",
+                "/v1/crm/admin/organisations",
+                "File an organization; keyed on its domain, so a repeat is an update.",
+            ),
+            route(
+                "PATCH",
+                "/v1/crm/admin/organisations/{id}",
+                "Edit an organization; the body carries the generation it was read at.",
+            ),
+            route(
+                "DELETE",
+                "/v1/crm/admin/organisations/{id}",
+                "Remove an organization.",
+            ),
+            route("POST", "/v1/crm/admin/tags", "Create a tag."),
+            route(
+                "POST",
+                "/v1/crm/admin/tags/tag",
+                "File a tag against a contact, organization or other record.",
+            ),
+            route(
+                "POST",
+                "/v1/crm/admin/tags/untag",
+                "Take a tag off the record it labels.",
+            ),
+        ],
+        Some(
+            "Every route as a declared JSON action, with the two CSV exports given their \
+             declared table view, and no HTML page of its own; all of them are admin actions \
+             gated on the admin token.",
+        ),
+    )
+}
+
 /// The curated catalog the control plane ships with: the manifest crate's
 /// `builtin()` catalog — the one list of the harness modules, with their
 /// tiers, dependency edges and pinned releases — with each entry's
@@ -1194,6 +1283,7 @@ fn detail_for(slug: &str) -> ModuleDetail {
         "telemetry" => telemetry(),
         "device-auth" => device_auth(),
         "orgs" => orgs(),
+        "crm" => crm(),
         _ => ModuleDetail::default(),
     }
 }

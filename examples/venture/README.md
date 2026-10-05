@@ -2,12 +2,16 @@
 
 The smallest complete Factory Zero venture: `cratefield-core` +
 `cratefield-runtime-cloudflare`, modules (`sample` row round-trip,
-`email-signup`, `waitlist`, and `orgs` — organizations, memberships, roles
-and invitations), one Worker, one local D1.
+`email-signup`, `waitlist`, `orgs` — organizations, memberships, roles
+and invitations, and `crm` — contacts, organizations and tags), one Worker,
+one local D1.
 
 `orgs` is mounted with the roles `owner`, `manager`, `staff` and a staff
 organization; `src/admin.rs` adds `GET /v1/admin/ping` behind its staff guard
 (a staff member, or a machine holding `ADMIN_TOKEN`).
+
+`crm` is mounted with its defaults — it takes no settings, and every route
+it declares is an admin action behind the same `ADMIN_TOKEN`.
 
 CI builds it to wasm with `worker-build --release` so a native-only
 dependency can never slip into a module, then boots it under
