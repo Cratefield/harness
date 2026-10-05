@@ -120,10 +120,16 @@ Object's storage is not a backup of your data.
 rather than from inside a socket — has **no Workers adapter**. Reaching a room
 from outside means fetching the object's stub with an internal request, and
 that needs a protocol between the Worker and the object, and something to stop
-anything else speaking it. `Cloudflare::provides()` therefore does not list
-`Port::Realtime`, so a module that puts it in `optional()` — the notifications
-module does, to push inbox updates into a room — gets `None` on Workers and
-degrades, which is what `optional()` is for. The native runtime has both halves.
+anything else speaking it.
+
+The `Actors` port ([ACTORS.md](ACTORS.md), issue #583) now builds exactly that
+protocol — a signed Worker-to-object frame the object answers **403** unless it
+verifies — so the missing piece is no longer the protocol but the move: carrying
+Realtime's `broadcast`/`members` onto it is a follow-up. Until then
+`Cloudflare::provides()` does not list `Port::Realtime`, so a module that puts it
+in `optional()` — the notifications module does, to push inbox updates into a
+room — gets `None` on Workers and degrades, which is what `optional()` is for.
+The native runtime has both halves.
 
 ## On the native runtime
 

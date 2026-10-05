@@ -8,7 +8,8 @@ vendor services that will change. Modules must not.
 
 ## Decision
 `cratefield-core` defines the port traits: `Database`, `Mailer`, `Captcha`,
-`RateLimiter`, `Signer`, `KeyValue`, `HttpClient`, `Clock`, `IdGen`, `Defer`.
+`RateLimiter`, `Signer`, `KeyValue`, `HttpClient`, `Clock`, `IdGen`, `Defer`,
+`Actors`.
 All are `Send + Sync` and object-safe (`Arc<dyn Trait>`). Modules declare which
 ports they `requires()` and which are `optional()`; `Harness::build()` fails
 when a required port is not provided.

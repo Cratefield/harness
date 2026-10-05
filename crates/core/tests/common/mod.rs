@@ -103,6 +103,8 @@ pub struct SampleModule {
     pub requires: &'static [Port],
     pub optional: &'static [Port],
     pub tables: &'static [&'static str],
+    /// Actor kinds this module owns (issue #583).
+    pub actor_kinds: &'static [&'static str],
     pub park: Option<SharedParkGate>,
     pub well_known: bool,
     pub depends_on: &'static [&'static str],
@@ -118,6 +120,7 @@ impl Default for SampleModule {
             requires: &[],
             optional: &[],
             tables: &[],
+            actor_kinds: &[],
             park: None,
             well_known: false,
             depends_on: &[],
@@ -193,6 +196,10 @@ impl Module for SampleModule {
 
     fn tables(&self) -> &'static [&'static str] {
         self.tables
+    }
+
+    fn actor_kinds(&self) -> &'static [&'static str] {
+        self.actor_kinds
     }
 
     fn migrations(&self) -> Migrations {

@@ -5,6 +5,7 @@
 //! Async methods use `async_trait` until native `async fn` in traits is
 //! ergonomic for trait objects.
 
+mod actor;
 mod auth;
 mod blob;
 mod captcha;
@@ -29,6 +30,12 @@ mod text_model;
 mod tracker;
 mod vector_index;
 
+pub use actor::{
+    ACTOR_CALL_TIMEOUT, ActorContext, ActorError, ActorHandler, ActorHandlers, ActorStore,
+    ActorWrites, Actors, MAX_ACTOR_KEY_BYTES, MAX_ACTOR_KIND_BYTES, MAX_ACTOR_MESSAGE_BYTES,
+    MAX_ACTOR_REPLY_BYTES, MAX_ACTOR_VALUE_BYTES, ScopedActors, check_actor_call, run_actor_alarm,
+    run_actor_message, validate_actor_key, validate_actor_kind,
+};
 pub use auth::{Auth, AuthError, Caller, Subject, Unconfigured};
 pub use blob::{
     Blob, BlobError, BlobMeta, BlobObject, BlobPage, BlobStream, DEFAULT_PRESIGN_TTL,
@@ -118,6 +125,10 @@ pub enum Port {
     Clock,
     IdGen,
     Defer,
+    /// Per-key serialized state with transactional storage and an alarm
+    /// (issue #583): the durable-object pattern behind one runtime-neutral
+    /// trait.
+    Actor,
 }
 
 /// Declares [`Port::ALL`] and, from the same list, a match that has to be
@@ -172,6 +183,7 @@ ports!(
     Clock,
     IdGen,
     Defer,
+    Actor,
 );
 
 impl Port {
@@ -198,6 +210,7 @@ impl Port {
             Port::Clock => "Clock",
             Port::IdGen => "IdGen",
             Port::Defer => "Defer",
+            Port::Actor => "actor",
         }
     }
 }
@@ -245,6 +258,10 @@ pub struct Ports {
     pub clock: Option<Arc<dyn Clock>>,
     pub id_gen: Option<Arc<dyn IdGen>>,
     pub defer: Option<Arc<dyn Defer>>,
+    /// Per-key serialized state with transactional storage and an alarm
+    /// (issue #583). The harness wraps it in a [`ScopedActors`] per module,
+    /// so a module only reaches the kinds it declared.
+    pub actors: Option<Arc<dyn Actors>>,
     /// Set by the runtime when the venture mounts sidecar modules. Not a
     /// [`Port`], so `view_for` never copies it and no module can reach it.
     pub dispatcher: Option<Arc<dyn Dispatcher>>,
@@ -292,6 +309,7 @@ impl Ports {
             clock: None,
             id_gen: None,
             defer: None,
+            actors: None,
             dispatcher: None,
             tenants: None,
         }
@@ -343,6 +361,7 @@ impl Ports {
             Port::Clock => self.clock.is_some(),
             Port::IdGen => self.id_gen.is_some(),
             Port::Defer => self.defer.is_some(),
+            Port::Actor => self.actors.is_some(),
         }
     }
 
@@ -431,6 +450,18 @@ impl Ports {
         }
         if allows(&declared, Port::Defer) {
             view.defer.clone_from(&self.defer);
+        }
+        if allows(&declared, Port::Actor) {
+            // Scope the host to this module's declared kinds, the actor
+            // equivalent of the table-ownership rule.
+            view.actors = self.actors.as_ref().map(|actors| {
+                Arc::new(ScopedActors::new(
+                    Arc::clone(actors),
+                    module.name(),
+                    module.actor_kinds(),
+                    self.clock.clone(),
+                )) as Arc<dyn Actors>
+            });
         }
         view
     }

@@ -585,6 +585,7 @@ pub(crate) fn clone_ports(ports: &Ports) -> Ports {
     snapshot.clock.clone_from(&ports.clock);
     snapshot.id_gen.clone_from(&ports.id_gen);
     snapshot.defer.clone_from(&ports.defer);
+    snapshot.actors.clone_from(&ports.actors);
     snapshot
 }
 

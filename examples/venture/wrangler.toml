@@ -27,11 +27,25 @@ bucket_name = "venture-example"
 name = "ROOMS"
 class_name = "Rooms"
 
+# The Actor port (issue #583). Also one class: the kind rides in the object
+# name (`"<kind>:<key>"`), so a second kind is a second handler, not a second
+# class. `ActorDriver` in `cratefield-runtime-cloudflare` is what it forwards
+# to.
+[[durable_objects.bindings]]
+name = "ACTORS"
+class_name = "Actors"
+
 # A class using the WebSocket hibernation API has to be declared in a
 # migration, or the runtime will not accept a socket on its behalf.
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["Rooms"]
+
+# A class with storage but no sockets is declared the same way, one tag later:
+# without a migration naming it the runtime will not instantiate it.
+[[migrations]]
+tag = "v2"
+new_sqlite_classes = ["Actors"]
 
 # The sidecar-mount shape of the same example (issue #258). The default
 # deployment above binds nothing, which is the honest default: mounting a
@@ -67,6 +81,10 @@ migrations_dir = "migrations"
 name = "ROOMS"
 class_name = "Rooms"
 
+[[env.sidecar.durable_objects.bindings]]
+name = "ACTORS"
+class_name = "Actors"
+
 [[env.sidecar.r2_buckets]]
 binding = "R2"
 bucket_name = "venture-example"
@@ -74,3 +92,7 @@ bucket_name = "venture-example"
 [[env.sidecar.migrations]]
 tag = "v1"
 new_sqlite_classes = ["Rooms"]
+
+[[env.sidecar.migrations]]
+tag = "v2"
+new_sqlite_classes = ["Actors"]

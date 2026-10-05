@@ -360,6 +360,18 @@ pub trait Module: Send + Sync + 'static {
     fn tables(&self) -> &'static [&'static str] {
         &[]
     }
+    /// Actor kinds this module owns, each `[a-z0-9_-]`; duplicates across
+    /// modules are a build error, and so is a kind with no handler registered
+    /// through
+    /// [`HarnessBuilder::actor`](crate::HarnessBuilder::actor).
+    ///
+    /// Like [`tables`](Module::tables), this is the ownership rule for the
+    /// actor port: the harness scopes the module's view to exactly these
+    /// kinds, so a module cannot reach another's actor. Defaulting to empty
+    /// keeps every existing module compiling unchanged.
+    fn actor_kinds(&self) -> &'static [&'static str] {
+        &[]
+    }
     /// What this module holds about a person, per table.
     ///
     /// Read by `cratefield-module-privacy` to export a subject's data, to
