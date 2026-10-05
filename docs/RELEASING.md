@@ -216,6 +216,7 @@ crate exists**, so the very first release of each crate is manual:
    cargo publish -p cratefield-push-auth      # before adapter-apns, -fcm, -webpush and the CLI
    cargo publish -p cratefield-adapter-github-app  # after push-auth; before the facade
    cargo publish -p cratefield-adapter-classifier-llm
+   cargo publish -p cratefield-adapter-colonizer
    cargo publish -p cratefield-adapter-github-issues
    cargo publish -p cratefield-adapter-owlpost
    cargo publish -p cratefield-adapter-polar
