@@ -45,6 +45,11 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   NEXT_TELEMETRY_DISABLED: 1
+  # Named explicitly, not resolved from node_modules: the root `npm ci` installs
+  # the wrangler that @cloudflare/vitest-pool-workers pins (4.124.0), whose
+  # workerd predates the Worker's `compatibility_date` (2026-09-01) and refuses
+  # to start it.
+  WRANGLER: wrangler@4.147.0
 
 jobs:
   e2e:
@@ -80,11 +85,11 @@ jobs:
         run: npm run idp
       - name: Apply local D1 migrations
         working-directory: examples/next-auth/idp
-        run: bunx wrangler d1 migrations apply DB --local
+        run: bunx "$WRANGLER" d1 migrations apply DB --local
       - name: Start wrangler dev
         working-directory: examples/next-auth/idp
         run: |
-          nohup bunx wrangler dev --local --port 8787 > "$RUNNER_TEMP/wrangler.log" 2>&1 &
+          nohup bunx "$WRANGLER" dev --local --port 8787 > "$RUNNER_TEMP/wrangler.log" 2>&1 &
           for _ in $(seq 1 60); do
             code=$(curl -s -o /dev/null -w "%{http_code}" -m 3 http://127.0.0.1:8787/__health || true)
             if [ "$code" = "200" ]; then echo "worker ready"; exit 0; fi

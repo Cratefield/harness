@@ -36,8 +36,8 @@ npm run idp
 
 # 3. Build and start the local IdP on http://localhost:8787.
 cd idp
-npx wrangler d1 migrations apply DB --local
-npx wrangler dev --local --port 8787     # leave running
+npx wrangler@4.147.0 d1 migrations apply DB --local
+npx wrangler@4.147.0 dev --local --port 8787     # leave running
 
 # 4. Register this app's client + test user, writing .env.local.
 cd -
@@ -51,6 +51,10 @@ npm run start                             # leave running
 npx playwright install --with-deps chromium   # once
 npm run test:e2e
 ```
+
+Wrangler is named with its version because the repository root's `npm ci`
+installs an older one (pinned by `@cloudflare/vitest-pool-workers`) whose
+runtime cannot start a Worker with the IdP's `compatibility_date`.
 
 `npm run test:e2e` starts the app itself (Playwright's `webServer`) and reuses
 an already-running `npm run start` when there is one. The IdP is started outside
