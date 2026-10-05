@@ -193,6 +193,22 @@ pub(crate) const REGISTRY: &[ModuleCodegen] = &[
         needs_mailer: false,
         needs_push: false,
     },
+    ModuleCodegen {
+        slug: "crm",
+        name: "CRM",
+        summary: "Contacts, organisations and the tags that label them, filed idempotently \
+                  by natural key: the same email address is one contact, and a stale write \
+                  is refused rather than overwriting a newer edit.",
+        version: "0.1.0",
+        feature: "crm",
+        module: "crm",
+        type_name: "Crm",
+        has_templates: false,
+        // `Mailer` and `Push` are not ports this module declares, so there
+        // is nothing to wire here.
+        needs_mailer: false,
+        needs_push: false,
+    },
 ];
 
 fn codegen_for(slug: &str) -> Option<&'static ModuleCodegen> {

@@ -36,6 +36,7 @@ fn pairs() -> Vec<(CatalogModule, Box<dyn Module>)> {
         // so its defaults stand in for the metadata (ports, tables, surface),
         // which do not depend on the settings.
         Box::new(cratefield_module_orgs::Orgs::default()),
+        Box::new(cratefield_module_crm::Crm::new()),
     ];
     let catalog = curated();
     assert_eq!(

@@ -44,6 +44,10 @@ const VENTURES: &[(&str, &[ComposedModule])] = &[
             ("email-signup", Some("module-email-signup")),
             ("waitlist", Some("module-waitlist")),
             ("notifications", Some("module-notifications")),
+            // In the builder's order the CRM comes after `orgs` and the
+            // venture's own `admin` module, neither of which ships
+            // migrations of its own, so it follows `notifications` here.
+            ("crm", Some("module-crm")),
         ],
     ),
 ];
