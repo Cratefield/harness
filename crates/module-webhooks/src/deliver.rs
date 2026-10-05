@@ -1,11 +1,12 @@
-//! The drain: lease due outbox rows, sign and POST each one, and file the
+//! The drain: lease due outbox rows within the invocation's
+//! [`ScheduledBudget`] (ADR 0023), sign and POST each one, and file the
 //! outcome — complete, retry with backoff, or dead-letter. This is the
 //! whole delivery policy of the module, in one place.
 
 use bytes::Bytes;
 use cratefield_core::{
-    Clock, DbError, HttpClient, HttpError, IdGen, ModuleConfig, ModuleContext, Outbox,
-    OutboxRecord, UlidIdGen,
+    Clock, DbError, DrainOptions, HttpClient, HttpError, IdGen, ModuleConfig, ModuleContext,
+    Outbox, OutboxRecord, Processed, ScheduledBudget, UlidIdGen,
 };
 use hmac::{Hmac, KeyInit, Mac};
 use http::header::CONTENT_TYPE;
@@ -14,9 +15,11 @@ use serde::Serialize;
 use sha2::Sha256;
 use std::fmt::Write as _;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
+use time::OffsetDateTime;
 
-use crate::clock::{iso, plus_secs};
+use crate::clock::iso;
 use crate::store::{self, DeadLetterReason, DeliveryJob, GiveUp};
 
 /// The one header a delivery is verified by, Stripe-style:
@@ -36,19 +39,27 @@ const BACKOFF_BASE_SECS: u64 = 30;
 const BACKOFF_MAX_SECS: u64 = 3_600;
 /// How long a claimed row stays leased to one drainer.
 const LEASE_SECS: i64 = 300;
-/// Rows claimed per pass. A pass delivers sequentially — webhook
-/// receivers answer well within the [`LEASE_SECS`] the claim holds, and a
-/// sequential pass keeps the delivery log in attempt order.
+/// Rows claimed per pass, before the budget caps it further. A pass
+/// delivers sequentially — webhook receivers answer well within the
+/// [`LEASE_SECS`] the claim holds, and a sequential pass keeps the
+/// delivery log in attempt order.
 const DRAIN_BATCH: u64 = 16;
+/// What the [`ScheduledBudget`] charges per row processed: one subrequest
+/// per delivery attempt — at most one outbound POST — a conservative count
+/// (ADR 0023 counts the unit of work, not the database writes around it).
+const SUBREQUESTS_PER_DELIVERY: u32 = 1;
 
 /// What one drain pass did.
 ///
 /// A per-row failure never aborts the pass; it is counted in `failed` and
-/// the row keeps its lease until that expires, exactly the posture
-/// `module-notifications`' drain takes.
+/// the row is due again when its five-minute lease would have lapsed,
+/// exactly the posture `module-notifications`' drain takes. The pass does
+/// stop early — releasing the rest, still due, for the next tick — when
+/// the invocation's [`ScheduledBudget`] runs out, which `deferred` counts.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct DrainReport {
-    /// Rows this drainer won the lease on.
+    /// Rows this pass processed — one subrequest charged each; the budget
+    /// allowed this many.
     pub claimed: usize,
     /// Answered 2xx: the row is completed.
     pub delivered: usize,
@@ -60,29 +71,41 @@ pub struct DrainReport {
     /// enqueue and the drain.
     pub dropped: usize,
     /// Rows whose delivery errored in a way this pass could not file —
-    /// the log write itself failed. The row keeps its lease.
+    /// the log write itself failed. The row is due again when its lease
+    /// would have lapsed.
     pub failed: usize,
+    /// Claimed rows released untouched because the budget ran out: still
+    /// queued, due immediately, for the next tick.
+    pub deferred: u64,
 }
 
-impl DrainReport {
-    /// One row's outcome, counted.
-    fn record(&mut self, outcome: Outcome) {
-        match outcome {
-            Outcome::Delivered => self.delivered += 1,
-            Outcome::Retried => self.retried += 1,
-            Outcome::DeadLettered => self.dead_lettered += 1,
-            Outcome::Dropped => self.dropped += 1,
-        }
-    }
-}
-
-/// The filing of one claimed row.
+/// The filing of one claimed row: what the report counts, and what the
+/// drain maps to a [`Processed`] for the outbox.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Outcome {
+enum Filed {
+    /// 2xx: the row completes.
     Delivered,
-    Retried,
+    /// Transient failure: retry at this instant, counting one attempt.
+    Retried(OffsetDateTime),
+    /// Terminal: dead-lettered, the row already moved out of the outbox.
     DeadLettered,
+    /// The endpoint is gone: the row completes — nobody is subscribed.
     Dropped,
+}
+
+/// The handler's outcome counters.
+///
+/// Atomics rather than a `Cell`/`RefCell`: the `scheduled` future is `Send`
+/// (core's `BoxFuture` carries `+ Send`) and a `&RefCell<T>` is not, so the
+/// handler cannot hold one across an await. `&Counters` is `Send + Sync`,
+/// and the handler runs one row at a time, so nothing contends.
+#[derive(Debug, Default)]
+struct Counters {
+    delivered: AtomicUsize,
+    retried: AtomicUsize,
+    dead_lettered: AtomicUsize,
+    dropped: AtomicUsize,
+    failed: AtomicUsize,
 }
 
 /// The delivery as the receiver sees it: the event's identity, the
@@ -139,8 +162,10 @@ pub(crate) fn backoff(attempts_made: i64) -> Duration {
 }
 
 /// The clock reading one pass works in: the stored RFC 3339 spelling for
-/// every database timestamp, and Unix seconds for the signature.
+/// every database timestamp, Unix seconds for the signature, and the
+/// `OffsetDateTime` itself for the timestamps the outbox applies.
 struct Timestamps {
+    at: OffsetDateTime,
     iso: String,
     unix: i64,
 }
@@ -152,21 +177,32 @@ struct Timestamps {
 fn now_timestamps(clock: &Arc<dyn Clock>) -> Timestamps {
     let at = clock.now();
     Timestamps {
+        at,
         iso: iso(at),
         unix: at.unix_timestamp(),
     }
 }
 
-/// Delivers every due outbox row this pass can lease, through the ports of
+/// Delivers as many due outbox rows as this pass can lease **within the
+/// invocation's [`ScheduledBudget`]** (ADR 0023), through the ports of
 /// `ctx` — the entry point the venture's scheduled invocation must use
 /// (a cron invocation builds no router, so a context parked at
 /// router-build time is exactly what this must not depend on).
 ///
+/// Each row is signed and delivered once per pass: 2xx completes it,
+/// anything else retries with exponential backoff (410 Gone and
+/// SSRF-blocked destinations dead-letter immediately), and `MAX_ATTEMPTS`
+/// failures dead-letter it for [`Webhooks::replay`]. One delivery attempt
+/// spends one subrequest; when the budget runs out the rows it never
+/// reached are released, still due, for the next tick and counted in
+/// [`DrainReport::deferred`].
+///
 /// # Errors
 ///
-/// [`DeliveryError`] when a port is missing or the claim itself fails. A
-/// per-row failure never aborts the pass: it is counted in
-/// [`DrainReport::failed`] and the row keeps its lease until it expires.
+/// [`DeliveryError`] when a port is missing, the claim fails, or the
+/// outbox refuses a completion write. A per-row *delivery* failure never
+/// aborts the pass: it is counted in [`DrainReport::failed`] and the row
+/// is due again when its lease would have lapsed.
 pub(crate) async fn drain(
     ctx: &ModuleContext,
     max_attempts: u32,
@@ -192,40 +228,88 @@ pub(crate) async fn drain(
         ModuleConfig::new(crate::MODULE_NAME, &*ctx.config).get_u32("MAX_ATTEMPTS", max_attempts),
     );
 
-    let now = now_timestamps(&clock);
-    let lease_until = plus_secs(&now.iso, LEASE_SECS);
-    let records = Outbox::new(store::OUTBOX)
-        .claim_due(&*db, &now.iso, &lease_until, DRAIN_BATCH)
+    let counters = Counters::default();
+    let budget: &ScheduledBudget = &ctx.scheduled;
+    let core_report = Outbox::new(store::OUTBOX)
+        .drain_within(
+            &*db,
+            &*clock,
+            budget,
+            DrainOptions {
+                limit: DRAIN_BATCH,
+                lease: time::Duration::seconds(LEASE_SECS),
+                subrequests_per_item: SUBREQUESTS_PER_DELIVERY,
+            },
+            |record| {
+                // Clone the ports into the future: a `FnMut` handler cannot
+                // hand out borrows of its captures across an await.
+                let db = Arc::clone(&db);
+                let http = Arc::clone(&http);
+                let clock = Arc::clone(&clock);
+                let counters = &counters;
+                async move {
+                    let now = now_timestamps(&clock);
+                    match deliver_one(&*db, &*http, &record, max_attempts, &now).await {
+                        Ok(Filed::Delivered) => {
+                            counters.delivered.fetch_add(1, Ordering::Relaxed);
+                            Processed::Done
+                        }
+                        Ok(Filed::Retried(at)) => {
+                            counters.retried.fetch_add(1, Ordering::Relaxed);
+                            Processed::RetryAt(at)
+                        }
+                        Ok(Filed::DeadLettered) => {
+                            counters.dead_lettered.fetch_add(1, Ordering::Relaxed);
+                            // The dead letter already dropped the outbox row.
+                            Processed::Done
+                        }
+                        Ok(Filed::Dropped) => {
+                            counters.dropped.fetch_add(1, Ordering::Relaxed);
+                            Processed::Done
+                        }
+                        // The row keeps its lease: released due when that
+                        // lapses, without counting an attempt. Abandoning
+                        // the rest of the pass over one error would leave
+                        // every row behind it leased and untouched for the
+                        // whole lease.
+                        Err(error) => {
+                            counters.failed.fetch_add(1, Ordering::Relaxed);
+                            tracing::error!(row = %record.id, %error, "delivering a webhook failed");
+                            Processed::NextAt(
+                                now.at.saturating_add(time::Duration::seconds(LEASE_SECS)),
+                            )
+                        }
+                    }
+                }
+            },
+        )
         .await?;
 
-    let mut report = DrainReport {
-        claimed: records.len(),
-        ..DrainReport::default()
-    };
-    for record in &records {
-        match deliver_one(&*db, &*http, record, max_attempts, &now).await {
-            Ok(outcome) => report.record(outcome),
-            // The row keeps its lease and becomes due again when that
-            // expires. Abandoning the rest of the pass over one error
-            // would leave every row behind it leased and untouched for
-            // the whole lease.
-            Err(error) => {
-                report.failed += 1;
-                tracing::error!(row = %record.id, %error, "delivering a webhook failed");
-            }
-        }
-    }
-    Ok(report)
+    Ok(DrainReport {
+        claimed: usize::try_from(core_report.processed).unwrap_or(usize::MAX),
+        delivered: counters.delivered.load(Ordering::Relaxed),
+        retried: counters.retried.load(Ordering::Relaxed),
+        dead_lettered: counters.dead_lettered.load(Ordering::Relaxed),
+        dropped: counters.dropped.load(Ordering::Relaxed),
+        failed: counters.failed.load(Ordering::Relaxed),
+        deferred: core_report.released,
+    })
 }
 
-/// One row: parse, resolve the endpoint, sign, send, file.
+/// One row: parse, resolve the endpoint, sign, send, and report how it was
+/// filed. The outbox row itself is left to [`drain_within`], which applies
+/// the [`Processed`] the caller maps this [`Filed`] to — except the
+/// dead-letter and drop paths, which move or remove the row here (a dead
+/// letter must be atomic with its row's removal).
+///
+/// [`drain_within`]: cratefield_core::Outbox::drain_within
 async fn deliver_one(
     db: &dyn cratefield_core::Database,
     http: &dyn HttpClient,
     record: &OutboxRecord,
     max_attempts: i64,
     now: &Timestamps,
-) -> Result<Outcome, DeliveryError> {
+) -> Result<Filed, DeliveryError> {
     let Ok(job) = serde_json::from_str::<DeliveryJob>(&record.payload) else {
         return dead_letter_malformed(db, record, now).await;
     };
@@ -236,9 +320,7 @@ async fn deliver_one(
     // subscribed at the other end any more. Dropped, not dead-lettered —
     // a replay would have nothing to deliver to either.
     let Some(target) = store::delivery_target(db, &job.subject, &job.endpoint_id).await? else {
-        db.execute(&store::delete_outbox_statement(&record.id))
-            .await?;
-        return Ok(Outcome::Dropped);
+        return Ok(Filed::Dropped);
     };
 
     let body = serde_json::to_vec(&Envelope {
@@ -262,8 +344,8 @@ async fn deliver_one(
                 now,
             )
             .await?;
-            Outbox::new(store::OUTBOX).complete(db, &record.id).await?;
-            Ok(Outcome::Delivered)
+            // Completed by the drain, off this outcome.
+            Ok(Filed::Delivered)
         }
         // The endpoint said never again: a permanent refusal no retry
         // fixes, so it does not burn the remaining attempts.
@@ -330,7 +412,7 @@ async fn dead_letter_malformed(
     db: &dyn cratefield_core::Database,
     record: &OutboxRecord,
     now: &Timestamps,
-) -> Result<Outcome, DeliveryError> {
+) -> Result<Filed, DeliveryError> {
     tracing::error!(row = %record.id, "outbox row is not a webhooks delivery job");
     let why = "outbox payload is not a webhooks delivery job";
     let broken = broken_job(&record.payload, &record.topic);
@@ -350,7 +432,7 @@ async fn dead_letter_malformed(
         },
     )
     .await?;
-    Ok(Outcome::DeadLettered)
+    Ok(Filed::DeadLettered)
 }
 
 /// A failure no retry fixes (`410 Gone`, or the `HttpClient` port
@@ -364,7 +446,7 @@ async fn reject_now(
     why: &str,
     status_code: Option<i64>,
     now: &Timestamps,
-) -> Result<Outcome, DeliveryError> {
+) -> Result<Filed, DeliveryError> {
     log_attempt(db, job, attempt, status_code, Some(why), now).await?;
     store::dead_letter(
         db,
@@ -381,7 +463,7 @@ async fn reject_now(
         },
     )
     .await?;
-    Ok(Outcome::DeadLettered)
+    Ok(Filed::DeadLettered)
 }
 
 /// A payload that failed to parse, for the dead letter's own columns. The
@@ -461,7 +543,7 @@ async fn retry_or_give_up(
     now: &Timestamps,
     max_attempts: i64,
     failure: Failure<'_>,
-) -> Result<Outcome, DeliveryError> {
+) -> Result<Filed, DeliveryError> {
     let (attempt, why, status_code) = (failure.attempt, failure.why, failure.status_code);
     log_attempt(db, job, attempt, status_code, Some(why), now).await?;
     if attempt >= max_attempts {
@@ -480,14 +562,14 @@ async fn retry_or_give_up(
             },
         )
         .await?;
-        return Ok(Outcome::DeadLettered);
+        return Ok(Filed::DeadLettered);
     }
+    // The outbox counts this attempt when it applies `Processed::RetryAt`.
     let delay = backoff(attempt);
     let seconds = i64::try_from(delay.as_secs()).unwrap_or(i64::from(u32::MAX));
-    Outbox::new(store::OUTBOX)
-        .retry_later(db, &record.id, &plus_secs(&now.iso, seconds))
-        .await?;
-    Ok(Outcome::Retried)
+    Ok(Filed::Retried(
+        now.at.saturating_add(time::Duration::seconds(seconds)),
+    ))
 }
 
 /// Why a whole drain pass cannot start.

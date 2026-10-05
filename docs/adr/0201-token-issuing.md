@@ -38,7 +38,17 @@ recommendation, adopted unchanged in shape:
   (reuse detection) — a stolen-token replay is treated as a compromise
   alarm, not just a failed request. A token presented for the wrong
   client is refused *without* being consumed, so a wrong-client
-  presentation cannot burn the rightful client's token.
+  presentation cannot burn the rightful client's token. A short,
+  configured grace (issue #655) carves out one false positive: a page
+  that fires several refreshes from separate Worker isolates, all
+  holding the same cookie, would otherwise have its session revoked by
+  the loser of the race. Inside the window — default off, `0` — a second
+  presentation by the **same client id**, within seconds of the
+  legitimate rotation, is graced and handed its own sibling successor
+  instead of revoking; a bounded count stops it becoming a second
+  lifetime, and the first sibling used retires the rest. Reuse outside
+  the window, by another client, past the count, or after a sibling's
+  chain has moved on, still revokes.
 - **Discovery**: `/.well-known/jwks.json` (every configured key's
   public half, `Cache-Control: public, max-age=300`) and
   `/.well-known/openid-configuration` (`max-age=3600`), served at the

@@ -11,7 +11,7 @@
 mod support;
 
 use base64ct::{Base64UrlUnpadded, Encoding as _};
-use factory0_auth_core::{UserRow, identity_by_provider_subject, insert_user};
+use cratefield_auth_core::{UserRow, identity_by_provider_subject, insert_user};
 use http::StatusCode;
 use serde_json::Value;
 use support::provider::{APPLE_CLIENT_ID, TokenClaims};
@@ -46,7 +46,7 @@ fn form_encode(value: &str) -> String {
 }
 
 fn session_cookie(response: &Res) -> Option<String> {
-    response.cookie("__Host-fz_session")
+    response.cookie("__Host-session")
 }
 
 #[test]
@@ -68,7 +68,7 @@ fn a_first_authorization_signs_in_and_keeps_the_name_from_the_form_body() {
                 body("apple-code", &started.state),
                 form_encode(user)
             ),
-            &[("__Host-fz_oidc", &started.flow_cookie)],
+            &[("__Host-auth_oidc", &started.flow_cookie)],
         )
         .await;
 
@@ -110,7 +110,7 @@ fn a_later_sign_in_arrives_without_a_name_and_still_works() {
                 body("code-1", &first.state),
                 form_encode(user)
             ),
-            &[("__Host-fz_oidc", &first.flow_cookie)],
+            &[("__Host-auth_oidc", &first.flow_cookie)],
         )
         .await;
         assert_eq!(response.status, StatusCode::FOUND);
@@ -122,7 +122,7 @@ fn a_later_sign_in_arrives_without_a_name_and_still_works() {
             &kit,
             APPLE_CALLBACK,
             &body("code-2", &second.state),
-            &[("__Host-fz_oidc", &second.flow_cookie)],
+            &[("__Host-auth_oidc", &second.flow_cookie)],
         )
         .await;
         assert_eq!(
@@ -184,7 +184,7 @@ fn the_flow_cookie_is_the_one_a_cross_site_post_can_carry() {
         let cookie = response
             .cookies()
             .into_iter()
-            .find(|header| header.starts_with("__Host-fz_oidc="))
+            .find(|header| header.starts_with("__Host-auth_oidc="))
             .expect("a flow cookie");
         assert!(cookie.contains("SameSite=None"), "{cookie}");
         assert!(cookie.contains("Secure"), "{cookie}");
@@ -195,7 +195,7 @@ fn the_flow_cookie_is_the_one_a_cross_site_post_can_carry() {
         let cookie = response
             .cookies()
             .into_iter()
-            .find(|header| header.starts_with("__Host-fz_oidc="))
+            .find(|header| header.starts_with("__Host-auth_oidc="))
             .expect("a flow cookie");
         assert!(cookie.contains("SameSite=Lax"), "{cookie}");
     });
@@ -234,7 +234,7 @@ fn the_token_request_carries_a_minted_client_secret() {
             &kit,
             APPLE_CALLBACK,
             &body("apple-code", &started.state),
-            &[("__Host-fz_oidc", &started.flow_cookie)],
+            &[("__Host-auth_oidc", &started.flow_cookie)],
         )
         .await;
         assert_eq!(response.status, StatusCode::FOUND, "{}", response.text());
@@ -311,7 +311,7 @@ fn a_post_whose_state_does_not_match_the_cookie_is_refused() {
             &kit,
             APPLE_CALLBACK,
             &body("apple-code", "not-the-state"),
-            &[("__Host-fz_oidc", &started.flow_cookie)],
+            &[("__Host-auth_oidc", &started.flow_cookie)],
         )
         .await;
         assert_eq!(response.status, StatusCode::BAD_REQUEST);
@@ -338,7 +338,7 @@ fn a_body_that_will_not_parse_answers_like_an_expired_flow() {
                 &kit,
                 APPLE_CALLBACK,
                 bad,
-                &[("__Host-fz_oidc", &started.flow_cookie)],
+                &[("__Host-auth_oidc", &started.flow_cookie)],
             )
             .await;
             assert_eq!(response.status, StatusCode::BAD_REQUEST, "{bad:?}");
@@ -363,11 +363,11 @@ fn a_stranger_cannot_clear_a_victims_flow_cookie() {
                 &kit,
                 APPLE_CALLBACK,
                 hostile,
-                &[("__Host-fz_oidc", &started.flow_cookie)],
+                &[("__Host-auth_oidc", &started.flow_cookie)],
             )
             .await;
             let cleared = response.cookies().into_iter().any(|header| {
-                header.starts_with("__Host-fz_oidc=") && header.contains("Max-Age=0")
+                header.starts_with("__Host-auth_oidc=") && header.contains("Max-Age=0")
             });
             assert!(
                 !cleared,
@@ -382,7 +382,7 @@ fn a_stranger_cannot_clear_a_victims_flow_cookie() {
             &kit,
             APPLE_CALLBACK,
             &body("apple-code", &started.state),
-            &[("__Host-fz_oidc", &started.flow_cookie)],
+            &[("__Host-auth_oidc", &started.flow_cookie)],
         )
         .await;
         assert_eq!(
@@ -403,11 +403,11 @@ fn signing_in_while_signed_in_adds_a_provider_rather_than_a_second_account() {
     pollster::block_on(async {
         let kit = apple_kit();
         let existing = seed_user(&kit, "someone@example.com").await;
-        let session = factory0_auth_core::issue(
+        let session = cratefield_auth_core::issue(
             &*kit.db,
             &*kit.clock,
             &*kit.id_gen,
-            factory0_auth_core::Login {
+            cratefield_auth_core::Login {
                 user_id: &existing,
                 ip: None,
                 user_agent: None,
@@ -421,7 +421,7 @@ fn signing_in_while_signed_in_adds_a_provider_rather_than_a_second_account() {
 
         // `/start` is same-site, so the session cookie arrives there.
         let started = {
-            let response = get(&kit, APPLE_START, &[("__Host-fz_session", &session.value)]).await;
+            let response = get(&kit, APPLE_START, &[("__Host-session", &session.value)]).await;
             assert_eq!(response.status, StatusCode::FOUND);
             let url = response.location().expect("a Location");
             let parsed = url::Url::parse(&url).expect("a url");
@@ -437,7 +437,7 @@ fn signing_in_while_signed_in_adds_a_provider_rather_than_a_second_account() {
                 .expect("a nonce");
             kit.provider.set_nonce(&nonce);
             (
-                response.cookie("__Host-fz_oidc").expect("a flow cookie"),
+                response.cookie("__Host-auth_oidc").expect("a flow cookie"),
                 state,
             )
         };
@@ -453,7 +453,7 @@ fn signing_in_while_signed_in_adds_a_provider_rather_than_a_second_account() {
             &kit,
             APPLE_CALLBACK,
             &body("apple-code", &started.1),
-            &[("__Host-fz_oidc", &started.0)],
+            &[("__Host-auth_oidc", &started.0)],
         )
         .await;
         assert_eq!(response.status, StatusCode::OK, "{}", response.text());
@@ -488,13 +488,13 @@ fn the_form_post_callback_revokes_the_session_it_replaces() {
             &kit,
             APPLE_CALLBACK,
             &body("code-1", &first.state),
-            &[("__Host-fz_oidc", &first.flow_cookie)],
+            &[("__Host-auth_oidc", &first.flow_cookie)],
         )
         .await;
         assert_eq!(response.status, StatusCode::FOUND, "{}", response.text());
         let old_value = session_cookie(&response).expect("the first sign-in set a session");
 
-        let old = factory0_auth_core::validate(&*kit.db, &*kit.clock, &old_value)
+        let old = cratefield_auth_core::validate(&*kit.db, &*kit.clock, &old_value)
             .await
             .expect("validate runs")
             .expect("the first session is valid to begin with");
@@ -503,7 +503,7 @@ fn the_form_post_callback_revokes_the_session_it_replaces() {
         // arrives here and its id is sealed into the flow.
         kit.provider.set_claims(TokenClaims::apple());
         let started = {
-            let response = get(&kit, APPLE_START, &[("__Host-fz_session", &old_value)]).await;
+            let response = get(&kit, APPLE_START, &[("__Host-session", &old_value)]).await;
             assert_eq!(response.status, StatusCode::FOUND);
             let url = response.location().expect("a Location");
             let parsed = url::Url::parse(&url).expect("a url");
@@ -519,7 +519,7 @@ fn the_form_post_callback_revokes_the_session_it_replaces() {
                 .expect("a nonce");
             kit.provider.set_nonce(&nonce);
             (
-                response.cookie("__Host-fz_oidc").expect("a flow cookie"),
+                response.cookie("__Host-auth_oidc").expect("a flow cookie"),
                 state,
             )
         };
@@ -529,7 +529,7 @@ fn the_form_post_callback_revokes_the_session_it_replaces() {
             &kit,
             APPLE_CALLBACK,
             &body("code-2", &started.1),
-            &[("__Host-fz_oidc", &started.0)],
+            &[("__Host-auth_oidc", &started.0)],
         )
         .await;
         assert_eq!(response.status, StatusCode::FOUND, "{}", response.text());
@@ -538,7 +538,7 @@ fn the_form_post_callback_revokes_the_session_it_replaces() {
 
         // The cookie the browser arrived with is now worthless.
         assert!(
-            factory0_auth_core::validate(&*kit.db, &*kit.clock, &old_value)
+            cratefield_auth_core::validate(&*kit.db, &*kit.clock, &old_value)
                 .await
                 .expect("validate runs")
                 .is_none(),
@@ -546,7 +546,7 @@ fn the_form_post_callback_revokes_the_session_it_replaces() {
         );
 
         // Revoked, not merely deleted or expired, and the new one is live.
-        let rows = factory0_auth_core::sessions_by_user(&*kit.db, &old.user_id)
+        let rows = cratefield_auth_core::sessions_by_user(&*kit.db, &old.user_id)
             .await
             .expect("sessions read");
         let superseded = rows
@@ -587,7 +587,7 @@ fn a_relay_address_never_links_to_an_existing_account() {
             &kit,
             APPLE_CALLBACK,
             &body("apple-code", &started.state),
-            &[("__Host-fz_oidc", &started.flow_cookie)],
+            &[("__Host-auth_oidc", &started.flow_cookie)],
         )
         .await;
         assert_eq!(response.status, StatusCode::FOUND, "{}", response.text());

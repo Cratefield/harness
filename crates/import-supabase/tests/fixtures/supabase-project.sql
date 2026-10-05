@@ -270,3 +270,11 @@ INSERT INTO public.audit_log (message) VALUES ('created'), ('updated');
 
 -- Planner estimates, as a live project's autovacuum would have left them.
 ANALYZE;
+
+-- Two policies no rule places, appended last so a sibling branch editing the
+-- public section does not collide (issue #726). They exercise the policy
+-- classifier's owner-only and public-read branches and the threshold.
+CREATE POLICY "Members can leave unless they own the team" ON public.team_members
+    FOR DELETE USING (user_id = auth.uid() AND role <> 'owner');
+CREATE POLICY "Members can read their team's rows" ON public.projects
+    FOR SELECT USING (team_id > 0 AND status <> 'archived');

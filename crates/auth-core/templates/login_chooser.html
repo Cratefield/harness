@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Sign in · Factory Zero</title>
+<title>Sign in · {{ brand.name }}</title>
 <style>
   :root { color-scheme: dark; }
   * { box-sizing: border-box; }
@@ -23,18 +23,21 @@
     font: inherit; font-weight: 550; cursor: pointer; text-align: center;
   }
   a.method:hover, a.method:focus-visible,
-  button.method:hover, button.method:focus-visible { border-color: #FF5A36; outline: none; }
+  button.method:hover, button.method:focus-visible { border-color: {{ brand.accent }}; outline: none; }
   button.method[disabled] { opacity: .6; cursor: progress; }
   p.none { color: #9b978f; background: #17171a; border: 1px dashed #26262b;
            border-radius: .6rem; padding: 1rem; }
   p.error { color: #ffb4a2; margin: 1rem 0 0; font-size: .9rem; min-height: 1.4em; }
   footer { margin-top: 2rem; color: #6f6c66; font-size: .8rem; }
+  img.brand-logo { display: block; max-height: 3rem; max-width: 12rem; margin: 0 auto 1.25rem; }
+  footer a { color: {{ brand.accent }}; }
 </style>
 </head>
 <body>
 <main>
+  {% include "_brand_header.html" %}
   <h1>Sign in</h1>
-  <p class="sub">One account, every Factory Zero venture.</p>
+  <p class="sub">Continue to {{ brand.name }}.</p>
   {% if methods.is_empty() %}
   <p class="none">No login methods are enabled here yet. The sign-in
   options appear as each method is switched on.</p>
@@ -50,7 +53,7 @@
   </ul>
   <p class="error" id="cf-error" role="alert"></p>
   {% endif %}
-  <footer>auth.factory0.ventures · Factory Zero</footer>
+  {% include "_brand_footer.html" %}
 </main>
 
 {% if has_passkey %}

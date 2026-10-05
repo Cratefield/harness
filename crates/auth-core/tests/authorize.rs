@@ -17,12 +17,12 @@
 
 use axum::http::{Method, StatusCode, header};
 use base64ct::{Base64UrlUnpadded, Encoding};
-use cratefield_core::{MapConfig, UlidIdGen};
-use cratefield_testing::{FixedClock, TestHarness};
-use factory0_auth_core::{
+use cratefield_auth_core::{
     AuthCore, ClientRedirectUriRow, ClientRow, Login, Redacted, UserRow, insert_client,
     insert_redirect_uri, issue, session_by_token_hash,
 };
+use cratefield_core::{MapConfig, UlidIdGen};
+use cratefield_testing::{FixedClock, TestHarness};
 use p256::ecdsa;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -121,10 +121,10 @@ fn kit_with_every_module() -> TestHarness {
     TestHarness::with_ports(
         vec![
             Box::new(AuthCore::new()),
-            Box::new(factory0_auth_magic_link::MagicLink::new()),
-            Box::new(factory0_auth_password::Password::new()),
-            Box::new(factory0_auth_oidc::Oidc::new()),
-            Box::new(factory0_auth_meta::Meta::new()),
+            Box::new(cratefield_auth_magic_link::MagicLink::new()),
+            Box::new(cratefield_auth_password::Password::new()),
+            Box::new(cratefield_auth_oidc::Oidc::new()),
+            Box::new(cratefield_auth_meta::Meta::new()),
         ],
         move |ports| {
             ports.config = config;
@@ -158,7 +158,7 @@ fn challenge() -> String {
 }
 
 async fn seed_user(kit: &TestHarness, id: &str) {
-    factory0_auth_core::insert_user(
+    cratefield_auth_core::insert_user(
         &*kit.db,
         &UserRow {
             id: id.to_owned(),
@@ -237,7 +237,7 @@ fn authorize_uri(extra: &str) -> String {
 async fn get(kit: &TestHarness, uri: &str, cookie: Option<&str>) -> axum::response::Response {
     let mut request = axum::http::Request::builder().method(Method::GET).uri(uri);
     if let Some(cookie) = cookie {
-        request = request.header(header::COOKIE, format!("__Host-fz_session={cookie}"));
+        request = request.header(header::COOKIE, format!("__Host-session={cookie}"));
     }
     kit.router
         .clone()
@@ -271,7 +271,7 @@ async fn post(
         .uri(uri)
         .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded");
     if let Some(cookie) = cookie {
-        request = request.header(header::COOKIE, format!("__Host-fz_session={cookie}"));
+        request = request.header(header::COOKIE, format!("__Host-session={cookie}"));
     }
     for (name, value) in headers {
         request = request.header(*name, *value);
@@ -307,7 +307,7 @@ fn clears_the_session(response: &axum::response::Response) -> bool {
 }
 
 /// The session row a cookie value names, read straight from the store.
-async fn session_row(kit: &TestHarness, cookie: &str) -> factory0_auth_core::SessionRow {
+async fn session_row(kit: &TestHarness, cookie: &str) -> cratefield_auth_core::SessionRow {
     let hash = Sha256::digest(cookie.as_bytes()).to_vec();
     session_by_token_hash(&*kit.db, &hash)
         .await
@@ -538,7 +538,7 @@ async fn a_cross_site_navigation_to_logout_still_asks_instead_of_failing() {
     let request = axum::http::Request::builder()
         .method(Method::GET)
         .uri("/v1/auth-core/logout")
-        .header(header::COOKIE, format!("__Host-fz_session={cookie}"))
+        .header(header::COOKIE, format!("__Host-session={cookie}"))
         .header("sec-fetch-site", "cross-site")
         .body(axum::body::Body::empty())
         .expect("request");
@@ -950,7 +950,7 @@ async fn an_absolute_request_target_still_yields_a_path_return_to() {
     seed_client(&kit).await;
 
     // Exactly what runtime-cloudflare passes to axum.
-    let absolute = format!("https://auth.factory0.ventures{}", authorize_uri(""));
+    let absolute = format!("https://auth.acme.example{}", authorize_uri(""));
     let page = body_of(get(&kit, &absolute, None).await).await;
 
     assert!(

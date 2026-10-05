@@ -468,7 +468,7 @@ impl Module for Console {
             // Apple's minted client-secret cache: shared across requests
             // so the .p8 is parsed once per secret lifetime, exactly as it
             // is in auth-oidc. Untouched when Apple is not configured.
-            apple: factory0_auth_oidc::apple::Minter::new(),
+            apple: cratefield_auth_oidc::apple::Minter::new(),
         });
         axum::Router::new()
             .route("/", get(home))
@@ -499,7 +499,7 @@ impl Module for Console {
 
 struct ConsoleState {
     ctx: Arc<ModuleContext>,
-    apple: factory0_auth_oidc::apple::Minter,
+    apple: cratefield_auth_oidc::apple::Minter,
 }
 
 // ---------------------------------------------------------------------------
@@ -1655,7 +1655,7 @@ fn meta_client(ctx: &ModuleContext) -> Option<crate::meta::MetaClient> {
         redirect_uri: format!("{}{BASE}/auth/meta/callback", base.trim_end_matches('/')),
         graph_version: cfg.get_str(
             "META_GRAPH_VERSION",
-            factory0_auth_meta::graph::DEFAULT_GRAPH_VERSION,
+            cratefield_auth_meta::graph::DEFAULT_GRAPH_VERSION,
         ),
     })
 }

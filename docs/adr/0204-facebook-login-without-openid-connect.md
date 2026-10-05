@@ -22,7 +22,7 @@ descriptor in `auth-oidc`, which is written around discovery and ID tokens.
 
 ### 1. Its own crate, on `oauth2`
 
-`factory0-auth-meta`, using `oauth2` directly — the crate `openidconnect` is
+`cratefield-auth-meta`, using `oauth2` directly — the crate `openidconnect` is
 built on, already in the tree and already proven to reach wasm32 with default
 features off (ADR 0200).
 

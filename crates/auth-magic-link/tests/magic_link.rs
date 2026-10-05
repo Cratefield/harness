@@ -1,12 +1,13 @@
 //! Issue #21 end to end.
 
 use async_trait::async_trait;
+use cratefield_auth_core::{AuthCore, STATUS_ACTIVE, UserRow, insert_user, user_by_primary_email};
+use cratefield_auth_magic_link::MagicLink;
 use cratefield_core::{
-    Clock, Config, Database, MailError, Mailer, MapConfig, Message, SendOutcome, Statement,
+    Clock, Config, Database, Decision, MailError, Mailer, MapConfig, Message, SendOutcome,
+    Statement,
 };
 use cratefield_testing::TestHarness;
-use factory0_auth_core::{AuthCore, STATUS_ACTIVE, UserRow, insert_user, user_by_primary_email};
-use factory0_auth_magic_link::MagicLink;
 use http::{HeaderMap, Method, Request, StatusCode, header};
 use serde_json::{Value, json};
 use std::sync::atomic::{AtomicI64, Ordering};
@@ -16,7 +17,7 @@ use tower::ServiceExt;
 
 const REQUEST: &str = "/v1/auth-magic-link/request";
 const CONSUME: &str = "/v1/auth-magic-link/consume";
-const BASE: &str = "https://auth.factory0.ventures";
+const BASE: &str = "https://auth.acme.example";
 
 /// A token-shaped value that was never issued: exactly the length and
 /// alphabet a real token has, so it gets past the shape guard and reaches
@@ -76,6 +77,7 @@ impl Outbox {
 struct Kit {
     harness: TestHarness,
     outbox: Outbox,
+    limiter: cratefield_testing::FakeRateLimiter,
     clock: Arc<TestClock>,
     db: Arc<dyn Database>,
 }
@@ -85,11 +87,31 @@ fn kit() -> Kit {
 }
 
 fn kit_with(extra: &[(&str, &str)]) -> Kit {
+    kit_limited(extra, cratefield_testing::FakeRateLimiter::always_allow())
+}
+
+/// A kit whose limiter refuses everything, for the request endpoint anyone
+/// can call.
+fn kit_rate_limited() -> Kit {
+    kit_limited(
+        &[],
+        cratefield_testing::FakeRateLimiter::scripted(
+            Vec::new(),
+            Decision {
+                ok: false,
+                retry_after: Some(std::time::Duration::from_secs(30)),
+                quota: None,
+            },
+        ),
+    )
+}
+
+fn kit_limited(extra: &[(&str, &str)], limiter: cratefield_testing::FakeRateLimiter) -> Kit {
     let mut pairs = vec![
         ("AUTH_MAGIC_LINK_PUBLIC_BASE".to_owned(), BASE.to_owned()),
         (
             "AUTH_MAGIC_LINK_MAIL_FROM".to_owned(),
-            "sign-in@factory0.ventures".to_owned(),
+            "sign-in@acme.example".to_owned(),
         ),
     ];
     for (key, value) in extra {
@@ -100,12 +122,14 @@ fn kit_with(extra: &[(&str, &str)]) -> Kit {
     let config: Arc<dyn Config> = Arc::new(MapConfig::from_pairs(pairs));
 
     let mailer = outbox.clone();
+    let limiter_for_ports = limiter.clone();
     let clock_for_ports = clock.clone();
     let config_for_ports = config.clone();
     let harness = TestHarness::with_ports(
         vec![Box::new(AuthCore::new()), Box::new(MagicLink::new())],
         move |ports| {
             ports.mailer = Some(Arc::new(mailer));
+            ports.rate_limiter = Some(Arc::new(limiter_for_ports));
             ports.clock = Some(clock_for_ports);
             ports.config = config_for_ports;
         },
@@ -114,6 +138,7 @@ fn kit_with(extra: &[(&str, &str)]) -> Kit {
     Kit {
         harness,
         outbox,
+        limiter,
         clock,
         db,
     }
@@ -131,9 +156,9 @@ impl cratefield_core::Template for GermanMail {
         _locale: &str,
     ) -> Result<cratefield_core::Rendered, cratefield_core::TemplateError> {
         Ok(cratefield_core::Rendered {
-            subject: "Bei Factory Zero anmelden".to_owned(),
+            subject: "Bei Acme anmelden".to_owned(),
             html: "<p>Melde dich an.</p>".to_owned(),
-            text: "Melde dich bei Factory Zero an.".to_owned(),
+            text: "Melde dich bei Acme an.".to_owned(),
         })
     }
 }
@@ -146,7 +171,7 @@ fn kit_localized() -> Kit {
         ("AUTH_MAGIC_LINK_PUBLIC_BASE".to_owned(), BASE.to_owned()),
         (
             "AUTH_MAGIC_LINK_MAIL_FROM".to_owned(),
-            "sign-in@factory0.ventures".to_owned(),
+            "sign-in@acme.example".to_owned(),
         ),
         ("AUTH_LOCALES".to_owned(), "en,de".to_owned()),
     ];
@@ -175,6 +200,7 @@ fn kit_localized() -> Kit {
     Kit {
         harness,
         outbox,
+        limiter: cratefield_testing::FakeRateLimiter::always_allow(),
         clock,
         db,
     }
@@ -275,7 +301,7 @@ async fn click(kit: &Kit, token: &str) -> Res {
     let opened = navigate(kit, &link).await;
     assert_eq!(opened.status, StatusCode::OK, "{}", opened.text());
     assert!(
-        opened.cookie("__Host-fz_session").is_none(),
+        opened.cookie("__Host-session").is_none(),
         "opening the link signed somebody in"
     );
     assert!(
@@ -424,14 +450,14 @@ fn the_mail_carries_a_working_link_and_the_token_is_stored_hashed() {
             Sha256::digest(token.as_bytes()).to_vec()
         };
         assert!(
-            factory0_auth_core::single_use_token_by_hash(&*kit.db, &digest)
+            cratefield_auth_core::single_use_token_by_hash(&*kit.db, &digest)
                 .await
                 .expect("query")
                 .is_some(),
             "the row is not keyed by the token's digest"
         );
         assert!(
-            factory0_auth_core::single_use_token_by_hash(&*kit.db, token.as_bytes())
+            cratefield_auth_core::single_use_token_by_hash(&*kit.db, token.as_bytes())
                 .await
                 .expect("query")
                 .is_none(),
@@ -450,7 +476,7 @@ fn clicking_the_link_signs_in_and_verifies_the_address() {
 
         let response = click(&kit, &token).await;
         assert_eq!(response.status, StatusCode::FOUND, "{}", response.text());
-        assert!(response.cookie("__Host-fz_session").is_some());
+        assert!(response.cookie("__Host-session").is_some());
         assert_eq!(response.location().as_deref(), Some("/"));
         assert_eq!(count(&kit, "sessions"), 1);
 
@@ -551,7 +577,7 @@ fn a_prefetch_does_not_spend_the_token_and_a_click_still_works() {
             let response = prefetch(&kit, &token).await;
             assert_eq!(response.status, StatusCode::OK);
             assert!(
-                response.cookie("__Host-fz_session").is_none(),
+                response.cookie("__Host-session").is_none(),
                 "a prefetch signed somebody in"
             );
             assert!(response.text().contains("Confirm"), "{}", response.text());
@@ -584,7 +610,7 @@ fn the_confirm_button_spends_the_token() {
             .expect("request");
         let response = send(&kit, request).await;
         assert_eq!(response.status, StatusCode::FOUND, "{}", response.text());
-        assert!(response.cookie("__Host-fz_session").is_some());
+        assert!(response.cookie("__Host-session").is_some());
     });
 }
 
@@ -621,7 +647,7 @@ fn a_cross_site_confirm_cannot_spend_a_token_or_sign_anyone_in() {
             "https://test.example/problems/auth/cross-site-request"
         );
         assert!(
-            cross_site.cookie("__Host-fz_session").is_none(),
+            cross_site.cookie("__Host-session").is_none(),
             "the cross-site confirm signed somebody in"
         );
         assert_eq!(count(&kit, "sessions"), 0, "a session was issued anyway");
@@ -640,7 +666,7 @@ fn a_cross_site_confirm_cannot_spend_a_token_or_sign_anyone_in() {
         )
         .await;
         assert_eq!(own.status, StatusCode::FOUND, "{}", own.text());
-        assert!(own.cookie("__Host-fz_session").is_some());
+        assert!(own.cookie("__Host-session").is_some());
     });
 }
 
@@ -663,7 +689,7 @@ fn a_forced_navigation_to_the_link_does_not_sign_anyone_in() {
         let forced = navigate(&kit, &format!("{CONSUME}?token={token}")).await;
         assert_eq!(forced.status, StatusCode::OK, "{}", forced.text());
         assert!(
-            forced.cookie("__Host-fz_session").is_none(),
+            forced.cookie("__Host-session").is_none(),
             "a forced navigation signed the victim in"
         );
         assert!(forced.location().is_none(), "the GET redirected");
@@ -687,7 +713,7 @@ fn a_forced_navigation_to_the_link_does_not_sign_anyone_in() {
         // from the confirm page, same-origin.
         let pressed = click(&kit, &token).await;
         assert_eq!(pressed.status, StatusCode::FOUND, "{}", pressed.text());
-        assert!(pressed.cookie("__Host-fz_session").is_some());
+        assert!(pressed.cookie("__Host-session").is_some());
         assert_eq!(count(&kit, "sessions"), 1);
     });
 }
@@ -885,12 +911,12 @@ fn a_token_of_another_kind_cannot_be_spent_here() {
             use sha2::{Digest, Sha256};
             Sha256::digest(token.as_bytes()).to_vec()
         };
-        factory0_auth_core::insert_single_use_token(
+        cratefield_auth_core::insert_single_use_token(
             &*kit.db,
-            &factory0_auth_core::SingleUseTokenRow {
+            &cratefield_auth_core::SingleUseTokenRow {
                 id: "t1".to_owned(),
-                kind: factory0_auth_core::TOKEN_AUTHORIZATION_CODE.to_owned(),
-                token_hash: factory0_auth_core::Redacted(digest),
+                kind: cratefield_auth_core::TOKEN_AUTHORIZATION_CODE.to_owned(),
+                token_hash: cratefield_auth_core::Redacted(digest),
                 user_id: Some("u-ada".to_owned()),
                 client_id: None,
                 payload: None,
@@ -903,7 +929,7 @@ fn a_token_of_another_kind_cannot_be_spent_here() {
 
         let response = click(&kit, token).await;
         assert_eq!(response.status, StatusCode::BAD_REQUEST);
-        assert!(response.cookie("__Host-fz_session").is_none());
+        assert!(response.cookie("__Host-session").is_none());
         assert_eq!(count(&kit, "sessions"), 0);
     });
 }
@@ -1215,7 +1241,7 @@ fn a_named_locale_renders_the_localized_mail() {
         assert_eq!(response.status, StatusCode::ACCEPTED);
         assert_eq!(
             kit.outbox.last().expect("a mail").subject,
-            "Bei Factory Zero anmelden"
+            "Bei Acme anmelden"
         );
     });
 }
@@ -1237,7 +1263,7 @@ fn accept_language_picks_a_localized_template() {
         assert_eq!(response.status, StatusCode::ACCEPTED);
         assert_eq!(
             kit.outbox.last().expect("a mail").subject,
-            "Bei Factory Zero anmelden"
+            "Bei Acme anmelden"
         );
     });
 }
@@ -1299,5 +1325,46 @@ fn registering_by_link_stores_a_supported_locale() {
             .expect("query")
             .expect("a user");
         assert_eq!(user.locale, None);
+    });
+}
+
+/// The request endpoint anyone can call is rate limited: a refused caller
+/// is told to wait, and nothing is written on the way to the refusal — no
+/// mail, no token row for a mail cannon to harvest.
+#[test]
+fn a_rate_limited_caller_is_told_to_wait_and_nothing_is_written() {
+    pollster::block_on(async {
+        let kit = kit_rate_limited();
+        seed(&kit, "ada@example.com", false).await;
+
+        let response = request_link(&kit, "ada@example.com").await;
+        assert_eq!(
+            response.status,
+            StatusCode::TOO_MANY_REQUESTS,
+            "{}",
+            response.text()
+        );
+        assert!(response.headers.contains_key(header::RETRY_AFTER));
+
+        assert_eq!(kit.outbox.count(), 0, "a refused caller was mailed");
+        assert_eq!(count(&kit, "single_use_tokens"), 0);
+    });
+}
+
+#[test]
+fn the_limit_is_keyed_on_the_address_as_well_as_the_caller() {
+    pollster::block_on(async {
+        let kit = kit();
+
+        // The limit is consulted once per key, and there is more than one
+        // key: the caller and the address, so a botnet cannot walk past the
+        // per-caller limit by spreading one address across many machines —
+        // and cannot turn the endpoint into a mail cannon for one victim.
+        request_link(&kit, "ada@example.com").await;
+        assert!(
+            kit.limiter.calls() >= 2,
+            "the address was not a limit key: one request consulted the limiter {}",
+            kit.limiter.calls()
+        );
     });
 }

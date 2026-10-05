@@ -2,11 +2,14 @@
 source: crates/module-waitlist/tests/templates.rs
 expression: rendered.text
 ---
-Your spot on the factory0 kontinuum waitlist is confirmed.
-This mail was sent to nick@example.com.
-You are number 42 in line.
+You are #42
 
-Check your place any time:
+Your spot on the factory0 kontinuum waitlist is confirmed. You are number 42 in line.
+
+Check my place:
 https://api.factory0.ventures/v1/waitlist/status?token=def
 
+--
+Sent to nick@example.com because you confirmed your spot on the factory0 kontinuum waitlist.
 Factory Zero · factory0.ventures
+factory0

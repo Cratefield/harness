@@ -232,7 +232,8 @@ impl Venture {
                     ));
                 } else if !is_valid_origin(origin) {
                     errors.push(format!(
-                        "venture `{}`: CORS origin `{origin}` must be scheme://host[:port]",
+                        "venture `{}`: CORS origin `{origin}` must be scheme://host[:port] \
+                         or a known browser-extension origin",
                         self.name
                     ));
                 }
@@ -256,7 +257,27 @@ fn is_valid_origin(origin: &str) -> bool {
     let Some((scheme, rest)) = origin.split_once("://") else {
         return false;
     };
-    if scheme.is_empty() || !scheme.chars().all(|c| c.is_ascii_alphanumeric()) {
+    if scheme.is_empty() {
+        return false;
+    }
+    // A browser extension's origin carries a hyphen in the scheme, so the
+    // alphanumeric-scheme rule below rejects it (issue #579). Admit exactly
+    // three such schemes, as **exact-match origins only**: the id is checked
+    // in full, so there is no wildcard, bare scheme, port, path or trailing
+    // slash — the same shapes an `https` origin may not have. Any other
+    // hyphenated scheme (`foo-bar://…`, `chrome-extensions://…`) still falls
+    // through to the alphanumeric check and is rejected.
+    match scheme {
+        "chrome-extension" => return is_chrome_extension_id(rest),
+        // Firefox emits lowercase ids.
+        "moz-extension" => return is_extension_uuid(rest, false),
+        // Safari emits uppercase ids; either case is accepted for this one
+        // scheme (Firefox's stays lowercase-only, so the two are documented
+        // distinct).
+        "safari-web-extension" => return is_extension_uuid(rest, true),
+        _ => {}
+    }
+    if !scheme.chars().all(|c| c.is_ascii_alphanumeric()) {
         return false;
     }
     if rest.contains(['/', '?', '#']) {
@@ -268,6 +289,25 @@ fn is_valid_origin(origin: &str) -> bool {
         && host
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-' || c == ':')
+}
+
+/// A Chrome extension id: exactly 32 characters, each `a`–`p` (digits and
+/// letters above `p` never occur in a real id).
+fn is_chrome_extension_id(id: &str) -> bool {
+    id.len() == 32 && id.chars().all(|c| ('a'..='p').contains(&c))
+}
+
+/// A canonical RFC 4122 UUID, `8-4-4-4-12` hex. `any_case` also admits
+/// uppercase hex, which Safari emits and Firefox does not.
+fn is_extension_uuid(id: &str, any_case: bool) -> bool {
+    let bytes = id.as_bytes();
+    if bytes.len() != 36 {
+        return false;
+    }
+    bytes.iter().enumerate().all(|(i, &b)| match i {
+        8 | 13 | 18 | 23 => b == b'-',
+        _ => b.is_ascii_hexdigit() && (any_case || !b.is_ascii_uppercase()),
+    })
 }
 
 #[cfg(test)]
@@ -310,5 +350,105 @@ mod tests {
     fn wildcard_origin_rejected() {
         let v = Venture::new("factory0", "factory0.ventures").cors_origins(["*"]);
         assert!(errors(&v).iter().any(|e| e.contains("wildcard")));
+    }
+
+    /// A single-origin venture is valid exactly when `is_valid_origin` passes
+    /// (the other fields are always valid here).
+    fn origin_is_valid(origin: &str) -> bool {
+        errors(&Venture::new("factory0", "factory0.ventures").cors_origins([origin])).is_empty()
+    }
+
+    #[test]
+    fn browser_extension_origins_are_accepted() {
+        // Chrome: 32 characters, each a-p.
+        assert!(origin_is_valid(
+            "chrome-extension://abcdefghijklmnopabcdefghijklmnop"
+        ));
+        // Firefox emits a lowercase UUID.
+        assert!(origin_is_valid(
+            "moz-extension://5de6e0f6-2b1a-4f6e-9c3d-0a1b2c3d4e5f"
+        ));
+        // Safari emits uppercase; either case is accepted for this scheme.
+        assert!(origin_is_valid(
+            "safari-web-extension://5DE6E0F6-2B1A-4F6E-9C3D-0A1B2C3D4E5F"
+        ));
+        assert!(origin_is_valid(
+            "safari-web-extension://5de6e0f6-2b1a-4f6e-9c3d-0a1b2c3d4e5f"
+        ));
+    }
+
+    #[test]
+    fn malformed_chrome_extension_ids_are_rejected() {
+        // Short and long by one character.
+        assert!(!origin_is_valid(
+            "chrome-extension://abcdefghijklmnopabcdefghijklmno"
+        ));
+        assert!(!origin_is_valid(
+            "chrome-extension://abcdefghijklmnopabcdefghijklmnopq"
+        ));
+        // 'q' is past `p`; a digit and an uppercase letter are out of range.
+        assert!(!origin_is_valid(
+            "chrome-extension://qbcdefghijklmnopabcdefghijklmnop"
+        ));
+        assert!(!origin_is_valid(
+            "chrome-extension://0bcdefghijklmnopabcdefghijklmnop"
+        ));
+        assert!(!origin_is_valid(
+            "chrome-extension://Abcdefghijklmnopabcdefghijklmnop"
+        ));
+        // No bare scheme, port, path or trailing slash.
+        assert!(!origin_is_valid("chrome-extension://"));
+        assert!(!origin_is_valid(
+            "chrome-extension://abcdefghijklmnopabcdefghijklmnop:80"
+        ));
+        assert!(!origin_is_valid(
+            "chrome-extension://abcdefghijklmnopabcdefghijklmnop/x"
+        ));
+        assert!(!origin_is_valid(
+            "chrome-extension://abcdefghijklmnopabcdefghijklmnop/"
+        ));
+    }
+
+    #[test]
+    fn malformed_extension_uuids_are_rejected() {
+        // Firefox ids are lowercase-only; the uppercase form is not accepted.
+        assert!(!origin_is_valid(
+            "moz-extension://5DE6E0F6-2B1A-4F6E-9C3D-0A1B2C3D4E5F"
+        ));
+        // No dashes at all.
+        assert!(!origin_is_valid(
+            "moz-extension://5de6e0f62b1a4f6e9c3d0a1b2c3d4e5f"
+        ));
+        // A group one character short.
+        assert!(!origin_is_valid(
+            "moz-extension://5de6e0f6-2b1a-4f6e-9c3d-0a1b2c3d4e5"
+        ));
+        // Non-hex trailing character.
+        assert!(!origin_is_valid(
+            "moz-extension://5de6e0f6-2b1a-4f6e-9c3d-0a1b2c3d4e5g"
+        ));
+        // No bare scheme, path or trailing slash.
+        assert!(!origin_is_valid("moz-extension://"));
+        assert!(!origin_is_valid("safari-web-extension://"));
+        assert!(!origin_is_valid(
+            "safari-web-extension://5de6e0f6-2b1a-4f6e-9c3d-0a1b2c3d4e5f/x"
+        ));
+        assert!(!origin_is_valid(
+            "safari-web-extension://5de6e0f6-2b1a-4f6e-9c3d-0a1b2c3d4e5f/"
+        ));
+    }
+
+    #[test]
+    fn other_hyphenated_schemes_and_nulls_are_rejected() {
+        // Any other hyphenated scheme, including a near-miss of a known one.
+        assert!(!origin_is_valid("foo-bar://x"));
+        assert!(!origin_is_valid(
+            "chrome-extensions://abcdefghijklmnopabcdefghijklmnop"
+        ));
+        assert!(!origin_is_valid("null"));
+        assert!(!origin_is_valid("*"));
+        // `https` rules are unchanged: no path, port stays allowed.
+        assert!(origin_is_valid("https://app.example:8443"));
+        assert!(!origin_is_valid("https://app.example/"));
     }
 }

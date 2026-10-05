@@ -9,8 +9,13 @@ POST /v1/waitlist            { "email": ..., "product": "cratefield" }
 GET  /v1/waitlist/admin/export.csv   (Bearer ADMIN_TOKEN)
 ```
 
-The mailer is a no-op until `cratefield.com` has a verified sending domain (see
-`src/lib.rs`); swap it for the Resend adapter and double opt-in comes to life.
+The mailer picks the first mail key that is set on the Worker: `OWLPOST_API_KEY`
+(`op_test_…` in development, `op_live_…` in production), else `RESEND_API_KEY`,
+else a no-op that still captures the join as a pending entry. Whichever
+provider is picked, the confirmation is sent `from`
+`no-reply@send.cratefield.com`. Set a secret with
+`wrangler secret put OWLPOST_API_KEY`; double opt-in comes to life once one is
+set.
 
 **Status:** deployed, `/__health` live. The join path is blocked by
 [Cratefield/harness#107](https://github.com/Cratefield/harness/issues/107) — the

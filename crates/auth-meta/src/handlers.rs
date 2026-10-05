@@ -12,9 +12,9 @@ use axum::extract::{Query, State};
 use axum::response::{Html, IntoResponse, Response};
 use axum::routing::get;
 use base64ct::{Base64UrlUnpadded, Encoding as _};
+use cratefield_auth_core::cookie_value as session_cookie_value;
+use cratefield_auth_core::federated::{Caller, Ports};
 use cratefield_core::{Problem, Scope};
-use factory0_auth_core::cookie_value as session_cookie_value;
-use factory0_auth_core::federated::{Caller, Ports};
 use http::{HeaderMap, StatusCode, header};
 use oauth2::{
     AuthUrl, AuthorizationCode, Client, ClientId, ClientSecret, CsrfToken, EndpointNotSet,
@@ -211,7 +211,7 @@ async fn start(
     // so the callback can revoke that row even though the cookie naming it
     // will not arrive there (auth #36).
     let signed_in = match (ctx.ports.db.as_deref(), session_cookie_value(&headers)) {
-        (Some(db), Some(value)) => factory0_auth_core::validate(db, clock, &value)
+        (Some(db), Some(value)) => cratefield_auth_core::validate(db, clock, &value)
             .await
             .ok()
             .flatten(),
@@ -364,7 +364,7 @@ async fn callback(
 
     let presented = session_cookie_value(&headers);
     let current_user = match presented.as_deref() {
-        Some(value) => factory0_auth_core::validate(db, clock, value)
+        Some(value) => cratefield_auth_core::validate(db, clock, value)
             .await
             .ok()
             .flatten()
@@ -373,11 +373,11 @@ async fn callback(
         // sealed answer is the fallback, re-checked because the account
         // may have been disabled in the ten minutes since `/start`.
         None => match flow.signed_in_user.as_deref() {
-            Some(user_id) => factory0_auth_core::user_by_id(db, user_id)
+            Some(user_id) => cratefield_auth_core::user_by_id(db, user_id)
                 .await
                 .ok()
                 .flatten()
-                .filter(|user| user.status == factory0_auth_core::STATUS_ACTIVE)
+                .filter(|user| user.status == cratefield_auth_core::STATUS_ACTIVE)
                 .map(|user| user.id),
             None => None,
         },
@@ -579,7 +579,7 @@ async fn deletion_status(
     let job = if code.is_empty() {
         None
     } else {
-        factory0_auth_core::deletion_job_by_code(db, &code)
+        cratefield_auth_core::deletion_job_by_code(db, &code)
             .await
             .ok()
             .flatten()
@@ -593,7 +593,7 @@ async fn deletion_status(
             "No deletion request matches that code.",
         ));
     };
-    let message = if job.status == factory0_auth_core::DELETION_DONE {
+    let message = if job.status == cratefield_auth_core::DELETION_DONE {
         "Your deletion request has been carried out."
     } else {
         "Your deletion request has been received and is being carried out."

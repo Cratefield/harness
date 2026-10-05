@@ -2,7 +2,7 @@
 name = "cratefield-oauth-client"
 description = "OAuth 2.0 for the harness: authorize URLs, code exchange, refresh and revocation over the HttpClient port, PKCE, and token sealing (issue #531)"
 readme = "README.md"
-version = "0.2.1"
+version = "0.3.0"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true

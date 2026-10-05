@@ -1,10 +1,10 @@
-//! Verify Factory Zero auth tokens in a consuming app (issue #11).
+//! Verify auth-service tokens in a consuming app (issue #11).
 //!
 //! Six ventures each writing their own JWT validation is six chances to
 //! forget the audience check. This crate does it once.
 //!
 //! ```ignore
-//! let auth = AuthClient::new(http, clock, "https://auth.factory0.ventures", "client-kontinuum");
+//! let auth = AuthClient::new(http, clock, "https://auth.acme.example", "client-kontinuum");
 //! async fn handler(Authenticated(claims): Authenticated) -> String { claims.sub }
 //! ```
 //!

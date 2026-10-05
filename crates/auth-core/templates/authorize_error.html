@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Sign-in error · Factory Zero</title>
+<title>Sign-in error · {{ brand.name }}</title>
 <style>
   :root { color-scheme: dark; }
   * { box-sizing: border-box; }
@@ -21,15 +21,18 @@
     font-size: .8rem; word-break: break-all;
   }
   footer { margin-top: 2rem; color: #6f6c66; font-size: .8rem; }
+  img.brand-logo { display: block; max-height: 3rem; max-width: 12rem; margin: 0 auto 1.25rem; }
+  footer a { color: {{ brand.accent }}; }
 </style>
 </head>
 <body>
 <main>
+  {% include "_brand_header.html" %}
   <h1>That sign-in link could not be used</h1>
   <p>{{ message }} Nothing was redirected: an invalid sign-in request
   is never forwarded on to any application.</p>
   <code>request {{ request_id }}</code>
-  <footer>auth.factory0.ventures · Factory Zero</footer>
+  {% include "_brand_footer.html" %}
 </main>
 </body>
 </html>

@@ -69,7 +69,8 @@ to `cratefield.com` rather than all zones.
 
 ### 3. GitHub repository secrets
 
-The same names `deploy-auth.yml` uses:
+The same names `deploy-auth.yml` uses (it reads them per
+`auth-<app>-<env>` environment, falling back to these repository secrets):
 
 ```
 gh secret set CLOUDFLARE_ACCOUNT_ID -R Cratefield/harness   # paste the account id

@@ -1,0 +1,133 @@
+# The `alphahunt` auth instance (issue #777): the harness auth Worker
+# (`crates/auth-worker`), deployed for Alphahunt on Alphahunt's own domain
+# with Alphahunt's own branding, D1, secrets and passkey relying party.
+# Hosted by Cratefield on Alphahunt's domain (a Cratefield-managed instance).
+#
+# Deployed by `.github/workflows/deploy-auth.yml` from this directory:
+# `main` -> staging (top level), an `auth-v*` tag -> production
+# (`[env.production]`, behind the `auth-alphahunt-production` approval gate).
+# Wrangler does not inherit `[vars]` into an environment, so both blocks
+# carry the full set. Every variable is documented in
+# `crates/auth-worker/README.md`.
+#
+# needs-human before the first deploy (docs/auth/MANAGED-INSTANCES.md):
+# - `wrangler d1 create alphahunt-auth-staging` / `alphahunt-auth-production` and
+#   paste the ids below in place of the REPLACE_WITH_* placeholders.
+# - The secrets, by name only: HARNESS_SECRET, ADMIN_TOKEN,
+#   AUTH_CORE_SIGNING_KEYS (+ AUTH_CORE_SIGNING_KEY_ACTIVE), OWLPOST_API_KEY,
+#   TURNSTILE_SECRET, and the OIDC/Meta client secrets once those methods
+#   are enabled. Per environment: `wrangler secret put <NAME> [--env production]`.
+# - The custom domains (routes below) on the Cloudflare account that holds
+#   alphahunt.ing, the Turnstile site for both hostnames, and the Owlpost
+#   sending domain `send.alphahunt.ing`.
+name = "alphahunt-auth"
+main = "../../crates/auth-worker/build/worker/shim.mjs"
+compatibility_date = "2026-09-01"
+workers_dev = false
+# Staging's own hostname; production's is in `[env.production]`.
+route = { pattern = "auth-staging.alphahunt.ing", custom_domain = true }
+
+# `worker-build` compiles the package in its working directory, so the build
+# runs in the crate and `main` points at the shim it writes there. Every
+# instance builds the same, unmodified crate.
+[build]
+cwd = "../../crates/auth-worker"
+command = "cargo install -q worker-build && worker-build --release"
+watch_dir = "../../crates/auth-worker/src"
+
+[observability]
+enabled = true
+
+# --- Staging (deployed from `main`) ---
+
+# Workers Rate Limiting backs the harness's throttle; readiness refuses the
+# instance unless a limiter resolves (harness #437). Namespace ids are per
+# account and must not collide with another instance's on the same account.
+[[ratelimits]]
+name = "RATE_LIMITER"
+namespace_id = "1201"
+
+[ratelimits.simple]
+limit = 30
+period = 60
+
+[[d1_databases]]
+binding = "DB"
+database_name = "alphahunt-auth-staging"
+database_id = "REPLACE_WITH_STAGING_D1_ID"
+migrations_dir = "../../crates/auth-worker/migrations"
+
+# The meta-module drains Meta deletion jobs on a schedule.
+[triggers]
+crons = ["*/15 * * * *"]
+
+[vars]
+ENV = "staging"
+AUTH_PUBLIC_URL = "https://auth-staging.alphahunt.ing"
+AUTH_CORE_ISSUER = "https://auth-staging.alphahunt.ing"
+AUTH_VENTURE_NAME = "alphahunt-auth"
+AUTH_CORS_ORIGINS = "https://alphahunt.ing,https://app.alphahunt.ing"
+AUTH_BRAND_NAME = "Alphahunt"
+AUTH_BRAND_FOOTER = "Alphahunt"
+AUTH_CORE_LOGIN_METHODS = "passkey,magic-link"
+AUTH_PASSKEYS_RP_ID = "auth-staging.alphahunt.ing"
+AUTH_PASSKEYS_ORIGINS = "https://auth-staging.alphahunt.ing"
+AUTH_MAILER = "owlpost"
+MAIL_FROM = "Alphahunt <no-reply@send.alphahunt.ing>"
+AUTH_MAGIC_LINK_PUBLIC_BASE = "https://auth-staging.alphahunt.ing"
+AUTH_MAGIC_LINK_MAIL_FROM = "Alphahunt <sign-in@send.alphahunt.ing>"
+AUTH_PASSWORD_PUBLIC_BASE = "https://auth-staging.alphahunt.ing"
+AUTH_PASSWORD_MAIL_FROM = "Alphahunt <sign-in@send.alphahunt.ing>"
+AUTH_OIDC_REDIRECT_BASE = "https://auth-staging.alphahunt.ing"
+AUTH_META_REDIRECT_BASE = "https://auth-staging.alphahunt.ing"
+# AUTH_BRAND_LOGO_URL = "https://alphahunt.ing/logo.png"   # needs-human: confirm the page/address exists, then uncomment
+# AUTH_BRAND_ACCENT = "#rrggbb"   # needs-human: confirm the page/address exists, then uncomment
+# AUTH_BRAND_SUPPORT_EMAIL = "support@alphahunt.ing"   # needs-human: confirm the page/address exists, then uncomment
+# AUTH_BRAND_PRIVACY_URL = "https://alphahunt.ing/privacy"   # needs-human: confirm the page/address exists, then uncomment
+# AUTH_BRAND_TERMS_URL = "https://alphahunt.ing/terms"   # needs-human: confirm the page/address exists, then uncomment
+
+# --- Production (deployed from an `auth-v*` tag, behind the approval gate) ---
+[env.production]
+route = { pattern = "auth.alphahunt.ing", custom_domain = true }
+
+[[env.production.ratelimits]]
+name = "RATE_LIMITER"
+namespace_id = "1202"
+
+[env.production.ratelimits.simple]
+limit = 30
+period = 60
+
+[[env.production.d1_databases]]
+binding = "DB"
+database_name = "alphahunt-auth-production"
+database_id = "REPLACE_WITH_PRODUCTION_D1_ID"
+migrations_dir = "../../crates/auth-worker/migrations"
+
+[env.production.triggers]
+crons = ["*/15 * * * *"]
+
+[env.production.vars]
+ENV = "production"
+AUTH_PUBLIC_URL = "https://auth.alphahunt.ing"
+AUTH_CORE_ISSUER = "https://auth.alphahunt.ing"
+AUTH_VENTURE_NAME = "alphahunt-auth"
+AUTH_CORS_ORIGINS = "https://alphahunt.ing,https://app.alphahunt.ing"
+AUTH_BRAND_NAME = "Alphahunt"
+AUTH_BRAND_FOOTER = "Alphahunt"
+AUTH_CORE_LOGIN_METHODS = "passkey,magic-link"
+AUTH_PASSKEYS_RP_ID = "alphahunt.ing"
+AUTH_PASSKEYS_ORIGINS = "https://auth.alphahunt.ing"
+AUTH_MAILER = "owlpost"
+MAIL_FROM = "Alphahunt <no-reply@send.alphahunt.ing>"
+AUTH_MAGIC_LINK_PUBLIC_BASE = "https://auth.alphahunt.ing"
+AUTH_MAGIC_LINK_MAIL_FROM = "Alphahunt <sign-in@send.alphahunt.ing>"
+AUTH_PASSWORD_PUBLIC_BASE = "https://auth.alphahunt.ing"
+AUTH_PASSWORD_MAIL_FROM = "Alphahunt <sign-in@send.alphahunt.ing>"
+AUTH_OIDC_REDIRECT_BASE = "https://auth.alphahunt.ing"
+AUTH_META_REDIRECT_BASE = "https://auth.alphahunt.ing"
+# AUTH_BRAND_LOGO_URL = "https://alphahunt.ing/logo.png"   # needs-human: confirm the page/address exists, then uncomment
+# AUTH_BRAND_ACCENT = "#rrggbb"   # needs-human: confirm the page/address exists, then uncomment
+# AUTH_BRAND_SUPPORT_EMAIL = "support@alphahunt.ing"   # needs-human: confirm the page/address exists, then uncomment
+# AUTH_BRAND_PRIVACY_URL = "https://alphahunt.ing/privacy"   # needs-human: confirm the page/address exists, then uncomment
+# AUTH_BRAND_TERMS_URL = "https://alphahunt.ing/terms"   # needs-human: confirm the page/address exists, then uncomment

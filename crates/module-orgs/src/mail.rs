@@ -1,13 +1,20 @@
 //! The invitation mail (issue #652).
 //!
-//! One mail, rendered here rather than through a template registry, because a
-//! venture has nothing to localize yet: it carries the organization's name, the
-//! role offered, a link, and — for a venture that serves its own accept page —
-//! the token itself, so an invitee is never stuck when the configured base is
-//! not where they expect to land. The body is built from values this module
-//! controls except the organization's name, which is escaped.
+//! One mail: the organization's name, the role offered, a link, and — for a
+//! venture that serves its own accept page — the token itself, so an invitee
+//! is never stuck when the configured base is not where they expect to land.
+//! It renders through the template registry as `orgs/invitation`, in the
+//! venture's [`MailTheme`] via `cratefield-mail-templates`, so a venture can
+//! restyle or reword it like every other module's mail. The organization's
+//! name is typed by a person; the layout escapes it with everything else.
 
-use cratefield_core::{MailError, Message, ModuleConfig, ModuleContext, SendOutcome};
+use cratefield_core::{
+    MailError, Message, ModuleConfig, ModuleContext, Rendered, SendOutcome, Template,
+    TemplateError, TemplateRegistry,
+};
+use cratefield_mail_templates::{self as mt, MailTheme};
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 use crate::OrgsError;
 
@@ -66,6 +73,117 @@ fn encode_uri_component(value: &str) -> String {
     out
 }
 
+/// The registry id a venture overrides.
+pub const TEMPLATE_INVITATION: &str = "orgs/invitation";
+
+/// What the invitation template is given. Serialized through the registry,
+/// so it is a wire format: adding a field is fine, renaming one breaks
+/// overrides. The module also puts the resolved theme under `theme`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InvitationMail {
+    /// The venture's name.
+    pub venture: String,
+    /// The venture's domain, named beside it.
+    pub domain: String,
+    /// The invitee's address.
+    pub email: String,
+    /// The organization's name, as a person typed it.
+    pub org: String,
+    /// The role offered.
+    pub role: String,
+    /// The accept link, token included.
+    pub accept_url: String,
+    /// The raw token, for an accept page that asks for it.
+    pub token: String,
+    /// Days until the invitation expires.
+    pub expires_in_days: i64,
+}
+
+struct InvitationTemplate {
+    theme: Option<MailTheme>,
+}
+
+impl Template for InvitationTemplate {
+    fn render(&self, data: &Value, _locale: &str) -> Result<Rendered, TemplateError> {
+        let theme = mt::theme_for_template(self.theme.as_ref(), data);
+        let data: InvitationMail =
+            serde_json::from_value(data.clone()).map_err(|_| TemplateError::RenderFailed {
+                id: TEMPLATE_INVITATION.to_owned(),
+                reason: "the mail data is not the shape this template takes".to_owned(),
+            })?;
+        let venture = theme.name_or(&data.venture);
+        let days = data.expires_in_days;
+        let plural = if days == 1 { "day" } else { "days" };
+        Ok(mt::Message::new(
+            format!("You have been invited to join {}", data.org),
+            "You have been invited",
+        )
+        .preheader(format!(
+            "Join \u{201c}{}\u{201d} on {venture} as {}.",
+            data.org, data.role
+        ))
+        .paragraph(format!(
+            "You have been invited to join an organization on {venture} ({}).",
+            data.domain
+        ))
+        .fact("Organization", &data.org)
+        .fact("Role", &data.role)
+        .button("Accept the invitation", &data.accept_url)
+        .code(
+            "If you would rather paste it, your invitation token is:",
+            &data.token,
+        )
+        .note(format!("This invitation expires in {days} {plural}."))
+        .note(
+            "If you were not expecting this, ignore this email: nothing happens unless you \
+             accept.",
+        )
+        .recipient(&data.email)
+        .why(format!(
+            "someone invited this address to an organization on {venture}"
+        ))
+        .render(&theme)
+        .into())
+    }
+}
+
+/// The module's default template, for `Harness::builder().templates(..)`.
+/// It renders in the theme the module resolves for each mail (the
+/// venture's core `Brand`, with the deployment's `MAIL_THEME` config on
+/// top); use [`themed_templates`] to compose the venture's own theme.
+#[must_use]
+pub fn default_templates() -> Vec<(String, Box<dyn Template>)> {
+    templates(None)
+}
+
+/// The module's template in `theme`, the venture's own style. The
+/// deployment's `MAIL_THEME` config still applies on top.
+#[must_use]
+pub fn themed_templates(theme: &MailTheme) -> Vec<(String, Box<dyn Template>)> {
+    templates(Some(theme))
+}
+
+fn templates(theme: Option<&MailTheme>) -> Vec<(String, Box<dyn Template>)> {
+    vec![(
+        TEMPLATE_INVITATION.to_owned(),
+        Box::new(InvitationTemplate {
+            theme: theme.cloned(),
+        }) as Box<dyn Template>,
+    )]
+}
+
+/// Renders through the venture's registry, falling back to the compiled
+/// default when the registry misses (the conformance kit registers
+/// nothing).
+fn render(registry: &TemplateRegistry, data: &Value) -> Result<Rendered, TemplateError> {
+    match registry.render(TEMPLATE_INVITATION, data, "en") {
+        Err(TemplateError::UnknownTemplate { .. }) => {
+            InvitationTemplate { theme: None }.render(data, "en")
+        }
+        other => other,
+    }
+}
+
 /// Renders and sends one invitation.
 ///
 /// # Errors
@@ -82,38 +200,30 @@ pub(crate) async fn send(
     let cfg = ModuleConfig::new(crate::MODULE_NAME, &*ctx.config);
     let from = cfg.get_str("FROM", &format!("no-reply@send.{}", ctx.venture.domain));
 
-    let days = mail.expires_in_days;
-    let subject = format!("You have been invited to join {}", mail.org_name);
-    let inviter_line = format!("{} ({})", ctx.venture.name, ctx.venture.domain);
-    let text = format!(
-        "{inviter_line}\n\n\
-         You have been invited to join \"{org}\" as {role}.\n\n\
-         Accept the invitation:\n{url}\n\n\
-         If you would rather paste it, your invitation token is:\n{token}\n\n\
-         This invitation expires in {days} {plural}.\n",
-        org = mail.org_name,
-        role = mail.role,
-        url = mail.accept_url,
-        token = mail.token,
-        days = days,
-        plural = if days == 1 { "day" } else { "days" },
-    );
-    let html = format!(
-        "<p>You have been invited to join <strong>{org}</strong> as {role}.</p>\
-         <p><a href=\"{url}\">Accept the invitation</a></p>\
-         <p>Or paste this token into the accept page: <code>{token}</code></p>\
-         <p>This invitation expires in {days} {plural}.</p>",
-        org = escape_html(mail.org_name),
-        role = escape_html(mail.role),
-        url = mail.accept_url,
-        token = escape_html(mail.token),
-        days = days,
-        plural = if days == 1 { "day" } else { "days" },
-    );
+    let mut data = serde_json::to_value(InvitationMail {
+        venture: ctx.venture.name.clone(),
+        domain: ctx.venture.domain.clone(),
+        email: mail.to.to_owned(),
+        org: mail.org_name.to_owned(),
+        role: mail.role.to_owned(),
+        accept_url: mail.accept_url.to_owned(),
+        token: mail.token.to_owned(),
+        expires_in_days: mail.expires_in_days,
+    })
+    .map_err(|error| OrgsError::Mail(error.to_string()))?;
+    mt::attach_theme(&mut data, &ctx.venture, &*ctx.config);
+    let rendered =
+        render(&ctx.templates, &data).map_err(|error| OrgsError::Mail(error.to_string()))?;
 
-    let mut message = Message::new(mail.to, from, subject, text, html)
-        .idempotency_key(mail.idempotency_key)
-        .tags([crate::MODULE_NAME, "invitation"]);
+    let mut message = Message::new(
+        mail.to,
+        from,
+        rendered.subject,
+        rendered.text,
+        rendered.html,
+    )
+    .idempotency_key(mail.idempotency_key)
+    .tags([crate::MODULE_NAME, "invitation"]);
     if let Some(reply_to) = cfg.get_opt("REPLY_TO") {
         message = message.reply_to(reply_to);
     }
@@ -143,25 +253,6 @@ fn mail_error(error: &MailError) -> String {
     error.to_string()
 }
 
-/// Escapes the five characters that would let a value leave an HTML text
-/// node or an attribute. Only the organization's name and the role need it —
-/// roles come from the venture's own configuration, but a name is typed by a
-/// person, and this mail is rendered by a client that will honour markup.
-fn escape_html(value: &str) -> String {
-    let mut out = String::with_capacity(value.len());
-    for ch in value.chars() {
-        match ch {
-            '&' => out.push_str("&amp;"),
-            '<' => out.push_str("&lt;"),
-            '>' => out.push_str("&gt;"),
-            '"' => out.push_str("&quot;"),
-            '\'' => out.push_str("&#39;"),
-            other => out.push(other),
-        }
-    }
-    out
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -173,10 +264,24 @@ mod tests {
     }
 
     #[test]
-    fn markup_in_a_name_does_not_escape_its_text_node() {
-        assert_eq!(
-            escape_html("<script>alert('x')</script>"),
-            "&lt;script&gt;alert(&#39;x&#39;)&lt;/script&gt;"
-        );
+    fn markup_in_a_name_is_escaped_and_cannot_forge_a_text_line() {
+        let data = serde_json::to_value(InvitationMail {
+            venture: "acme".to_owned(),
+            domain: "acme.test".to_owned(),
+            email: "ada@example.com".to_owned(),
+            org: "<script>alert('x')</script>\r\nBcc: x@evil.test".to_owned(),
+            role: "admin".to_owned(),
+            accept_url: "https://api.acme.test/v1/orgs/invitations/accept?token=t".to_owned(),
+            token: "t".to_owned(),
+            expires_in_days: 7,
+        })
+        .expect("json");
+        let rendered = render(&TemplateRegistry::new(), &data).expect("renders");
+        assert!(!rendered.html.contains("<script>"), "{}", rendered.html);
+        assert!(rendered.html.contains("&lt;script&gt;alert(&#39;x&#39;)"));
+        assert!(!rendered.text.contains("\nBcc:"), "{}", rendered.text);
+        assert!(!rendered.subject.contains('\n'));
+        assert!(rendered.text.contains("expires in 7 days"));
+        assert!(rendered.text.contains("accept?token=t"));
     }
 }

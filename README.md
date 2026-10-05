@@ -183,6 +183,7 @@ convenience, not a layer.
 | `cratefield-push-wiring` | Assembles the `Push` port from the environment: one env-variable table shared by `serve()`, `fz push` and `fz doctor` |
 | `cratefield-adapter-stripe` | `Payments` over the Stripe REST API |
 | `cratefield-adapter-polar` | `Payments` over Polar, a Merchant of Record: hosted checkout, usage meters through event ingestion, the customer portal, refunds, disputes and Standard Webhooks verification, through the `HttpClient` port |
+| `cratefield-mail-templates` | Branded transactional mail: one email-client-safe layout (600px tables, inline styles, dark mode, preheader, a text twin) themed with each venture's own website colours, logo and fonts, which every module that sends mail renders through |
 | `cratefield-module-cms` | A small content store with an editor: typed collections, versioned, in the venture's own database |
 | `cratefield-module-privacy` | Subject access and erasure, assembled from what every other module declares it holds |
 | `cratefield-module-notifications` | Push, an in-app inbox and email from one `notify()`, with per-account per-category preferences ([NOTIFICATIONS.md](docs/NOTIFICATIONS.md)) |
@@ -199,7 +200,7 @@ makes a crate private now, not a separate repository (ADR
 
 | Crate | Role |
 |---|---|
-| `factory0-auth-*` | The auth service: `auth-core` plus one crate per login method (passkeys, OIDC/Google/Apple, password, magic link, Meta) and the deployable `auth-worker`. `cratefield-auth-client`, which verifies its tokens in a consuming app, is published; the service itself is not |
+| `cratefield-auth-*` | The auth service: `auth-core` plus one crate per login method (passkeys, OIDC/Google/Apple, password, magic link, Meta) and the deployable `auth-worker`. `cratefield-auth-client`, which verifies its tokens in a consuming app, is published; the service itself is not |
 | `fz-module-linkedin` | Private Factory Zero module: run a LinkedIn Company Page from the harness |
 | `cratefield-control-plane`, `cratefield-console`, `cratefield-accounts`, `cratefield-access`, `cratefield-catalog`, `cratefield-connections`, `cratefield-provisioning`, `cratefield-ui-generator` | The managed service: sign up, pick modules, connect Cloudflare and SSO, get a running venture |
 | `cratefield-introspect` | Reads a database's own catalog over the `Database` port (SQLite pragmas, Postgres `information_schema`) and answers in `cratefield-tables`' vocabulary — the source the dashboard's data screen renders

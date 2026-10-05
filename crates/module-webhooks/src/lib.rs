@@ -212,20 +212,24 @@ impl Webhooks {
         })
     }
 
-    /// Delivers every due outbox row this pass can lease, through the
-    /// ports of `ctx`. Call it from the venture's **scheduled** entry
-    /// point — a cron invocation builds no router, so the context must be
-    /// the one the runtime hands in, not one parked at router-build time.
+    /// Delivers due outbox rows through the ports of `ctx`, spending no
+    /// more than what the invocation's `ctx.scheduled` budget allows (ADR
+    /// 0023). Call it from the venture's **scheduled** entry point — a cron
+    /// invocation builds no router, so the context must be the one the
+    /// runtime hands in, not one parked at router-build time.
     ///
     /// Each row is signed and delivered once per pass: 2xx completes it,
     /// anything else retries with exponential backoff (410 Gone and
     /// SSRF-blocked destinations dead-letter immediately), and
     /// `MAX_ATTEMPTS` failures dead-letter it for
-    /// [`Webhooks::replay`]. A per-row failure never aborts the pass.
+    /// [`Webhooks::replay`]. One delivery attempt spends one subrequest;
+    /// when the budget runs out the rows it never reached stay queued, due
+    /// now, for the next tick. A per-row failure never aborts the pass.
     ///
     /// # Errors
     ///
-    /// [`DeliveryError`] when a port is missing or the claim fails.
+    /// [`DeliveryError`] when a port is missing, the claim fails, or the
+    /// outbox refuses a completion write.
     pub async fn drain_with(&self, ctx: &ModuleContext) -> Result<DrainReport, DeliveryError> {
         deliver::drain(ctx, self.max_attempts).await
     }
@@ -394,8 +398,10 @@ impl Module for Webhooks {
     }
 
     /// The recovery half of the outbox contract: whatever a caller's
-    /// immediate drain never got to is delivered on the next tick, and
-    /// the dead letters pile up here for [`Webhooks::replay`].
+    /// immediate drain never got to is delivered on the next tick — as far
+    /// as the invocation's budget reaches (ADR 0023), with the rest left
+    /// due for the ticks after — and the dead letters pile up here for
+    /// [`Webhooks::replay`].
     fn scheduled<'a>(
         &'a self,
         ctx: &'a ModuleContext,
@@ -406,7 +412,9 @@ impl Module for Webhooks {
                 .drain_with(ctx)
                 .await
                 .map_err(|err| Box::new(err) as AnyError)?;
-            if report.claimed > 0 {
+            // `deferred` alone is worth a line: the budget stopped a pass
+            // that had work left, and the next tick must pick it up.
+            if report.claimed > 0 || report.deferred > 0 {
                 tracing::info!(?report, cron, "drained the webhooks outbox");
             }
             Ok(())

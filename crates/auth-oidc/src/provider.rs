@@ -4,7 +4,7 @@
 //! this descriptor rather than against Google, so Apple (#16) and any other
 //! compliant provider arrive as data plus whatever quirk they insist on.
 
-use factory0_auth_core::{PROVIDER_APPLE, PROVIDER_GOOGLE};
+use cratefield_auth_core::{PROVIDER_APPLE, PROVIDER_GOOGLE};
 use openidconnect::AuthType;
 use openidconnect::core::CoreJwsSigningAlgorithm;
 

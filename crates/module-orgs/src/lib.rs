@@ -23,6 +23,8 @@ use cratefield_core::{
 
 use handlers::Settings;
 
+pub use mail::{InvitationMail, TEMPLATE_INVITATION, default_templates, themed_templates};
+
 /// The module's name: it is mounted at `/v1/orgs`, and its config keys are
 /// prefixed `ORGS_`.
 pub const MODULE_NAME: &str = "orgs";

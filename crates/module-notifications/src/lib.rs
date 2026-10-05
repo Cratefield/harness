@@ -79,6 +79,7 @@
 mod clock;
 mod handlers;
 mod locale;
+mod mail;
 mod message;
 mod notify;
 mod store;
@@ -88,6 +89,7 @@ pub use handlers::{
     RegisterBody, UNKNOWN_CATEGORY, WEBHOOK_UNVERIFIED,
 };
 pub use locale::EVENT_MISSING_TRANSLATION;
+pub use mail::{EmailMail, TEMPLATE_EMAIL, default_templates, themed_templates};
 pub use message::{Localizable, Message, RenderMode};
 pub use notify::{
     DrainReport, EVENT_REQUESTED, EVENT_SUBSCRIPTION_PRUNED, EVENT_SUBSCRIPTION_REHOMED, Enqueued,

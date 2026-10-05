@@ -1,0 +1,16 @@
+---
+source: ventures/cratefield-waitlist/src/lib.rs
+expression: rendered.text
+---
+Hold your spot
+
+Cratefield is admitting members in join order. Confirm your address to hold your place on the waitlist.
+
+Confirm my spot:
+https://api.cratefield.com/v1/waitlist/confirm?token=abc
+
+If you did not join this waitlist, ignore this email: nothing happens until the link is opened.
+
+--
+Sent to ada@example.com because this address was entered on the Cratefield waitlist.
+Cratefield · https://cratefield.com · hello@cratefield.com

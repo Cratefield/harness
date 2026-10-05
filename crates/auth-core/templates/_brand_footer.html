@@ -1,0 +1,6 @@
+<footer>
+    <span>{{ brand.footer }}</span>
+    {% if let Some(email) = brand.support_email %}<span> · <a href="mailto:{{ email }}">Help</a></span>{% endif %}
+    {% if let Some(url) = brand.privacy_url %}<span> · <a href="{{ url }}">Privacy</a></span>{% endif %}
+    {% if let Some(url) = brand.terms_url %}<span> · <a href="{{ url }}">Terms</a></span>{% endif %}
+  </footer>

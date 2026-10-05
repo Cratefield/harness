@@ -463,6 +463,24 @@ Resend-compatible, so the verified-subdomain rule and the degraded
 development (it never reaches a provider) and the venture's `op_live_…`
 key in production: `wrangler secret put OWLPOST_API_KEY`.
 
+### 7b. Mail in the venture's own style
+
+**Agent.** Every module that sends mail renders through
+`cratefield-mail-templates` (ADR [0028](adr/0028-mail-renders-through-one-themed-layout.md)).
+Give the venture a `MailTheme` built from its website's CSS tokens and
+logo, and compose it into each mail-sending module instead of its
+`default_templates()` — `.templates(cratefield::waitlist::themed_templates(&mail_theme()))`,
+and the same for every other module that sends mail.
+
+The logo is a PNG the website hosts at twice its display size
+(`/assets/email/logo-64.png` for the default 32×32). A deployment can
+adjust the composed theme without a rebuild with `MAIL_THEME`, a JSON
+object of any subset of the fields (`{"light":{"button":"#123456"}}`).
+With neither, mail renders in a neutral theme built from the venture's
+name, public URL and core `Brand`. Preview every mail in the theme with
+`tools/render-emails --theme theme.json --screenshots` in the harness
+repository.
+
 ## 8. Custom domain
 
 **Human** (DNS + Cloudflare). Point `api.<your-domain>` at the Worker —
@@ -470,6 +488,24 @@ a routes/custom-domain entry in `wrangler.toml` or the dashboard.
 `public_url` and `cors_origins` come from the manifest, so change them
 in `venture.json` and re-run `fz build` — and they must list the real
 origin: the harness rejects a wildcard CORS origin outright.
+
+A venture whose client is a browser extension lists that extension's
+origin the same way (issue #579). Three schemes are accepted, each as an
+exact-match origin — no wildcard, port, path or trailing slash:
+
+- `chrome-extension://<id>`, the id exactly 32 characters, each `a`–`p`;
+- `moz-extension://<uuid>`, a canonical lowercase RFC 4122 UUID
+  (`8-4-4-4-12`); Firefox emits lowercase;
+- `safari-web-extension://<uuid>`, the same UUID shape but accepting
+  uppercase hex too, because Safari emits it.
+
+Any other hyphenated scheme is still rejected. CORS credentials stay
+**off** (bearer tokens only), which is what an extension driving the
+PKCE flow wants: it holds an `auth-client` token and the browser never
+attaches a cookie it could be tricked into lending out. The login
+redirect Chrome's `launchWebAuthFlow` lands on is a plain `https` URL,
+`https://<extension-id>.chromiumapp.org/`, registered as a client
+redirect URI — see `crates/auth-core/src/redirect_uri.rs`.
 
 ## 8b. Add the forms to your site
 
@@ -518,9 +554,9 @@ for you — the toolchain's wasm target, and Cloudflare credentials.
 
 For the workflow around those commands, copy what already works:
 [`.github/workflows/deploy-auth.yml`](../.github/workflows/deploy-auth.yml)
-deploys this repository's auth Worker — a push to `main` deploys
-staging, an `auth-v*` tag deploys production behind a GitHub Environment
-approval gate, D1 migrations are applied before each deploy, and a smoke
+deploys this repository's auth instances (one per app, each from
+`instances/<app>/wrangler.toml`) — a push to `main` deploys staging, an
+`auth-v*` tag deploys production behind a GitHub Environment approval gate, D1 migrations are applied before each deploy, and a smoke
 script runs after it. It is not a venture deploy, and no venture deploy
 workflow ships in this repository today; pointing that shape at your
 venture directory is a one-time human step.

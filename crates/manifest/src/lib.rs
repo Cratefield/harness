@@ -685,6 +685,45 @@ mod tests {
     }
 
     #[test]
+    fn browser_extension_origins_are_origins() {
+        // The same three shapes `cratefield_core` accepts at boot
+        // (issue #579), so a manifest listing an extension's origin builds
+        // instead of being refused here first.
+        let with_origins = |origins: serde_json::Value| {
+            let base: serde_json::Value =
+                serde_json::from_str(sample_json()).expect("the fixture is JSON");
+            let mut object = base.as_object().expect("an object").clone();
+            object.insert("cors_origins".to_owned(), origins);
+            VentureManifest::from_json_str(&serde_json::Value::Object(object).to_string())
+                .expect("parses")
+                .validate()
+        };
+        with_origins(serde_json::json!([
+            "chrome-extension://abcdefghijklmnopabcdefghijklmnop",
+            "moz-extension://5de6e0f6-2b1a-4f6e-9c3d-0a1b2c3d4e5f",
+            "safari-web-extension://5DE6E0F6-2B1A-4F6E-9C3D-0A1B2C3D4E5F",
+        ]))
+        .expect("extension origins are origins");
+
+        // Rejected: a bad id, a bare scheme, a trailing slash and an
+        // unknown hyphenated scheme.
+        for bad in [
+            "chrome-extension://abcdefghijklmnopabcdefghijklmno",
+            "chrome-extension://qbcdefghijklmnopabcdefghijklmnop",
+            "moz-extension://5DE6E0F6-2B1A-4F6E-9C3D-0A1B2C3D4E5F",
+            "chrome-extension://",
+            "chrome-extension://abcdefghijklmnopabcdefghijklmnop/",
+            "foo-bar://x",
+            "null",
+        ] {
+            let error = with_origins(serde_json::json!([bad]))
+                .expect_err(bad)
+                .to_string();
+            assert!(error.contains("cors_origins"), "{bad}: {error}");
+        }
+    }
+
+    #[test]
     fn a_subject_column_must_be_able_to_hold_a_caller_id() {
         // A subject is a caller's id: a string out of a verified
         // credential. Declared on a column that cannot hold one, every
