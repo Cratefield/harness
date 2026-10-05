@@ -90,6 +90,9 @@ async fn drop_role(role: &str) {
 fn normalized(report: &Report) -> Report {
     let mut report = report.clone();
     let role = format!("`{}`", report.read_only.role);
+    // The crate version changes on every release; it is checked below, not
+    // frozen into the snapshot.
+    report.tool.version = "<version>".to_owned();
     report.project.host = "<host>".to_owned();
     report.project.port = 5432;
     report.project.database = "<database>".to_owned();
@@ -169,6 +172,9 @@ async fn the_fixture_report_matches_its_snapshot() {
             "Members can leave unless they own the team",
         ]
     );
+
+    // The version is normalized out of the snapshot, so it is checked here.
+    assert_eq!(report.tool.version, env!("CARGO_PKG_VERSION"));
 
     let normalized = normalized(&report);
     insta::assert_snapshot!("fixture-report.json", normalized.to_json());
