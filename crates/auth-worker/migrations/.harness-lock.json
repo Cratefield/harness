@@ -38,5 +38,17 @@
   "auth-core/0010": {
     "file": "0010_auth-core_0010_sso_connections.sql",
     "sha256": "4cfb30bcd158b896940386493bb141d40709f7828c6c9cd4a4fef559465bade4"
+  },
+  "auth-core/0011": {
+    "file": "0013_auth-core_0011_email_change.sql",
+    "sha256": "8b96a16bf71660d135f007cb0ec81962896fbf99d455dfa39b22b0440cd005b0"
+  },
+  "auth-magic-link/0001": {
+    "file": "0012_auth-magic-link_0001_send_cooldown.sql",
+    "sha256": "7b13e4aaade1989e990a26c4a6ae4a9ef12fa23131b3f6c02caa3a4b15f73313"
+  },
+  "auth-passkeys/0001": {
+    "file": "0011_auth-passkeys_0001_challenge_budget.sql",
+    "sha256": "e62674b2f933652dbe77f01a712a2b975cd99f4446f36047aefbf864c77d0654"
   }
 }
