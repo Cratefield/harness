@@ -59,7 +59,8 @@ pub use dispatcher::{DispatchError, Dispatcher};
 pub use embedder::{EmbedError, Embedder, Embeddings};
 pub use http::{
     BoundedHttpClient, DEFAULT_RESPONSE_TIMEOUT, HttpClient, HttpError, HttpPolicy,
-    MAX_CONCURRENT_REQUESTS, MAX_RESPONSE_BYTES, MAX_RESPONSE_TIMEOUT, declared_content_length,
+    MAX_CONCURRENT_REQUESTS, MAX_RESPONSE_BYTES, MAX_RESPONSE_TIMEOUT, StatusOnly,
+    declared_content_length,
 };
 pub use idgen::{IdGen, UlidIdGen};
 pub use inbound_mail::{InboundMailError, InboundMailSource, InboundMessage, receive_mail};

@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- The response body is read as a stream under the `HttpPolicy` cap, so an
+  upstream that never declares a `content-length` is refused at the chunk
+  that crosses the cap rather than buffered first. Reading stops there and
+  drops the platform's handle on the fetch, so an endless body costs one
+  chunk past the cap instead of the isolate's memory. The platform offers
+  no stream at all for a null-body status (204/205/304, or the reply to a
+  `HEAD`), which is read as an empty body rather than a failed send, so
+  the cap does not cost those replies the buffered read used to answer
+  ([#714](https://github.com/Cratefield/harness/issues/714)).
+- Redirects are answered, not taken: the transport request asks for
+  `redirect: "manual"`, so no upstream can move the exchange to another
+  host or down to `http` after the destination was vetted
+  ([#714](https://github.com/Cratefield/harness/issues/714)).
+
+### Added
+
+- `StatusOnly` request marker honoured: a request carrying it is answered
+  from the status line alone, its body never read, and its
+  body-describing headers (`Content-Length`, `Content-Encoding`,
+  `Transfer-Encoding`) dropped, so a liveness probe of a large resource
+  does not fail on a length it never asked for
+  ([#714](https://github.com/Cratefield/harness/issues/714)).
+
 ## [0.4.0](https://github.com/Cratefield/harness/compare/cratefield-runtime-cloudflare-v0.3.0...cratefield-runtime-cloudflare-v0.4.0) - 2026-10-04
 
 ### Changed

@@ -133,7 +133,7 @@ pub use ports::{
     Priority, Prompt, ProviderStatus, Push, PushError, PushOutcome, Question, Quota,
     RateLimitError, RateLimiter, Realtime, RealtimeError, Recipient, Refund, RefundRequest, Role,
     RoomContext, RoomHandler, RoutingPush, RoutingTextModel, RoutingTracker, Row, Rows,
-    ScopedActors, ScopedBlob, SendOutcome, Severity, SignatureError, Signer, Statement,
+    ScopedActors, ScopedBlob, SendOutcome, Severity, SignatureError, Signer, Statement, StatusOnly,
     StatusUpdate, StatusWebhook, Subject, SubscriptionCheckoutRequest, SystemClock, TextModel,
     TextModelError, TicketComment, TicketDraft, TicketState, TicketStatus, ToolCall, ToolChoice,
     ToolResult, ToolSpec, Tracker, TrackerError, TransferCharge, TryFromValue, Turn, UlidIdGen,
