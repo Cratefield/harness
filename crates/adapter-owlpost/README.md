@@ -96,6 +96,32 @@ match &envelope.data {
 }
 ```
 
+## Sending domains
+
+The `/v1/domains` routes, so a venture can register a sending domain, show
+the DNS records to publish, and watch verification. The API key needs the
+`domains:manage` scope.
+
+| Operation | Endpoint |
+|---|---|
+| `Owlpost::create_domain(name)` — returns the domain with its records | `POST {base}/v1/domains` |
+| `Owlpost::list_domains()` — entries may carry no records | `GET {base}/v1/domains` |
+| `Owlpost::get_domain(id)` — the records and the current status | `GET {base}/v1/domains/{id}` |
+| `Owlpost::verify_domain(id)` — asks for a re-check; poll `get_domain` for the outcome | `POST {base}/v1/domains/{id}/verify` |
+| `Owlpost::delete_domain(id)` | `DELETE {base}/v1/domains/{id}` |
+
+`Domain` carries `Vec<DnsRecord>`, each typed as `purpose` (`DKIM`, `MAIL
+FROM`, `SPF`), `kind` (`TXT`, `MX`, `CNAME`), `name`, `value`, `ttl`,
+`priority` and `status` — everything a DNS-setting UI needs without parsing
+strings; both it and its records serialize, so a venture can hand them
+straight to its frontend. These routes return `DomainError`, not
+`OwlpostError`: 404 → `NotFound`, 409 → `AlreadyExists`, 400/422 → `Invalid`
+(the same as a local refusal), and 403 → `Mail(Unauthorized)` — on a domain
+route a 403 is a key without the `domains:manage` scope, never an unverified
+sending domain. Every other status maps as in the table below, wrapped in
+`DomainError::Mail`. A provider state or record purpose added later parses as
+`Unknown` rather than failing.
+
 ## Error mapping
 
 Owlpost answers RFC 9457 `application/problem+json`. `OwlpostError` is
