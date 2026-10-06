@@ -87,7 +87,8 @@ async fn every_shipped_migration_applies_on_postgres_16() {
             "waitlist/0003",
             "waitlist/0004",
             "waitlist/0005",
-            "waitlist/0006"
+            "waitlist/0006",
+            "waitlist/0007"
         ]
     );
 
