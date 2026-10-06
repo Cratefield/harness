@@ -6,7 +6,7 @@
 use async_trait::async_trait;
 use bytes::Bytes;
 use cratefield_adapter_owlpost::{
-    DEFAULT_BASE_URL, MAX_BATCH, Owlpost, OwlpostError, SendOptions, Stream,
+    DEFAULT_BASE_URL, MAX_BATCH, Owlpost, OwlpostError, SendOptions, Stream, Suppression,
 };
 use cratefield_core::{Clock, HttpClient, HttpError, MailError, Mailer, Message, SendOutcome};
 use http::{HeaderMap, Request, Response, StatusCode};
@@ -676,4 +676,271 @@ async fn the_key_never_leaks_in_debug_or_a_provider_echo() {
         !err.to_string().contains(DUMMY_KEY) && !format!("{err:?}").contains(DUMMY_KEY),
         "{err:?}"
     );
+}
+
+// --- Suppressions and topics (issue #669) --------------------------------
+
+/// The list answer, from the Owlpost suppression docs: the first entry
+/// account-wide (`topic: null`), the second partial, so both the present and
+/// the defaulted fields are covered.
+const LIST_BODY: &str = r#"{
+  "object": "list",
+  "data": [
+    {"address":"old@example.org","topic":null,"reason":"bounce",
+     "email_id":"em_01j9","created_at":"2026-10-03T09:00:00Z"},
+    {"address":"grumpy@example.org","topic":"project:news","reason":"manual"}
+  ]
+}"#;
+
+/// The bearer header every route carries.
+fn auth(headers: &HeaderMap) -> String {
+    headers["authorization"]
+        .to_str()
+        .expect("ascii auth")
+        .to_owned()
+}
+
+/// `GET` with and without `?topic=`: no topic means no `?` at all, and a
+/// topic is percent-encoded (here its `:`) before it reaches the query. The
+/// fields are deserialised.
+#[pollster::test]
+async fn list_reads_the_list_with_and_without_a_topic_filter() {
+    let (http, rx) = fixture(200, LIST_BODY, None);
+    let owlpost = adapter(http.clone());
+
+    let found: Vec<Suppression> = owlpost.list_suppressions(None).await.expect("listed");
+    assert_eq!(found.len(), 2);
+    // A `topic` of null is an account-wide entry.
+    assert_eq!(found[0].address, "old@example.org");
+    assert_eq!(found[0].topic, None);
+    assert_eq!(found[0].reason.as_deref(), Some("bounce"));
+    assert_eq!(found[0].email_id.as_deref(), Some("em_01j9"));
+    assert_eq!(found[0].created_at.as_deref(), Some("2026-10-03T09:00:00Z"));
+    // The partial second entry: absent fields default to None.
+    assert_eq!(found[1].topic.as_deref(), Some("project:news"));
+    assert_eq!(found[1].email_id, None);
+    assert_eq!(found[1].created_at, None);
+
+    owlpost
+        .list_suppressions(Some("project:news"))
+        .await
+        .expect("listed");
+
+    let first = rx.try_recv().expect("one request");
+    assert_eq!(first.method, "GET");
+    assert_eq!(
+        first.uri,
+        format!("{DEFAULT_BASE_URL}/v1/emails/suppressions")
+    );
+    assert!(!first.uri.contains('?'), "no topic means no query string");
+    assert_eq!(auth(&first.headers), format!("Bearer {DUMMY_KEY}"));
+    assert!(first.body.is_empty(), "a GET carries no body");
+
+    let second = rx.try_recv().expect("a second request");
+    assert_eq!(second.method, "GET");
+    assert_eq!(
+        second.uri,
+        format!("{DEFAULT_BASE_URL}/v1/emails/suppressions?topic=project%3Anews")
+    );
+    assert_eq!(http.calls.load(Ordering::SeqCst), 2);
+}
+
+/// `POST`, topic-scoped and account-wide: an absent topic omits the key
+/// rather than sending it as null.
+#[pollster::test]
+async fn add_posts_the_address_and_omits_an_absent_topic() {
+    let (http, rx) = fixture(
+        201,
+        r#"{"address":"old@example.org","reason":"manual"}"#,
+        None,
+    );
+    let owlpost = adapter(http.clone());
+
+    owlpost
+        .add_suppression("old@example.org", Some("project:news"))
+        .await
+        .expect("added");
+    owlpost
+        .add_suppression("old@example.org", None)
+        .await
+        .expect("added");
+
+    let scoped = rx.try_recv().expect("one request");
+    assert_eq!(scoped.method, "POST");
+    assert_eq!(
+        scoped.uri,
+        format!("{DEFAULT_BASE_URL}/v1/emails/suppressions")
+    );
+    assert_eq!(auth(&scoped.headers), format!("Bearer {DUMMY_KEY}"));
+    assert_eq!(scoped.headers["content-type"], "application/json");
+    assert_eq!(
+        scoped.body,
+        r#"{"address":"old@example.org","topic":"project:news"}"#
+    );
+
+    let account_wide = rx.try_recv().expect("a second request");
+    assert_eq!(account_wide.body, r#"{"address":"old@example.org"}"#);
+}
+
+/// `DELETE`: the address is an encoded path segment, topic/reason are query
+/// parameters, and both absent means the bare path. No body, so no content
+/// type.
+#[pollster::test]
+async fn remove_deletes_the_encoded_path_with_its_query() {
+    let (http, rx) = fixture(200, r#"{"address":"ada@example.org","deleted":true}"#, None);
+    let owlpost = adapter(http.clone());
+
+    owlpost
+        .remove_suppression("ada@example.org", Some("project:news"), Some("complaint"))
+        .await
+        .expect("removed");
+    owlpost
+        .remove_suppression("ada@example.org", None, None)
+        .await
+        .expect("removed");
+
+    let with_query = rx.try_recv().expect("one request");
+    assert_eq!(with_query.method, "DELETE");
+    assert_eq!(
+        with_query.uri,
+        format!(
+            "{DEFAULT_BASE_URL}/v1/emails/suppressions/ada%40example.org\
+             ?topic=project%3Anews&reason=complaint"
+        )
+    );
+    assert_eq!(auth(&with_query.headers), format!("Bearer {DUMMY_KEY}"));
+    assert!(with_query.body.is_empty(), "a DELETE carries no body");
+    assert!(!with_query.headers.contains_key("content-type"));
+
+    let bare = rx.try_recv().expect("a second request");
+    assert_eq!(
+        bare.uri,
+        format!("{DEFAULT_BASE_URL}/v1/emails/suppressions/ada%40example.org")
+    );
+}
+
+/// `PUT /v1/emails/topics/{topic}` naming a topic.
+#[pollster::test]
+async fn set_topic_name_puts_the_name_onto_the_topic_path() {
+    let (http, rx) = fixture(
+        200,
+        r#"{"object":"topic","id":"project:news","name":"Acme release digest"}"#,
+        None,
+    );
+    adapter(http)
+        .set_topic_name("project:news", "Acme release digest")
+        .await
+        .expect("named");
+
+    let captured = rx.try_recv().expect("one request");
+    assert_eq!(captured.method, "PUT");
+    assert_eq!(
+        captured.uri,
+        format!("{DEFAULT_BASE_URL}/v1/emails/topics/project%3Anews")
+    );
+    assert_eq!(auth(&captured.headers), format!("Bearer {DUMMY_KEY}"));
+    assert_eq!(captured.headers["content-type"], "application/json");
+    assert_eq!(captured.body, r#"{"name":"Acme release digest"}"#);
+}
+
+/// A 404 on a remove (nothing to delete) maps to `MailError::Invalid` with
+/// the provider's RFC 9457 detail.
+#[pollster::test]
+async fn a_404_on_remove_maps_to_invalid_with_its_detail() {
+    let (http, _rx) = fixture(
+        404,
+        r#"{"type":"https://owlpost.to/probs/not-found","title":"Not Found",
+            "detail":"no suppression for ada@example.org"}"#,
+        None,
+    );
+    let err = adapter(http)
+        .remove_suppression("ada@example.org", None, None)
+        .await
+        .unwrap_err();
+
+    assert!(
+        matches!(&err, OwlpostError::Mail(MailError::Invalid { detail })
+            if detail == "Not Found: no suppression for ada@example.org"),
+        "{err:?}"
+    );
+}
+
+/// A 422 maps the same way, and this body echoes the API key back, so the
+/// mapped detail must not carry it.
+#[pollster::test]
+async fn a_422_on_add_maps_to_invalid_and_redacts_the_key() {
+    let (http, _rx) = fixture(
+        422,
+        r#"{"type":"https://owlpost.to/probs/invalid-content","title":"Unprocessable",
+            "detail":"bad address op_test_dummy_key_000000000000"}"#,
+        None,
+    );
+    let err = adapter(http)
+        .add_suppression("not-an-email", None)
+        .await
+        .unwrap_err();
+
+    assert!(
+        matches!(&err, OwlpostError::Mail(MailError::Invalid { detail })
+            if detail == "Unprocessable: bad address [redacted]"),
+        "{err:?}"
+    );
+    assert!(!err.to_string().contains(DUMMY_KEY), "{err}");
+    assert!(!format!("{err:?}").contains(DUMMY_KEY), "{err:?}");
+}
+
+/// Empty fields and out-of-allowlist topics are caught before the key check,
+/// so not one refusal reaches the wire.
+#[pollster::test]
+async fn suppression_and_topic_refusals_are_local() {
+    // A keyless adapter still refuses a programming error locally: the
+    // refusal is not a provider outcome.
+    let (http, rx) = fixture(200, LIST_BODY, None);
+    let owlpost = Owlpost::new(http.clone(), clock_at(0), None, "from@x.dev", None);
+
+    for err in [
+        owlpost.add_suppression("", None).await,
+        owlpost.add_suppression("old@example.org", Some("")).await,
+        owlpost.remove_suppression("", None, None).await,
+        owlpost
+            .remove_suppression("old@example.org", Some(""), None)
+            .await,
+        owlpost.list_suppressions(Some("")).await.map(|_| ()),
+    ] {
+        let err = err.expect_err("an empty field is refused");
+        assert!(
+            matches!(err, OwlpostError::Mail(MailError::Invalid { .. })),
+            "{err:?}"
+        );
+    }
+
+    // A `/` or an uppercase letter is outside the charset Owlpost defines for
+    // a topic, so no route that takes one will put it on the wire.
+    for bad in ["news/eu", "Project:News", "", &"a".repeat(65)] {
+        let err = owlpost
+            .set_topic_name(bad, "Name")
+            .await
+            .expect_err("a bad topic is refused");
+        assert!(
+            matches!(err, OwlpostError::Mail(MailError::Invalid { .. })),
+            "topic {bad:?}: {err:?}"
+        );
+    }
+
+    // An empty or over-long name is refused on the same rules.
+    for name in ["", &"n".repeat(201)] {
+        let err = owlpost
+            .set_topic_name("project:news", name)
+            .await
+            .expect_err("a bad name is refused");
+        assert!(
+            matches!(&err, OwlpostError::Mail(MailError::Invalid { detail })
+                if detail.contains("name")),
+            "name of {} chars: {err:?}",
+            name.len()
+        );
+    }
+
+    assert_eq!(http.calls.load(Ordering::SeqCst), 0, "refusals are local");
+    assert!(rx.try_recv().is_err(), "no request was captured");
 }

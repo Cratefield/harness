@@ -35,6 +35,10 @@ pub mod webhook;
 
 pub use webhook::{Envelope, OwlpostEvent, WebhookError, parse_verified};
 
+mod suppressions;
+
+pub use suppressions::Suppression;
+
 /// The hosted Owlpost API. A self-hosted or proxy deployment points the
 /// adapter elsewhere with [`Owlpost::with_base_url`] /
 /// [`OWLPOST_BASE_URL`](Owlpost::from_env); the wire path `/v1/emails` is
@@ -219,7 +223,9 @@ impl OwlpostClient {
             );
             return Err(OwlpostError::NotConfigured);
         };
-        let is_post = method == http::Method::POST;
+        // What the log calls the answer: a write is "sent" whatever the verb
+        // (POST sends, PUT renames, DELETE removes), a GET reads.
+        let writes = method != http::Method::GET && method != http::Method::HEAD;
         let mut builder = Request::builder()
             .method(method)
             .uri(format!("{}{path}", self.base_url.trim_end_matches('/')))
@@ -243,8 +249,7 @@ impl OwlpostClient {
         let retry_after = retry_after(response.headers(), self.clock.as_ref());
         let text = String::from_utf8_lossy(response.body()).to_string();
         if status.is_success() {
-            // A POST writes (and is "sent"); a GET reads.
-            let outcome = if is_post { "sent" } else { "read" };
+            let outcome = if writes { "sent" } else { "read" };
             tracing::info!(
                 provider = "owlpost",
                 code = status.as_u16(),
