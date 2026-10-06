@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.1](https://github.com/Cratefield/harness/compare/cratefield-runtime-cloudflare-v0.4.0...cratefield-runtime-cloudflare-v0.4.1) - 2026-10-06
+
+### Other
+
+- runtime-cloudflare HttpClient: cap the response body while streaming, and don't follow redirects ([#809](https://github.com/Cratefield/harness/pull/809))
+- Actor port: per-key serialized state with transactional storage and alarms, on Durable Objects ([#583](https://github.com/Cratefield/harness/pull/583)) ([#743](https://github.com/Cratefield/harness/pull/743))
+- Blob port: streamed reads and writes, multipart uploads and listing for objects above MAX_BLOB_BYTES ([#586](https://github.com/Cratefield/harness/pull/586)) ([#741](https://github.com/Cratefield/harness/pull/741))
+
 ### Security
 
 - The response body is read as a stream under the `HttpPolicy` cap, so an

@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.1](https://github.com/Cratefield/harness/compare/cratefield-testing-v0.5.0...cratefield-testing-v0.5.1) - 2026-10-06
+
+### Other
+
+- Actor port: per-key serialized state with transactional storage and alarms, on Durable Objects ([#583](https://github.com/Cratefield/harness/pull/583)) ([#743](https://github.com/Cratefield/harness/pull/743))
+- image inputs (Part::Image) for the Anthropic and OpenAI-compatible adapters ([#745](https://github.com/Cratefield/harness/pull/745))
+- Blob port: streamed reads and writes, multipart uploads and listing for objects above MAX_BLOB_BYTES ([#586](https://github.com/Cratefield/harness/pull/586)) ([#741](https://github.com/Cratefield/harness/pull/741))
+
 ### Added
 
 - TextModel image inputs (issue [#628](https://github.com/Cratefield/harness/issues/628)): the `text_model_image_bounds_conformance` port suite, and a `FakeTextModel` that answers image prompts and refuses an over-limit one before recording it.

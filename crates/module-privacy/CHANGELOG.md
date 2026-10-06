@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.1](https://github.com/Cratefield/harness/compare/cratefield-module-privacy-v0.3.0...cratefield-module-privacy-v0.3.1) - 2026-10-06
+
+### Other
+
+- serve the CF08 provider protocol from a harness deployment, and apply the account provider last ([#792](https://github.com/Cratefield/harness/pull/792))
+
 ### Added
 
 - *(provider server)* `Privacy::serve_provider`, so a deployment can answer the same signed protocol it calls out on: `POST /v1/privacy/provider/{export,erase/plan,erase/apply}` over this composition's own declarations, with the HMAC as the authorisation rather than `ADMIN_TOKEN`, and no routes at all where it was not opted in ([#656](https://github.com/Cratefield/harness/issues/656)).

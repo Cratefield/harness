@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.1](https://github.com/Cratefield/harness/compare/cratefield-module-waitlist-v0.4.0...cratefield-module-waitlist-v0.4.1) - 2026-10-06
+
+### Other
+
+- seed the missing position-counter rows in migration 0007 ([#801](https://github.com/Cratefield/harness/pull/801))
+- document the deferred confirmation mail, and correct every doc that still promises the join-time 503 ([#806](https://github.com/Cratefield/harness/pull/806))
+
 ## [0.4.0](https://github.com/Cratefield/harness/compare/cratefield-module-waitlist-v0.3.0...cratefield-module-waitlist-v0.4.0) - 2026-10-04
 
 ### Added
