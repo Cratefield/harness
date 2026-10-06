@@ -8,7 +8,7 @@ include = ["src/**/*", "README.md"]
 # No longer held back: it is on crates.io and named in the ordered list
 # in docs/RELEASING.md, and release-plz.toml carries no entry for it. The
 # CLI consumes it — `fz client-ts` (issue #155).
-version = "0.4.0"
+version = "0.4.1"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true

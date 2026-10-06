@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.1](https://github.com/Cratefield/harness/compare/cratefield-adapter-owlpost-v0.2.0...cratefield-adapter-owlpost-v0.2.1) - 2026-10-06
+
+### Added
+
+- *(adapter-owlpost)* sending domains — create, list, get, verify, delete ([#681](https://github.com/Cratefield/harness/pull/681)) ([#797](https://github.com/Cratefield/harness/pull/797))
+- *(adapter-owlpost)* suppressions and topic naming ([#669](https://github.com/Cratefield/harness/pull/669)) ([#795](https://github.com/Cratefield/harness/pull/795))
+- *(adapter-owlpost)* typed webhook events and a verify-then-parse entry point ([#668](https://github.com/Cratefield/harness/pull/668)) ([#796](https://github.com/Cratefield/harness/pull/796))
+- *(adapter-owlpost)* inbound messages — list/search, held, get, raw, reply, release ([#682](https://github.com/Cratefield/harness/pull/682)) ([#798](https://github.com/Cratefield/harness/pull/798))
+
 ## [0.2.0](https://github.com/Cratefield/harness/compare/cratefield-adapter-owlpost-v0.1.0...cratefield-adapter-owlpost-v0.2.0) - 2026-10-04
 
 ### Changed

@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.1](https://github.com/Cratefield/harness/compare/cratefield-client-ts-v0.4.0...cratefield-client-ts-v0.4.1) - 2026-10-06
+
+### Other
+
+- drop the stale release-plz hold comment (cratefield-tables promotion already done) ([#722](https://github.com/Cratefield/harness/pull/722))
+
 ## [0.4.0](https://github.com/Cratefield/harness/compare/cratefield-client-ts-v0.3.0...cratefield-client-ts-v0.4.0) - 2026-10-04
 
 ### Changed
