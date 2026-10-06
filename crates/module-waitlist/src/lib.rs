@@ -100,6 +100,14 @@ const MIGRATION_POSITION_COUNTER: SqlMigration = SqlMigration::new(
     include_str!("../migrations/sqlite/0006_position_counter.sql"),
 );
 
+/// Counter rows for the products 0006's backfill could not see, because
+/// their confirmed positions predate the lock table (issue #707).
+const MIGRATION_LOCK_BACKFILL: SqlMigration = SqlMigration::new(
+    "0007",
+    "lock_backfill",
+    include_str!("../migrations/sqlite/0007_lock_backfill.sql"),
+);
+
 /// A per-product waitlist.
 pub struct Waitlist {
     settings: Settings,
@@ -311,13 +319,14 @@ impl Module for Waitlist {
     }
 
     fn migrations(&self) -> Migrations {
-        const MIGRATIONS: [SqlMigration; 6] = [
+        const MIGRATIONS: [SqlMigration; 7] = [
             MIGRATION_INIT,
             MIGRATION_ENTRY_GENERATION,
             MIGRATION_MAIL_COOLDOWN,
             MIGRATION_POSITION_LOCK,
             MIGRATION_ANONYMISABLE_ENTRY,
             MIGRATION_POSITION_COUNTER,
+            MIGRATION_LOCK_BACKFILL,
         ];
         // The array is the apply order; this refuses a gap, a duplicate
         // or an entry out of order at build time (issue #27).

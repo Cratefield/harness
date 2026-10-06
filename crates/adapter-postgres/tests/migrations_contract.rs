@@ -87,7 +87,8 @@ async fn every_shipped_migration_applies_on_postgres_16() {
             "waitlist/0003",
             "waitlist/0004",
             "waitlist/0005",
-            "waitlist/0006"
+            "waitlist/0006",
+            "waitlist/0007"
         ]
     );
 
@@ -136,7 +137,7 @@ async fn runner_applies_a_module_directly_and_is_idempotent() {
         .query(&Statement::new("SELECT id FROM harness_migrations"))
         .await
         .expect("tracking readable");
-    assert_eq!(rows.len(), 6, "all shipped waitlist migrations are tracked");
+    assert_eq!(rows.len(), 7, "all shipped waitlist migrations are tracked");
 
     // Through the port as a trait object, like a venture wires it.
     let port: Arc<dyn Database> = Arc::new(db);
