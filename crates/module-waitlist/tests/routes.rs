@@ -203,6 +203,79 @@ async fn five_concurrent_confirms_get_distinct_positions() {
     }
 }
 
+/// Two confirmations of the **same** confirm link at the same instant —
+/// the browser prefetching the `see_other` target while the click lands,
+/// or a mail client link-scanner racing the reader. Exactly one of them
+/// may flip the entry, and exactly one "you are on the list" mail may go
+/// out: the loser's batch flips no row, and a loser that reported `true`
+/// anyway would send a second confirmation mail for the one place the
+/// person now holds.
+///
+/// `confirm_entry` decides that from a `find_by_id` read taken *after*
+/// its batch commits, so the read cannot tell this caller's flip from the
+/// winner's: both racers see a positioned row and both answer `true`.
+#[pollster::test]
+async fn two_concurrent_confirms_of_one_link_send_one_confirmation() {
+    for kit in kits() {
+        let mut positions: Vec<i64> = Vec::new();
+        for round in 0..10 {
+            let email = format!("double{round}@example.com");
+            join(&kit, &email, "kontinuum").await;
+            kit.defer.drain().await;
+
+            let before = kit.mailer.sent().len();
+            let gate = barrier(2);
+            let mut handles = Vec::new();
+            for _ in 0..2 {
+                let router = kit.router.clone();
+                let path = confirm_path(&kit, round);
+                let gate = Arc::clone(&gate);
+                handles.push(std::thread::spawn(move || {
+                    gate.wait();
+                    let request = Request::builder()
+                        .method(Method::GET)
+                        .uri(path)
+                        .body(Body::empty())
+                        .expect("request");
+                    let response = pollster::block_on(router.oneshot(request)).expect("answers");
+                    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+                }));
+            }
+            for handle in handles {
+                handle.join().expect("confirm thread");
+            }
+            kit.defer.drain().await;
+
+            let confirmations = kit.mailer.sent()[before..]
+                .iter()
+                .filter(|message| message.subject.starts_with("You are #"))
+                .count();
+            assert_eq!(
+                confirmations, 1,
+                "{}: round {round}: one confirmation mail for one \
+                 confirmation, not one per racer",
+                kit.dialect
+            );
+            // The counter burns one value per batch, so the position is not
+            // `round + 1` — gaps are the module's documented behaviour.
+            // What must hold is that the entry holds exactly one, and
+            // that each round's is distinct from every other's.
+            let position = column_int(&kit, &email, "position").expect("position");
+            assert!(
+                position > 0,
+                "{}: round {round}: the entry holds one position",
+                kit.dialect
+            );
+            assert!(
+                !positions.contains(&position),
+                "{}: round {round}: position {position} was handed out twice",
+                kit.dialect
+            );
+            positions.push(position);
+        }
+    }
+}
+
 #[pollster::test]
 async fn referral_credit_only_from_confirmed_same_product_referrers() {
     for kit in kits() {

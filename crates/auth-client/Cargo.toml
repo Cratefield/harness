@@ -33,6 +33,9 @@ p256 = { version = "0.14.0", default-features = false, features = [
 sha2 = { workspace = true }
 thiserror = { workspace = true }
 bytes = { workspace = true }
+# The async mutex that makes "check freshness -> fetch -> store" one fetch
+# for concurrent cold callers. wasm32-safe (no std thread primitives).
+futures-util = { workspace = true }
 
 [dev-dependencies]
 async-trait = { workspace = true }

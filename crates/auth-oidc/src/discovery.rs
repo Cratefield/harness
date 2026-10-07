@@ -111,6 +111,16 @@ pub(crate) struct Cache {
     /// When discovery last failed, per issuer. While an issuer is down,
     /// every request would otherwise re-run two upstream fetches.
     failures: RwLock<Vec<(String, i64)>>,
+    /// Held across a discovery, so concurrent logins for one issuer take
+    /// turns instead of each running their own. A cold cache — or the
+    /// instant an hour-old entry lapses — otherwise turns a burst of
+    /// simultaneous first-time logins into a burst of upstream fetches,
+    /// which is the load the cache exists to absorb.
+    ///
+    /// An async mutex, and not a `std::sync::Mutex` held across the
+    /// `await`: the module's futures are `Send` (ADR 0200), and a
+    /// standard lock guard held over one is not.
+    flight: futures_util::lock::Mutex<()>,
 }
 
 impl Cache {
@@ -180,6 +190,16 @@ impl Cache {
                 provider: key,
                 detail: "discovery failed moments ago; not retrying yet".to_owned(),
             });
+        }
+
+        // One discovery in flight per cache. A caller that queued behind an
+        // in-flight one asks the freshness question *again* under the lock
+        // and finds the entry it was waiting for, rather than running a
+        // second fetch for a document it now already holds.
+        let _flight = self.flight.lock().await;
+        let now = clock.now().unix_timestamp();
+        if let Some(metadata) = self.read(&key, now, force) {
+            return Ok(metadata);
         }
 
         let issuer = IssuerUrl::new(key.clone()).map_err(|err| DiscoveryError::Failed {
@@ -256,6 +276,106 @@ pub(crate) fn key_id_of(token: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    const ISSUER: &str = "https://idp.example";
+
+    /// A clock frozen at a fixed instant — nothing here cares about wall
+    /// time, only that the TTL decision is stable.
+    struct FrozenClock;
+
+    impl Clock for FrozenClock {
+        fn now(&self) -> time::OffsetDateTime {
+            time::OffsetDateTime::from_unix_timestamp(1_800_000_000).expect("in range")
+        }
+    }
+
+    /// An issuer that answers both halves of discovery — the configuration
+    /// document and the JWKS — and counts how many times the *document* was
+    /// asked for. The delay is what makes the unguarded version fail every
+    /// run rather than one in a hundred (the trick `push-auth`'s own race
+    /// test uses).
+    struct FakeIdp {
+        document: String,
+        jwks: String,
+        document_calls: AtomicUsize,
+    }
+
+    #[async_trait::async_trait]
+    impl HttpClient for FakeIdp {
+        async fn send(
+            &self,
+            request: http::Request<Bytes>,
+        ) -> Result<http::Response<Bytes>, cratefield_core::HttpError> {
+            let body = if request.uri().path().ends_with("openid-configuration") {
+                self.document_calls.fetch_add(1, Ordering::SeqCst);
+                std::thread::sleep(std::time::Duration::from_millis(50));
+                self.document.clone()
+            } else {
+                self.jwks.clone()
+            };
+            Ok(http::Response::builder()
+                .status(200)
+                .body(Bytes::from(body))
+                .expect("response"))
+        }
+    }
+
+    fn idp() -> std::sync::Arc<FakeIdp> {
+        std::sync::Arc::new(FakeIdp {
+            document: serde_json::json!({
+                "issuer": ISSUER,
+                "authorization_endpoint": format!("{ISSUER}/authorize"),
+                "token_endpoint": format!("{ISSUER}/token"),
+                "jwks_uri": format!("{ISSUER}/jwks"),
+                "response_types_supported": ["code"],
+                "subject_types_supported": ["public"],
+                "id_token_signing_alg_values_supported": ["RS256"],
+            })
+            .to_string(),
+            jwks: serde_json::json!({ "keys": [] }).to_string(),
+            document_calls: AtomicUsize::new(0),
+        })
+    }
+
+    /// A cold cache must cost the identity provider **one** discovery
+    /// document, however many logins arrive at once. Nothing serialises
+    /// callers here: every one of them reads the empty cache, sees no
+    /// recent failure, and runs its own discovery — so a burst of
+    /// simultaneous first-time logins turned into a burst of upstream
+    /// fetches, which is the exact load the cache exists to avoid.
+    #[test]
+    fn a_cold_discovery_cache_is_fetched_once_however_many_callers_arrive() {
+        const THREADS: usize = 8;
+
+        let cache = std::sync::Arc::new(Cache::default());
+        let idp = idp();
+        let clock = FrozenClock;
+        let provider = crate::provider::sso(ISSUER);
+        let http: std::sync::Arc<dyn HttpClient> = idp.clone();
+
+        let gate = std::sync::Barrier::new(THREADS);
+        let provider = &provider;
+        let clock = &clock;
+        std::thread::scope(|scope| {
+            for _ in 0..THREADS {
+                let cache = std::sync::Arc::clone(&cache);
+                let http = std::sync::Arc::clone(&http);
+                let gate = &gate;
+                scope.spawn(move || {
+                    gate.wait();
+                    pollster::block_on(cache.metadata(provider, http, clock, false))
+                        .expect("discovery succeeds");
+                });
+            }
+        });
+
+        assert_eq!(
+            idp.document_calls.load(Ordering::SeqCst),
+            1,
+            "one discovery document — a cold-cache race must not stampede the issuer"
+        );
+    }
 
     #[test]
     fn a_key_id_is_read_from_an_unverified_header() {
