@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.2](https://github.com/Cratefield/harness/compare/cratefield-auth-client-v0.3.1...cratefield-auth-client-v0.3.2) - 2026-10-07
+
+### Fixed
+
+- close eight concurrency races across the pool cache, auth caches, realtime rooms, waitlist confirms and tracker adapters ([#823](https://github.com/Cratefield/harness/pull/823))
+
 ## [0.3.1](https://github.com/Cratefield/harness/compare/cratefield-auth-client-v0.3.0...cratefield-auth-client-v0.3.1) - 2026-10-05
 
 ### Other
