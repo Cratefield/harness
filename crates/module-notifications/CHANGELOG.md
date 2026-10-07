@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.1](https://github.com/Cratefield/harness/compare/cratefield-module-notifications-v0.3.0...cratefield-module-notifications-v0.3.1) - 2026-10-07
+
+### Fixed
+
+- close five input-validation gaps — an unescaped HTML sink, a javascript: URL, an unvalidated slug, an OAuth token sent to any host, and an unclamped page size ([#826](https://github.com/Cratefield/harness/pull/826))
+
 ### Fixed
 
 - `GET /v1/notifications?limit=0` no longer returns an empty inbox. The

@@ -1419,7 +1419,7 @@ dependencies = [
 
 [[package]]
 name = "cratefield-cli"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "base64 0.23.1",
  "bytes",
@@ -1921,7 +1921,7 @@ dependencies = [
 
 [[package]]
 name = "cratefield-module-notifications"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "async-trait",
  "axum",

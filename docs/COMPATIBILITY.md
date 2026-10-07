@@ -70,7 +70,7 @@ compatibility-doc` and checked in CI for drift. Do not edit by hand.
 | `cratefield-auth-worker` *(not published)* | 0.1.1 | 1 | `^0.8` — `>=0.8.0, <0.9.0` |
 | `cratefield-bench-write-ceiling` *(not published)* | 0.1.1 | 1 | `^0.8` — `>=0.8.0, <0.9.0` |
 | `cratefield-chrome` *(not published)* | 0.1.1 | 1 | `^0.8` — `>=0.8.0, <0.9.0` |
-| `cratefield-cli` | 0.6.0 | 1 | `^0.8` — `>=0.8.0, <0.9.0` |
+| `cratefield-cli` | 0.6.1 | 1 | `^0.8` — `>=0.8.0, <0.9.0` |
 | `cratefield-client-ts` | 0.4.1 | 1 | `^0.8` — `>=0.8.0, <0.9.0` |
 | `cratefield-connections` *(not published)* | 0.1.1 | 1 | `^0.8` — `>=0.8.0, <0.9.0` |
 | `cratefield-console` *(not published)* | 0.1.1 | 1 | `^0.8` — `>=0.8.0, <0.9.0` |
@@ -87,7 +87,7 @@ compatibility-doc` and checked in CI for drift. Do not edit by hand.
 | `cratefield-module-device-auth` | 0.3.0 | 1 | `^0.8` — `>=0.8.0, <0.9.0` |
 | `cratefield-module-email-signup` | 0.4.0 | 1 | `^0.8` — `>=0.8.0, <0.9.0` |
 | `cratefield-module-hello` *(not published)* | 0.1.1 | 1 | `^0.8` — `>=0.8.0, <0.9.0` |
-| `cratefield-module-notifications` | 0.3.0 | 1 | `^0.8` — `>=0.8.0, <0.9.0` |
+| `cratefield-module-notifications` | 0.3.1 | 1 | `^0.8` — `>=0.8.0, <0.9.0` |
 | `cratefield-module-orgs` | 0.1.1 | 1 | `^0.8` — `>=0.8.0, <0.9.0` |
 | `cratefield-module-privacy` | 0.3.1 | 1 | `^0.8` — `>=0.8.0, <0.9.0` |
 | `cratefield-module-telemetry` | 0.3.0 | 1 | `^0.8` — `>=0.8.0, <0.9.0` |
