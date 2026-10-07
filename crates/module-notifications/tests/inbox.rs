@@ -167,6 +167,57 @@ async fn a_page_hands_back_a_cursor_only_while_there_is_more() {
     );
 }
 
+/// A page size is clamped at both ends. `?limit=0` used to ask for an
+/// empty page and, because an empty page is trivially a full one, hand
+/// back a next cursor as though rows were left. It is now the smallest
+/// legal page, like `module-orgs` and `module-crm` already do it.
+#[pollster::test]
+async fn the_page_size_is_clamped_at_both_ends() {
+    let kit = kit();
+    notify_and_commit(&kit, ALICE, BOOKING, "only").await;
+    // A zero limit on a one-row inbox is exactly the default page.
+    assert_eq!(
+        list(&kit, ALICE, "?limit=0").await["notifications"],
+        list(&kit, ALICE, "").await["notifications"],
+        "?limit=0 must not empty the inbox"
+    );
+
+    for n in 0..3 {
+        notify_and_commit(&kit, ALICE, BOOKING, &format!("n{n}")).await;
+        kit.clock.advance(1);
+    }
+
+    // Four rows: a zero limit is the smallest legal page, and it pages.
+    let zero = list(&kit, ALICE, "?limit=0").await;
+    let zero_rows = zero["notifications"].as_array().expect("a list");
+    assert_eq!(zero_rows.len(), 1, "?limit=0 returned nothing at all");
+    assert_eq!(
+        zero_rows[0],
+        list(&kit, ALICE, "?limit=1").await["notifications"][0]
+    );
+    let cursor = zero["cursor"].as_str().expect("a cursor").to_owned();
+
+    let second = list(&kit, ALICE, &format!("?limit=0&cursor={cursor}")).await;
+    assert_eq!(
+        second["notifications"].as_array().expect("a list").len(),
+        1,
+        "the cursor must actually walk the rest of the inbox"
+    );
+
+    // Above the ceiling: the ceiling, so every row still comes back.
+    let huge = list(&kit, ALICE, "?limit=100000").await;
+    assert_eq!(huge["notifications"].as_array().expect("a list").len(), 4);
+    assert!(huge["cursor"].is_null(), "everything came back in one page");
+
+    // One row is a legal page, so the ceiling is not the lower bound.
+    let one = list(&kit, ALICE, "?limit=1").await;
+    assert_eq!(one["notifications"].as_array().expect("a list").len(), 1);
+    assert!(
+        one["cursor"].as_str().is_some(),
+        "one row of four is a full page"
+    );
+}
+
 #[pollster::test]
 async fn unread_count_and_the_unread_filter_agree() {
     let kit = kit();

@@ -839,10 +839,12 @@ async fn list_inbox(
     let Some(db) = state.ctx.ports.db.clone() else {
         return Err(internal(&scope));
     };
+    // Clamped at both ends: `?limit=0` would otherwise ask for an empty
+    // page and, because the page looks full, hand back a next cursor.
     let limit = query
         .limit
         .unwrap_or(INBOX_PAGE_DEFAULT)
-        .min(INBOX_PAGE_MAX);
+        .clamp(1, INBOX_PAGE_MAX);
     // Opaque to the client, and deliberately so: it is the ordering pair,
     // and which columns order the list is not part of the contract. A
     // malformed one pages from the start rather than erroring — a cursor

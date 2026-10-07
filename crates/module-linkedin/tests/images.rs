@@ -165,6 +165,68 @@ fn everything_checkable_locally_is_checked_before_a_request_is_spent() {
     });
 }
 
+/// An `uploadUrl` is whatever the response body said, and it is fetched
+/// with the venture's bearer token. A body naming another host must fail
+/// before the token is attached — and a plain `http` URL on the upload host
+/// must too, since it would put the token on the wire in the clear. The
+/// userinfo trick is in the list because `Uri::host()` reads `evil.example`
+/// out of `https://www.linkedin.com@evil.example/x`, which is exactly why
+/// the comparison is on the parsed host rather than on the string.
+#[test]
+fn an_upload_url_off_the_media_upload_origin_is_never_followed() {
+    pollster::block_on(async {
+        for host in [
+            "https://evil.example/collect",
+            "http://169.254.169.254/latest/meta-data",
+            "http://www.linkedin.com/dms-uploads",
+            "https://www.linkedin.com@evil.example/x",
+        ] {
+            let kit = support::kit();
+            connect(&kit).await;
+            post_json(&kit, "/v1/linkedin/admin/pages/sync", "{}").await;
+            kit.fake.set_upload_host(host);
+
+            let response = upload(&kit, png(600, 400), "image/png").await;
+            assert_eq!(
+                response.status,
+                StatusCode::BAD_GATEWAY,
+                "{host} was followed: {}",
+                response.text()
+            );
+            assert!(
+                kit.fake.calls_to("/dms-uploads/").is_empty(),
+                "the PUT went out to {host}"
+            );
+            for call in kit.fake.calls() {
+                assert_ne!(call.method, "PUT", "a PUT left for {host}");
+            }
+        }
+    });
+}
+
+/// The check is an origin check, not a blocklist: the host LinkedIn really
+/// names — `www.linkedin.com`, not `api.linkedin.com` — is still followed,
+/// bearer and all. This runs on the fixture's own default, so it fails if
+/// the default ever stops modelling the real `initializeUpload` response.
+#[test]
+fn a_same_origin_https_upload_url_is_still_followed() {
+    pollster::block_on(async {
+        let kit = ready_kit().await;
+        let response = upload(&kit, png(600, 400), "image/png").await;
+        assert_eq!(response.status, StatusCode::ACCEPTED, "{}", response.text());
+        assert_eq!(response.json()["status"], "available");
+
+        let put = kit
+            .fake
+            .calls_to("/dms-uploads/")
+            .into_iter()
+            .next()
+            .expect("an upload");
+        assert_eq!(put.method, "PUT");
+        assert!(put.header("authorization").is_some());
+    });
+}
+
 #[test]
 fn the_same_bytes_are_uploaded_once_per_page() {
     pollster::block_on(async {
