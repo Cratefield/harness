@@ -70,7 +70,7 @@ compatibility-doc` and checked in CI for drift. Do not edit by hand.
 | `cratefield-auth-worker` *(not published)* | 0.1.1 | 1 | `^0.8` — `>=0.8.0, <0.9.0` |
 | `cratefield-bench-write-ceiling` *(not published)* | 0.1.1 | 1 | `^0.8` — `>=0.8.0, <0.9.0` |
 | `cratefield-chrome` *(not published)* | 0.1.1 | 1 | `^0.8` — `>=0.8.0, <0.9.0` |
-| `cratefield-cli` | 0.6.1 | 1 | `^0.8` — `>=0.8.0, <0.9.0` |
+| `cratefield-cli` | 0.6.2 | 1 | `^0.8` — `>=0.8.0, <0.9.0` |
 | `cratefield-client-ts` | 0.4.1 | 1 | `^0.8` — `>=0.8.0, <0.9.0` |
 | `cratefield-connections` *(not published)* | 0.1.1 | 1 | `^0.8` — `>=0.8.0, <0.9.0` |
 | `cratefield-console` *(not published)* | 0.1.1 | 1 | `^0.8` — `>=0.8.0, <0.9.0` |
