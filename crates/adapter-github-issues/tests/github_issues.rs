@@ -652,3 +652,153 @@ impl Scripted {
         self
     }
 }
+
+// ---------------------------------------------------------------------------
+// The race the single-flight guard closes
+// ---------------------------------------------------------------------------
+
+/// Long enough that a second thread starting alongside the first reaches
+/// its own lookup first, short enough not to slow the suite.
+const RACE_WINDOW: Duration = Duration::from_millis(250);
+
+/// A *stateful* GitHub, the shape the scripted fake above cannot express:
+/// issues really accumulate, and a lookup answered while a rival lookup is
+/// still in flight is answered before either POST lands. That is what makes
+/// the check-then-act window observable rather than theoretical — the
+/// search index is eventually consistent, so it legitimately answers
+/// "nothing here" for a create that has not committed yet.
+///
+/// The rendezvous is a **wait with a deadline**, not a barrier: once the
+/// adapter serialises its filings only one lookup is ever in flight, so a
+/// hard barrier would deadlock instead of testing anything.
+struct RacingGitHub {
+    issues: std::sync::Mutex<Vec<(i64, String)>>,
+    arrived: (std::sync::Mutex<usize>, std::sync::Condvar),
+    next_number: std::sync::atomic::AtomicI64,
+    creates: AtomicUsize,
+}
+
+impl RacingGitHub {
+    fn new() -> Arc<Self> {
+        Arc::new(Self {
+            issues: std::sync::Mutex::new(Vec::new()),
+            arrived: (std::sync::Mutex::new(0), std::sync::Condvar::new()),
+            next_number: std::sync::atomic::AtomicI64::new(1),
+            creates: AtomicUsize::new(0),
+        })
+    }
+
+    /// Holds each lookup until a second one joins, or `RACE_WINDOW` passes
+    /// if it never does. Two callers then read the world before either has
+    /// written to it.
+    ///
+    /// The count resets once a pair has met, so the search phase and the
+    /// list phase each rendezvous independently: without the reset the
+    /// second phase would find the counter already past two and sail
+    /// straight through, quietly testing nothing.
+    fn rendezvous(&self) {
+        let (lock, condvar) = &self.arrived;
+        let mut arrived = lock.lock().expect("rendezvous lock");
+        *arrived += 1;
+        if *arrived >= 2 {
+            *arrived = 0;
+            condvar.notify_all();
+        } else {
+            let _waited = condvar
+                .wait_timeout(arrived, RACE_WINDOW)
+                .expect("rendezvous lock");
+        }
+    }
+
+    fn issue(number: i64, body: &str) -> serde_json::Value {
+        serde_json::json!({
+            "number": number,
+            "body": body,
+            "html_url": format!("https://github.test/{OWNER}/{REPO}/issues/{number}"),
+        })
+    }
+}
+
+#[async_trait]
+impl HttpClient for RacingGitHub {
+    async fn send(&self, request: Request<Bytes>) -> Result<Response<Bytes>, HttpError> {
+        match request.uri().path() {
+            // The index has not caught up with anything yet.
+            "/search/issues" => {
+                self.rendezvous();
+                Ok(Response::builder()
+                    .status(200)
+                    .body(Bytes::from(
+                        serde_json::json!({ "total_count": 0, "items": [] }).to_string(),
+                    ))
+                    .expect("response"))
+            }
+            path if path == format!("/repos/{OWNER}/{REPO}/issues") => {
+                if request.method() == "GET" {
+                    // Snapshot first, then let any rival lookup arrive: both
+                    // callers observe the world before either writes.
+                    let snapshot = self.issues.lock().expect("issues lock").clone();
+                    self.rendezvous();
+                    let items: Vec<serde_json::Value> = snapshot
+                        .iter()
+                        .map(|(number, body)| Self::issue(*number, body))
+                        .collect();
+                    return Ok(Response::builder()
+                        .status(200)
+                        .body(Bytes::from(serde_json::json!(items).to_string()))
+                        .expect("response"));
+                }
+                // The create: the issue really joins the repository.
+                let payload: serde_json::Value =
+                    serde_json::from_slice(request.body()).expect("json create body");
+                let body = payload["body"].as_str().expect("a body").to_owned();
+                let number = self.next_number.fetch_add(1, Ordering::SeqCst);
+                self.issues
+                    .lock()
+                    .expect("issues lock")
+                    .push((number, body.clone()));
+                self.creates.fetch_add(1, Ordering::SeqCst);
+                Ok(Response::builder()
+                    .status(201)
+                    .body(Bytes::from(Self::issue(number, &body).to_string()))
+                    .expect("response"))
+            }
+            other => panic!("unexpected path {other}"),
+        }
+    }
+}
+
+/// Two in-process `file` calls for one idempotency key, started together.
+/// The gate around the check-then-act is the whole reason this passes:
+/// without it both callers read "no such issue" and both create.
+#[test]
+fn two_concurrent_files_with_one_key_create_one_issue() {
+    let github = RacingGitHub::new();
+    let adapter = Arc::new(GitHubIssues::new(github.clone(), clock_at(0)).with_base(BASE));
+
+    let start = Arc::new(std::sync::Barrier::new(2));
+    let racers: Vec<_> = (0..2)
+        .map(|_| {
+            let adapter = Arc::clone(&adapter);
+            let start = Arc::clone(&start);
+            std::thread::spawn(move || {
+                start.wait();
+                pollster::block_on(adapter.file(&dest(), &cred(), &draft()))
+            })
+        })
+        .collect();
+
+    let mut filed = Vec::new();
+    for racer in racers {
+        filed.push(racer.join().expect("race thread").expect("file ok"));
+    }
+
+    assert_eq!(
+        github.creates.load(Ordering::SeqCst),
+        1,
+        "one idempotency key must file one issue, not one per caller: {filed:?}"
+    );
+    // And both callers learned the same issue, which is what the second
+    // one deduping onto looks like from here.
+    assert_eq!(filed[0].external_id, filed[1].external_id, "{filed:?}");
+}

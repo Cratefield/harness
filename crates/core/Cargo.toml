@@ -24,6 +24,12 @@ tower = { workspace = true }
 tower-http = { workspace = true }
 bytes = { workspace = true }
 futures-core = { workspace = true }
+# `futures_util::lock::Mutex` for the `/__health` sidecar probe cache's
+# single-flight guard (harness.rs `probe_sidecars`): a std mutex cannot be
+# held across the probe's awaits, and a std one that could would stall an
+# executor thread for the length of the subrequest. Wasm-safe, and the same
+# lock the GitHub App adapter single-flights its token exchange with.
+futures-util = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 schemars = { workspace = true }

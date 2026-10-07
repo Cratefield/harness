@@ -32,8 +32,11 @@ use crate::ports::{ReqwestClient, SpawnDefer, TokioClock};
 static WARNED_SIGNER: AtomicBool = AtomicBool::new(false);
 
 fn warn_once(flag: &AtomicBool, message: &str) {
-    if !flag.load(Ordering::Relaxed) {
-        flag.store(true, Ordering::Relaxed);
+    // One `swap`, not `load`-then-`store`: two threads can both read `false`
+    // in the gap between the two operations and both log, which is the one
+    // thing a "once" warning exists to prevent. The idiom `core`'s
+    // production-readiness acceptance flags already use (harness.rs:558).
+    if !flag.swap(true, Ordering::Relaxed) {
         tracing::warn!("{message}");
     }
 }
@@ -631,5 +634,95 @@ mod tests {
         assert!(wired.provides().contains(&Port::CustomHostnames));
         let bare = super::Native::new();
         assert!(!bare.provides().contains(&Port::CustomHostnames));
+    }
+
+    /// A "warn once" flag two racing threads both read as unset is a "warn
+    /// twice": `load`-then-`store` has a gap the other thread walks straight
+    /// through. Both runtimes build their runtime from several threads, so the
+    /// gap is reachable. The subscriber is installed before any `warn_once`
+    /// call, because a callsite's interest is fixed at its first execution.
+    mod warn_once_race {
+        use super::super::warn_once;
+        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+        use std::sync::{Arc, Barrier, OnceLock};
+
+        /// The message the test warns with, and how many times the installed
+        /// subscriber saw it. A process-wide counter: the threads race across
+        /// cores, so a thread-local one would only prove what that core saw.
+        const MARKER: &str = "warn-once-race-marker";
+
+        struct Counter(Arc<AtomicUsize>);
+
+        impl tracing::Subscriber for Counter {
+            fn enabled(&self, _metadata: &tracing::Metadata<'_>) -> bool {
+                true
+            }
+
+            fn new_span(&self, _attributes: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+                tracing::span::Id::from_u64(1)
+            }
+
+            fn record(&self, _id: &tracing::span::Id, _values: &tracing::span::Record<'_>) {}
+
+            fn record_follows_from(&self, _id: &tracing::span::Id, _follows: &tracing::span::Id) {}
+
+            fn event(&self, event: &tracing::Event<'_>) {
+                struct Marker<'a>(&'a str, &'a AtomicUsize);
+                impl tracing::field::Visit for Marker<'_> {
+                    fn record_debug(
+                        &mut self,
+                        field: &tracing::field::Field,
+                        value: &dyn std::fmt::Debug,
+                    ) {
+                        // `tracing::warn!("{message}")` records the message as
+                        // `format_args!`, so `Debug` is the rendered line.
+                        if field.name() == "message" && format!("{value:?}").contains(self.0) {
+                            self.1.fetch_add(1, Ordering::SeqCst);
+                        }
+                    }
+                }
+                event.record(&mut Marker(MARKER, &self.0));
+            }
+
+            fn enter(&self, _id: &tracing::span::Id) {}
+
+            fn exit(&self, _id: &tracing::span::Id) {}
+        }
+
+        fn seen() -> &'static Arc<AtomicUsize> {
+            static SEEN: OnceLock<Arc<AtomicUsize>> = OnceLock::new();
+            SEEN.get_or_init(|| {
+                let seen = Arc::new(AtomicUsize::new(0));
+                let _ = tracing::subscriber::set_global_default(Counter(Arc::clone(&seen)));
+                seen
+            })
+        }
+
+        /// 32 threads released from a barrier all read the same unset flag:
+        /// exactly one of them may log. Rounds rather than one shot, because the
+        /// gap is a window — a single pass can pass by luck.
+        #[test]
+        fn a_warn_once_flag_is_claimed_by_exactly_one_thread() {
+            let seen = seen();
+            for _ in 0..200 {
+                let flag = Arc::new(AtomicBool::new(false));
+                let gate = Arc::new(Barrier::new(32));
+                let threads: Vec<_> = (0..32)
+                    .map(|_| {
+                        let gate = Arc::clone(&gate);
+                        let flag = Arc::clone(&flag);
+                        std::thread::spawn(move || {
+                            gate.wait();
+                            warn_once(&flag, MARKER);
+                        })
+                    })
+                    .collect();
+                for thread in threads {
+                    thread.join().expect("thread");
+                }
+                let logged = seen.swap(0, Ordering::SeqCst);
+                assert_eq!(logged, 1, "{logged} threads logged a once-only warning");
+            }
+        }
     }
 }

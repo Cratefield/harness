@@ -1160,11 +1160,10 @@ async fn problem_type_layer(
 /// and one entry per mount.
 type ProbeCache = Option<(i64, Vec<serde_json::Value>)>;
 
-/// The fresh cache every router starts with. The shared mutex lives in one
-/// place so the scoped allow for it has one justification to point at.
-#[allow(clippy::disallowed_types)]
-fn new_probe_cache() -> Arc<std::sync::Mutex<ProbeCache>> {
-    Arc::new(std::sync::Mutex::new(None))
+/// The fresh cache every router starts with. The shared lock lives in one
+/// place so the single-flight justification has one home to point at.
+fn new_probe_cache() -> Arc<futures_util::lock::Mutex<ProbeCache>> {
+    Arc::new(futures_util::lock::Mutex::new(None))
 }
 
 #[derive(Clone)]
@@ -1184,9 +1183,11 @@ struct HealthState {
     /// each sidecar's state, and caching it keeps a polling dashboard from
     /// turning every health check into a fan-out of subrequests.
     /// Deployment-scoped, not request state: it outlives no request, so
-    /// ADR 0007's ban on ambient request state does not apply.
-    #[allow(clippy::disallowed_types)]
-    probe_cache: Arc<std::sync::Mutex<ProbeCache>>,
+    /// ADR 0007's ban on ambient request state does not apply. The lock is
+    /// held across the probe so a burst of concurrent health checks runs one
+    /// fan-out, not one each — the `Realtime` room table has the same shape
+    /// for the same reason.
+    probe_cache: Arc<futures_util::lock::Mutex<ProbeCache>>,
 }
 
 /// How long a `/__health` sidecar listing stays fresh (issue #61). Short on
@@ -1232,13 +1233,20 @@ async fn health_handler(State(state): State<HealthState>) -> impl IntoResponse {
 /// said about itself, `null` when it said nothing. A sidecar that answers
 /// a wrong contract still reports here — the operator reading `/__health`
 /// needs both numbers, and the per-request refusal is a separate story.
+///
+/// One fan-out, shared: the cache is checked and filled under one lock held
+/// across the probe, so health checks arriving together queue on it and then
+/// read the entries the first one stored rather than each probing every
+/// sidecar for itself. The stamp is taken after the fan-out, so the TTL
+/// window starts when the answer was actually produced.
 async fn probe_sidecars(state: &HealthState) -> Vec<serde_json::Value> {
     if state.sidecars.is_empty() {
         return Vec::new();
     }
+    let mut cache = state.probe_cache.lock().await;
     let now_ms =
         i64::try_from(state.clock.now().unix_timestamp_nanos() / 1_000_000).unwrap_or(i64::MAX);
-    if let Some((at_ms, entries)) = state.probe_cache.lock().unwrap().as_ref()
+    if let Some((at_ms, entries)) = cache.as_ref()
         && now_ms - at_ms < SIDECAR_PROBE_TTL_SECS * 1000
     {
         return entries.clone();
@@ -1248,7 +1256,9 @@ async fn probe_sidecars(state: &HealthState) -> Vec<serde_json::Value> {
     for mount in &state.sidecars {
         entries.push(probe_one_sidecar(state, mount).await);
     }
-    *state.probe_cache.lock().unwrap() = Some((now_ms, entries.clone()));
+    let stamped_ms =
+        i64::try_from(state.clock.now().unix_timestamp_nanos() / 1_000_000).unwrap_or(i64::MAX);
+    *cache = Some((stamped_ms, entries.clone()));
     entries
 }
 

@@ -14,6 +14,7 @@
 #![allow(clippy::disallowed_types)]
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -29,13 +30,31 @@ type MemberSender = (String, UnboundedSender<Vec<u8>>);
 pub struct InProcessRealtime {
     handler: Arc<dyn RoomHandler>,
     rooms: Arc<Mutex<HashMap<String, Room>>>,
+    /// Hands each [`Connection`] a session id. A member whose socket drops and
+    /// reconnects gets a second connection under the same member id, and the
+    /// two overlap: the server may not have noticed the old socket is gone
+    /// before the new one arrives. Without a session id the stale connection's
+    /// `close` removes the *live* one from the room — the member stays
+    /// connected and becomes invisible (see [`Room::members`]).
+    next_session: Arc<AtomicU64>,
+}
+
+/// One connected socket: the sender the room writes to, and the session that
+/// says which connection owns it.
+struct Registration {
+    session: u64,
+    tx: UnboundedSender<Vec<u8>>,
 }
 
 #[derive(Default)]
 struct Room {
-    /// Each connected member's outgoing channel: a message pushed here is
+    /// Each connected member's outgoing channel, keyed by member id and
+    /// carrying the session that registered it: a message pushed here is
     /// written to that member's socket by the caller pumping [`Connection`].
-    members: HashMap<String, UnboundedSender<Vec<u8>>>,
+    /// A second connection for the same member replaces the first's entry, so
+    /// a late `close` or `deliver` from the replaced one must check the
+    /// session before acting on the entry it finds.
+    members: HashMap<String, Registration>,
     /// The pending shared-clock alarm, if any.
     alarm: Option<tokio::task::JoinHandle<()>>,
 }
@@ -46,6 +65,7 @@ impl InProcessRealtime {
         Self {
             handler,
             rooms: Arc::new(Mutex::new(HashMap::new())),
+            next_session: Arc::new(AtomicU64::new(1)),
         }
     }
 
@@ -75,13 +95,14 @@ impl InProcessRealtime {
         member: Member,
     ) -> Result<Connection, RealtimeError> {
         let (tx, rx) = unbounded_channel();
+        let session = self.next_session.fetch_add(1, Ordering::Relaxed);
         {
             let mut rooms = self.rooms.lock().expect("rooms lock");
             rooms
                 .entry(room_id.to_owned())
                 .or_default()
                 .members
-                .insert(member.id.clone(), tx);
+                .insert(member.id.clone(), Registration { session, tx });
         }
         let ctx = self.context(room_id);
         self.handler.on_join(&ctx, &member).await?;
@@ -89,6 +110,7 @@ impl InProcessRealtime {
             rx,
             member,
             room_id: room_id.to_owned(),
+            session,
             realtime: self.clone(),
         })
     }
@@ -100,6 +122,10 @@ pub struct Connection {
     rx: UnboundedReceiver<Vec<u8>>,
     member: Member,
     room_id: String,
+    /// The session that registered this socket in the room. A member that
+    /// reconnected holds a newer one, and this connection no longer owns the
+    /// room's entry for that member id.
+    session: u64,
     realtime: InProcessRealtime,
 }
 
@@ -114,8 +140,9 @@ impl Connection {
     ///
     /// # Errors
     ///
-    /// [`RealtimeError::NotAMember`] if this member has already left (so a late
-    /// or forged frame is dropped), else any error the handler returns.
+    /// [`RealtimeError::NotAMember`] if this member has already left, or has
+    /// reconnected on a newer socket since (so a late or forged frame is
+    /// dropped), else any error the handler returns.
     ///
     /// # Panics
     ///
@@ -123,9 +150,11 @@ impl Connection {
     pub async fn deliver(&self, message: &[u8]) -> Result<(), RealtimeError> {
         let present = {
             let rooms = self.realtime.rooms.lock().expect("rooms lock");
-            rooms
-                .get(&self.room_id)
-                .is_some_and(|room| room.members.contains_key(&self.member.id))
+            rooms.get(&self.room_id).is_some_and(|room| {
+                room.members
+                    .get(&self.member.id)
+                    .is_some_and(|registration| registration.session == self.session)
+            })
         };
         if !present {
             return Err(RealtimeError::NotAMember);
@@ -140,6 +169,11 @@ impl Connection {
     /// Ends the membership: removes the socket and runs
     /// [`RoomHandler::on_leave`].
     ///
+    /// A socket this member has already replaced by reconnecting no longer
+    /// owns the room's entry for that id, so this leaves the live socket
+    /// wired: the stale close must not unregister it, empty the room, or
+    /// abort the alarm a live member set.
+    ///
     /// # Errors
     ///
     /// Propagates any error the handler's `on_leave` returns.
@@ -150,7 +184,12 @@ impl Connection {
     pub async fn close(self) -> Result<(), RealtimeError> {
         {
             let mut rooms = self.realtime.rooms.lock().expect("rooms lock");
-            if let Some(room) = rooms.get_mut(&self.room_id) {
+            let owns_entry = rooms.get(&self.room_id).is_some_and(|room| {
+                room.members
+                    .get(&self.member.id)
+                    .is_some_and(|registration| registration.session == self.session)
+            });
+            if owns_entry && let Some(room) = rooms.get_mut(&self.room_id) {
                 room.members.remove(&self.member.id);
                 if room.members.is_empty() {
                     if let Some(alarm) = room.alarm.take() {
@@ -183,7 +222,7 @@ impl NativeContext {
             .map(|room| {
                 room.members
                     .iter()
-                    .map(|(id, tx)| (id.clone(), tx.clone()))
+                    .map(|(id, registration)| (id.clone(), registration.tx.clone()))
                     .collect()
             })
             .unwrap_or_default()
@@ -379,6 +418,7 @@ mod tests {
             rx: unbounded_channel().1,
             member,
             room_id: "room".to_owned(),
+            session: 0,
             realtime,
         };
         assert!(matches!(
@@ -403,6 +443,56 @@ mod tests {
         tokio::task::yield_now().await;
 
         assert_eq!(a.next_outgoing().await.unwrap(), b"tick");
+        assert_eq!(rec.alarms.load(Ordering::SeqCst), 1);
+    }
+
+    /// A member whose socket drops and reconnects gets a second
+    /// [`Connection`] under the same member id. If the first connection's
+    /// `close` is what lands last — the network case: the server has not yet
+    /// noticed the old socket is gone when the new one arrives — it removes
+    /// the *live* socket's sender from the room. The member stays connected,
+    /// and is now invisible: every broadcast misses it and its own `deliver`
+    /// is refused.
+    #[tokio::test]
+    async fn a_stale_connection_closing_leaves_the_reconnected_member_wired() {
+        let (rt, _rec) = recorder();
+        let old = rt.connect("room", Member::new("a")).await.unwrap();
+        let mut new = rt.connect("room", Member::new("a")).await.unwrap();
+        // The reconnected socket sees its own join notice; the stale one's
+        // notice went to the socket it replaced.
+        assert_eq!(new.next_outgoing().await.unwrap(), b"join:a");
+
+        old.close().await.unwrap();
+
+        // Still a member, and still reachable.
+        assert_eq!(rt.members("room").await.unwrap().len(), 1);
+        rt.broadcast("room", b"hello").await.unwrap();
+        assert_eq!(new.next_outgoing().await.unwrap(), b"hello");
+        new.deliver(b"hi").await.unwrap();
+    }
+
+    /// The same stale `close`, reaching the room's shared clock: with the live
+    /// socket unregistered the room reads empty, so it is torn down and its
+    /// pending alarm is aborted — the alarm a live member set never fires.
+    #[tokio::test(start_paused = true)]
+    async fn a_stale_connection_closing_does_not_cancel_the_live_members_alarm() {
+        let (rt, rec) = recorder();
+        let old = rt.connect("room", Member::new("a")).await.unwrap();
+        let mut new = rt.connect("room", Member::new("a")).await.unwrap();
+        let _ = new.next_outgoing().await; // the join notice
+
+        rt.context("room")
+            .set_alarm(Duration::from_millis(50))
+            .await
+            .unwrap();
+        // Let the spawned alarm task reach its `sleep`.
+        tokio::task::yield_now().await;
+
+        old.close().await.unwrap();
+
+        tokio::time::advance(Duration::from_millis(60)).await;
+        tokio::task::yield_now().await;
+        assert_eq!(new.next_outgoing().await.unwrap(), b"tick");
         assert_eq!(rec.alarms.load(Ordering::SeqCst), 1);
     }
 }

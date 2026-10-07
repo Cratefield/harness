@@ -1026,3 +1026,55 @@ async fn a_sidecar_one_contract_behind_degrades_only_its_prefix() {
     let elsewhere = request(&router, Method::GET, "/v1/sample/hello", &[], None).await;
     assert_eq!(elsewhere.status(), StatusCode::OK);
 }
+
+/// The probe cache's check-then-act (harness.rs `probe_sidecars`): the
+/// freshness test and the store are two separate lock acquisitions with a
+/// fan-out of awaits in between, so two `/__health` calls that arrive
+/// together both miss and both probe every sidecar. The doc comment names the
+/// cost being avoided — "caching it keeps a polling dashboard from turning
+/// every health check into a fan-out of subrequests" — and a burst of health
+/// checks is exactly what a dashboard does.
+#[pollster::test]
+async fn concurrent_health_checks_probe_the_sidecar_once() {
+    let dispatcher =
+        Arc::new(RecordingDispatcher::new("ACME").answering_contract(cratefield_core::HARNESS_API));
+    let router = harness_with_sample().router(ports_with_sidecars(
+        r#"{"acme-pricing":"ACME"}"#,
+        Some(dispatcher.clone()),
+    ));
+
+    // Eight health checks released together, each on its own runtime thread so
+    // they really do overlap rather than queue behind one executor.
+    let gate = Arc::new(std::sync::Barrier::new(8));
+    let threads: Vec<_> = (0..8)
+        .map(|_| {
+            let router = router.clone();
+            let gate = Arc::clone(&gate);
+            std::thread::spawn(move || {
+                let (tx, rx) = std::sync::mpsc::channel();
+                gate.wait();
+                std::thread::spawn(move || {
+                    let body = pollster::block_on(async {
+                        common::body_json(
+                            common::request(&router, Method::GET, "/__health", &[], None).await,
+                        )
+                        .await
+                    });
+                    tx.send(body).expect("health body");
+                });
+                rx.recv_timeout(std::time::Duration::from_secs(30))
+                    .expect("the health call answers")
+            })
+        })
+        .collect();
+
+    for thread in threads {
+        let health = thread.join().expect("thread");
+        assert_eq!(health["sidecars"][0]["probe"], "ok");
+    }
+    assert_eq!(
+        dispatcher.calls.load(Ordering::SeqCst),
+        1,
+        "one cold probe answers the whole burst"
+    );
+}
