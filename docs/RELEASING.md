@@ -17,7 +17,10 @@ cannot begin on a commit that failed `cargo test`:
 1. `release-plz release-pr` collects the conventional commits since the
    last release and opens (or updates) a release PR: per-crate version
    bumps, per-crate `CHANGELOG.md`, rewritten workspace dependency
-   requirements.
+   requirements. Because `docs/COMPATIBILITY.md` is generated from those
+   versions, the workflow then regenerates it on the release PR's branch
+   (only with `RELEASE_PLZ_TOKEN`, since a `GITHUB_TOKEN` push starts no CI
+   run), so the matrix drift check passes without a hand edit.
 2. Merging that release PR puts CI on the merge commit, and the run that
    passes triggers `release-plz release`: it publishes every crate whose
    version is not yet on crates.io — in dependency order
