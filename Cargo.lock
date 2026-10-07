@@ -861,12 +861,13 @@ dependencies = [
 
 [[package]]
 name = "cratefield-adapter-github-issues"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "async-trait",
  "bytes",
  "cratefield-core",
  "cratefield-testing",
+ "futures-util",
  "getrandom 0.4.3",
  "http",
  "pollster",
@@ -878,13 +879,14 @@ dependencies = [
 
 [[package]]
 name = "cratefield-adapter-jira"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "async-trait",
  "base64 0.23.1",
  "bytes",
  "cratefield-core",
  "cratefield-testing",
+ "futures-util",
  "getrandom 0.4.3",
  "hex",
  "hmac 0.13.0",
@@ -952,7 +954,7 @@ dependencies = [
 
 [[package]]
 name = "cratefield-adapter-postgres"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "async-trait",
  "axum",
@@ -1130,7 +1132,7 @@ dependencies = [
 
 [[package]]
 name = "cratefield-auth-client"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "async-trait",
  "axum",
@@ -1138,6 +1140,7 @@ dependencies = [
  "bytes",
  "cratefield-core",
  "cratefield-testing",
+ "futures-util",
  "http",
  "p256 0.14.0",
  "pollster",
@@ -1254,6 +1257,7 @@ dependencies = [
  "cratefield-auth-core",
  "cratefield-core",
  "cratefield-testing",
+ "futures-util",
  "getrandom 0.4.3",
  "http",
  "openidconnect",
@@ -1561,7 +1565,7 @@ dependencies = [
 
 [[package]]
 name = "cratefield-core"
-version = "0.8.1"
+version = "0.8.2"
 dependencies = [
  "async-trait",
  "axum",
@@ -1570,6 +1574,7 @@ dependencies = [
  "cratefield-adapter-sqlite",
  "futures-channel",
  "futures-core",
+ "futures-util",
  "hex",
  "hmac 0.13.0",
  "http",
@@ -2015,7 +2020,7 @@ dependencies = [
 
 [[package]]
 name = "cratefield-module-waitlist"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "async-trait",
  "axum",
@@ -2175,7 +2180,7 @@ dependencies = [
 
 [[package]]
 name = "cratefield-runtime-cloudflare"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "async-trait",
  "axum",
@@ -2205,7 +2210,7 @@ dependencies = [
 
 [[package]]
 name = "cratefield-runtime-native"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "async-trait",
  "axum",

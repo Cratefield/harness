@@ -6,6 +6,12 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.8.2](https://github.com/Cratefield/harness/compare/cratefield-core-v0.8.1...cratefield-core-v0.8.2) - 2026-10-07
+
+### Fixed
+
+- close eight concurrency races across the pool cache, auth caches, realtime rooms, waitlist confirms and tracker adapters ([#823](https://github.com/Cratefield/harness/pull/823))
+
 ### Added
 
 - **A provider-neutral billing lifecycle, in `billing`** (issue #593,

@@ -25,6 +25,7 @@ use cratefield_core::{
     ProviderScheme, SignatureEncoding, StatusUpdate, StatusWebhook, TicketComment, TicketDraft,
     TicketState, TicketStatus, Tracker, TrackerError, WebhookVerifier, retry_after,
 };
+use futures_util::lock::Mutex as AsyncMutex;
 use http::header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE};
 use http::{Request, StatusCode};
 use serde_json::Value;
@@ -70,6 +71,18 @@ pub struct JiraCloud {
     /// A value overrides the scheme and host for tests pointed at a fake
     /// ([`JiraCloud::with_base`]).
     base: Option<String>,
+    /// Held across the whole search-then-create of one [`Tracker::file`],
+    /// so two in-process callers racing on one idempotency key cannot
+    /// both observe "no such issue" and both create one. Jira labels are
+    /// not a uniqueness constraint, so nothing on the provider side
+    /// closes that window — this gate is the same single-flight
+    /// `GithubApp` holds across its token exchange.
+    ///
+    /// It serialises *all* filings on one adapter, not just same-key
+    /// ones: a per-key table would leak an entry per key ever filed and
+    /// buy nothing a retry does not already give — the create is one
+    /// POST either way.
+    file_gate: AsyncMutex<()>,
 }
 
 impl std::fmt::Debug for JiraCloud {
@@ -95,6 +108,7 @@ impl JiraCloud {
             clock,
             issue_type: DEFAULT_ISSUE_TYPE.to_owned(),
             base: None,
+            file_gate: AsyncMutex::new(()),
         }
     }
 
@@ -261,6 +275,14 @@ impl Tracker for JiraCloud {
         validate_site(site)?;
         validate_project(project)?;
         let label = idem_label(&draft.idempotency_key);
+
+        // Held across the lookup AND the create: the gate is what makes
+        // search-before-create safe rather than merely hopeful. A second
+        // caller arriving mid-flight waits here, and by the time its JQL
+        // search runs the first one's labelled issue exists. Taken after
+        // the destination validation, so a malformed site is refused
+        // without queueing behind a stranger's create.
+        let _single_flight = self.file_gate.lock().await;
 
         // Search before creating. The outbox is at-least-once, so this WILL
         // be called twice for one draft; and the `?` here is the fail-closed

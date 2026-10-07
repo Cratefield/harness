@@ -646,6 +646,183 @@ fn jira_deps_are_wasm_safe() {
     cratefield_testing::assert_wasm_safe_deps(env!("CARGO_PKG_NAME"));
 }
 
+// ---------------------------------------------------------------------------
+// The race the single-flight guard closes
+// ---------------------------------------------------------------------------
+
+/// Long enough that a second thread starting alongside the first reaches
+/// its own lookup first, short enough not to slow the suite.
+const RACE_WINDOW: Duration = Duration::from_millis(250);
+
+/// A *stateful* Jira, the shape the scripted fake above cannot express:
+/// issues really accumulate, and a JQL search answered while a rival
+/// search is still in flight is answered before either create lands.
+/// Jira labels are not a uniqueness constraint, so nothing provider-side
+/// closes that window — which is the point.
+///
+/// The rendezvous is a **wait with a deadline**, not a barrier: once the
+/// adapter serialises its filings only one search is ever in flight, so a
+/// hard barrier would deadlock instead of testing anything. The count
+/// resets once a pair has met, so the search and the create each
+/// rendezvous independently.
+struct RacingJira {
+    issues: std::sync::Mutex<Vec<(String, String)>>,
+    arrived: (std::sync::Mutex<usize>, std::sync::Condvar),
+    next_number: AtomicUsize,
+    creates: AtomicUsize,
+}
+
+impl RacingJira {
+    fn new() -> Arc<Self> {
+        Arc::new(Self {
+            issues: std::sync::Mutex::new(Vec::new()),
+            arrived: (std::sync::Mutex::new(0), std::sync::Condvar::new()),
+            next_number: AtomicUsize::new(0),
+            creates: AtomicUsize::new(0),
+        })
+    }
+
+    fn rendezvous(&self) {
+        let (lock, condvar) = &self.arrived;
+        let mut arrived = lock.lock().expect("rendezvous lock");
+        *arrived += 1;
+        if *arrived >= 2 {
+            *arrived = 0;
+            condvar.notify_all();
+        } else {
+            let _waited = condvar
+                .wait_timeout(arrived, RACE_WINDOW)
+                .expect("rendezvous lock");
+        }
+    }
+
+    /// A search response carrying only the issues whose label is `label`.
+    fn search_answer(issues: &[(String, String)], label: &str) -> String {
+        let matching: Vec<serde_json::Value> = issues
+            .iter()
+            .filter(|(_, labels)| labels.split(',').any(|one| one == label))
+            .map(|(key, _)| serde_json::json!({ "key": key }))
+            .collect();
+        serde_json::json!({ "startAt": 0, "maxResults": 1, "total": matching.len(),
+                            "issues": matching })
+        .to_string()
+    }
+}
+
+#[async_trait]
+impl HttpClient for RacingJira {
+    async fn send(&self, request: Request<Bytes>) -> Result<Response<Bytes>, HttpError> {
+        match request.uri().path() {
+            "/rest/api/3/search/jql" => {
+                // Snapshot first, then let any rival search arrive: both
+                // callers observe the world before either writes.
+                let snapshot = self.issues.lock().expect("issues lock").clone();
+                let query = request
+                    .uri()
+                    .query()
+                    .and_then(|query| query.split("jql=").nth(1))
+                    .unwrap_or_default()
+                    .to_owned();
+                self.rendezvous();
+                // The label the query asks about, recovered from the JQL the
+                // adapter built — this fake answers the search Jira would.
+                let label = percent_decode(&query)
+                    .split("labels = \"")
+                    .nth(1)
+                    .and_then(|rest| rest.split('"').next())
+                    .unwrap_or_default()
+                    .to_owned();
+                return Ok(Response::builder()
+                    .status(200)
+                    .body(Bytes::from(Self::search_answer(&snapshot, &label)))
+                    .expect("response"));
+            }
+            "/rest/api/3/issue" => {
+                // The create: the issue really joins the project.
+                let payload: Value = serde_json::from_slice(request.body()).expect("json body");
+                let labels = payload["fields"]["labels"]
+                    .as_array()
+                    .expect("labels")
+                    .iter()
+                    .filter_map(|label| label.as_str())
+                    .collect::<Vec<_>>()
+                    .join(",");
+                self.next_number.fetch_add(1, Ordering::SeqCst);
+                let key = format!("{PROJECT}-{}", self.next_number.load(Ordering::SeqCst));
+                self.issues
+                    .lock()
+                    .expect("issues lock")
+                    .push((key.clone(), labels));
+                self.creates.fetch_add(1, Ordering::SeqCst);
+                return Ok(Response::builder()
+                    .status(201)
+                    .body(Bytes::from(
+                        serde_json::json!({ "id": "10002", "key": key }).to_string(),
+                    ))
+                    .expect("response"));
+            }
+            other => panic!("unexpected path {other}"),
+        }
+    }
+}
+
+/// The inverse of `percent_encode` in the crate under test: this fake has
+/// to read the JQL the adapter actually sent, percent-decoding and all.
+fn percent_decode(value: &str) -> String {
+    let bytes = value.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'%' && index + 2 < bytes.len() {
+            let hex = std::str::from_utf8(&bytes[index + 1..index + 3]).expect("hex");
+            out.push(u8::from_str_radix(hex, 16).expect("a hex digit"));
+            index += 3;
+        } else {
+            out.push(bytes[index]);
+            index += 1;
+        }
+    }
+    String::from_utf8(out).expect("utf8")
+}
+
+/// Two in-process `file` calls for one idempotency key, started together.
+/// The gate around the check-then-act is the whole reason this passes:
+/// without it both callers' JQL searches answer "no such issue" and both
+/// create.
+#[test]
+fn two_concurrent_files_with_one_key_create_one_issue() {
+    let jira = RacingJira::new();
+    let adapter = Arc::new(
+        JiraCloud::new(jira.clone(), Arc::new(cratefield_core::SystemClock)).with_base(BASE),
+    );
+
+    let start = Arc::new(std::sync::Barrier::new(2));
+    let racers: Vec<_> = (0..2)
+        .map(|_| {
+            let adapter = Arc::clone(&adapter);
+            let start = Arc::clone(&start);
+            std::thread::spawn(move || {
+                start.wait();
+                pollster::block_on(adapter.file(&dest(), &cred(), &draft()))
+            })
+        })
+        .collect();
+
+    let mut filed = Vec::new();
+    for racer in racers {
+        filed.push(racer.join().expect("race thread").expect("file ok"));
+    }
+
+    assert_eq!(
+        jira.creates.load(Ordering::SeqCst),
+        1,
+        "one idempotency key must file one issue, not one per caller: {filed:?}"
+    );
+    // And both callers learned the same issue, which is what the second
+    // one deduping onto looks like from here.
+    assert_eq!(filed[0].external_id, filed[1].external_id, "{filed:?}");
+}
+
 impl Scripted {
     fn with_retry_after(mut self, value: &str) -> Self {
         self.retry_after = Some(value.to_owned());

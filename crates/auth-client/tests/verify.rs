@@ -5,7 +5,8 @@
 //! wave through. The one accepting test exists to prove the others are
 //! not passing vacuously.
 
-use std::sync::{Arc, RwLock};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Barrier, RwLock};
 
 use async_trait::async_trait;
 use base64ct::{Base64UrlUnpadded, Encoding};
@@ -420,6 +421,71 @@ async fn a_failed_refetch_keeps_the_previous_keys() {
     auth.verify(&good)
         .await
         .expect("a failed refetch keeps the previous keys");
+}
+
+/// A cold cache must cost the auth service **one** fetch, however many
+/// verifications arrive at once. Every caller that finds the cache stale
+/// runs the refresh itself, so a burst of concurrent requests at a cold
+/// start (or the instant a TTL lapses under load) sent N fetches for one
+/// key set — a thundering herd aimed at the auth service, which is the
+/// one thing a consuming app cannot afford to hammer.
+#[test]
+fn a_cold_cache_race_fetches_the_key_set_once() {
+    const THREADS: usize = 8;
+
+    /// Canned body, plus a delay inside `send` so every thread has passed
+    /// its freshness check before the first fetch comes back. The delay is
+    /// what makes the unguarded version fail every run rather than one in
+    /// a hundred (the trick `push-auth`'s own race test uses).
+    struct SlowJwks {
+        body: String,
+        calls: AtomicUsize,
+    }
+    #[async_trait]
+    impl HttpClient for SlowJwks {
+        async fn send(
+            &self,
+            _request: http::Request<Bytes>,
+        ) -> Result<http::Response<Bytes>, HttpError> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            Ok(http::Response::builder()
+                .status(200)
+                .body(Bytes::from(self.body.clone()))
+                .expect("response"))
+        }
+    }
+
+    let (signing, jwk) = key(1);
+    let http = Arc::new(SlowJwks {
+        body: jwks_body(&[jwk]),
+        calls: AtomicUsize::new(0),
+    });
+    let auth = Arc::new(client(Arc::clone(&http) as Arc<dyn HttpClient>));
+    let token = mint(
+        &signing,
+        &json!({"alg": "ES256", "kid": "k1"}),
+        &claims(CLIENT, ISSUER, NOW + 600),
+    );
+
+    let gate = Barrier::new(THREADS);
+    std::thread::scope(|scope| {
+        for _ in 0..THREADS {
+            let auth = Arc::clone(&auth);
+            let token = token.clone();
+            let gate = &gate;
+            scope.spawn(move || {
+                gate.wait();
+                pollster::block_on(auth.verify(&token)).expect("verifies");
+            });
+        }
+    });
+
+    assert_eq!(
+        http.calls.load(Ordering::SeqCst),
+        1,
+        "one key set, one fetch — a cold-cache race must not stampede the auth service"
+    );
 }
 
 /// Garbage in the header, the segments, or the base64 is refused
