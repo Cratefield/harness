@@ -323,14 +323,26 @@ fn refund(data: &Value, change: RefundChange, customers: CustomerIds) -> Option<
     };
     let mut events = Vec::with_capacity(2);
     if let Some(dispute) = data.get("dispute").filter(|d| !d.is_null()) {
-        // `RefundDispute` carries no customer object; the refund names the
-        // Polar customer, which is only the right `customer_ref` when the
-        // adapter names customers by Polar id.
-        let mut dispute = dispute_from(dispute, customers).ok()?;
-        if customers == CustomerIds::Polar {
-            dispute.customer_ref = Some(event.customer_id.clone());
+        // The dispute is enrichment on a refund that is already whole: a
+        // dispute object this crate cannot read costs the dispute alone.
+        // `?` here used to take the refund down with it, and a refund
+        // Polar really issued is money a customer got back.
+        match dispute_from(dispute, customers) {
+            Ok(mut dispute) => {
+                // `RefundDispute` carries no customer object; the refund names the
+                // Polar customer, which is only the right `customer_ref` when the
+                // adapter names customers by Polar id.
+                if customers == CustomerIds::Polar {
+                    dispute.customer_ref = Some(event.customer_id.clone());
+                }
+                events.push(PolarEvent::Dispute(dispute));
+            }
+            Err(error) => tracing::warn!(
+                error = %error,
+                refund_id = %event.id,
+                "polar refund carried a dispute this adapter cannot read; the refund stands alone"
+            ),
         }
-        events.push(PolarEvent::Dispute(dispute));
     }
     events.insert(0, PolarEvent::Refund(event));
     Some(events)

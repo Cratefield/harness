@@ -1555,6 +1555,76 @@ pub(crate) async fn suppressed_email_bursts(
     db: &dyn Database,
     limit: u64,
 ) -> Result<Vec<SuppressedBurst>, DbError> {
+    // `limit` bounds how many rows one **read** holds; it must not bound how
+    // many rows one burst holds. A page of rows cuts a burst at the page
+    // boundary, and each half is then a burst of its own: the summary counts
+    // only the half it read, its `first_suppressed_at` is a different instant so
+    // its idempotency key differs, and the half that did not clear is
+    // summarised again on the next tick — one burst of news, several mails. So
+    // the reads keyset past a complete page and keep going while the next row
+    // belongs to the burst the last page was in the middle of.
+    let mut bursts: Vec<SuppressedBurst> = Vec::new();
+    let mut after: Option<(String, String)> = None;
+    loop {
+        let page = read_suppressed_page(db, limit, after.as_ref()).await?;
+        if page.is_empty() {
+            break;
+        }
+        let full = u64::try_from(page.len()).unwrap_or(u64::MAX) == limit;
+        let last = page.last().expect("a page just checked as non-empty");
+        for row in &page {
+            match bursts
+                .iter_mut()
+                .find(|burst| burst.account_id == row.account_id && burst.category == row.category)
+            {
+                Some(burst) => {
+                    burst.count += 1;
+                    burst.ids.push(row.id.clone());
+                }
+                None => bursts.push(SuppressedBurst {
+                    account_id: row.account_id.clone(),
+                    category: row.category.clone(),
+                    count: 1,
+                    ids: vec![row.id.clone()],
+                    first_suppressed_at: row.suppressed_at.clone(),
+                }),
+            }
+        }
+        let open = (last.account_id.clone(), last.category.clone());
+        after = Some((last.suppressed_at.clone(), last.id.clone()));
+        if !full {
+            // A short page is the end of the table, so the last burst is whole.
+            break;
+        }
+        // A full page may have cut the burst it ended in. Read one row past it:
+        // only a row belonging to that same burst means there is more of it.
+        let next = read_suppressed_page(db, 1, after.as_ref()).await?;
+        let continues = next
+            .first()
+            .is_some_and(|row| (row.account_id.clone(), row.category.clone()) == open);
+        if !continues {
+            break;
+        }
+    }
+    Ok(bursts)
+}
+
+/// One suppression row, as the page reads it.
+struct SuppressedRow {
+    id: String,
+    account_id: String,
+    category: String,
+    suppressed_at: String,
+}
+
+/// `limit` rows after `after` — `(suppressed_at, id)` — in that order, so a
+/// page never overlaps or skips the row it paged past. Plain comparisons and
+/// OR, to stay in the portable subset (ADR 0004).
+async fn read_suppressed_page(
+    db: &dyn Database,
+    limit: u64,
+    after: Option<&(String, String)>,
+) -> Result<Vec<SuppressedRow>, DbError> {
     let mut select = Query::select();
     select
         .columns([
@@ -1565,39 +1635,35 @@ pub(crate) async fn suppressed_email_bursts(
         ])
         .from(iden(EMAIL_SUPPRESSED))
         .order_by(iden("suppressed_at"), Order::Asc)
+        .order_by(iden("id"), Order::Asc)
         .limit(limit);
-    let mut bursts: Vec<SuppressedBurst> = Vec::new();
-    for row in db.query(&Statement::render(&select)).await?.rows {
-        let row_id = row
-            .get::<String>("id")
-            .ok_or_else(|| corrupt(EMAIL_SUPPRESSED, "?", "id"))?;
-        let account_id = row
-            .get::<String>("account_id")
-            .ok_or_else(|| corrupt(EMAIL_SUPPRESSED, "?", "account_id"))?;
-        let category = row
-            .get::<String>("category")
-            .ok_or_else(|| corrupt(EMAIL_SUPPRESSED, "?", "category"))?;
-        let suppressed_at = row
-            .get::<String>("suppressed_at")
-            .ok_or_else(|| corrupt(EMAIL_SUPPRESSED, "?", "suppressed_at"))?;
-        match bursts
-            .iter_mut()
-            .find(|burst| burst.account_id == account_id && burst.category == category)
-        {
-            Some(burst) => {
-                burst.count += 1;
-                burst.ids.push(row_id);
-            }
-            None => bursts.push(SuppressedBurst {
-                account_id,
-                category,
-                count: 1,
-                ids: vec![row_id],
-                first_suppressed_at: suppressed_at,
-            }),
-        }
+    if let Some((at, id)) = after {
+        select.and_where(
+            Expr::col(iden("suppressed_at"))
+                .gt(at)
+                .or(Expr::col(iden("suppressed_at"))
+                    .eq(at)
+                    .and(Expr::col(iden("id")).gt(id))),
+        );
     }
-    Ok(bursts)
+    let mut rows = Vec::new();
+    for row in db.query(&Statement::render(&select)).await?.rows {
+        rows.push(SuppressedRow {
+            id: row
+                .get::<String>("id")
+                .ok_or_else(|| corrupt(EMAIL_SUPPRESSED, "?", "id"))?,
+            account_id: row
+                .get::<String>("account_id")
+                .ok_or_else(|| corrupt(EMAIL_SUPPRESSED, "?", "account_id"))?,
+            category: row
+                .get::<String>("category")
+                .ok_or_else(|| corrupt(EMAIL_SUPPRESSED, "?", "category"))?,
+            suppressed_at: row
+                .get::<String>("suppressed_at")
+                .ok_or_else(|| corrupt(EMAIL_SUPPRESSED, "?", "suppressed_at"))?,
+        });
+    }
+    Ok(rows)
 }
 
 /// Deletes exactly the suppressed rows a burst's count covered, by id.

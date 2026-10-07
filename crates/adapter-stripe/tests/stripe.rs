@@ -443,6 +443,33 @@ fn list_subscriptions_follows_pagination_with_starting_after() {
 }
 
 #[test]
+fn pagination_stops_when_a_page_does_not_advance_the_cursor() {
+    // The same page, `has_more` set, for every `starting_after` — what an
+    // answer that never clears `has_more` looks like through a proxy. The
+    // cursor it hands back is the one that was sent, so the walk used to
+    // repeat one request forever and `list_subscriptions` never returned.
+    let page = r#"{"object":"list","has_more":true,"data":[
+        {"id":"sub_1","customer":"cus_1","status":"active",
+         "items":{"data":[{"quantity":1,"price":{"id":"price_1"}}]}}
+    ]}"#;
+    let seq = SequencedHttp::new(vec![(200, page.to_owned()); 4]);
+    let s = Stripe::new(
+        seq.clone(),
+        Arc::new(FixedClock(1_700_000_000)),
+        "sk_test_x",
+        "whsec_test",
+    );
+    let subs = pollster::block_on(s.list_subscriptions("cus_1")).unwrap();
+
+    let uris = seq.uris();
+    assert!(
+        uris.len() <= 2,
+        "a page that does not advance the cursor is not progress: {uris:?}"
+    );
+    assert_eq!(subs.len(), uris.len(), "one subscription per page read");
+}
+
+#[test]
 fn portal_and_subscriptions_not_configured_never_call_the_network() {
     let s = Stripe::not_configured();
     let portal = PortalSessionRequest {

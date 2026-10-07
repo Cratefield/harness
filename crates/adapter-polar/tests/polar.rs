@@ -1153,6 +1153,24 @@ fn a_refund_that_prevented_a_dispute_also_yields_the_dispute() {
 }
 
 #[test]
+/// The nested `dispute` is enrichment on top of a refund that is already
+/// complete. A dispute object this crate cannot read — a field Polar dropped,
+/// renamed, or a shape this version does not know — must cost the dispute
+/// alone: the refund Polar really did issue is money moving back to a
+/// customer, and dropping it over an optional extra leaves the venture's
+/// books wrong with nothing in the log but a generic "incomplete".
+fn a_malformed_nested_dispute_does_not_take_the_refund_with_it() {
+    let mut data = fixture_json("refund_prevented_dispute.json");
+    data["dispute"]["order_id"] = Value::Null;
+    let events = normalize(&event("refund.created", data), CustomerIds::Polar);
+    let [PolarEvent::Refund(refund)] = events.as_slice() else {
+        panic!("the refund survived: {events:?}")
+    };
+    assert_eq!(refund.reason, "dispute_prevention");
+    assert_eq!(refund.amount, Money::new(1500, "usd"));
+}
+
+#[test]
 fn customer_events() {
     for (kind, change) in [
         ("customer.created", CustomerChange::Created),

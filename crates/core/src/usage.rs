@@ -78,10 +78,15 @@ impl Period {
                 let diff = month_index(now.year(), now.month())
                     - month_index(anchor.year(), anchor.month());
                 let mut index = diff.div_euclid(every);
-                while anchored_start(anchor, every, index + 1) <= now {
+                // The walk stops at the edges of the representable calendar
+                // as well as at the boundary: `anchored_start` saturates
+                // there, so an unclamped loop would spin on a saturated
+                // comparison rather than converge.
+                let (lowest, highest) = month_index_bounds();
+                while index < highest && anchored_start(anchor, every, index + 1) <= now {
                     index += 1;
                 }
-                while anchored_start(anchor, every, index) > now {
+                while index > lowest && anchored_start(anchor, every, index) > now {
                     index -= 1;
                 }
                 index
@@ -90,22 +95,25 @@ impl Period {
     }
 
     /// The window with this index: `window_for(index_at(now)) == window_at(now)`.
+    /// An index at either extreme of the `i64` range saturates rather than
+    /// overflowing (see `month_index_bounds`).
     #[must_use]
     pub fn window_for(self, index: i64) -> PeriodWindow {
+        let next = index.saturating_add(1);
         match self {
             Self::CalendarMonthUtc => PeriodWindow {
                 start: month_start(index),
-                end: month_start(index + 1),
+                end: month_start(next),
             },
             Self::Day => PeriodWindow {
                 start: day_start(index),
-                end: day_start(index + 1),
+                end: day_start(next),
             },
             Self::Anchored { anchor, every } => {
                 let every = i64::from(every.0.max(1));
                 PeriodWindow {
                     start: anchored_start(anchor, every, index),
-                    end: anchored_start(anchor, every, index + 1),
+                    end: anchored_start(anchor, every, next),
                 }
             }
         }
@@ -118,9 +126,33 @@ fn month_index(year: i32, month: Month) -> i64 {
     i64::from(year) * 12 + i64::from(u8::from(month)) - 1
 }
 
-/// The first instant of absolute month `index`, UTC.
+/// The month-index span `time` can represent, on the [`month_index`] spine:
+/// January of `Date::MIN`'s year through December of `Date::MAX`'s year.
+///
+/// A period index outside it is caller arithmetic going wide — `window_for`
+/// is public and infallible, and `history`/`purge` derive their index from a
+/// `u32` count with no bound of its own — so every helper below **clamps**
+/// into this span instead of asserting it. A panic here unwinds the handler
+/// mid-response and drops the connection, which is a worse answer than a
+/// window pinned to the edge of the calendar.
+fn month_index_bounds() -> (i64, i64) {
+    (
+        month_index(Date::MIN.year(), Month::January),
+        month_index(Date::MAX.year(), Month::December),
+    )
+}
+
+/// [`month_index_bounds`] applied to a possibly out-of-range index.
+fn clamp_month_index(index: i64) -> i64 {
+    let (lowest, highest) = month_index_bounds();
+    index.clamp(lowest, highest)
+}
+
+/// The first instant of absolute month `index`, UTC, clamped to the span
+/// `time` can represent (see [`month_index_bounds`]).
 fn month_start(index: i64) -> OffsetDateTime {
-    let year = i32::try_from(index.div_euclid(12)).expect("month index within time's year range");
+    let index = clamp_month_index(index);
+    let year = i32::try_from(index.div_euclid(12)).expect("a clamped month index fits an i32 year");
     let month = month_from(index.rem_euclid(12) + 1);
     Date::from_calendar_date(year, month, 1)
         .expect("the first of a valid month is a valid date")
@@ -129,9 +161,13 @@ fn month_start(index: i64) -> OffsetDateTime {
 }
 
 /// The first instant of the UTC day `index` julian days after the julian
-/// epoch.
+/// epoch, clamped to the days `time` can represent.
 fn day_start(index: i64) -> OffsetDateTime {
-    Date::from_julian_day(i32::try_from(index).expect("julian day within time's year range"))
+    let lowest = i64::from(Date::MIN.to_julian_day());
+    let highest = i64::from(Date::MAX.to_julian_day());
+    let julian =
+        i32::try_from(index.clamp(lowest, highest)).expect("a clamped julian day fits i32");
+    Date::from_julian_day(julian)
         .expect("a valid julian day is a valid date")
         .midnight()
         .assume_utc()
@@ -139,11 +175,16 @@ fn day_start(index: i64) -> OffsetDateTime {
 
 /// The start of anchored period `index`: `anchor + index * every` months,
 /// computed from the anchor each time, the day clamped to the target month's
-/// last day and the anchor's UTC time-of-day kept.
+/// last day and the anchor's UTC time-of-day kept. The target month is
+/// clamped to [`month_index_bounds`], so an `every` wider than the calendar
+/// pins the window to its edge instead of panicking.
 fn anchored_start(anchor: OffsetDateTime, every: i64, index: i64) -> OffsetDateTime {
     let anchor = anchor.to_offset(UtcOffset::UTC);
-    let target = month_index(anchor.year(), anchor.month()) + index * every;
-    let year = i32::try_from(target.div_euclid(12)).expect("anchor month within time's year range");
+    let target = clamp_month_index(
+        month_index(anchor.year(), anchor.month()).saturating_add(index.saturating_mul(every)),
+    );
+    let year =
+        i32::try_from(target.div_euclid(12)).expect("a clamped month index fits an i32 year");
     let month = month_from(target.rem_euclid(12) + 1);
     let day = anchor.day().min(days_in_month(year, month));
     Date::from_calendar_date(year, month, day)
@@ -775,6 +816,66 @@ mod tests {
                 period.window_for(index - 1).end,
                 period.window_for(index).start,
                 "consecutive windows abut"
+            );
+        }
+    }
+
+    /// A period index outside the span `time` can represent is caller
+    /// arithmetic going wide, not a programming error: `window_for` is a
+    /// public, infallible function, and `history`/`purge` derive their index
+    /// from a `u32` count with no bound of its own
+    /// (`index_at(now) - last_n_periods + 1`). It must clamp, not panic —
+    /// a panic there unwinds the handler mid-response and drops the
+    /// connection instead of answering.
+    #[test]
+    fn a_period_index_outside_the_calendar_clamps_instead_of_panicking() {
+        let now = at("2026-01-15T00:00:00Z");
+        for index in [i64::MIN, i64::MIN + 1, -1_000_000, 1_000_000, i64::MAX] {
+            let month = Period::CalendarMonthUtc.window_for(index);
+            assert!(
+                month.start <= month.end,
+                "index {index}: {} .. {}",
+                month.start,
+                month.end
+            );
+            let day = Period::Day.window_for(index);
+            assert!(
+                day.start <= day.end,
+                "index {index}: {} .. {}",
+                day.start,
+                day.end
+            );
+        }
+        // The exact index `Usage::history` computes for the largest count a
+        // caller can name.
+        let current = Period::CalendarMonthUtc.index_at(now);
+        assert!(
+            Period::CalendarMonthUtc
+                .window_for(current - i64::from(u32::MAX) + 1)
+                .start
+                <= now
+        );
+    }
+
+    /// `Months` is a bare `u32` and nothing bounds it above, but an anchored
+    /// period wider than the calendar `time` can hold is still a period: the
+    /// kernel must answer with a clamped window rather than panic on the
+    /// request path, where `index_at` runs for every consume/read/refund.
+    #[test]
+    fn an_anchor_spanning_more_months_than_a_calendar_holds_does_not_panic() {
+        for every in [Months(u32::MAX), Months(200_000), Months(120_000)] {
+            let period = Period::Anchored {
+                anchor: at("2026-01-31T09:30:00Z"),
+                every,
+            };
+            for index in [0, 1, -1, i64::MAX, i64::MIN] {
+                let window = period.window_for(index);
+                assert!(window.start <= window.end, "every {every:?}, index {index}");
+            }
+            let index = period.index_at(at("2026-01-15T00:00:00Z"));
+            assert!(
+                period.window_for(index).start <= at("2026-01-15T00:00:00Z"),
+                "every {every:?}"
             );
         }
     }

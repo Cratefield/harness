@@ -21,6 +21,21 @@ mapfile -t dirs < <(git ls-files '*/migrations/*.sql' | xargs -r -n1 dirname | s
 #
 # `git diff --name-status` against the merge base: M, D and R on a file
 # that already existed are all the same rule broken.
+#
+# The merge base is resolved first, on purpose. It used to be computed
+# inside the diff's own argument, which put `git merge-base` inside a
+# command substitution inside a process substitution — and a process
+# substitution's status is thrown away by the `while read` it feeds, so
+# nothing in the foreground ever failed. An unresolvable base ref (a
+# renamed or removed base branch, a clone whose history does not reach
+# it) therefore made the diff argument `...HEAD`, the diff matched
+# nothing, and this script printed "no problems" and exited 0: a green
+# "migrations are never edited" check that had checked nothing.
+if ! MERGE_BASE=$(git merge-base "$BASE" HEAD); then
+  echo "migration guard: no merge base between \`$BASE\` and HEAD — nothing was checked." >&2
+  echo "The guard diffs against the base branch, so it needs the history between them: a base ref that does not exist, or a clone too shallow to reach it, is refused rather than passed." >&2
+  exit 2
+fi
 while IFS=$'\t' read -r status path rest; do
   [ -z "${status:-}" ] && continue
   case "$path" in */migrations/*.sql) ;; *) continue ;; esac
@@ -35,7 +50,7 @@ while IFS=$'\t' read -r status path rest; do
       fail "$path was renamed to ${rest:-?}. A migration's filename is its identity in the tracking table; renaming it makes the applied row unmatchable."
       ;;
   esac
-done < <(git diff --name-status --find-renames "$(git merge-base "$BASE" HEAD)"...HEAD -- '*/migrations/*.sql')
+done < <(git diff --name-status --find-renames "$MERGE_BASE...HEAD" -- '*/migrations/*.sql')
 
 # --- 2. Sequences are contiguous; dialect overrides are not sequences ---
 #

@@ -519,6 +519,17 @@ impl Payments for Stripe {
                 .and_then(|object| object.get("id"))
                 .and_then(Value::as_str);
             match (has_more, last_id) {
+                // A page that hands back the cursor it was given is not
+                // progress: re-sending it would repeat one request forever and
+                // `list_subscriptions` would never return.
+                (true, Some(id)) if Some(id) == starting_after.as_deref() => {
+                    tracing::warn!(
+                        customer = %customer_ref,
+                        cursor = %id,
+                        "stripe page did not advance the pagination cursor; stopping"
+                    );
+                    break;
+                }
                 (true, Some(id)) => starting_after = Some(id.to_owned()),
                 _ => break,
             }

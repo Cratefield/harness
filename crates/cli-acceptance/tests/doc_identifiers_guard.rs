@@ -90,10 +90,15 @@ impl Fixture {
     /// Runs the copied script. Returns (success, stderr).
     fn run(&self) -> (bool, String) {
         let path = self.dir.0.as_path();
-        let Output { status, stderr, .. } =
-            in_fixture(&path.join("tools/doc-identifiers.sh"), path)
-                .output()
-                .expect("script runs");
+        let mut command = in_fixture(Path::new("bash"), path);
+        // Through `bash` rather than through the executable bit: a checkout
+        // materialised by cp, an archive or a download does not carry mode
+        // 755 the way a `git checkout` does, and the loss would fail every
+        // test in this file at once with `PermissionDenied`.
+        let Output { status, stderr, .. } = command
+            .arg(path.join("tools/doc-identifiers.sh"))
+            .output()
+            .expect("script runs");
         (
             status.success(),
             String::from_utf8_lossy(&stderr).into_owned(),
