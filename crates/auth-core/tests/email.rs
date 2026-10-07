@@ -646,6 +646,31 @@ fn an_old_session_needs_the_password_back() {
     });
 }
 
+/// A `created_at` *after* now is not a recent session — it is a clock that
+/// disagrees, an imported row, a row another scheduler wrote. Comparing the
+/// elapsed seconds against the window alone lets a negative elapsed satisfy it,
+/// so an account with no password to re-enter changes its address with nothing
+/// proved. The window is a range, not a half-line.
+#[test]
+fn a_session_created_in_the_future_is_not_a_recent_one() {
+    pollster::block_on(async {
+        for kit in kits() {
+            account(&kit, "bob", "bob@example.test", false).await;
+            let future = sign_in(&kit, "bob", -2 * HOUR).await;
+
+            let response = change(&kit, &future, json!({ "new_email": "b@example.test" })).await;
+            assert_eq!(
+                response.status,
+                StatusCode::FORBIDDEN,
+                "elapsed is negative, which is not less than the window by \
+                 accident: {}",
+                response.text()
+            );
+            assert!(response.slug().ends_with("reauthentication-required"));
+        }
+    });
+}
+
 /// An address free when the link was mailed may not be by the time it is opened:
 /// taking it would swallow somebody else's account, and the refusal must be the
 /// one a bad link gets. A token of another kind is not ours to spend either.

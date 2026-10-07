@@ -306,7 +306,7 @@ pub(crate) async fn disconnect(
 }
 
 fn days_until(clock: &dyn cratefield_core::Clock, at: &str) -> Option<i64> {
-    store::parse_iso(at).map(|expiry| (expiry - clock.now()).whole_days())
+    store::parse_iso(at).map(|expiry| store::whole_days_left(expiry, clock.now()))
 }
 
 /// A fixed page for the human at the end of the redirect. No parameter from

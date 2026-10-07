@@ -106,6 +106,55 @@ async fn eight_notifies_in_one_window_become_five_mails_plus_one_summary() {
     );
 }
 
+/// The drain batch is how many *outbox rows* a pass leases — it is not a
+/// limit on the suppressed-email rows a burst may hold. A burst larger than
+/// it is read one page at a time, so the first page is summarised, its ids
+/// are cleared, and the rows nobody read are still a burst on the next tick:
+/// one burst becomes one summary per page, each counting only the page, and
+/// each with a different idempotency key so the provider cannot dedupe them.
+/// The `send` + `clear` batch is what bounds a summary to one send, and it
+/// only bounds the ids it read.
+#[pollster::test]
+async fn a_burst_larger_than_the_drain_batch_is_still_one_summary() {
+    let kit = kit_with(
+        std::sync::Arc::new(cratefield_testing::FakePush::new(
+            cratefield_testing::PushMode::DeliverOk,
+        )),
+        vec![Category::new(BOOKING).email(true)],
+        &[
+            ("NOTIFICATIONS_EMAIL_MAX_PER_WINDOW", CAP),
+            // Two outbox rows a pass: fewer than the three the burst holds.
+            ("NOTIFICATIONS_DRAIN_BATCH", "2"),
+        ],
+    );
+    set_email(&kit, "alice@example.test").await;
+    burst(&kit, 8).await;
+    assert_eq!(kit.count("notifications_email_suppressed").await, 3);
+
+    kit.clock.advance(WINDOW);
+    kit.notifier.drain(&kit.scope()).await.expect("drain");
+
+    assert_eq!(
+        kit.count("notifications_email_suppressed").await,
+        0,
+        "one summary spends the whole burst, not the page it happened to read"
+    );
+    let summary = kit.harness.mailer.last_message().expect("the summary");
+    assert_eq!(
+        summary.subject, "You have 3 new notifications",
+        "the count is the burst's, not the page's"
+    );
+
+    // The whole point of the idempotency key: a second tick is a no-op.
+    kit.clock.advance(60);
+    kit.notifier.drain(&kit.scope()).await.expect("drain");
+    assert_eq!(
+        kit.harness.mailer.sent().len(),
+        6,
+        "the second tick sends nothing, not a second copy of the same news"
+    );
+}
+
 #[pollster::test]
 async fn an_unsubscribe_that_lands_during_the_window_means_no_summary() {
     let kit = summary_kit();

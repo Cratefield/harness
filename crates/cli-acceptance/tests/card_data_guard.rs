@@ -104,9 +104,14 @@ impl Fixture {
     /// Runs the real guard against `base`. Returns (success, stderr).
     fn run_guard(&self) -> (bool, String) {
         let script = repo_root().join("tools/migration-guard.sh");
-        let mut cmd = Command::new(&script);
+        // Through `bash` rather than through the executable bit: a checkout
+        // materialised by cp, an archive or a download does not carry mode
+        // 755 the way a `git checkout` does, and the loss would fail every
+        // test in this file at once with `PermissionDenied`.
+        let mut cmd = Command::new("bash");
         clear_git_env(&mut cmd);
         let out = cmd
+            .arg(&script)
             .current_dir(self.dir.path())
             .arg("base")
             .output()

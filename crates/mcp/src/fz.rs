@@ -65,14 +65,23 @@ pub fn timeout_from_env() -> Result<Option<Duration>, String> {
 /// # Errors
 ///
 /// Anything but a whole number of seconds is `Err`, naming the variable
-/// and the value that was refused.
+/// and the value that was refused. So is a number too large to be added
+/// to an [`Instant`]: the limit becomes a deadline by being added to
+/// the current instant, and a value that cannot be added would panic
+/// on the first tool call instead of naming itself here.
 pub fn parse_timeout_secs(text: &str) -> Result<Option<Duration>, String> {
+    let refused = || {
+        format!(
+            "FZ_MCP_TIMEOUT_SECS must be a whole number of seconds (0 for no limit), not `{text}`"
+        )
+    };
     match text.trim().parse::<u64>() {
         Ok(0) => Ok(None),
-        Ok(secs) => Ok(Some(Duration::from_secs(secs))),
-        Err(_) => Err(format!(
-            "FZ_MCP_TIMEOUT_SECS must be a whole number of seconds (0 for no limit), not `{text}`"
-        )),
+        Ok(secs) => match Instant::now().checked_add(Duration::from_secs(secs)) {
+            Some(_) => Ok(Some(Duration::from_secs(secs))),
+            None => Err(refused()),
+        },
+        Err(_) => Err(refused()),
     }
 }
 
@@ -319,8 +328,14 @@ impl FzRunner for ProcessRunner {
         let stderr = child.stderr.take().map(drain_stream);
 
         // Poll instead of blocking on `wait`, so the deadline is ours
-        // to enforce rather than the child's to outlive.
-        let deadline = self.timeout.map(|limit| Instant::now() + limit);
+        // to enforce rather than the child's to outlive. `checked_add`
+        // rather than `+`: a limit too large for the platform's
+        // `Instant` would panic here and take the server down with it,
+        // and a deadline that far out is no deadline at all, which is
+        // exactly what the overflow means.
+        let deadline = self
+            .timeout
+            .and_then(|limit| Instant::now().checked_add(limit));
         let mut expired = false;
         let status = loop {
             match child.try_wait() {

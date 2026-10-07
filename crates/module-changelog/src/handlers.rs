@@ -139,9 +139,17 @@ async fn list_releases(
     let offset = (page - 1).saturating_mul(per_page).min(i64::MAX as u64);
 
     // The fingerprint is everything the answer depends on, path and query
-    // alike, so a cache hit is the same answer a miss would have built.
+    // alike, so a cache hit is the same answer a miss would have built —
+    // and that includes the resolved source and locale. `resolved()`
+    // re-reads `CHANGELOG_*` per request, so a deployment that repoints
+    // `CHANGELOG_REPO` is asking about different rows (filed under a
+    // different `source_id`) and reporting a different `source` block;
+    // the same is true of the locale `rendering` reports. Neither moves
+    // the generation on its own, which is exactly why they belong here.
     let fingerprint = format!(
-        "list:{page}:{per_page}:{}:{}",
+        "list:{}:{page}:{per_page}:{}:{}:{}",
+        settings.source_id(),
+        settings.locale,
         query.locale.as_deref().unwrap_or(""),
         query.style.as_deref().unwrap_or(""),
     );
@@ -196,7 +204,13 @@ async fn read_release(
     Path(version): Path<String>,
 ) -> Result<Response, Problem> {
     let settings = state.resolved();
-    let fingerprint = format!("release:{version}");
+    // As `list_releases`: everything the body is built from, and that is
+    // the row under `source_id()` plus the locale `rendering` reports.
+    let fingerprint = format!(
+        "release:{}:{}:{version}",
+        settings.source_id(),
+        settings.locale,
+    );
     let cache = ReadCache::of(&state.ctx, settings.cache_ttl_secs);
     if let Some(body) = cache.get(&fingerprint).await {
         return Ok(json_body(body));

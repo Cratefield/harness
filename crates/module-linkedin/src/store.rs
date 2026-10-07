@@ -66,6 +66,18 @@ pub(crate) fn iso_in(clock: &dyn Clock, seconds: i64) -> String {
     iso(clock.now().saturating_add(time::Duration::seconds(seconds)))
 }
 
+/// Whole days from `now` until `expiry`, **rounded down**.
+///
+/// `time`'s `whole_days` truncates toward zero, so a credential an hour past
+/// its expiry counts as `0` days left — the same answer one with 23 hours
+/// still to run gives. `0` reads as "valid today", and this is the one number
+/// an operator reads to decide whether a connection needs attention, so the
+/// floor is what makes "already expired" distinguishable from "expires
+/// today". `div_euclid` rounds toward negative infinity, which is the floor.
+pub(crate) fn whole_days_left(expiry: OffsetDateTime, now: OffsetDateTime) -> i64 {
+    (expiry - now).whole_seconds().div_euclid(86_400)
+}
+
 /// The UTC day a budget row is keyed by.
 pub(crate) fn day_of(clock: &dyn Clock) -> String {
     let now = clock.now();

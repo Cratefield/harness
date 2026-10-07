@@ -522,10 +522,21 @@ impl Standing {
     }
 
     /// The date the data key is next due, if its age is known.
+    ///
+    /// Every step here is fallible and none of it is allowed to take
+    /// the page down. `key_max_age_days` is a raw `i64` off a policy
+    /// row this screen deliberately honours out of range
+    /// ([`policy_for`]), `Duration::days` multiplies before it checks,
+    /// and `OffsetDateTime + Duration` panics once the sum leaves
+    /// `Date`'s range — around 2.7 million years, which a `u32` config
+    /// value reaches. A due date the arithmetic cannot name is one this
+    /// page does not claim; `None` drops the sentence, and the rest of
+    /// the card still renders.
     fn key_due_date(&self) -> Option<String> {
         let rotated = parse_stamp(self.key_rotated_at.as_deref()?)?;
+        let seconds = self.policy.key_max_age_days.checked_mul(86_400)?;
         Some(date_of(
-            rotated + time::Duration::days(self.policy.key_max_age_days),
+            rotated.checked_add(time::Duration::seconds(seconds))?,
         ))
     }
 }
@@ -3939,5 +3950,43 @@ mod tests {
             ("DASHBOARD_SECRET_MAX_AGE_DAYS", "200"),
         ]);
         assert!(module.validate_config(&ok).is_ok());
+    }
+
+    /// A standing whose policy number falls outside what a date can
+    /// hold. `policy_for` honours such a row deliberately ("a row whose
+    /// numbers fell outside what this build accepts is honoured anyway"),
+    /// so the page has to render it rather than panic: `Duration::days`
+    /// overflows at roughly 1.07e14 days, and `OffsetDateTime +
+    /// Duration` leaves `Date`'s range at about 2.7 million years —
+    /// which `DASHBOARD_KEY_MAX_AGE_DAYS`, read as a `u32`, can name
+    /// with room to spare.
+    #[test]
+    fn a_policy_row_beyond_the_date_range_renders_without_panicking() {
+        let standing = |days| Standing {
+            policy: Policy {
+                key_max_age_days: days,
+                secret_max_age_days: days,
+                edited: None,
+            },
+            now: None,
+            key_rotated_at: Some("2026-01-15T00:00:00Z".to_owned()),
+            key_age_days: Some(0),
+            key_due: false,
+            overdue: 0,
+        };
+
+        // In range: the ordinary case still computes the ordinary date.
+        assert_eq!(standing(90).key_due_date().as_deref(), Some("2026-04-15"));
+
+        // Out of range: the page says nothing rather than a wrong date,
+        // and — the part that was a panic — it says nothing by returning,
+        // not by unwinding.
+        for days in [i64::MAX, i64::MIN, u32::MAX.into(), 3_000_000] {
+            assert_eq!(
+                standing(days).key_due_date(),
+                None,
+                "key_max_age_days = {days} must not name a date"
+            );
+        }
     }
 }
