@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.1](https://github.com/Cratefield/harness/compare/cratefield-adapter-polar-v0.2.0...cratefield-adapter-polar-v0.2.1) - 2026-10-07
+
+### Fixed
+
+- thirteen error-handling defects, plus make the guard-script tests survive a non-executable checkout ([#828](https://github.com/Cratefield/harness/pull/828))
+
 ## [0.2.0](https://github.com/Cratefield/harness/compare/cratefield-adapter-polar-v0.1.0...cratefield-adapter-polar-v0.2.0) - 2026-10-04
 
 ### Changed

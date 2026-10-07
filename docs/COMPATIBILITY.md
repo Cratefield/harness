@@ -49,12 +49,12 @@ compatibility-doc` and checked in CI for drift. Do not edit by hand.
 | `cratefield-adapter-jira` | 0.2.1 | 1 | `^0.8` — `>=0.8.0, <0.9.0` |
 | `cratefield-adapter-openai-compatible` | 0.2.1 | 1 | `^0.8` — `>=0.8.0, <0.9.0` |
 | `cratefield-adapter-owlpost` | 0.2.1 | 1 | `^0.8` — `>=0.8.0, <0.9.0` |
-| `cratefield-adapter-polar` | 0.2.0 | 1 | `^0.8` — `>=0.8.0, <0.9.0` |
+| `cratefield-adapter-polar` | 0.2.1 | 1 | `^0.8` — `>=0.8.0, <0.9.0` |
 | `cratefield-adapter-postgres` | 0.3.1 | 1 | `^0.8` — `>=0.8.0, <0.9.0` |
 | `cratefield-adapter-resend` | 0.4.1 | 1 | `^0.8` — `>=0.8.0, <0.9.0` |
 | `cratefield-adapter-sqlite` | 0.3.0 | 1 | `^0.8` — `>=0.8.0, <0.9.0` |
 | `cratefield-adapter-sqlite-wasm` *(not published)* | 0.1.1 | 1 | `^0.8` — `>=0.8.0, <0.9.0` |
-| `cratefield-adapter-stripe` | 0.3.1 | 1 | `^0.8` — `>=0.8.0, <0.9.0` |
+| `cratefield-adapter-stripe` | 0.3.2 | 1 | `^0.8` — `>=0.8.0, <0.9.0` |
 | `cratefield-adapter-turnstile` | 0.3.1 | 1 | `^0.8` — `>=0.8.0, <0.9.0` |
 | `cratefield-adapter-typesafe` | 0.3.0 | 1 | `^0.8` — `>=0.8.0, <0.9.0` |
 | `cratefield-adapter-webhook-tracker` | 0.3.0 | 1 | `^0.8` — `>=0.8.0, <0.9.0` |
@@ -80,9 +80,9 @@ compatibility-doc` and checked in CI for drift. Do not edit by hand.
 | `cratefield-introspect` | 0.3.0 | 1 | `^0.8` — `>=0.8.0, <0.9.0` |
 | `cratefield-mail-previews` *(not published)* | 0.1.1 | 1 | `^0.8` — `>=0.8.0, <0.9.0` |
 | `cratefield-mail-templates` | 0.1.1 | 1 | `^0.8` — `>=0.8.0, <0.9.0` |
-| `cratefield-module-changelog` | 0.3.0 | 1 | `^0.8` — `>=0.8.0, <0.9.0` |
+| `cratefield-module-changelog` | 0.3.1 | 1 | `^0.8` — `>=0.8.0, <0.9.0` |
 | `cratefield-module-cms` | 0.3.0 | 1 | `^0.8` — `>=0.8.0, <0.9.0` |
-| `cratefield-module-connections` | 0.2.0 | 1 | `^0.8` — `>=0.8.0, <0.9.0` |
+| `cratefield-module-connections` | 0.2.1 | 1 | `^0.8` — `>=0.8.0, <0.9.0` |
 | `cratefield-module-crm` | 0.1.0 | 1 | `^0.8` — `>=0.8.0, <0.9.0` |
 | `cratefield-module-device-auth` | 0.3.0 | 1 | `^0.8` — `>=0.8.0, <0.9.0` |
 | `cratefield-module-email-signup` | 0.4.0 | 1 | `^0.8` — `>=0.8.0, <0.9.0` |

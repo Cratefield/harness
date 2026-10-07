@@ -6,6 +6,12 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.8.3](https://github.com/Cratefield/harness/compare/cratefield-core-v0.8.2...cratefield-core-v0.8.3) - 2026-10-07
+
+### Fixed
+
+- thirteen error-handling defects, plus make the guard-script tests survive a non-executable checkout ([#828](https://github.com/Cratefield/harness/pull/828))
+
 ## [0.8.2](https://github.com/Cratefield/harness/compare/cratefield-core-v0.8.1...cratefield-core-v0.8.2) - 2026-10-07
 
 ### Fixed
