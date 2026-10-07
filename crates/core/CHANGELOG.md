@@ -6,6 +6,12 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.8.4](https://github.com/Cratefield/harness/compare/cratefield-core-v0.8.3...cratefield-core-v0.8.4) - 2026-10-07
+
+### Other
+
+- charge amounts, currency exponents and ledger entry types ([#832](https://github.com/Cratefield/harness/pull/832))
+
 ## [0.8.3](https://github.com/Cratefield/harness/compare/cratefield-core-v0.8.2...cratefield-core-v0.8.3) - 2026-10-07
 
 ### Fixed
