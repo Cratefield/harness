@@ -45,12 +45,12 @@ compatibility-doc` and checked in CI for drift. Do not edit by hand.
 | `cratefield-adapter-colonizer` | 0.1.0 | 1 | `^0.8` — `>=0.8.0, <0.9.0` |
 | `cratefield-adapter-fcm` | 0.3.0 | 1 | `^0.8` — `>=0.8.0, <0.9.0` |
 | `cratefield-adapter-github-app` | 0.2.0 | 1 | `^0.8` — `>=0.8.0, <0.9.0` |
-| `cratefield-adapter-github-issues` | 0.3.0 | 1 | `^0.8` — `>=0.8.0, <0.9.0` |
-| `cratefield-adapter-jira` | 0.2.0 | 1 | `^0.8` — `>=0.8.0, <0.9.0` |
+| `cratefield-adapter-github-issues` | 0.3.1 | 1 | `^0.8` — `>=0.8.0, <0.9.0` |
+| `cratefield-adapter-jira` | 0.2.1 | 1 | `^0.8` — `>=0.8.0, <0.9.0` |
 | `cratefield-adapter-openai-compatible` | 0.2.1 | 1 | `^0.8` — `>=0.8.0, <0.9.0` |
 | `cratefield-adapter-owlpost` | 0.2.1 | 1 | `^0.8` — `>=0.8.0, <0.9.0` |
 | `cratefield-adapter-polar` | 0.2.0 | 1 | `^0.8` — `>=0.8.0, <0.9.0` |
-| `cratefield-adapter-postgres` | 0.3.0 | 1 | `^0.8` — `>=0.8.0, <0.9.0` |
+| `cratefield-adapter-postgres` | 0.3.1 | 1 | `^0.8` — `>=0.8.0, <0.9.0` |
 | `cratefield-adapter-resend` | 0.4.1 | 1 | `^0.8` — `>=0.8.0, <0.9.0` |
 | `cratefield-adapter-sqlite` | 0.3.0 | 1 | `^0.8` — `>=0.8.0, <0.9.0` |
 | `cratefield-adapter-sqlite-wasm` *(not published)* | 0.1.1 | 1 | `^0.8` — `>=0.8.0, <0.9.0` |
@@ -60,7 +60,7 @@ compatibility-doc` and checked in CI for drift. Do not edit by hand.
 | `cratefield-adapter-webhook-tracker` | 0.3.0 | 1 | `^0.8` — `>=0.8.0, <0.9.0` |
 | `cratefield-adapter-webpush` | 0.3.0 | 1 | `^0.8` — `>=0.8.0, <0.9.0` |
 | `cratefield-adapter-workers-ai` | 0.3.0 | 1 | `^0.8` — `>=0.8.0, <0.9.0` |
-| `cratefield-auth-client` | 0.3.1 | 1 | `^0.8` — `>=0.8.0, <0.9.0` |
+| `cratefield-auth-client` | 0.3.2 | 1 | `^0.8` — `>=0.8.0, <0.9.0` |
 | `cratefield-auth-core` *(not published)* | 0.1.1 | 1 | `^0.8` — `>=0.8.0, <0.9.0` |
 | `cratefield-auth-magic-link` *(not published)* | 0.1.1 | 1 | `^0.8` — `>=0.8.0, <0.9.0` |
 | `cratefield-auth-meta` *(not published)* | 0.1.1 | 1 | `^0.8` — `>=0.8.0, <0.9.0` |
@@ -91,7 +91,7 @@ compatibility-doc` and checked in CI for drift. Do not edit by hand.
 | `cratefield-module-orgs` | 0.1.1 | 1 | `^0.8` — `>=0.8.0, <0.9.0` |
 | `cratefield-module-privacy` | 0.3.1 | 1 | `^0.8` — `>=0.8.0, <0.9.0` |
 | `cratefield-module-telemetry` | 0.3.0 | 1 | `^0.8` — `>=0.8.0, <0.9.0` |
-| `cratefield-module-waitlist` | 0.4.1 | 1 | `^0.8` — `>=0.8.0, <0.9.0` |
+| `cratefield-module-waitlist` | 0.4.2 | 1 | `^0.8` — `>=0.8.0, <0.9.0` |
 | `cratefield-module-webhooks` | 0.4.0 | 1 | `^0.8` — `>=0.8.0, <0.9.0` |
 | `cratefield-oauth-client` | 0.3.0 | 1 | `^0.8` — `>=0.8.0, <0.9.0` |
 | `cratefield-provisioning` *(not published)* | 0.1.1 | 1 | `^0.8` — `>=0.8.0, <0.9.0` |
@@ -99,8 +99,8 @@ compatibility-doc` and checked in CI for drift. Do not edit by hand.
 | `cratefield-push-wiring` | 0.3.0 | 1 | `^0.8` — `>=0.8.0, <0.9.0` |
 | `cratefield-runtime-browser` *(not published)* | 0.1.1 | 1 | `^0.8` — `>=0.8.0, <0.9.0` |
 | `cratefield-runtime-browser-demo` *(not published)* | 0.1.1 | 1 | `^0.8` — `>=0.8.0, <0.9.0` |
-| `cratefield-runtime-cloudflare` | 0.4.1 | 1 | `^0.8` — `>=0.8.0, <0.9.0` |
-| `cratefield-runtime-native` | 0.4.1 | 1 | `^0.8` — `>=0.8.0, <0.9.0` |
+| `cratefield-runtime-cloudflare` | 0.4.2 | 1 | `^0.8` — `>=0.8.0, <0.9.0` |
+| `cratefield-runtime-native` | 0.4.2 | 1 | `^0.8` — `>=0.8.0, <0.9.0` |
 | `cratefield-secrets` | 0.4.0 | 1 | `^0.8` — `>=0.8.0, <0.9.0` |
 | `cratefield-tables` | 0.4.0 | 1 | `^0.8` — `>=0.8.0, <0.9.0` |
 | `cratefield-tables-api` | 0.1.0 | 1 | `^0.8` — `>=0.8.0, <0.9.0` |

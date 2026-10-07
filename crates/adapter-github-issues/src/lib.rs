@@ -19,6 +19,7 @@ use cratefield_core::{
     Clock, Credential, Destination, Filed, HttpClient, HttpError, TicketDraft, TicketState,
     TicketStatus, Tracker, TrackerError, retry_after,
 };
+use futures_util::lock::Mutex as AsyncMutex;
 use http::header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE, USER_AGENT};
 use http::{Request, StatusCode};
 use std::fmt::Write as _;
@@ -50,6 +51,19 @@ pub struct GitHubIssues {
     /// [`GitHubIssues::with_base`] overrides it for GitHub Enterprise Server
     /// and for tests pointed at a fake.
     base: String,
+    /// Held across the whole search-then-create of one [`Tracker::file`],
+    /// so two in-process callers racing on one idempotency key cannot
+    /// both observe "no such issue" and both create one. Search-before-
+    /// create alone is check-then-act: without this gate the second
+    /// caller reads the world before the first's POST lands and files a
+    /// duplicate the dedupe check cannot then undo. The same single-
+    /// flight `GithubApp` holds across its token exchange.
+    ///
+    /// It serialises *all* filings on one adapter, not just same-key
+    /// ones: a per-key table would leak an entry per key ever filed and
+    /// buy nothing a retry does not already give — the create is one
+    /// POST either way.
+    file_gate: AsyncMutex<()>,
 }
 
 impl std::fmt::Debug for GitHubIssues {
@@ -72,6 +86,7 @@ impl GitHubIssues {
             http,
             clock,
             base: DEFAULT_BASE.to_owned(),
+            file_gate: AsyncMutex::new(()),
         }
     }
 
@@ -272,6 +287,15 @@ impl Tracker for GitHubIssues {
     ) -> Result<Filed, TrackerError> {
         let (owner, repo) = repo_of(dest)?;
         let marker = idem_marker(&draft.idempotency_key);
+
+        // Held across the lookup AND the create: the gate is what makes
+        // search-before-create safe rather than merely hopeful. A second
+        // caller arriving mid-flight waits here, and by the time its
+        // lookup runs the first one's issue is on the recent-issues page
+        // the check reads. Taken after `repo_of`, so a destination this
+        // adapter does not serve is refused without queueing behind a
+        // stranger's create.
+        let _single_flight = self.file_gate.lock().await;
 
         // Search before creating. The outbox is at-least-once, so this WILL
         // be called twice for one draft; and the `?` here is the fail-closed

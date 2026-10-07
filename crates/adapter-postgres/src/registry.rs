@@ -73,6 +73,17 @@ struct Cached {
     last_used: i64,
 }
 
+/// How a pool is opened. Always [`Postgres::connect_with`] in production;
+/// a field rather than a bare call so a test can count opens and race
+/// them without a server behind them — the race this exists for is
+/// between two opens, so it is only observable if a test can perform
+/// one.
+type Open = Arc<
+    dyn Fn(String, PoolLimits) -> cratefield_core::BoxFuture<'static, Result<Postgres, DbError>>
+        + Send
+        + Sync,
+>;
+
 /// Pools per tenant, with both caps applied.
 pub struct PoolRegistry {
     dsns: Arc<dyn TenantDsns>,
@@ -80,10 +91,19 @@ pub struct PoolRegistry {
     idle: Duration,
     clock: Arc<dyn Clock>,
     total: Arc<tokio::sync::Semaphore>,
+    /// Always [`Postgres::connect_with`] outside tests.
+    open: Open,
     // Not request state (ADR 0007): deployment-scoped, outlives every
     // request, and shared by all of them.
     #[allow(clippy::disallowed_types)]
     pools: std::sync::Mutex<HashMap<String, Cached>>,
+    /// One async lock per key, held only while that key's pool is being
+    /// opened — the single-flight that stops two cold callers opening
+    /// one pool each and the second `insert` orphaning the first. A
+    /// lock is per key, not one for the registry: opening tenant A must
+    /// not hold up tenant B.
+    #[allow(clippy::disallowed_types)]
+    inflight: std::sync::Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
 }
 
 impl PoolRegistry {
@@ -118,8 +138,22 @@ impl PoolRegistry {
             idle,
             clock,
             total: Arc::new(tokio::sync::Semaphore::new(total.max(1))),
+            open: Arc::new(|dsn: String, limits: PoolLimits| {
+                Box::pin(async move { Postgres::connect_with(&dsn, limits).await })
+            }),
             pools: std::sync::Mutex::new(HashMap::new()),
+            inflight: std::sync::Mutex::new(HashMap::new()),
         }
+    }
+
+    /// A registry whose pools come from `open` instead of a real server.
+    /// Test-only: the single-flight below is only observable if a test
+    /// can count opens and race them, which needs a connect the test
+    /// controls.
+    #[cfg(test)]
+    fn with_open(mut self, open: Open) -> Self {
+        self.open = open;
+        self
     }
 
     /// How many pools are open right now. For tests and `/__health`;
@@ -197,6 +231,23 @@ impl PoolRegistry {
             return Ok(Arc::clone(&cached.db));
         }
 
+        // Cold. One opener per key, so the check above and the insert
+        // below are not a check-then-act across two awaits: without
+        // this, two callers that both missed open two pools, and the
+        // second `insert` replaced the first — closing it out from
+        // under whoever still held it, and putting one tenant on two
+        // pools for as long as the orphaned one stayed alive.
+        let flight = self.flight(key);
+        let _opening = flight.lock().await;
+
+        // Re-check under the flight: whoever held it may have opened
+        // this key while we waited, and opening a second pool for a key
+        // that now has one is the race this lock exists to stop.
+        if let Some(cached) = self.pools.lock().expect("pool lock").get_mut(key) {
+            cached.last_used = now;
+            return Ok(Arc::clone(&cached.db));
+        }
+
         // The DSN exists only inside this block, and the error it could be
         // folded into is discarded rather than formatted.
         let dsn = self
@@ -205,7 +256,7 @@ impl PoolRegistry {
             .await
             .map_err(|_| PoolError::Lookup)?
             .ok_or(PoolError::NoDsn)?;
-        let pool = Postgres::connect_with(&dsn, self.limits)
+        let pool = (self.open)(dsn.clone(), self.limits)
             .await
             .map_err(|_| PoolError::Connect)?;
         drop(dsn);
@@ -225,6 +276,25 @@ impl PoolRegistry {
             },
         );
         Ok(db)
+    }
+
+    /// The lock that serialises opens of `key`.
+    ///
+    /// Entries are swept on every open, keeping only a key somebody is
+    /// still opening: a registry outlives its tenants and must not
+    /// accumulate a lock for every tenant it ever served. Sweeping on
+    /// `Arc::strong_count` is what makes that safe — the map holds one
+    /// reference, so a count of one means nobody is opening it or
+    /// waiting to, while a caller still holding a clone keeps its lock
+    /// alive and keeps waiting on it.
+    fn flight(&self, key: &str) -> Arc<tokio::sync::Mutex<()>> {
+        let mut inflight = self.inflight.lock().expect("pool lock");
+        inflight.retain(|_, flight| Arc::strong_count(flight) > 1);
+        Arc::clone(
+            inflight
+                .entry(key.to_owned())
+                .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(()))),
+        )
     }
 }
 
@@ -546,5 +616,82 @@ mod tests {
         );
         assert_eq!(registry.open_pools(), 0, "and opened nothing");
         temp.finish().await;
+    }
+
+    /// A `Postgres` over a pool that has not connected.
+    ///
+    /// `connect_lazy` is what makes the race testable without a
+    /// server: it parses the URL and opens nothing, so a test can
+    /// exercise which pool was *handed out* without one being open.
+    fn lazy_postgres(limits: PoolLimits) -> Postgres {
+        Postgres {
+            pool: sqlx::postgres::PgPoolOptions::new()
+                .max_connections(limits.max_connections)
+                .connect_lazy("postgres://unused@127.0.0.1:1/unused")
+                .expect("a lazy pool needs no server"),
+        }
+    }
+
+    /// Two callers racing one cold key open one pool between them.
+    ///
+    /// "A key has *a* pool" is the registry's whole promise, and two
+    /// opens break it: one tenant on two pools, the first orphaned by
+    /// the second's `insert` while whoever held it is still querying.
+    ///
+    /// Counted at the connect rather than observed on a server, so the
+    /// assertion is on the thing the race is about rather than on a
+    /// symptom downstream of it.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn two_callers_racing_one_cold_key_open_one_pool() {
+        let opens = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        // Holds every open until the test releases it, so the second
+        // caller reaches the map's insert before the first one has.
+        let gate = Arc::new(tokio::sync::Semaphore::new(0));
+        let counted = Arc::clone(&opens);
+        let held = Arc::clone(&gate);
+
+        let dsns = Dsns::new("postgres://unused/unused", &["a"]);
+        let registry = Arc::new(
+            PoolRegistry::new(Arc::clone(&dsns) as Arc<dyn TenantDsns>, StepClock::new())
+                .with_open(Arc::new(move |_dsn: String, limits: PoolLimits| {
+                    let counted = Arc::clone(&counted);
+                    let held = Arc::clone(&held);
+                    Box::pin(async move {
+                        counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                        let _permit = held.acquire().await.expect("gate is open");
+                        Ok(lazy_postgres(limits))
+                    })
+                })),
+        );
+
+        let mut racers: Vec<_> = (0..2)
+            .map(|_| {
+                let registry = Arc::clone(&registry);
+                tokio::spawn(async move { registry.pool_for("a").await })
+            })
+            .collect();
+
+        // Let both callers run as far as they can before releasing.
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        gate.add_permits(2);
+
+        let first = racers.remove(0).await.expect("racer").expect("a pool");
+        let second = racers.remove(0).await.expect("racer").expect("a pool");
+
+        assert_eq!(
+            opens.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "one key, one pool — a second open is a second pool for one tenant"
+        );
+        assert!(
+            Arc::ptr_eq(&first, &second),
+            "and both callers get that one pool, not one of two"
+        );
+        assert_eq!(registry.open_pools(), 1);
+        assert_eq!(
+            dsns.lookups(),
+            vec!["a".to_owned()],
+            "and its DSN is read once, not once per racing caller"
+        );
     }
 }

@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.1](https://github.com/Cratefield/harness/compare/cratefield-adapter-jira-v0.2.0...cratefield-adapter-jira-v0.2.1) - 2026-10-07
+
+### Fixed
+
+- close eight concurrency races across the pool cache, auth caches, realtime rooms, waitlist confirms and tracker adapters ([#823](https://github.com/Cratefield/harness/pull/823))
+
 ## [0.2.0](https://github.com/Cratefield/harness/compare/cratefield-adapter-jira-v0.1.0...cratefield-adapter-jira-v0.2.0) - 2026-10-04
 
 ### Changed

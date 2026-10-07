@@ -771,11 +771,7 @@ fn render_screens(doc: &SurfaceDocument, venture: &Venture) -> String {
              screens at all. Every module it carries is API-only.</p>",
         );
     }
-    let base = if doc.venture.public_url.is_empty() {
-        format!("https://{}", venture.subdomain)
-    } else {
-        doc.venture.public_url.trim_end_matches('/').to_owned()
-    };
+    let base = surface_base(&doc.venture.public_url, &venture.subdomain);
 
     let mut out = String::new();
     for module in &doc.modules {
@@ -803,6 +799,30 @@ fn render_screens(doc: &SurfaceDocument, venture: &Venture) -> String {
          and does not pretend to have.</p>",
     );
     out
+}
+
+/// Where the screen links a venture's UI actually point.
+///
+/// `public_url` comes out of the venture's own `/__surface` document, so it
+/// is tenant-controlled, and it lands in `href="{base}/ui/..."`. HTML
+/// escaping does not touch URL schemes: a `javascript:alert(1);/*` payload
+/// survives `escape()` intact and executes on click. So the declared URL is
+/// honoured only when it is an absolute http(s) URL — the same check the
+/// auth-core issuer takes at tokens.rs — and anything else (including the
+/// empty document) falls back to the subdomain the control plane already
+/// knows the venture by, which cannot be attacker-chosen.
+fn surface_base(public_url: &str, subdomain: &str) -> String {
+    let declared = public_url.trim();
+    // The scheme must be one of ours and there must be something after it:
+    // `https://` on its own is not a base. Comparison is case-sensitive on
+    // purpose — failing closed costs a fallback, not a hole.
+    let usable = (declared.starts_with("https://") && declared.len() > "https://".len())
+        || (declared.starts_with("http://") && declared.len() > "http://".len());
+    if usable {
+        declared.trim_end_matches('/').to_owned()
+    } else {
+        format!("https://{subdomain}")
+    }
 }
 
 #[allow(clippy::format_push_string)] // the house idiom for HTML building
@@ -1838,7 +1858,15 @@ fn health_dot(health: &HealthVerdict) -> &'static str {
 }
 
 /// The dashboard frame: the left navigation and the screen beside it.
+///
+/// The crumb is escaped here, exactly as `card()` escapes its title: every
+/// caller passes plain text (a literal, a count, or a stored name such as
+/// `venture.slug`), never pre-built markup. Anything that genuinely is
+/// markup belongs in `body`, which is the raw half of this pair — `nav_html`
+/// beside it. Escaping centrally is what keeps a slug that somehow picked
+/// up a `<` from becoming an element on every screen that names it.
 pub(crate) fn frame(nav_html: &str, crumb: &str, body: &str) -> String {
+    let crumb = escape(crumb);
     format!(
         "<div class=\"dash\"><div class=\"dash__body\">{nav_html}         <div class=\"dash__main\"><p class=\"dash__crumb\">{crumb}</p>{body}</div>         </div></div>"
     )
@@ -1872,6 +1900,79 @@ mod tests {
     /// The kit's fixed clock reads `1_800_000_000`; mint sessions "now" so
     /// they are live, not expired.
     const NOW: u64 = 1_800_000_000;
+
+    // ---- The frame escapes its crumb; the surface base refuses a
+    // non-http scheme. Both are regressions. ----
+
+    #[test]
+    fn frame_escapes_its_crumb() {
+        // A crumb is plain text by contract: every call site passes a
+        // literal, a count or a stored name. One that arrives carrying
+        // markup must not become an element.
+        let rendered = frame("<nav></nav>", "<img src=x onerror=alert(1)>", "<p>body</p>");
+        assert!(
+            !rendered.contains("<img"),
+            "a raw <img reached the page: {rendered}"
+        );
+        assert!(
+            rendered.contains("&lt;img src=x onerror=alert(1)&gt;"),
+            "the crumb should render as text: {rendered}"
+        );
+        // And the raw halves still are raw.
+        assert!(rendered.contains("<nav></nav>"));
+        assert!(rendered.contains("<p>body</p>"));
+    }
+
+    #[test]
+    fn the_surface_base_takes_only_an_http_url() {
+        assert_eq!(
+            surface_base("https://acme.example.com/", "acme.sub.example"),
+            "https://acme.example.com",
+        );
+        assert_eq!(
+            surface_base("http://localhost:8787", "acme.sub.example"),
+            "http://localhost:8787",
+        );
+        // Empty: what a venture that has declared no public URL gets.
+        assert_eq!(
+            surface_base("", "acme.sub.example"),
+            "https://acme.sub.example"
+        );
+        // The reproduced payload. `escape()` does not touch a URL scheme,
+        // so this reached the href verbatim and ran on click.
+        for hostile in [
+            "javascript:alert(1);/*",
+            "JavaScript:alert(1)",
+            " javascript:alert(1)",
+            "data:text/html,<script>alert(1)</script>",
+            "vbscript:msgbox(1)",
+            "https://",
+            "//evil.example.com",
+        ] {
+            assert_eq!(
+                surface_base(hostile, "acme.sub.example"),
+                "https://acme.sub.example",
+                "{hostile:?} must not become a base"
+            );
+        }
+    }
+
+    #[test]
+    fn a_rendered_screen_link_never_carries_a_javascript_scheme() {
+        // The base reaches `href="{base}/ui/..."`; this is the whole
+        // reason `surface_base` exists.
+        let base = surface_base("javascript:alert(1);/*", "acme.sub.example");
+        assert!(base.starts_with("https://acme.sub.example"));
+        let surface = Surface {
+            views: vec![View::Status {
+                action: "health".to_owned(),
+            }],
+            actions: Vec::new(),
+        };
+        let rows = render_module_screens(&base, "cms", &surface);
+        assert!(!rows.contains("javascript:"));
+        assert!(rows.contains("https://acme.sub.example/ui/cms/health"));
+    }
 
     struct Reply {
         status: StatusCode,

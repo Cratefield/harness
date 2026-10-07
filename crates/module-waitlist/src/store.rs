@@ -329,11 +329,22 @@ pub(crate) async fn confirm_entry(
     }
     stmts.push(Statement::render(&flip));
     db.batch_atomic(&stmts).await?;
-    // The batch reports no per-statement counts; the row's state is the
-    // truth for whether this call flipped anything.
+    // The batch reports no per-statement counts, so the answer has to be
+    // read back — but the row's *state* is not an answer, because the
+    // state a racer observes may be the winner's. Two confirms of one
+    // link both find a positioned row, so "does it hold a position"
+    // answers `true` twice and the loser sends a second "you are on the
+    // list" mail for the one place the person holds.
+    //
+    // The discriminator is the `referral_code` this call tried to write:
+    // the flip stamps it and only the flip does, so it is present exactly
+    // when this batch is the one that confirmed the entry. It is safe as
+    // the marker because `handlers::referral_code` mints a fresh
+    // ULID-derived code per attempt, and `now` is not — it is truncated
+    // to the second, so two racers routinely share it.
     Ok(find_by_id(db, &row.id)
         .await?
-        .is_some_and(|fresh| fresh.position.is_some()))
+        .is_some_and(|fresh| fresh.referral_code.as_deref() == Some(referral_code)))
 }
 
 pub(crate) async fn list_for_export(
@@ -441,6 +452,86 @@ mod tests {
             .and_then(|row| row.get::<i64>("referrals"))
             .expect("referrals");
         assert_eq!(referrals, 1, "one referral, one credit");
+    }
+
+    /// Two confirms of ONE entry — a link scanner racing the reader, or a
+    /// browser prefetching the `see_other` target while the click lands —
+    /// must report `true` exactly once. The guard that keeps them from
+    /// both flipping is the flip's own `status = pending AND generation`
+    /// predicate, which is what makes the batch atomic; but the batch
+    /// reports no counts, so the answer comes from a read taken after it
+    /// commits. Reading the row's *state* answers `true` twice — the
+    /// loser reads the winner's position — and the caller mails a second
+    /// "you are on the list" for the one place the person holds. The
+    /// read must discriminate on something only the winning batch wrote.
+    #[test]
+    fn a_replayed_or_concurrent_confirm_reports_flipped_once() {
+        use cratefield_core::Module;
+        use std::sync::{Arc, Barrier};
+
+        let module = crate::Waitlist::new().products(["kontinuum"]);
+        let db = cratefield_adapter_sqlite::SqliteDatabase::in_memory().expect("db");
+        db.apply_migrations(module.name(), module.migrations().sqlite)
+            .expect("migrate");
+        pollster::block_on(db.execute(&Statement::with_values(
+            "INSERT INTO waitlist_entries \
+             (id, email, email_normalized, product, status, referrals, created_at) \
+             VALUES ('e1', 'a@b.test', 'a@b.test', 'kontinuum', 'pending', 0, \
+                     '2026-01-01T00:00:00Z')",
+            vec![],
+        )))
+        .expect("insert");
+
+        let row = pollster::block_on(find_by_id(&db, "e1"))
+            .expect("query")
+            .expect("row");
+
+        // Concurrent: both batches carry the same generation guard, and
+        // each mints its own referral code, so the codes tell the winner
+        // apart from the loser after the fact.
+        let db = Arc::new(db);
+        let gate = Arc::new(Barrier::new(2));
+        let racers: Vec<_> = ["CODEAAAA", "CODEBBBB"]
+            .into_iter()
+            .map(|code| {
+                let db = Arc::clone(&db);
+                let gate = Arc::clone(&gate);
+                let row = row.clone();
+                std::thread::spawn(move || {
+                    gate.wait();
+                    pollster::block_on(confirm_entry(
+                        &*db,
+                        &row,
+                        row.generation,
+                        "2026-01-01T00:00:01Z",
+                        code,
+                    ))
+                    .expect("confirm")
+                })
+            })
+            .collect();
+        let flipped: Vec<bool> = racers
+            .into_iter()
+            .map(|racer| racer.join().expect("confirm thread"))
+            .collect();
+        assert_eq!(
+            flipped.iter().filter(|won| **won).count(),
+            1,
+            "exactly one confirm of one link reports a flip, not both: {flipped:?}"
+        );
+
+        // Replayed: the same call again, on its own, is the same shape
+        // with no concurrency at all — and the entry already holds a
+        // position, so a state-based read would answer `true` here too.
+        let replay = pollster::block_on(confirm_entry(
+            &*db,
+            &row,
+            row.generation,
+            "2026-01-01T00:00:02Z",
+            "CODECCCC",
+        ))
+        .expect("replay");
+        assert!(!replay, "a replayed confirm flips nothing");
     }
 
     /// Issue #707: a database that confirmed entries before migration

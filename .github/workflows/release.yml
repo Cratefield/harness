@@ -14,6 +14,13 @@
 #   crates.io yet, in dependency order, and tags
 #   `<crate>-v<version>`.
 #
+# crates.io refuses trusted publishing to a `workflow_run` run ("Trusted
+# Publishing does not support the `workflow_run` event trigger"), so the
+# automatic run never publishes itself: it starts a `workflow_dispatch`
+# run of this workflow for the exact commit CI passed, and that run
+# publishes. A `GITHUB_TOKEN`-created `workflow_dispatch` is one of the
+# events GitHub does start a run for.
+#
 # Two human prerequisites, each with its own switch so an unfinished
 # setup leaves `main` green with an annotation rather than red:
 #
@@ -55,6 +62,10 @@ on:
         description: "Add --dry-run to the release command"
         type: boolean
         default: true
+      sha:
+        description: "Commit to release (empty: the branch head). Set by the automatic hand-off."
+        type: string
+        default: ""
 
 env:
   CARGO_TERM_COLOR: always
@@ -73,6 +84,7 @@ jobs:
       contents: write # release PR commits, git tags, GitHub releases
       pull-requests: write # open and update the release PR
       id-token: write # crates.io trusted publishing (OIDC)
+      actions: write # hand publishing to a workflow_dispatch run (see the top)
     env:
       # `secrets` is not a permitted context in a step `if:` — GitHub
       # rejects the whole workflow with "Unrecognized named-value:
@@ -87,7 +99,7 @@ jobs:
           # Under `workflow_run` the default ref is the branch head, which can
           # already have moved past the commit CI verified. Release the commit
           # that passed, not whatever is newest.
-          ref: ${{ github.event.workflow_run.head_sha || github.ref }}
+          ref: ${{ github.event.workflow_run.head_sha || inputs.sha || github.ref }}
       # Checking out a SHA leaves a detached HEAD, and release-plz then dies
       # with "cannot determine current branch". Put the checkout on its
       # branch at that exact commit, tracking the remote branch, so the
@@ -125,8 +137,21 @@ jobs:
       - name: Every crate this round would publish exists on crates.io
         if: vars.CRATES_IO_READY == 'true'
         run: tools/release-preflight.sh
+      # Under `workflow_run` crates.io will not issue a trusted-publishing
+      # token, so the automatic run hands the commit to a dispatched run,
+      # which publishes. Values reach gh through the environment only.
+      - name: Hand publishing to a workflow_dispatch run
+        if: vars.CRATES_IO_READY == 'true' && github.event_name == 'workflow_run'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BRANCH: ${{ github.event.workflow_run.head_branch }}
+          SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          gh workflow run release.yml --repo "$GITHUB_REPOSITORY" --ref "$BRANCH" \
+            -f dry_run=false -f sha="$SHA"
+          echo "::notice title=Publishing handed off::A workflow_dispatch run of Release publishes $SHA."
       - name: Publish crates and tag releases (no-op until the release PR merges)
-        if: vars.CRATES_IO_READY == 'true'
+        if: vars.CRATES_IO_READY == 'true' && github.event_name == 'workflow_dispatch'
         uses: release-plz/action@v0.5.133
         with:
           command: release
@@ -178,5 +203,6 @@ jobs:
     if: >-
       needs.release-plz.result == 'success' &&
       vars.CRATES_IO_READY == 'true' &&
+      github.event_name == 'workflow_dispatch' &&
       !inputs.dry_run
     uses: ./.github/workflows/crates-io-resolve.yml

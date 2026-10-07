@@ -18,12 +18,17 @@
 use bytes::Bytes;
 use cratefield_core::{Clock, HttpClient, HttpError, retry_after};
 use cratefield_oauth_client::{OAuthClient, ProviderConfig};
-use http::{Method, Request, Response, StatusCode, header};
+use http::{Method, Request, Response, StatusCode, Uri, header};
 use serde_json::Value;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 
 pub(crate) const API_HOST: &str = "https://api.linkedin.com";
+/// The host LinkedIn's `initializeUpload` returns its `uploadUrl` on — the
+/// "media upload host" of the table in the module docs. Distinct from
+/// `API_HOST` by design, not by accident: the upload is a `PUT` to `www`
+/// with the bearer and none of the Rest.li headers.
+pub(crate) const MEDIA_UPLOAD_HOST: &str = "https://www.linkedin.com";
 pub(crate) const OAUTH_TOKEN_URL: &str = "https://www.linkedin.com/oauth/v2/accessToken";
 pub(crate) const OAUTH_AUTHORIZE_URL: &str = "https://www.linkedin.com/oauth/v2/authorization";
 const RESTLI_PROTOCOL: &str = "2.0.0";
@@ -530,6 +535,14 @@ impl<'a> Client<'a> {
         content_type: &str,
         bytes: Bytes,
     ) -> Result<(), ApiError> {
+        // The URL is whatever the response body said, so it is checked
+        // before the token is attached: a body naming another host must
+        // not turn this into a credential leak.
+        if !same_origin(MEDIA_UPLOAD_HOST, upload_url) {
+            return Err(ApiError::Decode(format!(
+                "uploadUrl is not on {MEDIA_UPLOAD_HOST}: {upload_url}"
+            )));
+        }
         let mut builder = Request::builder()
             .method(Method::PUT)
             .uri(upload_url)
@@ -737,6 +750,28 @@ pub(crate) fn authorize_url(client_id: &str, redirect_uri: &str, state: &str) ->
         state,
         None,
     )
+}
+
+/// Whether `url` names the same origin — scheme, host and port — as
+/// `api_base`. The media `uploadUrl` is followed only within that origin,
+/// because it is fetched with a credential in `Authorization`.
+fn same_origin(api_base: &str, url: &str) -> bool {
+    match (api_base.parse::<Uri>(), url.parse::<Uri>()) {
+        (Ok(base), Ok(target)) => origin(&base).is_some() && origin(&base) == origin(&target),
+        _ => false,
+    }
+}
+
+/// A URI's `(scheme, host, port)` with the default port filled in, or `None`
+/// when it is not an absolute `http`/`https` URL.
+fn origin(uri: &Uri) -> Option<(&str, &str, u16)> {
+    let scheme = uri.scheme_str()?;
+    let default_port = match scheme {
+        "https" => 443,
+        "http" => 80,
+        _ => return None,
+    };
+    Some((scheme, uri.host()?, uri.port_u16().unwrap_or(default_port)))
 }
 
 #[cfg(test)]

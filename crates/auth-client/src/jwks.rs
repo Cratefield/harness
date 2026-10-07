@@ -11,6 +11,7 @@ use std::sync::{Arc, RwLock};
 use base64ct::{Base64UrlUnpadded, Encoding};
 use bytes::Bytes;
 use cratefield_core::{Clock, HttpClient};
+use futures_util::lock::Mutex;
 use p256::ecdsa::VerifyingKey;
 use serde::Deserialize;
 
@@ -67,6 +68,16 @@ pub struct AuthClient {
     /// lint bans `Mutex` as shared mutable state (ADR 0007). This is
     /// wiring state, not request state.
     cache: RwLock<JwksCache>,
+    /// Held across a fetch, so concurrent verifications take turns rather
+    /// than each deciding to refetch. A cold cache, or the instant a TTL
+    /// lapses under load, otherwise sends one JWKS request per waiting
+    /// verification — and lets a slow fetch that started earlier land
+    /// after a faster one and overwrite the newer key set.
+    ///
+    /// An async mutex, and not a `std::sync::Mutex` held across the
+    /// `await`: this crate is wasm-safe (ADR 0200), where the standard
+    /// mutex has no thread primitives to block on.
+    flight: Mutex<()>,
 }
 
 impl AuthClient {
@@ -89,6 +100,7 @@ impl AuthClient {
             jwks_uri,
             client_id: client_id.into(),
             cache: RwLock::new(JwksCache::default()),
+            flight: Mutex::new(()),
         }
     }
 
@@ -140,13 +152,36 @@ impl AuthClient {
     /// Fetches the key set. A failure leaves the previous keys in place:
     /// a momentarily unreachable auth service must not invalidate every
     /// session in a running app.
+    ///
+    /// One fetch at a time, and the freshness question is asked again
+    /// *after* taking the flight lock rather than only before it. A caller
+    /// that queued behind an in-flight refetch therefore finds the cache
+    /// fresh and returns without a second request, and — the half that
+    /// matters for rotation — a fetch that started earlier can no longer
+    /// land after a newer one and put the retired key set back.
+    ///
+    /// A forced refresh still goes ahead even when the cache is fresh:
+    /// that is the whole point of it, and the throttle below is what keeps
+    /// it from becoming one request per verification.
     async fn refresh(&self, now: i64, forced: bool) {
-        if forced {
-            let mut cache = self.cache.write().expect("jwks cache uncontended");
-            if !cache.may_force(now) {
+        let _flight = self.flight.lock().await;
+        // The guards are scoped: an `RwLock` guard must not be live across
+        // the `await` below, because the future this sits in has to be
+        // `Send` for axum's extractors.
+        {
+            let cache = self.cache.read().expect("jwks cache uncontended");
+            if !forced && cache.is_fresh(now) {
                 return;
             }
-            cache.last_forced = Some(now);
+            if forced && !cache.may_force(now) {
+                return;
+            }
+        }
+        if forced {
+            self.cache
+                .write()
+                .expect("jwks cache uncontended")
+                .last_forced = Some(now);
         }
         match self.fetch(now).await {
             Ok(keys) => {
