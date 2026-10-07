@@ -87,6 +87,11 @@ ui = ["dep:cratefield-ui"]
 # a feature of its own for a venture that localises its own mail without
 # mounting that module.
 i18n = ["dep:cratefield-i18n"]
+# Keeping the facts across a model rewrite (issue #836): the protected spans
+# of a text and the check that a rewrite kept them, and a word diff that
+# keeps those spans whole. Pure text, no ports.
+text-guard = ["dep:cratefield-text-guard"]
+text-diff = ["dep:cratefield-text-diff"]
 secrets = ["dep:cratefield-secrets"]
 kms = ["dep:cratefield-kms"]
 # The venture manifest and its composition generator (issue #138). A venture
@@ -175,6 +180,8 @@ cratefield-adapter-typesafe = { workspace = true, optional = true }
 cratefield-adapter-classifier-llm = { workspace = true, optional = true }
 cratefield-ui = { workspace = true, optional = true }
 cratefield-i18n = { workspace = true, optional = true }
+cratefield-text-guard = { workspace = true, optional = true }
+cratefield-text-diff = { workspace = true, optional = true }
 cratefield-manifest = { workspace = true, optional = true }
 cratefield-client-ts = { workspace = true, optional = true }
 cratefield-introspect = { workspace = true, optional = true }

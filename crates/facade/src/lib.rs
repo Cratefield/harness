@@ -111,6 +111,12 @@ pub use cratefield_kms as kms;
 #[cfg(feature = "i18n")]
 pub use cratefield_i18n as i18n;
 
+#[cfg(feature = "text-guard")]
+pub use cratefield_text_guard as text_guard;
+
+#[cfg(feature = "text-diff")]
+pub use cratefield_text_diff as text_diff;
+
 #[cfg(feature = "manifest")]
 pub use cratefield_manifest as manifest;
 
