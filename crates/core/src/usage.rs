@@ -96,7 +96,7 @@ impl Period {
 
     /// The window with this index: `window_for(index_at(now)) == window_at(now)`.
     /// An index at either extreme of the `i64` range saturates rather than
-    /// overflowing (see [`month_index_bounds`]).
+    /// overflowing (see `month_index_bounds`).
     #[must_use]
     pub fn window_for(self, index: i64) -> PeriodWindow {
         let next = index.saturating_add(1);
