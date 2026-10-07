@@ -9,13 +9,82 @@
 
 mod support;
 
+use cratefield_core::Config;
 use cratefield_module_changelog::Changelog;
+use cratefield_testing::{Dialect, MemoryKeyValue, TestHarness};
 use http::StatusCode;
 use serde_json::{Value, json};
+use std::collections::HashMap;
+use std::sync::{Arc, RwLock};
 use support::{
     ADMIN, API_BASE, CHANGELOG_MD, CHANGELOG_MD_120_BODY, KitSpec, MARKDOWN_BODY, REPO, body_of,
     filler_page, get, kits_from, kits_with, refresh, refresh_as, release, updated_at_by_version,
 };
+
+/// A configuration a test can change between two requests — the shape
+/// `source::resolved()` reads on every request, and what a redeploy with
+/// new environment bindings is.
+#[derive(Clone, Default)]
+struct MutableConfig(Arc<RwLock<HashMap<String, String>>>);
+
+impl MutableConfig {
+    fn with(pairs: &[(&str, &str)]) -> Self {
+        let map = pairs
+            .iter()
+            .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
+            .collect();
+        Self(Arc::new(RwLock::new(map)))
+    }
+
+    fn set(&self, key: &str, value: &str) {
+        self.0
+            .write()
+            .expect("config lock")
+            .insert(key.to_owned(), value.to_owned());
+    }
+}
+
+impl Config for MutableConfig {
+    fn get(&self, key: &str) -> Option<String> {
+        self.0.read().expect("config lock").get(key).cloned()
+    }
+}
+
+/// One kit per available dialect whose `CHANGELOG_*` keys the test can
+/// rewrite between requests. Same composition as [`support::kits`] — bare
+/// `Changelog::new()`, a `KeyValue`, the scripted fake — except the
+/// configuration is behind a lock rather than baked into a `MapConfig`.
+fn kits_with_mutable_config(config: &MutableConfig) -> Vec<support::Kit> {
+    Dialect::available()
+        .into_iter()
+        .map(|dialect| {
+            let fake = support::FakeGitHub::new();
+            let clock = support::TestClock::new();
+            let kv = MemoryKeyValue::new();
+            let harness =
+                TestHarness::with_database_and_ports(vec![Box::new(Changelog::new())], dialect, {
+                    let fake = fake.clone();
+                    let clock = clock.clone();
+                    let kv = kv.clone();
+                    let config = config.clone();
+                    move |ports| {
+                        ports.http = Some(Arc::new(fake.clone()));
+                        ports.clock = Some(clock.clone());
+                        ports.kv = Some(Arc::new(kv.clone()) as Arc<dyn cratefield_core::KeyValue>);
+                        ports.config = Arc::new(config.clone());
+                    }
+                });
+            support::Kit {
+                dialect: harness.dialect,
+                db: harness.db.clone(),
+                harness,
+                fake,
+                clock,
+                kv: Some(kv),
+            }
+        })
+        .collect()
+}
 
 /// The versions of a list response, in the order the body served them.
 fn versions(json: &Value) -> Vec<&str> {
@@ -1096,5 +1165,91 @@ async fn an_empty_release_title_falls_back_to_the_tag() {
             ["v1.1.0", "v1.0.0"],
             "an empty or blank name left the release untitled",
         );
+    }
+}
+
+/// 21. The read cache's fingerprint is **everything the answer depends
+/// on**, which `source_id()` and the reported `source`/`rendering` blocks
+/// are part of. `resolved()` re-reads `CHANGELOG_*` on every request, so
+/// a deployment that repoints `CHANGELOG_REPO` — or `CHANGELOG_LOCALE` —
+/// must not be answered the previous source's rows or the previous
+/// locale's `rendering` block, both of which are filed under a different
+/// `source_id` in the database and so are absent from the new answer.
+///
+/// The cache key is keyed by the generation, and the generation only
+/// moves when a refresh changed something — so a repoint that has not
+/// refreshed yet reads straight through to the old body.
+#[pollster::test]
+async fn a_repointed_source_is_not_served_the_previous_sources_cached_body() {
+    let config = MutableConfig::with(&[
+        ("ADMIN_TOKEN", ADMIN),
+        ("CHANGELOG_REPO", REPO),
+        ("CHANGELOG_API_BASE", API_BASE),
+        ("CHANGELOG_LOCALE", "en"),
+    ]);
+
+    for kit in kits_with_mutable_config(&config) {
+        assert!(kit.kv.is_some(), "the kit composes the read cache");
+        kit.fake
+            .script_releases(&[release("v1.0.0", "2026-01-01T00:00:00Z", "the first")]);
+        refresh(&kit).await;
+
+        // Prime both cache entries against the first source.
+        let listed = get(&kit, "/v1/changelog").await;
+        assert_eq!(listed.json()["total"], 1);
+        assert_eq!(listed.json()["source"]["repo"], REPO);
+        assert_eq!(listed.json()["releases"][0]["rendering"]["locale"], "en");
+        let one = get(&kit, "/v1/changelog/v1.0.0").await;
+        assert_eq!(one.status, StatusCode::OK);
+
+        // The deployment is repointed: a different repository, and a
+        // different locale for what it reports. The rows are filed under
+        // the new `source_id`, so the new answer has none of the old.
+        config.set("CHANGELOG_REPO", "other/widgets");
+        config.set("CHANGELOG_LOCALE", "fr");
+
+        let relisted = get(&kit, "/v1/changelog").await;
+        assert_eq!(
+            relisted.json()["source"]["repo"],
+            "other/widgets",
+            "the list was served the previous source's cached body",
+        );
+        assert_eq!(
+            relisted.json()["total"],
+            0,
+            "the list served the previous source's releases: {}",
+            body_of(&relisted),
+        );
+        assert_eq!(
+            relisted.json()["releases"],
+            json!([]),
+            "the list served the previous source's releases",
+        );
+
+        let gone = get(&kit, "/v1/changelog/v1.0.0").await;
+        assert_eq!(
+            gone.status,
+            StatusCode::NOT_FOUND,
+            "the release read served the previous source's cached body: {}",
+            body_of(&gone),
+        );
+
+        // And the new locale alone is enough: a read under it must not be
+        // answered the `en` block cached above.
+        config.set("CHANGELOG_REPO", REPO);
+        kit.fake
+            .script_releases(&[release("v9.9.9", "2026-09-01T00:00:00Z", "the new one")]);
+        let report = refresh(&kit).await;
+        assert_eq!(report["inserted"], 1, "{report}");
+        let fresh = get(&kit, "/v1/changelog/v9.9.9").await;
+        assert_eq!(fresh.status, StatusCode::OK);
+        assert_eq!(
+            fresh.json()["rendering"]["locale"],
+            "fr",
+            "the release was served the previous locale's cached body",
+        );
+
+        // Put the shared config back before the next dialect's leg.
+        config.set("CHANGELOG_LOCALE", "en");
     }
 }

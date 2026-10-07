@@ -51,6 +51,45 @@ fn a_non_numeric_limit_is_refused_not_silently_defaulted() {
     assert!(parse_timeout_secs("").is_err(), "an empty value is not 0");
 }
 
+/// A limit that parses as a `u64` but cannot be added to an
+/// `Instant` is refused here too, at startup. `run` computes
+/// `Instant::now() + limit`, and that addition panics with "overflow
+/// when adding duration to instant" once the limit passes the `Instant`
+/// range — so a value like `u64::MAX`, accepted here, killed the whole
+/// server on the first tool call instead of returning an envelope. The
+/// grammar is "a whole number of seconds"; a number too large to be a
+/// deadline is a misuse of the variable, exactly like a non-number, and
+/// must be named as one rather than panicking mid-session.
+#[test]
+fn a_limit_too_large_to_be_a_deadline_is_refused_at_parse_time() {
+    // (the value an operator would type, the same number written with
+    // separators, so the test reads as a number and not as digits)
+    for (typed, spelled) in [
+        ("9223372036854775807", 9_223_372_036_854_775_807_u64),
+        ("18446744073709551615", 18_446_744_073_709_551_615_u64),
+    ] {
+        let error = parse_timeout_secs(typed).expect_err(
+            "a limit past the Instant range is a misuse, not a deadline \
+             that panics on the first tool call",
+        );
+        assert!(
+            error.contains("FZ_MCP_TIMEOUT_SECS"),
+            "the refusal names the variable: {error}"
+        );
+        assert!(
+            error.contains(&spelled.to_string()),
+            "the refusal names the value it refused: {error}"
+        );
+    }
+    // And the boundary just below it stays a legal limit: refusing too
+    // eagerly would be its own bug.
+    assert_eq!(
+        parse_timeout_secs("9223372036000"),
+        Ok(Some(std::time::Duration::from_secs(9_223_372_036_000))),
+        "a large but representable deadline is still accepted"
+    );
+}
+
 /// The defect the limit exists for: a child that never finishes comes
 /// back as `mcp-fz-timeout`, naming the program and the limit — and
 /// the limit bounds how long the call takes, which is the whole point

@@ -4,7 +4,7 @@
 
 use axum::body::Body;
 use axum::extract::{FromRequest, Request};
-use axum::http::{HeaderValue, Request as HttpRequest, header};
+use axum::http::{HeaderValue, Request as HttpRequest, StatusCode, header};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response as AxumResponse};
 use serde::de::DeserializeOwned;
@@ -301,10 +301,17 @@ where
         match axum::Json::<T>::from_request(request, state).await {
             Ok(axum::Json(value)) => Ok(Json(value)),
             Err(rejection) => {
-                // Body reads fail through the shared 413 slug (the size
-                // limit); everything else is a 400 validation problem.
+                // Only a body that tripped the size limit is the shared 413
+                // slug. `BytesRejection::FailedToBufferBody` also covers a
+                // body that simply failed to arrive (a reset connection, a
+                // truncated chunked body), which axum itself rejects as a
+                // 400: that request's body never existed, so "too large"
+                // names a cause the caller never had. Everything else is a
+                // 400 validation problem.
                 let mut problem = match &rejection {
-                    axum::extract::rejection::JsonRejection::BytesRejection(_) => {
+                    axum::extract::rejection::JsonRejection::BytesRejection(rejection)
+                        if rejection.status() == StatusCode::PAYLOAD_TOO_LARGE =>
+                    {
                         Problem::request_too_large()
                     }
                     _ => Problem::validation_failed(rejection.body_text()),
@@ -346,8 +353,13 @@ where
         match axum::Form::<T>::from_request(request, state).await {
             Ok(axum::Form(value)) => Ok(Form(value)),
             Err(rejection) => {
+                // Only a body that tripped the size limit is the shared 413
+                // slug; a body that failed to arrive is a 400, as in
+                // [`Json`]'s extractor above.
                 let mut problem = match &rejection {
-                    axum::extract::rejection::FormRejection::BytesRejection(_) => {
+                    axum::extract::rejection::FormRejection::BytesRejection(rejection)
+                        if rejection.status() == StatusCode::PAYLOAD_TOO_LARGE =>
+                    {
                         Problem::request_too_large()
                     }
                     _ => Problem::validation_failed(rejection.body_text()),
@@ -553,6 +565,76 @@ mod tests {
         let response = allowance_exhausted("mail_sent", &exhausted());
         assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
         assert_eq!(header(&response, "retry-after").as_deref(), Some("120"));
+    }
+
+    /// A request whose body never arrives — a reset connection, a truncated
+    /// chunked body — is not an oversize body. `axum` rejects it as a 400
+    /// (`BytesRejection::FailedToBufferBody` holds both a length-limit and an
+    /// unknown-body error, and only the former is a 413), and
+    /// `docs/ERRORS.md` scopes `request-too-large` to "the request body
+    /// exceeded the 64 KiB limit". Telling the caller its body was too large
+    /// when the body never existed is a wrong status for a wrong reason.
+    struct BodyThatNeverArrives;
+
+    impl futures_core::Stream for BodyThatNeverArrives {
+        type Item = Result<bytes::Bytes, std::io::Error>;
+
+        fn poll_next(
+            self: std::pin::Pin<&mut Self>,
+            _: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<Option<Self::Item>> {
+            std::task::Poll::Ready(Some(Err(std::io::Error::new(
+                std::io::ErrorKind::ConnectionReset,
+                "connection reset by peer",
+            ))))
+        }
+    }
+
+    fn request_with_a_dead_body(content_type: &'static str) -> Request {
+        Request::builder()
+            .method("POST")
+            .uri("/v1/thing")
+            .header(header::CONTENT_TYPE, content_type)
+            .body(Body::from_stream(BodyThatNeverArrives))
+            .expect("request builds")
+    }
+
+    #[pollster::test]
+    async fn a_body_that_never_arrives_is_a_400_not_a_413() {
+        let Err(problem) = Json::<serde_json::Value>::from_request(
+            request_with_a_dead_body("application/json"),
+            &(),
+        )
+        .await
+        else {
+            panic!("the body never arrives");
+        };
+        assert_eq!(
+            problem.status,
+            StatusCode::BAD_REQUEST,
+            "a failed body read is not request-too-large: {}",
+            problem.slug
+        );
+        assert_eq!(problem.slug, crate::problems::SLUGS.validation_failed.slug);
+    }
+
+    /// The same shape through the form extractor, which shares the mapping.
+    #[pollster::test]
+    async fn a_form_body_that_never_arrives_is_a_400_not_a_413() {
+        let Err(problem) = Form::<std::collections::HashMap<String, String>>::from_request(
+            request_with_a_dead_body("application/x-www-form-urlencoded"),
+            &(),
+        )
+        .await
+        else {
+            panic!("the body never arrives");
+        };
+        assert_eq!(
+            problem.status,
+            StatusCode::BAD_REQUEST,
+            "a failed body read is not request-too-large: {}",
+            problem.slug
+        );
     }
 
     #[test]

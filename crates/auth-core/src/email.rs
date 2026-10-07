@@ -276,10 +276,15 @@ async fn prove_recent(
     user_id: &str,
     current_password: Option<&str>,
 ) -> Result<(), Problem> {
-    // A timestamp we cannot read is not evidence of recency.
+    // A timestamp we cannot read is not evidence of recency, and neither is one
+    // that reads as *later* than now: a row whose clock disagreed with ours has
+    // an elapsed of a negative number of seconds, and a negative number is
+    // less than any window. The window is a range, not a half-line — the same
+    // rule `within_grace` applies to a refresh token's grace.
     let recent = match store::session_by_id(db, session_id).await {
-        Ok(Some(row)) => OffsetDateTime::parse(&row.created_at, &Rfc3339)
-            .is_ok_and(|created| (clock.now() - created).whole_seconds() < RECENT_SECS),
+        Ok(Some(row)) => OffsetDateTime::parse(&row.created_at, &Rfc3339).is_ok_and(|created| {
+            (0..RECENT_SECS).contains(&(clock.now() - created).whole_seconds())
+        }),
         Ok(None) => false,
         Err(err) => {
             tracing::error!(error = %err, "could not read a session's age");

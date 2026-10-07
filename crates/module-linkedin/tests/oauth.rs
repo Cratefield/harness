@@ -236,3 +236,26 @@ fn a_callback_without_a_code_changes_nothing() {
         let _ = ADMIN;
     });
 }
+
+/// `access_expires_in_days` is a count of *whole* days left, truncated
+/// toward zero — so a token that lapsed an hour ago reports `0`, the same
+/// answer a token with 23 hours left gives. An operator reading "0 days"
+/// cannot tell "expiring today" from "expired", which is the one thing this
+/// field exists to warn about.
+#[test]
+fn an_expired_access_token_is_not_reported_as_zero_days_left() {
+    pollster::block_on(async {
+        let kit = support::kit();
+        connect(&kit).await;
+
+        // 60 days plus one hour: past the recorded expiry.
+        kit.clock.advance_days(60);
+        kit.clock.advance_secs(3_600);
+
+        let body = get(&kit, "/v1/linkedin/admin/status").await.json();
+        assert_eq!(
+            body["access_expires_in_days"], -1,
+            "a token an hour past its expiry reported zero days left: {body}"
+        );
+    });
+}

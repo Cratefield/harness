@@ -68,8 +68,14 @@ pub(crate) fn parse_stamp(raw: &str) -> Option<OffsetDateTime> {
 }
 
 /// `seconds` from `at`, in the storage shape.
+///
+/// Saturating, like every sibling module's `iso_in`: `seconds` reaches this
+/// from the provider's `expires_in` and from operator-configured refresh
+/// leads, neither of which is bounded before the call, and a plain `+` panics
+/// on a value that carries the timestamp out of range — a panic in the OAuth
+/// callback rather than a far-future expiry column.
 fn iso_in(at: OffsetDateTime, seconds: i64) -> String {
-    stamp(at + Duration::seconds(seconds))
+    stamp(at.saturating_add(Duration::seconds(seconds)))
 }
 
 fn new_id(ctx: &ModuleContext) -> String {
@@ -866,6 +872,27 @@ mod tests {
             stamp(shifted),
             stamp(epoch),
             "the clock's own offset must not reach the stored value"
+        );
+    }
+
+    /// `expires_in` comes from the provider's token response and
+    /// `refresh_lead_secs` from operator configuration. Neither is bounded
+    /// before it reaches [`iso_in`], so an absurd value must saturate the way
+    /// the sibling modules' `iso_in` does — a plain `+` panics here and takes
+    /// the OAuth callback down with it.
+    #[test]
+    fn an_extreme_offset_saturates_instead_of_panicking() {
+        let now =
+            OffsetDateTime::from_unix_timestamp(1_700_000_000).expect("the epoch is in range");
+        let far = iso_in(now, i64::MAX);
+        assert_eq!(
+            parse_stamp(&far).map(OffsetDateTime::year),
+            Some(9999),
+            "a saturated expiry must still be a timestamp this module can read back"
+        );
+        assert!(
+            far.ends_with('Z'),
+            "a saturated expiry is still UTC: {far:?}"
         );
     }
 }

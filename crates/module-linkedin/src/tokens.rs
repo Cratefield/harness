@@ -256,7 +256,7 @@ pub(crate) async fn maintain(ctx: &ModuleContext, settings: &Settings, scope: &S
             json!({
                 "account_id": account.id,
                 "refresh_expires_at": store::iso(expiry),
-                "days_left": (expiry - clock.now()).whole_days(),
+                "days_left": store::whole_days_left(expiry, clock.now()),
             }),
         );
         let now = store::now_iso(clock);
