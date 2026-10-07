@@ -184,5 +184,8 @@ pub use cratefield_module_orgs as orgs;
 #[cfg(feature = "connections")]
 pub use cratefield_module_connections as connections;
 
+#[cfg(feature = "wallets")]
+pub use cratefield_module_wallets as wallets;
+
 #[cfg(feature = "testing")]
 pub use cratefield_testing as testing;

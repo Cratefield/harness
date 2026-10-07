@@ -140,6 +140,9 @@ cratefield-module-connections = { path = "crates/module-connections", version = 
 # Organizations, memberships, roles and email invitations (issue #652), with
 # the staff-organization path that lets people retire `ADMIN_TOKEN`.
 cratefield-module-orgs = { path = "crates/module-orgs", version = "0.1" }
+# Linked EVM and Solana wallets (issue #835): SIWE/SIWS signature
+# verification binding a wallet to a signed-in account.
+cratefield-module-wallets = { path = "crates/module-wallets", version = "0.1" }
 # Declared here rather than by bare path in the one crate that uses it: a
 # path-only dependency has no version, and `cargo publish` refuses a
 # dependency without one. It was invisible while both crates were
@@ -272,6 +275,29 @@ sha1 = "0.11.0"
 base64 = "0.23.1"
 subtle = "2.6.1"
 hex = "0.4.3"
+# secp256k1 for `module-wallets` (issue #835): recovering the signer's
+# address from an EIP-191 `personal_sign` signature. The 0.13 line, not
+# 0.14, because that is the line built on `elliptic-curve` 0.13 / `ecdsa`
+# 0.16 — the same stack `p384` 0.13 already pulls in above, so an EVM
+# signature check adds no second elliptic-curve stack to the tree.
+# `default-features = false` keeps `pkcs8`, `pem`, `schnorr` and `std` off;
+# the `ecdsa` feature carries `verifying`, which is where
+# `VerifyingKey::recover_from_prehash` lives. Pure Rust, wasm-safe.
+k256 = { version = "0.13", default-features = false, features = [
+    "arithmetic",
+    "ecdsa",
+    "alloc",
+] }
+# Keccak-256 for EIP-191 message hashing and EIP-55 address checksumming
+# (issue #835). Pure Rust, no-std, wasm-safe, one `crunchy` dependency —
+# a standalone keccak that does not drag a second digest stack in beside
+# the workspace's `sha2` 0.11. Only the `keccak` permutation is wanted.
+tiny-keccak = { version = "2.0.2", default-features = false, features = [
+    "keccak",
+] }
+# Base58 for Solana addresses and signatures (issue #835). Already in the
+# lock file transitively via `solana-*`; declared so the crate names it.
+bs58 = "0.5.1"
 # ES256 (P-256 ECDSA) for the APNs provider JWT (adapter-apns, #104). Pure
 # Rust, wasm-safe; `ecdsa` signs with deterministic RFC6979 nonces so it
 # needs no RNG on the isolate, and `pem`/`pkcs8` parse Apple's `.p8` key.

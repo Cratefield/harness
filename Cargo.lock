@@ -701,6 +701,7 @@ dependencies = [
  "cratefield-module-privacy",
  "cratefield-module-telemetry",
  "cratefield-module-waitlist",
+ "cratefield-module-wallets",
  "cratefield-module-webhooks",
  "cratefield-oauth-client",
  "cratefield-push-auth",
@@ -2042,6 +2043,35 @@ dependencies = [
  "tower",
  "tracing",
  "ulid",
+]
+
+[[package]]
+name = "cratefield-module-wallets"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "axum",
+ "base64 0.23.1",
+ "bs58",
+ "cratefield-adapter-sqlite",
+ "cratefield-core",
+ "cratefield-testing",
+ "ed25519-dalek",
+ "futures-util",
+ "getrandom 0.4.3",
+ "hex",
+ "http",
+ "k256",
+ "pollster",
+ "schemars 1.2.2",
+ "sea-query",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
+ "time",
+ "tiny-keccak",
+ "tower",
+ "tracing",
 ]
 
 [[package]]
@@ -3730,6 +3760,18 @@ dependencies = [
  "cfg-if",
  "futures-util",
  "wasm-bindgen",
+]
+
+[[package]]
+name = "k256"
+version = "0.13.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f6e3919bbaa2945715f0bb6d3934a173d1e9a59ac23767fbaaef277265a7411b"
+dependencies = [
+ "cfg-if",
+ "ecdsa 0.16.9",
+ "elliptic-curve 0.13.8",
+ "sha2 0.10.9",
 ]
 
 [[package]]
@@ -5501,6 +5543,15 @@ checksum = "7e689342a48d2ea927c87ea50cabf8594854bf940e9310208848d680d668ed85"
 dependencies = [
  "num-conv",
  "time-core",
+]
+
+[[package]]
+name = "tiny-keccak"
+version = "2.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2c9d3793400a45f954c52e73d068316d76b6f4e36977e3fcebb13a2721e80237"
+dependencies = [
+ "crunchy",
 ]
 
 [[package]]
