@@ -455,6 +455,11 @@ jobs:
       # concurrent memoizer rather than the `Rc`/`RefCell` default.
       - name: Build cratefield-i18n to wasm
         run: cargo build --target wasm32-unknown-unknown -p cratefield-i18n
+      # The text guard and word diff (issue #836) are pure text functions
+      # with no core dependency, and nothing in this repo builds them for
+      # wasm otherwise; a venture runs them inside a Worker.
+      - name: Build cratefield-text-guard and cratefield-text-diff to wasm
+        run: cargo build --target wasm32-unknown-unknown -p cratefield-text-guard -p cratefield-text-diff
       # Same reason for the two portable classifier adapters (issue #456):
       # typesafe rides the `HttpClient` port and classifier-llm the
       # `TextModel` port, and no venture in this repo enables either facade

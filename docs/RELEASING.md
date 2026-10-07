@@ -50,7 +50,8 @@ the crates.io setup and are publishable, but neither has ever been
 published, so neither can have a trusted publisher yet. Both are in the
 ordered list in step 2 below; both need their first manual publish (step 2)
 and their trusted publisher (step 3) before the release run can publish
-them. They, along with `cratefield-tables-api` above, are what
+them. `cratefield-text-guard` and `cratefield-text-diff` (issue #836) are
+in the same position. They, along with `cratefield-tables-api` above, are what
 `tools/release-preflight.sh` currently fails on — `CRATES_IO_READY` must
 stay unset until they are done, or the round half-publishes before it
 reaches them.
@@ -240,6 +241,8 @@ own the `cratefield-*` names.
    cargo publish -p cratefield-manifest       # before the CLI and the facade
    cargo publish -p cratefield-tables-api     # needs core, tables and manifest; before the facade
    cargo publish -p cratefield-i18n           # before module-notifications
+   cargo publish -p cratefield-text-guard     # needs nothing in the workspace
+   cargo publish -p cratefield-text-diff      # needs nothing in the workspace
    cargo publish -p cratefield-kms
    cargo publish -p cratefield-adapter-anthropic
    cargo publish -p cratefield-adapter-openai-compatible

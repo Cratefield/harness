@@ -153,6 +153,11 @@ cratefield-oauth-client = { path = "crates/oauth-client", version = "0.3" }
 # negotiation and text direction. Nothing in it is notification-specific,
 # so `module-waitlist`'s mail templates can take it next.
 cratefield-i18n = { path = "crates/i18n", version = "0.2" }
+# Keeping the facts across a model rewrite (issue #836): the protected spans
+# of a text (names, numbers, quotes, code) and a check that a rewrite kept
+# them, plus a word diff that keeps those spans whole. Pure text, no core.
+cratefield-text-guard = { path = "crates/text-guard", version = "0.1" }
+cratefield-text-diff = { path = "crates/text-diff", version = "0.1" }
 cratefield-testing = { path = "crates/testing", version = "0.5" }
 # The control plane's shared page chrome (cratefield.com's look, one copy).
 cratefield-chrome = { path = "crates/control-plane-chrome", version = "0.1.0" }

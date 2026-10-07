@@ -1,0 +1,23 @@
+[package]
+name = "cratefield-text-guard"
+description = "Protect names, numbers, quotes and code across a model rewrite: find the spans that must not change, then check a rewrite kept them"
+readme = "README.md"
+keywords = ["cratefield", "text", "llm", "rewrite", "guard"]
+categories = ["text-processing"]
+include = ["src/**/*", "README.md"]
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+# Pure text functions: no I/O, no ports, no `cratefield-core`. serde only so a
+# caller can put a span or a violation straight into a JSON answer.
+serde = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }
