@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.2](https://github.com/Cratefield/harness/compare/cratefield-runtime-native-v0.4.1...cratefield-runtime-native-v0.4.2) - 2026-10-07
+
+### Fixed
+
+- close eight concurrency races across the pool cache, auth caches, realtime rooms, waitlist confirms and tracker adapters ([#823](https://github.com/Cratefield/harness/pull/823))
+
 ## [0.4.1](https://github.com/Cratefield/harness/compare/cratefield-runtime-native-v0.4.0...cratefield-runtime-native-v0.4.1) - 2026-10-06
 
 ### Other
