@@ -934,7 +934,7 @@ dependencies = [
 
 [[package]]
 name = "cratefield-adapter-polar"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "async-trait",
  "base64 0.23.1",
@@ -1021,7 +1021,7 @@ dependencies = [
 
 [[package]]
 name = "cratefield-adapter-stripe"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "async-trait",
  "bytes",
@@ -1565,7 +1565,7 @@ dependencies = [
 
 [[package]]
 name = "cratefield-core"
-version = "0.8.2"
+version = "0.8.3"
 dependencies = [
  "async-trait",
  "axum",
@@ -1762,7 +1762,7 @@ dependencies = [
 
 [[package]]
 name = "cratefield-module-changelog"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "async-trait",
  "axum",
@@ -1805,7 +1805,7 @@ dependencies = [
 
 [[package]]
 name = "cratefield-module-connections"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "async-trait",
  "axum",
