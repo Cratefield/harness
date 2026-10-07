@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `GET /v1/notifications?limit=0` no longer returns an empty inbox. The
+  page size is clamped to `1..=INBOX_PAGE_MAX` (the idiom
+  `module-orgs` and `module-crm` already use) instead of only capped from
+  above, so a zero limit is the default page rather than a page that looks
+  full and hands back a next cursor for a page that cannot exist. A limit
+  above the ceiling still clamps to `INBOX_PAGE_MAX`.
+
 ## [0.3.0](https://github.com/Cratefield/harness/compare/cratefield-module-notifications-v0.2.1...cratefield-module-notifications-v0.3.0) - 2026-10-04
 
 ### Added

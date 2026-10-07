@@ -801,6 +801,26 @@ async fn new_wizard(State(state): State<Arc<ConsoleState>>, headers: HeaderMap) 
     .into_response()
 }
 
+/// A slug the form is willing to accept: a DNS label, because the slug is
+/// stored as the venture's subdomain and a subdomain is a DNS label. Lower
+/// case, digits and hyphens only, 1 to 63 characters, no leading or trailing
+/// hyphen — the words the form's own hint already uses.
+///
+/// Refused here rather than at the edge because the subdomain is what every
+/// later request addresses the venture by, and DNS will not hold a name with
+/// an angle bracket in it. There is no shared validator for this: the owlpost
+/// adapter's `valid_domain_name` is a private multi-label check for a
+/// different job, and this crate does not depend on the adapter.
+fn is_slug(slug: &str) -> bool {
+    !slug.is_empty()
+        && slug.len() <= 63
+        && slug
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+        && !slug.starts_with('-')
+        && !slug.ends_with('-')
+}
+
 /// Creates the venture record from the wizard: resolve the module set, then
 /// `create_venture`. Provisioning it onto Cloudflare (the live deploy) is a
 /// separate, needs-human step shown on the venture page.
@@ -832,6 +852,14 @@ async fn create_venture_handler(
         .unwrap_or_default();
     if slug.is_empty() {
         return (StatusCode::BAD_REQUEST, "a slug is required").into_response();
+    }
+    if !is_slug(&slug) {
+        return (
+            StatusCode::BAD_REQUEST,
+            "the slug must be lower-case letters, digits and hyphens, 1 to 63 characters, \
+             and must not start or end with a hyphen",
+        )
+            .into_response();
     }
 
     let catalog = cratefield_catalog::curated();
@@ -3249,5 +3277,91 @@ mod tests {
         assert_eq!(refused.status, StatusCode::FORBIDDEN);
         assert!(refused.body.contains("did not share an email address"));
         assert!(refused.body.contains("email permission"));
+    }
+
+    // ---- The slug is the subdomain, so it must be a DNS label. ----
+
+    #[test]
+    fn the_slug_validator_is_a_dns_label() {
+        for good in ["acme", "acme-waitlist", "a1", "a-b-9", &"a".repeat(63)] {
+            assert!(is_slug(good), "should accept {good:?}");
+        }
+        for bad in [
+            "",
+            "Foo_Bar",
+            "Acme",
+            "<script>alert(1)</script>",
+            "-acme",
+            "acme-",
+            "a.b",
+            "a/b",
+            &"a".repeat(64),
+        ] {
+            assert!(!is_slug(bad), "should refuse {bad:?}");
+        }
+    }
+
+    /// A session cookie the guarded wizard route will admit, built the way
+    /// the browser sends it. The kit's signer, so the guard admits it.
+    fn signed_in() -> String {
+        let token = issue_session(
+            &signer(),
+            "op@cratefield.com",
+            1_800_000_000,
+            DEFAULT_TTL_SECS,
+        );
+        format!("cf_session={token}")
+    }
+
+    #[pollster::test]
+    async fn a_slug_that_is_not_a_dns_label_is_refused_with_400() {
+        // The slug becomes the subdomain. Without this check a venture can
+        // be created whose subdomain is `<script>`, and every page that
+        // names it carries the markup.
+        let kit = kit(cratefield_core::MapConfig::from_pairs([(
+            "CONSOLE_BASE_URL",
+            "https://console.cratefield.com",
+        )]));
+        let cookie = signed_in();
+        for bad in ["<script>alert(1)</script>", "Foo_Bar", &"a".repeat(64)] {
+            let refused = call(
+                &kit.router,
+                post_form(
+                    "/v1/console/new",
+                    &[("cookie", cookie.as_str())],
+                    &format!("module=waitlist&slug={bad}"),
+                ),
+            )
+            .await;
+            assert_eq!(
+                refused.status,
+                StatusCode::BAD_REQUEST,
+                "{bad:?} must not become a subdomain"
+            );
+        }
+    }
+
+    #[pollster::test]
+    async fn an_ordinary_slug_still_creates_the_venture() {
+        let kit = kit(cratefield_core::MapConfig::from_pairs([(
+            "CONSOLE_BASE_URL",
+            "https://console.cratefield.com",
+        )]));
+        let cookie = signed_in();
+        let created = call(
+            &kit.router,
+            post_form(
+                "/v1/console/new",
+                &[("cookie", cookie.as_str())],
+                "module=waitlist&slug=acme-waitlist",
+            ),
+        )
+        .await;
+        assert_eq!(created.status, StatusCode::SEE_OTHER);
+        assert!(
+            created.location.starts_with("/v1/console/ventures/"),
+            "redirected to the venture: {}",
+            created.location
+        );
     }
 }

@@ -117,6 +117,7 @@ struct Inner {
     token_response: RwLock<Option<Value>>,
     token_error: RwLock<Option<(u16, Value)>>,
     injected: RwLock<VecDeque<Injected>>,
+    upload_host: RwLock<Option<String>>,
     lose_next_create: AtomicBool,
     now_ms: RwLock<i64>,
 }
@@ -141,6 +142,12 @@ impl FakeLinkedIn {
     /// What newly created posts report as their lifecycle state.
     pub fn set_lifecycle(&self, state: &str) {
         *self.inner.lifecycle.write().expect("lock") = Some(state.to_owned());
+    }
+
+    /// The host `initializeUpload` names its `uploadUrl` on. The default is
+    /// `www.linkedin.com`, the media upload host; a hostile-URL test moves it.
+    pub fn set_upload_host(&self, host: &str) {
+        *self.inner.upload_host.write().expect("lock") = Some(host.to_owned());
     }
 
     /// The statuses `GET /rest/images/{urn}` will serve, in order. The last
@@ -471,12 +478,21 @@ impl HttpClient for FakeLinkedIn {
         // --- images -------------------------------------------------------
         if url.contains("/rest/images?action=initializeUpload") {
             let index = self.inner.next_post.fetch_add(1, Ordering::SeqCst);
+            // The real `initializeUpload` names `www.linkedin.com`, a
+            // different host from the API one; a test can move it.
+            let host = self
+                .inner
+                .upload_host
+                .read()
+                .expect("lock")
+                .clone()
+                .unwrap_or_else(|| "https://www.linkedin.com/dms-uploads".to_owned());
             return Ok(json_response(
                 200,
                 &json!({
                     "value": {
                         "uploadUrlExpiresAt": 1_650_567_510_704i64,
-                        "uploadUrl": format!("https://www.linkedin.com/dms-uploads/image{index}"),
+                        "uploadUrl": format!("{host}/image{index}"),
                         "image": format!("urn:li:image:C4E10AQ{index}"),
                     }
                 }),
