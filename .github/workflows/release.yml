@@ -120,12 +120,44 @@ jobs:
       # to `release-plz/action`, which publishes no floating major tag, so
       # `@v0` cannot resolve and the job never starts. Bump deliberately.
       - name: Open or update the release PR
+        id: release_pr
         if: env.HAS_RELEASE_PLZ_TOKEN == 'true' || vars.ACTIONS_MAY_OPEN_PRS == 'true'
         uses: release-plz/action@v0.5.133
         with:
           command: release-pr
         env:
           GITHUB_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN || secrets.GITHUB_TOKEN }}
+      # A release bumps crate versions, and docs/COMPATIBILITY.md is generated
+      # from them, so CI's drift check ("Compatibility matrix drift check",
+      # issue #17) fails every release PR until the matrix is regenerated.
+      # release-plz has no hook to run a command, so regenerate it here, on
+      # the release PR's own branch, with the generator the check uses. Only
+      # with RELEASE_PLZ_TOKEN: a push by `GITHUB_TOKEN` starts no workflow
+      # run, so the PR would sit with no checks at all. The branch names come
+      # from the action's output through the environment, never interpolated
+      # into the script, and the token is read from the environment only.
+      - name: Regenerate the compatibility matrix on the release PR
+        if: steps.release_pr.outputs.prs_created == 'true' && env.HAS_RELEASE_PLZ_TOKEN == 'true'
+        env:
+          PRS: ${{ steps.release_pr.outputs.prs }}
+          PUSH_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          origin="https://x-access-token:${PUSH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          echo "$PRS" | jq -r '.[].head_branch' | while read -r branch; do
+            [ -n "$branch" ] || continue
+            git fetch --quiet "$origin" "$branch"
+            git checkout --quiet -B "release-pr-matrix" FETCH_HEAD
+            cargo run -q -p cratefield-cli --example compatibility-doc
+            if git diff --quiet -- docs/COMPATIBILITY.md; then
+              echo "The matrix on $branch is already current."
+              continue
+            fi
+            git commit --quiet -m "docs: regenerate the compatibility matrix for the released versions" docs/COMPATIBILITY.md
+            git push --quiet "$origin" "HEAD:refs/heads/$branch"
+            echo "::notice title=Matrix regenerated::docs/COMPATIBILITY.md updated on $branch."
+          done
       # A trusted publisher can only be configured after a crate exists
       # on crates.io, so a crate's first version must be published by
       # hand; release-plz learns that by failing, mid-round, after the
