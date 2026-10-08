@@ -1,10 +1,11 @@
 -- EarthOS-shaped Supabase fixture: SHAPE, not data.
 --
 -- Apply to a live `supabase start` stack FIRST (before seed.sh), as the
--- `postgres` superuser on the `supabase db` port 54322:
+-- `postgres` superuser on the `supabase db` port 54322. DB_URL is the stack's
+-- own connection string: `supabase status -o env` prints it as DB_URL, or
+-- `eval "$(supabase status -o env)"` puts it in the environment.
 --
---   psql "postgresql://postgres:postgres@127.0.0.1:54322/postgres" \
---        -v ON_ERROR_STOP=1 -f schema.sql
+--   psql "$DB_URL" -v ON_ERROR_STOP=1 -f schema.sql
 --
 -- Idempotent: every object is dropped before it is created, so a re-run
 -- after a failed CI job starts from the same place. Re-running on top of a

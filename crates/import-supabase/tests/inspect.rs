@@ -544,8 +544,8 @@ async fn the_earthos_shaped_fixture_is_visible_to_the_documented_role() {
     let Some(base) = supabase_db_url() else {
         eprintln!(
             "skipping: FZ_TEST_SUPABASE_DB_URL is not set — start a Supabase stack \
-             (supabase start) and set it to \
-             postgresql://postgres:postgres@127.0.0.1:54322/postgres"
+             (supabase start) and point it at the stack's DB URL \
+             (supabase status -o env prints it as DB_URL)"
         );
         return;
     };
@@ -575,7 +575,7 @@ async fn the_earthos_shaped_fixture_is_visible_to_the_documented_role() {
         .expect("the documented role SQL runs as postgres");
     pool.close().await;
 
-    // postgres://user:pass@host:port/db -> the same, logging in as the role.
+    // The base URL's userinfo is the superuser's; swap it for the role's own.
     let (scheme, rest) = base.split_once("://").expect("a URL scheme");
     let (_, host_and_path) = rest.split_once('@').expect("userinfo in the URL");
     let role_url = format!("{scheme}://{role}:{password}@{host_and_path}");

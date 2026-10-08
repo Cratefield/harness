@@ -13,11 +13,15 @@ identical apart from `read_only` and `warnings`. That is
 
 ```sh
 supabase start
-psql "postgresql://postgres:postgres@127.0.0.1:54322/postgres" -v ON_ERROR_STOP=1 -f schema.sql
-SUPABASE_URL=http://127.0.0.1:54321 \
-  DB_URL="postgresql://postgres:postgres@127.0.0.1:54322/postgres" \
-  SERVICE_ROLE_KEY=... ./seed.sh
+eval "$(supabase status -o env)"   # sets DB_URL, API_URL, SERVICE_ROLE_KEY
+psql "$DB_URL" -v ON_ERROR_STOP=1 -f schema.sql
+SUPABASE_URL="$API_URL" ./seed.sh
 ```
+
+`seed.sh` needs `SUPABASE_URL`, `SERVICE_ROLE_KEY` and `DB_URL`; the three
+`supabase status -o env` variables above are all of them, and `seed.sh` names
+the first and the third in its own header. `API_URL` is passed as
+`SUPABASE_URL` because that is the name GoTrue's own tooling uses.
 
 `schema.sql` runs FIRST, as `postgres`, on the `supabase db` port 54322 against
 db `postgres`; it is idempotent (`drop ... if exists` first). `seed.sh` runs after

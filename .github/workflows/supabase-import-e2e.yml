@@ -104,13 +104,16 @@ jobs:
       # a previous run left, and the rows are not. Applying it twice from two
       # places would drop the tables under the rows the other place just wrote.
       #
-      # Secrets: the local stack's service-role key and its DB URL (which
-      # carries a password) are read from `supabase status -o env` into shell
-      # variables, registered as log masks before this job passes them
-      # anywhere, and handed to seed.sh through the environment. The anon key
-      # and the JWT secret are masked too, though nothing reads them:
-      # `supabase status` printed them, so masking them costs two lines and
-      # closes the door on a later step that does use one.
+      # Secrets: no credential is written literally in this file at all --
+      # not the service-role key, and not the DB URL. Both are read from
+      # `supabase status -o env` into shell variables, registered as log masks
+      # before this job passes them anywhere, and handed to seed.sh through
+      # the environment. The DB URL is then carried to the inspecting step
+      # through $GITHUB_ENV, which is the only channel between steps, and only
+      # after the mask above is registered. The anon key and the JWT secret
+      # are masked too, though nothing reads them: `supabase status` printed
+      # them, so masking them costs two lines and closes the door on a later
+      # step that does use one.
       #
       # What masking does NOT cover: `supabase start` above already printed
       # those same dev keys in its own startup banner, and no mask registered
@@ -121,8 +124,6 @@ jobs:
       # keys for a stack this job just created and destroyed, but a key in a
       # CI log is a key in a CI log.
       - name: Seed users through the GoTrue admin API (issue #733)
-        env:
-          FZ_TEST_SUPABASE_DB_URL: postgresql://postgres:postgres@127.0.0.1:54322/postgres
         run: |
           set -euo pipefail
           keys="$(supabase status -o env)"
@@ -160,6 +161,11 @@ jobs:
           DB_URL="$db_url" \
           EARTHOS_USER_IDS_FILE=/tmp/earthos-user-ids \
             ./crates/import-supabase/tests/supabase-fixture/seed.sh
+          # The inspecting step below needs the same URL, and $GITHUB_ENV is
+          # the only channel a value can travel through between steps. It is
+          # written after the ::add-mask:: above, so the URL stays masked for
+          # every step that reads it from here on.
+          printf 'FZ_TEST_SUPABASE_DB_URL=%s\n' "$db_url" >> "$GITHUB_ENV"
           unset service_role_key anon_key jwt_secret api_url db_url keys
       # The guard on the guard: the test skips itself when the variable is
       # unset, and a skipped test is a green job that proved nothing, so
@@ -168,8 +174,6 @@ jobs:
       # so rather than skipping — so a seed that quietly did nothing is a
       # red job, not a green one.
       - name: Inspect the EarthOS fixture as postgres and as the documented role
-        env:
-          FZ_TEST_SUPABASE_DB_URL: postgresql://postgres:postgres@127.0.0.1:54322/postgres
         run: |
           set -o pipefail
           cargo test -p cratefield-import-supabase --test inspect \

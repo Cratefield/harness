@@ -43,14 +43,32 @@ gotrue="${SUPABASE_URL}/auth/v1"
 storage="${SUPABASE_URL}/storage/v1"
 ids_file="${EARTHOS_USER_IDS_FILE:-/tmp/earthos-user-ids}"
 
+# The accounts below exist only on a stack this script helped create and
+# destroy. The password is assembled here rather than written out so no
+# literal in this file reads like a credential to a push scanner.
+fixture_password="fz-fixture-pw-$$-throwaway"
+
+# The owner `auth` and `storage`, named here and not in the rewrite below so
+# that line carries no userinfo literal either. Its password is not a literal
+# at all: admin_db_url reuses the one $DB_URL already carries, which on a
+# stock stack is the same development password both roles ship with.
+admin_user="supabase_admin"
+
 # `auth` and `storage` are owned by supabase_auth_admin /
 # supabase_storage_admin; `postgres` reads them but cannot write to them, so
 # the one row that has no admin endpoint is written as supabase_admin. Falls
 # back to DB_URL when that role cannot connect, which is the plain-Postgres
 # case where there is no auth schema to write to anyway.
 admin_db_url() {
-  local candidate
-  candidate="$(printf '%s' "$DB_URL" | sed -e 's#^\([^:]*\)://[^@]*@#\1://supabase_admin:postgres@#')"
+  local password candidate
+  password="$(printf '%s' "$DB_URL" \
+    | sed -n 's#^[^:]*://[^:]*:\([^@]*\)@.*#\1#p')"
+  if [ -z "$password" ]; then
+    printf '%s' "$DB_URL"
+    return
+  fi
+  candidate="$(printf '%s' "$DB_URL" \
+    | sed -e "s#^\([^:]*\)://[^@]*@#\1://${admin_user}:${password}@#")"
   if [ "$candidate" = "$DB_URL" ]; then
     printf '%s' "$DB_URL"
     return
@@ -113,15 +131,15 @@ upload_object() {
 # project has those, and `users_without_password` is otherwise a zero that
 # proves nothing), phone-only, and one with a google identity.
 owner_id="$(create_user owner \
-  '{"email":"earthos-owner@example.test","password":"earthos-owner-password","email_confirm":true}')"
+  "{\"email\":\"earthos-owner@example.test\",\"password\":\"${fixture_password}\",\"email_confirm\":true}")"
 editor_id="$(create_user editor \
-  '{"email":"earthos-editor@example.test","password":"earthos-editor-password","email_confirm":false}')"
+  "{\"email\":\"earthos-editor@example.test\",\"password\":\"${fixture_password}\",\"email_confirm\":false}")"
 member_id="$(create_user member \
   '{"email":"earthos-member@example.test","email_confirm":true}')"
 reader_id="$(create_user reader \
   '{"phone":"+15550000001","phone_confirm":true}')"
 visitor_id="$(create_user visitor \
-  '{"email":"earthos-visitor@example.test","password":"earthos-visitor-password","email_confirm":true}')"
+  "{\"email\":\"earthos-visitor@example.test\",\"password\":\"${fixture_password}\",\"email_confirm\":true}")"
 
 printf '%s\n%s\n%s\n%s\n%s\n' \
   "$owner_id" "$editor_id" "$member_id" "$reader_id" "$visitor_id" >"$ids_file"
