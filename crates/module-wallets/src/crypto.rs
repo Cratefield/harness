@@ -30,7 +30,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use ed25519_dalek::Verifier;
-use tiny_keccak::{Hasher, Keccak};
+use sha3::{Digest, Keccak256};
 
 use crate::Chain;
 
@@ -45,11 +45,7 @@ const EIP_6492_MAGIC: &[u8] = &[
 
 /// keccak-256 of `data`.
 pub(crate) fn keccak256(data: &[u8]) -> [u8; 32] {
-    let mut hash = [0u8; 32];
-    let mut keccak = Keccak::v256();
-    keccak.update(data);
-    keccak.finalize(&mut hash);
-    hash
+    Keccak256::digest(data).into()
 }
 
 /// The EIP-191 `personal_sign` hash of `message`: keccak-256 of the prefix

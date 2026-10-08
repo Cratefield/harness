@@ -191,12 +191,8 @@ pub fn raw_keccak(message: &str) -> [u8; 32] {
 }
 
 fn keccak256(data: &[u8]) -> [u8; 32] {
-    use tiny_keccak::{Hasher, Keccak};
-    let mut out = [0u8; 32];
-    let mut keccak = Keccak::v256();
-    keccak.update(data);
-    keccak.finalize(&mut out);
-    out
+    use sha3::{Digest, Keccak256};
+    Keccak256::digest(data).into()
 }
 
 /// A Solana test wallet: a real ed25519 key, the base58 address that key

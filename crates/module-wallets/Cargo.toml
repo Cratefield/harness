@@ -35,9 +35,8 @@ schemars = { workspace = true }
 # wasm32-safe.
 k256 = { workspace = true }
 # Keccak-256 for EIP-191 message hashing and EIP-55 address checksumming.
-# Pure Rust, no-std, wasm-safe — a standalone keccak that does not drag a
-# second digest stack in beside `sha2` 0.11.
-tiny-keccak = { workspace = true }
+# Pure Rust, no-std, wasm-safe, on the same `digest` 0.11 as `sha2`.
+sha3 = { workspace = true }
 # Base58 for Solana addresses (issue #835). Already in the lock file
 # transitively; declared so the crate names it.
 bs58 = { workspace = true }
@@ -63,11 +62,11 @@ async-trait = { workspace = true }
 # the module verifies instead of pasting canned hex. `k256` and
 # `ed25519-dalek` are regular deps too; they are named again because a test
 # binary's `use` needs them in its own graph. `hex` and `bs58` render the
-# signature and the Solana address on the wire, and `tiny-keccak` derives
+# signature and the Solana address on the wire, and `sha3` derives
 # the Ethereum address from a public key the way the module does. `ecdsa` is
 # not repeated here: `k256::ecdsa` re-exports everything the tests reach for.
 k256 = { workspace = true }
 ed25519-dalek = { workspace = true }
 hex = { workspace = true }
 bs58 = { workspace = true }
-tiny-keccak = { workspace = true }
+sha3 = { workspace = true }

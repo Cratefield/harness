@@ -289,12 +289,10 @@ k256 = { version = "0.13", default-features = false, features = [
     "alloc",
 ] }
 # Keccak-256 for EIP-191 message hashing and EIP-55 address checksumming
-# (issue #835). Pure Rust, no-std, wasm-safe, one `crunchy` dependency —
-# a standalone keccak that does not drag a second digest stack in beside
-# the workspace's `sha2` 0.11. Only the `keccak` permutation is wanted.
-tiny-keccak = { version = "2.0.2", default-features = false, features = [
-    "keccak",
-] }
+# (issue #835). RustCrypto's `sha3` at the 0.11 line, built on the same
+# `digest` 0.11 as the workspace's `sha2`, so no second digest stack; MIT or
+# Apache-2.0 (tiny-keccak's CC0-1.0 is not on deny.toml's allow list).
+sha3 = { version = "0.11.0", default-features = false }
 # Base58 for Solana addresses and signatures (issue #835). Already in the
 # lock file transitively via `solana-*`; declared so the crate names it.
 bs58 = "0.5.1"
