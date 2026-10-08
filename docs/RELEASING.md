@@ -254,6 +254,7 @@ own the `cratefield-*` names.
    cargo publish -p cratefield-module-privacy # before the facade
    cargo publish -p cratefield-module-waitlist
    cargo publish -p cratefield-module-webhooks  # before the facade
+   cargo publish -p cratefield-module-wallets   # before the facade
    cargo publish -p cratefield-push-auth      # before adapter-apns, -fcm, -webpush and the CLI
    cargo publish -p cratefield-adapter-github-app  # after push-auth; before the facade
    cargo publish -p cratefield-adapter-classifier-llm

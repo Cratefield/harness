@@ -122,5 +122,14 @@ human-readable page at each `<public_url>/problems/<slug>`.
 | `usage/allowance-exhausted` | 429 | Usage allowance exhausted | `cratefield-core` | The subject's metered allowance is spent for the current period; retry after the period resets. |
 | `validation-failed` | 400 | Request validation failed | `cratefield-core` | The request body or query did not deserialize into a valid request. |
 | `verifier-unavailable` | 503 | Cannot check the credential | `cratefield-tables-api` | The service that verifies credentials could not answer. Try again shortly. |
+| `wallets/address-already-linked` | 409 | Wallet already linked | `cratefield-module-wallets` | This wallet is already linked to a different account. |
+| `wallets/chain-mismatch` | 400 | Chain mismatch | `cratefield-module-wallets` | The chain in the message is not the chain this request, and this service, are for. |
+| `wallets/domain-mismatch` | 400 | Domain mismatch | `cratefield-module-wallets` | The domain in the sign-in message does not match this service's domain. |
+| `wallets/invalid-message` | 400 | Invalid sign-in message | `cratefield-module-wallets` | The message could not be parsed as a SIWE or SIWS sign-in message. |
+| `wallets/message-expired` | 400 | Message expired or not yet valid | `cratefield-module-wallets` | The message's expiration time has passed or its not-before time is in the future. |
+| `wallets/nonce-invalid` | 400 | Invalid or expired nonce | `cratefield-module-wallets` | The nonce is unknown, already used, issued to another account, or expired. |
+| `wallets/not-found` | 404 | No such wallet link | `cratefield-module-wallets` | No wallet link with that id belongs to your account. |
+| `wallets/signature-invalid` | 400 | Signature verification failed | `cratefield-module-wallets` | The signature does not prove ownership of the address in the message. |
+| `wallets/unauthenticated` | 401 | Sign in to manage wallets | `cratefield-module-wallets` | These routes are available only to a signed-in user. |
 | `webhook-unverified` | 401 | Unverified webhook delivery | `cratefield-module-notifications` | The delivery did not carry a signature this deployment could verify. |
 | `webpush-not-configured` | 404 | Browser push is not configured | `cratefield-module-notifications` | This venture serves no Web Push application server key. |

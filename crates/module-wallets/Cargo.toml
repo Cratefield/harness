@@ -1,0 +1,72 @@
+[package]
+name = "cratefield-module-wallets"
+description = "Cratefield module: link EVM and Solana wallets to a signed-in account via SIWE/SIWS signature verification"
+readme = "README.md"
+keywords = ["cratefield", "wallet", "siwe", "evm", "solana"]
+categories = ["web-programming"]
+include = ["src/**/*", "migrations/**/*", "tests/**/*", "README.md"]
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+cratefield-core = { workspace = true }
+axum = { workspace = true }
+http = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sea-query = { workspace = true }
+tracing = { workspace = true }
+time = { workspace = true }
+hex = { workspace = true }
+base64 = { workspace = true }
+thiserror = { workspace = true }
+async-trait = { workspace = true }
+schemars = { workspace = true }
+# secp256k1 recovery for EVM signatures (issue #835): `k256` is the pure-Rust
+# secp256k1; the `ecdsa` feature brings the `verifying` half, which is where
+# `VerifyingKey::recover_from_prehash` and the recoverable signature type live.
+# `default-features = false` keeps it off the `std`-only path; pure Rust and
+# wasm32-safe.
+k256 = { workspace = true }
+# Keccak-256 for EIP-191 message hashing and EIP-55 address checksumming.
+# Pure Rust, no-std, wasm-safe, on the same `digest` 0.11 as `sha2`.
+sha3 = { workspace = true }
+# Base58 for Solana addresses (issue #835). Already in the lock file
+# transitively; declared so the crate names it.
+bs58 = { workspace = true }
+# Ed25519 verification for Solana signatures (issue #835). Already a workspace
+# dep for the auth stack; used here for `VerifyingKey::verify`.
+ed25519-dalek = { workspace = true }
+# Selects getrandom's `wasm_js` backend on wasm32, so the wasm build of this
+# crate stands on its own (same line as in `module-webhooks` and the adapters).
+getrandom = { workspace = true }
+
+[dev-dependencies]
+cratefield-adapter-sqlite = { path = "../adapter-sqlite" }
+cratefield-testing = { path = "../testing", features = ["postgres"] }
+serde_json = { workspace = true }
+pollster = { workspace = true }
+tower = { workspace = true }
+# `join_all` for the concurrency test: two verifies of the same nonce driven
+# as one joined future, so both are in flight at the same time.
+futures-util = { workspace = true }
+# `#[async_trait]` on the recording EIP-1271 verifier test double.
+async-trait = { workspace = true }
+# Test-only signing, so an integration test can produce the very signatures
+# the module verifies instead of pasting canned hex. `k256` and
+# `ed25519-dalek` are regular deps too; they are named again because a test
+# binary's `use` needs them in its own graph. `hex` and `bs58` render the
+# signature and the Solana address on the wire, and `sha3` derives
+# the Ethereum address from a public key the way the module does. `ecdsa` is
+# not repeated here: `k256::ecdsa` re-exports everything the tests reach for.
+k256 = { workspace = true }
+ed25519-dalek = { workspace = true }
+hex = { workspace = true }
+bs58 = { workspace = true }
+sha3 = { workspace = true }

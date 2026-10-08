@@ -197,6 +197,7 @@ convenience, not a layer.
 | `cratefield-oauth-client` | OAuth 2.0 over the `HttpClient` port: authorize URLs, code exchange, refresh, revocation, PKCE, and token sealing |
 | `cratefield-module-changelog` | A project's releases mirrored into the venture's own database and served over an API — the reads never call upstream |
 | `cratefield-module-webhooks` | Outbound webhooks: per-subject endpoints, HMAC-signed POSTs over the core outbox, dead letters and replay |
+| `cratefield-module-wallets` | Link EVM and Solana wallets to a signed-in account: single-use nonces, SIWE (EIP-4361) and SIWS verification, EIP-1271 contract signatures behind a port |
 
 Everything else in the workspace is unpublished — `publish = false` is what
 makes a crate private now, not a separate repository (ADR
