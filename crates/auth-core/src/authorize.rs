@@ -145,6 +145,22 @@ pub fn known_method_slugs() -> Vec<&'static str> {
     CATALOGUE.iter().map(|(slug, ..)| *slug).collect()
 }
 
+/// The link-shaped sign-in methods this deployment offers, as
+/// `(label, href)`, each carrying `return_to` (a path on this service) so
+/// a person lands back where they started. For a hosted page outside the
+/// authorization flow that needs a signed-in person — adding a passkey,
+/// for one. The passkey method is left out: it is started by the
+/// chooser's script, not by a link, and a page that asks someone to sign
+/// in first is usually there because they have no passkey yet.
+#[must_use]
+pub fn sign_in_links(cfg: &dyn Config, return_to: &str) -> Vec<(String, String)> {
+    enabled_login_methods(cfg, return_to)
+        .into_iter()
+        .filter(|method| !method.is_passkey)
+        .map(|method| (method.label, method.href))
+        .collect()
+}
+
 /// A button on the login chooser.
 pub(crate) struct LoginMethod {
     /// The method's identifier, e.g. `passkey`.

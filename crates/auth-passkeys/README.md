@@ -13,6 +13,7 @@ Passkey registration and login for the auth service
 | `POST /login/verify` | no | Checks the assertion, advances the counter, issues a session |
 | `GET /credentials` | required | The account's passkeys |
 | `DELETE /credentials/{id}` | required | Removes one, unless it is the account's only way in |
+| `GET /add?return_to=<url>` | optional | The hosted "Add a passkey" page. Signed out, it offers the sign-in links and comes back here; signed in, it runs the registration ceremony (asking for PRF) and returns to `return_to` with `#cf_passkey=<credential id>&cf_aaguid=<uuid>&cf_prf=1\|0` — or `#cf_passkey_error=cancelled` from its "Not now" link. `return_to` must be an `https` URL on the origin of an active client's registered redirect URI; anything else is dropped, never redirected to |
 
 `POST /login/verify` refuses a cross-site request — `403`,
 `auth/cross-site-request`, ahead of the rate limiter. A verified

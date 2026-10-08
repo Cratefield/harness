@@ -26,6 +26,7 @@
 
 #![forbid(unsafe_code)]
 
+mod add;
 mod budget;
 mod challenge;
 mod login;
@@ -395,7 +396,10 @@ impl Module for Passkeys {
             ctx: Arc::new(ctx),
             rp,
         });
-        register::router().merge(login::router()).with_state(state)
+        register::router()
+            .merge(login::router())
+            .merge(add::router())
+            .with_state(state)
     }
 
     /// Deletes budget rows whose window closed more than a day ago, so the
