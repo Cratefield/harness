@@ -299,8 +299,19 @@ $fixture$;
 -- managed schema, which is a different disposition from an app policy.
 -- Guarded because the `cron` schema is absent off-stack, and because
 -- cron.schedule() needs privileges the CI role may not hold.
+--
+-- A stock `supabase start` ships pg_cron preloaded but does not create the
+-- extension (a project enables it from the dashboard), so without this there
+-- is no `cron.job` and the inspector rightly reports no jobs. Created here,
+-- and the creation guarded on its own: off-stack the library is absent or not
+-- preloaded, and then the schedule below is skipped the same way.
 do $fixture$
 begin
+    begin
+        create extension if not exists pg_cron;
+    exception
+        when others then null;
+    end;
     perform cron.schedule('earthos-heartbeat', '*/5 * * * *', 'select 1');
 exception
     when undefined_table or undefined_object or undefined_function
