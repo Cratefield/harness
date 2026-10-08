@@ -1,39 +1,11 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+{% include "_head.html" %}
 <title>Sign in · {{ brand.name }}</title>
-<style>
-  :root { color-scheme: dark; }
-  * { box-sizing: border-box; }
-  body {
-    margin: 0; min-height: 100vh; display: grid; place-items: center;
-    background: #0A0A0B; color: #EDEBE6;
-    font: 16px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
-  }
-  main { width: min(26rem, 92vw); padding: 2.5rem 2rem; text-align: center; }
-  h1 { font-size: 1.375rem; font-weight: 650; margin: 0 0 .25rem; }
-  p.sub { color: #9b978f; margin: 0 0 2rem; font-size: .925rem; }
-  ul.methods { list-style: none; margin: 0; padding: 0; display: grid; gap: .6rem; }
-  a.method, button.method {
-    display: block; width: 100%; padding: .8rem 1rem; border-radius: .6rem;
-    background: #17171a; color: #EDEBE6; text-decoration: none; font-weight: 550;
-    border: 1px solid #26262b; transition: border-color .15s ease;
-    font: inherit; font-weight: 550; cursor: pointer; text-align: center;
-  }
-  a.method:hover, a.method:focus-visible,
-  button.method:hover, button.method:focus-visible { border-color: {{ brand.accent }}; outline: none; }
-  button.method[disabled] { opacity: .6; cursor: progress; }
-  p.none { color: #9b978f; background: #17171a; border: 1px dashed #26262b;
-           border-radius: .6rem; padding: 1rem; }
-  p.error { color: #ffb4a2; margin: 1rem 0 0; font-size: .9rem; min-height: 1.4em; }
-  footer { margin-top: 2rem; color: #6f6c66; font-size: .8rem; }
-  img.brand-logo { display: block; max-height: 3rem; max-width: 12rem; margin: 0 auto 1.25rem; }
-  footer a { color: {{ brand.accent }}; }
-</style>
 </head>
 <body>
+<div class="cf-toasts" id="cf-toasts" role="region" aria-label="Notifications" aria-live="polite"></div>
 <main>
   {% include "_brand_header.html" %}
   <h1>Sign in</h1>
@@ -51,7 +23,6 @@
     {% endif %}
     {% endfor %}
   </ul>
-  <p class="error" id="cf-error" role="alert"></p>
   {% endif %}
   {% include "_brand_footer.html" %}
 </main>
@@ -69,7 +40,7 @@
 (function () {
   "use strict";
   var button = document.getElementById("cf-passkey");
-  var error = document.getElementById("cf-error");
+  var toasts = document.getElementById("cf-toasts");
   if (!button || !window.PublicKeyCredential || !navigator.credentials) return;
   button.hidden = false;
 
@@ -135,8 +106,32 @@
     });
   }
 
+  // A notice in the page's own toast stack, newest on top. Built with
+  // text nodes only: nothing here is ever parsed as markup.
+  function notify(title, text) {
+    if (!toasts) return;
+    var toast = document.createElement("div");
+    toast.className = "cf-toast cf-toast-error";
+    toast.setAttribute("role", "alert");
+    var heading = document.createElement("span");
+    heading.className = "cf-toast-title";
+    heading.textContent = title;
+    var body = document.createElement("span");
+    body.className = "cf-toast-text";
+    body.textContent = text;
+    var close = document.createElement("button");
+    close.type = "button";
+    close.className = "cf-toast-close";
+    close.setAttribute("aria-label", "Dismiss this notice");
+    close.textContent = "\u00d7";
+    close.addEventListener("click", function () { toast.remove(); });
+    toast.appendChild(heading);
+    toast.appendChild(body);
+    toast.appendChild(close);
+    toasts.insertBefore(toast, toasts.firstChild);
+  }
+
   button.addEventListener("click", function () {
-    error.textContent = "";
     button.disabled = true;
     // No email: the authenticator offers whatever discoverable credential
     // it holds, which is the passwordless path.
@@ -166,7 +161,7 @@
         // identically so a caller cannot tell "no such credential" from
         // "bad signature", and saying more here would undo that.
         if (reason && reason.name === "NotAllowedError") return;
-        error.textContent = "That did not work. Try again, or use another method.";
+        notify("Passkey sign-in failed", "That did not work. Try again, or use another method.");
       });
   });
 })();

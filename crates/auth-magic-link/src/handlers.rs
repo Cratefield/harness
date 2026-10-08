@@ -1,11 +1,12 @@
 //! The two routes (issue #21): request and consume.
 
 use axum::extract::{Query, State};
-use axum::response::{Html, IntoResponse, Response};
+use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use base64ct::{Base64UrlUnpadded, Encoding as _};
+use cratefield_auth_core::page::{HostedPage, Toast, escape as html_escape};
 use cratefield_auth_core::{
-    Hints, Redacted, STATUS_ACTIVE, SingleUseTokenRow, TOKEN_MAGIC_LINK, UserRow,
+    Brand, Hints, Redacted, STATUS_ACTIVE, SingleUseTokenRow, TOKEN_MAGIC_LINK, UserRow,
     consume_single_use_token, cookie_value as session_cookie_value, insert_single_use_token,
     insert_user, resolve, retire_unconsumed_tokens, set_cookie, single_use_token_by_hash,
     ui_locales_from_return_to, user_by_id, user_by_primary_email,
@@ -96,34 +97,59 @@ fn hash(token: &str) -> Vec<u8> {
     Sha256::digest(token.as_bytes()).to_vec()
 }
 
-/// The document shell every page here renders inside.
-fn page_html(status: StatusCode, body: &str) -> Response {
-    let document = format!(
-        "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">\
-<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">\
-<meta name=\"robots\" content=\"noindex\">\
-<title>Sign in</title></head>\
-<body style=\"font:16px/1.5 system-ui,sans-serif;margin:3rem auto;max-width:32rem;\
-padding:0 1rem\">{body}</body></html>"
-    );
-    (
-        status,
-        [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
-        Html(document),
-    )
-        .into_response()
+/// Where every page here sends a person who needs a new link.
+const START_PATH: &str = "/v1/auth-magic-link/start";
+
+/// The instance's branding, for a page this module renders (issue #840).
+fn brand_of(state: &ModuleState) -> Brand {
+    Brand::from_config(&*state.ctx.config, &state.ctx.venture)
 }
 
-fn page(status: StatusCode, message: &str, confirm: Option<&str>) -> Response {
-    let action = confirm.map_or_else(String::new, |token| {
-        format!(
-            "<form method=\"post\"><input type=\"hidden\" name=\"token\" value=\"{}\">\
-<button type=\"submit\" style=\"font:inherit;padding:12px 20px;border-radius:6px;\
-border:0;background:#1a1a1a;color:#fff;font-weight:600;cursor:pointer\">Sign in</button></form>",
-            html_escape(token)
-        )
-    });
-    page_html(status, &format!("<p>{}</p>{action}", html_escape(message)))
+/// The confirm page: the one form here that posts back to a page whose
+/// URL carries the token. Rendered through the hosted shell, so it answers
+/// with `Referrer-Policy: same-origin` and the browser's POST carries a
+/// real `Origin` the login-CSRF guard can check (issue #840).
+fn confirm_page(brand: &Brand, token: &str) -> Response {
+    let body = format!(
+        "<h1>Confirm sign-in</h1>\
+<p class=\"sub\">Confirm that it was you who asked to sign in to {name}.</p>\
+<form method=\"post\" class=\"cf-form\"><input type=\"hidden\" name=\"token\" value=\"{token}\">\
+<button class=\"cf-primary\" type=\"submit\">Sign in</button></form>",
+        name = html_escape(&brand.name),
+        token = html_escape(token),
+    );
+    HostedPage::new("Confirm sign-in").body(body).render(brand)
+}
+
+/// The answer to a submitted form, whoever the address belongs to.
+fn sent_page(brand: &Brand, return_to: Option<&str>, minutes: i64) -> Response {
+    let again = start_href(return_to);
+    let body = format!(
+        "<h1>Check your inbox</h1>\
+<p class=\"sub\">If that address can sign in, a link is on its way. Check your inbox. \
+It works once and expires in {minutes} minutes.</p>\
+<a class=\"cf-back\" href=\"{again}\">Use a different address</a>",
+        again = html_escape(&again),
+    );
+    HostedPage::new("Check your inbox")
+        .status(StatusCode::ACCEPTED)
+        .body(body)
+        .toast(Toast::success(
+            "Request received",
+            "If that address can sign in, a link is on its way.",
+        ))
+        .render(brand)
+}
+
+/// `/start`, carrying `return_to` when there is one.
+fn start_href(return_to: Option<&str>) -> String {
+    return_to.map_or_else(
+        || START_PATH.to_owned(),
+        |value| {
+            let encoded: String = url::form_urlencoded::byte_serialize(value.as_bytes()).collect();
+            format!("{START_PATH}?return_to={encoded}")
+        },
+    )
 }
 
 /// The refusal, as a pause rather than a rendered response, so the JSON
@@ -195,11 +221,15 @@ struct StartForm {
 }
 
 /// `GET /start?return_to=/path` — the form.
-async fn start(Query(query): Query<StartQuery>) -> Response {
+async fn start(State(state): State<Arc<ModuleState>>, Query(query): Query<StartQuery>) -> Response {
     form_page(
-        safe_return_to(query.return_to.as_deref()).as_deref(),
-        query.locale.as_deref(),
-        None,
+        &brand_of(&state),
+        &FormState {
+            return_to: safe_return_to(query.return_to.as_deref()).as_deref(),
+            locale: query.locale.as_deref(),
+            email: "",
+            problem: None,
+        },
     )
 }
 
@@ -216,16 +246,29 @@ async fn start_submit(
     scope: Scope,
     headers: HeaderMap,
     axum::extract::Form(form): axum::extract::Form<StartForm>,
-) -> Result<Response, Problem> {
+) -> Response {
+    let brand = brand_of(&state);
     let return_to = safe_return_to(form.return_to.as_deref());
-    // An empty box is the one thing worth saying out loud: it is the
-    // person's own typing, not a fact about anybody's account.
-    if form.email.trim().is_empty() {
-        return Ok(form_page(
-            return_to.as_deref(),
-            form.locale.as_deref(),
-            Some("Enter your email address."),
-        ));
+    let again = |problem: FormProblem| {
+        form_page(
+            &brand,
+            &FormState {
+                return_to: return_to.as_deref(),
+                locale: form.locale.as_deref(),
+                email: &form.email,
+                problem: Some(problem),
+            },
+        )
+    };
+    // What the person typed is theirs to be told about: an empty box and
+    // a string that cannot be an address are facts about their typing,
+    // not about anybody's account, so saying so leaks nothing.
+    let typed = form.email.trim();
+    if typed.is_empty() {
+        return again(FormProblem::Empty);
+    }
+    if !looks_like_an_address(typed) {
+        return again(FormProblem::NotAnAddress);
     }
     match decide(
         &state,
@@ -236,62 +279,159 @@ async fn start_submit(
         form.locale.as_deref(),
         None,
     )
-    .await?
+    .await
     {
         // The same sentence the JSON route returns, for the same reason:
         // it must not say whether the address has an account.
-        Verdict::Accepted => Ok(page(
-            StatusCode::ACCEPTED,
-            "If that address can sign in, a link is on its way. Check your inbox.",
-            None,
-        )),
-        Verdict::RateLimited(_) => Ok(form_page(
+        Ok(Verdict::Accepted) => sent_page(
+            &brand,
             return_to.as_deref(),
-            form.locale.as_deref(),
-            Some("Too many attempts just now. Try again in a minute."),
-        )),
+            state
+                .settings
+                .as_ref()
+                .map_or(15, |settings| settings.ttl_secs / 60),
+        ),
+        Ok(Verdict::RateLimited(decision)) => {
+            let wait = decision
+                .retry_after
+                .or_else(|| decision.quota.as_ref().map(|quota| quota.reset))
+                .map_or(60, |pause| pause.as_secs().max(1));
+            let mut response = again(FormProblem::RateLimited(wait));
+            // The same pause the JSON route sends as a header.
+            if let Ok(value) = header::HeaderValue::from_str(&wait.to_string()) {
+                response.headers_mut().insert(header::RETRY_AFTER, value);
+            }
+            response
+        }
+        // A browser form post never gets problem JSON: the same refusal,
+        // as a page with a way forward (issue #840).
+        Err(problem) => cratefield_auth_core::page::problem_page(
+            &brand,
+            &problem.instance(&scope.request_id),
+            ("Try again", &start_href(return_to.as_deref())),
+        ),
     }
 }
 
-/// The form itself, with an optional message above it.
-fn form_page(return_to: Option<&str>, locale: Option<&str>, message: Option<&str>) -> Response {
-    let hidden = return_to.map_or_else(String::new, |value| {
+/// A permissive shape check for the page only: something before an `@`,
+/// a dotted domain after it, no spaces. Deliberately looser than an RFC
+/// validator — a real address this refuses is a person locked out — and
+/// only ever used to tell someone they mistyped.
+fn looks_like_an_address(value: &str) -> bool {
+    let Some((local, domain)) = value.rsplit_once('@') else {
+        return false;
+    };
+    !local.is_empty()
+        && domain.contains('.')
+        && !domain.starts_with('.')
+        && !domain.ends_with('.')
+        && value.len() <= 320
+        && !value.chars().any(|c| c.is_whitespace() || c.is_control())
+}
+
+/// Why the form came back.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum FormProblem {
+    /// Nothing was typed.
+    Empty,
+    /// What was typed cannot be an address.
+    NotAnAddress,
+    /// The limiter refused; wait this many seconds.
+    RateLimited(u64),
+}
+
+/// Everything the form page shows.
+struct FormState<'a> {
+    return_to: Option<&'a str>,
+    locale: Option<&'a str>,
+    /// What was typed, put back in the box so a typo is fixed, not retyped.
+    email: &'a str,
+    problem: Option<FormProblem>,
+}
+
+/// The form itself, with any problem shown inline under the field (and,
+/// for a refusal that is not about the field, as a notice).
+fn form_page(brand: &Brand, state: &FormState<'_>) -> Response {
+    let hidden = state.return_to.map_or_else(String::new, |value| {
         format!(
             "<input type=\"hidden\" name=\"return_to\" value=\"{}\">",
             html_escape(value)
         )
-    }) + &locale.map_or_else(String::new, |value| {
+    }) + &state.locale.map_or_else(String::new, |value| {
         format!(
             "<input type=\"hidden\" name=\"locale\" value=\"{}\">",
             html_escape(value)
         )
     });
-    let note = message.map_or_else(String::new, |text| {
-        format!("<p style=\"color:#a33\">{}</p>", html_escape(text))
-    });
-    let body = format!(
-        "{note}<form method=\"post\">{hidden}\
-<label for=\"email\" style=\"display:block;margin-bottom:.4rem\">Email address</label>\
-<input id=\"email\" name=\"email\" type=\"email\" autocomplete=\"email\" required \
-autofocus style=\"font:inherit;padding:10px;width:100%;box-sizing:border-box;\
-border:1px solid #ccc;border-radius:6px\">\
-<button type=\"submit\" style=\"font:inherit;margin-top:.8rem;padding:12px 20px;\
-border-radius:6px;border:0;background:#1a1a1a;color:#fff;font-weight:600;\
-cursor:pointer\">Email me a link</button></form>"
+    let field_error = match state.problem {
+        Some(FormProblem::Empty) => "Enter your email address.".to_owned(),
+        Some(FormProblem::NotAnAddress) => {
+            "That does not look like an email address. Check it and try again.".to_owned()
+        }
+        Some(FormProblem::RateLimited(wait)) => {
+            format!(
+                "Too many attempts just now. Wait {} and try again.",
+                seconds(wait)
+            )
+        }
+        None => String::new(),
+    };
+    let invalid = matches!(
+        state.problem,
+        Some(FormProblem::Empty | FormProblem::NotAnAddress)
     );
-    page_html(StatusCode::OK, &body)
+    let back = state.return_to.map_or_else(String::new, |value| {
+        format!(
+            "<a class=\"cf-back\" href=\"{}\">Other ways to sign in</a>",
+            html_escape(value)
+        )
+    });
+    // `novalidate`: the browser's own bubble would replace the message
+    // below with one in another voice; the server says it instead, with
+    // or without script.
+    let body = format!(
+        "<h1>Sign in with email</h1>\
+<p class=\"sub\">We will email you a link that signs you in.</p>\
+<form method=\"post\" class=\"cf-form\" novalidate>{hidden}\
+<label class=\"cf-label\" for=\"email\">Email address</label>\
+<input class=\"cf-input\" id=\"email\" name=\"email\" type=\"email\" autocomplete=\"email\" \
+inputmode=\"email\" required autofocus value=\"{value}\" aria-describedby=\"email-error\"{aria_invalid}>\
+<p class=\"cf-field-error\" id=\"email-error\" role=\"alert\" aria-live=\"assertive\">{field_error}</p>\
+<button class=\"cf-primary\" type=\"submit\">Email me a link</button></form>{back}",
+        value = html_escape(state.email.trim()),
+        aria_invalid = if invalid {
+            " aria-invalid=\"true\""
+        } else {
+            ""
+        },
+        field_error = html_escape(&field_error),
+    );
+    let mut page = HostedPage::new("Sign in with email").body(body);
+    match state.problem {
+        Some(FormProblem::RateLimited(wait)) => {
+            page = page
+                .status(StatusCode::TOO_MANY_REQUESTS)
+                .toast(Toast::error(
+                    "Too many attempts",
+                    format!("Wait {} before asking for another link.", seconds(wait)),
+                ));
+        }
+        Some(FormProblem::Empty | FormProblem::NotAnAddress) => {
+            page = page.status(StatusCode::UNPROCESSABLE_ENTITY);
+        }
+        None => {}
+    }
+    page.render(brand)
 }
 
-/// Escapes the five characters that can leave an HTML attribute or a text
-/// node. `return_to` and the token on the confirm page are caller-supplied
-/// and land in a `value=`.
-fn html_escape(value: &str) -> String {
-    value
-        .replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
-        .replace('\'', "&#39;")
+/// `30 seconds`, `1 minute`, `2 minutes`: a wait as a person reads it.
+fn seconds(wait: u64) -> String {
+    match wait {
+        1 => "a second".to_owned(),
+        2..=59 => format!("{wait} seconds"),
+        60..=119 => "a minute".to_owned(),
+        _ => format!("{} minutes", wait.div_ceil(60)),
+    }
 }
 
 /// What the request path decided. Everything except a rate-limit refusal
@@ -664,16 +804,16 @@ fn looks_like_a_token(value: &str) -> bool {
 ///
 /// Nothing is read either: the page is the same whether or not the token
 /// is real, so nobody can use this route to test one.
-async fn consume(Query(query): Query<ConsumeQuery>) -> Response {
+async fn consume(
+    State(state): State<Arc<ModuleState>>,
+    Query(query): Query<ConsumeQuery>,
+) -> Response {
+    let brand = brand_of(&state);
     let token = query.token.unwrap_or_default();
     if !looks_like_a_token(&token) {
-        return expired_page();
+        return expired_page(&brand);
     }
-    page(
-        StatusCode::OK,
-        "Confirm that it was you who asked to sign in.",
-        Some(&token),
-    )
+    confirm_page(&brand, &token)
 }
 
 /// `POST /consume`, the confirm button.
@@ -684,14 +824,28 @@ async fn confirm(
     uri: Uri,
     body: String,
 ) -> Result<Response, Problem> {
+    let brand = brand_of(&state);
     // Spending the token mints a session, so a form on another site must
     // not be able to press this button for somebody (issue #439). This is
     // the only way in: the GET above never spends, because a click out of
     // a mail client is inherently cross-site and so is a forced
     // navigation (issue #483), and only a request from our own page can
     // be told apart from both.
-    cratefield_auth_core::csrf::require_same_origin(&headers, &uri)
-        .map_err(|problem| problem.instance(&scope.request_id))?;
+    //
+    // A browser that posted the confirm form gets the refusal as a page
+    // with a way forward rather than problem JSON (issue #840); an API
+    // client still gets the problem.
+    if let Err(problem) = cratefield_auth_core::csrf::require_same_origin(&headers, &uri) {
+        let problem = problem.instance(&scope.request_id);
+        if cratefield_auth_core::page::wants_html(&headers) {
+            return Ok(cratefield_auth_core::page::problem_page(
+                &brand,
+                &problem,
+                ("Send a new link", START_PATH),
+            ));
+        }
+        return Err(problem);
+    }
     let token = url::form_urlencoded::parse(body.as_bytes())
         .find(|(key, _)| key == "token")
         .map(|(_, value)| value.to_string())
@@ -699,9 +853,18 @@ async fn confirm(
     // The same shape the GET branch demands, so the two entry points stay
     // one rule and a malformed value never reaches `spend`.
     if !looks_like_a_token(&token) {
-        return Ok(expired_page());
+        return Ok(expired_page(&brand));
     }
-    spend(&state, &scope, &headers, &token).await
+    match spend(&state, &scope, &headers, &token, &brand).await {
+        Err(problem) if cratefield_auth_core::page::wants_html(&headers) => {
+            Ok(cratefield_auth_core::page::problem_page(
+                &brand,
+                &problem,
+                ("Send a new link", START_PATH),
+            ))
+        }
+        other => other,
+    }
 }
 
 /// Spends the token and signs the person in.
@@ -715,6 +878,7 @@ async fn spend(
     scope: &Scope,
     headers: &HeaderMap,
     token: &str,
+    brand: &Brand,
 ) -> Result<Response, Problem> {
     let Some(settings) = state.settings.as_ref() else {
         return Err(Problem::new(&NOT_READY));
@@ -730,30 +894,30 @@ async fn spend(
     let now = iso(clock.now());
 
     let Ok(Some(row)) = single_use_token_by_hash(db, &hash(token)).await else {
-        return Ok(expired_page());
+        return Ok(expired_page(brand));
     };
     // A token of the wrong kind is not this endpoint's business: an
     // authorization code presented here must not become a session.
     if row.kind != TOKEN_MAGIC_LINK {
         tracing::warn!(kind = %row.kind, "a token of another kind was presented to the magic link");
-        return Ok(expired_page());
+        return Ok(expired_page(brand));
     }
 
     // The one statement that makes this single-use.
     let Ok(Some(spent)) = consume_single_use_token(db, &row.id, &now).await else {
         // Expired, or somebody else got there first. Both answer the same
         // way: an attacker racing a real person must not learn they lost.
-        return Ok(expired_page());
+        return Ok(expired_page(brand));
     };
 
     let Some(user_id) = spent.user_id.clone() else {
-        return Ok(expired_page());
+        return Ok(expired_page(brand));
     };
     let Ok(Some(user)) = user_by_id(db, &user_id).await else {
-        return Ok(expired_page());
+        return Ok(expired_page(brand));
     };
     if user.status != STATUS_ACTIVE {
-        return Ok(expired_page());
+        return Ok(expired_page(brand));
     }
 
     // Opening a link sent to an address is the proof that the address is
@@ -822,12 +986,26 @@ async fn spend(
     Ok(response)
 }
 
-fn expired_page() -> Response {
-    page(
-        StatusCode::BAD_REQUEST,
-        "That sign-in link has expired or was already used. Ask for another.",
-        None,
-    )
+/// Expired, used, never issued or malformed: one page for all four, so
+/// none can be told from another. It says what to do next.
+fn expired_page(brand: &Brand) -> Response {
+    let body = format!(
+        "<h1>This link has expired</h1>\
+<p class=\"sub\">That sign-in link has expired or was already used. Links work once, \
+for a short time. Send yourself a new one.</p>\
+<a class=\"cf-primary\" href=\"{START_PATH}\">Send a new link</a>"
+    );
+    HostedPage::new("Link expired")
+        .status(StatusCode::BAD_REQUEST)
+        .body(body)
+        .toast(
+            Toast::error(
+                "Link expired",
+                "This link has expired \u{2014} send a new one.",
+            )
+            .action("Send a new link", START_PATH),
+        )
+        .render(brand)
 }
 
 #[cfg(test)]
@@ -910,7 +1088,11 @@ mod tests {
         // the first place, so the escape — the second guard — is tested
         // here directly, the way `return_to`'s is.
         let attack = "\"><script>alert(1)</script>";
-        let response = page(StatusCode::OK, "Confirm.", Some(attack));
+        let brand = Brand::from_config(
+            &cratefield_core::MapConfig::default(),
+            &cratefield_core::Venture::new("acme", "auth.acme.example"),
+        );
+        let response = confirm_page(&brand, attack);
         let body = pollster::block_on(axum::body::to_bytes(response.into_body(), usize::MAX))
             .expect("body reads");
         let html = String::from_utf8_lossy(&body).to_string();

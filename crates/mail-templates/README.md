@@ -76,6 +76,11 @@ Where a module's theme comes from, strongest first:
    and what its core `Brand` says (accent, logo, footer line), on neutral
    greys. A venture that does nothing keeps working.
 
+Two opt-in fields suit a dark brand (issue #840): `header_bg` (with
+`header_text` for the wordmark) draws the logo row as a solid band joined
+to the top of the card, inline, so Gmail keeps it; `display_font` gives
+headings their own stack. Unset, the layout is unchanged.
+
 The logo is a PNG (most clients drop SVG), hosted on the venture's site at
 twice its display size: `logo-64.png` for the default 32×32. Themes are
 plain data (`serde`), so the same JSON drives `MAIL_THEME` and the preview

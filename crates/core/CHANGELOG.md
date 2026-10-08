@@ -6,6 +6,17 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **A handler's `Referrer-Policy: same-origin` survives the no-store
+  stamp** (issue #840). `/v1/*` and token-carrying responses still get
+  `no-referrer`, except when the handler itself answered with
+  `same-origin`, which also sends nothing cross-site. Under `no-referrer`
+  a browser sends `Origin: null` on a page's own form POST, which a
+  login-CSRF guard must refuse from clients that send no
+  `Sec-Fetch-Site` (webviews, older Safari). Any other policy a handler
+  sets is still overwritten.
+
 ## [0.8.4](https://github.com/Cratefield/harness/compare/cratefield-core-v0.8.3...cratefield-core-v0.8.4) - 2026-10-07
 
 ### Other

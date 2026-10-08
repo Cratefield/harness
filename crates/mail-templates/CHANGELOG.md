@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`MailTheme::header_bg` / `header_text` and `display_font`** (issue
+  #840), all opt-in: a solid header band behind the logo row, joined to
+  the card (inline, so Gmail keeps it), and a heading font stack. Both are
+  sanitised like the other colours and fonts; unset, every mail renders as
+  before.
+
 ## [0.1.1](https://github.com/Cratefield/harness/compare/cratefield-mail-templates-v0.1.0...cratefield-mail-templates-v0.1.1) - 2026-10-05
 
 ### Other

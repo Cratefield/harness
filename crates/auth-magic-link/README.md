@@ -28,7 +28,22 @@ It is also the answer to three things other modules leave undone:
 | `POST /consume` | The confirm button. The only thing that signs in |
 
 `POST /consume` refuses a cross-site request — `403`,
-`auth/cross-site-request` (issue #439). Pressing the confirm button signs
+`auth/cross-site-request` (issue #439). A browser form post (one whose
+`Accept` names `text/html`) gets that refusal, and any other problem from
+`/consume` or `/start`, as a branded page with a next step instead of
+problem JSON (issue #840); an API client still gets the problem.
+
+Every page here answers with `Referrer-Policy: same-origin` (issue #840).
+The harness stamps `no-referrer` on `/v1/*` and on any URL carrying a
+`token`, and under `no-referrer` a browser sends `Origin: null` on the
+confirm page's own POST. Browsers that also send `Sec-Fetch-Site:
+same-origin` got through on that; Gmail's in-app browser, other webviews
+and older Safari send no fetch metadata and were refused. `same-origin`
+sends the real `Origin` to this origin and nothing to any other site, so
+the token in the URL still never leaves it, and the guard is unchanged:
+`Origin: null` is still refused
+(`origin_null_is_still_refused_and_a_browser_is_shown_a_way_forward`,
+`a_webview_without_fetch_metadata_can_press_the_confirm_button`). Pressing the confirm button signs
 somebody in, and `SameSite=Lax` stops a cross-site POST from *carrying*
 our session cookie, not from *setting* one. `GET /consume` is open to any
 site — a click out of a mail client is inherently cross-site — and that is
@@ -57,6 +72,14 @@ already accepts unauthenticated from anywhere; a token would protect
 nothing and would cost the no-script property. What bounds abuse is the
 rate limiter and the send cooldown, which the page shares with the JSON
 route rather than having its own.
+
+The form validates on the server, so it needs no script: an empty box,
+a string that cannot be an address, and a rate-limit refusal (with the
+wait, and the same `Retry-After` the JSON route sends) are shown under the
+field, announced (`role="alert"`, `aria-live`), with the field marked
+`aria-invalid` and the typing put back. These are facts about what the
+person typed, never about an account; `POST /request` still answers `202`
+to all of them. The expired page offers "Send a new link".
 
 `return_to` is escaped before it reaches the hidden field.
 `safe_return_to` requires a leading `/` and refuses an absolute URL, but it

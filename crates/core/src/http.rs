@@ -208,7 +208,8 @@ fn ua_family_of(user_agent: &str) -> String {
 
 /// Middleware: `/v1/*` responses carry
 /// `Cache-Control: no-store`, `X-Content-Type-Options: nosniff`,
-/// `Referrer-Policy: no-referrer`, `X-Frame-Options: DENY` and
+/// `Referrer-Policy: no-referrer` (or the handler's own `same-origin`,
+/// see `keeps_own_referrer_policy`), `X-Frame-Options: DENY` and
 /// `Content-Security-Policy: frame-ancestors 'none'` (architecture
 /// section 6). `/v1` is never meant to be framed: the API answers in
 /// JSON no page has business embedding, and the one document it serves —
@@ -251,10 +252,35 @@ fn insert_no_store_headers(headers: &mut axum::http::HeaderMap) {
         header::X_CONTENT_TYPE_OPTIONS,
         HeaderValue::from_static("nosniff"),
     );
-    headers.insert(
-        header::HeaderName::from_static("referrer-policy"),
-        HeaderValue::from_static("no-referrer"),
-    );
+    if !keeps_own_referrer_policy(headers) {
+        headers.insert(
+            header::REFERRER_POLICY,
+            HeaderValue::from_static("no-referrer"),
+        );
+    }
+}
+
+/// Whether a handler's own `Referrer-Policy` survives the no-store
+/// stamp: only `same-origin`, which, like `no-referrer`, sends nothing
+/// to any other site (issue #840).
+///
+/// The one reason to want it is a page that posts a form back to
+/// itself. Under `no-referrer` a browser sends `Origin: null` on that
+/// POST, even same-origin, and a login-CSRF guard is right to refuse
+/// `null`; browsers that also send `Sec-Fetch-Site` get through on that,
+/// but webviews (Gmail's in-app browser among them) and older Safari send
+/// no fetch metadata, so their same-origin POST was refused. Under
+/// `same-origin` they send the real `Origin` instead. Anything else a
+/// handler set — `origin`, `unsafe-url`, a list — could carry a
+/// token-bearing URL to another site, so it is overwritten as before.
+fn keeps_own_referrer_policy(headers: &axum::http::HeaderMap) -> bool {
+    let mut values = headers.get_all(header::REFERRER_POLICY).iter();
+    match (values.next(), values.next()) {
+        (Some(value), None) => value
+            .to_str()
+            .is_ok_and(|policy| policy.trim().eq_ignore_ascii_case("same-origin")),
+        _ => false,
+    }
 }
 
 /// Frame-blocking headers, scoped to `/v1/*` only. Deliberately not
@@ -489,6 +515,52 @@ mod tests {
             .headers()
             .get(name)
             .and_then(|value| value.to_str().ok().map(str::to_owned))
+    }
+
+    /// Issue #840: a page that posts back to itself may answer with
+    /// `same-origin`, which leaks nothing cross-site and lets the browser
+    /// send a real `Origin`; every other policy a handler sets is still
+    /// replaced by `no-referrer`.
+    #[test]
+    fn only_a_handlers_same_origin_policy_survives_the_no_store_stamp() {
+        let stamped = |policy: Option<&'static str>| {
+            let mut headers = axum::http::HeaderMap::new();
+            if let Some(policy) = policy {
+                headers.insert(header::REFERRER_POLICY, HeaderValue::from_static(policy));
+            }
+            insert_no_store_headers(&mut headers);
+            let values: Vec<_> = headers
+                .get_all(header::REFERRER_POLICY)
+                .iter()
+                .map(|value| value.to_str().unwrap_or_default().to_owned())
+                .collect();
+            values.join(",")
+        };
+        assert_eq!(stamped(None), "no-referrer");
+        assert_eq!(stamped(Some("same-origin")), "same-origin");
+        assert_eq!(stamped(Some("Same-Origin")), "Same-Origin");
+        for weaker in [
+            "unsafe-url",
+            "origin",
+            "strict-origin-when-cross-origin",
+            "no-referrer-when-downgrade",
+            "same-origin, unsafe-url",
+        ] {
+            assert_eq!(stamped(Some(weaker)), "no-referrer", "{weaker} survived");
+        }
+        // Two headers are ambiguous; the strict value wins.
+        let mut headers = axum::http::HeaderMap::new();
+        headers.append(
+            header::REFERRER_POLICY,
+            HeaderValue::from_static("same-origin"),
+        );
+        headers.append(
+            header::REFERRER_POLICY,
+            HeaderValue::from_static("unsafe-url"),
+        );
+        insert_no_store_headers(&mut headers);
+        assert_eq!(headers.get_all(header::REFERRER_POLICY).iter().count(), 1);
+        assert_eq!(headers.get(header::REFERRER_POLICY).unwrap(), "no-referrer");
     }
 
     #[test]

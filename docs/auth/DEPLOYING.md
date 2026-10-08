@@ -103,7 +103,7 @@ branding included, is in
 | `AUTH_VENTURE_NAME` | **required** | The instance's id, e.g. `alphahunt-auth`. Must be kebab-case (`[a-z0-9]+`, parts joined by `-`). |
 | `AUTH_CORS_ORIGINS` | **required** | The app's exact `scheme://host[:port]` origins for cross-origin `GET`s (discovery, JWKS). Must be `https` (`http` only for a loopback host); no wildcards, paths or trailing slash. At least one. |
 | `AUTH_BRAND_NAME` | **required** | The display name on every page and in every mail subject. |
-| `AUTH_BRAND_*` | none | Logo, accent, support address, footer, privacy and terms URLs. |
+| `AUTH_BRAND_*` | none | Logo, accent, support address, footer, privacy and terms URLs, and the optional page theme (background, text, danger, scheme, radius, fonts; issue #840). |
 | `AUTH_PROBLEM_BASE` | `<AUTH_PUBLIC_URL>/problems/` | Overrides the problem-type base. |
 | `AUTH_TURNSTILE_HOSTNAME` | host of `AUTH_PUBLIC_URL` | The bare hostname the Turnstile verdict must name (no scheme, port or path). (`TURNSTILE_SECRET` stays a secret.) |
 | `MAIL_FROM` | `no-reply@<host of AUTH_PUBLIC_URL>` | The mailer's default `From`, for mail that sets none of its own: `addr@host` or `Name <addr@host>`, domain verified. Magic-link does not use it — see below. |
@@ -187,7 +187,7 @@ you fix the config and redeploy — confirm it is up with
 |---|---|
 | `… is required` | One of the four identity values (`AUTH_PUBLIC_URL`, `AUTH_VENTURE_NAME`, `AUTH_CORS_ORIGINS`, `AUTH_BRAND_NAME`) is missing from this environment's vars. Remember wrangler does not inherit `[vars]` into `[env.production.vars]`. |
 | `AUTH_PUBLIC_URL` — not absolute / has a path / `http` off loopback | A bare `https` origin like `https://auth.example.com`; only `localhost`/`127.0.0.1`/`[::1]` may use `http`. A trailing `/` is fine. |
-| `AUTH_BRAND_*` — malformed | The accent is `#rgb`/`#rrggbb`; URLs are absolute `https`; the support address is a bare `addr@host`; names and footers have no control characters. |
+| `AUTH_BRAND_*` — malformed | The accent and every theme colour is `#rgb`/`#rrggbb`; the radius is `0`–`32`; a font stack is names, quotes, commas and spaces only; the scheme is `dark` or `light`; URLs are absolute `https`; the support address is a bare `addr@host`; names and footers have no control characters. |
 | `AUTH_CORS_ORIGINS` — wildcard, path, trailing slash, `http`, or no origins | Exact `https` `scheme://host[:port]` origins; set-but-empty is refused, at least one is required. |
 | `AUTH_VENTURE_NAME` — must be kebab-case | `[a-z0-9]+` parts joined by `-`, e.g. `acme-auth`. |
 | `AUTH_TURNSTILE_HOSTNAME` — must be a bare hostname | The host alone, e.g. `auth.example.com`; no scheme, port or path. |

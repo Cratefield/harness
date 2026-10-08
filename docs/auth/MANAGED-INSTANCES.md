@@ -37,7 +37,9 @@ Copy `instances/cratefield/` to `instances/<app>/` and edit
   `AUTH_CORS_ORIGINS` (the app's own browser origins),
   `AUTH_BRAND_NAME` and the optional branding (`AUTH_BRAND_LOGO_URL`,
   `AUTH_BRAND_ACCENT`, `AUTH_BRAND_SUPPORT_EMAIL`, `AUTH_BRAND_FOOTER`,
-  `AUTH_BRAND_PRIVACY_URL`, `AUTH_BRAND_TERMS_URL`),
+  `AUTH_BRAND_PRIVACY_URL`, `AUTH_BRAND_TERMS_URL`, and the page theme —
+  `AUTH_BRAND_BACKGROUND`, `AUTH_BRAND_TEXT`, `AUTH_BRAND_FONT_*` and the
+  rest, issue #840 — plus `MAIL_THEME` for the sign-in mail),
   `AUTH_PASSKEYS_RP_ID` (production: `<domain>`; staging: its own host),
   `AUTH_PASSKEYS_ORIGINS`, the module bases (`AUTH_MAGIC_LINK_PUBLIC_BASE`,
   `AUTH_PASSWORD_PUBLIC_BASE`, `AUTH_OIDC_REDIRECT_BASE`,

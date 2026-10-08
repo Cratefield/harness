@@ -198,6 +198,35 @@ mod tests {
         assert_eq!(overridden.subject, "the venture's own subject");
     }
 
+    /// A dark brand's mail (issue #840): the deployment's `MAIL_THEME`
+    /// gives the logo row a dark band and the button the accent, inline,
+    /// so a client that drops `<style>` (Gmail among them) still shows
+    /// both.
+    #[test]
+    fn a_mail_theme_from_config_gives_a_header_band_and_an_accent_button() {
+        let cfg = cratefield_core::MapConfig::from_pairs([(
+            mt::THEME_CONFIG_KEY,
+            r##"{"wordmark":"Acme","header_bg":"#0C0C0D","header_text":"#ECEAE4",
+                "light":{"button":"#D8FF3C","button_text":"#0C0C0D"},"radius":0,"button_radius":0}"##,
+        )]);
+        let rendered =
+            render(&TemplateRegistry::new(), &data(), "en", &venture(), &cfg).expect("renders");
+        let html = &rendered.html;
+        assert!(
+            html.contains("bgcolor=\"#0C0C0D\" style=\"background:#0C0C0D;padding:20px 40px"),
+            "no header band: {html}"
+        );
+        assert!(html.contains("color:#ECEAE4\">Acme</td>"), "{html}");
+        assert!(
+            html.contains("bgcolor=\"#D8FF3C\" style=\"border-radius:0px;background:#D8FF3C\""),
+            "no accent button: {html}"
+        );
+        assert!(
+            html.contains("color:#0C0C0D;text-decoration:none"),
+            "{html}"
+        );
+    }
+
     #[test]
     fn nothing_from_the_link_can_break_out_of_the_html() {
         // The link is built by this service, not by a caller, but the

@@ -1,0 +1,109 @@
+/* The hosted auth pages' shared stylesheet (issue #840). Every colour,
+   font and corner comes from the custom properties `Brand::stylesheet`
+   writes above this, so an instance themes these rules without
+   touching them. */
+* { box-sizing: border-box; }
+body {
+  margin: 0; min-height: 100vh; display: grid; place-items: center;
+  background: var(--cf-bg); color: var(--cf-text);
+  font: 16px/1.5 var(--cf-font-body);
+  -webkit-font-smoothing: antialiased;
+}
+main { width: min(27rem, 100%); padding: 2.5rem 1.25rem; text-align: center; }
+h1 {
+  font-family: var(--cf-font-display); font-size: 1.5rem; line-height: 1.2;
+  font-weight: 650; margin: 0 0 .5rem; letter-spacing: -.01em;
+}
+p { margin: 0 0 1.25rem; }
+p.sub { color: var(--cf-muted); margin: 0 0 2rem; font-size: .95rem; }
+.cf-label {
+  display: block; margin: 0 0 .45rem; font-family: var(--cf-font-mono);
+  font-size: .72rem; font-weight: 500; letter-spacing: .08em;
+  text-transform: uppercase; color: var(--cf-muted);
+}
+ul.methods { list-style: none; margin: 0; padding: 0; display: grid; gap: .6rem; }
+a.method, button.method {
+  display: block; width: 100%; padding: .8rem 1rem; border-radius: var(--cf-radius);
+  background: var(--cf-surface); color: var(--cf-text); text-decoration: none;
+  border: 1px solid var(--cf-border); transition: border-color .15s ease;
+  font: inherit; font-weight: 550; cursor: pointer; text-align: center;
+}
+a.method:hover, a.method:focus-visible,
+button.method:hover, button.method:focus-visible { border-color: var(--cf-accent); outline: none; }
+button.method[disabled] { opacity: .6; cursor: progress; }
+.cf-primary {
+  display: block; width: 100%; margin-top: 1rem; padding: .85rem 1rem;
+  border: 0; border-radius: var(--cf-radius);
+  background: var(--cf-accent); color: var(--cf-accent-text);
+  font: inherit; font-weight: 650; text-align: center; text-decoration: none;
+  cursor: pointer; transition: filter .15s ease;
+}
+.cf-primary:hover { filter: brightness(1.08); }
+.cf-primary:focus-visible { outline: 2px solid var(--cf-text); outline-offset: 3px; }
+form.cf-form { text-align: left; margin: 0; }
+.cf-input {
+  display: block; width: 100%; padding: .75rem .85rem; font: inherit;
+  color: var(--cf-text); background: var(--cf-surface);
+  border: 1px solid var(--cf-border); border-radius: var(--cf-radius);
+}
+.cf-input:focus { outline: none; border-color: var(--cf-accent); box-shadow: 0 0 0 1px var(--cf-accent); }
+.cf-input[aria-invalid="true"] { border-color: var(--cf-danger); box-shadow: 0 0 0 1px var(--cf-danger); }
+.cf-field-error {
+  margin: .5rem 0 0; color: var(--cf-danger); font-size: .875rem;
+  min-height: 0;
+}
+.cf-field-error:empty { display: none; }
+.cf-field-error::before { content: "! "; font-family: var(--cf-font-mono); font-weight: 700; }
+.cf-back { display: inline-block; margin-top: 1.25rem; color: var(--cf-muted); font-size: .875rem; }
+.cf-back:hover, .cf-back:focus-visible { color: var(--cf-text); }
+p.none {
+  color: var(--cf-muted); background: var(--cf-surface); border: 1px dashed var(--cf-border);
+  border-radius: var(--cf-radius); padding: 1rem;
+}
+code {
+  display: inline-block; margin-top: .25rem; padding: .2rem .5rem;
+  background: var(--cf-surface); border-radius: var(--cf-radius); color: var(--cf-muted);
+  font-family: var(--cf-font-mono); font-size: .75rem; word-break: break-all;
+}
+footer { margin-top: 2rem; color: var(--cf-muted); font-size: .8rem; }
+footer a { color: var(--cf-accent); }
+img.brand-logo { display: block; max-height: 3rem; max-width: 12rem; margin: 0 auto 1.25rem; }
+
+/* Notices: top-right, newest on top; on a phone, across the top with a
+   16px gutter each side. */
+.cf-toasts {
+  position: fixed; top: 16px; right: 16px; z-index: 10;
+  width: min(23rem, calc(100vw - 32px));
+  display: flex; flex-direction: column; gap: .5rem; text-align: left;
+}
+@media (max-width: 600px) {
+  .cf-toasts { left: 16px; right: 16px; width: auto; }
+}
+.cf-toast {
+  position: relative; display: block; padding: .8rem 2.6rem .85rem 1rem;
+  background: var(--cf-surface); color: var(--cf-text);
+  border: 1px solid var(--cf-border); border-left: 4px solid var(--cf-accent);
+  border-radius: var(--cf-radius); box-shadow: 0 10px 30px rgba(0, 0, 0, .35);
+  font-size: .9rem; line-height: 1.4;
+  animation: cf-toast-in .22s ease-out both;
+}
+.cf-toast-error { border-left-color: var(--cf-danger); }
+.cf-toast-title {
+  display: block; margin-bottom: .15rem; font-family: var(--cf-font-mono);
+  font-size: .72rem; letter-spacing: .08em; text-transform: uppercase;
+  color: var(--cf-accent);
+}
+.cf-toast-error .cf-toast-title { color: var(--cf-danger); }
+.cf-toast a { color: var(--cf-text); font-weight: 600; }
+.cf-toast-close {
+  position: absolute; top: .55rem; right: .55rem; width: 1.75rem; height: 1.75rem;
+  margin: 0; padding: 0; border: 0; background: transparent; color: var(--cf-muted);
+  font: 700 1.1rem/1 var(--cf-font-mono); cursor: pointer;
+}
+/* A notice closes with no script: its close control is a checkbox. */
+input.cf-toast-close { appearance: none; -webkit-appearance: none; }
+input.cf-toast-close::after { content: "\00d7"; display: block; text-align: center; line-height: 1.75rem; }
+.cf-toast-close:hover, .cf-toast-close:focus-visible { color: var(--cf-text); outline: 1px solid var(--cf-border); }
+.cf-toast:has(input.cf-toast-close:checked) { display: none; }
+@keyframes cf-toast-in { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) { .cf-toast { animation: none; } }
