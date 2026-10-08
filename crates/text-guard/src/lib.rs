@@ -148,8 +148,11 @@
 //! ```
 //!
 //! Caller spans come back as [`SpanKind::Custom`] with the caller's label
-//! in [`Span::label`], and must survive verbatim at a word boundary like a
-//! name. They take precedence over every built-in span they overlap,
+//! in [`Span::label`]. One survives when the rewrite has a caller span with
+//! the same label and the same text: the same characters that the caller's
+//! rules no longer recognise (an escaped copy of a mention, say) do not
+//! count, so [`Guard::verify_with`] needs the rewrite's caller spans too.
+//! They take precedence over every built-in span they overlap,
 //! including code. A range that is empty, out of bounds, not on a `char`
 //! boundary, or overlaps an earlier caller span is ignored; per-call spans
 //! count as earlier than the extractor's.
@@ -494,10 +497,11 @@ impl Guard {
         self.verify_with(original, &[], rewrite, &[])
     }
 
-    /// [`Guard::verify`] with caller spans for each side: `original_extra`
-    /// must survive like any protected span, and `rewrite_extra` shadows
-    /// what it covers in the rewrite, so the digits inside a caller span are
-    /// never an introduced number.
+    /// [`Guard::verify`] with caller spans for each side. Each of
+    /// `original_extra` survives only as one of `rewrite_extra` (or of the
+    /// guard's extractor) with the same label and text, and `rewrite_extra`
+    /// shadows what it covers in the rewrite, so the digits inside a caller
+    /// span are never an introduced number.
     ///
     /// # Errors
     ///
@@ -511,12 +515,24 @@ impl Guard {
     ) -> Result<(), Vec<Violation>> {
         let mut violations = Vec::new();
         let mut seen = BTreeSet::new();
+        let rewrite_spans = self.extract_with(rewrite, rewrite_extra);
         for span in self.extract_with(original, original_extra) {
             let key = (span.kind, span.label.clone(), span.protected().to_owned());
             if seen.contains(&key) {
                 continue;
             }
-            if !contains_bounded(rewrite, span.protected(), span.kind) {
+            let kept = if span.kind == SpanKind::Custom {
+                // A caller span survives as a caller span: same label, same
+                // text, found in the rewrite by the same caller rules.
+                rewrite_spans.iter().any(|kept| {
+                    kept.kind == SpanKind::Custom
+                        && kept.label == span.label
+                        && kept.text == span.text
+                })
+            } else {
+                contains_bounded(rewrite, span.protected(), span.kind)
+            };
+            if !kept {
                 violations.push(Violation {
                     kind: ViolationKind::Missing,
                     span,
@@ -526,7 +542,7 @@ impl Guard {
         }
         if self.numbers {
             let mut introduced = BTreeSet::new();
-            for span in self.extract_with(rewrite, rewrite_extra) {
+            for span in rewrite_spans {
                 if span.kind == SpanKind::Number
                     && !contains_bounded(original, &span.text, SpanKind::Number)
                     && introduced.insert(span.text.clone())

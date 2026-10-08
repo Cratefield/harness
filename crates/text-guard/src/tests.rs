@@ -572,6 +572,12 @@ fn per_call_spans_take_ranges_and_win_over_the_extractor() {
             .verify_with("Code X-42 ships", &extra, "Code X-43 ships", &[])
             .is_err()
     );
+    // The same characters, not locked as a caller span in the rewrite, do
+    // not count: an escaped copy of a mention is text, not a mention.
+    let violations = Guard::new()
+        .verify_with("Code X-42 ships", &extra, "Code X-42 ships", &[])
+        .unwrap_err();
+    assert_eq!(violations[0].span.kind_name(), "sku");
 }
 
 #[test]

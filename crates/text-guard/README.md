@@ -23,7 +23,7 @@ assert!(verify(original, "Dana Okafor says Q3 revenue rose 19% to $4.2M.").is_er
 | `name` | two or more capitalised words, lowercase particles (`of`, `van`, …) between them, leading function words dropped | verbatim, at a word boundary |
 | `url` | `http://`, `https://` or bare `www.` links, to whitespace; trailing `.,;:!?'` and unmatched `)` `]` are the sentence's, balanced parentheses stay | verbatim and whole (not a prefix of a longer link) |
 | `hashtag` | `#` + letters, digits, `_` in any script, at least one letter, not glued to a word (`C#`); `#123` and `# Heading` are not hashtags | verbatim, not the front of a longer tag |
-| `custom` | byte ranges the caller supplies, labelled (`Guard::with_extra`, `extract_with`, `verify_with`) | verbatim, at a word boundary |
+| `custom` | byte ranges the caller supplies, labelled (`Guard::with_extra`, `extract_with`, `verify_with`) | as a caller span of the rewrite with the same label and text (an escaped copy is not one) |
 
 Rules run in the order code, quote, url, hashtag, number, name, after the
 caller's spans, and a span never overlaps an earlier one: the digits of a
