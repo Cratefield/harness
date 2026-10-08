@@ -8,7 +8,9 @@ use bytes::Bytes;
 use cratefield_adapter_owlpost::{
     DEFAULT_BASE_URL, MAX_BATCH, Owlpost, OwlpostError, SendOptions, Stream, Suppression,
 };
-use cratefield_core::{Clock, HttpClient, HttpError, MailError, Mailer, Message, SendOutcome};
+use cratefield_core::{
+    Clock, HttpClient, HttpError, MailError, MailProvider, Mailer, Message, SendOutcome,
+};
 use http::{HeaderMap, Request, Response, StatusCode};
 use serde_json::Value;
 use std::sync::Arc;
@@ -390,6 +392,24 @@ fn debug_never_prints_the_key() {
     assert!(
         format!("{unconfigured:?}").contains("api_key_configured: false"),
         "a blank key must not read as configured"
+    );
+}
+
+/// `/__health` names Owlpost and says whether a key is held (issue #793) —
+/// and, having no probe, says nothing about health at all.
+#[test]
+fn providers_reports_the_key_as_present_or_absent() {
+    let (http, _rx) = fixture(200, "{}", None);
+    assert_eq!(
+        adapter(http.clone()).providers(),
+        vec![MailProvider::new("owlpost", true)]
+    );
+
+    let (http, _rx) = fixture(200, "{}", None);
+    let keyless = Owlpost::new(http, clock_at(0), None, "from@x.dev", None);
+    assert_eq!(
+        keyless.providers(),
+        vec![MailProvider::new("owlpost", false)]
     );
 }
 

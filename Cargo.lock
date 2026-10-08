@@ -710,6 +710,8 @@ dependencies = [
  "cratefield-secrets",
  "cratefield-tables-api",
  "cratefield-testing",
+ "cratefield-text-diff",
+ "cratefield-text-guard",
  "cratefield-ui",
 ]
 

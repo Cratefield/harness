@@ -17,7 +17,8 @@ pub use inbound::ResendInbound;
 use async_trait::async_trait;
 use bytes::Bytes;
 use cratefield_core::{
-    Clock, HttpClient, HttpError, MailError, Mailer, Message, SendOutcome, retry_after,
+    Clock, HttpClient, HttpError, MailError, MailProvider, Mailer, Message, SendOutcome,
+    retry_after,
 };
 use http::header::{AUTHORIZATION, CONTENT_TYPE};
 use http::{Request, StatusCode};
@@ -181,6 +182,13 @@ impl Resend {
 
 #[async_trait]
 impl Mailer for Resend {
+    /// Resend is the only provider behind this adapter, and it has no
+    /// probe: whether the key works is only learned by sending, so health
+    /// stays unknown rather than being guessed.
+    fn providers(&self) -> Vec<MailProvider> {
+        vec![MailProvider::new("resend", self.api_key.is_some())]
+    }
+
     async fn send(&self, message: Message) -> Result<SendOutcome, MailError> {
         // Outcome logging per issue #14: provider, code, idempotency key;
         // the recipient is never logged.

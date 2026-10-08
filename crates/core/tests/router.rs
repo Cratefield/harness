@@ -677,9 +677,49 @@ async fn oversized_form_body_rejected() {
 
 /// `/__health` carries the observability detail from issue #14:
 /// `harness_api`, `HARNESS_BUILD` from config, mailer/captcha presence.
+///
+/// It also names itself (issue #793), so the listing below is this mailer's
+/// and not a placeholder.
 struct NeverMailer;
 #[async_trait::async_trait]
 impl cratefield_core::Mailer for NeverMailer {
+    fn providers(&self) -> Vec<cratefield_core::MailProvider> {
+        vec![cratefield_core::MailProvider::new("never", true)]
+    }
+
+    async fn send(
+        &self,
+        _message: cratefield_core::Message,
+    ) -> Result<cratefield_core::SendOutcome, cratefield_core::MailError> {
+        Ok(cratefield_core::SendOutcome::NotConfigured)
+    }
+}
+
+/// A mailer that knows its provider is both unconfigured and failing — the
+/// verdict a venture with a failover chain wants to see for its secondary.
+struct FailingMailer;
+#[async_trait::async_trait]
+impl cratefield_core::Mailer for FailingMailer {
+    fn providers(&self) -> Vec<cratefield_core::MailProvider> {
+        vec![cratefield_core::MailProvider {
+            name: "cloudflare".to_owned(),
+            configured: false,
+            healthy: Some(false),
+        }]
+    }
+
+    async fn send(
+        &self,
+        _message: cratefield_core::Message,
+    ) -> Result<cratefield_core::SendOutcome, cratefield_core::MailError> {
+        Ok(cratefield_core::SendOutcome::NotConfigured)
+    }
+}
+
+/// A mailer that says nothing about itself, so the trait's default does.
+struct AnonymousMailer;
+#[async_trait::async_trait]
+impl cratefield_core::Mailer for AnonymousMailer {
     async fn send(
         &self,
         _message: cratefield_core::Message,
@@ -704,6 +744,11 @@ async fn health_lists_contract_and_port_detail() {
     assert_eq!(body["harness_build"], "c8ecd06");
     assert_eq!(body["mailer"], "configured");
     assert_eq!(body["captcha"], "absent");
+    // The named listing beside the port-presence key (issue #793). An
+    // adapter with no probe omits `healthy` rather than claiming `false`.
+    assert_eq!(body["mailers"][0]["name"], "never");
+    assert_eq!(body["mailers"][0]["configured"], true);
+    assert_eq!(body["mailers"][0].get("healthy"), None);
 
     // Without config or ports: null build, mailer not configured.
     let bare = harness.router(Ports::empty());
@@ -711,6 +756,41 @@ async fn health_lists_contract_and_port_detail() {
     let body = body_json(response).await;
     assert_eq!(body["harness_build"], serde_json::Value::Null);
     assert_eq!(body["mailer"], "not_configured");
+    assert_eq!(body["mailers"], json!([]));
+}
+
+/// A provider's own verdicts reach `/__health` verbatim, so a dashboard can
+/// tell "no key" from "key there but the provider is failing" (issue #793).
+#[pollster::test]
+async fn health_reports_a_providers_configured_and_unhealthy_verdicts() {
+    let harness = harness_with_sample();
+    let mut ports = Ports::empty();
+    ports.mailer = Some(Arc::new(FailingMailer));
+    let router = harness.router(ports);
+    let response = request(&router, Method::GET, "/__health", &[], None).await;
+    let body = body_json(response).await;
+    assert_eq!(body["mailer"], "configured");
+    assert_eq!(
+        body["mailers"],
+        json!([{"name": "cloudflare", "configured": false, "healthy": false}])
+    );
+}
+
+/// A mailer that overrides nothing still appears: the port being wired in is
+/// what today's `"mailer": "configured"` has always meant (issue #793).
+#[pollster::test]
+async fn health_lists_an_anonymous_provider_for_a_mailer_that_reports_none() {
+    let harness = harness_with_sample();
+    let mut ports = Ports::empty();
+    ports.mailer = Some(Arc::new(AnonymousMailer));
+    let router = harness.router(ports);
+    let response = request(&router, Method::GET, "/__health", &[], None).await;
+    let body = body_json(response).await;
+    assert_eq!(body["mailer"], "configured");
+    assert_eq!(
+        body["mailers"],
+        json!([{"name": "mailer", "configured": true}])
+    );
 }
 
 // ------------------------------------------ deployed readiness (issue #143)

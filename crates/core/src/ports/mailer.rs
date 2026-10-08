@@ -2,6 +2,7 @@
 //! reference implementation (issue #6).
 
 use async_trait::async_trait;
+use serde::Serialize;
 use std::time::Duration;
 
 /// An outbound mail. `text` is always sent alongside `html`.
@@ -164,9 +165,47 @@ impl std::fmt::Display for MailError {
 
 impl std::error::Error for MailError {}
 
+/// One mail provider behind a [`Mailer`], as reported to `/__health`.
+///
+/// Name and two verdicts, never a credential: a health report that leaked an
+/// API key would be a secret published on an unauthenticated endpoint.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct MailProvider {
+    pub name: String,
+    pub configured: bool,
+    /// `None` when the adapter carries no probe, i.e. "unknown", not
+    /// "unhealthy" — the key is then omitted from the JSON entirely.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub healthy: Option<bool>,
+}
+
+impl MailProvider {
+    /// A provider the adapter can name and configure but not probe.
+    #[must_use]
+    pub fn new(name: impl Into<String>, configured: bool) -> Self {
+        Self {
+            name: name.into(),
+            configured,
+            healthy: None,
+        }
+    }
+}
+
 #[async_trait]
 pub trait Mailer: Send + Sync {
     async fn send(&self, message: Message) -> Result<SendOutcome, MailError>;
+
+    /// The providers this mailer sends through, for `/__health`.
+    ///
+    /// The default reports one anonymous `"mailer"`, `configured: true`,
+    /// because the port being wired in *is* today's `"mailer": "configured"`
+    /// (issue #793) — an adapter that knows nothing about itself should still
+    /// show up in the listing rather than drop out of it. An adapter that
+    /// carries its own key overrides this to say whether it has one; neither
+    /// this nor the listing exposes a secret.
+    fn providers(&self) -> Vec<MailProvider> {
+        vec![MailProvider::new("mailer", true)]
+    }
 }
 
 #[cfg(test)]

@@ -5,7 +5,9 @@
 use async_trait::async_trait;
 use bytes::Bytes;
 use cratefield_adapter_resend::Resend;
-use cratefield_core::{Clock, HttpClient, HttpError, MailError, Mailer, Message, SendOutcome};
+use cratefield_core::{
+    Clock, HttpClient, HttpError, MailError, MailProvider, Mailer, Message, SendOutcome,
+};
 use http::{HeaderMap, Request, Response, StatusCode};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -343,6 +345,23 @@ async fn not_configured_short_circuits_without_network() {
         http.calls.load(Ordering::SeqCst),
         0,
         "no network call when the key is absent"
+    );
+}
+
+/// `/__health` names Resend and says whether a key is held (issue #793) —
+/// and, having no probe, says nothing about health at all.
+#[test]
+fn providers_reports_the_key_as_present_or_absent() {
+    let (http, _rx) = fixture(200, "{}", None);
+    assert_eq!(
+        adapter(http.clone()).providers(),
+        vec![MailProvider::new("resend", true)]
+    );
+
+    let keyless = Resend::new(http, clock_at(0), None, "from@x.dev", None);
+    assert_eq!(
+        keyless.providers(),
+        vec![MailProvider::new("resend", false)]
     );
 }
 

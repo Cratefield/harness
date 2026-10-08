@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `providers()` reports the one provider behind the adapter — `owlpost`,
+  configured or not, with health left unknown when the adapter carries no
+  probe (issue #793).
+
 ## [0.2.1](https://github.com/Cratefield/harness/compare/cratefield-adapter-owlpost-v0.2.0...cratefield-adapter-owlpost-v0.2.1) - 2026-10-06
 
 ### Added
