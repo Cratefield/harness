@@ -32,7 +32,7 @@ pub use brand::Brand;
 // which meant nothing outside the crate could name either — the README
 // documents `AUTH_CORE_LOGIN_METHODS` and its vocabulary, and no caller
 // could ask for it.
-pub use authorize::{LOGIN_METHODS_KEY, known_method_slugs};
+pub use authorize::{LOGIN_METHODS_KEY, known_method_slugs, sign_in_links};
 mod clients;
 /// Login CSRF (issue #439): the same-origin guard a state-changing route
 /// runs before it acts, and the 403 problem it answers with.
