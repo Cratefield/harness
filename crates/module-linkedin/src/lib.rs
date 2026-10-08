@@ -25,6 +25,7 @@
 #![forbid(unsafe_code)]
 
 mod client;
+mod factcheck;
 mod handlers;
 mod imagehdr;
 mod images;

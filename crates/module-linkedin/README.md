@@ -21,13 +21,82 @@ Mounted at `/v1/linkedin`. Everything except the OAuth callback sits under
 | `GET /v1/linkedin/admin/pages` | Pages and showcases, with roles. `?kind=showcase` filters |
 | `POST /v1/linkedin/admin/pages/{org}/images` | Raw image body, returns an asset |
 | `GET /v1/linkedin/admin/assets/{id}` | Asset upload status |
-| `POST /v1/linkedin/admin/pages/{org}/posts` | Creates or schedules a post |
+| `POST /v1/linkedin/admin/pages/{org}/posts` | Creates or schedules a post. Optional `source`: [fact check](#fact-check) first |
 | `GET /v1/linkedin/admin/posts` | Local post records. `?page=`, `?state=`, `?limit=` |
-| `PATCH /v1/linkedin/admin/posts/{id}` | Commentary, CTA label, landing page |
+| `PATCH /v1/linkedin/admin/posts/{id}` | Commentary, CTA label, landing page. Optional `source`: [fact check](#fact-check) first |
 | `DELETE /v1/linkedin/admin/posts/{id}` | Deletes on LinkedIn, then locally |
 
 `{org}` accepts a bare organization id, `urn:li:organization:{id}`, or the
 legacy `urn:li:organizationBrand:{id}`; all three name the same page.
+
+## Fact check
+
+An agent drafting a post from release notes or an announcement can send that
+text as `source` beside the commentary, on a create or an edit, and the module
+checks the commentary kept its facts before anything is created, scheduled or
+edited ([`cratefield-text-guard`](../text-guard)):
+
+```http
+POST /v1/linkedin/admin/pages/2414183/posts
+Authorization: Bearer <ADMIN_TOKEN>
+Content-Type: application/json
+
+{
+  "commentary": "Cold starts are down 38% in release 2.4, thanks to @[DevTestCo](urn:li:organization:2414183). https://example.com/releases/v2\\_4 {hashtag|\\#|launch}",
+  "commentary_format": "little",
+  "source": "Release 2.4 ships today: cold starts down 38%, with @[DevTestCo](urn:li:organization:2414183). Notes: https://example.com/releases/v2_4 #launch",
+  "idempotency_key": "release-2.4"
+}
+```
+
+```http
+PATCH /v1/linkedin/admin/posts/{id}
+Authorization: Bearer <ADMIN_TOKEN>
+Content-Type: application/json
+
+{ "commentary": "Release 2.4: cold starts down 38%.", "source": "Release 2.4 ships today: cold starts down 38%." }
+```
+
+What must survive from the source: names, numbers, quotes, code, links and
+hashtags (the guard's built-in kinds), plus LinkedIn's mentions
+(`@[Name](urn:li:organization:123)`, `urn:li:person:…`) as **mentions** —
+same name, same URN, unescaped. Both texts are read as a person sees the post:
+`little` backslash escapes count as the character they escape, and a hashtag
+template `{hashtag|\#|launch}` reads as `#launch`, so a plain `#launch` in
+release notes is kept by a template in the post and the other way round. The
+digits inside a URN are never an introduced number.
+
+- **Fails**: `422` `linkedin-fact-check-failed`, and nothing is stored or
+  sent. `missing` lists each span of the source the commentary dropped or
+  altered, `introduced` each number it made up:
+
+  ```json
+  {
+    "type": ".../linkedin-fact-check-failed",
+    "status": 422,
+    "detail": "the commentary dropped or altered 1 protected span(s) of the source and introduced 1 number(s); nothing was created, scheduled or edited",
+    "missing": [{ "kind": "number", "text": "38%" }],
+    "introduced": [{ "kind": "number", "text": "40%" }]
+  }
+  ```
+
+  `kind` is `name`, `number`, `quote`, `code`, `url`, `hashtag` or
+  `mention`.
+- **Passes**: the usual answer plus `fact_check`: the source's locked spans
+  and a word diff from source to commentary (`removed`, `added`, `same`, and
+  `locked` for a locked span that came through unchanged):
+
+  ```json
+  "fact_check": {
+    "ok": true,
+    "locks": [{ "kind": "number", "text": "2.4" }, { "kind": "mention", "text": "@[DevTestCo](urn:li:organization:2414183)" }],
+    "diff": [{ "op": "removed", "text": "Release " }, { "op": "same", "text": "..." }, { "op": "locked", "text": "38%" }]
+  }
+  ```
+
+The source is checked and dropped: it is never stored. On an edit, `source`
+needs `commentary` beside it and is never sent to LinkedIn. Without `source`,
+a create or an edit answers exactly as before, with no `fact_check` member.
 
 ## Configuration
 
