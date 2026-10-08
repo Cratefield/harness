@@ -87,6 +87,9 @@ pub use cratefield_adapter_webhook_tracker as webhook_tracker;
 #[cfg(feature = "jira")]
 pub use cratefield_adapter_jira as jira;
 
+#[cfg(feature = "linear")]
+pub use cratefield_adapter_linear as linear;
+
 // The portable classifier adapters (issue #456). The third one,
 // `cratefield-adapter-workers-ai`, is deliberately not re-exported here: it
 // depends on the `worker` crate and the `env.AI` binding, so a venture on

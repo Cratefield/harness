@@ -1,0 +1,10 @@
+{
+  "data": {
+    "issue": {
+      "id": "9f1c1d4e-6b2a-4f0c-9a7e-2d5b8c3e1a70",
+      "identifier": "ENG-123",
+      "url": "https://linear.app/acme/issue/ENG-123/outbox-refund-failed",
+      "state": { "id": "state-canceled", "name": "Canceled", "type": "canceled" }
+    }
+  }
+}

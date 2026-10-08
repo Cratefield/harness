@@ -47,6 +47,7 @@ compatibility-doc` and checked in CI for drift. Do not edit by hand.
 | `cratefield-adapter-github-app` | 0.2.0 | 1 | `^0.8` — `>=0.8.0, <0.9.0` |
 | `cratefield-adapter-github-issues` | 0.3.1 | 1 | `^0.8` — `>=0.8.0, <0.9.0` |
 | `cratefield-adapter-jira` | 0.2.1 | 1 | `^0.8` — `>=0.8.0, <0.9.0` |
+| `cratefield-adapter-linear` | 0.1.0 | 1 | `^0.8` — `>=0.8.0, <0.9.0` |
 | `cratefield-adapter-openai-compatible` | 0.2.1 | 1 | `^0.8` — `>=0.8.0, <0.9.0` |
 | `cratefield-adapter-owlpost` | 0.2.1 | 1 | `^0.8` — `>=0.8.0, <0.9.0` |
 | `cratefield-adapter-polar` | 0.2.1 | 1 | `^0.8` — `>=0.8.0, <0.9.0` |

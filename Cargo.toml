@@ -66,6 +66,10 @@ cratefield-adapter-webhook-tracker = { path = "crates/adapter-webhook-tracker", 
 # search-before-create by an idempotency label, and the inbound status
 # webhook.
 cratefield-adapter-jira = { path = "crates/adapter-jira", version = "0.2" }
+# Its other sibling (issue #559): the `Tracker` port over the Linear
+# GraphQL API — a personal API key or an OAuth token, file/status/comment,
+# and the inbound status webhook.
+cratefield-adapter-linear = { path = "crates/adapter-linear", version = "0.1" }
 cratefield-adapter-turnstile = { path = "crates/adapter-turnstile", version = "0.3" }
 # The first `TextModel` adapter (issue #430): the Claude Messages API over
 # the `HttpClient` port, against the minimal `TextModel` trait module in core.
