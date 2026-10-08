@@ -21,3 +21,7 @@ serde = { workspace = true }
 
 [dev-dependencies]
 serde_json = { workspace = true }
+# Dev-only, so the tests can feed the guard's real ranges (links, hashtags,
+# caller spans) through the diff. Path-only, so it is stripped from the
+# packaged manifest rather than resolved from crates.io.
+cratefield-text-guard = { path = "../text-guard" }

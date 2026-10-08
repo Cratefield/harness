@@ -246,3 +246,64 @@ fn a_long_full_rewrite_is_fast_and_linear_in_memory() {
     let segments = diff_words(&before, &after);
     assert_eq!(rebuilt_after(&segments), after);
 }
+
+#[test]
+fn links_hashtags_and_caller_spans_from_the_guard_stay_whole() {
+    use cratefield_text_guard::{ExtraSpan, Guard};
+
+    fn mentions(text: &str) -> Vec<ExtraSpan> {
+        text.find("@[")
+            .and_then(|open| {
+                let close = open + text[open..].find(')')? + 1;
+                Some(vec![ExtraSpan::new(open..close, "mention")])
+            })
+            .unwrap_or_default()
+    }
+
+    let guard = Guard::new().with_extra(mentions);
+    let before =
+        "Read https://example.com/notes/v2-3 from @[Acme Co](urn:li:organization:12) #launch";
+    let after =
+        "From @[Acme Co](urn:li:organization:12): read https://example.com/notes/v2-3 #launch";
+    let segments = diff_words_locked(before, after, &guard.ranges(before), &guard.ranges(after));
+    let locked: Vec<_> = segments
+        .iter()
+        .filter(|s| s.op == Op::Locked)
+        .map(|s| s.text.trim_end())
+        .collect();
+    assert!(
+        locked.contains(&"https://example.com/notes/v2-3"),
+        "{segments:?}"
+    );
+    assert!(locked.contains(&"#launch"), "{segments:?}");
+    // Moved, so removed and added — each whole, inside one segment, never
+    // split across two.
+    let mention = "@[Acme Co](urn:li:organization:12)";
+    for op in [Op::Removed, Op::Added] {
+        assert!(
+            segments
+                .iter()
+                .any(|s| s.op == op && s.text.contains(mention)),
+            "{segments:?}"
+        );
+    }
+    assert_eq!(rebuilt_after(&segments), after);
+
+    // A changed link is removed and added whole.
+    let changed =
+        "Read https://example.com/notes/v2-4 from @[Acme Co](urn:li:organization:12) #launch";
+    let segments = diff_words_locked(
+        before,
+        changed,
+        &guard.ranges(before),
+        &guard.ranges(changed),
+    );
+    assert_eq!(
+        ops(&segments)[..3],
+        [
+            (Op::Same, "Read "),
+            (Op::Removed, "https://example.com/notes/v2-3 "),
+            (Op::Added, "https://example.com/notes/v2-4 "),
+        ]
+    );
+}

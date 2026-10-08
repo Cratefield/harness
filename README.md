@@ -191,7 +191,7 @@ convenience, not a layer.
 | `cratefield-module-notifications` | Push, an in-app inbox and email from one `notify()`, with per-account per-category preferences ([NOTIFICATIONS.md](docs/NOTIFICATIONS.md)) |
 | `cratefield-module-telemetry` | Aggregate usage counts from clients, consent-first, in the venture's own database ([TELEMETRY.md](docs/TELEMETRY.md)) |
 | `cratefield-i18n` | Server-side localisation: Fluent catalogs, BCP 47 negotiation, text direction |
-| `cratefield-text-guard` | Keeps the facts across a model rewrite: finds the names, numbers, quotes and code a rewrite must not change, and lists every one a rewrite dropped or altered |
+| `cratefield-text-guard` | Keeps the facts across a model rewrite: finds the names, numbers, quotes, code, links and hashtags (plus caller-supplied spans) a rewrite must not change, and lists every one a rewrite dropped or altered |
 | `cratefield-text-diff` | Word-level diff (removed, added, same) in which protected ranges stay whole and come back as locked |
 | `cratefield-auth-client` | Verifies auth tokens in a consuming app: JWKS fetch and cache, ES256, an axum extractor |
 | `cratefield-oauth-client` | OAuth 2.0 over the `HttpClient` port: authorize URLs, code exchange, refresh, revocation, PKCE, and token sealing |
