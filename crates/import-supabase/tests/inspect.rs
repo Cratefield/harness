@@ -465,6 +465,364 @@ async fn the_documented_role_sql_yields_the_postgres_report_on_supabase() {
     println!("supabase acceptance: the documented role matched the postgres run");
 }
 
+/// The fixture's table `public.name`, if the report lists it.
+fn has_table(report: &Report, name: &str) -> bool {
+    report
+        .tables
+        .iter()
+        .any(|table| table.schema == "public" && table.name == name)
+}
+
+/// The fixture's enum `public.name`, if the report lists it.
+fn has_enum(report: &Report, name: &str) -> bool {
+    report
+        .enums
+        .iter()
+        .any(|entry| entry.schema == "public" && entry.name == name)
+}
+
+/// The fixture's function `public.name`, if the report lists it.
+fn has_function(report: &Report, name: &str) -> bool {
+    report
+        .functions
+        .iter()
+        .any(|function| function.schema == "public" && function.name == name)
+}
+
+/// The fixture's trigger on `public.table`, if the report lists it.
+fn has_trigger(report: &Report, table: &str, name: &str) -> bool {
+    report
+        .triggers
+        .iter()
+        .any(|trigger| trigger.schema == "public" && trigger.table == table && trigger.name == name)
+}
+
+/// The fixture's policy on `public.table`, by name. The fixture names its
+/// policies after the shape they express rather than after the column, so
+/// this looks them up by the name `schema.sql` gives them and asserts the
+/// shape below — which is what the importer has to place.
+fn fixture_policy<'a>(
+    report: &'a Report,
+    table: &str,
+    name: &str,
+) -> &'a cratefield_import_supabase::Policy {
+    report
+        .policies
+        .iter()
+        .find(|policy| policy.schema == "public" && policy.table == table && policy.name == name)
+        .unwrap_or_else(|| {
+            panic!(
+                "{table} has no policy {name:?}; the fixture's policies are {:?}",
+                report
+                    .policies
+                    .iter()
+                    .filter(|policy| policy.schema == "public" && policy.table == table)
+                    .map(|policy| policy.name.as_str())
+                    .collect::<Vec<_>>()
+            )
+        })
+}
+
+/// Issue #733: the EarthOS-shaped fixture
+/// (`tests/supabase-fixture/schema.sql` plus `seed.sh`) is visible to the
+/// role `docs/import/supabase.md` tells a user to create, and through it to
+/// `postgres` — the same equality the sibling test asserts, but on a
+/// fixture that looks like a real project: tenancy through a parent, four
+/// RLS shapes, enums, a SECURITY DEFINER function, a trigger, a cron job,
+/// and users created through `GoTrue` rather than inserted.
+///
+/// The point is that the two runs are equal by construction only when the
+/// grants really carry: a fixture with nothing in it would compare equal
+/// whatever the role could see, so every fixture object is asserted present
+/// in the `postgres` report before the comparison, and the report must
+/// contain the fixture's counts rather than nulls. Skips without
+/// `FZ_TEST_SUPABASE_DB_URL`; fails, loudly, when the fixture is missing —
+/// a silently skipped seed would read as green.
+#[tokio::test]
+#[allow(clippy::too_many_lines)] // the whole scenario, in order
+async fn the_earthos_shaped_fixture_is_visible_to_the_documented_role() {
+    let Some(base) = supabase_db_url() else {
+        eprintln!(
+            "skipping: FZ_TEST_SUPABASE_DB_URL is not set — start a Supabase stack \
+             (supabase start) and point it at the stack's DB URL \
+             (supabase status -o env prints it as DB_URL)"
+        );
+        return;
+    };
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("the clock is past 1970")
+        .as_nanos();
+    let role = format!("fz_inspect_earthos_{}_{nanos}", std::process::id());
+    let password = format!("earthos-acceptance-password-{nanos}");
+    // Cleanup runs even when an assertion below panics.
+    let _guard = DropRoleGuard {
+        url: base.clone(),
+        role: role.clone(),
+    };
+
+    // The documented SQL, run as `postgres` — what the Supabase SQL editor
+    // does — with a unique role name and a random password.
+    let sql = documented_role_sql()
+        .replace("cratefield_inspect", &role)
+        .replace("<a long random password>", &password);
+    let pool = sqlx::PgPool::connect(&base)
+        .await
+        .expect("connect as postgres");
+    sqlx::raw_sql(&sql)
+        .execute(&pool)
+        .await
+        .expect("the documented role SQL runs as postgres");
+    pool.close().await;
+
+    // The base URL's userinfo is the superuser's; swap it for the role's own.
+    let (scheme, rest) = base.split_once("://").expect("a URL scheme");
+    let (_, host_and_path) = rest.split_once('@').expect("userinfo in the URL");
+    let role_url = format!("{scheme}://{role}:{password}@{host_and_path}");
+
+    let as_postgres = inspect(&InspectOptions::new(PROJECT_REF, Secret::new(base)))
+        .await
+        .expect("inspect as postgres");
+    let as_role = inspect(&InspectOptions::new(PROJECT_REF, Secret::new(role_url)))
+        .await
+        .expect("inspect as the documented role");
+
+    // The fixture is loaded, or this test is not testing anything: an empty
+    // stack would pass every assertion below for the wrong reason.
+    assert!(
+        has_table(&as_postgres, "projects"),
+        "the EarthOS fixture is missing (no public.projects) — run \
+         crates/import-supabase/tests/supabase-fixture/schema.sql and then \
+         crates/import-supabase/tests/supabase-fixture/seed.sh against the stack \
+         named by FZ_TEST_SUPABASE_DB_URL"
+    );
+
+    // The tenant shape: tenancy through a parent row, the shadow users table
+    // GoTrue's trigger fills, the spatial table and the audit log.
+    for table in [
+        "projects",
+        "organizations",
+        "organizations_members",
+        "users",
+        "places",
+        "audit_events",
+        "projects_internal",
+    ] {
+        assert!(
+            has_table(&as_postgres, table),
+            "no public.{table} in the report"
+        );
+    }
+    // RLS is on every one of them, and the inspector read that from the
+    // catalog rather than from a policy it invented.
+    for table in ["projects", "organizations", "users", "projects_internal"] {
+        let entry = as_postgres
+            .tables
+            .iter()
+            .find(|entry| entry.schema == "public" && entry.name == table)
+            .unwrap_or_else(|| panic!("no public.{table}"));
+        assert!(entry.rls_enabled, "public.{table} reports RLS off");
+    }
+    // `audit_events` is the locked table: RLS with no policy at all, which
+    // is an informational fact and never a policy.
+    assert!(
+        !as_postgres
+            .policies
+            .iter()
+            .any(|policy| policy.table == "audit_events"),
+        "audit_events has RLS and no policy; it must report none"
+    );
+
+    // The four RLS shapes on `projects`, each placed by a rule — no
+    // classifier runs in this job, so an unplaced one would mean the rule
+    // missed a shape the fixture is here to prove.
+    for (name, expected) in [
+        ("projects_owner", PolicyPattern::TenantScoped),
+        ("projects_owner_via_parent", PolicyPattern::TenantScoped),
+        ("projects_tenant_via_parent", PolicyPattern::TenantScoped),
+        ("projects_public_read", PolicyPattern::PublicReadFiltered),
+    ] {
+        let policy = fixture_policy(&as_postgres, "projects", name);
+        assert_eq!(policy.pattern, expected, "{name} was placed wrongly");
+        assert_eq!(policy.source, PolicySource::Rule, "{name}");
+        assert!(
+            policy.using.is_some(),
+            "{name} carries no USING expression: {}",
+            policy.test_stub
+        );
+    }
+    // The one that must cover every command is the ALL policy, and the
+    // three SELECT ones are reads only: getting that backwards would send
+    // someone to write a delete route.
+    assert_eq!(
+        fixture_policy(&as_postgres, "projects", "projects_owner_via_parent").command,
+        "ALL"
+    );
+    for name in [
+        "projects_owner",
+        "projects_tenant_via_parent",
+        "projects_public_read",
+    ] {
+        assert_eq!(
+            fixture_policy(&as_postgres, "projects", name).command,
+            "SELECT",
+            "{name}"
+        );
+    }
+    // The filtered public read is bounded by the fixture's own columns, so
+    // the advice names them: that is what the person writing the route needs.
+    let public_read = fixture_policy(&as_postgres, "projects", "projects_public_read");
+    assert!(
+        public_read.suggested_equivalent.contains("visibility"),
+        "the filtered public read does not name its filter column: {}",
+        public_read.suggested_equivalent
+    );
+    // And the tenancy shapes really do reach `auth.uid()`, which is what
+    // makes them tenancy rather than an owner check on a bare column.
+    for name in [
+        "projects_owner",
+        "projects_owner_via_parent",
+        "projects_tenant_via_parent",
+    ] {
+        assert!(
+            fixture_policy(&as_postgres, "projects", name)
+                .using
+                .as_deref()
+                .is_some_and(|expr| expr.contains("auth.uid()")),
+            "{name} does not name auth.uid(): {:?}",
+            fixture_policy(&as_postgres, "projects", name).using
+        );
+    }
+    // The deny-all shape, on the table that is locked by it.
+    let deny_all = fixture_policy(
+        &as_postgres,
+        "projects_internal",
+        "projects_internal_deny_all",
+    );
+    assert_eq!(deny_all.pattern, PolicyPattern::DenyAll);
+    assert_eq!(deny_all.command, "SELECT");
+    // The membership policy on the join table the tenant shape reads.
+    let self_policy = fixture_policy(
+        &as_postgres,
+        "organizations_members",
+        "organizations_members_self",
+    );
+    assert_eq!(self_policy.pattern, PolicyPattern::OwnerOnly);
+    // A policy on the fixture's own table is a policy; the platform's own on
+    // `cron` is a managed one, and never a finding. Each policy's finding
+    // is named `schema.table.policy` — the id a dispositions file keys on.
+    assert!(
+        as_postgres.findings.iter().any(|finding| {
+            finding.kind == "policy" && finding.object == "public.projects.projects_public_read"
+        }),
+        "no needs-work finding for the public.projects public-read policy"
+    );
+    assert!(
+        !as_postgres
+            .managed_policies
+            .iter()
+            .any(|policy| policy.schema == "public"),
+        "a public policy was reported as a managed one"
+    );
+
+    // Enums, the SECURITY DEFINER function and the trigger the sign-up path
+    // depends on.
+    for name in ["project_status", "member_role"] {
+        assert!(has_enum(&as_postgres, name), "no public.{name} enum");
+    }
+    // `handle_new_user` runs as its owner, so the importer's needs-work
+    // classification has to see it — it is the trigger that fills
+    // public.users, and a harness route cannot.
+    assert!(has_function(&as_postgres, "handle_new_user"));
+    let handler = as_postgres
+        .functions
+        .iter()
+        .find(|function| function.schema == "public" && function.name == "handle_new_user")
+        .expect("the sign-up handler");
+    assert!(
+        handler.security_definer,
+        "handle_new_user is not SECURITY DEFINER"
+    );
+    // And the tenancy function reaches `auth.uid()`: a harness has no
+    // session, so that is a needs-work item, not an automatic one.
+    let tenant = as_postgres
+        .functions
+        .iter()
+        .find(|function| function.schema == "public" && function.name == "current_tenant_id")
+        .expect("the tenancy function");
+    assert!(
+        tenant.references_auth,
+        "current_tenant_id does not name auth."
+    );
+    assert!(
+        tenant.security_definer,
+        "current_tenant_id is not SECURITY DEFINER"
+    );
+    // And the plain trigger is a plain trigger.
+    assert!(has_function(&as_postgres, "touch_updated_at"));
+    assert!(has_trigger(&as_postgres, "projects", "touch_projects"));
+
+    // The cron job, the auth users GoTrue created and the buckets the
+    // Storage API made: the three sections that are `not_visible` rather
+    // than zero when a grant is missing, so a real count here is the
+    // evidence that BYPASSRLS reached past their RLS.
+    let jobs = as_postgres
+        .cron_jobs
+        .as_ref()
+        .expect("pg_cron jobs are visible to postgres");
+    assert!(
+        jobs.iter().any(|job| job.name == "earthos-heartbeat"),
+        "no earthos-heartbeat cron job: {:?}",
+        jobs.iter().map(|job| job.name.as_str()).collect::<Vec<_>>()
+    );
+    let users = as_postgres
+        .auth
+        .users
+        .expect("auth.users is visible to postgres");
+    assert!(users >= 1, "the fixture seeded no auth users");
+    let buckets = as_postgres
+        .storage
+        .buckets
+        .as_ref()
+        .expect("storage.buckets is visible to postgres");
+    assert!(!buckets.is_empty(), "the fixture seeded no storage buckets");
+
+    // The documented role sees all of it: nothing is `not_visible`, and the
+    // counts it reports are the real ones, not nulls.
+    let not_visible: Vec<&str> = as_role
+        .coverage
+        .sections
+        .iter()
+        .filter(|section| section.coverage == SourceStatus::NotVisible)
+        .map(|section| section.section.as_str())
+        .collect();
+    assert!(not_visible.is_empty(), "{not_visible:?}");
+    assert_eq!(as_role.read_only.role, role);
+    assert!(as_role.read_only.transaction_read_only);
+    assert!(!as_role.read_only.role_can_write);
+    assert_eq!(as_role.auth.users, as_postgres.auth.users);
+    assert_eq!(
+        as_role.storage.buckets.as_ref().map(Vec::len),
+        as_postgres.storage.buckets.as_ref().map(Vec::len)
+    );
+    assert!(has_table(&as_role, "projects"));
+
+    // Identical apart from what is genuinely about the connection:
+    // `read_only` and `warnings`. The report carries no timestamp.
+    let comparable = |report: &Report| {
+        let mut value: serde_json::Value =
+            serde_json::from_str(&report.to_json()).expect("the report round-trips");
+        let object = value.as_object_mut().expect("the report is an object");
+        object.remove("read_only");
+        object.remove("warnings");
+        value
+    };
+    assert_eq!(comparable(&as_postgres), comparable(&as_role));
+    // A marker only a run prints, never a skip: the E2E job greps for it,
+    // so a stack that is not reached fails the job rather than passing it.
+    println!("earthos acceptance: the documented role saw the fixture");
+}
+
 #[tokio::test]
 #[allow(clippy::too_many_lines)] // the whole scenario, in order
 async fn a_role_that_cannot_see_a_section_gets_not_visible_not_zero() {
