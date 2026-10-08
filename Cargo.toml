@@ -124,6 +124,9 @@ cratefield-module-crm = { path = "crates/module-crm", version = "0.1" }
 # CHANGELOG.md) into the venture's own database; its reads never call
 # upstream, so the changelog survives an outage of the thing it mirrors.
 cratefield-module-changelog = { path = "crates/module-changelog", version = "0.3" }
+# Owlpost's signed inbound-mail and delivery webhooks, as harness events
+# (issue #673).
+cratefield-module-owlpost = { path = "crates/module-owlpost", version = "0.1" }
 # The notifications module is the first to depend on the auth client, because
 # the account a route acts for comes from the auth extractor (ADR 0016).
 cratefield-module-notifications = { path = "crates/module-notifications", version = "0.3" }
