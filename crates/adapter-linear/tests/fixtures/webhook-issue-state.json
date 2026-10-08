@@ -1,0 +1,23 @@
+{
+  "action": "update",
+  "type": "Issue",
+  "createdAt": "2026-10-28T09:13:20.000Z",
+  "url": "https://linear.app/acme/issue/ENG-123/outbox-refund-failed",
+  "webhookTimestamp": 1793090000000,
+  "webhookId": "9c2b0f6e-1d4a-4f5b-8c7d-0a1b2c3d4e5f",
+  "organizationId": "7e1f2a3b-4c5d-6e7f-8a9b-0c1d2e3f4a5b",
+  "data": {
+    "id": "9f1c1d4e-6b2a-4f0c-9a7e-2d5b8c3e1a70",
+    "identifier": "ENG-123",
+    "title": "Outbox: refund failed",
+    "state": {
+      "id": "state-done",
+      "name": "Done",
+      "type": "completed"
+    },
+    "assignee": null
+  },
+  "updatedFrom": {
+    "stateId": "state-started"
+  }
+}

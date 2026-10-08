@@ -920,11 +920,12 @@ is the whole truth:
 | `Destination::GitHub` | `cratefield-adapter-github-issues` | yes | yes | no | — | dedupes by an invisible HTML comment stamped into the issue body |
 | `Destination::Webhook` | `cratefield-adapter-webhook-tracker` | yes | no (rejected) | no | — | signs outbound deliveries with `Cratefield-Signature` (HMAC-SHA256, Stripe-style) |
 | `Destination::Jira` | `cratefield-adapter-jira` | yes | yes | yes | `X-Hub-Signature` — sha256 hex over the body | Basic auth over the tenant's `email:api_token`; ADF bodies; dedupes by a derived idempotency label |
-| linear, zendesk, salesforce, hubspot, intercom, slack, freshdesk, colonizer | not yet — tracked follow-up | | | | | |
+| `Destination::Linear` | `cratefield-adapter-linear` | yes | yes | yes | `Linear-Signature` — bare sha256 hex over the body | GraphQL; a personal API key (bare) or an OAuth token (`Bearer`); Markdown bodies, with the port's labels folded into the description; no dedupe search, so a redelivery may file twice |
+| zendesk, salesforce, hubspot, intercom, slack, freshdesk, colonizer | not yet — tracked follow-up | | | | | |
 
-Freshdesk is a `Destination` variant with no adapter yet, like the rest of
-the last row: wire what your venture needs into `RoutingTracker`, whose
-unwired slots answer `NotConfigured`.
+Every variant left in the last row is a `Destination` with no adapter yet,
+like Freshdesk before it: wire what your venture needs into
+`RoutingTracker`, whose unwired slots answer `NotConfigured`.
 
 ### Storing and serving media
 

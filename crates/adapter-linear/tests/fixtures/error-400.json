@@ -1,0 +1,8 @@
+{
+  "errors": [
+    {
+      "message": "Entity not found: Team",
+      "extensions": { "code": "INVALID_INPUT", "type": "validation" }
+    }
+  ]
+}

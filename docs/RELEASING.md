@@ -268,6 +268,7 @@ own the `cratefield-*` names.
    cargo publish -p cratefield-adapter-typesafe
    cargo publish -p cratefield-adapter-webhook-tracker
    cargo publish -p cratefield-adapter-jira
+   cargo publish -p cratefield-adapter-linear
    cargo publish -p cratefield-auth-client    # before module-notifications and the runtimes
    cargo publish -p cratefield-oauth-client   # before module-linkedin (which is held back)
    cargo publish -p cratefield-module-connections  # needs core and oauth-client
