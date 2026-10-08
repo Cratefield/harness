@@ -92,6 +92,10 @@ pub(crate) struct CreateBody {
     /// ISO-8601. Absent means "as soon as the publisher runs".
     scheduled_at: Option<String>,
     idempotency_key: String,
+    /// The text the commentary was written from (release notes, an
+    /// announcement). When present the commentary must keep its facts
+    /// ([`crate::factcheck`]) or nothing is created. Checked, never stored.
+    source: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -215,6 +219,10 @@ pub(crate) async fn create(
         .map_err(|trouble| trouble.problem(&scope))?;
 
     let prepared = prepare(&body, &settings)?;
+    let fact_check = match body.source.as_deref() {
+        None => None,
+        Some(source) => Some(check_source(source, &prepared.commentary)?),
+    };
 
     if let Some(asset_id) = body.asset_id.as_deref() {
         check_asset(db, asset_id, &page.org_id, &scope).await?;
@@ -229,10 +237,13 @@ pub(crate) async fn create(
             handlers::internal(&scope)
         })?
     {
-        return Ok(handlers::accepted(json!({
-            "post": handlers::post_json(&existing),
-            "duplicate": true,
-        })));
+        return Ok(handlers::accepted(with_fact_check(
+            json!({
+                "post": handlers::post_json(&existing),
+                "duplicate": true,
+            }),
+            fact_check,
+        )));
     }
 
     let now = store::now_iso(clock);
@@ -290,10 +301,49 @@ pub(crate) async fn create(
         }));
     }
 
-    Ok(handlers::accepted(json!({
-        "post": handlers::post_json(&row),
-        "duplicate": false,
-    })))
+    Ok(handlers::accepted(with_fact_check(
+        json!({
+            "post": handlers::post_json(&row),
+            "duplicate": false,
+        }),
+        fact_check,
+    )))
+}
+
+/// Runs the fact check of `commentary` (as it will be sent) against the
+/// caller's `source`.
+fn check_source(source: &str, commentary: &str) -> Result<Value, Problem> {
+    if source.trim().is_empty() {
+        return Err(Problem::validation_failed(
+            "source must not be empty; leave it out to skip the fact check",
+        ));
+    }
+    crate::factcheck::check(source, commentary)
+}
+
+/// Adds `fact_check` to a response body when a check ran, and nothing at
+/// all when it did not, so a request without `source` gets exactly the
+/// answer it always got.
+fn with_fact_check(mut body: Value, fact_check: Option<Value>) -> Value {
+    if let (Some(object), Some(fact_check)) = (body.as_object_mut(), fact_check) {
+        object.insert("fact_check".to_owned(), fact_check);
+    }
+    body
+}
+
+/// The `source` of an edit, checked against the new commentary. A `source`
+/// with no `commentary` beside it has nothing to check.
+fn edit_fact_check(body: &Value, new_commentary: Option<&str>) -> Result<Option<Value>, Problem> {
+    let Some(source) = body.get("source") else {
+        return Ok(None);
+    };
+    let source = source
+        .as_str()
+        .ok_or_else(|| Problem::validation_failed("source must be a string"))?;
+    let commentary = new_commentary.ok_or_else(|| {
+        Problem::validation_failed("source is checked against commentary; send commentary with it")
+    })?;
+    check_source(source, commentary).map(Some)
 }
 
 pub(crate) async fn list(
@@ -343,7 +393,8 @@ fn build_patch(
     }
 
     for key in object.keys() {
-        if EDITABLE.contains(&key.as_str()) {
+        // `source` is not sent to LinkedIn: it is the fact check's input.
+        if EDITABLE.contains(&key.as_str()) || key == "source" {
             continue;
         }
         return Err(Problem::validation_failed(match key.as_str() {
@@ -427,6 +478,7 @@ pub(crate) async fn edit(
     let http = handlers::http(ctx)?;
 
     let (set, new_commentary) = build_patch(&body, &settings)?;
+    let fact_check = edit_fact_check(&body, new_commentary.as_deref())?;
 
     let row = store::find_post(db, &id)
         .await
@@ -456,10 +508,13 @@ pub(crate) async fn edit(
             .ok()
             .flatten()
             .unwrap_or(row);
-        return Ok(handlers::ok(json!({
-            "post": handlers::post_json(&updated),
-            "sent_to_linkedin": false,
-        })));
+        return Ok(handlers::ok(with_fact_check(
+            json!({
+                "post": handlers::post_json(&updated),
+                "sent_to_linkedin": false,
+            }),
+            fact_check,
+        )));
     };
 
     let session = tokens::session(ctx, &settings, &scope)
@@ -488,10 +543,13 @@ pub(crate) async fn edit(
         .ok()
         .flatten()
         .unwrap_or(row);
-    Ok(handlers::ok(json!({
-        "post": handlers::post_json(&updated),
-        "sent_to_linkedin": true,
-    })))
+    Ok(handlers::ok(with_fact_check(
+        json!({
+            "post": handlers::post_json(&updated),
+            "sent_to_linkedin": true,
+        }),
+        fact_check,
+    )))
 }
 
 fn cta_allowed(label: &str, api_version: &str) -> bool {

@@ -27,6 +27,11 @@ tracing = { workspace = true }
 time = { workspace = true }
 sha2 = { workspace = true }
 zeroize = { workspace = true }
+# The optional fact check of commentary against its `source`: the protected
+# spans and the check (with LinkedIn's mention and hashtag templates locked
+# as caller spans), and the word diff a reviewer reads.
+cratefield-text-guard = { workspace = true }
+cratefield-text-diff = { workspace = true }
 
 [dev-dependencies]
 # Dev-only, and only so `tests/privacy.rs` can prove the personal-data

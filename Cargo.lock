@@ -3165,6 +3165,8 @@ dependencies = [
  "cratefield-module-privacy",
  "cratefield-oauth-client",
  "cratefield-testing",
+ "cratefield-text-diff",
+ "cratefield-text-guard",
  "http",
  "pollster",
  "sea-query",

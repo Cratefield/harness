@@ -74,6 +74,7 @@ human-readable page at each `<public_url>/problems/<slug>`.
 | `device-rehome-limit` | 429 | Too many devices taken over | `cratefield-module-notifications` | This account has claimed too many devices that belonged to other accounts. |
 | `internal` | 500 | Internal error | `cratefield-core` | Unhandled error; no internals are exposed in the body. |
 | `invalid-token` | 400 | Invalid or expired token | `cratefield-core` | A signed link or token is malformed, tampered with, or expired. |
+| `linkedin-fact-check-failed` | 422 | The commentary does not keep the facts of its source | `fz-module-linkedin` | A protected span of the source (name, number, quote, code, link, hashtag or mention) is missing or altered in the commentary, or the commentary introduced a number. `missing` and `introduced` list each one. |
 | `linkedin-not-connected` | 409 | No LinkedIn account connected | `fz-module-linkedin` | Connect a page first: POST /v1/linkedin/admin/connect. |
 | `linkedin-page-role-missing` | 403 | The connected account cannot post to this page | `fz-module-linkedin` | The page is unknown, revoked, or held with a role that cannot publish organic posts. |
 | `linkedin-reconnect-required` | 409 | LinkedIn connection needs renewing | `fz-module-linkedin` | LinkedIn rejected the stored credentials. A page administrator must connect again. |
