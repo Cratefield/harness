@@ -126,7 +126,10 @@ jobs:
       - name: Seed users through the GoTrue admin API (issue #733)
         run: |
           set -euo pipefail
-          keys="$(supabase status -o env)"
+          # The stack was started from /tmp/supabase-e2e, and `supabase
+          # status` names its containers after the project directory, so it
+          # must be asked from there, not from the checkout.
+          keys="$(cd /tmp/supabase-e2e && supabase status -o env)"
           # `-o env` prints KEY=value, with the value quoted on some CLI
           # versions and bare on others; take both and strip the quotes.
           value_of() {
