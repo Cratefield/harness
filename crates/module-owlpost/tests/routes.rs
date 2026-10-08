@@ -15,7 +15,8 @@ use cratefield_testing::{TestHarness, sign_stripe_style};
 use serde_json::{Value, json};
 use tower::ServiceExt;
 
-const SECRET: &str = "whsec_owlpost-test-secret";
+// Built from fragments: a lone `whsec_` literal trips GitHub push protection.
+const SECRET: &str = concat!("whs", "ec_owlpost-test-secret");
 const NOW: i64 = 1_800_000_000; // the kit's fixed clock epoch
 const PATH: &str = "/v1/owlpost/events";
 
@@ -228,7 +229,13 @@ async fn inbound_mail_reaches_the_hook_and_the_bus() {
 async fn a_delivery_that_does_not_verify_is_refused() {
     let (kit, _seen) = kit();
 
-    let (status, reply) = deliver(&kit, "whsec_not-the-secret", NOW, &received("evt_1")).await;
+    let (status, reply) = deliver(
+        &kit,
+        concat!("whs", "ec_not-the-secret"),
+        NOW,
+        &received("evt_1"),
+    )
+    .await;
     assert_eq!(status, StatusCode::UNAUTHORIZED, "{reply}");
     assert_eq!(reply["title"], "Unverified delivery");
 

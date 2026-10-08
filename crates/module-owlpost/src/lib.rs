@@ -36,6 +36,11 @@ pub const MODULE_NAME: &str = "owlpost";
 /// fails closed, present-but-blank fails [`Module::validate_config`].
 pub const SECRET_KEY: &str = "OWLPOST_WEBHOOK_SECRET";
 
+/// The `{MODULE}_`-scoped suffix [`SECRET_KEY`] composes from: what
+/// [`SignatureVerification::Hmac`] declares and `validate_config` reads,
+/// so the two cannot drift apart.
+const SECRET_KEY_SUFFIX: &str = "WEBHOOK_SECRET";
+
 /// The one migration: the `owlpost_inbox` dedup ledger.
 const MIGRATION_INIT: SqlMigration = SqlMigration::new(
     "0001",
@@ -185,7 +190,7 @@ impl Module for Owlpost {
     /// The route is a provider webhook guarded by an HMAC over the raw body.
     fn signature_verification(&self) -> SignatureVerification {
         SignatureVerification::Hmac {
-            secret: "WEBHOOK_SECRET",
+            secret: SECRET_KEY_SUFFIX,
         }
     }
 
@@ -204,7 +209,7 @@ impl Module for Owlpost {
         // not unbootable. Set-but-blank is a typo, not a choice.
         let module = ModuleConfig::new(MODULE_NAME, cfg);
         let mut errors = ConfigError::default();
-        if let Some(secret) = cfg.get(&module.key("WEBHOOK_SECRET"))
+        if let Some(secret) = cfg.get(&module.key(SECRET_KEY_SUFFIX))
             && secret.trim().is_empty()
         {
             errors.push(format!(
