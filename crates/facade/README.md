@@ -65,7 +65,7 @@ also switch on the extra features noted in their rows:
 | `classifier-llm` | `cratefield-adapter-classifier-llm` | `cratefield::classifier_llm` | `Classifier` over the `TextModel` port, JSON-schema output, no new vendor |
 | `ui` | `cratefield-ui` | `cratefield::ui` | Renders the module surface as HTML |
 | `i18n` | `cratefield-i18n` | `cratefield::i18n` | Server-side localisation: Fluent catalogs, BCP 47 negotiation and text direction. Pulled in by `notifications` already; a feature of its own for localising a venture's own strings |
-| `text-guard` | `cratefield-text-guard` | `cratefield::text_guard` | Keeps the facts across a model rewrite: finds the names, numbers, quotes and code a rewrite must not change, and lists every one it dropped or altered |
+| `text-guard` | `cratefield-text-guard` | `cratefield::text_guard` | Keeps the facts across a model rewrite: finds the names, numbers, quotes, code, links and hashtags (plus caller-supplied spans) a rewrite must not change, and lists every one it dropped or altered |
 | `text-diff` | `cratefield-text-diff` | `cratefield::text_diff` | Word-level diff in which protected ranges stay whole and come back as locked |
 | `secrets` | `cratefield-secrets` | `cratefield::secrets` | Envelope-encrypted secrets |
 | `kms` | `cratefield-kms` | `cratefield::kms` | The KMS port and its local-file provider |

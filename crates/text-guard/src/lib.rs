@@ -8,7 +8,9 @@
 //! and nothing else:
 //!
 //! 1. [`Guard::extract`] finds the **protected spans** of a text: numbers,
-//!    quotations, code and multi-word names ([`SpanKind`]).
+//!    quotations, code, multi-word names, links and hashtags
+//!    ([`SpanKind`]), plus any spans the caller protects itself
+//!    ([`ExtraSpan`]).
 //! 2. [`Guard::verify`] checks a rewrite against its original and lists
 //!    every protected span that went missing or changed, and every number
 //!    the rewrite introduced ([`Violation`]).
@@ -43,6 +45,11 @@
 //! code. Spans never overlap; when two rules match the same text the
 //! earlier rule in this list wins.
 //!
+//! - **Caller spans** ([`SpanKind::Custom`]): byte ranges the caller
+//!   supplies ([`Guard::with_extra`], [`Guard::extract_with`]) for syntax
+//!   this crate does not know, such as a platform's mention markup. They
+//!   come first and beat every built-in rule they overlap; see
+//!   [Caller spans](#caller-spans).
 //! - **Code** ([`SpanKind::Code`]): a fenced block (a line opening with
 //!   three or more backticks or tildes, to the matching closing fence or
 //!   the end of the text), then inline code (a run of backticks to the next
@@ -56,6 +63,28 @@
 //!   must survive is the quoted **words** ([`Span::protected`]): the quote
 //!   marks may change style, and a closing `,` `.` `;` or `:` inside the
 //!   marks may move, because typographic conventions move them.
+//! - **Links** ([`SpanKind::Url`]): `http://` or `https://` (any case)
+//!   followed by a host, or a bare `www.` followed by a host with a dot in
+//!   it, starting at a word boundary and running to whitespace or to one of
+//!   `<` `>` `"` `` ` `` or a curly quote or guillemet. Sentence punctuation
+//!   at the end (`.` `,` `;` `:` `!` `?` and closing `'` or `’`) is not part
+//!   of the link, and neither is a closing `)` or `]` without a matching
+//!   opener inside the link: `(see https://example.com/a_(b))` keeps
+//!   `https://example.com/a_(b)`. Must survive verbatim and **whole**: the
+//!   rewrite has to contain it as a complete link, so
+//!   `https://example.com/a` is not found inside `https://example.com/ab`.
+//!   Digits in a link are part of it, never numbers of their own, and a `#`
+//!   in a link is never a hashtag.
+//! - **Hashtags** ([`SpanKind::Hashtag`]): `#` followed by letters, digits
+//!   and `_` (any script), containing at least one letter, where the `#` is
+//!   not glued to a letter, digit, `_`, `#` or `&` before it. So `#launch`,
+//!   `#Q3_results` and `#café` are hashtags, while `#1` and `#123` are not
+//!   (they read as rank and issue numbers, and the digits are protected as a
+//!   number instead), `C#` is not, and a Markdown heading (`# Title`, `##
+//!   Title`) is not, because a space follows the marks. A hex colour such as
+//!   `#ff8800` *is* a hashtag by these rules. Must survive verbatim, and a
+//!   hashtag is not found inside a longer one (`#launch` in
+//!   `#launch_day`).
 //! - **Numbers** ([`SpanKind::Number`]): a token that starts at a word
 //!   boundary with an optional currency sign and a digit, continues through
 //!   digits joined by `.` `,` `:` `/` or `-` (only between digits, so a
@@ -79,8 +108,51 @@
 //! may use one fewer time than the original; it may not drop or alter one.
 //! A number the rewrite contains and the original does not is reported as
 //! [`ViolationKind::Introduced`]: a changed figure shows up as one missing
-//! and one introduced. Names, quotes and code a rewrite adds are not
-//! reported — new wording is the point of a rewrite.
+//! and one introduced. Names, quotes, code, links and hashtags a rewrite
+//! adds are not reported — new wording is the point of a rewrite.
+//!
+//! # Caller spans
+//!
+//! A platform's own markup — a mention such as
+//! `@[Name](urn:li:organization:123)`, a template, a placeholder — is
+//! nothing this crate should know about, but a rewrite must keep it, and
+//! the digits inside it must not count as numbers. A caller locks it with
+//! [`ExtraSpan`]s, either per call ([`Guard::extract_with`],
+//! [`Guard::verify_with`]) or with an extractor function that runs on every
+//! text the guard looks at, original and rewrite alike
+//! ([`Guard::with_extra`]):
+//!
+//! ```
+//! use cratefield_text_guard::{ExtraSpan, Guard, SpanKind};
+//!
+//! /// `{{placeholder}}` templates, labelled for the caller's own errors.
+//! fn placeholders(text: &str) -> Vec<ExtraSpan> {
+//!     let mut spans = Vec::new();
+//!     let mut from = 0;
+//!     while let Some(open) = text[from..].find("{{").map(|at| from + at) {
+//!         let Some(close) = text[open..].find("}}").map(|at| open + at + 2) else { break };
+//!         spans.push(ExtraSpan::new(open..close, "placeholder"));
+//!         from = close;
+//!     }
+//!     spans
+//! }
+//!
+//! let guard = Guard::new().with_extra(placeholders);
+//! let spans = guard.extract("Hi {{name_2}}, 18% off");
+//! assert_eq!(spans[0].kind, SpanKind::Custom);
+//! assert_eq!(spans[0].label.as_deref(), Some("placeholder"));
+//! assert_eq!(spans[1].text, "18%"); // the 2 inside the template is not a number
+//!
+//! let violations = guard.verify("Hi {{name_2}}", "Hi {{name_3}}").unwrap_err();
+//! assert_eq!(violations.len(), 1); // the template is missing; 3 is not "introduced"
+//! ```
+//!
+//! Caller spans come back as [`SpanKind::Custom`] with the caller's label
+//! in [`Span::label`], and must survive verbatim at a word boundary like a
+//! name. They take precedence over every built-in span they overlap,
+//! including code. A range that is empty, out of bounds, not on a `char`
+//! boundary, or overlaps an earlier caller span is ignored; per-call spans
+//! count as earlier than the extractor's.
 
 #![forbid(unsafe_code)]
 
@@ -95,8 +167,11 @@ use serde::{Deserialize, Serialize};
 pub const MAX_QUOTE_CHARS: usize = 600;
 
 /// What kind of fact a [`Span`] protects.
+///
+/// Non-exhaustive: new built-in kinds are added in minor releases.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum SpanKind {
     /// Two or more capitalised words: a person, a company, a place.
     Name,
@@ -106,6 +181,13 @@ pub enum SpanKind {
     Quote,
     /// Inline code or a fenced code block.
     Code,
+    /// A link: `https://example.com/path`, `www.example.com`.
+    Url,
+    /// A hashtag: `#launch`, `#Q3_results`.
+    Hashtag,
+    /// A span the caller protected ([`ExtraSpan`]); its label is in
+    /// [`Span::label`].
+    Custom,
 }
 
 impl SpanKind {
@@ -116,6 +198,9 @@ impl SpanKind {
             Self::Number => "number",
             Self::Quote => "quote",
             Self::Code => "code",
+            Self::Url => "url",
+            Self::Hashtag => "hashtag",
+            Self::Custom => "custom",
         }
     }
 }
@@ -136,6 +221,10 @@ pub struct Span {
     pub text: String,
     pub start: usize,
     pub end: usize,
+    /// The caller's label for a [`SpanKind::Custom`] span (`"mention"`,
+    /// say); `None` for every built-in kind, and then absent from JSON.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
 }
 
 impl Span {
@@ -153,7 +242,38 @@ impl Span {
             _ => &self.text,
         }
     }
+
+    /// What the span is, for an error message or a JSON answer: the
+    /// caller's label for a [`SpanKind::Custom`] span, the kind's name
+    /// otherwise.
+    pub fn kind_name(&self) -> &str {
+        match (&self.label, self.kind) {
+            (Some(label), SpanKind::Custom) => label,
+            _ => self.kind.name(),
+        }
+    }
 }
+
+/// A span the caller protects on top of the built-in kinds: a byte range
+/// of the text and a label of the caller's choosing (see
+/// [Caller spans](crate#caller-spans)).
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct ExtraSpan {
+    pub range: Range<usize>,
+    pub label: String,
+}
+
+impl ExtraSpan {
+    pub fn new(range: Range<usize>, label: impl Into<String>) -> Self {
+        Self {
+            range,
+            label: label.into(),
+        }
+    }
+}
+
+/// Finds a caller's own protected spans in a text; see [`Guard::with_extra`].
+pub type Extractor = fn(&str) -> Vec<ExtraSpan>;
 
 /// How a rewrite broke a protected span.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -175,14 +295,18 @@ pub struct Violation {
     pub span: Span,
 }
 
-/// Which span kinds to look for. [`Guard::new`] looks for all four.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Which span kinds to look for, and the caller's own extractor if any.
+/// [`Guard::new`] looks for every built-in kind.
+#[derive(Debug, Clone, Copy)]
 #[allow(clippy::struct_excessive_bools)] // one switch per `SpanKind`, set by name
 pub struct Guard {
     names: bool,
     numbers: bool,
     quotes: bool,
     code: bool,
+    urls: bool,
+    hashtags: bool,
+    extra: Option<Extractor>,
 }
 
 impl Default for Guard {
@@ -192,14 +316,45 @@ impl Default for Guard {
 }
 
 impl Guard {
-    /// A guard for names, numbers, quotes and code.
+    /// A guard for names, numbers, quotes, code, links and hashtags, with
+    /// no caller spans.
     pub const fn new() -> Self {
         Self {
             names: true,
             numbers: true,
             quotes: true,
             code: true,
+            urls: true,
+            hashtags: true,
+            extra: None,
         }
+    }
+
+    /// Whether links are protected (default: yes). Links are still *found*
+    /// when off, like code, so the digits and `#` inside one are not
+    /// protected as numbers and hashtags; they are just not returned.
+    #[must_use]
+    pub const fn urls(mut self, on: bool) -> Self {
+        self.urls = on;
+        self
+    }
+
+    /// Whether hashtags are protected (default: yes).
+    #[must_use]
+    pub const fn hashtags(mut self, on: bool) -> Self {
+        self.hashtags = on;
+        self
+    }
+
+    /// Runs `extractor` on every text this guard looks at — the text of
+    /// [`Guard::extract`], and both the original and the rewrite in
+    /// [`Guard::verify`] — and protects what it returns as
+    /// [`SpanKind::Custom`] spans, ahead of every built-in kind. Replaces
+    /// any extractor set before.
+    #[must_use]
+    pub const fn with_extra(mut self, extractor: Extractor) -> Self {
+        self.extra = Some(extractor);
+        self
     }
 
     /// Whether multi-word names are protected (default: yes).
@@ -234,10 +389,35 @@ impl Guard {
 
     /// The protected spans of `text`, in order, never overlapping.
     pub fn extract(&self, text: &str) -> Vec<Span> {
+        self.extract_with(text, &[])
+    }
+
+    /// [`Guard::extract`] with `extra` caller spans of `text` protected
+    /// first, ahead of the guard's own extractor (if any) and every
+    /// built-in kind.
+    pub fn extract_with(&self, text: &str, extra: &[ExtraSpan]) -> Vec<Span> {
         let mut taken: Vec<Range<usize>> = Vec::new();
         let mut spans = Vec::new();
 
-        let code = code_spans(text);
+        let from_extractor = self.extra.map(|f| f(text)).unwrap_or_default();
+        for e in extra.iter().chain(&from_extractor) {
+            let r = &e.range;
+            let valid = r.start < r.end
+                && r.end <= text.len()
+                && text.is_char_boundary(r.start)
+                && text.is_char_boundary(r.end);
+            if valid && !overlaps(&taken, r) {
+                let mut custom = span(text, SpanKind::Custom, r.clone());
+                custom.label = Some(e.label.clone());
+                spans.push(custom);
+                taken.push(r.clone());
+            }
+        }
+
+        let code: Vec<_> = code_spans(text)
+            .into_iter()
+            .filter(|r| !overlaps(&taken, r))
+            .collect();
         for range in &code {
             if self.code {
                 spans.push(span(text, SpanKind::Code, range.clone()));
@@ -246,15 +426,27 @@ impl Guard {
         taken.extend(code);
 
         if self.quotes {
-            for range in quote_spans(text, &taken) {
-                spans.push(span(text, SpanKind::Quote, range));
-            }
-            taken.extend(
-                spans
-                    .iter()
-                    .filter(|s| s.kind == SpanKind::Quote)
-                    .map(Span::range),
-            );
+            let found = quote_spans(text, &taken);
+            taken.extend(found.iter().cloned());
+            spans.extend(found.into_iter().map(|r| span(text, SpanKind::Quote, r)));
+        }
+        // Links are always found, like code, so a figure or a `#` inside
+        // one never turns into a span of its own.
+        let urls: Vec<_> = url_spans(text)
+            .into_iter()
+            .filter(|r| !overlaps(&taken, r))
+            .collect();
+        if self.urls {
+            spans.extend(urls.iter().map(|r| span(text, SpanKind::Url, r.clone())));
+        }
+        taken.extend(urls);
+        if self.hashtags {
+            let found: Vec<_> = hashtag_spans(text)
+                .into_iter()
+                .filter(|r| !overlaps(&taken, r))
+                .collect();
+            taken.extend(found.iter().cloned());
+            spans.extend(found.into_iter().map(|r| span(text, SpanKind::Hashtag, r)));
         }
         if self.numbers {
             let found: Vec<_> = number_spans(text)
@@ -282,6 +474,14 @@ impl Guard {
         self.extract(text).iter().map(Span::range).collect()
     }
 
+    /// The byte ranges of [`Guard::extract_with`].
+    pub fn ranges_with(&self, text: &str, extra: &[ExtraSpan]) -> Vec<Range<usize>> {
+        self.extract_with(text, extra)
+            .iter()
+            .map(Span::range)
+            .collect()
+    }
+
     /// Checks that `rewrite` kept every protected span of `original` and
     /// introduced no number of its own.
     ///
@@ -291,10 +491,28 @@ impl Guard {
     /// then introduced ones in the rewrite's order. A span that occurs
     /// several times in the original is reported once.
     pub fn verify(&self, original: &str, rewrite: &str) -> Result<(), Vec<Violation>> {
+        self.verify_with(original, &[], rewrite, &[])
+    }
+
+    /// [`Guard::verify`] with caller spans for each side: `original_extra`
+    /// must survive like any protected span, and `rewrite_extra` shadows
+    /// what it covers in the rewrite, so the digits inside a caller span are
+    /// never an introduced number.
+    ///
+    /// # Errors
+    ///
+    /// See [`Guard::verify`].
+    pub fn verify_with(
+        &self,
+        original: &str,
+        original_extra: &[ExtraSpan],
+        rewrite: &str,
+        rewrite_extra: &[ExtraSpan],
+    ) -> Result<(), Vec<Violation>> {
         let mut violations = Vec::new();
         let mut seen = BTreeSet::new();
-        for span in self.extract(original) {
-            let key = (span.kind, span.protected().to_owned());
+        for span in self.extract_with(original, original_extra) {
+            let key = (span.kind, span.label.clone(), span.protected().to_owned());
             if seen.contains(&key) {
                 continue;
             }
@@ -308,7 +526,7 @@ impl Guard {
         }
         if self.numbers {
             let mut introduced = BTreeSet::new();
-            for span in self.extract(rewrite) {
+            for span in self.extract_with(rewrite, rewrite_extra) {
                 if span.kind == SpanKind::Number
                     && !contains_bounded(original, &span.text, SpanKind::Number)
                     && introduced.insert(span.text.clone())
@@ -348,6 +566,7 @@ fn span(text: &str, kind: SpanKind, range: Range<usize>) -> Span {
         text: text[range.clone()].to_owned(),
         start: range.start,
         end: range.end,
+        label: None,
     }
 }
 
@@ -509,6 +728,134 @@ fn quote_spans(text: &str, taken: &[Range<usize>]) -> Vec<Range<usize>> {
                 chars.next();
             }
             spans.push(range);
+        }
+    }
+    spans
+}
+
+// --------------------------------------------------------------- links ----
+
+/// Where a link's address starts, if one starts at byte `start`: the
+/// length of its `http://`, `https://` or `www.` prefix.
+fn link_prefix(rest: &str) -> Option<usize> {
+    let starts = |prefix: &str| {
+        rest.get(..prefix.len())
+            .is_some_and(|head| head.eq_ignore_ascii_case(prefix))
+    };
+    ["https://", "http://", "www."]
+        .into_iter()
+        .find(|prefix| starts(prefix))
+        .map(str::len)
+}
+
+/// Ends a link outright: whitespace, angle brackets, double quotes of any
+/// style, a backtick.
+fn ends_link(c: char) -> bool {
+    c.is_whitespace() || matches!(c, '<' | '>' | '"' | '`' | '“' | '”' | '„' | '«' | '»')
+}
+
+/// The end of a link starting at `start`, if one starts there. Does not
+/// check the word boundary before it.
+fn url_at(text: &str, start: usize) -> Option<usize> {
+    let rest = &text[start..];
+    let prefix = link_prefix(rest)?;
+    if !rest[prefix..].starts_with(char::is_alphanumeric) {
+        return None;
+    }
+    let mut end = prefix
+        + rest[prefix..]
+            .chars()
+            .take_while(|c| !ends_link(*c))
+            .map(char::len_utf8)
+            .sum::<usize>();
+    // Sentence punctuation and unmatched closers at the end are the
+    // sentence's, not the link's.
+    while let Some(last) = rest[..end].chars().next_back() {
+        let unmatched = |open: char| {
+            let link = &rest[..end];
+            link.matches(open).count() < link.matches(last).count()
+        };
+        let trailing = match last {
+            '.' | ',' | ';' | ':' | '!' | '?' | '\'' | '’' => true,
+            ')' => unmatched('('),
+            ']' => unmatched('['),
+            _ => false,
+        };
+        if !trailing {
+            break;
+        }
+        end -= last.len_utf8();
+    }
+    let host = &rest[prefix..end];
+    let host = &host[..host.find(['/', '?', '#']).unwrap_or(host.len())];
+    // `www.` needs a dot in the host after it, or "www.something" in prose
+    // would be a link; a scheme needs a host at all.
+    let ok = if prefix == "www.".len() {
+        host.contains('.') && !host.ends_with('.')
+    } else {
+        !host.is_empty()
+    };
+    ok.then_some(start + end)
+}
+
+fn url_spans(text: &str) -> Vec<Range<usize>> {
+    let mut spans = Vec::new();
+    let mut i = 0;
+    while i < text.len() {
+        let Some(c) = text[i..].chars().next() else {
+            break;
+        };
+        let at_boundary = before(text, i).is_none_or(|p| !is_word_char(p));
+        if at_boundary
+            && matches!(c, 'h' | 'H' | 'w' | 'W')
+            && let Some(end) = url_at(text, i)
+        {
+            spans.push(i..end);
+            i = end;
+            continue;
+        }
+        i += c.len_utf8();
+    }
+    spans
+}
+
+// ------------------------------------------------------------ hashtags ----
+
+fn is_tag_char(c: char) -> bool {
+    c.is_alphanumeric() || c == '_'
+}
+
+/// Whether a `#` may open a hashtag after this char: not glued to a word
+/// (`C#`), another `#` (`##`), or an `&` (`&#39;`).
+fn opens_hashtag(prev: Option<char>) -> bool {
+    prev.is_none_or(|p| !is_tag_char(p) && !matches!(p, '#' | '&'))
+}
+
+/// The end of a hashtag whose `#` is at `start`, if one starts there.
+fn hashtag_at(text: &str, start: usize) -> Option<usize> {
+    let body = text[start..].strip_prefix('#')?;
+    let len: usize = body
+        .chars()
+        .take_while(|c| is_tag_char(*c))
+        .map(char::len_utf8)
+        .sum();
+    // `#1` and `#123` are a rank and an issue number, not hashtags.
+    body[..len]
+        .chars()
+        .any(char::is_alphabetic)
+        .then_some(start + 1 + len)
+}
+
+fn hashtag_spans(text: &str) -> Vec<Range<usize>> {
+    let mut spans = Vec::new();
+    for (i, c) in text.char_indices() {
+        if c != '#' || spans.last().is_some_and(|r: &Range<usize>| i < r.end) {
+            continue;
+        }
+        if opens_hashtag(before(text, i))
+            && let Some(end) = hashtag_at(text, i)
+        {
+            spans.push(i..end);
         }
     }
     spans
@@ -826,7 +1173,15 @@ fn contains_bounded(hay: &str, needle: &str, kind: SpanKind) -> bool {
             || hay[end..].chars().next().is_none_or(|n| {
                 !is_word_char(n) && !runs_on(n, hay[end + n.len_utf8()..].chars().next())
             });
-        left_ok && right_ok
+        match kind {
+            // The whole link, not a prefix of a longer one.
+            SpanKind::Url => left_ok && url_at(hay, at) == Some(end),
+            // Not glued on either side, and not the front of a longer tag.
+            SpanKind::Hashtag => {
+                opens_hashtag(before(hay, at)) && !hay[end..].starts_with(is_tag_char)
+            }
+            _ => left_ok && right_ok,
+        }
     })
 }
 

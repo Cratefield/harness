@@ -2372,6 +2372,7 @@ dependencies = [
 name = "cratefield-text-diff"
 version = "0.1.0"
 dependencies = [
+ "cratefield-text-guard",
  "serde",
  "serde_json",
 ]
