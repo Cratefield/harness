@@ -1,0 +1,185 @@
+# The Supabase importer's end-to-end job (issue #733).
+#
+# A real `supabase start` stack — the schema, the roles and the grants
+# Supabase actually ships, which no service container in the workspace
+# `test` job reproduces — loaded with the EarthOS-shaped fixture in
+# crates/import-supabase/tests/supabase-fixture, then inspected twice:
+# once as `postgres`, and once as the read-only role
+# docs/import/supabase.md tells a user to create. The two reports must be
+# identical apart from `read_only` and `warnings`, and the fixture's own
+# objects must be visible in both.
+#
+# What this job adds over the workspace run:
+#
+#   * the fixture tests run against a plain Postgres 16 with a hand-built
+#     `auth`/`storage`/`cron`, so they prove the inspector's logic and the
+#     docs' SQL shape; this proves the docs' SQL against the schema and
+#     the grants Supabase really ships;
+#   * the users are created through the GoTrue admin API rather than
+#     inserted into `auth.users`, so the sign-up hook and the shadow
+#     `public.users` row exist the way a project creates them — the path
+#     the auth-import phase (#659) reads;
+#   * the job is path-triggered, so it costs minutes of Docker only when
+#     the importer actually changed.
+#
+# Later phases add steps to this same job rather than a new one: the auth
+# import (#659), the data load and its verify (#660), and the storage copy
+# against MinIO (#661). Each needs the same stack, the same fixture and
+# the same role, so each is one step here.
+
+name: Supabase import e2e
+
+# `pull_request` is path-filtered and `schedule` deliberately is not.
+# The path filter keeps the minutes of Docker this job spends off every PR
+# that cannot change it — a pull_request run of the whole workspace's test
+# suite costs seconds, so the filter is what makes this job affordable.
+# The nightly schedule has NO path filter at all: `version: 2.119.0` below
+# pins the CLI, but the images that CLI pulls are not ours and are not
+# immutable, so a stack can change under a path-filtered trigger and
+# nothing would ever notice. An unfiltered nightly run is the thing that
+# notices. It also runs when the main branch is untouched, which is when a
+# dependency break is otherwise invisible.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    paths:
+      - crates/import-supabase/**
+      - crates/cli/src/import*.rs
+      - crates/import-supabase/tests/supabase-fixture/**
+      # The e2e test extracts the read-only role SQL out of this document at
+      # compile time (inspect.rs), so an edit to it changes the SQL this job
+      # runs without touching a single line under crates/.
+      - docs/import/supabase.md
+      - .github/workflows/supabase-import-e2e.yml
+  schedule:
+    - cron: "23 5 * * *"
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  supabase-import-e2e:
+    # The acceptance criterion is a run in ten minutes or less on a
+    # standard runner; the timeout is a backstop for a stack that hangs,
+    # not the budget.
+    name: supabase import e2e (issue 733)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.98.1"
+      - uses: Swatinem/rust-cache@v2
+      # Pinned deliberately, and bumped by hand: this `version:` is THE knob
+      # for the stack under test. The docs' role SQL runs against whatever
+      # schema this version's images ship, so an upstream change should be
+      # a deliberate bump with the diff read, not something a `latest` tag
+      # decides at random on a PR. It is also why the nightly run has no
+      # path filter — the images move whether or not this file does.
+      - uses: supabase/setup-cli@v1
+        with:
+          version: 2.119.0
+      # The project lives outside the checkout: only Postgres is read, so
+      # every service the test does not need is excluded, which brings the
+      # stack up faster and pulls fewer images. The database itself and its
+      # migrations are not in the exclude list.
+      - name: Create the Supabase project directory
+        run: mkdir -p /tmp/supabase-e2e
+      - name: supabase init
+        working-directory: /tmp/supabase-e2e
+        run: supabase init
+      - name: Start a local Supabase stack
+        working-directory: /tmp/supabase-e2e
+        run: supabase start -x studio,imgproxy,mailpit,edge-runtime,logflare,vector,supavisor
+      # The EarthOS shape (tenancy through a parent, the four RLS shapes,
+      # enums, a SECURITY DEFINER function, a trigger, a cron job) and then
+      # the people in it, created through the GoTrue admin API rather than
+      # inserted into auth.users, so the sign-up hook fires and the shadow
+      # public.users row is the one a project really gets.
+      #
+      # schema.sql is applied HERE and nowhere else — seed.sh does not apply
+      # it, and would be wrong to: the shape is idempotent DDL that drops what
+      # a previous run left, and the rows are not. Applying it twice from two
+      # places would drop the tables under the rows the other place just wrote.
+      #
+      # Secrets: the local stack's service-role key and its DB URL (which
+      # carries a password) are read from `supabase status -o env` into shell
+      # variables, registered as log masks before this job passes them
+      # anywhere, and handed to seed.sh through the environment. The anon key
+      # and the JWT secret are masked too, though nothing reads them:
+      # `supabase status` printed them, so masking them costs two lines and
+      # closes the door on a later step that does use one.
+      #
+      # What masking does NOT cover: `supabase start` above already printed
+      # those same dev keys in its own startup banner, and no mask registered
+      # after that can unprint them. So the claim here is the narrow one --
+      # masked before the job uses them, not before they exist in the log.
+      # Nothing is ever echoed, `set -x` is never on, and seed.sh parses the
+      # API's responses instead of printing them. They are development-only
+      # keys for a stack this job just created and destroyed, but a key in a
+      # CI log is a key in a CI log.
+      - name: Seed users through the GoTrue admin API (issue #733)
+        env:
+          FZ_TEST_SUPABASE_DB_URL: postgresql://postgres:postgres@127.0.0.1:54322/postgres
+        run: |
+          set -euo pipefail
+          keys="$(supabase status -o env)"
+          # `-o env` prints KEY=value, with the value quoted on some CLI
+          # versions and bare on others; take both and strip the quotes.
+          value_of() {
+            printf '%s\n' "$keys" \
+              | sed -n "s/^$1=//p" | head -n1 | sed -e 's/^"//' -e 's/"$//'
+          }
+          service_role_key="$(value_of SERVICE_ROLE_KEY)"
+          anon_key="$(value_of ANON_KEY)"
+          jwt_secret="$(value_of JWT_SECRET)"
+          api_url="$(value_of API_URL)"
+          db_url="$(value_of DB_URL)"
+          if [ -z "$service_role_key" ] || [ -z "$db_url" ]; then
+            echo "::error::supabase status -o env printed no keys; the stack is not up"
+            exit 1
+          fi
+          # Masked before any of them is used, so even a failing curl that
+          # echoes its header cannot leak one. `supabase start` printed these
+          # same values in its banner before this step ran; see the comment
+          # above for what that does and does not make this worth.
+          echo "::add-mask::$service_role_key"
+          echo "::add-mask::$anon_key"
+          echo "::add-mask::$jwt_secret"
+          echo "::add-mask::$db_url"
+          # The shape first (it drops what a previous run left) and then the
+          # rows, which is the order schema.sql's own header documents.
+          psql "$db_url" --quiet --set ON_ERROR_STOP=1 \
+            -f crates/import-supabase/tests/supabase-fixture/schema.sql
+          # The ids land in the file, not on stdout: a caller joins rows with
+          # them, and seed.sh's own stdout stays a summary a log can show.
+          SUPABASE_URL="$api_url" \
+          SERVICE_ROLE_KEY="$service_role_key" \
+          DB_URL="$db_url" \
+          EARTHOS_USER_IDS_FILE=/tmp/earthos-user-ids \
+            ./crates/import-supabase/tests/supabase-fixture/seed.sh
+          unset service_role_key anon_key jwt_secret api_url db_url keys
+      # The guard on the guard: the test skips itself when the variable is
+      # unset, and a skipped test is a green job that proved nothing, so
+      # the marker is printed only by a run (see the test). This job also
+      # fails the run itself when the fixture is missing — the test says
+      # so rather than skipping — so a seed that quietly did nothing is a
+      # red job, not a green one.
+      - name: Inspect the EarthOS fixture as postgres and as the documented role
+        env:
+          FZ_TEST_SUPABASE_DB_URL: postgresql://postgres:postgres@127.0.0.1:54322/postgres
+        run: |
+          set -o pipefail
+          cargo test -p cratefield-import-supabase --test inspect \
+            the_earthos_shaped_fixture_is_visible_to_the_documented_role \
+            -- --nocapture | tee /tmp/supabase-import-e2e.log
+          if ! grep -q 'earthos acceptance: the documented role saw the fixture' /tmp/supabase-import-e2e.log; then
+            echo "the acceptance test skipped instead of running: FZ_TEST_SUPABASE_DB_URL did not reach it"
+            exit 1
+          fi
+      - name: Stop the stack
+        if: always()
+        working-directory: /tmp/supabase-e2e
+        run: supabase stop --no-backup || true
