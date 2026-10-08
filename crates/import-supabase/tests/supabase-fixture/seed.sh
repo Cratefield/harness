@@ -115,13 +115,15 @@ create_bucket() {
 
 # One object through the Storage API, so the object rows carry the metadata
 # the per-bucket counts read (`metadata->>'size'`). `x-upsert` makes a re-run
-# replace rather than fail.
+# replace rather than fail. The content type is the fourth argument because
+# Storage checks it against the bucket's `allowed_mime_types`: a text/plain
+# body into the image-only avatars bucket is refused with a 400.
 upload_object() {
   curl --silent --show-error --fail-with-body --output /dev/null \
     --request POST "${storage}/object/$1/$2" \
     --header "apikey: ${SERVICE_ROLE_KEY}" \
     --header "Authorization: Bearer ${SERVICE_ROLE_KEY}" \
-    --header "Content-Type: text/plain" \
+    --header "Content-Type: $4" \
     --header "x-upsert: true" \
     --data-binary "$3"
 }
@@ -157,8 +159,8 @@ create_bucket earthos-avatars \
 # are tiny, so the over-the-blob-cap count stays zero — uploading 10 MB
 # through the API to make one number non-zero is not worth the CI minutes,
 # and the cap is the plain-Postgres fixture's business.
-upload_object earthos-media map.svg 'the public map'
-upload_object earthos-avatars owner.png 'the owner avatar'
+upload_object earthos-media map.svg 'the public map' image/svg+xml
+upload_object earthos-avatars owner.png 'the owner avatar' image/png
 
 # The google identity. GoTrue mints an identity from the provider's callback,
 # and the admin API has no way to fake one, so this is the single row written
