@@ -188,7 +188,8 @@ Then, after ~40 s of first-compile:
 ```
 $ curl -fsS http://127.0.0.1:8792/__health
 {"captcha":"absent","env":"development","harness_api":1,"harness_build":null,
- "mailer":"not_configured","modules":[{"emits":[],"name":"sample","version":"0.1.0"},
+ "mailer":"configured","mailers":[{"configured":false,"name":"resend"}],
+ "modules":[{"emits":[],"name":"sample","version":"0.1.0"},
  {"emits":["email-signup.confirmed","email-signup.unsubscribed"],"name":"email-signup","version":"0.1.0"},
  {"emits":["waitlist.joined","waitlist.confirmed"],"name":"waitlist","version":"0.1.0"}],
  "venture":"venture-example"}
@@ -196,6 +197,11 @@ $ curl -fsS http://127.0.0.1:8792/__health
 $ curl -fsS http://127.0.0.1:8792/__ready
 {"ok":true}
 ```
+
+The two pasted bodies are illustrative rather than a literal capture — the
+`mailer` key is port presence and `mailers` is the adapter's own verdict,
+and `tools/doc-commands.sh` checks only the `$ ` lines above, so keep both
+in step with `examples/venture/src/lib.rs` by hand.
 
 Every response echoes `x-request-id` (a ULID unless the client sent a
 valid one); errors are RFC 9457 `application/problem+json` with that id

@@ -65,7 +65,7 @@ pub use http::{
 pub use idgen::{IdGen, UlidIdGen};
 pub use inbound_mail::{InboundMailError, InboundMailSource, InboundMessage, receive_mail};
 pub use kv::{KeyValue, KvError};
-pub use mailer::{MailError, Mailer, Message, SendOutcome};
+pub use mailer::{MailError, MailProvider, Mailer, Message, SendOutcome};
 pub use payments::{
     Charge, CheckoutRequest, CheckoutSession, ConnectAccountLink, ConnectAccountLinkRequest,
     Dispute, DisputeListRequest, DisputePage, DisputePhase, DisputeStatus, LineItem, Money,

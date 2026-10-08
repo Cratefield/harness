@@ -23,7 +23,8 @@ pub use inbound::{MessageDetail, MessagePage, MessageQuery, MessageSummary};
 use async_trait::async_trait;
 use bytes::Bytes;
 use cratefield_core::{
-    Clock, HttpClient, HttpError, MailError, Mailer, Message, SendOutcome, retry_after,
+    Clock, HttpClient, HttpError, MailError, MailProvider, Mailer, Message, SendOutcome,
+    retry_after,
 };
 use http::header::{AUTHORIZATION, CONTENT_TYPE};
 use http::{Request, StatusCode};
@@ -424,6 +425,11 @@ impl OwlpostClient {
         }
     }
 
+    /// Whether a key is held. For `/__health`; never the key itself.
+    fn is_configured(&self) -> bool {
+        self.api_key.is_some()
+    }
+
     /// Replaces the API key wherever the provider's own text echoed it, so no
     /// error can hand the credential back to a logger.
     fn redact(&self, text: String) -> String {
@@ -746,6 +752,13 @@ fn upstream_detail(detail: String, retry_after: Option<Duration>) -> String {
 
 #[async_trait]
 impl Mailer for Owlpost {
+    /// Owlpost is the only provider behind this adapter, and it has no
+    /// probe: whether the key works is only learned by sending, so health
+    /// stays unknown rather than being guessed.
+    fn providers(&self) -> Vec<MailProvider> {
+        vec![MailProvider::new("owlpost", self.client.is_configured())]
+    }
+
     /// Delegates to [`Owlpost::send_with`] with no extra options; the outcome
     /// logging lives in the client, per issue #14.
     async fn send(&self, message: Message) -> Result<SendOutcome, MailError> {

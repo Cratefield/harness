@@ -6,6 +6,20 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **`Mailer::providers()` names the providers behind the port**
+  (issue #793). The new `MailProvider { name, configured, healthy }`
+  reports a name and two verdicts and never a credential — a health
+  report that leaked an API key would be a secret published on an
+  unauthenticated endpoint. `/__health` gains a `"mailers"` array beside
+  the unchanged `"mailer"` key; the two answer different questions (is
+  the port wired, does the adapter hold its key), so a Resend with no
+  API key reads `configured` and `configured: false`. `healthy` is
+  `None` — and the JSON key is then omitted — for an adapter with no
+  probe, because "unknown" is not "unhealthy". The method has a default,
+  so every existing adapter compiles unchanged and still lists itself.
+
 ### Fixed
 
 - **A handler's `Referrer-Policy: same-origin` survives the no-store

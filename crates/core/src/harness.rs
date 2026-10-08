@@ -34,8 +34,8 @@ use crate::http::{
 use crate::module::{HARNESS_API, Module, ModuleContext, harness_api_mismatch};
 use crate::ports::Dispatcher;
 use crate::ports::{
-    ActorHandler, ActorHandlers, Clock, Database, Port, Ports, RateLimiter, Statement, SystemClock,
-    validate_actor_kind, warn_undeclared_ports,
+    ActorHandler, ActorHandlers, Clock, Database, Mailer, Port, Ports, RateLimiter, Statement,
+    SystemClock, validate_actor_kind, warn_undeclared_ports,
 };
 use crate::problem::Problem;
 use crate::problems::SLUGS;
@@ -818,7 +818,7 @@ impl Harness {
             venture: self.venture_as_deployed(ports.config.as_ref()),
             modules: self.modules.clone(),
             harness_build: ports.config.get("HARNESS_BUILD").filter(|b| !b.is_empty()),
-            mailer_configured: ports.mailer.is_some(),
+            mailer: ports.mailer.clone(),
             captcha_configured: ports.captcha.is_some(),
             sidecars,
             dispatcher: ports.dispatcher.clone(),
@@ -1172,7 +1172,9 @@ struct HealthState {
     modules: Vec<Arc<dyn Module>>,
     /// Git sha injected as a var by the deploy workflow (issue #14).
     harness_build: Option<String>,
-    mailer_configured: bool,
+    /// The mailer itself, not a yes/no: `/__health` lists its providers so
+    /// a venture running more than one can see them all (issue #793).
+    mailer: Option<Arc<dyn Mailer>>,
     captcha_configured: bool,
     sidecars: Vec<SidecarMount>,
     dispatcher: Option<Arc<dyn Dispatcher>>,
@@ -1214,15 +1216,27 @@ async fn health_handler(State(state): State<HealthState>) -> impl IntoResponse {
         })
         .collect();
     let sidecars = probe_sidecars(&state).await;
+    // The per-provider listing (issue #793): names and verdicts only. An
+    // adapter reports its own configured/unknown, and a secret never gets
+    // this far — `MailProvider` has no field that could carry one.
+    let mailers = state
+        .mailer
+        .as_ref()
+        .map(|mailer| mailer.providers())
+        .unwrap_or_default();
     Json(json!({
         "venture": state.venture.name,
         "env": state.venture.env.as_str(),
         "harness_api": HARNESS_API,
         "harness_build": state.harness_build,
-        // Port presence: the Mailer/Captcha traits carry no probe, so a
-        // NotConfigured adapter still reports its port as configured.
-        "mailer": if state.mailer_configured { "configured" } else { "not_configured" },
+        // Port presence, not capability: the Mailer/Captcha traits carry no
+        // probe, so a NotConfigured adapter still reports its port as
+        // configured. `mailers` above is the finer, per-adapter answer and
+        // the two are meant to disagree — a wired Resend with no API key
+        // reads `configured` here and `configured: false` there.
+        "mailer": if state.mailer.is_some() { "configured" } else { "not_configured" },
         "captcha": if state.captcha_configured { "configured" } else { "absent" },
+        "mailers": mailers,
         "modules": modules,
         "sidecars": sidecars,
     }))
