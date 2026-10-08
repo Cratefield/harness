@@ -2,13 +2,13 @@
 <html lang="en">
 <head>
 {% include "_head.html" %}
-<title>Signed out · {{ brand.name }}</title>
+<title>{{ title }} · {{ brand.name }}</title>
 </head>
 <body>
+{% include "_toasts.html" %}
 <main>
   {% include "_brand_header.html" %}
-  <h1>You are signed out</h1>
-  <p>The session on this device was revoked.</p>
+  {{ body|safe }}
   {% include "_brand_footer.html" %}
 </main>
 </body>

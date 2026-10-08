@@ -396,16 +396,29 @@ style=\"background:{bg};border-collapse:collapse\"><tr>\
 style=\"max-width:600px;border-collapse:separate\">",
             bg = l.bg,
         );
-        Self::write_brand_row(&mut h, theme);
-        // The card.
+        let banded = Self::write_brand_row(&mut h, theme);
+        // The card. Under a header band it joins the band: no top border,
+        // no top corners.
+        let card_edges = if banded {
+            format!(
+                "border:1px solid {border};border-top:0;border-radius:0 0 {r}px {r}px",
+                border = l.border,
+                r = theme.radius,
+            )
+        } else {
+            format!(
+                "border:1px solid {border};border-radius:{r}px",
+                border = l.border,
+                r = theme.radius,
+            )
+        };
         let _ = write!(
             h,
             "<tr><td class=\"cf-card\" bgcolor=\"{card}\" \
-style=\"background:{card};border:1px solid {border};border-radius:{radius}px;padding:36px 40px;font-family:{font}\">\
-<h1 class=\"cf-h1 cf-ink\" style=\"margin:0 0 16px;font-family:{font};font-size:26px;line-height:32px;font-weight:700;letter-spacing:-0.4px;color:{ink}\">{heading}</h1>",
+style=\"background:{card};{card_edges};padding:36px 40px;font-family:{font}\">\
+<h1 class=\"cf-h1 cf-ink\" style=\"margin:0 0 16px;font-family:{display};font-size:26px;line-height:32px;font-weight:700;letter-spacing:-0.4px;color:{ink}\">{heading}</h1>",
             card = l.card,
-            border = l.border,
-            radius = theme.radius,
+            display = theme.display_font,
             ink = l.ink,
             heading = e(&self.heading),
         );
@@ -524,7 +537,8 @@ style=\"background:{card};border:1px solid {border};border-radius:{radius}px;pad
         .fold(h, |h, tag| h.replace(tag, &format!("{tag}\n")))
     }
 
-    fn write_brand_row(h: &mut String, theme: &MailTheme) {
+    /// The logo row; `true` when it was drawn as a header band.
+    fn write_brand_row(h: &mut String, theme: &MailTheme) -> bool {
         let e = escape;
         let l = &theme.light;
         let font = &theme.font;
@@ -534,8 +548,10 @@ style=\"background:{card};border:1px solid {border};border-radius:{radius}px;pad
             theme.wordmark.as_str()
         };
         if label.is_empty() && theme.logo_url.is_none() {
-            return;
+            return false;
         }
+        let band = theme.header_bg.as_deref();
+        let label_ink = theme.header_text.as_deref().unwrap_or(&l.ink);
         let mut inner = String::from(
             "<table role=\"presentation\" cellpadding=\"0\" cellspacing=\"0\" border=\"0\"><tr>",
         );
@@ -570,10 +586,18 @@ style=\"display:block;width:{w}px;height:{hgt}px;border:0;outline:none;text-deco
             } else {
                 ""
             };
+            // On a band the wordmark keeps the band's colour in both
+            // schemes, so it loses the class the dark scheme repaints.
             let _ = write!(
                 inner,
-                "<td class=\"cf-ink\" style=\"{pad}font-family:{font};font-size:20px;line-height:32px;font-weight:700;letter-spacing:-0.5px;color:{ink}\">{label}</td>",
-                ink = l.ink,
+                "<td{class} style=\"{pad}font-family:{display};font-size:20px;line-height:32px;font-weight:700;letter-spacing:-0.5px;color:{ink}\">{label}</td>",
+                class = if band.is_some() {
+                    ""
+                } else {
+                    " class=\"cf-ink\""
+                },
+                display = theme.display_font,
+                ink = if band.is_some() { label_ink } else { &l.ink },
                 label = e(label),
             );
         }
@@ -587,7 +611,17 @@ style=\"display:block;width:{w}px;height:{hgt}px;border:0;outline:none;text-deco
                 ink = l.ink,
             )
         };
-        let _ = write!(h, "<tr><td style=\"padding:0 4px 20px\">{row}</td></tr>");
+        if let Some(bg) = band {
+            let r = theme.radius;
+            let _ = write!(
+                h,
+                "<tr><td class=\"cf-band\" bgcolor=\"{bg}\" style=\"background:{bg};padding:20px 40px;border-radius:{r}px {r}px 0 0\">{row}</td></tr>"
+            );
+            true
+        } else {
+            let _ = write!(h, "<tr><td style=\"padding:0 4px 20px\">{row}</td></tr>");
+            false
+        }
     }
 
     fn write_footer(&self, h: &mut String, theme: &MailTheme) {
@@ -708,7 +742,12 @@ a[x-apple-data-detectors]{{color:inherit!important;text-decoration:none!importan
         button = d.button,
         button_text = d.button_text,
         accent = d.accent,
-    )
+    ) + if theme.header_bg.is_some() {
+        // The band narrows with the card on a phone.
+        "@media (max-width:620px){.cf-band{padding:16px 20px!important}}"
+    } else {
+        ""
+    }
 }
 
 /// Representative messages with sample values: what `render-emails`

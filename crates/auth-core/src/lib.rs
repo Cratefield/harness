@@ -52,6 +52,10 @@ pub mod federated;
 mod import;
 pub mod linking;
 mod locale;
+/// The hosted page shell every auth module renders into (issue #840):
+/// the brand's theme, a notice stack, and `Referrer-Policy: same-origin`
+/// so a page's own form posts carry a real `Origin`.
+pub mod page;
 mod secrets;
 mod sessions;
 mod sso;

@@ -168,7 +168,10 @@ pub(crate) struct LoginMethod {
 /// the template error to the browser.
 fn html(template: &impl Template) -> Response {
     match template.render() {
-        Ok(body) => axum::response::Html(body).into_response(),
+        // Every page here is a hosted page: `same-origin`, so the
+        // chooser's passkey `fetch` and the sign-out form send a real
+        // `Origin` (issue #840; see `crate::page`).
+        Ok(body) => crate::page::with_page_headers(axum::response::Html(body).into_response()),
         Err(err) => {
             tracing::error!(error = %err, "auth template failed to render");
             Problem::internal().into_response()

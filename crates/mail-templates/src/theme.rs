@@ -191,6 +191,17 @@ pub struct MailTheme {
     pub font: String,
     /// The monospace stack, for links and codes.
     pub mono: String,
+    /// The heading font stack; empty means [`font`](Self::font). Like
+    /// `font`, name the site's display face first, then fallbacks a
+    /// reader is likely to have.
+    pub display_font: String,
+    /// A solid band behind the logo row, joined to the top of the card
+    /// (a dark header on a light mail, say); `None` keeps the logo row on
+    /// the page background, as before.
+    pub header_bg: Option<String>,
+    /// The wordmark's colour on that band; `None` means the palette's
+    /// `ink`.
+    pub header_text: Option<String>,
     /// Card corner radius, CSS pixels.
     pub radius: u8,
     /// Button corner radius, CSS pixels.
@@ -227,6 +238,9 @@ impl Default for MailTheme {
             font: "-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif"
                 .to_owned(),
             mono: "ui-monospace,SFMono-Regular,Menlo,Consolas,monospace".to_owned(),
+            display_font: String::new(),
+            header_bg: None,
+            header_text: None,
             radius: 12,
             button_radius: 8,
             footer: Vec::new(),
@@ -287,6 +301,22 @@ impl MailTheme {
     pub fn radii(mut self, card: u8, button: u8) -> Self {
         self.radius = card;
         self.button_radius = button;
+        self
+    }
+
+    /// A solid header band behind the logo row, and the wordmark's
+    /// colour on it.
+    #[must_use]
+    pub fn header_band(mut self, background: impl Into<String>, text: impl Into<String>) -> Self {
+        self.header_bg = Some(background.into());
+        self.header_text = Some(text.into());
+        self
+    }
+
+    /// The heading font stack.
+    #[must_use]
+    pub fn display_font(mut self, stack: impl Into<String>) -> Self {
+        self.display_font = stack.into();
         self
     }
 
@@ -427,6 +457,9 @@ impl MailTheme {
         let defaults = Self::default();
         theme.font = font_stack(&self.font, &defaults.font);
         theme.mono = font_stack(&self.mono, &defaults.mono);
+        theme.display_font = font_stack(&self.display_font, &theme.font);
+        theme.header_bg = self.header_bg.clone().filter(|c| is_hex_colour(c));
+        theme.header_text = self.header_text.clone().filter(|c| is_hex_colour(c));
         theme.logo_url = self.logo_url.clone().filter(|url| is_web_url(url));
         theme.logo_bg = self.logo_bg.clone().filter(|c| is_hex_colour(c));
         theme.logo_width = self.logo_width.clamp(8, 280);
@@ -643,6 +676,30 @@ mod tests {
         assert_eq!(theme.logo_url, None);
         assert_eq!(theme.logo_bg, None);
         assert_eq!(theme.site_url, "");
+
+        let band = MailTheme::new("x", "https://x.test")
+            .header_band("url(evil)", "#fff;color:red")
+            .display_font("x\";background:url(evil)")
+            .sanitized();
+        assert_eq!(band.header_bg, None);
+        assert_eq!(band.header_text, None);
+        assert!(!band.display_font.contains(';') && !band.display_font.contains('('));
+    }
+
+    #[test]
+    fn a_header_band_and_a_display_font_come_from_config() {
+        let cfg = MapConfig::from_pairs([(
+            THEME_CONFIG_KEY,
+            r##"{"header_bg":"#0C0C0D","header_text":"#ECEAE4","display_font":"'Archivo Black',Arial,sans-serif"}"##,
+        )]);
+        let theme = MailTheme::from_config(&venture(), &cfg).sanitized();
+        assert_eq!(theme.header_bg.as_deref(), Some("#0C0C0D"));
+        assert_eq!(theme.header_text.as_deref(), Some("#ECEAE4"));
+        assert_eq!(theme.display_font, "'Archivo Black',Arial,sans-serif");
+        // Unset, the heading keeps the body font.
+        let plain = MailTheme::for_venture(&venture()).sanitized();
+        assert_eq!(plain.display_font, plain.font);
+        assert_eq!(plain.header_bg, None);
     }
 
     #[test]

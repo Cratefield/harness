@@ -46,6 +46,39 @@ any other app's value.
 | `AUTH_BRAND_TERMS_URL` | Terms of service | no link |
 | `AUTH_PASSKEYS_RP_NAME` | Name an authenticator shows | `AUTH_BRAND_NAME` |
 
+### Page theme (optional, issue #840)
+
+The hosted pages (the sign-in chooser, the magic-link form, confirm and
+expired pages, sign-out) render through one shell themed by these keys.
+An instance that sets none keeps the neutral dark pages. Each value is
+validated at boot, because each is written into the pages' `<style>`.
+
+| Key | Meaning | When unset |
+|---|---|---|
+| `AUTH_BRAND_BACKGROUND` | `#rgb`/`#rrggbb` page background | neutral near-black |
+| `AUTH_BRAND_TEXT` | `#rgb`/`#rrggbb` text colour | neutral off-white |
+| `AUTH_BRAND_ACCENT_TEXT` | Label colour on accent-filled buttons | black or white, whichever reads on the accent |
+| `AUTH_BRAND_DANGER` | Field errors and error notices | a soft red |
+| `AUTH_BRAND_SCHEME` | `dark` or `light` | from the background's lightness |
+| `AUTH_BRAND_RADIUS` | Corner radius, `0` (square) to `32` pixels | `10` |
+| `AUTH_BRAND_FONT_BODY` | Body font stack | the system stack |
+| `AUTH_BRAND_FONT_DISPLAY` | Heading font stack | the body stack |
+| `AUTH_BRAND_FONT_MONO` | Label and code font stack | the system monospace stack |
+| `AUTH_BRAND_FONT_CSS_URL` | `https` stylesheet that loads those fonts (Google Fonts, say) | no web fonts |
+
+Surfaces, borders and muted text are mixed from the background and text
+colours, so a two-colour brand needs only those two. The sign-in mail is
+themed separately by `MAIL_THEME` (see
+[`cratefield-mail-templates`](../mail-templates)), which can give the logo
+row a dark `header_bg` band and the button the accent.
+
+Every hosted page answers with `Referrer-Policy: same-origin`, not the
+`no-referrer` the harness stamps on `/v1/*`: under `no-referrer` a browser
+sends `Origin: null` on the page's own form POST, and the login-CSRF guard
+refuses that from any client that sends no `Sec-Fetch-Site` (Gmail's in-app
+browser, other webviews, older Safari). `same-origin` still sends nothing
+to any other site.
+
 ### Mail
 
 Login mail (magic links, password verification and reset) goes through the

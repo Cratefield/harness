@@ -23,8 +23,12 @@ or deploy yet. Owlpost (`OWLPOST_API_KEY`) and Turnstile (`TURNSTILE_SECRET`)
 are not set on staging yet, so staging sends no mail and shows no captcha.
 The steps are in
 [`docs/auth/MANAGED-INSTANCES.md`](../../docs/auth/MANAGED-INSTANCES.md).
-Alphahunt's logo, accent, support address and legal URLs are commented out
-in `wrangler.toml` until Alphahunt confirms them.
+The pages and the sign-in mail carry Alphahunt's own look (issue #840):
+ink `#0C0C0D`, paper `#ECEAE4`, lime `#D8FF3C`, red `#FF3B2F`; Archivo
+Black, Geist and JetBrains Mono; square corners; the mark from
+`https://alphahunt.ing/assets/icon-512.png`; help at
+`contact@alphahunt.ing`. The privacy and terms URLs stay commented out
+until those pages exist on alphahunt.ing.
 
 Consumer side (after the first production deploy): Alphahunt-ing/backend
 sets `AUTH_ISSUER=https://auth.alphahunt.ing` and verifies tokens with

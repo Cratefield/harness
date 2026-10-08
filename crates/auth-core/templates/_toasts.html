@@ -1,0 +1,10 @@
+<div class="cf-toasts" id="cf-toasts" role="region" aria-label="Notifications" aria-live="polite">
+{%- for toast in toasts %}
+  <div class="cf-toast cf-toast-{{ toast.kind.as_str() }}" role="{{ toast.kind.role() }}">
+    <span class="cf-toast-title">{{ toast.title }}</span>
+    <span class="cf-toast-text">{{ toast.text }}</span>
+    {%- if let Some(action) = toast.action %} <a href="{{ action.href }}">{{ action.label }}</a>{% endif %}
+    <input class="cf-toast-close" type="checkbox" aria-label="Dismiss this notice">
+  </div>
+{%- endfor %}
+</div>

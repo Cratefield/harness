@@ -1209,14 +1209,237 @@ fn an_empty_box_is_the_one_thing_the_page_will_say() {
         // is theirs, and a form that silently does nothing is worse.
         let kit = kit();
         let answer = post_form(&kit, START, "email=").await;
-        assert_eq!(answer.status, StatusCode::OK);
+        assert_eq!(answer.status, StatusCode::UNPROCESSABLE_ENTITY);
         assert!(
             answer.text().contains("Enter your email"),
             "{}",
             answer.text()
         );
         assert!(answer.text().contains("<form"), "the form comes back");
+        // Inline, announced, and tied to the field (issue #840).
+        assert!(answer.text().contains("aria-invalid=\"true\""));
+        assert!(answer.text().contains("aria-describedby=\"email-error\""));
+        assert!(answer.text().contains("aria-live=\"assertive\""));
         assert_eq!(kit.outbox.count(), 0);
+    });
+}
+
+/// What the person typed is also theirs when it cannot be an address:
+/// the page says so under the field and puts the typing back, escaped,
+/// and nothing is sent (issue #840). The JSON route still answers `202`
+/// for the same input — an API caller learns nothing new.
+#[test]
+fn a_mistyped_address_is_named_inline_and_nothing_is_sent() {
+    pollster::block_on(async {
+        let kit = kit();
+        let answer = post_form(&kit, START, "email=ada%40example").await;
+        assert_eq!(answer.status, StatusCode::UNPROCESSABLE_ENTITY);
+        let html = answer.text();
+        assert!(
+            html.contains("does not look like an email address"),
+            "{html}"
+        );
+        assert!(html.contains("value=\"ada@example\""), "{html}");
+        assert!(html.contains("aria-invalid=\"true\""), "{html}");
+        assert_eq!(kit.outbox.count(), 0);
+        assert_eq!(count(&kit, "single_use_tokens"), 0);
+
+        // The echo is escaped like every other value on the page.
+        let hostile = post_form(
+            &kit,
+            START,
+            "email=%22%3E%3Cscript%3Ealert(1)%3C%2Fscript%3E",
+        )
+        .await;
+        assert!(
+            !hostile.text().contains("<script>alert"),
+            "{}",
+            hostile.text()
+        );
+
+        let json = request_link(&kit, "ada@example").await;
+        assert_eq!(json.status, StatusCode::ACCEPTED);
+    });
+}
+
+/// A refused form says how long to wait, under the field and as a
+/// notice, with the same `Retry-After` the JSON route sends.
+#[test]
+fn a_rate_limited_form_says_how_long_to_wait() {
+    pollster::block_on(async {
+        let kit = kit_rate_limited();
+        let answer = post_form(&kit, START, "email=ada%40example.com").await;
+        assert_eq!(answer.status, StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(
+            answer
+                .headers
+                .get(header::RETRY_AFTER)
+                .and_then(|v| v.to_str().ok()),
+            Some("30")
+        );
+        let html = answer.text();
+        assert!(html.contains("Wait 30 seconds"), "{html}");
+        assert!(html.contains("cf-toast-error"), "{html}");
+        assert!(html.contains("<form"), "the form comes back: {html}");
+        assert_eq!(kit.outbox.count(), 0);
+    });
+}
+
+/// The expired page is a dead end no more: it says what happened and
+/// offers the next step, as a button and as a notice.
+#[test]
+fn the_expired_page_offers_a_new_link() {
+    pollster::block_on(async {
+        let kit = kit();
+        let response = click(&kit, BOGUS_TOKEN).await;
+        assert_eq!(response.status, StatusCode::BAD_REQUEST);
+        let html = response.text();
+        assert!(html.contains("This link has expired"), "{html}");
+        assert!(
+            html.contains("href=\"/v1/auth-magic-link/start\""),
+            "no way forward: {html}"
+        );
+        assert!(html.contains("role=\"alert\""), "{html}");
+    });
+}
+
+// ---------------------------------------------------------------------
+// Issue #840: the confirm button in a webview. The harness stamps
+// `Referrer-Policy: no-referrer` on `/v1/*` and on any URL carrying a
+// token, and under `no-referrer` a browser sends `Origin: null` on a form
+// POST, even to its own origin. A browser that also sends
+// `Sec-Fetch-Site: same-origin` got through on that; Gmail's in-app
+// browser, other webviews and older Safari send no fetch metadata, so
+// their confirm was refused with "origin is null". The page now answers
+// with `same-origin`, which leaks nothing cross-site and makes the
+// browser send the real `Origin`.
+
+/// What a browser puts in `Origin` on a form POST from a page on
+/// `page_origin` to that same origin, under the page's referrer policy
+/// (Fetch, "append a request `Origin` header", the non-CORS POST branch).
+/// Only the policies this module ever sees are modelled.
+fn origin_a_browser_sends(policy: &str, page_origin: &str) -> String {
+    match policy {
+        "no-referrer" => "null".to_owned(),
+        // `same-origin`, `strict-origin(-when-cross-origin)`,
+        // `no-referrer-when-downgrade` all keep a same-origin `Origin`.
+        _ => page_origin.to_owned(),
+    }
+}
+
+#[test]
+fn a_webview_without_fetch_metadata_can_press_the_confirm_button() {
+    pollster::block_on(async {
+        let kit = kit();
+        seed(&kit, "ada@example.com", false).await;
+        request_link(&kit, "ada@example.com").await;
+        let token = kit.outbox.last_token().expect("a token");
+        let link = format!("{CONSUME}?token={token}");
+
+        // The confirm page, through the whole router, so the harness's
+        // own header layers have had their say.
+        let page = get_page(&kit, &link).await;
+        assert_eq!(page.status, StatusCode::OK, "{}", page.text());
+        let policy = page
+            .headers
+            .get("referrer-policy")
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or_default()
+            .to_owned();
+        assert_eq!(policy, "same-origin", "the confirm page's referrer policy");
+        assert_eq!(page.headers.get(header::CACHE_CONTROL).unwrap(), "no-store");
+
+        // The press, as a webview sends it: no `Sec-Fetch-*` at all, and
+        // the `Origin` the page's policy produces.
+        let origin = origin_a_browser_sends(&policy, "https://auth.example.test");
+        assert_ne!(origin, "null");
+        let pressed = post_form_with(
+            &kit,
+            &link,
+            &format!("token={token}"),
+            &[
+                ("host", "auth.example.test"),
+                ("origin", &origin),
+                ("accept", "text/html"),
+            ],
+        )
+        .await;
+        assert_eq!(pressed.status, StatusCode::FOUND, "{}", pressed.text());
+        assert!(pressed.cookie("__Host-session").is_some());
+        assert_eq!(count(&kit, "sessions"), 1);
+    });
+}
+
+/// The fix is the page's policy, not a looser guard: `Origin: null` with
+/// no fetch metadata — what the old `no-referrer` page produced — is
+/// still refused, spends nothing, and a browser gets the refusal as a
+/// branded page with a way forward instead of problem JSON.
+#[test]
+fn origin_null_is_still_refused_and_a_browser_is_shown_a_way_forward() {
+    pollster::block_on(async {
+        let kit = kit();
+        seed(&kit, "ada@example.com", false).await;
+        request_link(&kit, "ada@example.com").await;
+        let token = kit.outbox.last_token().expect("a token");
+        let link = format!("{CONSUME}?token={token}");
+
+        let origin = origin_a_browser_sends("no-referrer", "https://auth.example.test");
+        let refused = post_form_with(
+            &kit,
+            &link,
+            &format!("token={token}"),
+            &[
+                ("host", "auth.example.test"),
+                ("origin", &origin),
+                ("accept", "text/html,application/xhtml+xml"),
+            ],
+        )
+        .await;
+        assert_eq!(refused.status, StatusCode::FORBIDDEN, "{}", refused.text());
+        assert!(refused.cookie("__Host-session").is_none());
+        assert_eq!(count(&kit, "sessions"), 0);
+        let html = refused.text();
+        assert!(
+            refused
+                .headers
+                .get(header::CONTENT_TYPE)
+                .and_then(|v| v.to_str().ok())
+                .is_some_and(|v| v.starts_with("text/html")),
+            "{html}"
+        );
+        assert!(
+            html.contains("href=\"/v1/auth-magic-link/start\""),
+            "{html}"
+        );
+        assert!(
+            !html.contains("\"type\":"),
+            "problem JSON reached a browser: {html}"
+        );
+
+        // Unspent: the same token, pressed properly, still works.
+        let pressed = click(&kit, &token).await;
+        assert_eq!(pressed.status, StatusCode::FOUND, "{}", pressed.text());
+    });
+}
+
+/// Every page this module renders answers with `same-origin`: the form
+/// posts back to itself too, and the sent page links back to it.
+#[test]
+fn every_page_here_answers_with_the_same_origin_policy() {
+    pollster::block_on(async {
+        let kit = kit();
+        let start = get_page(&kit, START).await;
+        let sent = post_form(&kit, START, "email=ada%40example.com").await;
+        let expired = get_page(&kit, &format!("{CONSUME}?token=bad")).await;
+        for (name, page) in [("start", &start), ("sent", &sent), ("expired", &expired)] {
+            assert_eq!(
+                page.headers
+                    .get("referrer-policy")
+                    .and_then(|v| v.to_str().ok()),
+                Some("same-origin"),
+                "{name}"
+            );
+        }
     });
 }
 

@@ -82,11 +82,28 @@ AUTH_PASSWORD_PUBLIC_BASE = "https://auth-staging.alphahunt.ing"
 AUTH_PASSWORD_MAIL_FROM = "Alphahunt <sign-in@send.alphahunt.ing>"
 AUTH_OIDC_REDIRECT_BASE = "https://auth-staging.alphahunt.ing"
 AUTH_META_REDIRECT_BASE = "https://auth-staging.alphahunt.ing"
-# AUTH_BRAND_LOGO_URL = "https://alphahunt.ing/logo.png"   # needs-human: confirm the page/address exists, then uncomment
-# AUTH_BRAND_ACCENT = "#rrggbb"   # needs-human: confirm the page/address exists, then uncomment
-# AUTH_BRAND_SUPPORT_EMAIL = "support@alphahunt.ing"   # needs-human: confirm the page/address exists, then uncomment
-# AUTH_BRAND_PRIVACY_URL = "https://alphahunt.ing/privacy"   # needs-human: confirm the page/address exists, then uncomment
-# AUTH_BRAND_TERMS_URL = "https://alphahunt.ing/terms"   # needs-human: confirm the page/address exists, then uncomment
+# Alphahunt's look (issue #840), from alphahunt.ing's own tokens: ink
+# #0C0C0D, paper #ECEAE4, lime #D8FF3C, red #FF3B2F; Archivo Black for
+# headings, Geist for text, JetBrains Mono for labels; square corners.
+# The logo is the site's mark as a PNG (mail clients drop SVG).
+AUTH_BRAND_LOGO_URL = "https://alphahunt.ing/assets/icon-512.png"
+AUTH_BRAND_ACCENT = "#D8FF3C"
+AUTH_BRAND_ACCENT_TEXT = "#0C0C0D"
+AUTH_BRAND_BACKGROUND = "#0C0C0D"
+AUTH_BRAND_TEXT = "#ECEAE4"
+AUTH_BRAND_DANGER = "#FF3B2F"
+AUTH_BRAND_SCHEME = "dark"
+AUTH_BRAND_RADIUS = "0"
+AUTH_BRAND_FONT_DISPLAY = "'Archivo Black', 'Arial Black', Impact, sans-serif"
+AUTH_BRAND_FONT_BODY = "Geist, system-ui, -apple-system, 'Segoe UI', sans-serif"
+AUTH_BRAND_FONT_MONO = "'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace"
+AUTH_BRAND_FONT_CSS_URL = "https://fonts.googleapis.com/css2?family=Archivo+Black&family=Geist:wght@400;500;600&family=JetBrains+Mono:wght@500;700&display=swap"
+AUTH_BRAND_SUPPORT_EMAIL = "contact@alphahunt.ing"
+# The sign-in mail: a dark header band with the mark, paper card, lime
+# button, all inline so Gmail keeps it.
+MAIL_THEME = '''{"wordmark":"Alphahunt","site_url":"https://alphahunt.ing","logo_alt":"Alphahunt","logo_width":36,"logo_height":36,"header_bg":"#0C0C0D","header_text":"#ECEAE4","light":{"bg":"#ECEAE4","card":"#F7F6F2","border":"#D3D0C7","ink":"#0C0C0D","text":"#2A2A2C","muted":"#55554F","accent":"#0C0C0D","button":"#D8FF3C","button_text":"#0C0C0D","code_bg":"#ECEAE4"},"dark":{"bg":"#0C0C0D","card":"#141416","border":"#2A2A2C","ink":"#ECEAE4","text":"#BDBBB5","muted":"#8A8A86","accent":"#D8FF3C","button":"#D8FF3C","button_text":"#0C0C0D","code_bg":"#0C0C0D"},"font":"Geist,'Helvetica Neue',Helvetica,Arial,sans-serif","mono":"'JetBrains Mono',ui-monospace,SFMono-Regular,Menlo,Consolas,monospace","display_font":"'Archivo Black','Arial Black',Impact,'Helvetica Neue',Arial,sans-serif","radius":0,"button_radius":0,"contact":"contact@alphahunt.ing"}'''
+# AUTH_BRAND_PRIVACY_URL = "https://alphahunt.ing/privacy"   # needs-human: the page does not exist yet (404), uncomment once it does
+# AUTH_BRAND_TERMS_URL = "https://alphahunt.ing/terms"   # needs-human: the page does not exist yet (404), uncomment once it does
 
 # --- Production (deployed from an `auth-v*` tag, behind the approval gate) ---
 [env.production]
@@ -128,8 +145,25 @@ AUTH_PASSWORD_PUBLIC_BASE = "https://auth.alphahunt.ing"
 AUTH_PASSWORD_MAIL_FROM = "Alphahunt <sign-in@send.alphahunt.ing>"
 AUTH_OIDC_REDIRECT_BASE = "https://auth.alphahunt.ing"
 AUTH_META_REDIRECT_BASE = "https://auth.alphahunt.ing"
-# AUTH_BRAND_LOGO_URL = "https://alphahunt.ing/logo.png"   # needs-human: confirm the page/address exists, then uncomment
-# AUTH_BRAND_ACCENT = "#rrggbb"   # needs-human: confirm the page/address exists, then uncomment
-# AUTH_BRAND_SUPPORT_EMAIL = "support@alphahunt.ing"   # needs-human: confirm the page/address exists, then uncomment
-# AUTH_BRAND_PRIVACY_URL = "https://alphahunt.ing/privacy"   # needs-human: confirm the page/address exists, then uncomment
-# AUTH_BRAND_TERMS_URL = "https://alphahunt.ing/terms"   # needs-human: confirm the page/address exists, then uncomment
+# Alphahunt's look (issue #840), from alphahunt.ing's own tokens: ink
+# #0C0C0D, paper #ECEAE4, lime #D8FF3C, red #FF3B2F; Archivo Black for
+# headings, Geist for text, JetBrains Mono for labels; square corners.
+# The logo is the site's mark as a PNG (mail clients drop SVG).
+AUTH_BRAND_LOGO_URL = "https://alphahunt.ing/assets/icon-512.png"
+AUTH_BRAND_ACCENT = "#D8FF3C"
+AUTH_BRAND_ACCENT_TEXT = "#0C0C0D"
+AUTH_BRAND_BACKGROUND = "#0C0C0D"
+AUTH_BRAND_TEXT = "#ECEAE4"
+AUTH_BRAND_DANGER = "#FF3B2F"
+AUTH_BRAND_SCHEME = "dark"
+AUTH_BRAND_RADIUS = "0"
+AUTH_BRAND_FONT_DISPLAY = "'Archivo Black', 'Arial Black', Impact, sans-serif"
+AUTH_BRAND_FONT_BODY = "Geist, system-ui, -apple-system, 'Segoe UI', sans-serif"
+AUTH_BRAND_FONT_MONO = "'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace"
+AUTH_BRAND_FONT_CSS_URL = "https://fonts.googleapis.com/css2?family=Archivo+Black&family=Geist:wght@400;500;600&family=JetBrains+Mono:wght@500;700&display=swap"
+AUTH_BRAND_SUPPORT_EMAIL = "contact@alphahunt.ing"
+# The sign-in mail: a dark header band with the mark, paper card, lime
+# button, all inline so Gmail keeps it.
+MAIL_THEME = '''{"wordmark":"Alphahunt","site_url":"https://alphahunt.ing","logo_alt":"Alphahunt","logo_width":36,"logo_height":36,"header_bg":"#0C0C0D","header_text":"#ECEAE4","light":{"bg":"#ECEAE4","card":"#F7F6F2","border":"#D3D0C7","ink":"#0C0C0D","text":"#2A2A2C","muted":"#55554F","accent":"#0C0C0D","button":"#D8FF3C","button_text":"#0C0C0D","code_bg":"#ECEAE4"},"dark":{"bg":"#0C0C0D","card":"#141416","border":"#2A2A2C","ink":"#ECEAE4","text":"#BDBBB5","muted":"#8A8A86","accent":"#D8FF3C","button":"#D8FF3C","button_text":"#0C0C0D","code_bg":"#0C0C0D"},"font":"Geist,'Helvetica Neue',Helvetica,Arial,sans-serif","mono":"'JetBrains Mono',ui-monospace,SFMono-Regular,Menlo,Consolas,monospace","display_font":"'Archivo Black','Arial Black',Impact,'Helvetica Neue',Arial,sans-serif","radius":0,"button_radius":0,"contact":"contact@alphahunt.ing"}'''
+# AUTH_BRAND_PRIVACY_URL = "https://alphahunt.ing/privacy"   # needs-human: the page does not exist yet (404), uncomment once it does
+# AUTH_BRAND_TERMS_URL = "https://alphahunt.ing/terms"   # needs-human: the page does not exist yet (404), uncomment once it does
