@@ -697,6 +697,7 @@ dependencies = [
  "cratefield-module-crm",
  "cratefield-module-device-auth",
  "cratefield-module-email-signup",
+ "cratefield-module-guardrails",
  "cratefield-module-notifications",
  "cratefield-module-orgs",
  "cratefield-module-owlpost",

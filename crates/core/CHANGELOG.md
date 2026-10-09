@@ -8,6 +8,13 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **The facade gains a `guardrails` feature** (issue #763). It
+  re-exports the new `cratefield-module-guardrails` as
+  `cratefield::guardrails`: the policy engine every automated
+  value-moving action must pass, with hard denies, allowlists, required
+  simulation, micro-USD caps, a kill switch and audit. It denies by
+  default and fails closed. Nothing in `cratefield-core` changes.
+
 - **`Mailer::providers()` names the providers behind the port**
   (issue #793). The new `MailProvider { name, configured, healthy }`
   reports a name and two verdicts and never a credential — a health

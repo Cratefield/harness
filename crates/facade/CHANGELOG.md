@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- *(guardrails)* a `guardrails` feature that re-exports `cratefield-module-guardrails` as `cratefield::guardrails`: the policy engine every automated value-moving action must pass ([#763](https://github.com/Cratefield/harness/issues/763))
+
 ## [0.2.0](https://github.com/Cratefield/harness/compare/cratefield-v0.1.4...cratefield-v0.2.0) - 2026-10-03
 
 ### Added
