@@ -152,5 +152,5 @@ a server-held session key would do.
 
 Tests run against a scripted fake HTTP transport (no network): the setup
 flow's request order and bodies, stamp verification against the sealed
-key, policy-builder escaping, EVM/Solana/UserOperation/EIP-712 signing
-with signature verification, and the status-to-error mapping.
+key, policy-builder escaping, EVM, Solana, UserOperation and EIP-712
+signing with signature verification, and the status-to-error mapping.

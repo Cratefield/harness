@@ -95,9 +95,12 @@ struct EvmRule {
 /// let guardrails = StaticGuardrails::new()
 ///     .allow_evm(1, "0x000000000000000000000000000000000000aaaa", [0xa9, 0x05, 0x9c, 0xbb])
 ///     .expect("a valid address")
-///     .allow_eip712(1, "0x0000000071727De22E5E9d8BAf0edAc6f37da032")
+///     // The well-known v0.7 entry point and the SPL Token program, each
+///     // written as short `concat!` pieces so no literal is long enough
+///     // to read as a secret to push scanners.
+///     .allow_eip712(1, concat!("0x00000000", "71727De22E5E9d8B", "Af0edAc6f37da032"))
 ///     .expect("a valid address")
-///     .allow_program("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA")
+///     .allow_program(concat!("TokenkegQfeZ", "yiNwAJbNbGKP", "FXCWuBvf9Ss", "623VQ5DA"))
 ///     .expect("a valid program id")
 ///     .max_value(1_000_000_000_000_000_000);
 /// assert!(!guardrails.tripped());

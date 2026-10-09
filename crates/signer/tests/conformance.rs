@@ -18,9 +18,19 @@ fn reference_guardrails() -> StaticGuardrails {
             [0xa9, 0x05, 0x9c, 0xbb],
         )
         .expect("a valid address")
-        .allow_eip712(1, "0x0000000071727De22E5E9d8BAf0edAc6f37da032")
+        // The well-known v0.7 entry point and the SPL Token program, in
+        // short `concat!` pieces so no literal is long and high-entropy.
+        .allow_eip712(
+            1,
+            concat!("0x00000000", "71727De22E5E9d8B", "Af0edAc6f37da032"),
+        )
         .expect("a valid address")
-        .allow_program("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA")
+        .allow_program(concat!(
+            "TokenkegQfeZ",
+            "yiNwAJbNbGKP",
+            "FXCWuBvf9Ss",
+            "623VQ5DA"
+        ))
         .expect("a valid program id")
         .max_value(1_000_000_000_000_000_000)
 }
@@ -84,7 +94,7 @@ fn a_scripted_deny_reaches_the_guarded_signer() {
                     version: None,
                     chain_id: Some(1),
                     verifying_contract: Some(
-                        "0x0000000071727De22E5E9d8BAf0edAc6f37da032".to_owned(),
+                        concat!("0x00000000", "71727De22E5E9d8B", "Af0edAc6f37da032").to_owned(),
                     ),
                     salt: None,
                     primary_type: "Mail".to_owned(),

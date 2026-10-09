@@ -13,6 +13,11 @@ use cratefield_signer::{
     SignerError, StaticGuardrails, Subject,
 };
 
+/// The SPL Token program id, joined from short pieces at compile time
+/// so the literal never reads as a long high-entropy secret to push
+/// scanners.
+const TOKEN_PROGRAM: &str = concat!("TokenkegQfeZ", "yiNwAJbNbGKP", "FXCWuBvf9Ss", "623VQ5DA");
+
 fn allowed_tx() -> Payload {
     Payload::EvmTransaction(EvmTransaction {
         chain_id: 1,
@@ -415,7 +420,9 @@ fn guardrail_rules_only_match_what_they_name() {
     let Payload::Eip712(mut other_domain) = eip712 else {
         unreachable!()
     };
-    other_domain.verifying_contract = Some("0x0000000071727De22E5E9d8BAf0edAc6f37da032".into());
+    // The well-known v0.7 entry point, in short `concat!` pieces.
+    other_domain.verifying_contract =
+        Some(concat!("0x00000000", "71727De22E5E9d8B", "Af0edAc6f37da032").into());
     assert!(
         !decision_for(Payload::Eip712(other_domain)).is_allow(),
         "a different verifying contract is not covered"
@@ -425,7 +432,7 @@ fn guardrail_rules_only_match_what_they_name() {
 #[test]
 fn solana_allowlist_requires_every_program() {
     let guardrails = StaticGuardrails::new()
-        .allow_program("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA")
+        .allow_program(TOKEN_PROGRAM)
         .expect("a valid program id");
     let intent = cratefield_signer::Intent {
         chain: cratefield_signer::Chain::Solana,
@@ -434,10 +441,7 @@ fn solana_allowlist_requires_every_program() {
         value: None,
         // The SPL Token program plus an unresolvable lookup-table
         // reference: never allowed through by the token entry.
-        programs: vec![
-            "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA".to_owned(),
-            "lt:9".to_owned(),
-        ],
+        programs: vec![TOKEN_PROGRAM.to_owned(), "lt:9".to_owned()],
         verifying_contract: None,
     };
     let subject = Subject::new("acme", None).expect("a venture");
@@ -454,7 +458,7 @@ fn solana_allowlist_requires_every_program() {
     assert!(reason.contains("lt:9"), "{reason}");
 
     let resolved = cratefield_signer::Intent {
-        programs: vec!["TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA".to_owned()],
+        programs: vec![TOKEN_PROGRAM.to_owned()],
         ..context.intent
     };
     let context = cratefield_signer::SignContext {

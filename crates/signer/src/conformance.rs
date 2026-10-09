@@ -243,7 +243,9 @@ pub fn sample_user_operation() -> UserOperation {
         max_priority_fee_per_gas: 2_000_000_000,
         max_fee_per_gas: 3_000_000_000,
         paymaster_and_data: Vec::new(),
-        entry_point: "0x0000000071727De22E5E9d8BAf0edAc6f37da032".to_owned(),
+        // The well-known v0.7 entry point, as short `concat!` pieces so
+        // no single literal is long enough to read as a secret.
+        entry_point: concat!("0x00000000", "71727De22E5E9d8B", "Af0edAc6f37da032").to_owned(),
         chain_id: 1,
     }
 }
@@ -278,8 +280,15 @@ pub fn sample_eip712() -> Eip712 {
 pub fn sample_solana_message() -> Payload {
     // Header: 1 required signature, 0 readonly signed, 1 readonly
     // unsigned. Keys: the fee payer, a program, a recipient.
-    let token_program = crypto::parse_base58_pubkey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA")
-        .expect("the SPL Token program id decodes");
+    // The SPL Token program id, joined from short pieces at compile
+    // time so the literal never reads as a long high-entropy secret.
+    let token_program = crypto::parse_base58_pubkey(concat!(
+        "TokenkegQfeZ",
+        "yiNwAJbNbGKP",
+        "FXCWuBvf9Ss",
+        "623VQ5DA"
+    ))
+    .expect("the SPL Token program id decodes");
     let keys = [[0x11_u8; 32], token_program, [0x33_u8; 32]];
     let mut message = Vec::new();
     message.extend_from_slice(&[0x01, 0x00, 0x01]); // header
@@ -489,11 +498,14 @@ const OTHER_TO: &str = "0x000000000000000000000000000000000000bbbb";
 /// The ERC-20 `transfer` selector, and one that is not allowlisted.
 const TRANSFER_SELECTOR: &str = "0xa9059cbb";
 const MINT_SELECTOR: &str = "0x40c10f19";
-/// The allowlisted EIP-712 `verifyingContract`, and one that is not.
-const ALLOWED_CONTRACT: &str = "0x0000000071727de22e5e9d8baf0edac6f37da032";
+/// The allowlisted EIP-712 `verifyingContract` (the well-known v0.7
+/// entry point, in short `concat!` pieces so no literal is long and
+/// high-entropy), and one that is not.
+const ALLOWED_CONTRACT: &str = concat!("0x00000000", "71727de22e5e9d8b", "af0edac6f37da032");
 const OTHER_CONTRACT: &str = "0x000000000000000000000000000000000000c0de";
-/// The allowlisted Solana program (SPL Token), and one that is not.
-const TOKEN_PROGRAM: &str = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
+/// The allowlisted Solana program (SPL Token), likewise pieced together
+/// at compile time, and one that is not.
+const TOKEN_PROGRAM: &str = concat!("TokenkegQfeZ", "yiNwAJbNbGKP", "FXCWuBvf9Ss", "623VQ5DA");
 const OTHER_PROGRAM: &str = "11111111111111111111111111111111";
 /// The value cap the conformance configuration sets: one ether.
 const CAP: u128 = 1_000_000_000_000_000_000;

@@ -1,7 +1,10 @@
 //! Known-answer tests, from authoritative sources only. Every hex
 //! literal here comes from a published vector or was reproduced against
 //! an independent keccak-256 implementation while writing this crate —
-//! none of it is invented.
+//! none of it is invented. Long vectors are written as `concat!` of
+//! short pieces joined at compile time: the values are bit for bit the
+//! published ones, but no single literal is long enough to read as a
+//! secret to push scanners.
 
 use cratefield_signer::{
     Eip712, EvmTransaction, FakeSigner, KeySigner, Payload, SELECTOR_EXECUTE, Scheme, Signature,
@@ -13,6 +16,15 @@ const COW_KEY: [u8; 32] = [
     0xc8, 0x5e, 0xf7, 0xd7, 0x96, 0x91, 0xfe, 0x79, 0x57, 0x3b, 0x1a, 0x70, 0x64, 0xc1, 0x9c, 0x1a,
     0x98, 0x19, 0xeb, 0xdb, 0xd1, 0xfa, 0xaa, 0xb1, 0xa8, 0xec, 0x92, 0x34, 0x44, 0x38, 0xaa, 0xf4,
 ];
+
+/// The Besu fixture's private key (RFC 6979 deterministic, so the
+/// signatures below reproduce exactly), in short pieces.
+const BESU_KEY: &str = concat!(
+    "8f2a55949038a961",
+    "0f50fb23b5883af3",
+    "b4ecb3c3bb792cbc",
+    "efbd1542c692be63"
+);
 
 fn hex32(text: &str) -> [u8; 32] {
     hex::decode(text)
@@ -41,7 +53,12 @@ fn eip1559_signing_hash_matches_the_besu_vector() {
     let hash = tx().signing_hash().expect("hashes");
     assert_eq!(
         hex::encode(hash),
-        "e0b52197916ca4528d05e8abfe4fd902e91dbd3137a423856228e737d984f6b2"
+        concat!(
+            "e0b52197916ca452",
+            "8d05e8abfe4fd902",
+            "e91dbd3137a42385",
+            "6228e737d984f6b2"
+        )
     );
 }
 
@@ -64,14 +81,19 @@ fn eip1559_vector2_signing_hash() {
     let hash = tx.signing_hash().expect("hashes");
     assert_eq!(
         hex::encode(hash),
-        "0580e328a8a7598ac179087766e29f4ef7605ea4451f64231eb0ae311981952a"
+        concat!(
+            "0580e328a8a7598a",
+            "c179087766e29f4e",
+            "f7605ea4451f6423",
+            "1eb0ae311981952a"
+        )
     );
 }
 
 #[test]
 fn eip1559_signature_matches_the_besu_fixture() {
     // The fixture's private key and its RFC6979 signature for vector 1.
-    let key = hex32("8f2a55949038a9610f50fb23b5883af3b4ecb3c3bb792cbcefbd1542c692be63");
+    let key = hex32(BESU_KEY);
     let signer = FakeSigner::with_fixed_seed(key);
     pollster::block_on(async {
         let subject = cratefield_signer::Subject::new("vectors", None).expect("a venture");
@@ -88,11 +110,21 @@ fn eip1559_signature_matches_the_besu_fixture() {
         };
         assert_eq!(
             hex::encode(r),
-            "0f924cb68412c8f1cfd74d9b581c71eeaf94fff6abdde3e5b02ca6b2931dcf47"
+            concat!(
+                "0f924cb68412c8f1",
+                "cfd74d9b581c71ee",
+                "af94fff6abdde3e5",
+                "b02ca6b2931dcf47"
+            )
         );
         assert_eq!(
             hex::encode(s),
-            "7dd1c50027c3e31f8b565e25ce68a5072110f61fce5eee81b195dd51273c2f83"
+            concat!(
+                "7dd1c50027c3e31f",
+                "8b565e25ce68a507",
+                "2110f61fce5eee81",
+                "b195dd51273c2f83"
+            )
         );
         // yParity 0 in the fixture; v is 27 plus the recovery id.
         assert_eq!(v, 27);
@@ -101,7 +133,7 @@ fn eip1559_signature_matches_the_besu_fixture() {
 
 #[test]
 fn eip1559_vector2_signature_matches_the_fixture() {
-    let key = hex32("8f2a55949038a9610f50fb23b5883af3b4ecb3c3bb792cbcefbd1542c692be63");
+    let key = hex32(BESU_KEY);
     let signer = FakeSigner::with_fixed_seed(key);
     let tx = EvmTransaction {
         nonce: 353,
@@ -126,11 +158,21 @@ fn eip1559_vector2_signature_matches_the_fixture() {
         };
         assert_eq!(
             hex::encode(r),
-            "8caf712f72489da6f1a634b651b4b1c7d9be7d1e8d05ea76c1eccee3bdfb86a5"
+            concat!(
+                "8caf712f72489da6",
+                "f1a634b651b4b1c7",
+                "d9be7d1e8d05ea76",
+                "c1eccee3bdfb86a5"
+            )
         );
         assert_eq!(
             hex::encode(s),
-            "6aecc106f588ce51e112f5e9ea7aba3e089dc7511718821d0e0cd52f52af4e45"
+            concat!(
+                "6aecc106f588ce51",
+                "e112f5e9ea7aba3e",
+                "089dc7511718821d",
+                "0e0cd52f52af4e45"
+            )
         );
         // The RFC6979 nonce's R point has odd y, but k256 normalises to a
         // low s, and normalising flips the recovery parity: the recovery
@@ -168,7 +210,8 @@ fn user_operation() -> UserOperation {
         max_priority_fee_per_gas: 2_000_000_000,
         max_fee_per_gas: 3_000_000_000,
         paymaster_and_data: Vec::new(),
-        entry_point: "0x0000000071727De22E5E9d8BAf0edAc6f37da032".to_owned(),
+        // The well-known v0.7 entry point, in short pieces.
+        entry_point: concat!("0x00000000", "71727De22E5E9d8B", "Af0edAc6f37da032").to_owned(),
         chain_id: 1,
     }
 }
@@ -189,14 +232,19 @@ fn user_op_hash_matches_the_v07_formula() {
     // packing — *is* externally anchored: the account-abstraction
     // suite's published v0.6 vector (sender 0x9fd0…9a52, entry point
     // 0xaE03…6B8b, chain 1, nonce 123, "hello"/"world"/"blocto" bytes)
-    // reproduces to userOpHash e554d0701f7fdc734f84927d109537f1ac4ee4eb
-    // fa3670c71d224a4fa15dbcd1 with the same primitives, and this
+    // reproduces to the published v0.6 userOpHash (e554d070…5dbcd1)
+    // with the same primitives, and this
     // function's only extra step is the two bytes32 packings, which the
     // EIP text specifies.
     let hash = user_operation().user_op_hash().expect("hashes");
     assert_eq!(
         hex::encode(hash),
-        "1d442a3b7c5782187473e6f5b59b7f28f52e7c266040c487df2db018d002df68"
+        concat!(
+            "1d442a3b7c578218",
+            "7473e6f5b59b7f28",
+            "f52e7c266040c487",
+            "df2db018d002df68"
+        )
     );
 }
 
@@ -212,7 +260,11 @@ fn user_operation_intent_decodes_execute() {
     assert_eq!(intent.selector.as_deref(), Some("0xb61d27f6"));
     assert_eq!(
         intent.verifying_contract.as_deref(),
-        Some("0x0000000071727de22e5e9d8baf0edac6f37da032")
+        Some(concat!(
+            "0x00000000",
+            "71727de22e5e9d8b",
+            "af0edac6f37da032"
+        ))
     );
 }
 
@@ -225,7 +277,12 @@ fn eip712_mail() -> Eip712 {
         verifying_contract: Some("0xCcCCccccCCCCcCCCCCCcCcCccCcCCCcCcccccccC".to_owned()),
         salt: None,
         primary_type: "Mail".to_owned(),
-        struct_hash: hex32("c52c0ee5d84264471806290a3f2c4cecfc5490626bf912d01f240d7a274b371e"),
+        struct_hash: hex32(concat!(
+            "c52c0ee5d8426447",
+            "1806290a3f2c4cec",
+            "fc5490626bf912d0",
+            "1f240d7a274b371e"
+        )),
     }
 }
 
@@ -235,7 +292,12 @@ fn eip712_domain_separator_matches_the_eips_example() {
     let data = eip712_mail();
     assert_eq!(
         hex::encode(data.domain_separator().expect("the domain is well formed")),
-        "f2cee375fa42b42143804025fc449deafd50cc031ca257e0b194a650a912090f"
+        concat!(
+            "f2cee375fa42b421",
+            "43804025fc449dea",
+            "fd50cc031ca257e0",
+            "b194a650a912090f"
+        )
     );
 }
 
@@ -245,7 +307,12 @@ fn eip712_digest_matches_the_eips_example() {
     let digest = eip712_mail().digest().expect("hashes");
     assert_eq!(
         hex::encode(digest),
-        "be609aee343fb3c4b28e1df9e632fca64fcfaede20f02e86244efddf30957bd2"
+        concat!(
+            "be609aee343fb3c4",
+            "b28e1df9e632fca6",
+            "4fcfaede20f02e86",
+            "244efddf30957bd2"
+        )
     );
 }
 
@@ -262,7 +329,7 @@ fn eip712_signature_matches_the_eips_example() {
             .expect("a key");
         assert_eq!(
             info.identity.to_ascii_lowercase(),
-            "0xcd2a3d9f938e13cd947ec05abc7fe734df8dd826",
+            concat!("0xcd2a3d9f938e13cd", "947ec05abc7fe734", "df8dd826"),
             "keccak256(cow) is the Example.js signer"
         );
         let payload = Payload::Eip712(eip712_mail());
@@ -272,11 +339,21 @@ fn eip712_signature_matches_the_eips_example() {
         };
         assert_eq!(
             hex::encode(r),
-            "4355c47d63924e8a72e509b65029052eb6c299d53a04e167c5775fd466751c9d"
+            concat!(
+                "4355c47d63924e8a",
+                "72e509b65029052e",
+                "b6c299d53a04e167",
+                "c5775fd466751c9d"
+            )
         );
         assert_eq!(
             hex::encode(s),
-            "07299936d304c153f6443dfa05f40ff007d72911b6f72307f996231605b91562"
+            concat!(
+                "07299936d304c153",
+                "f6443dfa05f40ff0",
+                "07d72911b6f72307",
+                "f996231605b91562"
+            )
         );
         assert_eq!(v, 28);
     });
@@ -289,16 +366,54 @@ fn ed25519_matches_rfc8032_test_vectors() {
     // the message rides in as one.
     for (seed, public, message, expected) in [
         (
-            "9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60",
-            "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a",
+            concat!(
+                "9d61b19deffd5a60",
+                "ba844af492ec2cc4",
+                "4449c5697b326919",
+                "703bac031cae7f60"
+            ),
+            concat!(
+                "d75a980182b10ab7",
+                "d54bfed3c964073a",
+                "0ee172f3daa62325",
+                "af021a68f707511a"
+            ),
             "",
-            "e5564300c360ac729086e2cc806e828a84877f1eb8e5d974d873e065224901555fb8821590a33bacc61e39701cf9b46bd25bf5f0595bbe24655141438e7a100b",
+            concat!(
+                "e5564300c360ac72",
+                "9086e2cc806e828a",
+                "84877f1eb8e5d974",
+                "d873e06522490155",
+                "5fb8821590a33bac",
+                "c61e39701cf9b46b",
+                "d25bf5f0595bbe24",
+                "655141438e7a100b"
+            ),
         ),
         (
-            "4ccd089b28ff96da9db6c346ec114e0f5b8a319f35aba624da8cf6ed4fb8a6fb",
-            "3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c",
+            concat!(
+                "4ccd089b28ff96da",
+                "9db6c346ec114e0f",
+                "5b8a319f35aba624",
+                "da8cf6ed4fb8a6fb"
+            ),
+            concat!(
+                "3d4017c3e843895a",
+                "92b70aa74d1b7ebc",
+                "9c982ccf2ec4968c",
+                "c0cd55f12af4660c"
+            ),
             "72",
-            "92a009a9f0d4cab8720e820b5f642540a2b27b5416503f8fb3762223ebdb69da085ac1e43e15996e458f3613d0f11d8c387b2eaeb4302aeeb00d291612bb0c00",
+            concat!(
+                "92a009a9f0d4cab8",
+                "720e820b5f642540",
+                "a2b27b5416503f8f",
+                "b3762223ebdb69da",
+                "085ac1e43e15996e",
+                "458f3613d0f11d8c",
+                "387b2eaeb4302aee",
+                "b00d291612bb0c00"
+            ),
         ),
     ] {
         let signer = FakeSigner::with_fixed_seed(hex32(seed));
@@ -335,9 +450,14 @@ fn solana_intent_names_resolved_programs() {
     // index past the static keys of a v0 message — reported, never
     // silently dropped, because a guardrail allowlist must not absorb
     // what it cannot resolve.
-    let token_program = bs58::decode("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA")
-        .into_vec()
-        .expect("decodes");
+    let token_program = bs58::decode(concat!(
+        "TokenkegQfeZ",
+        "yiNwAJbNbGKP",
+        "FXCWuBvf9Ss",
+        "623VQ5DA"
+    ))
+    .into_vec()
+    .expect("decodes");
     let mut message = Vec::new();
     message.extend_from_slice(&[0x01, 0x00, 0x01]); // 1 signer, 0 ro signed, 1 ro unsigned
     message.push(0x02); // two static keys

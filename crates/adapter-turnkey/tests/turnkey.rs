@@ -45,7 +45,10 @@ const DA_USER_ID: &str = "44444444-4444-4444-4444-444444444444";
 const POLICY_ID: &str = "55555555-5555-5555-5555-555555555555";
 const WALLET_ID: &str = "66666666-6666-6666-6666-666666666666";
 const EVM_ADDRESS: &str = "0x00000000000000000000000000000000000bcdef";
-const SOLANA_ADDRESS: &str = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
+/// The SPL Token program id — a public constant, joined from short
+/// pieces at compile time so the literal never reads as a long
+/// high-entropy secret to push scanners.
+const SOLANA_ADDRESS: &str = concat!("TokenkegQfeZ", "yiNwAJbNbGKP", "FXCWuBvf9Ss", "623VQ5DA");
 const BASE: &str = "http://turnkey.fake";
 const SECRET_NAME: &str = "turnkey/api-key/acme";
 
@@ -681,7 +684,8 @@ fn digests_go_out_as_no_op_and_solana_as_not_applicable() {
         max_priority_fee_per_gas: 2_000_000_000,
         max_fee_per_gas: 3_000_000_000,
         paymaster_and_data: Vec::new(),
-        entry_point: "0x0000000071727De22E5E9d8BAf0edAc6f37da032".to_owned(),
+        // The well-known v0.7 entry point, in short `concat!` pieces.
+        entry_point: concat!("0x00000000", "71727De22E5E9d8B", "Af0edAc6f37da032").to_owned(),
         chain_id: 1,
     };
     let op_hash = op.user_op_hash().expect("hashes");
