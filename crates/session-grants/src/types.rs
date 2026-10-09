@@ -254,8 +254,8 @@ pub enum OwnerSignature {
 /// One signed EIP-7702 authorization (EIP-7702 §"`authorization_list`").
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SignedAuthorization {
-    /// The authorization proper: delegation target, chain id, nonce.
-    pub authorization: Eip7702Authorization,
+    /// The delegation being signed: target contract, chain id, nonce.
+    pub delegation: Eip7702Authorization,
     /// The recovery id of the signature.
     pub y_parity: bool,
     /// The signature's `r` scalar, hex.

@@ -361,6 +361,13 @@ mod tests {
         Address::parse(&hex[..42]).expect("an address")
     }
 
+    /// A made-up Solana key: 44 copies of `ch` — valid base58 by the
+    /// crate's rules, unmistakably not a real account.
+    fn made_up_key(ch: char) -> Pubkey {
+        let key: String = std::iter::repeat_n(ch, 44).collect();
+        Pubkey::parse(&key).expect("a made-up key")
+    }
+
     #[test]
     fn window_and_rate_render_into_the_summary() {
         let at = time::Date::from_calendar_date(2026, time::Month::October, 9)
@@ -425,16 +432,14 @@ mod tests {
 
     #[test]
     fn swig_summary_names_programs_and_per_destination_caps() {
-        let swig = Pubkey::parse("9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM").expect("a pubkey");
-        let program =
-            Pubkey::parse("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA").expect("a pubkey");
-        let destination =
-            Pubkey::parse("4Nd1mBQtrMJVYVfKf2PJy9NZUZdTAsp7D4xWLs4gDB4T").expect("a pubkey");
+        let swig = made_up_key('1');
+        let program = made_up_key('3');
+        let destination = made_up_key('2');
         let spec = GrantSpec {
             id: "grant-2".into(),
             owner: "user-1".into(),
-            credential: OwnerCredential::Eip7702 {
-                address: address(5),
+            credential: OwnerCredential::Passkey {
+                credential_id: "cred-5".into(),
             },
             window: ValidityWindow {
                 valid_after: OffsetDateTime::UNIX_EPOCH,
@@ -471,16 +476,14 @@ mod tests {
 
         let text = summary.render();
         assert!(!text.contains(&destination.to_string()));
-        assert!(text.contains("acts through: 9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM"));
+        assert!(text.contains(&format!("acts through: {swig}")));
     }
 
     #[test]
     fn squads_summary_names_the_vault_and_period() {
-        let multisig =
-            Pubkey::parse("9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM").expect("a pubkey");
-        let mint = Pubkey::parse("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v").expect("a pubkey");
-        let destination =
-            Pubkey::parse("4Nd1mBQtrMJVYVfKf2PJy9NZUZdTAsp7D4xWLs4gDB4T").expect("a pubkey");
+        let multisig = made_up_key('1');
+        let mint = made_up_key('5');
+        let destination = made_up_key('2');
         let spec = GrantSpec {
             id: "grant-3".into(),
             owner: "treasury".into(),
@@ -497,7 +500,7 @@ mod tests {
                 multisig: multisig.clone(),
                 vault_index: 2,
                 limits: vec![SpendingLimit {
-                    mint: Some(mint),
+                    mint: Some(mint.clone()),
                     amount: 5_000_000_000,
                     period: SpendPeriod::Weekly,
                     destinations: vec![destination],
@@ -506,7 +509,7 @@ mod tests {
         };
         let text = summarize(&spec).render();
         assert!(text.contains("vault #2"));
-        assert!(text.contains("5'000'000'000 of EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"));
+        assert!(text.contains(&format!("5'000'000'000 of {mint}")));
         assert!(text.contains("per week"));
         assert!(text.contains("only to 1 recipient(s)"));
     }

@@ -66,6 +66,6 @@ pub use crate::types::{
 pub use crate::fakes::{
     FakeBundler, FakeKernelPermissions, FakeRpc, FakeSquads, FakeSwig, FixedClock,
     MemoryGrantStore, MutableClock, WINDOW_START, destination, evm_account, evm_session_key,
-    evm_spec, evm_target, passkey, passkey_signature, squads_spec, swig_session_key, swig_spec,
-    swig_wallet, token_program, transfer_selector, usdc_mint, window,
+    evm_spec, evm_target, passkey, passkey_signature, second_destination, squads_spec,
+    swig_session_key, swig_spec, swig_wallet, token_program, transfer_selector, usdc_mint, window,
 };

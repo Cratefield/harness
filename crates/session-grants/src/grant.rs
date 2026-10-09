@@ -654,33 +654,35 @@ mod tests {
         }
     }
 
+    /// A made-up Solana key: 44 copies of `ch` — valid base58 by the
+    /// crate's rules, unmistakably not a real account.
+    fn made_up_key(ch: char) -> Pubkey {
+        let key: String = std::iter::repeat_n(ch, 44).collect();
+        Pubkey::parse(&key).expect("a made-up key")
+    }
+
     #[test]
     fn usage_folds_and_aggregates() {
         let mut usage = Usage::default();
+        let program = made_up_key('7');
+        let destination = made_up_key('4');
         usage.merge(&Usage::of(&IntendedAction::SolanaTransfer {
             cluster: Cluster::Mainnet,
-            program: Pubkey::parse("So11111111111111111111111111111111111111112")
-                .expect("a program"),
+            program: program.clone(),
             lamports: 1_000,
-            destination: Pubkey::parse("9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM")
-                .expect("a destination"),
+            destination: destination.clone(),
             token: None,
         }));
         usage.merge(&Usage::of(&IntendedAction::SolanaTransfer {
             cluster: Cluster::Mainnet,
-            program: Pubkey::parse("So11111111111111111111111111111111111111112")
-                .expect("a program"),
+            program,
             lamports: 500,
-            destination: Pubkey::parse("9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM")
-                .expect("a destination"),
+            destination: destination.clone(),
             token: None,
         }));
         assert_eq!(usage.calls, 2);
         assert_eq!(usage.native_total(), 1_500);
-        assert_eq!(
-            usage.native_to("9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM"),
-            1_500
-        );
+        assert_eq!(usage.native_to(destination.as_str()), 1_500);
     }
 
     #[test]

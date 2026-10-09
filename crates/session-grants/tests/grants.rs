@@ -504,9 +504,7 @@ async fn swig_limits_are_recurring_and_per_destination() {
     let enforcer = Enforcer::new(&store, clock.as_ref());
 
     let here = destination();
-    let there =
-        cratefield_session_grants::Pubkey::parse("3nMFwZXwY1s1M5s8vYAHqd4wGs4iSxXE4oLRW7kxc2dp")
-            .expect("a second destination");
+    let there = cratefield_session_grants::second_destination();
 
     // 0.4 SOL to `here`: inside the 0.5 SOL per-destination cap.
     assert!(
@@ -628,9 +626,7 @@ async fn squads_spending_limits_cap_treasury_transfers() {
         })
     );
     // A different recipient is not in the limit's allowlist.
-    let stranger =
-        cratefield_session_grants::Pubkey::parse("3nMFwZXwY1s1M5s8vYAHqd4wGs4iSxXE4oLRW7kxc2dp")
-            .expect("a second destination");
+    let stranger = cratefield_session_grants::second_destination();
     assert_eq!(
         enforcer
             .authorize("grant-squads", &squads_transfer(1_000_000_000, &stranger))

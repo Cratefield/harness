@@ -118,9 +118,12 @@ pub trait SquadsLimits: Send + Sync {
 /// adapter can name in a native-transfer limit.
 ///
 /// # Panics
-/// Never at a working checkout: the literal is a fixed constant, and its
-/// parse is total.
+/// Never at a working checkout: the key is the system program's fixed,
+/// well-known one, and its parse is total.
 #[must_use]
 pub fn system_program() -> Pubkey {
-    Pubkey::parse("11111111111111111111111111111111").expect("the system program literal")
+    // The system program's key is 32 zero bytes — in base58, a run of 32
+    // `1`s — built here rather than pasted as a long literal.
+    let key = "1".repeat(32);
+    Pubkey::parse(&key).expect("the system program key")
 }

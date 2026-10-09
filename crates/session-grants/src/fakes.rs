@@ -253,7 +253,7 @@ impl JsonRpcTransport for FakeRpc {
                 "preVerificationGas": "50000"
             }),
             "pm_sponsorUserOperation" => serde_json::json!({
-                "paymasterAndData": "0x9f2df015d0ca63ed3a1a0b0e9f472f00b4b0000000000000000000000000000000000000000000000000000000000000",
+                "paymasterAndData": format!("0x{}", "a".repeat(96)),
                 "verificationGasLimit": "200000",
                 "callGasLimit": "60000",
                 "preVerificationGas": "50000"
@@ -343,7 +343,7 @@ impl Bundler for FakeBundler {
 
     async fn sponsor(&self, _op: &UserOperation) -> Result<Sponsorship, BundlerError> {
         Ok(Sponsorship {
-            paymaster_and_data: "0x0baa75c46d18be2e0ddf1a4fdd0be7651a1c8e4".to_owned(),
+            paymaster_and_data: format!("0x{}", "b".repeat(38)),
             verification_gas_limit: "200000".to_owned(),
             call_gas_limit: "60000".to_owned(),
             pre_verification_gas: "50000".to_owned(),
@@ -391,9 +391,9 @@ pub(crate) fn check_signature(
 ) -> Result<(), Mismatch> {
     match (credential, signature) {
         (OwnerCredential::Passkey { .. }, OwnerSignature::PasskeyAssertion { .. }) => Ok(()),
-        (OwnerCredential::Eip7702 { .. }, OwnerSignature::Authorization(authorization)) => {
+        (OwnerCredential::Eip7702 { .. }, OwnerSignature::Authorization(signed)) => {
             match chain_id {
-                Some(chain_id) if authorization.authorization.chain_id() == chain_id => Ok(()),
+                Some(chain_id) if signed.delegation.chain_id() == chain_id => Ok(()),
                 None => Ok(()),
                 _ => Err(Mismatch),
             }
@@ -744,34 +744,44 @@ pub fn transfer_selector() -> crate::types::Selector {
     crate::types::Selector::parse("0xa9059cbb").expect("a fixed literal")
 }
 
-/// The Swig wallet every Swig builder names.
+/// A made-up Solana key: 44 copies of `ch`. [`crate::types::Pubkey`]
+/// accepts it (base58 alphabet, 32-44 characters), and no real account can
+/// collide with it — a real key never repeats one character 44 times.
+fn made_up_key(ch: char) -> crate::types::Pubkey {
+    let key: String = std::iter::repeat_n(ch, 44).collect();
+    crate::types::Pubkey::parse(&key).expect("a made-up key")
+}
+
+/// The Swig wallet every Swig builder names — a made-up key, not a real
+/// account.
 pub fn swig_wallet() -> crate::types::Pubkey {
-    crate::types::Pubkey::parse("9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM")
-        .expect("a fixed literal")
+    made_up_key('1')
 }
 
-/// The session authority every Swig builder names.
+/// The session authority every Swig builder names — a made-up key.
 pub fn swig_session_key() -> crate::types::Pubkey {
-    crate::types::Pubkey::parse("4Nd1mBQtrMJVYVfKf2PJy9NZUZdTAsp7D4xWLs4gDB4T")
-        .expect("a fixed literal")
+    made_up_key('2')
 }
 
-/// The SPL token program every Swig builder scopes to.
+/// The token program every Swig builder scopes to — a made-up key.
 pub fn token_program() -> crate::types::Pubkey {
-    crate::types::Pubkey::parse("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA")
-        .expect("a fixed literal")
+    made_up_key('3')
 }
 
-/// The destination every Swig and Squads builder names.
+/// The destination every Swig and Squads builder names — a made-up key.
 pub fn destination() -> crate::types::Pubkey {
-    crate::types::Pubkey::parse("DdpuaJgjB2RptGMnfnCZVmC4vkKsMV6ytRa2gggQtCWt")
-        .expect("a fixed literal")
+    made_up_key('4')
 }
 
-/// The USDC mint every Squads builder names.
+/// The token mint every Squads builder names — a made-up key.
 pub fn usdc_mint() -> crate::types::Pubkey {
-    crate::types::Pubkey::parse("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v")
-        .expect("a fixed literal")
+    made_up_key('5')
+}
+
+/// A second destination, distinct from [`destination`], for the tests that
+/// need a recipient the grant does not allow — a made-up key.
+pub fn second_destination() -> crate::types::Pubkey {
+    made_up_key('6')
 }
 
 /// The passkey credential the builders name.
