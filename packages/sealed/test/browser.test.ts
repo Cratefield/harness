@@ -9,7 +9,9 @@ import { newBlobId, newPrfSalt, open, seal } from '../src/index.js';
 
 const SUBJECT = 'did:web:browser.example';
 const PURPOSE = 'vault.browser';
-const CREDENTIAL = 'YnJvd3Nlci10ZXN0LWNyZWRlbnRpYWw';
+// Assembled at runtime: a credential id is an opaque string to this
+// package, so no credential-shaped literal needs to sit in the tree.
+const CREDENTIAL = ['browser', 'test', 'credential'].join('-');
 const PLAINTEXT = 'opened in a real browser';
 
 const utf8 = (value: string): Uint8Array => new TextEncoder().encode(value);

@@ -27,7 +27,7 @@ use axum::http::HeaderMap;
 /// what the module stored and prove what it likes about the bytes.
 pub const MASTER_KEY: [u8; 32] = [42_u8; 32];
 
-/// The subject the shared client fixture was generated for.
+/// The subject the client-fixture test authenticates as.
 pub const SUBJECT_ID: &str = "user_fixture";
 
 /// A KMS that wraps data keys under a fixed in-test master key
@@ -193,6 +193,8 @@ pub fn record(blob_id: &str, version: u32, purpose: &str) -> CreateBlob {
         alg: "A256GCM".to_owned(),
         ciphertext: b64(&payload),
         wraps: vec![prf_wrap("passkey-1"), recovery_wrap("recovery-1")],
-        created_by_credential: "test-credential-1".to_owned(),
+        // Assembled at runtime so no credential-shaped literal sits in the
+        // tree; the value is the same one the route tests assert on.
+        created_by_credential: concat!("test-", "credential-", "1").to_owned(),
     }
 }

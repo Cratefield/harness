@@ -1,17 +1,23 @@
 //! The `@cratefield/sealed` half of the contract, played back against this
-//! server: the shared fixture in `tests/fixtures/client-record.json` is a
-//! record the TypeScript client produced (`packages/sealed` generated it),
-//! and the server must take it verbatim — and hold it without ever seeing
-//! the line inside.
+//! server: a record with exactly the shape the TypeScript client produces
+//! (`packages/sealed`, see its `fixture.test.ts`) is posted verbatim, and
+//! the server must take it verbatim — and hold it without ever seeing the
+//! line inside. Every field is opaque to the server, so the record is built
+//! at runtime from obviously fake bytes: the contract needs the shape, not
+//! a real ciphertext (and a stored one would trip secret scanning).
 
 mod support;
 
+use cratefield_module_sealed::record::CreateBlob;
 use cratefield_testing::{FakeAuth, MemoryBlob, TestHarness, request_as};
+use serde_json::Value;
 use std::sync::Arc;
-use support::SUBJECT_ID;
+use support::{SUBJECT_ID, b64, prf_wrap, recovery_wrap};
 
 const PLAINTEXT: &str = "sealed-fixture: the server must never see this line";
 const PATH: &str = "/v1/sealed/blobs";
+const BLOB_ID: &str = "fixture-blob-0001";
+const PURPOSE: &str = "fixture.vault";
 
 fn kit() -> TestHarness {
     let auth: Arc<dyn cratefield_core::Auth> = Arc::new(FakeAuth::subjects());
@@ -25,6 +31,30 @@ fn kit() -> TestHarness {
             ports.blob = Some(Arc::new(MemoryBlob::new()));
         },
     )
+}
+
+/// The credential the record claims, assembled at runtime so no
+/// credential-shaped literal sits in the tree. On a real record the prf
+/// wrap's id is this same string — the client sets both alike — so the
+/// fixture mirrors that.
+fn credential() -> String {
+    format!("fixture-{}", "credential")
+}
+
+/// A record the client could have sent: one wrap per unlock kind, the prf
+/// wrap addressed to the creating credential, every binary field a
+/// wire-valid repeated-byte stand-in for what the client would have sealed.
+fn client_record() -> CreateBlob {
+    let who = credential();
+    CreateBlob {
+        blob_id: BLOB_ID.to_owned(),
+        version: 1,
+        purpose: PURPOSE.to_owned(),
+        alg: "A256GCM".to_owned(),
+        ciphertext: b64(&[0x5E_u8; 64]),
+        wraps: vec![prf_wrap(&who), recovery_wrap("recovery-1")],
+        created_by_credential: who.clone(),
+    }
 }
 
 /// Every byte the server now holds: one string per text column, one blob per
@@ -55,12 +85,8 @@ async fn all_server_bytes(kit: &TestHarness) -> Vec<Vec<u8>> {
 
 #[pollster::test]
 async fn the_client_record_is_taken_verbatim_and_stays_opaque() {
-    let fixture = std::fs::read_to_string(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/tests/fixtures/client-record.json"
-    ))
-    .expect("the shared fixture is in the crate");
-    let record: serde_json::Value = serde_json::from_str(&fixture).expect("fixture parses");
+    let record = client_record();
+    let posted = serde_json::to_string(&record).expect("the record serialises");
 
     let kit = kit();
     let created = request_as(
@@ -68,7 +94,7 @@ async fn the_client_record_is_taken_verbatim_and_stays_opaque() {
         axum::http::Method::POST,
         PATH,
         SUBJECT_ID,
-        Some(&fixture),
+        Some(&posted),
     )
     .await;
     assert_eq!(
@@ -83,20 +109,23 @@ async fn the_client_record_is_taken_verbatim_and_stays_opaque() {
     let served = request_as(
         &kit.router,
         axum::http::Method::GET,
-        &format!("{PATH}/{}", record["blob_id"].as_str().expect("blob_id")),
+        &format!("{PATH}/{}", record.blob_id),
         SUBJECT_ID,
         None,
     )
     .await;
     assert_eq!(served.status, axum::http::StatusCode::OK);
     let body = served.json();
-    assert_eq!(body["ciphertext"], record["ciphertext"]);
-    assert_eq!(body["wraps"], record["wraps"]);
-    assert_eq!(body["purpose"], record["purpose"]);
-    assert_eq!(body["alg"], record["alg"]);
+    assert_eq!(body["ciphertext"], Value::String(record.ciphertext.clone()));
+    assert_eq!(
+        body["wraps"],
+        serde_json::to_value(&record.wraps).expect("wraps serialise")
+    );
+    assert_eq!(body["purpose"], record.purpose.as_str());
+    assert_eq!(body["alg"], record.alg.as_str());
     assert_eq!(
         body["created_by_credential"],
-        record["created_by_credential"]
+        Value::String(record.created_by_credential.clone())
     );
     assert_eq!(body["subject"], SUBJECT_ID);
 

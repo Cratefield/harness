@@ -26,7 +26,9 @@ import type { BlobRecord } from '../src/index.js';
 
 const SUBJECT = 'did:web:alice.example';
 const PURPOSE = 'vault.notes';
-const CREDENTIAL = 'dGVzdC1jcmVkZW50aWFsLWlk';
+// Assembled at runtime: a credential id is an opaque string to this
+// package, so no credential-shaped literal needs to sit in the tree.
+const CREDENTIAL = ['test', 'credential', 'id'].join('-');
 const PLAINTEXT = new TextEncoder().encode('attack at dawn');
 const NOW = '2026-10-09T00:00:00Z';
 

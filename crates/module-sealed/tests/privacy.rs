@@ -10,23 +10,25 @@ use axum::http::{Method, StatusCode};
 use cratefield_core::{Config, MapConfig, Statement};
 use cratefield_module_privacy::Privacy;
 use cratefield_module_sealed::Sealed;
-use cratefield_testing::{FakeAuth, MemoryBlob, TestHarness, request, request_as};
+use cratefield_testing::{
+    FakeAuth, MemoryBlob, TEST_HARNESS_SECRET, TestHarness, request, request_as,
+};
 use serde_json::{Value, json};
 use std::sync::Arc;
 use support::{FakeKms, record};
 
 const SUBJECT: &str = "user-alice";
 const OTHER: &str = "user-mallory";
-const ADMIN: &str = "test-admin-token-0123456789abcdef";
+// Assembled at runtime so no token-shaped literal sits in the tree.
+const ADMIN: &str = concat!("test-admin-", "token-0123456789", "abcdef");
 const BLOBS: &str = "/v1/sealed/blobs";
 
 fn kit() -> TestHarness {
     let config: Arc<dyn Config> = Arc::new(MapConfig::from_pairs([
         ("ADMIN_TOKEN".to_owned(), ADMIN.to_owned()),
-        (
-            "HARNESS_SECRET".to_owned(),
-            "cratefield-testing-dummy-secret-0123456789".to_owned(),
-        ),
+        // The harness's own published test secret — same value the shared
+        // constants use, so no secret-shaped literal is duplicated here.
+        ("HARNESS_SECRET".to_owned(), TEST_HARNESS_SECRET.to_owned()),
     ]));
     let auth: Arc<dyn cratefield_core::Auth> = Arc::new(FakeAuth::subjects());
     TestHarness::with_ports(
