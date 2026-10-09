@@ -96,6 +96,12 @@ text-guard = ["dep:cratefield-text-guard"]
 text-diff = ["dep:cratefield-text-diff"]
 secrets = ["dep:cratefield-secrets"]
 kms = ["dep:cratefield-kms"]
+# Signing by key reference (issue #761): the guardrails-then-audit gate
+# in front of a provider, and session keys minted into the Secrets store.
+signer = ["dep:cratefield-signer"]
+# The Turnkey provider of the signer port (issue #761): sub-organizations
+# rooted in the user's passkey, the backend scoped by policy.
+turnkey = ["dep:cratefield-adapter-turnkey"]
 # The venture manifest and its composition generator (issue #138). A venture
 # does not need it to run; `fz` reads it, and so does anything generating a
 # composition from a manifest.
@@ -205,6 +211,8 @@ cratefield-auth-client = { workspace = true, optional = true }
 cratefield-oauth-client = { workspace = true, optional = true }
 cratefield-secrets = { workspace = true, optional = true }
 cratefield-kms = { workspace = true, optional = true }
+cratefield-signer = { workspace = true, optional = true }
+cratefield-adapter-turnkey = { workspace = true, optional = true }
 cratefield-mail-templates = { workspace = true, optional = true }
 cratefield-module-email-signup = { workspace = true, optional = true }
 cratefield-module-privacy = { workspace = true, optional = true }

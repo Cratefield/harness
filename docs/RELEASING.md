@@ -282,6 +282,8 @@ own the `cratefield-*` names.
    cargo publish -p cratefield-module-telemetry
    cargo publish -p cratefield-ui
    cargo publish -p cratefield-secrets
+   cargo publish -p cratefield-signer    # needs secrets; before the facade
+   cargo publish -p cratefield-adapter-turnkey    # needs the signer; before the facade
    cargo publish -p cratefield-adapter-apns
    cargo publish -p cratefield-adapter-fcm    # before push-wiring and the facade
    cargo publish -p cratefield-adapter-webpush  # before push-wiring, the CLI and the facade
