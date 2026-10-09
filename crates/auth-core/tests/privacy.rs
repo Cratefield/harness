@@ -40,6 +40,9 @@ const SUBJECT_TABLES: &[&str] = &[
     "credentials",
     "sessions",
     "single_use_tokens",
+    // Issue #854: the enable/disable audit trail, erased with the account
+    // it names.
+    "user_admin_audit",
 ];
 
 /// The tables that hold a person and survive an erasure, with the reason
@@ -148,6 +151,12 @@ async fn seed(kit: &TestHarness, user: &str, email: &str) {
                 CODE_PAYLOAD.into(),
                 "2027-01-01T00:00:00Z".into(),
             ],
+        ),
+        (
+            "user_admin_audit",
+            "INSERT INTO user_admin_audit (id, user_id, action, at) \
+             VALUES (?, ?, 'user.disable', ?)",
+            vec![format!("audit-{user}").into(), user.into(), at.into()],
         ),
     ];
     for (table, sql, values) in rows {
