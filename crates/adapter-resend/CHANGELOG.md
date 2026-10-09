@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.2](https://github.com/Cratefield/harness/compare/cratefield-adapter-resend-v0.4.1...cratefield-adapter-resend-v0.4.2) - 2026-10-09
+
+### Added
+
+- *(core)* report per-provider mailer status in /__health ([#793](https://github.com/Cratefield/harness/pull/793)) ([#845](https://github.com/Cratefield/harness/pull/845))
+
 ### Added
 
 - `providers()` reports the one provider behind the adapter — `resend`,

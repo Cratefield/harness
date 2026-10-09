@@ -6,6 +6,16 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.8.5](https://github.com/Cratefield/harness/compare/cratefield-core-v0.8.4...cratefield-core-v0.8.5) - 2026-10-09
+
+### Added
+
+- *(core)* report per-provider mailer status in /__health ([#793](https://github.com/Cratefield/harness/pull/793)) ([#845](https://github.com/Cratefield/harness/pull/845))
+
+### Fixed
+
+- *(auth)* a webview can press the magic-link confirm button; themeable hosted pages and mail; friendly validation ([#840](https://github.com/Cratefield/harness/pull/840)) ([#841](https://github.com/Cratefield/harness/pull/841))
+
 ### Added
 
 - **`Mailer::providers()` names the providers behind the port**

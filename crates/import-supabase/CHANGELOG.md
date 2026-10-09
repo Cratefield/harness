@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.1](https://github.com/Cratefield/harness/compare/cratefield-import-supabase-v0.2.0...cratefield-import-supabase-v0.2.1) - 2026-10-09
+
+### Other
+
+- end-to-end Supabase import job on a real `supabase start` with an EarthOS-shaped fixture (issue #733) ([#839](https://github.com/Cratefield/harness/pull/839))
+
 ## [0.2.0](https://github.com/Cratefield/harness/compare/cratefield-import-supabase-v0.1.0...cratefield-import-supabase-v0.2.0) - 2026-10-05
 
 ### Other

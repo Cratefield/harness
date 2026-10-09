@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.2](https://github.com/Cratefield/harness/compare/cratefield-mail-templates-v0.1.1...cratefield-mail-templates-v0.1.2) - 2026-10-09
+
+### Fixed
+
+- *(auth)* a webview can press the magic-link confirm button; themeable hosted pages and mail; friendly validation ([#840](https://github.com/Cratefield/harness/pull/840)) ([#841](https://github.com/Cratefield/harness/pull/841))
+
 ### Added
 
 - **`MailTheme::header_bg` / `header_text` and `display_font`** (issue

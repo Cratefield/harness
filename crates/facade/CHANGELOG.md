@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.1](https://github.com/Cratefield/harness/compare/cratefield-v0.2.0...cratefield-v0.2.1) - 2026-10-09
+
+### Added
+
+- *(module-owlpost)* verified Owlpost event receiver with typed inbound mail and delivery events ([#673](https://github.com/Cratefield/harness/pull/673)) ([#853](https://github.com/Cratefield/harness/pull/853))
+- *(text-guard)* protect links, hashtags and caller-supplied spans ([#836](https://github.com/Cratefield/harness/pull/836)) ([#851](https://github.com/Cratefield/harness/pull/851))
+- *(text-guard)* keep names, numbers, quotes and code across a model rewrite, and a word diff that keeps them whole ([#836](https://github.com/Cratefield/harness/pull/836)) ([#837](https://github.com/Cratefield/harness/pull/837))
+
+### Other
+
+- Linear adapter (`cratefield-adapter-linear`) with comment and inbound status webhook (#559, part 2) ([#850](https://github.com/Cratefield/harness/pull/850))
+- link EVM and Solana wallets to a signed-in account via SIWE/SIWS (plus a push-protection fix) ([#838](https://github.com/Cratefield/harness/pull/838))
+
 ## [0.2.0](https://github.com/Cratefield/harness/compare/cratefield-v0.1.4...cratefield-v0.2.0) - 2026-10-03
 
 ### Added
