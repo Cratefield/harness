@@ -14,6 +14,10 @@
 
 mod admin;
 mod api_key;
+// Outbound HTTP budgets (issue #765): the shared token bucket, daily
+// quota and retry policy adapters opt into by wrapping their HttpClient.
+// Private like `usage`, with the surface re-exported below.
+mod budget;
 mod classifier_agreement;
 mod classifier_routing;
 mod config;
@@ -70,6 +74,11 @@ pub use admin::{bearer_token, constant_time_eq, require_admin};
 pub use api_key::{
     ApiKeyError, ApiKeyMode, ApiKeyPrincipal, ApiKeys, IssuedKey, RandomBytes, RandomError,
     require_api_key,
+};
+pub use budget::{
+    Budget, BudgetRouter, BudgetedHttpClient, DEFAULT_ALERT_TABLE, DEFAULT_BUCKET_TABLE,
+    DEFAULT_QUOTA_TABLE, EVENT_QUOTA_EXHAUSTED, EVENT_QUOTA_WARNING, Idempotent, RetryPolicy,
+    Sleeper,
 };
 pub use classifier_agreement::{
     AgreementAt, AgreementLog, AgreementReport, CalibrationPoint, CorpusItem, Disagreement,
