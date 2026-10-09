@@ -102,6 +102,7 @@ human-readable page at each `<public_url>/problems/<slug>`.
 | `orgs-mail-failed` | 502 | The invitation could not be sent | `cratefield-module-orgs` | The mailing provider refused the invitation message, so no invitation was created. Nothing is left behind to accept; try again. |
 | `orgs-not-found` | 404 | No such organization | `cratefield-module-orgs` | No organization the caller is a member of carries that id. An organization the caller is not in answers the same way, so its existence is not disclosed. |
 | `orgs-unknown-role` | 422 | Unknown role | `cratefield-module-orgs` | The role is not one of the roles this venture configured for its organizations. The configured set is fixed at build. |
+| `owlpost-unverified` | 401 | Unverified delivery | `cratefield-module-owlpost` | The request carried no signature this deployment could verify, or one that did not hold. |
 | `partial-key` | 400 | The key is not complete | `cratefield-tables-api` | Name every primary-key column of the table once: a row is addressed by its whole key. `after` and `sort` are the page's parameters on this route and cannot name a key column, so a table whose key uses one of those names has no address here. |
 | `privacy-provider-unverified` | 401 | Unverified provider call | `cratefield-module-privacy` | The request carried no signature this deployment could verify, or one that did not hold. |
 | `rate-limited` | 429 | Rate limit exceeded | `cratefield-core` | Too many requests from this IP or address; retry after the pause. |

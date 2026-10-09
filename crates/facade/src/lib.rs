@@ -90,6 +90,13 @@ pub use cratefield_adapter_jira as jira;
 #[cfg(feature = "linear")]
 pub use cratefield_adapter_linear as linear;
 
+/// Owlpost's signed inbound webhooks as harness events (issue #673). The
+/// plain `owlpost` alias is the sending adapter; this is the module that
+/// receives its deliveries, so the feature and alias are named for what
+/// they emit.
+#[cfg(feature = "owlpost-events")]
+pub use cratefield_module_owlpost as owlpost_events;
+
 // The portable classifier adapters (issue #456). The third one,
 // `cratefield-adapter-workers-ai`, is deliberately not re-exported here: it
 // depends on the `worker` crate and the `env.AI` binding, so a venture on

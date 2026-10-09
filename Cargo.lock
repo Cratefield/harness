@@ -699,6 +699,7 @@ dependencies = [
  "cratefield-module-email-signup",
  "cratefield-module-notifications",
  "cratefield-module-orgs",
+ "cratefield-module-owlpost",
  "cratefield-module-privacy",
  "cratefield-module-telemetry",
  "cratefield-module-waitlist",
@@ -1994,6 +1995,22 @@ dependencies = [
  "serde_json",
  "sha2 0.11.0",
  "thiserror 2.0.20",
+ "time",
+ "tower",
+ "tracing",
+]
+
+[[package]]
+name = "cratefield-module-owlpost"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "cratefield-adapter-owlpost",
+ "cratefield-core",
+ "cratefield-testing",
+ "pollster",
+ "serde",
+ "serde_json",
  "time",
  "tower",
  "tracing",

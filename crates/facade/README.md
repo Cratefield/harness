@@ -90,6 +90,7 @@ also switch on the extra features noted in their rows:
 | `orgs` | `cratefield-module-orgs` | `cratefield::orgs` | Organizations, memberships, roles and email invitations: a person creates an organization and is its owner, invites people by address, and everyone who belongs holds a role the venture configured |
 | `connections` | `cratefield-module-connections` | `cratefield::connections` | Per-subject third-party OAuth connections: authorize, sealed access and refresh tokens, guarded refresh, revoke, over the `HttpClient` port |
 | `wallets` | `cratefield-module-wallets` | `cratefield::wallets` | Links a person's own crypto wallet (EVM or Solana) to an account they have already signed in to, by verifying an EIP-4361 (SIWE) or SIWS signature over a single-use nonce bound to their account. Reads an address and proves ownership of it; never asks a wallet to move funds |
+| `owlpost-events` | `cratefield-module-owlpost` | `cratefield::owlpost_events` | Owlpost's signed inbound webhooks as harness events: verified `POST /v1/owlpost/events`, deduplicated per delivery, with a venture hook per inbound mail. The plain `owlpost` feature is the sending adapter |
 | `testing` | `cratefield-testing` | `cratefield::testing` | The conformance kit; belongs under `[dev-dependencies]` |
 
 The third classifier adapter, `cratefield-adapter-workers-ai`, has no
