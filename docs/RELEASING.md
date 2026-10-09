@@ -274,6 +274,7 @@ own the `cratefield-*` names.
    cargo publish -p cratefield-module-connections  # needs core and oauth-client
    cargo publish -p cratefield-adapter-workers-ai
    cargo publish -p cratefield-module-changelog
+   cargo publish -p cratefield-module-owlpost  # needs core and adapter-owlpost; before the facade
    cargo publish -p cratefield-module-cms
    cargo publish -p cratefield-module-crm
    cargo publish -p cratefield-module-telemetry
