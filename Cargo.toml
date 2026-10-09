@@ -70,6 +70,8 @@ cratefield-adapter-jira = { path = "crates/adapter-jira", version = "0.2" }
 # GraphQL API — a personal API key or an OAuth token, file/status/comment,
 # and the inbound status webhook.
 cratefield-adapter-linear = { path = "crates/adapter-linear", version = "0.1" }
+# Its sibling (issue #764): the `TelegramBot` port over the Telegram Bot API — send/edit/delete/answer with local rate budgets, plus the typed inbound update and the secret-token webhook.
+cratefield-adapter-telegram = { path = "crates/adapter-telegram", version = "0.1" }
 cratefield-adapter-turnstile = { path = "crates/adapter-turnstile", version = "0.3" }
 # The first `TextModel` adapter (issue #430): the Claude Messages API over
 # the `HttpClient` port, against the minimal `TextModel` trait module in core.
@@ -127,6 +129,9 @@ cratefield-module-changelog = { path = "crates/module-changelog", version = "0.3
 # Owlpost's signed inbound-mail and delivery webhooks, as harness events
 # (issue #673).
 cratefield-module-owlpost = { path = "crates/module-owlpost", version = "0.1" }
+# Telegram in the harness (issue #764): the secret-token webhook, account
+# linking, consent buttons that never move value without a passkey.
+cratefield-module-telegram = { path = "crates/module-telegram", version = "0.1" }
 # The notifications module is the first to depend on the auth client, because
 # the account a route acts for comes from the auth extractor (ADR 0016).
 cratefield-module-notifications = { path = "crates/module-notifications", version = "0.3" }

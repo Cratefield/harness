@@ -1,0 +1,23 @@
+{
+  "update_id": 103,
+  "channel_post": {
+    "message_id": 9,
+    "chat": {
+      "id": -1001234567890,
+      "type": "channel",
+      "title": "Releases",
+      "username": "releases"
+    },
+    "date": 1767225600,
+    "text": "🎉 check https://example.com/a and see the docs",
+    "entities": [
+      { "type": "url", "offset": 9, "length": 21 },
+      {
+        "type": "text_link",
+        "offset": 39,
+        "length": 8,
+        "url": "https://example.com/docs"
+      }
+    ]
+  }
+}

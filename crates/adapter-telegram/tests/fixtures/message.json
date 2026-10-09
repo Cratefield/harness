@@ -1,0 +1,16 @@
+{
+  "update_id": 100,
+  "message": {
+    "message_id": 11,
+    "chat": { "id": 42, "type": "private", "username": "ada" },
+    "from": {
+      "id": 42,
+      "is_bot": false,
+      "first_name": "Ada",
+      "username": "ada",
+      "language_code": "en"
+    },
+    "date": 1767225600,
+    "text": "hello bot"
+  }
+}

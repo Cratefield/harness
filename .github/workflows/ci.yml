@@ -519,6 +519,9 @@ jobs:
         run: worker-build --release
       - name: Assert sidecar template shim exists
         run: test -f examples/sidecar-module-template/build/worker/shim.mjs
+      # Same reason for the Telegram adapter and module (issue #764): both ride the `HttpClient` and `Clock` ports, and no venture in this repo wires them yet, so nothing else would notice a dependency that cannot reach wasm32.
+      - name: Build cratefield-adapter-telegram and cratefield-module-telegram to wasm
+        run: cargo build --target wasm32-unknown-unknown -p cratefield-adapter-telegram -p cratefield-module-telegram --features cratefield-module-telegram/notifications
 
   wrangler-dev:
     name: wrangler dev (examples/venture, local D1)

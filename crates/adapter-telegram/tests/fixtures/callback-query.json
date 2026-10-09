@@ -1,0 +1,12 @@
+{
+  "update_id": 102,
+  "callback_query": {
+    "id": "cq1",
+    "from": { "id": 42, "is_bot": false, "first_name": "Ada" },
+    "message": {
+      "message_id": 7,
+      "chat": { "id": -10099, "type": "supergroup", "title": "Ops" }
+    },
+    "data": "deploy:ack"
+  }
+}

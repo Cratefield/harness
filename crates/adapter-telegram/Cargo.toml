@@ -1,0 +1,44 @@
+[package]
+name = "cratefield-adapter-telegram"
+description = "TelegramBot port over the Telegram Bot API for the Cratefield harness"
+readme = "README.md"
+keywords = ["cratefield", "telegram", "bot", "webhook", "adapter"]
+categories = ["api-bindings"]
+include = ["src/**/*", "README.md"]
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+cratefield-core = { workspace = true }
+async-trait = { workspace = true }
+bytes = { workspace = true }
+http = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+# Not called from this crate — nothing here draws randomness. It is here to
+# pick getrandom's `wasm_js` backend, which `ulid` (via cratefield-core)
+# pulls in and which otherwise only a leaf crate selects, so that
+# `cargo build --target wasm32-unknown-unknown -p cratefield-adapter-telegram`
+# stands on its own (the pattern of issue #178, and the same line
+# cratefield-adapter-linear carries).
+getrandom = { workspace = true }
+
+[dev-dependencies]
+# Path-only on purpose: `cargo publish` resolves dev-dependencies against
+# crates.io, and a path-only one is stripped from the packaged manifest
+# (see the note in the workspace manifest). `port-conformance` carries
+# `assert_wasm_safe_deps`; the kit's `FakeHttpClient` and `ManualClock`
+# live behind the heavy `harness` feature — axum, tower, the SQLite
+# adapter — which this crate's tests need none of, so the tests script
+# their own small fakes (see tests/common) exactly as adapter-linear's do.
+cratefield-testing = { path = "../testing", default-features = false, features = ["port-conformance"] }
+pollster = { workspace = true }
+# Builds the instant the tests' clock starts from.
+time = { workspace = true }
