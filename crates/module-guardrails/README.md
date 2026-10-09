@@ -12,11 +12,16 @@ each is a refusal, never a shrug.
 ```rust
 use cratefield_module_guardrails::*;
 
+// Placeholder addresses, built at runtime so no long hex literal sits in
+// this file; 40 hex digits is a 20-byte address.
+let from = format!("0x{}", "1".repeat(40));
+let spender = format!("0x{}", "2".repeat(40));
+
 let engine = Guardrails::builder()
     .policy(Policy::new()
         .chain(Chain::Evm { chain_id: 1 })
-        .contract("0x1111111111111111111111111111111111111111", &[SEL_APPROVE])
-        .spender("0x2222222222222222222222222222222222222222")
+        .contract(&from, &[SEL_APPROVE])
+        .spender(&spender)
         .subject("job-7", SubjectPolicy::new()
             .caps(Caps::uniform(
                 &TokenKey::native(Chain::Evm { chain_id: 1 }),

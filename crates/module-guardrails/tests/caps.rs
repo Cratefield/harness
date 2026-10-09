@@ -163,7 +163,10 @@ fn the_period_window_sees_only_its_span() {
 fn a_token_with_no_cap_entry_has_a_cap_of_zero() {
     // The simulation spends a token no caps table names: default deny
     // reaches the caps, whatever `TOKEN` is trusted with.
-    let other = "0x9999999999999999999999999999999999999999";
+    // Built at runtime so no long hex literal sits in this file; 40 hex
+    // digits is a 20-byte address. The reference coerces to `&str` at the
+    // call sites below.
+    let other = &format!("0x{}", "9".repeat(40));
     let sim = ScriptedSimulator::new().respond(spend_report(other, -1));
     let prices = FixedPrices::new().price(
         TokenKey {

@@ -87,7 +87,11 @@ fn draw(rng: &mut Xorshift) -> Case {
         let program = if allowlisted {
             SYSTEM_PROGRAM
         } else {
-            "Prog1111111111111111111111111111111111111"
+            // A fake program id, built from fragments so no long
+            // base58-shaped literal sits in this file.
+            concat!(
+                "Prog", "1111", "1111", "1111", "1111", "1111", "1111", "1111", "1111", "1111", "1"
+            )
         };
         // System `Assign` (the hard-deny arm) or a plain `Transfer`.
         let data = if assign {

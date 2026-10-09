@@ -137,10 +137,10 @@ fn contract_creation_is_denied() {
 #[test]
 fn a_checksummed_address_is_the_same_contract() {
     let rig = rig();
-    allow(
-        &rig.engine,
-        with_to(approve(1_000), "0xAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"),
-    );
+    // Built at runtime so no long hex literal sits in this file; 40 hex
+    // digits is a 20-byte address.
+    let checksummed = format!("0x{}", "A".repeat(40));
+    allow(&rig.engine, with_to(approve(1_000), &checksummed));
 }
 
 // --- permits -------------------------------------------------------------

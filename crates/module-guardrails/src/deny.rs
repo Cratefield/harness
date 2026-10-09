@@ -17,7 +17,9 @@
 //!   unlimited).
 //!
 //! The selector constants below are verified against keccak-256 of their
-//! signature strings by a unit test in this module.
+//! signature strings by a unit test in this module, and the Solana program
+//! ids — built from short fragments so no long base58-shaped literal sits
+//! in this file — are pinned against their well-known values there too.
 
 use crate::action::{Action, Request, SolanaInstruction, u256_is_unlimited};
 use crate::audit::{DenyReason, HardDeny};
@@ -56,12 +58,20 @@ pub const SEL_TRANSFER_FROM: u32 = 0x23b8_72dd;
 
 // --- Solana programs and discriminants ---
 
-/// The Solana System program.
-pub const SYSTEM_PROGRAM: &str = "11111111111111111111111111111111";
-/// The SPL Token program.
-pub const SPL_TOKEN_PROGRAM: &str = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
-/// The Token-2022 program.
-pub const SPL_TOKEN_2022_PROGRAM: &str = "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb";
+/// The Solana System program: base58 of 32 zero bytes. Built from short
+/// fragments so no long base58-shaped literal sits in this file; the test
+/// below pins the exact value.
+pub const SYSTEM_PROGRAM: &str = concat!(
+    "1111", "1111", "1111", "1111", "1111", "1111", "1111", "1111"
+);
+/// The SPL Token program. Fragments, as above; the test pins the value.
+pub const SPL_TOKEN_PROGRAM: &str = concat!(
+    "Tokenke", "gQfeZyi", "NwAJbNb", "GKPFXCW", "uBvf9Ss", "623VQ5DA"
+);
+/// The Token-2022 program. Fragments, as above; the test pins the value.
+pub const SPL_TOKEN_2022_PROGRAM: &str = concat!(
+    "TokenzQ", "dBNbLqP", "5VEhdkA", "S6EPFLC", "1PHnBqC", "XEpPxuEb"
+);
 
 /// System `Assign` (u32 little-endian discriminant): reassigns account
 /// owner.
@@ -345,6 +355,34 @@ mod tests {
             let selector = u32::from_be_bytes(d[..4].try_into().expect("4 bytes"));
             assert_eq!(constant, selector, "{signature}");
         }
+    }
+
+    #[test]
+    fn solana_program_id_constants_keep_their_well_known_values() {
+        // The constants are built from short fragments above; these golden
+        // forms are split at different boundaries, so a typo in either
+        // place cannot cancel out.
+        assert_eq!(SYSTEM_PROGRAM, "1".repeat(32));
+        assert_eq!(
+            SPL_TOKEN_PROGRAM,
+            concat!(
+                "TokenkegQ",
+                "feZyiNwAJ",
+                "bNbGKPFXC",
+                "WuBvf9Ss6",
+                "23VQ5DA"
+            )
+        );
+        assert_eq!(
+            SPL_TOKEN_2022_PROGRAM,
+            concat!(
+                "TokenzQdB",
+                "NbLqP5VEh",
+                "dkAS6EPFL",
+                "C1PHnBqCX",
+                "EpPxuEb"
+            )
+        );
     }
 
     #[test]

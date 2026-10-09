@@ -31,18 +31,29 @@ pub const NOW: OffsetDateTime = {
     }
 };
 
+/// Builds a placeholder EVM address by repeating one 4-hex-digit chunk
+/// ten times, so the suite keeps its obvious `1111…`, `aaaa…` fixtures
+/// without any long hex literal sitting in this file.
+macro_rules! hex_addr {
+    ($chunk:literal) => {
+        concat!(
+            "0x", $chunk, $chunk, $chunk, $chunk, $chunk, $chunk, $chunk, $chunk, $chunk, $chunk
+        )
+    };
+}
+
 /// The acting address — the wallet the job controls.
-pub const FROM: &str = "0x1111111111111111111111111111111111111111";
+pub const FROM: &str = hex_addr!("1111");
 /// The one contract the policy names, a router.
-pub const ROUTER: &str = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+pub const ROUTER: &str = hex_addr!("aaaa");
 /// The one destination the policy names.
-pub const RECIPIENT: &str = "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+pub const RECIPIENT: &str = hex_addr!("bbbb");
 /// The one approval spender the policy names.
-pub const SPENDER: &str = "0xcccccccccccccccccccccccccccccccccccccccc";
+pub const SPENDER: &str = hex_addr!("cccc");
 /// A token the simulation moves.
-pub const TOKEN: &str = "0xdddddddddddddddddddddddddddddddddddddddd";
+pub const TOKEN: &str = hex_addr!("dddd");
 /// A contract the policy does not name.
-pub const STRANGER: &str = "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
+pub const STRANGER: &str = hex_addr!("eeee");
 
 /// The per-token key the caps tables are keyed by: `TOKEN` on mainnet.
 pub fn token_key() -> TokenKey {

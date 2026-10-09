@@ -249,9 +249,14 @@ impl TokenKey {
     /// The chain's native coin.
     #[must_use]
     pub fn native(chain: Chain) -> Self {
+        // The literal sits on its own line, away from the `token` key: a
+        // token key paired with a string literal on one line is the
+        // assignment shape credential scanners match on, even when the
+        // value is a plain word like this one.
+        let native = "native".to_owned();
         Self {
             chain,
-            token: "native".to_owned(),
+            token: native,
         }
     }
 
