@@ -24,6 +24,14 @@ tower = { workspace = true }
 tower-http = { workspace = true }
 bytes = { workspace = true }
 futures-core = { workspace = true }
+# The outbound budget's default sleeper (issue #765): the one timer that
+# brings neither an executor nor a runtime dependency — `Delay` is a plain
+# future. Not a workspace dependency on purpose: nothing else in the tree
+# needs it, and core versions independently. It compiles for
+# wasm32-unknown-unknown (the wasm gate holds) but cannot fire there — std
+# has no monotonic timer on that target — so a runtime on wasm supplies a
+# real sleeper through `BudgetedHttpClient::with_sleeper`.
+futures-timer = "3"
 # `futures_util::lock::Mutex` for the `/__health` sidecar probe cache's
 # single-flight guard (harness.rs `probe_sidecars`): a std mutex cannot be
 # held across the probe's awaits, and a std one that could would stall an
@@ -38,6 +46,13 @@ sea-query = { workspace = true }
 async-trait = { workspace = true }
 thiserror = { workspace = true }
 ulid = { workspace = true }
+# Not called from this crate — nothing here draws randomness. It is here to
+# pick getrandom's `wasm_js` backend, which `ulid` pulls in and which
+# otherwise only a leaf crate selects, so that
+# `cargo check --target wasm32-unknown-unknown -p cratefield-core` stands on
+# its own (issue #765). The same line, for the same reason, is in
+# cratefield-push-auth, cratefield-kms and the auth crates.
+getrandom = { workspace = true }
 time = { workspace = true }
 hmac = { workspace = true }
 sha2 = { workspace = true }

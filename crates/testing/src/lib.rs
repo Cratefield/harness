@@ -34,6 +34,11 @@ mod actor;
 // — it binds through sea-query's `From` impls without naming the crate,
 // so it needs nothing beyond `cratefield-core`.
 mod blob;
+// The outbound-budget conformance checks (issue #765): gated with the
+// harness like `actor`, because the fixture needs `async-trait`, the kit's
+// `ManualClock` and `serde_json` — harness-only dependencies here.
+#[cfg(feature = "harness")]
+mod budget;
 #[cfg(feature = "harness")]
 mod conformance;
 #[cfg(feature = "harness")]
@@ -66,6 +71,11 @@ pub use actor::{
 };
 pub use batch::assert_batch_is_atomic;
 pub use blob::{assert_blob_large_round_trips, assert_blob_round_trips};
+#[cfg(feature = "harness")]
+pub use budget::{
+    assert_budget_daily_quota, assert_budget_pacing, assert_budget_passthrough,
+    assert_budget_retries,
+};
 #[cfg(feature = "harness")]
 pub use conformance::{conformance, conformance_in_process_only, full_fake_ports, sidecar_parity};
 #[cfg(feature = "harness")]

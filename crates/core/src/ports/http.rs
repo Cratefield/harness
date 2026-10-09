@@ -175,6 +175,20 @@ pub enum HttpError {
     /// link-local / metadata address.
     #[error("destination refused by outbound policy: {0}")]
     BlockedDestination(String),
+    /// The outbound budget refused the request before it reached the wire:
+    /// the per-upstream token bucket could not carry its cost within the
+    /// wait this client allows, or the per-provider daily quota is spent.
+    /// `retry_after` is when the budget can carry the request again — the
+    /// same contract a 429's `Retry-After` carries, for a request that was
+    /// never sent (issue #765).
+    #[error("outbound budget exhausted for {what}: retry after {retry_after:?}")]
+    BudgetExhausted {
+        /// What the budget is spent against — the budget router's key, an
+        /// upstream name or `rpc:<key id>` shaped string.
+        what: String,
+        /// How long until the budget can carry the request again.
+        retry_after: Duration,
+    },
 }
 
 #[async_trait]
