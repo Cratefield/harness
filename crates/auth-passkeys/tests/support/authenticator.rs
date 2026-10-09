@@ -48,6 +48,17 @@ fn rsa_key() -> &'static rsa::RsaPrivateKey {
     })
 }
 
+/// What the extension-output map carries, when the ED flag is set.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExtensionOutput {
+    None,
+    /// What Chrome's credProtect request comes back as.
+    CredProtect,
+    /// CTAP2.1's `hmac-secret: true` (issue #756), the signed answer that
+    /// says this authenticator can evaluate PRF.
+    HmacSecret,
+}
+
 pub struct SoftAuthenticator {
     algorithm: Algorithm,
     key: Key,
@@ -58,9 +69,9 @@ pub struct SoftAuthenticator {
     pub counter: u32,
     /// Whether the authenticator verified the user (a PIN or biometric).
     pub user_verified: bool,
-    /// Whether to append an extension-output map, as a security key does
-    /// when Chrome asks for `credProtect`.
-    pub extension_output: bool,
+    /// What to append as an extension-output map, if anything, as a
+    /// security key does when the browser asks for an extension.
+    pub extension_output: ExtensionOutput,
 }
 
 impl SoftAuthenticator {
@@ -85,14 +96,21 @@ impl SoftAuthenticator {
             aaguid: [0xAB; 16],
             counter: 1,
             user_verified: true,
-            extension_output: false,
+            extension_output: ExtensionOutput::None,
         }
     }
 
     /// Emit extension outputs, which sets the ED flag and appends one more
     /// CBOR map after the credential data.
     pub fn with_extension_output(mut self) -> Self {
-        self.extension_output = true;
+        self.extension_output = ExtensionOutput::CredProtect;
+        self
+    }
+
+    /// Answer the PRF request the way a CTAP2.1 authenticator does:
+    /// `hmac-secret: true` inside the signed authenticator data.
+    pub fn with_hmac_secret(mut self) -> Self {
+        self.extension_output = ExtensionOutput::HmacSecret;
         self
     }
 
@@ -167,10 +185,25 @@ impl SoftAuthenticator {
         if attested {
             flags |= FLAG_AT;
         }
-        if attested && self.extension_output {
+        if attested && self.extension_output != ExtensionOutput::None {
             flags |= FLAG_ED;
         }
         flags
+    }
+
+    /// The extension-output map, when the authenticator answers one.
+    fn extension_outputs(&self) -> Option<Value> {
+        match self.extension_output {
+            ExtensionOutput::None => None,
+            ExtensionOutput::CredProtect => Some(Value::Map(vec![(
+                Value::Text("credProtect".to_owned()),
+                Value::Integer(2.into()),
+            )])),
+            ExtensionOutput::HmacSecret => Some(Value::Map(vec![(
+                Value::Text("hmac-secret".to_owned()),
+                Value::Bool(true),
+            )])),
+        }
     }
 
     fn authenticator_data(&self, rp_id: &str, attested: bool) -> Vec<u8> {
@@ -184,12 +217,7 @@ impl SoftAuthenticator {
             data.extend_from_slice(&id_len.to_be_bytes());
             data.extend_from_slice(&self.credential_id);
             data.extend_from_slice(&self.cose_key());
-            if self.extension_output {
-                // What Chrome's credProtect request comes back as.
-                let outputs = Value::Map(vec![(
-                    Value::Text("credProtect".to_owned()),
-                    Value::Integer(2.into()),
-                )]);
+            if let Some(outputs) = self.extension_outputs() {
                 let mut encoded = Vec::new();
                 ciborium::into_writer(&outputs, &mut encoded).expect("extensions encode");
                 data.extend_from_slice(&encoded);

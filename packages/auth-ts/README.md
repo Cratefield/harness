@@ -78,6 +78,39 @@ export const GET = nextAuth.handlers.start;
 See [`docs/auth/WEB-APPS.md#nextjs`](../../docs/auth/WEB-APPS.md#nextjs) for the
 full integration guide, the cookie layout and the security model.
 
+## Passkey PRF
+
+For browser clients, `getPrfKey` evaluates the WebAuthn `prf` extension over a
+set of enrolled passkeys and derives a non-extractable AES-GCM key from the
+output — a key the user holds and the server never sees. The enrolled
+passkeys come from `GET /v1/auth-passkeys/passkeys/prf`, which returns
+`{ passkeys: [{ credentialId, prf, prfSalt }] }` for the signed-in account.
+The raw output is
+validated (present, 32 bytes — provider support claims are ignored) and
+consumed by an HKDF-SHA256 step keyed on a per-purpose `info` string;
+`redactPrfResults` turns a ceremony's `clientExtensionResults` into the
+`{ prf: { enabled } }` form the server accepts (anything still carrying
+`prf.results` is refused with `400`, `auth/passkey-prf-output-rejected`), and
+`PrfUnavailableError`
+signals an authenticator that could not evaluate.
+
+```ts
+import { getPrfKey, hasPrfCapablePasskey } from '@cratefield/auth';
+
+if (hasPrfCapablePasskey(passkeys)) {
+  const key = await getPrfKey(
+    passkeys.map((p) => p.credentialId),
+    passkeys.map((p) => p.prfSalt),
+    { info: 'cratefield:sealed-notes:v1' },
+  );
+}
+```
+
+**Always enrol two unlock methods before sealing data**: losing the only
+PRF-capable authenticator loses the data, and the server cannot help. See
+[`docs/auth/PASSKEYS-PRF.md`](../../docs/auth/PASSKEYS-PRF.md) for the flow,
+the capability states and the 2026 provider support matrix.
+
 ## License
 
 MIT

@@ -9,10 +9,10 @@
 //! `auth-core` owns the schema every login method writes through: it
 //! publishes the typed store API, so `credentials` and `single_use_tokens`
 //! have exactly one definition and one migration history. This module owns
-//! a single table of its own, the challenge budget behind `login/options`
-//! (see the `budget` module), because the issuance cap it enforces is
-//! this module's policy and has to hold even in a composition that wired
-//! up no rate limiter.
+//! two tables of its own: the challenge budget behind `login/options` (see
+//! the `budget` module), because the issuance cap it enforces is this
+//! module's policy and has to hold even in a composition that wired up no
+//! rate limiter; and the per-credential PRF salt (see the `prf` module).
 //!
 //! Relying-party verification is implemented here rather than taken from
 //! `webauthn-rs`, which cannot build for `wasm32-unknown-unknown` (ADR 0200).
@@ -30,6 +30,7 @@ mod add;
 mod budget;
 mod challenge;
 mod login;
+mod prf;
 mod register;
 mod request;
 pub mod webauthn;
@@ -43,6 +44,7 @@ use std::sync::Arc;
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
+pub use prf::PrfCapability;
 pub use webauthn::UserVerification;
 
 /// The one answer every failed ceremony gets. Which check failed is logged,
@@ -81,6 +83,18 @@ pub const CREDENTIAL_ALREADY_REGISTERED: ProblemDef = ProblemDef {
     description: "The credential id is already stored for an account",
 };
 
+/// A verify body carrying a PRF result (`clientExtensionResults.prf.results`)
+/// — the hash of this service's salt with the authenticator's secret. This
+/// service hands salts out and never consumes outputs, so nothing about the
+/// ceremony is read or stored.
+pub const PRF_OUTPUT_REJECTED: ProblemDef = ProblemDef {
+    slug: "auth/passkey-prf-output-rejected",
+    status: StatusCode::BAD_REQUEST,
+    title: "The passkey presented a PRF result",
+    description: "clientExtensionResults.prf.results is never accepted; send \
+                  prf: { enabled } instead",
+};
+
 /// The algorithms offered at registration, best first: ES256 is what Apple,
 /// Android and most security keys produce, RS256 is Windows Hello, EdDSA
 /// appears on some keys. Anything else is refused at registration rather
@@ -106,6 +120,14 @@ const MIGRATION_CHALLENGE_BUDGET: SqlMigration = SqlMigration::new(
     "0001",
     "challenge_budget",
     include_str!("../migrations/sqlite/0001_challenge_budget.sql"),
+);
+
+/// The PRF salt and capability per credential (issue #756). Name must match
+/// `prf::PRF_TABLE`.
+const MIGRATION_PASSKEY_PRF: SqlMigration = SqlMigration::new(
+    "0002",
+    "passkey_prf",
+    include_str!("../migrations/sqlite/0002_passkey_prf.sql"),
 );
 
 pub(crate) fn iso(at: OffsetDateTime) -> String {
@@ -302,13 +324,15 @@ impl Module for Passkeys {
         &[Port::RateLimiter]
     }
 
-    /// One: the challenge budget ledger. `auth-core` owns every other table
-    /// this module writes, so there is one schema and one migration history
-    /// for `credentials` and `single_use_tokens` rather than two modules
-    /// disagreeing about them. The budget window is this module's policy,
-    /// the way the sign-in-link send cooldown is auth-magic-link's.
+    /// Two tables of the module's own: the challenge budget ledger behind
+    /// `login/options` and the per-credential PRF salt. `auth-core` owns
+    /// every other table this module writes, so there is one schema and one
+    /// migration history for `credentials` and `single_use_tokens` rather
+    /// than two modules disagreeing about them. The budget window is this
+    /// module's policy, the way the sign-in-link send cooldown is
+    /// auth-magic-link's.
     fn tables(&self) -> &'static [&'static str] {
-        &["auth_passkeys_challenge_budget"]
+        &["auth_passkeys_challenge_budget", "auth_passkeys_prf"]
     }
 
     /// The budget row is a counter keyed by a composite subject —
@@ -319,21 +343,35 @@ impl Module for Passkeys {
     /// row is a credential, and the retention is short: the scheduled
     /// handler deletes any row whose window closed more than a day ago, so
     /// a probed address is not remembered much longer than the probe took.
+    ///
+    /// The PRF row holds a random salt keyed by the authenticator's opaque
+    /// id and one of three words. No column names a person — the salt is
+    /// not even a secret, the browser receives it — so the table is
+    /// declared as holding nobody, and the row goes away with its
+    /// credential.
     fn personal_data(&self) -> &'static [PersonalDataSet] {
-        const SETS: &[PersonalDataSet] = &[PersonalDataSet {
-            table: "auth_passkeys_challenge_budget",
-            subject: "subject",
-            kind: DataKind::Usage,
-            disposition: Disposition::Unreachable(
-                "the row is a counter keyed by email-or-ip plus window, so no equality \
-                 predicate on your address reaches it, and it is deleted within a day of \
-                 its window closing",
+        const SETS: &[PersonalDataSet] = &[
+            PersonalDataSet {
+                table: "auth_passkeys_challenge_budget",
+                subject: "subject",
+                kind: DataKind::Usage,
+                disposition: Disposition::Unreachable(
+                    "the row is a counter keyed by email-or-ip plus window, so no equality \
+                     predicate on your address reaches it, and it is deleted within a day of \
+                     its window closing",
+                ),
+                description: "How many passkey sign-in attempts your address or network made \
+                              recently, so the login page cannot be swept for accounts.",
+                redacted: &[],
+                subject_via: None,
+            },
+            PersonalDataSet::none(
+                "auth_passkeys_prf",
+                "A random per-passkey salt and whether the passkey has shown it can evaluate \
+                 the PRF extension. Keyed by the authenticator's opaque id, it names no \
+                 person, holds no extension output, and is deleted with the passkey.",
             ),
-            description: "How many passkey sign-in attempts your address or network made \
-                          recently, so the login page cannot be swept for accounts.",
-            redacted: &[],
-            subject_via: None,
-        }];
+        ];
         SETS
     }
 
@@ -358,7 +396,7 @@ impl Module for Passkeys {
     }
 
     fn migrations(&self) -> Migrations {
-        const MIGRATIONS: [SqlMigration; 1] = [MIGRATION_CHALLENGE_BUDGET];
+        const MIGRATIONS: [SqlMigration; 2] = [MIGRATION_CHALLENGE_BUDGET, MIGRATION_PASSKEY_PRF];
         // Refuses a gap, a duplicate or an entry out of order at build
         // time (issue #27).
         const _: () = cratefield_core::assert_migration_set(&MIGRATIONS);
@@ -399,6 +437,7 @@ impl Module for Passkeys {
         register::router()
             .merge(login::router())
             .merge(add::router())
+            .merge(prf::router())
             .with_state(state)
     }
 
@@ -427,21 +466,22 @@ mod tests {
     }
 
     #[test]
-    fn the_module_owns_only_its_budget_because_auth_core_owns_the_rest() {
+    fn the_module_owns_only_its_budget_and_prf_salt_because_auth_core_owns_the_rest() {
         let module = Passkeys::new();
         assert_eq!(module.name(), "auth-passkeys");
-        // One table, and it is the challenge budget ledger. `auth-core`
-        // owns every other row this module writes; a second name appearing
-        // here means something was declared in the wrong module.
-        assert_eq!(module.tables(), ["auth_passkeys_challenge_budget"]);
-        let migrations = module.migrations().sqlite;
+        // Two tables: the challenge budget ledger and the PRF salt.
+        // `auth-core` owns every other row this module writes; another name
+        // appearing here means something was declared in the wrong module.
         assert_eq!(
-            migrations.len(),
-            1,
-            "the ledger is created by this module's one migration"
+            module.tables(),
+            ["auth_passkeys_challenge_budget", "auth_passkeys_prf"]
         );
+        let migrations = module.migrations().sqlite;
+        assert_eq!(migrations.len(), 2, "one migration per owned table");
         assert_eq!(migrations[0].id, "0001");
         assert_eq!(migrations[0].sql, MIGRATION_CHALLENGE_BUDGET.sql);
+        assert_eq!(migrations[1].id, "0002");
+        assert_eq!(migrations[1].sql, MIGRATION_PASSKEY_PRF.sql);
         assert_eq!(module.requires(), [Port::Db, Port::Clock, Port::IdGen]);
         assert!(module.public_writes());
     }
