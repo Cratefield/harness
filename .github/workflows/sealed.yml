@@ -1,0 +1,66 @@
+# CI for the sealed-blob client and server halves (issue #757):
+# @cratefield/sealed (packages/sealed) and the Rust `module-sealed` crate
+# (crates/module-sealed).
+#
+# ci.yml stays Rust-only and publish-auth-ts.yml owns the npm package
+# pipeline, so this file carries what neither covers: the sealed package's
+# browser leg (real headless Chromium, which ci.yml has no Node-browser job
+# for) and the crate's wasm32 build, which the client's wire format depends
+# on — the module must compile for a Worker isolate or the store it serves
+# does not exist.
+
+name: Sealed
+
+on:
+  push:
+    paths:
+      - 'packages/sealed/**'
+      - 'crates/module-sealed/**'
+      - '.github/workflows/sealed.yml'
+  pull_request:
+    paths:
+      - 'packages/sealed/**'
+      - 'crates/module-sealed/**'
+      - '.github/workflows/sealed.yml'
+
+jobs:
+  client:
+    name: "@cratefield/sealed typecheck, test, browser, build"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Node 24 like the other npm jobs: the local dev leg runs the same
+      # version, and vitest's browser runner needs nothing older.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: npm ci
+      - name: Typecheck
+        run: npm run typecheck -w @cratefield/sealed
+      - name: Node tests
+        run: npm test -w @cratefield/sealed
+      # Real Chromium, not a stub: the whole claim of the package is that it
+      # runs on WebCrypto in a browser, and this is the only leg that runs
+      # there. --with-deps for the shared libraries the runner image lacks.
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+      - name: Browser tests
+        run: npm run test:browser -w @cratefield/sealed
+      - name: Build
+        run: npm run build -w @cratefield/sealed
+
+  crate:
+    name: module-sealed wasm32 build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.98.1"
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      # The sealed store runs on a Worker isolate, so the crate must reach
+      # wasm32 on its own — the same check the wasm job in ci.yml applies to
+      # every adapter, applied here because no venture mounts this module yet.
+      - name: Build cratefield-module-sealed to wasm
+        run: cargo build --target wasm32-unknown-unknown -p cratefield-module-sealed
