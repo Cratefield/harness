@@ -498,6 +498,11 @@ jobs:
       # native build proves nothing and this leg is its only positive proof.
       - name: Build cratefield-adapter-workers-ai to wasm
         run: cargo build --target wasm32-unknown-unknown -p cratefield-adapter-workers-ai
+      # The guardrails policy engine (issue #763) rides core's ports with no
+      # I/O of its own, and a venture runs it inside a Worker next to the
+      # signer it guards; nothing else builds it for wasm.
+      - name: Build cratefield-module-guardrails to wasm
+        run: cargo build --target wasm32-unknown-unknown -p cratefield-module-guardrails
       - name: Build example venture to wasm
         working-directory: examples/venture
         run: worker-build --release

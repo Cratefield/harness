@@ -197,5 +197,8 @@ pub use cratefield_module_connections as connections;
 #[cfg(feature = "wallets")]
 pub use cratefield_module_wallets as wallets;
 
+#[cfg(feature = "guardrails")]
+pub use cratefield_module_guardrails as guardrails;
+
 #[cfg(feature = "testing")]
 pub use cratefield_testing as testing;

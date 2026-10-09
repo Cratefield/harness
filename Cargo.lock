@@ -697,6 +697,7 @@ dependencies = [
  "cratefield-module-crm",
  "cratefield-module-device-auth",
  "cratefield-module-email-signup",
+ "cratefield-module-guardrails",
  "cratefield-module-notifications",
  "cratefield-module-orgs",
  "cratefield-module-owlpost",
@@ -1926,6 +1927,25 @@ dependencies = [
  "tower",
  "tracing",
  "ulid",
+]
+
+[[package]]
+name = "cratefield-module-guardrails"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "axum",
+ "cratefield-core",
+ "cratefield-testing",
+ "getrandom 0.4.3",
+ "hex",
+ "pollster",
+ "serde",
+ "serde_json",
+ "sha3",
+ "thiserror 2.0.20",
+ "time",
+ "tracing",
 ]
 
 [[package]]
