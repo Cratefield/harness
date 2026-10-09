@@ -659,7 +659,7 @@ dependencies = [
 
 [[package]]
 name = "cratefield"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "cratefield-adapter-anthropic",
  "cratefield-adapter-apns",
@@ -941,7 +941,7 @@ dependencies = [
 
 [[package]]
 name = "cratefield-adapter-owlpost"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "async-trait",
  "bytes",
@@ -996,7 +996,7 @@ dependencies = [
 
 [[package]]
 name = "cratefield-adapter-resend"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "async-trait",
  "base64 0.23.1",
@@ -1443,7 +1443,7 @@ dependencies = [
 
 [[package]]
 name = "cratefield-cli"
-version = "0.6.2"
+version = "0.6.3"
 dependencies = [
  "base64 0.23.1",
  "bytes",
@@ -1589,7 +1589,7 @@ dependencies = [
 
 [[package]]
 name = "cratefield-core"
-version = "0.8.4"
+version = "0.8.5"
 dependencies = [
  "async-trait",
  "axum",
@@ -1673,7 +1673,7 @@ dependencies = [
 
 [[package]]
 name = "cratefield-import-supabase"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "async-trait",
  "bytes",
@@ -1754,7 +1754,7 @@ dependencies = [
 
 [[package]]
 name = "cratefield-mail-templates"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "cratefield-core",
  "getrandom 0.4.3",
