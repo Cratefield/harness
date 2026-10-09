@@ -1929,6 +1929,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "cratefield-module-guardrails"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "axum",
+ "cratefield-core",
+ "cratefield-testing",
+ "getrandom 0.4.3",
+ "hex",
+ "pollster",
+ "serde",
+ "serde_json",
+ "sha3",
+ "thiserror 2.0.20",
+ "time",
+ "tracing",
+]
+
+[[package]]
 name = "cratefield-module-hello"
 version = "0.1.1"
 dependencies = [
