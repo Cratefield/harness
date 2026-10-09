@@ -28,6 +28,7 @@ sqlite = ["dep:cratefield-adapter-sqlite"]
 postgres = ["dep:cratefield-adapter-postgres"]
 resend = ["dep:cratefield-adapter-resend"]
 owlpost = ["dep:cratefield-adapter-owlpost"]
+telegram = ["dep:cratefield-adapter-telegram"]
 # The Colonizer mothership client (issue #675): a plain HTTP client rather
 # than a port adapter, so it takes a base URL and a `col_` token.
 colonizer = ["dep:cratefield-adapter-colonizer"]
@@ -148,6 +149,10 @@ guardrails = ["dep:cratefield-module-guardrails"]
 # plain `owlpost` name is the sending adapter's; this is the receiving
 # module, so it is named for what it emits.
 owlpost-events = ["dep:cratefield-module-owlpost"]
+# Telegram's secret-token webhook, account linking and consent buttons
+# (issue #764). The plain `telegram` name is the sending adapter's; this is
+# the receiving module, so it is named for what it answers.
+telegram-events = ["dep:cratefield-module-telegram"]
 
 # The conformance kit. Belongs under [dev-dependencies] in a venture.
 testing = ["dep:cratefield-testing"]
@@ -160,6 +165,7 @@ cratefield-adapter-sqlite = { workspace = true, optional = true }
 cratefield-adapter-postgres = { workspace = true, optional = true }
 cratefield-adapter-resend = { workspace = true, optional = true }
 cratefield-adapter-owlpost = { workspace = true, optional = true }
+cratefield-adapter-telegram = { workspace = true, optional = true }
 cratefield-adapter-colonizer = { workspace = true, optional = true }
 cratefield-adapter-turnstile = { workspace = true, optional = true }
 cratefield-adapter-anthropic = { workspace = true, optional = true }
@@ -215,6 +221,7 @@ cratefield-module-connections = { workspace = true, optional = true }
 cratefield-module-wallets = { workspace = true, optional = true }
 cratefield-module-guardrails = { workspace = true, optional = true }
 cratefield-module-owlpost = { workspace = true, optional = true }
+cratefield-module-telegram = { workspace = true, optional = true }
 cratefield-testing = { workspace = true, optional = true }
 
 [package.metadata.docs.rs]

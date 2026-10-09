@@ -11,7 +11,7 @@ use cratefield_adapter_telegram::{HttpTelegramBot, RateLimits, TelegramError};
 use std::sync::Arc;
 use time::OffsetDateTime;
 
-const TOKEN: &str = "123456789:AAExample_dummy-token_not-real";
+const TOKEN: &str = "test-bot-token";
 const BASE: &str = "http://telegram.fake";
 const SENT: &str = include_str!("fixtures/sent.json");
 

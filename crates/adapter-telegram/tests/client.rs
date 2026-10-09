@@ -19,7 +19,7 @@ use std::time::Duration;
 use time::OffsetDateTime;
 
 // Obvious dummy values, never real.
-const TOKEN: &str = "123456789:AAExample_dummy-token_not-real";
+const TOKEN: &str = "test-bot-token";
 const BASE: &str = "http://telegram.fake";
 
 const SENT: &str = include_str!("fixtures/sent.json");

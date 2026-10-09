@@ -1087,12 +1087,8 @@ mod tests {
     #[test]
     fn idle_buckets_are_pruned_once_the_map_grows_past_the_high_water() {
         let clock = TestClock::started_at(epoch());
-        let bot = HttpTelegramBot::new(
-            Arc::new(NeverHttp),
-            clock.clone(),
-            "123456789:AAExample_dummy-token_not-real",
-        )
-        .with_limits(one_per_chat());
+        let bot = HttpTelegramBot::new(Arc::new(NeverHttp), clock.clone(), "test-bot-token")
+            .with_limits(one_per_chat());
 
         // A burst across more chats than the high water: every bucket was
         // touched just now, so the sweep that runs on each acquire has
@@ -1123,12 +1119,8 @@ mod tests {
     #[test]
     fn a_live_429_deadline_survives_the_sweep_and_an_expired_one_does_not() {
         let clock = TestClock::started_at(epoch());
-        let bot = HttpTelegramBot::new(
-            Arc::new(NeverHttp),
-            clock.clone(),
-            "123456789:AAExample_dummy-token_not-real",
-        )
-        .with_limits(one_per_chat());
+        let bot = HttpTelegramBot::new(Arc::new(NeverHttp), clock.clone(), "test-bot-token")
+            .with_limits(one_per_chat());
         // The production pairing: a 429's deadline is noted for a chat the
         // bot has just messaged, so both a bucket and a deadline exist.
         bot.acquire(Some(7)).expect("chat 7 starts full");

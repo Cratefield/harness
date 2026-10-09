@@ -151,6 +151,12 @@ jobs:
       # tests away and they had never run here at all.
       - name: Native push wiring, with the optional feature (issue #191)
         run: cargo test -p cratefield-runtime-native --features push
+      # `notifications` is off by default, and `tests/channel.rs` is gated on
+      # it at file level (issue #764) — the workspace run compiles it to an
+      # empty binary and reports `0 passed`, so the channel's tests only
+      # ever run here.
+      - name: Telegram channel over the notifications feature (issue #764)
+        run: cargo test -p cratefield-module-telegram --features notifications
       # The facade is nothing but feature-gated re-exports, so a run with
       # no features enabled builds almost none of it.
       - name: The facade with every feature on (issue #16)
