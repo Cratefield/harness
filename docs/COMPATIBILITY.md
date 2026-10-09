@@ -56,6 +56,7 @@ compatibility-doc` and checked in CI for drift. Do not edit by hand.
 | `cratefield-adapter-sqlite` | 0.3.0 | 1 | `^0.8` — `>=0.8.0, <0.9.0` |
 | `cratefield-adapter-sqlite-wasm` *(not published)* | 0.1.1 | 1 | `^0.8` — `>=0.8.0, <0.9.0` |
 | `cratefield-adapter-stripe` | 0.3.2 | 1 | `^0.8` — `>=0.8.0, <0.9.0` |
+| `cratefield-adapter-telegram` | 0.1.0 | 1 | `^0.8` — `>=0.8.0, <0.9.0` |
 | `cratefield-adapter-turnstile` | 0.3.1 | 1 | `^0.8` — `>=0.8.0, <0.9.0` |
 | `cratefield-adapter-typesafe` | 0.3.0 | 1 | `^0.8` — `>=0.8.0, <0.9.0` |
 | `cratefield-adapter-webhook-tracker` | 0.3.0 | 1 | `^0.8` — `>=0.8.0, <0.9.0` |
@@ -93,6 +94,7 @@ compatibility-doc` and checked in CI for drift. Do not edit by hand.
 | `cratefield-module-orgs` | 0.1.1 | 1 | `^0.8` — `>=0.8.0, <0.9.0` |
 | `cratefield-module-owlpost` | 0.1.0 | 1 | `^0.8` — `>=0.8.0, <0.9.0` |
 | `cratefield-module-privacy` | 0.3.1 | 1 | `^0.8` — `>=0.8.0, <0.9.0` |
+| `cratefield-module-telegram` | 0.1.0 | 1 | `^0.8` — `>=0.8.0, <0.9.0` |
 | `cratefield-module-telemetry` | 0.3.0 | 1 | `^0.8` — `>=0.8.0, <0.9.0` |
 | `cratefield-module-waitlist` | 0.4.2 | 1 | `^0.8` — `>=0.8.0, <0.9.0` |
 | `cratefield-module-wallets` | 0.1.0 | 1 | `^0.8` — `>=0.8.0, <0.9.0` |

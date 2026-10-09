@@ -8,6 +8,13 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **The facade gains `telegram` and `telegram-events` features**
+  (issue #764). They re-export the new `cratefield-adapter-telegram` as
+  `cratefield::telegram` and `cratefield-module-telegram` as
+  `cratefield::telegram_events`: the Telegram Bot API adapter, and the
+  verified webhook, account linking and consent buttons that never move
+  value without a passkey. Nothing in `cratefield-core` changes.
+
 - **The facade gains a `guardrails` feature** (issue #763). It
   re-exports the new `cratefield-module-guardrails` as
   `cratefield::guardrails`: the policy engine every automated
