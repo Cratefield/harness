@@ -50,5 +50,9 @@
   "auth-passkeys/0001": {
     "file": "0011_auth-passkeys_0001_challenge_budget.sql",
     "sha256": "e62674b2f933652dbe77f01a712a2b975cd99f4446f36047aefbf864c77d0654"
+  },
+  "auth-passkeys/0002": {
+    "file": "0014_auth-passkeys_0002_passkey_prf.sql",
+    "sha256": "115d7581ca378208aba9ac0627e893a550069a6d40cf76a33794afde865269f9"
   }
 }

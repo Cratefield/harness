@@ -38,6 +38,7 @@ human-readable page at each `<public_url>/problems/<slug>`.
 | `auth/oidc-provider-unconfigured` | 503 | That sign-in provider is not configured | `cratefield-auth-oidc` | The provider's AUTH_OIDC_<PROVIDER>_* settings are missing or unusable |
 | `auth/passkey-already-registered` | 409 | That authenticator is already registered | `cratefield-auth-passkeys` | The credential id is already stored for an account |
 | `auth/passkey-ceremony-failed` | 401 | The passkey ceremony could not be completed | `cratefield-auth-passkeys` | Unknown credential, spent or expired challenge, wrong origin, or a signature that does not verify — not distinguished |
+| `auth/passkey-prf-output-rejected` | 400 | The passkey presented a PRF result | `cratefield-auth-passkeys` | clientExtensionResults.prf.results is never accepted; send prf: { enabled } instead |
 | `auth/passkeys-unconfigured` | 503 | Passkeys are not configured | `cratefield-auth-passkeys` | AUTH_PASSKEYS_RP_ID and AUTH_PASSKEYS_ORIGINS must be set |
 | `auth/password-login-refused` | 401 | That email address and password do not match | `cratefield-auth-password` | Wrong password, unknown address, or the account cannot sign in this way |
 | `auth/password-not-ready` | 503 | Password sign-in is not available | `cratefield-auth-password` | The module is missing a port it requires |

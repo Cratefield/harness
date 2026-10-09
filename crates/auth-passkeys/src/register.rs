@@ -11,7 +11,7 @@ use cratefield_auth_core::{
     Bytes, CREDENTIAL_PASSKEY, CredentialRow, credentials_by_user, identities_by_user,
     insert_credential, passkey_by_credential_id, user_by_id,
 };
-use cratefield_core::{Json, Problem, Scope};
+use cratefield_core::{Problem, Scope};
 use http::HeaderMap;
 use serde::Deserialize;
 use serde_json::json;
@@ -24,6 +24,7 @@ use webauthn_rs_proto::{
 };
 
 use crate::challenge::{self, PURPOSE_REGISTER};
+use crate::prf::{self, PrfCapability};
 use crate::request::{b64u, ceremony_failed, hex, internal, ok, ports, require_session};
 use crate::webauthn::{UserVerification, verify_registration};
 use crate::{COSE_EDDSA, COSE_ES256, COSE_RS256, ModuleState};
@@ -142,7 +143,15 @@ async fn options(
             extensions: None,
         },
     };
-    Ok(ok(serde_json::to_value(response).unwrap_or_default()))
+    let mut body = serde_json::to_value(response).unwrap_or_default();
+    // PRF, so the passkey can later unseal what an app seals with the
+    // extension (issue #756). The input is empty: this service hands out
+    // salts per assertion, at login. Injected into the serialised body
+    // because the wire structs have no `prf` field for serde to write.
+    if let Some(public_key) = body.get_mut("publicKey") {
+        public_key["extensions"] = serde_json::json!({ "prf": {} });
+    }
+    Ok(ok(body))
 }
 
 #[derive(Debug, Deserialize)]
@@ -160,11 +169,19 @@ async fn verify(
     State(state): State<Arc<ModuleState>>,
     scope: Scope,
     headers: HeaderMap,
-    Json(body): Json<VerifyBody>,
+    // Raw bytes rather than the JSON extractor, because the body is read
+    // twice: once as a value for the client extension results, which the
+    // typed wire structs have no field for, and once into those structs.
+    raw: axum::body::Bytes,
 ) -> Result<Response, Problem> {
     let session = require_session(&state, &headers, &scope).await?;
     let rp = state.rp()?;
     let (db, clock, id_gen) = ports(&state)?;
+
+    // Read as a value first, because the client extension results carry a
+    // field the typed wire structs have no place for; a PRF result is
+    // refused there (issue #756).
+    let (client_prf, body): (_, VerifyBody) = prf::parse_body(&raw, &scope)?;
 
     let label = body
         .label
@@ -210,6 +227,9 @@ async fn verify(
         ceremony_failed(&scope)
     })?;
 
+    // What the ceremony showed about PRF (issue #756).
+    let capability = PrfCapability::at_registration(registered.hmac_secret, client_prf.enabled);
+
     // `excludeCredentials` is advice to the browser, not a guarantee. The
     // server enforces it.
     if passkey_by_credential_id(db, &registered.credential_id)
@@ -224,27 +244,14 @@ async fn verify(
     }
 
     let now = crate::iso(clock.now());
-    let credential_id = id_gen.ulid();
-    insert_credential(
+    let credential_id = store_credential(
         db,
-        &CredentialRow {
-            id: credential_id.clone(),
-            user_id: session.user_id.clone(),
-            kind: CREDENTIAL_PASSKEY.to_owned(),
-            passkey_credential_id: Some(Bytes(registered.credential_id.clone())),
-            passkey_public_key_cose: Some(Bytes(registered.cose_key_raw.clone())),
-            passkey_sign_count: Some(i64::from(registered.sign_count)),
-            passkey_aaguid: registered.aaguid.map(|id| Bytes(id.to_vec())),
-            passkey_transports: transports_of(&body.credential),
-            password_hash: None,
-            label: label.map(str::to_owned),
-            created_at: now.clone(),
-            last_used_at: None,
-            passkey_suspect_at: None,
-            failed_attempts: 0,
-            failed_window_started_at: None,
-            locked_until: None,
-        },
+        id_gen,
+        &session.user_id,
+        &registered,
+        transports_of(&body.credential),
+        label,
+        &now,
     )
     .await
     .map_err(|err| {
@@ -261,6 +268,11 @@ async fn verify(
         );
     }
 
+    // The salt the passkey will evaluate PRF with (issue #756). Not a
+    // secret: it is handed back here and again at every login, and the
+    // authenticator hashes it with a secret that never leaves the device.
+    let prf = record_prf(db, &registered.credential_id, capability, &now).await;
+
     state.ctx.events.emit_in(
         &scope,
         EVENT_REGISTERED,
@@ -271,12 +283,20 @@ async fn verify(
         }),
     );
 
-    Ok(ok(json!({
+    // `prf` and `prfSalt` name what the row actually holds, so they are
+    // only sent when it was written; a client that got neither reads the
+    // truth at the next login, when the row is created.
+    let mut body = json!({
         "id": credential_id,
         "label": label,
         "created_at": now,
         "aaguid": registered.aaguid.map(|id| hex(&id)),
-    })))
+    });
+    if let Some(entry) = prf {
+        body["prf"] = json!(capability.as_str());
+        body["prfSalt"] = json!(b64u(&entry.salt));
+    }
+    Ok(ok(body))
 }
 
 /// The challenge the authenticator actually signed, read back out of the
@@ -285,6 +305,62 @@ async fn verify(
 fn challenge_from_client_data(raw: &[u8]) -> Option<Vec<u8>> {
     let parsed: webauthn_rs_proto::CollectedClientData = serde_json::from_slice(raw).ok()?;
     Some(parsed.challenge.as_slice().to_vec())
+}
+
+/// Records what the ceremony showed about the passkey, best-effort: the
+/// credential is already stored, and the row is created lazily, as
+/// `unknown`, the next time a salt is needed. `None` when nothing was
+/// written, so the response can omit `prf`/`prfSalt` rather than name
+/// values no row holds.
+async fn record_prf(
+    db: &dyn cratefield_core::Database,
+    credential_id: &[u8],
+    capability: PrfCapability,
+    now: &str,
+) -> Option<prf::Entry> {
+    match prf::record(db, credential_id, capability, now).await {
+        Ok(entry) => Some(entry),
+        Err(err) => {
+            tracing::warn!(error = %err, "could not store the passkey's PRF salt");
+            None
+        }
+    }
+}
+
+/// Stores the passkey row and returns its id.
+async fn store_credential(
+    db: &dyn cratefield_core::Database,
+    id_gen: &dyn cratefield_core::IdGen,
+    user_id: &str,
+    registered: &crate::webauthn::RegisteredCredential,
+    transports: Option<String>,
+    label: Option<&str>,
+    now: &str,
+) -> Result<String, cratefield_core::DbError> {
+    let credential_id = id_gen.ulid();
+    insert_credential(
+        db,
+        &CredentialRow {
+            id: credential_id.clone(),
+            user_id: user_id.to_owned(),
+            kind: CREDENTIAL_PASSKEY.to_owned(),
+            passkey_credential_id: Some(Bytes(registered.credential_id.clone())),
+            passkey_public_key_cose: Some(Bytes(registered.cose_key_raw.clone())),
+            passkey_sign_count: Some(i64::from(registered.sign_count)),
+            passkey_aaguid: registered.aaguid.map(|id| Bytes(id.to_vec())),
+            passkey_transports: transports,
+            password_hash: None,
+            label: label.map(str::to_owned),
+            created_at: now.to_owned(),
+            last_used_at: None,
+            passkey_suspect_at: None,
+            failed_attempts: 0,
+            failed_window_started_at: None,
+            locked_until: None,
+        },
+    )
+    .await?;
+    Ok(credential_id)
 }
 
 /// How the browser says this authenticator can be reached (`usb`,
@@ -381,5 +457,13 @@ async fn remove(
             tracing::error!(error = %err, "could not delete the passkey");
             internal(&scope)
         })?;
+    // The PRF salt row goes with its credential. A row that survived would
+    // be inert — reads filter against live credentials — but inert rows
+    // are still clutter.
+    if let Some(credential_id) = target.passkey_credential_id.as_ref()
+        && let Err(err) = prf::forget(db, challenge::credential_id_bytes(credential_id)).await
+    {
+        tracing::warn!(error = %err, "could not delete the passkey's PRF row");
+    }
     Ok(ok(json!({ "deleted": id })))
 }

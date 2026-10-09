@@ -275,11 +275,15 @@ const SCRIPT: &str = r##"<script>
 
   function toJson(credential) {
     var response = credential.response;
+    // Redacted: the PRF output ("results") is never sent to the server —
+    // only whether the passkey supports the extension at all.
+    var client = credential.getClientExtensionResults ? credential.getClientExtensionResults() : {};
+    var prf = client && client.prf ? { prf: { enabled: client.prf.enabled === true } } : {};
     return {
       id: credential.id,
       rawId: toBase64Url(credential.rawId),
       type: credential.type,
-      clientExtensionResults: {},
+      clientExtensionResults: prf,
       response: {
         clientDataJSON: toBase64Url(response.clientDataJSON),
         attestationObject: toBase64Url(response.attestationObject),

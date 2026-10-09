@@ -128,6 +128,11 @@ pub(crate) struct AuthData {
     /// database cannot change a byte of the key a signature is checked
     /// against.
     pub cose_key_raw: Option<Vec<u8>>,
+    /// The extension-output map answered `hmac-secret: true` — CTAP2.1's
+    /// signed word that this authenticator can evaluate PRF (issue #756).
+    /// On an assertion the same key carries the encrypted output bytes
+    /// instead, which are ignored, so this stays false there.
+    pub hmac_secret: bool,
 }
 
 impl AuthData {
@@ -151,6 +156,9 @@ pub struct RegisteredCredential {
     /// True when the authenticator sent an attestation statement we store
     /// but do not check. Deliberate, and recorded so it is visible.
     pub attestation_unverified: bool,
+    /// The signed `hmac-secret: true` answer (issue #756): the
+    /// authenticator's own word that it can evaluate PRF.
+    pub hmac_secret: bool,
 }
 
 /// What a successful assertion established.
@@ -175,6 +183,7 @@ pub(crate) fn parse_auth_data(bytes: &[u8]) -> Result<AuthData, WebauthnError> {
     let mut aaguid = None;
     let mut credential_id = None;
     let mut cose_key_raw = None;
+    let mut hmac_secret = false;
 
     if flags & FLAG_ATTESTED_CREDENTIAL_DATA != 0 {
         let rest = &bytes[AUTH_DATA_MIN..];
@@ -209,17 +218,27 @@ pub(crate) fn parse_auth_data(bytes: &[u8]) -> Result<AuthData, WebauthnError> {
         let mut consumed = usize::try_from(cursor.position()).unwrap_or(usize::MAX);
 
         // What follows the key is an extension-output map, when the ED flag
-        // says so. It is read only to find where the record ends: the
-        // outputs themselves are not acted on. Chrome asks for `credProtect`
-        // on a security key whenever a discoverable credential is created
-        // without `userVerification: required` — which is exactly what this
-        // module requests — so treating those bytes as corruption would
-        // refuse every such registration.
+        // says so. Read to find where the record ends, and for one output
+        // only: `hmac-secret: true`, the signed word that the authenticator
+        // can evaluate PRF (issue #756). The rest are not acted on — and on
+        // an assertion the same map carries the encrypted hmac-secret
+        // output bytes, which are ignored and never stored. Chrome asks
+        // for `credProtect` on a security key whenever a discoverable
+        // credential is created without `userVerification: required` —
+        // which is exactly what this module requests — so treating those
+        // bytes as corruption would refuse every such registration.
         if flags & FLAG_EXTENSION_DATA != 0 {
             let mut extensions = Cursor::new(&rest[key_start + consumed..]);
-            ciborium::de::from_reader::<ciborium::Value, _>(&mut extensions)
+            let outputs: ciborium::Value = ciborium::de::from_reader(&mut extensions)
                 .map_err(|err| WebauthnError::AuthenticatorData(format!("extensions: {err}")))?;
             consumed += usize::try_from(extensions.position()).unwrap_or(usize::MAX);
+            hmac_secret = matches!(
+                &outputs,
+                ciborium::Value::Map(entries)
+                if entries.iter().any(|(key, value)| matches!(key,
+                    ciborium::Value::Text(name) if name == "hmac-secret")
+                    && *value == ciborium::Value::Bool(true))
+            );
         }
 
         let trailing = rest.len() - key_start - consumed;
@@ -241,6 +260,7 @@ pub(crate) fn parse_auth_data(bytes: &[u8]) -> Result<AuthData, WebauthnError> {
         aaguid,
         credential_id,
         cose_key_raw,
+        hmac_secret,
     })
 }
 
@@ -410,6 +430,7 @@ pub fn verify_registration(
         user_verified: auth_data.user_verified(),
         attestation_format: attestation.fmt,
         attestation_unverified,
+        hmac_secret: auth_data.hmac_secret,
     })
 }
 
@@ -704,6 +725,7 @@ mod tests {
             aaguid: None,
             credential_id: None,
             cose_key_raw: None,
+            hmac_secret: false,
         };
         let verified = AuthData {
             flags: FLAG_USER_PRESENT | FLAG_USER_VERIFIED,
@@ -714,6 +736,7 @@ mod tests {
                 aaguid: None,
                 credential_id: None,
                 cose_key_raw: None,
+                hmac_secret: false,
             }
         };
         let absent = AuthData {
@@ -723,6 +746,7 @@ mod tests {
             aaguid: None,
             credential_id: None,
             cose_key_raw: None,
+            hmac_secret: false,
         };
 
         assert!(check_presence(&present, UserVerification::Preferred).is_ok());

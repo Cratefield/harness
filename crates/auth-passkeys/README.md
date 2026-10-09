@@ -13,6 +13,7 @@ Passkey registration and login for the auth service
 | `POST /login/verify` | no | Checks the assertion, advances the counter, issues a session |
 | `GET /credentials` | required | The account's passkeys |
 | `DELETE /credentials/{id}` | required | Removes one, unless it is the account's only way in |
+| `GET /passkeys/prf` | required | The account's passkeys with what each ceremony has shown about PRF support, and the salt each one evaluates with |
 | `GET /add?return_to=<url>` | optional | The hosted "Add a passkey" page. Signed out, it offers the sign-in links and comes back here; signed in, it runs the registration ceremony (asking for PRF) and returns to `return_to` with `#cf_passkey=<credential id>&cf_aaguid=<uuid>&cf_prf=1\|0` — or `#cf_passkey_error=cancelled` from its "Not now" link. `return_to` must be an `https` URL on the origin of an active client's registered redirect URI; anything else is dropped, never redirected to |
 
 `POST /login/verify` refuses a cross-site request — `403`,
@@ -37,14 +38,48 @@ wrong.
 
 ## What this module owns in the database
 
-One table: the challenge budget behind `login/options`
+Two tables. The challenge budget behind `login/options`
 (`auth_passkeys_challenge_budget`, migration `0001` here) — the issuance
 cap that keeps the public endpoint from being swept for accounts whether or
-not a rate limiter is wired up. Everything else belongs to `auth-core`,
-which owns `users`, `credentials`, `sessions` and `single_use_tokens`, and
-publishes the typed store API this module writes through, so that schema
-has one definition and one migration history. The `passkey_suspect_at`
-column this module needs was added there, in migration `0004`.
+not a rate limiter is wired up — and one PRF row per passkey
+(`auth_passkeys_prf`, migration `0002` here): its salt and what the
+ceremonies so far have shown about its PRF support. Everything else belongs
+to `auth-core`, which owns `users`, `credentials`, `sessions` and
+`single_use_tokens`, and publishes the typed store API this module writes
+through, so that schema has one definition and one migration history. The
+`passkey_suspect_at` column this module needs was added there, in migration
+`0004`.
+
+## The PRF extension
+
+The `prf` extension (issue #756) lets an app unseal, at sign-in, what it
+sealed at registration — this module asks for it, hands out the salts, and
+records what each ceremony shows about whether a passkey can answer. It
+never accepts the extension's *output*: the output is a hash of this
+service's salt with the authenticator's own secret, useful only on the
+device, so a verify body carrying `clientExtensionResults.prf.results` is
+refused with `400`, `auth/passkey-prf-output-rejected` — before the
+challenge is spent or anything is stored. Clients send a redacted
+`prf: { enabled }` instead. Details and a client walkthrough:
+[`docs/auth/PASSKEYS-PRF.md`](../../docs/auth/PASSKEYS-PRF.md).
+
+- Registration options ask for the extension with an empty input,
+  `publicKey.extensions.prf = {}`; the salts are chosen per assertion, at
+  login. The verify response names the outcome, `prf` and `prfSalt`, so the
+  app that sealed something at registration holds its salt at once (the
+  pair is omitted when the row could not be written; the registration
+  stands, and the salt turns up at the next login).
+- Login options hand one salt per allowed credential: `prf.eval` when
+  exactly one credential may answer, `prf.evalByCredential` — keyed by the
+  base64url credential id — when several, and no extension at all for a
+  discoverable login, where the credential that will answer is unknown.
+- Each passkey's capability is `supported` (the authenticator's signed
+  `hmac-secret: true`, or a client `enabled: true`), `unsupported` (a
+  client `enabled: false` at login), or `unknown` (no signal yet, the
+  honest default). Registration never records `unsupported` — some
+  authenticators report only on the next sign-in — and `supported` is
+  sticky against a later `false`. Rows are created lazily, so a credential
+  registered before the extension existed gets its salt at its next login.
 
 ## Verification
 

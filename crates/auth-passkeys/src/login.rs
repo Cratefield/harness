@@ -31,6 +31,7 @@ use webauthn_rs_proto::{
 
 use crate::ModuleState;
 use crate::challenge::{self, PURPOSE_LOGIN};
+use crate::prf::{self, PrfCapability};
 use crate::request::{
     ceremony_failed, client_hints, internal, limit_challenges, limit_login, ok, ports,
 };
@@ -143,6 +144,17 @@ async fn options(
         internal(&scope)
     })?;
 
+    // One salt per credential the browser may answer with (issue #756):
+    // `eval` for one, `evalByCredential` for several, nothing for a
+    // discoverable login. Injected into the serialised body because the
+    // wire structs have no `prf` field for serde to write.
+    let prf = prf::eval_extension(db, &allow, &crate::iso(clock.now()))
+        .await
+        .map_err(|err| {
+            tracing::error!(error = %err, "could not read a PRF salt");
+            internal(&scope)
+        })?;
+
     let response = RequestChallengeResponse {
         public_key: PublicKeyCredentialRequestOptions {
             challenge: issued.into(),
@@ -158,7 +170,13 @@ async fn options(
         },
         mediation: None,
     };
-    Ok(ok(serde_json::to_value(response).unwrap_or_default()))
+    let mut body = serde_json::to_value(response).unwrap_or_default();
+    if let Some(prf) = prf
+        && let Some(public_key) = body.get_mut("publicKey")
+    {
+        public_key["extensions"] = prf;
+    }
+    Ok(ok(body))
 }
 
 #[derive(Debug, Deserialize)]
@@ -338,8 +356,10 @@ async fn verify(
     if let Some(limited) = limit_login(&state, &headers).await {
         return Ok(limited);
     }
-    let body: VerifyBody = serde_json::from_slice(&raw)
-        .map_err(|err| Problem::validation_failed(format!("body is not a credential: {err}")))?;
+    // Read as a value first, because the client extension results carry a
+    // field the typed wire structs have no place for; a PRF result is
+    // refused there, before anything else (issue #756).
+    let (client_prf, body): (_, VerifyBody) = prf::parse_body(&raw, &scope)?;
     let rp = state.rp()?;
     let (db, clock, id_gen) = ports(&state)?;
 
@@ -394,6 +414,21 @@ async fn verify(
     }
     if let Err(err) = touch_credential_used(db, &stored.id, &now).await {
         tracing::warn!(error = %err, "could not record the credential's last use");
+    }
+
+    // What the redacted client report said about PRF (issue #756), with
+    // `supported` sticky against a later `false`.
+    let capability = PrfCapability::from_login_report(client_prf.enabled);
+    if let Some(credential_id) = stored.passkey_credential_id.as_ref()
+        && let Err(err) = prf::record(
+            db,
+            challenge::credential_id_bytes(credential_id),
+            capability,
+            &now,
+        )
+        .await
+    {
+        tracing::warn!(error = %err, "could not record the PRF capability");
     }
 
     let session = start_session(
