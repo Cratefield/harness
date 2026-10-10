@@ -21,9 +21,10 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use cratefield_adapter_sqlite::SqliteDatabase;
 use cratefield_core::{
-    Budget, BudgetRouter, BudgetedHttpClient, Clock, DEFAULT_ALERT_TABLE, DEFAULT_BUCKET_TABLE,
-    DEFAULT_QUOTA_TABLE, Database, Defer, EVENT_QUOTA_EXHAUSTED, EVENT_QUOTA_WARNING, EventBus,
-    HttpClient, HttpError, Idempotent, RetryPolicy, Statement, Usage,
+    Budget, BudgetRouter, BudgetedHttpClient, ByteStream, Clock, DEFAULT_ALERT_TABLE,
+    DEFAULT_BUCKET_TABLE, DEFAULT_QUOTA_TABLE, Database, Defer, EVENT_QUOTA_EXHAUSTED,
+    EVENT_QUOTA_WARNING, EventBus, HttpClient, HttpError, Idempotent, RetryPolicy, Statement,
+    Usage,
 };
 use futures_core::future::BoxFuture;
 
@@ -976,4 +977,228 @@ async fn a_clock_ahead_stamp_reports_the_true_refill_wait_not_a_free_one() {
     let (tokens, updated_ms) = fixture.bucket_row("dexscreener").await;
     assert_eq!(tokens, 0.0, "the refusal overspends nothing");
     assert_eq!(updated_ms, 3_000, "a refused spend does not move the row");
+}
+
+/// The scripted *streaming* inner client: records every request and pops
+/// one outcome per `send_streaming`. The body answers in chunks — a stream,
+/// not one buffered buffer — so the budget client's forwarding is exercised
+/// against the shape it claims to support.
+struct StreamingClient {
+    sent: Log<Vec<http::Request<Bytes>>>,
+    script: Log<Vec<Result<http::Response<ByteStream>, HttpError>>>,
+}
+
+impl StreamingClient {
+    fn new() -> Self {
+        Self {
+            sent: Log::new(Vec::new()),
+            script: Log::new(Vec::new()),
+        }
+    }
+
+    /// Queues one streaming answer: `chunks` are delivered in order, then
+    /// the body ends.
+    fn push(&self, chunks: &[&str]) {
+        // Copied up front: the body is `'static`, the slice is not.
+        let owned: Vec<Bytes> = chunks
+            .iter()
+            .map(|chunk| Bytes::copy_from_slice(chunk.as_bytes()))
+            .collect();
+        let body: ByteStream = Box::pin(futures_util::stream::iter(
+            owned.into_iter().map(Ok::<_, HttpError>),
+        ));
+        self.script
+            .lock()
+            .expect("script lock")
+            .push(Ok(http::Response::new(body)));
+    }
+
+    /// Queues one head-only answer: a status with no body to speak of —
+    /// the throttle a retry sees before any body exists.
+    fn push_status(&self, status: http::StatusCode) {
+        let body: ByteStream = Box::pin(futures_util::stream::empty());
+        self.script
+            .lock()
+            .expect("script lock")
+            .push(Ok(http::Response::builder()
+                .status(status)
+                .body(body)
+                .expect("status-only response")));
+    }
+
+    fn sends(&self) -> usize {
+        self.sent.lock().expect("sent lock").len()
+    }
+}
+
+#[async_trait]
+impl HttpClient for StreamingClient {
+    async fn send(
+        &self,
+        _request: http::Request<Bytes>,
+    ) -> Result<http::Response<Bytes>, HttpError> {
+        panic!("the streaming fixture answers send_streaming only");
+    }
+
+    async fn send_streaming(
+        &self,
+        request: http::Request<Bytes>,
+    ) -> Result<http::Response<ByteStream>, HttpError> {
+        self.sent.lock().expect("sent lock").push(request);
+        let mut script = self.script.lock().expect("script lock");
+        if script.is_empty() {
+            Ok(http::Response::new(Box::pin(futures_util::stream::empty())))
+        } else {
+            script.remove(0)
+        }
+    }
+}
+
+/// Everything one streaming test needs: the same wiring `Fixture` gives a
+/// buffered send, over the streaming inner client, with the instant
+/// sleeper so a paced retry advances the hand-stepped clock.
+struct StreamingFixture {
+    db: Arc<SqliteDatabase>,
+    inner: Arc<StreamingClient>,
+    client: Arc<BudgetedHttpClient>,
+}
+
+impl StreamingFixture {
+    fn new(budget: &Budget, policy: RetryPolicy) -> Self {
+        let db = Arc::new(SqliteDatabase::in_memory().expect("in-memory sqlite opens"));
+        let clock = Arc::new(StepClock(Log::new(1_000)));
+        let inner = Arc::new(StreamingClient::new());
+        let router: BudgetRouter = {
+            let budget = budget.clone();
+            Arc::new(move |_request| Some(budget.clone()))
+        };
+        let sleeper_clock = Arc::clone(&clock);
+        let client = BudgetedHttpClient::new(
+            Arc::clone(&inner) as Arc<dyn HttpClient>,
+            clock.clone(),
+            db.clone(),
+            router,
+        )
+        .with_retry(policy)
+        .with_sleeper(Arc::new(move |after| {
+            sleeper_clock.advance(i64::try_from(after.as_millis()).unwrap_or(i64::MAX));
+            Box::pin(std::future::ready(()))
+        }));
+        Self {
+            db,
+            inner,
+            client: Arc::new(client),
+        }
+    }
+
+    fn sends(&self) -> usize {
+        self.inner.sends()
+    }
+
+    /// The stored bucket row, through the same SQL `Fixture` reads with.
+    async fn bucket_row(&self, key: &str) -> (f64, i64) {
+        let rows = self
+            .db
+            .query(&Statement::with_values(
+                format!("SELECT tokens, updated_ms FROM {DEFAULT_BUCKET_TABLE} WHERE bucket = ?"),
+                vec![key.to_owned().into()],
+            ))
+            .await
+            .expect("bucket row reads");
+        let row = rows.first().expect("a row exists");
+        (
+            row.get::<f64>("tokens").expect("tokens"),
+            row.get::<i64>("updated_ms").expect("updated_ms"),
+        )
+    }
+}
+
+/// Pulls a streaming body to its end, in order.
+async fn drain(body: &mut ByteStream) -> Vec<Result<Bytes, HttpError>> {
+    use futures_util::StreamExt as _;
+
+    let mut items = Vec::new();
+    while let Some(item) = body.next().await {
+        items.push(item);
+    }
+    items
+}
+
+#[pollster::test]
+async fn a_streaming_send_spends_the_bucket_and_forwards_the_body() {
+    let fixture = StreamingFixture::new(&budget(10.0, 0.0), RetryPolicy::default());
+    create_tables(&*fixture.db).await;
+    fixture
+        .inner
+        .push(&["event: a\ndata: one\n\n", "data: two\n\n"]);
+    let mut response = fixture
+        .client
+        .send_streaming(get_request())
+        .await
+        .expect("a fresh bucket carries the stream");
+    assert_eq!(response.status(), http::StatusCode::OK);
+    let items = drain(response.body_mut()).await;
+    assert_eq!(items.len(), 2, "both chunks arrive, unbuffered: {items:?}");
+    assert!(items.iter().all(Result::is_ok), "no errors: {items:?}");
+    assert_eq!(fixture.sends(), 1, "one exchange, one inner send");
+    let (tokens, updated_ms) = fixture.bucket_row("dexscreener").await;
+    assert_eq!(tokens, 9.0, "a stream costs its budget like a send");
+    assert_eq!(updated_ms, 1_000, "the clock's reading when it was spent");
+}
+
+#[pollster::test]
+async fn a_dry_bucket_refuses_a_stream_without_moving_the_row() {
+    let fixture = StreamingFixture::new(
+        &budget(1.0, 1.0),
+        RetryPolicy::default().with_max_delay(Duration::from_millis(500)),
+    );
+    create_tables(&*fixture.db).await;
+    fixture.inner.push(&["data: one\n\n"]);
+    fixture
+        .client
+        .send_streaming(get_request())
+        .await
+        .expect("the first send spends the only token");
+    let err = match fixture.client.send_streaming(get_request()).await {
+        // No `Debug` on a streaming response, so `expect_err` cannot name
+        // this arm — a `match` refuses it just as loudly.
+        Ok(response) => {
+            drop(response);
+            panic!("a dry bucket refuses a stream like a send");
+        }
+        Err(err) => err,
+    };
+    assert!(
+        matches!(&err, HttpError::BudgetExhausted { what, retry_after }
+            if what == "dexscreener" && *retry_after == Duration::from_secs(1)),
+        "one token at 1/s: got {err}"
+    );
+    assert_eq!(fixture.sends(), 1, "the refused stream never went out");
+    let (tokens, updated_ms) = fixture.bucket_row("dexscreener").await;
+    assert_eq!(tokens, 0.0, "the refusal overspends nothing");
+    assert_eq!(updated_ms, 1_000, "the refusal does not move the row");
+}
+
+#[pollster::test]
+async fn a_streaming_retry_resends_the_head_not_the_body() {
+    let fixture = StreamingFixture::new(
+        &budget(10.0, 0.0),
+        RetryPolicy::default().with_max_retries(1),
+    );
+    create_tables(&*fixture.db).await;
+    fixture
+        .inner
+        .push_status(http::StatusCode::SERVICE_UNAVAILABLE);
+    fixture.inner.push(&["event: a\ndata: late\n\n"]);
+    let mut response = fixture
+        .client
+        .send_streaming(get_request())
+        .await
+        .expect("the retry lands on the scripted body");
+    let items = drain(response.body_mut()).await;
+    assert_eq!(items.len(), 1, "only the second answer had a body");
+    assert_eq!(fixture.sends(), 2, "the head went out twice");
+    // One spend, not two: the throttle never charged the bucket.
+    let (tokens, _) = fixture.bucket_row("dexscreener").await;
+    assert_eq!(tokens, 9.0, "one successful exchange costs one token");
 }

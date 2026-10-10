@@ -112,7 +112,8 @@ exercises end to end.
 
 ## Not in the port
 
-No streaming, for the same reason `TextModel` has none. No repair budget a
+Streaming is on the port itself (issue #859), but a structured-output call
+stays buffered: validating the answer needs it whole. No repair budget a
 caller can raise: one retry is the guarantee, and a caller that wants another
 attempt loops `complete_json` itself. And no schema migration — the validator
 subset is the contract, and a schema outside it is a caller bug to fix, not a

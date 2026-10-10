@@ -13,6 +13,13 @@
 //! that reports no [`Capability::Tools`] (resp. [`Capability::Images`]) is
 //! refused before the first call, not sent with them silently dropped.
 //!
+//! [`run_tool_loop_stream`] is the streaming counterpart (issue #859): the
+//! same gates, budgets and errors, but each step calls
+//! [`TextModel::stream`] and its [`TextDelta`]s come out as they arrive.
+//! Both loops share the pre-flight gates and the per-step settlement — the
+//! usage bookkeeping, the answer-or-run decision, the transcript's turns —
+//! so they cannot drift.
+//!
 //! **The schema validator is deliberately small.** JSON Schema 2020-12 is
 //! enormous and no validator crate is in this workspace's tree. Tool
 //! argument schemas use a narrow subset, so this module implements that
@@ -28,11 +35,15 @@
 //! asked, on exactly the subset a tool argument schema is held to.
 
 use async_trait::async_trait;
+use futures_util::SinkExt as _;
+use futures_util::StreamExt as _;
 use serde_json::{Map, Value};
 
 use crate::ports::{
-    Capability, Completion, Prompt, TextModel, TextModelError, ToolCall, ToolResult, ToolSpec, Turn,
+    Capability, Completion, CompletionBuilder, Prompt, TextDelta, TextModel, TextModelError,
+    ToolCall, ToolResult, ToolSpec, Turn,
 };
+use crate::stream::{BoxStream, pump};
 
 /// Runs one tool call and reports its result (issue #665).
 ///
@@ -215,6 +226,372 @@ pub async fn run_tool_loop(
     executor: &dyn ToolExecutor,
     budget: ToolBudget,
 ) -> Result<ToolLoopOutcome, ToolLoopError> {
+    preflight(model, &prompt)?;
+
+    let mut steps: Vec<StepUsage> = Vec::new();
+    let mut step_count: u32 = 0;
+    let mut used_tokens: u64 = 0;
+
+    loop {
+        // A budget of N means at most N calls. The check is here, before
+        // the call, so a budget of 0 makes none — not one — and even a
+        // model that would keep asking for tools never reaches an N+1th.
+        if step_count >= budget.max_steps {
+            return Err(ToolLoopError::StepBudgetExhausted { steps });
+        }
+
+        let completion = model
+            .complete(&prompt)
+            .await
+            .map_err(ToolLoopError::Model)?;
+        step_count += 1;
+        match settle_step(
+            completion,
+            &mut prompt.messages,
+            &mut steps,
+            &mut used_tokens,
+            &budget,
+        )
+        .after
+        {
+            AfterStep::Final(outcome) => return Ok(outcome),
+            AfterStep::Exhausted(error) => return Err(error),
+            AfterStep::Calls(calls) => {
+                let mut results = Vec::with_capacity(calls.len());
+                for call in &calls {
+                    results.push(execute_call(&prompt.tools, executor, call).await);
+                }
+                prompt.messages.push(Turn::tool_results(results));
+            }
+        }
+    }
+}
+
+/// One thing a streamed tool loop did (issue #859): the item type of
+/// [`run_tool_loop_stream`], produced in the order the work happened.
+/// Within one step: every [`TextDelta`] as it arrived, then one result per
+/// executed call, then the step's [`StepUsage`] — the same bookkeeping, in
+/// the same order, the buffered loop records into
+/// [`ToolLoopOutcome::steps`]. A loop that finishes ends with exactly one
+/// [`Self::Done`]; one that fails ends with the `Err` instead, and no
+/// `Done` follows an error.
+///
+/// `#[non_exhaustive]`: the loop is new and what it can report will grow.
+#[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
+pub enum ToolLoopEvent {
+    /// A [`TextDelta`] straight off the model's stream, forwarded the
+    /// moment it arrived — including [`TextDelta::Reasoning`], which the
+    /// completion rebuilt for the loop's own decisions does not carry.
+    Delta {
+        /// The step the delta belongs to: 0-based, the position its
+        /// [`StepUsage`] takes in [`ToolLoopOutcome::steps`].
+        step: usize,
+        /// The delta itself, exactly as the model yielded it.
+        delta: TextDelta,
+    },
+    /// An executed tool call and the result the model will be shown — the
+    /// same [`ToolResult`] the buffered loop feeds back, a tool-level
+    /// failure included. Emitted after the call ran, before the next one
+    /// starts.
+    ToolResult {
+        /// The step whose completion asked for the call.
+        step: usize,
+        /// The call as the model asked for it.
+        call: ToolCall,
+        /// What running it produced, or the error fed back instead.
+        result: ToolResult,
+    },
+    /// A model call finished and this is what it cost — the same entry the
+    /// buffered loop appends to [`ToolLoopOutcome::steps`]. One per model
+    /// call, before that call's tools run.
+    StepFinished {
+        /// The step that finished, 0-based as in [`Self::Delta`].
+        step: usize,
+        /// The usage the call reported.
+        usage: StepUsage,
+    },
+    /// The loop is over: the same outcome [`run_tool_loop`] returns for
+    /// the same run. Always the stream's last item on success.
+    Done(ToolLoopOutcome),
+}
+
+/// Where a streamed loop reports its events: the pump channel's sender. A
+/// failed send means the consumer dropped the stream — the loop's own
+/// future is going away with it — so every send here stops the loop when
+/// it fails.
+type EventSender = futures_channel::mpsc::Sender<Result<ToolLoopEvent, ToolLoopError>>;
+
+/// Streams `prompt` to completion through `model`, running any tool calls
+/// with `executor` within `budget` (issue #859) — the streaming
+/// counterpart of [`run_tool_loop`]. The gates before the first call, the
+/// budgets, and the item that ends the stream are the buffered loop's own:
+/// a [`ToolLoopEvent::Done`] carrying the same [`ToolLoopOutcome`] the
+/// buffered loop would have returned, or an `Err` carrying the same
+/// [`ToolLoopError`]. What differs is the plumbing. Each step calls
+/// [`TextModel::stream`] instead of [`TextModel::complete`], and the work
+/// comes out as [`ToolLoopEvent`]s as it happens: every [`TextDelta`] the
+/// moment it arrives (through a bounded channel, so a slow consumer
+/// backpressures the model rather than queueing it), one
+/// [`ToolLoopEvent::ToolResult`] per executed call, and the step's
+/// [`StepUsage`] once its usage is known. The step's [`Completion`] is
+/// rebuilt from its deltas with [`CompletionBuilder`], and the decision
+/// both loops then make — usage bookkeeping, answer-or-run, the turns
+/// appended to the transcript — is one shared function, so they cannot
+/// drift.
+///
+/// Structured output is the one behavioural difference, and it is the
+/// port's own: the streamed outcome's [`Completion::json`] is `None` even
+/// for a prompt carrying [`Prompt::json_schema`], because the parsed value
+/// is a buffered `complete` feature — [`CompletionBuilder`] documents why
+/// a relayed stream cannot promise it. `text` holds the same answer
+/// either loop saw, and nothing else about the outcome differs; a
+/// streaming caller wanting the value parses and validates the
+/// reassembled text against the prompt's schema itself, exactly as the
+/// `stream` half of the port tells its callers.
+///
+/// # Cancellation
+///
+/// Dropping the stream drops the loop and with it the in-flight model
+/// stream — which aborts the upstream exchange, the contract
+/// [`TextModel::stream`] carries — so no further tool runs and no further
+/// model call is made.
+///
+/// # Errors
+///
+/// The same cases [`run_tool_loop`] documents, reported as the stream's
+/// last item instead of a return value: [`ToolLoopError::Model`] for a
+/// refused prompt or a model that failed — including one that fails
+/// mid-stream, where the step's earlier deltas have already been forwarded
+/// and the error is the one a failed `complete` would have produced —
+/// [`ToolLoopError::InvalidToolSchema`] before the first call, and the two
+/// budget errors once spent. After an error item the stream ends.
+pub fn run_tool_loop_stream<'a>(
+    model: &'a dyn TextModel,
+    prompt: Prompt,
+    executor: &'a dyn ToolExecutor,
+    budget: ToolBudget,
+) -> BoxStream<'a, Result<ToolLoopEvent, ToolLoopError>> {
+    // The pump merges the loop's future — which borrows the model and the
+    // executor — into the stream it reports through, so the loop is polled
+    // only when the output is, and dropping the output drops the loop,
+    // which drops the in-flight model stream with it.
+    pump(move |tx| stream_loop(model, prompt, executor, budget, tx))
+}
+
+/// The streamed loop's body: the producer future [`pump`] merges into its
+/// output, driven only when the consumer polls and dropped with the
+/// consumer's stream. Every report goes through `tx`.
+async fn stream_loop(
+    model: &dyn TextModel,
+    mut prompt: Prompt,
+    executor: &dyn ToolExecutor,
+    budget: ToolBudget,
+    mut tx: EventSender,
+) {
+    // The gates run before anything is streamed, exactly as the buffered
+    // loop runs them before anything is completed.
+    if let Err(error) = preflight(model, &prompt) {
+        let _ = tx.send(Err(error)).await;
+        return;
+    }
+
+    let mut steps: Vec<StepUsage> = Vec::new();
+    let mut step_count: u32 = 0;
+    let mut used_tokens: u64 = 0;
+
+    loop {
+        // The buffered loop's step-budget rule, checked before the call: a
+        // budget of 0 streams nothing at all.
+        if step_count >= budget.max_steps {
+            let _ = tx
+                .send(Err(ToolLoopError::StepBudgetExhausted { steps }))
+                .await;
+            return;
+        }
+        let step = usize::try_from(step_count).unwrap_or(usize::MAX);
+        step_count += 1;
+
+        let Some(completion) = stream_step(model, &prompt, step, &mut tx).await else {
+            // The step ended in a model error, or the consumer went away —
+            // either has already been reported, and nothing more runs.
+            return;
+        };
+
+        let settled = settle_step(
+            completion,
+            &mut prompt.messages,
+            &mut steps,
+            &mut used_tokens,
+            &budget,
+        );
+        if tx
+            .send(Ok(ToolLoopEvent::StepFinished {
+                step,
+                usage: settled.usage,
+            }))
+            .await
+            .is_err()
+        {
+            return;
+        }
+        match settled.after {
+            AfterStep::Final(outcome) => {
+                let _ = tx.send(Ok(ToolLoopEvent::Done(outcome))).await;
+                return;
+            }
+            AfterStep::Exhausted(error) => {
+                let _ = tx.send(Err(error)).await;
+                return;
+            }
+            AfterStep::Calls(calls) => {
+                let mut results = Vec::with_capacity(calls.len());
+                for call in &calls {
+                    let result = execute_call(&prompt.tools, executor, call).await;
+                    results.push(result.clone());
+                    if tx
+                        .send(Ok(ToolLoopEvent::ToolResult {
+                            step,
+                            call: call.clone(),
+                            result,
+                        }))
+                        .await
+                        .is_err()
+                    {
+                        return;
+                    }
+                }
+                prompt.messages.push(Turn::tool_results(results));
+            }
+        }
+    }
+}
+
+/// Streams one step: forwards every [`TextDelta`] the model yields the
+/// moment it arrives, tagged with `step`, and folds them into the
+/// [`Completion`] they add up to — the value the buffered loop would have
+/// received from one `complete`. `None` when the loop must stop: a model
+/// error (reported as the same [`ToolLoopError::Model`] a failed
+/// `complete` would have produced, as the stream's last item) or a
+/// consumer that dropped the stream.
+async fn stream_step(
+    model: &dyn TextModel,
+    prompt: &Prompt,
+    step: usize,
+    tx: &mut EventSender,
+) -> Option<Completion> {
+    let mut builder = CompletionBuilder::default();
+    let mut deltas = model.stream(prompt);
+    while let Some(delta) = deltas.next().await {
+        match delta {
+            Ok(delta) => {
+                builder.push(&delta);
+                if tx
+                    .send(Ok(ToolLoopEvent::Delta { step, delta }))
+                    .await
+                    .is_err()
+                {
+                    return None;
+                }
+            }
+            Err(error) => {
+                let _ = tx.send(Err(ToolLoopError::Model(error))).await;
+                return None;
+            }
+        }
+    }
+    Some(builder.finish())
+}
+
+/// What a loop goes on to do after one step's completion, decided once for
+/// [`run_tool_loop`] and [`run_tool_loop_stream`] so the two cannot
+/// disagree about when a loop is over: the answer arrived, the token
+/// budget stopped it, or the step's calls are to be run.
+enum AfterStep {
+    /// The completion asked for no tool: the loop is over, and this is the
+    /// outcome both loops end with.
+    Final(ToolLoopOutcome),
+    /// The completion still asks for tools and the cumulative tokens
+    /// crossed the budget: the loop is over with this error, and the
+    /// step's calls were never run.
+    Exhausted(ToolLoopError),
+    /// The completion asks for `calls`, the budget allows running them,
+    /// and the assistant turn asking for them is already appended: run
+    /// them and feed the results back as one user turn.
+    Calls(Vec<ToolCall>),
+}
+
+/// [`AfterStep`] plus the usage it cost, so the streamed loop can report
+/// the step without re-reading a completion it has handed over.
+struct Settled {
+    usage: StepUsage,
+    after: AfterStep,
+}
+
+/// Records one completed model call and decides what the loop does next:
+/// appends the step's [`StepUsage`] to `steps`, updates `used_tokens`,
+/// returns the final answer whatever it cost, stops before any executor
+/// runs once the token budget is gone, and otherwise appends the assistant
+/// turn and hands back the calls to run.
+fn settle_step(
+    completion: Completion,
+    messages: &mut Vec<Turn>,
+    steps: &mut Vec<StepUsage>,
+    used_tokens: &mut u64,
+    budget: &ToolBudget,
+) -> Settled {
+    let usage = step_usage(&completion);
+    steps.push(usage.clone());
+    *used_tokens = used_tokens.saturating_add(
+        completion
+            .input_tokens
+            .saturating_add(completion.output_tokens),
+    );
+
+    // An answer with no tool calls is the loop's end, and it is returned
+    // whatever it cost: it has already been paid for, and discarding it
+    // would spend the tokens and hand back nothing. The budget is a
+    // ceiling on work yet to do, not on the last step.
+    if completion.tool_calls.is_empty() {
+        return Settled {
+            usage,
+            after: AfterStep::Final(ToolLoopOutcome {
+                completion,
+                messages: std::mem::take(messages),
+                steps: std::mem::take(steps),
+            }),
+        };
+    }
+
+    // Past the ceiling with tools still to run: stop here, before the
+    // executor is asked for anything, rather than spend more on a loop the
+    // caller capped.
+    if let Some(limit) = budget.max_total_tokens
+        && *used_tokens > limit
+    {
+        return Settled {
+            usage,
+            after: AfterStep::Exhausted(ToolLoopError::TokenBudgetExhausted {
+                used: *used_tokens,
+                steps: std::mem::take(steps),
+            }),
+        };
+    }
+
+    let calls = completion.tool_calls;
+    messages.push(Turn::assistant_tool_calls(completion.text, calls.clone()));
+    Settled {
+        usage,
+        after: AfterStep::Calls(calls),
+    }
+}
+
+/// The gates both loops run before the first model call, in the order the
+/// buffered loop has always run them: an over-limit image prompt, a
+/// tools- or image-bearing prompt to a model that cannot carry them, then
+/// the fail-closed schema walk. Shared so the streamed loop cannot open
+/// with weaker checks.
+fn preflight(model: &dyn TextModel, prompt: &Prompt) -> Result<(), ToolLoopError> {
     // An over-limit image prompt is refused before the first call, the same
     // rule the router applies.
     prompt.check_images().map_err(ToolLoopError::Model)?;
@@ -238,69 +615,17 @@ pub async fn run_tool_loop(
     for tool in &prompt.tools {
         validate_tool_schema(&tool.name, &tool.parameters)?;
     }
+    Ok(())
+}
 
-    let mut steps: Vec<StepUsage> = Vec::new();
-    let mut step_count: u32 = 0;
-    let mut used_tokens: u64 = 0;
-
-    loop {
-        // A budget of N means at most N calls. The check is here, before
-        // the call, so a budget of 0 makes none — not one — and even a
-        // model that would keep asking for tools never reaches an N+1th.
-        if step_count >= budget.max_steps {
-            return Err(ToolLoopError::StepBudgetExhausted { steps });
-        }
-
-        let completion = model
-            .complete(&prompt)
-            .await
-            .map_err(ToolLoopError::Model)?;
-        step_count += 1;
-        steps.push(StepUsage {
-            input_tokens: completion.input_tokens,
-            output_tokens: completion.output_tokens,
-            cached_input_tokens: completion.cached_input_tokens,
-            tool_calls: completion.tool_calls.len(),
-        });
-        used_tokens = used_tokens.saturating_add(
-            completion
-                .input_tokens
-                .saturating_add(completion.output_tokens),
-        );
-
-        // An answer with no tool calls is the loop's end, and it is
-        // returned whatever it cost: it has already been paid for, and
-        // discarding it would spend the tokens and hand back nothing. The
-        // budget is a ceiling on work yet to do, not on the last step.
-        if completion.tool_calls.is_empty() {
-            return Ok(ToolLoopOutcome {
-                completion,
-                messages: prompt.messages,
-                steps,
-            });
-        }
-
-        // Past the ceiling with tools still to run: stop here, before the
-        // executor is asked for anything, rather than spend more on a loop
-        // the caller capped.
-        if let Some(limit) = budget.max_total_tokens
-            && used_tokens > limit
-        {
-            return Err(ToolLoopError::TokenBudgetExhausted {
-                used: used_tokens,
-                steps,
-            });
-        }
-
-        let mut results = Vec::with_capacity(completion.tool_calls.len());
-        for call in &completion.tool_calls {
-            results.push(execute_call(&prompt.tools, executor, call).await);
-        }
-        prompt.messages.push(Turn::assistant_tool_calls(
-            completion.text,
-            completion.tool_calls,
-        ));
-        prompt.messages.push(Turn::tool_results(results));
+/// The [`StepUsage`] one completed model call costs, read off its
+/// completion — the same fields whichever way the completion arrived.
+fn step_usage(completion: &Completion) -> StepUsage {
+    StepUsage {
+        input_tokens: completion.input_tokens,
+        output_tokens: completion.output_tokens,
+        cached_input_tokens: completion.cached_input_tokens,
+        tool_calls: completion.tool_calls.len(),
     }
 }
 

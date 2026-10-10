@@ -109,7 +109,8 @@ use serde_json::json;
 
 use crate::events::EventBus;
 use crate::ports::{
-    Clock, Database, Defer, HttpClient, HttpError, IdGen, NoopDefer, Row, Statement, UlidIdGen,
+    ByteStream, Clock, Database, Defer, HttpClient, HttpError, IdGen, NoopDefer, Row, Statement,
+    UlidIdGen,
 };
 use crate::retry_after;
 use crate::scope::Scope;
@@ -292,6 +293,11 @@ pub type Sleeper = Arc<dyn Fn(Duration) -> Pin<Box<dyn Future<Output = ()> + Sen
 /// [`BoundedHttpClient`](crate::ports::BoundedHttpClient) stays the
 /// innermost hop, so the port's own bounds
 /// still apply underneath.
+///
+/// The streaming twin ([`HttpClient::send_streaming`]) spends the same
+/// budget the same way before the head, then hands the body through
+/// untouched: the retry loop covers the head only, because a body that
+/// has started arriving can never be replayed.
 pub struct BudgetedHttpClient {
     inner: Arc<dyn HttpClient>,
     clock: Arc<dyn Clock>,
@@ -613,21 +619,28 @@ impl BudgetedHttpClient {
     }
 
     /// The send-and-retry loop: pacing and the quota have already admitted
-    /// this request, so what is left is the exchange itself. The original
-    /// request is kept and cloned per attempt — `Bytes` clones are
-    /// refcounted, and the extensions (the [`Idempotent`] marker included)
-    /// ride along — because the body moves into the inner send.
-    async fn exchange(
+    /// this request, so what is left is the exchange itself. `send_one`
+    /// produces one attempt's future — the buffered `send` retries the
+    /// whole exchange, `send_streaming` retries only the **head** (a body
+    /// that has started arriving can never be replayed, so once a
+    /// streamed response is in hand it is returned as-is). Each attempt
+    /// clones what it consumes — `Bytes` clones are refcounted, and the
+    /// extensions (the [`Idempotent`] marker included) ride along.
+    async fn exchange_with<B, F, Fut>(
         &self,
-        request: http::Request<Bytes>,
         idempotent: bool,
-    ) -> Result<http::Response<Bytes>, HttpError> {
+        send_one: F,
+    ) -> Result<http::Response<B>, HttpError>
+    where
+        F: Fn() -> Fut,
+        Fut: Future<Output = Result<http::Response<B>, HttpError>>,
+    {
         let policy = self.retry;
         let mut waited = Duration::ZERO;
         let mut retries_left = policy.max_retries();
         let mut attempt = 0_u32;
         loop {
-            let outcome = self.inner.send(request.clone()).await;
+            let outcome = send_one().await;
             match outcome {
                 Ok(response) => {
                     let throttled = matches!(response.status().as_u16(), 429 | 503);
@@ -678,7 +691,27 @@ impl HttpClient for BudgetedHttpClient {
         let idempotent = request_is_idempotent(&request);
         self.acquire(&budget).await?;
         self.spend_daily_quota(&budget).await?;
-        self.exchange(request, idempotent).await
+        self.exchange_with(idempotent, || self.inner.send(request.clone()))
+            .await
+    }
+
+    async fn send_streaming(
+        &self,
+        request: http::Request<Bytes>,
+    ) -> Result<http::Response<ByteStream>, HttpError> {
+        let Some(budget) = (self.router)(&request) else {
+            // Unrouted requests are not free — they are simply not ours to
+            // govern. The inner client's own bounds still apply.
+            return self.inner.send_streaming(request).await;
+        };
+        let idempotent = request_is_idempotent(&request);
+        self.acquire(&budget).await?;
+        self.spend_daily_quota(&budget).await?;
+        // The budget is spent once, up front, exactly as `send` spends it;
+        // the retry loop covers the head only, so a stream never replays
+        // bytes that are already in flight.
+        self.exchange_with(idempotent, || self.inner.send_streaming(request.clone()))
+            .await
     }
 }
 

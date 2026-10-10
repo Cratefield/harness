@@ -33,6 +33,11 @@ axum = { workspace = true, features = ["tokio", "http1"] }
 http = { workspace = true }
 bytes = { workspace = true }
 futures-core = { workspace = true }
+# `stream::unfold` behind the streamed response body (issue #859): the
+# unfold state owns the `reqwest` response and the concurrency permit, and
+# both drop with the body — the cancellation contract. wasm-safe, and
+# already in every runtime's tree through core's `BoundedHttpClient`.
+futures-util = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
@@ -87,6 +92,13 @@ tracing-subscriber = { version = "0.3.23", default-features = false, features = 
 
 [dev-dependencies]
 cratefield-adapter-sqlite = { path = "../adapter-sqlite" }
+# End-to-end streamed text (issue #859): the real adapters behind a real
+# route, over a mock upstream the tests bind on loopback. Path-only (never
+# `workspace = true` — see the rule comment at the root `Cargo.toml`):
+# `cargo publish` strips a path-only dev-dependency from the packaged
+# manifest, the same way the `adapter-sqlite` one above travels.
+cratefield-adapter-anthropic = { path = "../adapter-anthropic" }
+cratefield-adapter-openai-compatible = { path = "../adapter-openai-compatible" }
 # `full_fake_ports`, for proving `clone_ports` carries every port.
 cratefield-testing = { path = "../testing" }
 tokio = { workspace = true, features = ["test-util"] }

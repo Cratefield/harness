@@ -26,6 +26,11 @@ futures-core = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tracing = { workspace = true }
+# The streaming half of the TextModel port (issue #859): the delta stream
+# is composed from core's `sse_events` with futures' stream adapters — the
+# crate core already uses, so nothing new enters the tree. Purely
+# combinators, no executor: wasm-safe like the rest of the crate.
+futures-util = { workspace = true }
 # Nothing here draws randomness, but `cratefield-core`'s `ulid` reaches
 # `getrandom` through `rand`, and picking `getrandom`'s `wasm_js` backend is
 # the final crate's job in this workspace, so `cargo build --target
@@ -42,3 +47,7 @@ getrandom = { workspace = true }
 cratefield-testing = { path = "../testing" }
 pollster = { workspace = true }
 time = { workspace = true }
+# The streaming tests drip body chunks through an mpsc channel the test
+# holds the sender half of, which is what makes "a delta before the whole
+# answer exists" and "dropping the stream drops the body" observable.
+futures-channel = { workspace = true }

@@ -36,6 +36,7 @@ use axum::http::request::Parts;
 use axum::response::{IntoResponse, Response};
 use bytes::Bytes;
 use futures_core::Stream;
+use futures_util::StreamExt;
 
 use crate::problem::Problem;
 use crate::scope::Scope;
@@ -63,6 +64,43 @@ fn slot(inner: Option<BoxStream<'static, Result<Bytes, StreamError>>>) -> Slot {
 /// as `futures_util::stream::BoxStream`, written here because core depends
 /// on `futures-core` only.
 pub type BoxStream<'a, T> = Pin<Box<dyn Stream<Item = T> + Send + 'a>>;
+
+/// How many items `pump`'s channel buffers: deep enough that a producer
+/// running ahead of its consumer does not stall on every item, small
+/// enough that an unread stream cannot queue an unbounded pipeline in
+/// memory. The producer awaits the send past this point, which is the
+/// backpressure that ties its pace to the reader's.
+const PUMP_BUFFER: usize = 16;
+
+/// Bridges a producer into a stream of its own lifetime without spawning a
+/// task (issue #859): an owning producer becomes a `'static` stream — the
+/// trick a route handler needs, because [`ResponseStream::new`] wants a
+/// `'static` body and a port call wants a borrow — and a borrowing one, a
+/// stream that borrows its inputs (`run_tool_loop_stream`'s loop future,
+/// which holds the model and the executor), becomes a stream of that same
+/// lifetime.
+///
+/// `produce` receives the channel's sender and runs to completion: it owns
+/// or borrows
+/// whatever it needs (an `Arc` and an owned prompt, say) and pushes items
+/// until its source ends or the receiver goes away. The trick that keeps
+/// this spawn-free: the future travels as a stream that never yields an
+/// item, merged with the receiver, so it is polled whenever — and only
+/// whenever — the output is polled. Dropping the output drops the merged
+/// producer, which drops whatever it owned, which is the cancellation
+/// contract; a producer that finds the receiver gone on a send stops
+/// early for the same reason.
+pub(crate) fn pump<'a, T, P, Fut>(produce: P) -> BoxStream<'a, T>
+where
+    T: Send + 'a,
+    P: FnOnce(futures_channel::mpsc::Sender<T>) -> Fut + Send + 'a,
+    Fut: std::future::Future<Output = ()> + Send + 'a,
+{
+    let (tx, rx) = futures_channel::mpsc::channel::<T>(PUMP_BUFFER);
+    let keepalive = futures_util::stream::once(Box::pin(produce(tx)))
+        .filter_map(|()| futures_util::future::ready(None::<T>));
+    Box::pin(futures_util::stream::select(keepalive, rx))
+}
 
 /// One route a module serves in streaming mode (issue #585). `path` is
 /// relative to the module's `/v1/<name>` mount and uses axum's pattern

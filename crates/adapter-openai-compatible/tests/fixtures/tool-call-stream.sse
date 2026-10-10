@@ -1,0 +1,14 @@
+data: {"id":"chatcmpl-abc123","object":"chat.completion.chunk","created":1699896916,"model":"gpt-4o-2024-08-06","system_fingerprint":"fp_44709d6fcb","choices":[{"index":0,"delta":{"role":"assistant","content":null,"tool_calls":[{"index":0,"id":"call_abc123","type":"function","function":{"name":"get_weather","arguments":""}}]},"logprobs":null,"finish_reason":null}]}
+
+data: {"id":"chatcmpl-abc123","object":"chat.completion.chunk","created":1699896916,"model":"gpt-4o-2024-08-06","system_fingerprint":"fp_44709d6fcb","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\n"}}]},"logprobs":null,"finish_reason":null}]}
+
+data: {"id":"chatcmpl-abc123","object":"chat.completion.chunk","created":1699896916,"model":"gpt-4o-2024-08-06","system_fingerprint":"fp_44709d6fcb","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\"location\": \"Boston, MA\""}}]},"logprobs":null,"finish_reason":null}]}
+
+data: {"id":"chatcmpl-abc123","object":"chat.completion.chunk","created":1699896916,"model":"gpt-4o-2024-08-06","system_fingerprint":"fp_44709d6fcb","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\n}"}}]},"logprobs":null,"finish_reason":null}]}
+
+data: {"id":"chatcmpl-abc123","object":"chat.completion.chunk","created":1699896916,"model":"gpt-4o-2024-08-06","system_fingerprint":"fp_44709d6fcb","choices":[{"index":0,"delta":{},"logprobs":null,"finish_reason":"tool_calls"}]}
+
+data: {"id":"chatcmpl-abc123","object":"chat.completion.chunk","created":1699896916,"model":"gpt-4o-2024-08-06","system_fingerprint":"fp_44709d6fcb","choices":[],"usage":{"prompt_tokens":82,"completion_tokens":17,"total_tokens":99}}
+
+data: [DONE]
+

@@ -12,6 +12,11 @@
 //! the status line alone, its body never read. Redirects are not
 //! followed: a 3xx comes back as it is, with its `Location`.
 //!
+//! `send_streaming` is the same exchange with the body left unbuffered
+//! (issue #859): the head answers as soon as the platform has it, the
+//! chunks arrive as they are read, and dropping the stream cancels the
+//! underlying `ReadableStream` — the upstream fetch stops with it.
+//!
 //! # A failure message here never carries the request URL
 //!
 //! This is the production path for every venture on this harness, and the
@@ -41,7 +46,7 @@ use std::fmt::Write as _;
 use async_trait::async_trait;
 use bytes::{Bytes, BytesMut};
 use cratefield_core::{
-    HttpClient, HttpError, HttpPolicy, StatusOnly, scrub_request_url, scrub_text,
+    ByteStream, HttpClient, HttpError, HttpPolicy, StatusOnly, scrub_request_url, scrub_text,
 };
 use futures_core::Stream;
 use futures_util::StreamExt;
@@ -65,43 +70,7 @@ impl HttpClient for FetchClient {
     ) -> Result<http::Response<Bytes>, HttpError> {
         let policy = HttpPolicy::of_request(&request);
         let status_only = request.extensions().get::<StatusOnly>().is_some();
-        let (parts, body) = request.into_parts();
-        // Kept for the whole exchange: it is what every failure below is
-        // scrubbed against, and the only thing here that knows which parts
-        // of a message are this request's URL.
-        let url = parts.uri.to_string();
-        let mut init = RequestInit::new();
-        init.method = Method::from(parts.method.as_str().to_string());
-        let headers = Headers::new();
-        for (name, value) in &parts.headers {
-            let _ = headers.set(name.as_str(), value.to_str().unwrap_or_default());
-        }
-        init.headers = headers;
-        // A redirect is answered, not taken. `Follow` is the platform
-        // default and would let an upstream move the exchange to another
-        // host, or down to `http`, after the destination was chosen. The
-        // caller sees the 3xx with its `Location` and decides for itself.
-        init.with_redirect(RequestRedirect::Manual);
-
-        // A body is attached only when there is one. The Fetch spec refuses
-        // to construct a Request whose method is GET or HEAD and whose body
-        // is non-null, and an empty JS string is not null: setting it
-        // unconditionally makes every GET through this port throw a
-        // TypeError before it leaves the isolate.
-        //
-        // Nothing caught it because every adapter shipped so far POSTs
-        // (Resend, Turnstile). The first GET consumer is OpenID Connect
-        // discovery in the `auth-oidc` crate, which fetches a configuration
-        // document and a JWKS.
-        if !body.is_empty() {
-            // The port's adapters send JSON bodies; non-UTF-8 is a hard
-            // error rather than a lossy corruption.
-            let body_text =
-                String::from_utf8(body.to_vec()).map_err(|err| transport(&err, &url))?;
-            init.with_body(Some(worker::wasm_bindgen::JsValue::from_str(&body_text)));
-        }
-        let worker_request =
-            WorkerRequest::new_with_init(&url, &init).map_err(|err| transport(&err, &url))?;
+        let (url, worker_request) = build_request(request)?;
 
         let mut response = Fetch::Request(worker_request)
             .send()
@@ -152,6 +121,100 @@ impl HttpClient for FetchClient {
             .await?;
         builder.body(bytes).map_err(|err| transport(&err, &url))
     }
+
+    /// The streamed send has no bounds of its own — head deadline, idle
+    /// gap and whole-body ceiling, byte cap and declared-length refusal
+    /// are all [`cratefield_core::BoundedHttpClient`]'s, which every
+    /// runtime wires around this transport; a bare `FetchClient` streams
+    /// unbounded. Unlike the buffered [`HttpClient::send`], this path does
+    /// not honour a [`StatusOnly`] marker: the caller gets the body
+    /// stream whatever it marked.
+    async fn send_streaming(
+        &self,
+        request: http::Request<Bytes>,
+    ) -> Result<http::Response<ByteStream>, HttpError> {
+        let (url, worker_request) = build_request(request)?;
+        let mut response = Fetch::Request(worker_request)
+            .send()
+            .into_send()
+            .await
+            .map_err(|err| transport(&err, &url))?;
+
+        let headers = response_headers(response.headers(), false);
+        let mut builder = http::Response::builder().status(response.status_code());
+        if let Some(map) = builder.headers_mut() {
+            *map = headers;
+        }
+
+        // `worker::ByteStream` is `!Send` — its `JsFuture` holds an `Rc` —
+        // so it crosses the port's `Send` bound through the crate's
+        // `SendStream` wrapper, and each chunk's failure goes through
+        // `transport` like every other failure here. Dropping the stream
+        // drops the wasm-streams reader, whose `Drop` cancels the
+        // underlying `ReadableStream` — the upstream fetch aborts with it.
+        // The body's own bounds are `cratefield_core::BoundedHttpClient`'s:
+        // nothing is buffered here for a cap to protect, and the head has
+        // already answered under the wrapper's deadline.
+        let body: ByteStream =
+            match response.stream() {
+                Ok(stream) => {
+                    let url = url.clone();
+                    Box::pin(crate::send_stream(stream).map(move |chunk| {
+                        chunk.map(Bytes::from).map_err(|err| transport(&err, &url))
+                    }))
+                }
+                // "There is no stream here" is the platform's answer for every
+                // null-body status (101/103/204/205/304) and a HEAD reply: an
+                // empty body, not a failed send — the same face the capped
+                // read takes it at.
+                Err(_) => Box::pin(futures_util::stream::empty()),
+            };
+        builder.body(body).map_err(|err| transport(&err, &url))
+    }
+}
+
+/// Builds the transport request a send hands the platform: method, copied
+/// headers, the body only when there is one, and the manual-redirect
+/// marker the port's redirect rule hangs on. Shared by the buffered and
+/// the streaming send so the two cannot drift.
+fn build_request(request: http::Request<Bytes>) -> Result<(String, WorkerRequest), HttpError> {
+    let (parts, body) = request.into_parts();
+    // Kept for the whole exchange: it is what every failure below is
+    // scrubbed against, and the only thing here that knows which parts
+    // of a message are this request's URL.
+    let url = parts.uri.to_string();
+    let mut init = RequestInit::new();
+    init.method = Method::from(parts.method.as_str().to_string());
+    let headers = Headers::new();
+    for (name, value) in &parts.headers {
+        let _ = headers.set(name.as_str(), value.to_str().unwrap_or_default());
+    }
+    init.headers = headers;
+    // A redirect is answered, not taken. `Follow` is the platform
+    // default and would let an upstream move the exchange to another
+    // host, or down to `http`, after the destination was chosen. The
+    // caller sees the 3xx with its `Location` and decides for itself.
+    init.with_redirect(RequestRedirect::Manual);
+
+    // A body is attached only when there is one. The Fetch spec refuses
+    // to construct a Request whose method is GET or HEAD and whose body
+    // is non-null, and an empty JS string is not null: setting it
+    // unconditionally makes every GET through this port throw a
+    // TypeError before it leaves the isolate.
+    //
+    // Nothing caught it because every adapter shipped so far POSTs
+    // (Resend, Turnstile). The first GET consumer is OpenID Connect
+    // discovery in the `auth-oidc` crate, which fetches a configuration
+    // document and a JWKS.
+    if !body.is_empty() {
+        // The port's adapters send JSON bodies; non-UTF-8 is a hard
+        // error rather than a lossy corruption.
+        let body_text = String::from_utf8(body.to_vec()).map_err(|err| transport(&err, &url))?;
+        init.with_body(Some(worker::wasm_bindgen::JsValue::from_str(&body_text)));
+    }
+    let worker_request =
+        WorkerRequest::new_with_init(&url, &init).map_err(|err| transport(&err, &url))?;
+    Ok((url, worker_request))
 }
 
 /// Copies a response's headers, dropping the ones that describe a body
