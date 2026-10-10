@@ -192,6 +192,10 @@ Fails when:
   the Captcha port (section 11);
 - any module migration is not collected yet, a locked file is missing or
   edited;
+- a local dependency crate ships a sqlite migration file no mounted
+  module declares (issue #870): collect writes only what modules declare,
+  so the file never ships and its tables never exist on D1 — return it
+  from the module's `Module::migrations()` or drop it;
 - a migration contains non-portable SQL: `AUTOINCREMENT`, `datetime(`,
   `SERIAL`, `NOW()`, `json_extract`, or backtick quoting.
 

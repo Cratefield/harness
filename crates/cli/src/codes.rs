@@ -30,6 +30,10 @@ pub struct Codes {
     /// A module migration has no locked file yet — run
     /// `fz migrations collect` first.
     pub migration_not_collected: DoctorCodeDef,
+    /// A dependency crate ships a sqlite migration file that no mounted
+    /// module declares, so it is never collected and its tables never
+    /// exist on D1.
+    pub migration_not_declared: DoctorCodeDef,
     /// A locked migration's file is missing from disk.
     pub locked_migration_missing: DoctorCodeDef,
     /// A locked migration's file no longer matches its pinned sha256.
@@ -160,6 +164,11 @@ pub const CODES: Codes = Codes {
         code: "migration-not-collected",
         title: "Migration not collected",
         description: "A module migration has no locked file yet; run `fz migrations collect`.",
+    },
+    migration_not_declared: DoctorCodeDef {
+        code: "migration-not-declared",
+        title: "Migration not declared",
+        description: "A dependency crate ships a sqlite migration file that no mounted module declares; it is never collected, so its tables never exist on D1.",
     },
     locked_migration_missing: DoctorCodeDef {
         code: "locked-migration-missing",
@@ -375,6 +384,7 @@ pub fn registry() -> Vec<&'static DoctorCodeDef> {
         &CODES.manifest_unreadable,
         &CODES.manifest_write_failed,
         &CODES.migration_not_collected,
+        &CODES.migration_not_declared,
         &CODES.module_self_check,
         &CODES.module_unknown,
         &CODES.non_portable_sql,
@@ -446,6 +456,7 @@ mod tests {
             CODES.hmac_webhook_secret_missing.code,
             CODES.lockfile_unreadable.code,
             CODES.migration_not_collected.code,
+            CODES.migration_not_declared.code,
             CODES.locked_migration_missing.code,
             CODES.locked_migration_edited.code,
             CODES.captcha_not_effective.code,

@@ -22,7 +22,7 @@ use cratefield_core::{
     VentureEnv, deployed_env, env_disagreement, harness_api_mismatch,
 };
 use cratefield_push_wiring::PushWiring;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 /// The `schema` field of the `fz doctor --json` object (harness #140):
@@ -238,6 +238,7 @@ fn run_checks(
 
     push_checks(harness, env, output, &mut failures);
     lockfile_failures(harness, migrations_dir, &mut failures);
+    undeclared_migration_failures(harness, migrations_dir, &mut failures);
     sidecar_failures(harness, sidecars, output, &mut failures);
     lint_failures(harness, &mut failures);
 
@@ -321,6 +322,198 @@ fn lockfile_failures(harness: &Harness, migrations_dir: &Path, failures: &mut Ve
             }
         }
     }
+}
+
+/// Undeclared dependency migrations (issue #870). `fz migrations collect`
+/// writes exactly what the mounted modules return from
+/// `Module::migrations()` — so SQL a module *crate* ships on disk that no
+/// mounted module declares is never collected, and its tables never exist
+/// on D1. Flags every sqlite file the venture's local dependencies ship
+/// ([`shipped_sql_files`]) whose body no module declares. The match is on
+/// the body, not the id: a module may re-wrap another crate's SQL under
+/// new ids (the control-plane console re-id-s six domain crates' schemas
+/// under one module).
+fn undeclared_migration_failures(
+    harness: &Harness,
+    migrations_dir: &Path,
+    failures: &mut Vec<DoctorFailure>,
+) {
+    let declared: std::collections::BTreeSet<&str> = harness
+        .modules()
+        .iter()
+        .flat_map(|module| module.migrations().sqlite)
+        .map(|migration| migration.sql.trim())
+        .collect();
+    for dir in venture_dependency_dirs(migrations_dir) {
+        let dep = dir.file_name().unwrap_or(dir.as_os_str()).to_string_lossy();
+        for file in shipped_sql_files(&dir) {
+            let message = match std::fs::read_to_string(&file) {
+                // Declared — the same bytes some module hands the runner.
+                Ok(body) if declared.contains(body.trim()) => continue,
+                Ok(_) => format!(
+                    "dependency `{dep}` ships `{}` but no module declares its SQL — it is \
+                     never collected and its tables never exist on D1. Return it from the \
+                     module's `Module::migrations()` (e.g. `include_str!`) so \
+                     `fz migrations collect` ships it, or drop the file",
+                    file.display()
+                ),
+                // Like the lockfile check above: an unreadable file is a
+                // reported failure, never a panic — and never a clean bill.
+                Err(err) => format!(
+                    "dependency `{dep}` ships `{}` but it cannot be read ({err}), so it \
+                     cannot be checked against any module's declared SQL",
+                    file.display()
+                ),
+            };
+            failures.push(DoctorFailure {
+                code: &CODES.migration_not_declared,
+                message,
+            });
+        }
+    }
+}
+
+/// The local crate directories a venture's dependencies resolve to, for
+/// the venture whose migrations dir this is — the directory the
+/// migrations dir sits in, canonicalized so a `--out` reached through
+/// `..` or a symlink still walks up to the real workspace root. A `path`
+/// dependency resolves relative to the venture; a `workspace = true` one
+/// through the nearest ancestor manifest with a `[workspace]` table and
+/// its `[workspace.dependencies]` entry (by the member's dependency key,
+/// as Cargo itself looks it up). Dev and build dependencies are not
+/// mounted in the harness, crates.io and git dependencies ship no
+/// directory to read, and a workspace dependency whose table never names
+/// a path is skipped with them. Sorted and deduped, because the failures
+/// reported over them are.
+///
+/// Empty when there is no manifest beside the migrations dir, or it does
+/// not parse — cargo itself refuses to build such a venture.
+#[must_use]
+pub fn venture_dependency_dirs(migrations_dir: &Path) -> Vec<PathBuf> {
+    // A bare `migrations` names the relative `""` parent: the working
+    // directory. The lexical path is the fallback when the directory does
+    // not exist to canonicalize.
+    let venture = match migrations_dir.parent() {
+        Some(parent) if !parent.as_os_str().is_empty() => parent.to_path_buf(),
+        _ => PathBuf::from("."),
+    };
+    let venture = std::fs::canonicalize(&venture).unwrap_or(venture);
+    let manifest = std::fs::read_to_string(venture.join("Cargo.toml"))
+        .ok()
+        .and_then(|text| text.parse::<toml::Table>().ok());
+    let Some(manifest) = manifest else {
+        return Vec::new();
+    };
+    // Walked once for the first `workspace = true` dependency and kept.
+    let mut workspace: Option<PathBuf> = None;
+    let mut dirs = std::collections::BTreeSet::new();
+    for deps in dependency_tables(&manifest) {
+        for (name, dep) in deps {
+            if let Some(path) = dep.get("path").and_then(toml::Value::as_str) {
+                dirs.insert(venture.join(path));
+            } else if dep.get("workspace").and_then(toml::Value::as_bool) == Some(true) {
+                if workspace.is_none() {
+                    workspace = workspace_root(&venture);
+                }
+                if let Some(path) = workspace
+                    .as_deref()
+                    .and_then(|root| workspace_dep_path(root, name))
+                {
+                    dirs.insert(path);
+                }
+            }
+        }
+    }
+    dirs.into_iter().collect()
+}
+
+/// The dependency tables a venture manifest declares: `[dependencies]`
+/// and every `[target.*.dependencies]`.
+fn dependency_tables(manifest: &toml::Table) -> Vec<&toml::Table> {
+    let mut tables = Vec::new();
+    if let Some(deps) = manifest.get("dependencies").and_then(toml::Value::as_table) {
+        tables.push(deps);
+    }
+    if let Some(targets) = manifest.get("target").and_then(toml::Value::as_table) {
+        for target in targets.values() {
+            if let Some(deps) = target.get("dependencies").and_then(toml::Value::as_table) {
+                tables.push(deps);
+            }
+        }
+    }
+    tables
+}
+
+/// The nearest manifest at or above the venture that carries a
+/// `[workspace]` table — the table a `workspace = true` dependency is
+/// resolved against.
+fn workspace_root(venture: &Path) -> Option<PathBuf> {
+    let mut dir = venture.to_path_buf();
+    loop {
+        let is_workspace = std::fs::read_to_string(dir.join("Cargo.toml"))
+            .ok()
+            .and_then(|text| text.parse::<toml::Table>().ok())
+            .is_some_and(|table| table.contains_key("workspace"));
+        if is_workspace {
+            return Some(dir);
+        }
+        if !dir.pop() || dir.as_os_str().is_empty() {
+            return None;
+        }
+    }
+}
+
+/// The path a workspace dependency is pinned to in the root manifest's
+/// `[workspace.dependencies]`, relative to that root.
+fn workspace_dep_path(root: &Path, name: &str) -> Option<PathBuf> {
+    let table = std::fs::read_to_string(root.join("Cargo.toml"))
+        .ok()
+        .and_then(|text| text.parse::<toml::Table>().ok())?;
+    table
+        .get("workspace")?
+        .get("dependencies")?
+        .get(name)?
+        .get("path")?
+        .as_str()
+        .map(|path| root.join(path))
+}
+
+/// The sqlite migration files a crate directory ships, sorted:
+/// `migrations/sqlite/*.sql` when that set exists, else the flat
+/// `migrations/*.sql` — but only when it carries no `.harness-lock.json`
+/// (the lock file `fz migrations collect` writes), which marks another
+/// venture's collected output rather than a module's own SQL.
+/// `migrations/postgres/` is never read: a crate that ships a postgres
+/// set has declared where its SQL differs, the same rule the in-crate
+/// lint check applies to a module. Public because the `cli-acceptance`
+/// migration test reads module crates and resolved dependencies with the
+/// same rule, so the two cannot drift.
+#[must_use]
+pub fn shipped_sql_files(dir: &Path) -> Vec<PathBuf> {
+    let migrations = dir.join("migrations");
+    let set = if migrations.join("sqlite").is_dir() {
+        migrations.join("sqlite")
+    } else if migrations.is_dir() && !migrations.join(crate::lock::LOCK_FILE).exists() {
+        migrations
+    } else {
+        return Vec::new();
+    };
+    let mut files: Vec<PathBuf> = std::fs::read_dir(&set)
+        .map(|entries| {
+            entries
+                .flatten()
+                .map(|entry| entry.path())
+                .filter(|path| {
+                    path.is_file()
+                        && path
+                            .extension()
+                            .is_some_and(|ext| ext.eq_ignore_ascii_case("sql"))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    files.sort();
+    files
 }
 
 /// Sidecars (issue #66). The doctor sees only compiled-in modules, so

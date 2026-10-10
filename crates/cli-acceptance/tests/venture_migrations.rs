@@ -16,13 +16,17 @@
 //! pending signup's inbox.
 //!
 //! This test is the check that was missing: it reproduces what collect
-//! would write and compares it against what is checked in.
+//! would write and compares it against what is checked in. A sibling test
+//! reads each venture's manifest the way the doctor's
+//! undeclared-migration check does (issue #870), so a venture cannot add
+//! a module dependency whose SQL silently never ships either.
 
 mod common;
 
 use common::repo_root;
-use std::collections::BTreeMap;
-use std::path::Path;
+use cratefield_cli::doctor::{shipped_sql_files, venture_dependency_dirs};
+use std::collections::{BTreeMap, BTreeSet};
+use std::path::{Path, PathBuf};
 
 /// One composed module: the name it is mounted under, and the crate
 /// directory whose `migrations/sqlite` it ships (`None` for an in-crate
@@ -76,26 +80,29 @@ fn is_sql(name: &str) -> bool {
         .is_some_and(|ext| ext.eq_ignore_ascii_case("sql"))
 }
 
-/// The `(id, name)` pairs a module ships, in id order — the same list
-/// `Module::migrations().sqlite` yields.
-fn module_migrations(root: &Path, module_dir: &str) -> Vec<(String, String)> {
-    let dir = root
-        .join("crates")
-        .join(module_dir)
-        .join("migrations/sqlite");
-    let mut files: Vec<_> = std::fs::read_dir(&dir)
-        .unwrap_or_else(|err| panic!("cannot read {}: {err}", dir.display()))
-        .map(|entry| entry.expect("readable entry").file_name())
-        .filter_map(|name| name.to_str().map(str::to_owned))
-        .filter(|name| is_sql(name))
-        .collect();
-    files.sort();
+/// The `(id, name, file)` triples a module crate ships, in id order — the
+/// same list `Module::migrations().sqlite` yields, read with the doctor's
+/// own [`shipped_sql_files`]. A module listed with a crate that ships no
+/// SQL at all is a mistake in the `VENTURES` table rather than a missed
+/// file, so it fails here with the entry named instead of passing
+/// silently.
+fn module_migrations(root: &Path, module_dir: &str) -> Vec<(String, String, PathBuf)> {
+    let files = shipped_sql_files(&root.join("crates").join(module_dir));
+    assert!(
+        !files.is_empty(),
+        "VENTURES lists {module_dir} but crates/{module_dir} ships no sqlite \
+         migration (no migrations/sqlite/*.sql, no flat migrations/*.sql); \
+         fix the entry or drop it"
+    );
     files
         .iter()
-        .map(|name| {
-            let stem = name.trim_end_matches(".sql");
-            let (id, rest) = stem.split_once('_').expect("<id>_<name>.sql");
-            (id.to_owned(), rest.to_owned())
+        .map(|file| {
+            let name = file.file_name().expect("file name").to_string_lossy();
+            let (id, rest) = name
+                .trim_end_matches(".sql")
+                .split_once('_')
+                .expect("<id>_<name>.sql");
+            (id.to_owned(), rest.to_owned(), file.clone())
         })
         .collect()
 }
@@ -132,7 +139,7 @@ fn every_venture_ships_every_migration_its_modules_declare() {
             let Some(module_dir) = module_dir else {
                 continue;
             };
-            for (id, name) in module_migrations(&root, module_dir) {
+            for (id, name, shipped_file) in module_migrations(&root, module_dir) {
                 let key = format!("{module_name}/{id}");
                 let Some(found) = present.get(&key) else {
                     failures.push(format!(
@@ -152,13 +159,8 @@ fn every_venture_ships_every_migration_its_modules_declare() {
                 // `sql.trim_end() + "\n"`, and a locked file that drifts
                 // from its module is a migration applied from one source
                 // and maintained in another.
-                let shipped = std::fs::read_to_string(
-                    root.join("crates")
-                        .join(module_dir)
-                        .join("migrations/sqlite")
-                        .join(format!("{id}_{name}.sql")),
-                )
-                .expect("module migration readable");
+                let shipped =
+                    std::fs::read_to_string(&shipped_file).expect("module migration readable");
                 let checked_in =
                     std::fs::read_to_string(dir.join(found.split('|').nth(1).expect("file half")))
                         .expect("venture migration readable");
@@ -168,6 +170,45 @@ fn every_venture_ships_every_migration_its_modules_declare() {
                     "{venture}: {key} differs from the migration its module ships"
                 );
             }
+        }
+    }
+
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// A venture cannot add a module dependency whose SQL silently never
+/// ships (issue #870): every local crate it depends on — `path`
+/// dependencies and `workspace = true` ones the workspace root manifest
+/// resolves — that ships sqlite SQL must appear in that venture's
+/// `VENTURES` entry here. A crate pulled in for features that ships no
+/// sqlite SQL (the facade, the runtimes, the adapters) is not flagged:
+/// there is nothing of its own to ship.
+///
+/// The dependency resolution is the doctor's own
+/// (`venture_dependency_dirs`), so this test cannot quietly disagree
+/// with the check it mirrors.
+#[test]
+fn every_local_dependency_that_ships_sql_is_listed() {
+    let root = repo_root();
+    let mut failures: Vec<String> = Vec::new();
+
+    for (venture, modules) in VENTURES {
+        let listed: BTreeSet<&str> = modules.iter().filter_map(|(_, dir)| *dir).collect();
+        for dep in venture_dependency_dirs(&root.join(venture).join("migrations")) {
+            let name = dep
+                .file_name()
+                .expect("a resolved dependency has a directory name")
+                .to_str()
+                .expect("a dependency directory name is utf-8");
+            if shipped_sql_files(&dep).is_empty() || listed.contains(name) {
+                continue;
+            }
+            failures.push(format!(
+                "{venture} depends on `{name}`, which ships sqlite migrations, but it is \
+                 not in this test's VENTURES entry — nothing declares its SQL, so it is \
+                 never collected and its tables never exist on D1. List it under the \
+                 module that declares it, or drop the dependency"
+            ));
         }
     }
 
