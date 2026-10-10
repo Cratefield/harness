@@ -1,0 +1,14 @@
+data: {"type":"start"}
+
+data: {"type":"start-step"}
+
+data: {"type":"text-start","id":"text-0"}
+
+data: {"type":"text-delta","id":"text-0","delta":"Half an answer"}
+
+data: {"type":"text-end","id":"text-0"}
+
+data: {"type":"error","errorText":"An error occurred."}
+
+data: [DONE]
+

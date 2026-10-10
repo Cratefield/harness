@@ -1,0 +1,34 @@
+{
+  "id": "msg-tool-loop",
+  "role": "assistant",
+  "parts": [
+    {
+      "type": "step-start"
+    },
+    {
+      "type": "text",
+      "text": "thinking ",
+      "state": "done"
+    },
+    {
+      "type": "tool-lookup",
+      "toolCallId": "call-1",
+      "state": "output-available",
+      "input": {
+        "q": "munich"
+      },
+      "output": {
+        "temp_c": 21,
+        "sky": "clear"
+      }
+    },
+    {
+      "type": "step-start"
+    },
+    {
+      "type": "text",
+      "text": "It is 21 and clear in Munich.",
+      "state": "done"
+    }
+  ]
+}

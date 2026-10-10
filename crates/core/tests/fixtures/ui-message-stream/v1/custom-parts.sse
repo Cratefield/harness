@@ -1,0 +1,26 @@
+data: {"type":"start","messageId":"msg-custom"}
+
+data: {"type":"start-step"}
+
+data: {"type":"source-url","sourceId":"src-1","url":"https://example.com/munich","title":"Munich travel guide"}
+
+data: {"type":"data-weather","id":"w1","data":{"temp_c":21}}
+
+data: {"type":"text-start","id":"text-0"}
+
+data: {"type":"text-delta","id":"text-0","delta":"Munich sits on the Isar."}
+
+data: {"type":"text-end","id":"text-0"}
+
+data: {"type":"tool-input-start","toolCallId":"call-1","toolName":"forecast"}
+
+data: {"type":"tool-input-available","toolCallId":"call-1","toolName":"forecast","input":{"city":"munich"}}
+
+data: {"type":"tool-output-error","toolCallId":"call-1","errorText":"the forecast service timed out"}
+
+data: {"type":"finish-step"}
+
+data: {"type":"finish","finishReason":"other"}
+
+data: [DONE]
+

@@ -1,0 +1,23 @@
+{
+  "name": "@cratefield/ui-message-contract",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Contract tests for the Rust encoder's Vercel AI SDK v6 UI message stream (crates/core sse): every committed .sse fixture must parse with the real AI SDK and rebuild exactly the committed UIMessage.",
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Cratefield/harness",
+    "directory": "packages/ui-message-contract"
+  },
+  "scripts": {
+    "test": "node --test"
+  },
+  "devDependencies": {
+    "@ai-sdk/provider-utils": "4.0.57",
+    "ai": "6.0.303"
+  }
+}

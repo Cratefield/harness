@@ -34,11 +34,38 @@
 //! chunk loop, and [`sse_events`] for callers that have a `ByteStream`
 //! (the [`HttpClient::send_streaming`](crate::HttpClient::send_streaming)
 //! shape) and want a stream of events.
+//!
+//! # Encoding (issue #860)
+//!
+//! The other direction lives here too: [`SseEvent::encode`] frames one
+//! event back into the wire bytes the decode rules above read — an event
+//! that round-trips through encode and decode is unchanged — and
+//! [`SseResponse`] streams a whole sequence of events as a response body,
+//! one chunk per event, with a comment heartbeat over any quiet stretch.
+//! The heartbeat is timed through the [`Clock`] port, so the
+//! same code serves a tokio runtime and a Workers isolate (`futures_timer`
+//! cannot fire on wasm). For the UI message stream dialect chat frontends
+//! speak, the [`ui_message`] submodule is the encoder.
 
+// The Vercel AI SDK "UI message stream" encoder (issue #860), in its own
+// file: this module keeps the wire framing, `sse/ui_message.rs` the chat
+// chunk vocabulary written on top of it.
+pub mod ui_message;
+
+use std::pin::Pin;
+use std::sync::Arc;
+use std::task::{Context, Poll};
+use std::time::Duration;
+
+use axum::response::{IntoResponse, Response};
+use bytes::Bytes;
+use futures_core::Stream;
+use futures_core::future::BoxFuture;
 use futures_util::StreamExt;
+use http::{HeaderName, HeaderValue};
 
-use crate::ports::{ByteStream, HttpError};
-use crate::stream::BoxStream;
+use crate::ports::{ByteStream, Clock, HttpError, timeout};
+use crate::stream::{BoxStream, ResponseStream};
 
 /// The largest single line the decoder will hold while waiting for its
 /// terminator. An SSE line is one field or one `data:` fragment, so a
@@ -66,6 +93,73 @@ pub struct SseEvent {
     pub data: String,
     /// The last `id:` field seen when this event dispatched.
     pub id: Option<String>,
+}
+
+impl SseEvent {
+    /// An unnamed event carrying just `data` — the shape the
+    /// [`ui_message`] encoder writes and most relays need. Set `event`
+    /// and `id` through a struct literal when a caller names its events.
+    #[must_use]
+    pub fn new(data: impl Into<String>) -> Self {
+        Self {
+            event: None,
+            data: data.into(),
+            id: None,
+        }
+    }
+
+    /// Frames the event into wire bytes — the inverse of the decode rules
+    /// the module documentation lists, so a decoded event that encodes
+    /// decodes back unchanged. The optional `event:` and `id:` lines come
+    /// first (a decoder keeps only the last of each, so one line is all
+    /// an event can mean), then every line of `data` — split on `\r\n`,
+    /// `\n` and `\r`, the three line endings [`SseDecoder`] reads — as
+    /// its own `data:` line, then the blank line that dispatches. CR and
+    /// LF are stripped from `event` and `id` first, so a value carrying a
+    /// line break cannot forge a field it does not own.
+    ///
+    /// The bytes are one complete event: an SSE response writes one per
+    /// chunk and flushes, no read-ahead.
+    #[must_use]
+    pub fn encode(&self) -> Bytes {
+        let mut wire = String::new();
+        for (field, value) in [("event", &self.event), ("id", &self.id)] {
+            if let Some(value) = value {
+                wire.push_str(field);
+                wire.push_str(": ");
+                wire.extend(
+                    value
+                        .chars()
+                        .filter(|character| !matches!(character, '\r' | '\n')),
+                );
+                wire.push('\n');
+            }
+        }
+        for line in split_data_lines(&self.data) {
+            wire.push_str("data: ");
+            wire.push_str(line);
+            wire.push('\n');
+        }
+        wire.push('\n');
+        Bytes::from(wire)
+    }
+}
+
+/// Splits an event's `data` on the decoder's three line endings — `\r\n`,
+/// `\n`, and the spec's legacy lone `\r` — one `data:` line per piece, so
+/// what encodes decodes back joined the same way. A `\r\n` pair is one
+/// break, not a break plus an empty line.
+fn split_data_lines(data: &str) -> Vec<&str> {
+    let mut lines = Vec::new();
+    let mut rest = data;
+    while let Some(index) = rest.find(['\r', '\n']) {
+        lines.push(&rest[..index]);
+        let tail = &rest[index..];
+        // A `\r\n` pair is one break: past both bytes; a lone break, past one.
+        rest = tail.strip_prefix("\r\n").unwrap_or(&tail[1..]);
+    }
+    lines.push(rest);
+    lines
 }
 
 /// An incremental Server-Sent Events decoder: feed it the chunks as they
@@ -327,6 +421,194 @@ struct Pipeline {
     decoder: SseDecoder,
     pending: std::vec::IntoIter<SseEvent>,
     done: bool,
+}
+
+/// How long a [`SseResponse`] may go without an event before it writes a
+/// comment heartbeat to the wire. Long enough that a healthy model stream
+/// — deltas seconds apart — never sends one, short enough that the
+/// proxies in front of a hosted runtime do not time an idle response
+/// out. The clock restarts on every event, so this bounds the gap
+/// between chunks, never the response's whole life.
+pub const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(15);
+
+/// A Server-Sent Events response (issue #860): a stream of [`SseEvent`]s
+/// bridged to the wire one chunk per event, a `: heartbeat` comment
+/// keeping the connection warm over any quiet stretch, and the headers an
+/// SSE response needs — `content-type: text/event-stream`,
+/// `cache-control: no-cache` and `x-accel-buffering: no` — plus any the
+/// caller adds with [`header`](Self::header).
+///
+/// The body is a [`ResponseStream`], so it bridges exactly the way every
+/// streamed response here does: polled directly on native runtimes, and
+/// taken out of the response extensions with [`ResponseStream::take`]
+/// where an axum body cannot be converted — `runtime-cloudflare`. The
+/// heartbeat is timed through the [`Clock`] port —
+/// [`Clock::timeout_any`] over a future that never resolves, on an owned
+/// clock — so core needs no timer of its own and the same code runs on
+/// tokio and on Workers (`futures_timer` cannot fire on wasm).
+///
+/// # Cancellation
+///
+/// The body polls its source only when the consumer polls, and drops
+/// with it: a client that disconnects drops the body, the body drops the
+/// source, and for a source carrying a model stream that is the
+/// cancellation contract
+/// [`TextModel::stream`](crate::TextModel::stream) carries — the
+/// disconnect stops the upstream spend.
+///
+/// [`Clock::timeout_any`]: crate::Clock::timeout_any
+pub struct SseResponse {
+    events: BoxStream<'static, SseEvent>,
+    clock: Arc<dyn Clock>,
+    every: Duration,
+    extra_headers: Vec<(HeaderName, HeaderValue)>,
+}
+
+impl SseResponse {
+    /// Streams `events` as the response body, heartbeating every
+    /// [`HEARTBEAT_INTERVAL`] of silence, timed by `clock`.
+    #[must_use]
+    pub fn new<S>(events: S, clock: Arc<dyn Clock>) -> Self
+    where
+        S: Stream<Item = SseEvent> + Send + 'static,
+    {
+        Self {
+            events: Box::pin(events),
+            clock,
+            every: HEARTBEAT_INTERVAL,
+            extra_headers: Vec::new(),
+        }
+    }
+
+    /// Moves the heartbeat interval: a heartbeat after `every` of
+    /// silence, or none at all when `every` is zero — a source that
+    /// heartbeats itself needs no help, and a response that answers once
+    /// needs none.
+    #[must_use]
+    pub fn heartbeat_every(mut self, every: Duration) -> Self {
+        self.every = every;
+        self
+    }
+
+    /// Adds one header to the response, over the SSE defaults when it
+    /// names one of them — the escape hatch for a caller whose proxy in
+    /// front needs something else.
+    #[must_use]
+    pub fn header(mut self, name: HeaderName, value: HeaderValue) -> Self {
+        self.extra_headers.push((name, value));
+        self
+    }
+}
+
+impl IntoResponse for SseResponse {
+    fn into_response(self) -> Response {
+        let body = ResponseStream::new(
+            SseBody::new(self.events, self.clock, self.every)
+                .map(Ok::<Bytes, std::convert::Infallible>),
+        );
+        // The handle rides on the response the way every `ResponseStream`'s
+        // does, so a runtime that bridges by taking the stream out of the
+        // extensions — `runtime-cloudflare` — gets this one too.
+        let mut response = body.into_response();
+        let headers = response.headers_mut();
+        headers.insert(
+            http::header::CONTENT_TYPE,
+            HeaderValue::from_static("text/event-stream"),
+        );
+        headers.insert(
+            http::header::CACHE_CONTROL,
+            HeaderValue::from_static("no-cache"),
+        );
+        headers.insert(
+            HeaderName::from_static("x-accel-buffering"),
+            HeaderValue::from_static("no"),
+        );
+        for (name, value) in self.extra_headers {
+            headers.insert(name, value);
+        }
+        response
+    }
+}
+
+/// The body behind [`SseResponse`]: one chunk per source event, a
+/// heartbeat whenever the sleep elapses before the next one, and the end
+/// of the source as the end of the stream — heartbeats keep a quiet
+/// source's connection warm, they do not keep a dead one open.
+struct SseBody {
+    source: BoxStream<'static, SseEvent>,
+    clock: Arc<dyn Clock>,
+    every: Duration,
+    /// The heartbeat sleep, armed afresh on every event and every
+    /// heartbeat: [`Clock::timeout_any`] over a future that never
+    /// resolves, on an owned clock clone. `None` when heartbeats are off.
+    ///
+    /// [`Clock::timeout_any`]: crate::Clock::timeout_any
+    sleep: Option<BoxFuture<'static, Option<()>>>,
+}
+
+impl SseBody {
+    fn new(source: BoxStream<'static, SseEvent>, clock: Arc<dyn Clock>, every: Duration) -> Self {
+        let mut body = Self {
+            source,
+            clock,
+            every,
+            sleep: None,
+        };
+        body.rearm();
+        body
+    }
+
+    /// Arms a fresh sleep. [`Clock::timeout_any`](crate::Clock::timeout_any)
+    /// borrows the clock, so the boxed future owns a clone and the borrow
+    /// lives inside it — the body keeps the clock only to re-arm.
+    fn rearm(&mut self) {
+        if self.every.is_zero() {
+            self.sleep = None;
+            return;
+        }
+        let clock = Arc::clone(&self.clock);
+        let every = self.every;
+        self.sleep = Some(Box::pin(async move {
+            timeout::<()>(clock.as_ref(), futures_util::future::pending(), every).await
+        }));
+    }
+}
+
+impl Stream for SseBody {
+    type Item = Bytes;
+
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Bytes>> {
+        let this = self.get_mut();
+        // The source first, on every poll: an event due at the same
+        // moment as a heartbeat wins, and the heartbeat's slot is spent
+        // on the re-arm instead.
+        match this.source.as_mut().poll_next(cx) {
+            // One event, one chunk, one flush — no batching, no
+            // read-ahead. The clock restarts here: the interval bounds
+            // the gap between events.
+            Poll::Ready(Some(event)) => {
+                this.rearm();
+                return Poll::Ready(Some(event.encode()));
+            }
+            // The source ended, and with it the heartbeats: the stream
+            // ends here, and nothing keeps the connection open for it.
+            Poll::Ready(None) => return Poll::Ready(None),
+            Poll::Pending => {}
+        }
+        let Some(sleep) = this.sleep.as_mut() else {
+            return Poll::Pending;
+        };
+        // Any answer means the interval elapsed — the never-resolving
+        // inner future is the only thing the clock could have abandoned.
+        // Re-arm before yielding, so the next gap is measured from this
+        // heartbeat, not from the last event.
+        if sleep.as_mut().poll(cx).is_ready() {
+            this.rearm();
+            Poll::Ready(Some(Bytes::from_static(b": heartbeat\n\n")))
+        } else {
+            Poll::Pending
+        }
+    }
 }
 
 #[cfg(test)]
@@ -600,5 +882,74 @@ mod tests {
         assert_eq!(items.len(), 2, "the event, then the error, then the end");
         assert_eq!(items[0].as_ref().unwrap().data, "one");
         assert!(items[1].is_err(), "the transport error surfaces as-is");
+    }
+
+    /// Encodes `event` and decodes it straight back through the real
+    /// decoder — the round-trip `encode` promises.
+    fn round_trip(event: &SseEvent) -> Vec<SseEvent> {
+        let mut decoder = SseDecoder::default();
+        decoder.push(&event.encode())
+    }
+
+    #[test]
+    fn an_event_encodes_to_what_the_decoder_reads_back() {
+        let event = SseEvent {
+            event: Some("token".to_owned()),
+            data: "first\nsecond".to_owned(),
+            id: Some("42".to_owned()),
+        };
+        assert_eq!(round_trip(&event), vec![event.clone()]);
+
+        // The exact framing: named fields first, one `data:` line per
+        // data line, the blank line that dispatches last.
+        assert_eq!(
+            &event.encode()[..],
+            b"event: token\nid: 42\ndata: first\ndata: second\n\n"
+        );
+    }
+
+    #[test]
+    fn crlf_and_a_lone_cr_break_data_lines_when_encoding() {
+        // The encoder splits on the decoder's three line endings, so the
+        // decoded data — the join of the data lines — is the same however
+        // the original was broken.
+        let event = SseEvent::new("a\r\nb\rc\nd");
+        assert_eq!(
+            round_trip(&event),
+            vec![SseEvent {
+                event: None,
+                data: "a\nb\nc\nd".to_owned(),
+                id: None,
+            }]
+        );
+    }
+
+    #[test]
+    fn a_line_break_in_event_or_id_cannot_forge_a_field() {
+        let event = SseEvent {
+            event: Some("to\r\nid: forged".to_owned()),
+            data: "x".to_owned(),
+            id: Some("a\nbroke".to_owned()),
+        };
+        let decoded = round_trip(&event);
+        assert_eq!(decoded.len(), 1, "one event, not two");
+        assert_eq!(decoded[0].event.as_deref(), Some("toid: forged"));
+        assert_eq!(decoded[0].id.as_deref(), Some("abroke"));
+    }
+
+    #[test]
+    fn an_encoding_survives_being_dripped_byte_by_byte() {
+        let event = SseEvent {
+            event: Some("tick".to_owned()),
+            data: "one\ntwo".to_owned(),
+            id: None,
+        };
+        let wire = event.encode();
+        let mut decoder = SseDecoder::default();
+        let mut events = Vec::new();
+        for byte in &wire {
+            events.extend(decoder.push(std::slice::from_ref(byte)));
+        }
+        assert_eq!(events, vec![event]);
     }
 }
