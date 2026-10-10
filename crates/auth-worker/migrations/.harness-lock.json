@@ -43,6 +43,10 @@
     "file": "0013_auth-core_0011_email_change.sql",
     "sha256": "8b96a16bf71660d135f007cb0ec81962896fbf99d455dfa39b22b0440cd005b0"
   },
+  "auth-core/0012": {
+    "file": "0015_auth-core_0012_user_admin_audit.sql",
+    "sha256": "145f63b11edeff12371b3ece7a2766e403f8709176fa9f6248996b85b1c05ecb"
+  },
   "auth-magic-link/0001": {
     "file": "0012_auth-magic-link_0001_send_cooldown.sql",
     "sha256": "7b13e4aaade1989e990a26c4a6ae4a9ef12fa23131b3f6c02caa3a4b15f73313"

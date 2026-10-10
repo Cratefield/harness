@@ -24,6 +24,7 @@ access and erasure walk.
 | `POST /admin/clients`, `GET /admin/clients`, `PATCH /admin/clients/{id}` | Register, list, rename or switch a client |
 | `POST /admin/clients/{id}/rotate-secret` | Rotate a confidential client's secret, with an overlap window |
 | `POST /admin/users/import`, `GET /admin/users/by-external-id` | `fz auth import`'s server half |
+| `POST /admin/users/{sub}/disable`, `POST /admin/users/{sub}/enable` | Switch an account off and back on (#854) |
 | `POST /sso/connections`, `GET /sso/connections` | An organization's own identity provider (#627) |
 | `POST /email/change` | `{ new_email, current_password? }`, signed in. Always `202`, always the same body |
 | `GET /email/confirm?token=…` | The page an email-change link opens. Never reads or spends the token |
@@ -67,6 +68,32 @@ verified, revokes the account's other sessions (keeping the one that carried
 the confirm), and emits `auth-core.email_changed` with `{"user_id": …}`, ids
 only.
 
+## The account switch (#854)
+
+`POST /admin/users/{sub}/disable` (admin bearer token) is the kill switch
+for one account. It sets `users.status = 'disabled'` — which alone refuses
+every new sign-in, because magic-link, passkey and every other login method
+funnel through the session issuer, which reads the flag — and then revokes
+every live session and retires every live refresh token (unspent and
+unexpired; an expired one is dead already). It answers
+`200` with `{"sub", "status", "sessions_revoked", "refresh_tokens_revoked"}`;
+an unknown `sub` is a `404`. The call is idempotent: repeating it answers
+the same shape with zero counts, and every call writes a `user_admin_audit`
+row (migration `0012`), enable included.
+
+`POST /admin/users/{sub}/enable` undoes the flag. It restores nothing:
+sessions stay revoked and retired refresh tokens stay spent, so the person
+signs in again as normal.
+
+**What disable does not stop instantly is the current access token.** It
+is a JWT valid for `ACCESS_TOKEN_SECS` (ten minutes), self-contained and
+verified by resource servers against the JWKS without a call back — so it
+keeps working until it expires, at most ten minutes after the disable.
+Refresh is refused the moment the flag moves, and the session dies with
+it. If that window is too wide for an incident, shorten
+`ACCESS_TOKEN_SECS`; there is no introspection endpoint that could see the
+flag earlier.
+
 ## Mail, events and limits
 
 Both mails resolve `{id}@{locale}` before `{id}` through the venture's
@@ -81,7 +108,7 @@ behind it are the credential's own lockout and the token's guarded consume.
 
 ## Migrations and tests
 
-`0001`–`0011`, applied per dialect. `0011` widens the `single_use_tokens`
+`0001`–`0012`, applied per dialect. `0011` widens the `single_use_tokens`
 kind CHECK with `email_change` by rebuilding the table — SQLite cannot alter
 a CHECK, and Postgres takes the same rebuild so both end on one shape (the
 reason is in the Postgres file's header).

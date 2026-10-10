@@ -678,6 +678,8 @@ dependencies = [
  "cratefield-adapter-resend",
  "cratefield-adapter-sqlite",
  "cratefield-adapter-stripe",
+ "cratefield-adapter-telegram",
+ "cratefield-adapter-turnkey",
  "cratefield-adapter-turnstile",
  "cratefield-adapter-typesafe",
  "cratefield-adapter-webhook-tracker",
@@ -702,6 +704,8 @@ dependencies = [
  "cratefield-module-orgs",
  "cratefield-module-owlpost",
  "cratefield-module-privacy",
+ "cratefield-module-sealed",
+ "cratefield-module-telegram",
  "cratefield-module-telemetry",
  "cratefield-module-waitlist",
  "cratefield-module-wallets",
@@ -712,6 +716,7 @@ dependencies = [
  "cratefield-runtime-cloudflare",
  "cratefield-runtime-native",
  "cratefield-secrets",
+ "cratefield-signer",
  "cratefield-tables-api",
  "cratefield-testing",
  "cratefield-text-diff",
@@ -1062,6 +1067,51 @@ dependencies = [
  "thiserror 2.0.20",
  "time",
  "tracing",
+]
+
+[[package]]
+name = "cratefield-adapter-telegram"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "cratefield-core",
+ "cratefield-testing",
+ "getrandom 0.4.3",
+ "http",
+ "pollster",
+ "serde",
+ "serde_json",
+ "time",
+ "tracing",
+]
+
+[[package]]
+name = "cratefield-adapter-turnkey"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "base64 0.23.1",
+ "bs58",
+ "bytes",
+ "cratefield-adapter-sqlite",
+ "cratefield-core",
+ "cratefield-kms",
+ "cratefield-secrets",
+ "cratefield-signer",
+ "ed25519-dalek",
+ "getrandom 0.4.3",
+ "hex",
+ "http",
+ "k256",
+ "p256 0.13.2",
+ "pollster",
+ "serde",
+ "serde_json",
+ "sha3",
+ "time",
+ "tracing",
+ "zeroize",
 ]
 
 [[package]]
@@ -2065,6 +2115,55 @@ dependencies = [
 ]
 
 [[package]]
+name = "cratefield-module-sealed"
+version = "0.1.0"
+dependencies = [
+ "aes-gcm",
+ "async-trait",
+ "axum",
+ "base64 0.23.1",
+ "cratefield-core",
+ "cratefield-kms",
+ "cratefield-module-privacy",
+ "cratefield-testing",
+ "getrandom 0.4.3",
+ "pollster",
+ "sea-query",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "thiserror 2.0.20",
+ "time",
+ "tower",
+ "tracing",
+]
+
+[[package]]
+name = "cratefield-module-telegram"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "axum",
+ "base64 0.23.1",
+ "cratefield-adapter-telegram",
+ "cratefield-core",
+ "cratefield-module-notifications",
+ "cratefield-testing",
+ "hex",
+ "hmac 0.13.0",
+ "http",
+ "pollster",
+ "schemars 1.2.2",
+ "sea-query",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "time",
+ "tower",
+ "tracing",
+]
+
+[[package]]
 name = "cratefield-module-telemetry"
 version = "0.3.0"
 dependencies = [
@@ -2365,6 +2464,29 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.20",
  "time",
+]
+
+[[package]]
+name = "cratefield-signer"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "bs58",
+ "cratefield-adapter-sqlite",
+ "cratefield-kms",
+ "cratefield-secrets",
+ "ed25519-dalek",
+ "getrandom 0.4.3",
+ "hex",
+ "k256",
+ "pollster",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "sha3",
+ "thiserror 2.0.20",
+ "time",
+ "zeroize",
 ]
 
 [[package]]

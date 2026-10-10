@@ -28,6 +28,7 @@ sqlite = ["dep:cratefield-adapter-sqlite"]
 postgres = ["dep:cratefield-adapter-postgres"]
 resend = ["dep:cratefield-adapter-resend"]
 owlpost = ["dep:cratefield-adapter-owlpost"]
+telegram = ["dep:cratefield-adapter-telegram"]
 # The Colonizer mothership client (issue #675): a plain HTTP client rather
 # than a port adapter, so it takes a base URL and a `col_` token.
 colonizer = ["dep:cratefield-adapter-colonizer"]
@@ -95,6 +96,12 @@ text-guard = ["dep:cratefield-text-guard"]
 text-diff = ["dep:cratefield-text-diff"]
 secrets = ["dep:cratefield-secrets"]
 kms = ["dep:cratefield-kms"]
+# Signing by key reference (issue #761): the guardrails-then-audit gate
+# in front of a provider, and session keys minted into the Secrets store.
+signer = ["dep:cratefield-signer"]
+# The Turnkey provider of the signer port (issue #761): sub-organizations
+# rooted in the user's passkey, the backend scoped by policy.
+turnkey = ["dep:cratefield-adapter-turnkey"]
 # The venture manifest and its composition generator (issue #138). A venture
 # does not need it to run; `fz` reads it, and so does anything generating a
 # composition from a manifest.
@@ -144,10 +151,15 @@ orgs = ["dep:cratefield-module-orgs", "mail-templates"]
 connections = ["dep:cratefield-module-connections"]
 wallets = ["dep:cratefield-module-wallets"]
 guardrails = ["dep:cratefield-module-guardrails"]
+sealed = ["dep:cratefield-module-sealed"]
 # Owlpost's signed inbound webhooks as harness events (issue #673). The
 # plain `owlpost` name is the sending adapter's; this is the receiving
 # module, so it is named for what it emits.
 owlpost-events = ["dep:cratefield-module-owlpost"]
+# Telegram's secret-token webhook, account linking and consent buttons
+# (issue #764). The plain `telegram` name is the sending adapter's; this is
+# the receiving module, so it is named for what it answers.
+telegram-events = ["dep:cratefield-module-telegram"]
 
 # The conformance kit. Belongs under [dev-dependencies] in a venture.
 testing = ["dep:cratefield-testing"]
@@ -160,6 +172,7 @@ cratefield-adapter-sqlite = { workspace = true, optional = true }
 cratefield-adapter-postgres = { workspace = true, optional = true }
 cratefield-adapter-resend = { workspace = true, optional = true }
 cratefield-adapter-owlpost = { workspace = true, optional = true }
+cratefield-adapter-telegram = { workspace = true, optional = true }
 cratefield-adapter-colonizer = { workspace = true, optional = true }
 cratefield-adapter-turnstile = { workspace = true, optional = true }
 cratefield-adapter-anthropic = { workspace = true, optional = true }
@@ -199,6 +212,8 @@ cratefield-auth-client = { workspace = true, optional = true }
 cratefield-oauth-client = { workspace = true, optional = true }
 cratefield-secrets = { workspace = true, optional = true }
 cratefield-kms = { workspace = true, optional = true }
+cratefield-signer = { workspace = true, optional = true }
+cratefield-adapter-turnkey = { workspace = true, optional = true }
 cratefield-mail-templates = { workspace = true, optional = true }
 cratefield-module-email-signup = { workspace = true, optional = true }
 cratefield-module-privacy = { workspace = true, optional = true }
@@ -214,7 +229,9 @@ cratefield-module-orgs = { workspace = true, optional = true }
 cratefield-module-connections = { workspace = true, optional = true }
 cratefield-module-wallets = { workspace = true, optional = true }
 cratefield-module-guardrails = { workspace = true, optional = true }
+cratefield-module-sealed = { workspace = true, optional = true }
 cratefield-module-owlpost = { workspace = true, optional = true }
+cratefield-module-telegram = { workspace = true, optional = true }
 cratefield-testing = { workspace = true, optional = true }
 
 [package.metadata.docs.rs]

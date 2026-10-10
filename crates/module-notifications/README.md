@@ -16,6 +16,8 @@ Push notifications for a Cratefield venture: device and browser
 subscriptions, per-account per-category preferences, a fan-out API other
 modules call, and a drain that delivers through the `Push` port, prunes
 dead subscriptions, retries transient failures and dead-letters permanent
+ones. A venture can register extra delivery channels — Telegram, say —
+behind the `Channel` trait, and the drain treats them like the built-in
 ones.
 
 Mounted at `/v1/notifications`. Requires the `Database`, `Push`, `Clock`
@@ -204,6 +206,16 @@ dead-letters with its own reason rather than passing for success,
 because nothing about that message will ever be accepted, `RateLimited`
 waits out the delay the provider named, and everything else retries to
 the same bound.
+
+Any further channel is a `Channel` the venture registers with
+`.channel(Arc::new(..))` (issue #764) — one outbox row per registered
+channel on the `notifications.channel` topic, gated by the account's
+**push** switch for the category until a preference column of its own
+exists. Its errors take the same shapes: `Unreachable` and `Permanent`
+dead-letter (`not_configured` and `rejected`), `Transient` waits out the
+`retry_after` it named and retries to the same bound. The payload names
+the channel and the account — never the channel's credential for that
+account, which stays in the crate that implements the trait.
 
 `Unregistered` is the **only** error that prunes. A wrongly-pruned Web
 Push subscription cannot be recreated server-side at all (ADR 0015).

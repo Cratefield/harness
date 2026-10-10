@@ -44,6 +44,7 @@ also switch on the extra features noted in their rows:
 | `postgres` | `cratefield-adapter-postgres` | `cratefield::postgres` | `Database` over sqlx |
 | `resend` | `cratefield-adapter-resend` | `cratefield::resend` | `Mailer` over the Resend API |
 | `owlpost` | `cratefield-adapter-owlpost` | `cratefield::owlpost` | `Mailer` over the Resend-compatible Owlpost API |
+| `telegram` | `cratefield-adapter-telegram` | `cratefield::telegram` | `TelegramBot` over the Bot API: verified webhook updates, sends under global and per-chat rate budgets, a token that never rides a log line |
 | `colonizer` | `cratefield-adapter-colonizer` | `cratefield::colonizer` | An HTTP client for the Colonizer mothership: open a colony, ask, answer, stop and resume, via the `HttpClient` port |
 | `turnstile` | `cratefield-adapter-turnstile` | `cratefield::turnstile` | `Captcha` over Cloudflare Turnstile |
 | `anthropic` | `cratefield-adapter-anthropic` | `cratefield::anthropic` | `TextModel` over the Anthropic Messages API, via the `HttpClient` port |
@@ -69,6 +70,8 @@ also switch on the extra features noted in their rows:
 | `text-diff` | `cratefield-text-diff` | `cratefield::text_diff` | Word-level diff in which protected ranges stay whole and come back as locked |
 | `secrets` | `cratefield-secrets` | `cratefield::secrets` | Envelope-encrypted secrets |
 | `kms` | `cratefield-kms` | `cratefield::kms` | The KMS port and its local-file provider |
+| `signer` | `cratefield-signer` | `cratefield::signer` | Signs EVM transactions, ERC-4337 `UserOperations`, EIP-712 data and Solana messages **by key reference**: the payload hash and intent are decoded here, guardrails (allowlist, value cap, kill switch) decide before the provider runs, and every attempt lands on an append-only audit chain that names the first tampered entry. Keys are session keys minted into the Secrets store, unsealed only inside `sign`; no API exports key material |
+| `turnkey` | `cratefield-adapter-turnkey` | `cratefield::turnkey` | The signer port's Turnkey provider: every end user gets a sub-organization rooted in their passkey, the backend is only a delegated access user scoped by `EFFECT_ALLOW` policies (with an `EFFECT_DENY` kill switch), and signing goes out as `SIGN_TRANSACTION_V2`/`SIGN_RAW_PAYLOAD_V2` by key reference — no export activity is ever wrapped |
 | `manifest` | `cratefield-manifest` | `cratefield::manifest` | The venture manifest and its composition generator; `fz` reads it, a running venture does not need it |
 | `client-ts` | `cratefield-client-ts` | `cratefield::client_ts` | The TypeScript client generator behind `fz client-ts`: a `/__surface` document in, a typed client package out |
 | `introspect` | `cratefield-introspect` | `cratefield::introspect` | Reads a live database's catalog over the Database port, in `cratefield-tables`' schema vocabulary |
@@ -91,7 +94,9 @@ also switch on the extra features noted in their rows:
 | `connections` | `cratefield-module-connections` | `cratefield::connections` | Per-subject third-party OAuth connections: authorize, sealed access and refresh tokens, guarded refresh, revoke, over the `HttpClient` port |
 | `wallets` | `cratefield-module-wallets` | `cratefield::wallets` | Links a person's own crypto wallet (EVM or Solana) to an account they have already signed in to, by verifying an EIP-4361 (SIWE) or SIWS signature over a single-use nonce bound to their account. Reads an address and proves ownership of it; never asks a wallet to move funds |
 | `guardrails` | `cratefield-module-guardrails` | `cratefield::guardrails` | The policy engine every automated value-moving action must pass: hard denies, allowlists, required simulation, micro-USD caps, a kill switch and audit. Default deny, fail closed |
+| `sealed` | `cratefield-module-sealed` | `cratefield::sealed` | The server half of client-side sealed blobs (`@cratefield/sealed` is the client): opaque ciphertext at rest under a server outer wrap, crypto-shred erasure, and no server-side recovery path |
 | `owlpost-events` | `cratefield-module-owlpost` | `cratefield::owlpost_events` | Owlpost's signed inbound webhooks as harness events: verified `POST /v1/owlpost/events`, deduplicated per delivery, with a venture hook per inbound mail. The plain `owlpost` feature is the sending adapter |
+| `telegram-events` | `cratefield-module-telegram` | `cratefield::telegram_events` | Telegram in the harness: the secret-token webhook, account linking and consent buttons that never move value without a passkey. The plain `telegram` feature is the sending adapter |
 | `testing` | `cratefield-testing` | `cratefield::testing` | The conformance kit; belongs under `[dev-dependencies]` |
 
 The third classifier adapter, `cratefield-adapter-workers-ai`, has no

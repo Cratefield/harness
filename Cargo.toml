@@ -40,6 +40,12 @@ cratefield-core = { path = "crates/core", version = "0.8" }
 cratefield-ui = { path = "crates/ui", version = "0.4" }
 cratefield-kms = { path = "crates/kms", version = "0.2" }
 cratefield-secrets = { path = "crates/secrets", version = "0.4" }
+# Key-reference signing (issue #761): guardrails, an audit chain, and
+# session keys that never leave the Secrets store.
+cratefield-signer = { path = "crates/signer", version = "0.1" }
+# The signer port's Turnkey provider (issue #761): passkey-rooted
+# sub-organizations, delegated access under policy, key-reference signing.
+cratefield-adapter-turnkey = { path = "crates/adapter-turnkey", version = "0.1" }
 cratefield-runtime-cloudflare = { path = "crates/runtime-cloudflare", version = "0.4" }
 cratefield-runtime-native = { path = "crates/runtime-native", version = "0.4" }
 cratefield-runtime-browser = { path = "crates/runtime-browser", version = "0.1.0" }
@@ -70,6 +76,8 @@ cratefield-adapter-jira = { path = "crates/adapter-jira", version = "0.2" }
 # GraphQL API — a personal API key or an OAuth token, file/status/comment,
 # and the inbound status webhook.
 cratefield-adapter-linear = { path = "crates/adapter-linear", version = "0.1" }
+# Its sibling (issue #764): the `TelegramBot` port over the Telegram Bot API — send/edit/delete/answer with local rate budgets, plus the typed inbound update and the secret-token webhook.
+cratefield-adapter-telegram = { path = "crates/adapter-telegram", version = "0.1" }
 cratefield-adapter-turnstile = { path = "crates/adapter-turnstile", version = "0.3" }
 # The first `TextModel` adapter (issue #430): the Claude Messages API over
 # the `HttpClient` port, against the minimal `TextModel` trait module in core.
@@ -127,6 +135,9 @@ cratefield-module-changelog = { path = "crates/module-changelog", version = "0.3
 # Owlpost's signed inbound-mail and delivery webhooks, as harness events
 # (issue #673).
 cratefield-module-owlpost = { path = "crates/module-owlpost", version = "0.1" }
+# Telegram in the harness (issue #764): the secret-token webhook, account
+# linking, consent buttons that never move value without a passkey.
+cratefield-module-telegram = { path = "crates/module-telegram", version = "0.1" }
 # The notifications module is the first to depend on the auth client, because
 # the account a route acts for comes from the auth extractor (ADR 0016).
 cratefield-module-notifications = { path = "crates/module-notifications", version = "0.3" }
@@ -151,6 +162,7 @@ cratefield-module-orgs = { path = "crates/module-orgs", version = "0.1" }
 # verification binding a wallet to a signed-in account.
 cratefield-module-wallets = { path = "crates/module-wallets", version = "0.1" }
 cratefield-module-guardrails = { path = "crates/module-guardrails", version = "0.1" } #763
+cratefield-module-sealed = { path = "crates/module-sealed", version = "0.1" } #757
 # Declared here rather than by bare path in the one crate that uses it: a
 # path-only dependency has no version, and `cargo publish` refuses a
 # dependency without one. It was invisible while both crates were

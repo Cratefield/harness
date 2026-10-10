@@ -256,6 +256,7 @@ own the `cratefield-*` names.
    cargo publish -p cratefield-module-webhooks  # before the facade
    cargo publish -p cratefield-module-wallets   # before the facade
    cargo publish -p cratefield-module-guardrails  # before the facade
+   cargo publish -p cratefield-module-sealed      # after kms; before the facade
    cargo publish -p cratefield-push-auth      # before adapter-apns, -fcm, -webpush and the CLI
    cargo publish -p cratefield-adapter-github-app  # after push-auth; before the facade
    cargo publish -p cratefield-adapter-classifier-llm
@@ -270,6 +271,7 @@ own the `cratefield-*` names.
    cargo publish -p cratefield-adapter-webhook-tracker
    cargo publish -p cratefield-adapter-jira
    cargo publish -p cratefield-adapter-linear
+   cargo publish -p cratefield-adapter-telegram  # before module-telegram and the facade
    cargo publish -p cratefield-auth-client    # before module-notifications and the runtimes
    cargo publish -p cratefield-oauth-client   # before module-linkedin (which is held back)
    cargo publish -p cratefield-module-connections  # needs core and oauth-client
@@ -281,10 +283,13 @@ own the `cratefield-*` names.
    cargo publish -p cratefield-module-telemetry
    cargo publish -p cratefield-ui
    cargo publish -p cratefield-secrets
+   cargo publish -p cratefield-signer    # needs secrets; before the facade
+   cargo publish -p cratefield-adapter-turnkey    # needs the signer; before the facade
    cargo publish -p cratefield-adapter-apns
    cargo publish -p cratefield-adapter-fcm    # before push-wiring and the facade
    cargo publish -p cratefield-adapter-webpush  # before push-wiring, the CLI and the facade
    cargo publish -p cratefield-module-notifications  # needs i18n and auth-client
+   cargo publish -p cratefield-module-telegram  # needs adapter-telegram and module-notifications; before the facade
    cargo publish -p cratefield-push-wiring    # before the runtimes and the CLI
    cargo publish -p cratefield-client-ts      # before the CLI (`fz client-ts`)
    cargo publish -p cratefield-import-supabase  # before the CLI (its `import-supabase` feature) and the facade

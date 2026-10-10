@@ -108,12 +108,22 @@ human-readable page at each `<public_url>/problems/<slug>`.
 | `privacy-provider-unverified` | 401 | Unverified provider call | `cratefield-module-privacy` | The request carried no signature this deployment could verify, or one that did not hold. |
 | `rate-limited` | 429 | Rate limit exceeded | `cratefield-core` | Too many requests from this IP or address; retry after the pause. |
 | `request-too-large` | 413 | Request body too large | `cratefield-core` | The request body exceeded the 64 KiB limit for /v1 endpoints. |
+| `sealed-already-exists` | 409 | That blob id is already stored | `cratefield-module-sealed` | The client generated this blob id, and a record under it already exists for this subject. Nothing was changed. |
+| `sealed-not-found` | 404 | No such blob | `cratefield-module-sealed` | No blob the caller holds carries that id. A blob held by someone else answers the same way, so its existence is not disclosed. |
+| `sealed-precondition-failed` | 412 | The record has changed since you read it | `cratefield-module-sealed` | The `If-Match` revision is not the one the row holds now, so somebody else wrote to it in between. Read the record again, reapply your edit and retry with the fresh `ETag`. |
+| `sealed-precondition-required` | 428 | An If-Match header is required | `cratefield-module-sealed` | Read the record first and send its `ETag` back as `If-Match`; a write without one is refused rather than applied blind. |
 | `sidecar-contract-mismatch` | 503 | Sidecar contract mismatch | `cratefield-core` | A sidecar answers a different HARNESS_API than this harness speaks. |
 | `sidecar-unauthorized` | 401 | Unauthorized sidecar caller | `cratefield-core` | A request to a sidecar-guarded route could not be established as coming from the trusted gateway. |
 | `sidecar-unavailable` | 503 | Sidecar module unavailable | `cratefield-core` | A sidecar-mounted module could not be reached; other modules are unaffected. |
 | `table-forbidden` | 403 | Not yours to reach | `cratefield-tables-api` | The table's declared access level does not admit this caller. |
 | `table-misdeclared` | 500 | Table declaration cannot be enforced | `cratefield-tables-api` | The table declares owner access without a subject column to match a caller against. |
 | `table-read-only` | 403 | Not writable | `cratefield-tables-api` | This table's declared access is public-read: it is served, never written. |
+| `telegram/action-not-confirmable` | 409 | Action cannot be confirmed | `cratefield-module-telegram` | The action is not awaiting passkey confirmation, or it has expired, or it was already confirmed. |
+| `telegram/action-not-yours` | 403 | Not your action | `cratefield-module-telegram` | Actions are confirmed by the account they were requested for. |
+| `telegram/no-such-action` | 404 | No such action | `cratefield-module-telegram` | No action with that id exists. |
+| `telegram/passkey-required` | 403 | Passkey confirmation required | `cratefield-module-telegram` | Approving a value-moving action needs a fresh passkey ceremony, and this request did not carry one this deployment could verify. |
+| `telegram/unauthenticated` | 401 | Sign in first | `cratefield-module-telegram` | This route is available only to a signed-in user. |
+| `telegram/unverified` | 401 | Unverified delivery | `cratefield-module-telegram` | The delivery carried no secret token this deployment could verify, or one that did not hold. |
 | `telemetry-payload-rejected` | 400 | Telemetry payload rejected | `cratefield-module-telemetry` | The batch carries a value outside the closed grammar the notice route publishes. |
 | `telemetry-schema-unsupported` | 400 | Telemetry schema not supported | `cratefield-module-telemetry` | The batch names a payload schema version this collector does not parse. |
 | `tenant-degraded` | 503 | Tenant is degraded | `cratefield-core` | The tenant's schema is behind or its database is unreachable; its neighbours are unaffected. |

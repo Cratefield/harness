@@ -1,0 +1,11 @@
+{
+  "update_id": 101,
+  "message": {
+    "message_id": 12,
+    "chat": { "id": 42, "type": "private" },
+    "from": { "id": 42, "is_bot": false, "first_name": "Ada" },
+    "date": 1767225600,
+    "text": "/start abc123",
+    "entities": [{ "type": "bot_command", "offset": 0, "length": 6 }]
+  }
+}

@@ -199,6 +199,11 @@ convenience, not a layer.
 | `cratefield-module-webhooks` | Outbound webhooks: per-subject endpoints, HMAC-signed POSTs over the core outbox, dead letters and replay |
 | `cratefield-module-wallets` | Link EVM and Solana wallets to a signed-in account: single-use nonces, SIWE (EIP-4361) and SIWS verification, EIP-1271 contract signatures behind a port |
 | `cratefield-module-guardrails` | The policy engine every automated value-moving action must pass: hard denies, allowlists, required simulation, micro-USD caps, a kill switch and audit — default deny, fail closed |
+| `cratefield-module-sealed` | The server half of client-side sealed blobs (`@cratefield/sealed` is the client): opaque ciphertext at rest under a server outer wrap, crypto-shred erasure, and no server-side recovery path |
+| `cratefield-adapter-telegram` | `TelegramBot` over the Telegram Bot API, through the `HttpClient` port: verified secret-token webhook updates, sends under global and per-chat rate budgets, a token that never rides a log line |
+| `cratefield-module-telegram` | Telegram in a venture: the secret-token webhook, account linking, consent buttons that never move value without a passkey, and a `module-notifications` channel |
+| `cratefield-signer` | Signs EVM transactions, ERC-4337 `UserOperations`, EIP-712 data and Solana messages by key reference: guardrails decide before the provider runs, every attempt lands on an append-only audit chain, and session keys never leave the Secrets store |
+| `cratefield-adapter-turnkey` | The signer port's Turnkey provider: sub-organizations rooted in the user's passkey, the backend a delegated access user scoped by policy with a kill switch, signing by key reference and never exporting |
 
 Everything else in the workspace is unpublished — `publish = false` is what
 makes a crate private now, not a separate repository (ADR

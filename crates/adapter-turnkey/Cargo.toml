@@ -1,0 +1,75 @@
+[package]
+name = "cratefield-adapter-turnkey"
+description = "Cratefield harness adapter: the Turnkey provider for the signer port — passkey-rooted sub-organizations, delegated access under policy, and key-reference signing"
+readme = "README.md"
+keywords = ["cratefield", "turnkey", "signing", "wallet", "adapter"]
+categories = ["api-bindings"]
+include = ["src/**/*", "tests/**/*", "README.md"]
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+cratefield-core = { workspace = true }
+cratefield-signer = { workspace = true }
+cratefield-secrets = { workspace = true }
+async-trait = { workspace = true }
+bytes = { workspace = true }
+http = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+hex = { workspace = true }
+bs58 = { workspace = true }
+base64 = { workspace = true }
+# The API-key stamp: an ECDSA P-256/SHA-256 DER signature over the exact
+# request body (`X-Stamp`, scheme `SIGNATURE_SCHEME_TK_API_P256`). The
+# workspace's own `p256` 0.13 line — the one `adapter-apns` and `webpush`
+# already carry — signs deterministically (RFC 6979, no RNG) and builds
+# for wasm32, which is why the vendor's `turnkey_api_key_stamper` crate
+# is not used: it drags in `getrandom` 0.2 and needs the `js` feature
+# opted in on wasm32, a second getrandom major the workspace does not
+# pin (checked against 0.16.0).
+p256 = { workspace = true }
+# Signature verification (issue #761 review): a Turnkey answer only
+# becomes a signature once it verifies — a secp256k1 answer must recover
+# to the key reference's identity address over the digest we computed
+# (`k256`'s `recover_from_prehash`, the same primitive the signer port's
+# conformance suite checks with, keccak256 of the recovered point being
+# the address), and an ed25519 answer must verify against the identity
+# pubkey over the exact message. The same crates signed the fake server's
+# fixtures in tests; they are real dependencies now.
+k256 = { workspace = true }
+sha3 = { workspace = true }
+ed25519-dalek = { workspace = true }
+# The unsealed API-key bytes live in a `Zeroizing` buffer for exactly the
+# span of the stamping call, then are gone.
+zeroize = { workspace = true }
+# Not called from this crate — nothing here draws randomness. It is here to
+# pick getrandom's `wasm_js` backend, which `ulid` (via cratefield-core)
+# pulls in and which otherwise only a leaf crate selects, so that
+# `cargo build --target wasm32-unknown-unknown -p cratefield-adapter-turnkey`
+# stands on its own (issue #559, on the pattern of issue #178). The same
+# line, for the same reason, is in cratefield-adapter-linear and the
+# other leaf crates.
+getrandom = { workspace = true }
+
+[dev-dependencies]
+# Path-only on purpose: `cargo publish` resolves dev-dependencies against
+# crates.io, and a path-only one is stripped from the packaged manifest
+# (see the note in the workspace manifest).
+cratefield-kms = { path = "../kms" }
+cratefield-adapter-sqlite = { path = "../adapter-sqlite" }
+# `k256`/`sha3`/`ed25519-dalek` are regular dependencies above: they sign
+# the fake server's fixtures here, and verify the adapter's answers for
+# real in `sign`.
+pollster = { workspace = true }
+hex = { workspace = true }
+# The test clock answers one fixed instant; `Clock::now` returns `time`'s
+# OffsetDateTime.
+time = { workspace = true }
