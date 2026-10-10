@@ -276,6 +276,68 @@ pub async fn user_by_primary_email(
     Ok(rows.first().map(user_from))
 }
 
+/// One `user_admin_audit` row (issue #854): the record of an operator
+/// switching an account on or off. Nothing reads it back in this module;
+/// it is the answer to "who flipped this account, and when".
+#[derive(Debug, Clone)]
+pub struct UserAdminAuditRow {
+    pub id: String,
+    pub user_id: String,
+    /// `user.disable` or `user.enable`.
+    pub action: String,
+    pub at: String,
+}
+
+/// Sets a user's status (`active`/`disabled`) and records the action —
+/// one commit, so the flag can never move without its audit row. The
+/// account-disable route (issue #854) calls this before revoking the
+/// account's sessions and refresh tokens, so a sign-in that races it is
+/// refused as `not active` before the revocations run.
+///
+/// The audit insert is an `INSERT … SELECT` that takes its `user_id` from
+/// the `users` row itself: a batch that races an erasure matches no user
+/// row and so writes no audit row either, on every dialect — the adapters
+/// do not all enforce the foreign key the column names.
+///
+/// Idempotent by nature: re-setting an unchanged status still writes the
+/// audit row, because the call itself is the action being recorded.
+///
+/// # Errors
+///
+/// [`DbError::Batch`] when the batch or the statement built for it fails.
+pub async fn set_user_status(
+    db: &dyn Database,
+    id: &str,
+    status: &str,
+    audit: &UserAdminAuditRow,
+    now: &str,
+) -> Result<(), DbError> {
+    let mut update = Query::update();
+    update
+        .table(iden("users"))
+        .values([
+            (iden("status"), status.into()),
+            (iden("updated_at"), now.into()),
+        ])
+        .and_where(Expr::col(iden("id")).eq(id));
+    let mut select = Query::select();
+    select
+        .expr(Expr::val(audit.id.clone()))
+        .column(iden("id"))
+        .expr(Expr::val(audit.action.clone()))
+        .expr(Expr::val(audit.at.clone()))
+        .from(iden("users"))
+        .and_where(Expr::col(iden("id")).eq(id));
+    let mut insert = Query::insert();
+    insert
+        .into_table(iden("user_admin_audit"))
+        .columns(["id", "user_id", "action", "at"])
+        .select_from(select)
+        .map_err(|err| DbError::Batch(err.to_string()))?;
+    db.batch_atomic(&[Statement::render(&update), Statement::render(&insert)])
+        .await
+}
+
 // ---------------------------------------------------------------------------
 // identities
 
