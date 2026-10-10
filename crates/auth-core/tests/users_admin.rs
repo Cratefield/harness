@@ -134,12 +134,15 @@ async fn exchange(
         .expect("exchange")
 }
 
-/// The `user_admin_audit` rows for one user, newest last.
+/// The `user_admin_audit` rows for one user, newest last. Two calls in the
+/// same test can land in the same second and the same ULID millisecond, and
+/// a ULID's random tail does not order within one — so ties break on the
+/// in-memory SQLite `rowid`, which is insertion order.
 async fn audit_rows(kit: &TestHarness, user: &str) -> Vec<String> {
     let rows = kit
         .db
         .query(&Statement::with_values(
-            "SELECT action FROM user_admin_audit WHERE user_id = ? ORDER BY at, id",
+            "SELECT action FROM user_admin_audit WHERE user_id = ? ORDER BY at, rowid",
             vec![user.into()],
         ))
         .await
