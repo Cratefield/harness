@@ -139,6 +139,30 @@ Bounds are enforced locally first: `Prompt::check_images` refuses more than
 `MAX_PROMPT_IMAGES` images, one over `MAX_IMAGE_ENCODED_BYTES`, or a total
 over `MAX_PROMPT_IMAGE_ENCODED_BYTES`, each with `TextModelError::ImageLimit`.
 
+## Streaming
+
+`TextModel::stream` (issue #859) speaks the wire natively: the request
+`complete` builds plus `stream: true` and
+`stream_options: {include_usage: true}`, its Server-Sent Events decoded by
+core's shared SSE decoder into `TextDelta`s — answer text as it arrives,
+`delta.reasoning_content` (and the `reasoning` alias some servers ship) as
+`Reasoning`, each tool call started / grown argument fragment by fragment /
+finished with the arguments reassembled by exactly the parser `complete`
+uses, the trailing usage chunk as `Usage`, and one `Finish`. The head maps
+errors identically to `complete` (bounded body included); an error payload
+inside the stream ends it with `Transport`, and a stream that ends without
+a `finish_reason` or `[DONE]` never passes as a success. Dropping the
+returned stream drops the response body, which cancels the upstream
+exchange — a disconnecting caller stops the spend.
+
+Two prompts do not stream natively. One carrying `Prompt::json_schema` falls
+back to one buffered `complete` round trip decomposed by
+`completion_deltas` — structured output is a buffered feature
+(`Completion::json` needs the whole answer). And a `finish_reason` of
+`length` beside tool calls ends the stream with the same `Rejected` error
+the buffered path returns: a call truncated mid-arguments never reaches an
+executor either way.
+
 Error mapping (to `cratefield_core::TextModelError`): 429 →
 `Transient { retry_after }` (from the `Retry-After` header, both RFC 9110
 forms), any 5xx → `Transient { retry_after: None }`, 400/422 → `Rejected`

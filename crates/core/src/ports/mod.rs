@@ -59,9 +59,10 @@ pub use defer::{Defer, NoopDefer};
 pub use dispatcher::{DispatchError, Dispatcher};
 pub use embedder::{EmbedError, Embedder, Embeddings};
 pub use http::{
-    BoundedHttpClient, DEFAULT_RESPONSE_TIMEOUT, HttpClient, HttpError, HttpPolicy,
-    MAX_CONCURRENT_REQUESTS, MAX_RESPONSE_BYTES, MAX_RESPONSE_TIMEOUT, StatusOnly,
-    declared_content_length,
+    BoundedHttpClient, ByteStream, DEFAULT_RESPONSE_TIMEOUT, DEFAULT_STREAM_IDLE_TIMEOUT,
+    DEFAULT_STREAM_TOTAL_TIMEOUT, HttpClient, HttpError, HttpPolicy, MAX_CONCURRENT_REQUESTS,
+    MAX_RESPONSE_BYTES, MAX_RESPONSE_TIMEOUT, MAX_STREAM_BYTES, MAX_STREAM_IDLE_TIMEOUT,
+    MAX_STREAM_TOTAL_TIMEOUT, StatusOnly, StreamPolicy, declared_content_length,
 };
 pub use idgen::{IdGen, UlidIdGen};
 pub use inbound_mail::{InboundMailError, InboundMailSource, InboundMessage, receive_mail};
@@ -88,10 +89,11 @@ pub use speech::{
     check_synthesize, check_transcribe, primary_subtag, wav_duration,
 };
 pub use text_model::{
-    Capability, Completion, DEFAULT_MAX_TOKENS, ImageLimit, ImageMediaType,
-    MAX_IMAGE_ENCODED_BYTES, MAX_PROMPT_IMAGE_ENCODED_BYTES, MAX_PROMPT_IMAGES, ModelTier, Part,
-    Prompt, Role, RoutingTextModel, TextModel, TextModelError, ToolCall, ToolChoice, ToolResult,
-    ToolSpec, Turn, encode_image, encoded_image_len,
+    Capability, Completion, CompletionBuilder, DEFAULT_MAX_TOKENS, FinishReason, ImageLimit,
+    ImageMediaType, MAX_IMAGE_ENCODED_BYTES, MAX_PROMPT_IMAGE_ENCODED_BYTES, MAX_PROMPT_IMAGES,
+    ModelTier, Part, Prompt, Role, RoutingTextModel, TextDelta, TextModel, TextModelError,
+    ToolCall, ToolChoice, ToolResult, ToolSpec, Turn, completion_deltas, encode_image,
+    encoded_image_len, stream_owned,
 };
 pub use tracker::{
     Credential, Destination, Filed, InboundStatusError, RoutingTracker, Severity, StatusUpdate,

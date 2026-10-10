@@ -24,6 +24,14 @@ tower = { workspace = true }
 tower-http = { workspace = true }
 bytes = { workspace = true }
 futures-core = { workspace = true }
+# The bounded mpsc channel behind `stream::pump` (issue #859): how
+# `stream_owned` hands a route handler a `'static` delta stream without
+# spawning a task — the pump future that owns the model and the prompt is
+# merged into the receiver and polled only when the output is, and
+# dropping the output drops it, which is the cancellation contract.
+# Wasm-safe. The "sink" feature is the `Sink` impl on the channel's
+# `Sender` (issue #859) — without it `SinkExt::send` has nothing to extend.
+futures-channel = { workspace = true, features = ["sink"] }
 # The outbound budget's default sleeper (issue #765): the one timer that
 # brings neither an executor nor a runtime dependency — `Delay` is a plain
 # future. Not a workspace dependency on purpose: nothing else in the tree
@@ -37,7 +45,10 @@ futures-timer = "3"
 # held across the probe's awaits, and a std one that could would stall an
 # executor thread for the length of the subrequest. Wasm-safe, and the same
 # lock the GitHub App adapter single-flights its token exchange with.
-futures-util = { workspace = true }
+# The extra "sink" feature is `SinkExt::send` on the pump's channel sender
+# (issue #859): `stream_owned` pushes deltas through an mpsc, and `send` is
+# the backpressured write. `futures-sink` is dependency-free and wasm-safe.
+futures-util = { workspace = true, features = ["sink"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 schemars = { workspace = true }

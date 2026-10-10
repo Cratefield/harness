@@ -22,6 +22,11 @@ bytes = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tracing = { workspace = true }
+# The streaming path (issue #859): the Messages event stream is folded
+# into the port's deltas with `futures_util::stream::unfold` over core's
+# `sse_events`, and the stream owns the response body, so dropping it
+# cancels the upstream exchange. Wasm-safe, the same way core's use of it.
+futures-util = { workspace = true }
 # Nothing here draws randomness, but `cratefield-core`'s `ulid` reaches
 # `getrandom` through `rand`, and picking `getrandom`'s `wasm_js` backend is
 # the final crate's job in this workspace, so `cargo build --target
@@ -41,3 +46,7 @@ getrandom = { workspace = true }
 cratefield-testing = { path = "../testing" }
 pollster = { workspace = true }
 time = { workspace = true }
+# The mpsc behind the incremental-delivery and cancellation tests: the
+# streamed body arrives over a channel the test holds the other end of,
+# so it controls exactly which bytes exist when.
+futures-channel = { workspace = true }

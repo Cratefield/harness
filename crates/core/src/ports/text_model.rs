@@ -5,7 +5,7 @@
 //! and invisible to the module (ADR 0002). [`RoutingTextModel`] is the seam,
 //! the way [`RoutingPush`](crate::RoutingPush) is for transports.
 //!
-//! **Tools arrived in issue #665; streaming stays out of scope.** A
+//! **Tools arrived in issue #665.** A
 //! [`Prompt`] may carry [`ToolSpec`]s and a [`ToolChoice`]; a
 //! [`Completion`] may carry the [`ToolCall`]s the model asked for; and a
 //! [`Turn`] can quote an assistant's requested calls and the
@@ -23,12 +23,24 @@
 //! answer, and allows one repair retry — so a caller holds a value that
 //! conforms or a [`TextModelError::SchemaViolation`], never a partial one.
 //!
-//! Streaming is the deliberate omission, not a gap:
-//! `response_to_worker` buffers a whole harness response to
-//! `MAX_RESPONSE_BUFFER` (1 MiB, `crates/runtime-cloudflare/src/lib.rs`),
-//! so a streamed completion has nowhere to arrive on this runtime — a port
-//! that promised deltas would be a port the Workers twin could not keep.
-//! A tool loop still is one request and one buffered answer per step.
+//! **Streaming is part of the port (issue #859).** [`TextModel::stream`]
+//! yields [`TextDelta`]s — text and reasoning as they arrive, each tool
+//! call as it starts, grows arguments and finishes, running usage, and
+//! exactly one `Finish` — and defaults to a single `complete` round trip
+//! decomposed by [`completion_deltas`], so every adapter that existed
+//! before the method did streams unchanged; one whose provider streams
+//! natively overrides it. [`CompletionBuilder`] runs the other way,
+//! reassembling deltas into a [`Completion`]. For a route handler,
+//! [`stream_owned`] turns an `Arc` and an owned prompt into a `'static`
+//! delta stream — the input [`ResponseStream`](crate::ResponseStream)
+//! bridges to the wire without the 1 MiB `response_to_worker` buffer,
+//! which is why the port can promise deltas now: issue #585 added
+//! [`Module::streaming_routes`](crate::Module::streaming_routes) and the
+//! runtime that could not keep the promise bridges it. Dropping the
+//! stream cancels the completion mid-flight, the same contract
+//! [`HttpClient::send_streaming`](crate::HttpClient::send_streaming)
+//! carries; the outbound bounds a streaming adapter works under are
+//! [`StreamPolicy`](crate::StreamPolicy)'s.
 //!
 //! **Image input arrived in issue #628.** A [`Turn`] may carry [`Part`]s —
 //! text and images in order — built with [`Turn::user_parts`]; a text-only
@@ -51,10 +63,13 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use base64::Engine as _;
+use futures_util::SinkExt as _;
+use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use super::http::MAX_RESPONSE_BYTES;
+use crate::stream::{BoxStream, pump};
 
 /// The token ceiling a [`Prompt`] starts with: enough for a drafted reply,
 /// small enough that a forgotten `.max_tokens(..)` cannot turn into a run
@@ -228,7 +243,12 @@ pub enum ToolChoice {
 /// arguments the model produced (issue #665). The arguments are exactly
 /// what the model sent — [`run_tool_loop`](crate::run_tool_loop) validates
 /// them against the tool's schema before any executor sees them.
-#[derive(Debug, Clone, PartialEq)]
+///
+/// Serialization arrived with streaming (issue #859):
+/// [`TextDelta::ToolCallFinished`](crate::TextDelta::ToolCallFinished)
+/// carries a whole call across the wire, so the call itself has to ride
+/// along.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ToolCall {
     pub id: String,
     pub name: String,
@@ -724,6 +744,248 @@ impl Completion {
     }
 }
 
+/// Why a completion stopped (issue #859): what
+/// [`TextDelta::Finish`] names when a stream ends successfully, and the
+/// shape `complete`'s outcome takes on the streaming port.
+///
+/// `#[non_exhaustive]`: providers invent reasons, and [`Self::Other`] is
+/// the pressure valve — a caller that matches the known ones and treats
+/// anything else as [`Self::Stop`]-shaped should not recompile when a
+/// provider's vocabulary grows.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum FinishReason {
+    /// The model finished its answer on its own.
+    Stop,
+    /// The answer was cut off at [`Prompt::max_tokens`].
+    Length,
+    /// The model asked to call a tool; the answer continues in
+    /// [`Completion::tool_calls`].
+    ToolUse,
+    /// The provider withheld or truncated content under its own policy.
+    ContentFilter,
+    /// A reason this port does not name. The provider's own word rides
+    /// along for the log line.
+    Other(String),
+}
+
+/// One incremental piece of a streamed completion (issue #859) — the item
+/// type of [`TextModel::stream`].
+///
+/// Semantics a caller (and an overriding adapter) can rely on:
+///
+/// - [`Self::Usage`] carries **running totals**; a stream may send several
+///   and the last one wins.
+/// - [`Self::ToolCallStarted`] / [`Self::ToolCallArguments`] /
+///   [`Self::ToolCallFinished`] carry one tool call through its life by
+///   `index`. The argument `chunk`s are incremental and only
+///   human-readable in sequence; [`Self::ToolCallFinished`] carries the
+///   fully reassembled [`ToolCall`] — exactly what `complete` would have
+///   returned in [`Completion::tool_calls`] — so a caller who only cares
+///   about finished calls can ignore the first two.
+/// - Exactly **one** [`Self::Finish`] ends a successful stream; it is the
+///   last item. An `Err` item also ends the stream (a failed completion
+///   has no `Finish`).
+/// - Dropping the stream cancels the completion: an overriding adapter
+///   MUST abort its upstream exchange on drop, the contract
+///   [`HttpClient::send_streaming`](crate::HttpClient::send_streaming)
+///   carries.
+///
+/// `Serialize`/`Deserialize` (adjacently tagged, so every variant round
+/// trips) is what lets a route write deltas straight out as SSE or
+/// NDJSON: `{"type":"text","data":"…"}`, `{"type":"finish","data":{…}}`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", content = "data", rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum TextDelta {
+    /// A run of answer text, in stream order.
+    Text(String),
+    /// A run of reasoning the model surfaced alongside its answer. Not
+    /// part of [`Completion::text`]; a caller shows it or drops it.
+    Reasoning(String),
+    /// The model asked to call a tool: the call's `index` in the
+    /// completion's tool-call order, its provider-assigned `id`, and the
+    /// tool `name`. The arguments have not arrived yet.
+    ToolCallStarted {
+        /// Position this call occupies in the completion's tool calls.
+        index: usize,
+        /// The provider's id for the call.
+        id: String,
+        /// The tool being called.
+        name: String,
+    },
+    /// One run of the arguments of the call at `index`. Chunks concatenate
+    /// to the call's full arguments JSON; see [`Self::ToolCallFinished`]
+    /// for the reassembled form.
+    ToolCallArguments {
+        /// Which call's arguments are growing.
+        index: usize,
+        /// The next piece of the arguments JSON.
+        chunk: String,
+    },
+    /// The call at `index` is complete, arguments and all — the same
+    /// [`ToolCall`] `complete` would have returned.
+    ToolCallFinished {
+        /// Which call finished.
+        index: usize,
+        /// The reassembled call.
+        call: ToolCall,
+    },
+    /// Token usage so far. Running totals: a later
+    /// [`Self::Usage`](Self) supersedes it entirely.
+    Usage {
+        /// Total prompt tokens processed so far, cached included.
+        input_tokens: u64,
+        /// Completion tokens produced so far.
+        output_tokens: u64,
+        /// The cached subset of `input_tokens`, where the provider
+        /// reports one — `None` keeps "no report" and "reported zero"
+        /// distinct, exactly as [`Completion::cached_input_tokens`] does.
+        cached_input_tokens: Option<u64>,
+    },
+    /// The stream is over, successfully. Always the last item of a
+    /// successful stream, and the only one.
+    Finish {
+        /// Why the completion stopped.
+        reason: FinishReason,
+        /// The provider identifier `complete` would have reported — the
+        /// log line's model, from the stream.
+        model: String,
+    },
+}
+
+/// Decomposes a buffered [`Completion`] into the [`TextDelta`] sequence
+/// [`TextModel::stream`]'s default implementation yields: the text (if
+/// any), each tool call through its three-step life, the usage, and one
+/// `Finish` — [`FinishReason::ToolUse`] when the completion carries tool
+/// calls, [`FinishReason::Stop`] otherwise.
+///
+/// The point is one definition of "a completion, as deltas", so a default
+/// stream and a native one produce the same shape and
+/// [`CompletionBuilder`] can invert both.
+#[must_use]
+pub fn completion_deltas(completion: &Completion) -> Vec<TextDelta> {
+    let mut deltas = Vec::new();
+    if !completion.text.is_empty() {
+        deltas.push(TextDelta::Text(completion.text.clone()));
+    }
+    for (index, call) in completion.tool_calls.iter().enumerate() {
+        deltas.push(TextDelta::ToolCallStarted {
+            index,
+            id: call.id.clone(),
+            name: call.name.clone(),
+        });
+        deltas.push(TextDelta::ToolCallArguments {
+            index,
+            chunk: call.arguments.to_string(),
+        });
+        deltas.push(TextDelta::ToolCallFinished {
+            index,
+            call: call.clone(),
+        });
+    }
+    deltas.push(TextDelta::Usage {
+        input_tokens: completion.input_tokens,
+        output_tokens: completion.output_tokens,
+        cached_input_tokens: completion.cached_input_tokens,
+    });
+    let reason = if completion.tool_calls.is_empty() {
+        FinishReason::Stop
+    } else {
+        FinishReason::ToolUse
+    };
+    deltas.push(TextDelta::Finish {
+        reason,
+        model: completion.model.clone(),
+    });
+    deltas
+}
+
+/// Reassembles a stream of [`TextDelta`]s back into a [`Completion`] —
+/// the inverse of [`completion_deltas`], for a caller that consumed a
+/// stream incrementally (relaying it to a client, say) and still wants
+/// the whole answer at the end: to log, to persist, to hand to the tool
+/// loop.
+///
+/// # Semantics
+///
+/// - [`TextDelta::Text`] pieces concatenate in order.
+/// - [`TextDelta::Reasoning`] is dropped: reasoning is not part of a
+///   completion.
+/// - [`TextDelta::ToolCallFinished`] fills `tool_calls` in `index` order;
+///   argument chunks and starts are informational here, since the
+///   finished call carries the reassembled form. A call whose finish
+///   never arrived (the stream died mid-call) leaves no trace — a
+///   half-finished call is not a call the tool loop may run.
+/// - [`TextDelta::Usage`] is last-wins, whole replacement.
+/// - [`TextDelta::Finish`] supplies `model` (empty when the stream ended
+///   without one).
+/// - `json` is always `None`: structured output is a `complete` feature —
+///   the parsed value comes from validating the whole answer against the
+///   prompt's schema, which a stream that relayed itself away never
+///   promised. A streaming caller wanting a value parses and validates
+///   the reassembled text itself.
+#[derive(Debug, Default)]
+pub struct CompletionBuilder {
+    text: String,
+    tool_calls: std::collections::BTreeMap<usize, ToolCall>,
+    usage: Option<(u64, u64, Option<u64>)>,
+    model: Option<String>,
+    finish_reason: Option<FinishReason>,
+}
+
+impl CompletionBuilder {
+    /// Folds one delta in. Cheap; call it for every item the stream
+    /// yields.
+    pub fn push(&mut self, delta: &TextDelta) {
+        match delta {
+            TextDelta::Text(text) => self.text.push_str(text),
+            // Reasoning is not replayed into the completion's text, and a
+            // call only exists once its Finished delta carries it whole.
+            TextDelta::Reasoning(_)
+            | TextDelta::ToolCallStarted { .. }
+            | TextDelta::ToolCallArguments { .. } => {}
+            TextDelta::ToolCallFinished { index, call } => {
+                self.tool_calls.insert(*index, call.clone());
+            }
+            TextDelta::Usage {
+                input_tokens,
+                output_tokens,
+                cached_input_tokens,
+            } => {
+                self.usage = Some((*input_tokens, *output_tokens, *cached_input_tokens));
+            }
+            TextDelta::Finish { reason, model } => {
+                self.finish_reason = Some(reason.clone());
+                self.model = Some(model.clone());
+            }
+        }
+    }
+
+    /// Why the stream ended, where it sent a `Finish` — `None` for a
+    /// stream that is still open or died without one.
+    #[must_use]
+    pub fn finish_reason(&self) -> Option<&FinishReason> {
+        self.finish_reason.as_ref()
+    }
+
+    /// The completion the deltas add up to: text concatenated, tool calls
+    /// from their finishes in index order, usage last-wins, model from
+    /// the `Finish`, `json` `None` (see the type's docs).
+    #[must_use]
+    pub fn finish(self) -> Completion {
+        let mut completion = Completion::new(self.text, self.model.unwrap_or_default());
+        completion.tool_calls = self.tool_calls.into_values().collect();
+        if let Some((input_tokens, output_tokens, cached_input_tokens)) = self.usage {
+            completion.input_tokens = input_tokens;
+            completion.output_tokens = output_tokens;
+            completion.cached_input_tokens = cached_input_tokens;
+        }
+        completion
+    }
+}
+
 /// Which image bound a [`Prompt`] crossed (issue #628): the count, one
 /// image's encoded size, or the whole prompt's. Carries only sizes and
 /// indices — never user content — so it is safe in a log line as-is.
@@ -894,6 +1156,44 @@ pub trait TextModel: Send + Sync {
     /// failing the call.
     async fn complete(&self, prompt: &Prompt) -> Result<Completion, TextModelError>;
 
+    /// Streams `prompt` as [`TextDelta`]s (issue #859). The default
+    /// implementation makes one `complete` round trip — the same provider
+    /// exchange, the same cost — and answers its result decomposed by
+    /// [`completion_deltas`], so an adapter written before this method
+    /// existed streams without a change. An adapter whose provider
+    /// streams natively overrides it; a caller cannot tell the difference
+    /// except by timing (and by [`Completion::json`], which only a
+    /// buffered structured-output call can fill).
+    ///
+    /// # Cancellation
+    ///
+    /// Dropping the returned stream cancels the completion: an overriding
+    /// adapter MUST abort its upstream exchange on drop, the same
+    /// contract
+    /// [`HttpClient::send_streaming`](crate::HttpClient::send_streaming)
+    /// carries, so a route whose client disconnects stops the spend. A
+    /// route handler that needs a `'static` stream builds one with
+    /// [`stream_owned`].
+    ///
+    /// A successful stream ends with exactly one [`TextDelta::Finish`];
+    /// an `Err` item ends it instead, and no `Finish` follows an error.
+    fn stream<'a>(
+        &'a self,
+        prompt: &'a Prompt,
+    ) -> BoxStream<'a, Result<TextDelta, TextModelError>> {
+        Box::pin(
+            futures_util::stream::once(self.complete(prompt)).flat_map(|outcome| {
+                futures_util::stream::iter(match outcome {
+                    Ok(completion) => completion_deltas(&completion)
+                        .into_iter()
+                        .map(Ok)
+                        .collect::<Vec<_>>(),
+                    Err(err) => vec![Err(err)],
+                })
+            }),
+        )
+    }
+
     /// Whether this adapter can do `capability` for a prompt routed to
     /// `tier`. Defaults to `false`: a model that has not opted in is
     /// refused a tools-bearing prompt by [`RoutingTextModel`] and
@@ -911,6 +1211,36 @@ pub trait TextModel: Send + Sync {
     fn supports(&self, _tier: ModelTier, _capability: Capability) -> bool {
         false
     }
+}
+
+/// A `'static` stream of `model`'s deltas for `prompt` (issue #859): the
+/// shape a route handler needs, because
+/// [`ResponseStream::new`](crate::ResponseStream::new) wants a body that
+/// outlives the request's borrowed state and [`TextModel::stream`] wants
+/// borrows.
+///
+/// Implemented without spawning and without `unsafe`: the model and the
+/// prompt travel in a pump future merged into the output stream (the
+/// crate-internal `pump` helper in core's `stream` module does the
+/// merging), so the pump is polled exactly when the output is and
+/// **dropping the output cancels the completion** — the inner stream
+/// drops, and with it the upstream exchange, which is how a disconnecting
+/// client stops the spend. An item the receiver has no room for parks the
+/// pump; a receiver that went away ends it.
+pub fn stream_owned(
+    model: Arc<dyn TextModel>,
+    prompt: Prompt,
+) -> BoxStream<'static, Result<TextDelta, TextModelError>> {
+    pump(move |mut tx| async move {
+        let mut stream = model.stream(&prompt);
+        while let Some(delta) = stream.next().await {
+            if tx.send(delta).await.is_err() {
+                // The consumer is gone: dropping the loop drops the inner
+                // stream and with it the upstream exchange.
+                break;
+            }
+        }
+    })
 }
 
 /// Dispatches by [`Prompt::tier`] to the adapter a venture configured for
@@ -980,6 +1310,36 @@ impl RoutingTextModel {
             ModelTier::Strong => self.strong.as_ref(),
         }
     }
+
+    /// The adapter `prompt` routes to, after the pre-flight refusals both
+    /// halves of the port share — `complete` and `stream` run the same
+    /// gates in the same order, so a prompt refused on one half is
+    /// refused identically, and before any adapter is called, on the
+    /// other: image bounds first (they hold whatever tier answers), then
+    /// the tier lookup, then the per-tier capability agreement.
+    fn routed(&self, prompt: &Prompt) -> Result<&Arc<dyn TextModel>, TextModelError> {
+        // An over-limit image prompt is refused before anything is routed:
+        // the limits are about the request a provider would be handed, so
+        // they hold whatever tier answers.
+        prompt.check_images()?;
+        let model = self
+            .route_for(prompt.tier)
+            .ok_or(TextModelError::NotConfigured)?;
+        // A tools-bearing prompt to a model that cannot carry tools is
+        // refused here, not silently sent with the tools dropped: the
+        // caller asked for something the wiring cannot honour, and a
+        // fabricated plain answer would hide that.
+        if !prompt.tools.is_empty() && !model.supports(prompt.tier, Capability::Tools) {
+            return Err(TextModelError::Unsupported(Capability::Tools));
+        }
+        // The same rule for images: a prompt carrying one to a model
+        // without vision is refused, never sent with the image silently
+        // dropped.
+        if prompt.has_images() && !model.supports(prompt.tier, Capability::Images) {
+            return Err(TextModelError::Unsupported(Capability::Images));
+        }
+        Ok(model)
+    }
 }
 
 impl std::fmt::Debug for RoutingTextModel {
@@ -994,28 +1354,23 @@ impl std::fmt::Debug for RoutingTextModel {
 #[async_trait]
 impl TextModel for RoutingTextModel {
     async fn complete(&self, prompt: &Prompt) -> Result<Completion, TextModelError> {
-        // An over-limit image prompt is refused before anything is routed:
-        // the limits are about the request a provider would be handed, so
-        // they hold whatever tier answers.
-        prompt.check_images()?;
-        match self.route_for(prompt.tier) {
-            Some(model) => {
-                // A tools-bearing prompt to a model that cannot carry tools
-                // is refused here, not silently sent with the tools
-                // dropped: the caller asked for something the wiring cannot
-                // honour, and a fabricated plain answer would hide that.
-                if !prompt.tools.is_empty() && !model.supports(prompt.tier, Capability::Tools) {
-                    return Err(TextModelError::Unsupported(Capability::Tools));
-                }
-                // The same rule for images: a prompt carrying one to a
-                // model without vision is refused, never sent with the image
-                // silently dropped.
-                if prompt.has_images() && !model.supports(prompt.tier, Capability::Images) {
-                    return Err(TextModelError::Unsupported(Capability::Images));
-                }
-                model.complete(prompt).await
-            }
-            None => Err(TextModelError::NotConfigured),
+        let model = self.routed(prompt)?;
+        model.complete(prompt).await
+    }
+
+    /// Forwards to the routed tier's own `stream` — a native stream is
+    /// not flattened through a buffered `complete`, or the router would
+    /// turn every native stream into one round trip. The pre-flight
+    /// refusals are the router's own (`routed`), so an unwired tier, an
+    /// over-limit prompt or a capability the tier lacks fails with the
+    /// same error `complete` gives, as the stream's first item.
+    fn stream<'a>(
+        &'a self,
+        prompt: &'a Prompt,
+    ) -> BoxStream<'a, Result<TextDelta, TextModelError>> {
+        match self.routed(prompt) {
+            Ok(model) => model.stream(prompt),
+            Err(err) => Box::pin(futures_util::stream::iter([Err(err)])),
         }
     }
 
@@ -1032,6 +1387,10 @@ impl TextModel for RoutingTextModel {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use futures_core::Stream;
+    use std::pin::Pin;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::task::{Context, Poll};
 
     // -----------------------------------------------------------------
     // ModelTier, Role, and the wire form
@@ -1697,5 +2056,414 @@ mod tests {
             })
         );
         assert_eq!(capable.count(), 1, "the over-limit prompt never reached it");
+    }
+
+    // -----------------------------------------------------------------
+    // Streaming (issue #859)
+
+    /// A model whose native stream is deliberately not its `complete`
+    /// decomposed: `complete` answers "buffered", `stream` yields
+    /// "native" — so a forwarded stream is observable as forwarding, and
+    /// a flattened one as the default's round trip.
+    struct Native {
+        seen: AtomicUsize,
+        /// Incremented whenever a handed-out stream is dropped: the
+        /// cancellation counter.
+        cancelled: Arc<AtomicUsize>,
+    }
+
+    impl Native {
+        fn new() -> Arc<Self> {
+            Arc::new(Self {
+                seen: AtomicUsize::new(0),
+                cancelled: Arc::new(AtomicUsize::new(0)),
+            })
+        }
+
+        fn completions(&self) -> usize {
+            self.seen.load(Ordering::Relaxed)
+        }
+
+        fn cancellations(&self) -> usize {
+            self.cancelled.load(Ordering::Relaxed)
+        }
+    }
+
+    /// Owned by every stream [`Native`] hands out; its drop is the
+    /// cancellation signal a route's disconnect relies on. A guard whose
+    /// stream ran to its natural end is disarmed first: cleanup is not
+    /// cancellation.
+    struct DropGuard {
+        counter: Arc<AtomicUsize>,
+        armed: bool,
+    }
+
+    impl DropGuard {
+        fn new(counter: Arc<AtomicUsize>) -> Self {
+            Self {
+                counter,
+                armed: true,
+            }
+        }
+    }
+
+    impl Drop for DropGuard {
+        fn drop(&mut self) {
+            if self.armed {
+                self.counter.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+    }
+
+    /// [`Native`]'s body: two deltas, then a clean end, holding its guard
+    /// the whole way.
+    struct NativeStream {
+        guard: Option<DropGuard>,
+        items: u8,
+        /// Set once the stream has been polled to its natural end: a drop
+        /// afterwards is cleanup, not cancellation.
+        exhausted: bool,
+    }
+
+    impl Stream for NativeStream {
+        type Item = Result<TextDelta, TextModelError>;
+
+        fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+            // The guard is never handed over; it is held until the stream
+            // itself drops.
+            let _ = &self.guard;
+            self.items += 1;
+            match self.items {
+                1 => Poll::Ready(Some(Ok(TextDelta::Text("native".to_owned())))),
+                2 => Poll::Ready(Some(Ok(TextDelta::Finish {
+                    reason: FinishReason::Stop,
+                    model: "native-vendor".to_owned(),
+                }))),
+                3 => {
+                    // A stand-in for a real upstream wait: park (waking the
+                    // executor at once, so a full drain still ends). With an
+                    // eager producer this is what lets a consumer's drop land
+                    // mid-stream instead of racing the natural end.
+                    cx.waker().wake_by_ref();
+                    Poll::Pending
+                }
+                _ => {
+                    self.exhausted = true;
+                    Poll::Ready(None)
+                }
+            }
+        }
+    }
+
+    impl Drop for NativeStream {
+        fn drop(&mut self) {
+            // Dropping mid-stream is the cancellation a route's disconnect
+            // relies on; dropping after the end is just cleanup, and must
+            // not count.
+            if self.exhausted
+                && let Some(guard) = self.guard.as_mut()
+            {
+                guard.armed = false;
+            }
+        }
+    }
+
+    #[async_trait]
+    impl TextModel for Native {
+        async fn complete(&self, _prompt: &Prompt) -> Result<Completion, TextModelError> {
+            self.seen.fetch_add(1, Ordering::Relaxed);
+            Ok(Completion::new("buffered", "native-vendor"))
+        }
+
+        fn stream<'a>(
+            &'a self,
+            _prompt: &'a Prompt,
+        ) -> BoxStream<'a, Result<TextDelta, TextModelError>> {
+            Box::pin(NativeStream {
+                guard: Some(DropGuard::new(Arc::clone(&self.cancelled))),
+                items: 0,
+                exhausted: false,
+            })
+        }
+    }
+
+    #[test]
+    fn completion_deltas_decomposes_text_tools_usage_and_finish() {
+        let call = ToolCall::new("call-1", "lookup", serde_json::json!({ "q": "x" }));
+        let completion = Completion::new("hello", "vendor-1")
+            .usage(3, 5)
+            .cached_input_tokens(2)
+            .tool_calls(vec![call.clone()]);
+        assert_eq!(
+            completion_deltas(&completion),
+            vec![
+                TextDelta::Text("hello".to_owned()),
+                TextDelta::ToolCallStarted {
+                    index: 0,
+                    id: "call-1".to_owned(),
+                    name: "lookup".to_owned(),
+                },
+                TextDelta::ToolCallArguments {
+                    index: 0,
+                    chunk: r#"{"q":"x"}"#.to_owned(),
+                },
+                TextDelta::ToolCallFinished { index: 0, call },
+                TextDelta::Usage {
+                    input_tokens: 3,
+                    output_tokens: 5,
+                    cached_input_tokens: Some(2),
+                },
+                TextDelta::Finish {
+                    reason: FinishReason::ToolUse,
+                    model: "vendor-1".to_owned(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn a_text_only_completion_finishes_stop_and_an_empty_one_carries_no_text_delta() {
+        let completion = Completion::new("", "vendor-1");
+        let deltas = completion_deltas(&completion);
+        assert_eq!(deltas.len(), 2, "usage and finish only: {deltas:?}");
+        assert!(matches!(
+            deltas[1],
+            TextDelta::Finish {
+                reason: FinishReason::Stop,
+                ..
+            }
+        ));
+    }
+
+    #[pollster::test]
+    async fn the_default_stream_is_one_round_trip_decomposed() {
+        let model = Recording::new("fast-vendor");
+        let prompt = Prompt::new(ModelTier::Fast).user("hi");
+        let deltas: Vec<_> = model.stream(&prompt).collect().await;
+        let completion = model.complete(&prompt).await.unwrap();
+        assert_eq!(
+            deltas,
+            completion_deltas(&completion)
+                .into_iter()
+                .map(Ok)
+                .collect::<Vec<_>>(),
+            "the default stream is the completion, as deltas"
+        );
+        assert_eq!(model.count(), 2, "the stream made its one round trip");
+    }
+
+    #[pollster::test]
+    async fn a_builder_round_trips_deltas_back_to_the_completion_minus_json() {
+        let call = ToolCall::new("call-1", "lookup", serde_json::json!({ "q": "x" }));
+        let completion = Completion::new("the answer", "vendor-1")
+            .json(serde_json::json!({ "reply": "the answer" }))
+            .usage(12, 34)
+            .cached_input_tokens(9)
+            .tool_calls(vec![call.clone()]);
+        let mut builder = CompletionBuilder::default();
+        for delta in completion_deltas(&completion) {
+            builder.push(&delta);
+        }
+        let rebuilt = builder.finish();
+        let expected = Completion::new("the answer", "vendor-1")
+            .usage(12, 34)
+            .cached_input_tokens(9)
+            .tool_calls(vec![call]);
+        assert_eq!(rebuilt, expected);
+        assert_eq!(
+            rebuilt.json, None,
+            "structured output is a `complete` feature"
+        );
+    }
+
+    #[test]
+    fn the_builder_takes_usage_last_and_needs_only_finished_calls() {
+        let mut builder = CompletionBuilder::default();
+        builder.push(&TextDelta::Text("a".to_owned()));
+        builder.push(&TextDelta::Reasoning(
+            "never reaches a completion".to_owned(),
+        ));
+        builder.push(&TextDelta::ToolCallArguments {
+            index: 0,
+            chunk: "{\"x\":".to_owned(),
+        });
+        builder.push(&TextDelta::Usage {
+            input_tokens: 1,
+            output_tokens: 1,
+            cached_input_tokens: None,
+        });
+        builder.push(&TextDelta::Usage {
+            input_tokens: 7,
+            output_tokens: 9,
+            cached_input_tokens: Some(4),
+        });
+        builder.push(&TextDelta::Finish {
+            reason: FinishReason::Length,
+            model: "vendor-9".to_owned(),
+        });
+        assert_eq!(builder.finish_reason(), Some(&FinishReason::Length));
+        let completion = builder.finish();
+        assert_eq!(completion.text, "a");
+        assert!(
+            completion.tool_calls.is_empty(),
+            "an unfinished call is not a call the tool loop may run"
+        );
+        assert_eq!(completion.input_tokens, 7);
+        assert_eq!(completion.output_tokens, 9);
+        assert_eq!(completion.cached_input_tokens, Some(4));
+        assert_eq!(completion.model, "vendor-9");
+    }
+
+    #[test]
+    fn a_delta_serialises_with_a_type_tag_and_round_trips() {
+        let deltas = vec![
+            TextDelta::Text("hi".to_owned()),
+            TextDelta::Reasoning("hmm".to_owned()),
+            TextDelta::ToolCallStarted {
+                index: 0,
+                id: "c1".to_owned(),
+                name: "lookup".to_owned(),
+            },
+            TextDelta::ToolCallArguments {
+                index: 0,
+                chunk: "{}".to_owned(),
+            },
+            TextDelta::ToolCallFinished {
+                index: 0,
+                call: ToolCall::new("c1", "lookup", serde_json::json!({})),
+            },
+            TextDelta::Usage {
+                input_tokens: 1,
+                output_tokens: 2,
+                cached_input_tokens: None,
+            },
+            TextDelta::Finish {
+                reason: FinishReason::ToolUse,
+                model: "vendor-1".to_owned(),
+            },
+        ];
+        for delta in &deltas {
+            let json = serde_json::to_value(delta).expect("serialises");
+            assert!(json.get("type").is_some(), "tagged: {json}");
+            let back: TextDelta = serde_json::from_value(json).expect("deserialises");
+            assert_eq!(&back, delta);
+        }
+        // The wire form a route writes is readable on its face.
+        assert_eq!(
+            serde_json::to_value(TextDelta::Text("hi".to_owned())).unwrap(),
+            serde_json::json!({ "type": "text", "data": "hi" })
+        );
+    }
+
+    #[pollster::test]
+    async fn the_router_forwards_stream_to_the_routed_tier() {
+        let native = Native::new();
+        let router = RoutingTextModel::new().fast(Arc::clone(&native) as Arc<dyn TextModel>);
+        let prompt = Prompt::new(ModelTier::Fast).user("hi");
+        let deltas: Vec<_> = router.stream(&prompt).collect().await;
+        assert_eq!(
+            deltas,
+            vec![
+                Ok(TextDelta::Text("native".to_owned())),
+                Ok(TextDelta::Finish {
+                    reason: FinishReason::Stop,
+                    model: "native-vendor".to_owned(),
+                }),
+            ],
+            "the inner model's native stream, not a flattened complete"
+        );
+        assert_eq!(
+            native.completions(),
+            0,
+            "forwarding never fell back to the buffered round trip"
+        );
+    }
+
+    #[pollster::test]
+    async fn the_router_refuses_a_stream_like_it_refuses_a_complete() {
+        // Unwired tier: the router's own NotConfigured, as the first item.
+        let native = Native::new();
+        let router = RoutingTextModel::new().fast(Arc::clone(&native) as Arc<dyn TextModel>);
+        let deltas: Vec<_> = router
+            .stream(&Prompt::new(ModelTier::Strong).user("hi"))
+            .collect()
+            .await;
+        assert_eq!(deltas, vec![Err(TextModelError::NotConfigured)]);
+
+        // Tools to a tier that cannot carry them: refused before the tier
+        // is ever called, exactly as `complete` refuses.
+        let incapable = Recording::new("plain");
+        let router = RoutingTextModel::new().fast(Arc::clone(&incapable) as Arc<dyn TextModel>);
+        let prompt = Prompt::new(ModelTier::Fast).user("hi").tool(ToolSpec::new(
+            "lookup",
+            "Look up.",
+            serde_json::json!({}),
+        ));
+        let deltas: Vec<_> = router.stream(&prompt).collect().await;
+        assert_eq!(
+            deltas,
+            vec![Err(TextModelError::Unsupported(Capability::Tools))]
+        );
+        assert_eq!(incapable.count(), 0, "the adapter was never called");
+    }
+
+    #[pollster::test]
+    async fn dropping_a_forwarded_stream_cancels_the_inner() {
+        let native = Native::new();
+        let router = RoutingTextModel::new().fast(Arc::clone(&native) as Arc<dyn TextModel>);
+        {
+            let prompt = Prompt::new(ModelTier::Fast).user("hi");
+            let mut stream = router.stream(&prompt);
+            let first = stream.next().await;
+            assert_eq!(first, Some(Ok(TextDelta::Text("native".to_owned()))));
+            // Dropped here, mid-stream.
+        }
+        assert_eq!(
+            native.cancellations(),
+            1,
+            "the drop reached the inner stream"
+        );
+    }
+
+    #[pollster::test]
+    async fn stream_owned_yields_a_static_stream_of_the_models_deltas() {
+        let native = Native::new();
+        // The `'static` bound is the point — this is the body a
+        // `ResponseStream` needs — so assert it by naming it.
+        let stream: BoxStream<'static, Result<TextDelta, TextModelError>> =
+            stream_owned(native.clone(), Prompt::new(ModelTier::Fast).user("hi"));
+        let deltas: Vec<_> = stream.collect().await;
+        assert_eq!(
+            deltas,
+            vec![
+                Ok(TextDelta::Text("native".to_owned())),
+                Ok(TextDelta::Finish {
+                    reason: FinishReason::Stop,
+                    model: "native-vendor".to_owned(),
+                }),
+            ]
+        );
+        assert_eq!(native.completions(), 0);
+        assert_eq!(
+            native.cancellations(),
+            0,
+            "a drained stream is not a cancelled one"
+        );
+    }
+
+    #[pollster::test]
+    async fn dropping_a_stream_owned_stream_cancels_the_model() {
+        let native = Native::new();
+        {
+            let mut stream = stream_owned(native.clone(), Prompt::new(ModelTier::Fast).user("hi"));
+            let first = stream.next().await;
+            assert_eq!(first, Some(Ok(TextDelta::Text("native".to_owned()))));
+            // Dropped here, before the model's stream ended.
+        }
+        assert_eq!(
+            native.cancellations(),
+            1,
+            "the pump dropped the inner stream"
+        );
     }
 }

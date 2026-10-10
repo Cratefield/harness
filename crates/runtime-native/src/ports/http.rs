@@ -35,8 +35,8 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use bytes::Bytes;
 use cratefield_core::{
-    HttpClient, HttpError, HttpPolicy, MAX_CONCURRENT_REQUESTS, declared_content_length,
-    scrub_request_url,
+    ByteStream, HttpClient, HttpError, HttpPolicy, MAX_CONCURRENT_REQUESTS,
+    declared_content_length, scrub_request_url,
 };
 use http::header::{
     AUTHORIZATION, CONTENT_LENGTH, CONTENT_TYPE, COOKIE, LOCATION, PROXY_AUTHORIZATION,
@@ -163,12 +163,11 @@ impl HttpClient for ReqwestClient {
 
         let response = self
             .exchange_until_final(
-                policy,
+                Some(ExchangeDeadline { policy, start }),
                 &mut method,
                 &mut headers,
                 &mut body,
                 &mut url,
-                start,
             )
             .await?;
 
@@ -193,6 +192,92 @@ impl HttpClient for ReqwestClient {
             .body(bytes)
             .map_err(|err| HttpError::Transport(err.to_string()))
     }
+
+    /// The streamed send has no bounds of its own — no head deadline, no
+    /// idle gap or whole-body ceiling on the body, no byte cap, no
+    /// declared-length refusal. All of those are
+    /// [`cratefield_core::BoundedHttpClient`]'s, which every runtime wires
+    /// around this transport; a bare `ReqwestClient` used directly streams
+    /// unbounded.
+    async fn send_streaming(
+        &self,
+        request: http::Request<Bytes>,
+    ) -> Result<http::Response<ByteStream>, HttpError> {
+        // The budget is held for the body's whole life, not just the head:
+        // a stream that runs for minutes is one in-flight request the whole
+        // time. The permit travels into the body stream and drops with it.
+        let permit = Arc::clone(&self.budget).try_acquire_owned().map_err(|_| {
+            HttpError::Transport("outbound concurrency budget exhausted".to_owned())
+        })?;
+        let (parts, mut body) = request.into_parts();
+        let mut method = parts.method;
+        let mut headers = parts.headers;
+        let mut url = Url::parse(&parts.uri.to_string())
+            .map_err(|err| HttpError::Transport(format!("invalid request uri: {err}")))?;
+        vet_static(&url, self.allow_loopback)?;
+        vet_resolved_host(&url, self.allow_loopback).await?;
+
+        // No deadline of its own: reqwest's per-request timeout is a
+        // *total* one and would kill a body whose whole point is to
+        // outlive the buffered deadline (see [`ExchangeDeadline`]). The
+        // bounds are `cratefield_core::BoundedHttpClient`'s — the head
+        // under the `HttpPolicy` deadline, the body under the
+        // `StreamPolicy` — measured through the Clock port, not reqwest.
+        let response = self
+            .exchange_until_final(None, &mut method, &mut headers, &mut body, &mut url)
+            .await?;
+
+        let status = response.status();
+        let headers_out = response.headers().clone();
+        let mut builder = http::Response::builder().status(status);
+        if let Some(target) = builder.headers_mut() {
+            *target = headers_out;
+        }
+        let body: ByteStream = Box::pin(futures_util::stream::unfold(
+            StreamingBody {
+                response: Some(response),
+                permit,
+            },
+            |mut state| async move {
+                // The response travels into the poll and back out with its
+                // chunk, so a wrapper that gives up on this poll drops the
+                // future — and the response with it, which is the abort.
+                let mut response = state.response.take()?;
+                match response.chunk().await {
+                    Ok(Some(chunk)) => {
+                        state.response = Some(response);
+                        Some((Ok(chunk), state))
+                    }
+                    // A clean end and a mid-body failure alike drop the
+                    // response here: the connection under it closes, the
+                    // budget goes back with the permit, and the stream (now
+                    // response-less) answers `None` to any later poll.
+                    Ok(None) => None,
+                    Err(err) => Some((Err(HttpError::Transport(safe_message(&err))), state)),
+                }
+            },
+        ));
+        builder
+            .body(body)
+            .map_err(|err| HttpError::Transport(err.to_string()))
+    }
+}
+
+/// The deadline an exchange answers under: the [`HttpPolicy`] timeout
+/// measured from `start`, re-armed against what is left at every redirect
+/// hop. `None` on the streaming path — reqwest's per-request timeout is a
+/// *total* one, running from the first connect to the last body byte, so
+/// it is the whole-exchange bound the buffered `send` promises and exactly
+/// what a streamed body cannot borrow: a body whose point is to outlive
+/// the 30 s buffered cap would be killed mid-stream. There the bounds come
+/// from [`cratefield_core::BoundedHttpClient`] instead — the head under
+/// the [`HttpPolicy`] deadline, the body under the
+/// [`cratefield_core::StreamPolicy`], both through the Clock port — and
+/// what the redirect loop still contributes on that path is the per-hop
+/// vetting, not a clock.
+struct ExchangeDeadline {
+    policy: HttpPolicy,
+    start: tokio::time::Instant,
 }
 
 impl ReqwestClient {
@@ -200,51 +285,51 @@ impl ReqwestClient {
     /// 3xx without a usable `Location`) comes back.
     async fn exchange_until_final(
         &self,
-        policy: HttpPolicy,
+        deadline: Option<ExchangeDeadline>,
         method: &mut http::Method,
         headers: &mut http::HeaderMap,
         body: &mut Bytes,
         url: &mut Url,
-        start: tokio::time::Instant,
     ) -> Result<reqwest::Response, HttpError> {
         for hop in 0.. {
-            let remaining = policy.timeout.saturating_sub(start.elapsed());
-            if remaining.is_zero() {
-                return Err(HttpError::DeadlineExceeded {
-                    after: policy.timeout,
-                });
-            }
-            let mut builder = self
-                .client
-                .request(method.clone(), url.clone())
-                .timeout(remaining);
+            let mut builder = self.client.request(method.clone(), url.clone());
             for (name, value) in headers.iter() {
                 builder = builder.header(name.clone(), value.clone());
             }
             if !body.is_empty() {
                 builder = builder.body(body.clone());
             }
+            if let Some(deadline) = &deadline {
+                let remaining = deadline
+                    .policy
+                    .timeout
+                    .saturating_sub(deadline.start.elapsed());
+                if remaining.is_zero() {
+                    return Err(HttpError::DeadlineExceeded {
+                        after: deadline.policy.timeout,
+                    });
+                }
+                builder = builder.timeout(remaining);
+            }
             let response = match builder.send().await {
                 Ok(response) => response,
                 Err(err) if err.is_timeout() => {
-                    return Err(HttpError::DeadlineExceeded {
-                        after: policy.timeout,
-                    });
+                    // Only the bounded path arms a reqwest timeout, so only
+                    // there is a timeout-shaped failure the deadline itself.
+                    match &deadline {
+                        Some(deadline) => {
+                            return Err(HttpError::DeadlineExceeded {
+                                after: deadline.policy.timeout,
+                            });
+                        }
+                        None => return Err(send_failure(&err)),
+                    }
                 }
                 Err(err) => {
                     // Never `err.to_string()`: it appends the request URL,
                     // which for a push transport is the recipient's
                     // credential. See `safe_message`.
-                    let message = safe_message(&err);
-                    // The resolver's refusal arrives boxed *inside* the
-                    // error, so the tag is in the cause chain rather than
-                    // in `Display` — which is what `safe_message` walks,
-                    // and what asking `Display` alone could not see.
-                    return Err(if message.contains(GUARD_TAG) {
-                        HttpError::BlockedDestination(message)
-                    } else {
-                        HttpError::Transport(message)
-                    });
+                    return Err(send_failure(&err));
                 }
             };
             let status = response.status();
@@ -316,6 +401,22 @@ async fn read_capped(mut response: reqwest::Response, limit: usize) -> Result<By
     Ok(Bytes::from(buffer))
 }
 
+/// The streamed body [`ReqwestClient::send_streaming`] returns: the
+/// `reqwest` response polled one chunk at a time, and the concurrency
+/// permit that paid for it. Both fields drop together — with the body —
+/// which is what closes the connection mid-exchange and releases the
+/// budget: the cancellation contract this port promises.
+struct StreamingBody {
+    /// `None` while a chunk poll is in flight (and forever after a
+    /// terminal error or a clean end), so a poll that never comes back
+    /// drops the response with it.
+    response: Option<reqwest::Response>,
+    /// The budget slot, held for as long as the body is being read — a
+    /// streamed exchange is one in-flight request its whole life.
+    #[allow(dead_code)] // dropped with the body; never read
+    permit: tokio::sync::OwnedSemaphorePermit,
+}
+
 /// A `reqwest::Error` as a message this crate may hand on — to
 /// `HttpError`, and from there to a log, a dead-letter row or an
 /// operator's terminal.
@@ -340,6 +441,20 @@ fn safe_message(err: &reqwest::Error) -> String {
         cause = current.source();
     }
     scrub_url(message, err.url())
+}
+
+/// A failed `builder.send()` as the port's error: the resolver's refusal
+/// is recognized by its tag, everything else is a transport failure.
+fn send_failure(err: &reqwest::Error) -> HttpError {
+    let message = safe_message(err);
+    // The resolver's refusal arrives boxed *inside* the error, so the tag
+    // is in the cause chain rather than in `Display` — which is what
+    // `safe_message` walks, and what asking `Display` alone could not see.
+    if message.contains(GUARD_TAG) {
+        HttpError::BlockedDestination(message)
+    } else {
+        HttpError::Transport(message)
+    }
 }
 
 /// Cuts `url` back to its origin everywhere it appears in `message`: as

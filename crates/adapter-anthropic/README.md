@@ -28,8 +28,7 @@ let model = Anthropic::new(
     "claude-opus-5",
 );
 // Without a key (degraded mode): complete() -> Err(NotConfigured), with
-// no network call. One call per complete() — no streaming, no retries
-// inside the adapter:
+// no network call. No retries inside the adapter:
 let completion = model
     .complete(Prompt::user("Summarise this in one line", 256))
     .await?;
@@ -62,6 +61,22 @@ only calls tools, and that is not an error. A tool call cut off by
 arguments. A prompt that sets both `json_schema` and `tools` is refused as
 `Rejected` before any request: the schema path already declares its own
 forced tool, so the two would collide.
+
+## Streaming
+
+`stream` (issue #859) sends the same request with `"stream": true` and
+answers `cratefield_core::TextDelta`s straight off the Messages event
+stream: text and reasoning as they are produced, each tool call from its
+start through its argument chunks to the finished call, running usage, and
+one `Finish` naming the wire's `stop_reason`. A finished call is exactly
+the `cratefield_core::ToolCall` `complete` returns for the same answer —
+one shared conversion — and a `CompletionBuilder` over the stream equals
+`complete`'s completion, field for field. The stream owns the response
+body, so dropping it cancels the upstream exchange. Two divergences: a
+`json_schema` prompt still completes and decomposes (structured output is
+a buffered feature), and a tool call cut off at `max_tokens` ends the
+stream with the same `Rejected` truncation refusal `complete` raises —
+never a half-runnable call.
 
 With a `Turn::user_parts` message (issue #628), the turn goes as the
 Messages API content-block array: each `Part::Text` as a `text` block and

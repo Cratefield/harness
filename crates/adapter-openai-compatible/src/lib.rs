@@ -44,20 +44,32 @@
 //! [`OpenAiCompatibleSpeech`] transcribes through the Whisper-shaped
 //! `audio/transcriptions` endpoint and voices text through `audio/speech`,
 //! at any base URL, under the same key and degraded-mode rules.
+//!
+//! **Streaming (issue #859).** [`TextModel::stream`] speaks the same wire
+//! natively: the request `complete` builds plus `stream: true` and
+//! `include_usage`, its Server-Sent Events decoded by core's shared
+//! [`SseDecoder`](cratefield_core::sse::SseDecoder) into
+//! [`TextDelta`](cratefield_core::TextDelta)s. Dropping the returned stream
+//! drops the response body and with it the upstream exchange, so a
+//! disconnecting caller stops the spend.
 
 #![doc = include_str!("../README.md")]
 #![forbid(unsafe_code)]
 
 use async_trait::async_trait;
 use bytes::Bytes;
+use cratefield_core::sse::{self, SseEvent};
 use cratefield_core::{
-    Capability, Clock, Completion, HttpClient, HttpError, HttpPolicy, MAX_RESPONSE_BYTES,
-    MAX_RESPONSE_TIMEOUT, ModelTier, Part, Prompt, Role, TextModel, TextModelError, ToolCall,
-    ToolChoice, ToolResult, Turn, encode_image, retry_after,
+    BoxStream, ByteStream, Capability, Clock, Completion, FinishReason, HttpClient, HttpError,
+    HttpPolicy, MAX_RESPONSE_BYTES, MAX_RESPONSE_TIMEOUT, ModelTier, Part, Prompt, Role, TextDelta,
+    TextModel, TextModelError, ToolCall, ToolChoice, ToolResult, Turn, completion_deltas,
+    encode_image, retry_after,
 };
+use futures_util::StreamExt;
 use http::header::{AUTHORIZATION, CONTENT_TYPE};
 use http::{Request, StatusCode};
 use serde_json::{Value, json};
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -221,6 +233,85 @@ impl OpenAiCompatible {
             _ => TextModelError::Transport(format!("unexpected status {status}: {detail}")),
         }
     }
+
+    /// The pre-flight refusals both halves of the port share — `complete`
+    /// and `stream` run the same gates in the same order, so a prompt
+    /// refused on one half is refused identically on the other: image
+    /// bounds first (they hold whatever this deployment is configured for),
+    /// then the key, then the capability gates. Returns the API key, so a
+    /// caller never reaches the wire without one.
+    fn preflight(&self, prompt: &Prompt) -> Result<&str, TextModelError> {
+        // An over-limit image prompt is refused first, before any request:
+        // the bounds hold whatever this deployment is configured for.
+        prompt.check_images()?;
+
+        let Some(api_key) = &self.api_key else {
+            tracing::info!(
+                provider = "openai-compatible",
+                outcome = "not_configured",
+                model = %self.model,
+                "text model outcome"
+            );
+            return Err(TextModelError::NotConfigured);
+        };
+
+        // A tools-bearing prompt to an adapter whose deployment turned
+        // tools off is refused here, before any request: sending the tools
+        // anyway and letting the model ignore them would answer as if none
+        // had been offered, hiding the mismatch. The router and
+        // `run_tool_loop` refuse this up front too; this is the adapter's
+        // own guard for a direct caller.
+        if !self.tools && !prompt.tools.is_empty() {
+            tracing::warn!(
+                provider = "openai-compatible",
+                outcome = "unsupported",
+                model = %self.model,
+                "text model outcome"
+            );
+            return Err(TextModelError::Unsupported(Capability::Tools));
+        }
+
+        // The same guard for images (issue #628): a deployment that did not
+        // opt into vision is refused an image-bearing prompt before any
+        // request.
+        if !self.images && prompt.has_images() {
+            tracing::warn!(
+                provider = "openai-compatible",
+                outcome = "unsupported",
+                model = %self.model,
+                "text model outcome"
+            );
+            return Err(TextModelError::Unsupported(Capability::Images));
+        }
+
+        Ok(api_key)
+    }
+
+    /// Serialises the wire body and frames the request: the shared headers,
+    /// and the port's widest [`HttpPolicy`] — as on the Anthropic adapter,
+    /// the port's 30 s ceiling for a model call's head, the port's body
+    /// cap, and `HttpPolicy::clamped` so a caller can tighten but never
+    /// raise.
+    fn frame(
+        &self,
+        api_key: &str,
+        payload: &ChatCompletionsRequest<'_>,
+    ) -> Result<Request<Bytes>, TextModelError> {
+        let body = serde_json::to_vec(&payload)
+            .map_err(|err| TextModelError::Transport(err.to_string()))?;
+        let mut request = Request::builder()
+            .method(http::Method::POST)
+            .uri(self.endpoint())
+            .header(CONTENT_TYPE, "application/json")
+            .header(AUTHORIZATION, format!("Bearer {api_key}"))
+            .body(Bytes::from(body))
+            .map_err(|err| TextModelError::Transport(err.to_string()))?;
+        request.extensions_mut().insert(HttpPolicy {
+            timeout: MAX_RESPONSE_TIMEOUT,
+            max_response_bytes: MAX_RESPONSE_BYTES,
+        });
+        Ok(request)
+    }
 }
 
 fn wire_role(role: Role) -> &'static str {
@@ -249,6 +340,24 @@ struct ChatCompletionsRequest<'a> {
     /// Absent when the prompt left the choice to the provider's default.
     #[serde(skip_serializing_if = "Option::is_none")]
     tool_choice: Option<Value>,
+    /// Set only by the streaming path ([`TextModel::stream`], issue #859):
+    /// absent on the buffered path, so a `complete` request body is
+    /// byte-for-byte what it always was.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    stream: bool,
+    /// Only ever sent beside `stream: true`: without `include_usage` the
+    /// chunk stream carries no trailing `usage` block, and the port's Usage
+    /// delta would have nothing to read.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    stream_options: Option<WireStreamOptions>,
+}
+
+/// The streaming flags the delta path adds to the body `complete` builds
+/// (issue #859). `include_usage` is the point of the envelope: it asks for
+/// the final, choices-empty chunk that carries the token counts.
+#[derive(serde::Serialize)]
+struct WireStreamOptions {
+    include_usage: bool,
 }
 
 /// One message of the request. Owned rather than borrowed because a tool
@@ -318,7 +427,7 @@ struct WireToolFunction<'a> {
 /// One tool call, in the shape the request and the answer share: the
 /// assistant message the caller sends back and the assistant message the
 /// server returns are the same object.
-#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Default, serde::Serialize, serde::Deserialize)]
 struct WireToolCall {
     #[serde(default)]
     id: String,
@@ -328,7 +437,7 @@ struct WireToolCall {
     function: Option<WireFunctionCall>,
 }
 
-#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Default, serde::Serialize, serde::Deserialize)]
 struct WireFunctionCall {
     #[serde(default)]
     name: String,
@@ -571,6 +680,10 @@ fn wire_request<'a>(
         response_format,
         tools,
         tool_choice: prompt.tool_choice.as_ref().and_then(wire_tool_choice),
+        // The buffered defaults: the streaming override turns both on
+        // without rebuilding the rest of the body.
+        stream: false,
+        stream_options: None,
     })
 }
 
@@ -679,20 +792,32 @@ fn refusal_guard(choice: &WireChoice, model: &str) -> Option<TextModelError> {
         ));
     }
     // The content filter stopped the answer before it was one, on either
-    // path. `Rejected`, not `Transient`: the prompt is what tripped it,
-    // so retrying unchanged fails the same way.
+    // path — through [`content_filter_rejected`], the very error the
+    // streamed half ends on for the same `finish_reason`.
     if choice.finish_reason.as_deref() == Some("content_filter") {
-        tracing::warn!(
-            provider = "openai-compatible",
-            outcome = "content_filter",
-            model = %model,
-            "text model outcome"
-        );
-        return Some(TextModelError::Rejected(
-            "the server's content filter stopped the answer".to_owned(),
-        ));
+        return Some(content_filter_rejected(model));
     }
     None
+}
+
+/// The content filter's rejection, word for word the same on both halves
+/// of the port: the buffered [`refusal_guard`] answers its
+/// `finish_reason: "content_filter"` with this, and the streaming fold
+/// ends on it — so `run_tool_loop` and `run_tool_loop_stream` cannot
+/// disagree about an answer the filter stopped. `Rejected`, not
+/// `Transient`: the prompt is what tripped it, so retrying unchanged
+/// fails the same way. The provider's report goes to the log, where the
+/// operator reads it the same way they read a provider error message; the
+/// error itself carries the adapter's own words, the convention of every
+/// other `Rejected` path.
+fn content_filter_rejected(model: &str) -> TextModelError {
+    tracing::warn!(
+        provider = "openai-compatible",
+        outcome = "content_filter",
+        model = %model,
+        "text model outcome"
+    );
+    TextModelError::Rejected("the server's content filter stopped the answer".to_owned())
 }
 
 /// The completion's usage, or the defaulted zero when the server sent
@@ -740,6 +865,399 @@ fn parse_tool_call(call: &WireToolCall) -> Option<ToolCall> {
     ))
 }
 
+/// The `data:` payload that ends a chat-completions chunk stream. Some
+/// compatible servers omit it after a `finish_reason` + usage; a stream
+/// that ends with neither sentinel nor reason never finished.
+const DONE_SENTINEL: &str = "[DONE]";
+
+/// One chat-completion **chunk** of a streamed answer (issue #859): the
+/// same envelope as [`ChatCompletionsResponse`] with a `delta` where the
+/// full message was, and — when `include_usage` was asked for — a final,
+/// choices-empty chunk carrying only the `usage`.
+#[derive(serde::Deserialize)]
+struct ChatChunk {
+    #[serde(default)]
+    model: String,
+    #[serde(default)]
+    choices: Vec<WireChunkChoice>,
+    #[serde(default)]
+    usage: Option<WireUsage>,
+}
+
+#[derive(serde::Deserialize)]
+struct WireChunkChoice {
+    #[serde(default)]
+    delta: Option<WireDelta>,
+    #[serde(default)]
+    finish_reason: Option<String>,
+}
+
+/// A chunk's delta: whichever pieces of the answer arrived with this chunk.
+/// Both reasoning spellings the compatible-server ecosystem has shipped are
+/// read (`reasoning_content` first, `reasoning` beside it); a server that
+/// exposes neither simply never trips the arm.
+#[derive(serde::Deserialize)]
+struct WireDelta {
+    #[serde(default)]
+    content: Option<String>,
+    #[serde(default)]
+    reasoning_content: Option<String>,
+    #[serde(default)]
+    reasoning: Option<String>,
+    #[serde(default)]
+    refusal: Option<String>,
+    #[serde(default)]
+    tool_calls: Vec<WireToolCallChunk>,
+}
+
+/// One fragment of one tool call inside a chunk: the call's `index` in the
+/// completion's tool-call order, and whichever parts travelled with this
+/// fragment — id and name on the first, argument text on every one after.
+/// `index` is defaulted as well as optional: a server that streams one call
+/// at a time is allowed to omit it (the one call is index 0), while a
+/// parallel-call server must send it to keep the calls apart.
+#[derive(serde::Deserialize)]
+struct WireToolCallChunk {
+    #[serde(default)]
+    index: usize,
+    #[serde(default)]
+    id: Option<String>,
+    #[serde(rename = "type", default)]
+    kind: Option<String>,
+    #[serde(default)]
+    function: Option<WireFunctionFragment>,
+}
+
+#[derive(serde::Deserialize)]
+struct WireFunctionFragment {
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    arguments: Option<String>,
+}
+
+/// The wire's `finish_reason` → the port's [`FinishReason`]: the four words
+/// of the vocabulary map one-to-one (`function_call`, the legacy spelling,
+/// lands on [`FinishReason::ToolUse`] beside `tool_calls`), and anything a
+/// server invents rides in [`FinishReason::Other`] for the log line.
+fn finish_reason(reason: &str) -> FinishReason {
+    match reason {
+        "stop" => FinishReason::Stop,
+        "length" => FinishReason::Length,
+        "tool_calls" | "function_call" => FinishReason::ToolUse,
+        "content_filter" => FinishReason::ContentFilter,
+        other => FinishReason::Other(other.to_owned()),
+    }
+}
+
+/// One tool call being reassembled across chunks: the wire shape
+/// [`parse_tool_call`] consumes — so a finished call is parsed by exactly
+/// the code path `complete` parses its answer with, never a second parser —
+/// plus whether the call's `ToolCallStarted` delta has gone out.
+#[derive(Default)]
+struct CallAcc {
+    wire: WireToolCall,
+    started: bool,
+}
+
+/// The streaming fold (issue #859): the SSE-decoded body plus everything
+/// the chunk sequence accumulates into — the calls keyed by wire `index`,
+/// the `finish_reason` the Finish delta waits for, the model, whether a
+/// `usage` chunk arrived — yielding [`TextDelta`]s as events dispatch. The
+/// fold owns the body, so dropping the delta stream drops the upstream
+/// exchange; nothing is spawned and nothing outlives the stream.
+struct Fold {
+    events: BoxStream<'static, Result<SseEvent, HttpError>>,
+    calls: BTreeMap<usize, CallAcc>,
+    reason: Option<FinishReason>,
+    model: String,
+    usage_seen: bool,
+    /// Deltas a chunk folded into that have not been yielded yet: one event
+    /// can produce several (a call's start and its first argument fragment
+    /// share a chunk), and the stream yields one item per poll.
+    pending: std::vec::IntoIter<TextDelta>,
+    /// Fused once the answer is over — `[DONE]`, the body's end or an
+    /// error. Nothing is pulled from `events` again.
+    done: bool,
+}
+
+impl Fold {
+    /// A fold over `events`, reporting the configured `model` unless a
+    /// chunk's own `model` names another.
+    fn new(events: BoxStream<'static, Result<SseEvent, HttpError>>, model: String) -> Self {
+        Self {
+            events,
+            calls: BTreeMap::new(),
+            reason: None,
+            model,
+            usage_seen: false,
+            pending: Vec::new().into_iter(),
+            done: false,
+        }
+    }
+
+    /// Folds one dispatched `data:` payload in.
+    ///
+    /// # Errors
+    ///
+    /// [`TextModelError::Transport`] for an in-stream error payload
+    /// (`{"error": …}` — the head was 2xx, so the request was accepted but
+    /// the answer died mid-generation: the same bucket as a connection cut
+    /// off mid-body, the provider's own words in the detail) and for a
+    /// payload that is neither JSON nor the sentinel.
+    fn push(&mut self, data: &str) -> Result<Vec<TextDelta>, TextModelError> {
+        if data.trim() == DONE_SENTINEL {
+            return self.finish(true);
+        }
+        if let Ok(envelope) = serde_json::from_str::<ErrorEnvelope>(data)
+            && envelope.error.is_some()
+        {
+            let error = TextModelError::Transport(format!(
+                "the stream carried an error: {}",
+                provider_message(data)
+            ));
+            tracing::warn!(
+                provider = "openai-compatible",
+                outcome = "failed",
+                model = %self.model,
+                error = %error,
+                "text model outcome"
+            );
+            return Err(error);
+        }
+        let chunk: ChatChunk = serde_json::from_str(data).map_err(|err| {
+            TextModelError::Transport(format!("stream chunk did not parse: {err}"))
+        })?;
+        if !chunk.model.is_empty() {
+            self.model = chunk.model;
+        }
+        let mut deltas = Vec::new();
+        // One choice per stream — the port sends no `n` — so each chunk is
+        // the same choice's next piece. The choices-empty chunk is the
+        // usage trailer `include_usage` asked for.
+        if let Some(choice) = chunk.choices.first() {
+            self.push_choice(choice, &mut deltas)?;
+        }
+        if let Some(usage) = chunk.usage {
+            self.usage_seen = true;
+            deltas.push(TextDelta::Usage {
+                input_tokens: u64::from(usage.prompt_tokens),
+                output_tokens: u64::from(usage.completion_tokens),
+                // The same cache report `complete` reads, keeping "no
+                // report" and "reported zero" distinct.
+                cached_input_tokens: usage
+                    .prompt_tokens_details
+                    .map(|details| u64::from(details.cached_tokens)),
+            });
+        }
+        Ok(deltas)
+    }
+
+    /// Folds one chunk's choice into `deltas`: refusal first (a declined
+    /// prompt never reaches the caller as text), then text, reasoning,
+    /// tool-call fragments, and the `finish_reason` the Finish delta waits
+    /// for.
+    ///
+    /// # Errors
+    ///
+    /// [`TextModelError::Rejected`] for a refusal, as `complete`'s
+    /// `refusal_guard` answers the buffered one.
+    fn push_choice(
+        &mut self,
+        choice: &WireChunkChoice,
+        deltas: &mut Vec<TextDelta>,
+    ) -> Result<(), TextModelError> {
+        if let Some(delta) = choice.delta.as_ref() {
+            if let Some(refusal) = delta.refusal.as_deref().filter(|r| !r.is_empty()) {
+                tracing::warn!(
+                    provider = "openai-compatible",
+                    outcome = "refused",
+                    model = %self.model,
+                    refusal = refusal,
+                    "text model outcome"
+                );
+                return Err(TextModelError::Rejected(
+                    "the model declined the prompt (refusal); the provider's words are in the log"
+                        .to_owned(),
+                ));
+            }
+            if let Some(text) = delta.content.as_deref().filter(|text| !text.is_empty()) {
+                deltas.push(TextDelta::Text(text.to_owned()));
+            }
+            let reasoning = delta
+                .reasoning_content
+                .as_deref()
+                .filter(|reasoning| !reasoning.is_empty())
+                .or_else(|| {
+                    delta
+                        .reasoning
+                        .as_deref()
+                        .filter(|reasoning| !reasoning.is_empty())
+                });
+            if let Some(reasoning) = reasoning {
+                deltas.push(TextDelta::Reasoning(reasoning.to_owned()));
+            }
+            for fragment in &delta.tool_calls {
+                self.push_tool_call(deltas, fragment);
+            }
+        }
+        if let Some(reason) = choice.finish_reason.as_deref() {
+            self.reason = Some(finish_reason(reason));
+        }
+        Ok(())
+    }
+
+    /// Folds one tool-call fragment in. The first fragment carrying an id
+    /// or a name opens the call with a [`TextDelta::ToolCallStarted`]; every
+    /// argument text grows it with [`TextDelta::ToolCallArguments`]; the
+    /// pieces accumulate in the wire shape [`parse_tool_call`] consumes, so
+    /// the finished call is the call `complete` would return. A server that
+    /// splits id and name across fragments gets its `Started` with whatever
+    /// had arrived — the `Finished` call always carries both.
+    fn push_tool_call(&mut self, deltas: &mut Vec<TextDelta>, fragment: &WireToolCallChunk) {
+        // Only function calls exist on this wire; an entry naming another
+        // `type` is skipped rather than misread as one, as in `complete`.
+        match fragment.kind.as_deref() {
+            None | Some("function") => {}
+            Some(_) => return,
+        }
+        let acc = self.calls.entry(fragment.index).or_default();
+        let mut named = false;
+        if let Some(id) = fragment.id.as_deref() {
+            id.clone_into(&mut acc.wire.id);
+            named = true;
+        }
+        if let Some(kind) = fragment.kind.as_deref() {
+            acc.wire.kind = Some(kind.to_owned());
+        }
+        if let Some(function) = fragment.function.as_ref() {
+            let wire = acc.wire.function.get_or_insert_with(Default::default);
+            if let Some(name) = function.name.as_deref() {
+                name.clone_into(&mut wire.name);
+                named = true;
+            }
+            if let Some(chunk) = function.arguments.as_deref().filter(|c| !c.is_empty()) {
+                wire.arguments.push_str(chunk);
+                deltas.push(TextDelta::ToolCallArguments {
+                    index: fragment.index,
+                    chunk: chunk.to_owned(),
+                });
+            }
+        }
+        if !acc.started && named {
+            acc.started = true;
+            deltas.push(TextDelta::ToolCallStarted {
+                index: fragment.index,
+                id: acc.wire.id.clone(),
+                name: acc
+                    .wire
+                    .function
+                    .as_ref()
+                    .map(|function| function.name.clone())
+                    .unwrap_or_default(),
+            });
+        }
+    }
+
+    /// The finish deltas, however the stream ended: each reassembled call
+    /// in index order — parsed by the shared [`parse_tool_call`] — then the
+    /// one `Finish`. `sentinel` says the `[DONE]` payload arrived and
+    /// stands in for a `finish_reason` a server never sent; a stream with
+    /// neither never finished at all.
+    ///
+    /// # Errors
+    ///
+    /// [`TextModelError::Transport`] when neither an ending nor a reason
+    /// arrived, and the buffered path's [`TextModelError::Rejected`] where
+    /// `complete` refuses, so a stream may not smuggle through what the
+    /// buffered answer refuses: a `finish_reason` of `length` beside tool
+    /// calls (arguments cut off mid-string must never reach an executor),
+    /// and `content_filter` — both through the very errors
+    /// `completion_from_response` raises, so `run_tool_loop` and
+    /// `run_tool_loop_stream` answer an answer the server stopped
+    /// identically.
+    fn finish(&mut self, sentinel: bool) -> Result<Vec<TextDelta>, TextModelError> {
+        self.done = true;
+        if self.reason.is_none() && !sentinel {
+            return Err(TextModelError::Transport(
+                "the stream ended without a finish_reason or [DONE] sentinel".to_owned(),
+            ));
+        }
+        // Parse first, decide second: the truncation rule reads on the
+        // calls the parser would return, exactly as `complete`'s does.
+        let calls: Vec<(usize, ToolCall)> = self
+            .calls
+            .iter()
+            .filter_map(|(index, acc)| parse_tool_call(&acc.wire).map(|call| (*index, call)))
+            .collect();
+        if !calls.is_empty() && self.reason.as_ref() == Some(&FinishReason::Length) {
+            return Err(TextModelError::Rejected(
+                "the response was truncated at max_tokens before the tool call arguments were \
+                 complete; a larger max_tokens is needed"
+                    .to_owned(),
+            ));
+        }
+        // The content filter stopped the answer: the same `Rejected`
+        // `complete`'s `refusal_guard` returns for the same `finish_reason`,
+        // not a successful `Finish{ContentFilter}` a caller could assemble
+        // into the completion the buffered path refuses.
+        if self.reason.as_ref() == Some(&FinishReason::ContentFilter) {
+            return Err(content_filter_rejected(&self.model));
+        }
+        if !self.usage_seen {
+            // Said out loud, not silent — the same warning the buffered
+            // path gives a server that omits the usage block.
+            tracing::warn!(
+                provider = "openai-compatible",
+                model = %self.model,
+                "text model completed without a usage block; token counts default to zero"
+            );
+        }
+        let tool_calls = calls.len();
+        let mut deltas: Vec<TextDelta> = calls
+            .into_iter()
+            .map(|(index, call)| TextDelta::ToolCallFinished { index, call })
+            .collect();
+        deltas.push(TextDelta::Finish {
+            reason: self.reason.clone().unwrap_or(FinishReason::Stop),
+            model: self.model.clone(),
+        });
+        tracing::info!(
+            provider = "openai-compatible",
+            outcome = "completed",
+            model = %self.model,
+            tool_calls,
+            "text model outcome"
+        );
+        Ok(deltas)
+    }
+}
+
+/// The unfold state of a native stream: sending the head, folding the body,
+/// or fused after an error.
+enum StreamPhase {
+    Head,
+    Body(Fold),
+    Done,
+}
+
+/// Drains a non-2xx body for the error mapping, stopping at `cap` — the
+/// buffered path's own ceiling, read off the request before it was sent. An
+/// error page's worth of bytes is all [`OpenAiCompatible::map_status`] can
+/// read; more arrives as a stream and must not outrun the bound.
+async fn collect_bounded(mut body: ByteStream, cap: usize) -> String {
+    let mut bytes = Vec::new();
+    while bytes.len() < cap {
+        match body.next().await {
+            Some(Ok(chunk)) => bytes.extend_from_slice(&chunk),
+            // The body's own error ends the drain: what arrived so far is
+            // still something to log and map.
+            Some(Err(_)) | None => break,
+        }
+    }
+    String::from_utf8_lossy(&bytes).to_string()
+}
+
 #[async_trait]
 impl TextModel for OpenAiCompatible {
     async fn complete(&self, prompt: &Prompt) -> Result<Completion, TextModelError> {
@@ -747,69 +1265,12 @@ impl TextModel for OpenAiCompatible {
         // status, outcome, model, token counts. The API key is never
         // logged, and neither is the prompt nor the completion — a prompt
         // is user content, and the operator needs none of it to see what
-        // happened.
-        //
-        // An over-limit image prompt is refused first, before any request:
-        // the bounds hold whatever this deployment is configured for.
-        prompt.check_images()?;
-
-        let Some(api_key) = &self.api_key else {
-            tracing::info!(
-                provider = "openai-compatible",
-                outcome = "not_configured",
-                model = %self.model,
-                "text model outcome"
-            );
-            return Err(TextModelError::NotConfigured);
-        };
-
-        // A tools-bearing prompt to an adapter whose deployment turned
-        // tools off is refused here, before any request: sending the tools
-        // anyway and letting the model ignore them would answer as if none
-        // had been offered, hiding the mismatch. The router and
-        // `run_tool_loop` refuse this up front too; this is the adapter's
-        // own guard for a direct caller.
-        if !self.tools && !prompt.tools.is_empty() {
-            tracing::warn!(
-                provider = "openai-compatible",
-                outcome = "unsupported",
-                model = %self.model,
-                "text model outcome"
-            );
-            return Err(TextModelError::Unsupported(Capability::Tools));
-        }
-
-        // The same guard for images (issue #628): a deployment that did not
-        // opt into vision is refused an image-bearing prompt before any
-        // request.
-        if !self.images && prompt.has_images() {
-            tracing::warn!(
-                provider = "openai-compatible",
-                outcome = "unsupported",
-                model = %self.model,
-                "text model outcome"
-            );
-            return Err(TextModelError::Unsupported(Capability::Images));
-        }
+        // happened. The pre-flight refusals live in `preflight`, shared
+        // with the streaming half of the port.
+        let api_key = self.preflight(prompt)?;
 
         let payload = wire_request(&self.model, prompt)?;
-        let body = serde_json::to_vec(&payload)
-            .map_err(|err| TextModelError::Transport(err.to_string()))?;
-
-        let mut request = Request::builder()
-            .method(http::Method::POST)
-            .uri(self.endpoint())
-            .header(CONTENT_TYPE, "application/json")
-            .header(AUTHORIZATION, format!("Bearer {api_key}"))
-            .body(Bytes::from(body))
-            .map_err(|err| TextModelError::Transport(err.to_string()))?;
-        // The caps are the design, as on the Anthropic adapter: the port's
-        // 30 s ceiling for a model call's tail, the port's body cap, and
-        // `HttpPolicy::clamped` so a caller can tighten but never raise.
-        request.extensions_mut().insert(HttpPolicy {
-            timeout: MAX_RESPONSE_TIMEOUT,
-            max_response_bytes: MAX_RESPONSE_BYTES,
-        });
+        let request = self.frame(api_key, &payload)?;
 
         let response = self
             .http
@@ -857,6 +1318,80 @@ impl TextModel for OpenAiCompatible {
         Ok(completion)
     }
 
+    /// Streams `prompt` over the same wire with `stream: true` and
+    /// `include_usage` (issue #859): the request `complete` builds plus the
+    /// two streaming fields, the head under the same [`HttpPolicy`] and the
+    /// body under the port's default
+    /// [`StreamPolicy`](cratefield_core::StreamPolicy) — the adapter
+    /// tightens nothing, and a runtime wrapping the client clamps as
+    /// always. A prompt asking for structured output does not stream
+    /// natively; it takes the buffered fallback (`stream_buffered`).
+    ///
+    /// # Cancellation
+    ///
+    /// The returned stream is the only holder of the response body: one
+    /// `unfold` state machine owns head-then-body, so dropping the stream
+    /// drops the body and with it the upstream exchange — the contract
+    /// [`HttpClient::send_streaming`] carries. Nothing is spawned; nothing
+    /// outlives the stream.
+    fn stream<'a>(
+        &'a self,
+        prompt: &'a Prompt,
+    ) -> BoxStream<'a, Result<TextDelta, TextModelError>> {
+        if prompt.json_schema.is_some() {
+            return self.stream_buffered(prompt);
+        }
+        Box::pin(futures_util::stream::unfold(
+            StreamPhase::Head,
+            move |mut phase| async move {
+                loop {
+                    match phase {
+                        StreamPhase::Head => {
+                            phase = match self.stream_head(prompt).await {
+                                Ok(fold) => StreamPhase::Body(fold),
+                                Err(err) => return Some((Err(err), StreamPhase::Done)),
+                            };
+                        }
+                        StreamPhase::Body(mut fold) => {
+                            if let Some(delta) = fold.pending.next() {
+                                return Some((Ok(delta), StreamPhase::Body(fold)));
+                            }
+                            if fold.done {
+                                return None;
+                            }
+                            match fold.events.next().await {
+                                Some(Ok(event)) => match fold.push(&event.data) {
+                                    Ok(deltas) => fold.pending = deltas.into_iter(),
+                                    Err(err) => return Some((Err(err), StreamPhase::Done)),
+                                },
+                                Some(Err(err)) => {
+                                    // The body's error is the stream's error,
+                                    // and the body drops here, cancelling the
+                                    // upstream.
+                                    return Some((
+                                        Err(TextModelError::Transport(err.to_string())),
+                                        StreamPhase::Done,
+                                    ));
+                                }
+                                None => match fold.finish(false) {
+                                    // End of body. A server that sent a
+                                    // finish_reason (and its usage chunk) but
+                                    // omitted the `[DONE]` sentinel still
+                                    // finished; anything else is an answer
+                                    // that never completed.
+                                    Ok(deltas) => fold.pending = deltas.into_iter(),
+                                    Err(err) => return Some((Err(err), StreamPhase::Done)),
+                                },
+                            }
+                            phase = StreamPhase::Body(fold);
+                        }
+                        StreamPhase::Done => return None,
+                    }
+                }
+            },
+        ))
+    }
+
     fn supports(&self, _tier: ModelTier, capability: Capability) -> bool {
         // The wire speaks function calling, so tools are on unless the
         // deployment turned them off; it speaks images too, but a model
@@ -871,6 +1406,78 @@ impl TextModel for OpenAiCompatible {
 }
 
 impl OpenAiCompatible {
+    /// Sends the streaming request: the shared pre-flight, the shared
+    /// request builder with the two streaming fields turned on, the head
+    /// bounded by the same [`HttpPolicy`] deadline `send` answers under. A
+    /// 2xx head hands back the fold the body is consumed through; a non-2xx
+    /// one collects its (bounded) body and maps exactly as `complete` does.
+    async fn stream_head(&self, prompt: &Prompt) -> Result<Fold, TextModelError> {
+        let api_key = self.preflight(prompt)?;
+        let mut payload = wire_request(&self.model, prompt)?;
+        payload.stream = true;
+        payload.stream_options = Some(WireStreamOptions {
+            include_usage: true,
+        });
+        let request = self.frame(api_key, &payload)?;
+        // The head is bounded by the policy the buffered request carries;
+        // the error path reuses its cap for the body it drains.
+        let cap = HttpPolicy::of_request(&request).max_response_bytes;
+
+        let response = self
+            .http
+            .send_streaming(request)
+            .await
+            .map_err(|err: HttpError| TextModelError::Transport(err.to_string()))?;
+        let status = response.status();
+        if !status.is_success() {
+            // One parser for both `Retry-After` forms (issue #214/#278), as
+            // on the buffered path.
+            let retry_after = retry_after(response.headers(), self.clock.as_ref());
+            let text = collect_bounded(response.into_body(), cap).await;
+            let error = Self::map_status(status, &text, retry_after);
+            tracing::warn!(
+                provider = "openai-compatible",
+                code = status.as_u16(),
+                outcome = "failed",
+                model = %self.model,
+                error = %error,
+                "text model outcome"
+            );
+            return Err(error);
+        }
+
+        Ok(Fold::new(
+            sse::sse_events(response.into_body()),
+            self.model.clone(),
+        ))
+    }
+
+    /// The buffered fallback for the one shape a chunk stream cannot carry:
+    /// a prompt with [`Prompt::json_schema`] — structured output is a
+    /// buffered feature, because [`Completion::json`] needs the whole
+    /// answer to validate against the prompt's schema, which a stream that
+    /// relayed itself away never promised (see `CompletionBuilder`). One
+    /// `complete` round trip, decomposed by
+    /// [`completion_deltas`](cratefield_core::completion_deltas) — the
+    /// port's default `stream`, written out here because a default trait
+    /// body cannot be called from an override.
+    fn stream_buffered<'a>(
+        &'a self,
+        prompt: &'a Prompt,
+    ) -> BoxStream<'a, Result<TextDelta, TextModelError>> {
+        Box::pin(
+            futures_util::stream::once(self.complete(prompt)).flat_map(|outcome| {
+                futures_util::stream::iter(match outcome {
+                    Ok(completion) => completion_deltas(&completion)
+                        .into_iter()
+                        .map(Ok)
+                        .collect::<Vec<_>>(),
+                    Err(err) => vec![Err(err)],
+                })
+            }),
+        )
+    }
+
     /// Turns a parsed success body into a [`Completion`]: the first choice's
     /// text, its tool calls, the parsed schema-shaped JSON where the prompt
     /// asked for it, and the usage. Every refusal that arrives inside a 200

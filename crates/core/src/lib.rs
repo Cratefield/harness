@@ -50,6 +50,10 @@ pub mod billing;
 // The `Blob` port's presigned URLs (issue #622); pure `SigV4`, public so
 // adapters and tests share one implementation.
 pub mod sigv4;
+// Incremental Server-Sent Events decoding (issue #859): the wire format
+// streaming completions arrive in, public so adapters and routes share
+// the one parser.
+pub mod sse;
 mod stream;
 mod structured_output;
 mod surface;
@@ -126,32 +130,34 @@ pub use personal_data::{
 pub use ports::{
     ACTOR_CALL_TIMEOUT, ActorContext, ActorError, ActorHandler, ActorHandlers, ActorStore,
     ActorWrites, Actors, Answer, AnswerValue, Auth, AuthError, Blob, BlobError, BlobObject,
-    BoundedHttpClient, Calibration, Caller, Capability, Captcha, CaptchaBinding, CaptchaError,
-    CertificateStatus, Charge, CheckoutRequest, CheckoutSession, Classifier, ClassifierError,
-    ClassifierProfile, Clock, Completion, ConnectAccountLink, ConnectAccountLinkRequest,
-    Credential, CustomHostname, CustomHostnameError, CustomHostnames, DEFAULT_MAX_STATE_CHARS,
-    DEFAULT_MAX_TOKENS, DEFAULT_RESPONSE_TIMEOUT, Database, DbError, Decision, Defer, Destination,
-    DispatchError, Dispatcher, DnsRecordType, EmbedError, Embedder, Embeddings, ExactVectorIndex,
-    Filed, HostnameClaim, HostnameRefusal, HttpClient, HttpError, HttpPolicy, IdGen, ImageLimit,
-    ImageMediaType, InboundStatusError, KeyValue, Kid, KvError, LineItem, LocKeys,
-    MAX_ACTOR_KEY_BYTES, MAX_ACTOR_KIND_BYTES, MAX_ACTOR_MESSAGE_BYTES, MAX_ACTOR_REPLY_BYTES,
-    MAX_ACTOR_VALUE_BYTES, MAX_BLOB_BYTES, MAX_CONCURRENT_REQUESTS, MAX_IMAGE_ENCODED_BYTES,
-    MAX_KID_NAME, MAX_NAMESPACE_BYTES, MAX_PROMPT_IMAGE_ENCODED_BYTES, MAX_PROMPT_IMAGES,
-    MAX_RESPONSE_BYTES, MAX_RESPONSE_TIMEOUT, MailError, MailProvider, Mailer, Member, Message,
-    ModelTier, Money, NoopDefer, Notification, Part, Payload, Payments, PaymentsError, Platform,
-    Port, Ports, Priority, Prompt, ProviderStatus, Push, PushError, PushOutcome, Question, Quota,
-    RateLimitError, RateLimiter, Realtime, RealtimeError, Recipient, Refund, RefundRequest, Role,
-    RoomContext, RoomHandler, RoutingPush, RoutingTextModel, RoutingTracker, Row, Rows,
-    ScopedActors, ScopedBlob, SendOutcome, Severity, SignatureError, Signer, Statement, StatusOnly,
-    StatusUpdate, StatusWebhook, Subject, SubscriptionCheckoutRequest, SystemClock, TextModel,
-    TextModelError, TicketComment, TicketDraft, TicketState, TicketStatus, ToolCall, ToolChoice,
-    ToolResult, ToolSpec, Tracker, TrackerError, TransferCharge, TryFromValue, Turn, UlidIdGen,
-    Unconfigured, UsageReport, UsageReported, Validation, ValidationMethod, VectorFilter,
-    VectorIndex, VectorIndexError, VectorMatch, VectorNamespace, VectorRecord, Verdict,
-    WebhookEvent, check_actor_call, check_blob_size, check_hostname, declared_content_length,
-    encode_image, encoded_image_len, receive_status, retry_after, run_actor_alarm,
-    run_actor_message, timeout, ttl_secs, validate_actor_key, validate_actor_kind,
-    validate_questions,
+    BoundedHttpClient, ByteStream, Calibration, Caller, Capability, Captcha, CaptchaBinding,
+    CaptchaError, CertificateStatus, Charge, CheckoutRequest, CheckoutSession, Classifier,
+    ClassifierError, ClassifierProfile, Clock, Completion, CompletionBuilder, ConnectAccountLink,
+    ConnectAccountLinkRequest, Credential, CustomHostname, CustomHostnameError, CustomHostnames,
+    DEFAULT_MAX_STATE_CHARS, DEFAULT_MAX_TOKENS, DEFAULT_RESPONSE_TIMEOUT,
+    DEFAULT_STREAM_IDLE_TIMEOUT, DEFAULT_STREAM_TOTAL_TIMEOUT, Database, DbError, Decision, Defer,
+    Destination, DispatchError, Dispatcher, DnsRecordType, EmbedError, Embedder, Embeddings,
+    ExactVectorIndex, Filed, FinishReason, HostnameClaim, HostnameRefusal, HttpClient, HttpError,
+    HttpPolicy, IdGen, ImageLimit, ImageMediaType, InboundStatusError, KeyValue, Kid, KvError,
+    LineItem, LocKeys, MAX_ACTOR_KEY_BYTES, MAX_ACTOR_KIND_BYTES, MAX_ACTOR_MESSAGE_BYTES,
+    MAX_ACTOR_REPLY_BYTES, MAX_ACTOR_VALUE_BYTES, MAX_BLOB_BYTES, MAX_CONCURRENT_REQUESTS,
+    MAX_IMAGE_ENCODED_BYTES, MAX_KID_NAME, MAX_NAMESPACE_BYTES, MAX_PROMPT_IMAGE_ENCODED_BYTES,
+    MAX_PROMPT_IMAGES, MAX_RESPONSE_BYTES, MAX_RESPONSE_TIMEOUT, MAX_STREAM_BYTES,
+    MAX_STREAM_IDLE_TIMEOUT, MAX_STREAM_TOTAL_TIMEOUT, MailError, MailProvider, Mailer, Member,
+    Message, ModelTier, Money, NoopDefer, Notification, Part, Payload, Payments, PaymentsError,
+    Platform, Port, Ports, Priority, Prompt, ProviderStatus, Push, PushError, PushOutcome,
+    Question, Quota, RateLimitError, RateLimiter, Realtime, RealtimeError, Recipient, Refund,
+    RefundRequest, Role, RoomContext, RoomHandler, RoutingPush, RoutingTextModel, RoutingTracker,
+    Row, Rows, ScopedActors, ScopedBlob, SendOutcome, Severity, SignatureError, Signer, Statement,
+    StatusOnly, StatusUpdate, StatusWebhook, StreamPolicy, Subject, SubscriptionCheckoutRequest,
+    SystemClock, TextDelta, TextModel, TextModelError, TicketComment, TicketDraft, TicketState,
+    TicketStatus, ToolCall, ToolChoice, ToolResult, ToolSpec, Tracker, TrackerError,
+    TransferCharge, TryFromValue, Turn, UlidIdGen, Unconfigured, UsageReport, UsageReported,
+    Validation, ValidationMethod, VectorFilter, VectorIndex, VectorIndexError, VectorMatch,
+    VectorNamespace, VectorRecord, Verdict, WebhookEvent, check_actor_call, check_blob_size,
+    check_hostname, completion_deltas, declared_content_length, encode_image, encoded_image_len,
+    receive_status, retry_after, run_actor_alarm, run_actor_message, stream_owned, timeout,
+    ttl_secs, validate_actor_key, validate_actor_kind, validate_questions,
 };
 // The dispute, portal and subscription types on `Payments` (issues #589,
 // #602, #690).
@@ -223,7 +229,8 @@ pub use tenant_lifecycle::{
     ErasureStep, TenantLifecycle, TenantLifecycleError, TenantSummary, remaining_erasure,
 };
 pub use tool_loop::{
-    StepUsage, ToolBudget, ToolExecutor, ToolLoopError, ToolLoopOutcome, run_tool_loop,
+    StepUsage, ToolBudget, ToolExecutor, ToolLoopError, ToolLoopEvent, ToolLoopOutcome,
+    run_tool_loop, run_tool_loop_stream,
 };
 pub use usage::{Consumed, Consumption, Exhausted, Months, Period, PeriodWindow, Usage};
 pub use venture::{Brand, Venture, VentureEnv};
