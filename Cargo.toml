@@ -162,6 +162,7 @@ cratefield-module-orgs = { path = "crates/module-orgs", version = "0.1" }
 # verification binding a wallet to a signed-in account.
 cratefield-module-wallets = { path = "crates/module-wallets", version = "0.1" }
 cratefield-module-guardrails = { path = "crates/module-guardrails", version = "0.1" } #763
+cratefield-module-sealed = { path = "crates/module-sealed", version = "0.1" } #757
 # Declared here rather than by bare path in the one crate that uses it: a
 # path-only dependency has no version, and `cargo publish` refuses a
 # dependency without one. It was invisible while both crates were

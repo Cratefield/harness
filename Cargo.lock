@@ -704,6 +704,7 @@ dependencies = [
  "cratefield-module-orgs",
  "cratefield-module-owlpost",
  "cratefield-module-privacy",
+ "cratefield-module-sealed",
  "cratefield-module-telegram",
  "cratefield-module-telemetry",
  "cratefield-module-waitlist",

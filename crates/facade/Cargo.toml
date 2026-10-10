@@ -151,6 +151,7 @@ orgs = ["dep:cratefield-module-orgs", "mail-templates"]
 connections = ["dep:cratefield-module-connections"]
 wallets = ["dep:cratefield-module-wallets"]
 guardrails = ["dep:cratefield-module-guardrails"]
+sealed = ["dep:cratefield-module-sealed"]
 # Owlpost's signed inbound webhooks as harness events (issue #673). The
 # plain `owlpost` name is the sending adapter's; this is the receiving
 # module, so it is named for what it emits.
@@ -228,6 +229,7 @@ cratefield-module-orgs = { workspace = true, optional = true }
 cratefield-module-connections = { workspace = true, optional = true }
 cratefield-module-wallets = { workspace = true, optional = true }
 cratefield-module-guardrails = { workspace = true, optional = true }
+cratefield-module-sealed = { workspace = true, optional = true }
 cratefield-module-owlpost = { workspace = true, optional = true }
 cratefield-module-telegram = { workspace = true, optional = true }
 cratefield-testing = { workspace = true, optional = true }
