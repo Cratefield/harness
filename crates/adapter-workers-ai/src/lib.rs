@@ -34,7 +34,7 @@
 mod speech;
 
 pub use speech::{
-    WORKERS_AI_MAX_AUDIO_BYTES, SpeechBinding, SpeechModel, SpeechRunner, TranscriptionModel,
+    SpeechBinding, SpeechModel, SpeechRunner, TranscriptionModel, WORKERS_AI_MAX_AUDIO_BYTES,
     WorkersAiSpeech,
 };
 

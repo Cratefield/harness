@@ -8,6 +8,15 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **A `Speech` port** (issue #861, ADR 0029). `transcribe` (audio in,
+  a `Transcript` with optional word timings out) and `synthesize` (text
+  in, a streamed `Synthesis` out), plus `voices`, `capabilities` and
+  `limits`. Limits are checked locally before any network call by
+  `check_transcribe` / `check_synthesize`, which refuse with
+  `SpeechError::LimitExceeded`; `wav_duration` reads a WAV header's
+  length without a codec. `NotConfiguredSpeech` is the standing
+  placeholder for an unwired port.
+
 - **The facade gains a `sealed` feature** (issue #757). It re-exports
   the new `cratefield-module-sealed` as `cratefield::sealed`: the server
   half of client-side sealed blobs. It stores opaque ciphertext under a
