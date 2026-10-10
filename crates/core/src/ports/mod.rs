@@ -26,6 +26,7 @@ mod push;
 mod rate_limiter;
 mod realtime;
 pub(crate) mod signer;
+mod speech;
 mod text_model;
 mod tracker;
 mod vector_index;
@@ -80,6 +81,12 @@ pub use push::{
 pub use rate_limiter::{Decision, Quota, RateLimitError, RateLimiter};
 pub use realtime::{Member, Realtime, RealtimeError, RoomContext, RoomHandler};
 pub use signer::{Kid, MAX_KID_NAME, Payload, SignatureError, Signer};
+pub use speech::{
+    AudioFormat, DEFAULT_MAX_AUDIO_BYTES, DEFAULT_MAX_AUDIO_SECONDS, DEFAULT_MAX_SYNTHESIS_CHARS,
+    NotConfiguredSpeech, Speech, SpeechCapabilities, SpeechError, SpeechLimit, SpeechLimits,
+    SpeechUsage, Synthesis, SynthesizeRequest, TranscribeRequest, Transcript, Voice, WordTiming,
+    check_synthesize, check_transcribe, primary_subtag, wav_duration,
+};
 pub use text_model::{
     Capability, Completion, DEFAULT_MAX_TOKENS, ImageLimit, ImageMediaType,
     MAX_IMAGE_ENCODED_BYTES, MAX_PROMPT_IMAGE_ENCODED_BYTES, MAX_PROMPT_IMAGES, ModelTier, Part,

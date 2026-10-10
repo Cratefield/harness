@@ -1,0 +1,9 @@
+{
+  "text": "the quick brown fox",
+  "word_count": 4,
+  "words": [
+    { "word": "the", "start": 0.0, "end": 0.12 }, { "word": "quick", "start": 0.12, "end": 0.38 },
+    { "word": "brown", "start": 0.38, "end": 0.64 }, { "word": "fox", "start": 0.64, "end": 0.9 }
+  ],
+  "vtt": "WEBVTT\n\n00:00.000 --> 00:00.120\nthe"
+}

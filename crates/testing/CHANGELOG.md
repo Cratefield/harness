@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `Speech` port conformance (issue [#861](https://github.com/Cratefield/harness/issues/861)): `speech_conformance` and `speech_conformance_not_configured`, with the shared fixture constants, behind the `port-conformance` feature.
+
 ## [0.5.1](https://github.com/Cratefield/harness/compare/cratefield-testing-v0.5.0...cratefield-testing-v0.5.1) - 2026-10-06
 
 ### Other

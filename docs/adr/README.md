@@ -133,6 +133,23 @@ cannot carry are reported, never guessed, and each needs a disposition
 before a cutover that is the DATA-MOVE switch — with a rollback window
 and a generated decommission checklist.
 
+ADR 0029 gives the harness a voice (#861): a `Speech` port —
+`transcribe`, `synthesize`, `voices`, `capabilities`, `limits` — asked
+for by capability and never by vendor, with every request checked
+against local ceilings (25 MiB, ten minutes, 4 096 characters —
+OpenAI's documented caps) before any network call, and a `SpeechUsage`
+of milliseconds transcribed and characters synthesised riding back on
+every answer, so a spend cap meters in the provider's own units.
+Synthesis answers a `ResponseStream` that may start yielding before
+the clip is finished. The two adapters are new modules of existing
+adapter crates — the Workers AI binding (Deepgram nova-3 and Whisper
+in, Aura out, truly streaming) and the OpenAI-compatible audio wire —
+not new crates, and the binding-backed one is not a facade feature,
+for the same `worker`-crate reason as the classifier's.
+OpenAI-compatible synthesis stays buffered until a streaming
+`HttpClient` (#859); the `Port::Speech` variant and `Ports` wiring are
+a follow-up.
+
 [0102](0102-crypto-crate.md) chose the crypto crate: RustCrypto's
 `chacha20poly1305`.
 

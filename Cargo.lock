@@ -936,6 +936,7 @@ dependencies = [
  "bytes",
  "cratefield-core",
  "cratefield-testing",
+ "futures-core",
  "getrandom 0.4.3",
  "http",
  "pollster",
@@ -1195,8 +1196,11 @@ name = "cratefield-adapter-workers-ai"
 version = "0.3.0"
 dependencies = [
  "async-trait",
+ "bytes",
  "cratefield-core",
  "cratefield-testing",
+ "futures-channel",
+ "futures-core",
  "getrandom 0.4.3",
  "pollster",
  "serde",

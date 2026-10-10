@@ -21,13 +21,25 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 tracing = { workspace = true }
 worker = { workspace = true }
+# The `Speech` port (issue #861): audio chunks arrive as `Bytes` and the
+# `BoxStream`/`ResponseStream` the port hands out is built over
+# `futures-core`. Both are already in core's own tree, so this adds no
+# crate to a consumer's build.
+bytes = { workspace = true }
+futures-core = { workspace = true }
 
 [dev-dependencies]
 # Path, not `workspace = true`: internal dev-dependencies are declared
 # path-only so `cargo publish` never resolves them against crates.io
-# (see the root manifest).
-cratefield-testing = { path = "../testing" }
+# (see the root manifest). Port-conformance alone (issue #201): the speech
+# and classifier suites need nothing beyond `cratefield-core`, so the dev
+# graph stays free of the harness's axum/SQLite stack.
+cratefield-testing = { path = "../testing", default-features = false, features = [
+    "port-conformance",
+] }
 pollster = { workspace = true }
+# The streaming acceptance test gates a chunk stream on a oneshot.
+futures-channel = { workspace = true }
 
 # A wasm leaf crate: getrandom (reached through core's `ulid` -> `rand`)
 # needs the opt-in `wasm_js` backend on wasm32-unknown-unknown, enabled by

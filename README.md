@@ -164,7 +164,7 @@ convenience, not a layer.
 | `cratefield-adapter-resend` | `Mailer` over the Resend REST API, with a `NotConfigured` mode until a sending domain is verified |
 | `cratefield-adapter-turnstile` | `Captcha` over Cloudflare Turnstile, fail-closed |
 | `cratefield-adapter-anthropic` | `TextModel` over the Anthropic Messages API (Claude), through the `HttpClient` port — no vendor SDK, `NotConfigured` mode when the key is absent |
-| `cratefield-adapter-openai-compatible` | `TextModel` over the OpenAI chat-completions wire at any base URL — OpenAI, OpenRouter, Workers AI's compatible endpoint, or a local vLLM/llama.cpp/Ollama server — with token usage on every completion |
+| `cratefield-adapter-openai-compatible` | `TextModel` over the OpenAI chat-completions wire at any base URL — OpenAI, OpenRouter, Workers AI's compatible endpoint, or a local vLLM/llama.cpp/Ollama server — with token usage on every completion; `Speech` over the audio wire (`/audio/transcriptions`, `/audio/speech`) |
 | `cratefield-adapter-cloudflare-saas` | `CustomHostnames` over Cloudflare for SaaS custom hostnames, through the `HttpClient` port — a customer's own hostname served by the venture, with a `NotConfigured` mode and refused-hostname short-circuit |
 | `cratefield-adapter-sqlite` | `Database` over rusqlite: every test, and single-node self-hosting |
 | `cratefield-module-email-signup` | Email signup with double opt-in, unsubscribe, admin export |

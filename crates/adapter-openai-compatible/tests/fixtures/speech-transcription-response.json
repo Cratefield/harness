@@ -1,0 +1,22 @@
+{
+  "task": "transcribe",
+  "language": "english",
+  "duration": 1.5,
+  "text": "the quick brown fox",
+  "words": [
+    { "word": "the", "start": 0.0, "end": 0.12 }, { "word": "quick", "start": 0.12, "end": 0.38 },
+    { "word": "brown", "start": 0.38, "end": 0.64 }, { "word": "fox", "start": 0.64, "end": 0.9 }
+  ],
+  "segments": [
+    {
+      "id": 0,
+      "seek": 0,
+      "start": 0.0,
+      "end": 0.9,
+      "text": " the quick brown fox",
+      "tokens": [50464, 262, 4037, 7586, 21831, 13],
+      "temperature": 0.0, "avg_logprob": -0.41,
+      "compression_ratio": 1.1, "no_speech_prob": 0.02
+    }
+  ]
+}

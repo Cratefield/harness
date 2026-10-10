@@ -24,10 +24,19 @@
 //! AI binding error can still echo platform identifiers (account ids,
 //! binding names), so error text only ever travels inside
 //! `ClassifierError` — whose `Display` scrubs — and this crate's log lines
-//! carry outcome labels, never raw binding text.
+//! carry outcome labels, never raw binding text. The same binding also
+//! carries the `Speech` port (issue #861) over its own `SpeechRunner` seam
+//! — see the `speech` module.
 
 #![doc = include_str!("../README.md")]
 #![forbid(unsafe_code)]
+
+mod speech;
+
+pub use speech::{
+    SpeechBinding, SpeechModel, SpeechRunner, TranscriptionModel, WORKERS_AI_MAX_AUDIO_BYTES,
+    WorkersAiSpeech,
+};
 
 use async_trait::async_trait;
 use cratefield_core::{
@@ -271,7 +280,9 @@ const SUM_TOLERANCE: f32 = 1.0e-4;
 
 /// Substrings (lowercased) that mark a binding error as the binding or the
 /// class being absent — the `NotConfigured` family, not a network failure.
-const BINDING_MARKERS: [&str; 5] = [
+/// Shared with the `speech` module's mapping onto the `SpeechError`
+/// vocabulary.
+pub(crate) const BINDING_MARKERS: [&str; 5] = [
     "binding cannot be cast",
     "does not contain binding",
     "is undefined",
@@ -283,7 +294,7 @@ const BINDING_MARKERS: [&str; 5] = [
 /// overload — retryable, and Workers AI offers no `Retry-After` hint
 /// through the binding, so `retry_after` stays `None` rather than an
 /// invented duration.
-const TRANSIENT_MARKERS: [&str; 7] = [
+pub(crate) const TRANSIENT_MARKERS: [&str; 7] = [
     "rate limit",
     "rate-limit",
     "too many requests",

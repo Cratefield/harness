@@ -19,6 +19,10 @@ cratefield-core = { workspace = true }
 async-trait = { workspace = true }
 http = { workspace = true }
 bytes = { workspace = true }
+# The trait the one-shot body stream a buffered synthesis wraps into a
+# `ResponseStream` implements; the tiny stream itself is written out in
+# `speech.rs`, the way core's own stream tests are.
+futures-core = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tracing = { workspace = true }

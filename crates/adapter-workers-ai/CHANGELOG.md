@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `Speech` over the Workers AI binding (issue [#861](https://github.com/Cratefield/harness/issues/861)): `WorkersAiSpeech` transcribes with Deepgram Nova-3 (the default) or Whisper and synthesizes with Deepgram Aura, behind a `SpeechRunner` seam (`SpeechBinding` in production). Its default audio ceiling is lowered to `WORKERS_AI_MAX_AUDIO_BYTES`, because the binding takes the clip as a JSON number array.
+
 ## [0.3.0](https://github.com/Cratefield/harness/compare/cratefield-adapter-workers-ai-v0.2.1...cratefield-adapter-workers-ai-v0.3.0) - 2026-10-04
 
 ### Changed
