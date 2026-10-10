@@ -499,6 +499,17 @@ jobs:
       # building over core, so it must reach wasm32 on its own too.
       - name: Build cratefield-mail-templates to wasm
         run: cargo build --target wasm32-unknown-unknown -p cratefield-mail-templates
+      # The key-reference signer (issue #761) is pure crypto over the
+      # Secrets port and is headed for browser-side wallet automation; no
+      # venture in this repo enables its facade feature yet, so nothing
+      # else would notice a dependency that cannot reach wasm32.
+      - name: Build cratefield-signer to wasm
+        run: cargo build --target wasm32-unknown-unknown -p cratefield-signer
+      # The signer port's Turnkey provider (issue #761): the stamp is pure
+      # RustCrypto P-256 with no RNG, and no venture enables its facade
+      # feature yet, so nothing else would notice a wasm32 break.
+      - name: Build cratefield-adapter-turnkey to wasm
+        run: cargo build --target wasm32-unknown-unknown -p cratefield-adapter-turnkey
       # And for workers-ai (issue #456) wasm32 is the whole point: it only
       # functions on an isolate, where the `env.AI` binding exists, so the
       # native build proves nothing and this leg is its only positive proof.

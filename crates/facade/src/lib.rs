@@ -128,6 +128,12 @@ pub use cratefield_secrets as secrets;
 #[cfg(feature = "kms")]
 pub use cratefield_kms as kms;
 
+#[cfg(feature = "signer")]
+pub use cratefield_signer as signer;
+
+#[cfg(feature = "turnkey")]
+pub use cratefield_adapter_turnkey as turnkey;
+
 #[cfg(feature = "i18n")]
 pub use cratefield_i18n as i18n;
 
