@@ -216,5 +216,8 @@ pub use cratefield_module_wallets as wallets;
 #[cfg(feature = "guardrails")]
 pub use cratefield_module_guardrails as guardrails;
 
+#[cfg(feature = "sealed")]
+pub use cratefield_module_sealed as sealed;
+
 #[cfg(feature = "testing")]
 pub use cratefield_testing as testing;

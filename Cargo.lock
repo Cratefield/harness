@@ -704,6 +704,7 @@ dependencies = [
  "cratefield-module-orgs",
  "cratefield-module-owlpost",
  "cratefield-module-privacy",
+ "cratefield-module-sealed",
  "cratefield-module-telegram",
  "cratefield-module-telemetry",
  "cratefield-module-waitlist",
@@ -2105,6 +2106,30 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.11.0",
+ "tower",
+ "tracing",
+]
+
+[[package]]
+name = "cratefield-module-sealed"
+version = "0.1.0"
+dependencies = [
+ "aes-gcm",
+ "async-trait",
+ "axum",
+ "base64 0.23.1",
+ "cratefield-core",
+ "cratefield-kms",
+ "cratefield-module-privacy",
+ "cratefield-testing",
+ "getrandom 0.4.3",
+ "pollster",
+ "sea-query",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "thiserror 2.0.20",
+ "time",
  "tower",
  "tracing",
 ]

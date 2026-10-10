@@ -1,0 +1,27 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    // Sealed crypto runs in the browser: `DOM` provides WebCrypto
+    // (`crypto.subtle`), `atob`/`btoa` and WebAuthn types. `"types": []`
+    // keeps `@types/node` (vitest pulls it in for the test runner) out of
+    // src/, so a `node:` import fails to compile rather than shipping a
+    // Node-only entry point.
+    "lib": ["ES2022", "DOM"],
+    "types": [],
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "verbatimModuleSyntax": true,
+    "isolatedModules": true,
+    "declaration": true,
+    "outDir": "dist",
+    "rootDir": "src",
+    "noEmitOnError": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true
+  },
+  "include": ["src"]
+}

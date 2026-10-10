@@ -108,6 +108,10 @@ human-readable page at each `<public_url>/problems/<slug>`.
 | `privacy-provider-unverified` | 401 | Unverified provider call | `cratefield-module-privacy` | The request carried no signature this deployment could verify, or one that did not hold. |
 | `rate-limited` | 429 | Rate limit exceeded | `cratefield-core` | Too many requests from this IP or address; retry after the pause. |
 | `request-too-large` | 413 | Request body too large | `cratefield-core` | The request body exceeded the 64 KiB limit for /v1 endpoints. |
+| `sealed-already-exists` | 409 | That blob id is already stored | `cratefield-module-sealed` | The client generated this blob id, and a record under it already exists for this subject. Nothing was changed. |
+| `sealed-not-found` | 404 | No such blob | `cratefield-module-sealed` | No blob the caller holds carries that id. A blob held by someone else answers the same way, so its existence is not disclosed. |
+| `sealed-precondition-failed` | 412 | The record has changed since you read it | `cratefield-module-sealed` | The `If-Match` revision is not the one the row holds now, so somebody else wrote to it in between. Read the record again, reapply your edit and retry with the fresh `ETag`. |
+| `sealed-precondition-required` | 428 | An If-Match header is required | `cratefield-module-sealed` | Read the record first and send its `ETag` back as `If-Match`; a write without one is refused rather than applied blind. |
 | `sidecar-contract-mismatch` | 503 | Sidecar contract mismatch | `cratefield-core` | A sidecar answers a different HARNESS_API than this harness speaks. |
 | `sidecar-unauthorized` | 401 | Unauthorized sidecar caller | `cratefield-core` | A request to a sidecar-guarded route could not be established as coming from the trusted gateway. |
 | `sidecar-unavailable` | 503 | Sidecar module unavailable | `cratefield-core` | A sidecar-mounted module could not be reached; other modules are unaffected. |

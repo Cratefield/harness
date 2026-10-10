@@ -8,6 +8,13 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **The facade gains a `sealed` feature** (issue #757). It re-exports
+  the new `cratefield-module-sealed` as `cratefield::sealed`: the server
+  half of client-side sealed blobs. It stores opaque ciphertext under a
+  server outer wrap, erases by crypto-shredding, and has no server-side
+  recovery path; `@cratefield/sealed` is the browser client. Nothing in
+  `cratefield-core` changes.
+
 - **The facade gains `telegram` and `telegram-events` features**
   (issue #764). They re-export the new `cratefield-adapter-telegram` as
   `cratefield::telegram` and `cratefield-module-telegram` as

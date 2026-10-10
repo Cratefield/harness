@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - *(telegram)* a `telegram` feature that re-exports `cratefield-adapter-telegram` as `cratefield::telegram`, and a `telegram-events` feature that re-exports `cratefield-module-telegram` as `cratefield::telegram_events`: the Telegram Bot API adapter and the webhook, account-linking and consent-button module ([#764](https://github.com/Cratefield/harness/issues/764))
+- *(sealed)* a `sealed` feature that re-exports `cratefield-module-sealed` as `cratefield::sealed`: the server half of client-side sealed blobs, with opaque ciphertext at rest, crypto-shred erasure and no server-side recovery ([#757](https://github.com/Cratefield/harness/issues/757))
 - *(guardrails)* a `guardrails` feature that re-exports `cratefield-module-guardrails` as `cratefield::guardrails`: the policy engine every automated value-moving action must pass ([#763](https://github.com/Cratefield/harness/issues/763))
 - *(signer)* a `signer` feature that re-exports `cratefield-signer` as `cratefield::signer`: signing by key reference behind guardrails and an audit chain, with session keys held in the Secrets store ([#761](https://github.com/Cratefield/harness/issues/761))
 - *(turnkey)* a `turnkey` feature that re-exports `cratefield-adapter-turnkey` as `cratefield::turnkey`: the signer port's Turnkey provider, delegated access under policy ([#761](https://github.com/Cratefield/harness/issues/761))
