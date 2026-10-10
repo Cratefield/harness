@@ -159,6 +159,14 @@ pub use ports::{
     Dispute, DisputeListRequest, DisputePage, DisputePhase, DisputeStatus, PortalSession,
     PortalSessionRequest, Subscription, SubscriptionStatus,
 };
+// The `Speech` port (issue #861), kept out of the wholesale block above
+// so that block stays untouched.
+pub use ports::{
+    AudioFormat, DEFAULT_MAX_AUDIO_BYTES, DEFAULT_MAX_AUDIO_SECONDS, DEFAULT_MAX_SYNTHESIS_CHARS,
+    NotConfiguredSpeech, Speech, SpeechCapabilities, SpeechError, SpeechLimit, SpeechLimits,
+    SpeechUsage, Synthesis, SynthesizeRequest, TranscribeRequest, Transcript, Voice, WordTiming,
+    check_synthesize, check_transcribe, primary_subtag, wav_duration,
+};
 // The Blob presign API (issue #622), kept out of the wholesale block above.
 pub use ports::{DEFAULT_PRESIGN_TTL, MAX_PRESIGN_TTL, PresignedPut};
 // The inbound mail source (issue #563), kept out of the wholesale block

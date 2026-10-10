@@ -1,0 +1,18 @@
+{
+  "results": {
+    "channels": [
+      {
+        "alternatives": [
+          {
+            "transcript": "the quick brown fox",
+            "confidence": 0.99,
+            "words": [
+              { "word": "the", "start": 0.0, "end": 0.12, "confidence": 0.98 }, { "word": "quick", "start": 0.12, "end": 0.38, "confidence": 0.99 },
+              { "word": "brown", "start": 0.38, "end": 0.64, "confidence": 0.99 }, { "word": "fox", "start": 0.64, "end": 0.9, "confidence": 0.97 }
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -39,6 +39,11 @@
 //! [`Prompt::check_images`] first — before the network and before the
 //! capability gate — so an over-limit prompt is refused locally rather than
 //! paid for, whatever the deployment is configured for.
+//!
+//! **Speech (issue #861).** The same wire carries audio:
+//! [`OpenAiCompatibleSpeech`] transcribes through the Whisper-shaped
+//! `audio/transcriptions` endpoint and voices text through `audio/speech`,
+//! at any base URL, under the same key and degraded-mode rules.
 
 #![doc = include_str!("../README.md")]
 #![forbid(unsafe_code)]
@@ -55,6 +60,12 @@ use http::{Request, StatusCode};
 use serde_json::{Value, json};
 use std::sync::Arc;
 use std::time::Duration;
+
+// The `Speech` port (issue #861): the audio wire alongside the chat wire
+// above, kept in its own module.
+mod speech;
+
+pub use speech::{DEFAULT_SPEECH_MODEL, DEFAULT_TRANSCRIPTION_MODEL, OpenAiCompatibleSpeech};
 
 /// The endpoint every request goes to unless
 /// [`OpenAiCompatible::with_base_url`] says otherwise: `OpenAI`'s own

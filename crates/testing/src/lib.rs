@@ -57,6 +57,10 @@ mod privacy_provider;
 mod request;
 #[cfg(feature = "harness")]
 mod sidecar;
+// The `Speech` port contract (issue #861): ungated like `port` — it
+// needs nothing beyond `cratefield-core`.
+#[cfg(feature = "port-conformance")]
+mod speech;
 // Webhook request signers (issue #666): mint the headers a provider
 // sends, for a test to feed `WebhookVerifier`. Like `batch` and `blob`
 // it is ungated — it needs only `cratefield-core` and the `http`/HMAC
@@ -108,6 +112,12 @@ pub use request::{TestResponse, request, request_as, request_chunks};
 #[cfg(feature = "harness")]
 pub use sidecar::{FakeSidecar, Fault, shared as shared_sidecar};
 pub use signing::{sign_provider_scheme, sign_stripe_style};
+#[cfg(feature = "port-conformance")]
+pub use speech::{
+    SPEECH_CONFORMANCE_AUDIO_BYTES, SPEECH_CONFORMANCE_AUDIO_MILLIS, SPEECH_CONFORMANCE_SYNTH_TEXT,
+    SPEECH_CONFORMANCE_TRANSCRIPT_TEXT, SPEECH_CONFORMANCE_WORD_TIMINGS, speech_conformance,
+    speech_conformance_not_configured, speech_conformance_transcribe_request,
+};
 pub use tmp::TempDir;
 
 // The fixed test secret for the kit's Signer — an obvious dummy, never real.
