@@ -1,0 +1,36 @@
+data: {"type":"start","messageId":"msg-tool-loop"}
+
+data: {"type":"start-step"}
+
+data: {"type":"text-start","id":"text-0"}
+
+data: {"type":"text-delta","id":"text-0","delta":"thinking "}
+
+data: {"type":"text-end","id":"text-0"}
+
+data: {"type":"tool-input-start","toolCallId":"call-1","toolName":"lookup"}
+
+data: {"type":"tool-input-delta","toolCallId":"call-1","inputTextDelta":"{\"q\":\"m"}
+
+data: {"type":"tool-input-delta","toolCallId":"call-1","inputTextDelta":"unich\"}"}
+
+data: {"type":"tool-input-available","toolCallId":"call-1","toolName":"lookup","input":{"q":"munich"}}
+
+data: {"type":"finish-step"}
+
+data: {"type":"tool-output-available","toolCallId":"call-1","output":{"temp_c":21,"sky":"clear"}}
+
+data: {"type":"start-step"}
+
+data: {"type":"text-start","id":"text-1"}
+
+data: {"type":"text-delta","id":"text-1","delta":"It is 21 and clear in Munich."}
+
+data: {"type":"text-end","id":"text-1"}
+
+data: {"type":"finish-step"}
+
+data: {"type":"finish","finishReason":"stop"}
+
+data: [DONE]
+

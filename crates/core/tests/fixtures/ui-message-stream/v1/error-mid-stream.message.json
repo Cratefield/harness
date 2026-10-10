@@ -1,0 +1,14 @@
+{
+  "id": "",
+  "role": "assistant",
+  "parts": [
+    {
+      "type": "step-start"
+    },
+    {
+      "type": "text",
+      "text": "Half an answer",
+      "state": "done"
+    }
+  ]
+}

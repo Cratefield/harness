@@ -1,0 +1,26 @@
+data: {"type":"start"}
+
+data: {"type":"start-step"}
+
+data: {"type":"reasoning-start","id":"reasoning-0"}
+
+data: {"type":"reasoning-delta","id":"reasoning-0","delta":"The user asks about Munich."}
+
+data: {"type":"reasoning-delta","id":"reasoning-0","delta":"A sentence will do."}
+
+data: {"type":"reasoning-end","id":"reasoning-0"}
+
+data: {"type":"text-start","id":"text-0"}
+
+data: {"type":"text-delta","id":"text-0","delta":"Munich sits on the Isar"}
+
+data: {"type":"text-delta","id":"text-0","delta":", in Bavaria."}
+
+data: {"type":"text-end","id":"text-0"}
+
+data: {"type":"finish-step"}
+
+data: {"type":"finish","finishReason":"stop"}
+
+data: [DONE]
+

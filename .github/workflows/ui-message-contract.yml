@@ -1,0 +1,44 @@
+# CI for the UI message stream contract (issue #860): the Rust encoder in
+# crates/core (src/sse.rs, src/sse/**) emits Vercel AI SDK v6 UI message
+# stream SSE, and packages/ui-message-contract replays the committed
+# fixtures through the real AI SDK parser to prove the wire format and the
+# rebuilt UIMessages.
+#
+# ci.yml stays Rust-only, so this file carries the JS side of the contract:
+# the .sse fixtures under crates/core/tests/fixtures/ui-message-stream are
+# the shared artifact, and package-lock.json is watched so a dependency
+# bump of the parser cannot silently change what the contract accepts.
+
+name: UI message contract
+
+on:
+  push:
+    paths:
+      - 'crates/core/src/sse.rs'
+      - 'crates/core/src/sse/**'
+      - 'crates/core/tests/fixtures/ui-message-stream/**'
+      - 'packages/ui-message-contract/**'
+      - 'package-lock.json'
+      - '.github/workflows/ui-message-contract.yml'
+  pull_request:
+    paths:
+      - 'crates/core/src/sse.rs'
+      - 'crates/core/src/sse/**'
+      - 'crates/core/tests/fixtures/ui-message-stream/**'
+      - 'packages/ui-message-contract/**'
+      - 'package-lock.json'
+      - '.github/workflows/ui-message-contract.yml'
+
+jobs:
+  contract:
+    name: "@cratefield/ui-message-contract node tests"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Node 24 like the other npm jobs.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: npm ci
+      - name: Contract tests
+        run: npm test -w @cratefield/ui-message-contract
