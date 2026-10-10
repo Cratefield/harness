@@ -1,6 +1,7 @@
 //! `cratefield-module-notifications`: device and browser subscriptions,
 //! per-account per-category preferences, a fan-out API other modules call,
-//! and a drain that delivers through the `Push` port (issue #182).
+//! and a drain that delivers through the `Push` port and any extra
+//! [`Channel`]s the venture registers (issue #182, #764).
 //!
 //! ```no_run
 //! use cratefield_module_notifications::{Category, Notifications};
@@ -76,6 +77,7 @@
 #![doc = include_str!("../README.md")]
 #![forbid(unsafe_code)]
 
+mod channel;
 mod clock;
 mod handlers;
 mod locale;
@@ -84,6 +86,7 @@ mod message;
 mod notify;
 mod store;
 
+pub use channel::{Channel, ChannelError, ChannelMessage};
 pub use handlers::{
     ChannelPatch, NO_APPLICATION_SERVER_KEY, PreferencesBody, REHOME_LIMIT, RecipientBody,
     RegisterBody, UNKNOWN_CATEGORY, WEBHOOK_UNVERIFIED,
@@ -93,7 +96,7 @@ pub use mail::{EmailMail, TEMPLATE_EMAIL, default_templates, themed_templates};
 pub use message::{Localizable, Message, RenderMode};
 pub use notify::{
     DrainReport, EVENT_REQUESTED, EVENT_SUBSCRIPTION_PRUNED, EVENT_SUBSCRIPTION_REHOMED, Enqueued,
-    Notifier, NotifyError, Skipped, TOPIC_SEND,
+    Notifier, NotifyError, Skipped, TOPIC_CHANNEL, TOPIC_SEND,
 };
 pub use store::{DeadLetterReason, Transport};
 
@@ -363,6 +366,11 @@ pub(crate) struct Settings {
     pub transport_probe: Option<TransportProbe>,
     pub mailer_probe: Option<TransportProbe>,
     pub vapid_key_probe: Option<VapidKeyProbe>,
+    /// The venture's extra delivery channels (#764), in registration
+    /// order. Read by both halves: `notify` queues one row per channel
+    /// that can reach the account, and the drain matches the row's
+    /// channel name against this list.
+    pub channels: Vec<Arc<dyn crate::channel::Channel>>,
     /// The venture's strings (#190). `None` is a single-language venture,
     /// which pays for none of this: a `Localizable` is then a
     /// misconfiguration rather than a silent English fallback.
@@ -387,6 +395,15 @@ impl std::fmt::Debug for Settings {
             .field("email_max_per_window", &self.email_max_per_window)
             .field("transport_probe", &self.transport_probe.is_some())
             .field("mailer_probe", &self.mailer_probe.is_some())
+            // Names only — a channel's own credentials live in its crate.
+            .field(
+                "channels",
+                &self
+                    .channels
+                    .iter()
+                    .map(|channel| channel.name())
+                    .collect::<Vec<_>>(),
+            )
             // Whether one is wired, never what it answers: the key is
             // public, but a report that prints a probe's result is a
             // habit that reaches a probe whose result is not.
@@ -506,6 +523,7 @@ impl Notifications {
                 transport_probe: None,
                 mailer_probe: None,
                 vapid_key_probe: None,
+                channels: Vec::new(),
                 catalog: None,
                 default_locale: None,
                 messages: Arc::new(Vec::new()),
@@ -819,6 +837,31 @@ impl Notifications {
         self
     }
 
+    /// Registers one extra delivery channel (#764) — the seam a crate
+    /// like a Telegram adapter implements — next to the built-in push and
+    /// email:
+    ///
+    /// ```rust,ignore
+    /// Notifications::new().channel(Arc::new(cratefield_module_telegram::TelegramChannel::new(bot)))
+    /// ```
+    ///
+    /// Call it once per channel; every registered channel queues one
+    /// outbox row per notification, and the drain retries and dead-letters
+    /// its failures exactly as it does mail's. Until a channel has a
+    /// preference column of its own, it follows the account's **push**
+    /// switch for the category, re-checked at send time. The channel
+    /// resolves its own recipient out of its own tables by account id —
+    /// nothing of the sort travels through the outbox payload.
+    ///
+    /// The name must be lower-case letters, digits and underscores, and
+    /// registered once: `validate_config` refuses anything else, the same
+    /// way it refuses a duplicated category.
+    #[must_use]
+    pub fn channel(mut self, channel: Arc<dyn crate::channel::Channel>) -> Self {
+        self.settings.channels.push(channel);
+        self
+    }
+
     /// The handle other modules call.
     ///
     /// Take it before composing the harness and hand it to the modules
@@ -1103,6 +1146,10 @@ impl Module for Notifications {
         }
     }
 
+    // One linear list of independent checks, each a few lines; per-concern
+    // helpers would hide which checks run, in what order. Kept whole,
+    // deliberately.
+    #[allow(clippy::too_many_lines)]
     fn validate_config(&self, cfg: &dyn Config) -> Result<(), ConfigError> {
         let module = ModuleConfig::new(MODULE_NAME, cfg);
         let mut errors = ConfigError::default();
@@ -1130,6 +1177,28 @@ impl Module for Notifications {
                 ));
             }
             seen.push(&category.name);
+        }
+
+        // The extra channels (#764) get the same treatment as categories:
+        // a duplicated or mistyped name is a composition bug, and the
+        // name is written into outbox payloads, so it has to be the slug
+        // a dead-letter reason can quote back.
+        let mut registered: Vec<&str> = Vec::new();
+        for channel in &self.settings.channels {
+            if !is_category_name(channel.name()) {
+                errors.push(format!(
+                    "notifications: channel {:?} must be lower-case letters, digits and \
+                     underscores",
+                    channel.name()
+                ));
+            }
+            if registered.contains(&channel.name()) {
+                errors.push(format!(
+                    "notifications: channel {:?} is registered twice",
+                    channel.name()
+                ));
+            }
+            registered.push(channel.name());
         }
 
         // Parsed as the `u32` the runtime reads, not as a `u64`: a value

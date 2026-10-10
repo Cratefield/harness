@@ -39,6 +39,9 @@ pub use cratefield_adapter_resend as resend;
 #[cfg(feature = "owlpost")]
 pub use cratefield_adapter_owlpost as owlpost;
 
+#[cfg(feature = "telegram")]
+pub use cratefield_adapter_telegram as telegram;
+
 #[cfg(feature = "colonizer")]
 pub use cratefield_adapter_colonizer as colonizer;
 
@@ -96,6 +99,13 @@ pub use cratefield_adapter_linear as linear;
 /// they emit.
 #[cfg(feature = "owlpost-events")]
 pub use cratefield_module_owlpost as owlpost_events;
+
+/// Telegram's secret-token webhook, account linking and consent buttons
+/// (issue #764). The plain `telegram` alias is the sending adapter; this is
+/// the module that answers its webhooks, so the feature and alias are named
+/// for what they serve.
+#[cfg(feature = "telegram-events")]
+pub use cratefield_module_telegram as telegram_events;
 
 // The portable classifier adapters (issue #456). The third one,
 // `cratefield-adapter-workers-ai`, is deliberately not re-exported here: it

@@ -17,6 +17,9 @@ workspace = true
 [dependencies]
 cratefield-core = { workspace = true }
 cratefield-mail-templates = { workspace = true }
+# The `Channel` trait (#764) is an async trait, like every port in core.
+# Pure Rust, wasm-safe, already in the tree.
+async-trait = { workspace = true }
 # The catalog a `Localizable` message is rendered from, the BCP 47
 # negotiation chain, and the text direction an `ar` mail needs (issue
 # #190). A venture with one language never builds a catalog and pays
@@ -71,7 +74,6 @@ cratefield-adapter-sqlite = { path = "../adapter-sqlite" }
 cratefield-push-wiring = { path = "../push-wiring" }
 pollster = { workspace = true }
 tower = { workspace = true }
-async-trait = { workspace = true }
 bytes = { workspace = true }
 base64ct = { workspace = true }
 # Mints the ES256 access tokens the route tests present. Pinned to the

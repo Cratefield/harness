@@ -678,6 +678,7 @@ dependencies = [
  "cratefield-adapter-resend",
  "cratefield-adapter-sqlite",
  "cratefield-adapter-stripe",
+ "cratefield-adapter-telegram",
  "cratefield-adapter-turnstile",
  "cratefield-adapter-typesafe",
  "cratefield-adapter-webhook-tracker",
@@ -702,6 +703,7 @@ dependencies = [
  "cratefield-module-orgs",
  "cratefield-module-owlpost",
  "cratefield-module-privacy",
+ "cratefield-module-telegram",
  "cratefield-module-telemetry",
  "cratefield-module-waitlist",
  "cratefield-module-wallets",
@@ -1059,6 +1061,23 @@ dependencies = [
  "sha2 0.11.0",
  "subtle",
  "thiserror 2.0.20",
+ "time",
+ "tracing",
+]
+
+[[package]]
+name = "cratefield-adapter-telegram"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "cratefield-core",
+ "cratefield-testing",
+ "getrandom 0.4.3",
+ "http",
+ "pollster",
+ "serde",
+ "serde_json",
  "time",
  "tracing",
 ]
@@ -2056,6 +2075,31 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.11.0",
+ "tower",
+ "tracing",
+]
+
+[[package]]
+name = "cratefield-module-telegram"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "axum",
+ "base64 0.23.1",
+ "cratefield-adapter-telegram",
+ "cratefield-core",
+ "cratefield-module-notifications",
+ "cratefield-testing",
+ "hex",
+ "hmac 0.13.0",
+ "http",
+ "pollster",
+ "schemars 1.2.2",
+ "sea-query",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "time",
  "tower",
  "tracing",
 ]

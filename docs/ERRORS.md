@@ -114,6 +114,12 @@ human-readable page at each `<public_url>/problems/<slug>`.
 | `table-forbidden` | 403 | Not yours to reach | `cratefield-tables-api` | The table's declared access level does not admit this caller. |
 | `table-misdeclared` | 500 | Table declaration cannot be enforced | `cratefield-tables-api` | The table declares owner access without a subject column to match a caller against. |
 | `table-read-only` | 403 | Not writable | `cratefield-tables-api` | This table's declared access is public-read: it is served, never written. |
+| `telegram/action-not-confirmable` | 409 | Action cannot be confirmed | `cratefield-module-telegram` | The action is not awaiting passkey confirmation, or it has expired, or it was already confirmed. |
+| `telegram/action-not-yours` | 403 | Not your action | `cratefield-module-telegram` | Actions are confirmed by the account they were requested for. |
+| `telegram/no-such-action` | 404 | No such action | `cratefield-module-telegram` | No action with that id exists. |
+| `telegram/passkey-required` | 403 | Passkey confirmation required | `cratefield-module-telegram` | Approving a value-moving action needs a fresh passkey ceremony, and this request did not carry one this deployment could verify. |
+| `telegram/unauthenticated` | 401 | Sign in first | `cratefield-module-telegram` | This route is available only to a signed-in user. |
+| `telegram/unverified` | 401 | Unverified delivery | `cratefield-module-telegram` | The delivery carried no secret token this deployment could verify, or one that did not hold. |
 | `telemetry-payload-rejected` | 400 | Telemetry payload rejected | `cratefield-module-telemetry` | The batch carries a value outside the closed grammar the notice route publishes. |
 | `telemetry-schema-unsupported` | 400 | Telemetry schema not supported | `cratefield-module-telemetry` | The batch names a payload schema version this collector does not parse. |
 | `tenant-degraded` | 503 | Tenant is degraded | `cratefield-core` | The tenant's schema is behind or its database is unreachable; its neighbours are unaffected. |

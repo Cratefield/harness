@@ -35,6 +35,7 @@ use futures_util::StreamExt as _;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
+use crate::channel::{ChannelError, ChannelMessage};
 use crate::clock::{now_iso, plus_secs};
 use crate::locale::{self, Localised};
 use crate::message::{Localizable, Message};
@@ -48,6 +49,13 @@ pub const TOPIC_SEND: &str = "notifications.send";
 /// One row per notification per **account**, not per device: a coach's
 /// notes are one email however many phones the account has.
 pub(crate) const TOPIC_EMAIL: &str = "notifications.email";
+/// The outbox topic an extra-channel row carries (#764).
+///
+/// One row per notification per **registered channel**: the payload names
+/// the channel and the account, and the channel resolves its own
+/// recipient out of its own tables — a chat id never travels in a
+/// payload, for the same reason a push token does not.
+pub const TOPIC_CHANNEL: &str = "notifications.channel";
 
 /// The event a venture can subscribe to instead of taking a crate
 /// dependency on this module.
@@ -114,6 +122,26 @@ pub(crate) struct EmailJob {
     pub localizable: Option<Localizable>,
 }
 
+/// One queued extra-channel delivery (#764), the account-level sibling of
+/// [`EmailJob`].
+///
+/// `channel` is the registered [`Channel::name`], matched again in the
+/// drain. The recipient's own credential — a chat id, a bot token — is
+/// **not** here, for the same reason a push token is not in [`SendJob`]:
+/// an outbox payload is ordinary data that ends up in exports and
+/// diagnostics, and the channel looks its recipient up out of its own
+/// tables by `account_id`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct ChannelJob {
+    pub channel: String,
+    pub notification_id: String,
+    pub account_id: String,
+    pub category: String,
+    pub notification: Notification,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub localizable: Option<Localizable>,
+}
+
 /// The room one inbox row is announced in, and the bytes announced.
 type Room = (String, Vec<u8>);
 
@@ -150,8 +178,12 @@ pub struct Enqueued {
     statements: Vec<Statement>,
     /// How many of `statements` are push rows. Counted rather than derived
     /// from the length: since #187 the batch may also carry the in-app
-    /// inbox insert, and `len()` means devices.
+    /// inbox insert, and since #764 an extra-channel row or two, and
+    /// `len()` means devices.
     devices: usize,
+    /// How many of `statements` are extra-channel rows (#764). Account
+    /// level, so deliberately not in `len()`: that answer is devices.
+    channel_rows: usize,
     inbox: bool,
     /// The room and payload for the live announcement, present exactly
     /// when an inbox row is in `statements`. Built here so
@@ -199,10 +231,19 @@ impl Enqueued {
     }
 
     /// Whether nothing will be *sent*. An inbox row may still be written —
-    /// see [`Enqueued::wrote_inbox`].
+    /// see [`Enqueued::wrote_inbox`] — and an extra channel may still have
+    /// a row queued — see [`Enqueued::channel_rows`].
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.devices == 0
+    }
+
+    /// How many extra-channel rows are in the batch (#764). One per
+    /// registered channel that could reach the account — account level,
+    /// whatever the account's devices are doing.
+    #[must_use]
+    pub fn channel_rows(&self) -> usize {
+        self.channel_rows
     }
 
     /// Whether the batch carries an in-app inbox row (#187).
@@ -533,6 +574,46 @@ impl Notifier {
         ))
     }
 
+    /// The outbox insert for one account's extra-channel delivery (#764).
+    ///
+    /// One row per registered channel, carrying the channel's name and the
+    /// account — never the channel's own credential for that account.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "one row's worth of columns, named rather than bundled"
+    )]
+    fn channel_row(
+        &self,
+        channel: &str,
+        account_id: &str,
+        notification_id: &str,
+        category: &Category,
+        notification: &Notification,
+        localizable: Option<&Localizable>,
+        now: &str,
+    ) -> Result<Statement, NotifyError> {
+        let job = ChannelJob {
+            channel: channel.to_owned(),
+            notification_id: notification_id.to_owned(),
+            account_id: account_id.to_owned(),
+            category: category.name.clone(),
+            notification: notification.clone(),
+            localizable: localizable.cloned(),
+        };
+        let payload = serde_json::to_string(&job).map_err(|err| {
+            NotifyError::Database(DbError::Execute(format!(
+                "notification does not serialise: {err}"
+            )))
+        })?;
+        Ok(Outbox::new(store::OUTBOX).enqueue_statement(
+            &self.new_id(),
+            TOPIC_CHANNEL,
+            &payload,
+            Some(account_id),
+            now,
+        ))
+    }
+
     /// Whether `account_id` should be emailed for `category`.
     ///
     /// Three things, all of which must hold: the venture opted the
@@ -690,6 +771,12 @@ impl Notifier {
     /// `data`, [`NotifyError::NoCatalog`] for a localizable message in a
     /// venture with no catalog, and [`NotifyError::Database`] when a read
     /// fails.
+    //
+    // One notify is the whole queueing ceremony — inbox, mail, extra
+    // channels, push — in the order the caller's one commit needs them.
+    // Splitting it into fragments would scatter that order across
+    // helpers. Kept whole, deliberately.
+    #[allow(clippy::too_many_lines)]
     pub async fn notify(
         &self,
         db: &dyn Database,
@@ -761,12 +848,52 @@ impl Notifier {
 
         // Cheap skip, not the check that counts: the drain re-reads the
         // preference immediately before sending, so an opt-out that
-        // arrives after this line still wins.
-        if !self.push_allowed(db, account_id, &category).await? {
+        // arrives after this line still wins. The extra channels (#764)
+        // follow the same switch, so it is read once for all of them.
+        let push_on = self.push_allowed(db, account_id, &category).await?;
+
+        // The venture's extra channels, ahead of the push early returns
+        // for the same reason email is: an account with no device can
+        // still have linked one. Until a channel has a preference column
+        // of its own, the account's **push** answer for the category is
+        // its answer here too, and a channel that cannot reach the
+        // account queues nothing. Both answers are re-checked in the
+        // drain; this is the optimisation, not the authority.
+        let mut channel_rows = 0usize;
+        if push_on {
+            for channel in &self.settings().channels {
+                let queued = match channel.reachable(db, account_id).await {
+                    Ok(reachable) => reachable,
+                    Err(error) => {
+                        tracing::warn!(
+                            channel = channel.name(),
+                            %error,
+                            "checking channel reachability failed; queueing nothing for it"
+                        );
+                        false
+                    }
+                };
+                if queued {
+                    statements.push(self.channel_row(
+                        channel.name(),
+                        account_id,
+                        &notification_id,
+                        &category,
+                        &notification,
+                        localizable.as_ref(),
+                        &now,
+                    )?);
+                    channel_rows += 1;
+                }
+            }
+        }
+
+        if !push_on {
             return Ok(Enqueued {
                 notification_id,
                 statements,
                 devices: 0,
+                channel_rows,
                 inbox,
                 announcement,
                 skipped: Some(Skipped::PreferenceOff),
@@ -781,6 +908,7 @@ impl Notifier {
                 notification_id,
                 statements,
                 devices: 0,
+                channel_rows,
                 inbox,
                 announcement,
                 skipped: Some(Skipped::NoSubscriptions),
@@ -805,6 +933,7 @@ impl Notifier {
             devices: subscriptions.len(),
             notification_id,
             statements,
+            channel_rows,
             inbox,
             announcement,
             skipped: None,
@@ -841,7 +970,9 @@ impl Notifier {
         // is exactly the one whose broken message would otherwise be
         // silent everywhere.
         self.announce(scope, &enqueued).await;
-        if !enqueued.is_empty() {
+        // Devices **or** an extra-channel row (#764): both need the drain,
+        // and `is_empty()` counts only devices.
+        if !enqueued.is_empty() || enqueued.channel_rows() > 0 {
             self.deliver_now(scope);
         }
         Ok(enqueued)
@@ -1164,6 +1295,9 @@ impl Notifier {
     ) -> Result<Outcome, NotifyError> {
         if record.topic == TOPIC_EMAIL {
             return self.deliver_email(ctx, db, scope, record, now).await;
+        }
+        if record.topic == TOPIC_CHANNEL {
+            return self.deliver_channel(ctx, db, scope, record, now).await;
         }
 
         let Ok(job) = serde_json::from_str::<SendJob>(&record.payload) else {
@@ -1502,6 +1636,183 @@ impl Notifier {
                     .await
             }
         }
+    }
+
+    /// Delivers one queued extra-channel row (#764).
+    ///
+    /// The same policy shape as email over the channel's own outcomes: an
+    /// unregistered channel or an account the channel cannot reach
+    /// dead-letters as `not_configured`, a `Permanent` refusal dead-letters
+    /// as `rejected`, a `Transient` one retries to the shared bound — and
+    /// the push switch is re-read here, so an opt-out that arrived after
+    /// the row was written still wins.
+    async fn deliver_channel(
+        &self,
+        ctx: &ModuleContext,
+        db: &dyn Database,
+        scope: &Scope,
+        record: &OutboxRecord,
+        now: &str,
+    ) -> Result<Outcome, NotifyError> {
+        let Ok(job) = serde_json::from_str::<ChannelJob>(&record.payload) else {
+            tracing::error!(row = %record.id, "outbox row is not a notifications channel job");
+            self.dead_letter(
+                db,
+                record,
+                DeadLetterReason::Malformed,
+                "outbox payload is not a notifications channel job",
+                now,
+            )
+            .await?;
+            return Ok(Outcome::DeadLettered);
+        };
+
+        let Some(channel) = self
+            .settings()
+            .channels
+            .iter()
+            .find(|channel| channel.name() == job.channel)
+        else {
+            // The venture unregistered the channel between the commit and
+            // the drain. Dead-letter rather than drop: the notification
+            // was real, and the row is the only place its failure shows.
+            self.dead_letter(
+                db,
+                record,
+                DeadLetterReason::NotConfigured,
+                &format!("no channel named {:?} is registered", job.channel),
+                now,
+            )
+            .await?;
+            return Ok(Outcome::DeadLettered);
+        };
+
+        // The checks that count, re-read now rather than trusted from when
+        // the row was written. A venture that stopped declaring the
+        // category drops silently, as the push arm does; an opted-out
+        // account likewise — channels follow the **push** switch (#764).
+        let Ok(category) = self.category(&job.category).cloned() else {
+            db.execute(&store::delete_outbox_statement(&record.id))
+                .await?;
+            return Ok(Outcome::Dropped);
+        };
+        if !self.push_allowed(db, &job.account_id, &category).await? {
+            db.execute(&store::delete_outbox_statement(&record.id))
+                .await?;
+            return Ok(Outcome::Dropped);
+        }
+
+        // Reachable now, not when the row was written: an account that
+        // unlinked between the two does not get a message it cannot
+        // receive, and the dead letter is where the drop is visible.
+        match channel.reachable(db, &job.account_id).await {
+            Ok(true) => {}
+            Ok(false) => {
+                self.dead_letter(
+                    db,
+                    record,
+                    DeadLetterReason::NotConfigured,
+                    &format!(
+                        "channel {} reports the account is no longer reachable on it",
+                        job.channel
+                    ),
+                    now,
+                )
+                .await?;
+                return Ok(Outcome::DeadLettered);
+            }
+            Err(error) => return self.channel_failed(ctx, db, record, &error, now).await,
+        }
+
+        let message = self
+            .channel_message(ctx, db, scope, &job, &category)
+            .await?;
+        match channel.deliver(db, &job.account_id, &message).await {
+            Ok(()) => {
+                // No send record and no cooldown to count against: those
+                // are the mail channel's tables, and a channel keeps its
+                // own books.
+                db.execute(&store::delete_outbox_statement(&record.id))
+                    .await?;
+                Ok(Outcome::Delivered)
+            }
+            Err(error) => self.channel_failed(ctx, db, record, &error, now).await,
+        }
+    }
+
+    /// One mapping from a channel's error to the drain's outcomes, shared
+    /// by the reachability check and the send: `Unreachable` dead-letters
+    /// as `not_configured` (only the account can fix it, by linking
+    /// again), `Permanent` as `rejected`, and `Transient` retries to the
+    /// same bound as every other channel.
+    async fn channel_failed(
+        &self,
+        ctx: &ModuleContext,
+        db: &dyn Database,
+        record: &OutboxRecord,
+        error: &ChannelError,
+        now: &str,
+    ) -> Result<Outcome, NotifyError> {
+        match error {
+            ChannelError::Unreachable => {
+                self.dead_letter(
+                    db,
+                    record,
+                    DeadLetterReason::NotConfigured,
+                    &error.to_string(),
+                    now,
+                )
+                .await?;
+                Ok(Outcome::DeadLettered)
+            }
+            ChannelError::Permanent(message) => {
+                self.dead_letter(db, record, DeadLetterReason::Rejected, message, now)
+                    .await?;
+                Ok(Outcome::DeadLettered)
+            }
+            ChannelError::Transient { retry_after } => {
+                self.retry_or_give_up(
+                    ctx,
+                    db,
+                    record,
+                    "the channel asked to try again later",
+                    *retry_after,
+                    now,
+                )
+                .await
+            }
+        }
+    }
+
+    /// The message an extra channel is handed, in the account's own
+    /// language (#190): one channel per account, like the inbox and the
+    /// mailbox, whatever the account's devices say.
+    async fn channel_message(
+        &self,
+        ctx: &ModuleContext,
+        db: &dyn Database,
+        scope: &Scope,
+        job: &ChannelJob,
+        category: &Category,
+    ) -> Result<ChannelMessage, NotifyError> {
+        let asked = self.account_locale(db, &job.account_id).await?;
+        let notification = match job.localizable.as_ref() {
+            // A rendered caller gets its own words back untouched.
+            None => job.notification.clone(),
+            Some(message) => {
+                let catalog = self.catalog(&message.key)?;
+                let rendered = locale::render(&*catalog, message, &asked, false);
+                locale::report_missing(ctx, scope, &category.name, &rendered.missing);
+                prepare(rendered.notification, category, &job.notification_id)?
+            }
+        };
+        Ok(ChannelMessage {
+            category: category.name.clone(),
+            title: notification.title,
+            body: notification.body,
+            url: notification.url,
+            notification_id: job.notification_id.clone(),
+        })
     }
 
     /// Everything that can turn a queued email back into nothing,
@@ -1940,6 +2251,29 @@ mod tests {
         let parsed: SendJob = serde_json::from_str(old).expect("an older payload still reads");
         assert!(parsed.localizable.is_none());
         assert_eq!(parsed.notification.title, "Booked");
+    }
+
+    #[test]
+    fn a_channel_payload_names_the_channel_and_the_account_and_no_recipient() {
+        // The whole point of the seam (#764): the channel's credential for
+        // the account — a chat id, say — belongs to the channel's own
+        // tables, never in a payload that ends up in exports.
+        let job = ChannelJob {
+            channel: "telegram".to_owned(),
+            notification_id: "n".to_owned(),
+            account_id: "a".to_owned(),
+            category: "booking".to_owned(),
+            notification: Notification::new("Booked", "Tuesday"),
+            localizable: None,
+        };
+        let json = serde_json::to_string(&job).expect("serialises");
+        assert!(json.contains("\"telegram\""), "{json}");
+        assert!(json.contains("\"a\""), "{json}");
+        assert!(!json.contains("chat_id"), "{json}");
+        assert!(!json.contains("recipient"), "{json}");
+        assert!(!json.contains('@'), "{json}");
+        let back: ChannelJob = serde_json::from_str(&json).expect("round trips");
+        assert_eq!(back.channel, "telegram");
     }
 
     #[test]

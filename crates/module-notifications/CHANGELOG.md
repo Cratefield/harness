@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- a `Channel` trait for extra delivery channels a venture registers with `.channel(..)`, such as Telegram: one outbox row per registered channel on the `notifications.channel` topic, with the push adapters' error shapes ([#764](https://github.com/Cratefield/harness/issues/764))
+
 ## [0.3.1](https://github.com/Cratefield/harness/compare/cratefield-module-notifications-v0.3.0...cratefield-module-notifications-v0.3.1) - 2026-10-07
 
 ### Fixed
