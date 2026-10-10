@@ -172,6 +172,90 @@ jobs:
       - name: Module catalog drift check (issue #139)
         run: cargo run -q -p cratefield-catalog --example catalog-doc -- --check
 
+  # The crates the workspace `exclude`s — the venture-side `fz` binaries,
+  # the cli-acceptance fixture and the two spikes — keep their own
+  # Cargo.lock, and no job above compiles them. A workspace dependency bump
+  # can therefore leave one of those lockfiles stale, pass CI, and break
+  # the first `cargo build --locked` out of tree (issue #856). Discovery
+  # re-derives the list every run from git and `cargo metadata`, so a new
+  # crate added outside the workspace is covered without editing this
+  # file; the script fails when the query finds none.
+  out-of-workspace-crates:
+    name: out-of-workspace crate discovery
+    runs-on: ubuntu-latest
+    outputs:
+      dirs: ${{ steps.discover.outputs.dirs }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.98.1"
+      - id: discover
+        run: |
+          python3 - <<'PY'
+          import json, os, subprocess
+
+          # Every Cargo.toml git tracks; the root manifest itself defines
+          # the workspace rather than a crate, so its directory ("") drops.
+          tracked = subprocess.run(
+              ["git", "ls-files", "*Cargo.toml", ":!:**/node_modules/**"],
+              check=True, capture_output=True, text=True,
+          ).stdout.splitlines()
+          tracked_dirs = {d for f in tracked if (d := os.path.dirname(f))}
+
+          # The packages the root workspace actually resolved: the
+          # `members` globs minus the `exclude` list, with the spikes' own
+          # `[workspace]` tables keeping them out too.
+          members = json.loads(subprocess.run(
+              ["cargo", "metadata", "--no-deps", "--format-version", "1"],
+              check=True, capture_output=True, text=True,
+          ).stdout)
+          member_dirs = {
+              os.path.relpath(os.path.dirname(p["manifest_path"]))
+              for p in members["packages"]
+          }
+
+          out = sorted(tracked_dirs - member_dirs)
+          if not out:
+              raise SystemExit(
+                  "no out-of-workspace Cargo.toml found: the discovery query is broken"
+              )
+          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+              f.write(f"dirs={json.dumps(out)}\n")
+          PY
+
+  # One matrix entry per crate discovery found. `--locked` on every cargo
+  # run is the point (issue #856): it fails when this crate's Cargo.lock
+  # was left behind by a workspace dependency bump. Refresh a stale lock
+  # by running `cargo metadata --format-version 1 > /dev/null` in the
+  # crate's directory and committing the updated Cargo.lock.
+  standalone:
+    name: standalone crate (${{ matrix.dir }})
+    needs: out-of-workspace-crates
+    runs-on: ubuntu-latest
+    strategy:
+      # One broken crate should not hide another's result.
+      fail-fast: false
+      matrix:
+        dir: ${{ fromJSON(needs.out-of-workspace-crates.outputs.dirs) }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.98.1"
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          # The crate is outside the workspace: cache its target dir under
+          # its own key, keyed on its own lockfile and manifests.
+          workspaces: ${{ matrix.dir }}
+      - name: fmt, clippy and test with the lockfile held to the manifest
+        working-directory: ${{ matrix.dir }}
+        run: |
+          cargo fmt --check
+          cargo clippy --locked --all-targets -- -D warnings
+          cargo test --locked
+
   supabase-inspect-e2e:
     # The acceptance test issue #723 asks for, against a real Supabase
     # stack: `supabase start` (Docker, which the workspace `test` job does
