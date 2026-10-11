@@ -24,21 +24,34 @@
 //! and how many sessions and refresh tokens this call took away. An
 //! account a second call finds already disabled reports zeros, so an
 //! operator can tell a first disable from a repeat.
+//!
+//! Beside the switch, one read under the same guard:
+//! `GET /admin/users/{sub}/passkeys` answers how many usable passkeys the
+//! account holds, as `{"passkeys": <count>}` — a number and nothing else,
+//! so an app that keeps its own sign-in policy (ask for the passkey once
+//! the member has one) can learn the one fact it needs without holding a
+//! credential id or a public key. A passkey flagged by a counter
+//! regression (`passkey_suspect_at`) is refused at login, so it is not
+//! counted: an app that demanded it would be demanding a passkey that
+//! cannot sign in. Like `by-external-id`, a read writes no audit row.
 
 use axum::extract::{Path, State};
 use axum::response::{IntoResponse, Response};
-use axum::routing::post;
+use axum::routing::{get, post};
 use cratefield_core::{Json, Problem, Scope, subject_hash};
 use serde_json::json;
 use std::sync::Arc;
 
 use crate::ModuleState;
-use crate::store::{self, STATUS_ACTIVE, STATUS_DISABLED, TOKEN_REFRESH, UserAdminAuditRow};
+use crate::store::{
+    self, CREDENTIAL_PASSKEY, STATUS_ACTIVE, STATUS_DISABLED, TOKEN_REFRESH, UserAdminAuditRow,
+};
 
 pub(crate) fn router(state: Arc<ModuleState>) -> axum::Router {
     axum::Router::new()
         .route("/admin/users/{sub}/disable", post(disable))
         .route("/admin/users/{sub}/enable", post(enable))
+        .route("/admin/users/{sub}/passkeys", get(passkeys))
         .route_layer(axum::middleware::from_fn_with_state(
             Arc::clone(&state),
             crate::clients::admin_guard,
@@ -80,7 +93,30 @@ async fn enable(
     switch(&scope, &state, &sub, STATUS_ACTIVE, "user.enable").await
 }
 
-/// The shared body of both routes: flip `users.status` beside its audit
+/// `GET /admin/users/{sub}/passkeys` — `{"passkeys": <count>}`, the
+/// account's passkeys that can still sign in. An unknown sub is a `404`,
+/// as on the switch: the caller named an account, and "nobody by that id"
+/// is an answer it needs rather than a zero.
+async fn passkeys(
+    scope: Scope,
+    State(state): State<Arc<ModuleState>>,
+    Path(sub): Path<String>,
+) -> Result<Response, Problem> {
+    let Some(db) = state.ctx.ports.db.clone() else {
+        return Err(internal(&scope));
+    };
+    store::user_by_id(&*db, &sub)
+        .await?
+        .ok_or_else(|| Problem::not_found().instance(&scope.request_id))?;
+    let count = store::credentials_by_user(&*db, &sub)
+        .await?
+        .iter()
+        .filter(|row| row.kind == CREDENTIAL_PASSKEY && row.passkey_suspect_at.is_none())
+        .count();
+    Ok(Json(json!({ "passkeys": count })).into_response())
+}
+
+/// The shared body of both switch routes: flip `users.status` beside its audit
 /// row, then — for a disable — pull the live access paths out. The flag
 /// moves first because it is what refuses the racing sign-in; the
 /// revocations after it can only find what was live before the flip.

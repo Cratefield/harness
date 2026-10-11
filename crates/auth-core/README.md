@@ -25,6 +25,7 @@ access and erasure walk.
 | `POST /admin/clients/{id}/rotate-secret` | Rotate a confidential client's secret, with an overlap window |
 | `POST /admin/users/import`, `GET /admin/users/by-external-id` | `fz auth import`'s server half |
 | `POST /admin/users/{sub}/disable`, `POST /admin/users/{sub}/enable` | Switch an account off and back on (#854) |
+| `GET /admin/users/{sub}/passkeys` | `{"passkeys": <count>}`: how many usable passkeys the account holds |
 | `POST /sso/connections`, `GET /sso/connections` | An organization's own identity provider (#627) |
 | `POST /email/change` | `{ new_email, current_password? }`, signed in. Always `202`, always the same body |
 | `GET /email/confirm?token=…` | The page an email-change link opens. Never reads or spends the token |
@@ -84,6 +85,14 @@ row (migration `0012`), enable included.
 `POST /admin/users/{sub}/enable` undoes the flag. It restores nothing:
 sessions stay revoked and retired refresh tokens stay spent, so the person
 signs in again as normal.
+
+`GET /admin/users/{sub}/passkeys` (same admin bearer token) answers
+`{"passkeys": <count>}`: how many passkeys the account holds that can still
+sign in (one flagged by a counter regression is not counted). It is for an
+app that keeps its own sign-in policy, such as asking for the passkey once
+the member has one, and returns a number only: no credential ids and no
+public keys. An unknown `sub` is a `404`. Being a read, it writes no audit
+row.
 
 **What disable does not stop instantly is the current access token.** It
 is a JWT valid for `ACCESS_TOKEN_SECS` (ten minutes), self-contained and

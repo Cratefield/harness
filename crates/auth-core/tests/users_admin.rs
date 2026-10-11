@@ -378,3 +378,150 @@ async fn count_users(kit: &TestHarness) -> i64 {
         .and_then(|row| row.get::<i64>("n"))
         .unwrap_or(-1)
 }
+
+// --- the passkey count -------------------------------------------------------
+
+async fn get(kit: &TestHarness, path: &str, token: Option<&str>) -> Reply {
+    let mut builder = axum::http::Request::builder().method(Method::GET).uri(path);
+    if let Some(token) = token {
+        builder = builder.header(header::AUTHORIZATION, format!("Bearer {token}"));
+    }
+    let request = builder
+        .body(axum::body::Body::empty())
+        .expect("request builds");
+    reply(kit.router.clone().oneshot(request).await.expect("answers")).await
+}
+
+/// One credential row for `user`: a passkey (optionally flagged suspect)
+/// or a password hash.
+async fn seed_credential(kit: &TestHarness, id: &str, user: &str, kind: &str, suspect: bool) {
+    let passkey = kind == cratefield_auth_core::CREDENTIAL_PASSKEY;
+    cratefield_auth_core::insert_credential(
+        &*kit.db,
+        &cratefield_auth_core::CredentialRow {
+            id: id.to_owned(),
+            user_id: user.to_owned(),
+            kind: kind.to_owned(),
+            passkey_credential_id: passkey
+                .then(|| cratefield_auth_core::Bytes(id.as_bytes().to_vec())),
+            passkey_public_key_cose: passkey.then(|| cratefield_auth_core::Bytes(vec![0xa5; 8])),
+            passkey_sign_count: passkey.then_some(0),
+            passkey_aaguid: None,
+            passkey_transports: None,
+            password_hash: (!passkey)
+                .then(|| cratefield_auth_core::Redacted("$argon2id$v=19$stub".to_owned())),
+            label: None,
+            created_at: iso(EPOCH),
+            last_used_at: None,
+            passkey_suspect_at: None,
+            failed_attempts: 0,
+            failed_window_started_at: None,
+            locked_until: None,
+        },
+    )
+    .await
+    .expect("credential");
+    // The flag is not an insert column: it is set the way login sets it.
+    if suspect {
+        cratefield_auth_core::mark_passkey_suspect(&*kit.db, id, &iso(EPOCH + 5))
+            .await
+            .expect("flag");
+    }
+}
+
+#[pollster::test]
+async fn the_passkey_count_answers_only_behind_the_admin_guard() {
+    let kit = kit();
+    seed_user(&kit, "u1").await;
+    seed_credential(&kit, "pk1", "u1", "passkey", false).await;
+    let path = format!("{BASE}/admin/users/u1/passkeys");
+
+    let Reply { status, json } = get(&kit, &path, None).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    assert_eq!(
+        json["type"],
+        "https://test.example/problems/admin-unauthorized"
+    );
+    assert!(json.get("passkeys").is_none());
+
+    let Reply { status, json } = get(&kit, &path, Some("definitely-wrong")).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(
+        json["type"],
+        "https://test.example/problems/admin-forbidden"
+    );
+    assert!(json.get("passkeys").is_none());
+}
+
+#[pollster::test]
+async fn the_passkey_count_is_a_number_and_nothing_else() {
+    let kit = kit();
+    seed_user(&kit, "u1").await;
+    seed_credential(&kit, "pk1", "u1", "passkey", false).await;
+    seed_credential(&kit, "pk2", "u1", "passkey", false).await;
+
+    let Reply { status, json } = get(
+        &kit,
+        &format!("{BASE}/admin/users/u1/passkeys"),
+        Some(ADMIN),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    // Least data out: no ids, no public keys, no labels.
+    assert_eq!(json, serde_json::json!({ "passkeys": 2 }));
+}
+
+#[pollster::test]
+async fn the_passkey_count_leaves_out_passwords_suspect_passkeys_and_other_accounts() {
+    let kit = kit();
+    seed_user(&kit, "u1").await;
+    seed_user(&kit, "u2").await;
+    seed_credential(&kit, "pw1", "u1", "password", false).await;
+    seed_credential(&kit, "pk-flagged", "u1", "passkey", true).await;
+    seed_credential(&kit, "pk-other", "u2", "passkey", false).await;
+
+    let Reply { status, json } = get(
+        &kit,
+        &format!("{BASE}/admin/users/u1/passkeys"),
+        Some(ADMIN),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    assert_eq!(json["passkeys"], 0);
+
+    let Reply { json, .. } = get(
+        &kit,
+        &format!("{BASE}/admin/users/u2/passkeys"),
+        Some(ADMIN),
+    )
+    .await;
+    assert_eq!(json["passkeys"], 1);
+}
+
+#[pollster::test]
+async fn the_passkey_count_of_an_unknown_sub_is_a_404_and_writes_nothing() {
+    let kit = kit();
+    let Reply { status, json } = get(
+        &kit,
+        &format!("{BASE}/admin/users/nobody/passkeys"),
+        Some(ADMIN),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(json["type"], "https://test.example/problems/not-found");
+    assert!(audit_rows(&kit, "nobody").await.is_empty());
+}
+
+#[pollster::test]
+async fn reading_the_passkey_count_writes_no_audit_row() {
+    let kit = kit();
+    seed_user(&kit, "u1").await;
+    let Reply { status, .. } = get(
+        &kit,
+        &format!("{BASE}/admin/users/u1/passkeys"),
+        Some(ADMIN),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(audit_rows(&kit, "u1").await.is_empty());
+}
