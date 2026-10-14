@@ -54,7 +54,7 @@ must get it from somewhere other than the join response.
 
 Register the mail templates in the venture's `src/lib.rs`, in the
 venture's own style: they render through `cratefield-mail-templates`
-(ADR 0028) with the `MailTheme` you give them. `default_templates()` renders
+(ADR 0030) with the `MailTheme` you give them. `default_templates()` renders
 in a theme built from the venture's core `Brand` and its `MAIL_THEME` config
 instead; either way, venture overrides registered later win.
 
