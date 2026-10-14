@@ -1,9 +1,21 @@
-# ADR 0028: Mail renders through one themed layout, and the theme travels by composition and config, not through core
+# ADR 0030: Mail renders through one themed layout, and the theme travels by composition and config, not through core
 
-Status: proposed, 2026-10-04. Issue #715. Extends issue #12 (default
-templates with venture overrides) and the template registry in
-`cratefield-core` (`template.rs`). Changes no locked contract: the `Module`
-trait, `ModuleContext`, `Brand` and `HARNESS_API` are untouched.
+Status: proposed, 2026-10-04. Numbered 0030 on 2026-10-14; see the note below
+the record. Issue #715. Extends issue #12 (default templates with venture
+overrides) and the template registry in `cratefield-core` (`template.rs`).
+Changes no locked contract: the `Module` trait, `ModuleContext`, `Brand` and
+`HARNESS_API` are untouched.
+
+## Why this number
+
+This file and ADR 0028 (inbound mail and runtime MCP) were both allocated
+0028 on 2026-10-04. 0028 stays with the inbound-mail record: it is accepted,
+and its number is cited from two released CHANGELOGs and from
+`core/src/ports/inbound_mail.rs`. This record is still proposed, and its
+number was cited only from documents, so it is the one that moves.
+
+Nothing in the decision changed — only the number it is filed under, and the
+six places that cited it.
 
 ## Context
 
