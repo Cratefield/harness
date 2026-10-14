@@ -130,6 +130,15 @@ const MIGRATION_PASSKEY_PRF: SqlMigration = SqlMigration::new(
     include_str!("../migrations/sqlite/0002_passkey_prf.sql"),
 );
 
+/// The same table for Postgres, where the two byte columns are BYTEA. Without
+/// it the sqlite set is the one offered to the Postgres runner, and it fails
+/// the portable-SQL lint on `BLOB`.
+const MIGRATION_PASSKEY_PRF_POSTGRES: SqlMigration = SqlMigration::new(
+    "0002",
+    "passkey_prf",
+    include_str!("../migrations/postgres/0002_passkey_prf.sql"),
+);
+
 pub(crate) fn iso(at: OffsetDateTime) -> String {
     at.replace_nanosecond(0)
         .unwrap_or(at)
@@ -400,7 +409,15 @@ impl Module for Passkeys {
         // Refuses a gap, a duplicate or an entry out of order at build
         // time (issue #27).
         const _: () = cratefield_core::assert_migration_set(&MIGRATIONS);
-        Migrations::sqlite(&MIGRATIONS)
+        // The runner selects one set wholesale, so the Postgres list carries
+        // both: 0002 differs, 0001 is portable and is reused (ADR 0004).
+        const MIGRATIONS_POSTGRES: [SqlMigration; 2] =
+            [MIGRATION_CHALLENGE_BUDGET, MIGRATION_PASSKEY_PRF_POSTGRES];
+        const _: () = cratefield_core::assert_migration_set(&MIGRATIONS_POSTGRES);
+        Migrations {
+            sqlite: &MIGRATIONS,
+            postgres: &MIGRATIONS_POSTGRES,
+        }
     }
 
     fn validate_config(&self, cfg: &dyn Config) -> Result<(), ConfigError> {
