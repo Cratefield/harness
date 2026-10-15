@@ -36,10 +36,12 @@ use std::sync::Arc;
 
 use cratefield_accounts::{Repository, VentureStatus};
 use cratefield_adapter_sqlite::SqliteDatabase;
-use cratefield_core::{Database, Harness, Mailer, MailError, Message, Module, SendOutcome, Statement, Venture};
+use cratefield_core::{
+    Database, Harness, MailError, Mailer, Message, Module, SendOutcome, Statement, Venture,
+};
 use cratefield_kms::{Kms, LocalFileKms};
-use cratefield_secrets::{Actor, SecretBytes, Secrets, chain_sink};
 use cratefield_runtime_native::{Native, serve_on};
+use cratefield_secrets::{Actor, SecretBytes, Secrets, chain_sink};
 use tokio::net::TcpListener;
 
 /// The identity the console's dev-login mints a session for.
@@ -66,7 +68,9 @@ async fn main() {
         .expect("apply console migrations");
     db.apply_migrations(
         "dashboard",
-        cratefield_dashboard::Dashboard::default().migrations().sqlite,
+        cratefield_dashboard::Dashboard::default()
+            .migrations()
+            .sqlite,
     )
     .expect("apply dashboard migrations");
     let db: Arc<dyn Database> = Arc::new(db);
@@ -77,7 +81,11 @@ async fn main() {
     });
 
     seed(&db).await;
-    seed_secrets(&db, &Secrets::new(kms.clone()).with_audit(chain_sink(Arc::clone(&db)))).await;
+    seed_secrets(
+        &db,
+        &Secrets::new(kms.clone()).with_audit(chain_sink(Arc::clone(&db))),
+    )
+    .await;
 
     let mailer: Arc<dyn Mailer> = Arc::new(DevMailer);
 
@@ -187,7 +195,13 @@ async fn seed(db: &Arc<dyn Database>) {
 
     // (id, slug, module set, tenant, the status to land on)
     let plan = [
-        ("v_draft", "draft-app", "cms", "ten_draft", VentureStatus::Draft),
+        (
+            "v_draft",
+            "draft-app",
+            "cms",
+            "ten_draft",
+            VentureStatus::Draft,
+        ),
         (
             "v_live",
             "live-app",
@@ -202,7 +216,13 @@ async fn seed(db: &Arc<dyn Database>) {
             "ten_broken",
             VentureStatus::Degraded,
         ),
-        ("v_old", "old-app", "cms", "ten_old", VentureStatus::Archived),
+        (
+            "v_old",
+            "old-app",
+            "cms",
+            "ten_old",
+            VentureStatus::Archived,
+        ),
     ];
 
     for (id, slug, modules, tenant, status) in plan {
@@ -305,6 +325,8 @@ impl Mailer for DevMailer {
             "\n── dev mail ──\nfrom: {}\nto: {}\nsubject: {}\n{}\n───────────────\n",
             message.from, message.to, message.subject, message.text
         );
-        Ok(SendOutcome::Sent { id: "dev".to_owned() })
+        Ok(SendOutcome::Sent {
+            id: "dev".to_owned(),
+        })
     }
 }

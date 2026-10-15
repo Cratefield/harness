@@ -172,6 +172,66 @@ jobs:
       - name: Module catalog drift check (issue #139)
         run: cargo run -q -p cratefield-catalog --example catalog-doc -- --check
 
+  # The crates the workspace `exclude`s — the venture-side `fz` binaries,
+  # the cli-acceptance fixture and the two spikes — keep their own
+  # Cargo.lock, and no job above compiles them. A workspace dependency bump
+  # can therefore leave one of those lockfiles stale, pass CI, and break
+  # the first `cargo build --locked` out of tree (issue #856). Discovery
+  # (tools/out-of-workspace-crates.sh, which the release workflow also
+  # uses to refresh these locks on the release PR) re-derives the list
+  # every run from git and `cargo metadata`, so a new crate added outside
+  # the workspace is covered without editing this file; the script fails
+  # when the query finds none.
+  out-of-workspace-crates:
+    name: out-of-workspace crate discovery
+    runs-on: ubuntu-latest
+    outputs:
+      dirs: ${{ steps.discover.outputs.dirs }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.98.1"
+      - id: discover
+        # Assigned first so a failing discovery fails the step: `echo
+        # "...$(cmd)"` would swallow the exit status.
+        run: |
+          dirs=$(tools/out-of-workspace-crates.sh)
+          echo "dirs=$dirs" >> "$GITHUB_OUTPUT"
+
+  # One matrix entry per crate discovery found. `--locked` on every cargo
+  # run is the point (issue #856): it fails when this crate's Cargo.lock
+  # was left behind by a workspace dependency bump. Refresh stale locks
+  # with `tools/out-of-workspace-crates.sh --refresh-locks` and commit the
+  # updated Cargo.lock files. The release workflow does this on the
+  # release PR, whose version bumps would otherwise fail here every time.
+  standalone:
+    name: standalone crate (${{ matrix.dir }})
+    needs: out-of-workspace-crates
+    runs-on: ubuntu-latest
+    strategy:
+      # One broken crate should not hide another's result.
+      fail-fast: false
+      matrix:
+        dir: ${{ fromJSON(needs.out-of-workspace-crates.outputs.dirs) }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.98.1"
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          # The crate is outside the workspace: cache its target dir under
+          # its own key, keyed on its own lockfile and manifests.
+          workspaces: ${{ matrix.dir }}
+      - name: fmt, clippy and test with the lockfile held to the manifest
+        working-directory: ${{ matrix.dir }}
+        run: |
+          cargo fmt --check
+          cargo clippy --locked --all-targets -- -D warnings
+          cargo test --locked
+
   supabase-inspect-e2e:
     # The acceptance test issue #723 asks for, against a real Supabase
     # stack: `supabase start` (Docker, which the workspace `test` job does

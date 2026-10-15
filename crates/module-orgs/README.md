@@ -4,7 +4,7 @@ Organizations, memberships, roles and email invitations for a Cratefield
 venture: a person creates an organization and is its owner, invites people by
 address, and everyone who belongs holds a role the venture configured.
 
-Mounted at `/v1/orgs`. One migration, three tables. Every route but the admin
+Mounted at `/v1/orgs`. Four migrations, seven tables. Every route but the admin
 listing acts for the account the venture's `Auth` port identifies; no route
 reads a subject id from anywhere else, so one person cannot act as another.
 
@@ -85,6 +85,47 @@ To move:
 No shared secret to rotate, and removing somebody from the staff organization
 is a `DELETE` — that is the reason to move.
 
+## Service accounts, grants and the audit log
+
+Three library modules sit beside the routes (issue #878). They are plain
+functions over the `Database` port with no routes of their own, so a venture
+whose people sign in some other way can still use them — it applies
+`MIGRATION_SERVICE_ACCOUNTS`, `MIGRATION_GRANTS` and `MIGRATION_AUDIT` under a
+module of its own and declares `ACCESS_PERSONAL_DATA`. A venture that mounts
+`Orgs` gets the tables with it.
+
+- **`service_accounts`** — non-human principals an organization owns (name,
+  description, owning member, creator, disabled flag) and their API keys:
+  `{brand}_{id}_{secret}`, returned once by `mint_key`, stored only as a
+  SHA-256 and compared in constant time, revocable, rotatable, with an
+  optional expiry and a last-used stamp. `verify_key` answers `None` for
+  every refusal alike — unknown, wrong secret, revoked, expired, account
+  disabled or deleted. `disable_owned_by` disables every account a member
+  owns and revokes their keys in one transaction, for when the member leaves.
+- **`grants`** — `principal × selector × permission`, where a selector is a
+  kind (or `*`), a space and a path prefix matched on whole segments
+  (`reports/q3` covers `reports/q3/plan`, never `reports/q3x`), and
+  permissions are ordered `read < write < admin`. `decide` is deny-by-default
+  and **an applicable deny wins**; expired grants stop applying, and a stored
+  row that no longer parses fails closed. `decide_with_credential` and
+  `coverage` intersect with a credential's scope list, which can only narrow.
+  `coverage` answers prefixes, for a listing that must filter before it
+  ranks or limits. `may_grant` lets only an `admin` holder hand out what lies
+  inside what they hold. A venture's default access goes in as
+  `Grant::implicit` values, so the same rule governs it.
+- **`audit`** — an append-only log: actor, the member a service account acted
+  for, the credential's prefix (never a secret), action, resource, detail.
+  `list` pages newest first.
+
+```rust,ignore
+use cratefield_module_orgs::grants::{decide, split_path, Grant, Permission, Resource, Selector};
+
+let mine = Selector::new("*", "personal:alice", vec![])?;
+let grants = vec![Grant::implicit("member:alice", mine, Permission::Admin)];
+let page = Resource::new("pages", "personal:alice", split_path("notes/today"))?;
+assert!(decide(&grants, &["member:alice"], &page, Permission::Write, now).is_allowed());
+```
+
 ## Ports
 
 Requires `Db` and `Auth`. Optionally uses `Clock` (expiry and single-use),
@@ -101,6 +142,10 @@ same `NotConfigured` and answers `202` anyway.
 | `org_members` | `user_sub` | identifier | erase |
 | `orgs` | `created_by` | identifier | retain |
 | `org_invitations` | — | contact | unreachable (the address is held only as a hash) |
+| `org_service_accounts` | `owner_sub` | identifier | erase |
+| `org_service_account_keys` | via `org_service_accounts.owner_sub` | identifier | erase (`secret_hash` redacted) |
+| `org_grants` | `principal` | identifier | erase |
+| `org_audit` | `actor_id` | usage | retain (an erasable audit trail is no trail) |
 
 An organization outlives its creator — deleting the row would delete every
 other member's organization with it — so `orgs` is retained, with the reason

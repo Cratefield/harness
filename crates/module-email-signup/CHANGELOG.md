@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.1](https://github.com/Cratefield/harness/compare/cratefield-module-email-signup-v0.4.0...cratefield-module-email-signup-v0.4.1) - 2026-10-15
+
+### Other
+
+- ADR 0030: the mail-theme record takes the number it was sharing ([#875](https://github.com/Cratefield/harness/pull/875))
+
 ## [0.4.0](https://github.com/Cratefield/harness/compare/cratefield-module-email-signup-v0.3.0...cratefield-module-email-signup-v0.4.0) - 2026-10-04
 
 ### Added

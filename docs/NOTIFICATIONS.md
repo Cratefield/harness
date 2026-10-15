@@ -362,7 +362,7 @@ idempotency key derived from the window.
 A bounce or complaint from the provider suppresses the address (issue #233).
 
 The body renders through the template registry as `notifications/email`, in
-the venture's `MailTheme` (`cratefield-mail-templates`, ADR 0028): register
+the venture's `MailTheme` (`cratefield-mail-templates`, ADR 0030): register
 `themed_templates(&theme)` to compose the venture's style, or override the id
 to reword it. The template is given the subject (already chosen from the
 catalog, the category or the title), the title, body and link, `lang` and

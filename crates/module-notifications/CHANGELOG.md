@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.2](https://github.com/Cratefield/harness/compare/cratefield-module-notifications-v0.3.1...cratefield-module-notifications-v0.3.2) - 2026-10-15
+
+### Other
+
+- adapter-telegram + module-telegram: verified bot webhook, account linking, rate-limited messages, signed action buttons and a notifications channel ([#764](https://github.com/Cratefield/harness/pull/764)) ([#864](https://github.com/Cratefield/harness/pull/864))
+
 ### Added
 
 - a `Channel` trait for extra delivery channels a venture registers with `.channel(..)`, such as Telegram: one outbox row per registered channel on the `notifications.channel` topic, with the push adapters' error shapes ([#764](https://github.com/Cratefield/harness/issues/764))

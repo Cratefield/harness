@@ -1,11 +1,11 @@
 [package]
 name = "cratefield-module-orgs"
-description = "Cratefield module: organizations, memberships, roles and email invitations"
+description = "Cratefield module: organizations, memberships, roles, invitations, service accounts, access grants and an audit log"
 readme = "README.md"
-keywords = ["cratefield", "organizations", "memberships", "roles", "module"]
+keywords = ["cratefield", "organizations", "memberships", "authorization", "module"]
 categories = ["web-programming"]
 include = ["src/**/*", "migrations/**/*", "tests/**/*", "README.md"]
-version = "0.1.1"
+version = "0.1.2"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -32,6 +32,9 @@ hex = { workspace = true }
 thiserror = { workspace = true }
 async-trait = { workspace = true }
 schemars = { workspace = true }
+# A service account key's 256 random bits (issue #878). Already in the graph
+# through `cratefield-core`; named here for the direct call.
+getrandom = { workspace = true }
 
 [dev-dependencies]
 # Dev-only, and only so `tests/privacy.rs` can prove the personal-data

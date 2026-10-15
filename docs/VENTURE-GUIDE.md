@@ -482,7 +482,7 @@ key in development (it never reaches a provider) and the venture's
 ### 7b. Mail in the venture's own style
 
 **Agent.** Every module that sends mail renders through
-`cratefield-mail-templates` (ADR [0028](adr/0028-mail-renders-through-one-themed-layout.md)).
+`cratefield-mail-templates` (ADR [0030](adr/0030-mail-renders-through-one-themed-layout.md)).
 Give the venture a `MailTheme` built from its website's CSS tokens and
 logo, and compose it into each mail-sending module instead of its
 `default_templates()` — `.templates(cratefield::waitlist::themed_templates(&mail_theme()))`,

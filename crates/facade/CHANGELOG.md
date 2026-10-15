@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.1](https://github.com/Cratefield/harness/compare/cratefield-v0.2.0...cratefield-v0.2.1) - 2026-10-15
+
+### Added
+
+- *(module-owlpost)* verified Owlpost event receiver with typed inbound mail and delivery events ([#673](https://github.com/Cratefield/harness/pull/673)) ([#853](https://github.com/Cratefield/harness/pull/853))
+- *(text-guard)* protect links, hashtags and caller-supplied spans ([#836](https://github.com/Cratefield/harness/pull/836)) ([#851](https://github.com/Cratefield/harness/pull/851))
+- *(text-guard)* keep names, numbers, quotes and code across a model rewrite, and a word diff that keeps them whole ([#836](https://github.com/Cratefield/harness/pull/836)) ([#837](https://github.com/Cratefield/harness/pull/837))
+
+### Other
+
+- module-sealed + @cratefield/sealed: zero-knowledge sealed blobs (passkey PRF + recovery-code wraps, server outer wrap, no server recovery) ([#757](https://github.com/Cratefield/harness/pull/757)) ([#867](https://github.com/Cratefield/harness/pull/867))
+- Signer port: sign by key reference via Turnkey delegated access or Secrets-held session keys, guarded and audit-chained ([#761](https://github.com/Cratefield/harness/pull/761)) ([#865](https://github.com/Cratefield/harness/pull/865))
+- adapter-telegram + module-telegram: verified bot webhook, account linking, rate-limited messages, signed action buttons and a notifications channel ([#764](https://github.com/Cratefield/harness/pull/764)) ([#864](https://github.com/Cratefield/harness/pull/864))
+- allowlists, caps, required simulation, hard denies and a kill switch for value-moving actions ([#763](https://github.com/Cratefield/harness/pull/763)) ([#862](https://github.com/Cratefield/harness/pull/862))
+- Linear adapter (`cratefield-adapter-linear`) with comment and inbound status webhook (#559, part 2) ([#850](https://github.com/Cratefield/harness/pull/850))
+- link EVM and Solana wallets to a signed-in account via SIWE/SIWS (plus a push-protection fix) ([#838](https://github.com/Cratefield/harness/pull/838))
+
 ### Added
 
 - *(telegram)* a `telegram` feature that re-exports `cratefield-adapter-telegram` as `cratefield::telegram`, and a `telegram-events` feature that re-exports `cratefield-module-telegram` as `cratefield::telegram_events`: the Telegram Bot API adapter and the webhook, account-linking and consent-button module ([#764](https://github.com/Cratefield/harness/issues/764))

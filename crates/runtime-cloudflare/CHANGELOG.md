@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.3](https://github.com/Cratefield/harness/compare/cratefield-runtime-cloudflare-v0.4.2...cratefield-runtime-cloudflare-v0.4.3) - 2026-10-15
+
+### Other
+
+- streaming completions (text, reasoning, tool-call and usage deltas) with idle/total timeouts and cancel-on-drop ([#869](https://github.com/Cratefield/harness/pull/869))
+
 ## [0.4.2](https://github.com/Cratefield/harness/compare/cratefield-runtime-cloudflare-v0.4.1...cratefield-runtime-cloudflare-v0.4.2) - 2026-10-07
 
 ### Fixed

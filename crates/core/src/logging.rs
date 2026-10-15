@@ -1252,11 +1252,18 @@ mod tests {
 
 // ---------------------------------------------------------------------------
 // Control-event forwarder (issue #107; widened to every boot-time control
-// event by issue #441)
+// event by issue #441; the level travels with the line since issue #846)
 
-/// A process-wide sink for internal-error diagnostics, installed by the
-/// runtime. See [`set_error_forwarder`].
-type ErrorForwarder = fn(&str);
+/// A process-wide sink for control-event and internal-error diagnostics,
+/// installed by the runtime. See [`set_error_forwarder`].
+///
+/// The forwarder receives each event's [`ControlLevel`] alongside the line
+/// so a runtime can route it to the right console level (issue #846) —
+/// Workers Logs shows an acceptance as a warning and a module's progress
+/// note as information, not everything as an error. The name is
+/// historical: installed for the 500-mapped internal errors of issue #107,
+/// widened to info/warn control events by issue #441.
+type ErrorForwarder = fn(ControlLevel, &str);
 
 static ERROR_FORWARDER: OnceLock<ErrorForwarder> = OnceLock::new();
 
@@ -1291,17 +1298,19 @@ impl ControlLevel {
     }
 }
 
-/// Installs a process-wide forwarder for internal-error diagnostics
-/// (architecture section 11).
+/// Installs a process-wide forwarder for control-event and internal-error
+/// diagnostics (architecture section 11).
 ///
 /// On `wasm32` a tracing dispatcher cannot be installed — it hangs the
 /// workerd/miniflare isolate — so every `tracing::error!` core emits when it
 /// maps an internal failure to a 500 is dropped, and a Workers 500 becomes a
 /// black box (issue #107). The Cloudflare runtime therefore points this
-/// forwarder at `worker::console_error!`, and core calls it alongside its
-/// `tracing::error!` so the same one-line diagnostic reaches Workers Logs.
-/// Since issue #441 the same sink also carries boot-time **control events**
-/// at their own level — see [`forward_control_event`].
+/// forwarder at the `worker::console_*!` macros, and core calls it alongside
+/// its `tracing::error!` so the same one-line diagnostic reaches Workers
+/// Logs. Since issue #441 the same sink also carries boot-time **control
+/// events**, and since issue #846 the forwarder receives each line's
+/// [`ControlLevel`] so the runtime routes it to the matching console level —
+/// see [`forward_control_event`] and the `module_log!` macro below it.
 ///
 /// Native runs leave it unset and rely on the tracing subscriber. This is
 /// boot-time infrastructure installed before the first response, not request
@@ -1321,9 +1330,12 @@ pub fn set_error_forwarder(forwarder: ErrorForwarder) {
 /// native keeps the structured fields and Workers keeps the fact.
 /// The payload passes [`scrub_text`] (issue #135) and is prefixed second:
 /// the level tag is ours, and must not be scrubbed with what it carries.
+/// Since issue #846 the sink also receives `level` itself, so a runtime
+/// can route to the right console level rather than parse the prefix;
+/// the line keeps its `[level] ` prefix either way.
 pub fn forward_control_event(level: ControlLevel, line: &str) {
     if let Some(forwarder) = ERROR_FORWARDER.get() {
-        forwarder(&format!("[{}] {}", level.as_str(), scrub_text(line)));
+        forwarder(level, &format!("[{}] {}", level.as_str(), scrub_text(line)));
     }
 }
 
@@ -1338,16 +1350,70 @@ pub(crate) fn forward_internal_error(line: &str) {
     forward_control_event(ControlLevel::Error, line);
 }
 
+// ---------------------------------------------------------------------------
+// Module-facing logging (issue #846)
+
+/// Emit a log line from module code on every runtime (issue #846).
+///
+/// On Workers no tracing dispatcher can be installed (see
+/// `runtime-cloudflare`'s `tracing_setup`), so a bare `tracing::info!` from
+/// module code is dropped there. `module_log!` routes the line through the
+/// control-event forwarder to Workers Logs instead, and natively it emits a
+/// normal `tracing` event. Both paths run the formatted line through
+/// [`scrub_text`], the same redaction rules every log field gets.
+///
+/// `module_log!(info, "stored {} rows", n);`
+///
+/// Levels: `info`, `warn`, `error`. Never log user text or message bodies —
+/// metadata only; the redaction pipeline is a backstop, not permission.
+#[macro_export]
+macro_rules! module_log {
+    (info, $($arg:tt)+) => {
+        $crate::ControlLevel::module_log_line($crate::ControlLevel::Info, format_args!($($arg)+))
+    };
+    (warn, $($arg:tt)+) => {
+        $crate::ControlLevel::module_log_line($crate::ControlLevel::Warn, format_args!($($arg)+))
+    };
+    (error, $($arg:tt)+) => {
+        $crate::ControlLevel::module_log_line($crate::ControlLevel::Error, format_args!($($arg)+))
+    };
+}
+
+impl ControlLevel {
+    /// Macro helper for `module_log!` — not part of the public API surface.
+    ///
+    /// It rides [`ControlLevel`] because the macro must reach it as a
+    /// `$crate::…` path and `logging` is a private module whose re-export
+    /// list at the crate root is fixed; the level enum is already
+    /// re-exported there (issue #846). Scrubs the formatted line once,
+    /// forwards it — [`scrub_text`] is idempotent, so its second pass
+    /// inside [`forward_control_event`] is a no-op — then emits the
+    /// native `tracing` event at this level. The `tracing` call lives
+    /// here, inside core, so a module crate needs no `tracing` dependency
+    /// of its own.
+    #[doc(hidden)]
+    pub fn module_log_line(self, args: core::fmt::Arguments<'_>) {
+        let line = scrub_text(&args.to_string());
+        forward_control_event(self, &line);
+        match self {
+            ControlLevel::Info => tracing::info!("{line}"),
+            ControlLevel::Warn => tracing::warn!("{line}"),
+            ControlLevel::Error => tracing::error!("{line}"),
+        }
+    }
+}
+
 #[cfg(test)]
 #[allow(clippy::disallowed_types)] // test-only capture of the forwarded line
 mod forwarder_tests {
     use super::*;
-    use std::sync::Mutex;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Arc, Mutex};
 
     static CAPTURED: Mutex<Vec<String>> = Mutex::new(Vec::new());
     static INSTALL: std::sync::Once = std::sync::Once::new();
 
-    fn capture(line: &str) {
+    fn capture(_level: ControlLevel, line: &str) {
         CAPTURED.lock().unwrap().push(line.to_owned());
     }
 
@@ -1365,6 +1431,57 @@ mod forwarder_tests {
     /// needle per test below, rather than counting a shared phrase.
     fn install_sink() {
         INSTALL.call_once(|| set_error_forwarder(capture));
+    }
+
+    /// A hand-rolled `tracing` subscriber for the native-arm test below —
+    /// `tracing-subscriber` is deliberately not a dependency. It counts
+    /// `event()` calls through an `AtomicUsize` and captures the `message`
+    /// field, sharing both through `Arc`s because `with_default` takes the
+    /// subscriber by value.
+    struct CountingSubscriber {
+        events: Arc<AtomicUsize>,
+        messages: Arc<Mutex<Vec<String>>>,
+    }
+
+    /// Collects the `message` field of one event; the Debug shape of
+    /// `fmt::Arguments` is the formatted line itself.
+    struct MessageCapture {
+        message: Option<String>,
+    }
+
+    impl tracing::field::Visit for MessageCapture {
+        fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+            if field.name() == "message" {
+                self.message = Some(format!("{value:?}"));
+            }
+        }
+    }
+
+    impl tracing::Subscriber for CountingSubscriber {
+        fn enabled(&self, _metadata: &tracing::Metadata<'_>) -> bool {
+            true
+        }
+
+        fn new_span(&self, _span: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+            tracing::span::Id::from_u64(1)
+        }
+
+        fn record(&self, _span: &tracing::span::Id, _values: &tracing::span::Record<'_>) {}
+
+        fn record_follows_from(&self, _span: &tracing::span::Id, _follows: &tracing::span::Id) {}
+
+        fn event(&self, event: &tracing::Event<'_>) {
+            self.events.fetch_add(1, Ordering::Relaxed);
+            let mut capture = MessageCapture { message: None };
+            event.record(&mut capture);
+            if let Some(message) = capture.message {
+                self.messages.lock().unwrap().push(message);
+            }
+        }
+
+        fn enter(&self, _span: &tracing::span::Id) {}
+
+        fn exit(&self, _span: &tracing::span::Id) {}
     }
 
     #[test]
@@ -1454,6 +1571,85 @@ mod forwarder_tests {
         assert!(
             line.contains("[subject_hash:"),
             "the pseudonym should survive for correlation: {line}"
+        );
+    }
+
+    #[test]
+    fn module_log_reaches_the_sink_and_emits_the_native_tracing_event() {
+        // One test on purpose: both arms ride `module_log!`, whose info arm
+        // is a single static `tracing` callsite. As two tests, the bare sink
+        // arm on a parallel thread could win that callsite's one-time
+        // registration with `Interest::never`; `with_default` never
+        // re-registers callsites, so the native arm's scoped subscriber was
+        // never asked and saw no event. Sequential here, the registration
+        // order between the arms is fixed.
+        install_sink();
+        // The module-facing macro rides the forwarder, so what a Worker
+        // prints — where no tracing dispatcher exists — is exactly these
+        // lines (issue #846). A GitHub token and an email ride the formatted
+        // args; neither may survive the trip, and each line must carry its
+        // level prefix like every other forwarded control event.
+        // The token is `concat!`ed from fragments instead of written whole:
+        // a token-shaped literal in the source trips GitHub's push secret
+        // scanning, while the assembled value still matches the scrubber's
+        // provider-token shape. Handing it in as an argument also exercises
+        // the macro's format-args arm.
+        let token = concat!("ghs_", "ABCDEFGH", "IJKLMNOP", "QRSTUVWX", "YZ012345");
+        crate::module_log!(
+            info,
+            "module-log-846-info acked {} for nick@example.com",
+            token
+        );
+        crate::module_log!(warn, "module-log-846-warn retrying for ada@example.com");
+        {
+            let captured = CAPTURED.lock().unwrap();
+            for (level, needle) in [
+                ("info", "module-log-846-info"),
+                ("warn", "module-log-846-warn"),
+            ] {
+                let line = captured
+                    .iter()
+                    .find(|line| line.contains(needle))
+                    .unwrap_or_else(|| panic!("no module_log line carried {needle}"));
+                let prefix = format!("[{level}] ");
+                assert!(
+                    line.starts_with(&prefix),
+                    "the {needle} line should be prefixed {prefix:?}: {line}"
+                );
+                assert!(!line.contains('@'), "email reached the sink: {line}");
+                assert!(!line.contains(token), "token reached the sink: {line}");
+            }
+        }
+        // The macro's second arm: natively the same line is a real `tracing`
+        // event. `with_default` scopes the subscriber to this thread, and
+        // the counters it bumps are shared through `Arc`s because it takes
+        // the subscriber by value. The sink arm just registered the shared
+        // callsite with `Interest::never` — no dispatcher was current — so
+        // the cache must be rebuilt under the scoped subscriber.
+        let events = Arc::new(AtomicUsize::new(0));
+        let messages = Arc::new(Mutex::new(Vec::new()));
+        let before = events.load(Ordering::Relaxed);
+        tracing::subscriber::with_default(
+            CountingSubscriber {
+                events: Arc::clone(&events),
+                messages: Arc::clone(&messages),
+            },
+            || {
+                tracing::callsite::rebuild_interest_cache();
+                crate::module_log!(info, "module-log-846-tracing the native arm fires too");
+            },
+        );
+        assert_eq!(
+            events.load(Ordering::Relaxed),
+            before + 1,
+            "module_log! should emit one tracing event on a dispatcher"
+        );
+        let messages = messages.lock().unwrap();
+        assert!(
+            messages
+                .iter()
+                .any(|message| message.contains("module-log-846-tracing")),
+            "the tracing event should carry the same forwarded line: {messages:?}"
         );
     }
 
