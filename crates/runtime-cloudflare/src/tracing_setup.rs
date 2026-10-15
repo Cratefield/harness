@@ -7,12 +7,18 @@
 //! ([`cratefield_core::set_error_forwarder`]) so core's boot-time control
 //! events — the production-readiness acceptance and refusal, a sidecar
 //! gateway misconfiguration, the secret-access audit — and the
-//! internal-error diagnostics that map a failure to a 500 reach
-//! `worker::console_error!` instead of vanishing (issues #107, #441). Each
-//! forwarded line carries its own level as a `[warn] `/`[error] `/`[info] `
-//! prefix; runtime logging goes through the crate's `rt_log!` macro, which
-//! writes plain lines to `worker::console_log!`/`console_error!` (Workers
-//! Logs picks them up).
+//! internal-error diagnostics that map a failure to a 500 reach Workers
+//! Logs instead of vanishing (issues #107, #441). Since issue #846 the
+//! forwarder receives each event's `ControlLevel` and routes it to the
+//! matching console level — `console_error!` for errors, `console_warn!`
+//! for warnings, `console_log!` for information — so Workers Logs shows
+//! every line at its real level. Module code logs through
+//! `cratefield_core::module_log!`, which rides this same forwarder
+//! (issue #846): a module's own `tracing::info!` would be dropped here,
+//! since no dispatcher exists. Each forwarded line carries its own level
+//! as a `[warn] `/`[error] `/`[info] ` prefix as well; runtime logging
+//! goes through the crate's `rt_log!` macro, which writes plain lines to
+//! `worker::console_log!`/`console_error!` (Workers Logs picks them up).
 //!
 //! **Native (tests, the future `runtime-native`):** a hand-rolled
 //! subscriber writes one JSON line per event with field redaction per
@@ -37,10 +43,16 @@ pub fn install_tracing() {
         // core a forwarder so its boot-time control events — readiness
         // acceptance and refusal, gateway misconfiguration, the
         // secret-access audit — and the internal errors mapped to a 500
-        // reach Workers Logs via `console_error!`, rather than vanishing
-        // (issues #107, #441). Core prefixes each line with its own level,
-        // so this prints it verbatim.
-        cratefield_core::set_error_forwarder(|line| worker::console_error!("{line}"));
+        // reach Workers Logs, rather than vanishing (issues #107, #441).
+        // The forwarder routes by level (issue #846): an acceptance shows
+        // as a warning, a refusal as an error, a module's `module_log!`
+        // info as information. Core prefixes each line with its own level
+        // too, so this prints it verbatim.
+        cratefield_core::set_error_forwarder(|level, line| match level {
+            cratefield_core::ControlLevel::Error => worker::console_error!("{line}"),
+            cratefield_core::ControlLevel::Warn => worker::console_warn!("{line}"),
+            cratefield_core::ControlLevel::Info => worker::console_log!("{line}"),
+        })
     });
     #[cfg(not(target_arch = "wasm32"))]
     INSTALLED.get_or_init(|| {

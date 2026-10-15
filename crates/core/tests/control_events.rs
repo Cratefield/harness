@@ -51,7 +51,7 @@ use cratefield_core::{
 static CAPTURED: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
 static INSTALL: std::sync::Once = std::sync::Once::new();
 
-fn record(line: &str) {
+fn record(_level: cratefield_core::ControlLevel, line: &str) {
     CAPTURED.lock().expect("capture lock").push(line.to_owned());
 }
 

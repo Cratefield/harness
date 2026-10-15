@@ -352,7 +352,7 @@ fn envelope(body: &http::Request<Bytes>) -> serde_json::Value {
 static REPORTS: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
 static INSTALL: std::sync::Once = std::sync::Once::new();
 
-fn record(line: &str) {
+fn record(_level: cratefield_core::ControlLevel, line: &str) {
     REPORTS.lock().expect("report lock").push(line.to_owned());
 }
 

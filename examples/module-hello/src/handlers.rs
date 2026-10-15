@@ -96,9 +96,10 @@ async fn record(
     db.execute(&Statement::render(&query))
         .await
         .map_err(|err| {
-            tracing::error!(error = %err, "hello insert failed");
+            cratefield_core::module_log!(error, "hello insert failed: {err}");
             internal(&scope)
         })?;
+    cratefield_core::module_log!(info, "hello row stored");
 
     state
         .ctx
@@ -127,7 +128,7 @@ async fn count(
         .from(sea_query::Alias::new("hello_visits"))
         .to_owned();
     let rows = db.query(&Statement::render(&query)).await.map_err(|err| {
-        tracing::error!(error = %err, "hello count failed");
+        cratefield_core::module_log!(error, "hello count failed: {err}");
         internal(&scope)
     })?;
     let visits: i64 = rows.first().and_then(|row| row.get("count")).unwrap_or(0);

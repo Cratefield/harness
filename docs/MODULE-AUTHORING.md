@@ -124,9 +124,9 @@ workspace = true
 cratefield-core = { workspace = true }
 axum = { workspace = true }
 serde = { workspace = true }
+schemars = { workspace = true }
 serde_json = { workspace = true }
 sea-query = { workspace = true }
-tracing = { workspace = true }
 
 [dev-dependencies]
 cratefield-testing = { workspace = true }
@@ -141,6 +141,9 @@ Notes:
   wasm-safe by construction (ADR 0001) and the CI job on this repository
   fails if it ever pulls `worker`, `wasm-bindgen`, `tokio`, `reqwest`,
   `sqlx` or `rusqlite`.
+- No `tracing` dependency: module code logs through
+  `cratefield_core::module_log!` ([Logging from a module](#logging-from-a-module)),
+  whose expansion never leaves core (issue #846).
 - `[lints] workspace = true` brings in `unsafe_code = "forbid"` and the
   clippy `pedantic` set the whole workspace uses.
 - In this workspace the dependencies are `workspace = true`; in a private
@@ -449,7 +452,11 @@ use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::routing::{get, post};
-use cratefield_core::{IdGen, Json, ModuleConfig, ModuleContext, Problem, Scope, Statement, UlidIdGen};
+use cratefield_core::{
+    Action, Audience, IdGen, Json, ModuleConfig, ModuleContext, Outcome, Problem, Scope, Statement,
+    Surface, UlidIdGen, View,
+};
+use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::sync::Arc;
@@ -476,9 +483,28 @@ pub(crate) fn router(ctx: Arc<ModuleContext>, settings: Settings) -> axum::Route
         .with_state(state)
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, JsonSchema)]
 struct RecordBody {
+    #[schemars(extend("x-cf-label" = "Your name", "x-cf-placeholder" = "Ada"))]
     name: String,
+}
+
+/// The module's UI surface (ADR 0010): the record form and the count as
+/// a status view. Derived from `RecordBody`, the type `record` deserializes.
+pub(crate) fn surface() -> Surface {
+    Surface::new()
+        .action(
+            Action::post("record", "/")
+                .input::<RecordBody>()
+                .accepted("Recorded. Hello!"),
+        )
+        .action(
+            Action::get("count", "/count")
+                .audience(Audience::Public)
+                .outcome(Outcome::Json),
+        )
+        .view(View::form("record"))
+        .view(View::status("count"))
 }
 
 /// `POST /v1/hello` `{ "name": str }` -> `202 {"ok":true,"name":..}`;
@@ -496,10 +522,10 @@ async fn record(
 
     let name = body.name.trim().to_owned();
     if name.is_empty() || name.chars().count() > max {
-        return Err(Problem::validation_failed(format!(
-            "name must be 1..={max} characters"
-        ))
-        .instance(&scope.request_id));
+        return Err(
+            Problem::validation_failed(format!("name must be 1..={max} characters"))
+                .instance(&scope.request_id),
+        );
     }
 
     let id = state
@@ -513,16 +539,23 @@ async fn record(
         .columns([sea_query::Alias::new("id"), sea_query::Alias::new("name")])
         .values_panic([id.into(), name.clone().into()])
         .to_owned();
-    db.execute(&Statement::render(&query)).await.map_err(|err| {
-        tracing::error!(error = %err, "hello insert failed");
-        internal(&scope)
-    })?;
+    db.execute(&Statement::render(&query))
+        .await
+        .map_err(|err| {
+            cratefield_core::module_log!(error, "hello insert failed: {err}");
+            internal(&scope)
+        })?;
+    cratefield_core::module_log!(info, "hello row stored");
 
     state
         .ctx
         .events
         .emit_in(&scope, EVENT_RECORDED, json!({ "name": name }));
-    Ok((StatusCode::ACCEPTED, Json(json!({ "ok": true, "name": name }))).into_response())
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(json!({ "ok": true, "name": name })),
+    )
+        .into_response())
 }
 
 /// `GET /v1/hello/count` -> `200 {"visits": n}`.
@@ -541,7 +574,7 @@ async fn count(
         .from(sea_query::Alias::new("hello_visits"))
         .to_owned();
     let rows = db.query(&Statement::render(&query)).await.map_err(|err| {
-        tracing::error!(error = %err, "hello count failed");
+        cratefield_core::module_log!(error, "hello count failed: {err}");
         internal(&scope)
     })?;
     let visits: i64 = rows.first().and_then(|row| row.get("count")).unwrap_or(0);
@@ -766,6 +799,47 @@ assert_eq!(res.status, StatusCode::OK);
 
 A streaming route keeps the request id, its CORS headers and any guard, exactly
 as a buffered one does — assert those too.
+
+### Logging from a module
+
+The handlers above log with `cratefield_core::module_log!`, not
+`tracing`, because the two runtimes disagree about a bare `tracing::…!`:
+natively it works, on Workers it is dropped — no tracing dispatcher can
+be installed there, and installing one hangs the workerd isolate
+(issue #107). That asymmetry is the trap: route tests pass, production
+is silent. `module_log!` (issue #846) is the supported facility and works
+on both runtimes:
+
+```rust
+cratefield_core::module_log!(info, "hello row stored");
+cratefield_core::module_log!(error, "hello insert failed: {err}");
+```
+
+`use cratefield_core::module_log;` drops the path prefix. Three levels:
+`info`, `warn`, `error`. The expansion references only `cratefield_core`,
+so a module carries no `tracing` dependency (step 1).
+
+The formatted line is scrubbed by core's redaction pipeline
+(`cratefield_core::scrub_text`, issue #135) before it goes anywhere:
+secret-bearing URL queries and userinfo, JWTs and other dotted signed
+tokens, provider tokens and `Bearer` credentials come out `[redacted]`,
+emails come out as their `subject_hash` pseudonym. On Workers the line
+is forwarded through the control-event forwarder into Workers Logs as a
+`[info] `-tagged console line at its real console level
+(`console_log!`, `console_warn!`, `console_error!`); a native run emits
+the same line as an ordinary redacted JSON `tracing` event.
+
+Metadata only — never user text or message bodies. Redaction is a
+backstop, not permission. Ghostwritin's generation-request line is the
+shape to copy:
+
+```rust
+module_log!(info, "request account={} words={} voice={} strength={} err={}",
+    account, words, voice, strength, err_code);
+```
+
+ids, counts, enum names and error codes: what you would say about a
+request, never what the person wrote.
 
 ## Step 5 — Config keys
 
@@ -1243,9 +1317,10 @@ test a_recorded_visit_is_counted ... ok
 test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
 
    Doc-tests cratefield_module_hello
-running 1 test
+running 2 tests
 test examples/module-hello/src/lib.rs - (line 6) - compile ... ok
-test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+test examples/module-hello/src/lib.rs - (line 24) ... ok
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
 ```
 
 And the format/lint gates CI runs:
