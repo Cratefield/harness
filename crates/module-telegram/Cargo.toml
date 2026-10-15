@@ -47,6 +47,6 @@ schemars = { workspace = true }
 cratefield-module-notifications = { workspace = true, optional = true }
 
 [dev-dependencies]
-cratefield-testing = { path = "../testing" }
+cratefield-testing = { path = "../testing", features = ["postgres"] }
 pollster = { workspace = true }
 tower = { workspace = true }
