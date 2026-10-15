@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.2](https://github.com/Cratefield/harness/compare/cratefield-adapter-anthropic-v0.3.1...cratefield-adapter-anthropic-v0.3.2) - 2026-10-15
+
+### Other
+
+- streaming completions (text, reasoning, tool-call and usage deltas) with idle/total timeouts and cancel-on-drop ([#869](https://github.com/Cratefield/harness/pull/869))
+
 ## [0.3.1](https://github.com/Cratefield/harness/compare/cratefield-adapter-anthropic-v0.3.0...cratefield-adapter-anthropic-v0.3.1) - 2026-10-06
 
 ### Other

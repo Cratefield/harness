@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.2](https://github.com/Cratefield/harness/compare/cratefield-adapter-openai-compatible-v0.2.1...cratefield-adapter-openai-compatible-v0.2.2) - 2026-10-15
+
+### Added
+
+- *(core)* Speech port — transcription and streamed synthesis, with Workers AI and OpenAI-compatible adapters ([#861](https://github.com/Cratefield/harness/pull/861)) ([#868](https://github.com/Cratefield/harness/pull/868))
+
+### Other
+
+- streaming completions (text, reasoning, tool-call and usage deltas) with idle/total timeouts and cancel-on-drop ([#869](https://github.com/Cratefield/harness/pull/869))
+
 ### Added
 
 - `Speech` over the OpenAI audio wire (issue [#861](https://github.com/Cratefield/harness/issues/861)): `OpenAiCompatibleSpeech` transcribes through `audio/transcriptions` and synthesizes through `audio/speech` at any base URL, under the same key and `NotConfigured` rules as the chat adapter, with the port's limits enforced before any request.

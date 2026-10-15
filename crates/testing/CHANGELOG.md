@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.2](https://github.com/Cratefield/harness/compare/cratefield-testing-v0.5.1...cratefield-testing-v0.5.2) - 2026-10-15
+
+### Added
+
+- *(core)* Speech port — transcription and streamed synthesis, with Workers AI and OpenAI-compatible adapters ([#861](https://github.com/Cratefield/harness/pull/861)) ([#868](https://github.com/Cratefield/harness/pull/868))
+- *(core)* HttpClient outbound budgets — per-upstream token buckets, Retry-After backoff, daily quota alerts ([#765](https://github.com/Cratefield/harness/pull/765)) ([#858](https://github.com/Cratefield/harness/pull/858))
+
 ### Added
 
 - `Speech` port conformance (issue [#861](https://github.com/Cratefield/harness/issues/861)): `speech_conformance` and `speech_conformance_not_configured`, with the shared fixture constants, behind the `port-conformance` feature.

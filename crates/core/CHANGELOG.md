@@ -6,6 +6,26 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.9.0](https://github.com/Cratefield/harness/compare/cratefield-core-v0.8.4...cratefield-core-v0.9.0) - 2026-10-15
+
+### Added
+
+- *(core)* SSE response helper and AI SDK UI message stream encoder ([#860](https://github.com/Cratefield/harness/pull/860)) ([#871](https://github.com/Cratefield/harness/pull/871))
+- *(core)* Speech port — transcription and streamed synthesis, with Workers AI and OpenAI-compatible adapters ([#861](https://github.com/Cratefield/harness/pull/861)) ([#868](https://github.com/Cratefield/harness/pull/868))
+- *(core)* HttpClient outbound budgets — per-upstream token buckets, Retry-After backoff, daily quota alerts ([#765](https://github.com/Cratefield/harness/pull/765)) ([#858](https://github.com/Cratefield/harness/pull/858))
+- *(core)* report per-provider mailer status in /__health ([#793](https://github.com/Cratefield/harness/pull/793)) ([#845](https://github.com/Cratefield/harness/pull/845))
+
+### Fixed
+
+- *(auth)* a webview can press the magic-link confirm button; themeable hosted pages and mail; friendly validation ([#840](https://github.com/Cratefield/harness/pull/840)) ([#841](https://github.com/Cratefield/harness/pull/841))
+
+### Other
+
+- streaming completions (text, reasoning, tool-call and usage deltas) with idle/total timeouts and cancel-on-drop ([#869](https://github.com/Cratefield/harness/pull/869))
+- module-sealed + @cratefield/sealed: zero-knowledge sealed blobs (passkey PRF + recovery-code wraps, server outer wrap, no server recovery) ([#757](https://github.com/Cratefield/harness/pull/757)) ([#867](https://github.com/Cratefield/harness/pull/867))
+- adapter-telegram + module-telegram: verified bot webhook, account linking, rate-limited messages, signed action buttons and a notifications channel ([#764](https://github.com/Cratefield/harness/pull/764)) ([#864](https://github.com/Cratefield/harness/pull/864))
+- allowlists, caps, required simulation, hard denies and a kill switch for value-moving actions ([#763](https://github.com/Cratefield/harness/pull/763)) ([#862](https://github.com/Cratefield/harness/pull/862))
+
 ### Added
 
 - **A `Speech` port** (issue #861, ADR 0029). `transcribe` (audio in,

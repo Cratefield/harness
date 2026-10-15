@@ -531,7 +531,7 @@ dependencies = [
 
 [[package]]
 name = "cratefield-adapter-apns"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "async-trait",
  "bytes",
@@ -546,7 +546,7 @@ dependencies = [
 
 [[package]]
 name = "cratefield-adapter-fcm"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "async-trait",
  "bytes",
@@ -563,7 +563,7 @@ dependencies = [
 
 [[package]]
 name = "cratefield-adapter-sqlite"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "async-trait",
  "cratefield-core",
@@ -575,7 +575,7 @@ dependencies = [
 
 [[package]]
 name = "cratefield-adapter-webpush"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "aes-gcm",
  "async-trait",
@@ -691,7 +691,7 @@ dependencies = [
 
 [[package]]
 name = "cratefield-cli"
-version = "0.6.2"
+version = "0.7.0"
 dependencies = [
  "base64 0.23.1",
  "bytes",
@@ -718,7 +718,7 @@ dependencies = [
 
 [[package]]
 name = "cratefield-client-ts"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "cratefield-core",
  "serde_json",
@@ -782,7 +782,7 @@ dependencies = [
 
 [[package]]
 name = "cratefield-core"
-version = "0.8.4"
+version = "0.9.0"
 dependencies = [
  "async-trait",
  "axum",
@@ -857,7 +857,7 @@ dependencies = [
 
 [[package]]
 name = "cratefield-introspect"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "cratefield-core",
  "cratefield-tables",
@@ -889,7 +889,7 @@ dependencies = [
 
 [[package]]
 name = "cratefield-mail-templates"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "cratefield-core",
  "getrandom 0.4.3",
@@ -910,7 +910,7 @@ dependencies = [
 
 [[package]]
 name = "cratefield-oauth-client"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "base64 0.23.1",
  "bytes",
@@ -940,7 +940,7 @@ dependencies = [
 
 [[package]]
 name = "cratefield-push-auth"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "base64 0.23.1",
  "cratefield-core",
@@ -953,7 +953,7 @@ dependencies = [
 
 [[package]]
 name = "cratefield-push-wiring"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "async-trait",
  "bytes",
@@ -966,7 +966,7 @@ dependencies = [
 
 [[package]]
 name = "cratefield-secrets"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "async-trait",
  "chacha20poly1305",
@@ -983,7 +983,7 @@ dependencies = [
 
 [[package]]
 name = "cratefield-tables"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "cratefield-core",
  "sea-query",

@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0](https://github.com/Cratefield/harness/compare/cratefield-cli-v0.6.2...cratefield-cli-v0.7.0) - 2026-10-15
+
+### Other
+
+- fz doctor: fail on module SQL a venture's dependencies ship but no module declares (migration-not-declared) ([#872](https://github.com/Cratefield/harness/pull/872))
+
 ## [0.6.2](https://github.com/Cratefield/harness/compare/cratefield-cli-v0.6.1...cratefield-cli-v0.6.2) - 2026-10-07
 
 ### Other
