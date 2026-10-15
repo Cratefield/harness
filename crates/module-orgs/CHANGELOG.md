@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.2](https://github.com/Cratefield/harness/compare/cratefield-module-orgs-v0.1.1...cratefield-module-orgs-v0.1.2) - 2026-10-15
+
+### Added
+
+- *(module-orgs)* service accounts, access grants and an audit log ([#878](https://github.com/Cratefield/harness/pull/878)) ([#879](https://github.com/Cratefield/harness/pull/879))
+
 ## [0.1.1](https://github.com/Cratefield/harness/compare/cratefield-module-orgs-v0.1.0...cratefield-module-orgs-v0.1.1) - 2026-10-06
 
 ### Other

@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.3](https://github.com/Cratefield/harness/compare/cratefield-module-waitlist-v0.4.2...cratefield-module-waitlist-v0.4.3) - 2026-10-15
+
+### Other
+
+- ADR 0030: the mail-theme record takes the number it was sharing ([#875](https://github.com/Cratefield/harness/pull/875))
+
 ## [0.4.2](https://github.com/Cratefield/harness/compare/cratefield-module-waitlist-v0.4.1...cratefield-module-waitlist-v0.4.2) - 2026-10-07
 
 ### Fixed
