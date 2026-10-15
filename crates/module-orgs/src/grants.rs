@@ -8,8 +8,8 @@
 //! (an opaque partition the venture names: `shared`, `personal:<id>`, …) and a
 //! **path** of segments; it covers a [`Resource`] of the same kind and space
 //! whose path *starts with* the selector's path, segment by segment. So
-//! `docs/team` covers `docs/team` and `docs/team/plan`, and never
-//! `docs/teamwork`.
+//! `reports/q3` covers `reports/q3` and `reports/q3/plan`, and never
+//! `reports/q3x`.
 //!
 //! ## The rule
 //!

@@ -104,7 +104,7 @@ module of its own and declares `ACCESS_PERSONAL_DATA`. A venture that mounts
   owns and revokes their keys in one transaction, for when the member leaves.
 - **`grants`** — `principal × selector × permission`, where a selector is a
   kind (or `*`), a space and a path prefix matched on whole segments
-  (`docs/team` covers `docs/team/plan`, never `docs/teamwork`), and
+  (`reports/q3` covers `reports/q3/plan`, never `reports/q3x`), and
   permissions are ordered `read < write < admin`. `decide` is deny-by-default
   and **an applicable deny wins**; expired grants stop applying, and a stored
   row that no longer parses fails closed. `decide_with_credential` and
