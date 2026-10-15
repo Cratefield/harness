@@ -1,0 +1,140 @@
+# The `keepshipping` auth instance (issue #777): the harness auth Worker
+# (`crates/auth-worker`), deployed for Keep Shipping on Keep Shipping's own
+# domain with Keep Shipping's own branding, D1, secrets and passkey relying
+# party. Hosted by Cratefield on Keep Shipping's domain (a Cratefield-managed
+# instance). Consumer: the Keep Shipping console (`console.keepshipping.run`,
+# `AUTH_ISSUER` + `AUTH_CLIENT_ID`), a public PKCE client with the redirect
+# `https://console.keepshipping.run/console/callback`.
+#
+# Deployed by `.github/workflows/deploy-auth.yml` from this directory:
+# `main` -> staging (top level), an `auth-v*` tag -> production
+# (`[env.production]`, behind the `auth-keepshipping-production` approval gate).
+# Wrangler does not inherit `[vars]` into an environment, so both blocks
+# carry the full set. Every variable is documented in
+# `crates/auth-worker/README.md`.
+#
+# Provisioned on the Cloudflare account that holds keepshipping.run: the
+# staging D1 exists (id below) and is migrated. Production's D1 is still a
+# placeholder, so the deploy workflow skips production. Still needed before
+# production (docs/auth/MANAGED-INSTANCES.md):
+# - `wrangler d1 create keepshipping-auth-production` and its id below.
+# - The secrets, by name only: HARNESS_SECRET, ADMIN_TOKEN,
+#   AUTH_CORE_SIGNING_KEYS (+ AUTH_CORE_SIGNING_KEY_ACTIVE), OWLPOST_API_KEY,
+#   TURNSTILE_SECRET, and the OIDC/Meta client secrets once those methods
+#   are enabled. Per environment: `wrangler secret put <NAME> [--env production]`.
+# - The custom domains (routes below) on the Cloudflare account that holds
+#   keepshipping.run, the Turnstile site for both hostnames, and the Owlpost
+#   sending domain `send.keepshipping.run`.
+name = "keepshipping-auth"
+main = "../../crates/auth-worker/build/worker/shim.mjs"
+compatibility_date = "2026-09-01"
+workers_dev = false
+# Staging's own hostname; production's is in `[env.production]`.
+route = { pattern = "auth-staging.keepshipping.run", custom_domain = true }
+
+# `worker-build` compiles the package in its working directory, so the build
+# runs in the crate and `main` points at the shim it writes there. Every
+# instance builds the same, unmodified crate.
+[build]
+cwd = "../../crates/auth-worker"
+command = "cargo install -q worker-build && worker-build --release"
+watch_dir = "../../crates/auth-worker/src"
+
+[observability]
+enabled = true
+
+# --- Staging (deployed from `main`) ---
+
+# Workers Rate Limiting backs the harness's throttle; readiness refuses the
+# instance unless a limiter resolves (harness #437). Namespace ids are per
+# account and must not collide with another instance's on the same account.
+[[ratelimits]]
+name = "RATE_LIMITER"
+namespace_id = "1401"
+
+[ratelimits.simple]
+limit = 30
+period = 60
+
+[[d1_databases]]
+binding = "DB"
+database_name = "keepshipping-auth-staging"
+database_id = "b6b74676-aaca-4359-9f12-d32e7684e45f"
+migrations_dir = "../../crates/auth-worker/migrations"
+
+# The meta-module drains Meta deletion jobs on a schedule.
+[triggers]
+crons = ["*/15 * * * *"]
+
+[vars]
+ENV = "staging"
+AUTH_PUBLIC_URL = "https://auth-staging.keepshipping.run"
+AUTH_CORE_ISSUER = "https://auth-staging.keepshipping.run"
+AUTH_VENTURE_NAME = "keepshipping-auth"
+AUTH_CORS_ORIGINS = "https://console.keepshipping.run"
+AUTH_BRAND_NAME = "Keep Shipping"
+AUTH_BRAND_FOOTER = "Keep Shipping"
+AUTH_CORE_LOGIN_METHODS = "passkey,magic-link"
+AUTH_PASSKEYS_RP_ID = "auth-staging.keepshipping.run"
+AUTH_PASSKEYS_ORIGINS = "https://auth-staging.keepshipping.run"
+# Staging leaves AUTH_MAILER unset: the Worker then uses Owlpost as soon as
+# the OWLPOST_API_KEY secret exists, and boots without mail until then
+# (production keeps `owlpost` and refuses to boot without the key).
+MAIL_FROM = "Keep Shipping <no-reply@send.keepshipping.run>"
+AUTH_MAGIC_LINK_PUBLIC_BASE = "https://auth-staging.keepshipping.run"
+AUTH_MAGIC_LINK_MAIL_FROM = "Keep Shipping <sign-in@send.keepshipping.run>"
+AUTH_PASSWORD_PUBLIC_BASE = "https://auth-staging.keepshipping.run"
+AUTH_PASSWORD_MAIL_FROM = "Keep Shipping <sign-in@send.keepshipping.run>"
+AUTH_OIDC_REDIRECT_BASE = "https://auth-staging.keepshipping.run"
+AUTH_META_REDIRECT_BASE = "https://auth-staging.keepshipping.run"
+AUTH_BRAND_LOGO_URL = "https://keepshipping.run/assets/icon-512.png"
+AUTH_BRAND_ACCENT = "#1950cc"
+AUTH_BRAND_SUPPORT_EMAIL = "contact@keepshipping.run"
+# AUTH_BRAND_PRIVACY_URL = "https://keepshipping.run/privacy"   # needs-human: keepshipping.run has no privacy page yet (404); uncomment once it exists
+# AUTH_BRAND_TERMS_URL = "https://keepshipping.run/terms"   # needs-human: keepshipping.run has no terms page yet (404); uncomment once it exists
+
+# --- Production (deployed from an `auth-v*` tag, behind the approval gate) ---
+[env.production]
+route = { pattern = "auth.keepshipping.run", custom_domain = true }
+
+[[env.production.ratelimits]]
+name = "RATE_LIMITER"
+namespace_id = "1402"
+
+[env.production.ratelimits.simple]
+limit = 30
+period = 60
+
+[[env.production.d1_databases]]
+binding = "DB"
+database_name = "keepshipping-auth-production"
+database_id = "REPLACE_WITH_PRODUCTION_D1_ID"
+migrations_dir = "../../crates/auth-worker/migrations"
+
+[env.production.triggers]
+crons = ["*/15 * * * *"]
+
+[env.production.vars]
+ENV = "production"
+AUTH_PUBLIC_URL = "https://auth.keepshipping.run"
+AUTH_CORE_ISSUER = "https://auth.keepshipping.run"
+AUTH_VENTURE_NAME = "keepshipping-auth"
+AUTH_CORS_ORIGINS = "https://console.keepshipping.run"
+AUTH_BRAND_NAME = "Keep Shipping"
+AUTH_BRAND_FOOTER = "Keep Shipping"
+AUTH_CORE_LOGIN_METHODS = "passkey,magic-link"
+AUTH_PASSKEYS_RP_ID = "keepshipping.run"
+AUTH_PASSKEYS_ORIGINS = "https://auth.keepshipping.run"
+AUTH_MAILER = "owlpost"
+MAIL_FROM = "Keep Shipping <no-reply@send.keepshipping.run>"
+AUTH_MAGIC_LINK_PUBLIC_BASE = "https://auth.keepshipping.run"
+AUTH_MAGIC_LINK_MAIL_FROM = "Keep Shipping <sign-in@send.keepshipping.run>"
+AUTH_PASSWORD_PUBLIC_BASE = "https://auth.keepshipping.run"
+AUTH_PASSWORD_MAIL_FROM = "Keep Shipping <sign-in@send.keepshipping.run>"
+AUTH_OIDC_REDIRECT_BASE = "https://auth.keepshipping.run"
+AUTH_META_REDIRECT_BASE = "https://auth.keepshipping.run"
+AUTH_BRAND_LOGO_URL = "https://keepshipping.run/assets/icon-512.png"
+AUTH_BRAND_ACCENT = "#1950cc"
+AUTH_BRAND_SUPPORT_EMAIL = "contact@keepshipping.run"
+# AUTH_BRAND_PRIVACY_URL = "https://keepshipping.run/privacy"   # needs-human: keepshipping.run has no privacy page yet (404); uncomment once it exists
+# AUTH_BRAND_TERMS_URL = "https://keepshipping.run/terms"   # needs-human: keepshipping.run has no terms page yet (404); uncomment once it exists

@@ -162,8 +162,9 @@ how to require it for an organization are in [SSO.md](SSO.md).
 
 Design adopted 2026-09-06; per-instance model adopted 2026-10-05 (issue
 #777). The Worker composes all merged modules and deploys with wrangler, one
-instance per app. `instances/alphahunt` and `instances/yoginini` are live on
-staging only (`auth-staging.alphahunt.ing`, `auth-staging.yoginini.us`);
+instance per app. `instances/alphahunt`, `instances/yoginini` and
+`instances/keepshipping` are live on staging only (`auth-staging.alphahunt.ing`,
+`auth-staging.yoginini.us`, `auth-staging.keepshipping.run`);
 their production deploys and `instances/cratefield` wait on the steps in
 [MANAGED-INSTANCES.md](MANAGED-INSTANCES.md) (secrets, Owlpost, Turnstile,
 first `auth-v*` tag). Per-organization enterprise SSO over OpenID
