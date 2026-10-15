@@ -1575,48 +1575,57 @@ mod forwarder_tests {
     }
 
     #[test]
-    fn module_log_lines_reach_the_sink_scrubbed_and_prefixed() {
+    fn module_log_reaches_the_sink_and_emits_the_native_tracing_event() {
+        // One test on purpose: both arms ride `module_log!`, whose info arm
+        // is a single static `tracing` callsite. As two tests, the bare sink
+        // arm on a parallel thread could win that callsite's one-time
+        // registration with `Interest::never`; `with_default` never
+        // re-registers callsites, so the native arm's scoped subscriber was
+        // never asked and saw no event. Sequential here, the registration
+        // order between the arms is fixed.
         install_sink();
         // The module-facing macro rides the forwarder, so what a Worker
         // prints — where no tracing dispatcher exists — is exactly these
         // lines (issue #846). A GitHub token and an email ride the formatted
         // args; neither may survive the trip, and each line must carry its
         // level prefix like every other forwarded control event.
+        // The token is `concat!`ed from fragments instead of written whole:
+        // a token-shaped literal in the source trips GitHub's push secret
+        // scanning, while the assembled value still matches the scrubber's
+        // provider-token shape. Handing it in as an argument also exercises
+        // the macro's format-args arm.
+        let token = concat!("ghs_", "ABCDEFGH", "IJKLMNOP", "QRSTUVWX", "YZ012345");
         crate::module_log!(
             info,
-            "module-log-846-info acked ghs_ABCDEFGHIJKLMNOPQRSTUVWXYZ012345 \
-             for nick@example.com"
+            "module-log-846-info acked {} for nick@example.com",
+            token
         );
         crate::module_log!(warn, "module-log-846-warn retrying for ada@example.com");
-        let captured = CAPTURED.lock().unwrap();
-        for (level, needle) in [
-            ("info", "module-log-846-info"),
-            ("warn", "module-log-846-warn"),
-        ] {
-            let line = captured
-                .iter()
-                .find(|line| line.contains(needle))
-                .unwrap_or_else(|| panic!("no module_log line carried {needle}"));
-            let prefix = format!("[{level}] ");
-            assert!(
-                line.starts_with(&prefix),
-                "the {needle} line should be prefixed {prefix:?}: {line}"
-            );
-            assert!(!line.contains('@'), "email reached the sink: {line}");
-            assert!(
-                !line.contains("ghs_ABCDEFGHIJKLMNOPQRSTUVWXYZ012345"),
-                "token reached the sink: {line}"
-            );
+        {
+            let captured = CAPTURED.lock().unwrap();
+            for (level, needle) in [
+                ("info", "module-log-846-info"),
+                ("warn", "module-log-846-warn"),
+            ] {
+                let line = captured
+                    .iter()
+                    .find(|line| line.contains(needle))
+                    .unwrap_or_else(|| panic!("no module_log line carried {needle}"));
+                let prefix = format!("[{level}] ");
+                assert!(
+                    line.starts_with(&prefix),
+                    "the {needle} line should be prefixed {prefix:?}: {line}"
+                );
+                assert!(!line.contains('@'), "email reached the sink: {line}");
+                assert!(!line.contains(token), "token reached the sink: {line}");
+            }
         }
-    }
-
-    #[test]
-    fn module_log_also_emits_the_native_tracing_event() {
-        install_sink();
         // The macro's second arm: natively the same line is a real `tracing`
         // event. `with_default` scopes the subscriber to this thread, and
         // the counters it bumps are shared through `Arc`s because it takes
-        // the subscriber by value.
+        // the subscriber by value. The sink arm just registered the shared
+        // callsite with `Interest::never` — no dispatcher was current — so
+        // the cache must be rebuilt under the scoped subscriber.
         let events = Arc::new(AtomicUsize::new(0));
         let messages = Arc::new(Mutex::new(Vec::new()));
         let before = events.load(Ordering::Relaxed);
@@ -1625,7 +1634,10 @@ mod forwarder_tests {
                 events: Arc::clone(&events),
                 messages: Arc::clone(&messages),
             },
-            || crate::module_log!(info, "module-log-846-tracing the native arm fires too"),
+            || {
+                tracing::callsite::rebuild_interest_cache();
+                crate::module_log!(info, "module-log-846-tracing the native arm fires too");
+            },
         );
         assert_eq!(
             events.load(Ordering::Relaxed),
