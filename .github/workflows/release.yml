@@ -139,6 +139,13 @@ jobs:
       # run, so the PR would sit with no checks at all. The branch names come
       # from the action's output through the environment, never interpolated
       # into the script, and the token is read from the environment only.
+      #
+      # The work happens in a separate worktree. It used to `git checkout`
+      # the release PR's branch in the job's own checkout and never switch
+      # back, so in a `workflow_dispatch` run the publish step below ran on
+      # the release PR's tree and published its versions before the PR was
+      # merged. The step after this one refuses to publish anything but the
+      # commit this run was asked to release.
       - name: Regenerate the compatibility matrix and standalone lockfiles on the release PR
         if: steps.release_pr.outputs.prs_created == 'true' && env.HAS_RELEASE_PLZ_TOKEN == 'true'
         env:
@@ -148,22 +155,45 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           origin="https://x-access-token:${PUSH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          # Shares this checkout's target dir, so the rust-cache still applies.
+          export CARGO_TARGET_DIR="$GITHUB_WORKSPACE/target"
+          wt="$RUNNER_TEMP/release-pr"
           echo "$PRS" | jq -r '.[].head_branch' | while read -r branch; do
             [ -n "$branch" ] || continue
             git fetch --quiet "$origin" "$branch"
-            git checkout --quiet -B "release-pr-matrix" FETCH_HEAD
+            git worktree remove --force "$wt" 2>/dev/null || true
+            git worktree add --quiet --detach "$wt" FETCH_HEAD
+            cd "$wt"
             cargo run -q -p cratefield-cli --example compatibility-doc
             tools/out-of-workspace-crates.sh --refresh-locks </dev/null
             changed=$(git diff --name-only -- docs/COMPATIBILITY.md '*Cargo.lock' ':!:Cargo.lock')
             if [ -z "$changed" ]; then
               echo "The matrix and the standalone lockfiles on $branch are already current."
-              continue
+            else
+              echo "$changed" | xargs git add --
+              git commit --quiet -m "chore: regenerate the compatibility matrix and standalone lockfiles for the released versions"
+              git push --quiet "$origin" "HEAD:refs/heads/$branch"
+              echo "::notice title=Release PR regenerated::Updated on $branch: $(echo "$changed" | paste -sd ' ' -)"
             fi
-            echo "$changed" | xargs git add --
-            git commit --quiet -m "chore: regenerate the compatibility matrix and standalone lockfiles for the released versions"
-            git push --quiet "$origin" "HEAD:refs/heads/$branch"
-            echo "::notice title=Release PR regenerated::Updated on $branch: $(echo "$changed" | paste -sd ' ' -)"
+            cd "$GITHUB_WORKSPACE"
+            git worktree remove --force "$wt"
           done
+      # Publishing reads whatever is checked out, so pin it: the job's
+      # checkout must still be the exact commit this run releases, clean.
+      - name: The checkout is the commit being released
+        env:
+          WANT: ${{ github.event.workflow_run.head_sha || inputs.sha || github.sha }}
+        run: |
+          have=$(git rev-parse HEAD)
+          if [ "$have" != "$WANT" ]; then
+            echo "::error::The checkout is at $have, not $WANT, the commit this run releases. Refusing to go on."
+            exit 1
+          fi
+          if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
+            git status --short --untracked-files=no
+            echo "::error::The checkout of $WANT has tracked changes. Refusing to go on."
+            exit 1
+          fi
       # A trusted publisher can only be configured after a crate exists
       # on crates.io, so a crate's first version must be published by
       # hand; release-plz learns that by failing, mid-round, after the
