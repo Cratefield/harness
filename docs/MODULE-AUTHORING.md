@@ -1281,7 +1281,7 @@ Everything else a module can do, with the module that does it:
   `cratefield_mail_templates::attach_theme(&mut data, &ctx.venture, &*ctx.config)`
   and resolve the theme in the template with `theme_for_template`, so a
   composed theme, the `MAIL_THEME` config and the venture default apply in
-  that order (ADR [0028](adr/0028-mail-renders-through-one-themed-layout.md)).
+  that order (ADR [0030](adr/0030-mail-renders-through-one-themed-layout.md)).
   Never write mail markup by hand.
 - **Scheduled work** (cron): `Module::scheduled` — see waitlist's pending
   purge in `crates/module-waitlist/src/lib.rs`. Use the `ModuleContext`

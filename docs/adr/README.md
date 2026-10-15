@@ -108,6 +108,21 @@ drain_within` is the "N due items per tick" drain, and `reschedule` is
 the per-item cursor for recurring polling. Cloudflare Queues fan-out is
 left for a follow-up.
 
+ADR 0024 makes nearest-neighbour search a port of its own (#561):
+`VectorIndex` answers `upsert`, `query` and `delete`, and `query` takes a
+`k` and an equality `VectorFilter` and returns one normalised cosine number,
+higher closer, so a module can threshold a result without learning a
+vendor's metric or scale. An upsert replaces the whole record rather than
+merging it, and deleting an id that is not there is not an error. Every call
+carries a `VectorNamespace`, and the normal constructor is
+`VectorNamespace::for_tenant` — the same scoping a table has, so a query
+never crosses tenants even where both corpora share one index. Embeddings
+get their own `Embedder` port rather than `TextModel::embed`, which keeps
+tools, streaming and embeddings out of the `TextModel` shape; the model name
+rides with the vectors, because vectors from two models are not comparable,
+and the input token count rides with them because that is what a usage
+report bills.
+
 ADR 0025 moves the billing lifecycle out of venture code and into a
 module (#592). RevenueCat is not a `Payments` adapter — it moves no money
 — so store purchases get their own `InAppPurchases` port
@@ -133,6 +148,32 @@ cannot carry are reported, never guessed, and each needs a disposition
 before a cutover that is the DATA-MOVE switch — with a rollback window
 and a generated decommission checklist.
 
+ADR 0027 keeps a Merchant of Record inside the `Payments` port and reads
+disputes through it (#690), on the port shapes #589 and #602 set out without
+implementing their Stripe halves. Polar is a `Payments` adapter rather than a
+new port: it moves money the way the port means — hosted checkout, refunds,
+metered usage — and an operation a MoR does not offer
+(`create_connect_account_link`, `charge_with_transfer`) answers
+`PaymentsError::Unsupported` rather than a silent no-op. The port gains only
+additive methods with defaults, so every existing implementation compiles
+unchanged and `HARNESS_API` stays 1: `create_portal_session`, `get_dispute`,
+`close_dispute`, and `list_disputes` — the last one because Polar sends no
+dispute webhook, so a scheduled poll is the only way a dispute is ever seen to
+open — plus `verify_webhook_request`, defaulting to `Stripe-Signature`, so one
+handler serves every adapter.
+
+ADR 0028 makes inbound mail a verified source beside the outbound one (#563)
+and gives the runtime a way to serve a module's surface over MCP. Inbound mail
+is a verify-then-parse trait in core (`InboundMailSource`, with `kind()`,
+`verifier()` and `parse()`) rather than a `Port` variant: a delivery is
+*pushed* at a route with a per-endpoint secret, so a `Port` entry would touch
+`Port::ALL`, `Ports`, both runtimes and every bundle for a service a module
+reaches through a webhook and never through `module.ports()`. `receive_mail`
+verifies before it parses, so `parse` never sees unverified bytes, and the
+shape is deliberately tracker's `StatusWebhook`/`receive_status`. The
+outbound `Mailer` stays the port; the inbound half is its mirror.
+Verification is core's, deduplication belongs to the `Inbox`.
+
 ADR 0029 gives the harness a voice (#861): a `Speech` port —
 `transcribe`, `synthesize`, `voices`, `capabilities`, `limits` — asked
 for by capability and never by vendor, with every request checked
@@ -149,6 +190,22 @@ for the same `worker`-crate reason as the classifier's.
 OpenAI-compatible synthesis stays buffered until a streaming
 `HttpClient` (#859); the `Port::Speech` variant and `Ports` wiring are
 a follow-up.
+
+ADR 0030 puts every mail through one themed layout (#715) and lets the theme
+travel by composition and config rather than through core. One crate owns the
+look — `cratefield-mail-templates` renders a `Message` with a `MailTheme` into
+an HTML part and a plain-text twin, depends only on core, serde and tracing,
+and builds for wasm32 — while a module describes only what the mail says. The
+theme reaches the templates beside them: each mail-sending module exports
+`themed_templates(&MailTheme)` next to `default_templates()`, returning the
+same template ids carrying the venture's theme, so a venture composes its
+style exactly where it already registers templates, one line per module. The
+two modules that had rendered outside the registry (`module-orgs`,
+`module-notifications`) now render through it, which also makes them
+overridable like the rest. No locked contract moves: the `Module` trait,
+`ModuleContext`, `Brand` and `HARNESS_API` are untouched. Filed as 0030
+because it shared 0028 with the inbound-mail record while both were being
+drafted; see the note inside it.
 
 [0102](0102-crypto-crate.md) chose the crypto crate: RustCrypto's
 `chacha20poly1305`.

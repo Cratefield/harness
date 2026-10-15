@@ -82,7 +82,7 @@ impl Sealed {
     }
 }
 
-/// The one migration: the three tables of the crypto-shredding contract.
+/// The first migration: the three tables of the crypto-shredding contract.
 /// The Postgres set differs only in `BYTEA` for `BLOB` and in how
 /// append-only is enforced; see `migrations/`.
 const MIGRATION_INIT: SqlMigration = SqlMigration::new(
@@ -95,6 +95,20 @@ const MIGRATION_INIT_PG: SqlMigration = SqlMigration::new(
     "0001",
     "init",
     include_str!("../migrations/postgres/0001_init.sql"),
+);
+
+/// `revision` widened to BIGINT on Postgres; a no-op on SQLite, whose
+/// INTEGER is already 64-bit.
+const MIGRATION_REVISION_BIGINT: SqlMigration = SqlMigration::new(
+    "0002",
+    "revision_bigint",
+    include_str!("../migrations/sqlite/0002_revision_bigint.sql"),
+);
+
+const MIGRATION_REVISION_BIGINT_PG: SqlMigration = SqlMigration::new(
+    "0002",
+    "revision_bigint",
+    include_str!("../migrations/postgres/0002_revision_bigint.sql"),
 );
 
 impl Module for Sealed {
@@ -175,8 +189,8 @@ impl Module for Sealed {
     }
 
     fn migrations(&self) -> Migrations {
-        const MIGRATIONS: [SqlMigration; 1] = [MIGRATION_INIT];
-        const MIGRATIONS_PG: [SqlMigration; 1] = [MIGRATION_INIT_PG];
+        const MIGRATIONS: [SqlMigration; 2] = [MIGRATION_INIT, MIGRATION_REVISION_BIGINT];
+        const MIGRATIONS_PG: [SqlMigration; 2] = [MIGRATION_INIT_PG, MIGRATION_REVISION_BIGINT_PG];
         const _: () = cratefield_core::assert_migration_set(&MIGRATIONS);
         Migrations {
             sqlite: &MIGRATIONS,
