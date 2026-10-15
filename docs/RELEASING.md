@@ -20,7 +20,11 @@ cannot begin on a commit that failed `cargo test`:
    requirements. Because `docs/COMPATIBILITY.md` is generated from those
    versions, the workflow then regenerates it on the release PR's branch
    (only with `RELEASE_PLZ_TOKEN`, since a `GITHUB_TOKEN` push starts no CI
-   run), so the matrix drift check passes without a hand edit.
+   run), so the matrix drift check passes without a hand edit. In the
+   same commit it refreshes the `Cargo.lock` of every crate outside the
+   workspace (`tools/out-of-workspace-crates.sh --refresh-locks`): the
+   version bumps leave those behind, and the `standalone crate` jobs build
+   them with `--locked`.
 2. Merging that release PR puts CI on the merge commit, and the run that
    passes triggers `release-plz release`: it publishes every crate whose
    version is not yet on crates.io — in dependency order
